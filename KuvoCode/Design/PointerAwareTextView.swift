@@ -49,17 +49,55 @@ class PointerAwareTextView: NSTextView {
         return layout.characterIndexForGlyph(at: glyph)
     }
 
-    private func claimPointer(for event: NSEvent) {
+    fileprivate func claimPointer(for event: NSEvent) {
         claim.show(pointer(at: event.locationInWindow))
+    }
+
+    fileprivate func letGo() {
+        claim.show(nil)
     }
 
     // No cursor rectangles: they'd show the I-beam under whatever is drawn over the text.
     override func resetCursorRects() {}
 
+    // Nor its scroll view's (the composer's, a file's): AppKit gives it the I-beam over all it
+    // shows whenever the text is made selectable or editable in a window.
+    // (Nonisolated as NSText's; it's only ever set on the main thread, as any view's.)
+    nonisolated override var isSelectable: Bool {
+        get { super.isSelectable }
+        set {
+            super.isSelectable = newValue
+            MainActor.assumeIsolated { clearScrollViewsCursor() }
+        }
+    }
+
+    nonisolated override var isEditable: Bool {
+        get { super.isEditable }
+        set {
+            super.isEditable = newValue
+            MainActor.assumeIsolated { clearScrollViewsCursor() }
+        }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        clearScrollViewsCursor()
+    }
+
+    private func clearScrollViewsCursor() {
+        if let scroll = enclosingScrollView, scroll.documentView === self, scroll.documentCursor != nil {
+            scroll.documentCursor = nil
+        }
+    }
+
+    // The claim's moves go to a tracker of its own, so NSTextView's handlers stay as AppKit's
+    // (they'd otherwise get each move twice, and a move's event has no tracking area to tell).
+    private lazy var tracker = PointerTracker(text: self)
+
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let tracking { removeTrackingArea(tracking) }
-        let area = PointerClaim.trackingArea(owner: self)
+        let area = PointerClaim.trackingArea(owner: tracker, in: self)
         addTrackingArea(area)
         tracking = area
     }
@@ -69,20 +107,27 @@ class PointerAwareTextView: NSTextView {
         claimPointer(for: event)
     }
 
-    // The text view's own tracking areas' events still go to AppKit's handling; those of the
-    // claim's area are the claim's alone (passed on, they'd reach the views around it twice).
-    override func mouseEntered(with event: NSEvent) {
-        if event.trackingArea !== tracking { super.mouseEntered(with: event) }
-        claimPointer(for: event)
+    // Removed under the pointer (a reply rebuilt, a row let go): no `mouseExited` comes.
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        if newWindow == nil { letGo() }
+    }
+}
+
+/// The owner of a text view's claim's tracking area.
+private final class PointerTracker: NSResponder {
+    private weak var text: PointerAwareTextView?
+
+    init(text: PointerAwareTextView) {
+        self.text = text
+        super.init()
     }
 
-    override func mouseMoved(with event: NSEvent) {
-        if event.trackingArea !== tracking { super.mouseMoved(with: event) }
-        claimPointer(for: event)
-    }
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
 
-    override func mouseExited(with event: NSEvent) {
-        if event.trackingArea !== tracking { super.mouseExited(with: event) }
-        claim.show(nil)
-    }
+    override func cursorUpdate(with event: NSEvent) { text?.claimPointer(for: event) }
+    override func mouseEntered(with event: NSEvent) { text?.claimPointer(for: event) }
+    override func mouseMoved(with event: NSEvent) { text?.claimPointer(for: event) }
+    override func mouseExited(with event: NSEvent) { text?.letGo() }
 }
