@@ -1823,7 +1823,7 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   and its wake-ups wait, or come back, when the flag changes (it can go with every change to its
   metadata); a Mac sees to it, and a machine's bridge does with the Mac closed too; a session's
   first wake-up or watch made while it's archived, by a client or by its agent's `kuvo-wake` on any
-  box, is held from the start; a pause of your own stays through both). `POST kuvo/wakes/<session>` with `{"due", "every"?,
+  box, is held from the start, and any its box finds archived when they're due is held then; a pause of your own stays through both). `POST kuvo/wakes/<session>` with `{"due", "every"?,
   "note"}` adds one, as the bar over the Mac's composer does (`due` at least a minute away;
   `every` 30m, 2h, 1d, 1w or weekdays, at least 5m), with the computer's own clock and weekends;
   `400 {"message"}` for what can't be one, `409` with 50 waiting. `POST

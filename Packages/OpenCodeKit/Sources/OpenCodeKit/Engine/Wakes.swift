@@ -807,14 +807,15 @@ public enum Wakes {
         esac
         s_body=$(printf '%s' "$s_out" | sed '$d')
         # One held (`held`) is only let go once it's gone, or, held as archived, once it's back
-        # (its bringing back didn't reach this computer): its wake-ups go from the next minute.
+        # (its bringing back didn't reach this computer): then it goes on as any other.
         if [ -n "$held" ]; then
           [ "$(cat "${bot}paused" 2>/dev/null)" = archived ] && ! printf '%s' "$s_body" | grep -qE "$archived" && rm -f "${bot}paused"
           return 1
         fi
         # Archived, from any app (a Mac's, a phone's: they mark the session itself), wherever it
-        # was done: its wake-ups wait, as when paused, until it's brought back.
-        printf '%s' "$s_body" | grep -qE "$archived" && return 1
+        # was done, or a folder made since (by the box's sandbox, say): held as archiving holds
+        # them (`paused`), so it shows held wherever it's listed, until it's brought back.
+        printf '%s' "$s_body" | grep -qE "$archived" && { printf archived >"${bot}paused"; return 1; }
         s_dir=$(printf '%s' "$s_body" | sed -n 's/.*"location" *: *{[^}]*"directory" *: *"\([^"]*\)".*/\1/p' | head -n 1)
         [ -n "$s_dir" ] && [ "$s_dir" != "$(cat "${bot}directory" 2>/dev/null)" ] && printf '%s' "$s_dir" >"${bot}directory"
         s_parent=$(printf '%s' "$s_body" | sed -n 's/.*"parentID" *: *"\(ses_[A-Za-z0-9]*\)".*/\1/p' | head -n 1)
@@ -904,7 +905,8 @@ public enum Wakes {
           if [ "$(cat "${bot}paused" 2>/dev/null)" != moving ] && session=$(cat "$bot/session" 2>/dev/null) && [ -n "$session" ] && reach; then
             held=1; settle; held=
           fi
-          continue
+          # (One let go as its session is back goes on now, as any other.)
+          [ -e "${bot}paused" ] || [ ! -d "$bot" ] && continue
         fi
         # One whose last wake-up couldn't go waits before it's tried again (`.retry`: when, and how
         # long it waited): a minute, then twice as long each time, up to half an hour.
@@ -1049,9 +1051,9 @@ public enum Wakes {
       # session has, until it's brought back: as the Mac's app makes one (WakeUps.makeFolder) and the
       # box's routes do, so too for this Mac's keeper with the app closed, a machine's tools and an
       # agent's own kuvo-wake. Asked of its engine (a coding agent's, of the agents' bridge), found
-      # by its record in the box's `run` folder: this Mac's is in `box`, beside the bots' folder.
-      m_root=${KUVO_BOTS:-$HOME/.kuvo-code/bots}; m_record=
-      for m_k in "${m_root%/*}/box" "${m_root%/*}"; do [ -f "$m_k/run/engine.json" ] && m_record=$m_k/run/engine.json && break; done
+      # by its record in the box's `run` folder, beside the wakes folder: this Mac's is in `box`.
+      m_home=${bot%/*}; m_home=${m_home%/*}; m_record=
+      for m_k in "$m_home/box" "$m_home"; do [ -f "$m_k/run/engine.json" ] && m_record=$m_k/run/engine.json && break; done
       [ -n "$m_record" ] && [ "$KUVO_WAKE_VIA" = bridge ] && m_record=${m_record%/*}/bridge.json
       if [ -n "$m_record" ] && archivedAt "$(listens "$m_record" port)" "$(listens "$m_record" password)" "$session"; then
         printf archived >"$bot/paused"

@@ -322,7 +322,8 @@ import Testing
     }
 
     /// Archived from any app (a phone's, say, which marks the session itself), with the Mac closed:
-    /// its wake-ups and watches wait there, kept, until it's brought back; then they go.
+    /// its wake-ups and watches wait there, kept and held as archiving holds them (as a folder the
+    /// box's sandbox made for it is), until it's brought back; then they go, that same minute.
     @Test func anArchivedSessionsWakeUpsAndWatchesWaitUntilItsBack() throws {
         defer { cleanUp() }
         let old = try folder("ses_old", in: sessions, session: "ses_old", wake: "Follow up")
@@ -332,6 +333,7 @@ import Testing
         watchesDone()
         #expect(prompts().isEmpty)
         #expect(wakes(of: old).count == 1, "kept for when it's back")
+        #expect((try? String(contentsOf: old.appending(path: "paused"), encoding: .utf8)) == "archived", "held, as it shows")
         // The engine's own mark, too.
         try answer(Self.enginePort, "GET", "api/session/ses_old", #"{"id":"ses_old","time":{"created":1,"archived":1760000000000}}"#)
         try fire()
@@ -377,7 +379,7 @@ import Testing
     }
 
     /// Held as archived, though the session is back (its bringing back never reached this
-    /// computer): let go, and its wake-ups go from the next minute. One paused by you stays.
+    /// computer): let go, and its wake-ups go that minute. One paused by you stays.
     @Test func aSessionHeldAsArchivedThoughItsBackIsLetGo() throws {
         defer { cleanUp() }
         let back = try folder("ses_back", in: sessions, session: "ses_back", wake: "Follow up")
@@ -387,7 +389,6 @@ import Testing
         try write(mine.appending(path: "paused"), "paused")
         try answer(Self.enginePort, "GET", "api/session/ses_mine", #"{"id":"ses_mine"}"#)
         try fire()
-        try fire()
         #expect(prompts() == ["\(Self.enginePort) ses_back [Wake-up] Follow up"])
         #expect(wakes(of: mine).count == 1, "paused by you")
     }
@@ -395,15 +396,21 @@ import Testing
     /// An archived session's agent schedules a wake-up or a watch with no app open (its own
     /// kuvo-wake, or the box's tools running it): the folder they're kept in is held as archiving
     /// holds one, as the Mac's app makes it, and it waits until the session is back. A coding
-    /// agent's session is asked of the agents' bridge. One that isn't archived isn't held.
-    @Test(arguments: WakesTests.shells)
-    func oneMadeForAnArchivedSessionIsHeldFromTheStart(_ shell: String) throws {
+    /// agent's session is asked of the agents' bridge. One that isn't archived isn't held. Its box
+    /// is found beside the wakes folder, a machine's (`run`) or this Mac's (`box/run`), however the
+    /// agent's environment names the bots' folder (the Mac's coding agents aren't told it).
+    @Test(arguments: WakesTests.shells, ["run", "box/run"])
+    func oneMadeForAnArchivedSessionIsHeldFromTheStart(_ shell: String, records: String) throws {
         defer { cleanUp() }
-        try write(k.appending(path: "run/bridge.json"), #"{"pid":2,"port":\#(Self.bridgePort),"password":"bridge-pass"}"#)
+        let engine = #"{"pid":1,"port":\#(Self.enginePort),"password":"engine-pass"}"#
+        try write(k.appending(path: "\(records)/engine.json"), engine)
+        try write(k.appending(path: "\(records)/bridge.json"), #"{"pid":2,"port":\#(Self.bridgePort),"password":"bridge-pass"}"#)
+        // This Mac's: a machine's record (for the minute's run, below) answers nothing meanwhile.
+        if records != "run" { try write(k.appending(path: "run/engine.json"), #"{"pid":1,"port":9,"password":"elsewhere"}"#) }
         try answer(Self.enginePort, "GET", "api/session/ses_old", #"{"id":"ses_old","metadata":{"kuvo.archived":true}}"#)
         try answer(Self.bridgePort, "GET", "api/session/ses_agent", #"{"id":"ses_agent","time":{"created":1,"archived":1760000000000}}"#)
         try answer(Self.enginePort, "GET", "api/session/ses_new", #"{"id":"ses_new","metadata":{}}"#)
-        let wake = #"KUVO_BOTS="$K/bots" KUVO_WAKES="$K/wakes" \#(shell) "$K/bin/kuvo-wake""#
+        let wake = #"KUVO_WAKES="$K/wakes" \#(shell) "$K/bin/kuvo-wake""#
         let added = try sh(#"\#(wake) ses_old add +2h "Look again""#)
         #expect(added.status == 0, "\(added.output)")
         let watched = try sh(#"KUVO_WAKE_VIA=bridge \#(wake) ses_agent watch 10m "echo same" "Tell the user""#)
@@ -412,13 +419,19 @@ import Testing
         #expect(fresh.status == 0, "\(fresh.output)")
 
         let held = { (session: String) in try? String(contentsOf: sessions.appending(path: "\(session)/paused"), encoding: .utf8) }
-        #expect(held("ses_old") == "archived", "\(shell)")
-        #expect(held("ses_agent") == "archived", "\(shell): asked of the bridge")
-        #expect(held("ses_new") == nil, "\(shell): not archived")
+        #expect(held("ses_old") == "archived", "\(shell), \(records)")
+        #expect(held("ses_agent") == "archived", "\(shell), \(records): asked of the bridge")
+        #expect(held("ses_new") == nil, "\(shell), \(records): not archived")
         #expect(wakes(of: sessions.appending(path: "ses_old")).count == 1, "kept for when it's back")
+
+        // Brought back (somewhere this box didn't hear of): let go, its wake-up waiting for its time.
+        try write(k.appending(path: "run/engine.json"), engine)
+        try answer(Self.enginePort, "GET", "api/session/ses_old", #"{"id":"ses_old","metadata":{"kuvo.archived":false}}"#)
         try fire(shell: shell)
         watchesDone()
-        #expect(prompts().isEmpty)
+        #expect(held("ses_old") == nil, "\(shell), \(records)")
+        #expect(wakes(of: sessions.appending(path: "ses_old")).count == 1)
+        #expect(prompts().isEmpty, "not due yet")
     }
 
     /// A subagent's, paused: it stays as it is, rather than going to the conversation that
