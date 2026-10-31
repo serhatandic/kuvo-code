@@ -60,7 +60,7 @@ const TAB_IDLE = Number(process.env.KUVO_BROWSER_TAB_IDLE || 3600) * 1000;
 
 // Goes up with every change to the keeper (host mode): a newer one replaces one that's running
 // (its pages close, its sign-ins stay), and an older one never replaces a newer.
-const KEEPER = 41;
+const KEEPER = 42;
 // Passkeys: none yet, as in the panel's browser on the Mac (Passkeys.swift, the same script).
 const NO_PASSKEYS = "(() => {\n  try {\n    // Says a passkey was asked for with an event only this launch's listener, in a world of its\n    // own, knows the name of: nothing of it is left in the page's world. (Taken before the page\n    // can change them.)\n    const dispatch = EventTarget.prototype.dispatchEvent, Made = Event;\n    const tell = () => {\n      try {\n        dispatch.call(window, new Made(\"KUVO_PASSKEY_EVENT\"));\n      } catch {}\n    };\n    const none = (options) => {\n      // Asked of you, not looked for quietly as the page loads.\n      if (options.mediation !== \"conditional\") tell();\n      return Promise.reject(new DOMException(\"Passkeys can't be used in this browser.\", \"NotAllowedError\"));\n    };\n    const Container = window.CredentialsContainer;\n    if (Container && Container.prototype) {\n      const prototype = Container.prototype, get = prototype.get, create = prototype.create;\n      if (get) prototype.get = function (options) { return options && options.publicKey ? none(options) : get.call(this, options); };\n      if (create) prototype.create = function (options) { return options && options.publicKey ? none(options) : create.call(this, options); };\n    }\n    const Credential = window.PublicKeyCredential;\n    if (Credential) {\n      Credential.isUserVerifyingPlatformAuthenticatorAvailable = () => Promise.resolve(false);\n      if (Credential.isConditionalMediationAvailable) Credential.isConditionalMediationAvailable = () => Promise.resolve(false);\n    }\n  } catch {}\n})();";
 // The event it fires when a passkey is asked for (a name of this keeper's, which only the
@@ -573,6 +573,10 @@ async function host() {
   // Each frame's target, and the page it's in, by its session.
   const frameTargets = new Map();
   const pageOf = (sessionId) => frameTargets.get(sessionId)?.page ?? [...own].find(([, each]) => each === sessionId)?.[0];
+  // The page each frame of a page's own site is in (it runs in the page, no target of its own),
+  // and the page that opened each page: where a download from one of them began.
+  const framePages = new Map();
+  const openers = new Map();
   // Sites that asked for a passkey lately (which this browser can't use), by host: an ask for
   // one says so, to tell you to choose another way to sign in.
   const passkeySites = new Map();
@@ -808,14 +812,22 @@ async function host() {
       return;
     }
     if (message.method === "Target.detachedFromTarget" && (ownFrames.delete(message.params.sessionId) || [...own.values()].includes(message.params.sessionId))) return;
+    if (message.method === "Page.frameAttached" && message.sessionId && isOwn(message.sessionId)) framePages.set(message.params.frameId, pageOf(message.sessionId));
+    if (message.method === "Page.frameDetached" && message.sessionId && isOwn(message.sessionId)) framePages.delete(message.params.frameId);
     if (message.method === "Browser.downloadWillBegin" && !downloads.has(message.params.guid)) {
       // Whose it is: the conversation at work in the page it started in (a page's main frame's ID
-      // is the page's), now or in the last two minutes, unless you'd taken the page over. Anyone
-      // else's (yours, a frame's in a page, a page an agent left) is nobody's.
-      const page = message.params.frameId;
-      const worker = everyStatus().workers.find((each) => each.targetId === page && each.session);
-      const claim = claims.get(page);
-      const session = held.has(page) ? undefined : worker?.session ?? (claim && Date.now() - claim.at < 2 * 60_000 ? claim.session : undefined);
+      // is the page's; a frame's is its page's), now or in the last two minutes, unless you'd
+      // taken the page over. One a page began as it opened (a link to a new tab) is that of the
+      // page that opened it. Anyone else's (yours, a page an agent left) is nobody's.
+      const pageWith = (frame) => framePages.get(frame) ?? [...frameTargets.values()].find((each) => each.targetId === frame)?.page ?? frame;
+      const whose = (page) => {
+        const worker = everyStatus().workers.find((each) => each.targetId === page && each.session);
+        const claim = claims.get(page);
+        return held.has(page) ? undefined : worker?.session ?? (claim && Date.now() - claim.at < 2 * 60_000 ? claim.session : undefined);
+      };
+      const page = pageWith(message.params.frameId);
+      const opener = openers.get(page);
+      const session = whose(page) ?? (opener && !held.has(page) ? whose(pageWith(opener)) : undefined);
       downloads.set(message.params.guid, { name: message.params.suggestedFilename || "download", session });
       broadcast({ method: "Kuvo.downloading", params: { name: downloads.get(message.params.guid).name, session } });
     }
@@ -832,7 +844,10 @@ async function host() {
         broadcast({ method: "Kuvo.downloadFailed", params: { name, session } });
       }
     }
-    if (message.method === "Target.targetCreated" && message.params.targetInfo.type === "page") targets.add(message.params.targetInfo.targetId);
+    if (message.method === "Target.targetCreated" && message.params.targetInfo.type === "page") {
+      targets.add(message.params.targetInfo.targetId);
+      if (message.params.targetInfo.openerId) openers.set(message.params.targetInfo.targetId, message.params.targetInfo.openerId);
+    }
     if ((message.method === "Target.targetCreated" || message.method === "Target.targetInfoChanged") && message.params.targetInfo.type === "page") {
       addresses.set(message.params.targetInfo.targetId, message.params.targetInfo.url);
       firstPage ??= message.params.targetInfo.targetId;
@@ -842,6 +857,8 @@ async function host() {
     }
     if (message.method === "Target.targetDestroyed") {
       targets.delete(message.params.targetId);
+      openers.delete(message.params.targetId);
+      for (const [frame, page] of framePages) if (page === message.params.targetId) framePages.delete(frame);
       addresses.delete(message.params.targetId);
       passkeyCleared(message.params.targetId);
       own.delete(message.params.targetId);

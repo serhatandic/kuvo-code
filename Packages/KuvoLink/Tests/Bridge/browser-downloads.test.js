@@ -38,3 +38,25 @@ test("a download is told as the conversation's whose agent was at work in its pa
   const failed = await tools.heard.until((message) => message.method === "Kuvo.downloadFailed");
   assert.deepEqual(failed.params, { name: "photo.jpg" });
 });
+
+test("a download from a frame in the page, or from a tab the page opened as it began, is that page's conversation's", async () => {
+  const mac = await client();
+  await mac.heard.until((message) => message.method === "Kuvo.hello");
+  const tools = await client();
+  await tools.heard.until((message) => message.method === "Kuvo.hello");
+  tools.send({ method: "Kuvo.setStatus", params: { working: true, tool: "browser_click", targetId: "P4", session: "ses_quotes" } });
+  await mac.heard.until((message) => message.method === "Kuvo.status" && message.params.workers?.some((each) => each.session === "ses_quotes"));
+  // P4, one of the browser's pages, with a frame of its own site in it (no target of its own).
+  event("Target.attachedToTarget", { sessionId: "S4", targetInfo: { targetId: "P4", type: "page", url: "https://example.com/quotes" }, waitingForDebugger: false });
+  event("Page.frameAttached", { frameId: "F4", parentFrameId: "P4" }, "S4");
+
+  event("Browser.downloadWillBegin", { guid: "g-frame", frameId: "F4", url: "https://example.com/quote.pdf", suggestedFilename: "quote.pdf" });
+  const fromFrame = await tools.heard.until((message) => message.method === "Kuvo.downloading" && message.params.name === "quote.pdf");
+  assert.equal(fromFrame.params.session, "ses_quotes");
+
+  // A link in P4 that opens a new tab, which downloads as it opens: no agent is in the tab yet.
+  event("Target.targetCreated", { targetInfo: { targetId: "P5", type: "page", url: "", openerId: "P4" } });
+  event("Browser.downloadWillBegin", { guid: "g-tab", frameId: "P5", url: "https://example.com/invoice.pdf", suggestedFilename: "invoice.pdf" });
+  const fromTab = await tools.heard.until((message) => message.method === "Kuvo.downloading" && message.params.name === "invoice.pdf");
+  assert.equal(fromTab.params.session, "ses_quotes");
+});
