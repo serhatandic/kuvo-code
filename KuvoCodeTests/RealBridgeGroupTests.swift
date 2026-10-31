@@ -107,12 +107,12 @@ import Testing
 
     /// This Mac's bridge, as the app starts it: its group chats in `root/groups`, its bots in
     /// `root/bots`, what it lets go of in `root/trash`, who can be named in `root/agents.json`.
-    private func start(root: URL) async throws -> RealBridge {
+    private func start(root: URL, agents: OutsideAgents = OutsideAgents()) async throws -> RealBridge {
         try await RealBridge.start(engine: engine, folder: folder, environment: [
             "KUVO_GROUPS": root.appending(path: "groups").path, "KUVO_BOTS": root.appending(path: "bots").path,
             "KUVO_TRASH": root.appending(path: "trash").path, "KUVO_GROUPS_MEMORY_KEY": BotGroups.memoryKey,
             "KUVO_AGENTS_FILE": root.appending(path: "agents.json").path,
-        ])
+        ], agents: agents)
     }
 
     private func clean() {
@@ -162,6 +162,35 @@ import Testing
         #expect(groups.speaking[made.id] == nil)
         // Kept where the box keeps it.
         #expect(FileManager.default.fileExists(atPath: folder.appending(path: "groups/\(made.id)/group.json").path))
+    }
+
+    /// This Mac's bridge is up before its engine, as it usually is at launch: once the engine is up,
+    /// its chats show as the bridge has them (what went on there while the app was closed), rather
+    /// than staying as last seen.
+    @Test func thisMacsChatsShowAsItsBridgeHasThemWhenItsUpBeforeTheEngine() async throws {
+        defer { clean() }
+        try bots(in: folder)
+        serve(Seats(lines: [:]))
+        // A chat its box went on with while the app was closed.
+        let chat = folder.appending(path: "groups/grp_ship0000001")
+        try FileManager.default.createDirectory(at: chat, withIntermediateDirectories: true)
+        try JSONSerialization.data(withJSONObject: ["kuvo": 1, "status": "active", "group": [
+            "id": "grp_ship0000001", "name": "Crew", "members": ["bot_ada", "bot_ben"], "seats": [:], "heard": [:], "created": "2026-10-31T09:00:00Z",
+        ]]).write(to: chat.appending(path: "group.json"))
+        try JSONSerialization.data(withJSONObject: [
+            ["id": "gm_1", "kind": "message", "text": "Ready to ship Friday?", "time": "2026-10-31T09:01:00Z"],
+            ["id": "gm_2", "kind": "message", "author": "bot_ada", "text": "Release notes are in.", "time": "2026-10-31T09:05:00Z"],
+        ]).write(to: chat.appending(path: "messages.json"))
+        let app = AppModel()
+        app.followAgents()
+        let bridge = try await start(root: folder, agents: app.agents)
+        defer { bridge.stop() }
+        // Its feed is up, and the app has done what it does as it connects, before the engine is.
+        try await until { app.catalog.areAgentsLoaded }
+
+        app.standIn(engine: engine.api)
+        try await until { app.chats.messages(in: "grp_ship0000001").map(\.id) == ["gm_1", "gm_2"] }
+        #expect(app.chats.list.map(\.id) == ["grp_ship0000001"])
     }
 
     /// One chat's talk redraws only what shows that chat: another chat's conversation, sidebar row

@@ -310,6 +310,33 @@ import Testing
         #expect(app.chats.stopped(in: "grp_box0000001").isEmpty)
     }
 
+    /// A chat that went on on this Mac's box while the window was closed: opened again, it shows as
+    /// the box has it now (a part given again, waiting on its stopped conversation), not as last seen.
+    @Test func aChatThatWentOnWhileClosedShowsAsItsBoxHasItNow() async throws {
+        defer { Self.clean(); mac.stop() }
+        try saveBots([("bot_ada", "Ada", nil), ("bot_ben", "Ben", nil)])
+        let group = Self.group("grp_mac0000001", members: ["bot_ada", "bot_ben"], seats: ["bot_ada": "ses_seatA", "bot_ben": "ses_seatB"])
+        let asked: [String: Any] = ["id": "gm_1", "kind": "message", "text": "Are we ready to ship Friday?", "time": "2026-10-31T12:49:29Z"]
+        let wrapUp = { (state: String) -> [String: Any] in
+            ["id": "gm_2", "kind": "wrapUp", "author": "bot_ada", "time": "2026-10-31T12:50:09Z", "text": "We ship Friday.\n\n- **&Ben**: make `timer.test.ts` steady",
+             "tasks": [["id": "gt_b", "bot": "bot_ben", "task": "Make `timer.test.ts` steady.", "state": state, "prompt": "msg_seedb", "started": "2026-10-31T12:50:59Z"]]]
+        }
+        let note: [String: Any] = ["id": "gm_3", "kind": "note", "text": "Ben couldn’t do its part: its message was taken back before Ben read it.", "time": "2026-10-31T12:54:29Z"]
+        here.add(group, messages: [asked, wrapUp("failed"), note])
+        let before = app()
+        await before.boxGroups.connected(nil)
+        #expect(before.chats.messages(in: "grp_mac0000001").map(\.id) == ["gm_1", "gm_2", "gm_3"])
+        before.boxGroups.flush()
+
+        // Meanwhile, on the box: the chat as it is now.
+        here.add(group, messages: [asked, wrapUp("working")])
+        let app = app()
+        #expect(app.chats.messages(in: "grp_mac0000001").map(\.id) == ["gm_1", "gm_2", "gm_3"], "as last seen, until the box says")
+        await app.boxGroups.connected(nil)
+        #expect(app.chats.messages(in: "grp_mac0000001").map(\.id) == ["gm_1", "gm_2"])
+        #expect(app.chats.messages(in: "grp_mac0000001").last?.tasks?.first?.state == .working)
+    }
+
     /// One machine added twice, at two addresses, found to be one: its chats are kept once, as
     /// the address it's kept under says, not twice with one copy talking on.
     @Test func aMachineAtTwoAddressesKeepsItsChatsOnce() throws {
