@@ -412,3 +412,40 @@ test("what waits on the box outlives the box: one left as the queue went on goes
   assert.deepEqual(prompted.map(each => each.id), ["msg_w1"]);
   assert.equal(link.queueOf("ses_1").waiting, undefined);
 });
+
+test("a run that fails after Resume sent what waited on the box pauses the queue again, the rest still waiting for Resume", async () => {
+  inboxes.ses_1 = [];
+  await ask("POST", "kuvo/sessions/ses_1/stop");
+  await ask("POST", "kuvo/sessions/ses_1/queue/add", { id: "msg_w1", text: "Check the build." });
+  await ask("POST", "kuvo/sessions/ses_1/queue/add", { id: "msg_w2", text: "Then deploy." });
+  await ask("POST", "kuvo/sessions/ses_1/queue/resume");
+  assert.deepEqual(prompted.map(each => each.id), ["msg_w1"]);
+  // Its run fails (a rate limit): the next isn't run into the same error, and Resume shows.
+  const b = box();
+  b.hear("session.execution.started");
+  b.hear("session.execution.failed");
+  const after = await until(state => state.paused);
+  assert.deepEqual(after.waiting.map(each => each.id), ["msg_w2"]);
+  b.wait(5000);
+  assert.deepEqual(prompted.map(each => each.id), ["msg_w1"]);
+});
+
+test("a conversation deleted while stopped takes what waited on the box with it", async () => {
+  inboxes.ses_1 = [];
+  await ask("POST", "kuvo/sessions/ses_1/stop");
+  await ask("POST", "kuvo/sessions/ses_1/queue/add", { id: "msg_w1", text: "Carry on.", files: [{ uri: "file:///tmp/a.txt", name: "a.txt" }] });
+  box().hear("session.deleted");
+  assert.deepEqual(link.queueOf("ses_1"), { paused: false, held: [] });
+  assert.deepEqual(fs.readdirSync(path.join(home, "run", "waiting")), [], "nothing of it left on the box");
+  assert.equal("ses_1" in link.readQueues(), false);
+});
+
+test("your own message waits shown as you wrote it, though what goes to the agent says more (its files' notes)", async () => {
+  inboxes.ses_1 = [];
+  await ask("POST", "kuvo/sessions/ses_1/stop");
+  const whole = "Look at this.\n\n[Attached: /tmp/a.png]";
+  await ask("POST", "kuvo/sessions/ses_1/queue/add", { id: "msg_w1", text: whole, words: "Look at this." });
+  assert.deepEqual((await ask("GET", "kuvo/sessions/ses_1/queue")).json.waiting.map(each => each.text), ["Look at this."]);
+  await ask("POST", "kuvo/sessions/ses_1/queue/resume");
+  assert.deepEqual(prompted.map(each => each.text), [whole]);
+});

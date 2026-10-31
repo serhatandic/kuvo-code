@@ -574,16 +574,19 @@ the same for every client and with none connected, and keeps them in `run/queues
   as they went to the engine, go first, in that order. `POST …/queue/resume`: unpaused, and the
   next one goes now. `POST …/queue/<item>/now` (Send Now): unpaused, the item steered (one waiting
   on the box sent), and a run under way stopped to go on with it; 404 when it isn't waiting.
-  `POST …/queue/add` (`{id?, text, files?, delivery?, from?}`, a prompt's body): a client's own
-  message for the queue (Undo, or one sent after this run), its files kept on the box as a
-  message's are (a phone's also naming its agents and saying it's from the phone, as its prompt
-  would), shown as written; while it's paused it waits on the box (`from` names who it was from, for one put
+  `POST …/queue/add` (`{id?, text, files?, delivery?, from?, words?}`, a prompt's body): a client's
+  own message for the queue (every one sent after this run, and Undo), its files kept on the box
+  as a message's are (a phone's also naming its agents and saying it's from the phone, as its
+  prompt would), shown as `words` (as you wrote it, without what the client added for the agent),
+  else as its text; while it's paused it waits on the box (`from` names who it was from, for one put
   back), else it goes to the engine as asked (`queue` by default); its answer says which,
   `waits: true|false`. `DELETE …/queue/<item>`: one waiting on the box taken away, its answer
   carrying it as it was, `removed: {id, text, files?, delivery, from?, words}` (`words`, as it was
   shown); 404 if it isn't. Undo adds it back with `…/queue/add` and `kept: true` (its body as it
   was kept, its files not kept again, shown with its `words`). Each answers the queue as it is
-  now; 404 for no such session here, 503 with no engine, 502 when the engine refused.
+  now; 404 for no such session here, 503 with no engine, 502 when the engine refused. A run that
+  fails pauses the queue again while anything waits on the box; a conversation deleted takes its
+  queue and what waited for it with it.
 - Clients show what's held and whether it's paused from these; the in-flight record of a message
   still on its way (and that Stop held it) stays with the client that sends it, which waits for its
   request before it asks the box to stop, and for its hold before it asks the box to resume.

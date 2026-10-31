@@ -870,6 +870,15 @@ function takeWaiting(session, item, resume = false) {
   const message = isObject(whole) && typeof whole.text === "string" && (whole.delivery === "steer" || whole.delivery === "queue") ? { id: shown.id, text: whole.text, delivery: whole.delivery, ...Array.isArray(whole.files) ? { files: whole.files } : {} } : null;
   return { shown, message };
 }
+function forgetQueue(session) {
+  let gone = [];
+  changeQueue(session, (state) => {
+    gone = state.waiting ?? [];
+    return { paused: false, held: [] };
+  });
+  for (const each of gone)
+    fs7.rmSync(waitingFile(each.id), { force: true });
+}
 function dropWaiting(session, item) {
   return takeWaiting(session, item);
 }
@@ -925,7 +934,7 @@ async function holdQueue(target, session, since, items = []) {
   }
   const waiting = await inboxOf(target, session).catch(() => inbox);
   const there = (id) => waiting.some((item) => item.id === id);
-  return changeQueue(session, (state) => since !== undefined && (state.resumed ?? 0) >= since ? state : { ...state, paused: state.paused || waiting.length > 0, held: [...moved.filter(there), ...state.held.filter((id) => !moved.includes(id) && there(id))] });
+  return changeQueue(session, (state) => since !== undefined && (state.resumed ?? 0) >= since ? state : { ...state, paused: state.paused || waiting.length > 0 || Boolean(state.waiting?.length), held: [...moved.filter(there), ...state.held.filter((id) => !moved.includes(id) && there(id))] });
 }
 async function stopSession(target, session, holds = true) {
   const held = await holdQueue(target, session);
@@ -1020,6 +1029,11 @@ function queueWatcher(target, { after = DRAIN_AFTER, schedule = setTimeout, canc
           changeQueue(session, (state) => ({ ...state, paused: false }));
         else if (!queueOf(session).paused)
           later(drains, session, () => drain(target, session));
+        break;
+      case "session.deleted":
+        forget(drains, session);
+        forget(stops, session);
+        forgetQueue(session);
         break;
       case "session.inbox.delivered":
       case "session.inbox.cancelled": {
@@ -17995,7 +18009,7 @@ async function* add({ request, bridge, readEngine, json, signal }, target, sessi
   const attached = given.kept === true ? asGiven : await attachedIn(asGiven, session, modelInput(base, headers, signal), request.fromMac === true, !toAgents);
   const body = given.kept !== true && fromPhoneToo ? fromPhone(await namedIn(attached, session, namingHere(readEngine))) : attached;
   const message = parsed(body);
-  const words = given.kept !== true ? given.text : typeof given.words === "string" ? given.words : undefined;
+  const words = typeof given.words === "string" ? given.words : given.kept !== true ? given.text : undefined;
   if (keepWaiting(session, message, { from, words }))
     return yield* json(200, { ...shownQueue(queueOf(session)), waits: true });
   await asked(target, "POST", `api/session/${encodeURIComponent(session)}/prompt`, message);

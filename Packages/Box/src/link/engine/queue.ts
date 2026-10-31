@@ -210,6 +210,16 @@ function takeWaiting(session: string, item?: string, resume = false): { shown: W
   return { shown, message };
 }
 
+/** `session`'s queue forgotten, and what waited on the box for it (its conversation is gone). */
+export function forgetQueue(session: string): void {
+  let gone: Waiting[] = [];
+  changeQueue(session, state => {
+    gone = state.waiting ?? [];
+    return { paused: false, held: [] };
+  });
+  for (const each of gone) fs.rmSync(waitingFile(each.id), { force: true });
+}
+
 /** One taken away from what waits on the box (Remove, or Edit): how it was shown and what would
  * have gone (for Undo to put back as it was); null when it isn't there. */
 export function dropWaiting(session: string, item: string): ReturnType<typeof takeWaiting> {
@@ -255,8 +265,8 @@ function putBack(session: string, message: Outgoing & { id: string }, shown: Wai
 }
 
 /** What waits for `session`'s next step held in its queue, ahead of what was queued (the latest
- * first), and the queue paused when anything waits: what Stop does before it stops the run, and a
- * failed run's. */
+ * first), and the queue paused when anything waits, in the engine or on the box: what Stop does
+ * before it stops the run, and a failed run's. */
 // `since`: for an interrupt then (ms), unless Resume or Send Now went on with it after. `items`:
 // messages a client held as they went (queued or not), put first, in that order.
 export async function holdQueue(target: Target, session: string, since?: number, items: string[] = []): Promise<QueueState> {
@@ -275,7 +285,7 @@ export async function holdQueue(target: Target, session: string, since?: number,
   const waiting = await inboxOf(target, session).catch(() => inbox);
   const there = (id: string) => waiting.some(item => item.id === id);
   return changeQueue(session, state => (since !== undefined && (state.resumed ?? 0) >= since ? state
-    : { ...state, paused: state.paused || waiting.length > 0, held: [...moved.filter(there), ...state.held.filter(id => !moved.includes(id) && there(id))] }));
+    : { ...state, paused: state.paused || waiting.length > 0 || Boolean(state.waiting?.length), held: [...moved.filter(there), ...state.held.filter(id => !moved.includes(id) && there(id))] }));
 }
 
 /** Stop: what waits held, the queue paused whether anything waits or not (what arrives later waits
@@ -399,6 +409,12 @@ export function queueWatcher(target: Target, { after = DRAIN_AFTER, schedule = s
         // You writing to it for now: it goes on. (Not a letter, a wake-up or a note.)
         if (event.data?.item?.delivery === "steer" && isYours(event.data.item)) changeQueue(session, state => ({ ...state, paused: false }));
         else if (!queueOf(session).paused) later(drains, session, () => drain(target, session));
+        break;
+      case "session.deleted":
+        // Gone: its queue and what waited for it with it.
+        forget(drains, session);
+        forget(stops, session);
+        forgetQueue(session);
         break;
       case "session.inbox.delivered":
       case "session.inbox.cancelled": {

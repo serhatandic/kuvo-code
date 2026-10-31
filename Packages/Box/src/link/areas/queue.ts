@@ -69,8 +69,9 @@ export async function* queueRoute(context: RouteContext, match: RegExpMatchArray
 
 // A client's own message for the queue (Undo, or one sent after this run while it's paused): its
 // files kept on the box as a message's are (`attachedIn`), then waiting there while the queue is
-// paused, else to the engine as it asked. `{id?, text, files?, delivery?, from?}`; `waits` says which.
-// `kept`: one a DELETE gave back (Undo), as it was kept already, shown with its `words`.
+// paused, else to the engine as it asked. `{id?, text, files?, delivery?, from?, words?}` (`words`:
+// how it's shown, as you wrote it); `waits` says which. `kept`: one a DELETE gave back (Undo), as it
+// was kept already.
 async function* add({ request, bridge, readEngine, json, signal }: RouteContext, target: Target, session: string): AsyncGenerator<AnswerPiece> {
   const given = parsed(request.body);
   if (!isObject(given) || typeof given.text !== "string" || (!given.text.trim() && !(Array.isArray(given.files) && given.files.length))) return yield* json(400, { message: "Send {\"text\": …}." });
@@ -86,8 +87,9 @@ async function* add({ request, bridge, readEngine, json, signal }: RouteContext,
   const attached = given.kept === true ? asGiven : await attachedIn(asGiven, session, modelInput(base, headers, signal), request.fromMac === true, !toAgents);
   const body = given.kept !== true && fromPhoneToo ? fromPhone(await namedIn(attached, session, namingHere(readEngine))) : attached;
   const message = parsed(body) as { id: string; text: string; files?: unknown[]; delivery: "steer" | "queue" };
-  // Shown as written (not with what was added for the agent), or, put back, as it was shown.
-  const words = given.kept !== true ? given.text : typeof given.words === "string" ? given.words : undefined;
+  // Shown as written (`words`: without what the client added for the agent, like its files' notes),
+  // or, put back, as it was shown.
+  const words = typeof given.words === "string" ? given.words : given.kept !== true ? given.text : undefined;
   if (keepWaiting(session, message, { from, words })) return yield* json(200, { ...shownQueue(queueOf(session)), waits: true });
   await asked(target, "POST", `api/session/${encodeURIComponent(session)}/prompt`, message);
   return yield* json(200, { ...shownQueue(queueOf(session)), waits: false });
