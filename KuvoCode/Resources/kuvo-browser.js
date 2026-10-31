@@ -60,7 +60,7 @@ const TAB_IDLE = Number(process.env.KUVO_BROWSER_TAB_IDLE || 3600) * 1000;
 
 // Goes up with every change to the keeper (host mode): a newer one replaces one that's running
 // (its pages close, its sign-ins stay), and an older one never replaces a newer.
-const KEEPER = 40;
+const KEEPER = 41;
 // Passkeys: none yet, as in the panel's browser on the Mac (Passkeys.swift, the same script).
 const NO_PASSKEYS = "(() => {\n  try {\n    // Says a passkey was asked for with an event only this launch's listener, in a world of its\n    // own, knows the name of: nothing of it is left in the page's world. (Taken before the page\n    // can change them.)\n    const dispatch = EventTarget.prototype.dispatchEvent, Made = Event;\n    const tell = () => {\n      try {\n        dispatch.call(window, new Made(\"KUVO_PASSKEY_EVENT\"));\n      } catch {}\n    };\n    const none = (options) => {\n      // Asked of you, not looked for quietly as the page loads.\n      if (options.mediation !== \"conditional\") tell();\n      return Promise.reject(new DOMException(\"Passkeys can't be used in this browser.\", \"NotAllowedError\"));\n    };\n    const Container = window.CredentialsContainer;\n    if (Container && Container.prototype) {\n      const prototype = Container.prototype, get = prototype.get, create = prototype.create;\n      if (get) prototype.get = function (options) { return options && options.publicKey ? none(options) : get.call(this, options); };\n      if (create) prototype.create = function (options) { return options && options.publicKey ? none(options) : create.call(this, options); };\n    }\n    const Credential = window.PublicKeyCredential;\n    if (Credential) {\n      Credential.isUserVerifyingPlatformAuthenticatorAvailable = () => Promise.resolve(false);\n      if (Credential.isConditionalMediationAvailable) Credential.isConditionalMediationAvailable = () => Promise.resolve(false);\n    }\n  } catch {}\n})();";
 // The event it fires when a passkey is asked for (a name of this keeper's, which only the
@@ -817,19 +817,19 @@ async function host() {
       const claim = claims.get(page);
       const session = held.has(page) ? undefined : worker?.session ?? (claim && Date.now() - claim.at < 2 * 60_000 ? claim.session : undefined);
       downloads.set(message.params.guid, { name: message.params.suggestedFilename || "download", session });
-      broadcast({ method: "Kuvo.downloading", params: { name: downloads.get(message.params.guid).name } });
+      broadcast({ method: "Kuvo.downloading", params: { name: downloads.get(message.params.guid).name, session } });
     }
     if (message.method === "Browser.downloadProgress" && message.params.state !== "inProgress") {
       const { name, session } = downloads.get(message.params.guid) ?? {};
       downloads.delete(message.params.guid);
       if (message.params.state === "completed" && name) {
         const file = finishDownload(message.params.guid, name);
-        if (file) broadcast({ method: "Kuvo.downloaded", params: { name: path.basename(file), path: file, size: message.params.totalBytes } });
-        else broadcast({ method: "Kuvo.downloadFailed", params: { name } });
+        if (file) broadcast({ method: "Kuvo.downloaded", params: { name: path.basename(file), path: file, size: message.params.totalBytes, session } });
+        else broadcast({ method: "Kuvo.downloadFailed", params: { name, session } });
         // Kept in the record of what agents made, as that conversation's (none running: not kept).
         if (file && session) engine("POST", "api/kuvo/artifacts/noted", { path: file, session, via: "download" }, "bridge").catch(() => {});
       } else if (name) {
-        broadcast({ method: "Kuvo.downloadFailed", params: { name } });
+        broadcast({ method: "Kuvo.downloadFailed", params: { name, session } });
       }
     }
     if (message.method === "Target.targetCreated" && message.params.targetInfo.type === "page") targets.add(message.params.targetInfo.targetId);
@@ -1185,6 +1185,17 @@ const notes = [];
 const noteOnce = (note) => {
   if (!notes.includes(note)) notes.push(note);
 };
+// What a conversation's downloads did while none of its calls was at work, for its next one.
+const downloadNotes = new Map();
+/// A download's news goes to the conversation it's for: its call at work, or its next one. One
+/// that's nobody's (yours, a page no agent was in) goes to no agent.
+function noteDownload(note, session = null) {
+  if (busy && session === (caller ?? null)) return noteOnce(note);
+  if (!session) return;
+  const waiting = downloadNotes.get(session) ?? [];
+  if (!waiting.includes(note)) waiting.push(note);
+  downloadNotes.set(session, waiting);
+}
 let busy = false;
 // The tool at work, and the page it works in.
 let currentTool = null;
@@ -1227,6 +1238,10 @@ async function takeTurn(call) {
   currentTool = call.name;
   workingIn = null;
   notes.unshift(...call.notes.splice(0));
+  if (call.session && downloadNotes.has(call.session)) {
+    for (const note of downloadNotes.get(call.session)) noteOnce(note);
+    downloadNotes.delete(call.session);
+  }
   link?.notify("Kuvo.setStatus", { working: true, tool: call.name });
 }
 
@@ -1316,13 +1331,13 @@ async function openLink() {
         else dialogs.set(message.sessionId, message.params);
         break;
       case "Kuvo.downloading":
-        noteOnce(`The page started downloading ${message.params.name}.`);
+        noteDownload(`The page started downloading ${message.params.name}.`, message.params.session);
         break;
       case "Kuvo.downloaded":
-        noteOnce(`Downloaded ${message.params.name} to ${message.params.path}.`);
+        noteDownload(`Downloaded ${message.params.name} to ${message.params.path}.`, message.params.session);
         break;
       case "Kuvo.downloadFailed":
-        noteOnce(`Downloading ${message.params.name} failed.`);
+        noteDownload(`Downloading ${message.params.name} failed.`, message.params.session);
         break;
       case "Page.fileChooserOpened":
         choosers.get(message.sessionId)?.(message.params);
