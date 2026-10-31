@@ -402,12 +402,17 @@ final class AppModel {
         var downloaded = false
         do {
             async let environment = ShellEnvironment.load()
-            let binary: URL
+            let binary: URL?
             if let override = Self.engineOverride {
                 binary = URL(filePath: override)
             } else if let installed = await Task.detached(operation: { [installer] in installer.installed() }).value {
                 // Checking its signature reads all of it, a second or so: off the main thread.
                 binary = installed
+            } else if KeeperRecord.read()?.isOtherVersion == true {
+                // An older keeper making way for this version's runs the engine it came with, which
+                // a download here would take away (one keeps only its own version): the keeper that
+                // replaces it downloads this version's.
+                binary = nil
             } else {
                 engine = .downloading(progress: 0)
                 downloaded = true
@@ -536,6 +541,10 @@ final class AppModel {
     @ObservationIgnored private(set) lazy var ownBox = MacBoxRunner(box: box, agents: agents, host: host)
     /// This Mac's keeper's box, followed: nil while the app runs its own.
     private(set) var keeperBox: KeeperFollower?
+    /// The keeper running now is an older app's, making way for this one's the first moment nothing
+    /// is under way (a running session is never stopped for an update): until then the app follows
+    /// it, and Settings › General and the menu bar's card say the update waits.
+    private(set) var keeperMakesWay = false
 
     /// Whether quitting leaves this Mac's work going (the keeper runs it): Quit takes Kuvo Code to
     /// the menu bar (`InBackground`), and Stop Background Work is there.
@@ -563,7 +572,10 @@ final class AppModel {
             follower.onEngine = { [weak self] state in self?.boxEngineChanged(state) }
             follower.onKeeper = { [weak self] in Task { await self?.tellKeeper() } }
             follower.onGone = { [weak self] in self?.keeperGone() }
+            follower.onMakingWay = { [weak self] makingWay in self?.keeperMakesWay = makingWay }
             host.tellsBox = false
+            // The keeper keeps this Mac awake while agents work, so the app holds nothing besides.
+            Awake.shared.keeper = { (try? await KeeperControl.send(.status))?["awake"] as? Bool ?? false }
             keeperBox = follower
             await follower.start()
         }
@@ -595,6 +607,9 @@ final class AppModel {
         log.notice("Background work is off: this Mac's box runs in the app")
         keeperBox.stop()
         self.keeperBox = nil
+        keeperMakesWay = false
+        // The app keeps this Mac awake itself now, while it runs the box.
+        Awake.shared.keeper = nil
         box.unfollow()
         agents.unfollow()
         host.tellsBox = true
@@ -696,10 +711,13 @@ final class AppModel {
         NSApplication.shared.terminate(nil)
     }
 
-    /// The app quits: its own box stops with it; the keeper's goes on.
+    /// The app quits: its own box stops with it; the keeper's goes on, and keeps this Mac awake
+    /// while agents work there.
     func stopBox() {
         keeperBox?.stop()
         if keeperBox == nil { ownBox.stop() }
+        Awake.shared.agentsWork(false)
+        Awake.shared.keeper = nil
     }
 
     /// This Mac's settings read from its box and brought up to date (integrations' and servers'

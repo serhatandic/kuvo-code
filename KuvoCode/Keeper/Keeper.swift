@@ -40,8 +40,16 @@ final class Keeper {
     private let link = PhoneLink()
     /// The browser's tools, for the engine and the agents: the open app's, or saying it isn't.
     private let tools = KeeperTools()
-    /// Making way for a newer app's keeper, once nothing is under way.
-    private var updating: Task<Void, Never>?
+    /// Making way for a newer app's keeper: it goes the first moment nothing is under way.
+    private var handingOver = false
+    /// Gone (`finish`): nothing more is looked at.
+    private var finished = false
+    /// What's under way, looked at every so often (`watch`).
+    private var watching: Task<Void, Never>?
+    /// This Mac kept awake while agents work on it, as Settings › General says (the app's own
+    /// setting, read as you change it): whether or not the app is open, after a restart too. An
+    /// app following this keeper holds nothing of its own besides (`Awake.keeper`).
+    private let awake = Awake()
 
     init(box: MacBoxRunner = MacBoxRunner(box: BoxProcess(), agents: OutsideAgents(), host: HostInterface()),
          version: String = AppInfo.version, build: String = AppInfo.build, exits: @escaping (Exit) -> Void = { Darwin.exit($0.rawValue) }) {
@@ -99,8 +107,8 @@ final class Keeper {
             while !box.claim() {
                 try? await Task.sleep(for: .seconds(5))
             }
-            watchForUpdate()
             await box.start()
+            watch()
         } catch {
             // Nothing could reach it: gone, to be started again by launchd.
             log.error("The keeper couldn't start: \(error.localizedDescription, privacy: .public)")
@@ -110,6 +118,10 @@ final class Keeper {
 
     /// Everything it started stopped, its record taken away, and gone.
     func finish(_ how: Exit) {
+        guard !finished else { return }
+        finished = true
+        watching?.cancel()
+        awake.agentsWork(false)
         box.stop()
         tools.stop()
         server.stop()
@@ -151,7 +163,7 @@ final class Keeper {
             Task { await box.box.startAgain() }
             return .json([:])
         case .update:
-            update(within: (try? JSONSerialization.jsonObject(with: request.body) as? [String: Any])?["within"] as? Double ?? Self.updateWait)
+            update()
             return .json([:])
         case .app:
             let given = (try? JSONSerialization.jsonObject(with: request.body) as? [String: Any]) ?? [:]
@@ -161,7 +173,8 @@ final class Keeper {
         }
     }
 
-    /// What runs, and how: the engine, the box and the bridge, and whether anything is under way.
+    /// What runs, and how: the engine, the box and the bridge, whether anything is under way, and
+    /// whether it keeps this Mac awake for it.
     private var status: [String: Any] {
         get async {
             var engine: [String: Any] = [:]
@@ -174,7 +187,7 @@ final class Keeper {
             var answer: [String: Any] = [
                 "pid": Int(getpid()), "version": version, "build": build,
                 "started": started.timeIntervalSince1970 * 1000, "engine": engine, "busy": await box.isBusy(),
-                "updating": updating != nil,
+                "updating": handingOver, "awake": awake.isHolding,
             ]
             if let failure = box.box.failure { answer["box"] = ["failure": failure] }
             if let failure = box.agents.failure { answer["agents"] = ["failure": failure] }
@@ -182,36 +195,48 @@ final class Keeper {
         }
     }
 
-    // MARK: Updates
+    // MARK: What's under way
 
-    /// How long a keeper making way for a newer app's waits for what's under way, at most: past
-    /// that, it stops it (a session's queue pauses, as when the engine stops).
-    static let updateWait: Double = 30 * 60
-
-    /// Gone once nothing is under way, or `within` seconds have passed, to be started again from
-    /// the app now installed (launchd starts it from there).
-    private func update(within limit: Double) {
-        guard updating == nil else { return }
-        log.info("Making way for a newer keeper, within \(Int(limit))s")
-        updating = Task { @MainActor in
-            await Self.makeWay(within: limit, busy: box.isBusy)
-            finish(.again)
+    /// What's under way, looked at now and again every so often: every 10 seconds, and every 2
+    /// while it makes way for a newer keeper, so it goes soon after the last session ends.
+    private func watch() {
+        watching?.cancel()
+        watching = Task { @MainActor in
+            while await look() {
+                await Self.clock(handingOver ? 2 : 10)
+                if Task.isCancelled { return }
+            }
         }
     }
 
-    /// The app installed over this one (an update installed as you quit, with no app open to say
-    /// so): it makes way for the new one's keeper, as when the app asks.
-    private func watchForUpdate() {
-        Task { @MainActor in
-            while updating == nil {
-                await Self.clock(60)
-                guard !Task.isCancelled else { return }
-                if let installed = Self.installedVersion(), installed != "\(version) (\(build))" {
-                    log.info("Kuvo Code \(installed, privacy: .public) is installed now")
-                    update(within: Self.updateWait)
-                }
-            }
+    /// One look: this Mac kept awake while something is under way (and the setting says so), an
+    /// app installed over this one noticed (an update installed as you quit, with no app open to
+    /// say so), and once it makes way with nothing under way, gone. Whether to look again.
+    private func look() async -> Bool {
+        let busy = await box.isBusy()
+        guard !Task.isCancelled, !finished else { return false }
+        awake.agentsWork(busy)
+        // The setting as you last changed it, in the app or from a phone.
+        awake.update()
+        if !handingOver, let installed = Self.installedVersion(), installed != "\(version) (\(build))" {
+            log.info("Kuvo Code \(installed, privacy: .public) is installed now")
+            handingOver = true
         }
+        guard handingOver, !busy else { return true }
+        finish(.again)
+        return false
+    }
+
+    /// Gone the first moment nothing is under way on the engine or with the coding agents, however
+    /// long what runs takes (a running session is never stopped for an update), to be started again
+    /// from the app now installed (launchd starts it from there). Until then, an app following it
+    /// says the update waits.
+    private func update() {
+        guard !handingOver, !finished else { return }
+        log.info("Making way for a newer keeper once nothing is under way")
+        handingOver = true
+        // Looked at now, unless the box is still starting: its first look comes once it has.
+        if watching != nil { watch() }
     }
 
     /// The version of the app now at this one's place, as "0.9.0 (123)": read from its file, as the
@@ -221,19 +246,6 @@ final class Keeper {
               let info = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
               let version = info["CFBundleShortVersionString"] as? String, let build = info["CFBundleVersion"] as? String else { return nil }
         return "\(version) (\(build))"
-    }
-
-    /// Waits until `busy` says nothing is under way, asking every `every` seconds, or until `limit`
-    /// seconds have passed: whether it ended with nothing under way.
-    @discardableResult
-    static func makeWay(within limit: Double, every: Int = 10, busy: () async -> Bool) async -> Bool {
-        var waited = 0
-        while await busy() {
-            guard Double(waited) < limit else { return false }
-            await clock(every)
-            waited += every
-        }
-        return true
     }
 
     #if DEBUG

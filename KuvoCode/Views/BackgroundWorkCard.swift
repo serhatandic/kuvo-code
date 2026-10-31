@@ -69,6 +69,8 @@ struct BackgroundWorkCard: View {
                         line(title)
                     }
                     if working.count > 3 { line("and \(working.count - 3) more") }
+                    // After an update, until the work moves to it.
+                    if app.keeperMakesWay, !working.isEmpty { line("Updates once this is done") }
                     if let next { line(next) }
                     if working.isEmpty, next == nil {
                         Text("Nothing is running. A message or a wake-up starts the work again.")

@@ -350,6 +350,8 @@ private struct BackgroundWorkRow: View {
 
     private var caption: Text {
         switch work.state {
+        // After an update: the work moves to it once what's running now is done.
+        case .on where app.keeperMakesWay: Text("Updates to \(AppInfo.version) once what’s running now is done. Nothing is stopped for it.")
         // How to turn it off: macOS's own switch, in Login Items & Extensions.
         case .on: Text("Bots, goals and wake-ups go on when Kuvo Code is closed. To turn this off, use [Login Items](kuvo-settings:login-items).")
         case .needsApproval: Text("Waiting for your OK in Login Items & Extensions. Until then, the work stops when you quit.")
