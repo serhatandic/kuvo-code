@@ -308,19 +308,24 @@ final class Bots {
         show()
     }
 
-    /// This Mac's bots as its box keeps them, from now on (`kuvo/bots/events`): one made, changed or
-    /// deleted, by an agent, a phone or here, shows as it happens.
-    func follow() async {
+    /// A box's bots as it keeps them, from now on (`kuvo/bots/events`): one made, changed or deleted,
+    /// by an agent, a phone or here, shows as it happens. This Mac's always; a machine's while it's
+    /// connected (its connection ends this).
+    func follow(_ box: String = BoxClient.mac) async {
         struct Line: Decodable { var bots: [ListedBot] }
+        let onThisMac = box == BoxClient.mac
         while !Task.isCancelled {
             // The app gone (a test's): nothing more to follow for it.
             guard let app else { return }
-            do {
-                    for try await data in (client(BoxClient.mac) ?? app.box(BoxClient.mac)).follow("kuvo/bots/events") {
+            // (Nothing goes to a machine while it's away or starting over.)
+            if let client = onThisMac ? client(box) ?? app.box(box) : canReach(box) ? client(box) : nil {
+                do {
+                    for try await data in client.follow("kuvo/bots/events") {
                         guard let line = try? JSONDecoder().decode(Line.self, from: data) else { continue }
-                        take(line.bots, from: BoxClient.mac)
+                        take(line.bots, from: box)
                     }
-            } catch {}
+                } catch {}
+            }
             // The box started again, or isn't up yet: followed again in a moment.
             try? await Task.sleep(for: .seconds(2))
         }

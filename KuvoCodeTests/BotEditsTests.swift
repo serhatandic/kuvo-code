@@ -11,7 +11,7 @@ import Testing
 /// shows (a change made there meanwhile included). The machine's box is the real one (`kuvo-link.js
 /// serve`), reached over HTTP where a Mac reaches it over SSH; its engine is a stand-in.
 @MainActor
-@Suite(.serialized) struct BotEditsTests {
+@Suite(.serialized, .timeLimit(.minutes(1))) struct BotEditsTests {
     let engine = StubEngine(port: 47_985)
     let app = AppModel()
 
@@ -143,6 +143,23 @@ import Testing
         release.open()
         await read.value
         #expect(app.bots.bot(ada.id)?.name == "Ada Lovelace")
+    }
+
+    /// A machine's bots followed while it's connected: one a phone changes or makes there shows here
+    /// as it happens, not only once the Mac connects to it again.
+    @Test func whatAPhoneDoesToAMachinesBotsShowsWhileItsConnected() async throws {
+        let machine = try await lab()
+        defer { done(machine) }
+        app.bots.boxes = { box in box == "lab" ? machine.client : BoxClient(box: box, transport: LocalBox { _ in AsyncThrowingStream { $0.finish() } }) }
+        app.bots.reachable = { $0 == "lab" }
+        let following = Task { await app.bots.follow("lab") }
+        defer { following.cancel() }
+        try await until { app.bots.bot("bot_ada000001") != nil }
+
+        // A phone renames her there.
+        _ = try await machine.client.send("PATCH", "kuvo/bots/bot_ada000001", body: Data(#"{"name": "Ada Lovelace"}"#.utf8))
+        try await until { app.bots.bot("bot_ada000001")?.name == "Ada Lovelace" }
+        #expect(app.bots.bot("bot_ada000001")?.machine == "lab")
     }
 
     /// One its box won't take when it's back (a name that's only spaces, say) is let go, and the box's
