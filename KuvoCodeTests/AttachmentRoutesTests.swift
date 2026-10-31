@@ -110,4 +110,14 @@ import Testing
         #expect(prepared.files.map(\.name) == ["notes.txt"])
         #expect(prepared.unsent == [huge.path])
     }
+
+    /// A picture only the engine has (a photo from the phone), opened twice: the same copy on
+    /// this Mac both times, not a second one.
+    @Test func openingAPictureTwiceWritesItOnce() throws {
+        let png = try Data(contentsOf: url("shot.png")).base64EncodedString()
+        let item = AttachmentItem.stored(.init(mime: "image/png", name: "photo.png", data: png), id: "msg_\(UUID().uuidString)#0")
+        let first = try #require(item.localURL())
+        defer { try? FileManager.default.removeItem(at: first) }
+        #expect(item.localURL() == first)
+    }
 }
