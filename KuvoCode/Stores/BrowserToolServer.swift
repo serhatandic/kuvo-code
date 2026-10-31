@@ -605,7 +605,8 @@ enum BrowserTools {
             if expanded.hasPrefix("/"), fileNote(for: URL(filePath: realTarget(expanded)).absoluteString, caller: caller) != nil {
                 return text("Not saved: \(expanded) is outside this conversation's folder, and this session asks before writing files elsewhere. Save it in the folder; if the user wants it elsewhere, ask them first, then move it there (a command, which asks them).", error: true)
             }
-            return text(await agent.savePDF(to: path))
+            // Where it was checked: "new/../x.pdf" leaves no "new" folder behind.
+            return text(await agent.savePDF(to: expanded.hasPrefix("/") ? expanded : path))
         case "browser_screenshot":
             guard let png = await agent.screenshot() else { return text("Couldn't capture the page.", error: true) }
             return ["content": [["type": "image", "data": png, "mimeType": "image/png"]]]

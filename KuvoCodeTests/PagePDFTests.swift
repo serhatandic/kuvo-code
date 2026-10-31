@@ -87,6 +87,10 @@ import Testing
         let around = await save(elsewhere.path(percentEncoded: false) + "/new/../notes.pdf")
         #expect(around.text.hasPrefix("Not saved:"), "\(around.text)")
         #expect(try String(contentsOf: outside, encoding: .utf8) == "your notes")
+        // In the folder the same way: saved where it says, with no folder made on the way.
+        #expect(await save(folder.path(percentEncoded: false) + "/made/../through.pdf").text.hasPrefix("Saved the page as a"))
+        #expect(FileManager.default.fileExists(atPath: folder.appending(path: "through.pdf").path(percentEncoded: false)))
+        #expect(!FileManager.default.fileExists(atPath: folder.appending(path: "made").path(percentEncoded: false)))
     }
 
     @Test func whatItTurnsDown() async throws {
