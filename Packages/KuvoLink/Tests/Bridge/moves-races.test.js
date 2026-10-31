@@ -364,6 +364,9 @@ test("while it moves, what waits for it stays as it is: a Remove, an Undo or a R
   assert.equal(queue.paused, true, "still stopped");
   assert.deepEqual(queue.waiting.map(each => each.id), ["msg_q1", "msg_q2"]);
   for (const id of ["msg_q1", "msg_q2"]) assert.ok(fs.existsSync(path.join(home, "run", "waiting", `${id}.json`)), id);
+  // And it can be changed again.
+  assert.equal((await ask("DELETE", "kuvo/sessions/ses_qmove/queue/msg_q1")).status, 200);
+  assert.deepEqual((await ask("GET", "kuvo/sessions/ses_qmove/queue")).json.waiting.map(each => each.id), ["msg_q2"]);
 });
 
 test("where a moved conversation lives: by the computer that moved it, lately, and never one of this box's own", () => {

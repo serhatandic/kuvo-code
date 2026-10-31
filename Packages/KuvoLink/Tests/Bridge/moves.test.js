@@ -64,7 +64,7 @@ function body(request) {
 // An engine with its conversations (`{id, title, directory, messages}`), as its API exports, imports
 // and deletes them.
 async function engineWith(sessions) {
-  const engine = { sessions: new Map(sessions.map(each => [each.id, each])), prompts: [], cursors: new Map() };
+  const engine = { sessions: new Map(sessions.map(each => [each.id, each])), prompts: [], cursors: new Map(), active: new Set() };
   const server = http.createServer(async (request, response) => {
     const given = await body(request);
     const url = new URL(request.url, "http://x");
@@ -84,7 +84,7 @@ async function engineWith(sessions) {
       }
       return send(200, [...engine.sessions.values()].map(listed));
     }
-    if (url.pathname === "/api/session/active") return send(200, {});
+    if (url.pathname === "/api/session/active") return send(200, Object.fromEntries([...engine.active].map(id => [id, { type: "busy" }])));
     if (url.pathname === "/api/model") return send(200, []);
     if (url.pathname === "/api/experimental/session/import" && request.method === "POST") {
       if (engine.sessions.has(given.info?.id)) return response.writeHead(409, { "content-type": "application/json" }).end(JSON.stringify({ message: "It's there already." }));
@@ -109,7 +109,10 @@ async function engineWith(sessions) {
       return send(200, true);
     }
     if (match[2] === "/instructions/entries") return send(200, []);
-    if (match[2] === "/interrupt") return send(200, true);
+    if (match[2] === "/interrupt") {
+      engine.active.delete(session.id);
+      return send(200, true);
+    }
     if (match[2] === "/message") return send(200, []);
     if (match[2] === "/prompt") {
       engine.prompts.push({ session: session.id, text: given.text, delivery: given.delivery, ...(given.files ? { files: given.files } : {}) });
@@ -429,7 +432,8 @@ test("a chat you stopped moves stopped, with what waits for it in the same order
   assert.equal((await ask("POST", "kuvo/sessions/ses_stop/stop")).json?.paused, true);
   // What came while it was stopped: another agent's letter, then one of yours with a file.
   await ask("POST", "kuvo/sessions/ses_stop/queue/add", { id: "msg_wait1", text: "[Letter] The build is green.", from: "Ada", words: "The build is green.", kept: true });
-  await ask("POST", "kuvo/sessions/ses_stop/queue/add", { id: "msg_wait2", text: "Then the docs.", files: [{ uri: "file:///tmp/notes.txt", name: "notes.txt" }] });
+  fs.writeFileSync(path.join(support, "stop-notes.txt"), "Docs first.");
+  await ask("POST", "kuvo/sessions/ses_stop/queue/add", { id: "msg_wait2", text: "Then the docs.", files: [{ uri: `file://${path.join(support, "stop-notes.txt")}`, name: "notes.txt" }] });
   const moved = await ask("POST", "kuvo/moves", { kind: "chat", id: "ses_stop", to: lab.key });
   assert.equal(moved.status, 200, JSON.stringify(moved.json));
   // There: still stopped, the same waiting, in the same order, shown as here.
@@ -463,6 +467,8 @@ test("a chat stopped with messages the engine held moves with them, in their ord
   const notes = path.join(support, "notes.txt");
   fs.writeFileSync(notes, "Ship on Friday.");
   await ask("POST", "kuvo/sessions/ses_held/queue/add", { id: "msg_wait4", text: "Then the docs.", files: [{ uri: `file://${notes}`, name: "notes.txt" }] });
+  // And one whose file is gone by now: it goes, without it.
+  await ask("POST", "kuvo/sessions/ses_held/queue/add", { id: "msg_wait5", text: "And the tag.", files: [{ uri: `file://${path.join(support, "gone.txt")}`, name: "gone.txt" }] });
   const moved = await ask("POST", "kuvo/moves", { kind: "chat", id: "ses_held", to: lab.key });
   assert.equal(moved.status, 200, JSON.stringify(moved.json));
   // There: stopped, all three waiting in the order they had here, shown as here.
@@ -472,10 +478,11 @@ test("a chat stopped with messages the engine held moves with them, in their ord
     ["msg_held2", "Ada", "The build is green.", null],
     ["msg_held1", null, "Also run the tests.", ["log.txt"]],
     ["msg_wait4", null, "Then the docs.", ["notes.txt"]],
+    ["msg_wait5", null, "And the tag.", null],
   ]);
   assert.deepEqual(labEngine.prompts.filter(each => each.session === "ses_held"), [], "nothing went to the agent");
   // Each goes whole as Resume sends it, a file with what's in it.
-  for (const step of [1, 2, 3]) {
+  for (const step of [1, 2, 3, 4]) {
     assert.equal((await askMachine("POST", "kuvo/sessions/ses_held/queue/resume")).status, 200);
     await eventually(() => labEngine.prompts.filter(each => each.session === "ses_held").length >= step);
   }
@@ -483,5 +490,25 @@ test("a chat stopped with messages the engine held moves with them, in their ord
     ["[Message from Ada · ses_ada] (To answer, use send_message to ses_ada.)\n\nThe build is green.", null],
     ["Also run the tests.", [{ name: "log.txt", uri: "data:text/plain;base64,b2s=" }]],
     ["Then the docs.", [{ name: "notes.txt", uri: `data:text/plain;base64,${Buffer.from("Ship on Friday.").toString("base64")}` }]],
+    ["And the tag.", null],
   ]);
+});
+
+test("a chat at work as you move it: Stop while it waits for the turn to end, and it moves stopped, with what was sent meanwhile", { timeout: 90_000 }, async t => {
+  signal = t.signal;
+  macEngine.sessions.set("ses_busy", { id: "ses_busy", title: "Busy", directory: macChats, messages: messages("Refactor it."), inbox: [
+    { id: "msg_busy1", sessionID: "ses_busy", type: "user", delivery: "queue", payload: { text: "Keep the old names." } },
+  ] });
+  macEngine.active.add("ses_busy");
+  const moving = ask("POST", "kuvo/moves", { kind: "chat", id: "ses_busy", to: lab.key });
+  // Once it's moving (waiting for the turn to end): Stop.
+  while (!(await ask("GET", "kuvo/moves")).json?.moves?.some(each => each.thing === "ses_busy")) await new Promise(resolve => setTimeout(resolve, 20));
+  const stopped = await ask("POST", "kuvo/sessions/ses_busy/stop");
+  assert.equal(stopped.status, 200, JSON.stringify(stopped.json));
+  assert.equal(stopped.json.paused, true);
+  const moved = await moving;
+  assert.equal(moved.status, 200, JSON.stringify(moved.json));
+  const there = (await askMachine("GET", "kuvo/sessions/ses_busy/queue")).json;
+  assert.equal(there.paused, true, "still stopped");
+  assert.deepEqual(there.waiting?.map(each => each.text), ["Keep the old names."]);
 });

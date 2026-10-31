@@ -411,7 +411,8 @@ A client asks the box it lives on once, and watches; the move goes on with no cl
   its way, for a client to show how far it is. `away`: conversations this box's engine lists that don't live here (a copy not
   switched to yet, an original still going): clients leave them out.
 - While it moves, nothing reaches it: a prompt to one of its conversations through the link answers
-  `409 {message}`, as does a change to its queue (`…/stop`, `…/queue/…`; reading it still works), a letter `retry`, its wake-ups and watches are held (`paused` says `moving`), and
+  `409 {message}`, as does a change to its queue (`…/queue/…`; reading it still works, and a Stop
+  works while the box it leaves waits for its turn to end), a letter `retry`, its wake-ups and watches are held (`paused` says `moving`), and
   changing or deleting the bot answers `409`. A client shows it as moving.
 
 Between the boxes, each `{"move": {op, id, …}}` (`id`: `mov_…`), each step sent again each minute
@@ -423,8 +424,9 @@ until it's answered:
    api/kuvo/groups/<id>/hold`; `queues`, by conversation, each one paused or with something
    waiting on the box ("The queue"), bridge 0.9.134: `{paused, held, waiting: [{shown, message}]}`,
    what waits as it's shown and whole, in the order it would go: what waits on the box, and for one
-   paused, what its engine held, carried as one waiting on the box; each file a message brings as
-   a `data:` link with what's in it, read on this box, or left out) and its folder (a bot's; a chat's wake-ups'),
+   paused, what its engine held, carried as one waiting on the box (anything there but a message,
+   and it waits as for a turn); each file a message brings as a `data:` link with what's in it, read
+   on this box, or left out, and shown without it) and its folder (a bot's; a chat's wake-ups'),
    tar, gzip; at most 1 GB.
 2. `offer {kind, thing, name, size, hash, wasPaused, pausedAs?, from, members?}` → `ready`, or
    `refused {message}`: its engine or group chats aren't running, too big, a group chat's bots

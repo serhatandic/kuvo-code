@@ -7,6 +7,7 @@
 // the engine started again pause it until Resume; Stop holds what was for the next step ahead of
 // the queue, the latest Stop's first. Kept in `run/queues.json`, by session.
 
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -206,7 +207,7 @@ function carriedFiles(given: unknown): { uri: string; name?: string }[] {
     const name = typeof file.name === "string" ? { name: file.name } : {};
     const uri = isObject(file.source) && typeof file.source.uri === "string" ? file.source.uri : file.uri;
     const type = typeof file.mime === "string" && file.mime ? file.mime : null;
-    if (typeof uri === "string" && uri.startsWith("data:")) return [{ uri, ...name }];
+    if (typeof uri === "string" && uri.startsWith("data:")) return BASE64_DATA.test(uri) ? [{ uri, ...name }] : [];
     if (typeof file.data === "string") return [{ uri: `data:${type ?? "application/octet-stream"};base64,${file.data}`, ...name }];
     if (typeof uri !== "string" || !uri.startsWith("file:")) return [];
     try {
@@ -230,6 +231,12 @@ function shownOfHeld(text: string): Shown {
 }
 
 const fileNamesOf = (carried: { name?: string }[]): string[] => carried.map(file => file.name ?? "file");
+// A file as a `data:` link with what's in it, as a carried message's files are.
+const BASE64_DATA = /^data:[^,]*;base64,/;
+
+/** One the engine held that a move can't carry (not a message, or one without words): the move
+ * waits rather than leave it behind. */
+export class CantCarry extends Error {}
 
 /** The queues of `sessions` that are paused or have something waiting on the box, for a move
  * (`unpackQueues` sets them up on the box it goes to): what waits on the box, and for one that's
@@ -248,13 +255,19 @@ export async function packQueues(target: Target, sessions: readonly string[]): P
       if (shown) {
         let message: unknown = null;
         try { message = JSON.parse(fs.readFileSync(waitingFile(id), "utf8")); } catch {}
-        return [{ shown, message: isObject(message) ? { ...message, ...(Array.isArray(message.files) ? { files: carriedFiles(message.files) } : {}) } : null }];
+        if (!isObject(message) || !Array.isArray(message.files)) return [{ shown, message }];
+        // Shown with the files that go with it.
+        const carried = carriedFiles(message.files);
+        const { files: _names, ...rest } = shown;
+        return [{ shown: { ...rest, ...(carried.length ? { files: fileNamesOf(carried) } : {}) }, message: { ...message, files: carried } }];
       }
       // One the engine held: waiting on the box there, as one kept here would.
       const held = inbox.find(item => item.id === id);
       const text = typeof held?.text === "string" ? held.text : typeof held?.payload?.text === "string" ? held.payload.text : null;
-      if (!held || held.type !== "user" || text === null) return [];
-      const ownID = /^msg_[A-Za-z0-9]{1,80}$/.test(id) ? id : (renamed[id] = messageID());
+      if (!held) return [];
+      if (held.type !== "user" || text === null) throw new CantCarry(id);
+      // (An ID the box can't name a file by: one of its own, the same each time it's packed.)
+      const ownID = /^msg_[A-Za-z0-9]{1,80}$/.test(id) ? id : (renamed[id] = `msg_${crypto.createHash("sha256").update(id).digest("hex").slice(0, 32)}`);
       const carried = carriedFiles(held.payload?.files);
       const { from, words } = shownOfHeld(text);
       return [{
@@ -284,7 +297,7 @@ export function unpackQueues(carried: unknown, sessions: readonly string[]): str
       const [shown] = files.keptWaiting([isObject(each) ? each.shown : null]);
       const message = isObject(each) && isObject(each.message) ? each.message : null;
       if (!shown || !message || typeof message.text !== "string" || waiting.some(other => other.id === shown.id)) continue;
-      const brought = (Array.isArray(message.files) ? message.files : []).flatMap(file => isObject(file) && typeof file.uri === "string" && /^data:[^,]*;base64,/.test(file.uri)
+      const brought = (Array.isArray(message.files) ? message.files : []).flatMap(file => isObject(file) && typeof file.uri === "string" && BASE64_DATA.test(file.uri)
         ? [{ uri: file.uri, ...(typeof file.name === "string" ? { name: file.name } : {}) }] : []);
       writePrivate(waitingFile(shown.id), JSON.stringify({ id: shown.id, text: message.text, delivery: message.delivery === "steer" ? "steer" : "queue", ...(brought.length ? { files: brought } : {}) }));
       waiting.push(shown);

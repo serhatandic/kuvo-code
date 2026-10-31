@@ -21,7 +21,7 @@ import { askGroups } from "../areas/groups";
 import { botHere, MOVING } from "../bots/here";
 import { settleBot } from "../bots/tell";
 import { call, readBridgeFile, readEngineFile } from "../engine/client";
-import { forgetQueue, packQueues, queueOf, resumeQueue, unpackQueues } from "../engine/queue";
+import { CantCarry, forgetQueue, packQueues, queueOf, resumeQueue, unpackQueues } from "../engine/queue";
 import { writePrivate } from "../files";
 import { HERE, IS_MAC, K } from "../home";
 import { readPeerAgents } from "../peers/directory";
@@ -353,6 +353,12 @@ class Refused extends Error {
 const fingerprint = (exports: unknown[], queues: Record<string, unknown>): string =>
   `${conversationHash(exports)}.${crypto.createHash("sha256").update(JSON.stringify(queues, (key, value) => key === "at" ? undefined : value)).digest("base64url")}`;
 
+/** What waits for its conversations, as a move carries it (`packQueues`); one the engine held that
+ * can't go with it, and it doesn't go yet. */
+const queuesOf = (engine: Target, sessions: readonly string[], name: string) => packQueues(engine, sessions).catch(error => {
+  throw error instanceof CantCarry ? new Refused(say.waiting(name)) : error;
+});
+
 // What the box it leaves has of each move in memory: the parts the other box has, and those on
 // their way (by when they went).
 const outgoing = new Map<string, { got: Set<number>; flying: Map<number, number>; exports: string }>();
@@ -377,7 +383,7 @@ async function carryOn(id: string): Promise<void> {
     contents.exports = exports;
     record.sessions = idsOf(exports);
     // A conversation you stopped goes stopped, with what waits for it, here and in the engine.
-    queues = await packQueues(engine, record.sessions);
+    queues = await queuesOf(engine, record.sessions, record.name);
     if (Object.keys(queues).length) contents.queues = queues;
     if (record.folder) contents.folder = path.basename(record.folder);
     if (record.kind === "bot") {
@@ -436,7 +442,7 @@ async function arrived(record: MoveRecord): Promise<void> {
     const before = outgoing.get(record.id)?.exports;
     // Taken back meanwhile (its copy there couldn't be set up, or it took too long): nothing more.
     if (!still()) return;
-    if (!before || fingerprint(again, await packQueues(engine, record.sessions)) !== before) {
+    if (!before || fingerprint(again, await queuesOf(engine, record.sessions, record.name)) !== before) {
       if (record.tries >= 2) throw new Refused(say.busy(record.name));
       changeMove(record.id, each => { each.tries += 1; each.stage = "holding"; each.step = undefined; });
       return drive(record.id);

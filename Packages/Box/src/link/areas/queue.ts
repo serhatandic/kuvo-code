@@ -4,7 +4,7 @@
 
 import { isObject, parsed } from "../../shared/json";
 import { MOVING } from "../bots/here";
-import { frozen } from "../moves/records";
+import { frozen, liveMoves } from "../moves/records";
 import { followed } from "../follow";
 import { placeOfSession } from "../letters/letter";
 import { targetsOf } from "../letters/tools";
@@ -39,8 +39,11 @@ export async function* queueRoute(context: RouteContext, match: RegExpMatchArray
     if (method !== "GET") return yield* json(405, {});
     return yield* json(200, shownQueue(queueOf(session)));
   }
-  // One moving to or from another computer: what waits for it goes as it was read for the move.
-  if (frozen().has(session)) return yield* json(409, { message: MOVING });
+  // One moving to or from another computer: what waits for it goes as it was read for the move. A
+  // Stop still stops it while the box it leaves waits for its turn to end, before it's read.
+  const stopping = action === "stop" || step === "hold";
+  const settling = () => liveMoves().some(move => move.role === "from" && move.stage === "holding" && (move.thing === session || move.sessions.includes(session)));
+  if (frozen().has(session) && !(stopping && settling())) return yield* json(409, { message: MOVING });
   if (item && !now) {
     if (method !== "DELETE") return yield* json(405, {});
     // (The engine's inbox, for what came after it; none when it can't be read.)
