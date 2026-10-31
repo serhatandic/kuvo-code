@@ -25,6 +25,38 @@ export interface Account {
   message?: string
   /** It was signed in, and its maker ended the sign-in (it's to be signed in again). */
   ended?: boolean
+  /** Its sign-in couldn't be checked just now (the check failed or took too long): as it last said. */
+  unchecked?: boolean
+}
+
+/**
+ * An agent's sign-in as it last said. A check that fails or takes too long (a computer too busy to
+ * answer in time) isn't a sign-out: the account stays as it was, `unchecked`, and is asked again
+ * next time. Only the agent's own word, that you're signed out, is one. Never checked yet, it's
+ * taken as signed in: a run on it says so if it isn't, where a model taken away mid-goal can't be
+ * put back.
+ */
+export class KnownAccount {
+  private known?: Account
+  private checking?: Promise<Account | undefined>
+  /** When the last check failed: not tried again for a while unless asked anew (it'd only make each list wait as long). */
+  private failed?: number
+
+  /**
+   * `check`: the agent's answer, or undefined when it gave none. One check at a time: a busy
+   * computer isn't given more.
+   */
+  async read(fresh: boolean, check: () => Promise<Account | undefined>): Promise<Account> {
+    if (fresh || this.failed === undefined || Date.now() - this.failed >= 30_000) {
+      this.checking ??= check()
+        .catch(() => undefined)
+        .finally(() => (this.checking = undefined))
+      const said = await this.checking
+      this.failed = said ? undefined : Date.now()
+      if (said) return (this.known = said)
+    }
+    return { ...(this.known ?? { installed: true, signedIn: true }), unchecked: true }
+  }
 }
 
 export interface SignInAttempt {

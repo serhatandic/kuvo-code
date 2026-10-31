@@ -16,6 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- A coding agent too slow to answer whether it's signed in (on a busy Mac or machine) no longer looks signed out: Claude Code, Codex, Grok and Cursor keep their accounts and models as they last said, so a bot's or a session's model isn't taken away mid-goal. Only the agent saying you're signed out is a sign-out.
 - Removing a worktree in Settings › Worktrees says whether it has changes that aren't committed and how many commits its branch keeps; an old failure note goes once a remove works, and removing one on this Mac while its engine is down says why instead of doing nothing.
 - When this Mac's engine stops, Settings › Accounts and the first launch's subscriptions step say so above the list, with Try Again, and dim what needs the engine until it's back, rather than offering sign-ins that fail. Coding agents still sign in meanwhile.
 - Settings › Storage says it measures only this Mac, once you've added a machine.

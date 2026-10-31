@@ -6,7 +6,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { providerID, type AgentAccount } from "../accounts"
 import type { Agent, AgentContext, Account, SignInAttempt, SignInOptions, Thread } from "../agent"
-import { accountName, ContextWindows, model } from "../agent"
+import { accountName, ContextWindows, KnownAccount, model } from "../agent"
 import { emit } from "../events"
 import { AcpThread, questionFields } from "../acp"
 import { withOwnFolders } from "../machine"
@@ -113,7 +113,7 @@ export class GrokAgent implements Agent {
   /** Its models asked of the new CLI; sessions start it at their next message. */
   programUpdated() {
     this.program++
-    this.status = undefined
+    if (this.status) this.status.at = 0
   }
 
   methods() {
@@ -135,13 +135,18 @@ export class GrokAgent implements Agent {
     return withOwnFolders({ ...process.env, GROK_DISABLE_AUTOUPDATER: "1", ...(this.instance.home ? { GROK_HOME: this.instance.home } : {}) })
   }
 
-  /** `grok models` says whether you're signed in, and lists your models. */
+  /**
+   * `grok models` says whether you're signed in, and lists your models; undefined when it said
+   * neither (it failed, or took too long), and the models it listed last are kept.
+   */
   private async read(fresh: boolean) {
     if (!fresh && this.status && Date.now() - this.status.at < 30_000) return this.status
     const executable = this.executable()!
     const result = await run(executable, ["models"], { env: this.env(), timeout: 20_000, cwd: this.context.temporary })
     const text = plain(result.stdout + "\n" + result.stderr)
-    const signedIn = Boolean(process.env.XAI_API_KEY) || (/you are logged in/i.test(text) && !/not authenticated|not logged in/i.test(text))
+    const signedOut = /not authenticated|not logged in|grok login|log ?in first|sign in first/i.test(text)
+    if (result.timedOut || !text.trim() || (!signedOut && !/you are logged in/i.test(text) && !process.env.XAI_API_KEY)) return undefined
+    const signedIn = Boolean(process.env.XAI_API_KEY) || !signedOut
     const models: { id: string; name: string; isDefault: boolean }[] = []
     for (const line of text.split("\n")) {
       const match = line.match(/^\s*[*-]\s+(\S+)(.*)$/)
@@ -151,11 +156,17 @@ export class GrokAgent implements Agent {
     return this.status
   }
 
+  /** Its sign-in as Grok's CLI last said (a check that fails isn't a sign-out). */
+  private known = new KnownAccount()
+
   async account(fresh = false): Promise<Account> {
     if (!this.executable()) return { installed: false, signedIn: false, message: "Install Grok's CLI, then sign in here." }
-    const status = await this.read(fresh)
-    if (!status.signedIn) return { installed: true, signedIn: false, message: "Sign in to Grok with your SuperGrok plan." }
-    return { installed: true, signedIn: true, label: process.env.XAI_API_KEY ? "xAI API key" : "grok.com" }
+    return this.known.read(fresh, async () => {
+      const status = await this.read(fresh)
+      if (!status) return undefined
+      if (!status.signedIn) return { installed: true, signedIn: false, message: "Sign in to Grok with your SuperGrok plan." }
+      return { installed: true, signedIn: true, label: process.env.XAI_API_KEY ? "xAI API key" : "grok.com" }
+    })
   }
 
   /** Its device code works wherever its page is opened. */
@@ -174,17 +185,17 @@ export class GrokAgent implements Agent {
       instructions: options.remote
         ? "Open Grok's page, sign in, and enter the code it shows here. Grok's CLI keeps the sign-in, as when you run grok login."
         : "Finish signing in to Grok in your browser. Grok's CLI keeps the sign-in, as when you run grok login.",
-      signedIn: async () => (await this.read(true)).signedIn,
+      signedIn: async () => (await this.read(true))?.signedIn ?? false,
       printedPage: options.remote,
       userCode: options.remote ? /\b([A-Z0-9]{4,}(?:-[A-Z0-9]{4,})+)\b/ : undefined,
     })
   }
 
   async models(): Promise<Model[]> {
-    const status = await this.read(false)
+    const listed = (await this.read(false))?.models ?? this.status?.models ?? []
     const efforts = this.efforts()
     // (Before a session has said, the efforts every Grok model has.)
-    return status.models.map((info, index) => model(this.providerID, info.id, info.name, { released: info.isDefault ? 1000 : 500 - index, context: this.windows.get(info.id) ?? 256_000, variants: efforts[info.id]?.values ?? ["low", "medium", "high"] }))
+    return listed.map((info, index) => model(this.providerID, info.id, info.name, { released: info.isDefault ? 1000 : 500 - index, context: this.windows.get(info.id) ?? 256_000, variants: efforts[info.id]?.values ?? ["low", "medium", "high"] }))
   }
 
   /** How much each model holds, as Grok says in a turn. */

@@ -131,6 +131,8 @@ export async function integration(agent: Agent, fresh = false, auto?: Auto): Pro
       installed: account.installed,
       message: account.message,
       signInEnded: account.ended ?? false,
+      // Its sign-in couldn't be checked just now, and is as it last said.
+      unchecked: account.unchecked ?? false,
       account: account.label,
       install: agent.install,
       signsOut: Boolean(agent.signOut),
@@ -145,7 +147,7 @@ export async function integration(agent: Agent, fresh = false, auto?: Auto): Pro
     },
     methods: agent.methods(),
     connections: account.signedIn
-      ? [{ type: "agent", label: account.label, method: "oauth", status: { status: "connected", message: account.label ? `Signed in as ${account.label}` : "Signed in" } }]
+      ? [{ type: "agent", label: account.label, method: "oauth", status: { status: "connected", message: account.label ? `Signed in as ${account.label}` : account.unchecked ? "Couldn't check the sign-in just now" : "Signed in" } }]
       : [],
   }
 }
