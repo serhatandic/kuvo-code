@@ -392,6 +392,35 @@ import Testing
         #expect(wakes(of: mine).count == 1, "paused by you")
     }
 
+    /// An archived session's agent schedules a wake-up or a watch with no app open (its own
+    /// kuvo-wake, or the box's tools running it): the folder they're kept in is held as archiving
+    /// holds one, as the Mac's app makes it, and it waits until the session is back. A coding
+    /// agent's session is asked of the agents' bridge. One that isn't archived isn't held.
+    @Test(arguments: WakesTests.shells)
+    func oneMadeForAnArchivedSessionIsHeldFromTheStart(_ shell: String) throws {
+        defer { cleanUp() }
+        try write(k.appending(path: "run/bridge.json"), #"{"pid":2,"port":\#(Self.bridgePort),"password":"bridge-pass"}"#)
+        try answer(Self.enginePort, "GET", "api/session/ses_old", #"{"id":"ses_old","metadata":{"kuvo.archived":true}}"#)
+        try answer(Self.bridgePort, "GET", "api/session/ses_agent", #"{"id":"ses_agent","time":{"created":1,"archived":1760000000000}}"#)
+        try answer(Self.enginePort, "GET", "api/session/ses_new", #"{"id":"ses_new","metadata":{}}"#)
+        let wake = #"KUVO_BOTS="$K/bots" KUVO_WAKES="$K/wakes" \#(shell) "$K/bin/kuvo-wake""#
+        let added = try sh(#"\#(wake) ses_old add +2h "Look again""#)
+        #expect(added.status == 0, "\(added.output)")
+        let watched = try sh(#"KUVO_WAKE_VIA=bridge \#(wake) ses_agent watch 10m "echo same" "Tell the user""#)
+        #expect(watched.status == 0, "\(watched.output)")
+        let fresh = try sh(#"\#(wake) ses_new add +2h "Look again""#)
+        #expect(fresh.status == 0, "\(fresh.output)")
+
+        let held = { (session: String) in try? String(contentsOf: sessions.appending(path: "\(session)/paused"), encoding: .utf8) }
+        #expect(held("ses_old") == "archived", "\(shell)")
+        #expect(held("ses_agent") == "archived", "\(shell): asked of the bridge")
+        #expect(held("ses_new") == nil, "\(shell): not archived")
+        #expect(wakes(of: sessions.appending(path: "ses_old")).count == 1, "kept for when it's back")
+        try fire(shell: shell)
+        watchesDone()
+        #expect(prompts().isEmpty)
+    }
+
     /// A subagent's, paused: it stays as it is, rather than going to the conversation that
     /// started it and being sent there.
     @Test func aPausedSubagentsWakeUpsStayPut() throws {

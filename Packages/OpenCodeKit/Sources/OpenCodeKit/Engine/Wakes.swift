@@ -653,6 +653,15 @@ public enum Wakes {
       esac
     }
 
+    # A session the engine has as archived: Kuvo Code's mark in its metadata, or the engine's own.
+    archived='"kuvo\.archived" *: *true|"archived" *: *[0-9]'
+    # Whether the session $3 is archived, as the engine (or the agents' bridge) answering on port
+    # $1, to password $2, has it now; not when it can't be asked.
+    archivedAt() {
+      [ -n "$1" ] && [ -n "$2" ] && command -v curl >/dev/null 2>&1 || return 1
+      printf 'user = "opencode:%s"\n' "$2" | curl -q -sf -m 5 --noproxy '*' -K - "http://127.0.0.1:$1/api/session/$3" 2>/dev/null | grep -qE "$archived"
+    }
+
     # The box's sandbox, while it's on (`fenced`, its launcher): its folder is the first of those
     # given that has a `run` folder (beside the engine's record; this Mac's box keeps its own in
     # `box`, beside the bots' folder). Set up and checked (`ready`) but not on yet, or its launcher
@@ -752,13 +761,8 @@ public enum Wakes {
         if [ "$(cat "${bot}via" 2>/dev/null)" = bridge ]; then port=$bport password=$bpassword tools=1; else port=$eport password=$epassword; fi
         [ -n "$port" ] && [ -n "$password" ]
       }
-      # A session the engine has as archived: Kuvo Code's mark in its metadata, or the engine's own.
-      archived='"kuvo\.archived" *: *true|"archived" *: *[0-9]'
       # A session's watches wait too while it's archived (its wake-ups do, in `settle`).
-      archivedNow() {
-        [ "$bots" != "$botsroot" ] && command -v curl >/dev/null 2>&1 || return 1
-        printf 'user = "opencode:%s"\n' "$password" | curl -q -sf -m 5 --noproxy '*' -K - "http://127.0.0.1:$port/api/session/$session" 2>/dev/null | grep -qE "$archived"
-      }
+      archivedNow() { [ "$bots" != "$botsroot" ] && archivedAt "$port" "$password" "$session"; }
       # A conversation you stopped, its queue paused on the box (`run/queues.json`, beside the
       # engine's record): its wake-ups wait there, in the list you resume, as what else arrives
       # does (`hold`); its watches wait until you resume it.
@@ -1041,6 +1045,17 @@ public enum Wakes {
       [ -n "$fresh" ] || return 0
       (umask 077; mkdir -p "$bot") && printf '%s' "$session" >"$bot/session" && printf '%s' "$PWD" >"$bot/directory" \
         && { [ "$KUVO_WAKE_VIA" != bridge ] || printf bridge >"$bot/via"; } || { echo "Couldn't keep it in $bot." >&2; exit 2; }
+      # An archived session's is held from the start (`paused`), as archiving holds the wake-ups a
+      # session has, until it's brought back: as the Mac's app makes one (WakeUps.makeFolder) and the
+      # box's routes do, so too for this Mac's keeper with the app closed, a machine's tools and an
+      # agent's own kuvo-wake. Asked of its engine (a coding agent's, of the agents' bridge), found
+      # by its record in the box's `run` folder: this Mac's is in `box`, beside the bots' folder.
+      m_root=${KUVO_BOTS:-$HOME/.kuvo-code/bots}; m_record=
+      for m_k in "${m_root%/*}/box" "${m_root%/*}"; do [ -f "$m_k/run/engine.json" ] && m_record=$m_k/run/engine.json && break; done
+      [ -n "$m_record" ] && [ "$KUVO_WAKE_VIA" = bridge ] && m_record=${m_record%/*}/bridge.json
+      if [ -n "$m_record" ] && archivedAt "$(listens "$m_record" port)" "$(listens "$m_record" password)" "$session"; then
+        printf archived >"$bot/paused"
+      fi
     }
     # The user's time zone, when the bot lives on a machine whose clock may be in another.
     z=$(zone "$bot/"); if [ -n "$z" ]; then TZ=$z; export TZ; fi
