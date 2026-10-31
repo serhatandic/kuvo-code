@@ -252,6 +252,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - Searching Settings for "swipe", "awake", "opencode" or "beta" finds General, where those settings are.
 - After picking a preset accent color, or leaving Appearance, the color panel no longer changes the accent.
 - The first launch's screen access step says to quit and reopen Kuvo Code if you just allowed Screen Recording, which macOS needs before it counts.
+- An agent you install on the first launch that finishes after you've gone on opens its sign-in in Settings › Accounts, instead of being left installed but not signed in.
 
 ## 0.7.2
 

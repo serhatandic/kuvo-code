@@ -170,10 +170,10 @@ struct SubscriptionsStep: View {
                 await app.usage.sync()
             }
         case .install(let id):
-            onboarding.install(row, with: app.agents) { installed in
+            onboarding.install(row, with: app.agents) { signInHere in
                 await catalog.refreshAgents(fresh: true)
                 await onboarding.look(in: box, agentsUp: app.agents.api != nil)
-                if installed { signIn(id) }
+                if signInHere { signIn(id) }
             }
         }
     }
