@@ -868,8 +868,8 @@ describe.skipIf(!canFence)("Antigravity in the box's sandbox", () => {
     // (The bridge's home and temporary folder are inside Kuvo Code's, which the sandbox hides.)
     const agent = new TestAntigravity(fakeAcp([], [], undefined, { readsItsFolder: true }), join(kuvo, "agents"))
     expect(await signedIn(agent)).toEqual({ status: "complete" })
-    // Nothing left of where it ran.
-    expect(readdirSync(join(kuvo, "agents", "temporary", "antigravity"))).toEqual([])
+    // Nothing left of where it ran, once it's gone.
+    await until(() => readdirSync(join(kuvo, "agents", "temporary", "antigravity")).length === 0)
   })
 
   test("an agent that stops as it starts says why in a line, and leaves its traceback for the log", async () => {

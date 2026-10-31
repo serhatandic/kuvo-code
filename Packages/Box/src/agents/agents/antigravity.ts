@@ -20,7 +20,7 @@ import { emit } from "../events"
 import { withOwnFolders } from "../machine"
 import { newID } from "../ids"
 import { run, which } from "../proc"
-import { RPC } from "../rpc"
+import { RPC, RPCError } from "../rpc"
 import { catcher } from "../signin"
 import { copySkillsInto, skillsFor, turnedOff } from "../skills"
 import type { Turn } from "../turn"
@@ -57,10 +57,12 @@ const signInLine = "Open the following link to authenticate the ACP server:"
 /** Google's agent stopped while signing in: why, in a line (what it said goes to the log). */
 class AgentStopped extends Error {
   constructor(readonly said: string) {
+    // (By its last line: a traceback's error, not a warning before it.)
+    const last = said.trim().split("\n").at(-1) ?? ""
     super(
-      /PermissionError|Operation not permitted|Permission denied|EACCES|EPERM/i.test(said)
+      /PermissionError|Operation not permitted|Permission denied|EACCES|EPERM/i.test(last)
         ? "Google's Antigravity agent stopped as it started: it wasn't allowed into a folder it needs."
-        : "Google's Antigravity agent stopped before you could sign in.",
+        : "Google's Antigravity agent stopped before signing in finished.",
     )
   }
 }
@@ -549,14 +551,21 @@ export class AntigravityAgent implements Agent {
       await this.ensureInstalled()
       if (cancelled) return
       const launch = this.launch()
-      // It starts in its own temporary folder, one of its own places in the sandbox: it reads the
-      // folder it starts in, and the bridge's temporary folder may be inside one the sandbox hides
-      // (on a Mac, the app's own temporary folder).
-      const cwd = launch.temporary
-      // In the box's sandbox while it's on, as its sessions run: what it reads as it starts
-      // (settings, skills, servers) runs there too, never outside.
-      const whole = fenceRules() ? fenceAgent(launch.argv[0], cwd, { ...this.places(launch.env), read: this.reads(launch.env) }) : undefined
-      if (fenceRules() && !whole) throw new Error("Antigravity runs in the sandbox here, and it isn't ready: restart Kuvo Code.")
+      // It starts in an empty folder in its own temporary one (not where it unpacks itself), one of
+      // its own places in the sandbox: it reads the folder it starts in, and the bridge's temporary
+      // folder may be inside one the sandbox hides (on a Mac, the app's own temporary folder).
+      const cwd = join(launch.temporary, "work")
+      let whole: ReturnType<typeof fenceAgent>
+      try {
+        mkdirSync(cwd)
+        // In the box's sandbox while it's on, as its sessions run: what it reads as it starts
+        // (settings, skills, servers) runs there too, never outside.
+        whole = fenceRules() ? fenceAgent(launch.argv[0], cwd, { ...this.places(launch.env), read: this.reads(launch.env) }) : undefined
+        if (fenceRules() && !whole) throw new Error("Antigravity runs in the sandbox here, and it isn't ready: restart Kuvo Code.")
+      } catch (error) {
+        launch.onExit()
+        throw error
+      }
       rpc = new RPC(whole ? [whole.command, ...launch.argv.slice(1)] : launch.argv, {
         cwd,
         env: { ...launch.env, ...whole?.env },
@@ -591,8 +600,9 @@ export class AntigravityAgent implements Agent {
         if (setup?.sessionId) this.removeSessionFiles(setup.sessionId)
         if (!cancelled) status = { status: "complete" }
       } catch (error) {
-        // Stopped: what it said (a traceback, most often) is for the log, not the sheet.
-        if (rpc.isClosed && !cancelled) {
+        // Stopped (not refused): what it said (a traceback, most often) is for the log, not the sheet.
+        if (rpc.isClosed && !cancelled && !(error instanceof RPCError)) {
+          await rpc.errorsRead
           console.error(`Google's Antigravity agent stopped while signing in:\n${rpc.stderr.trim()}`)
           throw new AgentStopped(rpc.stderr)
         }

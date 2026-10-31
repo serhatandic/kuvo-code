@@ -6167,8 +6167,9 @@ class RPC {
       return code;
     });
     this.read();
-    this.readErrors();
+    this.errorsRead = this.readErrors().catch(() => {});
   }
+  errorsRead;
   jsonrpc;
   filter;
   get pid() {
@@ -8072,7 +8073,9 @@ var signInLine = "Open the following link to authenticate the ACP server:";
 class AgentStopped extends Error {
   said;
   constructor(said) {
-    super(/PermissionError|Operation not permitted|Permission denied|EACCES|EPERM/i.test(said) ? "Google's Antigravity agent stopped as it started: it wasn't allowed into a folder it needs." : "Google's Antigravity agent stopped before you could sign in.");
+    const last = said.trim().split(`
+`).at(-1) ?? "";
+    super(/PermissionError|Operation not permitted|Permission denied|EACCES|EPERM/i.test(last) ? "Google's Antigravity agent stopped as it started: it wasn't allowed into a folder it needs." : "Google's Antigravity agent stopped before signing in finished.");
     this.said = said;
   }
 }
@@ -8500,10 +8503,17 @@ class AntigravityAgent {
       if (cancelled)
         return;
       const launch = this.launch();
-      const cwd = launch.temporary;
-      const whole = fenceRules() ? fenceAgent(launch.argv[0], cwd, { ...this.places(launch.env), read: this.reads(launch.env) }) : undefined;
-      if (fenceRules() && !whole)
-        throw new Error("Antigravity runs in the sandbox here, and it isn't ready: restart Kuvo Code.");
+      const cwd = join17(launch.temporary, "work");
+      let whole;
+      try {
+        mkdirSync12(cwd);
+        whole = fenceRules() ? fenceAgent(launch.argv[0], cwd, { ...this.places(launch.env), read: this.reads(launch.env) }) : undefined;
+        if (fenceRules() && !whole)
+          throw new Error("Antigravity runs in the sandbox here, and it isn't ready: restart Kuvo Code.");
+      } catch (error) {
+        launch.onExit();
+        throw error;
+      }
       rpc = new RPC(whole ? [whole.command, ...launch.argv.slice(1)] : launch.argv, {
         cwd,
         env: { ...launch.env, ...whole?.env },
@@ -8539,7 +8549,8 @@ class AntigravityAgent {
         if (!cancelled)
           status = { status: "complete" };
       } catch (error) {
-        if (rpc.isClosed && !cancelled) {
+        if (rpc.isClosed && !cancelled && !(error instanceof RPCError)) {
+          await rpc.errorsRead;
           console.error(`Google's Antigravity agent stopped while signing in:
 ${rpc.stderr.trim()}`);
           throw new AgentStopped(rpc.stderr);
@@ -22137,4 +22148,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 7544afcd8ba6b04da997c81463a6129744f6c68c1db293c6465990fd6175da47
+// Built from Packages/Box/src/agents af556ef65be8112d63e48abbcc1d1b33dcb923dcf09357cf973088bf3c8773ef
