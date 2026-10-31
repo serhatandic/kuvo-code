@@ -111,7 +111,7 @@ struct GoalPlanBar: View {
             if plan.state == .running {
                 if let goal, goal.state == .working {
                     Button("Pause", action: pause)
-                        .help("Let the turn under way finish, then hold the goal")
+                        .help("Stop the turn under way and hold the goal until you resume it")
                 } else if let goal, goal.state == .paused {
                     Button("Resume", action: resume)
                         .help("Carry on with the plan")

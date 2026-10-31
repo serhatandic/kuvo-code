@@ -115,7 +115,7 @@ struct GoalBar: View {
             switch goal.state {
             case .working:
                 Button("Pause", action: pause)
-                    .help("Let the turn under way finish, then hold the goal")
+                    .help("Stop the turn under way and hold the goal until you resume it")
                 Button("Stop") { confirmsStop = true }
                     .help("Stop the agent and take the goal away")
             case .paused:

@@ -65,12 +65,16 @@ public enum Message: Codable, Sendable, Hashable, Identifiable {
         public var time: Time
         public var text: String
         public var files: [Attachment]?
+        /// What the engine keeps with it: for one the box wrote to the agent, its mark
+        /// (`kuvo.note`, KuvoClient's BoxNote).
+        public var metadata: JSONValue?
 
-        public init(id: String, time: Time, text: String, files: [Attachment]? = nil) {
+        public init(id: String, time: Time, text: String, files: [Attachment]? = nil, metadata: JSONValue? = nil) {
             self.id = id
             self.time = time
             self.text = text
             self.files = files
+            self.metadata = metadata
         }
 
         /// A file sent with the message. The engine keeps its contents (`data`, base64),

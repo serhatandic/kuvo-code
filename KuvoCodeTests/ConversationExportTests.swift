@@ -13,8 +13,8 @@ import Testing
 
     init() { TestEnvironment.prepare() }
 
-    nonisolated private static func user(_ id: String, _ text: String) -> [String: Any] {
-        ["id": id, "type": "user", "time": ["created": 1], "text": text]
+    nonisolated private static func user(_ id: String, _ text: String, metadata: [String: Any]? = nil) -> [String: Any] {
+        ["id": id, "type": "user", "time": ["created": 1], "text": text].merging(metadata.map { ["metadata": $0] } ?? [:]) { $1 }
     }
 
     private static func reply(_ id: String, _ blocks: [[String: Any]]) -> [String: Any] {
@@ -44,6 +44,13 @@ import Testing
             Self.user("m3", AgentMail.compose(from: "Ada", session: "ses_ada", text: "Can you review?", waits: false)),
             Self.user("m4", Wakes.marker + "Check the build"),
             Self.user("m5", SentWithKeyword.message("check CI", typed: "/loop every hour")),
+            // /goal in a bot's chat, as its box sends it, and as one sent it before.
+            Self.user("m6", "Summarize the commits weekly\n\n<sent-with>\n\(SentWithKeyword.goalHeading)\n/goal\n</sent-with>"),
+            Self.user("m7", "[Goal] Plan the launch\n\n(The user asked for this as a goal: plan it, check what it needs, and put it to them with propose_goal before doing any of the work.)"),
+            // What the box told the bot: what happened, never as yours, marked or from before it was.
+            Self.user("m8", "[Goal started] The user approved the plan. Work through it now: 1. Read 2. Write\nSpend nothing.",
+                      metadata: ["kuvo": ["note": ["from": "Goal", "line": "Goal started"]]]),
+            Self.user("m9", "[The user answered] Made Tidepool at ~/Developer/tidepool."),
         ])
         let markdown = ConversationExport.markdown(title: "Fix the app", messages: messages, directory: "/p")
         #expect(markdown.hasPrefix("# Fix the app\n"))
@@ -54,8 +61,11 @@ import Testing
         #expect(markdown.contains("**Message from Ada**\n\nCan you review?"))
         #expect(markdown.contains("**Wake-up**\n\nCheck the build"))
         // Sent with a keyword: as you typed it, without the note the agent reads.
-        #expect(markdown.contains("**You**\n\n/loop every hour check CI"))
-        #expect(!markdown.contains("<sent-with>"))
+        #expect(markdown.contains("**You**\n\n/loop every hour check CI\n\n/goal Summarize the commits weekly\n\n/goal Plan the launch\n\n**Goal**"))
+        #expect(!markdown.contains("<sent-with>") && !markdown.contains("propose_goal"))
+        #expect(markdown.contains("**Goal**\n\nGoal started"))
+        #expect(markdown.contains("**Your answer**\n\nYou answered: Made Tidepool at ~/Developer/tidepool."))
+        #expect(!markdown.contains("[Goal started]") && !markdown.contains("Spend nothing") && !markdown.contains("[The user answered]"))
         #expect(!markdown.contains("<review-comments>") && !markdown.contains("<attached-files>"))
     }
 

@@ -1,3 +1,4 @@
+import ClientSessions
 import Foundation
 import OpenCodeKit
 
@@ -26,7 +27,12 @@ enum ConversationExport {
             switch message {
             case .user(let user):
                 let written = CommandMessages.shared.text(of: user)
-                // Not yours: another agent's message, a wake-up, a group chat's work.
+                // Not yours: another agent's message, a wake-up, a group chat's work, what the box
+                // told the agent (as the line of what happened).
+                if let note = BoxNote.of(user) {
+                    say(note.from, note.line)
+                    continue
+                }
                 if let mail = AgentMail.parse(written) {
                     say("Message from \(mail.name)", mail.text)
                     continue
