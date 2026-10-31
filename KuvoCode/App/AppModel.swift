@@ -550,13 +550,15 @@ final class AppModel {
     /// the menu bar (`InBackground`), and Stop Background Work is there.
     /// The keeper's turned on while the app ran its own box counts too: the app's goes on in the
     /// menu bar until it quits for real, and the keeper takes over then.
-    /// Switched off in Login Items & Extensions, it's off at once, keeper followed or not.
+    /// Switched off in Login Items & Extensions, it's off at once, keeper followed or not; and so
+    /// is one launchd couldn't start this time, or a demo's, test's or measurement's copy's.
     var keepsWorkingAfterQuit: Bool {
         #if DEBUG
         // A test's keeper, followed without asking macOS.
         if keeperBox != nil, ProcessInfo.processInfo.environment["KUVO_KEEPER"] == "follow" { return true }
         #endif
-        return BackgroundWork.shared.state == .on
+        let work = BackgroundWork.shared
+        return work.state == .on && work.registersHere && !work.didntStart
     }
     /// The own box was started this launch (restarting it is starting its engine over).
     @ObservationIgnored private var ownBoxStarted = false
@@ -577,7 +579,11 @@ final class AppModel {
             // The keeper keeps this Mac awake while agents work, so the app holds nothing besides.
             Awake.shared.keeper = { (try? await KeeperControl.send(.status))?["awake"] as? Bool ?? false }
             keeperBox = follower
-            await follower.start()
+            if !(await follower.start()) {
+                keeperBox = nil
+                Awake.shared.keeper = nil
+                host.tellsBox = true
+            }
         }
         if let keeperBox { return try await keeperBox.ready() }
         if !ownBoxStarted {

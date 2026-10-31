@@ -2,6 +2,7 @@ import Foundation
 import IOKit.pwr_mgt
 import KuvoLink
 import OpenCodeKit
+import ServiceManagement
 import Testing
 @testable import KuvoCode
 
@@ -213,6 +214,75 @@ import Testing
         try await until { !app.workspace.running.contains("ses_long") }
         #expect(engineStarts == 2, "the older keeper's engine and the newer's, none of the app's")
         #expect(newerGone.how == nil)
+    }
+
+    /// macOS has background work on for this copy, but launchd has no keeper to start (the app it
+    /// was registered from was moved or deleted): the app runs this Mac's box itself at once, never
+    /// waiting on a keeper that isn't coming; Settings says it didn't start, and quitting stops the
+    /// work rather than leaving it to nothing.
+    @Test func withBackgroundWorkOnButNoKeeperLaunchdCanStartTheAppRunsTheBoxItself() async throws {
+        let node = try #require(TestBox.node, "Node runs this Mac's box in the tests")
+        let binary = try standIns(node: node)
+        setenv("KUVO_OPENCODE_BINARY", binary.path(percentEncoded: false), 1)
+        try await StubWeb.listen(port: 47921)
+        // On in Login Items & Extensions, for a copy that registers as a user's does; launchd has
+        // no such agent (this copy's label was never loaded).
+        BackgroundWork.status = { .enabled }
+        BackgroundWork.asUsersCopy = true
+        BackgroundWork.shared.refresh()
+        let app = AppModel()
+        defer {
+            app.stop()
+            app.stopBox()
+            BackgroundWork.status = nil
+            BackgroundWork.asUsersCopy = false
+            BackgroundWork.shared.didntStart = false
+            BackgroundWork.shared.refresh()
+            unsetenv("KUVO_OPENCODE_BINARY")
+            try? FileManager.default.removeItem(at: folder)
+            StubWeb.stopListening(port: 47921)
+            engine.stop()
+        }
+        engine.on("GET", "/api/info", json: ["version": OpenCodeEngine.version, "pid": 1])
+        engine.list([StubEngine.session("ses_here", title: "Here", directory: "/tmp/kuvo-tests-keeper")])
+
+        await app.start()
+        #expect(app.engine == .ready, "the app runs its own engine rather than wait")
+        #expect(app.workspace.session("ses_here") != nil)
+        #expect(engineStarts == 1)
+        #expect(BackgroundWork.shared.didntStart, "Settings says background work didn't start")
+        #expect(!app.keepsWorkingAfterQuit, "quitting stops the work, which nothing would carry on")
+    }
+
+    /// A demo's, test's or measurement's copy whose bundle ID macOS has registered (a copy run
+    /// with KUVO_KEEPER=on before): it runs its work itself, as such a copy always does, never
+    /// following a keeper launchd would start from wherever that copy was.
+    @Test func aDemoCopyWhoseBundleIsRegisteredStillRunsTheBoxItself() async throws {
+        let node = try #require(TestBox.node, "Node runs this Mac's box in the tests")
+        let binary = try standIns(node: node)
+        setenv("KUVO_OPENCODE_BINARY", binary.path(percentEncoded: false), 1)
+        try await StubWeb.listen(port: 47921)
+        BackgroundWork.status = { .enabled }
+        BackgroundWork.shared.refresh()
+        let app = AppModel()
+        defer {
+            app.stop()
+            app.stopBox()
+            BackgroundWork.status = nil
+            BackgroundWork.shared.refresh()
+            unsetenv("KUVO_OPENCODE_BINARY")
+            try? FileManager.default.removeItem(at: folder)
+            StubWeb.stopListening(port: 47921)
+            engine.stop()
+        }
+        engine.on("GET", "/api/info", json: ["version": OpenCodeEngine.version, "pid": 1])
+        engine.list([StubEngine.session("ses_demo", title: "Demo", directory: "/tmp/kuvo-tests-keeper")])
+
+        await app.start()
+        #expect(app.engine == .ready, "the copy runs its own engine rather than wait on a keeper")
+        #expect(app.workspace.session("ses_demo") != nil)
+        #expect(engineStarts == 1)
+        #expect(!app.keepsWorkingAfterQuit)
     }
 
     /// Another copy of Kuvo Code, of another version, opened while the one launchd runs the keeper

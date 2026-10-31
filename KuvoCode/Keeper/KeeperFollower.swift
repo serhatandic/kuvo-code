@@ -74,13 +74,28 @@ final class KeeperFollower {
 
     /// Followed from now on: the keeper started if it isn't running (after Stop Background Work),
     /// or asked to make way for this app's own if it came with another version (as it's read).
-    func start() async {
+    /// Whether it's followed: not when launchd has no keeper to start (the app it was registered
+    /// from is gone, say), and the app runs the box itself, never waiting on one.
+    func start() async -> Bool {
         if KeeperRecord.read() == nil {
             askedToStart = .now
-            BackgroundWork.shared.start()
+            guard startKeeper() else {
+                log.error("launchd has no keeper to start: this Mac's box runs in the app")
+                BackgroundWork.shared.didntStart = true
+                return false
+            }
         }
         follow()
         await read()
+        return true
+    }
+
+    /// No keeper came after all: the app runs this Mac's box itself, and Settings says background
+    /// work didn't start this time.
+    private func didntStart() {
+        log.error("The keeper didn't start: this Mac's box runs in the app")
+        BackgroundWork.shared.didntStart = true
+        onGone()
     }
 
     func stop() {
@@ -148,6 +163,7 @@ final class KeeperFollower {
         if record?.pid != keeper {
             keeper = record?.pid
             if let record {
+                BackgroundWork.shared.didntStart = false
                 onKeeper()
                 // One of another version (the app was updated since it started): asked to make way
                 // for this app's own. It goes the first moment nothing is under way, and is
@@ -188,7 +204,7 @@ final class KeeperFollower {
         } else if KeeperRecord.read() == nil, isGone() {
             onGone()
         } else if KeeperRecord.read() == nil, let askedToStart, -askedToStart.timeIntervalSinceNow > Self.startWait {
-            engine = .failed("Kuvo Code’s background work didn’t start. Check that Kuvo Code is allowed in System Settings › General › Login Items & Extensions.")
+            didntStart()
         } else if let silentSince, -silentSince.timeIntervalSinceNow > Self.startWait {
             engine = .failed("Kuvo Code’s background work isn’t answering. Try again, or restart your Mac if it still doesn’t.")
         } else if let engineState = status["engine"] as? [String: Any], engineState["state"] as? String == "downloading" {
@@ -198,10 +214,23 @@ final class KeeperFollower {
                 // Gone (stopped from elsewhere, or it crashed and launchd hasn't started it yet):
                 // asked to start, and given the time to.
                 askedToStart = .now
-                BackgroundWork.shared.start()
+                guard startKeeper() else {
+                    didntStart()
+                    return
+                }
             }
             engine = .starting
         }
+    }
+
+    /// launchd asked to start the keeper: whether it took it (it has none to start when the app it
+    /// was registered from is gone, say).
+    private func startKeeper() -> Bool {
+        #if DEBUG
+        // A test's keeper, which the test starts, never launchd.
+        if ProcessInfo.processInfo.environment["KUVO_KEEPER"] == "follow" { return true }
+        #endif
+        return BackgroundWork.shared.start()
     }
 
     /// No keeper, and none will come: macOS has it switched off (or never registered it).
