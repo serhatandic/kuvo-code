@@ -598,10 +598,13 @@ enum BrowserTools {
             if let url = string("url"), let note = integrationNote(for: url, caller: caller) { return text(note) }
             return text(await agent.newTab(string("url")))
         case "browser_upload":
-            guard let index = int("index"), let files = arguments["files"] as? [String], !files.isEmpty else { return text("Missing index or files.", error: true) }
+            guard let index = int("index"), let given = arguments["files"] as? [String], !given.isEmpty else { return text("Missing index or files.", error: true) }
+            // Each file by its full path, checked and read as the same one.
+            let files = given.map { ($0 as NSString).expandingTildeInPath }
+            if let relative = files.first(where: { !$0.hasPrefix("/") }) { return text("Not attached: give the full path of \(relative).", error: true) }
             // Attached, a file goes to the site: one outside the conversation's folder only as a
             // command could read it, after asking.
-            if let outside = files.first(where: { fileNote(for: $0, caller: caller) != nil }) {
+            if let outside = files.first(where: { fileNote(for: URL(filePath: $0).absoluteString, caller: caller) != nil }) {
                 return text("Not attached: \(outside) is outside this conversation's folder, and this session asks before reading files elsewhere. Ask the user first; if they agree, copy it into the folder (a command, which asks them) and attach it from there.", error: true)
             }
             return text(await agent.upload(index, files: files))
