@@ -1,7 +1,8 @@
 // Also Allowed (PROTOCOL.md, "Sandbox"): what you let a project's commands do beyond the sandbox,
 // from an ask's Always for This or added in Settings: a folder (or file) its commands write in the
 // sandbox. A bot's own folder and the chats' are projects here too, each rule listed by whose it is
-// (`ownerOf`); a bot's go with it when it's deleted. Kept in the box's own folder, which nothing in a project can write. (Never a command
+// (`ownerOf`); a bot's go once it's no longer here (`forgetGoneBots`). Kept in the box's own folder,
+// which nothing in a project can write, and changed only by the box's long-running process. (Never a command
 // that runs outside it without asking: what a command runs, its scripts and its project's settings,
 // is what the sandbox writes.)
 //
@@ -33,7 +34,7 @@ export class RuleRefusal extends Error {}
 /** A project's folder by where it really is, as its rules are kept. */
 export const realProject = (project: string) => {
   let real: string;
-  try { real = fs.realpathSync(project); } catch { return path.resolve(project); }
+  try { real = fs.realpathSync(project); } catch { return realish(project); }
   try {
     const named = fs.readFileSync(path.join(real, ".git"), "utf8").match(/^gitdir:\s*(.+)$/m)?.[1]?.trim();
     if (!named) return real;
@@ -76,7 +77,7 @@ export function ownerOf(project: string): SandboxOwner {
   if (real === realish(CHATS)) return { kind: "chats", name: "Chats" };
   const [id, workspace, ...more] = path.relative(realish(BOTS), real).split(path.sep);
   if (BOT_ID.test(id) && workspace === "workspace" && !more.length) {
-    return { kind: "bot", id, name: botHere(id)?.described.name || "A bot no longer here" };
+    return { kind: "bot", id, name: botHere(id)?.described.name || "A bot" };
   }
   return { kind: "project", name: path.basename(real) || real };
 }
@@ -106,15 +107,16 @@ export function addableOwners(): SandboxOwner[] {
 }
 
 /** The folder a rule for `owner` is kept under: a bot's own (one here, in its own folder) or the
- * chats'. */
+ * chats', made if it isn't yet (no chat yet), so it's kept by where it really is. */
 export function folderOfOwner(owner: unknown): string {
   const given = owner && typeof owner === "object" ? owner as { kind?: unknown; id?: unknown } : {};
-  if (given.kind === "chats") return CHATS;
+  const made = (folder: string) => (fs.mkdirSync(folder, { recursive: true, mode: 0o700 }), folder);
+  if (given.kind === "chats") return made(CHATS);
   if (given.kind === "bot" && typeof given.id === "string" && BOT_ID.test(given.id)) {
     const here = botHere(given.id);
     if (!here) throw new RuleRefusal("That bot isn't on this computer any more.");
     if (typeof here.described.project === "string") throw new RuleRefusal(`${here.described.name} works in a project: add the folder for that project.`);
-    return path.join(here.folder, "workspace");
+    return made(path.join(here.folder, "workspace"));
   }
   throw new RuleRefusal("Name whose it is: {kind: \"bot\", id} or {kind: \"chats\"}.");
 }
@@ -194,11 +196,15 @@ export function addRule(given: { project?: unknown; kind?: unknown; path?: unkno
   return rule;
 }
 
-/** Removes the rules of a folder (by where it really is, `realProject`) and those inside it: a
- * bot's, as it's deleted. */
-export function forgetRulesIn(top: string): void {
+/** Removes the rules of bots no longer here (deleted, or moved to another computer): their folder
+ * is gone. */
+export function forgetGoneBots(): void {
   const rules = readAllowed();
-  const left = rules.filter(rule => !inside(rule.project, top));
+  const bots = realish(BOTS);
+  const left = rules.filter(rule => {
+    const [id, workspace, ...more] = path.relative(bots, rule.project).split(path.sep);
+    return !(BOT_ID.test(id) && workspace === "workspace" && !more.length && !fs.existsSync(path.join(bots, id)));
+  });
   if (left.length !== rules.length) keep(left);
 }
 

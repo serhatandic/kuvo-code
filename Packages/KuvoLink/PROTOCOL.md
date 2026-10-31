@@ -3088,9 +3088,10 @@ A bot's own folder (its folder's `workspace`) and the chats' folder are projects
 bot's own conversation, and every chat (they share one folder), have their own rules. Since bridge
 0.9.133 each rule says whose it is, `owner`, `{kind: "project" | "bot" | "chats", id?, name}` (a
 project by its folder's name, a bot by its `id` and the name it has now, the chats as `Chats`), and
-`gone: true` when its project's folder isn't there any more (a project deleted, a bot moved away),
-so a client still lists it to be removed. Deleting a bot (`DELETE kuvo/bots/<id>`) removes its
-rules. A client lists them all at once, grouped by whose.
+`gone: true` when its project's folder isn't there any more (a project deleted or moved), so a
+client still lists it to be removed. A bot's rules go once it's no longer here (deleted, or moved
+to another computer): the long-running process drops them as it next answers Also Allowed. Adding
+for a bot or the chats makes its folder if there isn't one yet. A client lists them all at once, grouped by whose.
 
 The launcher reads a project's as each command starts, from `run/fence/allowed/<sum>` (one path a
 line; `sum`, the first 32 hex of the SHA-256 of the project's real path, as the launcher names its

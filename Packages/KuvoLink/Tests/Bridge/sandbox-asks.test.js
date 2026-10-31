@@ -458,7 +458,9 @@ function botHere(id, name, session, project) {
 test("Also Allowed lists every rule by whose it is (a project, a bot's own folder, the chats), and whom else one can be added for", async () => {
   botHere("bot_scout", "Scout", "ses_scout");
   botHere("bot_nova", "Nova", "ses_nova", shop);
-  fs.mkdirSync(path.join(home, "chats"), { recursive: true });
+  botHere("bot_juno", "Juno", "ses_juno");
+  // (No chat yet: the chats' folder isn't there.)
+  fs.rmSync(path.join(home, "chats"), { recursive: true, force: true });
   const reports = path.join(outside, "reports"), exports = path.join(outside, "exports"), dist = path.join(outside, "dist");
   for (const folder of [reports, exports, dist]) fs.mkdirSync(folder, { recursive: true });
   assert.equal((await box.ask("POST", "kuvo/sandbox/allowed", { project: shop, kind: "write", path: dist })).status, 200);
@@ -466,6 +468,9 @@ test("Also Allowed lists every rule by whose it is (a project, a bot's own folde
   assert.equal(forScout.status, 200, JSON.stringify(forScout.value));
   const forChats = await box.ask("POST", "kuvo/sandbox/allowed?all", { owner: { kind: "chats" }, kind: "write", path: exports });
   assert.equal(forChats.status, 200, JSON.stringify(forChats.value));
+  // Made for it, so the rule is kept where the folder really is, and isn't shown gone.
+  assert.ok(fs.existsSync(path.join(home, "chats")));
+  assert.equal(forChats.value.allowed.at(-1).project, fs.realpathSync(path.join(home, "chats")));
   // A bot that works in a project has no folder of its own to give: its project's rules are its.
   const forNova = await box.ask("POST", "kuvo/sandbox/allowed", { owner: { kind: "bot", id: "bot_nova" }, kind: "write", path: reports });
   assert.equal(forNova.status, 400);
@@ -477,7 +482,7 @@ test("Also Allowed lists every rule by whose it is (a project, a bot's own folde
   assert.deepEqual(whose, [["project", "shop", dist], ["bot", "Scout", reports], ["chats", "Chats", exports]]);
   assert.equal(all.allowed[1].owner.id, "bot_scout");
   assert.deepEqual(forChats.value.allowed.map(rule => rule.path), [dist, reports, exports]);
-  assert.deepEqual(all.owners, [{ kind: "bot", id: "bot_scout", name: "Scout" }, { kind: "chats", name: "Chats" }], "Nova works in a project");
+  assert.deepEqual(all.owners, [{ kind: "bot", id: "bot_juno", name: "Juno" }, { kind: "bot", id: "bot_scout", name: "Scout" }, { kind: "chats", name: "Chats" }], "Nova works in a project");
   assert.ok(all.allowed.every(rule => !rule.gone));
 
   // A project's own still answers as before.
@@ -496,6 +501,11 @@ test("Also Allowed lists every rule by whose it is (a project, a bot's own folde
   assert.deepEqual(chatAsk.owner, { kind: "chats", name: "Chats" });
   await box.ask("POST", `kuvo/sandbox/asks/${chatAsk.id}`, { answer: "no" });
   await fromChat;
+
+  // Moved to another computer, a bot's rules go with it.
+  assert.equal((await box.ask("POST", "kuvo/sandbox/allowed", { owner: { kind: "bot", id: "bot_juno" }, kind: "write", path: reports })).status, 200);
+  fs.rmSync(path.join(home, "bots", "bot_juno"), { recursive: true });
+  assert.deepEqual((await box.ask("GET", "kuvo/sandbox/allowed")).value.allowed.map(rule => rule.owner.name), ["Scout", "Chats"]);
 
   // Deleted, a bot's rules go with it; the chats' stay.
   assert.equal((await box.ask("DELETE", "kuvo/bots/bot_scout")).status, 200);
