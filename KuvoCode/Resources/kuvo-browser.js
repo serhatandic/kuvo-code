@@ -1777,6 +1777,18 @@ function realPath(place) {
   }
 }
 
+/// Where a file that may not be there yet would be: its nearest folder that is, with links
+/// followed, and the rest of its path.
+function realTarget(file) {
+  let folder = file;
+  const rest = [];
+  while (!fs.existsSync(folder) && path.dirname(folder) !== folder) {
+    rest.unshift(path.basename(folder));
+    folder = path.dirname(folder);
+  }
+  return path.join(realPath(folder), ...rest);
+}
+
 /// The file `address` (a whole URL) is, when it's one outside `access`'s places, links followed
 /// to where they lead; else null. One it can't tell (a host in it, say, which Chrome ignores)
 /// counts as outside.
@@ -2547,8 +2559,14 @@ async function tool(name, args) {
       return withNote(Promise.resolve(value.length > 30_000 ? value.slice(0, 30_000) + "\n… (cut)" : value || "(no text)"));
     }
     case "browser_save_pdf": {
-      const file = string("path");
-      if (!file || !file.startsWith("/") || !file.toLowerCase().endsWith(".pdf")) return text("Give a full path ending in .pdf.", true);
+      const given = string("path");
+      const file = given && path.resolve(given.replace(/^~(?=$|\/)/, os.homedir()));
+      if (!given || !/^~?\//.test(given) || !file.toLowerCase().endsWith(".pdf")) return text("Give a full path ending in .pdf.", true);
+      // Saved outside the conversation's folder, it would replace what's there without asking,
+      // where a command would have asked (as on the Mac).
+      if (outsideFile(pathToFileURL(realTarget(file)).href, await fileAccess(caller))) {
+        return text(`Not saved: ${file} is outside this conversation's folder, and this session asks before writing files elsewhere. Save it in the folder; if the user wants it elsewhere, ask them first, then move it there (a command, which asks them).`, true);
+      }
       if (isEmpty(await address(p))) return text("The browser is empty. Open the page first: for a document, write it as an HTML file and open it (file:///…).", true);
       try {
         // On the paper the Mac prints on, with the page's colors.

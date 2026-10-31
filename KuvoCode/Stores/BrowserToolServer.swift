@@ -359,6 +359,18 @@ enum BrowserTools {
         return "Not opened: \(url.path) is outside this conversation's folder, and this session asks before reading files elsewhere. Ask the user first; if they agree, copy it into the folder (a command, which asks them) and open it there."
     }
 
+    /// Where a file that may not be there yet would be: its nearest folder that is, with links
+    /// followed, and the rest of its path.
+    static func realTarget(_ path: String) -> String {
+        var folder = URL(filePath: path)
+        var rest: [String] = []
+        while !FileManager.default.fileExists(atPath: folder.path(percentEncoded: false)), folder.path(percentEncoded: false) != "/" {
+            rest.insert(folder.lastPathComponent, at: 0)
+            folder.deleteLastPathComponent()
+        }
+        return rest.reduce(folder.resolvingSymlinksInPath()) { $0.appending(path: $1) }.path(percentEncoded: false)
+    }
+
     /// What the browser says instead of opening `address`, when it's an added integration's
     /// site: to use its tools. The first time only, so the agent can still open it when the user
     /// asked for the website itself.
@@ -583,6 +595,12 @@ enum BrowserTools {
             return text(await agent.text())
         case "browser_save_pdf":
             guard let path = string("path") else { return text("Missing path.", error: true) }
+            // Saved outside the conversation's folder, it would replace what's there without
+            // asking, where a command would have asked.
+            let expanded = (path as NSString).expandingTildeInPath
+            if expanded.hasPrefix("/"), fileNote(for: URL(filePath: realTarget(expanded)).absoluteString, caller: caller) != nil {
+                return text("Not saved: \(expanded) is outside this conversation's folder, and this session asks before writing files elsewhere. Save it in the folder; if the user wants it elsewhere, ask them first, then move it there (a command, which asks them).", error: true)
+            }
             return text(await agent.savePDF(to: path))
         case "browser_screenshot":
             guard let png = await agent.screenshot() else { return text("Couldn't capture the page.", error: true) }

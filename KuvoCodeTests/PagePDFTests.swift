@@ -52,6 +52,39 @@ import Testing
         #expect(words(target).contains("Lighthouse report"))
     }
 
+    /// In a session that asks before reading or writing files outside its folder: saved in the
+    /// folder (a new one in it too), not over a file elsewhere.
+    @Test func savedInTheFolderNotOverAFileElsewhere() async throws {
+        let elsewhere = try #require(FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first)
+            .appending(path: "\(AppInfo.bundleID)/PDF-elsewhere-\(UUID().uuidString.prefix(6))")
+        let given = folder.path(percentEncoded: false)
+        BrowserTools.sessionFolder = { _ in given }
+        BrowserTools.readsAnywhere = { _ in false }
+        defer {
+            BrowserTools.sessionFolder = { _ in nil }
+            try? FileManager.default.removeItem(at: folder)
+            try? FileManager.default.removeItem(at: elsewhere)
+        }
+        let agent = agent
+        _ = await agent.navigate(try page())
+        func save(_ path: String) async -> (text: String, isError: Bool) {
+            let value = await BrowserTools.call("browser_save_pdf", arguments: ["path": path], agent: agent, caller: "ses_pdf")
+            return (((value["content"] as? [[String: Any]])?.first?["text"] as? String) ?? "", value["isError"] as? Bool ?? false)
+        }
+
+        let outside = elsewhere.appending(path: "notes.pdf")
+        try FileManager.default.createDirectory(at: elsewhere, withIntermediateDirectories: true)
+        try Data("your notes".utf8).write(to: outside)
+        let refused = await save(outside.path(percentEncoded: false))
+        #expect(refused.isError)
+        #expect(refused.text.hasPrefix("Not saved:"), "\(refused.text)")
+        #expect(try String(contentsOf: outside, encoding: .utf8) == "your notes", "the file there stays as it was")
+
+        let inside = folder.appending(path: "out/report.pdf")
+        #expect(await save(inside.path(percentEncoded: false)).text.hasPrefix("Saved the page as a"))
+        #expect(words(inside).contains("Lighthouse report"))
+    }
+
     @Test func whatItTurnsDown() async throws {
         defer { try? FileManager.default.removeItem(at: folder) }
         #expect(await agent.savePDF(to: folder.appending(path: "x.pdf").path(percentEncoded: false)).hasPrefix("The browser is empty"))

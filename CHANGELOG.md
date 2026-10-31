@@ -233,6 +233,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - In the browser on a machine, an agent hears only about its own downloads, not another conversation's or yours.
 - In the browser on a machine, a click that opens a new tab carries the agent on there, and no longer into a tab you or another conversation opened at the same moment.
 - The agent's browser on a machine opens a file's path, like /home/you/report.html or ~/site/index.html, as the file, as it does on your Mac, rather than as a broken web address.
+- In a session that asks before touching files outside its folder, the agent's browser no longer saves a PDF over a file elsewhere: it saves in the folder, or asks you first.
 - A reply the agent is still writing keeps its words when its conversation is read again, after the network or a machine comes back: they no longer vanish until the paragraph ends, or show twice in a coding agent's reply.
 - A note the agent's engine adds by itself, like a background command finishing, shows even when it was waiting as you opened the conversation.
 - A conversation on a machine goes on updating after the machine reconnects, even when the machine is slow to answer at first; and when your Mac wakes, its own conversations no longer wait on a machine that's still reconnecting.
