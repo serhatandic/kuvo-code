@@ -256,6 +256,23 @@ import Testing
         #expect(engine.requests("POST", "/prompt").count == 1, "one run at a time")
     }
 
+    /// Stopped from another client a moment ago, before this Mac heard: a message sent for after
+    /// this run still waits on the box, which decides, rather than reaching the engine, which would
+    /// run all it holds.
+    @Test func aMessageQueuedBeforeThisMacHeardOfAStopStillWaits() async throws {
+        let (model, box, _) = try await open(running: true, inbox: [queued("msg_02", "Then update the docs")])
+        defer { box.stop(); engine.stop() }
+        // Stopped from the phone: its box paused it, and this Mac hasn't read that yet.
+        try Data(#"{"ses_queue":{"paused":true,"held":[]}}"#.utf8).write(to: BoxProcess.run.appending(path: "queues.json"))
+        #expect(!model.isQueuePaused)
+
+        model.send("Also run the tests", for: nil, queue: true)
+        try await until { model.waiting.last.map(model.isOnBox) == true }
+        #expect(engine.requests("POST", "/prompt").isEmpty, "held on the box, not sent to the engine")
+        #expect(model.waiting.map(\.text) == ["Then update the docs", "Also run the tests"])
+        #expect(model.isQueuePaused, "as the box says")
+    }
+
     /// Resume its box can't take (it's not running now): the queue shows Paused again, and why.
     @Test func resumeTheBoxDidntTakeStaysPaused() async throws {
         let (model, box, _) = try await open(running: false, inbox: [queued("msg_02", "Then update the docs")], queues: #"{"ses_queue":{"paused":true,"held":[]}}"#)

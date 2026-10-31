@@ -995,9 +995,10 @@ final class SessionModel {
                 if Moves.isFrozen(self.id) { throw Moves.Failure.moving }
                 // Held while it was on its way: to the queue, not the next step.
                 let asked: InboxItem.Delivery = outgoing[id]?.heldAt != nil ? .queue : delivery
-                // For after this run while the queue is paused: held on the box, as anything arriving
-                // then is (the engine would run all it holds the moment it had one more).
-                if asked == .queue, isQueuePaused, await holdsOnBox() {
+                // For after this run: to the box, which holds it while the queue is paused, as anything
+                // arriving then (the engine would run all it holds the moment it had one more), and
+                // decides that itself: a Stop from another client may not have reached here yet.
+                if asked == .queue, await holdsOnBox() {
                     try await holdOnBox(id, text: message, files: prepared.files, written: (text, files))
                     restoredFailed = ""
                     return
@@ -1729,15 +1730,16 @@ final class SessionModel {
         return await boxFeatures().contains("queue.waits")
     }
 
-    /// `message` (with `files`, as the engine takes them) held on the box for Resume: shown in the
-    /// queue as the box lists it, `written` kept for Edit. Not held after all (resumed meanwhile):
-    /// the box sent it to the engine, as asked.
+    /// `message` (with `files`, as the engine takes them) for after this run, to the box: held there
+    /// for Resume while the queue is paused, shown in the queue as the box lists it, `written` kept
+    /// for Edit; otherwise the box sends it to the engine, as asked.
     private func holdOnBox(_ message: String, text: String, files: [OpenCodeAPI.PromptFile], written: (text: String, files: [URL])) async throws {
-        struct Add: Encodable { var id: String; var text: String; var files: [OpenCodeAPI.PromptFile]?; var delivery: InboxItem.Delivery }
+        struct Add: Encodable { var id: String; var text: String; var files: [OpenCodeAPI.PromptFile]?; var delivery: InboxItem.Delivery; var words: String }
         yoursOnBox[message] = written
         let state: BoxQueue
         do {
-            state = try await changeQueue("queue/add", body: Add(id: message, text: text, files: files.isEmpty ? nil : files, delivery: .queue))
+            // Shown as you wrote it, without its files' notes for the agent.
+            state = try await changeQueue("queue/add", body: Add(id: message, text: text, files: files.isEmpty ? nil : files, delivery: .queue, words: written.text))
         } catch {
             yoursOnBox[message] = nil
             throw error
