@@ -1,4 +1,5 @@
 import Foundation
+import KuvoLink
 import OpenCodeKit
 import Testing
 @testable import KuvoCode
@@ -85,6 +86,49 @@ import Testing
         link["macPeers"] = [["key": Self.lab, "sign": String(repeating: "S", count: 43), "address": String(repeating: "A", count: 22), "name": "lab", "id": "lab", "kind": "machine"]]
         try FileManager.default.createDirectory(at: BoxProcess.run, withIntermediateDirectories: true)
         try JSONSerialization.data(withJSONObject: link).write(to: file, options: .atomic)
+    }
+
+    /// This Mac's moves read twice at once (its group chats read once they're known, as the app
+    /// starts and reads every box's): the first read back returns once the latest is taken, so
+    /// what goes by it knows a chat moving away is moving, not gone.
+    @Test func aReadOvertakenByAnotherReturnsKnowingWhatTheLatestSaid() async throws {
+        let gate = Gate()
+        let asked = Asked()
+        let moving = #"{"moves":[{"id":"mv_1","kind":"group","thing":"grp_trip000001","from":"mac-key","to":"lab-key","role":"from","stage":"copying","sessions":[]}],"away":[]}"#
+        let app = AppModel()
+        app.moves.app = app
+        app.moves.boxes = { box in
+            BoxClient(box: box, transport: LocalBox { _ in
+                let first = asked.next() == 1
+                return AsyncThrowingStream { answer in
+                    DispatchQueue.global().async {
+                        // The first read answers at once, from before the move; the latest once the gate opens.
+                        if !first { gate.wait() }
+                        answer.yield(.head(status: 200, headers: ["content-type": "application/json"]))
+                        answer.yield(.body(Data((first ? #"{"moves":[],"away":[]}"# : moving).utf8)))
+                        answer.finish()
+                    }
+                }
+            })
+        }
+        let before = Task { await app.moves.reload(BoxClient.mac) }
+        let latest = Task { await app.moves.reload(BoxClient.mac) }
+        try await until { asked.count == 2 }
+        gate.open()
+        await before.value
+        #expect(app.moves.isPending("grp_trip000001"), "known once the first read returns")
+        await latest.value
+    }
+
+    /// Requests counted, from any thread.
+    nonisolated private final class Asked: @unchecked Sendable {
+        private let lock = NSLock()
+        private var asked = 0
+        var count: Int { lock.withLock { asked } }
+        func next() -> Int {
+            defer { TestPulse.beat() }
+            return lock.withLock { asked += 1; return asked }
+        }
     }
 
     @Test func itsMenuListsWhereTheBoxSaysItCanGoAndItsRowSaysHowFarItIs() async throws {

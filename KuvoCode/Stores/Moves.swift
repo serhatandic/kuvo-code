@@ -350,11 +350,14 @@ final class Moves {
 
     /// Each box's reads, numbered: an answer older than one taken already isn't taken.
     @ObservationIgnored private var reads: [String: Int] = [:]
+    /// Each box's latest read, which one before it waits for.
+    @ObservationIgnored private var latest: [String: Task<Void, Never>] = [:]
     /// Machines read again every few seconds while they say something's moving (a machine's box
     /// answers this Mac once over SSH, not as it changes).
     @ObservationIgnored private var rereading: [String: Task<Void, Never>] = [:]
 
-    /// What `box` (this Mac's, or a machine's id) says of its moves now.
+    /// What `box` (this Mac's, or a machine's id) says of its moves now. Read again meanwhile, it
+    /// returns once that's taken: what's moving is known then, as its callers expect.
     func reload(_ box: String) async {
         guard let app, let client = client(box) else { return }
         if box != BoxClient.mac, boxes == nil, app.machines.engine(box)?.isReady != true {
@@ -363,9 +366,18 @@ final class Moves {
         }
         reads[box, default: 0] += 1
         let read = reads[box]
-        let said = try? await client.value(BoxMoves.self, "GET", "kuvo/moves")
-        guard reads[box] == read else { return }
-        take(said, from: box)
+        let reading = Task {
+            let said = try? await client.value(BoxMoves.self, "GET", "kuvo/moves")
+            guard reads[box] == read else { return }
+            take(said, from: box)
+        }
+        latest[box] = reading
+        var waited = reading
+        await reading.value
+        while let newer = latest[box], newer != waited {
+            waited = newer
+            await newer.value
+        }
     }
 
     /// Each machine's moves read again (as the app starts, or a machine connects).
