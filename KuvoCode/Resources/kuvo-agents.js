@@ -2596,21 +2596,55 @@ import { readFileSync as readFileSync8 } from "fs";
 import { join as join10 } from "path";
 
 // Packages/Box/src/agents/agent.ts
+class TookTooLong extends Error {
+}
+
 class KnownAccount {
+  keep;
   known;
   checking;
-  failed;
+  failure;
+  generation = 0;
+  constructor(keep = 0) {
+    this.keep = keep;
+  }
   async read(fresh, check) {
-    if (fresh || this.failed === undefined || Date.now() - this.failed >= 30000) {
-      this.checking ??= check().catch(() => {
-        return;
-      }).finally(() => this.checking = undefined);
-      const said = await this.checking;
-      this.failed = said ? undefined : Date.now();
-      if (said)
-        return this.known = said;
+    if (!fresh && this.known && !this.failure && Date.now() - this.known.at < this.keep)
+      return this.known.account;
+    if (fresh || !this.failure || Date.now() - this.failure.at >= 30000) {
+      const generation = this.generation;
+      if (!this.checking) {
+        const checking = check().then((account) => ({ account }), (error) => ({ error })).finally(() => {
+          if (this.checking === checking)
+            this.checking = undefined;
+        });
+        this.checking = checking;
+      }
+      const result = await this.checking;
+      if (generation !== this.generation)
+        return this.read(fresh, check);
+      if ("account" in result) {
+        this.failure = undefined;
+        this.known = { at: Date.now(), account: result.account };
+        return result.account;
+      }
+      this.failure = { at: Date.now(), error: result.error };
     }
-    return { ...this.known ?? { installed: true, signedIn: true }, unchecked: true };
+    if (this.known)
+      return { ...this.known.account, unchecked: true };
+    if (this.failure?.error instanceof TookTooLong)
+      return { installed: true, signedIn: true, unchecked: true };
+    throw this.failure?.error;
+  }
+  stale() {
+    if (this.known)
+      this.known.at = 0;
+  }
+  reset() {
+    this.generation++;
+    this.checking = undefined;
+    this.known = undefined;
+    this.failure = undefined;
   }
 }
 
@@ -6278,7 +6312,7 @@ class RPC {
           if (!this.pending.has(id))
             return;
           this.pending.delete(id);
-          reject(new Error(`${method} took too long.`));
+          reject(new TookTooLong(`${method} took too long.`));
         }, timeout);
       }
     });
@@ -9382,40 +9416,42 @@ class ClaudeAgent {
       { type: "oauth", id: "console", label: "Sign in with Anthropic Console" }
     ];
   }
-  async readStatus(fresh) {
-    if (!fresh && this.status && Date.now() - this.status.at < 30000)
-      return this.status.status;
+  async readStatus() {
     const executable = this.executable();
     if (!executable)
-      return;
+      throw new Error("Claude Code isn't installed.");
     const result = await run(executable, ["auth", "status", "--json"], { timeout: 20000, env: this.env() });
+    if (result.timedOut)
+      throw new TookTooLong("Claude Code took too long to say whether it's signed in.");
     let status;
     try {
       status = JSON.parse(result.stdout);
     } catch {}
-    if (typeof status?.loggedIn !== "boolean")
-      return;
+    if (typeof status?.loggedIn !== "boolean") {
+      const words = (result.stderr.trim() || result.stdout.trim()).split(`
+`).pop()?.trim().slice(0, 300);
+      throw new Error(words ? `Claude Code couldn't say whether it's signed in: ${words}` : `Claude Code couldn't say whether it's signed in (it stopped with code ${result.code}).`);
+    }
     this.status = { at: Date.now(), status };
     return status;
   }
-  known = new KnownAccount;
+  known = new KnownAccount(30000);
   async account(fresh = false) {
     if (!this.executable()) {
       return { installed: false, signedIn: false, message: "Install Claude Code, then sign in here." };
     }
-    return this.known.read(fresh, async () => {
-      const status = await this.readStatus(fresh);
-      if (!status)
-        return;
+    const account = await this.known.read(fresh, async () => {
+      const status = await this.readStatus();
       if (!status.loggedIn)
         return { installed: true, signedIn: false, message: "Sign in to Claude Code with your Claude plan or an Anthropic Console account." };
-      if (this.authFailedAt && this.settingsWritten() <= this.authFailedAt + 60000) {
-        return { installed: true, signedIn: false, ended: true, message: "Claude ended this sign-in. Sign in again." };
-      }
       const plan = status.subscriptionType ? `${status.subscriptionType.charAt(0).toUpperCase()}${status.subscriptionType.slice(1)} plan` : undefined;
       const who = status.email ?? (status.apiProvider && status.apiProvider !== "firstParty" ? status.apiProvider : undefined);
       return { installed: true, signedIn: true, label: [who, plan].filter(Boolean).join(" \xB7 ") || "Claude Code" };
     });
+    if (account.signedIn && this.authFailedAt && this.settingsWritten() <= this.authFailedAt + 60000) {
+      return { installed: true, signedIn: false, ended: true, message: "Claude ended this sign-in. Sign in again." };
+    }
+    return account;
   }
   usesKey() {
     const method = this.status?.status.authMethod ?? "";
@@ -9441,9 +9477,12 @@ class ClaudeAgent {
       home: this.context.home,
       temporary: this.context.temporary,
       instructions: "Finish signing in on Claude's page. Claude Code keeps the sign-in, as when you run claude auth login.",
-      signedIn: async () => Boolean((await this.readStatus(true))?.loggedIn),
+      signedIn: async () => (await this.readStatus()).loggedIn === true,
       codePrompt: /Paste code here if prompted >\s*/g,
-      onComplete: () => this.authFailedAt = undefined,
+      onComplete: () => {
+        this.authFailedAt = undefined;
+        this.known.reset();
+      },
       printedPage: options.remote
     });
   }
@@ -11064,7 +11103,6 @@ class CodexAgent {
   threads = new Map;
   oneOffs = new Map;
   logins = new Map;
-  accountCache;
   modelList;
   skillRoots = new Map;
   rootsSet = new WeakMap;
@@ -11110,7 +11148,7 @@ class CodexAgent {
   }
   programUpdated() {
     this.modelList = undefined;
-    this.accountCache = undefined;
+    this.known.stale();
     for (const [key, slot] of this.slots) {
       slot.outdated = slot.server;
       slot.starting?.then((rpc) => {
@@ -11279,11 +11317,11 @@ class CodexAgent {
         this.logins.delete(params.loginId);
         done(params.success ? { status: "complete" } : { status: "failed", message: params.error ?? "Signing in didn't work." });
       }
-      this.accountCache = undefined;
+      this.known.reset();
       return;
     }
     if (method === "account/updated") {
-      this.accountCache = undefined;
+      this.known.reset();
       return;
     }
     if (method === "account/rateLimits/updated") {
@@ -11372,17 +11410,15 @@ class CodexAgent {
       thread.notification(method, params);
   }
   early = new Map;
-  known = new KnownAccount;
+  known = new KnownAccount(30000);
   async account(fresh = false) {
     if (!this.executable())
       return { installed: false, signedIn: false, message: "Install Codex, then sign in here." };
-    if (!fresh && this.accountCache && Date.now() - this.accountCache.at < 30000)
-      return this.accountCache.account;
     return this.known.read(fresh, async () => {
       const rpc = await this.rpc();
       const result = await rpc.request("account/read", {}, 20000);
       if (!result || typeof result !== "object")
-        return;
+        throw new Error("Codex couldn't say whether it's signed in.");
       const info = result.account;
       let account;
       if (!info) {
@@ -11393,7 +11429,6 @@ class CodexAgent {
       } else {
         account = { installed: true, signedIn: true, label: info.type === "apiKey" ? "OpenAI API key" : String(info.type) };
       }
-      this.accountCache = { at: Date.now(), account };
       return account;
     });
   }
@@ -11433,7 +11468,7 @@ class CodexAgent {
   async signInWithKey(key) {
     const rpc = await this.rpc();
     await rpc.request("account/login/start", { type: "apiKey", apiKey: key }, 30000);
-    this.accountCache = undefined;
+    this.known.reset();
   }
   async models() {
     if (this.modelList && Date.now() - this.modelList.at < 30 * 60000)
@@ -13078,7 +13113,6 @@ class CursorAgent {
   get name() {
     return accountName("Cursor", this.instance);
   }
-  accountCache;
   modelList;
   primed = false;
   constructor(context, instance = { id: "default" }) {
@@ -13133,8 +13167,6 @@ class CursorAgent {
     if ((this.instance.home || !process.env.CURSOR_API_KEY) && !existsSync15(this.authFile)) {
       return { installed: true, signedIn: false, message: "Sign in with your Cursor account. Kuvo Code downloads Cursor's agent the first time." };
     }
-    if (!fresh && this.accountCache && Date.now() - this.accountCache.at < 60000)
-      return this.accountCache.account;
     return this.known.read(fresh, async () => {
       const sdk = await this.sdk();
       const apiKey = await this.apiKey(sdk);
@@ -13147,15 +13179,14 @@ class CursorAgent {
           account = { installed: true, signedIn: true, label: me?.userEmail ?? (process.env.CURSOR_API_KEY ? "Cursor API key" : "Cursor account") };
         } catch (error) {
           if (!(error instanceof sdk.AuthenticationError || error?.status === 401))
-            return;
+            throw error;
           account = { installed: true, signedIn: false, message: "Cursor turned the sign-in down. Sign in again." };
         }
       }
-      this.accountCache = { at: Date.now(), account };
       return account;
     });
   }
-  known = new KnownAccount;
+  known = new KnownAccount(60000);
   signsInRemotely = true;
   async signIn() {
     if (!this.instance.home && process.env.CURSOR_API_KEY)
@@ -13171,7 +13202,7 @@ class CursorAgent {
       if (!credentials)
         throw new Error("Cursor didn't hand over the sign-in.");
       await (await this.store(sdk)).save(credentials);
-      this.accountCache = undefined;
+      this.known.reset();
       this.modelList = undefined;
       status = { status: "complete" };
     }).catch((error) => {
@@ -13191,12 +13222,12 @@ class CursorAgent {
     const sdk = await this.sdk();
     await withTimeout2(sdk.Cursor.me({ apiKey: key }), 15000);
     await (await this.store(sdk)).save({ version: 1, backendUrl: "https://api2.cursor.sh", apiKey: key, createdAtMs: Date.now() });
-    this.accountCache = undefined;
+    this.known.reset();
     this.modelList = undefined;
   }
   async signOut() {
     rmSync11(this.authFile, { force: true });
-    this.accountCache = undefined;
+    this.known.reset();
     this.modelList = undefined;
   }
   async models() {
@@ -13799,7 +13830,7 @@ var cursorUpdates = new Set([
 ]);
 var cursorTools = new Set(["shell", "write", "delete", "glob", "grep", "read", "edit", "ls", "readLints", "mcp", "generateImage", "recordScreen", "semSearch", "createPlan", "updateTodos", "task"]);
 function withTimeout2(promise, milliseconds) {
-  return Promise.race([promise, Bun.sleep(milliseconds).then(() => Promise.reject(new Error("Cursor didn't answer in time.")))]);
+  return Promise.race([promise, Bun.sleep(milliseconds).then(() => Promise.reject(new TookTooLong("Cursor didn't answer in time.")))]);
 }
 
 // Packages/Box/src/agents/agents/grok.ts
@@ -13913,8 +13944,13 @@ class GrokAgent {
     const text = plain(result.stdout + `
 ` + result.stderr);
     const signedOut = /not authenticated|not logged in|grok login|log ?in first|sign in first/i.test(text);
-    if (result.timedOut || !text.trim() || !signedOut && !/you are logged in/i.test(text) && !process.env.XAI_API_KEY)
-      return;
+    if (result.timedOut)
+      throw new TookTooLong("Grok's CLI took too long to say whether it's signed in.");
+    if (!text.trim() || !signedOut && !/you are logged in/i.test(text) && !process.env.XAI_API_KEY) {
+      const words = text.trim().split(`
+`).pop()?.trim().slice(0, 300);
+      throw new Error(words ? `Grok's CLI couldn't say whether it's signed in: ${words}` : `Grok's CLI couldn't say whether it's signed in (it stopped with code ${result.code}).`);
+    }
     const signedIn = Boolean(process.env.XAI_API_KEY) || !signedOut;
     const models = [];
     for (const line of text.split(`
@@ -13932,8 +13968,6 @@ class GrokAgent {
       return { installed: false, signedIn: false, message: "Install Grok's CLI, then sign in here." };
     return this.known.read(fresh, async () => {
       const status = await this.read(fresh);
-      if (!status)
-        return;
       if (!status.signedIn)
         return { installed: true, signedIn: false, message: "Sign in to Grok with your SuperGrok plan." };
       return { installed: true, signedIn: true, label: process.env.XAI_API_KEY ? "xAI API key" : "grok.com" };
@@ -13951,13 +13985,13 @@ class GrokAgent {
       home: this.context.home,
       temporary: this.context.temporary,
       instructions: options.remote ? "Open Grok's page, sign in, and enter the code it shows here. Grok's CLI keeps the sign-in, as when you run grok login." : "Finish signing in to Grok in your browser. Grok's CLI keeps the sign-in, as when you run grok login.",
-      signedIn: async () => (await this.read(true))?.signedIn ?? false,
+      signedIn: async () => (await this.read(true)).signedIn,
       printedPage: options.remote,
       userCode: options.remote ? /\b([A-Z0-9]{4,}(?:-[A-Z0-9]{4,})+)\b/ : undefined
     });
   }
   async models() {
-    const listed = (await this.read(false))?.models ?? this.status?.models ?? [];
+    const listed = await this.read(false).then((status) => status.models, () => this.status?.models ?? []);
     const efforts = this.efforts();
     return listed.map((info, index) => model(this.providerID, info.id, info.name, { released: info.isDefault ? 1000 : 500 - index, context: this.windows.get(info.id) ?? 256000, variants: efforts[info.id]?.values ?? ["low", "medium", "high"] }));
   }
@@ -21767,10 +21801,11 @@ async function integration(agent, fresh = false, auto) {
     agent.account(fresh).catch((error) => ({ installed: false, signedIn: false, message: String(error?.message ?? error) })),
     maintainedSoon(agent, fresh)
   ]);
-  const seen = JSON.stringify([account.installed, account.signedIn, account.label]);
   const before = lastSeen.get(agent.providerID);
-  lastSeen.set(agent.providerID, seen);
-  if (before !== undefined && before !== seen) {
+  const label = account.signedIn ? account.label ?? before?.label : undefined;
+  lastSeen.set(agent.providerID, { installed: account.installed, signedIn: account.signedIn, label });
+  const changed = before && (before.installed !== account.installed || before.signedIn !== account.signedIn || before.label !== undefined && before.label !== label);
+  if (changed) {
     agent.forgetModels?.();
     emit("integration.updated", { integrationID: agent.providerID });
     if (account.signedIn && auto?.release(agent.providerID))
@@ -22568,4 +22603,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 47ec586328193530f90b960d7ad101ec524b4a0a2b33d024e95432c897e7f15d
+// Built from Packages/Box/src/agents 49bc7b3cc2bd66b3c6ee19ff7b8e837ffac189aba456d5233aa3842d55bfb9fc
