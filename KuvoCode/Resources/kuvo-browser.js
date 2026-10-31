@@ -2749,7 +2749,7 @@ async function mcp() {
         // Showing something in Kuvo Code's panel needs no browser, nor a turn in the line.
         // Nor does writing to another agent.
         if (WAKE_TOOLS.has(params.name)) {
-          wake(params.name, params.arguments || {}, params._meta?.["ai.opencode/sessionID"] ?? null).then(reply, (error) => reply(text(error instanceof ToolError ? error.message : String(error), true)));
+          wake(params.name, params.arguments || {}, call.session).then(reply, (error) => reply(text(error instanceof ToolError ? error.message : String(error), true)));
           return;
         }
         // The vault's and the sandbox's, which this machine's box carries out (and may ask you).
