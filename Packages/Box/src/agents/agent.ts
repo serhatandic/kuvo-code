@@ -29,33 +29,68 @@ export interface Account {
   unchecked?: boolean
 }
 
+/** An agent didn't answer in time (a computer too busy to run it, say): no answer, rather than a wrong one. */
+export class TookTooLong extends Error {}
+
 /**
  * An agent's sign-in as it last said. A check that fails or takes too long (a computer too busy to
  * answer in time) isn't a sign-out: the account stays as it was, `unchecked`, and is asked again
- * next time. Only the agent's own word, that you're signed out, is one. Never checked yet, it's
- * taken as signed in: a run on it says so if it isn't, where a model taken away mid-goal can't be
- * put back.
+ * next time. Only the agent's own word, that you're signed out, is one. Never answered yet, one
+ * that took too long is taken as signed in (a run on it says so if it isn't, where a model taken
+ * away mid-goal can't be put back), and one that failed throws why.
  */
 export class KnownAccount {
-  private known?: Account
-  private checking?: Promise<Account | undefined>
-  /** When the last check failed: not tried again for a while unless asked anew (it'd only make each list wait as long). */
-  private failed?: number
+  private known?: { at: number; account: Account }
+  private checking?: Promise<{ account: Account } | { error: unknown }>
+  /** The last check's failure: not tried again for a while unless asked anew (it'd only make each list wait as long). */
+  private failure?: { at: number; error: unknown }
+  /** Counts resets: a check begun before one isn't kept. */
+  private generation = 0
 
-  /**
-   * `check`: the agent's answer, or undefined when it gave none. One check at a time: a busy
-   * computer isn't given more.
-   */
-  async read(fresh: boolean, check: () => Promise<Account | undefined>): Promise<Account> {
-    if (fresh || this.failed === undefined || Date.now() - this.failed >= 30_000) {
-      this.checking ??= check()
-        .catch(() => undefined)
-        .finally(() => (this.checking = undefined))
-      const said = await this.checking
-      this.failed = said ? undefined : Date.now()
-      if (said) return (this.known = said)
+  /** `keep`: how long an answer stands before the agent is asked again (unless asked anew). */
+  constructor(private readonly keep = 0) {}
+
+  /** `check`: the agent's answer; throws when it gave none (`TookTooLong`, or why it failed). One check at a time: a busy computer isn't given more. */
+  async read(fresh: boolean, check: () => Promise<Account>): Promise<Account> {
+    if (!fresh && this.known && !this.failure && Date.now() - this.known.at < this.keep) return this.known.account
+    if (fresh || !this.failure || Date.now() - this.failure.at >= 30_000) {
+      const generation = this.generation
+      if (!this.checking) {
+        const checking: Promise<{ account: Account } | { error: unknown }> = check()
+          .then(
+            (account) => ({ account }),
+            (error: unknown) => ({ error }),
+          )
+          .finally(() => {
+            if (this.checking === checking) this.checking = undefined
+          })
+        this.checking = checking
+      }
+      const result = await this.checking
+      if (generation !== this.generation) return this.read(fresh, check)
+      if ("account" in result) {
+        this.failure = undefined
+        this.known = { at: Date.now(), account: result.account }
+        return result.account
+      }
+      this.failure = { at: Date.now(), error: result.error }
     }
-    return { ...(this.known ?? { installed: true, signedIn: true }), unchecked: true }
+    if (this.known) return { ...this.known.account, unchecked: true }
+    if (this.failure?.error instanceof TookTooLong) return { installed: true, signedIn: true, unchecked: true }
+    throw this.failure?.error
+  }
+
+  /** Asked again next time (its program changed), with what it last said kept until it answers. */
+  stale() {
+    if (this.known) this.known.at = 0
+  }
+
+  /** Signed in or out here: the next ask is the agent's word, not the last answer. */
+  reset() {
+    this.generation++
+    this.checking = undefined
+    this.known = undefined
+    this.failure = undefined
   }
 }
 

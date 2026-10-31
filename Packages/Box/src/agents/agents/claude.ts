@@ -11,7 +11,7 @@ import { pathToFileURL } from "node:url"
 import { providerID, type AgentAccount } from "../accounts"
 import type { Agent, AgentContext, Account, MessageInput, OwnTurn, RunInput, RunResult, SignInAttempt, SignInOptions, SubagentMessages, SubagentRun, Thread, TurnHooks, PromptFile } from "../agent"
 import type { Limit } from "../auto"
-import { accountName, ContextWindows, failure, KnownAccount, model } from "../agent"
+import { accountName, ContextWindows, failure, KnownAccount, model, TookTooLong } from "../agent"
 import { fileDiff, fromPatch } from "../diff"
 import { install, maintenance, update, type MaintenanceDefinition } from "../maintenance"
 import { emit } from "../events"
@@ -132,40 +132,44 @@ export class ClaudeAgent implements Agent {
     ]
   }
 
-  /** What `claude auth status` says, or undefined when it said nothing to go by (it failed, or took too long). */
-  private async readStatus(fresh: boolean): Promise<Status | undefined> {
-    if (!fresh && this.status && Date.now() - this.status.at < 30_000) return this.status.status
+  /** What `claude auth status` says; throws when it says nothing to go by (`TookTooLong`, or why not). */
+  private async readStatus(): Promise<Status> {
     const executable = this.executable()
-    if (!executable) return undefined
+    if (!executable) throw new Error("Claude Code isn't installed.")
     const result = await run(executable, ["auth", "status", "--json"], { timeout: 20_000, env: this.env() })
+    if (result.timedOut) throw new TookTooLong("Claude Code took too long to say whether it's signed in.")
     let status: Status | undefined
     try {
       status = JSON.parse(result.stdout)
     } catch {}
-    if (typeof status?.loggedIn !== "boolean") return undefined
+    if (typeof status?.loggedIn !== "boolean") {
+      const words = (result.stderr.trim() || result.stdout.trim()).split("\n").pop()?.trim().slice(0, 300)
+      throw new Error(words ? `Claude Code couldn't say whether it's signed in: ${words}` : `Claude Code couldn't say whether it's signed in (it stopped with code ${result.code}).`)
+    }
     this.status = { at: Date.now(), status }
     return status
   }
 
-  /** Its sign-in as Claude Code last said (a check that fails isn't a sign-out). */
-  private known = new KnownAccount()
+  /** Its sign-in as Claude Code last said, for 30 seconds (a check that fails isn't a sign-out). */
+  private known = new KnownAccount(30_000)
 
   async account(fresh = false): Promise<Account> {
     if (!this.executable()) {
       return { installed: false, signedIn: false, message: "Install Claude Code, then sign in here." }
     }
-    return this.known.read(fresh, async () => {
-      const status = await this.readStatus(fresh)
-      if (!status) return undefined
+    const account = await this.known.read(fresh, async () => {
+      const status = await this.readStatus()
       if (!status.loggedIn) return { installed: true, signedIn: false, message: "Sign in to Claude Code with your Claude plan or an Anthropic Console account." }
-      // (The run that was turned away writes them too as it ends: a minute's grace for that.)
-      if (this.authFailedAt && this.settingsWritten() <= this.authFailedAt + 60_000) {
-        return { installed: true, signedIn: false, ended: true, message: "Claude ended this sign-in. Sign in again." }
-      }
       const plan = status.subscriptionType ? `${status.subscriptionType.charAt(0).toUpperCase()}${status.subscriptionType.slice(1)} plan` : undefined
       const who = status.email ?? (status.apiProvider && status.apiProvider !== "firstParty" ? status.apiProvider : undefined)
       return { installed: true, signedIn: true, label: [who, plan].filter(Boolean).join(" · ") || "Claude Code" }
     })
+    // Claude turned the sign-in away in a run, though `claude auth status` still says signed in.
+    // (The run that was turned away writes its settings too as it ends: a minute's grace for that.)
+    if (account.signedIn && this.authFailedAt && this.settingsWritten() <= this.authFailedAt + 60_000) {
+      return { installed: true, signedIn: false, ended: true, message: "Claude ended this sign-in. Sign in again." }
+    }
+    return account
   }
 
   /** Paid per token (an API key), rather than by a plan. */
@@ -200,9 +204,12 @@ export class ClaudeAgent implements Agent {
       // Claude Code's word: a sign-in Claude ended still reads as signed in there, so signing in
       // again counts once the command says it worked (another Claude Code writing its settings
       // meanwhile isn't it).
-      signedIn: async () => Boolean((await this.readStatus(true))?.loggedIn),
+      signedIn: async () => (await this.readStatus()).loggedIn === true,
       codePrompt: /Paste code here if prompted >\s*/g,
-      onComplete: () => (this.authFailedAt = undefined),
+      onComplete: () => {
+        this.authFailedAt = undefined
+        this.known.reset()
+      },
       // On another device: the page it prints, which ends on a code to paste here.
       printedPage: options.remote,
     })

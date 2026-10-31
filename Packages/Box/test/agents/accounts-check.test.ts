@@ -3,11 +3,11 @@
 // stay as the agent last said, and only the agent's own word that you're signed out is a sign-out.
 // Claude Code and Grok are fake programs on the PATH; Codex's app-server and Cursor's SDK are stand-ins.
 
-import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test"
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { afterAll, afterEach, beforeAll, describe, expect, setSystemTime, test } from "bun:test"
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { delimiter, join } from "node:path"
-import type { Agent } from "../../src/agents/agent"
+import { TookTooLong, type Agent } from "../../src/agents/agent"
 import { ClaudeAgent } from "../../src/agents/agents/claude"
 import { CodexAgent } from "../../src/agents/agents/codex"
 import { CursorAgent } from "../../src/agents/agents/cursor"
@@ -23,6 +23,7 @@ const path = process.env.PATH
 beforeAll(() => {
   root = mkdtempSync(join(tmpdir(), "kuvo-accounts-check-"))
   bin = join(root, "bin")
+  mkdirSync(bin)
   // The fake programs first: they're the ones found.
   process.env.PATH = [bin, path].join(delimiter)
 })
@@ -34,6 +35,7 @@ afterAll(() => {
 
 afterEach(() => {
   delete process.env.CURSOR_API_KEY
+  setSystemTime()
 })
 
 /** A program on the PATH that answers as `mode`'s file says: what it prints, or killed as it runs (a check cut short). */
@@ -42,7 +44,6 @@ function program(name: string, answers: Record<string, string>): (mode: string) 
   const cases = Object.entries(answers)
     .map(([mode, script]) => `  ${mode}) ${script} ;;`)
     .join("\n")
-  require("node:fs").mkdirSync(bin, { recursive: true })
   const file = join(bin, name)
   writeFileSync(file, `#!/bin/sh\ncase "$(cat '${modeFile}')" in\n${cases}\n  killed) kill -9 $$ ;;\nesac\n`)
   chmodSync(file, 0o755)
@@ -59,7 +60,7 @@ function bridge(agents: Agent[]) {
   return {
     /** The account as Settings › Accounts shows it, asked anew. */
     account: (agent: Agent) => ask(`integration/${encodeURIComponent(agent.providerID)}`),
-    /** The models the picker lists, of `agent`. */
+    /** The models the picker lists, of `agent` (its account as it stands, not asked anew). */
     models: async (agent: Agent) => ((await ask("model")) as any[]).filter((model) => model.providerID === agent.providerID).map((model) => model.id),
   }
 }
@@ -78,12 +79,47 @@ const context = () => {
   return { home, temporary: home, deps: {} as any }
 }
 
+/** Codex's app-server, as the test says it answers: `account/read` and `model/list`, counted. */
+function codexServer() {
+  const server = {
+    /** How it answers now: as signed in, as signed out, too late, or held until `release`. */
+    answers: "in" as "in" | "out" | "late" | "held",
+    reads: 0,
+    release: () => {},
+    /** Called once a held check is waiting. */
+    holding: () => {},
+    isClosed: false,
+    request: async (method: string) => {
+      if (method === "account/read") server.reads++
+      if (server.answers === "late") throw new TookTooLong(`${method} took too long.`)
+      if (server.answers === "held") await new Promise<void>((resolve) => ((server.release = resolve), server.holding()))
+      if (method === "account/read") return { account: server.answers === "out" ? null : { type: "chatgpt", email: "ada@example.com", planType: "plus" } }
+      if (method === "model/list") return { data: [{ id: "gpt-6", model: "gpt-6", displayName: "GPT-6", isDefault: true }] }
+      throw new Error(`No ${method}.`)
+    },
+  }
+  return server
+}
+
+function codex(server: { request: (method: string) => Promise<unknown> } | Error) {
+  class TestCodex extends CodexAgent {
+    override executable() {
+      return "/usr/bin/true"
+    }
+    override async rpc(): Promise<any> {
+      if (server instanceof Error) throw server
+      return server
+    }
+  }
+  return new TestCodex(context())
+}
+
 describe("an agent's sign-in that can't be checked just now", () => {
   test("Claude Code: still signed in as you, with its models, until Claude Code says you're signed out", async () => {
     const claude = program("claude", {
       in: `echo '{"loggedIn":true,"authMethod":"claude.ai","email":"ada@example.com","subscriptionType":"max"}'`,
       out: `echo '{"loggedIn":false,"authMethod":"none"}'; exit 1`,
-      garbled: `echo 'Error: something went wrong'; exit 1`,
+      garbled: `echo 'Error: something went wrong' >&2; exit 1`,
     })
     class TestClaude extends ClaudeAgent {
       // Claude Code's own list of your models, as it says once it starts.
@@ -105,7 +141,7 @@ describe("an agent's sign-in that can't be checked just now", () => {
     expect((await box.account(agent)).connections[0]?.label).toBe("ada@example.com · Max plan")
     expect(await box.models(agent)).not.toEqual([])
 
-    // Killed as it checks (a check that ran out of time), or saying nothing it can go by.
+    // Killed as it checks, or saying nothing it can go by.
     const changes = told()
     for (const mode of ["killed", "garbled"]) {
       claude(mode)
@@ -126,13 +162,31 @@ describe("an agent's sign-in that can't be checked just now", () => {
     expect(await box.models(agent)).toEqual([])
   })
 
-  test("never checked yet, a check that fails isn't taken for a sign-out either, and says it couldn't check", async () => {
-    const claude = program("claude", { in: `echo '{"loggedIn":true}'` })
-    const agent = new ClaudeAgent(context())
-    claude("killed")
-    const account = await bridge([agent]).account(agent)
+  test("never answered yet: one that took too long is taken as signed in and says it couldn't check; one that fails says why", async () => {
+    const late = codexServer()
+    late.answers = "late"
+    const slow = codex(late)
+    const account = await bridge([slow]).account(slow)
     expect(account.connections[0]?.status).toEqual({ status: "connected", message: "Couldn't check the sign-in just now" })
     expect(account.metadata.unchecked).toBe(true)
+
+    // Its answer once it comes only names the account: nothing the app has to read again.
+    const changes = told()
+    late.answers = "in"
+    expect((await bridge([slow]).account(slow)).connections[0]?.label).toBe("ada@example.com · ChatGPT Plus")
+    changes.stop()
+    expect(changes.events).toEqual([])
+
+    // Broken for good (its app-server can't start): its own words, as before, not "couldn't check" for ever.
+    const broken = codex(new Error("codex: cannot execute binary file"))
+    const said = await bridge([broken]).account(broken)
+    expect(said.connections).toEqual([])
+    expect(said.metadata.message).toBe("codex: cannot execute binary file")
+
+    const claude = program("claude", { crashes: `echo 'Segmentation fault' >&2; exit 139` })
+    claude("crashes")
+    const crashing = new ClaudeAgent(context())
+    expect((await bridge([crashing]).account(crashing)).metadata.message).toBe("Claude Code couldn't say whether it's signed in: Segmentation fault")
   })
 
   test("Grok: its models stay listed while `grok models` can't answer", async () => {
@@ -159,40 +213,67 @@ describe("an agent's sign-in that can't be checked just now", () => {
     expect(await box.models(agent)).toEqual([])
   })
 
-  test("Codex: an app-server that doesn't answer in time keeps the account and the models it listed", async () => {
-    let answering = true
-    const server = {
-      isClosed: false,
-      request: async (method: string) => {
-        if (!answering) throw new Error(`Codex didn't answer ${method} in time.`)
-        if (method === "account/read") return { account: { type: "chatgpt", email: "ada@example.com", planType: "plus" } }
-        if (method === "model/list") return { data: [{ id: "gpt-6", model: "gpt-6", displayName: "GPT-6", isDefault: true }] }
-        throw new Error(`No ${method}.`)
-      },
-    }
-    class TestCodex extends CodexAgent {
-      override executable() {
-        return "/usr/bin/true"
-      }
-      override async rpc(): Promise<any> {
-        return server
-      }
-    }
-    const agent = new TestCodex(context())
+  test("Codex: an app-server that doesn't answer in time keeps the account and the models it listed; one that says you're signed out signs you out", async () => {
+    const server = codexServer()
+    const agent = codex(server)
     const box = bridge([agent])
+    const start = Date.now()
+    setSystemTime(start)
 
     expect((await box.account(agent)).connections[0]?.label).toBe("ada@example.com · ChatGPT Plus")
     expect(await box.models(agent)).toEqual(["gpt-6"])
 
-    answering = false
+    // Busy past the time its models are listed again.
+    server.answers = "late"
+    setSystemTime(start + 31 * 60_000)
     const account = await box.account(agent)
     expect(account.metadata.installed).toBe(true)
     expect(account.connections[0]?.label).toBe("ada@example.com · ChatGPT Plus")
-    ;(agent as any).modelList.at = 0
     expect(await box.models(agent)).toEqual(["gpt-6"])
+
+    server.answers = "out"
+    const out = await box.account(agent)
+    expect(out.connections).toEqual([])
+    expect(out.metadata.message).toBe("Sign in to Codex with ChatGPT or an OpenAI API key.")
+    expect(await box.models(agent)).toEqual([])
   })
 
-  test("Cursor: out of reach, still signed in as you with your models; turned down by Cursor, signed out", async () => {
+  test("a busy agent is asked once at a time, and not again for 30 seconds after a check that failed", async () => {
+    const server = codexServer()
+    const agent = codex(server)
+    const box = bridge([agent])
+    const start = Date.now()
+    setSystemTime(start)
+
+    // Asked twice while the first check waits: one check, both answered by it.
+    server.answers = "held"
+    const held = new Promise<void>((resolve) => (server.holding = resolve))
+    const both = Promise.all([box.account(agent), box.account(agent)])
+    await held
+    server.answers = "in"
+    server.release()
+    for (const account of await both) expect(account.connections[0]?.label).toBe("ada@example.com · ChatGPT Plus")
+    expect(server.reads).toBe(1)
+    expect(await box.models(agent)).toEqual(["gpt-6"])
+    expect(server.reads).toBe(1)
+
+    // Its answer stands a while; then a check that fails…
+    server.answers = "late"
+    setSystemTime(start + 31_000)
+    expect(await box.models(agent)).toEqual(["gpt-6"])
+    expect(server.reads).toBe(2)
+    // …isn't tried again for 30 seconds by the lists the app reads,
+    setSystemTime(start + 50_000)
+    expect(await box.models(agent)).toEqual(["gpt-6"])
+    expect(server.reads).toBe(2)
+    // and is then.
+    server.answers = "in"
+    setSystemTime(start + 62_000)
+    expect(await box.models(agent)).toEqual(["gpt-6"])
+    expect(server.reads).toBe(3)
+  })
+
+  test("Cursor: out of reach, still signed in as you with your models; turned down by Cursor, or signed out of here, signed out", async () => {
     process.env.CURSOR_API_KEY = "key_test"
     let reachable = true
     let rejects = false
@@ -220,17 +301,26 @@ describe("an agent's sign-in that can't be checked just now", () => {
     }
     const agent = new TestCursor(context())
     const box = bridge([agent])
+    const start = Date.now()
+    setSystemTime(start)
 
     expect((await box.account(agent)).connections[0]?.label).toBe("ada@example.com")
     expect(await box.models(agent)).toEqual(["default", "composer-2"])
 
     reachable = false
+    setSystemTime(start + 31 * 60_000)
     expect((await box.account(agent)).connections[0]?.label).toBe("ada@example.com")
-    ;(agent as any).modelList.at = 0
     expect(await box.models(agent)).toEqual(["default", "composer-2"])
 
     reachable = true
     rejects = true
     expect((await box.account(agent)).connections).toEqual([])
+
+    // Signed out of here, with your key still set: asked anew, not as it last said.
+    rejects = false
+    expect((await box.account(agent)).connections[0]?.label).toBe("ada@example.com")
+    await agent.signOut()
+    rejects = true
+    expect((await box.models(agent))).toEqual([])
   })
 })
