@@ -64,6 +64,10 @@ import ClientAccounts
         let page = KeyPage.page(for: "acme-coding-plan-eu", name: "Acme Coding Plan (Europe)")
         #expect(page?.line == "Your Acme Coding Plan subscription's key.")
         #expect(page?.url == nil)
+        // Docs that aren't a web page aren't a link.
+        let odd = KeyPage.page(for: "acme-coding-plan-eu", name: "Acme Coding Plan", docs: URL(string: "javascript:alert(1)"))
+        #expect(odd?.url == nil)
+        #expect(odd?.line == "Your Acme Coding Plan subscription's key.")
     }
 
     @Test func aKnownPageWinsOverTheCatalogsDocs() {

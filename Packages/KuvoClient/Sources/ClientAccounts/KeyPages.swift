@@ -38,7 +38,11 @@ public struct KeyPage: Equatable, Sendable {
         case .named(let named): named
         case .keyOfItsOwn: nil
         }
-        guard let known else { return KeyPage(plan: plan, source: nil, url: docs, opensDocs: docs != nil) }
+        guard let known else {
+            // Only a web page: anything else from a catalog would be a dead link.
+            let docs = docs.flatMap { ["http", "https"].contains($0.scheme?.lowercased() ?? "") ? $0 : nil }
+            return KeyPage(plan: plan, source: nil, url: docs, opensDocs: docs != nil)
+        }
         return KeyPage(plan: plan, source: known.source, url: known.url, opensDocs: known.opensDocs)
     }
 
