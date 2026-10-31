@@ -28,7 +28,13 @@ final class Keeper {
     private lazy var server = LoopbackServer { [weak self] request in await self?.respond(to: request) ?? .init(status: 503) }
     private let started = Date.now
     /// The box it keeps: the box itself, the engine and the coding agents' bridge.
-    private let box = MacBoxRunner(box: BoxProcess(), agents: OutsideAgents(), host: HostInterface())
+    private let box: MacBoxRunner
+    /// The app it was started from, as it records itself (a test's keeper can be an older one's).
+    private let version: String
+    private let build: String
+    /// How it goes, once everything it started has stopped: the process exits (a test's keeper
+    /// only says so).
+    private let exits: (Exit) -> Void
     /// This Mac's link, for its keys alone (the box's relay asks for them through the host
     /// interface); the app's own follows the phones.
     private let link = PhoneLink()
@@ -36,6 +42,14 @@ final class Keeper {
     private let tools = KeeperTools()
     /// Making way for a newer app's keeper, once nothing is under way.
     private var updating: Task<Void, Never>?
+
+    init(box: MacBoxRunner = MacBoxRunner(box: BoxProcess(), agents: OutsideAgents(), host: HostInterface()),
+         version: String = AppInfo.version, build: String = AppInfo.build, exits: @escaping (Exit) -> Void = { Darwin.exit($0.rawValue) }) {
+        self.box = box
+        self.version = version
+        self.build = build
+        self.exits = exits
+    }
 
     /// `--box`: runs until launchd stops it, or it's told to stop. Never returns.
     nonisolated static func main() -> Never {
@@ -61,15 +75,15 @@ final class Keeper {
 
     private var terminate: DispatchSourceSignal?
 
-    private func start() async {
+    func start() async {
         do {
             let port = try await server.start()
-            try KeeperRecord(pid: getpid(), version: AppInfo.version, build: AppInfo.build, url: "http://127.0.0.1:\(port)",
+            try KeeperRecord(pid: getpid(), version: version, build: build, url: "http://127.0.0.1:\(port)",
                              password: password, started: started.timeIntervalSince1970 * 1000).write()
             Self.writeStart()
             // Its process, as a machine's keeper records its own.
             FileManager.default.createFile(atPath: KeeperRecord.run.appending(path: "box.pid").path, contents: Data("\(getpid())".utf8), attributes: [.posixPermissions: 0o600])
-            log.info("Keeper \(AppInfo.version, privacy: .public) (\(AppInfo.build, privacy: .public)) started")
+            log.info("Keeper \(self.version, privacy: .public) (\(self.build, privacy: .public)) started")
             link.hasMachines = { Machines.anySaved }
             box.host.phoneLink = link
             box.host.appAnswers = false
@@ -104,7 +118,7 @@ final class Keeper {
             try? FileManager.default.removeItem(at: KeeperRecord.run.appending(path: "box.pid"))
         }
         log.info("Keeper stopped (\(how.rawValue))")
-        exit(how.rawValue)
+        exits(how)
     }
 
     // MARK: Control
@@ -158,7 +172,7 @@ final class Keeper {
             case .failed(let reason): engine = ["state": "failed", "reason": reason]
             }
             var answer: [String: Any] = [
-                "pid": Int(getpid()), "version": AppInfo.version, "build": AppInfo.build,
+                "pid": Int(getpid()), "version": version, "build": build,
                 "started": started.timeIntervalSince1970 * 1000, "engine": engine, "busy": await box.isBusy(),
                 "updating": updating != nil,
             ]
@@ -190,8 +204,9 @@ final class Keeper {
     private func watchForUpdate() {
         Task { @MainActor in
             while updating == nil {
-                try? await Task.sleep(for: .seconds(60))
-                if let installed = Self.installedVersion(), installed != "\(AppInfo.version) (\(AppInfo.build))" {
+                await Self.clock(60)
+                guard !Task.isCancelled else { return }
+                if let installed = Self.installedVersion(), installed != "\(version) (\(build))" {
                     log.info("Kuvo Code \(installed, privacy: .public) is installed now")
                     update(within: Self.updateWait)
                 }
@@ -208,16 +223,28 @@ final class Keeper {
         return "\(version) (\(build))"
     }
 
-    /// Waits until `busy` says nothing is under way, asking every `every`, or until `limit` seconds
-    /// have passed: whether it ended with nothing under way.
+    /// Waits until `busy` says nothing is under way, asking every `every` seconds, or until `limit`
+    /// seconds have passed: whether it ended with nothing under way.
     @discardableResult
-    static func makeWay(within limit: Double, every: Duration = .seconds(10), busy: () async -> Bool) async -> Bool {
-        let deadline = Date.now.addingTimeInterval(limit)
+    static func makeWay(within limit: Double, every: Int = 10, busy: () async -> Bool) async -> Bool {
+        var waited = 0
         while await busy() {
-            guard Date.now < deadline else { return false }
-            try? await Task.sleep(for: every)
+            guard Double(waited) < limit else { return false }
+            await clock(every)
+            waited += every
         }
         return true
+    }
+
+    #if DEBUG
+    /// Tests move a clock of their own on.
+    static var clock: (Int) async -> Void = sleep
+    #else
+    private static let clock: (Int) async -> Void = sleep
+    #endif
+
+    private static func sleep(_ seconds: Int) async {
+        try? await Task.sleep(for: .seconds(seconds))
     }
 
     // MARK: Asked as a machine's keeper is
