@@ -31,6 +31,8 @@ export interface FenceState {
   able: boolean;
   /** Every coding agent's process here runs in it too: none started before it was on still runs. */
   agents: boolean;
+  /** An agent's process started before it was on still runs outside it (`POST kuvo/sandbox/restart` restarts it in it). */
+  outside?: boolean;
   /** The box asks you, once, to restart the agents started before it was on (`POST kuvo/sandbox/restart`). */
   restart?: boolean;
   /** Why not, for a client to map without reading `why`, and what you can do about it. */
@@ -63,6 +65,9 @@ const ON = path.join(FOLDER, "on");
 // And that it's set up and checked here, so a check waits while it isn't on yet rather than run
 // without it (where the box can't set it up, commands run as before, and checks with them).
 const READY = path.join(FOLDER, "ready");
+// That this box, as it runs now, has set it up or found it can't run here (its pid): the agents
+// bridge waits for it before it starts any coding agent.
+const DECIDED = path.join(FOLDER, "decided");
 const platform: "darwin" | "linux" = process.platform === "darwin" ? "darwin" : "linux";
 
 const places: FencePlaces = {
@@ -96,7 +101,9 @@ let lastProfiles = "";
 
 /** Whether the sandbox is on here: read each time from what the box knows, without waiting. */
 export function fenceState(): FenceState {
-  const base = { able: checked.able, agents: agentsAllInside(), ...(asksToRestart() ? { restart: true } : {}) };
+  // `agents`: every coding agent's process here runs in it, or none runs (what opens the vault to agents).
+  const said = bridgeSays();
+  const base = { able: checked.able, agents: said === "none" || said === "inside", ...(said === "outside" ? { outside: true } : {}), ...(asksToRestart() ? { restart: true } : {}) };
   // Kuvo Code's own kill switch: no reason a client shows, as there's nothing you can do.
   if (!fenceWanted()) return { ...base, on: false, why: "Kuvo Code has it turned off on this computer for now." };
   if (!checked.passed) return { ...base, on: false, ...cannot(checked) };
@@ -134,14 +141,6 @@ export function engineCommandsInSandbox(): boolean {
  * finishes its turn as it started; the next starts it again in it. */
 export const agentsCommandsInSandbox = (): boolean => fenceWanted() && fs.existsSync(ON);
 
-/** Whether every coding agent's process here runs in it now: the agents bridge says so for the
- * sandbox as it is (`run/fence/agents`; none it started before it was on still runs), or none runs.
- * What opens the vault to agents. */
-export function agentsAllInside(): boolean {
-  const said = bridgeSays();
-  return said === "none" || said === "inside";
-}
-
 /** What the agents bridge says of its agents' processes, for the sandbox as it is now: all inside
  * it, some started before it was on still running (`outside`), none running, or nothing yet (it
  * hasn't looked since it was set up, or the sandbox isn't on). */
@@ -171,6 +170,7 @@ const RESTART_ASKED = path.join(FOLDER, "restart-asked");
  */
 export function asksToRestart(): boolean {
   if (fs.existsSync(RESTART_ASKED)) return false;
+  // `agents`: every coding agent's process here runs in it, or none runs (what opens the vault to agents).
   const said = bridgeSays();
   if (said === "outside") return true;
   if (said === "inside") answeredRestart();
@@ -431,6 +431,9 @@ export function sweepWakeFolders(now = Date.now()): void {
 export function keepFence(): void {
   try { setUpFence(); } catch {}
   try { tellAgents(); } catch {}
+  // Set up, or found it can't run here: the agents bridge starts the coding agents from now, never
+  // before (it may have started first: this Mac's app starts it as the engine starts).
+  try { writePrivate(DECIDED, JSON.stringify({ pid: process.pid })); } catch {}
   let rounds = 0;
   setInterval(() => {
     const round = rounds++;

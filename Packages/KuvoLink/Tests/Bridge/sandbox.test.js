@@ -76,8 +76,14 @@ async function start(box, env = {}) {
     return { status: response.status, value: await response.json().catch(() => ({})) };
   };
   const stop = async () => { child.stdin.end(); child.kill("SIGTERM"); await exited; };
-  return { url, ask, stop };
+  return { url, ask, stop, pid: child.pid };
 }
+
+// Whom the box's word to the agents bridge names, that it has set up its sandbox (or found it
+// can't run): the box as it runs now, before the bridge starts any coding agent.
+const decidedBy = box => {
+  try { return JSON.parse(fs.readFileSync(path.join(box.home, "run", "fence", "decided"), "utf8")).pid; } catch { return undefined; }
+};
 
 // The engine, opening `folder` and running `command` there as its shell tool does: through the
 // shell its plugins give it, with the environment they set, then the conversation's (`session`,
@@ -150,6 +156,7 @@ test("set up wherever it can run as the box starts, waiting only for the engine,
     assert.equal("wanted" in state, false);
     assert.equal(state.reason, "waiting", state.why);
     assert.equal(fs.existsSync(box.plugin), true, "the engine has its plugin as the box starts");
+    assert.equal(decidedBy(box), running.pid, "it tells the agents bridge, which starts no agent before");
     assert.equal((await running.ask("PATCH", "kuvo/sandbox", { on: false })).status, 405);
     assert.equal(fs.existsSync(box.plugin), true);
   } finally {
@@ -510,6 +517,7 @@ test("with Kuvo Code's own kill switch, the engine's plugin goes, and commands r
     // Nothing a client offers: there's nothing you can do about it.
     assert.deepEqual([state.on, state.reason, state.action], [false, undefined, undefined]);
     assert.equal(fs.existsSync(box.plugin), false);
+    assert.equal(decidedBy(box), off.pid, "the agents bridge starts them, as before");
     assert.equal((await engineRuns(box, project, `cat ${JSON.stringify(path.join(box.home, "run", "engine.json"))}`)).status, 0);
   } finally {
     await off.stop();

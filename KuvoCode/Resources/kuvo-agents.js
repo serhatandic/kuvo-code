@@ -6303,6 +6303,42 @@ function fenceOn() {
   const where = folder();
   return Boolean(where) && process.env.KUVO_SANDBOX !== "off" && existsSync7(join14(where, "on"));
 }
+async function untilSandboxDecided(bound = 30000) {
+  const where = folder();
+  if (!where || process.env.KUVO_SANDBOX === "off")
+    return;
+  const decided = () => {
+    try {
+      return alive(JSON.parse(readFileSync13(join14(where, "decided"), "utf8")).pid);
+    } catch {
+      return false;
+    }
+  };
+  if (decided())
+    return;
+  console.error("Waiting for the box to set up its sandbox before starting any coding agent.");
+  const until = Date.now() + bound;
+  await new Promise((done) => {
+    const look = setInterval(() => {
+      if (!decided() && Date.now() < until)
+        return;
+      if (!decided())
+        console.error("The box didn't set up its sandbox in time: the coding agents start as it is.");
+      clearInterval(look);
+      done();
+    }, 100);
+  });
+}
+var alive = (pid) => {
+  if (!Number.isInteger(pid) || pid <= 1)
+    return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
 var noted = "";
 function noteAgentsInside(inside) {
   const where = folder();
@@ -22440,6 +22476,7 @@ if (artifactsFolder) {
     console.error("artifacts:", error);
   }
 }
+await untilSandboxDecided();
 var server4;
 try {
   server4 = Bun.serve({
@@ -22508,4 +22545,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents d371c62fe5c072fad050b02f883a11a324705d458fe96fc50e1baec23539ff1c
+// Built from Packages/Box/src/agents bd308100ba731c2d438ec47aaee94901dfadf5bd68a5b9c223c42263e90632b7

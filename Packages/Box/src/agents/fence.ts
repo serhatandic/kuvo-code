@@ -47,6 +47,45 @@ export function fenceOn(): boolean {
 }
 
 /**
+ * Until the box that runs here now has set up its sandbox, or found it can't run here
+ * (`run/fence/decided`, naming it): a coding agent started before then would run outside it until
+ * it stops. Not while it's off (Kuvo Code's kill switch) or there's no sandbox folder, and no longer
+ * than `bound`, for a box that doesn't start: then the agents start as the sandbox is.
+ */
+export async function untilSandboxDecided(bound = 30_000): Promise<void> {
+  const where = folder()
+  if (!where || process.env.KUVO_SANDBOX === "off") return
+  const decided = () => {
+    try {
+      return alive(JSON.parse(readFileSync(join(where, "decided"), "utf8")).pid)
+    } catch {
+      return false
+    }
+  }
+  if (decided()) return
+  console.error("Waiting for the box to set up its sandbox before starting any coding agent.")
+  const until = Date.now() + bound
+  await new Promise<void>((done) => {
+    const look = setInterval(() => {
+      if (!decided() && Date.now() < until) return
+      if (!decided()) console.error("The box didn't set up its sandbox in time: the coding agents start as it is.")
+      clearInterval(look)
+      done()
+    }, 100)
+  })
+}
+
+const alive = (pid: unknown) => {
+  if (!Number.isInteger(pid) || (pid as number) <= 1) return false
+  try {
+    process.kill(pid as number, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
  * Tells the box's link whether every agent's process here runs in the sandbox (`run/fence/agents`:
  * this bridge, for the sandbox as it is now), which opens the vault to agents; `outside` while one
  * started before it was on still runs (the box asks you once to restart them); gone while it's off.

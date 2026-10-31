@@ -826,10 +826,11 @@ beside it.
   a check or what waits, tied to a service: `stripe.com`, from its page's address or as the bot
   names it) is for the service's own icon, which each client loads from the site itself.
 - **Alone, or with you there**: a goal goes on alone only where the box's commands run in the
-  sandbox (`sandboxOn`, false until it's built in; a test box says yes with `KUVO_TEST_SANDBOX_ON=1`,
-  never the real app's, `run.kuvo.code/box`, whose app takes it out). Elsewhere it runs all the same,
-  with what its sessions ask waiting for you. Clients never say "sandbox" on the card: the check
-  reads "This Mac can't work on its own yet".
+  sandbox (`sandboxOn`: `kuvo/sandbox`'s `on`, and for a bot on a coding agent its `agents` too; a
+  test box says yes with `KUVO_TEST_SANDBOX_ON=1`, never the real app's, `run.kuvo.code/box`, whose
+  app takes it out). Elsewhere it runs all the same, with what its sessions ask waiting for you.
+  Clients don't show the `alone` check: they read `kuvo/sandbox` and say why it can't yet, with
+  what fixes it (Restart Agents where an agent started before the sandbox still runs).
 - **The goal's own work**: the sessions the bot started since the goal did (a minute's slack); what it
   started before isn't the goal's.
 - **Carrying on**: once nothing of the goal has been at work (the bot or its sessions) for 10
@@ -3016,7 +3017,7 @@ Agents are told: each box starts its engine with `run/fence/agents.md` among its
 Mac: `swift … --disable-sandbox`, xcodebuild's package flags, `pgrep` rather than `ps`); otherwise
 it's empty.
 
-- `GET kuvo/sandbox` → `{on, why?, able, agents}`. `on`: every command the engine runs here
+- `GET kuvo/sandbox` → `{on, why?, able, agents, outside?, restart?, …}`. `on`: every command the engine runs here
   goes through the sandbox, checked (the engine loaded this box's plugin). `why`, when it isn't, in
   words for Settings: why this computer can't (`able: false`: no Landlock, no engine
   yet), a failed check, `Its plugin for the engine was changed or removed.`, `The engine isn't
@@ -3026,7 +3027,13 @@ it's empty.
   `agents` is true once no agent process the bridge started before it was on still runs (the
   agents bridge notes it, `{pid, on}`, in `run/fence/agents`, for the sandbox as it is: `on` is the
   token each setup writes in `run/fence/on`, with `outside: true` while one still runs; with no
-  bridge running, it's true). `restart`: the box asks you, once, to restart those: true the first
+  bridge running, it's true). `outside`: one still runs outside it (`agents` is false then; while
+  it's false without `outside`, the bridge hasn't noted it yet). No agent starts outside it as the
+  box starts: the box writes `run/fence/decided` (`{pid}`, its own) once its first setup has put
+  the sandbox on or found it can't be here, and the agents bridge waits for that (a pid that's
+  running) before it listens, a while at most, so one started before the box (as a Mac's keeper
+  and a machine's launch do) starts none outside it. A bridge with no sandbox folder, or started
+  with `KUVO_SANDBOX=off`, doesn't wait. `restart`: the box asks you, once, to restart those: true the first
   time it's on with one still running (never if it was on with all inside it first), until you
   answer with `POST kuvo/sandbox/restart` `{restart}`, which answers the state anew (400 without
   a true or false; 503 when the agents bridge doesn't answer, and it stays asked). True has the
