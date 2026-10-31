@@ -943,6 +943,48 @@ function carryQueue(from, to, renamed) {
 }
 var CARRIED_FILE = path7.join(RUN, "queues-carried.json");
 var MOST_CARRIED = 300;
+function packQueues(sessions) {
+  const all = readQueues2();
+  const packed = {};
+  for (const session of sessions) {
+    const state = all[session];
+    if (!state || !state.paused && !state.waiting?.length)
+      continue;
+    const waiting = (state.waiting ?? []).map((shown) => {
+      let message = null;
+      try {
+        message = JSON.parse(fs8.readFileSync(waitingFile2(shown.id), "utf8"));
+      } catch {}
+      return { shown, message };
+    });
+    packed[session] = { paused: state.paused, held: state.held.filter((id) => waiting.some((each) => each.shown.id === id)), waiting };
+  }
+  return packed;
+}
+function unpackQueues(carried, sessions) {
+  if (!isObject(carried))
+    return [];
+  const goOn = [];
+  for (const session of sessions) {
+    const queue = carried[session];
+    if (!isObject(queue))
+      continue;
+    const waiting = [];
+    for (const each of Array.isArray(queue.waiting) ? queue.waiting : []) {
+      const [shown] = keptWaiting([isObject(each) ? each.shown : null]);
+      const message = isObject(each) && isObject(each.message) ? each.message : null;
+      if (!shown || !message || typeof message.text !== "string" || waiting.some((other) => other.id === shown.id))
+        continue;
+      writePrivate(waitingFile2(shown.id), JSON.stringify({ id: shown.id, text: message.text, delivery: message.delivery === "steer" ? "steer" : "queue", ...Array.isArray(message.files) ? { files: message.files } : {} }));
+      waiting.push(shown);
+    }
+    const held = (Array.isArray(queue.held) ? queue.held : []).filter((id) => typeof id === "string" && waiting.some((each) => each.id === id));
+    changeQueue2(session, () => ({ paused: true, held, ...waiting.length ? { waiting } : {} }));
+    if (queue.paused !== true)
+      goOn.push(session);
+  }
+  return goOn;
+}
 function forgetQueue(session) {
   let gone = [];
   changeQueue2(session, (state) => {
@@ -12005,6 +12047,7 @@ class Refused extends Error {
     this.status = status;
   }
 }
+var fingerprint = (exports, sessions) => `${conversationHash(exports)}.${crypto20.createHash("sha256").update(JSON.stringify(packQueues(sessions))).digest("base64url")}`;
 var outgoing = new Map;
 async function carryOn(id) {
   const record = readMove(id);
@@ -12024,6 +12067,9 @@ async function carryOn(id) {
     exports = await exportAll(engine, record.sessions[0]);
     contents.exports = exports;
     record.sessions = idsOf(exports);
+    const queues = packQueues(record.sessions);
+    if (Object.keys(queues).length)
+      contents.queues = queues;
     if (record.folder)
       contents.folder = path52.basename(record.folder);
     if (record.kind === "bot") {
@@ -12040,7 +12086,7 @@ async function carryOn(id) {
   const still = readMove(id);
   if (!still || still.failed || still.stage !== "holding")
     return;
-  outgoing.set(id, { got: new Set, flying: new Map, exports: conversationHash(exports) });
+  outgoing.set(id, { got: new Set, flying: new Map, exports: fingerprint(exports, record.sessions) });
   const now = changeMove(id, (each) => {
     Object.assign(each, { sessions: record.sessions, wasPaused: record.wasPaused, pausedAs: record.pausedAs, members: record.members, hash: bundle.hash, size: bundle.size, sent: 0, stage: "copying", step: "offer", offered: true, sentAt: Date.now() });
   });
@@ -12085,7 +12131,7 @@ async function arrived(record) {
     const before = outgoing.get(record.id)?.exports;
     if (!still())
       return;
-    if (!before || conversationHash(again) !== before) {
+    if (!before || fingerprint(again, record.sessions) !== before) {
       if (record.tries >= 2)
         throw new Refused(say.busy(record.name));
       changeMove(record.id, (each) => {
@@ -12144,6 +12190,8 @@ async function finish(id) {
     }
     for (const session of [...record.sessions].reverse())
       await deleteSession(engine, session);
+    for (const session of record.sessions)
+      forgetQueue(session);
     if (record.kind === "bot")
       await answerBotKeys("DELETE", `kuvo/bots/${record.thing}/keys`, null, null).catch(() => {});
     await toTrash(place);
@@ -12409,6 +12457,11 @@ async function bringIn(record, signal) {
     each.sessions = idsOf(contents.exports);
   });
   await importAll(engine, contents.exports, directory, signal);
+  const goOn = unpackQueues(contents.queues, idsOf(contents.exports));
+  if (goOn.length)
+    changeMove(record.id, (each) => {
+      each.queuesGoOn = goOn;
+    });
   for (const [integration, keys] of Object.entries(contents.keys ?? {})) {
     const given = await answerBotKeys("PUT", `kuvo/bots/${record.thing}/keys/${encodeURIComponent(integration)}`, { keys }, null);
     if (given.status !== 200)
@@ -12423,6 +12476,8 @@ async function switchHere(record) {
   } else {
     unhold(folderOf(record.kind, record.thing) ?? undefined, record.wasPaused, record.pausedAs);
     forgetMovedAway(record.sessions);
+    for (const session of record.queuesGoOn ?? [])
+      await resumeQueue(readEngineFile(), session).catch(() => {});
     if (record.kind === "bot")
       await settleBot(record.thing, readEngineFile, () => {
         try {
@@ -12453,6 +12508,8 @@ async function clearCopy(record) {
     for (const session of [...record.sessions].reverse())
       if (engine)
         await deleteSession(engine, session).catch(() => {});
+    for (const session of record.sessions)
+      forgetQueue(session);
     const place = folderOf(record.kind, record.thing);
     if (place && record.placed) {
       if (record.kind === "bot")

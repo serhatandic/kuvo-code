@@ -96,13 +96,15 @@ async function engineWith(sessions) {
       const session = engine.sessions.get(exported[1]);
       return session ? send(200, { info: { id: session.id, title: session.title, ...(session.parent ? { parentID: session.parent } : {}) }, messages: session.messages }) : send(404, null);
     }
-    const match = url.pathname.match(/^\/api\/session\/([^/]+)(\/inbox|\/prompt|\/instructions\/entries)?$/);
+    const match = url.pathname.match(/^\/api\/session\/([^/]+)(\/inbox|\/prompt|\/instructions\/entries|\/interrupt|\/message)?$/);
     const session = match && engine.sessions.get(match[1]);
     if (!session) return send(404, null);
     if (match[2] === "/inbox") return send(200, []);
     if (match[2] === "/instructions/entries") return send(200, []);
+    if (match[2] === "/interrupt") return send(200, true);
+    if (match[2] === "/message") return send(200, []);
     if (match[2] === "/prompt") {
-      engine.prompts.push({ session: session.id, text: given.text });
+      engine.prompts.push({ session: session.id, text: given.text, delivery: given.delivery });
       return send(200, {});
     }
     if (request.method === "DELETE") {
@@ -411,4 +413,31 @@ test("a bot you paused moves paused, as you paused it", { timeout: 60_000 }, asy
   assert.equal(moved.status, 200, JSON.stringify(moved.json));
   assert.equal(fs.readFileSync(path.join(macBots, "bot_rest", "paused"), "utf8"), "Back on Monday");
   assert.ok(macEngine.sessions.has("ses_rest") && !fs.existsSync(path.join(labBots, "bot_rest")));
+});
+
+test("a chat you stopped moves stopped, with what waits for it in the same order; nothing of it stays here", { timeout: 60_000 }, async t => {
+  signal = t.signal;
+  macEngine.sessions.set("ses_stop", { id: "ses_stop", title: "Stopped", directory: macChats, messages: messages("Wait for me.") });
+  assert.equal((await ask("POST", "kuvo/sessions/ses_stop/stop")).json?.paused, true);
+  // What came while it was stopped: another agent's letter, then one of yours with a file.
+  await ask("POST", "kuvo/sessions/ses_stop/queue/add", { id: "msg_wait1", text: "[Letter] The build is green.", from: "Ada", words: "The build is green.", kept: true });
+  await ask("POST", "kuvo/sessions/ses_stop/queue/add", { id: "msg_wait2", text: "Then the docs.", files: [{ uri: "file:///tmp/notes.txt", name: "notes.txt" }] });
+  const moved = await ask("POST", "kuvo/moves", { kind: "chat", id: "ses_stop", to: lab.key });
+  assert.equal(moved.status, 200, JSON.stringify(moved.json));
+  // There: still stopped, the same waiting, in the same order, shown as here.
+  const there = await askMachine("GET", "kuvo/sessions/ses_stop/queue");
+  assert.equal(there.status, 200);
+  assert.equal(there.json.paused, true, "still stopped");
+  assert.deepEqual(there.json.waiting?.map(each => [each.id, each.from ?? null, each.text, each.files ?? null]), [
+    ["msg_wait1", "Ada", "The build is green.", null],
+    ["msg_wait2", null, "Then the docs.", ["notes.txt"]],
+  ]);
+  assert.deepEqual(labEngine.prompts.filter(each => each.session === "ses_stop"), [], "nothing went to the agent");
+  // Here: nothing of it.
+  assert.deepEqual((await ask("GET", "kuvo/sessions/ses_stop/queue")).json, { paused: false, held: [] });
+  for (const id of ["msg_wait1", "msg_wait2"]) assert.ok(!fs.existsSync(path.join(macHome, "run", "waiting", `${id}.json`)), id);
+  // Resume there: the first goes, whole, as it would have gone here.
+  assert.equal((await askMachine("POST", "kuvo/sessions/ses_stop/queue/resume")).status, 200);
+  assert.deepEqual(labEngine.prompts.filter(each => each.session === "ses_stop"), [{ session: "ses_stop", text: "[Letter] The build is green.", delivery: "steer" }]);
+  assert.deepEqual((await askMachine("GET", "kuvo/sessions/ses_stop/queue")).json.waiting.map(each => each.id), ["msg_wait2"]);
 });

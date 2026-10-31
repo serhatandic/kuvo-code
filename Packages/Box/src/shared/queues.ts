@@ -67,7 +67,8 @@ export interface Shown {
 // (A message's id names its file in `waiting`.)
 const WAITING_ID = /^msg_[A-Za-z0-9]{1,80}$/;
 
-const keptWaiting = (value: unknown): Waiting[] => (Array.isArray(value) ? value : []).flatMap(item => {
+/** What waits on the box, as a list in a file (or another box's move) gives it: each that's whole. */
+export const keptWaiting = (value: unknown): Waiting[] => (Array.isArray(value) ? value : []).flatMap(item => {
   if (!isObject(item) || typeof item.id !== "string" || !WAITING_ID.test(item.id) || typeof item.text !== "string") return [];
   const files = Array.isArray(item.files) ? item.files.filter((name): name is string => typeof name === "string") : [];
   return [{ id: item.id, ...(typeof item.from === "string" ? { from: item.from } : {}), text: item.text, ...(files.length ? { files } : {}), at: typeof item.at === "number" ? item.at : 0 }];

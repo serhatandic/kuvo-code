@@ -175,6 +175,58 @@ export function carryQueue(from: string, to: string, renamed: Record<string, str
 const CARRIED_FILE = path.join(RUN, "queues-carried.json");
 const MOST_CARRIED = 300;
 
+/** What waits for a conversation, as a move carries it to another box (`move.json`'s `queues`):
+ * whether it's paused, what's held of what waits on the box, and what waits, as it's shown and
+ * whole, in its order. */
+export interface CarriedQueue {
+  paused: boolean;
+  held: string[];
+  waiting: { shown: Waiting; message: unknown }[];
+}
+
+/** The queues of `sessions` that are paused or have something waiting on the box, for a move
+ * (`unpackQueues` sets them up on the box it goes to). What the engine held isn't among them: a
+ * move goes once its inbox is empty. */
+export function packQueues(sessions: readonly string[]): Record<string, CarriedQueue> {
+  const all = readQueues();
+  const packed: Record<string, CarriedQueue> = {};
+  for (const session of sessions) {
+    const state = all[session];
+    if (!state || (!state.paused && !state.waiting?.length)) continue;
+    const waiting = (state.waiting ?? []).map(shown => {
+      let message: unknown = null;
+      try { message = JSON.parse(fs.readFileSync(waitingFile(shown.id), "utf8")); } catch {}
+      return { shown, message };
+    });
+    packed[session] = { paused: state.paused, held: state.held.filter(id => waiting.some(each => each.shown.id === id)), waiting };
+  }
+  return packed;
+}
+
+/** The queues a move brought (`packQueues`'s), for `sessions` only, kept here paused while its copy
+ * is held: what waits, whole, in its order (one whose contents didn't come, left out). The
+ * sessions whose queue went on where it came from, to go on here once it's switched to. */
+export function unpackQueues(carried: unknown, sessions: readonly string[]): string[] {
+  if (!isObject(carried)) return [];
+  const goOn: string[] = [];
+  for (const session of sessions) {
+    const queue = carried[session];
+    if (!isObject(queue)) continue;
+    const waiting: Waiting[] = [];
+    for (const each of Array.isArray(queue.waiting) ? queue.waiting : []) {
+      const [shown] = files.keptWaiting([isObject(each) ? each.shown : null]);
+      const message = isObject(each) && isObject(each.message) ? each.message : null;
+      if (!shown || !message || typeof message.text !== "string" || waiting.some(other => other.id === shown.id)) continue;
+      writePrivate(waitingFile(shown.id), JSON.stringify({ id: shown.id, text: message.text, delivery: message.delivery === "steer" ? "steer" : "queue", ...(Array.isArray(message.files) ? { files: message.files } : {}) }));
+      waiting.push(shown);
+    }
+    const held = (Array.isArray(queue.held) ? queue.held : []).filter((id): id is string => typeof id === "string" && waiting.some(each => each.id === id));
+    changeQueue(session, () => ({ paused: true, held, ...(waiting.length ? { waiting } : {}) }));
+    if (queue.paused !== true) goOn.push(session);
+  }
+  return goOn;
+}
+
 /** `session`'s queue forgotten, and what waited on the box for it (its conversation is gone). */
 export function forgetQueue(session: string): void {
   let gone: Waiting[] = [];

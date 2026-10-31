@@ -420,7 +420,10 @@ until it's answered:
 1. The box it leaves holds it, waits until its conversations are settled (no turn running, nothing
    in their inbox; a minute at most), and packs one file: `move.json` (its conversations as the
    engine exports them, root first; a bot's own keys; a group chat as its bridge held it, `POST
-   api/kuvo/groups/<id>/hold`) and its folder (a bot's; a chat's wake-ups'), tar, gzip; at most 1 GB.
+   api/kuvo/groups/<id>/hold`; `queues`, by conversation, each one paused or with something
+   waiting on the box ("The queue"), bridge 0.9.133: `{paused, held, waiting: [{shown, message}]}`,
+   what waits as it's shown and whole, in its order) and its folder (a bot's; a chat's wake-ups'),
+   tar, gzip; at most 1 GB.
 2. `offer {kind, thing, name, size, hash, wasPaused, pausedAs?, from, members?}` → `ready`, or
    `refused {message}`: its engine or group chats aren't running, too big, a group chat's bots
    (`members`) don't all live on that machine, one by that ID lives there already, or a move of it
@@ -436,17 +439,20 @@ until it's answered:
    in it or for it, or a `move.json` that isn't a file of its own, and it's refused), `paused` saying `moving`,
    a chat's `directory` its chats folder; each conversation imported under its own ID (noted first;
    they must be one conversation and its subagents', rooted at the chat or at the conversation a
-   bot's folder names, none of them on this box already); a bot's keys given; a group chat put there
+   bot's folder names, none of them on this box already); their `queues` kept paused (what waits,
+   whole, in its order); a bot's keys given; a group chat put there
    held (`PUT api/kuvo/groups/<id>`, `status: "held"`). → `arrived`, or `failed {message}`, what it
    set up gone again; the message says only what's wrong with what came, never what this box found.
    Setting it up for 30 minutes (its engine stuck) is given up on the same way.
-5. The box it leaves settles and reads it again. Anything new, and it all goes again (from 1, three
-   tries; then 409, `busy`).
+5. The box it leaves settles and reads it again, its queues too. Anything new, and it all goes again
+   (from 1, three tries; then 409, `busy`).
 6. It notes the switch, and sends `switch` → `switched`: the box it went to lets its wake-ups go (as
-   they were), starts a group chat (`activate`), and tells a bot what it is (as
-   `kuvo/bots/<id>/arrived` does).
+   they were), starts a group chat (`activate`), tells a bot what it is (as
+   `kuvo/bots/<id>/arrived` does), and lets a queue that wasn't paused go on (one you stopped
+   stays stopped, with what waits for it, until Resume there).
 7. Then the box it left lets the original go: its conversation saved in its folder (or
-   `moved-<id>` in the box's folder) as `conversation.json`, its conversations deleted, a bot's own
+   `moved-<id>` in the box's folder) as `conversation.json`, its conversations deleted with their
+   queues (what waited for them on this box went with them), a bot's own
    keys removed, the folder to Kuvo Code's trash (on a Mac, on to the Finder's Trash), a group chat
    released. It says for two days where those conversations live now ("Peers", `moved`).
 
