@@ -3096,7 +3096,7 @@ vault does (`run/vault.sock`); another passes them on.
 - `GET kuvo/sandbox/asks` → `{asks: [ask], restart?}`, oldest first, with `restart: true` while
   the box asks you to restart its agents (the state's `restart`); `kuvo/sandbox/asks/events`, NDJSON,
   the same at once and on every change. An ask: `{id, at, session?, sessionName?, bot?, botName?,
-  project, command, why, stopped?, error?, always?, machine?}`. `session` is the conversation's root
+  project, command, why, stopped?, error?, always?, machine?, owner?}`. `session` is the conversation's root
   (a bot's sub-agent asks as its bot's conversation). `stopped`, on macOS: what the sandbox refused
   that command, from the system's log, each `{kind, path?}` (`kind`: `write`, `read`, `connect`,
   `job`, `app` or `other`; `path`, the file, folder or address). `always`: what Always for This would
@@ -3104,7 +3104,9 @@ vault does (`run/vault.sock`); another passes them on.
   when that's all it stopped and it's one that may be given (below); without it, the command can
   only be allowed once. A command itself is never let out for good: what it runs (its scripts, its
   project's settings, `package.json`, a `Makefile`) is what the sandbox writes, so the same command
-  asks again each time. `machine`: the machine's name, on a machine.
+  asks again each time. `machine`: the machine's name, on a machine. `owner`: whose its folder is,
+  which Always gives the place to (Also Allowed, below; bridge 0.9.138): a client names a bot's own
+  folder by the bot ("outside Scout's folder") and the chats as Chats, whose Always is every chat's.
 - `POST kuvo/sandbox/asks/<id>` `{answer: "once" | "always" | "no"}` → `200`, `404` for one that
   isn't open, `400` for another answer. `always` without `always` in the ask counts as once.
 - Each open ask is also a notice to your phones (as the vault's are): `<who> wants to run a command
@@ -3121,8 +3123,17 @@ Allowed by hand. Reading the log doesn't hold up the box: the ask waits on it.
 What you let a project's commands do beyond the sandbox, from Always for This or added in Settings:
 a folder (or file) they write in the sandbox, at most 8 a project. Kept in the box's own
 `box/sandbox-allowed.json`, which no command can write, and changed only in the box's long-running
-process (another passes the routes on). A rule: `{id, project, kind: "write", path, at, by?}`
-(`project`, `path`: real paths; `by`: `Mac` or the phone's name).
+process (another passes the routes on). A rule: `{id, project, kind: "write", path, at, by?, owner?,
+gone?}` (`project`, `path`: real paths; `by`: `Mac` or the phone's name).
+
+A bot's own folder (its folder's `workspace`) and the chats' folder are projects here too: a
+bot's own conversation, and every chat (they share one folder), have their own rules. Since bridge
+0.9.138 each rule says whose it is, `owner`, `{kind: "project" | "bot" | "chats", id?, name}` (a
+project by its folder's name, a bot by its `id` and the name it has now, the chats as `Chats`), and
+`gone: true` when its project's folder isn't there any more (a project deleted or moved), so a
+client still lists it to be removed. A bot's rules go once it's no longer here (deleted, or moved
+to another computer): the long-running process drops them as it next answers Also Allowed. Adding
+for a bot or the chats makes its folder if there isn't one yet. A client lists them all at once, grouped by whose.
 
 The launcher reads a project's as each command starts, from `run/fence/allowed/<sum>` (one path a
 line; `sum`, the first 32 hex of the SHA-256 of the project's real path, as the launcher names its
@@ -3138,10 +3149,20 @@ one; a repository's own folder (`.git`) or a settings folder of the engine's or 
 places the sandbox already keeps read-only. Your home folder is your account's own, whatever `HOME`
 says.
 
-- `GET kuvo/sandbox/allowed[?project=<folder>]` → `{allowed: [rule]}`, every project's without one.
-- `POST kuvo/sandbox/allowed` `{project, kind: "write", path}` → `{allowed}`, that project's; `400` with `message` for one that can't be given. The same rule again
-  is the one there.
-- `DELETE kuvo/sandbox/allowed/<id>` → `{allowed}`, that project's; `404` for one that isn't there.
+- `GET kuvo/sandbox/allowed[?project=<folder>]` → `{allowed: [rule]}`, that project's; without
+  one, every rule here and `owners`: whom else a folder can be added for, each bot here working in
+  its own folder (not a project) by name, then the chats.
+- `POST kuvo/sandbox/allowed[?all]` `{project, kind: "write", path}`, or `{owner: {kind: "bot", id} |
+  {kind: "chats"}, kind: "write", path}` for a bot's own folder or the chats' → `{allowed}`, that
+  project's, or with `?all` everything as `GET` answers it; `400` with `message` for one that can't
+  be given (and for a bot that works in a project: its rules are that project's). The same rule
+  again is the one there.
+- `DELETE kuvo/sandbox/allowed/<id>[?all]` → `{allowed}`, that project's, or with `?all` everything;
+  `404` for one that isn't there.
+
+A box before 0.9.138 sends no `owner`, `gone` or `owners` and answers `?all` as without it: a client
+lists its rules by their projects' folders, adds for projects only, and reads them all again after
+an add.
 
 ### Paired phones
 

@@ -13166,7 +13166,7 @@ var realProject = (project) => {
   try {
     real = fs52.realpathSync(project);
   } catch {
-    return path54.resolve(project);
+    return realish(project);
   }
   try {
     const named = fs52.readFileSync(path54.join(real, ".git"), "utf8").match(/^gitdir:\s*(.+)$/m)?.[1]?.trim();
@@ -13198,6 +13198,55 @@ function allowedFor(project) {
     return all;
   const real = realProject(project);
   return all.filter((rule) => rule.project === real);
+}
+var BOT_ID = /^bot_[A-Za-z0-9]+$/;
+function ownerOf(project) {
+  const real = realProject(project);
+  if (real === realish(CHATS))
+    return { kind: "chats", name: "Chats" };
+  const [id, workspace, ...more] = path54.relative(realish(BOTS), real).split(path54.sep);
+  if (BOT_ID.test(id) && workspace === "workspace" && !more.length) {
+    return { kind: "bot", id, name: botHere(id)?.described.name || "A bot" };
+  }
+  return { kind: "project", name: path54.basename(real) || real };
+}
+function listed(rules) {
+  const owners = new Map;
+  return rules.map((rule) => {
+    let known = owners.get(rule.project);
+    if (!known)
+      owners.set(rule.project, known = { owner: ownerOf(rule.project), gone: !fs52.existsSync(rule.project) });
+    return { ...rule, owner: known.owner, ...known.gone ? { gone: true } : {} };
+  });
+}
+function addableOwners() {
+  const bots = [];
+  let ids = [];
+  try {
+    ids = fs52.readdirSync(BOTS).filter((id) => BOT_ID.test(id));
+  } catch {}
+  for (const id of ids) {
+    const here = botHere(id);
+    if (here && typeof here.described.project !== "string")
+      bots.push({ kind: "bot", id, name: here.described.name });
+  }
+  bots.sort((a, b) => a.name.localeCompare(b.name));
+  return [...bots, { kind: "chats", name: "Chats" }];
+}
+function folderOfOwner(owner) {
+  const given = owner && typeof owner === "object" ? owner : {};
+  const made = (folder) => (fs52.mkdirSync(folder, { recursive: true, mode: 448 }), folder);
+  if (given.kind === "chats")
+    return made(CHATS);
+  if (given.kind === "bot" && typeof given.id === "string" && BOT_ID.test(given.id)) {
+    const here = botHere(given.id);
+    if (!here)
+      throw new RuleRefusal("That bot isn't on this computer any more.");
+    if (typeof here.described.project === "string")
+      throw new RuleRefusal(`${here.described.name} works in a project: add the folder for that project.`);
+    return made(path54.join(here.folder, "workspace"));
+  }
+  throw new RuleRefusal('Name whose it is: {kind: "bot", id} or {kind: "chats"}.');
 }
 function keep(rules) {
   writePrivate(FILE, JSON.stringify({ allowed: rules }, null, 2) + `
@@ -13286,6 +13335,16 @@ function addRule(given) {
   const rule = { id: newID("al_"), project, kind: "write", path: where, at: Date.now(), ...given.by ? { by: given.by } : {} };
   keep([...rules, rule]);
   return rule;
+}
+function forgetGoneBots() {
+  const rules = readAllowed();
+  const bots = realish(BOTS);
+  const left = rules.filter((rule) => {
+    const [id, workspace, ...more] = path54.relative(bots, rule.project).split(path54.sep);
+    return !(BOT_ID.test(id) && workspace === "workspace" && !more.length && !fs52.existsSync(path54.join(bots, id)));
+  });
+  if (left.length !== rules.length)
+    keep(left);
 }
 function removeRule(id) {
   const rules = readAllowed();
@@ -18236,7 +18295,7 @@ import fs68 from "node:fs";
 import path70 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.137";
+var BRIDGE_VERSION = "0.9.138";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -18859,7 +18918,8 @@ async function askToRun(caller, args, signal) {
     ...stopped.length ? { stopped } : {},
     ...error ? { error } : {},
     ...always ? { always } : {},
-    ...IS_MAC ? {} : { machine: os8.hostname() }
+    ...IS_MAC ? {} : { machine: os8.hostname() },
+    owner: ownerOf(project)
   }, signal);
   if (answered.unanswered)
     return { text: "Nobody answered in time, so it didn't run. Don't get around the sandbox another way: go on without it, or ask the user when they're back.", isError: false };
@@ -19904,20 +19964,22 @@ async function* sandboxRoute(context) {
   }
   if (route === "kuvo/sandbox/allowed" || parts[2] === "allowed") {
     try {
-      if (route === "kuvo/sandbox/allowed" && method === "GET") {
-        const project = new URLSearchParams(request.path.split("?")[1] ?? "").get("project") ?? undefined;
-        return yield* json(200, { allowed: allowedFor(project) });
-      }
+      const query = new URLSearchParams(request.path.split("?")[1] ?? "");
+      forgetGoneBots();
+      const answer = (of) => ({ allowed: listed(allowedFor(of)), ...of ? {} : { owners: addableOwners() } });
+      if (route === "kuvo/sandbox/allowed" && method === "GET")
+        return yield* json(200, answer(query.get("project") ?? undefined));
       if (route === "kuvo/sandbox/allowed" && method === "POST") {
-        const rule = addRule({ ...given, by: clientName(context) });
-        return yield* json(200, { allowed: allowedFor(rule.project) });
+        const project = given.project === undefined && given.owner !== undefined ? folderOfOwner(given.owner) : given.project;
+        const rule = addRule({ ...given, project, by: clientName(context) });
+        return yield* json(200, answer(query.has("all") ? undefined : rule.project));
       }
       if (parts.length === 4 && method === "DELETE") {
         const id = idOf(parts[3]);
         const rule = allowedFor().find((each) => each.id === id);
         if (!rule || !removeRule(id))
           return yield* json(404, { message: "That isn't in Also Allowed." });
-        return yield* json(200, { allowed: allowedFor(rule.project) });
+        return yield* json(200, answer(query.has("all") ? undefined : rule.project));
       }
       return yield* json(405, {});
     } catch (error) {

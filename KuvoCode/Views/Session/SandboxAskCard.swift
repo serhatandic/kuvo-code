@@ -19,7 +19,8 @@ struct SandboxAskCards: View {
 /// A command the sandbox stopped, which its agent asks to run outside it: who asks, what the
 /// sandbox stopped (on a Mac, what it tried and where; on Linux, the error the command got), the
 /// command, the agent's reason; Don't Allow, Always for This (where the box names the one place
-/// to let the project's commands write, still in the sandbox) and Allow Once.
+/// to let the project's, the bot's own or every chat's commands write, still in the sandbox) and
+/// Allow Once.
 struct SandboxAskCard: View {
     let asked: SandboxAsk
     let box: String
@@ -124,13 +125,14 @@ struct SandboxAskCard: View {
     @ViewBuilder private func always(whole: Bool) -> some View {
         if let path = asked.alwaysPath {
             Button { answer(.always) } label: {
-                Text("Always for \(Text(path).monospaced())")
+                // A chat's is every chat's: said on the button.
+                Text("Always for \(Text(path).monospaced())\(asked.alwaysScope.map { " " + $0 } ?? "")")
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .fixedSize(horizontal: whole, vertical: false)
             }
-            .help(asked.alwaysMeaning ?? "")
-            .accessibilityLabel(asked.alwaysMeaning ?? "Always for This")
+            .accessibilityLabel(asked.alwaysTitle ?? "Always for This")
+            .accessibilityHint(asked.alwaysHint ?? "")
         }
     }
 

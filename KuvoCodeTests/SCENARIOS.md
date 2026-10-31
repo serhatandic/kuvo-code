@@ -28,6 +28,7 @@ for Linux's tools).
 | B8 A session in a worktree, merged back; a machine's worktrees kept by the machine | WorktreeSessionTests, GitBranchesTests, the bridge's worktrees.test.js | making one on a machine from the Mac (by hand, on a test machine) |
 | B9 Plan first, then Build It | AgentAsksTests | |
 | B10 Ask First: allow once, always, deny | ComposerReturnsTests, ProjectFoldersTests, PermissionCardsTests, AlwaysAllowedTests | |
+| The sandbox's Also Allowed: every folder at once under whose it is (a project, a bot's own folder, the chats, where one counts for every chat), added for whom you pick and removed, from a box from before owners too; a deleted bot's go with it, and a folder that's gone still shows | AlsoAllowedTests, SandboxAsksTests (the card's words); KuvoClient's SandboxTests; the bridge's sandbox-asks.test.js | the list itself (UI; a look in a demo copy with `KUVO_DEMO_SANDBOX_RULES`); the phone's side: kuvo-code-ios SandboxTests |
 | B11, L38 The agent asks questions, answered in the card or skipped | AgentAsksTests | |
 | B12 Queue while it works, Stop, Resume; a message removed or edited on its way, and Undo putting a removed one back where it was while it's stopped | ComposerReturnsTests, QueueTests, MessagesOnTheirWayTests; the bridge's queue.test.js (the box's order) | |
 | B13 Two sessions at once, each with its own asks | AgentAsksTests | |
