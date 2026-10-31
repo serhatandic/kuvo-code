@@ -3,7 +3,7 @@ import ClientDesign
 import SwiftUI
 
 /// Appearance: light or dark, the accent color, the window, how messages read, with a preview of
-/// a conversation in what's chosen, and how the sidebar switches between your computers.
+/// a conversation in what's chosen.
 struct AppearanceSettings: View {
     @AppStorage(Appearance.key) private var mode = Appearance.system
     @AppStorage(Look.accentKey) private var accent = Look.Accent.system.rawValue
@@ -222,6 +222,8 @@ private struct AccentSwatches: View {
         HStack(spacing: 8) {
             ForEach(Look.Accent.allCases) { option in
                 Button {
+                    // The color panel, if it's open, no longer picks the accent.
+                    ColorPanel.shared.close()
                     accent = option.rawValue
                 } label: {
                     Swatch(fill: option == .system ? AnyShapeStyle(AngularGradient(colors: [.red, .orange, .yellow, .green, .blue, .purple, .pink, .red], center: .center)) : AnyShapeStyle(option.color), isSelected: accent == option.rawValue)
@@ -251,7 +253,11 @@ private struct AccentSwatches: View {
             .buttonStyle(.plain)
             .clickablePointer()
             .help("Custom Color…")
+            .accessibilityLabel("Custom Color")
+            .accessibilityAddTraits(isCustom ? .isSelected : [])
         }
+        // Leaving the page, the color panel no longer picks the accent.
+        .onDisappear { ColorPanel.shared.close() }
     }
 
     private var isCustom: Bool { Look.Accent(rawValue: accent) == nil }
@@ -314,6 +320,16 @@ final class ColorPanel: NSObject {
         panel.setAction(#selector(changed(_:)))
         panel.isContinuous = true
         panel.makeKeyAndOrderFront(nil)
+    }
+
+    /// Closed, and no longer telling anyone its colors: a color picked after this changes nothing.
+    func close() {
+        guard onChange != nil else { return }
+        onChange = nil
+        let panel = NSColorPanel.shared
+        panel.setTarget(nil)
+        panel.setAction(nil)
+        panel.orderOut(nil)
     }
 
     @objc private func changed(_ panel: NSColorPanel) {

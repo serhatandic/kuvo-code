@@ -626,6 +626,9 @@ final class OutsideAgents {
     private(set) var installing: Set<String> = []
     /// Why an install didn't work, until you've seen it.
     var installFailures: [String: String] = [:]
+    /// Installed from the first launch after you'd gone on from it: their sign-in, which would
+    /// have followed there, opens in Settings › Accounts.
+    var signInsAfterInstall: Set<String> = []
 
     /// Installs an agent's program (Claude Code, Codex, Grok's CLI) with its maker's own installer,
     /// the command it shows, on the computer its bridge is on, as you'd run it in a terminal there;

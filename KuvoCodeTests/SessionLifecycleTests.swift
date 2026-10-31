@@ -40,12 +40,48 @@ import Testing
         var stillThere: Bool?
         workspace.onDeleted = { [workspace] id in stillThere = workspace.session(id) != nil }
 
-        await workspace.delete("ses_a")
+        try await workspace.delete("ses_a")
         #expect(engine.requests("DELETE", "/api/session/ses_a").count == 1)
         #expect(listed() == ["ses_b"])
         #expect(Drafts.shared["ses_a"].text.isEmpty)
         #expect(Drafts.shared["ses_b"].text == "another thought")
         #expect(stillThere == true, "what goes with it (its wake-ups, its tabs) is told while it can still be read")
+    }
+
+    /// Its engine refuses (Settings › Storage's clean-up, the sidebar's Delete): it stays, with
+    /// what you'd written in it, and why is said, rather than it going and coming back later.
+    /// Out of the sidebar while its engine answers (a running one stops first, a machine's is
+    /// over SSH), and back if it's refused.
+    @Test func oneItsEngineRefusesStaysAndSaysWhy() async throws {
+        defer { engine.stop() }
+        await start([StubEngine.session("ses_a", directory: project, created: 2), StubEngine.session("ses_b", directory: project, created: 1)])
+        let answering = Gate()
+        let refused = StubWeb.json(["message": "database is locked"], status: 500)
+        engine.on("DELETE", "/api/session/*") { _ in
+            answering.wait()
+            return refused
+        }
+        Drafts.shared["ses_a"].text = "half a thought"
+        defer { Drafts.shared.remove("ses_a") }
+
+        let deleting = Task { try await workspace.delete("ses_a") }
+        try await until { !engine.requests("DELETE", "/api/session/ses_a").isEmpty }
+        #expect(listed() == ["ses_b"], "out of the sidebar meanwhile")
+        answering.open()
+        await #expect(throws: (any Error).self) { try await deleting.value }
+        #expect(listed() == ["ses_a", "ses_b"])
+        #expect(Drafts.shared["ses_a"].text == "half a thought")
+    }
+
+    /// Deleted from your phone while this Mac wasn't listening: its engine doesn't have it, and
+    /// Delete takes it away here too.
+    @Test func oneItsEngineHasNoMoreGoes() async throws {
+        defer { engine.stop() }
+        await start([StubEngine.session("ses_a", directory: project, created: 2), StubEngine.session("ses_b", directory: project, created: 1)])
+        engine.on("DELETE", "/api/session/*", json: ["message": "Session not found"], status: 404)
+
+        try await workspace.delete("ses_a")
+        #expect(listed() == ["ses_b"])
     }
 
     /// Finished while you were elsewhere: unread, on the Dock's count, until you look; archived,

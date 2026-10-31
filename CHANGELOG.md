@@ -245,6 +245,14 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - A conversation you just read no longer turns bold again when the sessions are read again before the engine has the read.
 - Deleting a conversation closes the tab of its subagent you had open in its place.
 - Searching the sidebar again clears what the earlier search found in conversations, instead of leaving it under the new search until each computer answers.
+- Deleting a session that its engine refuses, or whose machine is away, says why, and the session stays with what you'd written in it, instead of vanishing and coming back later; its worktree stays too. Settings › Storage › Clean Up Old Sessions says which couldn't be deleted. One already deleted from your phone goes.
+- Settings › Storage shows this Mac's numbers right away, also while a machine you picked under What Agents Made is slow to answer or away.
+- Deleting the downloads for machines no longer stalls Settings, and waits while a machine is being set up with them.
+- Bring Over from opencode says when its settings couldn't be saved, and which API keys couldn't be copied, instead of counting them as brought over.
+- Searching Settings for "swipe", "awake", "opencode" or "beta" finds General, where those settings are.
+- After picking a preset accent color, or leaving Appearance, the color panel no longer changes the accent.
+- The first launch's screen access step says to quit and reopen Kuvo Code if you just allowed Screen Recording, which macOS needs before it counts.
+- An agent you install on the first launch that finishes after you've gone on opens its sign-in in Settings › Accounts, instead of being left installed but not signed in.
 
 ## 0.7.2
 
