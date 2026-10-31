@@ -38,11 +38,14 @@ const outputLimit = 30_000
  * What Claude Code writes at its settings folder's top as it runs whole in the box's sandbox: its
  * conversations, their files and notes, its caches and logs, and its sign-in (in a file on Linux;
  * on an added account's, its settings file too: `.claude.json`). Not its settings, hooks, skills,
- * agents, commands or plugins, which run outside the sandbox when you use it yourself.
+ * agents, commands or plugins, which run outside the sandbox when you use it yourself, nor what
+ * your own Claude Code runs or reads from there later: the shells its commands source
+ * (`shell-snapshots`), a session's environment (`session-env`), an editor's lock (`ide`) and its
+ * settings' backups. Without them it still runs its commands, with no shell snapshot of its own.
  */
 const STATE_IN_HOME = [
-  "projects", "sessions", "session-env", "shell-snapshots", "file-history", "todos", "tasks", "teams", "plans", "history.jsonl*",
-  "statsig", "telemetry", "debug", "cache", "paste-cache", "image-cache", "ide", "state", "backups", "logs", "uploads",
+  "projects", "sessions", "file-history", "todos", "tasks", "teams", "plans", "history.jsonl*",
+  "statsig", "telemetry", "debug", "cache", "paste-cache", "image-cache", "state", "logs", "uploads",
   "stats-cache.json*", "mcp-needs-auth-cache.json*", ".credentials.json*", ".claude.json*", "*.lock",
 ]
 /** What it never writes in its state either: settings put there. */

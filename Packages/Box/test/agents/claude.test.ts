@@ -617,8 +617,10 @@ describe("Claude Code in the box's sandbox", () => {
     // Its settings folder its own: its conversations, sign-in and caches written; never its
     // settings or hooks, which run outside the sandbox when you use it yourself.
     expect(launched.own).toBe(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"))
-    expect(launched.state.split(" ")).toEqual(expect.arrayContaining(["projects", "sessions", "todos", "shell-snapshots", ".credentials.json*"]))
-    expect(launched.state.split(" ")).not.toEqual(expect.arrayContaining(["settings.json"]))
+    expect(launched.state.split(" ")).toEqual(expect.arrayContaining(["projects", "sessions", "todos", ".credentials.json*"]))
+    // Never what your own Claude Code, outside, runs or reads later: its settings, the shells its
+    // commands source, a session's environment, an editor's lock, a settings backup.
+    for (const later of ["settings.json", "shell-snapshots", "session-env", "ide", "backups"]) expect(launched.state.split(" ")).not.toContain(later)
     expect(launched.kept.split(" ")).toEqual(expect.arrayContaining(["settings*.json", "hooks"]))
     // Its commands are in the sandbox already: no shell of the box's in it, nor a temporary folder
     // of Kuvo Code's own (hidden from it).
