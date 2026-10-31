@@ -195,7 +195,7 @@ final class ReplyPieceView: NSView {
 // MARK: - Prose
 
 /// Prose, as TextKit lays it out: selectable, its links clickable.
-final class ReplyTextView: NSTextView, NSTextViewDelegate {
+final class ReplyTextView: PointerAwareTextView, NSTextViewDelegate {
     var openURL: (URL) -> Bool = { _ in false }
     nonisolated(unsafe) private var siteIcons: NSObjectProtocol?
 
@@ -623,7 +623,7 @@ final class ReplyCodeView: NSView {
 }
 
 /// The code itself: selectable, its lines never wrapping.
-final class ReplyCodeTextView: NSTextView {
+final class ReplyCodeTextView: PointerAwareTextView {
     convenience init() {
         let storage = NSTextStorage()
         let layout = ReplyCodeLayoutManager()

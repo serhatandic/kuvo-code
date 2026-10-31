@@ -28,7 +28,7 @@ struct LongText: NSViewRepresentable {
 
 /// The text view under `LongText`: not editable, sized by its text, with no scroll view of its own
 /// (the conversation scrolls it).
-final class LongTextView: NSTextView {
+final class LongTextView: PointerAwareTextView {
     /// What it shows, as last given, to tell what was added.
     private var shown = ""
     private var attributes: [NSAttributedString.Key: Any] = [:]
