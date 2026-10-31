@@ -24,7 +24,7 @@ import { dropRelayed, relayedServers, relayedTools, relayPort } from "../toolrel
 import { computerServers } from "../servers"
 import { skillsFolder, skillsFor, turnedOff, upward } from "../skills"
 import { onMachine, ownFoldersScript } from "../machine"
-import { fenceAgent, fenceAttachments, fenceCopy, fenceKey, fenceOn } from "../fence"
+import { fenceAgent, fenceAttachments, fenceCopy, fenceKey, fenceOn, seatBot } from "../fence"
 import { addShell, endShell } from "../shells"
 import { pictureData, pictureFile, withPictures } from "../pictures"
 import type { Turn } from "../turn"
@@ -868,6 +868,7 @@ class ClaudeThread implements Thread {
       read: [...(skills ? [skills] : []), ...(attached ? [attached] : []), ...(machineFolders ? [machineFolders] : [])],
       port: relayPort(),
       session: this.session.id,
+      bot: seatBot(this.session),
     })
     if (!fence) throw new Error("Claude Code runs in the sandbox here, and it isn't ready: restart Kuvo Code.")
     // Its temporary files where the launcher puts them (the box's own folder is hidden from it),

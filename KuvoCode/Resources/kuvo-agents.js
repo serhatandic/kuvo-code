@@ -6456,6 +6456,10 @@ function repositoryOf2(folder) {
   return "";
 }
 var AGENT_FOLDERS = 4;
+var seatBot = (session) => {
+  const bot = session?.metadata?.kuvo?.seat?.bot;
+  return typeof bot === "string" && /^bot_[A-Za-z0-9]+$/.test(bot) ? bot : undefined;
+};
 function fenceAgent(program, directory, mine) {
   const where = folder();
   if (!where || !fenceRules())
@@ -6481,7 +6485,8 @@ function fenceAgent(program, directory, mine) {
       KUVO_FENCE_STATE: names(mine.state),
       KUVO_FENCE_KEPT: names(mine.kept),
       KUVO_FENCE_PORT: String(mine.port ?? 0),
-      ...mine.session && /^ses_[A-Za-z0-9]+$/.test(mine.session) ? { OPENCODE_SESSION_ID: mine.session } : {}
+      ...mine.session && /^ses_[A-Za-z0-9]+$/.test(mine.session) ? { OPENCODE_SESSION_ID: mine.session } : {},
+      ...mine.bot && /^bot_[A-Za-z0-9]+$/.test(mine.bot) ? { KUVO_FENCE_BOT: mine.bot } : {}
     },
     ended: () => unlinked(mine.homes, mine.state)
   };
@@ -7222,7 +7227,8 @@ class AcpThread {
       kept: whole.kept,
       read: [...skills?.startsWith("/") ? [skills] : [], ...attached ? [attached] : [], ...whole.read?.(started) ?? []],
       port: relayPort(),
-      session: this.session.id
+      session: this.session.id,
+      bot: seatBot(this.session)
     });
     if (!fence)
       throw new Error(`${this.name} runs in the sandbox here, and it isn't ready: restart Kuvo Code.`);
@@ -9998,7 +10004,8 @@ class ClaudeThread {
       kept: KEPT_IN_HOME,
       read: [...skills ? [skills] : [], ...attached ? [attached] : [], ...machineFolders ? [machineFolders] : []],
       port: relayPort(),
-      session: this.session.id
+      session: this.session.id,
+      bot: seatBot(this.session)
     });
     if (!fence)
       throw new Error("Claude Code runs in the sandbox here, and it isn't ready: restart Kuvo Code.");
@@ -11221,7 +11228,7 @@ class CodexAgent {
     slot.starting ??= this.start(key, slot, fence, thread).finally(() => slot.starting = undefined);
     return slot.starting;
   }
-  fenced(directory, sessionID) {
+  fenced(directory, sessionID, bot) {
     const skills = skillsRoot();
     if (skills)
       mkdirSync13(skills, { recursive: true, mode: 448 });
@@ -11233,7 +11240,8 @@ class CodexAgent {
       kept: KEPT_IN_HOME2,
       read: [...skills ? [skills] : [], ...attached ? [attached] : []],
       port: relayPort(),
-      session: sessionID
+      session: sessionID,
+      bot
     });
   }
   async start(key, slot, fenceNow, thread) {
@@ -11243,7 +11251,7 @@ class CodexAgent {
     if (this.instance.home && !onMachine)
       shadowHome(this.instance.home, this.yourCodex);
     const directory = key === ACCOUNT ? this.accountFolder() : thread?.session.location.directory ?? this.home;
-    const fence = key === SHARED ? undefined : this.fenced(directory, key === ACCOUNT ? undefined : key);
+    const fence = key === SHARED ? undefined : this.fenced(directory, key === ACCOUNT ? undefined : key, seatBot(thread?.session));
     if (key !== SHARED && !fence)
       throw new Error("Codex runs in the sandbox here, and it isn't ready: restart Kuvo Code.");
     const args = ["app-server", ...noComputerUse.flatMap((plugin) => ["-c", `plugins.${plugin}.enabled=false`])];
@@ -13603,7 +13611,8 @@ ${text}`;
       kept: [],
       read: [runtime, dirname11(process.execPath), ...options.local?.dirs ?? [], ...attached ? [attached] : []],
       port: relayPort(),
-      session: this.session.id
+      session: this.session.id,
+      bot: seatBot(this.session)
     });
     if (!fence)
       throw new Error("Cursor runs in the sandbox here, and it isn't ready: restart Kuvo Code.");
@@ -22562,4 +22571,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 866e4811b2015396dee776416842501e4278d5bcd1509c2ee451cb29c1f3674c
+// Built from Packages/Box/src/agents a3470354188d5b2258f662b9e083e26f31facbeccc885d5f83ac8329bba815d1

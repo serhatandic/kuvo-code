@@ -111,7 +111,7 @@ if (wakes && fs.existsSync(wakes)) {
 // Its bot's memory, which the launcher names: that file alone, read and written in place (a file's
 // rule can't make, move or remove it).
 const memory = process.env.KUVO_FENCE_MEMORY;
-if (memory && memory.startsWith("/")) { try { if (fs.lstatSync(memory).isFile()) grant(memory, READ | WRITE | (abi >= 3 ? 1n << 14n : 0n)); } catch {} }
+if (memory && memory.startsWith("/")) { try { const it = fs.lstatSync(memory); if (it.isFile() && it.nlink === 1) grant(memory, READ | WRITE | (abi >= 3 ? 1n << 14n : 0n)); } catch {} }
 
 const keep = [];
 const text = (s) => { const b = Buffer.from(s + "\0"); keep.push(b); return b; };

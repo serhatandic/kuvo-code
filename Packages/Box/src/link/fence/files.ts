@@ -162,13 +162,18 @@ export function launcherScript(places: FencePlaces): string {
     `    (umask 077; mkdir -p "$w_own/wakes" "$w_own/watches" "$w_own/inbox") 2>/dev/null && touch "$w_own" && w_own=$(cd "$w_own" && pwd -P) && own=$w_own && export KUVO_WAKE_FOLDER="$own" ;;`,
     `esac`,
     // Its bot's memory (`MEMORY.md` in its folder), which it's told to keep: the bot whose
-    // conversation this is, or, for another of its conversations in its own folder (its seat in a
-    // group chat), the bot whose folder that is. That file alone, read and written in place, as it
-    // is: never another bot's, nor anything else of its folder (its settings, where it works).
-    `memory=`,
+    // conversation this is; for its seat in a group chat, the bot the agents bridge names
+    // (`KUVO_FENCE_BOT`, as its box marked the seat), or, run by the engine, the bot whose own
+    // folder (never a link) it works in. That file alone, read and written in place, as it is (no
+    // other name for another file): never another bot's, nor anything else of its folder.
+    `memory= m_bot=\${KUVO_FENCE_BOT-}`,
+    "unset KUVO_FENCE_BOT",
     `if [ -n "$w_bot" ] && [ "$own" != "$F/none" ]; then memory=$own/MEMORY.md`,
-    `else for b in ${sh(places.bots)}/*/; do [ "$(cd "\${b}workspace" 2>/dev/null && pwd -P)" = "$work" ] && memory=$(cd "$b" && pwd -P)/MEMORY.md && break; done; fi`,
-    `[ -n "$memory" ] && [ -f "$memory" ] && [ ! -L "$memory" ] || memory=$F/none`,
+    `else`,
+    `  case $m_bot in bot_*[!A-Za-z0-9]*|bot_) ;; bot_*) memory=$(cd ${sh(places.bots)}/"$m_bot" 2>/dev/null && pwd -P)/MEMORY.md ;; esac`,
+    `  [ -n "$memory" ] || for b in ${sh(places.bots)}/*/; do [ ! -L "\${b}workspace" ] && [ "$(cd "\${b}workspace" 2>/dev/null && pwd -P)" = "$work" ] && memory=$(cd "$b" && pwd -P)/MEMORY.md && break; done`,
+    `fi`,
+    `[ -n "$memory" ] && [ -f "$memory" ] && [ ! -L "$memory" ] && [ "$(${places.platform === "darwin" ? "stat -f %l" : "stat -c %h"} "$memory" 2>/dev/null)" = 1 ] || memory=$F/none`,
     // Kuvo Code's SSH agent for the conversation (the vault's SSH keys), while agents may use it:
     // noted where commands can't write, then handed the command once the box has opened it. Its
     // name starts with its note's sum; the rest, no command can list or guess.

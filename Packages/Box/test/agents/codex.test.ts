@@ -1,7 +1,7 @@
 // Codex's thread against a fake `codex app-server`: what Codex 0.16x sends, shown, not lost.
 
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, linkSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { pathToFileURL } from "node:url"
@@ -760,6 +760,43 @@ describe.skipIf(!canFence)("Codex in the box's sandbox", () => {
     await until(() => ended(id))
     expect(said(id)).toBe("memory=yes settings=no other=no read=no")
     expect(readFileSync(join(ship, "MEMORY.md"), "utf8")).toBe("x")
+    expect(readFileSync(join(scout, "MEMORY.md"), "utf8")).toBe("# bot_scout's memory\n")
+  })
+
+  test("a bot's seat in a group chat, working in its project's folder, keeps the bot's memory too; a memory that's another file's other name isn't given", async () => {
+    const bot = (id: string) => {
+      const folder = join(kuvo, "bots", id)
+      mkdirSync(join(folder, "workspace"), { recursive: true })
+      writeFileSync(join(folder, "MEMORY.md"), `# ${id}'s memory\n`)
+      writeFileSync(join(folder, "bot.json"), "{}")
+      return folder
+    }
+    const ship = bot("bot_ship")
+    const scout = bot("bot_scout")
+    const project = join(root, "ship-project")
+    mkdirSync(project, { recursive: true })
+    codex = new TestCodex(fakeCodex(root, [[tries, {
+      memory: ["write", join(ship, "MEMORY.md")],
+      other: ["write", join(scout, "MEMORY.md")],
+    }]]), root)
+    const agent = codex
+    sessions = new Sessions(new Store(join(root, "sessions")), { find: (id: string | undefined) => (id === agent.providerID ? agent : undefined) } as unknown as Roster, new Auto(root))
+    // Its seat: a conversation of its own in the folder it works in, which its box marks as the bot's.
+    const seat = sessions.create({ title: "Ship in Launch", model: { providerID: agent.providerID, id: "gpt-test" }, location: { directory: project }, permissions: askFirst }).id
+    sessions.update(seat, { metadata: { kuvo: { seat: { group: "grp_launch", bot: "bot_ship" } } } })
+    sessions.prompt(seat, { id: "msg_codex_test_001", text: "go", files: [], delivery: "steer" })
+    await until(() => ended(seat))
+    expect(said(seat)).toBe("memory=yes other=no")
+    expect(readFileSync(join(ship, "MEMORY.md"), "utf8")).toBe("x")
+
+    // Scout's memory under Ship's name too (a hard link, made outside the sandbox): not Ship's alone.
+    rmSync(join(ship, "MEMORY.md"))
+    linkSync(join(scout, "MEMORY.md"), join(ship, "MEMORY.md"))
+    const own = sessions.create({ title: "Ship", model: { providerID: agent.providerID, id: "gpt-test" }, location: { directory: join(ship, "workspace") }, permissions: askFirst }).id
+    writeFileSync(join(ship, "session"), own)
+    sessions.prompt(own, { id: "msg_codex_test_002", text: "go", files: [], delivery: "steer" })
+    await until(() => ended(own))
+    expect(said(own)).toBe("memory=no other=no")
     expect(readFileSync(join(scout, "MEMORY.md"), "utf8")).toBe("# bot_scout's memory\n")
   })
 

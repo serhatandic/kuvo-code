@@ -5385,6 +5385,7 @@ function seatbeltProfile(policy, options) {
   allow(HIDDEN, `(subpath (string-append (param "WAKES") "/inbox"))`);
   allow("file-read-data file-write-data", `(literal (param "MEMORY"))`);
   out.push(";; what runs outside the sandbox, or changes the engine");
+  deny("file-write-unlink file-write-create", `(literal (param "WORK"))`, `(literal (param "GIT"))`);
   deny("file-write*", under("WORK_RE", "/" + GUARDED), under("GIT_RE", "/" + GIT_GUARDED), ...Array.from({ length: MOST_FOLDERS }, (_, at) => under(`ALLOW${at}_RE`, "/" + GUARDED)));
   deny("file-write*", ...homes.map((home) => inHome(home, `"/(.*/)?(" (param "KEPT") ")(/|$)"`)));
   out.push(";; your secrets");
@@ -5490,10 +5491,14 @@ function launcherScript(places) {
     `    fi`,
     `    (umask 077; mkdir -p "$w_own/wakes" "$w_own/watches" "$w_own/inbox") 2>/dev/null && touch "$w_own" && w_own=$(cd "$w_own" && pwd -P) && own=$w_own && export KUVO_WAKE_FOLDER="$own" ;;`,
     `esac`,
-    `memory=`,
+    `memory= m_bot=\${KUVO_FENCE_BOT-}`,
+    "unset KUVO_FENCE_BOT",
     `if [ -n "$w_bot" ] && [ "$own" != "$F/none" ]; then memory=$own/MEMORY.md`,
-    `else for b in ${sh(places.bots)}/*/; do [ "$(cd "\${b}workspace" 2>/dev/null && pwd -P)" = "$work" ] && memory=$(cd "$b" && pwd -P)/MEMORY.md && break; done; fi`,
-    `[ -n "$memory" ] && [ -f "$memory" ] && [ ! -L "$memory" ] || memory=$F/none`,
+    `else`,
+    `  case $m_bot in bot_*[!A-Za-z0-9]*|bot_) ;; bot_*) memory=$(cd ${sh(places.bots)}/"$m_bot" 2>/dev/null && pwd -P)/MEMORY.md ;; esac`,
+    `  [ -n "$memory" ] || for b in ${sh(places.bots)}/*/; do [ ! -L "\${b}workspace" ] && [ "$(cd "\${b}workspace" 2>/dev/null && pwd -P)" = "$work" ] && memory=$(cd "$b" && pwd -P)/MEMORY.md && break; done`,
+    `fi`,
+    `[ -n "$memory" ] && [ -f "$memory" ] && [ ! -L "$memory" ] && [ "$(${places.platform === "darwin" ? "stat -f %l" : "stat -c %h"} "$memory" 2>/dev/null)" = 1 ] || memory=$F/none`,
     `ssh=`,
     `if [ -d ${sh(places.sshAgents)} ]; then`,
     `  case \${OPENCODE_SESSION_ID-} in ses_*[!A-Za-z0-9_]*|ses_|'') note=dir-$sum ;; ses_*) note=$OPENCODE_SESSION_ID ;; *) note=dir-$sum ;; esac`,
@@ -5722,7 +5727,7 @@ if (wakes && fs.existsSync(wakes)) {
 // Its bot's memory, which the launcher names: that file alone, read and written in place (a file's
 // rule can't make, move or remove it).
 const memory = process.env.KUVO_FENCE_MEMORY;
-if (memory && memory.startsWith("/")) { try { if (fs.lstatSync(memory).isFile()) grant(memory, READ | WRITE | (abi >= 3 ? 1n << 14n : 0n)); } catch {} }
+if (memory && memory.startsWith("/")) { try { const it = fs.lstatSync(memory); if (it.isFile() && it.nlink === 1) grant(memory, READ | WRITE | (abi >= 3 ? 1n << 14n : 0n)); } catch {} }
 
 const keep = [];
 const text = (s) => { const b = Buffer.from(s + "\0"); keep.push(b); return b; };
@@ -18334,7 +18339,7 @@ import fs68 from "node:fs";
 import path70 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.145";
+var BRIDGE_VERSION = "0.9.146";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

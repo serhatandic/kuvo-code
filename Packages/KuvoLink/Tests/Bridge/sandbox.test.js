@@ -530,12 +530,15 @@ test("a bot keeps its memory from the sandbox, in its own conversation and its s
       ["change its conversation", "echo ses_other > ../session"],
       ["read another bot's memory", `cat ${JSON.stringify(path.join(scout, "MEMORY.md"))}`],
       ["write another bot's memory", `echo x >> ${JSON.stringify(path.join(scout, "MEMORY.md"))}`],
+      // Last: its own folder traded for a link to another bot's, which the next command would work in.
+      ["trade its folder for another bot's", `d=$(pwd -P) && cd .. && rmdir "$d" && ln -s ${JSON.stringify(scout)} "$d"`],
     ]);
     const expected = {
       "read its memory": "allowed", "write its memory": "allowed", "write its memory anew": "allowed",
       "replace its memory": "refused", "remove its memory": "refused", "link its memory elsewhere": "refused",
       "change its settings": "refused", "change its conversation": "refused",
       "read another bot's memory": "refused", "write another bot's memory": "refused",
+      "trade its folder for another bot's": "refused",
     };
     // Its own conversation, and its seat in a group chat (another conversation, in its folder).
     for (const session of ["ses_ship", "ses_seat"]) {
@@ -546,6 +549,7 @@ test("a bot keeps its memory from the sandbox, in its own conversation and its s
     }
     assert.equal(fs.readFileSync(path.join(ship, "bot.json"), "utf8"), "{}");
     assert.equal(fs.readFileSync(path.join(scout, "MEMORY.md"), "utf8"), "# bot_scout's memory\n");
+    assert.equal(fs.lstatSync(path.join(ship, "workspace")).isDirectory(), true, "its folder is still its own");
   } finally {
     await running.stop();
   }

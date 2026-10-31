@@ -110,6 +110,9 @@ export function seatbeltProfile(policy: FencePolicy, options: SeatbeltOptions): 
   allow("file-read-data file-write-data", `(literal (param "MEMORY"))`);
 
   out.push(";; what runs outside the sandbox, or changes the engine");
+  // The conversation's folder and its repository's, themselves: never removed or made again, so
+  // never traded for a link to somewhere else (another bot's folder) the next command would work in.
+  deny("file-write-unlink file-write-create", `(literal (param "WORK"))`, `(literal (param "GIT"))`);
   deny("file-write*", under("WORK_RE", "/" + GUARDED), under("GIT_RE", "/" + GIT_GUARDED),
     ...Array.from({ length: MOST_FOLDERS }, (_, at) => under(`ALLOW${at}_RE`, "/" + GUARDED)));
   deny("file-write*", ...homes.map(home => inHome(home, `"/(.*/)?(" (param "KEPT") ")(/|$)"`)));
