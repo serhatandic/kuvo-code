@@ -75,6 +75,16 @@ function accountShell(): string | undefined {
 
 const LOGIN_PATH_MARKERS = ["__KUVO_PATH__", "__KUVO_END__"] as const;
 
+/**
+ * Runs the shell (`$0`, with its flags and command) under a watch in its process group: once the
+ * read is over (`loginPath` closes the watch's input), or the box's process is gone before it is
+ * (stopped, crashed: the pipe closes with it), the watch kills all of it, and the group the shell
+ * may have moved into of its own as it started (interactive fish). An interactive shell takes no
+ * notice of SIGTERM, and one whose startup files hang would otherwise run on, with nothing left
+ * to stop it.
+ */
+const WATCHED = 'exec 3<&0 </dev/null; "$0" "$@" 3<&- & s=$!; { read -r _ <&3; kill -9 -$s; kill -9 0; } >/dev/null 2>&1 & exec 3<&-; wait $s; kill -9 -$s 2>/dev/null; kill -9 0';
+
 /** Folders as one PATH, each once, the first place it's named. */
 export function joinPath(...folders: (string | undefined)[]): string {
   return [...new Set(folders.flatMap(list => (list ?? "").split(":")).filter(Boolean))].join(":");
@@ -90,7 +100,7 @@ export function joinPath(...folders: (string | undefined)[]): string {
  * Undefined when neither answers in time, or with a shell that takes no POSIX flags (nushell, csh).
  * What its startup files start in the background is stopped with it, and what leaves it (a daemon,
  * like an `ssh-agent` a .bashrc starts when there's none) is let go: each read can leave one, so
- * read it once and keep it (`saveLoginPath`).
+ * read it once and keep it (`saveLoginPath`). Nor does it outlive the box's process (`WATCHED`).
  */
 export async function loginPath(env: Record<string, string | undefined> = process.env, wait = { interactive: 6_000, login: 2_000 }): Promise<string | undefined> {
   const shell = loginShell(env);
@@ -102,7 +112,7 @@ export async function loginPath(env: Record<string, string | undefined> = proces
       let output = "";
       let child: ReturnType<typeof spawn>;
       try {
-        child = spawn(shell, [flags, `printf '%s%s%s' ${LOGIN_PATH_MARKERS[0]} "$PATH" ${LOGIN_PATH_MARKERS[1]}`], { cwd: login.HOME, env: login, detached: true, stdio: ["ignore", "pipe", "ignore"] });
+        child = spawn("/bin/sh", ["-c", WATCHED, shell, flags, `printf '%s%s%s' ${LOGIN_PATH_MARKERS[0]} "$PATH" ${LOGIN_PATH_MARKERS[1]}`], { cwd: login.HOME, env: login, detached: true, stdio: ["pipe", "pipe", "ignore"] });
       } catch {
         return resolve(undefined);
       }
@@ -113,9 +123,13 @@ export async function loginPath(env: Record<string, string | undefined> = proces
         settled = true;
         clearTimeout(timer);
         clearTimeout(gone);
-        try {
-          if (child.pid) process.kill(-child.pid, "SIGKILL");
-        } catch {}
+        // The watch stops it all; should the watch not be there to (stopped itself), its group is.
+        child.stdin?.destroy();
+        setTimeout(() => {
+          try {
+            if (child.pid) process.kill(-child.pid, "SIGKILL");
+          } catch {}
+        }, 1_000).unref();
         // What left its group (a daemon) may still hold its output open: let go of it, so it never
         // keeps this running.
         child.stdout?.destroy();

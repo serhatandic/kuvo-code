@@ -228,6 +228,75 @@ test("on both: an interactive shell that never answers gives way to the login on
   }
 })
 
+/** A .bashrc that hangs for an interactive shell, taking no notice of being asked to stop, as a
+ * real one waiting on something can: it notes its shell (`shell.pid`) first. */
+function hangingBashrc(folder: string) {
+  writeFileSync(join(folder, ".bashrc"), readFileSync(join(folder, ".bashrc"), "utf8") + `trap '' TERM HUP INT\necho $$ >"$HOME/shell.pid.new"; mv "$HOME/shell.pid.new" "$HOME/shell.pid"\nwhile :; do :; done\n`)
+}
+
+/** Whether the process `pidFile` names has stopped (or never started), given a while to: a
+ * failure answers within the test, so its `finally` stops what's left (a test the runner times
+ * out never gets there). */
+async function stopped(pidFile: string) {
+  for (const begun = Date.now(); Date.now() - begun < 10_000; await Bun.sleep(20)) if (!existsSync(pidFile) || !running(pidFile)) return true
+  return false
+}
+
+const stopShell = (pidFile: string) => {
+  try { process.kill(Number(readFileSync(pidFile, "utf8")), "SIGKILL") } catch {}
+}
+
+test("on both: a .bashrc that hangs, deaf to being stopped, is given up on for the login shell's PATH, and stopped", async () => {
+  const { folder, local, nvm } = home()
+  hangingBashrc(folder)
+  try {
+    const found = (await loginPath({ HOME: folder, SHELL: "/bin/bash", PATH: "/usr/bin:/bin" }, { interactive: 1_000, login: 600_000 }))?.split(":")
+    expect(found).toContain(local)
+    expect(found).not.toContain(nvm)
+    expect(await stopped(join(folder, "shell.pid"))).toBe(true)
+  } finally {
+    stopShell(join(folder, "shell.pid"))
+  }
+}, 30_000)
+
+test("on both: a shell that moves into a process group of its own as it starts (fish, interactive) and hangs is stopped too", async () => {
+  const folder = join(root, "home")
+  mkdirSync(folder, { recursive: true })
+  const shell = join(folder, "fake-shell")
+  const pidFile = join(folder, "own.pid")
+  writeFileSync(shell, `#!/bin/sh\ncase "$1" in\n-ilc) exec perl -e 'setpgrp(0, 0); $SIG{TERM} = $SIG{HUP} = "IGNORE"; open(F, ">", "$ENV{HOME}/own.pid.new"); print F $$; close F; rename("$ENV{HOME}/own.pid.new", "$ENV{HOME}/own.pid"); sleep 1 while 1' ;;\n-lc) PATH="/login/bin:$PATH" exec /bin/sh -c "$2" ;;\nesac\n`)
+  chmodSync(shell, 0o755)
+  try {
+    // Given up on once it's started (however long that takes here), for the login one.
+    const found = loginPath({ HOME: folder, SHELL: shell, PATH: "/usr/bin:/bin" }, { interactive: 1_000, login: 600_000 })
+    expect((await found)?.split(":")[0]).toBe("/login/bin")
+    expect(await stopped(pidFile)).toBe(true)
+  } finally {
+    stopShell(pidFile)
+  }
+}, 30_000)
+
+test("on both: a read still going when the box's process stops (stopped, crashed) stops with it, never left running", async () => {
+  const { folder } = home()
+  hangingBashrc(folder)
+  const pidFile = join(folder, "shell.pid")
+  const box = Bun.spawn([process.execPath, "src/link/main.ts", "login-path"], {
+    cwd: resolve(import.meta.dir, ".."),
+    env: { HOME: folder, SHELL: "/bin/bash", PATH: "/usr/bin:/bin", KUVO_HOME: join(folder, ".kuvo-code"), BUN_BE_BUN: "1" },
+    stdout: "ignore",
+    stderr: "ignore",
+  })
+  try {
+    while (!existsSync(pidFile)) await Bun.sleep(20)
+    box.kill("SIGKILL")
+    await box.exited
+    expect(await stopped(pidFile)).toBe(true)
+  } finally {
+    box.kill("SIGKILL")
+    stopShell(pidFile)
+  }
+}, 30_000)
+
 test("this Mac: Settings › Accounts' refresh answers while a slow .zshrc is still being read, and the read carries on", () => {
   const folder = join(root, "home")
   mkdirSync(folder, { recursive: true })

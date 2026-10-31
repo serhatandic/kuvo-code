@@ -93,6 +93,7 @@ function accountShell() {
   return shell && path.isAbsolute(shell) ? shell : undefined;
 }
 var LOGIN_PATH_MARKERS = ["__KUVO_PATH__", "__KUVO_END__"];
+var WATCHED = 'exec 3<&0 </dev/null; "$0" "$@" 3<&- & s=$!; { read -r _ <&3; kill -9 -$s; kill -9 0; } >/dev/null 2>&1 & exec 3<&-; wait $s; kill -9 -$s 2>/dev/null; kill -9 0';
 function joinPath(...folders) {
   return [...new Set(folders.flatMap((list) => (list ?? "").split(":")).filter(Boolean))].join(":");
 }
@@ -107,7 +108,7 @@ async function loginPath(env = process.env, wait = { interactive: 6000, login: 2
       let output = "";
       let child;
       try {
-        child = spawn(shell, [flags, `printf '%s%s%s' ${LOGIN_PATH_MARKERS[0]} "$PATH" ${LOGIN_PATH_MARKERS[1]}`], { cwd: login.HOME, env: login, detached: true, stdio: ["ignore", "pipe", "ignore"] });
+        child = spawn("/bin/sh", ["-c", WATCHED, shell, flags, `printf '%s%s%s' ${LOGIN_PATH_MARKERS[0]} "$PATH" ${LOGIN_PATH_MARKERS[1]}`], { cwd: login.HOME, env: login, detached: true, stdio: ["pipe", "pipe", "ignore"] });
       } catch {
         return resolve(undefined);
       }
@@ -119,10 +120,13 @@ async function loginPath(env = process.env, wait = { interactive: 6000, login: 2
         settled = true;
         clearTimeout(timer);
         clearTimeout(gone);
-        try {
-          if (child.pid)
-            process.kill(-child.pid, "SIGKILL");
-        } catch {}
+        child.stdin?.destroy();
+        setTimeout(() => {
+          try {
+            if (child.pid)
+              process.kill(-child.pid, "SIGKILL");
+          } catch {}
+        }, 1000).unref();
         child.stdout?.destroy();
         child.unref();
         resolve(value);
@@ -18295,7 +18299,7 @@ import fs68 from "node:fs";
 import path70 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.138";
+var BRIDGE_VERSION = "0.9.139";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

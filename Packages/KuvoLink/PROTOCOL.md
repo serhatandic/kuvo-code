@@ -3123,7 +3123,7 @@ vault does (`run/vault.sock`); another passes them on.
   only be allowed once. A command itself is never let out for good: what it runs (its scripts, its
   project's settings, `package.json`, a `Makefile`) is what the sandbox writes, so the same command
   asks again each time. `machine`: the machine's name, on a machine. `owner`: whose its folder is,
-  which Always gives the place to (Also Allowed, below; bridge 0.9.138): a client names a bot's own
+  which Always gives the place to (Also Allowed, below; bridge 0.9.139): a client names a bot's own
   folder by the bot ("outside Scout's folder") and the chats as Chats, whose Always is every chat's.
 - `POST kuvo/sandbox/asks/<id>` `{answer: "once" | "always" | "no"}` → `200`, `404` for one that
   isn't open, `400` for another answer. `always` without `always` in the ask counts as once.
@@ -3146,7 +3146,7 @@ gone?}` (`project`, `path`: real paths; `by`: `Mac` or the phone's name).
 
 A bot's own folder (its folder's `workspace`) and the chats' folder are projects here too: a
 bot's own conversation, and every chat (they share one folder), have their own rules. Since bridge
-0.9.138 each rule says whose it is, `owner`, `{kind: "project" | "bot" | "chats", id?, name}` (a
+0.9.139 each rule says whose it is, `owner`, `{kind: "project" | "bot" | "chats", id?, name}` (a
 project by its folder's name, a bot by its `id` and the name it has now, the chats as `Chats`), and
 `gone: true` when its project's folder isn't there any more (a project deleted or moved), so a
 client still lists it to be removed. A bot's rules go once it's no longer here (deleted, or moved
@@ -3178,7 +3178,7 @@ says.
 - `DELETE kuvo/sandbox/allowed/<id>[?all]` → `{allowed}`, that project's, or with `?all` everything;
   `404` for one that isn't there.
 
-A box before 0.9.138 sends no `owner`, `gone` or `owners` and answers `?all` as without it: a client
+A box before 0.9.139 sends no `owner`, `gone` or `owners` and answers `?all` as without it: a client
 lists its rules by their projects' folders, adds for projects only, and reads them all again after
 an add.
 
