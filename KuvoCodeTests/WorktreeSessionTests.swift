@@ -386,7 +386,7 @@ import Testing
         let session = try await workspace.createSession(in: repository.path, model: nil, agent: "build", worktree: true)
         let folder = session.location.directory
         let tree = try #require(workspace.worktrees[folder])
-        #expect(try #require(await workspace.takeWorktrees(from: BoxClient.mac, details: true)?[tree.root]).removalNote.hasPrefix("Its folder is deleted. Everything in it is committed."))
+        #expect(try #require(await workspace.takeWorktrees(from: BoxClient.mac, details: true)?[tree.root]).removalNote.hasPrefix("Its folder is deleted. Git sees nothing in it that isn’t committed."))
 
         try Data("total = 1\n".utf8).write(to: URL(filePath: folder).appending(path: "a.py"))
         _ = try git("add", "-A", in: folder)
@@ -406,6 +406,8 @@ import Testing
         StubWeb.route(Self.engine + "/api/session/active") { _ in StubWeb.json([:], status: 503) }
         let said = await #expect(throws: BoxRefusal.self) { try await workspace.removeWorktree(folder) }
         #expect(said?.status == 503)
+        // What Settings shows: why, and that it stays.
+        #expect(said?.localizedDescription.contains("so it stays") == true)
         #expect(workspace.worktrees[folder] != nil)
         #expect(FileManager.default.fileExists(atPath: folder))
     }

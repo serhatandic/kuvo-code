@@ -69,7 +69,6 @@ struct SubscriptionsStep: View {
                             ForEach(offers.keys) { row(for: $0) }
                         }
                         links(offers)
-                            .disabled(app.engineIsDown)
                         if onboarding.offersUsage {
                             UsageRow(usage: onboarding.usage) { Task { await onboarding.turnOnUsage() } }
                                 .padding(.top, 14)
@@ -163,7 +162,7 @@ struct SubscriptionsStep: View {
         OfferRow(row: row, isBusy: isBusy(row)) { _ in perform(row) { signingIn = SignIn(id: $0) } }
             // What's found stays in view; what needs the engine waits for it (the coding agents
             // run beside it, through its restarts).
-            .disabled(app.engineIsDown && !OutsideAgents.isAgent(row.integrationID))
+            .waitsForEngine(app.engineIsDown && !OutsideAgents.isAgent(row.integrationID))
     }
 
     private func isBusy(_ row: Offers.Row) -> Bool {

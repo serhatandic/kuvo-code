@@ -124,8 +124,15 @@ struct WorktreesSettings: View {
                                 .buttonStyle(IconButtonStyle(width: 28, height: 24))
                                 .help("Show in Finder")
                             }
-                            Button("Remove…") { Task { await askToRemove(item.tree) } }
-                                .disabled(checking == item.tree.root)
+                            if checking == item.tree.root {
+                                Spinner(size: 13)
+                                    .frame(width: 70)
+                                    .accessibilityLabel("Looking at what’s in it")
+                            } else {
+                                Button("Remove…") { Task { await askToRemove(item.tree) } }
+                                    // One at a time: what's read is for the question it opens.
+                                    .disabled(checking != nil)
+                            }
                         }
                     } label: {
                         Text(item.tree.branch)
@@ -196,11 +203,22 @@ struct WorktreesSettings: View {
     /// Asks before removing `tree`, saying what's in it now: changes made since the list was read
     /// count. When the box can't say, the question says what's lost without guessing.
     private func askToRemove(_ tree: Workspace.Worktree) async {
+        let unsure = Workspace.BoxWorktree(project: tree.project, root: tree.root, folder: nil, branch: tree.branch, base: tree.base)
+        // Not reached when the page opened: asked without waiting on it again.
+        guard !unreached else {
+            removalNote = unsure.removalNote
+            removing = tree
+            return
+        }
         checking = tree.root
         let read = await workspace.takeWorktrees(from: box.machine ?? BoxClient.mac, details: true)
         checking = nil
-        if let read { listed = read }
-        removalNote = (read?[tree.root] ?? Workspace.BoxWorktree(project: tree.project, root: tree.root, folder: nil, branch: tree.branch, base: tree.base)).removalNote
+        if let read {
+            listed = read
+            // Gone meanwhile (removed from a phone): its row goes, with nothing to ask.
+            guard read[tree.root] != nil else { return }
+        }
+        removalNote = (read?[tree.root] ?? unsure).removalNote
         removing = tree
     }
 }
