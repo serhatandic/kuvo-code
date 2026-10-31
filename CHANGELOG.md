@@ -16,7 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
-- "Still loading your accounts and models…", Open Quickly and the command palette center on the page you're looking at, not the whole window, and move with it as the sidebar, the panel or Settings open and close.
+- "Still loading your accounts and models…", Open Quickly, the command palette and an agent's sign-in, code or step card over the window center on the page you're looking at, not the whole window, and move with it as the sidebar, the panel or Settings open and close.
 - Removing a worktree in Settings › Worktrees says whether it has changes that aren't committed and how many commits its branch keeps; an old failure note goes once a remove works, and removing one on this Mac while its engine is down says why instead of doing nothing.
 - When this Mac's engine stops, Settings › Accounts and the first launch's subscriptions step say so above the list, with Try Again, and dim what needs the engine until it's back, rather than offering sign-ins that fail. Coding agents still sign in meanwhile.
 - Settings › Storage says it measures only this Mac, once you've added a machine.

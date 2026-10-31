@@ -33,8 +33,8 @@ struct MainView: View {
     @State private var keyboardReturn = KeyboardReturn()
     /// Goes up for ⌘F in the group chat in view.
     @State private var groupFind = 0
-    /// The room the conversation and the panel share, in the window: what the panel takes, expanded.
-    @State private var mainArea: CGRect = .zero
+    /// The room the conversation and the panel share: what the panel takes, expanded.
+    @State private var mainAreaWidth: CGFloat = 0
     @AppStorage("sessionsWidth") private var sessionsWidth = 280.0
     @AppStorage("changesWidth") private var changesWidth = 420.0
     @AppStorage(Notifier.badgeKey) private var showsBadge = true
@@ -48,13 +48,9 @@ struct MainView: View {
     @State private var renaming: Session?
     /// The window's content width; the title bar is sized from it.
     @State private var contentWidth: CGFloat = 1200
-    /// Where the middle card is and where the title bar's items start, in the window: the tabs
-    /// line up with the card, and what shows over the window centers on it.
-    @State private var mainCard: CGRect = .zero
-    /// Settings' card, in the window, while they show.
-    @State private var settingsCard: CGRect = .zero
-    /// What the overlays below are laid over, in the window.
-    @State private var overlaid: CGRect = .zero
+    /// Where the middle card starts and where the title bar's items start, in the window: the
+    /// tabs line up with the card.
+    @State private var mainPaneX: CGFloat = 0
     @State private var titleBarX: CGFloat = 0
     @State private var settingsBarX: CGFloat = 0
     @AppStorage("splitWidth") private var splitWidth = 560.0
@@ -137,6 +133,8 @@ struct MainView: View {
                 // With the tab bar hidden and no sidebar, the window's buttons and the sidebar
                 // button sit over this card's header.
                 let controlsInset: CGFloat = !showsTabBar && layout.sessions == nil ? 124 : 0
+                // Which cards show, for what's centered on the conversation to slide with it.
+                let cardsShown = [layout.sessions != nil, layout.split != nil, layout.changes != nil, expands]
                 ZStack(alignment: .trailing) {
                     HStack(spacing: 0) {
                         conversationCard
@@ -147,7 +145,8 @@ struct MainView: View {
                             .environment(\.windowControlsInset, controlsInset)
                             // With the tab bar hidden, the panel button sits over the rightmost card.
                             .environment(\.windowControlsTrailingInset, !showsTabBar && layout.changes == nil && layout.split == nil ? 36 : 0)
-                            .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { mainCard = $0 }
+                            .onGeometryChange(for: CGFloat.self, of: { $0.frame(in: .global).minX }) { mainPaneX = $0 }
+                            .contentCard(layout: cardsShown)
                             // Under the expanded panel: out of reach, keys too (a card's Return
                             // or Esc), until it's back.
                             .disabled(expands)
@@ -163,6 +162,7 @@ struct MainView: View {
                             .allowsHitTesting(!expands)
                             splitCard(model)
                                 .frame(width: width)
+                                .contentCard(layout: cardsShown)
                                 .environment(\.windowControlsTrailingInset, !showsTabBar && layout.changes == nil ? 36 : 0)
                                 .transaction(value: showsPanel) { $0.animation = nil }
                                 .transaction(value: showsSidebar) { $0.animation = nil }
@@ -188,10 +188,11 @@ struct MainView: View {
                                 }
                             }
                     }
-                    .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { mainArea = $0 }
+                    .onGeometryChange(for: CGFloat.self, of: \.size.width) { mainAreaWidth = $0 }
                     if showsPanel, layout.changes != nil || expands {
                         utilitiesPane
-                            .frame(width: expands ? mainArea.width : layout.changes ?? mainArea.width)
+                            .frame(width: expands ? mainAreaWidth : layout.changes ?? mainAreaWidth)
+                            .contentCard(expands ? .expandedPanel : nil, layout: cardsShown)
                             .environment(\.windowControlsInset, expands ? controlsInset : 0)
                             .environment(\.windowControlsTrailingInset, showsTabBar ? 0 : 36)
                             .transition(.move(edge: .trailing).combined(with: .opacity))
@@ -229,7 +230,6 @@ struct MainView: View {
                         sidebarRange: PaneLayout.sessionsRange.lowerBound...widest,
                         resizeSidebar: { sessionsWidth = $0 },
                         topInset: keepsTitleBar ? 0 : Metrics.windowControlsHeight,
-                        cardFrame: { settingsCard = $0 },
                         close: closeSettings
                     )
                     .transition(.opacity)
@@ -305,17 +305,17 @@ struct MainView: View {
         .background(WindowStateReader { window = $0 })
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
         .iconOnlyToolbar()
-        .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { overlaid = $0 }
-        .overlay(alignment: .top) {
+        .overContentCard {
             if catalog.isSlow {
                 SlowEngineNotice()
+                    .fixedSize()
+                    .centeredOnContentCard()
                     .padding(.top, 12)
-                    .modifier(OverContentCard(card: contentCard, window: overlaid))
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
         .animation(.ui, value: catalog.isSlow)
-        .overlay(alignment: .top) {
+        .overContentCard {
             if showsOpenQuickly, let directory = focusedDirectory {
                 ZStack(alignment: .top) {
                     // A click outside closes it.
@@ -328,14 +328,14 @@ struct MainView: View {
                     } dismiss: {
                         showsOpenQuickly = false
                     }
+                    .centeredOnContentCard()
                     .padding(.top, 80)
-                    .modifier(OverContentCard(card: contentCard, window: overlaid))
                 }
                 .transition(.opacity)
             }
         }
         .animation(.ui, value: showsOpenQuickly)
-        .overlay(alignment: .top) {
+        .overContentCard {
             if showsPalette {
                 ZStack(alignment: .top) {
                     Color.black.opacity(0.001)
@@ -348,8 +348,8 @@ struct MainView: View {
                         openFile: { url in showInPanel { utilities.show(url) } },
                         dismiss: { showsPalette = false }
                     )
+                    .centeredOnContentCard()
                     .padding(.top, 80)
-                    .modifier(OverContentCard(card: contentCard, window: overlaid))
                 }
                 .transition(.opacity)
             }
@@ -515,19 +515,10 @@ struct MainView: View {
         }
     }
 
-    /// The card the window's content is in: Settings' page, the expanded panel, or else the
-    /// middle card. It reads as the window's background (the sidebar sits on the glass beside it),
-    /// so what shows over the window centers on it.
-    private var contentCard: CGRect {
-        if app.showsSettings { return settingsCard }
-        if showsPanel && panelExpanded { return mainArea }
-        return mainCard
-    }
-
     /// The project's width in the title bar: up to the middle card, when the sidebar leaves
     /// enough room for it.
     private var identityWidth: CGFloat? {
-        let room = mainCard.minX - titleBarX
+        let room = mainPaneX - titleBarX
         return showsSidebar && titleBarX > 0 && room >= 150 ? room : nil
     }
 
@@ -1237,25 +1228,6 @@ struct PaneLayout {
 
 /// The engine is taking a while, most often because macOS is asking whether it may
 /// read a folder (Claude skills or a project on the Desktop, say) and waiting for an answer.
-/// What shows over the whole window (a notice at the top, a palette) centers on `card`, the
-/// content card, rather than on the window, and follows it as the sidebar, the panel or Settings
-/// come and go. Wider than the card, it stays inside the window. Both frames are in the window.
-private struct OverContentCard: ViewModifier {
-    let card: CGRect
-    let window: CGRect
-    @State private var width: CGFloat = 0
-
-    func body(content: Content) -> some View {
-        let half = width / 2
-        let center = card.isEmpty || window.isEmpty ? window.width / 2 : min(max(card.midX - window.minX, half), window.width - half)
-        content
-            .fixedSize(horizontal: true, vertical: false)
-            .onGeometryChange(for: CGFloat.self, of: \.size.width) { width = $0 }
-            .offset(x: center - window.width / 2)
-            .animation(.ui, value: card)
-    }
-}
-
 private struct SlowEngineNotice: View {
     var body: some View {
         HStack(spacing: 10) {

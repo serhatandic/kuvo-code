@@ -4,7 +4,8 @@ import ClientText
 import SwiftUI
 
 /// Asks Kuvo Code can't show in a conversation: from a bot in a group chat, or from an agent it
-/// couldn't tell. A card at the top of the window, over whatever is in view, for the oldest one.
+/// couldn't tell. A card at the top of the window, over whatever is in view (centered on its
+/// content card), for the oldest one.
 /// The rest show in the conversation that asked, over its composer.
 struct BrowserAskOverlay: View {
     @Environment(AppModel.self) private var app
@@ -20,6 +21,7 @@ struct BrowserAskOverlay: View {
                 .frame(width: 400)
                 .glassEffect(.regular, in: .rect(cornerRadius: Metrics.composerRadius))
                 .shadow(color: .black.opacity(0.18), radius: 18, y: 6)
+                .centeredOnContentCard()
                 .padding(.top, 52)
                 .frame(maxHeight: .infinity, alignment: .top)
                 .transition(.move(edge: .top).combined(with: .opacity))

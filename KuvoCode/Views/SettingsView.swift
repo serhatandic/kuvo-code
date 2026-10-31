@@ -18,8 +18,6 @@ struct SettingsView: View {
     var resizeSidebar: (Double) -> Void = { _ in }
     /// Room above the sidebar's first row for the window's buttons, when they sit there.
     var topInset: CGFloat = 0
-    /// Where the page's card is, in the window, as it moves.
-    var cardFrame: (CGRect) -> Void = { _ in }
     /// Back to the sessions.
     let close: () -> Void
 
@@ -86,7 +84,7 @@ struct SettingsView: View {
             // material makes it), black text came out a washed-out gray on white.
             .environment(\.backgroundMaterial, nil)
             .background(WindowXReader { tabs.contentX = $0 })
-            .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { cardFrame($0) }
+            .contentCard(.settings)
             // Doing something in the page in view keeps its tab (see `SettingsTabs`).
             .background(InteractionWatcher { tabs.keepSelected() })
             .background(Surface.cardFill(scheme, focused: true), in: .rect(cornerRadius: Metrics.cardRadius))
