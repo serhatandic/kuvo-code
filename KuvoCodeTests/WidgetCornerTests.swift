@@ -52,6 +52,17 @@ import WebKit
         #expect(WidgetCard.pillX(widgetRight: 640, width: 40, pill: 56) == 0)
     }
 
+    // The user's report (2026-10-31): a widget as wide as the reply had Open Larger and Copy over
+    // its first line ("does not mean" hidden). Whatever its width, the controls cover none of it.
+    @Test func theControlsCoverNoneOfTheWidgetAtAnyWidth() {
+        let pill = CGSize(width: 56, height: 24), reply: CGFloat = 640, height: CGFloat = 220
+        for widgetRight: CGFloat in [242, 560, 600, 640] {
+            let widget = CGRect(x: 0, y: 0, width: widgetRight, height: height)
+            let controls = CGRect(x: WidgetCard.pillX(widgetRight: widgetRight, width: reply, pill: pill.width), y: 6, width: pill.width, height: pill.height)
+            #expect(!controls.intersects(widget), "a widget ending at \(widgetRight) of \(reply): its controls at \(controls)")
+        }
+    }
+
     @Test func aWidgetThatGrowsWiderWithoutGrowingTallerSaysWhereItEndsNow() async throws {
         let reports = Reports()
         let page = try await load(#"<div id="card" style="display: inline-block; height: 40px; background: #eee">9</div>"#, reports: reports)
