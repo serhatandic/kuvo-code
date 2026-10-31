@@ -164,6 +164,11 @@ final class Workspace {
     private var removedWorktrees: [String: String] = UserDefaults.standard.dictionary(forKey: "removedWorktrees") as? [String: String] ?? [:] {
         didSet { projectsChanged() }
     }
+    /// Being deleted, until its engine answers: out of the sidebar meanwhile (a running one stops
+    /// first, a machine's is over SSH), back if it's refused.
+    private(set) var deleting: Set<String> = [] {
+        didSet { projectsChanged() }
+    }
     private(set) var isLoaded = false
 
     /// Each open conversation's model, made the first time it's asked for: a cache, not what a
@@ -312,7 +317,7 @@ final class Workspace {
 
     /// Chats, newest first.
     var chats: [Session] {
-        sessions.filter { Self.isChat($0.location.directory) && !Self.isArchived($0) && !botSessions.contains($0.id) }
+        sessions.filter { Self.isChat($0.location.directory) && !Self.isArchived($0) && !botSessions.contains($0.id) && !deleting.contains($0.id) }
             .sorted { $0.time.updated > $1.time.updated }
     }
 
@@ -341,7 +346,7 @@ final class Workspace {
     /// Projects with their sessions, most recently active first.
     var projects: [Project] {
         // What they're made of, read here so views showing them are updated as it changes.
-        _ = (sessions.count, folders.count, settings.count, worktrees.count, removedWorktrees.count, botSessions.count, machines.count)
+        _ = (sessions.count, folders.count, settings.count, worktrees.count, removedWorktrees.count, botSessions.count, machines.count, deleting.count)
         if let madeProjects { return madeProjects }
         let projects = makeProjects()
         madeProjects = projects
@@ -358,7 +363,7 @@ final class Workspace {
     }
 
     private func makeProjects() -> [Project] {
-        let grouped = Dictionary(grouping: sessions.filter { !Self.isArchived($0) && !botSessions.contains($0.id) && !Self.isChat($0.location.directory) && !Self.isBotFolder($0.location.directory) }, by: projectDirectory(of:))
+        let grouped = Dictionary(grouping: sessions.filter { !Self.isArchived($0) && !botSessions.contains($0.id) && !deleting.contains($0.id) && !Self.isChat($0.location.directory) && !Self.isBotFolder($0.location.directory) }, by: projectDirectory(of:))
         let directories = Set(grouped.keys).union(folders).filter { RemoteFolder.machine(of: $0).map(machines.contains) ?? true }
         return directories.map { directory in
             Project(directory: directory, sessions: (grouped[directory] ?? []).sorted { $0.time.updated > $1.time.updated }, settings: settings[directory] ?? ProjectSettings())
@@ -1498,18 +1503,35 @@ final class Workspace {
     /// A session was deleted: its panel goes with it. The app sets it.
     @ObservationIgnored var onDeleted: ((String) -> Void)?
 
-    /// Deleted on its engine, then here: one its engine refused, or on a computer that isn't
-    /// connected (a machine that's away, this Mac's engine not up), stays, and why is thrown.
+    /// Deleted on its engine, then here; one its engine doesn't have any more goes too. Out of
+    /// the sidebar meanwhile. One its engine refused, or on a computer that isn't connected (a
+    /// machine that's away, this Mac's engine not up), stays, with what you'd written in it, and
+    /// why is thrown.
     func delete(_ id: String) async throws {
         try Moves.checkNotMoving(id)
-        guard let api = api(forSession: id) else { throw DeleteFailure.notConnected }
-        try await api.deleteSession(id)
+        guard let api = api(forSession: id) else {
+            throw DeleteFailure.notConnected(machine: session(id).flatMap { RemoteFolder.machine(of: $0.location.directory) })
+        }
+        deleting.insert(id)
+        defer { deleting.remove(id) }
+        do {
+            try await api.deleteSession(id)
+        } catch let error as ServerError where error.status == 404 {
+            // Gone there already (deleted from your phone while this Mac wasn't listening).
+        }
         drop(id)
     }
 
     enum DeleteFailure: LocalizedError {
-        case notConnected
-        var errorDescription: String? { "Its computer’s engine isn’t running. Try again once it is." }
+        /// Its machine (nil: this Mac, whose engine isn't up yet).
+        case notConnected(machine: String?)
+
+        var errorDescription: String? {
+            switch self {
+            case .notConnected(let machine?): "\(machine) isn’t connected. Connect to it, then try again."
+            case .notConnected(nil): "The engine isn’t running yet. Try again in a moment."
+            }
+        }
     }
 
     /// A session gone from its engine (deleted by its box, a bot's): what's here of it goes.

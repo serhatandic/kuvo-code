@@ -211,7 +211,11 @@ struct StorageSettings: View {
 
     /// A machine being set up reads the downloads meanwhile: they stay until it's done.
     private var machineInstalling: Bool {
-        app.machines.engines.values.contains { $0.connection == .installing }
+        app.machines.engines.values.contains { engine in
+            if engine.connection == .installing { return true }
+            if case .installing = engine.browser.setup { return true }
+            return false
+        }
     }
 
     private var archivedCount: Int {
@@ -265,10 +269,10 @@ struct StorageSettings: View {
     /// This Mac's measured beside what agents made on the picked computer: a machine slow to
     /// answer, or away, doesn't hold this Mac's numbers back.
     private func load() async {
-        async let made: Void = loadMade()
+        async let madeLoaded: Void = loadMade()
         let worktrees = Array(Set(workspace.worktrees.values.map(\.root))).filter { !RemoteFolder.isRemote($0) }
         report = await Task.detached { StorageReport.measure(worktrees: worktrees) }.value
-        await made
+        await madeLoaded
     }
 
     static func format(_ bytes: Int64) -> String {

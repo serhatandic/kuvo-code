@@ -107,7 +107,7 @@ import Testing
         #expect(!plan.isEmpty)
 
         let (note, renews) = await OpencodeImport.bringOver(plan, to: refusing, api: api, name: { $0 })
-        #expect(note.hasPrefix("Brought over 0 things"), "said: \(note)")
+        #expect(note.hasPrefix("Nothing came over"), "said: \(note)")
         #expect(note.contains("didn’t come over") && note.contains("isn’t writable"), "said: \(note)")
         #expect(!renews)
     }

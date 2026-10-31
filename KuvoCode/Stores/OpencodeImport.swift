@@ -344,8 +344,10 @@ enum OpencodeImport {
 
     /// What bringing a plan over came to.
     struct Outcome {
-        /// Settings sent to the box, which may still refuse them (`EngineConfig.settled`).
+        /// Settings that came over: none when they weren't saved (`notSaved`).
         var settings = 0
+        /// Why the settings weren't saved where the box keeps them, when they weren't.
+        var notSaved: String?
         /// API keys the engine took.
         var accounts = 0
         /// The integrations whose keys it didn't take.
@@ -359,11 +361,13 @@ enum OpencodeImport {
     @MainActor
     static func bringOver(_ plan: Plan, to config: EngineConfig, api: OpenCodeAPI, name: (String) -> String) async -> (note: String, renews: Bool) {
         let outcome = await apply(plan, to: config, api: api)
-        // Saved where the box keeps them before the engine starts again to read them.
-        let notSaved = outcome.settings > 0 ? await config.settled() : nil
-        let count = notSaved == nil ? outcome.count : outcome.accounts
-        var note = count == 1 ? "Brought over 1 thing from opencode." : "Brought over \(count) things from opencode."
-        if let notSaved { note += " Its settings didn’t come over. \(notSaved)" }
+        let count = outcome.count
+        var note = switch count {
+        case 0: "Nothing came over from opencode."
+        case 1: "Brought over 1 thing from opencode."
+        default: "Brought over \(count) things from opencode."
+        }
+        if let notSaved = outcome.notSaved { note += " Its settings didn’t come over. \(notSaved)" }
         if !outcome.failedAccounts.isEmpty {
             note += " The API keys for \(ListFormatter.localizedString(byJoining: outcome.failedAccounts.map(name))) couldn’t be copied; add them in Settings › Accounts."
         }
@@ -404,8 +408,20 @@ enum OpencodeImport {
             changes.append((["skills"], .array(ours + plan.skillFolders.map(JSONValue.string))))
             count += plan.skillFolders.count
         }
-        if !changes.isEmpty { config.set(changes) }
         var outcome = Outcome(settings: count)
+        if !changes.isEmpty {
+            if let problem = config.problem {
+                outcome.notSaved = problem
+            } else if !config.isLoaded {
+                outcome.notSaved = "Kuvo Code’s settings haven’t been read yet. Try again in a moment."
+            } else {
+                config.set(changes)
+                // Saved where the box keeps them (before the engine starts again to read them), or
+                // why not, as it answers this change.
+                outcome.notSaved = await config.settled()
+            }
+            if outcome.notSaved != nil { outcome.settings = 0 }
+        }
         for account in plan.accounts {
             if (try? await api.storeCredential(value: account.value, label: account.label, for: account.integration)) != nil {
                 outcome.accounts += 1

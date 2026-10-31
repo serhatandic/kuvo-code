@@ -632,9 +632,10 @@ struct SidebarView: View {
         if selection == session.id { selection = nil }
         let discarding = worktreeIsDirty
         Task {
-            // Deleted either way, as you asked; a worktree that stays shows in Settings › Worktrees.
+            // Its worktree goes once it has: one its engine refused keeps it, and says why. A
+            // worktree that stays shows in Settings › Worktrees.
+            do { try await workspace.delete(session.id) } catch { return Modal.show(error) }
             if removingWorktree { await removeWorktree(of: session, discarding: discarding) }
-            try? await workspace.delete(session.id)
         }
     }
 
