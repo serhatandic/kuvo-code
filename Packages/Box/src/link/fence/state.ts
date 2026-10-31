@@ -31,6 +31,8 @@ export interface FenceState {
   able: boolean;
   /** Every coding agent's process here runs in it too: none started before it was on still runs. */
   agents: boolean;
+  /** The box asks you, once, to restart the agents started before it was on (`POST kuvo/sandbox/restart`). */
+  restart?: boolean;
   /** Why not, for a client to map without reading `why`, and what you can do about it. */
   reason?: FenceReason;
   action?: FenceAction;
@@ -93,7 +95,7 @@ let lastProfiles = "";
 
 /** Whether the sandbox is on here: read each time from what the box knows, without waiting. */
 export function fenceState(): FenceState {
-  const base = { able: checked.able, agents: agentsAllInside() };
+  const base = { able: checked.able, agents: agentsAllInside(), ...(asksToRestart() ? { restart: true } : {}) };
   // Kuvo Code's own kill switch: no reason a client shows, as there's nothing you can do.
   if (!fenceWanted()) return { ...base, on: false, why: "Kuvo Code has it turned off on this computer for now." };
   if (!checked.passed) return { ...base, on: false, ...cannot(checked) };
@@ -135,17 +137,47 @@ export const agentsCommandsInSandbox = (): boolean => fenceWanted() && fs.exists
  * sandbox as it is (`run/fence/agents`; none it started before it was on still runs), or none runs.
  * What opens the vault to agents. */
 export function agentsAllInside(): boolean {
-  if (!agentsCommandsInSandbox()) return false;
+  const said = bridgeSays();
+  return said === "none" || said === "inside";
+}
+
+/** What the agents bridge says of its agents' processes, for the sandbox as it is now: all inside
+ * it, some started before it was on still running (`outside`), none running, or nothing yet (it
+ * hasn't looked since it was set up, or the sandbox isn't on). */
+function bridgeSays(): "inside" | "outside" | "none" | undefined {
+  if (!agentsCommandsInSandbox()) return undefined;
   let bridge: { pid?: number } | null = null;
   try { bridge = JSON.parse(fs.readFileSync(BRIDGE_FILE, "utf8")); } catch {}
-  if (!bridge?.pid || !processRuns(bridge.pid, "kuvo-agents")) return true;
+  if (!bridge?.pid || !processRuns(bridge.pid, "kuvo-agents")) return "none";
   try {
     const said = JSON.parse(fs.readFileSync(path.join(FOLDER, "agents"), "utf8"));
     const on = sandboxGeneration(ON);
-    return Boolean(on) && said.pid === bridge.pid && said.on === on;
+    if (!on || said.pid !== bridge.pid || said.on !== on) return undefined;
+    return said.outside === true ? "outside" : "inside";
   } catch {
-    return false;
+    return undefined;
   }
+}
+
+// Asked once whether to restart them: the first time it's on with some still outside it (or was
+// once all were in it, when there was nothing to ask).
+const RESTART_ASKED = path.join(FOLDER, "restart-asked");
+
+/**
+ * Whether the box asks you to restart the agents started before the sandbox was on (it does once,
+ * the first time it's on with some still running), noting that it's past once none is left.
+ */
+export function asksToRestart(): boolean {
+  if (fs.existsSync(RESTART_ASKED)) return false;
+  const said = bridgeSays();
+  if (said === "outside") return true;
+  if (said) answeredRestart();
+  return false;
+}
+
+/** You answered whether to restart them (or there was nothing to ask): never asked again here. */
+export function answeredRestart(): void {
+  try { writePrivate(RESTART_ASKED, ""); } catch {}
 }
 
 // Why a box doesn't have it on, and what you can do.

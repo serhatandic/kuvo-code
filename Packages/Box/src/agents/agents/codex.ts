@@ -180,6 +180,22 @@ export class CodexAgent implements Agent {
     return [...this.threads.values()].some((thread) => thread !== starting && thread.server === server && (thread.isRunning || thread.keepsWorking))
   }
 
+  /** Stops its app-servers started outside the box's sandbox that no turn is on now (you said to restart them): what used them starts again in it. Whether one is still at work. */
+  restartOutside(): boolean {
+    let waiting = false
+    for (const [key, slot] of this.slots) {
+      const server = slot.server
+      if (!server || server.isClosed || !this.unfencedServers.has(server)) continue
+      const working = [...this.threads.values()].some((thread) => thread.server === server && thread.isRunning)
+      if (working || ((key === SHARED || key === ACCOUNT) && (this.logins.size || [...this.oneOffs.values()].some((oneOff) => oneOff.rpc === server)))) {
+        waiting = true
+        continue
+      }
+      this.stop(key)
+    }
+    return waiting
+  }
+
   /** Restarts an old app-server when nothing but `starting`'s turn uses it. */
   private restartIfQuiet(key: string, starting?: CodexThread) {
     const slot = this.slots.get(key)

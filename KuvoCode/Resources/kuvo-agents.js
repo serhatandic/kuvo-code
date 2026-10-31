@@ -6302,7 +6302,7 @@ function noteAgentsInside(inside) {
   if (!where)
     return;
   const on = process.env.KUVO_SANDBOX === "off" ? "" : sandboxGeneration(join14(where, "on"));
-  const note = inside && on ? JSON.stringify({ pid: process.pid, on }) : "";
+  const note = on ? JSON.stringify({ pid: process.pid, on, ...inside ? {} : { outside: true } }) : "";
   if (note === noted)
     return;
   const record = join14(where, "agents");
@@ -10778,6 +10778,21 @@ class CodexAgent {
     if ((key === SHARED || key === ACCOUNT) && (this.logins.size || [...this.oneOffs.values()].some((oneOff) => oneOff.rpc === server)))
       return true;
     return [...this.threads.values()].some((thread) => thread !== starting && thread.server === server && (thread.isRunning || thread.keepsWorking));
+  }
+  restartOutside() {
+    let waiting = false;
+    for (const [key, slot] of this.slots) {
+      const server = slot.server;
+      if (!server || server.isClosed || !this.unfencedServers.has(server))
+        continue;
+      const working = [...this.threads.values()].some((thread) => thread.server === server && thread.isRunning);
+      if (working || (key === SHARED || key === ACCOUNT) && (this.logins.size || [...this.oneOffs.values()].some((oneOff) => oneOff.rpc === server))) {
+        waiting = true;
+        continue;
+      }
+      this.stop(key);
+    }
+    return waiting;
   }
   restartIfQuiet(key, starting) {
     const slot = this.slots.get(key);
@@ -16379,6 +16394,22 @@ ${live.agentPrompt}` : ""
   outside() {
     return [...this.live.values()].some((live) => [...live.threads.values()].some((thread) => thread.outside));
   }
+  restartOutside() {
+    let waiting = false;
+    for (const live of this.live.values()) {
+      for (const [providerID, thread] of live.threads) {
+        if (!thread.outside)
+          continue;
+        if (isBusy(live.doing)) {
+          waiting = true;
+          continue;
+        }
+        thread.close();
+        live.threads.delete(providerID);
+      }
+    }
+    return waiting;
+  }
   permissions(id) {
     this.record(id);
     return [...this.live.get(id)?.permissions.values() ?? []].map((pending) => pending.request);
@@ -21483,6 +21514,10 @@ function handler(context) {
           return json11({});
         }
       }
+      if (area === "kuvo" && a === "sandbox" && b === "restart" && !c && method === "POST") {
+        context.restartOutside?.();
+        return json11({});
+      }
       if (area === "kuvo" && a === "goals")
         return await goalRoutes(context.goals, method, parts.slice(3), body);
       if (area === "kuvo" && a === "btw")
@@ -21737,7 +21772,16 @@ function engineAgent(providerID) {
   return agent;
 }
 var sessions = new Sessions(store, roster, auto, engineAgent, (directory) => link2.policies(directory), (name, directory) => link2.agent(name, directory), new Snapshots(join27(home2, "snapshots")), (directory) => link2.titleModel(directory));
-var noteInside = () => noteAgentsInside(!sessions.outside() && !roster.all().some((agent) => agent.outside?.()));
+var restarting = false;
+var noteInside = () => {
+  if (restarting)
+    restarting = [sessions.restartOutside(), ...roster.all().map((agent) => agent.restartOutside?.() ?? false)].some(Boolean);
+  noteAgentsInside(!sessions.outside() && !roster.all().some((agent) => agent.outside?.()));
+};
+var restartOutside = () => {
+  restarting = true;
+  noteInside();
+};
 noteInside();
 setInterval(noteInside, 5000).unref?.();
 var self;
@@ -21849,7 +21893,7 @@ try {
     hostname: "127.0.0.1",
     port,
     idleTimeout: 0,
-    fetch: handler({ roster, sessions, auto, link: link2, password, version: version3, groups, goals, sideQuestions, handoffs, places: places4, reviews, voice, artifacts, noted: noted2 })
+    fetch: handler({ roster, sessions, auto, link: link2, password, version: version3, groups, goals, sideQuestions, handoffs, places: places4, reviews, voice, artifacts, noted: noted2, restartOutside })
   });
 } catch (error) {
   console.error("couldn't listen:", error?.message ?? error);
@@ -21911,4 +21955,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents efe7b05663013bb59a4854c60e3d4df48ec852916a799b45f27d12cb5e4a7fc4
+// Built from Packages/Box/src/agents 82bfa67d79dbcd227a37b40d211da6fbaaceb132a7555e98722f77b7121d931d

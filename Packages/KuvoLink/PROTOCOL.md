@@ -2917,7 +2917,16 @@ it's empty.
   engine) run in it too: each starts its next turn in it once it's set up and checked here, and
   `agents` is true once no agent process the bridge started before it was on still runs (the
   agents bridge notes it, `{pid, on}`, in `run/fence/agents`, for the sandbox as it is: `on` is the
-  token each setup writes in `run/fence/on`; with no bridge running, it's true). It counts the
+  token each setup writes in `run/fence/on`, with `outside: true` while one still runs; with no
+  bridge running, it's true). `restart`: the box asks you, once, to restart those: true the first
+  time it's on with one still running (never if it was on with all inside it first), until you
+  answer with `POST kuvo/sandbox/restart` `{restart}`, which answers the state anew (400 without
+  a true or false; 503 when the agents bridge doesn't answer, and it stays asked). True has the
+  bridge (`POST /api/kuvo/sandbox/restart`) close each agent's process started before the sandbox
+  was on as its conversation is between turns, the rest as their turns end (what one left running
+  stops with it); each starts again in the sandbox with its next turn, going on with its
+  conversation. False leaves them to finish as they are. Clients show it as a card in the
+  computer's conversations: "Restart agents in the sandbox?". It counts the
   agents' own processes, from their start: a command one of them started outside the sandbox that
   outlives it isn't followed, as with the engine's. Each runs whole in it, and so does all it
   starts: its commands, and its hooks and MCP servers, yours and a project's. Claude Code through

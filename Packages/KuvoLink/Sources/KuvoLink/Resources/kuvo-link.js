@@ -13218,7 +13218,7 @@ var checked = { able: false, passed: false, why: "It hasn't been checked yet.", 
 var failures = 0;
 var lastProfiles = "";
 function fenceState() {
-  const base = { able: checked.able, agents: agentsAllInside() };
+  const base = { able: checked.able, agents: agentsAllInside(), ...asksToRestart() ? { restart: true } : {} };
   if (!fenceWanted())
     return { ...base, on: false, why: "Kuvo Code has it turned off on this computer for now." };
   if (!checked.passed)
@@ -13251,21 +13251,43 @@ function engineCommandsInSandbox() {
 }
 var agentsCommandsInSandbox = () => fenceWanted() && fs52.existsSync(ON);
 function agentsAllInside() {
+  const said = bridgeSays();
+  return said === "none" || said === "inside";
+}
+function bridgeSays() {
   if (!agentsCommandsInSandbox())
-    return false;
+    return;
   let bridge = null;
   try {
     bridge = JSON.parse(fs52.readFileSync(BRIDGE_FILE, "utf8"));
   } catch {}
   if (!bridge?.pid || !processRuns(bridge.pid, "kuvo-agents"))
-    return true;
+    return "none";
   try {
     const said = JSON.parse(fs52.readFileSync(path54.join(FOLDER, "agents"), "utf8"));
     const on = sandboxGeneration(ON);
-    return Boolean(on) && said.pid === bridge.pid && said.on === on;
+    if (!on || said.pid !== bridge.pid || said.on !== on)
+      return;
+    return said.outside === true ? "outside" : "inside";
   } catch {
-    return false;
+    return;
   }
+}
+var RESTART_ASKED = path54.join(FOLDER, "restart-asked");
+function asksToRestart() {
+  if (fs52.existsSync(RESTART_ASKED))
+    return false;
+  const said = bridgeSays();
+  if (said === "outside")
+    return true;
+  if (said)
+    answeredRestart();
+  return false;
+}
+function answeredRestart() {
+  try {
+    writePrivate(RESTART_ASKED, "");
+  } catch {}
 }
 function cannot(why) {
   const said = why.why ? { why: why.why } : {};
@@ -19264,6 +19286,20 @@ async function* sandboxRoute(context) {
   }
   const body = parsed(request.body);
   const given = isObject(body) ? body : {};
+  if (route === "kuvo/sandbox/restart") {
+    if (method !== "POST")
+      return yield* json(405, {});
+    if (typeof given.restart !== "boolean")
+      return yield* json(400, { message: "Say whether to restart them: restart, true or false." });
+    const bridge = given.restart ? bridgeTarget() : null;
+    if (bridge) {
+      const told = await call(bridge, "POST", "/api/kuvo/sandbox/restart", {}, AbortSignal.timeout(1e4)).then(() => true, () => false);
+      if (!told)
+        return yield* json(503, { message: "The coding agents' bridge didn't answer: try again in a moment." });
+    }
+    answeredRestart();
+    return yield* json(200, shown2());
+  }
   const parts = route.split("/");
   if (!heldHere(route))
     return yield* json(404, {});

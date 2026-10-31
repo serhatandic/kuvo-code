@@ -46,7 +46,7 @@ function setBots({ pixelWork } = {}) {
 
 // The engine: the bots' conversations, a session of the user's own, the models there are accounts
 // for; the sessions made, what each was sent, what each asks, and how each ask was answered.
-let sessions, prompts, made, asked, replied, interrupted, active, busy;
+let sessions, prompts, made, asked, replied, interrupted, active, busy, restarts;
 // Sessions given a task stay at work (`staysAtWork`); none is made until the sessions at work were
 // looked at `holdMaking` times, so starts asked for at once all look before any is made.
 let staysAtWork, holdMaking, activeLooks, held;
@@ -63,6 +63,7 @@ function resetEngine() {
   ]);
   prompts = [];
   made = [];
+  restarts = 0;
   asked = new Map();
   replied = [];
   interrupted = [];
@@ -83,6 +84,11 @@ const standIn = onBridge => (request, response) => {
   request.on("end", () => {
     const reply = (value, status = 200) => { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value)); };
     const url = new URL(request.url, "http://x");
+    // The agents bridge told to restart its agents started before the sandbox was on.
+    if (onBridge && url.pathname === "/api/kuvo/sandbox/restart" && request.method === "POST") {
+      restarts += 1;
+      return reply({});
+    }
     if (url.pathname === "/api/provider") return reply({ data: [{ id: "anthropic", name: "Anthropic" }, { id: "deepseek", name: "DeepSeek" }] });
     if (url.pathname === "/api/model") {
       return reply({ data: [
@@ -654,6 +660,48 @@ test("a coding agent's session that runs in the sandbox lets a bot allow its com
   write(path.join(home, "run", "fence", "on"), "");
   write(path.join(home, "run", "fence", "agents"), JSON.stringify({ pid: bridgePID, on: "" }));
   assert.equal((await route("GET", "kuvo/sandbox")).body.agents, false);
+});
+
+test("the first time the sandbox is on with agents that started before it still running, the box asks you once to restart them, and Restart has the bridge do it", async t => {
+  write(path.join(home, "run", "bridge.json"), JSON.stringify({ port: bridge.address().port, password: "b", pid: await runningAs("kuvo-agents", t) }));
+  t.after(() => fs.rmSync(path.join(home, "run", "bridge.json"), { force: true }));
+  t.after(() => fs.rmSync(path.join(home, "run", "fence"), { recursive: true, force: true }));
+  const bridgePID = JSON.parse(fs.readFileSync(path.join(home, "run", "bridge.json"), "utf8")).pid;
+  const bridgeSays = said => write(path.join(home, "run", "fence", "agents"), JSON.stringify({ pid: bridgePID, on: "first", ...said }));
+  write(path.join(home, "run", "fence", "on"), "first");
+  // Before the bridge has looked at its agents for this setup: nothing to ask yet.
+  assert.equal((await route("GET", "kuvo/sandbox")).body.restart, undefined);
+  bridgeSays({ outside: true });
+  const asking = (await route("GET", "kuvo/sandbox")).body;
+  assert.equal(asking.restart, true);
+  assert.equal(asking.agents, false);
+  assert.equal((await route("POST", "kuvo/sandbox/restart", {})).status, 400);
+  const restarted = await route("POST", "kuvo/sandbox/restart", { restart: true });
+  assert.equal(restarted.status, 200);
+  assert.equal(restarted.body.restart, undefined);
+  assert.equal(restarts, 1);
+  // Asked once: while they finish their turns, and ever after, it isn't asked again.
+  assert.equal((await route("GET", "kuvo/sandbox")).body.restart, undefined);
+  write(path.join(home, "run", "fence", "on"), "second");
+  write(path.join(home, "run", "fence", "agents"), JSON.stringify({ pid: bridgePID, on: "second", outside: true }));
+  assert.equal((await route("GET", "kuvo/sandbox")).body.restart, undefined);
+
+  // Not Now: the bridge isn't told, and it isn't asked again either.
+  fs.rmSync(path.join(home, "run", "fence"), { recursive: true, force: true });
+  write(path.join(home, "run", "fence", "on"), "first");
+  bridgeSays({ outside: true });
+  assert.equal((await route("GET", "kuvo/sandbox")).body.restart, true);
+  assert.equal((await route("POST", "kuvo/sandbox/restart", { restart: false })).status, 200);
+  assert.equal(restarts, 1);
+  assert.equal((await route("GET", "kuvo/sandbox")).body.restart, undefined);
+
+  // On with every agent in it already: nothing to ask, then or later.
+  fs.rmSync(path.join(home, "run", "fence"), { recursive: true, force: true });
+  write(path.join(home, "run", "fence", "on"), "first");
+  bridgeSays({});
+  assert.equal((await route("GET", "kuvo/sandbox")).body.restart, undefined);
+  bridgeSays({ outside: true });
+  assert.equal((await route("GET", "kuvo/sandbox")).body.restart, undefined);
 });
 
 test("in the sandbox, what pushes, deploys or sends however it's phrased still comes to you: through git's aliases and its other commands, a package runner, or find", async t => {

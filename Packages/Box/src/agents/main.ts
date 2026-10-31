@@ -134,7 +134,17 @@ const sessions = new Sessions(
 )
 // Tells the box's link, as it changes, whether every agent's process here runs in its sandbox
 // (none started before it came on still runs): only then do agents use the vault.
-const noteInside = () => noteAgentsInside(!sessions.outside() && !roster.all().some((agent) => agent.outside?.()))
+// And restarts those you said to (`kuvo/sandbox/restart`): each between turns now, the rest as
+// their turns end, looked at again with the note.
+let restarting = false
+const noteInside = () => {
+  if (restarting) restarting = [sessions.restartOutside(), ...roster.all().map((agent) => agent.restartOutside?.() ?? false)].some(Boolean)
+  noteAgentsInside(!sessions.outside() && !roster.all().some((agent) => agent.outside?.()))
+}
+const restartOutside = () => {
+  restarting = true
+  noteInside()
+}
 noteInside()
 setInterval(noteInside, 5_000).unref?.()
 
@@ -271,7 +281,7 @@ try {
     hostname: "127.0.0.1",
     port,
     idleTimeout: 0,
-    fetch: handler({ roster, sessions, auto, link, password, version, groups, goals, sideQuestions, handoffs, places, reviews, voice, artifacts, noted }),
+    fetch: handler({ roster, sessions, auto, link, password, version, groups, goals, sideQuestions, handoffs, places, reviews, voice, artifacts, noted, restartOutside }),
   })
 } catch (error: any) {
   console.error("couldn't listen:", error?.message ?? error)

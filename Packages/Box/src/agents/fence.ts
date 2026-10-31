@@ -48,15 +48,15 @@ export function fenceOn(): boolean {
 
 /**
  * Tells the box's link whether every agent's process here runs in the sandbox (`run/fence/agents`:
- * this bridge, for the sandbox as it is now), which opens the vault to agents; gone while one
- * started before it was on still runs, or it's off.
+ * this bridge, for the sandbox as it is now), which opens the vault to agents; `outside` while one
+ * started before it was on still runs (the box asks you once to restart them); gone while it's off.
  */
 let noted = ""
 export function noteAgentsInside(inside: boolean) {
   const where = folder()
   if (!where) return
   const on = process.env.KUVO_SANDBOX === "off" ? "" : sandboxGeneration(join(where, "on"))
-  const note = inside && on ? JSON.stringify({ pid: process.pid, on }) : ""
+  const note = on ? JSON.stringify({ pid: process.pid, on, ...(inside ? {} : { outside: true }) }) : ""
   if (note === noted) return
   const record = join(where, "agents")
   try {

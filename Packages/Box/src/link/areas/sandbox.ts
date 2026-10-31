@@ -9,7 +9,8 @@ import { isObject, parsed } from "../../shared/json";
 import type { SandboxState } from "../../shared/routes/sandbox";
 import { addRule, allowedFor, removeRule, RuleRefusal } from "../fence/allowed";
 import { answerSandboxAsk, callSandboxTool, listSandboxAsks, onSandboxAsksChanged, SANDBOX_TOOLS } from "../fence/outside";
-import { fenceState, setUpFence, tellAgents } from "../fence/state";
+import { answeredRestart, fenceState, setUpFence, tellAgents } from "../fence/state";
+import { bridgeTarget, call } from "../engine/client";
 import type { AnswerPiece, RouteContext } from "../server/context";
 import { readLink } from "../state";
 import { askHolder, heldHere, holdsVault } from "../vault/holder";
@@ -51,6 +52,19 @@ export async function* sandboxRoute(context: RouteContext): AsyncGenerator<Answe
   }
   const body = parsed(request.body);
   const given = isObject(body) ? body : {};
+  // Your answer to its one ask: the agents bridge restarts those started before it was on (each
+  // between turns), or they finish as they are. Either way, it isn't asked again.
+  if (route === "kuvo/sandbox/restart") {
+    if (method !== "POST") return yield* json(405, {});
+    if (typeof given.restart !== "boolean") return yield* json(400, { message: "Say whether to restart them: restart, true or false." });
+    const bridge = given.restart ? bridgeTarget() : null;
+    if (bridge) {
+      const told = await call(bridge, "POST", "/api/kuvo/sandbox/restart", {}, AbortSignal.timeout(10_000)).then(() => true, () => false);
+      if (!told) return yield* json(503, { message: "The coding agents' bridge didn't answer: try again in a moment." });
+    }
+    answeredRestart();
+    return yield* json(200, shown());
+  }
   const parts = route.split("/");
 
   // The asks, the agents' tool and Also Allowed are the box's long-running process's.

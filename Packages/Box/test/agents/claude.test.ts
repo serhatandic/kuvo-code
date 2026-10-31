@@ -672,6 +672,27 @@ describe("Claude Code in the box's sandbox", () => {
     await until(() => fake.options.spawnClaudeCodeProcess !== undefined)
   })
 
+  test("restarted as you said to, a Claude Code started before the sandbox was on finishes its turn first, then its next starts in the sandbox, going on with its conversation", async () => {
+    const { id, first } = await begin()
+    turnOn()
+    expect(sessions.outside()).toBe(true)
+    // At work: it waits for its turn to end.
+    expect(sessions.restartOutside()).toBe(true)
+    expect(fake.closed).toBe(false)
+    const conversation = fake.options.sessionId
+    fake.out.push({ type: "system", subtype: "init", session_id: conversation })
+    fake.streams([first], [{ type: "text", text: "Done." }])
+    fake.result([first])
+    await until(() => idles(id).length === 1)
+    // Between turns: it goes now.
+    expect(sessions.restartOutside()).toBe(false)
+    expect(fake.closed).toBe(true)
+    expect(sessions.outside()).toBe(false)
+    sessions.prompt(id, { id: "msg_claude_turn_9001", text: "again", files: [], delivery: "steer" })
+    await until(() => fake.options.spawnClaudeCodeProcess !== undefined)
+    expect(fake.options.resume).toBe(conversation)
+  })
+
   test("a worktree's commits go to its repository's own folder, which its commands write; a .git that names a folder not naming it back gives none", () => {
     const repository = join(root, "repo")
     spawnSync("git", ["init", "-q", repository])
