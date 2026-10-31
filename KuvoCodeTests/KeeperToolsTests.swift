@@ -79,6 +79,38 @@ import Testing
         #expect(asked.requests("/kuvo/agent-tools").last?.body["session"] as? String == "ses_claude")
     }
 
+    /// An archived session's agent schedules a wake-up with Kuvo Code closed (it was still
+    /// working): it waits with the session, held as archiving holds it, as it does with the app
+    /// open (WakeUpsTests), until you bring the session back. The engine is a stand-in on a port of
+    /// its own, recorded where this Mac's box records its engine; kuvo-wake is real.
+    @Test func aWakeUpMadeWhileArchivedWaitsWithTheAppClosed() async throws {
+        let session = "ses_keeperarchived"
+        let engine = try await StubListener { request, _ in
+            guard request.url?.path() == "/api/session/\(session)" else { return StubWeb.Answer(status: 404) }
+            return StubWeb.json(["data": ["id": session, "title": "Nightly checks", "metadata": ["kuvo.archived": true]]])
+        }
+        let endpoint = engine.endpoint
+        BoxProcess.engineChanged(endpoint, version: OpenCodeEngine.version, pid: getpid())
+        let tools = KeeperTools(record: { $0 == "engine.json" ? endpoint : nil })
+        let folder = WakeUps.root.appending(path: session)
+        defer {
+            tools.stop()
+            engine.stop()
+            BoxProcess.engineChanged(nil, version: nil, pid: nil)
+            try? FileManager.default.removeItem(at: folder)
+        }
+        let server = try await tools.start().agents
+
+        let result = try await call(server, ["method": "tools/call", "params": [
+            "name": "schedule_wake_up", "arguments": ["when": "+2h", "note": "Look again"],
+            "_meta": ["ai.opencode/sessionID": session],
+        ]])
+        #expect(result["isError"] as? Bool == false, "\(text(result))")
+        let waiting = (try? FileManager.default.contentsOfDirectory(atPath: folder.appending(path: "wakes").path(percentEncoded: false))) ?? []
+        #expect(waiting.count == 1, "kept for when it's back")
+        #expect((try? String(contentsOf: folder.appending(path: "paused"), encoding: .utf8)) == "archived", "held while it's archived")
+    }
+
     /// The browser can't work without the app: a call says Kuvo Code needs to be open, and the
     /// box isn't asked.
     @Test func theBrowserSaysKuvoCodeNeedsToBeOpen() async throws {

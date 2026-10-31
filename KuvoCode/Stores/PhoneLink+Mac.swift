@@ -5,7 +5,7 @@ import KuvoLink
 /// at login, and staying awake while agents work.
 extension PhoneLink {
     /// `awakeNow`: whether it's kept awake now, by the app or by the keeper it follows (which reads
-    /// the setting as it changes, so a change here reaches it on its next look).
+    /// the setting again as it's asked, so the answer to a change here says what it changed).
     func answerMac(_ request: LinkRequest) async -> (Int, Data) {
         let login = OpenAtLogin.shared
         switch request.method.uppercased() {

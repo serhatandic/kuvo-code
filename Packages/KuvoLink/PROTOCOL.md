@@ -1825,8 +1825,9 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   since 1970, `every` like `1d`, left out for one that doesn't repeat; paused while it's archived: archive it as the Mac does,
   `PATCH api/session/<id>` with `{"metadata": {"kuvo.archived": true}}` (`false` brings it back),
   and its wake-ups wait, or come back, when the flag changes (it can go with every change to its
-  metadata); a Mac sees to it, and a machine's bridge does with the Mac closed too;
-  a pause of your own stays through both). `POST kuvo/wakes/<session>` with `{"due", "every"?,
+  metadata); a Mac sees to it, and a machine's bridge does with the Mac closed too; a session's
+  first wake-up or watch made while it's archived, by a client or by its agent's `kuvo-wake` on any
+  box, is held from the start, and any its box finds archived when they're due is held then; a pause of your own stays through both). `POST kuvo/wakes/<session>` with `{"due", "every"?,
   "note"}` adds one, as the bar over the Mac's composer does (`due` at least a minute away;
   `every` 30m, 2h, 1d, 1w or weekdays, at least 5m), with the computer's own clock and weekends;
   `400 {"message"}` for what can't be one, `409` with 50 waiting. `POST
@@ -2272,7 +2273,8 @@ machine's keeper does, so a client finds them there:
 - `run/keeper.json`: `{"pid", "version", "build", "url", "password", "started"}` (milliseconds).
   `run/keeper.lock` is held while it runs: one at a time.
 - `run/engine.json` and `run/bridge.json`, as on a machine; `run/engine-stopped` (its reason) when
-  the engine stopped and isn't started again until asked.
+  the engine stopped and isn't started again until asked, and beside it `run/engine-output`, what
+  the engine wrote last (when it wrote anything), which the app shows under the reason.
 - `run/serve.json`: `{"pid", "port", "password"}`, where the box answers.
 - `bin/kuvo-start`: as a machine's (`kuvo-start restart`), here calling the keeper
   (`--box-control`).
@@ -2284,18 +2286,22 @@ good), and `POST` `restart-engine`, `restart-agents`, `restart-box`, `stop` (Sto
 it stops everything and itself, and launchd leaves it stopped until the app opens or you log in
 again), `update` (an app of another version opened: it goes the first moment nothing is under way
 on the engine or with the coding agents, however long what runs takes, since a running session is
-never stopped for an update; launchd starts the installed app's), and `app {tools?, host?}`
+never stopped for an update; launchd starts the installed app's; it answers `{updating}`, false
+when the app at its place is still its own version, as when the app asking is another copy), and
+`app {tools?, host?}`
 (below). It also makes way by itself once another version is installed in its place.
 
 While a session works on the engine or with the coding agents, the keeper keeps the Mac from
 sleeping on its own (Settings › General's Keep this Mac awake, the app's own setting, read as it
-changes), whether or not the app is open; `awake` says whether it does now.
+changes), whether or not the app is open; `awake` says whether it does now, with the setting as it
+is then.
 
 The app is a client: it reads those records (again as the `run` folder changes) and connects to
 the engine, the box and the bridge as they say, starting the keeper with launchd when there's none.
 While macOS doesn't let the keeper run (switched off in Login Items & Extensions), the app runs the
 same three itself, and they stop when it quits. A newer app finding an older keeper asks it to
-make way (`update`) and follows it meanwhile, saying the update waits for what's running; it
+make way (`update`) and follows it meanwhile, saying the update waits for what's running (when
+the keeper answers that it makes way); it
 downloads no engine of its own then, so the one the older keeper runs stays, and connects to the
 new keeper's once its records appear. The app keeps the Mac awake itself only while it runs the box
 itself; following the keeper, `kuvo/mac`'s `awakeNow` is the keeper's `awake`.

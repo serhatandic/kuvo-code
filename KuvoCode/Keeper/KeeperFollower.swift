@@ -124,6 +124,9 @@ final class KeeperFollower {
     /// A read under way, and whether the records changed while it was: one at a time, so an older
     /// one that waited on the keeper never says what a newer one already said otherwise.
     private var reading = false
+    /// Whether the keeper followed now said it makes way for this app's (it doesn't when the app
+    /// at its place is its own version: this app is another copy).
+    private var keeperUpdates = false
     private var readAgain = false
 
     /// What the records say now.
@@ -151,11 +154,13 @@ final class KeeperFollower {
                 // followed until then.
                 if record.isOtherVersion {
                     log.info("The keeper is \(record.version, privacy: .public) (\(record.build, privacy: .public)): asked to make way")
-                    _ = try? await KeeperControl.send(.update, to: record)
+                    keeperUpdates = (try? await KeeperControl.send(.update, to: record))?["updating"] as? Bool ?? false
+                } else {
+                    keeperUpdates = false
                 }
             }
         }
-        makingWay = record?.isOtherVersion ?? false
+        makingWay = record != nil && keeperUpdates
         let engineRecord = Self.record("engine.json")
         let serve = Self.record("serve.json")
         let bridge = Self.record("bridge.json")
@@ -209,13 +214,15 @@ final class KeeperFollower {
         return BackgroundWork.shared.state != .on
     }
 
-    /// Why the engine stopped and isn't started again (`run/engine-stopped`): one from before the
-    /// last restart was asked for is the last engine's.
+    /// Why the engine stopped and isn't started again (`run/engine-stopped`), with what it wrote
+    /// last under it (`run/engine-output`), as the window shows its own engine's: one from before
+    /// the last restart was asked for is the last engine's.
     private func stoppedReason() -> String? {
         let file = KeeperRecord.run.appending(path: "engine-stopped")
         guard let reason = try? String(contentsOf: file, encoding: .utf8), !reason.isEmpty else { return nil }
         if let restartAsked, let written = (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate, written < restartAsked { return nil }
-        return reason
+        let output = (try? String(contentsOf: KeeperRecord.run.appending(path: "engine-output"), encoding: .utf8)) ?? ""
+        return output.isEmpty ? reason : reason + "\n\n" + output
     }
 
     /// One of the box's records, while its process runs: where it answers.

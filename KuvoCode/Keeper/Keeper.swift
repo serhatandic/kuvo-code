@@ -35,6 +35,9 @@ final class Keeper {
     /// How it goes, once everything it started has stopped: the process exits (a test's keeper
     /// only says so).
     private let exits: (Exit) -> Void
+    /// The version of the app now at its place, as `installedVersion` reads it (a test's keeper
+    /// can be given another).
+    private let installed: () -> String?
     /// This Mac's link, for its keys alone (the box's relay asks for them through the host
     /// interface); the app's own follows the phones.
     private let link = PhoneLink()
@@ -52,11 +55,13 @@ final class Keeper {
     private let awake = Awake()
 
     init(box: MacBoxRunner = MacBoxRunner(box: BoxProcess(), agents: OutsideAgents(), host: HostInterface()),
-         version: String = AppInfo.version, build: String = AppInfo.build, exits: @escaping (Exit) -> Void = { Darwin.exit($0.rawValue) }) {
+         version: String = AppInfo.version, build: String = AppInfo.build, exits: @escaping (Exit) -> Void = { Darwin.exit($0.rawValue) },
+         installed: @escaping () -> String? = { Keeper.installedVersion() }) {
         self.box = box
         self.version = version
         self.build = build
         self.exits = exits
+        self.installed = installed
     }
 
     /// `--box`: runs until launchd stops it, or it's told to stop. Never returns.
@@ -164,13 +169,20 @@ final class Keeper {
             return .json([:])
         case .update:
             update()
-            return .json([:])
+            return .json(["updating": handingOver])
         case .app:
             let given = (try? JSONSerialization.jsonObject(with: request.body) as? [String: Any]) ?? [:]
             tools.use(given["tools"] as? [String: Any] ?? [:])
             box.host.useApp(given["host"] as? [String: Any] ?? [:])
             return .json([:])
         }
+    }
+
+    /// Whether it keeps this Mac awake, with the setting as it is now (a phone that just changed it
+    /// hears what it changed, not what the last look found).
+    private var awakeNow: Bool {
+        awake.update()
+        return awake.isHolding
     }
 
     /// What runs, and how: the engine, the box and the bridge, whether anything is under way, and
@@ -187,7 +199,7 @@ final class Keeper {
             var answer: [String: Any] = [
                 "pid": Int(getpid()), "version": version, "build": build,
                 "started": started.timeIntervalSince1970 * 1000, "engine": engine, "busy": await box.isBusy(),
-                "updating": handingOver, "awake": awake.isHolding,
+                "updating": handingOver, "awake": awakeNow,
             ]
             if let failure = box.box.failure { answer["box"] = ["failure": failure] }
             if let failure = box.agents.failure { answer["agents"] = ["failure": failure] }
@@ -218,7 +230,7 @@ final class Keeper {
         awake.agentsWork(busy)
         // The setting as you last changed it, in the app or from a phone.
         awake.update()
-        if !handingOver, let installed = Self.installedVersion(), installed != "\(version) (\(build))" {
+        if !handingOver, let installed = installed(), installed != "\(version) (\(build))" {
             log.info("Kuvo Code \(installed, privacy: .public) is installed now")
             handingOver = true
         }
@@ -233,6 +245,13 @@ final class Keeper {
     /// says the update waits.
     private func update() {
         guard !handingOver, !finished else { return }
+        // launchd starts it again from its own place: with that app still its own version (the app
+        // asking is another copy, opened from elsewhere), it would only come back as it was, and be
+        // asked again.
+        guard let installed = installed(), installed != "\(version) (\(build))" else {
+            log.info("Asked to make way, but the app at its place is its own version")
+            return
+        }
         log.info("Making way for a newer keeper once nothing is under way")
         handingOver = true
         // Looked at now, unless the box is still starting: its first look comes once it has.
