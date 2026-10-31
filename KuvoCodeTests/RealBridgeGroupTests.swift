@@ -118,7 +118,7 @@ import Testing
     private func clean() {
         engine.stop()
         try? FileManager.default.removeItem(at: folder)
-        for name in ["group-chats.json", "group-chats", "groups.json", "groups", "Backups", "bots.json"] {
+        for name in ["group-chats.json", "group-chats", "groups.json", "groups", "Backups", "bots.json", "bots"] {
             try? FileManager.default.removeItem(at: AppInfo.supportDirectory.appending(path: name))
         }
     }

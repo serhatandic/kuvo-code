@@ -12,7 +12,7 @@ import Testing
 /// (`Packages/KuvoLink/Tests/Bridge/contract.test.js`, which runs the same scenarios against a
 /// machine's bridge). How a scenario is written: CONTRIBUTING.md, "Route scenarios".
 @MainActor
-@Suite(.serialized) struct RouteContractTests {
+@Suite(.serialized, .timeLimit(.minutes(1))) struct RouteContractTests {
     @Test(arguments: RouteScenarios.names) func scenario(_ name: String) async throws {
         let scenario = try #require(RouteScenarios.all.first { $0.name == name }?.scenario)
         let box = try MacBox()
