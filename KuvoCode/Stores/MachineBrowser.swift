@@ -284,6 +284,22 @@ final class MachineBrowser {
     }
 
     private func install() async {
+        // A stand-in (a demo copy's, under `.invalid`) is never contacted: nothing's installed there.
+        guard !machine.connection.isStandIn else {
+            #if DEBUG
+            // KUVO_DEMO_MACHINE_BROWSER: how its browser shows (`DemoMachines`).
+            switch DemoMachines.browser {
+            case "failed": setup = .failed(DemoMachines.failure(of: machine.name))
+            case "connecting":
+                setup = .ready
+                state = .connecting
+            default: setup = .installing(0.37)
+            }
+            #else
+            setup = .failed("Couldn’t reach \(machine.name).")
+            #endif
+            return
+        }
         guard let runtime = BrowserRuntime.pinned else {
             setup = .failed(MachineBrowserError.notPinned.localizedDescription)
             return
@@ -421,6 +437,8 @@ final class MachineBrowser {
 
     private func connect() {
         guard link == nil else { return }
+        // A stand-in is never contacted (see `install`).
+        guard !machine.connection.isStandIn else { return }
         state = .connecting
         let link = MachineBrowserLink(connection: machine.connection, command: MachineBrowserInstaller.command("connect"))
         link.onEvent = { [weak self] method, params, session in self?.handle(method, params, session) }
