@@ -2217,7 +2217,7 @@ private struct AccountsRow: View {
         let submenu = NSMenu()
         submenu.addItem(ActionItem("Kuvo Code Help", image: Self.symbol("book")) { NSWorkspace.shared.open(AppInfo.docs) })
         submenu.addItem(ActionItem("Keyboard Shortcuts", image: Self.symbol("command")) { app.openSettings(.shortcuts) })
-        submenu.addItem(ActionItem("What\u{2019}s New", image: Self.symbol("sparkles")) { NSWorkspace.shared.open(AppInfo.releases) })
+        submenu.addItem(ActionItem("What\u{2019}s New", image: Self.symbol("gift")) { NSWorkspace.shared.open(AppInfo.releases) })
         submenu.addItem(ActionItem("Report a Problem…", image: Self.symbol("exclamationmark.bubble")) { app.reportProblem() })
         submenu.addItem(ActionItem("Contact Us…", image: Self.symbol("envelope")) { NSWorkspace.shared.open(AppInfo.contact) })
         if updates.isAvailable {

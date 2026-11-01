@@ -433,7 +433,7 @@ private struct CommitForm: View {
                 Button {
                     suggest()
                 } label: {
-                    Label(isSuggesting ? "Writing…" : "Suggest a Message", systemImage: "sparkles")
+                    Label(isSuggesting ? "Writing…" : "Suggest a Message", systemImage: "pencil.line")
                 }
                 .buttonStyle(.link)
                 .font(.callout)
@@ -1064,7 +1064,9 @@ struct DiffLineRow: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 0) {
-            Text(line.number > 0 ? "\(line.number)" : "")
+            // One column counts the file as it is now: a removed line has no number in it (a
+            // comment on it still names its old line).
+            Text(line.kind != .removed && line.number > 0 ? "\(line.number)" : "")
                 .font(.system(size: 11.5, design: .monospaced))
                 .foregroundStyle(numberColor)
                 .frame(width: gutterWidth - 10, alignment: .trailing)
@@ -1104,15 +1106,32 @@ struct DiffLineRow: View {
         .accessibilityAction(named: "Comment on This Line") { comment?() }
     }
 
-    private var code: Text {
-        guard let runs, !runs.isEmpty else { return Text(line.text.isEmpty ? " " : line.text) }
+    /// The code, its indent apart, so a long line wraps under its own start as editors wrap it,
+    /// not back at the margin where it would read as a line of its own.
+    @ViewBuilder private var code: some View {
+        let whole = colored
+        let indent = line.text.prefix(while: { $0 == " " || $0 == "\t" }).count
+        if indent > 0, indent < line.text.count, whole.characters.count == line.text.count {
+            let split = whole.characters.index(whole.startIndex, offsetBy: indent)
+            HStack(alignment: .firstTextBaseline, spacing: 0) {
+                Text(AttributedString(whole[..<split]))
+                    .fixedSize()
+                Text(AttributedString(whole[split...]))
+            }
+        } else {
+            Text(whole)
+        }
+    }
+
+    private var colored: AttributedString {
+        guard let runs, !runs.isEmpty else { return AttributedString(line.text.isEmpty ? " " : line.text) }
         var string = AttributedString()
         for run in runs {
             var piece = AttributedString(run.text)
             if let color = CodeColors.color(for: run.type, dark: scheme == .dark) { piece.foregroundColor = color }
             string += piece
         }
-        return Text(string)
+        return string
     }
 
     private var rowColor: Color {
