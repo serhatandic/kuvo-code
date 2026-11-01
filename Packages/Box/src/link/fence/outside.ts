@@ -80,13 +80,14 @@ export const commandSum = (command: string) => crypto.createHash("sha256").updat
  * each command's refusals `kuvo-sandbox <session> <sum of the command>`); none where it can't be
  * read, or for a command that didn't run as it's named. (Read without holding up the box: it can
  * take seconds.) */
-export async function stopsFor(session: string, command: string, minutes = 3): Promise<SandboxStop[]> {
-  if (process.platform !== "darwin" || !/^ses_[A-Za-z0-9_]{1,80}$/.test(session)) return [];
+export async function stopsFor(session: string, command: string, minutes = 3, signal?: AbortSignal): Promise<SandboxStop[]> {
+  if (process.platform !== "darwin" || !/^ses_[A-Za-z0-9_]{1,80}$/.test(session) || signal?.aborted) return [];
   const tagged = `kuvo-sandbox ${session} ${commandSum(command)}`;
   const read = await new Promise<string>(resolve => {
     const child = spawn("/usr/bin/log", ["show", "--last", `${minutes}m`, "--style", "ndjson", "--predicate", `sender == "Sandbox" AND eventMessage CONTAINS "${tagged}"`], { stdio: ["ignore", "pipe", "ignore"] });
     let out = "";
     const timer = setTimeout(() => child.kill("SIGKILL"), 20_000);
+    signal?.addEventListener("abort", () => child.kill("SIGKILL"), { once: true });
     child.stdout.setEncoding("utf8").on("data", (chunk: string) => { if (out.length < 16 * 1024 * 1024) out += chunk; });
     child.on("error", () => resolve(""));
     child.on("close", () => { clearTimeout(timer); resolve(out); });
@@ -167,13 +168,13 @@ async function askToRun(caller: Caller, args: Record<string, unknown>, signal?: 
   // macOS writes what its sandbox refused to its log a while after (a busy Mac, seconds): until
   // it's there, the ask goes up without it, and gets it once it is.
   let asking: string | undefined;
-  let open = true;
-  const later = stopped.length || !caller.session || process.platform !== "darwin" ? undefined : (async () => {
+  const heard = new AbortController();
+  if (!stopped.length && caller.session && process.platform === "darwin") void (async () => {
     for (const wait of LOG_LATER) {
       await new Promise(resolve => setTimeout(resolve, wait).unref?.());
-      if (!open) return;
-      const found = await stopsFor(caller.session!, String(args.command));
-      if (!open || !found.length) continue;
+      if (heard.signal.aborted) return;
+      const found = await stopsFor(caller.session!, String(args.command), 3, heard.signal);
+      if (heard.signal.aborted || !found.length) continue;
       always = alwaysFor(found, project);
       if (asking) book.update(asking, { stopped: found, ...(always ? { always } : {}) });
       return;
@@ -191,8 +192,7 @@ async function askToRun(caller: Caller, args: Record<string, unknown>, signal?: 
     ...(IS_MAC ? {} : { machine: os.hostname() }),
     owner: ownerOf(project),
   }, signal, undefined, id => { asking = id; });
-  open = false;
-  void later;
+  heard.abort();
   if (answered.unanswered) return { text: "Nobody answered in time, so it didn't run. Don't get around the sandbox another way: go on without it, or ask the user when they're back.", isError: false };
   if (answered.answer === "no") return { text: "The user said no: don't run it, nor get around the sandbox another way. Find another way to do the task, or ask them why.", isError: false };
   let how: "once" | "always" = "once";

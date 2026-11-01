@@ -19461,14 +19461,15 @@ var KINDS = [
   [/^(appleevent-send|mach-lookup)/, "app"]
 ];
 var commandSum = (command) => crypto28.createHash("sha256").update(command).digest("hex").slice(0, 16);
-async function stopsFor(session, command, minutes = 3) {
-  if (process.platform !== "darwin" || !/^ses_[A-Za-z0-9_]{1,80}$/.test(session))
+async function stopsFor(session, command, minutes = 3, signal) {
+  if (process.platform !== "darwin" || !/^ses_[A-Za-z0-9_]{1,80}$/.test(session) || signal?.aborted)
     return [];
   const tagged = `kuvo-sandbox ${session} ${commandSum(command)}`;
   const read = await new Promise((resolve) => {
     const child = spawn9("/usr/bin/log", ["show", "--last", `${minutes}m`, "--style", "ndjson", "--predicate", `sender == "Sandbox" AND eventMessage CONTAINS "${tagged}"`], { stdio: ["ignore", "pipe", "ignore"] });
     let out = "";
     const timer = setTimeout(() => child.kill("SIGKILL"), 20000);
+    signal?.addEventListener("abort", () => child.kill("SIGKILL"), { once: true });
     child.stdout.setEncoding("utf8").on("data", (chunk) => {
       if (out.length < 16 * 1024 * 1024)
         out += chunk;
@@ -19566,21 +19567,22 @@ async function askToRun(caller, args, signal) {
   const stopped = caller.session ? await stopsFor(caller.session, String(args.command)) : [];
   let always = alwaysFor(stopped, project);
   let asking;
-  let open = true;
-  const later = stopped.length || !caller.session || process.platform !== "darwin" ? undefined : (async () => {
-    for (const wait of LOG_LATER) {
-      await new Promise((resolve) => setTimeout(resolve, wait).unref?.());
-      if (!open)
+  const heard = new AbortController;
+  if (!stopped.length && caller.session && process.platform === "darwin")
+    (async () => {
+      for (const wait of LOG_LATER) {
+        await new Promise((resolve) => setTimeout(resolve, wait).unref?.());
+        if (heard.signal.aborted)
+          return;
+        const found = await stopsFor(caller.session, String(args.command), 3, heard.signal);
+        if (heard.signal.aborted || !found.length)
+          continue;
+        always = alwaysFor(found, project);
+        if (asking)
+          book.update(asking, { stopped: found, ...always ? { always } : {} });
         return;
-      const found = await stopsFor(caller.session, String(args.command));
-      if (!open || !found.length)
-        continue;
-      always = alwaysFor(found, project);
-      if (asking)
-        book.update(asking, { stopped: found, ...always ? { always } : {} });
-      return;
-    }
-  })();
+      }
+    })();
   const answered = await book.ask({
     ...caller.root ? { session: caller.root, ...caller.sessionName ? { sessionName: caller.sessionName } : {} } : {},
     ...caller.bot ? { bot: caller.bot, botName: caller.botName } : {},
@@ -19595,7 +19597,7 @@ async function askToRun(caller, args, signal) {
   }, signal, undefined, (id) => {
     asking = id;
   });
-  open = false;
+  heard.abort();
   if (answered.unanswered)
     return { text: "Nobody answered in time, so it didn't run. Don't get around the sandbox another way: go on without it, or ask the user when they're back.", isError: false };
   if (answered.answer === "no")

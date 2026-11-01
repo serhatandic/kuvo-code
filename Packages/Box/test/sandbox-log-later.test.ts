@@ -1,8 +1,8 @@
-import { afterAll, expect, mock, test } from "bun:test"
+import { afterAll, expect, jest, mock, test } from "bun:test"
 import * as childProcess from "node:child_process"
 import { EventEmitter } from "node:events"
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs"
-import { homedir } from "node:os"
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 // On a busy Mac, macOS writes what its sandbox refused to its log seconds after the command was
@@ -20,7 +20,7 @@ mock.module("node:child_process", () => ({
     if (command !== "/usr/bin/log" || !logReads) return (real as (...args: unknown[]) => unknown)(command, ...rest)
     const lines = logReads.shift() ?? []
     const child = Object.assign(new EventEmitter(), { stdout: Object.assign(new EventEmitter(), { setEncoding() { return this } }), kill() {} })
-    setImmediate(() => {
+    queueMicrotask(() => {
       if (lines.length) child.stdout.emit("data", lines.map(line => JSON.stringify({ eventMessage: line })).join("\n") + "\n")
       child.emit("close", 0)
     })
@@ -28,16 +28,18 @@ mock.module("node:child_process", () => ({
   },
 }))
 
-mkdirSync(join(homedir(), ".kuvo-code-test"), { recursive: true })
-const root = mkdtempSync(join(homedir(), ".kuvo-code-test", "log-later-"))
+// (Bun has it; the pinned @types/bun doesn't say so yet.)
+const clock = jest as unknown as { advanceTimersByTime(ms: number): void }
+
+const root = realpathSync(mkdtempSync(join(tmpdir(), "sandbox-log-later-")))
 afterAll(() => {
   logReads = null
   rmSync(root, { recursive: true, force: true })
 })
 
 test.skipIf(process.platform !== "darwin")("an ask made before macOS logs what the sandbox stopped fills it in, and Always, once the log has it", async () => {
-  const before = { KUVO_HOME: process.env.KUVO_HOME, HOME: process.env.HOME }
-  process.env.KUVO_HOME = join(root, "box")
+  // (A home of its own, which the folder outside the project is in, as a user's would be.)
+  const before = process.env.HOME
   process.env.HOME = join(root, "home")
   const project = join(root, "home", "shop")
   const cache = join(root, "home", "outside", "cache")
@@ -48,13 +50,18 @@ test.skipIf(process.platform !== "darwin")("an ask made before macOS logs what t
   const refusal = `Sandbox: bash(4242) deny(1) file-write-create ${join(cache, "kept.txt")}\nkuvo-sandbox ses_shop ${commandSum(command)}`
   // The ask's own read finds nothing yet; the next has it.
   logReads = [[], [refusal]]
-  const filled = new Promise<void>(resolve => {
-    const stop = onSandboxAsksChanged(() => {
-      if (listSandboxAsks().some(ask => ask.stopped?.length)) { stop(); resolve() }
-    })
+  const when = (seen: () => boolean) => new Promise<void>(resolve => {
+    const stop = onSandboxAsksChanged(() => { if (seen()) { stop(); resolve() } })
   })
+  const up = when(() => listSandboxAsks().length > 0)
+  const filled = when(() => listSandboxAsks().some(ask => ask.stopped?.length))
+  jest.useFakeTimers()
   try {
     const call = callSandboxTool("sandbox_ask", { command, why: "To fill the shared cache." }, { session: "ses_shop", root: "ses_shop", folder: project })
+    await up
+    expect(listSandboxAsks()[0].stopped).toBeUndefined()
+    // (macOS has it by the box's next look.)
+    clock.advanceTimersByTime(1000)
     await filled
     const [ask] = listSandboxAsks()
     expect(ask.command).toBe(command)
@@ -64,10 +71,9 @@ test.skipIf(process.platform !== "darwin")("an ask made before macOS logs what t
     expect((await call).text).toStartWith("The user said no")
     expect(listSandboxAsks()).toEqual([])
   } finally {
+    jest.useRealTimers()
     logReads = null
-    for (const [key, value] of Object.entries(before)) {
-      if (value === undefined) delete process.env[key]
-      else process.env[key] = value
-    }
+    if (before === undefined) delete process.env.HOME
+    else process.env.HOME = before
   }
 })
