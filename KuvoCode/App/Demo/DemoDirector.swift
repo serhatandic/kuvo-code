@@ -110,8 +110,9 @@ enum DemoDirector {
         // then moves the newest chat into that project.
         if let message = environment["KUVO_DEMO_CHAT"] {
             Task {
-                await DemoWait.until("the engine (KUVO_DEMO_CHAT)", limit: DemoWait.unbounded) { app.api != nil }
-                guard let session = try? await workspace.createSession(in: Workspace.chatsFolder, model: nil, agent: nil) else { return }
+                await DemoWait.until("the engine's models (KUVO_DEMO_CHAT)", limit: DemoWait.unbounded) { app.api != nil && app.catalog.isLoaded }
+                // On the model a new chat from the UI starts on.
+                guard let session = try? await workspace.createSession(in: Workspace.chatsFolder, model: app.catalog.startingModel(LastModel.current), agent: nil) else { return }
                 app.tabs.open(.session(session.id))
                 workspace.model(for: session.id)?.submit(message, files: [], for: nil, queue: false, commands: [])
             }
@@ -532,7 +533,7 @@ enum DemoDirector {
         // KUVO_DEMO_REPLAY=<file>: a recorded run, played into a new session there (see PerfReplay).
         if let file = environment["KUVO_DEMO_REPLAY"] {
             let catalog = catalog(for: folder, app: app)
-            guard let session = try? await workspace.createSession(in: folder, model: catalog.defaultModel?.ref, agent: nil) else { return }
+            guard let session = try? await workspace.createSession(in: folder, model: catalog.startingModel(LastModel.current), agent: nil) else { return }
             app.tabs.open(.session(session.id))
             await DemoWait.until("the replay's session to load", limit: .seconds(10)) { workspace.model(for: session.id)?.isLoaded == true }
             // Its conversation drawn, before the run starts.
@@ -549,14 +550,14 @@ enum DemoDirector {
         guard let prompt = environment["KUVO_DEMO_PROMPT"] else { return app.tabs.newSession(in: folder) }
         let parts = environment["KUVO_DEMO_MODEL"]?.split(separator: "/", maxSplits: 1).map(String.init)
         let model = parts.flatMap { $0.count == 2 ? ModelRef(id: $0[1], providerID: $0[0]) : nil }
-        // Like a new session from the UI: the chosen model, or the default one. KUVO_DEMO_WORKTREE
-        // gives it a worktree of its own.
+        // Like a new session from the UI: the chosen model, or the one a new session starts on (the
+        // engine's default only when you can use it). KUVO_DEMO_WORKTREE gives it a worktree of its own.
         // A folder on a machine: once the machine is connected and its models are known.
         if let engine = app.machines.engine(RemoteFolder.machine(of: folder)) {
             await DemoWait.until("\(engine.machine.name)'s models (KUVO_DEMO_PROMPT)") { engine.isReady && engine.catalog.defaultModel != nil }
         }
         let catalog = catalog(for: folder, app: app)
-        guard let session = try? await workspace.createSession(in: folder, model: model ?? catalog.defaultModel?.ref, agent: catalog.startingAgent(chosen: EngineConfig.of(catalog.machine)?.value(at: ["default_agent"])?.string), worktree: environment["KUVO_DEMO_WORKTREE"] != nil) else { return }
+        guard let session = try? await workspace.createSession(in: folder, model: model ?? catalog.startingModel(LastModel.current), agent: catalog.startingAgent(chosen: EngineConfig.of(catalog.machine)?.value(at: ["default_agent"])?.string), worktree: environment["KUVO_DEMO_WORKTREE"] != nil) else { return }
         app.tabs.open(.session(session.id))
         // KUVO_DEMO_FILES: comma-separated paths to attach.
         let files = environment["KUVO_DEMO_FILES"]?.split(separator: ",").map { URL(filePath: String($0)) } ?? []
