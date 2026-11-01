@@ -411,7 +411,7 @@ when you're there to answer.
 | `KUVO_DEMO_SUBAGENT` | The first subagent of the session in view (or of the session with this ID or title) in its place, as its Open does, once its agent has started one; with `KUVO_DEMO_PROMPT`, of that prompt's session |
 | `KUVO_DEMO_OPEN_QUICKLY` | Open Quickly, with this typed in it (empty for none) |
 | `KUVO_DEMO_REPORT_PROBLEM` | Help › Report a Problem…'s sheet, with this typed in it (empty for none) |
-| `KUVO_DEMO_CONTEXT` | `1`: the context gauge's details (beside the composer) open once the conversation shows |
+| `KUVO_DEMO_CONTEXT` | `1`: the context gauge's details (in the title bar) open once the conversation shows |
 | `KUVO_DEMO_COMMIT` | With `KUVO_DEMO_PANEL=changes`: its Commit… form open, with this typed as the message (empty for none) |
 | `KUVO_DEMO_BRANCH` | With `KUVO_DEMO_PANEL=changes` on a branch or worktree: what Merge or Create Pull Request says, as if it had just run (`merged`, `conflict`, `pushed` or `failed`; nothing is merged or pushed) |
 | `KUVO_DEMO_POINTER` | With `KUVO_DEMO_PANEL=browser=<address>`: the agent's pointer over the page at `<x>,<y>` (its points), about to `click` (or `,type`, `,select`, `,hover`), held in view |
