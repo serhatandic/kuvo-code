@@ -233,6 +233,11 @@ import Testing
         let elsewhere = try JSONDecoder().decode(Session.self, from: JSONSerialization.data(withJSONObject: StubEngine.session("ses_elsewhere", directory: "/tmp")))
         let model = SessionModel(session: elsewhere, api: engine.api)
         model.goalBridge = { bridge.agents }
+        // Not a bot's conversation: its goal isn't asked of a bot first (an app made by another
+        // test leaves that asking set, and the goal would come back only after it).
+        let askBot = SessionModel.askBotForGoal
+        SessionModel.askBotForGoal = nil
+        defer { SessionModel.askBotForGoal = askBot }
         model.draftText = "/goal pause"
         model.submitDraft(for: nil, queue: false, commands: [])
         // A goal sent while the pause is on its way can't be set yet, and comes back as one.
