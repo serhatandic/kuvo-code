@@ -359,7 +359,9 @@ export class Goals {
     }
     // Cut short as the box stopped (found so as it starts again), not by you: checked as any turn.
     const cutShort = idle.outcome === "interrupted" && afterStart
-    if (!resumed && !cutShort && idle.outcome === "interrupted") {
+    // (A bot's long goal: its plan tells it to carry on after a turn stopped or failed, as after any;
+    // only a model's limit pauses it here, which the plan shows.)
+    if (!resumed && !cutShort && idle.outcome === "interrupted" && !goal.long) {
       // Stopped to carry on another way (a model picked partway): it's at work again.
       if (await this.isActive(session, place)) return
       if (!current()) return
@@ -372,6 +374,7 @@ export class Goals {
       // its words, or a while), and carries on by itself then.
       const words = idle.error?.message ? String(idle.error.message) : ""
       if (isLimit(words)) return this.pauseUntil(goal, resetsIn(words, Number(idle.time?.created) || this.now()) ?? this.now() + unknownReset, words)
+      if (goal.long) return this.save()
       return this.pause(goal, "error", words ? `The turn failed: ${sentence(words)}` : "The turn failed.")
     }
     // A bot's long goal: its plan says what's next; a turn here is only kept.

@@ -51,12 +51,19 @@ function makeGoals(bridge = false) {
 }
 
 const goal = (session = "ses_work") => goals.get(session)
+/** Writes to the conversation, and waits until the goal has looked at the turn that takes. */
+async function turnOn(text: string, session = "ses_work") {
+  const before = settled
+  engine.write(session, text)
+  await until(() => settled > before)
+}
 const nudges = (session = "ses_work") => engine.synthetic.filter((message) => message.session === session && message.text.startsWith("[Goal] Not met yet"))
 /** The goal as clients last heard it. */
 const told = (session = "ses_work") => events.filter((event) => event.type === "kuvo.goal.updated" && event.data.sessionID === session).at(-1)?.data.goal as Goal | null | undefined
 
 beforeEach(async () => {
   root = mkdtempSync(join(tmpdir(), "kuvo-goals-"))
+  settled = 0
   engine = new StandIn(beat)
   engine.session("ses_work", [{ id: "msg_0000", type: "idle", outcome: "succeeded", time: { created: 1 } }])
   link = new EngineLink()
@@ -277,11 +284,19 @@ describe("a goal", () => {
     engine.turns = Array.from({ length: quietLimit + 1 }, () => ({ tool: false, text: "Waiting on the sessions." }))
     await goals.set("ses_work", "the site is live", { long: true })
     expect(engine.synthetic).toHaveLength(0)
-    for (let turn = 0; turn < quietLimit + 1; turn++) engine.write("ses_work", `[Session finished] ${turn}`)
-    await until(() => settled >= quietLimit + 1)
+    for (let turn = 0; turn < quietLimit + 1; turn++) await turnOn(`[Session finished] ${turn}`)
     expect(nudges()).toHaveLength(0)
     expect(engine.checks).toHaveLength(0)
     expect(goal()).toMatchObject({ state: "working", long: true, turns: 0 })
+  })
+
+  test("a bot's long goal isn't paused by a turn that failed or was stopped, which its plan tells the bot to carry on from: it stays at work, and you can still pause it", async () => {
+    engine.turns = [{ tool: true, outcome: "failed", error: "Internal server error" }, { tool: true, outcome: "interrupted" }]
+    await goals.set("ses_work", "the site is live", { long: true })
+    await turnOn("[Goal] Carry on.")
+    await turnOn("[Goal] Carry on.")
+    expect(goal()).toMatchObject({ state: "working", long: true })
+    expect(goals.pauseByYou("ses_work")).toMatchObject({ state: "paused", pausedBy: "you" })
   })
 
   test(`pauses once the agent does nothing for ${quietLimit} turns in a row`, async () => {

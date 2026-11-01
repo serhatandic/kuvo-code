@@ -3689,7 +3689,7 @@ class Goals {
       return this.save();
     }
     const cutShort = idle.outcome === "interrupted" && afterStart;
-    if (!resumed && !cutShort && idle.outcome === "interrupted") {
+    if (!resumed && !cutShort && idle.outcome === "interrupted" && !goal.long) {
       if (await this.isActive(session, place))
         return;
       if (!current())
@@ -3702,6 +3702,8 @@ class Goals {
       const words = idle.error?.message ? String(idle.error.message) : "";
       if (isLimit(words))
         return this.pauseUntil(goal, resetsIn(words, Number(idle.time?.created) || this.now()) ?? this.now() + unknownReset2, words);
+      if (goal.long)
+        return this.save();
       return this.pause(goal, "error", words ? `The turn failed: ${sentence(words)}` : "The turn failed.");
     }
     if (goal.long) {
@@ -22706,4 +22708,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 1c176705fbb6c0a66e86fb63cb5ac13f7baa75dada198498c961573b21b56375
+// Built from Packages/Box/src/agents 65fa6402f8703168fe8318412a717e8cb1cb68b27cffc81f370731761bf6fc41
