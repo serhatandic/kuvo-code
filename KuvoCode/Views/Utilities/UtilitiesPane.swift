@@ -12,7 +12,8 @@ struct UtilitiesPane: View {
     var folders: [String] = []
     let model: SessionModel?
     let environment: [String: String]
-    @Binding var isExpanded: Bool
+    /// Expanded over the conversation.
+    let isExpanded: PaneSwitch
     var isFocused = true
     @Environment(\.windowControlsInset) private var windowControlsInset
     @Environment(\.windowControlsTrailingInset) private var windowControlsTrailingInset
@@ -105,11 +106,12 @@ struct UtilitiesPane: View {
             .buttonStyle(PanelIconStyle())
             .help("New Tab")
             Spacer(minLength: 0)
-            Button { withAnimation(.ui) { isExpanded.toggle() } } label: {
-                Label(isExpanded ? "Restore" : "Expand", systemImage: isExpanded ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
+            let expanded = isExpanded.isOn()
+            Button { withAnimation(.ui) { isExpanded.set(!expanded) } } label: {
+                Label(expanded ? "Restore" : "Expand", systemImage: expanded ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
             }
             .buttonStyle(PanelIconStyle())
-            .help(isExpanded ? "Restore" : "Expand")
+            .help(expanded ? "Restore" : "Expand")
         }
         .padding(.leading, 8 + windowControlsInset)
         .padding(.trailing, 8 + windowControlsTrailingInset)

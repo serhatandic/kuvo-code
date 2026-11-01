@@ -33,8 +33,6 @@ struct MainView: View {
     @State private var keyboardReturn = KeyboardReturn()
     /// Goes up for ⌘F in the group chat in view.
     @State private var groupFind = 0
-    /// The room the conversation and the panel share: what the panel takes, expanded.
-    @State private var mainAreaWidth: CGFloat = 0
     @AppStorage("sessionsWidth") private var sessionsWidth = 280.0
     @AppStorage("changesWidth") private var changesWidth = 420.0
     @AppStorage(Notifier.badgeKey) private var showsBadge = true
@@ -108,133 +106,29 @@ struct MainView: View {
 
     /// The cards, the title bar and what shows over them.
     private var windowContent: some View {
-        // Cards are sized from the room the window actually has, so they never spill
-        // past its edges. The gaps between them are drag handles for resizing.
-        GeometryReader { proxy in
-            // Expanded, the panel grows over the conversation, which keeps its room (and its
-            // layout) underneath for when it comes back.
-            let layout = paneLayout(available: proxy.size.width)
-            let expands = showsPanel && panelExpanded
-            HStack(spacing: 0) {
-                // The sidebar's room, with the gap after it; the sidebar itself is over it
-                // (below). Growing and shrinking with the slide, so the conversation makes room
-                // as the sidebar comes in, rather than all at once ahead of it.
-                Color.clear
-                    .frame(width: layout.sessions.map { $0 + Metrics.paneGap } ?? 0)
-                    .overlay(alignment: .trailing) {
-                        if let width = layout.sessions {
-                            PaneResizer(
-                                width: Binding(get: { width }, set: { sessionsWidth = $0 }),
-                                range: PaneLayout.sessionsRange.lowerBound...max(PaneLayout.sessionsRange.lowerBound, layout.sessionsMax),
-                                side: .leading
-                            )
-                        }
-                    }
-                // With the tab bar hidden and no sidebar, the window's buttons and the sidebar
-                // button sit over this card's header.
-                let controlsInset: CGFloat = !showsTabBar && layout.sessions == nil ? 124 : 0
-                // Which cards show, for what's centered on the conversation to slide with it.
-                let cardsShown = [layout.sessions != nil, layout.split != nil, layout.changes != nil, expands]
-                ZStack(alignment: .trailing) {
-                    HStack(spacing: 0) {
-                        conversationCard
-                            .frame(maxWidth: .infinity)
-                            // Another session shows at once, as the tab moves to it: animated, the
-                            // last one faded out row by row under the new one, both drawn meanwhile.
-                            .transaction(value: selection) { $0.animation = nil }
-                            .environment(\.windowControlsInset, controlsInset)
-                            // With the tab bar hidden, the panel button sits over the rightmost card.
-                            .environment(\.windowControlsTrailingInset, !showsTabBar && layout.changes == nil && layout.split == nil ? 36 : 0)
-                            .onGeometryChange(for: CGFloat.self, of: { $0.frame(in: .global).minX }) { mainPaneX = $0 }
-                            .contentCard(layout: cardsShown)
-                            // Under the expanded panel: out of reach, keys too (a card's Return
-                            // or Esc), until it's back.
-                            .disabled(expands)
-                            .allowsHitTesting(!expands)
-                            .accessibilityHidden(expands)
-                        // Split view: another session beside it, sized like the side cards.
-                        if let width = layout.split, let model = splitModel {
-                            PaneResizer(
-                                width: Binding(get: { width }, set: { splitWidth = $0 }),
-                                range: PaneLayout.splitRange.lowerBound...max(PaneLayout.splitRange.lowerBound, layout.splitMax),
-                                side: .trailing
-                            )
-                            .allowsHitTesting(!expands)
-                            splitCard(model)
-                                .frame(width: width)
-                                .contentCard(layout: cardsShown)
-                                .environment(\.windowControlsTrailingInset, !showsTabBar && layout.changes == nil ? 36 : 0)
-                                .transaction(value: showsPanel) { $0.animation = nil }
-                                .transaction(value: showsSidebar) { $0.animation = nil }
-                                .disabled(expands)
-                                .allowsHitTesting(!expands)
-                                .accessibilityHidden(expands)
-                                .transition(.move(edge: .trailing).combined(with: .opacity))
-                        }
-                        // The panel's room, with the gap before it; the panel itself is over it, so
-                        // expanding only makes it wider, the one card it is. Growing and shrinking
-                        // with the panel's slide, as the sidebar's does, so the conversation makes
-                        // room as the panel comes in rather than ahead of it.
-                        Color.clear
-                            .frame(width: layout.changes.map { $0 + Metrics.paneGap } ?? 0)
-                            .overlay(alignment: .leading) {
-                                if let width = layout.changes {
-                                    PaneResizer(
-                                        width: Binding(get: { width }, set: { changesWidth = $0 }),
-                                        range: PaneLayout.changesRange.lowerBound...max(PaneLayout.changesRange.lowerBound, layout.changesMax),
-                                        side: .trailing
-                                    )
-                                    .allowsHitTesting(!expands)
-                                }
-                            }
-                    }
-                    .onGeometryChange(for: CGFloat.self, of: \.size.width) { mainAreaWidth = $0 }
-                    if showsPanel, layout.changes != nil || expands {
-                        utilitiesPane
-                            .frame(width: expands ? mainAreaWidth : layout.changes ?? mainAreaWidth)
-                            .contentCard(expands ? .expandedPanel : nil, layout: cardsShown)
-                            .environment(\.windowControlsInset, expands ? controlsInset : 0)
-                            .environment(\.windowControlsTrailingInset, showsTabBar ? 0 : 36)
-                            .transition(.move(edge: .trailing).combined(with: .opacity))
-                    }
-                }
-            }
-            // Made once and kept while it's hidden, out past the window's left edge: showing it
-            // again only slides it in. Made again each time, it (and each of its bots) took the
-            // first tenth of a second of the slide.
-            .overlay(alignment: .topLeading) {
-                let shown = layout.sessions != nil
-                let width = layout.sessions ?? sessionsWidth
-                sessionsCard
-                    .frame(width: width)
-                    .offset(x: shown ? 0 : -(width + Metrics.paneGap * 2))
-                    .opacity(shown ? 1 : 0)
-                    .allowsHitTesting(shown)
-                    .disabled(!shown)
-                    .accessibilityHidden(!shown)
-            }
-            // Settings take the window's place. The sessions stay underneath, hidden and out of
-            // reach, so the panel's terminals and pages carry on and everything is where it was.
-            // Out of sight to the conversations too, whose rows (each a view of its own) would
-            // otherwise still follow the pointer and set it, under Settings' controls.
-            .environment(\.isConversationShown, !app.showsSettings)
-            .opacity(app.showsSettings ? 0 : 1)
-            .allowsHitTesting(!app.showsSettings)
-            .disabled(app.showsSettings)
-            .accessibilityHidden(app.showsSettings)
-            .overlay {
-                if app.showsSettings {
-                    let widest = max(PaneLayout.sessionsRange.lowerBound, min(PaneLayout.sessionsRange.upperBound, proxy.size.width * 0.4))
-                    SettingsView(
-                        sidebarWidth: min(max(layout.sessions ?? sessionsWidth, PaneLayout.sessionsRange.lowerBound), widest),
-                        sidebarRange: PaneLayout.sessionsRange.lowerBound...widest,
-                        resizeSidebar: { sessionsWidth = $0 },
-                        topInset: keepsTitleBar ? 0 : Metrics.windowControlsHeight,
-                        close: closeSettings
-                    )
-                    .transition(.opacity)
-                }
-            }
+        // Laid out by a view of their own, which is all that reads the panel's and the cards'
+        // widths: the panel coming and going lays the cards out again without making them again.
+        WindowCards(
+            tabs: tabs,
+            sessionsWidth: $sessionsWidth,
+            changesWidth: $changesWidth,
+            splitWidth: $splitWidth,
+            showsSidebar: showsSidebar,
+            showsTabBar: showsTabBar,
+            showsSettings: app.showsSettings,
+            mainPaneMoved: { mainPaneX = $0 },
+            sessions: sessionsCard,
+            conversation: conversationCard,
+            split: splitModel.map(splitCard),
+            panel: utilitiesPane
+        ) { sidebarWidth, sidebarRange in
+            SettingsView(
+                sidebarWidth: sidebarWidth,
+                sidebarRange: sidebarRange,
+                resizeSidebar: { sessionsWidth = $0 },
+                topInset: keepsTitleBar ? 0 : Metrics.windowControlsHeight,
+                close: closeSettings
+            )
         }
         .onGeometryChange(for: CGFloat.self, of: \.size.width) { contentWidth = $0 }
         .padding(.horizontal, Metrics.paneGap)
@@ -256,8 +150,6 @@ struct MainView: View {
             }
         }
         .animation(.ui, value: showsSidebar)
-        .animation(.ui, value: showsPanel)
-        .animation(.ui, value: panelExpanded)
         .animation(.ui, value: app.showsSettings)
         // Typing mustn't go on into a composer or terminal that Settings now hide; once they're
         // put away, it goes back to the conversation.
@@ -266,18 +158,6 @@ struct MainView: View {
             // Leaving Settings closes the sites you were signing in to.
             if !shows { app.settingsTabs.closeSites(machines: app.machines) }
         }
-        // Nor into the conversation the expanded panel covers (its composer, if it had the
-        // keyboard; the panel's own terminal or page keeps it).
-        .onChange(of: showsPanel && panelExpanded) { _, expanded in
-            guard expanded else { return returnKeyboard() }
-            guard let window = NSApp.mainWindow, let editor = window.firstResponder as? NSTextView,
-                  editor.isFieldEditor || editor is MessageTextView else { return }
-            window.makeFirstResponder(nil)
-        }
-        // The panel or the sidebar going takes the keyboard with it, if either had it: it goes
-        // back to the conversation. One coming in leaves it where it is.
-        .onChange(of: panelOnScreen) { _, shown in if !shown { returnKeyboard(leaving: .changes) } }
-        .onChange(of: sidebarOnScreen) { _, shown in if !shown { returnKeyboard(leaving: .sessions) } }
         // The agent started browsing: show it.
         .onChange(of: utilities.revealRequest) { withAnimation(.ui) { tabs.showPanel() } }
         // Hiding the tab bar takes the whole row away and the cards reach the top. The sidebar
@@ -366,12 +246,12 @@ struct MainView: View {
         // Viewed only while you're here: finished while you're in another app, it waits for you
         // on the Dock icon, and counts as seen when you come back. The session beside the tab's
         // is in view too.
-        .onChange(of: tabs.sessionsSeen) { if NSApp.isActive { markViewed() } }
         .onChange(of: idlesInView) { if NSApp.isActive { markViewed() } }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in markViewed() }
-        // The panel follows what's in view, all at once: the conversations, the half you work in,
-        // its place, and the bots in view.
-        .onChange(of: tabs.inView, initial: true) { _, inView in utilities.inView = inView }
+        // What follows the panel and the sidebar coming and going, and the sessions in view.
+        .background {
+            PaneFollower(tabs: tabs, utilities: utilities, contentWidth: contentWidth, returnKeyboard: returnKeyboard, markViewed: markViewed) { savedTabs = $0 }
+        }
         .onChange(of: room, initial: true) { _, room in tabs.room = room }
         // New Project and Edit Project: a popup over whatever's in the window.
         .sheet(item: Binding { tabs.projectEditor } set: { tabs.projectEditor = $0 }) { projectSheet($0) }
@@ -434,7 +314,6 @@ struct MainView: View {
             // What changed while the window was away, kept too.
             savedTabs = tabs.saved
         }
-        .onChange(of: tabs.snapshot) { _, saved in savedTabs = saved.text }
         .onChange(of: workspace.waitingCount, initial: true) { Notifier.shared.setBadge(workspace.waitingCount) }
         .onChange(of: showsBadge) { Notifier.shared.setBadge(workspace.waitingCount) }
         // Another tab: a rename in the last one's header ends, keeping what was typed.
@@ -864,13 +743,13 @@ struct MainView: View {
     }
 
     /// The panel's and the sidebar's buttons, which show what's on screen.
-    private var panelToggle: Binding<Bool> { Binding(get: { panelOnScreen }, set: { tabs.showPanel($0) }) }
+    private var panelToggle: PaneSwitch { PaneSwitch(isOn: { panelOnScreen }, set: { tabs.showPanel($0) }) }
     /// Room kept free in the title bar while the window is dragged narrower: its width reaches
     /// the tabs a pass late, and a strip wider than the room left would be put away in the
     /// toolbar's overflow and back, again and again.
     private var resizeRoom: CGFloat { window.isResizing ? 72 : 0 }
 
-    private var sidebarToggle: Binding<Bool> { Binding(get: { sidebarOnScreen }, set: { showSidebar($0) }) }
+    private var sidebarToggle: PaneSwitch { PaneSwitch(isOn: { sidebarOnScreen }, set: { showSidebar($0) }) }
 
     private var utilitiesPane: some View {
         // The panel of the session you work in (the one beside, as its panel is then): its changes,
@@ -881,7 +760,7 @@ struct MainView: View {
             folders: focusedDirectory.map { [$0] + workspace.extraFolders($0) } ?? [],
             model: focusedModel,
             environment: app.shellEnvironment,
-            isExpanded: Binding(get: { tabs.panelExpanded }, set: { tabs.panelExpanded = $0 }),
+            isExpanded: PaneSwitch(isOn: { tabs.panelExpanded }, set: { tabs.panelExpanded = $0 }),
             isFocused: focus == .changes
         )
         .environment(catalog(for: focusedDirectory))
@@ -1147,6 +1026,199 @@ struct MainView: View {
         )
     }
     #endif
+}
+
+/// The window's cards, laid out for the room it has: the sidebar, the conversation, the session
+/// beside it and the panel, with the gaps between them to resize them by, and Settings in their
+/// place while they show. The cards come made; this lays them out. It's the one view that reads
+/// which of them show and how wide, so showing or hiding the panel lays them out again without
+/// the window's view (and every card in it) being worked out again: that took the first frame of
+/// each slide.
+private struct WindowCards<Sessions: View, Conversation: View, Split: View, Panel: View, Settings: View>: View {
+    let tabs: WindowTabs
+    @Binding var sessionsWidth: Double
+    @Binding var changesWidth: Double
+    @Binding var splitWidth: Double
+    let showsSidebar: Bool
+    let showsTabBar: Bool
+    let showsSettings: Bool
+    /// Where the conversation's card starts in the window, as it moves.
+    let mainPaneMoved: (CGFloat) -> Void
+    let sessions: Sessions
+    let conversation: Conversation
+    /// The session beside the tab's, when it has one.
+    let split: Split?
+    let panel: Panel
+    /// Settings, given the sidebar's width and how wide it may be dragged.
+    @ViewBuilder let settings: (Double, ClosedRange<Double>) -> Settings
+    /// The room the conversation and the panel share: what the panel takes, expanded.
+    @State private var mainAreaWidth: CGFloat = 0
+
+    var body: some View {
+        // Cards are sized from the room the window actually has, so they never spill
+        // past its edges. The gaps between them are drag handles for resizing.
+        GeometryReader { proxy in
+            // Expanded, the panel grows over the conversation, which keeps its room (and its
+            // layout) underneath for when it comes back.
+            let layout = tabs.layout(available: proxy.size.width)
+            let expands = tabs.showsPanel && tabs.panelExpanded
+            HStack(spacing: 0) {
+                // The sidebar's room, with the gap after it; the sidebar itself is over it
+                // (below). Growing and shrinking with the slide, so the conversation makes room
+                // as the sidebar comes in, rather than all at once ahead of it.
+                Color.clear
+                    .frame(width: layout.sessions.map { $0 + Metrics.paneGap } ?? 0)
+                    .overlay(alignment: .trailing) {
+                        if let width = layout.sessions {
+                            PaneResizer(
+                                width: Binding(get: { width }, set: { sessionsWidth = $0 }),
+                                range: PaneLayout.sessionsRange.lowerBound...max(PaneLayout.sessionsRange.lowerBound, layout.sessionsMax),
+                                side: .leading
+                            )
+                        }
+                    }
+                // With the tab bar hidden and no sidebar, the window's buttons and the sidebar
+                // button sit over this card's header.
+                let controlsInset: CGFloat = !showsTabBar && layout.sessions == nil ? 124 : 0
+                // Which cards show, for what's centered on the conversation to slide with it.
+                let cardsShown = [layout.sessions != nil, layout.split != nil, layout.changes != nil, expands]
+                ZStack(alignment: .trailing) {
+                    HStack(spacing: 0) {
+                        conversation
+                            .frame(maxWidth: .infinity)
+                            // Another session shows at once, as the tab moves to it: animated, the
+                            // last one faded out row by row under the new one, both drawn meanwhile.
+                            .transaction(value: tabs.selection) { $0.animation = nil }
+                            .environment(\.windowControlsInset, controlsInset)
+                            // With the tab bar hidden, the panel button sits over the rightmost card.
+                            .environment(\.windowControlsTrailingInset, !showsTabBar && layout.changes == nil && layout.split == nil ? 36 : 0)
+                            .onGeometryChange(for: CGFloat.self, of: { $0.frame(in: .global).minX }) { mainPaneMoved($0) }
+                            .contentCard(layout: cardsShown)
+                            // Under the expanded panel: out of reach, keys too (a card's Return
+                            // or Esc), until it's back.
+                            .disabled(expands)
+                            .allowsHitTesting(!expands)
+                            .accessibilityHidden(expands)
+                        // Split view: another session beside it, sized like the side cards.
+                        if let width = layout.split, let split {
+                            PaneResizer(
+                                width: Binding(get: { width }, set: { splitWidth = $0 }),
+                                range: PaneLayout.splitRange.lowerBound...max(PaneLayout.splitRange.lowerBound, layout.splitMax),
+                                side: .trailing
+                            )
+                            .allowsHitTesting(!expands)
+                            split
+                                .frame(width: width)
+                                .contentCard(layout: cardsShown)
+                                .environment(\.windowControlsTrailingInset, !showsTabBar && layout.changes == nil ? 36 : 0)
+                                .transaction(value: tabs.showsPanel) { $0.animation = nil }
+                                .transaction(value: showsSidebar) { $0.animation = nil }
+                                .disabled(expands)
+                                .allowsHitTesting(!expands)
+                                .accessibilityHidden(expands)
+                                .transition(.move(edge: .trailing).combined(with: .opacity))
+                        }
+                        // The panel's room, with the gap before it; the panel itself is over it, so
+                        // expanding only makes it wider, the one card it is. Growing and shrinking
+                        // with the panel's slide, as the sidebar's does, so the conversation makes
+                        // room as the panel comes in rather than ahead of it.
+                        Color.clear
+                            .frame(width: layout.changes.map { $0 + Metrics.paneGap } ?? 0)
+                            .overlay(alignment: .leading) {
+                                if let width = layout.changes {
+                                    PaneResizer(
+                                        width: Binding(get: { width }, set: { changesWidth = $0 }),
+                                        range: PaneLayout.changesRange.lowerBound...max(PaneLayout.changesRange.lowerBound, layout.changesMax),
+                                        side: .trailing
+                                    )
+                                    .allowsHitTesting(!expands)
+                                }
+                            }
+                    }
+                    .onGeometryChange(for: CGFloat.self, of: \.size.width) { mainAreaWidth = $0 }
+                    if tabs.showsPanel, layout.changes != nil || expands {
+                        panel
+                            .frame(width: expands ? mainAreaWidth : layout.changes ?? mainAreaWidth)
+                            .contentCard(expands ? .expandedPanel : nil, layout: cardsShown)
+                            .environment(\.windowControlsInset, expands ? controlsInset : 0)
+                            .environment(\.windowControlsTrailingInset, showsTabBar ? 0 : 36)
+                            .transition(.move(edge: .trailing).combined(with: .opacity))
+                    }
+                }
+            }
+            // Made once and kept while it's hidden, out past the window's left edge: showing it
+            // again only slides it in. Made again each time, it (and each of its bots) took the
+            // first tenth of a second of the slide.
+            .overlay(alignment: .topLeading) {
+                let shown = layout.sessions != nil
+                let width = layout.sessions ?? sessionsWidth
+                sessions
+                    .frame(width: width)
+                    .offset(x: shown ? 0 : -(width + Metrics.paneGap * 2))
+                    .opacity(shown ? 1 : 0)
+                    .allowsHitTesting(shown)
+                    .disabled(!shown)
+                    .accessibilityHidden(!shown)
+            }
+            // Settings take the window's place. The sessions stay underneath, hidden and out of
+            // reach, so the panel's terminals and pages carry on and everything is where it was.
+            // Out of sight to the conversations too, whose rows (each a view of its own) would
+            // otherwise still follow the pointer and set it, under Settings' controls.
+            .environment(\.isConversationShown, !showsSettings)
+            .opacity(showsSettings ? 0 : 1)
+            .allowsHitTesting(!showsSettings)
+            .disabled(showsSettings)
+            .accessibilityHidden(showsSettings)
+            .overlay {
+                if showsSettings {
+                    let widest = max(PaneLayout.sessionsRange.lowerBound, min(PaneLayout.sessionsRange.upperBound, proxy.size.width * 0.4))
+                    settings(min(max(layout.sessions ?? sessionsWidth, PaneLayout.sessionsRange.lowerBound), widest), PaneLayout.sessionsRange.lowerBound...widest)
+                        .transition(.opacity)
+                }
+            }
+        }
+        .animation(.ui, value: tabs.showsPanel)
+        .animation(.ui, value: tabs.panelExpanded)
+    }
+}
+
+/// What follows the panel and the sidebar coming and going, and the sessions in view: in a view
+/// of its own, for the window's view not to read them (see `WindowCards`).
+private struct PaneFollower: View {
+    let tabs: WindowTabs
+    let utilities: Utilities
+    let contentWidth: CGFloat
+    let returnKeyboard: (WindowTabs.Pane?) -> Void
+    let markViewed: () -> Void
+    /// Keeps the tabs (and whether the panel shows) with the scene, as they change.
+    let save: (String) -> Void
+
+    var body: some View {
+        let layout = tabs.layout(available: contentWidth)
+        Color.clear
+            // Nor into the conversation the expanded panel covers (its composer, if it had the
+            // keyboard; the panel's own terminal or page keeps it).
+            .onChange(of: tabs.showsPanel && tabs.panelExpanded) { _, expanded in
+                guard expanded else { return returnKeyboard(nil) }
+                guard let window = NSApp.mainWindow, let editor = window.firstResponder as? NSTextView,
+                      editor.isFieldEditor || editor is MessageTextView else { return }
+                window.makeFirstResponder(nil)
+            }
+            // The panel or the sidebar going takes the keyboard with it, if either had it: it goes
+            // back to the conversation. One coming in leaves it where it is.
+            .onChange(of: tabs.showsPanel && (tabs.panelExpanded || layout.changes != nil)) { _, shown in if !shown { returnKeyboard(.changes) } }
+            .onChange(of: layout.sessions != nil) { _, shown in if !shown { returnKeyboard(.sessions) } }
+            // Viewed only while you're here: finished while you're in another app, it waits for you
+            // on the Dock icon, and counts as seen when you come back. The session beside the tab's
+            // is in view too.
+            .onChange(of: tabs.sessionsSeen) { if NSApp.isActive { markViewed() } }
+            // The panel follows what's in view, all at once: the conversations, the half you work in,
+            // its place, and the bots in view.
+            .onChange(of: tabs.inView, initial: true) { _, inView in utilities.inView = inView }
+            .onChange(of: tabs.snapshot) { _, saved in save(saved.text) }
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
 }
 
 /// How wide each card gets in the room the window has. The conversation always
