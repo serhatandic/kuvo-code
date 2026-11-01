@@ -478,6 +478,52 @@ import Testing
         model.draftText = ""
     }
 
+    /// A goal put back stays one until the composer is sent, whatever else comes and goes: Redo
+    /// bringing it back, or the undo made final elsewhere, still leaves no "/goal" in the middle
+    /// when a waiting message is edited back ahead of it.
+    @Test func aGoalPutBackStaysOneUntilItsSent() async throws {
+        let goal: [String: Any] = ["id": "msg_04", "sessionID": id, "type": "user", "delivery": "queue", "payload": ["text": SentWithKeyword.message("Ship v2", typed: "/goal")]]
+        let lint: [String: Any] = ["id": "msg_05", "sessionID": id, "type": "user", "delivery": "queue", "payload": ["text": "Then run the linter"]]
+        let docs: [String: Any] = ["id": "msg_06", "sessionID": id, "type": "user", "delivery": "queue", "payload": ["text": "Then the docs"]]
+        let (model, box, _) = try await open(running: true, inbox: [goal, lint, docs])
+        defer { box.stop(); engine.stop() }
+        engine.on("POST", "/api/experimental/session/\(id)/wait", json: [:])
+        engine.on("POST", "/api/session/\(id)/revert/stage") { request in
+            StubWeb.json(["data": ["messageID": request.body["messageID"] as? String ?? ""]])
+        }
+        engine.on("DELETE", "/api/session/\(id)/revert", json: [:])
+        func editBack(_ message: String) async throws {
+            let before = model.draftText
+            model.edit(try #require(model.waiting.first { $0.id == message }))
+            try await until { !engine.requests("DELETE", "/inbox/\(message)").isEmpty }
+            model.apply(try engine.event("session.inbox.cancelled", session: id, ["inboxID": message]))
+            try await until { model.draftText != before }
+        }
+        guard case .user(let fixBuild) = try JSONDecoder().decode(Message.self, from: JSONSerialization.data(withJSONObject: first)) else { return }
+
+        // Edit puts the goal back; an undo goes ahead of it, and Redo brings the goal back as it was.
+        try await editBack("msg_04")
+        model.undo(from: fixBuild)
+        try await until { model.draftText == "Fix the build\n\nShip v2" }
+        model.redo()
+        try await until { model.session.revert == nil }
+        #expect(model.draftText == "/goal Ship v2")
+        try await editBack("msg_05")
+        #expect(model.draftText == "Then run the linter\n\nShip v2")
+
+        // An undone goal, the undo made final (by another client, a starter, a command) with the
+        // goal still in the composer.
+        model.draftText = ""
+        let goalSent: [String: Any] = ["id": "msg_03", "type": "user", "time": ["created": 3], "text": SentWithKeyword.message("Ship v2", typed: "/goal")]
+        guard case .user(let undoneGoal) = try JSONDecoder().decode(Message.self, from: JSONSerialization.data(withJSONObject: goalSent)) else { return }
+        model.undo(from: undoneGoal)
+        try await until { model.draftText == "/goal Ship v2" }
+        model.apply(try engine.event("session.revert.committed", session: id, ["to": "msg_03"]))
+        try await editBack("msg_06")
+        #expect(model.draftText == "Then the docs\n\nShip v2")
+        model.draftText = ""
+    }
+
     /// A queued message that carries its file in itself (one queued from the phone, or for a
     /// machine, read again after a relaunch): its bubble shows the file, and Edit and Undo bring
     /// it back with the file, rather than the words alone.

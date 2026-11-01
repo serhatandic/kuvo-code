@@ -834,7 +834,6 @@ final class SessionModel {
             // Final: there's nothing left to redo, and the conversation no longer ends at the undo.
             session.revert = nil
             undone = nil
-            restoredGoal = ""
         default:
             break
         }
@@ -2092,7 +2091,8 @@ final class SessionModel {
         return text
     }
 
-    /// A goal put back in the composer, as it was put.
+    /// A goal put back in the composer, as it was put: kept until the composer is sent, as Redo
+    /// can bring it back after something went ahead of it.
     @ObservationIgnored private var restoredGoal = ""
 
     /// The text of sends that didn't go, put back at the start of the composer one after another.
@@ -2130,7 +2130,6 @@ final class SessionModel {
     private func dropRestoredGoal() {
         guard !restoredGoal.isEmpty, draftText == restoredGoal || draftText.hasPrefix(restoredGoal + "\n\n") else { return }
         draftText.removeFirst("/goal ".count)
-        restoredGoal = ""
     }
 
     /// What was in the composer before an undo, and after it: Redo puts the first back if the
@@ -2269,7 +2268,6 @@ final class SessionModel {
         editTranscript { $0.commitRevert(to: revert.messageID) }
         session.revert = nil
         undone = nil
-        restoredGoal = ""
     }
 
     /// Takes back an undo: the conversation and the files come back as they were.
@@ -2282,7 +2280,6 @@ final class SessionModel {
                 session.revert = nil
                 if let undone, composerState == undone.after { composerState = undone.before }
                 undone = nil
-                restoredGoal = ""
             } catch {
                 fail(error)
             }
