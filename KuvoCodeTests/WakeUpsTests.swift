@@ -336,9 +336,12 @@ import Testing
         app.workspace.handle(try event("session.execution.interrupted", ["sessionID": id]))
         #expect(app.workspace.waitingCount == 0, "off the Dock")
 
-        // Opened from search and worked in, archived still: a first wake-up added to it holds, and
-        // stops nothing (the stand-in still says it waits).
-        try await app.wakeUps.add(to: WakeUps.owner(of: try #require(app.workspace.session(id))), at: .now.addingTimeInterval(86_400), every: nil, note: "Check again")
+        // Opened from search and worked in, archived still: a first wake-up its agent makes holds,
+        // and stops nothing (the stand-in still says it waits).
+        let archived = StubWeb.json(["data": Self.session(id, archived: true)])
+        StubWeb.route(Self.engine + "/api/session/\(id)") { _ in archived }
+        let made = await app.wakeUps.call("schedule_wake_up", arguments: ["when": "+2h", "note": "Check again"], caller: id)
+        #expect(!made.isError, "\(made.text)")
         #expect(app.wakeUps.paused.contains(id))
         #expect(stopped() == 1, "a wake-up isn't an archive")
 

@@ -2574,15 +2574,22 @@ final class Workspace {
     func answerQuestion(_ form: String, in session: String, field: String, with answer: String) {
         Analytics.shared.track("question_answered", ["kind": "question", "from": "notification"])
         Task {
+            guard let api = api(forSession: session) else { return answerDidntGo(in: session) }
             do {
-                guard let api = api(forSession: session) else { throw CancellationError() }
                 try await api.reply(session: session, form: form, answer: [field: .string(answer)])
             } catch {
-                // The agent still waits: say so, rather than lose the answer.
-                Notifier.shared.notify(session: session, title: botName?(session) ?? self.session(session)?.title ?? AppInfo.name,
-                                       body: "Your answer didn’t go. Open the conversation to answer there.")
+                // Answered elsewhere first, its word not here yet: it goes, rather than say yours didn't.
+                if (try? await api.forms(session: session).contains { $0.id == form }) == false { return settled(form) }
+                answerDidntGo(in: session)
             }
         }
+    }
+
+    /// The agent still waits for an answer from a notification that didn't go: says so, rather
+    /// than lose the answer.
+    private func answerDidntGo(in session: String) {
+        Notifier.shared.notify(session: session, title: botName?(session) ?? self.session(session)?.title ?? AppInfo.name,
+                               body: "Your answer didn’t go. Open the conversation to answer there.")
     }
 
     /// Sends a message to a session from outside its conversation (a notification's Reply), with
@@ -2701,13 +2708,13 @@ final class Workspace {
         Analytics.shared.track("permission_answered", ["decision": answer.rawValue, "from": "notification"])
         guard let decision = PermissionRequest.Decision(rawValue: answer.rawValue) else { return }
         Task {
+            guard let api = api(forSession: session) else { return answerDidntGo(in: session) }
             do {
-                guard let api = api(forSession: session) else { throw CancellationError() }
                 try await api.reply(session: session, permission: request, decision: decision)
             } catch {
-                // The agent still waits: say so, as for a question, rather than lose the answer.
-                Notifier.shared.notify(session: session, title: botName?(session) ?? self.session(session)?.title ?? AppInfo.name,
-                                       body: "Your answer didn’t go. Open the conversation to answer there.")
+                // As for a question: one answered elsewhere first goes.
+                if (try? await api.permissions(session: session).contains { $0.id == request }) == false { return settled(request) }
+                answerDidntGo(in: session)
             }
         }
     }
