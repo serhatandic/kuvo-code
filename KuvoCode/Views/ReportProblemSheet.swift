@@ -15,17 +15,17 @@ struct ReportProblemSheet: View {
         return [
             ("Kuvo Code", "\(AppInfo.version) (\(AppInfo.build))"),
             ("macOS", "\(os.majorVersion).\(os.minorVersion)" + (os.patchVersion > 0 ? ".\(os.patchVersion)" : "")),
-            ("Mac", macModel),
+            ("Chip", chip),
             ("Engine", OpenCodeEngine.version),
         ]
     }
 
-    /// The Mac's model, as the system names it ("Mac15,12").
-    private static var macModel: String {
+    /// The Mac's chip, by its name ("Apple M2"), not the model's code ("Mac14,7").
+    private static var chip: String {
         var size = 0
-        sysctlbyname("hw.model", nil, &size, nil, 0)
+        sysctlbyname("machdep.cpu.brand_string", nil, &size, nil, 0)
         var name = [CChar](repeating: 0, count: max(size, 1))
-        sysctlbyname("hw.model", &name, &size, nil, 0)
+        sysctlbyname("machdep.cpu.brand_string", &name, &size, nil, 0)
         return String(decoding: name.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
     }
 
@@ -63,7 +63,7 @@ struct ReportProblemSheet: View {
                             .accessibilityLabel("What happened?")
                     }
                 }
-                section("What goes with it") {
+                section("Included with the report") {
                     WellGroup {
                         ForEach(Array(Self.versions.enumerated()), id: \.offset) { index, version in
                             if index > 0 { WellDivider() }
@@ -83,11 +83,8 @@ struct ReportProblemSheet: View {
                 }
             }
             .padding(.horizontal, 28)
-            EditorFooter(primary: "Open on GitHub", canDoPrimary: report.canSend, onPrimary: open, onCancel: close, cancelsOnEscape: true) {
-                Text("You add steps and post it there.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
+            // The note at the top says what happens there.
+            EditorFooter(primary: "Open on GitHub", canDoPrimary: report.canSend, onPrimary: open, onCancel: close, cancelsOnEscape: true)
             .padding(.horizontal, 28)
             .padding(.top, 22)
             .padding(.bottom, 24)
