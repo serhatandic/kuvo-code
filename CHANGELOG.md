@@ -20,6 +20,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - A goal's plan lines its lanes up when only some have a site, shows only the note of each lane once the plan is met, labels its days without crowding Today, with a date every few days in a long goal, and gives steps' names more room in a wide card.
 - Find in a conversation no longer covers the first message, and quoting several passages says how many; a quote's answer field opens when you click it, not on every quote at once.
 - The composer's attachments fade at their edges when there are more than fit, and a **+3** (or however many) beside them says how many are past the edge and brings the next one in.
+- Selecting text in a conversation puts Add to Chat and Copy clear of the lines, and under the last line you selected when there's no room above, instead of over what you selected.
 - The sidebar's accounts stay while the coding agents restart, instead of briefly showing fewer.
 - The command palette shows the letters you typed in bold in each result, and Run shows a play mark.
 - Settings › Accounts has one Add Account menu for the subscriptions, and Edit Bot › Keys one Add Its Own Key menu, instead of a button on every row, and a coding agent's accounts sit right under its name.

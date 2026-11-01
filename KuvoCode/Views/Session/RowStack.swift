@@ -865,35 +865,42 @@ final class RowStackView: NSView, NSUserInterfaceValidations {
         actionsBar = nil
     }
 
-    /// Over the selection's first line, centered on it; under it when there's no room above in
-    /// what's in sight. In front of the rows.
+    /// Over the selection's first line, centered on it; under its last when there's no room above
+    /// in what's in sight. Clear of the lines' text, leading and all. In front of the rows.
     private func placeMenu() {
-        guard let bar = actionsBar, let selected = orderedSelection, let line = firstLine(of: selected) else { return hideMenu() }
+        guard let bar = actionsBar, let selected = orderedSelection, let first = edgeLine(of: selected, last: false) else { return hideMenu() }
         let size = bar.fittingSize
         var visible = bounds
         if let clip = enclosingScrollView?.contentView {
             visible = convert(clip.bounds, from: clip)
             visible.origin.y += enclosingScrollView?.contentInsets.top ?? 0
         }
-        let x = min(max(line.midX - size.width / 2, bounds.minX + 4), bounds.maxX - size.width - 4)
-        let above = line.minY - size.height - 6
-        let y = above >= visible.minY ? above : line.maxY + 6
+        let x = min(max(first.midX - size.width / 2, bounds.minX + 4), bounds.maxX - size.width - 4)
+        let above = first.minY - size.height - 8
+        let y = above >= visible.minY ? above : (edgeLine(of: selected, last: true) ?? first).maxY + 8
         bar.frame = NSRect(x: x, y: y, width: size.width, height: size.height)
         if subviews.last !== bar { addSubview(bar, positioned: .above, relativeTo: nil) }
     }
 
-    /// Where the selection's first line is: the part of it in its first text, else the first
-    /// row it takes whole.
-    private func firstLine(of selected: (start: Spot, end: Spot)) -> NSRect? {
-        for row in selected.start.row...min(selected.end.row, ids.count - 1) {
+    /// Where the selection's first line is (or its `last`), as tall as the line: the part of it in
+    /// its first text, else the first row it takes whole.
+    private func edgeLine(of selected: (start: Spot, end: Spot), last: Bool) -> NSRect? {
+        let rows = Array(selected.start.row...min(selected.end.row, ids.count - 1))
+        for row in last ? rows.reversed() : rows {
             guard let host = hosts[ids[row]], host.isShown else { continue }
-            for (unit, text) in units(in: host.view).enumerated() {
+            let texts = Array(units(in: host.view).enumerated())
+            for (unit, text) in last ? texts.reversed() : texts {
                 guard let storage = text.textStorage, let range = range(row: row, unit: unit, length: storage.length, in: selected),
                       let layout = text.layoutManager, let container = text.textContainer else { continue }
                 let glyphs = layout.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+                guard glyphs.length > 0 else { continue }
                 var line = NSRange()
-                layout.lineFragmentRect(forGlyphAt: glyphs.location, effectiveRange: &line)
+                let fragment = layout.lineFragmentRect(forGlyphAt: last ? NSMaxRange(glyphs) - 1 : glyphs.location, effectiveRange: &line)
                 var rect = layout.boundingRect(forGlyphRange: NSIntersectionRange(glyphs, line), in: container)
+                // The line's whole height, not only its ink: a menu 8 pt off the ink still
+                // touched the line.
+                rect.origin.y = fragment.minY
+                rect.size.height = fragment.height
                 rect.origin.x += text.textContainerOrigin.x
                 rect.origin.y += text.textContainerOrigin.y
                 return convert(rect, from: text)

@@ -113,6 +113,19 @@ import Testing
         let menu = try #require(bar, "the menu shows once it's let go")
         let line = first.convert(first.layoutManager!.lineFragmentRect(forGlyphAt: 0, effectiveRange: nil), to: stack)
         #expect(menu.frame.maxY <= line.minY + 1 || menu.frame.minY >= line.maxY - 1, "over or under the line, not on it: \(menu.frame) \(line)")
+        // Clear of every line it selected, in each reply, so it hides none of what you chose.
+        var lines: [NSRect] = []
+        for text in [first, second] {
+            let layout = text.layoutManager!
+            let glyphs = layout.glyphRange(forCharacterRange: text.selectedRange(), actualCharacterRange: nil)
+            layout.enumerateLineFragments(forGlyphRange: glyphs) { rect, _, _, _, _ in
+                lines.append(text.convert(rect.offsetBy(dx: text.textContainerOrigin.x, dy: text.textContainerOrigin.y), to: stack))
+            }
+        }
+        #expect(lines.count >= 2)
+        for line in lines {
+            #expect(!menu.frame.insetBy(dx: 0, dy: 1).intersects(line), "the menu \(menu.frame) covers a selected line \(line)")
+        }
 
         // Add to Chat quotes what's selected, and the menu goes.
         let addToChat = try #require(menu.rootView.addToChat)
