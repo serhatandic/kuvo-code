@@ -2985,6 +2985,34 @@ named) asks you and waits. An item you give through `vault_ask` "always" is gran
 half an hour goes ahead. A command's copies (`run/vault-run/`) go when it ends, when the box ends,
 and as a box starts.
 
+### Working outside the project
+
+Settings › Permissions shows "Work outside the project: Ask" as the default, and every box keeps
+to it, sandbox or not: opencode 2.2.0's agents allow `external_directory` on their own, so each box
+writes the engine a plugin, `kuvo-defaults.js` in its settings' `opencode/plugins` (as it starts,
+and back each minute if it's gone or changed), that gives the engine's agents
+`{external_directory, "*", ask}`. The engine sets up plugins before it adds the rules in your
+settings, and the last rule that matches wins, so your settings' rules (Settings › Permissions,
+a project's, a conversation's) still decide. An agent that refuses everything keeps refusing.
+Agents you add in Settings › Agents come from your settings, after the plugin, so they don't get it:
+they work outside without asking unless a rule of yours says otherwise.
+
+What Kuvo Code and the engine keep for an agent stays open after that ask, for the agent to open:
+the box's `attachments` (and this Mac's app's `Attachments`), the agent's browser's downloads on a
+machine (this Mac's panel browser saves to `~/Downloads`, which asks), the engine's long outputs
+saved whole (`tool-output`), the repositories it reads (`repos`) and Plan's plans (`~/.opencode/plan`),
+and the folders of the skills the engine finds (learned again when they change, `skill.updated`;
+never `/` or a folder holding your home folder).
+
+The agents bridge takes the same ask as one of the engine's defaults, for when the engine can't
+say its agent's rules. It doesn't take a coding agent off running on its own (`approvesAll`), so
+Codex, Cursor, Grok and Antigravity keep their modes. Where the bridge sees a tool call (Claude
+Code's every one, and what the others ask about), one reaching outside the project asks first. An
+agent's own files are never outside (`ownsPath`), though your rules for what it does with them still
+hold: Claude Code's plans, each project's memory, what it saved of a long output
+(`projects/<project>/<session>/tool-results`), and its background commands' output in /tmp's
+`claude-<uid>` when the sandbox runs it.
+
 ### Sandbox
 
 Each box runs its agents' commands in a sandbox (`sandbox` in `features` and its asks, `sandbox.asks`, bridge 0.9.118) wherever

@@ -6,7 +6,7 @@ import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { existsSync, readFileSync, statSync } from "node:fs"
 import { homedir } from "node:os"
-import { join } from "node:path"
+import { join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import { providerID, type AgentAccount } from "../accounts"
 import type { Agent, AgentContext, Account, MessageInput, OwnTurn, RunInput, RunResult, SignInAttempt, SignInOptions, SubagentMessages, SubagentRun, Thread, TurnHooks, PromptFile } from "../agent"
@@ -229,6 +229,20 @@ export class ClaudeAgent implements Agent {
     // Without its own copy of Claude Code: it runs yours.
     await this.context.deps.ensure(this.id, SDK, { optional: false })
     return this.context.deps.load(this.id, SDK[0].name)
+  }
+
+  /**
+   * Its own files: in its settings folder, its plans, each project's memory (which it reads and
+   * writes on its own) and what it saved of a long output, which it's told to read back
+   * (`projects/<project>/<session>/tool-results`); and its background commands' output, in /tmp's
+   * `claude-<uid>` when it has no temporary folder of its own (in the sandbox).
+   */
+  ownsPath(path: string): boolean {
+    const file = resolve(path)
+    const settings = this.instance.home ?? process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude")
+    if (file.startsWith(settings + "/") && /^(plans\/[^/]+\.md|projects\/[^/]+\/memory\/.+|projects\/[^/]+\/[^/]+\/tool-results\/.+)$/.test(file.slice(settings.length + 1))) return true
+    const uid = process.getuid?.()
+    return uid !== undefined && ["/tmp", "/private/tmp"].some((tmp) => file.startsWith(`${tmp}/claude-${uid}/`) && /^[^/]+\/[^/]+\/tasks\/[^/]+$/.test(file.slice(`${tmp}/claude-${uid}/`.length)))
   }
 
   /** Where Claude Code reads skills itself: its settings folder's, and a project's `.claude/skills`. */

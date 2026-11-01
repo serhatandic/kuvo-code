@@ -9113,7 +9113,7 @@ import { spawn as spawn5 } from "child_process";
 import { randomUUID } from "crypto";
 import { existsSync as existsSync13, readFileSync as readFileSync18, statSync as statSync8 } from "fs";
 import { homedir } from "os";
-import { join as join20 } from "path";
+import { join as join20, resolve as resolve6 } from "path";
 import { pathToFileURL as pathToFileURL3 } from "url";
 
 // Packages/Box/src/agents/maintenance.ts
@@ -9565,6 +9565,14 @@ class ClaudeAgent {
   async sdk() {
     await this.context.deps.ensure(this.id, SDK, { optional: false });
     return this.context.deps.load(this.id, SDK[0].name);
+  }
+  ownsPath(path) {
+    const file = resolve6(path);
+    const settings = this.instance.home ?? process.env.CLAUDE_CONFIG_DIR ?? join20(homedir(), ".claude");
+    if (file.startsWith(settings + "/") && /^(plans\/[^/]+\.md|projects\/[^/]+\/memory\/.+|projects\/[^/]+\/[^/]+\/tool-results\/.+)$/.test(file.slice(settings.length + 1)))
+      return true;
+    const uid = process.getuid?.();
+    return uid !== undefined && ["/tmp", "/private/tmp"].some((tmp) => file.startsWith(`${tmp}/claude-${uid}/`) && /^[^/]+\/[^/]+\/tasks\/[^/]+$/.test(file.slice(`${tmp}/claude-${uid}/`.length)));
   }
   ownSkillFolders(directory) {
     const settings = this.instance.home ?? process.env.CLAUDE_CONFIG_DIR ?? join20(homedir(), ".claude");
@@ -14292,7 +14300,7 @@ import { createHash as createHash6 } from "crypto";
 import { spawn as spawnProcess } from "child_process";
 import { readFileSync as readFileSync23, statSync as statSync9 } from "fs";
 import { homedir as homedir5 } from "os";
-import { dirname as dirname13, join as join25, resolve as resolve6 } from "path";
+import { dirname as dirname13, join as join25, resolve as resolve7 } from "path";
 import { fileURLToPath as fileURLToPath2 } from "url";
 
 // Packages/Box/src/agents/handover.ts
@@ -14852,7 +14860,8 @@ function runCommand(command, directory, started = () => {}) {
 var engineDefaults = [
   { action: "read", resource: "*.env", effect: "ask" },
   { action: "read", resource: "*.env.*", effect: "ask" },
-  { action: "read", resource: "*.env.example", effect: "allow" }
+  { action: "read", resource: "*.env.example", effect: "allow" },
+  { action: "external_directory", resource: "*", effect: "ask" }
 ];
 function commandParts(line) {
   const whole = line.trim();
@@ -15267,11 +15276,11 @@ function ownPlaces() {
     places.push(join25(dirname13(process.env.KUVO_AGENTS_HOME), "Attachments"));
   return [...places, ...skillFolders()];
 }
-function outsidePaths(ask, directory, attached, own = ownPlaces()) {
+function outsidePaths(ask, directory, attached, own = ownPlaces(), owns) {
   if (!fileActions.has(ask.action))
     return [];
-  const paths = ask.resources.filter((resource) => resource && resource !== "*" && (resource.startsWith("/") || resource.startsWith("~/") || !/[*?[]/.test(resource))).map((resource) => resolve6(directory, resource.startsWith("~/") ? join25(homedir5(), resource.slice(2)) : resource));
-  return paths.filter((path) => !within(path, [directory, ...own]) && !attached.has(path));
+  const paths = ask.resources.filter((resource) => resource && resource !== "*" && (resource.startsWith("/") || resource.startsWith("~/") || !/[*?[]/.test(resource))).map((resource) => resolve7(directory, resource.startsWith("~/") ? join25(homedir5(), resource.slice(2)) : resource));
+  return paths.filter((path) => !within(path, [directory, ...own]) && !attached.has(path) && !owns?.(path));
 }
 function outsideAsk(ask, paths) {
   return { ...ask, action: "external_directory", resources: paths, save: [...new Set(paths.map((path) => join25(dirname13(path), "*")))], unclassified: false };
@@ -15352,7 +15361,7 @@ class Sessions {
         continue;
       changed = true;
       for (const path of found.made)
-        this.cited.push({ path: resolve6(record.session.location.directory, path), at: found.at });
+        this.cited.push({ path: resolve7(record.session.location.directory, path), at: found.at });
     }
     if (record.session.title?.includes(":codex-") && parseProvider(record.session.model?.providerID ?? "")?.kind === "codex") {
       record.session.title = plainCitations(record.session.title);
@@ -16702,7 +16711,7 @@ ${live.agentPrompt}` : ""
           return !canAsk;
         return !live.blocks.some((rule) => holdsBack(rule.effect));
       },
-      check: (ask, ownPlan) => this.checkPermission(live, record.session, ask, plan && !ownPlan),
+      check: (ask, ownPlan) => this.checkPermission(live, record.session, ask, plan && !ownPlan, this.ownedBy(turn)),
       permission: (ask) => this.askPermission(id, live, turn, ask, plan),
       question: (ask) => this.askQuestion(id, live, turn, ask),
       subagent: (toolCallID, task) => this.startSubagent(id, live, turn, toolCallID, task, plan)
@@ -16813,7 +16822,7 @@ ${live.agentPrompt}` : ""
     }
     return going.length > 0;
   }
-  checkPermission(live, session, ask, plan) {
+  checkPermission(live, session, ask, plan, owns) {
     const parts = partsOf2(ask);
     if (live.blocks && strictest(live.blocks, ask.action, parts) === "deny")
       return "deny";
@@ -16823,7 +16832,7 @@ ${live.agentPrompt}` : ""
     const effect = strictest(rules, ask.action, parts);
     if (effect === "deny")
       return "deny";
-    const away = outsidePaths(ask, session.location.directory, this.attached(session.id));
+    const away = outsidePaths(ask, session.location.directory, this.attached(session.id), undefined, owns);
     if (away.length) {
       if (live.blocks && strictest(live.blocks, "external_directory", away) === "deny")
         return "deny";
@@ -16838,6 +16847,10 @@ ${live.agentPrompt}` : ""
     if (hidesFromBlocks(live.blocks, ask))
       return "ask";
     return effect === "ask" && !this.allowedBefore(live, ask) ? "ask" : undefined;
+  }
+  ownedBy(turn) {
+    const agent = this.agent(turn.currentModel.providerID);
+    return agent?.ownsPath ? (path) => agent.ownsPath(path) : undefined;
   }
   attached(id) {
     const paths = new Set;
@@ -16874,7 +16887,7 @@ ${live.agentPrompt}` : ""
       return "reject";
     if (plan && changes2.has(ask.action))
       return "reject";
-    const away = ask.weighed ? [] : outsidePaths(ask, session.location.directory, this.attached(id));
+    const away = ask.weighed ? [] : outsidePaths(ask, session.location.directory, this.attached(id), undefined, this.ownedBy(turn));
     if (away.length) {
       if (live.blocks && strictest(live.blocks, "external_directory", away) === "deny")
         return "reject";
@@ -22704,4 +22717,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 7ae9ba88368c10c310e32623411414a18f2bd178d8cf86f6ae1207c16b582e76
+// Built from Packages/Box/src/agents 265bc5d1d44b1ca554c5f1ffe4cf0a89de951da748572148777761b48c6de7a5
