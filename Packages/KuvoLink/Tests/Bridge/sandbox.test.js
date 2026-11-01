@@ -95,11 +95,23 @@ async function engineRuns(box, folder, command, session) {
 // The engine opening `folder` now, and what runs a command there later (as `engineRuns`).
 async function engineOpens(box, folder) {
   let hook;
+  const tools = [];
   if (fs.existsSync(box.plugin)) {
     const plugin = (await import(`${pathToFileURL(box.plugin)}?${Math.random()}`)).default;
-    await plugin.setup({ location: { directory: folder }, shell: { hook: async (name, take) => { assert.equal(name, "create.before"); hook = take; } }, tool: { hook: async () => {} } });
+    await plugin.setup({ location: { directory: folder }, shell: { hook: async (name, take) => { assert.equal(name, "create.before"); hook = take; } }, tool: { hook: async (name, take) => { if (name === "execute.before") tools.push(take); } } });
   }
-  return (command, session) => engineRunsOpened(box, folder, hook, command, session);
+  const runs = (command, session) => engineRunsOpened(box, folder, hook, command, session);
+  // And one of its tools called there later, as engineCalls does.
+  runs.calls = async (tool, input) => {
+    const call = { tool, sessionID: ENGINE_SESSION, agent: "build", messageID: "msg_tools", id: "call_tools", input };
+    try {
+      for (const each of tools) await each(call);
+    } catch (error) {
+      return { refused: error.message };
+    }
+    return { input: call.input };
+  };
+  return runs;
 }
 
 // A command in `folder`, through what the plugin did as the engine opened it (`hook`).
@@ -791,7 +803,9 @@ test("a conversation's folder traded for a link by another's command isn't worke
     const tries = {};
     tries["the one in it already"] = said(opened(`echo planted > ${JSON.stringify(path.join(elsewhere, "planted"))}`));
     tries["the one moved there"] = said(await engineRuns(box, moved, `echo planted > ${JSON.stringify(path.join(elsewhere, "planted"))}`));
-    assert.deepEqual(tries, { "the one in it already": "refused", "the one moved there": "refused" });
+    // Nor moved on to where the link leads, from where it really was as it was opened.
+    tries["the one in it already, moved there"] = (await opened.calls("opencode_session_move", { directory: path.join(elsewhere, "on") })).refused ? "refused" : "moves";
+    assert.deepEqual(tries, { "the one in it already": "refused", "the one moved there": "refused", "the one in it already, moved there": "refused" });
     assert.equal(fs.existsSync(path.join(elsewhere, "planted")), false);
   } finally {
     await running.stop();

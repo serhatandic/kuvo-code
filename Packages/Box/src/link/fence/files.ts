@@ -351,6 +351,9 @@ export default {
     }
     try { fs.writeFileSync(note, JSON.stringify({ pid: process.pid, version: VERSION })) } catch {}
     const folder = work ? real(work) : ""
+    // (And as it's named: the letters a move's keeps, their case, an accent's form. Both taken as
+    // the engine opens it, never where a link put in its place since leads.)
+    const asNamed = work ? located(work) : ""
     // A folder this engine moved a conversation to: where it really was when the move was checked
     // (taken once, as the engine opens it).
     let movedTo = ""
@@ -406,8 +409,7 @@ export default {
         // worktree.
         const other = input.sessionID !== undefined && input.sessionID !== call.sessionID
         const to = !other && typeof input.directory === "string" ? located(resolved(work, input.directory.trim())) : ""
-        // (Its folder as it's named too, whose letters a move's keeps: their case, an accent's form.)
-        if (!to || (!within(to, folder) && !within(to, located(work)) && !(git && repository(to) === git))) {
+        if (!to || (!within(to, folder) && !within(to, asNamed) && !(git && repository(to) === git))) {
           throw new Error("This conversation's commands run in Kuvo Code's sandbox, in its own folder, so it can't move itself to another one. Ask the user to move it.")
         }
         // The engine moves it later, by the folder's name: noted where it really is now, so its
