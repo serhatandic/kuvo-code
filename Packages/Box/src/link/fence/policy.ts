@@ -24,6 +24,9 @@ export interface FencePolicy {
   /** On macOS, patterns for every copy's folders (`run.kuvo.code…`), wherever the system keeps
    * an app's: regular expressions over whole paths. */
   kuvoPatterns: string[];
+  /** On macOS, the folders that hold what those patterns and `readOnlyPatterns` name (where the
+   * system keeps apps' folders, your temporary folder): regular expressions over whole paths. */
+  patternFolders?: string[];
   /** Inside them, what commands may run: Kuvo Code's own helpers (`bin`). */
   kuvoReadable: string[];
   /** Written besides WORK, GIT and TMP: the system's temporary folders, devices, tools' caches. */
@@ -172,6 +175,7 @@ export function fencePolicy(ports: number[] = []): FencePolicy {
         `^${escapeRegex(home)}/Library/[^/]+/run\\.kuvo\\.code[^/]*(/|$)`,
         `^/private/var/folders/[^/]+/[^/]+/[^/]+/run\\.kuvo\\.code[^/]*(/|$)`,
       ],
+      patternFolders: [`^${escapeRegex(home)}/Library/[^/]+$`, `^/private/var/folders/[^/]+/[^/]+/[^/]+$`],
       writable: ["/private/tmp", "/private/var/tmp", "/dev", ...userTemporary(), ...inHome([...CACHES, ...MAC_CACHES])],
       sockets: inHome([".codex/ipc", ".grok"]),
       secrets: [...inHome([...SECRETS, ...MAC_SECRETS]), ...keychainDaemons(home).map(realish), ...sshKeys(home).map(realish), ...ghHosts(home).map(realish)],
