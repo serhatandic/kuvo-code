@@ -36,7 +36,7 @@ time it's used; its license is the last one below.
 HEADER
 
     section OpenUsage fork https://github.com/robinebers/openusage \
-        "Packages/UsageKit is a fork of OpenUsage, not the official OpenUsage. The OpenUsage name and logo are trademarks of Robin Ebers and aren't used." \
+        "Packages/UsageKit is a fork of OpenUsage, not the official OpenUsage. The OpenUsage name and logo are trademarks of Robin Ebers and aren't used. Its provider icons are also among ClientDesign's marks (Packages/KuvoClient/Sources/ClientDesign/Resources/Marks.xcassets)." \
         Packages/UsageKit/LICENSE
     section Textual 0.5.0 https://github.com/gonzalezreal/textual \
         "Packages/Textual is a copy of Textual with Kuvo Code's changes (see its README)." \
@@ -50,6 +50,12 @@ HEADER
     section browser-use 0.4.2 https://github.com/browser-use/browser-use \
         "KuvoCode/Resources/buildDomTree.js, unchanged." \
         Licenses/browser-use.txt
+    section models.dev "(logos, 2026-11-01)" https://models.dev \
+        "Providers' logos in Packages/KuvoClient/Sources/ClientDesign/Resources/Marks.xcassets, unchanged. Each logo is its owner's trademark, shown only to name its provider." \
+        Licenses/models.dev.txt
+    section "Simple Icons" 16.35.0 https://simpleicons.org \
+        "Services' marks in Packages/KuvoClient/Sources/ClientDesign/Resources/Marks.xcassets, unchanged. Each mark is its owner's trademark, shown only to name its service." \
+        Licenses/simple-icons.txt
 
     python3 - "$resolved" <<'PY' | while IFS='|' read -r location version; do
 import json, sys

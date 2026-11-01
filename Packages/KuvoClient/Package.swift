@@ -31,7 +31,7 @@ let package = Package(
         .target(name: "ClientDesign", dependencies: [
             .product(name: "Textual", package: "textual"),
             .product(name: "SwiftUIMath", package: "swiftui-math"),
-        ]),
+        ], resources: [.process("Resources/Marks.xcassets")]),
         .testTarget(name: "ClientDesignTests", dependencies: ["ClientDesign"]),
         .target(name: "ClientNews"),
         .testTarget(name: "ClientNewsTests", dependencies: ["ClientNews"]),
