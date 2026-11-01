@@ -97,6 +97,7 @@ struct PermissionsSettings: View {
                             Image(systemName: "minus.circle.fill")
                         }
                         .buttonStyle(RemoveButtonStyle())
+                        .accessibilityLabel("Remove")
                         .help("Remove")
                     }
                 }
@@ -581,6 +582,7 @@ private struct RuleRow: View {
                     Image(systemName: "minus.circle.fill")
                 }
                 .buttonStyle(RemoveButtonStyle())
+                .accessibilityLabel("Remove Rule")
                 .help("Remove Rule")
             }
             if let shownProblem {

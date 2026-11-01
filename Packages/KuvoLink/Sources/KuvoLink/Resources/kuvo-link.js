@@ -18416,6 +18416,7 @@ import path69 from "node:path";
 var MOST = 50;
 var MOST_TEXT = 400000;
 var MOST_OUTPUT = 2000;
+var TEXT_VERSION = 2;
 var texts = new Map;
 var reading = new Map;
 async function* searchRoute(context) {
@@ -18514,8 +18515,8 @@ function textOf2(place, target, session) {
     return already;
   const read = conversationOf2(target, session.id).then((messages) => {
     const cut = session.revert?.messageID ? messages.findIndex((message) => message.id === session.revert.messageID) : -1;
-    const text = searchText(cut >= 0 ? messages.slice(0, cut) : messages, session.location?.directory ?? session.directory ?? "").slice(-MOST_TEXT);
-    const kept = { updated, text, folded: fold(text) };
+    const text = searchText(cut >= 0 ? messages.slice(0, cut) : messages, session.location?.directory ?? session.directory ?? "");
+    const kept = { version: TEXT_VERSION, updated, text, folded: fold(text) };
     texts.set(name, { updated, folded: kept.folded });
     toDisk(name, kept);
     return kept;
@@ -18526,7 +18527,7 @@ function textOf2(place, target, session) {
 function fromDisk(name) {
   try {
     const kept = JSON.parse(fs65.readFileSync(path69.join(SEARCH, name + ".json"), "utf8"));
-    if (typeof kept.updated !== "number" || typeof kept.text !== "string" || typeof kept.folded !== "string")
+    if (kept.version !== TEXT_VERSION || typeof kept.updated !== "number" || typeof kept.text !== "string" || typeof kept.folded !== "string")
       return null;
     texts.set(name, { updated: kept.updated, folded: kept.folded });
     return kept;
@@ -18562,6 +18563,7 @@ function forgetGone(known, places) {
 function searchText(messages, directory) {
   const relative = (value) => directory && value.startsWith(directory + "/") ? value.slice(directory.length + 1) : value;
   const blocks = [];
+  const steps = [];
   for (const message of messages) {
     if (message.type === "user") {
       const written = String(message.text ?? "");
@@ -18589,7 +18591,7 @@ function searchText(messages, directory) {
           const input = part.state?.input ?? {};
           const named = [input.filePath, input.path].filter((value) => typeof value === "string").map(relative).concat([input.command, input.pattern, input.query, input.url, input.description].filter((value) => typeof value === "string"));
           if (named.length)
-            blocks.push(named.map((value) => value.split(`
+            steps.push(named.map((value) => value.split(`
 `)[0]).join(" "));
         }
       }
@@ -18600,7 +18602,14 @@ function searchText(messages, directory) {
 `));
     }
   }
-  return blocks.filter(Boolean).join(`
+  const said = blocks.filter(Boolean).join(`
+
+`).slice(-MOST_TEXT);
+  const room = MOST_TEXT - said.length - 2;
+  const done = room > 0 ? steps.filter(Boolean).join(`
+
+`).slice(-room) : "";
+  return [said, done].filter(Boolean).join(`
 
 `);
 }
@@ -18640,11 +18649,31 @@ function fold(text) {
   }).join("");
 }
 function snippet(text, at, length) {
-  const letters = Array.from(text);
-  const start = Math.max(0, at - 16);
-  const end = Math.min(letters.length, at + length + 80);
+  const all = Array.from(text);
+  const gap = (index) => all[index] === `
+` && all[index + 1] === `
+`;
+  let blockStart = at;
+  while (blockStart > 0 && !gap(blockStart - 2))
+    blockStart--;
+  let blockEnd = at + length;
+  while (blockEnd < all.length && !gap(blockEnd))
+    blockEnd++;
+  const letters = all.slice(0, blockEnd);
+  const space = (index) => /\s/.test(letters[index] ?? " ");
+  let start = Math.max(blockStart, at - 16);
+  for (let back = start;back >= blockStart && back > start - 12; back--)
+    if (space(back - 1)) {
+      start = back;
+      break;
+    }
+  while (start > blockStart && start < at && !space(start - 1))
+    start++;
+  let end = Math.min(letters.length, at + length + 80);
+  while (end < letters.length && end > at + length && !space(end))
+    end--;
   const words = letters.slice(start, end).join("").replace(/[*`#>]/g, "").split(/\s+/).filter(Boolean).join(" ");
-  return (start > 0 ? "…" : "") + words + (end < letters.length ? "…" : "");
+  return (start > blockStart ? "…" : "") + words + (end < letters.length ? "…" : "");
 }
 
 // Packages/Box/src/link/areas/changes.ts
@@ -19392,7 +19421,7 @@ import fs69 from "node:fs";
 import path73 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.161";
+var BRIDGE_VERSION = "0.9.162";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

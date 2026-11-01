@@ -205,21 +205,10 @@ struct Composer: View {
                 .help("Your comments on the changes go with this message.")
             }
             if !files.isEmpty {
-                ScrollView(.horizontal) {
-                    HStack(spacing: 8) {
-                        ForEach(files, id: \.self) { file in
-                            ComposerAttachment(url: file, route: Attachments.route(file, for: currentModel, onMachine: RemoteFolder.machine(of: folders.first ?? "") != nil),
-                                               number: imageFiles.firstIndex(of: file).map { $0 + 1 }) { detach(file) }
-                        }
-                    }
-                    // Room for each chip's remove button, which sits on its corner, and for
-                    // the hairline around each chip.
-                    .padding(.top, 6)
-                    .padding(.trailing, 6)
-                    .padding(.leading, 1)
-                    .padding(.bottom, 1)
+                AttachmentStrip(files: files) { file in
+                    ComposerAttachment(url: file, route: Attachments.route(file, for: currentModel, onMachine: RemoteFolder.machine(of: folders.first ?? "") != nil),
+                                       number: imageFiles.firstIndex(of: file).map { $0 + 1 }) { detach(file) }
                 }
-                .scrollIndicators(.hidden)
             }
 
             // Each quote with your answer to it, in the order they go.
@@ -334,6 +323,7 @@ struct Composer: View {
                             }
                             .buttonStyle(.plain)
                             .clickablePointer()
+                            .accessibilityLabel("Attach Files")
                             .help("Attach Files… You can also drop files here, or paste them.")
                             // Set on the engine: not while it's out of reach.
                             if showsMode {
@@ -1257,5 +1247,70 @@ private struct SideQuestionTag: View {
         .padding(.vertical, 3)
         .background(.tint.opacity(0.12), in: .capsule)
         .help("Asks on the side: answered from the conversation, changing nothing")
+    }
+}
+
+/// The files going with a message, in a row that scrolls sideways. A chip past the edge fades
+/// there, rather than showing as a cut sliver, and "+3" says how many are past it: clicking it
+/// brings the next one in.
+private struct AttachmentStrip<Chip: View>: View {
+    let files: [URL]
+    @ViewBuilder let chip: (URL) -> Chip
+    /// The chips not wholly in view past the trailing edge. Each says when it crosses the edge,
+    /// not where it is on every frame of a scroll.
+    @State private var past: Set<URL> = []
+    /// More chips than fit: the count keeps its room then, so the strip doesn't widen and slide
+    /// the chips over as the last one comes into view.
+    @State private var overflows = false
+    @State private var position = ScrollPosition(idType: URL.self)
+
+    var body: some View {
+        let next = files.first(where: past.contains)
+        // The count beside the row, not over it: the chips' names never run under it.
+        HStack(spacing: 6) {
+            ScrollView(.horizontal) {
+                HStack(spacing: 8) {
+                    ForEach(files, id: \.self) { file in
+                        chip(file)
+                            .onGeometryChange(for: Bool.self, of: { $0.frame(in: .scrollView).maxX > ($0.bounds(of: .scrollView)?.width ?? .infinity) + 1 }) { isPast in
+                                if isPast { past.insert(file) } else { past.remove(file) }
+                            }
+                    }
+                }
+                .scrollTargetLayout()
+                // Room for each chip's remove button, which sits on its corner, and for the
+                // hairline around each chip.
+                .padding(.top, 6)
+                .padding(.trailing, 6)
+                .padding(.leading, 1)
+                .padding(.bottom, 1)
+            }
+            .scrollPosition($position)
+            .scrollIndicators(.hidden)
+            .onScrollGeometryChange(for: Bool.self, of: { $0.contentSize.width > $0.containerSize.width + 1 }) { _, new in overflows = new }
+            .fadingScrollEdges(24, axis: .horizontal)
+            if overflows {
+                Button { if let next { withAnimation(.ui) { position.scrollTo(id: next, anchor: .trailing) } } } label: {
+                    Text("+\(max(past.count, 1))")
+                        .font(.system(size: 12, weight: .semibold))
+                        .monospacedDigit()
+                        .padding(.horizontal, 9)
+                        .frame(height: 24)
+                }
+                .buttonStyle(FilledButtonStyle(shape: .capsule, rest: 0.06))
+                .fixedSize()
+                .padding(.top, 6)
+                .help(past.count == 1 ? "One more file" : "\(past.count) more files")
+                .accessibilityLabel(past.count == 1 ? "One more file" : "\(past.count) more files")
+                // At the end, it fades where it is: the strip keeps its width.
+                .opacity(next == nil ? 0 : 1)
+                .disabled(next == nil)
+                .accessibilityHidden(next == nil)
+                .transition(.opacity)
+            }
+        }
+        .animation(.ui, value: next == nil)
+        .animation(.ui, value: overflows)
+        .onChange(of: files) { past.formIntersection(files) }
     }
 }

@@ -245,5 +245,6 @@ struct EditorDetail<Content: View>: View {
             .frame(maxWidth: .infinity)
         }
         .scrollBounceBehavior(.basedOnSize)
+        .fadingScrollEdges()
     }
 }

@@ -282,7 +282,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         case .skills: "Instructions and scripts the agent loads when a task calls for them."
         case .integrations: "Your mail, calendar, chats and tools, for agents and bots."
         case .mcp: "Programs and services that give the agent more tools."
-        case .engine: nil
+        case .engine: "The opencode engine your sessions run on."
         case .git: "Branches, commits and pull requests made from Kuvo Code."
         case .worktrees: "Folders of their own for sessions that work on a branch."
         case .archived: "Sessions you put away: still searchable, out of the sidebar."

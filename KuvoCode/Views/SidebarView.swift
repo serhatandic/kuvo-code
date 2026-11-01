@@ -1,5 +1,6 @@
 import ClientDesign
 import ClientSessions
+import ClientText
 import OpenCodeKit
 import SwiftUI
 import UsageKit
@@ -60,6 +61,8 @@ struct SidebarView: View {
     /// What each box found in its conversations, by the box: one's earlier finds stay until it
     /// answers the newer search, as on the phone.
     @State private var conversationFinds: [String: [Workspace.ConversationFind]] = [:]
+    /// The words `conversationFinds` were found for, to mark in them while you type on.
+    @State private var findsQuery = ""
     /// Everything found in conversations, the latest first.
     private var conversationResults: [Workspace.ConversationFind] {
         Array(conversationFinds.values.flatMap(\.self).sorted { $0.session.time.updated > $1.session.time.updated }.prefix(20))
@@ -256,6 +259,7 @@ struct SidebarView: View {
                 guard !Task.isCancelled else { return }
                 answered.insert(box)
                 searchAnswered.insert(box)
+                findsQuery = query
                 conversationFinds[box] = finds
             }
             guard !Task.isCancelled else { return }
@@ -543,9 +547,9 @@ struct SidebarView: View {
                 }
                 switch result.found {
                 case .bot(let bot):
-                    botRow(bot, snippet: result.snippet, action: show)
+                    botRow(bot, snippet: SearchSnippet.text(result.snippet, found: findsQuery), action: show)
                 case .session(let session):
-                    ConversationResultRow(title: session.title ?? "New Session", snippet: result.snippet, isSelected: selection == session.id, action: show)
+                    ConversationResultRow(title: session.title ?? "New Session", snippet: SearchSnippet.text(result.snippet, found: findsQuery), isSelected: selection == session.id, action: show)
                         .contextMenu { menu(for: session) }
                 }
             }
@@ -562,7 +566,7 @@ struct SidebarView: View {
 
     /// A bot's row, in its box's page or found by the search, which stands in for the page: its
     /// face moves unless it's staged. `snippet`: the words a search found in its conversation.
-    private func botRow(_ bot: Bot, snippet: String? = nil, action: (() -> Void)? = nil) -> some View {
+    private func botRow(_ bot: Bot, snippet: AttributedString? = nil, action: (() -> Void)? = nil) -> some View {
         BotRow(bot: bot, isSelected: selection == bot.sessionID, animates: !stagedBots.contains(bot.id), snippet: snippet) {
             if let action { action() } else { selection = bot.sessionID }
         }
@@ -1183,10 +1187,23 @@ private struct OpenInMenu: View {
     }
 }
 
+/// The words around what a search found, the found words in bold.
+enum SearchSnippet {
+    static func text(_ snippet: String, found query: String) -> AttributedString {
+        var text = AttributedString(snippet)
+        for range in SearchMatches.ranges(of: query, in: snippet) {
+            guard let lower = AttributedString.Index(range.lowerBound, within: text),
+                  let upper = AttributedString.Index(range.upperBound, within: text) else { continue }
+            text[lower..<upper].inlinePresentationIntent = .stronglyEmphasized
+        }
+        return text
+    }
+}
+
 /// A session found by what was said in it: its title, and the words around the match.
 private struct ConversationResultRow: View {
     let title: String
-    let snippet: String
+    let snippet: AttributedString
     let isSelected: Bool
     let action: () -> Void
 
@@ -1236,6 +1253,7 @@ struct SidebarSearchRow: View {
                     Image(systemName: "xmark.circle.fill")
                 }
                 .buttonStyle(ClearFieldButtonStyle())
+                .accessibilityLabel("Clear")
                 .help("Clear")
             }
         }
@@ -1396,6 +1414,7 @@ private struct ProjectRow: View {
             .buttonStyle(IconButtonStyle(width: 26, height: 24))
             .padding(.trailing, 4)
             .opacity(isHovering ? 1 : 0)
+            .accessibilityLabel("New Session in \(project.name)")
             .help("New Session in \(project.name)")
         }
         .onHover { isHovering = $0 }
@@ -1560,7 +1579,7 @@ private struct BotRow: View {
     let isSelected: Bool
     var animates = true
     /// Words found in its conversation by a search: shown in place of what it's doing.
-    var snippet: String?
+    var snippet: AttributedString?
     let action: () -> Void
     @Environment(Workspace.self) private var workspace
     @Environment(Bots.self) private var bots
@@ -2106,13 +2125,13 @@ private struct AccountsRow: View {
     var body: some View {
         NativeMenuButton(name: "account", menu: makeMenu) {
             HStack(spacing: 10) {
-                if catalog.connectedProviders.isEmpty {
+                if catalog.signedInAccounts.isEmpty {
                     Image(systemName: "person.crop.circle.badge.plus")
                         .font(.system(size: 15))
                         .foregroundStyle(.tint)
                 } else {
                     HStack(spacing: 8) {
-                        ForEach(catalog.connectedProviders.prefix(3)) { provider in
+                        ForEach(catalog.signedInAccounts.prefix(3)) { provider in
                             ProviderLogo(id: OutsideAgents.logo(provider.id), size: 18, colored: true)
                         }
                     }
@@ -2147,7 +2166,7 @@ private struct AccountsRow: View {
 
     private func makeMenu() -> NSMenu {
         let menu = NSMenu()
-        let providers = catalog.connectedProviders
+        let providers = catalog.signedInAccounts
         let accounts = ActionItem(
             providers.isEmpty ? "Connect an Account" : "Accounts",
             subtitle: !problems.isEmpty ? problemsText : providers.isEmpty ? "Sign in with a subscription, or add an API key" : Self.list(providers.map(\.name)),
@@ -2239,9 +2258,10 @@ private struct AccountsRow: View {
     }
 
     private var label: String {
-        switch catalog.connectedProviders.count {
+        let accounts = catalog.signedInAccounts
+        return switch accounts.count {
         case 0: "Connect an Account"
-        case 1: catalog.connectedProviders[0].name
+        case 1: accounts[0].name
         case let count: "\(count) Accounts"
         }
     }

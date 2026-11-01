@@ -235,7 +235,7 @@ struct BotEditor: View {
                 identity
 
                 if let bot {
-                    section("Job", note: "It keeps its job up to date as you tell it more in its conversation. Change it here too, and it hears the new one.") {
+                    section("Job") {
                         JobFields(name: bot.name, job: $job)
                     }
                     // Its job as the bot keeps it, changed while this was open: yours stays, unless
@@ -251,7 +251,7 @@ struct BotEditor: View {
                     LookPicker(look: $look)
                 }
 
-                section("Personality", note: "How it talks, in its own conversation and in group chats.") {
+                section("Personality") {
                     PersonalityPicker(selection: $personality)
                 }
 
@@ -305,22 +305,27 @@ struct BotEditor: View {
                             }
                         }
                     }
-                    section("Work", note: "Limits on the sessions \(bot.name) runs for you. It sizes its work to the job, with none until you set one; past one, it asks you. Each changes as you pick it.") {
+                    section("Work") {
                         BotWorkLimits(bot: bot)
                     }
-                    section("Wake-Ups", note: "The bot schedules these itself: wake-ups to carry on later, and watches, which check something without its model and wake it when that changes. Add a wake-up of your own, and at its time what it says to do arrives in its conversation.") {
+                    section("Wake-Ups") {
                         WakeList(owner: bot.wakeOwner, name: bot.name)
                     }
                     if bot.project == nil {
-                        section("Keys", note: "A key of its own, like a GitHub token only it should use: its tools take it in place of your shared one, and no other bot or session gets it.") {
+                        section("Keys") {
                             BotKeysSection(bot: bot) { service in withAnimation(.ui) { keyFor = service } }
                         }
                     } else {
-                        section("Keys", note: "It works in a project, beside your sessions there, so it uses the keys they do, from Settings › Integrations. A bot with a folder of its own can have its own.") {
-                            EmptyView()
+                        section("Keys") {
+                            WellGroup {
+                                WellRow { Image(systemName: "key") } content: {
+                                    Text("It uses its project’s keys, from Settings › Integrations.")
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
                         }
                     }
-                    section("Vault", note: "What it signs in, builds and works with from \(bot.machine.map { app.machines.engine($0)?.machine.name ?? $0 } ?? "this Mac")’s vault. It never sees a value: Kuvo Code fills it in, only on the item’s own sites.") {
+                    section("Vault") {
                         BotVaultSection(bot: bot)
                     }
                     section("Memory") {

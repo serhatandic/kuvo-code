@@ -285,7 +285,25 @@ public struct VaultActivity: Codable, Equatable, Identifiable, Sendable {
     public var isWarning: Bool { what == "refused" && how != "no grant" }
 
     /// What happened, in a sentence both apps show.
-    public var sentence: String {
+    public var sentence: String { sentence(here: nil) }
+
+    /// What happened, in a sentence both apps show. `here`: the client reading it ("Mac" in the
+    /// Mac app, the phone's name on a phone). What you did from there says only what happened
+    /// ("Added “GitHub”"); who and where are said when it was somewhere else.
+    public func sentence(here: String?) -> String {
+        if let here, client == here {
+            let item = itemName.map { "“\($0)”" } ?? "an item"
+            let agent = botName ?? sessionName ?? "an agent"
+            switch what {
+            case "allowed": return "Let \(agent) use \(item)\(how == "always" ? " from now on" : " once")"
+            case "declined": return "Said no to \(agent) using \(item)"
+            case "added": return "Added \(item)"
+            case "changed": return "Changed \(item)"
+            case "removed": return "Removed \(item)"
+            case "shown": return "Looked at \(item)"
+            default: break
+            }
+        }
         // You, on the client you did it from: "Mac" is the Mac that keeps it, or a machine's.
         let you = client.map { "You, on \($0 == "Mac" ? "your Mac" : $0)," } ?? "You"
         let who = botName ?? sessionName ?? (client == nil ? "An agent" : you)

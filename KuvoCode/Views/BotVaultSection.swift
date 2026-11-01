@@ -50,7 +50,7 @@ struct BotVaultSection: View {
                     }
                 }
                 ForEach(own, id: \.item.id) { item, how in
-                    WellRow { VaultKindTile(kind: item.kind, size: 20) } content: {
+                    WellRow { VaultKindTile(kind: item.kind, size: 20, site: item.sites.first) } content: {
                         HStack {
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(item.name).lineLimit(1)

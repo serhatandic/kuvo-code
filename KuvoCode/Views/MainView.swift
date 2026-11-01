@@ -985,10 +985,10 @@ struct MainView: View {
         }
         add("New Session", "square.and.pencil", "⌘N", actions.newSession)
         if actions.hasProject {
-            add("Run", "play.fill", "⌘R", detail: runCommand, actions.run)
+            add("Run", "play", "⌘R", detail: runCommand, actions.run)
         }
-        add("New Terminal", "terminal", "⌃`", actions.newTerminal)
-        add("New Terminal Tab", "apple.terminal", "⌃⇧`", actions.newTerminalTab)
+        add("New Terminal", "apple.terminal", "⌃⇧`", actions.newTerminalTab)
+        add("New Terminal in Panel", "terminal", "⌃`", actions.newTerminal)
         add("New Browser Tab", "globe", "⌥⌘B", actions.newBrowser)
         add("Show Changes", "plusminus", "⌥⌘I", actions.showChanges)
         if actions.hasProject {
@@ -1070,6 +1070,10 @@ struct MainView: View {
             showsSidebar: { showsSidebar },
             showSidebar: { showSidebar($0) },
             showPalette: { showsPalette = true },
+            openQuickly: {
+                showsPalette = false
+                showsOpenQuickly = true
+            },
             renameInView: { if let session = activeModel?.session { renaming = session } },
             runProject: { runProject() },
             newProject: { tabs.openProjectEditor(ProjectEditorRequest(project: nil, folders: $0)) }

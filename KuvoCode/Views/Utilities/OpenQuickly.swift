@@ -9,7 +9,7 @@ struct OpenQuickly: View {
     let open: (URL) -> Void
     let dismiss: () -> Void
 
-    @State private var query = ""
+    @State private var query = DemoTyped.openQuickly
     @State private var files: [ProjectFiles.File] = []
     @State private var selected = 0
     @FocusState private var isFocused: Bool

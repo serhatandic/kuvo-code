@@ -134,11 +134,11 @@ struct GoalCard: View {
     /// The checks and the limits, between the header and the buttons.
     private var middle: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if !plan.alone, let row = sandboxRow {
-                sandboxView(row)
-            }
-            if !yours.isEmpty {
+            if !yours.isEmpty || sandboxItem != nil {
                 VStack(spacing: 4) {
+                    if let row = sandboxItem {
+                        sandboxView(row)
+                    }
                     ForEach(yours) { check in
                         YoursRow(text: check.text, detail: check.detail, site: check.site, failed: check.state == .failed, button: check.action.map { action in
                             (action.label, { open(action) })
@@ -203,7 +203,7 @@ struct GoalCard: View {
 
     /// "Pixel’s plan. Two things are yours first; the rest is ready."
     private var subtitle: String {
-        let count = yours.count
+        let count = yours.count + (sandboxItem.map { $0.checking ? 0 : 1 } ?? 0)
         let first = count == 0 ? "" : count == 1 ? " One thing is yours first" : " \(Self.spelled(count).capitalized) things are yours first"
         let rest = plan.ready.isEmpty ? (count == 0 ? "" : ".") : (count == 0 ? " Everything’s ready." : "; the rest is ready.")
         return "\(plan.name)’s plan.\(first)\(rest)"
@@ -220,49 +220,21 @@ struct GoalCard: View {
                         codingAgent: bot?.agents == true, restarting: restartingAgents, restartingSessions: restartingSessions)
     }
 
+    /// Why the plan can't run alone, as the first thing that's yours: its first fix on the row,
+    /// the rest (Report a Problem) in its menu.
+    private var sandboxItem: GoalSandbox.Row? { plan.alone ? nil : sandboxRow }
+
     private func sandboxView(_ row: GoalSandbox.Row) -> some View {
-        HStack(alignment: .center, spacing: 12) {
-            Group {
-                if row.checking || sandboxBusy {
-                    Spinner(size: 14)
-                } else {
-                    Image(systemName: "checkmark.shield")
-                        .font(.system(size: 15))
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .frame(width: 18)
-            .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(row.title)
-                    .font(.callout.weight(.semibold))
-                if !row.text.isEmpty {
-                    Text(row.text)
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                if let sandboxFailure {
-                    Text(sandboxFailure)
-                        .font(.callout)
-                        .foregroundStyle(.orange)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            .accessibilityElement(children: .combine)
-            Spacer(minLength: 8)
-            VStack(alignment: .trailing, spacing: 6) {
-                ForEach(row.buttons, id: \.label) { button in
-                    Button(button.label) { act(button.action) }
-                        .buttonStyle(GoalPillButtonStyle(bordered: true))
-                        .disabled(sandboxBusy)
-                }
-            }
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
-        .background(Color.primary.opacity(scheme == .dark ? 0.06 : 0.045), in: .rect(cornerRadius: 10))
-        .animation(.ui, value: row)
+        let first = row.buttons.first
+        let detail = [row.text, sandboxFailure].compactMap { $0?.isEmpty == false ? $0 : nil }.joined(separator: "\n")
+        return YoursRow(text: row.title,
+                        detail: detail.isEmpty ? nil : detail,
+                        failed: sandboxFailure != nil,
+                        button: first.map { button in (button.label, { act(button.action) }) },
+                        busy: row.checking || sandboxBusy,
+                        more: row.buttons.dropFirst().map { button in (button.label, { act(button.action) }) })
+            .disabled(sandboxBusy)
+            .animation(.ui, value: row)
     }
 
     private func act(_ action: GoalSandbox.Action) {
@@ -492,12 +464,18 @@ struct YoursRow: View {
     var button: (String, () -> Void)?
     /// Puts it away (what waits for you while it runs).
     var clear: (() -> Void)?
+    /// A check is on its way: a spinner in place of the dot.
+    var busy = false
+    /// Less common actions, in a menu after the button.
+    var more: [(String, () -> Void)] = []
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         HStack(spacing: 12) {
             Group {
-                if failed {
+                if busy {
+                    Spinner(size: 11)
+                } else if failed {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: 11))
                         .foregroundStyle(.orange)
@@ -528,6 +506,22 @@ struct YoursRow: View {
                     }
                 }
                 .buttonStyle(GoalPillButtonStyle())
+            }
+            if !more.isEmpty {
+                Menu {
+                    ForEach(more.indices, id: \.self) { index in
+                        Button(more[index].0, action: more[index].1)
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 11, weight: .semibold))
+                }
+                .menuStyle(.button)
+                .menuIndicator(.hidden)
+                .buttonStyle(IconButtonStyle(width: 22, height: 22))
+                .foregroundStyle(.secondary)
+                .help("More")
+                .accessibilityLabel("More for \(text)")
             }
             if let clear {
                 Button("Put Away", systemImage: "xmark", action: clear)

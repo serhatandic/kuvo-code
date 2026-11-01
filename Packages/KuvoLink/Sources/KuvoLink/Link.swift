@@ -35,7 +35,7 @@ public enum LinkError: Error, Equatable, LocalizedError {
         case .hostOffline: "It may be asleep or offline."
         case .refused: "It turned this phone away. Pair again."
         case .closed: "The connection closed."
-        case .relayUnavailable: "Couldn’t reach the relay."
+        case .relayUnavailable: "Couldn’t connect. Check that you’re online, then try again."
         case .unsupportedVersion: "It runs a version this app doesn’t know. Update both."
         case .timedOut: "It didn’t answer."
         case .notAvailable: "It couldn’t open that."

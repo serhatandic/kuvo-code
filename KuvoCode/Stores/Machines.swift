@@ -479,6 +479,12 @@ final class MachineEngine {
             return connected()
         }
         #endif
+        // A stand-in (a name under `.invalid`, a demo copy's) is never contacted.
+        guard !machine.connection.isNeverContacted else {
+            failureMayPass = false
+            state = .failed("Couldn’t reach \(machine.name).")
+            return nil
+        }
         var attached: RemoteServer?
         do {
             state = .starting
@@ -684,6 +690,45 @@ final class MachineEngine {
     /// For the app's tests: the engine a machine's connection reaches (nil: it can't be reached),
     /// in place of starting one there over SSH. It has no live feed.
     static var standIn: ((Machine) async -> OpenCodeAPI?)?
+
+    /// A demo copy's stand-in machine (`DemoMachines`), shown as `status` says, as if its
+    /// connection had got there: nothing is started or sent anywhere.
+    func showStandIn(_ status: String) {
+        isRetrying = false
+        isStopped = false
+        isLive = false
+        failureMayPass = false
+        // (The state first: some of them clear the step.)
+        switch status {
+        case "connected", "reading":
+            state = .ready
+            isLive = true
+            step = status == "reading" ? .reading : nil
+        case "connecting":
+            state = .starting
+            step = .checking
+        case "starting":
+            state = .starting
+            step = .starting
+        case "downloading":
+            state = .downloading(progress: 0.35)
+            step = .downloading(fraction: 0.35)
+        case "copying":
+            state = .downloading(progress: 0.42)
+            step = .copying(sent: 41_000_000, total: 98_000_000)
+        case "reconnecting":
+            state = .failed("The connection to \(machine.name) was lost.")
+            isRetrying = true
+        case "stopped":
+            state = .preparing
+            isStopped = true
+        case "notConnected":
+            state = .preparing
+            isDisconnected = true
+        default:
+            state = .failed(DemoMachines.failure(of: machine.name))
+        }
+    }
     #endif
 
     /// A newer box whose engine didn't come up by itself: this app won't start an older one there.
@@ -915,6 +960,10 @@ final class Machines {
     }
 
     init() {
+        #if DEBUG
+        // KUVO_DEMO_MACHINE: stand-ins beside yours, never saved with them (`DemoMachines`).
+        list += DemoMachines.list.filter { standIn in !list.contains { $0.id == standIn.id } }.map { Machine(destination: $0.id) }
+        #endif
         for machine in list { engines[machine.id] = makeEngine(machine) }
         // What waits for a machine to answer: tried a little after launch, then every 15 minutes.
         Task { [weak self] in
@@ -1277,6 +1326,10 @@ final class Machines {
     }
 
     private func save() {
+        var list = list
+        #if DEBUG
+        list.removeAll { DemoMachines.standIn($0.id) != nil }
+        #endif
         UserDefaults.standard.set(try? JSONEncoder().encode(list), forKey: Self.key)
     }
 

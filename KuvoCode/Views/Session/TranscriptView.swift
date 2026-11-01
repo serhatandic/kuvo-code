@@ -1565,6 +1565,7 @@ struct MessageActionButton: View {
                 .font(.system(size: 11))
         }
         .buttonStyle(IconButtonStyle())
+        .accessibilityLabel(help)
         .help(help)
     }
 }
@@ -1589,6 +1590,7 @@ struct CopyButton: View {
                 .contentTransition(.symbolEffect(.replace))
         }
         .buttonStyle(IconButtonStyle())
+        .accessibilityLabel(copied ? "Copied" : help)
         .help(copied ? "Copied" : help)
     }
 }

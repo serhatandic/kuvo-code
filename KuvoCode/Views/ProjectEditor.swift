@@ -121,7 +121,8 @@ struct ProjectEditor: View {
                     .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { formHeight = $0 }
             }
             .scrollBounceBehavior(.basedOnSize)
-            .scrollEdgeEffectStyle(.soft, for: .bottom)
+            // What's under the footer fades there, rather than being cut by it.
+            .fadingScrollEdges()
             .frame(height: min(formHeight, 520))
             EditorFooter(primary: isNew ? "Create Project" : "Save", canDoPrimary: !folders.isEmpty, onPrimary: saveProject, onCancel: close, cancelsOnEscape: true)
                 .padding(.horizontal, 28)
@@ -406,6 +407,7 @@ private struct FolderRow: View {
                         Image(systemName: "minus.circle.fill")
                     }
                     .buttonStyle(RemoveButtonStyle())
+                    .accessibilityLabel("Remove from the project")
                     .help("Remove from the project")
                 }
             }

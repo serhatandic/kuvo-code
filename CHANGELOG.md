@@ -16,6 +16,30 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- The model menu says "Free" once in a provider's title when all its models are free, instead of on every row, and leaves out a model's mark where it's the provider's own.
+- A goal's plan lines its lanes up when only some have a site, shows only the note of each lane once the plan is met, labels its days without crowding Today, with a date every few days in a long goal, and gives steps' names more room in a wide card.
+- Find in a conversation no longer covers the first message, and quoting several passages says how many; a quote's answer field opens when you click it, not on every quote at once.
+- The composer's attachments fade at their edges when there are more than fit, and a **+3** (or however many) beside them says how many are past the edge and brings the next one in.
+- The sidebar's accounts stay while the coding agents restart, instead of briefly showing fewer.
+- The command palette shows the letters you typed in bold in each result, and Run shows a play mark.
+- Settings › Accounts has one Add Account menu for the subscriptions, and Edit Bot › Keys one Add Its Own Key menu, instead of a button on every row, and a coding agent's accounts sit right under its name.
+- Settings › Vault lists only the bots that can use an item, with Let a Bot Use It to add one, and its activity says what you did on this Mac plainly.
+- A wake-up's form has its title and a close button at the top, the reviewer keyword shows a magnifying glass, and Also Allowed's button reads Add Folder.
+- Search results show the words around the match from the message itself, not a tool's steps, and cut at whole words.
+- In Changes, Commit keeps its full name in a narrow panel and a comment names its line ("Line 12, before").
+- The panel's Files hides .DS_Store and version control folders, and a narrow header shows the file's name whole, with Open as its app's icon, and the full path on hover.
+- Settings pages fade at their top and bottom edges as you scroll; under New Worktrees, the menu names Kuvo Code's own folder and the row under it shows where that is.
+- More of the app's icon buttons read their names in VoiceOver.
+- The two terminal commands say where they open: **New Terminal** (⌃⇧`) as a tab, **New Terminal in Panel** (⌃`) in the side panel.
+- Settings › MCP Servers no longer offers Linear, Notion and Atlassian a second time: they're in Integrations, and a row there says so.
+- The model menu is as tall as what it lists, so a short list like Custom Auto's leaves no empty space under it.
+- In a narrow panel, Files gives an open file the whole width: the tree folds away and comes back from the toolbar.
+- A bot's work bar shows Open and Stop on the session under the pointer, and folds to its line while All is open, so its sessions aren't listed twice.
+- Edit Bot no longer ends each section with a paragraph: what you'd need to know is in the section itself, like "Pixel schedules these itself" under an empty Wake-Ups.
+- What a bot made is as tall as its list (short while it's empty), its Shelf no longer shows the bot's own job as something it made, and its button's dot no longer lights up for it.
+- When a goal can't run alone yet, its plan lists the sandbox first among what's yours, with its fix on the row, instead of a separate notice above.
+- Search results under In Conversations show the words you searched for in bold.
+- A vault item for a site shows that site's mark, like GitHub's or Stripe's, where Kuvo Code has one.
 - A turn that fails says what happened in its headline (the provider is rate limiting you, the sign-in has ended, the usage limit is reached, the provider couldn't be reached) with the details under it, and offers the way out in the same card: Try Again, and Switch Model, Sign In Again or Open Accounts where that's what helps.
 - A failed conversation's mark in the sidebar is a filled red disc, easier to tell from the others.
 - While a side question shows over the composer, what you send asks it a follow-up: a "Side question" tag says so, and its × sends the next message to the conversation again. The card no longer has a second text field of its own.
@@ -34,6 +58,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - A reply's steps show one "Worked for" line again, where some showed two when the engine gave the agent more guidance partway through.
 - A session an agent or a bot starts in a worktree, with a title, gets its branch named after that title, as yours do, also with your Mac closed; so does one titled while Kuvo Code there was restarting. They used to keep a made-up name like `kuvo/brave-otter`. Every session working in that worktree is told the new name, and a branch already pushed keeps its name.
 - Agents ask before working in a folder outside the project, as Settings › Permissions says they do: the engine had let them read and change files anywhere, your SSH keys included. Your own rules there still decide, and files you send with a message, skills and the agent's saved outputs open without asking.
+- The agent's pointer shows over the panel's browser when its steps come quickly too, instead of only the ring around a field and the badge.
 - Kuvo Code no longer quits when a file the panel shows with Quick Look (a PDF, a spreadsheet, a video) is followed by the next one as its window closes.
 - On a busy Mac, the card for a command the sandbox stopped fills in what was stopped, and **Always for** its folder, as soon as macOS has noted it, instead of showing only the command's error.
 - With pnpm 11, `pnpm dlx` in the sandbox runs what it fetches from Kuvo Code's own cache, no longer from copies it left in your own pnpm store, which your pnpm runs outside the sandbox.

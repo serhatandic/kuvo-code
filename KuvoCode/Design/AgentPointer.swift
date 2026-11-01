@@ -189,9 +189,15 @@ struct AgentPointerOverlay: View {
                 shown = step
                 visible = true
             }
-            try? await Task.sleep(for: .milliseconds(280))
-            withAnimation(.easeOut(duration: step.action == .click ? 0.5 : 1.2)) { pulse = true }
-            try? await Task.sleep(for: AgentPointer.lingers)
+            // A newer step cancels this one: it stops here, rather than hiding the arrow the newer
+            // step just showed.
+            do {
+                try await Task.sleep(for: .milliseconds(280))
+                withAnimation(.easeOut(duration: step.action == .click ? 0.5 : 1.2)) { pulse = true }
+                try await Task.sleep(for: AgentPointer.lingers)
+            } catch {
+                return
+            }
             withAnimation(.easeOut(duration: 0.35)) { visible = false }
         }
     }

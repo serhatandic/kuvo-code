@@ -27,6 +27,7 @@ public struct Placeholder: View {
     let kind: Kind
     let label: String
     let fadesOut: Bool
+    let waits: Bool
     @State private var shown = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var scheme
@@ -37,11 +38,14 @@ public struct Placeholder: View {
     /// `label` is what VoiceOver says ("Loading skills"). `fadesOut` cross-fades it with the
     /// content that replaces it, which comes in with `.transition(.replacingPlaceholder)`; off
     /// where it sits among other rows of a stack, which would keep its room while it fades and
-    /// then close up.
-    public init(_ kind: Kind, label: String = "Loading", fadesOut: Bool = true) {
+    /// then close up. `waits` off shows it at once, where a load is known to take a while (a
+    /// screen's first, which would otherwise stand empty for that moment).
+    public init(_ kind: Kind, label: String = "Loading", fadesOut: Bool = true, waits: Bool = true) {
         self.kind = kind
         self.label = label
         self.fadesOut = fadesOut
+        self.waits = waits
+        _shown = State(initialValue: !waits)
     }
 
     public var body: some View {
@@ -54,7 +58,7 @@ public struct Placeholder: View {
             .accessibilityHidden(!shown)
             .transition(fadesOut ? .replacingPlaceholder : .identity)
             .task {
-                guard (try? await Task.sleep(for: .seconds(Self.delay))) != nil else { return }
+                guard waits, (try? await Task.sleep(for: .seconds(Self.delay))) != nil else { return }
                 withAnimation(.easeOut(duration: 0.25)) { shown = true }
             }
     }

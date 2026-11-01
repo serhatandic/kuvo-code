@@ -387,9 +387,12 @@ private struct WorktreesFolderSection: View {
             if let preview {
                 let projects = preview.projects
                 if projects.isEmpty {
-                    // No project in a repository here yet: the folder itself.
+                    // No project in a repository here yet: the folder itself, by its path (the
+                    // picker above already names it).
                     LabeledContent("New worktrees go in") {
-                        Text(chosen ?? BoxPaths.display(preview.default, home: preview.home) + "/…")
+                        let folder = chosen ?? preview.default
+                        Text(BoxPaths.display(folder, home: preview.home))
+                            .help(folder)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                             .truncationMode(.middle)
@@ -468,6 +471,7 @@ private struct WorktreePlace: View {
         LabeledContent {
             HStack(spacing: 6) {
                 if let folder = project.folder {
+                    // By its path, Kuvo Code's own folder too: the picker above names that one.
                     Text(BoxPaths.display(folder, home: home))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -481,6 +485,7 @@ private struct WorktreePlace: View {
                             Image(systemName: "folder")
                         }
                         .buttonStyle(IconButtonStyle(width: 28, height: 24))
+                        .accessibilityLabel("Show in Finder")
                         .help("Show in Finder")
                     }
                 } else {

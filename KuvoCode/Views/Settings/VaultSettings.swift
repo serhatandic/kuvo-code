@@ -268,12 +268,26 @@ struct VaultSettings: View {
     }
 }
 
-/// An item's kind, as a small colored tile.
+/// An item's kind, as a small colored tile; for an item with a site, the site's mark instead,
+/// where the app has one, as Passwords shows it.
 struct VaultKindTile: View {
     let kind: VaultItem.Kind
     var size: CGFloat = 24
+    var site: String?
+    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
+        if let mark = site.flatMap(BrandMark.id(forSite:)) {
+            BrandMarkView(mark, size: size * 0.6)
+                .foregroundStyle(.primary)
+                .frame(width: size, height: size)
+                .background(Color.primary.opacity(scheme == .dark ? 0.12 : 0.07), in: .rect(cornerRadius: size * 0.27))
+        } else {
+            tile
+        }
+    }
+
+    private var tile: some View {
         Image(systemName: symbol)
             .font(.system(size: size * 0.5, weight: .semibold))
             .foregroundStyle(.white)
@@ -309,7 +323,7 @@ struct VaultItemRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            VaultKindTile(kind: item.kind)
+            VaultKindTile(kind: item.kind, site: item.sites.first)
             VStack(alignment: .leading, spacing: 1) {
                 Text(item.name).lineLimit(1)
                 Text(item.subtitle).font(.callout).foregroundStyle(.secondary).lineLimit(1)
@@ -330,13 +344,19 @@ struct VaultItemRow: View {
     }
 }
 
-/// How an item's used, at a glance: on its own, by asking, or by no one.
+/// How an item's used, at a glance: on its own or by asking. Nothing where no one may use it,
+/// as most items are: the exception is marked, not the rule.
 struct VaultWhoPill: View {
     let grants: [VaultGrant]
 
     var body: some View {
-        let (words, color): (String, Color) = grants.contains { $0.how == .own } ? ("On its own", .green)
-            : grants.isEmpty ? ("No one", .secondary) : ("Asks", .blue)
+        if !grants.isEmpty {
+            let (words, color): (String, Color) = grants.contains { $0.how == .own } ? ("On its own", .green) : ("Asks", .blue)
+            pill(words, color)
+        }
+    }
+
+    private func pill(_ words: String, _ color: Color) -> some View {
         Text(words)
             .font(.caption.weight(.medium))
             .foregroundStyle(color)
@@ -374,7 +394,7 @@ struct VaultActivityRow: View {
                 .font(.caption)
                 .frame(width: 14)
             VStack(alignment: .leading, spacing: 1) {
-                Text(entry.sentence).lineLimit(2)
+                Text(entry.sentence(here: "Mac")).lineLimit(2)
                 Text("\(entry.date, format: .relative(presentation: .named))\(entry.why.map { " · \($0)" } ?? "")")
                     .font(.caption)
                     .foregroundStyle(.secondary)
