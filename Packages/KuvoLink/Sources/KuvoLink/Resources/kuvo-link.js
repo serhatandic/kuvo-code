@@ -392,7 +392,7 @@ async function call(target, method, route, body, signal, folder) {
   });
   const value = await response.json().catch(() => ({}));
   if (!response.ok)
-    throw new Error(typeof value?.message === "string" && value.message || `It answered ${response.status}.`);
+    throw Object.assign(new Error(typeof value?.message === "string" && value.message || `It answered ${response.status}.`), { status: response.status });
   return value?.data ?? value;
 }
 async function fetched(url, most, timeout) {
@@ -8146,7 +8146,9 @@ async function lookAtGoals(tell, targets, { file = GOALS_FILE, here, now = Date.
     }
     if (!bridge)
       continue;
-    const loop = await call(bridge, "GET", `/api/kuvo/goals/${encodeURIComponent(goal.session)}`, undefined, signal).then((data) => isObject(data) ? data : null, () => null);
+    const loop = await call(bridge, "GET", `/api/kuvo/goals/${encodeURIComponent(goal.session)}`, undefined, signal).then((data) => isObject(data) ? data : null, (error) => error?.status === 404 ? null : undefined);
+    if (loop === undefined)
+      continue;
     if (!loop) {
       await setGoalLoop(goal, loopCondition(goal), targets, file);
       continue;

@@ -889,7 +889,12 @@ export async function lookAtGoals(tell: (notice: Notice) => boolean, targets: ()
       continue;
     }
     if (!bridge) continue;
-    const loop = await call(bridge, "GET", `/api/kuvo/goals/${encodeURIComponent(goal.session)}`, undefined, signal).then(data => (isObject(data) ? data : null), () => null);
+    // (Set again only once the bridge says it has none: one it couldn't read now may be one you paused.)
+    const loop = await call(bridge, "GET", `/api/kuvo/goals/${encodeURIComponent(goal.session)}`, undefined, signal).then(
+      data => (isObject(data) ? data : null),
+      (error: { status?: number }) => (error?.status === 404 ? null : undefined),
+    );
+    if (loop === undefined) continue;
     if (!loop) {
       await setGoalLoop(goal, loopCondition(goal), targets, file);
       continue;
