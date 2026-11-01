@@ -29,6 +29,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - Report a Problem names your Mac's chip, says once what happens on GitHub, and lists what's included with the report.
 - Open Quickly shows the letters you typed in bold, as the command palette does.
 - A terminal tab is named for what runs in it, else its folder, instead of user@host.
+- A subagent's row has its arrow at the end and its words at one size; **Open Conversation** is under its steps and in its right-click menu.
 - The sidebar's accounts stay while the coding agents restart, instead of briefly showing fewer.
 - The command palette shows the letters you typed in bold in each result, and Run shows a play mark.
 - Settings › Accounts has one Add Account menu for the subscriptions, and Edit Bot › Keys one Add Its Own Key menu, instead of a button on every row, and a coding agent's accounts sit right under its name.
