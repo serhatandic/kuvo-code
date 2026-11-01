@@ -22,6 +22,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - Settings › Permissions says what each choice does (Allow, Ask First, Don't Allow) instead of "Default" on every row; a row you changed says so, and its menu sets it back.
 - Settings › MCP Servers groups its popular servers by whether they need an account, instead of a tag on every row, and Settings › Agents describes the built-in agents in a line each.
 - Bring your subscriptions shows each kind as one list, and the mode menu in the composer has a chevron like the model menu beside it.
+- A reply's steps show one "Worked for" line again, where some showed two when the engine gave the agent more guidance partway through.
 - Agents ask before working in a folder outside the project, as Settings › Permissions says they do: the engine had let them read and change files anywhere, your SSH keys included. Your own rules there still decide, and files you send with a message, skills and the agent's saved outputs open without asking.
 - Kuvo Code no longer quits when a file the panel shows with Quick Look (a PDF, a spreadsheet, a video) is followed by the next one as its window closes.
 - On a busy Mac, the card for a command the sandbox stopped fills in what was stopped, and **Always for** its folder, as soon as macOS has noted it, instead of showing only the command's error.
