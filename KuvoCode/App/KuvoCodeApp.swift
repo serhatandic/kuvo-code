@@ -25,6 +25,8 @@ enum Launch {
                 exit(1)
             }
         }
+        // Before any window: a text field's I-beam only where nothing is drawn over it.
+        MainActor.assumeIsolated { CursorRects.install() }
         if AppInfo.isHostingTests {
             // Only as a copy of its own (scripts/test-app.sh): as the app itself, the tests would
             // read and change your settings and reach your machines.
