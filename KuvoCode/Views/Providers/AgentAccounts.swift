@@ -286,32 +286,32 @@ private struct ProductBlock: View {
     private var installFailure: String? { agents.installFailures[main.id] }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: hasActions ? 6 : 0) {
+        VStack(alignment: .leading, spacing: action == nil ? 0 : 6) {
             // The actions beside the name; in a narrow window, under it, lined up with the name
             // and the accounts; and one above the other when they don't fit side by side there
             // either, where what's still too long is cut short. With none, the accounts sit right
             // under the name, as one item.
-            if !hasActions {
-                heading
-            } else {
+            if let action {
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: 14) {
                         heading
                         Spacer(minLength: 12)
-                        actions(AnyLayout(HStackLayout(spacing: 10)))
+                        actions(action, AnyLayout(HStackLayout(spacing: 10)))
                     }
                     VStack(alignment: .leading, spacing: 4) {
                         heading
-                        actions(AnyLayout(HStackLayout(spacing: 10)), isUnder: true)
+                        actions(action, AnyLayout(HStackLayout(spacing: 10)), isUnder: true)
                             .padding(.leading, Self.indent)
                     }
                     VStack(alignment: .leading, spacing: 4) {
                         heading
-                        actions(AnyLayout(VStackLayout(alignment: .leading, spacing: 4)), isUnder: true, truncates: true)
+                        actions(action, AnyLayout(VStackLayout(alignment: .leading, spacing: 4)), isUnder: true, truncates: true)
                             .padding(.leading, Self.indent)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                heading
             }
             VStack(alignment: .leading, spacing: 0) {
                 switch product.kind {
@@ -381,17 +381,25 @@ private struct ProductBlock: View {
         }
     }
 
-    /// Whether `actions` has anything to show.
-    private var hasActions: Bool {
-        isInstalling || (isAgent && !isInstalled && installCommand != nil) || isUpdating || latest != nil
+    /// What it needs from you, if anything: installing again, or an update.
+    private enum Action {
+        case installing, install(command: String), updating, update(to: String)
+    }
+
+    private var action: Action? {
+        if isInstalling { return .installing }
+        if isAgent, !isInstalled, let installCommand { return .install(command: installCommand) }
+        if isUpdating { return .updating }
+        return latest.map { .update(to: $0) }
     }
 
     /// What it needs from you, on the product's line: installing again, or an update; and another
     /// account. Under the name (`isUnder`), the buttons' words line up with it, as the plain
     /// words do.
-    private func actions(_ layout: AnyLayout, isUnder: Bool = false, truncates: Bool = false) -> some View {
+    private func actions(_ action: Action, _ layout: AnyLayout, isUnder: Bool = false, truncates: Bool = false) -> some View {
         layout {
-            if isInstalling {
+            switch action {
+            case .installing:
                 HStack(spacing: 6) {
                     Spinner(size: 12)
                     Text("Installing…")
@@ -399,7 +407,7 @@ private struct ProductBlock: View {
                         .lineLimit(1)
                         .foregroundStyle(.secondary)
                 }
-            } else if isAgent, !isInstalled, let installCommand {
+            case .install(let installCommand):
                 Button(action: install) {
                     Label("Install", systemImage: "arrow.down.circle")
                         .font(.callout)
@@ -408,7 +416,7 @@ private struct ProductBlock: View {
                 .buttonStyle(TextButtonStyle(outset: isUnder))
                 .disabled(agents.api == nil)
                 .help("It isn't installed. Runs \(installCommand), its maker's installer.")
-            } else if isUpdating {
+            case .updating:
                 HStack(spacing: 6) {
                     Spinner(size: 12)
                     Text("Updating…")
@@ -416,7 +424,7 @@ private struct ProductBlock: View {
                         .lineLimit(1)
                         .foregroundStyle(.secondary)
                 }
-            } else if let latest {
+            case .update(let latest):
                 if updates {
                     Button(action: update) {
                         Label("Update to \(latest)", systemImage: "arrow.down.circle")
