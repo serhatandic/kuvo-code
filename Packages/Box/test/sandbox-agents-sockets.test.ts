@@ -54,7 +54,8 @@ test.skipIf(!canFence || process.platform !== "darwin")("a command can't use you
       // Written as they are on a box: /tmp and your temporary folder.
       writable: ["/dev", "/private/tmp", dirname(temporary)],
     })
-    const connects = (where: string) => `${process.execPath} -e 'require("net").connect(process.argv[1]).on("connect", () => process.exit(0)).on("error", () => process.exit(1))' ${JSON.stringify(where)}`
+    // (The Bun this runs on, quoted: an engine's is in a folder with a space in its name.)
+    const connects = (where: string) => `${JSON.stringify(process.execPath)} -e 'require("net").connect(process.argv[1]).on("connect", () => process.exit(0)).on("error", () => process.exit(1))' ${JSON.stringify(where)}`
     // And each in a folder commands write, moved (its folder, or itself) to be reached by another name.
     // (To names no rule knows.)
     const renamed = [[started, join(root, "started")], [system, join(root, "system")], [join(yours, "agent.123"), join(temporary, "moved.sock")]]
@@ -62,7 +63,8 @@ test.skipIf(!canFence || process.platform !== "darwin")("a command can't use you
     for (const [from, to] of renamed) tries.push(`mv ${JSON.stringify(from)} ${JSON.stringify(to)} 2>/dev/null; if ( ${connects(to.endsWith(".sock") ? to : join(to, from === system ? "Listeners" : "agent.123"))} ) 2>/dev/null; then echo "${to}: allowed"; else echo "${to}: refused"; fi`)
     tries.push(`if rm ${JSON.stringify(shared)} 2>/dev/null; then echo "${shared} removed: allowed"; else echo "${shared} removed: refused"; fi`)
     const script = tries.join("\n")
-    const ran = Bun.spawnSync([join(kuvo, "bin", "kuvo-fence"), "-c", script], { cwd: project, env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: home, KUVO_FENCE_WORK: project } })
+    // (Run on an engine's Bun, `BUN_BE_BUN=1`, the connects need it too, or they run the engine.)
+    const ran = Bun.spawnSync([join(kuvo, "bin", "kuvo-fence"), "-c", script], { cwd: project, env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: home, KUVO_FENCE_WORK: project, ...(process.env.BUN_BE_BUN ? { BUN_BE_BUN: process.env.BUN_BE_BUN } : {}) } })
     const out = ran.stdout.toString() + ran.stderr.toString()
     expect(Object.fromEntries(out.trim().split("\n").filter(line => /: (allowed|refused)$/.test(line)).map(line => line.split(": ")))).toEqual(
       { ...Object.fromEntries([...agents, ...renamed.map(([, to]) => to)].map(where => [where, "refused"])), ...Object.fromEntries([...others, `${shared} removed`].map(where => [where, "allowed"])) })
