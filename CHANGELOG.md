@@ -25,6 +25,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - With Find open at the end of a conversation, the arrow to the newest no longer shows with nothing below.
 - The badge over a page an agent is browsing is solid, and Take Over looks like a button.
 - A new tab's sites show their icon or mark (a globe when there's neither), never a letter, with names on up to two lines.
+- Setting up the browser on a machine shows one progress bar, its percentage on the line above it.
 - The sidebar's accounts stay while the coding agents restart, instead of briefly showing fewer.
 - The command palette shows the letters you typed in bold in each result, and Run shows a play mark.
 - Settings › Accounts has one Add Account menu for the subscriptions, and Edit Bot › Keys one Add Its Own Key menu, instead of a button on every row, and a coding agent's accounts sit right under its name.

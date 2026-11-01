@@ -166,7 +166,8 @@ private struct SetupCard: View {
 
     var body: some View {
         VStack(spacing: 14) {
-            Spinner(size: 22)
+            // One sign of progress: the bar, once it can say how far.
+            if progress == nil { Spinner(size: 22) }
             VStack(spacing: 6) {
                 Text("Setting Up the Browser on \(machine)")
                     .font(.system(size: 15, weight: .semibold))
@@ -177,8 +178,19 @@ private struct SetupCard: View {
                     .frame(maxWidth: 340)
             }
             if let progress {
-                ProgressLine("Downloading the browser", fraction: progress)
-                    .frame(width: 200)
+                VStack(spacing: 5) {
+                    HStack {
+                        Text("Downloading the browser")
+                        Spacer(minLength: 8)
+                        Text(min(max(progress, 0), 1), format: .percent.precision(.fractionLength(0)))
+                            .monospacedDigit()
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+                    ProgressLine("Downloading the browser", fraction: progress, layout: .bar)
+                }
+                .frame(width: 220)
             } else {
                 Text("Sending it to \(machine)…")
                     .font(.caption)
