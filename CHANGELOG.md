@@ -34,6 +34,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - A vault item's sharing says **Every agent** until it's shared with a session or bot by name.
 - A goal's card counts what's yours to do only where there's a button for it.
 - A command of several lines shows as its first line and … in a step, never its backticks.
+- The context gauge is its percentage alone until the conversation is half full, then a ring with it, so it no longer looks like it's loading; its details give the tokens without the percentage again.
 - With more computers than fit over the sidebar, a count after their names opens a menu of the rest, with how each is connected and **Add Machine…**; the one you're on always shows.
 - The sidebar's accounts stay while the coding agents restart, instead of briefly showing fewer.
 - The command palette shows the letters you typed in bold in each result, and Run shows a play mark.
