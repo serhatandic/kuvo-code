@@ -209,9 +209,12 @@ struct GoalCard: View {
     /// can do something about: the sandbox's row counts once it has a button, not while it's
     /// being checked or only says why it holds back.
     static func subtitle(name: String, yours: Int, sandbox: GoalSandbox.Row?, hasReady: Bool) -> String {
-        let count = yours + (sandbox.map { $0.checking || $0.buttons.isEmpty ? 0 : 1 } ?? 0)
+        let fixable = sandbox.map { !$0.checking && !$0.buttons.isEmpty }
+        let count = yours + (fixable == true ? 1 : 0)
         let first = count == 0 ? "" : count == 1 ? " One thing is yours first" : " \(Self.spelled(count).capitalized) things are yours first"
-        let rest = !hasReady ? (count == 0 ? "" : ".") : (count == 0 ? " Everything’s ready." : "; the rest is ready.")
+        // Nothing reads as ready over a row saying why it can't work alone yet, or still checking.
+        let ready = hasReady && fixable != false
+        let rest = !ready ? (count == 0 ? "" : ".") : (count == 0 ? " Everything’s ready." : "; the rest is ready.")
         return "\(name)’s plan.\(first)\(rest)"
     }
 
