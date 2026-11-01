@@ -42,7 +42,8 @@ struct OpenQuickly: View {
                                 Image(nsImage: NSWorkspace.shared.icon(of: file.url))
                                     .resizable()
                                     .frame(width: 16, height: 16)
-                                Text(file.name)
+                                // What you typed in semibold, as the command palette marks it.
+                                Text(CommandPalette.marked(file.name, query: query))
                                     .font(.system(size: 13, weight: .medium))
                                 let folder = (file.path as NSString).deletingLastPathComponent
                                 if !folder.isEmpty {
