@@ -607,6 +607,27 @@ test("this Mac's box hides its app's whole folder, its chats but the conversatio
   }
 });
 
+test("a chat's command works in the Chats folder, where every chat works, and the rest of Kuvo Code's folder stays hidden", async () => {
+  // (This Mac's chats are in its app's folder, a machine's in its own: each hidden but for them.)
+  const box = boxAt(linux ? "chats-machine" : "run.kuvo.code.chats-test", !linux);
+  const chats = linux ? path.join(box.home, "chats") : path.join(box.app, "Chats");
+  fs.mkdirSync(chats, { recursive: true });
+  fs.writeFileSync(path.join(chats, "notes.md"), "a chat's\n");
+  const running = await start(box);
+  try {
+    assert.equal((await running.ask("GET", "kuvo/sandbox")).value.able, true);
+    const ran = await engineRuns(box, chats, tries([
+      ["read what's there", "cat notes.md"],
+      ["write there", "echo ok > reply.md"],
+      ["read the box's files", `cat ${JSON.stringify(path.join(box.home, "run", "engine.json"))}`],
+    ]), "ses_chat");
+    assert.deepEqual(outcome(ran.out), { "read what's there": "allowed", "write there": "allowed", "read the box's files": "refused" }, ran.out);
+    assert.equal(fs.readFileSync(path.join(chats, "reply.md"), "utf8"), "ok\n");
+  } finally {
+    await running.stop();
+  }
+});
+
 test("a .git that names another folder doesn't let a command write there", async () => {
   const box = boxAt("git-redirect");
   const elsewhere = path.join(root, "elsewhere");

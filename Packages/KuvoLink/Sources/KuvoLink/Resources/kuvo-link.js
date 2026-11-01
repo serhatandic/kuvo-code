@@ -5428,7 +5428,7 @@ function seatbeltProfile(policy, options) {
 // Packages/Box/src/link/fence/files.ts
 var sh = (text) => `'${text.replace(/'/g, `'\\''`)}'`;
 function launcherScript(places) {
-  const insideCases = [...places.inside.map((folder) => `${sh(folder)}/?*`), sh(places.probe)].join("|");
+  const insideCases = [...places.inside.map((folder) => `${sh(folder)}/?*`), ...places.shared.flatMap((folder) => [sh(folder), `${sh(folder)}/?*`]), sh(places.probe)].join("|");
   const run = places.platform === "darwin" ? [
     `for c_last; do :; done`,
     `c_sum=$( (printf '%s' "\${c_last-}" | shasum -a 256) 2>/dev/null | cut -c 1-16)`,
@@ -5774,7 +5774,8 @@ var places = {
   folder: FOLDER,
   launcher: path27.join(K, "bin", "kuvo-fence"),
   runner: path27.join(K, "bin", "kuvo-fence.js"),
-  inside: [realish(BOTS), realish(CHATS)],
+  inside: [realish(BOTS)],
+  shared: [realish(CHATS)],
   probe: PROBE,
   bots: BOTS,
   wakes: SESSION_WAKES,

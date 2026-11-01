@@ -18,9 +18,12 @@ export interface FencePlaces {
   /** `bin/kuvo-fence`, and the Linux script beside it. */
   launcher: string;
   runner: string;
-  /** Folders of Kuvo Code's own whose folders are each a conversation's own (bots', chats'): in
-   * one, a command gets that folder back, and not its neighbours. */
+  /** Folders of Kuvo Code's own whose folders are each a conversation's own (bots'): in one, a
+   * command gets that folder back, and not its neighbours. */
   inside: string[];
+  /** Folders of Kuvo Code's own that conversations work in themselves (the chats', which every chat
+   * shares): in one, or a folder in it, a command gets that folder back. */
+  shared: string[];
   /** The box's own check's folder (`state.ts`, `probe`), also given back. */
   probe: string;
   /** Where kuvo-wake keeps a conversation's wake-ups and watches: its bot's folder in `bots`, or its
@@ -43,7 +46,7 @@ const sh = (text: string) => `'${text.replace(/'/g, `'\\''`)}'`;
 
 /** `bin/kuvo-fence`: the shell the engine runs each command with (`kuvo-fence -c <command>`). */
 export function launcherScript(places: FencePlaces): string {
-  const insideCases = [...places.inside.map(folder => `${sh(folder)}/?*`), sh(places.probe)].join("|");
+  const insideCases = [...places.inside.map(folder => `${sh(folder)}/?*`), ...places.shared.flatMap(folder => [sh(folder), `${sh(folder)}/?*`]), sh(places.probe)].join("|");
   const run = places.platform === "darwin"
     ? [
         // Its refusals, in macOS's log, name its conversation and the command, by a sum of it (a
