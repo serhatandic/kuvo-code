@@ -28,7 +28,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - Setting up the browser on a machine shows one progress bar, its percentage on the line above it.
 - Report a Problem names your Mac's chip, says once what happens on GitHub, and lists what's included with the report.
 - Open Quickly shows the letters you typed in bold, as the command palette does.
-- A terminal tab is named for what runs in it, else its folder, instead of user@host.
+- A terminal tab is named for what runs in it, else the command it opened with or its folder, instead of user@host.
 - A subagent's row has its arrow at the end and its words at one size; **Open Conversation** is under its steps and in its right-click menu.
 - VoiceOver reads the context gauge as the context window, with how full it is and its token counts.
 - A vault item's sharing says **Every agent** until it's shared with a session or bot by name.

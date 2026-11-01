@@ -115,6 +115,28 @@ import Testing
         #expect(session.title == "claude")
         session.view.feed(text: "\u{1b}]0;serhat@lokum\u{07}")
         #expect(session.title == folder.lastPathComponent)
+        session.view.feed(text: "\u{1b}]0;serhat@lokum: /\u{07}")
+        #expect(session.title == "/", "the top folder, not home")
+        session.view.feed(text: "\u{1b}]0;npm@10.8.1\u{07}")
+        #expect(session.title == "npm@10.8.1", "a version, not a host")
+        // A machine's home folder, before its shell names it.
+        #expect(TerminalSession.folderName("/home/serhat") == "~")
+        #expect(TerminalSession.folderName("/home/serhat/src/app/") == "app")
+    }
+
+    /// A project's own terminal (Terminal Instead of Chat) is named for its command until what
+    /// runs names itself; a plain shell, for its folder.
+    @Test func aProjectsTerminalIsNamedForItsCommand() {
+        let terminals = MainTerminals()
+        let command = terminals.open(in: folder.path, command: "sleep 60", environment: shell)
+        let plain = terminals.open(in: folder.path, command: nil, environment: shell)
+        defer {
+            terminals.close(command)
+            terminals.close(plain)
+            try? FileManager.default.removeItem(at: folder)
+        }
+        #expect(terminals.entry(command)?.session.title == "sleep")
+        #expect(terminals.entry(plain)?.session.title == folder.lastPathComponent)
     }
 
     /// Waits for the session's shell to end, as the terminal hears it.

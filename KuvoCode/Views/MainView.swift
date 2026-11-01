@@ -427,7 +427,7 @@ struct MainView: View {
             return TabItem(id: id, title: Workspace.isChat(directory) ? "New Chat" : "New Session", logo: nil, status: .idle)
         case .terminal:
             guard let entry = terminals.entry(id) else { return nil }
-            return TabItem(id: id, title: entry.session.title == "Terminal" ? entry.label : entry.session.title, logo: nil, status: .idle, symbol: "apple.terminal")
+            return TabItem(id: id, title: entry.session.title, logo: nil, status: .idle, symbol: "apple.terminal")
         case .group(let group):
             guard let group = groups.group(group) else { return nil }
             let status: TabItem.Status = groups.isDiscussing(group.id) ? .working : groups.isUnread(group) && groupID != group.id ? .unread : .idle
@@ -578,7 +578,7 @@ struct MainView: View {
                 }
                 .id(request.id)
             } else if let key = selection, let entry = terminals.entry(key.text) {
-                Card(title: entry.session.title == "Terminal" ? entry.label : entry.session.title, detail: workspace.projectName(entry.directory), isFocused: focus == .conversation) {
+                Card(title: entry.session.title, detail: workspace.projectName(entry.directory), isFocused: focus == .conversation) {
                     Image(systemName: "apple.terminal")
                 } actions: {
                     Button("Close Tab", systemImage: "xmark") { tabs.close(key) }

@@ -10,8 +10,11 @@ import SwiftUI
 @Observable
 final class TerminalSession: NSObject {
     let view: LocalProcessTerminalView
-    /// What its tab says: what runs in it, else its folder (`tabTitle`).
+    /// What its tab says: what runs in it, else the command it was opened with, else its folder
+    /// (`tabTitle`).
     private(set) var title: String
+    /// What the tab says until what runs in it names itself.
+    @ObservationIgnored private let untitled: String
     private(set) var isRunning = true
     /// Add to Message in the right-click menu, with the selected text.
     @ObservationIgnored var addToMessage: ((String) -> Void)?
@@ -22,11 +25,13 @@ final class TerminalSession: NSObject {
     let machine: String?
 
     /// A shell, typing `command` once it starts (so it stays a shell when the command ends).
-    init(directory: String, environment: [String: String], command: String? = nil) {
+    /// `label`: the tab's name until what runs names itself (the command's), else its folder's.
+    init(directory: String, environment: [String: String], command: String? = nil, label: String? = nil) {
         view = LocalProcessTerminalView(frame: NSRect(x: 0, y: 0, width: 640, height: 400))
         self.directory = directory
         machine = RemoteFolder.parse(directory)?.machine
-        title = Self.tabTitle("", folder: RemoteFolder.parse(directory)?.path ?? directory)
+        untitled = label ?? Self.folderName(RemoteFolder.parse(directory)?.path ?? directory)
+        title = untitled
         var environment = environment
         environment["TERM"] = "xterm-256color"
         environment["COLORTERM"] = "truecolor"
@@ -281,28 +286,32 @@ extension TerminalSession: @preconcurrency LocalProcessTerminalViewDelegate {
     func setTerminalTitle(source: LocalProcessTerminalView, title: String) {
         // Only when it says something new, without the spinner some agents turn at its start: one
         // changing every tenth of a second would draw the tabs and the sidebar again as often.
-        let steady = Self.tabTitle(title, folder: RemoteFolder.parse(directory)?.path ?? directory)
+        let steady = Self.tabTitle(title, otherwise: untitled)
         if self.title != steady { self.title = steady }
     }
 
     /// What a tab says, as Terminal and VS Code name theirs: what runs in it, by the title it
     /// sets, without the spinner or mark an agent keeps changing at its start (Braille dots, ✳);
-    /// else the folder it's in. A shell's own "user@host: ~/src/app" says only the folder ("app"),
-    /// so two shells on one machine don't read alike, cut off at the same place.
-    static func tabTitle(_ title: String, folder: String) -> String {
+    /// else `untitled`. A shell's own "user@host: ~/src/app" says only the folder ("app"), so two
+    /// shells on one machine don't read alike, cut off at the same place; "npm@10.8.1" is no host.
+    static func tabTitle(_ title: String, otherwise untitled: String) -> String {
         let marks: Set<Character> = ["✳", "✶", "✻", "✽", "✢", "✺", "·", "•", "●", "○", "◐", "◓", "◑", "◒", "⏺"]
         let kept = title.drop { $0.isWhitespace || marks.contains($0) || $0.unicodeScalars.allSatisfy { (0x2800...0x28FF).contains($0.value) } }
         var named = kept.trimmingCharacters(in: .whitespaces)
-        if let shell = named.wholeMatch(of: /[\w.-]+@[\w.-]+(?::\s*(.*))?/) {
+        if let shell = named.wholeMatch(of: /[\w.-]+@[A-Za-z][\w.-]*(?::\s*(.*))?/) {
             named = shell.1.map { String($0).trimmingCharacters(in: .whitespaces) } ?? ""
         }
-        if named.isEmpty { named = folder }
-        // A path: its last folder; the home folder as ~.
-        if named.hasPrefix("/") || named.hasPrefix("~") {
-            let last = (named as NSString).lastPathComponent
-            return named == "~" || named == NSHomeDirectory() || last.isEmpty || last == "/" ? "~" : last
-        }
-        return named
+        if named.isEmpty { return untitled }
+        return named.hasPrefix("/") || named.hasPrefix("~") ? folderName(named) : named
+    }
+
+    /// A folder as a tab names it: its last part, a home folder (this Mac's, or a machine's) as ~,
+    /// and the top as /.
+    static func folderName(_ path: String) -> String {
+        let path = path.count > 1 && path.hasSuffix("/") ? String(path.dropLast()) : path
+        if path == "/" { return "/" }
+        if path == "~" || path == NSHomeDirectory() || path == "/root" || path.wholeMatch(of: /\/(home|Users)\/[^\/]+/) != nil { return "~" }
+        return (path as NSString).lastPathComponent
     }
 
     func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
@@ -428,7 +437,7 @@ final class MainTerminals {
         let key = TabKey.terminal(UUID().uuidString).text
         let command = command?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         let label = command.map { String($0.split(separator: " ").first ?? "Terminal") } ?? "Terminal"
-        entries[key] = Entry(session: TerminalSession(directory: directory, environment: environment, command: command), directory: directory, label: label)
+        entries[key] = Entry(session: TerminalSession(directory: directory, environment: environment, command: command, label: command == nil ? nil : label), directory: directory, label: label)
         return key
     }
 

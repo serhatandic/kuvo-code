@@ -759,7 +759,7 @@ struct SidebarView: View {
     @ViewBuilder private func terminalRows(_ terminals: [(key: String, entry: MainTerminals.Entry)], indented: Bool) -> some View {
         ForEach(terminals, id: \.key) { terminal in
             TerminalRow(
-                title: terminal.entry.session.title == "Terminal" ? terminal.entry.label : terminal.entry.session.title,
+                title: terminal.entry.session.title,
                 isSelected: selection == terminal.key,
                 indented: indented,
                 action: { selection = terminal.key },
