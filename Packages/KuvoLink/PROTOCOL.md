@@ -717,8 +717,9 @@ client shows it from the same routes.
   stopped (held and paused, as the queue's Stop), and the bot's own turn too, with what it was
   still to hear of them dropped. 404 for no such bot here, 503 with no engine.
 - **A box starting again** (its link): what its followed sessions did while it was down (finished,
-  failed, asked; not one that was stopped) is told to their starters once, by what
-  `run/work/told.json` says was told: the engine's and the coding agents' bridge's each as it's
+  failed, also a turn that failed before it replied, asked; not one that was stopped) is told to
+  their starters once, by what `run/work/told.json` says was told (the reply, and a failed turn by
+  its end): the engine's and the coding agents' bridge's each as it's
   found, from when the box last heard of that one, and only once it could list them all (one slow or
   not there yet is looked at again a minute on; a session it couldn't read doesn't hold back the
   others, and is looked at again a few times, then as the box starts the next time, on a few starts at most). A finish that was waiting for its starter's wait
@@ -3008,7 +3009,10 @@ never `/` or a folder holding your home folder).
 The agents bridge takes the same ask as one of the engine's defaults, for when the engine can't
 say its agent's rules. It doesn't take a coding agent off running on its own (`approvesAll`), so
 Codex, Cursor, Grok and Antigravity keep their modes. Where the bridge sees a tool call (Claude
-Code's every one, and what the others ask about), one reaching outside the project asks first. An
+Code's every one, and what the others ask about), one whose files are outside the project asks
+first (a command's line isn't read for them), weighed by their folders as the engine weighs its own
+(`<folder>/*`: a rule for a folder's files holds for the folder itself, and "Always" allows that
+folder, not the one above it). An
 agent's own files are never outside (`ownsPath`), though your rules for what it does with them still
 hold: Claude Code's plans, each project's memory, what it saved of a long output
 (`projects/<project>/<session>/tool-results`), and its background commands' output in /tmp's

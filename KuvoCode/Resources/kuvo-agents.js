@@ -14310,7 +14310,7 @@ async function branchRoutes(places, method, parts, body) {
 // Packages/Box/src/agents/sessions.ts
 import { createHash as createHash6 } from "crypto";
 import { spawn as spawnProcess } from "child_process";
-import { readFileSync as readFileSync23, statSync as statSync9 } from "fs";
+import { readFileSync as readFileSync23, realpathSync as realpathSync5, statSync as statSync9 } from "fs";
 import { homedir as homedir5 } from "os";
 import { dirname as dirname13, join as join25, resolve as resolve7 } from "path";
 import { fileURLToPath as fileURLToPath2 } from "url";
@@ -15292,10 +15292,31 @@ function outsidePaths(ask, directory, attached, own = ownPlaces(), owns) {
   if (!fileActions.has(ask.action))
     return [];
   const paths = ask.resources.filter((resource) => resource && resource !== "*" && (resource.startsWith("/") || resource.startsWith("~/") || !/[*?[]/.test(resource))).map((resource) => resolve7(directory, resource.startsWith("~/") ? join25(homedir5(), resource.slice(2)) : resource));
-  return paths.filter((path) => !within(path, [directory, ...own]) && !attached.has(path) && !owns?.(path));
+  const places = [directory, realFolder(directory), ...own];
+  return paths.filter((path) => !within(path, places) && !attached.has(path) && !owns?.(path));
+}
+function realFolder(folder) {
+  try {
+    return realpathSync5(folder);
+  } catch {
+    return folder;
+  }
+}
+function outsideFolders(ask, paths) {
+  return [...new Set(paths.map((path) => join25(isFolder(path, ask.action) ? path : dirname13(path), "*")))];
+}
+function outsideRefusable(ask, paths, folders) {
+  return [...paths.filter((path) => !isFolder(path, ask.action)), ...folders];
+}
+function isFolder(path, action) {
+  try {
+    return statSync9(path).isDirectory();
+  } catch {
+    return action === "list" || action === "glob";
+  }
 }
 function outsideAsk(ask, paths) {
-  return { ...ask, action: "external_directory", resources: paths, save: [...new Set(paths.map((path) => join25(dirname13(path), "*")))], unclassified: false };
+  return { ...ask, action: "external_directory", resources: paths, save: outsideFolders(ask, paths), unclassified: false };
 }
 function partsOf2(ask) {
   return isShell(ask.action) ? ask.resources.flatMap(commandParts) : ask.resources;
@@ -16846,12 +16867,14 @@ ${live.agentPrompt}` : ""
       return "deny";
     const away = outsidePaths(ask, session.location.directory, this.attached(session.id), undefined, owns);
     if (away.length) {
-      if (live.blocks && strictest(live.blocks, "external_directory", away) === "deny")
+      const folders = outsideFolders(ask, away);
+      const refusable = outsideRefusable(ask, away, folders);
+      if (live.blocks && strictest(live.blocks, "external_directory", refusable) === "deny")
         return "deny";
-      const outside = strictest(rules, "external_directory", away);
-      if (outside === "deny")
+      if (strictest(rules, "external_directory", refusable) === "deny")
         return "deny";
-      if (outside === "ask" && !this.allowedBefore(live, outsideAsk(ask, away)))
+      const outside = strictest(rules, "external_directory", folders);
+      if (outside === "ask" && !this.allowedOutside(live, folders))
         return "ask";
     }
     if (live.blocks === undefined && !looks.has(ask.action))
@@ -16884,6 +16907,9 @@ ${live.agentPrompt}` : ""
   allowedBefore(live, ask) {
     return live.always.some((rule) => rule.action === ask.action && coveredBy(rule.patterns, ask.action, ask.resources));
   }
+  allowedOutside(live, folders) {
+    return live.always.some((rule) => rule.action === "external_directory" && coveredBy(rule.patterns, "external_directory", folders));
+  }
   async askPermission(id, live, turn, ask, plan) {
     const session = this.record(id).session;
     const parts = partsOf2(ask);
@@ -16901,14 +16927,16 @@ ${live.agentPrompt}` : ""
       return "reject";
     const away = ask.weighed ? [] : outsidePaths(ask, session.location.directory, this.attached(id), undefined, this.ownedBy(turn));
     if (away.length) {
-      if (live.blocks && strictest(live.blocks, "external_directory", away) === "deny")
+      const folders = outsideFolders(ask, away);
+      const refusable = outsideRefusable(ask, away, folders);
+      if (live.blocks && strictest(live.blocks, "external_directory", refusable) === "deny")
         return "reject";
       const rules = [...live.agentRules ?? engineDefaults, ...session.permissions ?? []];
-      const outside = strictest(rules, "external_directory", away);
-      if (outside === "deny")
+      if (strictest(rules, "external_directory", refusable) === "deny")
         return "reject";
+      const outside = strictest(rules, "external_directory", folders);
       const own = strictest(rules, ask.action, parts) ?? "allow";
-      if (outside === "ask" && own !== "deny" && (own === "allow" || this.allowedBefore(live, ask)) && !this.allowedBefore(live, outsideAsk(ask, away))) {
+      if (outside === "ask" && own !== "deny" && (own === "allow" || this.allowedBefore(live, ask)) && !this.allowedOutside(live, folders)) {
         return this.askPermission(id, live, turn, { ...outsideAsk(ask, away), metadata: ask.metadata, message: ask.message, sandboxed: ask.sandboxed }, plan);
       }
     }
@@ -17106,7 +17134,6 @@ ${live.agentPrompt}` : ""
     }
   }
 }
-
 class NotFound extends Error {
 }
 
@@ -22729,4 +22756,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 2b56a6fb28f0b98ee5db364bc26bc694b066d6ea3aa8a0964428e3c68e087686
+// Built from Packages/Box/src/agents 40041ef915bb5eb5895ee2c9c8e1d6e6f55043cab5cf83ce86b41802f2a35080

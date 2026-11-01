@@ -2,7 +2,7 @@
 // Auto down its list, and what a session keeps. Each test has a folder of its own, removed after.
 
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { AcpThread } from "../../src/agents/acp"
@@ -736,6 +736,71 @@ describe("asks and conversations", () => {
       sessions.replyPermission(id, sessions.permissions(id)[0].id, "reject")
       await settled(id, 1)
       expect(seen).toEqual([true, "once", "reject"])
+    }
+  })
+
+  test("a folder outside the project your rules allow is open itself, as on the engine, and Always on another allows that folder, not the one above it", async () => {
+    // (Outside the temporary folder, which is the bridge's own.)
+    const [notes, other, home] = ["/home/me/notes", "/home/me/other", "/home/me"]
+    const agents = new Map([a, b].map((agent) => [agent.providerID, agent]))
+    sessions.closeAll()
+    sessions = new Sessions(store, { find: (provider: string | undefined) => (provider ? agents.get(provider) : undefined) } as unknown as Roster, auto, undefined, async () => [], async () => ({
+      permissions: [{ action: "*", resource: "*", effect: "allow" }, { action: "external_directory", resource: "*", effect: "ask" }, { action: "external_directory", resource: join(notes, "*"), effect: "allow" }, { action: "external_directory", resource: join(notes, "keys*"), effect: "deny" }],
+    }))
+    const seen: unknown[] = []
+    a.script = async (_input, turn, hooks) => {
+      // Claude Code's LS and Glob name the folder itself.
+      seen.push(await hooks.permission({ action: "list", resources: [notes] }))
+      seen.push(await hooks.permission({ action: "read", resources: [join(notes, "a.md")] }))
+      // A rule refusing a file there holds for it.
+      seen.push(await hooks.permission({ action: "read", resources: [join(notes, "keys.txt")] }))
+      seen.push(await hooks.permission({ action: "list", resources: [other] }))
+      seen.push(await hooks.permission({ action: "read", resources: [join(other, "b.md")] }))
+      seen.push(await hooks.permission({ action: "glob", resources: [home] }))
+      turn.startStep()
+      turn.endStep()
+      return { outcome: "succeeded" }
+    }
+    const id = create()
+    send(id, "look around")
+    await until(() => sessions.permissions(id).length === 1)
+    expect(sessions.permissions(id)[0]).toMatchObject({ action: "external_directory", resources: [other], save: [join(other, "*")] })
+    sessions.replyPermission(id, sessions.permissions(id)[0].id, "always")
+    // The folder above it isn't allowed by that.
+    await until(() => sessions.permissions(id).length === 1)
+    expect(sessions.permissions(id)[0]).toMatchObject({ action: "external_directory", resources: [home] })
+    sessions.replyPermission(id, sessions.permissions(id)[0].id, "reject")
+    await settled(id, 1)
+    expect(seen).toEqual(["once", "once", "reject", "always", "once", "reject"])
+  })
+
+  test("a project whose folder is reached through a link doesn't ask for its own files, named where they really are", async () => {
+    // (The temporary folder is the bridge's own, never outside: taken for another here.)
+    const tmp = process.env.TMPDIR
+    process.env.TMPDIR = "/nowhere/tmp"
+    try {
+      const real = mkdtempSync(join(root, "real-"))
+      writeFileSync(join(real, "a.ts"), "export {}\n")
+      const linked = join(root, "project")
+      symlinkSync(real, linked)
+      const seen: unknown[] = []
+      a.script = async (_input, turn, hooks) => {
+        // Claude Code names files from where it runs, which the system gives as the real folder.
+        seen.push(await hooks.permission({ action: "read", resources: [join(realpathSync(real), "a.ts")] }))
+        seen.push(await hooks.permission({ action: "write", resources: [join(realpathSync(real), "new.ts")] }))
+        seen.push(await hooks.permission({ action: "read", resources: [join(linked, "a.ts")] }))
+        turn.startStep()
+        turn.endStep()
+        return { outcome: "succeeded" }
+      }
+      const id = sessions.create({ model: { providerID: "alpha", id: "one" }, location: { directory: linked } }).id
+      send(id, "read it")
+      await settled(id, 1)
+      expect(sessions.permissions(id)).toEqual([])
+      expect(seen).toEqual(["once", "once", "once"])
+    } finally {
+      if (tmp === undefined) delete process.env.TMPDIR
+      else process.env.TMPDIR = tmp
     }
   })
 

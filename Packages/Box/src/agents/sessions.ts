@@ -9,7 +9,7 @@
 
 import { createHash } from "node:crypto"
 import { spawn as spawnProcess } from "node:child_process"
-import { readFileSync, statSync } from "node:fs"
+import { readFileSync, realpathSync, statSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -714,12 +714,50 @@ export function outsidePaths(ask: PermissionAsk, directory: string, attached: Se
     // Paths, from the session's folder (`../x` too), not patterns of names (`*.ts`).
     .filter((resource) => resource && resource !== "*" && (resource.startsWith("/") || resource.startsWith("~/") || !/[*?[]/.test(resource)))
     .map((resource) => resolve(directory, resource.startsWith("~/") ? join(homedir(), resource.slice(2)) : resource))
-  return paths.filter((path) => !within(path, [directory, ...own]) && !attached.has(path) && !owns?.(path))
+  // The folder where it really is too: an agent names files from where it runs, which the system
+  // gives as the real folder (a project reached through a link, /tmp on a Mac).
+  const places = [directory, realFolder(directory), ...own]
+  return paths.filter((path) => !within(path, places) && !attached.has(path) && !owns?.(path))
+}
+
+/** Where a folder really is, its links followed (as it's named, if it isn't there). */
+function realFolder(folder: string): string {
+  try {
+    return realpathSync(folder)
+  } catch {
+    return folder
+  }
+}
+
+/**
+ * The folders these paths outside the project are in, as the engine names them for your rules for
+ * working there: a file's folder, or a folder itself, each with "/*" (so a rule for a folder's
+ * files holds for the folder too).
+ */
+function outsideFolders(ask: PermissionAsk, paths: string[]): string[] {
+  return [...new Set(paths.map((path) => join(isFolder(path, ask.action) ? path : dirname(path), "*")))]
+}
+
+/**
+ * What a rule refusing working outside the project is weighed on: those folders, and the files
+ * among the paths themselves (a rule or Block refusing a file holds for it).
+ */
+function outsideRefusable(ask: PermissionAsk, paths: string[], folders: string[]): string[] {
+  return [...paths.filter((path) => !isFolder(path, ask.action)), ...folders]
+}
+
+/** Whether a path an ask names is a folder (one not there yet: as a listing names it). */
+function isFolder(path: string, action: string): boolean {
+  try {
+    return statSync(path).isDirectory()
+  } catch {
+    return action === "list" || action === "glob"
+  }
 }
 
 /** An ask about working outside the project, for these paths: "Always" allows their folders. */
 function outsideAsk(ask: PermissionAsk, paths: string[]): PermissionAsk {
-  return { ...ask, action: "external_directory", resources: paths, save: [...new Set(paths.map((path) => join(dirname(path), "*")))], unclassified: false }
+  return { ...ask, action: "external_directory", resources: paths, save: outsideFolders(ask, paths), unclassified: false }
 }
 
 /** What an ask is about, a command line's commands one by one. */
@@ -2382,10 +2420,12 @@ export class Sessions {
     // Paths outside the project: your rules for working there too.
     const away = outsidePaths(ask, session.location.directory, this.attached(session.id), undefined, owns)
     if (away.length) {
-      if (live.blocks && strictest(live.blocks, "external_directory", away) === "deny") return "deny"
-      const outside = strictest(rules, "external_directory", away)
-      if (outside === "deny") return "deny"
-      if (outside === "ask" && !this.allowedBefore(live, outsideAsk(ask, away))) return "ask"
+      const folders = outsideFolders(ask, away)
+      const refusable = outsideRefusable(ask, away, folders)
+      if (live.blocks && strictest(live.blocks, "external_directory", refusable) === "deny") return "deny"
+      if (strictest(rules, "external_directory", refusable) === "deny") return "deny"
+      const outside = strictest(rules, "external_directory", folders)
+      if (outside === "ask" && !this.allowedOutside(live, folders)) return "ask"
     }
     // Blocks not known (the engine didn't answer): asked, which reads them again.
     if (live.blocks === undefined && !looks.has(ask.action)) return "ask"
@@ -2420,6 +2460,11 @@ export class Sessions {
     return live.always.some((rule) => rule.action === ask.action && coveredBy(rule.patterns, ask.action, ask.resources))
   }
 
+  /** You allowed working in these folders outside the project before ("Always"). */
+  private allowedOutside(live: Live, folders: string[]): boolean {
+    return live.always.some((rule) => rule.action === "external_directory" && coveredBy(rule.patterns, "external_directory", folders))
+  }
+
   private async askPermission(id: string, live: Live, turn: Turn, ask: PermissionAsk, plan: boolean): Promise<Decision> {
     const session = this.record(id).session
     const parts = partsOf(ask)
@@ -2437,12 +2482,14 @@ export class Sessions {
     // too. One that asks, where the action itself doesn't, is asked as that.
     const away = ask.weighed ? [] : outsidePaths(ask, session.location.directory, this.attached(id), undefined, this.ownedBy(turn))
     if (away.length) {
-      if (live.blocks && strictest(live.blocks, "external_directory", away) === "deny") return "reject"
+      const folders = outsideFolders(ask, away)
+      const refusable = outsideRefusable(ask, away, folders)
+      if (live.blocks && strictest(live.blocks, "external_directory", refusable) === "deny") return "reject"
       const rules = [...(live.agentRules ?? engineDefaults), ...(session.permissions ?? [])]
-      const outside = strictest(rules, "external_directory", away)
-      if (outside === "deny") return "reject"
+      if (strictest(rules, "external_directory", refusable) === "deny") return "reject"
+      const outside = strictest(rules, "external_directory", folders)
       const own = strictest(rules, ask.action, parts) ?? "allow"
-      if (outside === "ask" && own !== "deny" && (own === "allow" || this.allowedBefore(live, ask)) && !this.allowedBefore(live, outsideAsk(ask, away))) {
+      if (outside === "ask" && own !== "deny" && (own === "allow" || this.allowedBefore(live, ask)) && !this.allowedOutside(live, folders)) {
         return this.askPermission(id, live, turn, { ...outsideAsk(ask, away), metadata: ask.metadata, message: ask.message, sandboxed: ask.sandboxed }, plan)
       }
     }

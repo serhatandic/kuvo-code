@@ -218,6 +218,7 @@ struct TranscriptView: View {
         // Made again as Find's marks change (each row reads its own as it's laid out).
         _ = find.marksState
         return RowStack(items: rows, id: \.id, same: ==, estimate: Self.estimate, animatesNew: !rowCache.isBulk, text: { $0.copiedText(folders: model.folders()) },
+                 whole: \.copiesWhole,
                  space: { row, index in index == 0 ? 0 : row.spacing(after: rows[index - 1]) }) { row, index in
             RowView(row: row, directory: model.session.location.directory, folders: model.folders, heard: model.heard, cancel: model.cancelPending, undo: model.undo(from:), redo: model.redo, fork: fork(_:), retry: model.retry(_:), buildPlan: model.agent == "plan" && !isOffline ? { model.buildPlan() } as () -> Void : nil, reply: model.reply(to:))
                 .equatable()
@@ -623,6 +624,12 @@ enum Row: Identifiable, Hashable {
         }
     }
 
+    /// Copied by `copiedText` from a selection that takes all of it, though its view is made: a
+    /// command you ran, whose command isn't text to select in (only what it printed is).
+    var copiesWhole: Bool {
+        if case .shell = self { true } else { false }
+    }
+
     /// Its words as a selection across the conversation copies it whole: as it reads (Markdown
     /// as shown), a line of steps as its summary.
     func copiedText(folders: [String]) -> String {
@@ -988,7 +995,8 @@ private struct MessageText: View {
             // AppKit's text, as the composer's: its pointer shows only where nothing's drawn over it.
             // Asked whether the limit cuts it only while there is one: all of it showing says nothing
             // of what Show Less brings back.
-            SelectableText(text: shown.text, faces: shown.faces, lineLimit: isExpanded ? nil : Self.lines,
+            // A short one has no Show More: never cut, however narrow its bubble.
+            SelectableText(text: shown.text, faces: shown.faces, lineLimit: isExpanded || !mayBeLong ? nil : Self.lines,
                            cut: mayBeLong && !isExpanded ? { isLimited = $0 } : nil)
                 // Faded at the cut; masked only if it may be long (each mask is drawn off screen
                 // first), and then all along, so the fade comes and goes over the same words.

@@ -310,6 +310,12 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - After picking a preset accent color, or leaving Appearance, the color panel no longer changes the accent.
 - The first launch's screen access step says to quit and reopen Kuvo Code if you just allowed Screen Recording, which macOS needs before it counts.
 - An agent you install on the first launch that finishes after you've gone on opens its sign-in in Settings › Accounts, instead of being left installed but not signed in.
+- A bot hears that a session it started stopped with an error while its computer was off, also when the session failed before it replied (a model out of reach, a sign-in that ended).
+- Right-clicking the words of a message you sent offers its own menu again (Copy, Undo From Here…, New Session From Here), and so do a command's output (Copy Command, Copy Output) and other rows; on words you selected or a link, you get the text's menu (Copy, Look Up, Copy Link).
+- A coding agent looking through a folder outside the project that your Permissions rules allow (searching it, listing it) no longer asks, as the engine's agents don't; and **Always** on a folder it asks about allows that folder, not the one it's in. A project reached through a link (or in /tmp on a Mac) no longer has Claude Code asking about each of its own files as if they were outside it.
+- A /goal (or /loop, /btw, /handoff, /review) that can't be done comes back in front of what you typed while it was being sent without its keyword, so your new words don't become part of the goal.
+- Copying a selection that runs across a command you ran with ! copies its command too, not only what it printed.
+- A short message of yours in a narrow window shows all of its lines, instead of being cut at twelve with no Show More.
 
 ## 0.7.2
 
