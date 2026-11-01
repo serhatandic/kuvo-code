@@ -218,6 +218,8 @@ struct ModelChip<Label: View>: View {
     var scope: ModelScope = .engine
     /// Auto among them (not in your Auto list's own picker).
     var offersAuto = true
+    /// Opens it when it changes.
+    var openRequest = 0
     /// Drawn with the model in use and its effort.
     @ViewBuilder let label: (Model?, String?) -> Label
     @State private var isOpen = false
@@ -260,6 +262,10 @@ struct ModelChip<Label: View>: View {
             .popoverContent()
         }
         .onAppear { LogoImages.shared.prefetch(catalog.models.flatMap { [$0.makerLogoID, $0.providerID] }) }
+        .onChange(of: openRequest) {
+            placement = ModelPicker.Placement(room: anchor.room, prefersBelow: opensBelow)
+            isOpen = true
+        }
         #if DEBUG
         .task {
             // KUVO_DEMO_MENU=model opens the picker after launch; =list, on the model list; =models,
@@ -281,8 +287,8 @@ struct ModelChip<Label: View>: View {
 
 extension ModelChip where Label == ModelChipLabel {
     /// `inUse`: on Auto, the model of your list at work now, shown beside it.
-    init(selection: ModelRef?, onSelect: @escaping (ModelRef) -> Void, scope: ModelScope = .engine, offersAuto: Bool = true, inUse: ModelRef? = nil) {
-        self.init(selection: selection, onSelect: onSelect, scope: scope, offersAuto: offersAuto) { model, variant in
+    init(selection: ModelRef?, onSelect: @escaping (ModelRef) -> Void, scope: ModelScope = .engine, offersAuto: Bool = true, inUse: ModelRef? = nil, openRequest: Int = 0) {
+        self.init(selection: selection, onSelect: onSelect, scope: scope, offersAuto: offersAuto, openRequest: openRequest) { model, variant in
             ModelChipLabel(model: model, variant: variant, inUse: model?.providerID == OutsideAgents.autoProvider ? inUse : nil)
         }
     }

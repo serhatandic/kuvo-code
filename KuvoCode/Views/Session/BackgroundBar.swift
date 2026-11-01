@@ -148,7 +148,7 @@ struct BarLine: View {
                 mark
                     .frame(width: 18)
                 Text(title)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.system(size: 13, weight: .semibold))
                     .lineLimit(1)
                     .layoutPriority(2)
                 // Whole, or not at all where a narrow card has no room: cut down to a letter or
@@ -220,7 +220,7 @@ struct BarEnd: View {
     static let column: CGFloat = 40
     /// Between the controls at the end.
     static let gap: CGFloat = 2
-    /// From ✕ to the card's edge (the Hide tab over the card ends there too).
+    /// From ✕ to the card's edge.
     static let trailing: CGFloat = 8
 
     var body: some View {
