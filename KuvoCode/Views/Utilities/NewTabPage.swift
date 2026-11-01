@@ -144,7 +144,8 @@ private struct ToolCard: View {
     }
 }
 
-/// A suggested site: its icon large, its name under it.
+/// A suggested site: its icon large (its favicon, else its mark, else a globe; never a made-up
+/// letter), its name under it on up to two lines.
 private struct SiteTile: View {
     let site: BrowserHistory.Site
     let icon: NSImage?
@@ -161,17 +162,19 @@ private struct SiteTile: View {
                             .interpolation(.high)
                             .clipShape(.rect(cornerRadius: 8))
                     } else {
-                        Text(site.host.prefix(1).uppercased())
-                            .font(.system(size: 20, weight: .semibold))
+                        let mark = BrandMark.id(forSite: site.host)
+                        BrandMarkView(mark ?? "", size: 22, fallback: mark == nil ? "globe" : nil)
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .background(Color.primary.opacity(0.07), in: .rect(cornerRadius: 8))
                     }
                 }
                 .frame(width: 40, height: 40)
+                // Two lines, so names that start alike ("GitHub - …") still tell apart.
                 Text(site.title.isEmpty ? site.host : site.title)
                     .font(.system(size: 13))
-                    .lineLimit(1)
+                    .lineLimit(2, reservesSpace: true)
+                    .multilineTextAlignment(.center)
                     .truncationMode(.tail)
             }
             .padding(.vertical, 14)
