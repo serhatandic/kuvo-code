@@ -1579,11 +1579,18 @@ final class Workspace {
         Drafts.shared.remove(id)
     }
 
+    /// Shown at once; put back as it was if the engine doesn't take it (as `setFlag`), unless it
+    /// was renamed again meanwhile.
     func rename(_ id: String, to title: String) async {
-        guard !Moves.isFrozen(id), let index = sessions.firstIndex(where: { $0.id == id }), api(forSession: id) != nil else { return }
+        guard !Moves.isFrozen(id), let index = sessions.firstIndex(where: { $0.id == id }), let api = api(forSession: id) else { return }
+        let before = sessions[index].title
         sessions[index].title = title
         if let machine = RemoteFolder.machine(of: sessions[index].location.directory) { keepList(of: machine) }
-        try? await api(forSession: id)?.renameSession(id, title: title)
+        do {
+            try await api.renameSession(id, title: title)
+        } catch {
+            if let index = sessions.firstIndex(where: { $0.id == id }), sessions[index].title == title { sessions[index].title = before }
+        }
     }
 
     // MARK: Sync

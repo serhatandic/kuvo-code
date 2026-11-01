@@ -77,6 +77,17 @@ import Testing
         #expect(workspace.chats.map(\.id) == ["s_chat"])
     }
 
+    /// A rename the engine doesn't take (a machine's connection dropped, an engine that's busy)
+    /// goes back to the title it had, as a pin does, rather than looking saved until the next read.
+    @Test func aRenameTheEngineDoesntTakeGoesBack() async {
+        defer { StubWeb.stop() }
+        sessions.refuse("s_api")
+        await workspace.rename("s_api", to: "Payments")
+        #expect(workspace.session("s_api")?.title == "s_api")
+        await workspace.rename("s_web_new", to: "Checkout")
+        #expect(workspace.session("s_web_new")?.title == "Checkout")
+    }
+
     @Test func archivingTakesItOutAtOnceAndBack() async {
         defer { StubWeb.stop() }
         await workspace.setArchived("s_web_new", true)
