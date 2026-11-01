@@ -25,6 +25,8 @@ fs.copyFileSync(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.
 // each new session was marked with.
 const marked = new Map();
 let made = 0;
+// Whether the engine takes a new session's marks (it may refuse one, as a busy engine does).
+let marking = true;
 const engine = http.createServer((request, response) => {
   let body = "";
   request.on("data", chunk => { body += chunk; });
@@ -39,7 +41,10 @@ const engine = http.createServer((request, response) => {
       return reply({ message: "No such session." }, 404);
     }
     if (request.method === "POST" && request.url === "/api/session") return reply({ data: { id: `ses_new${++made}` } });
-    if (one && request.method === "PATCH") marked.set(decodeURIComponent(one[1]), JSON.parse(body).metadata);
+    if (one && request.method === "PATCH") {
+      if (!marking) return reply({ message: "Busy." }, 503);
+      marked.set(decodeURIComponent(one[1]), JSON.parse(body).metadata);
+    }
     reply({});
   });
 });
@@ -80,4 +85,19 @@ test("a session started from a conversation, its subagent or its engine run is m
     assert.ok(started, result.content[0].text);
     assert.deepEqual(marked.get(started), { kuvo: { startedBy: "ses_lead" } }, `started from ${caller}`);
   }
+});
+
+test("an agent is promised it'll hear of a session it starts only once that session is marked to tell it: from no conversation here, or one the engine couldn't mark, it's told to write to it instead", async t => {
+  t.after(() => { marking = true; });
+  const woken = /You'll be woken when it finishes/;
+  const marked = await call("start_session", { task: "Port it.", title: "Port", wake: "finished" }, "ses_lead");
+  assert.match(marked.content[0].text, woken, "marked: it'll hear");
+  const outside = await call("start_session", { task: "Port it.", title: "Port", wake: "finished", folder: home }, "ses_elsewhere");
+  assert.equal(outside.isError ?? false, false, outside.content?.[0]?.text);
+  assert.doesNotMatch(outside.content[0].text, woken, "nothing here would tell it");
+  assert.match(outside.content[0].text, /Write to it with send_message/);
+  marking = false;
+  const unmarked = await call("start_session", { task: "Port it.", title: "Port", wake: "finished" }, "ses_lead");
+  assert.equal(unmarked.isError ?? false, false, unmarked.content?.[0]?.text);
+  assert.doesNotMatch(unmarked.content[0].text, woken, "its mark didn't take");
 });

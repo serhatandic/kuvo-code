@@ -502,6 +502,24 @@ test("Pause, from any app, stops the bot's turn and its goal's sessions at once,
   assert.match(sent[0].text, /goal_progress/);
 });
 
+test("while you have a goal paused, none of its sessions starts another, however one of them is woken; once you resume it, they can", async () => {
+  await startedGoal();
+  await tool("start_session", { task: "Build the site.", project: "Driftwood", step: 1 });
+  const site = made[0].id;
+  sessions.get(site).metadata = { kuvo: { startedBy: "ses_pixel", by, depth: 1 } };
+  const holds = link.goalHolds(target);
+  await holds(goalEvent("ses_pixel", "paused", "you"));
+  // The site's session, idle as you paused, woken by a letter.
+  const refused = await tool("start_session", { task: "Write the copy.", project: "Driftwood" }, { session: site });
+  assert.equal(refused.isError, true, refused.text);
+  assert.match(refused.text, /paused/);
+  assert.equal(made.length, 1, "nothing new started");
+  await holds(goalEvent("ses_pixel", "working"));
+  const started = await tool("start_session", { task: "Write the copy.", project: "Driftwood" }, { session: site });
+  assert.equal(started.isError, false, started.text);
+  assert.equal(made.length, 2);
+});
+
 test("Pause on a conversation's own goal stops its turn and holds it until Resume", async () => {
   active.add("ses_site");
   const holds = link.goalHolds(target);

@@ -535,7 +535,8 @@ its own, which a `SIGTERM` stops waiting.
     here, on the engine or the coding agents' bridge as it runs) and `effort` (one of its variants);
     `mode` `build` or `plan`; `approval` `ask` or `approveAll`, never above the starter's (a starter
     that asks first starts one that does too); `wake` (`finished`, `asks`, `both`, `none`), what the
-    starter hears of it. `computer` other than this one: 400, for now.
+    starter hears of it (a conversation here, once the new session is marked so; the tool says
+    which). `computer` other than this one: 400, for now.
   - Unknown fields are ignored, so a newer client can send more to an older box.
 - **Limits**: one table on the box (`letters/limits.ts`): a conversation sends 20 messages in ten
   minutes and starts 6 sessions in ten minutes at most, and letters from one peer count as one
@@ -2052,7 +2053,7 @@ Grok). With none to answer, the goal pauses and says so. A client reaches them a
   turn holds nothing more), stops the turn under way, keeping what was said, and holds the
   conversation as Stop does (its queue paused: what reaches it meanwhile waits on the box); for a
   bot's goal, its sessions at work stop too, and nothing of it goes on, not even at a limit's reset
-  (bridge 0.9.143). The box keeps the hold through a restart and, finding the bridge again, reads
+  (bridge 0.9.143), nor a session one of its sessions starts (`start_session` answers 403). The box keeps the hold through a restart and, finding the bridge again, reads
   each goal it holds for: one resumed meanwhile goes on, one taken away leaves its conversation
   paused for Resume. `…/resume` lets it go: the conversation's queue on this box goes on, its last
   turn is checked (however it ended), and it carries on unless that met it; a bot is told to carry

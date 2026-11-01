@@ -16948,6 +16948,8 @@ async function startSession(given, by, place) {
   const bot = ownBot ?? (by?.place ? worksFor(by.place.data) : null);
   const depth = ownBot ? 1 : depthOf(by?.place?.data) + 1;
   const goal = bot ? runningGoal(bot.bot) : null;
+  if (goal?.heldByYou)
+    return no(403, "The user paused this goal: nothing new starts until they resume it.");
   let engine = null;
   try {
     engine = place.readEngine();
@@ -17056,13 +17058,16 @@ async function startSession(given, by, place) {
     await call(target, "PUT", `/api/experimental/session/${address}/instructions/entries/kuvo.project-folders`, { value: projectsNote(folder, project.folders) }).catch(() => {});
   }
   await tellWorktree(target, session).catch(() => {});
-  const wakes = wakesFrom(given.wake, Boolean(ownBot), given.wait === true);
+  let wakes = wakesFrom(given.wake, Boolean(ownBot), given.wait === true);
+  let marked = false;
   if (by?.place) {
     const kuvo = { startedBy: by.session, ...bot ? { by: bot, depth } : {}, ...wakes.length ? { wake: wakes } : {} };
-    await call(target, "PATCH", `/api/session/${address}`, { metadata: { kuvo } }).catch(() => {});
+    marked = await call(target, "PATCH", `/api/session/${address}`, { metadata: { kuvo } }).then(() => true, () => false);
     if (bot)
       noteWorkChanged(bot.bot);
   }
+  if (!marked)
+    wakes = [];
   if (bot && goal && given.step !== undefined && given.step !== null)
     linkSession(bot.bot, given.step, session);
   const waits = given.wait === true;
