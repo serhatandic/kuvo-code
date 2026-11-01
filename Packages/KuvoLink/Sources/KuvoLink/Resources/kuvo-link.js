@@ -12757,7 +12757,7 @@ async function forgetPlan(engine, id) {
       method: "DELETE",
       headers: { authorization: `Basic ${Buffer.from(`opencode:${engine.password}`).toString("base64")}` },
       signal: AbortSignal.timeout(1e4)
-    }).then((response) => (response.body?.cancel(), response.ok), () => false);
+    }).then((response) => (response.body?.cancel(), response.ok || response.status === 404), () => false);
     if (!removed)
       refused++;
   }

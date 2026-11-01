@@ -118,7 +118,8 @@ export async function forgetPlan(engine: Target, id: string): Promise<{ status: 
       method: "DELETE",
       headers: { authorization: `Basic ${Buffer.from(`opencode:${engine.password}`).toString("base64")}` },
       signal: AbortSignal.timeout(10_000),
-    }).then(response => (response.body?.cancel(), response.ok), () => false);
+    // Gone already (removed meanwhile from another device) is removed.
+    }).then(response => (response.body?.cancel(), response.ok || response.status === 404), () => false);
     if (!removed) refused++;
   }
   if (refused) return { status: 502, message: refused === 1 ? "The engine didn't remove a sign-in. Try again." : `The engine didn't remove ${refused} sign-ins. Try again.` };

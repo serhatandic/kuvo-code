@@ -1278,7 +1278,7 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     Settings › Accounts does it: that box's sign-ins and keys for that plan (`404` for one that
     isn't a plan there, an integration's server among them; from bridge 0.9.149, `502 {message}`
     when the engine wouldn't remove one, which stays, its plan still said to have ended, and `503
-    {message}` when the engine can't list them). Every box from bridge 0.9.61
+    {message}` when the engine can't list them; one already gone, removed meanwhile, is removed). Every box from bridge 0.9.61
     (`accounts.ended`); a Mac before answered them itself.
   - `GET kuvo/accounts/found` → `{agents, opencode, shell, connected}`: what the computer already has, for
     the first launch's Bring your subscriptions. `agents`: the coding agents' programs (`{id, name,
