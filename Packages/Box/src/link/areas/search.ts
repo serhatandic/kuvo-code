@@ -28,7 +28,11 @@ const MOST_OUTPUT = 2_000;
 
 /** A conversation's text as kept in the folder: as said, and as compared (no case, no accents),
  * letter for letter. */
+/** How a conversation's text is put together: one kept in an older way is read again. */
+const TEXT_VERSION = 2;
+
 interface Kept {
+  version?: number;
   updated: number;
   text: string;
   folded: string;
@@ -133,8 +137,8 @@ function textOf(place: string, target: Target, session: EngineSession): Promise<
     // Without what an undo took back.
     const cut = session.revert?.messageID ? messages.findIndex(message => message.id === session.revert!.messageID) : -1;
     // Its latest part, when it's long: what was said last is what's looked for most.
-    const text = searchText(cut >= 0 ? messages.slice(0, cut) : messages, session.location?.directory ?? session.directory ?? "").slice(-MOST_TEXT);
-    const kept = { updated, text, folded: fold(text) };
+    const text = searchText(cut >= 0 ? messages.slice(0, cut) : messages, session.location?.directory ?? session.directory ?? "");
+    const kept = { version: TEXT_VERSION, updated, text, folded: fold(text) };
     texts.set(name, { updated, folded: kept.folded });
     toDisk(name, kept);
     return kept;
@@ -146,7 +150,7 @@ function textOf(place: string, target: Target, session: EngineSession): Promise<
 function fromDisk(name: string): Kept | null {
   try {
     const kept = JSON.parse(fs.readFileSync(path.join(SEARCH, name + ".json"), "utf8")) as Kept;
-    if (typeof kept.updated !== "number" || typeof kept.text !== "string" || typeof kept.folded !== "string") return null;
+    if (kept.version !== TEXT_VERSION || typeof kept.updated !== "number" || typeof kept.text !== "string" || typeof kept.folded !== "string") return null;
     texts.set(name, { updated: kept.updated, folded: kept.folded });
     return kept;
   } catch {
@@ -221,7 +225,12 @@ export function searchText(messages: EngineMessage[], directory: string): string
       blocks.push([String(message.command ?? ""), output].filter(Boolean).join("\n\n"));
     }
   }
-  return [...blocks, ...steps].filter(Boolean).join("\n\n");
+  // Its latest part, when it's long: what was said last is what's looked for most, and what was
+  // said comes before the steps, which fill only the room it leaves.
+  const said = blocks.filter(Boolean).join("\n\n").slice(-MOST_TEXT);
+  const room = MOST_TEXT - said.length - 2;
+  const done = room > 0 ? steps.filter(Boolean).join("\n\n").slice(-room) : "";
+  return [said, done].filter(Boolean).join("\n\n");
 }
 
 /** A message as you wrote it: what Kuvo Code adds to its end comes off (who's named, a keyword it
@@ -271,7 +280,7 @@ export function snippet(text: string, at: number, length: number): string {
   const space = (index: number) => /\s/.test(letters[index] ?? " ");
   let start = Math.max(blockStart, at - 16);
   // Back to the start of the word it's in, or on to the next one where that's far.
-  for (let back = start; back > blockStart && back > start - 12; back--) if (space(back - 1)) { start = back; break; }
+  for (let back = start; back >= blockStart && back > start - 12; back--) if (space(back - 1)) { start = back; break; }
   while (start > blockStart && start < at && !space(start - 1)) start++;
   let end = Math.min(letters.length, at + length + 80);
   // Back to the end of the last whole word.

@@ -25,3 +25,19 @@ test("words said in the conversation are found there before a step's command or 
   expect(snippet(text, at, 4)).not.toContain("=|");
   expect(snippet(text, at, 4)).toContain("The tick() call");
 });
+
+test("a match near a message's start shows the message from its first word", () => {
+  const text = "Earlier reply.\n\nPlease refactor the timer so it pauses";
+  const shown = snippet(text, text.indexOf("timer"), "timer".length);
+  expect(shown.startsWith("Please refactor the timer")).toBe(true);
+});
+
+test("in a long conversation, what was said is kept for search before the steps", () => {
+  const messages = [
+    { type: "assistant", content: [{ type: "text", text: "The flaky login test was the clock." }] },
+    ...Array.from({ length: 50 }, (_, index) => ({ type: "assistant", content: [{ type: "tool", state: { input: { command: `run ${index} ` + "x".repeat(10_000) } } }] })),
+  ] as unknown as EngineMessage[];
+  const text = searchText(messages, "/p");
+  expect(text.length).toBeLessThanOrEqual(400_000);
+  expect(text).toContain("The flaky login test was the clock.");
+});
