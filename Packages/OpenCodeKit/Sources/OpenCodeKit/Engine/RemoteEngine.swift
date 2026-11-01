@@ -85,6 +85,15 @@ public struct SSHConnection: Sendable, Hashable, Codable {
     /// shows (`KUVO_DEMO_MACHINE`), which nothing ever goes to.
     public var isStandIn: Bool { Self.isStandIn(address) || Self.isStandIn(destination) }
 
+    /// Nothing goes to it, so nothing is tried there: a stand-in, unless a test's `standIn`
+    /// answers for it (the app's tests name their machines under `.invalid` too).
+    public var isNeverContacted: Bool {
+        #if DEBUG
+        if Self.standIn != nil { return false }
+        #endif
+        return isStandIn
+    }
+
     public static func isStandIn(_ address: String) -> Bool {
         let host = address.split(separator: "@").last.map(String.init) ?? address
         return host.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ".")).hasSuffix(".invalid")

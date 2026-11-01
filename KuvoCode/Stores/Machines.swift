@@ -480,7 +480,7 @@ final class MachineEngine {
         }
         #endif
         // A stand-in (a name under `.invalid`, a demo copy's) is never contacted.
-        guard !machine.connection.isStandIn else {
+        guard !machine.connection.isNeverContacted else {
             failureMayPass = false
             state = .failed("Couldn’t reach \(machine.name).")
             return nil
