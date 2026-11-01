@@ -47,11 +47,12 @@ export interface FencePolicy {
   ports: number[];
   /** Other apps' sockets that run what they're asked, outside the sandbox (folders), refused where
    * the system can (macOS): the ChatGPT app's, Grok's shared leader's (`~/.grok/leader.sock`), and
-   * your SSH agents', which sign with the keys commands can't read (1Password's, Secretive's,
+   * your SSH agents', which sign with the keys commands can't read (ssh-agent's, 1Password's, Secretive's,
    * Bitwarden's, yubikey-agent's, the box's own `SSH_AUTH_SOCK`). */
   sockets?: string[];
   /** On macOS, more of them by name: regular expressions over whole paths (the system's SSH agent's,
-   * where launchd keeps it, one a shell started, gpg-agent's). */
+   * where launchd keeps it, one a shell started, gpg-agent's), which also match their folders: in
+   * folders commands write, neither moved nor removed, so never reached by another name. */
   socketPatterns?: string[];
 }
 
@@ -184,16 +185,17 @@ export function fencePolicy(ports: number[] = []): FencePolicy {
       ],
       patternFolders: [`^${escapeRegex(home)}/Library/[^/]+$`, `^/private/var/folders/[^/]+/[^/]+/[^/]+$`],
       writable: ["/private/tmp", "/private/var/tmp", "/dev", ...userTemporary(), ...inHome([...CACHES, ...MAC_CACHES])],
-      sockets: [...inHome([".codex/ipc", ".grok", "Library/Group Containers/2BUA8C4S2C.com.1password/t",
+      sockets: [...inHome([".codex/ipc", ".grok", ".ssh/agent", "Library/Group Containers/2BUA8C4S2C.com.1password/t",
         "Library/Containers/com.maxgoedjen.Secretive.SecretAgent/Data", ".bitwarden-ssh-agent.sock",
         "Library/Containers/com.bitwarden.desktop/Data"]),
         "/opt/homebrew/var/run/yubikey-agent.sock", "/usr/local/var/run/yubikey-agent.sock",
         // (And the one this box was started with, wherever it is.)
         ...(process.env.SSH_AUTH_SOCK && path.isAbsolute(process.env.SSH_AUTH_SOCK) ? [realish(process.env.SSH_AUTH_SOCK)] : [])],
       socketPatterns: [
-        // The system's, where launchd keeps it, and one your shell starts (`eval $(ssh-agent)`).
-        "^/private/(var/run|tmp)/com\\.apple\\.launchd\\.[^/]+/",
-        "^/private/tmp/ssh-[^/]+/agent\\.", "^/private/var/folders/[^/]+/[^/]+/T/ssh-[^/]+/agent\\.",
+        // The system's, where launchd keeps it, and one your shell starts (`eval $(ssh-agent)`; since
+        // OpenSSH 10.1 in ~/.ssh/agent, above): each with its folder, which isn't moved either.
+        "^/private/(var/run|tmp)/com\\.apple\\.launchd\\.[^/]+(/|$)",
+        "^/private/tmp/ssh-[^/]+(/agent\\.|$)", "^/private/var/folders/[^/]+/[^/]+/T/ssh-[^/]+(/agent\\.|$)",
         // gpg-agent's own (not its key store's or keyserver helper's, which hold no keys).
         `^${escapeRegex(home)}/\\.gnupg/S\\.(gpg-agent|scdaemon)`,
       ],

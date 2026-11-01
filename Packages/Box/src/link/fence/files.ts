@@ -338,7 +338,15 @@ export default {
   id: "kuvo-code.sandbox",
   setup: async (ctx) => {
     const work = ctx.location?.directory ?? ""
-    const git = work ? repository(work) : ""
+    // A folder this engine moved a conversation to: where it really was when the move was checked,
+    // and its repository then (taken once, as the engine opens it). Where the folder is a link now,
+    // it's never where the link leads.
+    let moved
+    try {
+      const moves = JSON.parse(fs.readFileSync(MOVES, "utf8"))
+      if (typeof moves[work]?.at === "string") { moved = moves[work]; delete moves[work]; noteMoves(moves) }
+    } catch {}
+    const git = moved ? moved.git || "" : work ? repository(work) : ""
     // Tells the box this engine sends its commands through the sandbox. As it first does, before any
     // command runs in it: a new key for the box's sockets, so one a command read before (it could
     // read the box's folder then) opens nothing.
@@ -350,22 +358,15 @@ export default {
       try { fs.writeFileSync(made, crypto.randomBytes(32).toString("hex") + "\\n", { mode: 0o600 }); fs.renameSync(made, KEY) } catch { try { fs.rmSync(made, { force: true }) } catch {} }
     }
     try { fs.writeFileSync(note, JSON.stringify({ pid: process.pid, version: VERSION })) } catch {}
-    const folder = work ? real(work) : ""
+    const folder = moved ? moved.at : work ? real(work) : ""
     // (And as it's named: the letters a move's keeps, their case, an accent's form. Both taken as
     // the engine opens it, never where a link put in its place since leads.)
-    const asNamed = work ? located(work) : ""
-    // A folder this engine moved a conversation to: where it really was when the move was checked
-    // (taken once, as the engine opens it).
-    let movedTo = ""
-    try {
-      const moves = JSON.parse(fs.readFileSync(MOVES, "utf8"))
-      if (typeof moves[work] === "string") { movedTo = moves[work]; delete moves[work]; noteMoves(moves) }
-    } catch {}
-    const openedAt = work ? opened(work) : ""
+    const asNamed = moved ? moved.at : work ? located(work) : ""
+    const openedAt = moved ? moved.at : work ? opened(work) : ""
     await ctx.shell.hook("create.before", (input) => {
       input.env.KUVO_FENCE_SHELL = input.shell
       input.env.KUVO_FENCE_WORK = work
-      input.env.KUVO_FENCE_WORK_AT = movedTo || openedAt
+      input.env.KUVO_FENCE_WORK_AT = openedAt
       input.env.KUVO_FENCE_GIT = git
       input.env.KUVO_FENCE_RUNTIME = process.execPath
       input.shell = LAUNCHER
@@ -408,17 +409,20 @@ export default {
         // home folder) would write there: only itself, within its folder, or to its repository's
         // worktree.
         const other = input.sessionID !== undefined && input.sessionID !== call.sessionID
-        const to = !other && typeof input.directory === "string" ? located(resolved(work, input.directory.trim())) : ""
-        if (!to || (!within(to, folder) && !within(to, asNamed) && !(git && repository(to) === git))) {
+        const named = !other && typeof input.directory === "string" ? resolved(work, input.directory.trim()) : ""
+        // Where it is, and where its commands will take it to be (pwd -P): both within.
+        const to = named ? located(named) : ""
+        const at = to ? opened(named) || to : ""
+        const inside = (where) => within(where, folder) || within(where, asNamed) || !!(git && repository(where) === git)
+        if (!to || !inside(to) || !inside(at)) {
           throw new Error("This conversation's commands run in Kuvo Code's sandbox, in its own folder, so it can't move itself to another one. Ask the user to move it.")
         }
-        // The engine moves it later, by the folder's name: noted where it really is now, so its
-        // commands don't run there once the folder is traded for a link meanwhile.
+        // The engine moves it later, by the folder's name: noted where it was as it was checked, so
+        // its commands don't run where a link put in its place meanwhile leads.
         let moves = {}
         try { moves = JSON.parse(fs.readFileSync(MOVES, "utf8")) } catch {}
-        const named = resolved(work, input.directory.trim())
         delete moves[named]
-        moves[named] = opened(named)
+        moves[named] = { at, git: repository(at) }
         noteMoves(moves)
       }
     })

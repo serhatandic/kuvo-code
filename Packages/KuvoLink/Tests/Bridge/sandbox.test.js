@@ -802,10 +802,16 @@ test("a conversation's folder traded for a link by another's command isn't worke
     const said = run => run.status === 126 && /now leads somewhere else/.test(run.out) ? "refused" : `ran (${run.status}): ${run.out}`;
     const tries = {};
     tries["the one in it already"] = said(opened(`echo planted > ${JSON.stringify(path.join(elsewhere, "planted"))}`));
-    tries["the one moved there"] = said(await engineRuns(box, moved, `echo planted > ${JSON.stringify(path.join(elsewhere, "planted"))}`));
-    // Nor moved on to where the link leads, from where it really was as it was opened.
-    tries["the one in it already, moved there"] = (await opened.calls("opencode_session_move", { directory: path.join(elsewhere, "on") })).refused ? "refused" : "moves";
-    assert.deepEqual(tries, { "the one in it already": "refused", "the one moved there": "refused", "the one in it already, moved there": "refused" });
+    const movedOpened = await engineOpens(box, moved);
+    tries["the one moved there"] = said(movedOpened(`echo planted > ${JSON.stringify(path.join(elsewhere, "planted"))}`));
+    // Nor moved on to where the link leads, from where it really was as it was opened, or checked.
+    const movesOn = async (opens) => (await opens.calls("opencode_session_move", { directory: path.join(elsewhere, "on") })).refused ? "refused" : "moves";
+    tries["the one in it already, moved on there"] = await movesOn(opened);
+    tries["the one moved there, moved on there"] = await movesOn(movedOpened);
+    assert.deepEqual(tries, {
+      "the one in it already": "refused", "the one moved there": "refused",
+      "the one in it already, moved on there": "refused", "the one moved there, moved on there": "refused",
+    });
     assert.equal(fs.existsSync(path.join(elsewhere, "planted")), false);
   } finally {
     await running.stop();

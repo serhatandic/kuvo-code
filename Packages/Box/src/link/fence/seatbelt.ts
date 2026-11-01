@@ -124,6 +124,9 @@ export function seatbeltProfile(policy: FencePolicy, options: SeatbeltOptions): 
   const held = [...[...holders].map(folder => `(literal ${quote(folder)})`), ...(policy.patternFolders ?? []).map(regex)];
   deny("file-write-unlink file-clone", ...held);
   deny("file-write-create", ...held.map(folder => `(require-all ${folder} (vnode-type SYMLINK))`));
+  // Nor your agents' sockets or their folders in the temporary folders commands write (moved, one
+  // would be reached by a name the rule below doesn't know).
+  deny("file-write-unlink", ...(policy.socketPatterns ?? []).map(regex));
   deny("file-write*", under("WORK_RE", "/" + GUARDED), under("GIT_RE", "/" + GIT_GUARDED),
     ...Array.from({ length: MOST_FOLDERS }, (_, at) => under(`ALLOW${at}_RE`, "/" + GUARDED)));
   deny("file-write*", ...homes.map(home => inHome(home, `"/(.*/)?(" (param "KEPT") ")(/|$)"`)));
