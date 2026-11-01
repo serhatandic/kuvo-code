@@ -5,8 +5,10 @@
 // plugin and runs a command as the engine does, through the shell the plugin gives it, with the
 // environment the plugin set. The sandbox itself is the system's own (macOS's, Linux's Landlock).
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/sandbox.test.js`; on Linux, with Bun (the
-// engine's: `BUN_BE_BUN=1 <engine> test sandbox.test.js`).
+// Run with `node --test Packages/KuvoLink/Tests/Bridge/sandbox.test.js`; on a Linux machine, with
+// `scripts/test-linux.sh <ssh-host> sandbox.test.js`, and with `--engine` on the engine's own runner,
+// which the box runs on there (Bun's: `BUN_BE_BUN=1 <engine> test --timeout 120000 ./sandbox.test.js`,
+// as its 5 seconds a test are too few for some).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
