@@ -1,5 +1,6 @@
 import ClientDesign
 import ClientSessions
+import ClientText
 import OpenCodeKit
 import SwiftUI
 import UsageKit
@@ -543,9 +544,9 @@ struct SidebarView: View {
                 }
                 switch result.found {
                 case .bot(let bot):
-                    botRow(bot, snippet: result.snippet, action: show)
+                    botRow(bot, snippet: SearchSnippet.text(result.snippet, found: search), action: show)
                 case .session(let session):
-                    ConversationResultRow(title: session.title ?? "New Session", snippet: result.snippet, isSelected: selection == session.id, action: show)
+                    ConversationResultRow(title: session.title ?? "New Session", snippet: SearchSnippet.text(result.snippet, found: search), isSelected: selection == session.id, action: show)
                         .contextMenu { menu(for: session) }
                 }
             }
@@ -562,7 +563,7 @@ struct SidebarView: View {
 
     /// A bot's row, in its box's page or found by the search, which stands in for the page: its
     /// face moves unless it's staged. `snippet`: the words a search found in its conversation.
-    private func botRow(_ bot: Bot, snippet: String? = nil, action: (() -> Void)? = nil) -> some View {
+    private func botRow(_ bot: Bot, snippet: AttributedString? = nil, action: (() -> Void)? = nil) -> some View {
         BotRow(bot: bot, isSelected: selection == bot.sessionID, animates: !stagedBots.contains(bot.id), snippet: snippet) {
             if let action { action() } else { selection = bot.sessionID }
         }
@@ -1183,10 +1184,23 @@ private struct OpenInMenu: View {
     }
 }
 
+/// The words around what a search found, the found words in bold.
+enum SearchSnippet {
+    static func text(_ snippet: String, found query: String) -> AttributedString {
+        var text = AttributedString(snippet)
+        for range in SearchMatches.ranges(of: query, in: snippet) {
+            guard let lower = AttributedString.Index(range.lowerBound, within: text),
+                  let upper = AttributedString.Index(range.upperBound, within: text) else { continue }
+            text[lower..<upper].inlinePresentationIntent = .stronglyEmphasized
+        }
+        return text
+    }
+}
+
 /// A session found by what was said in it: its title, and the words around the match.
 private struct ConversationResultRow: View {
     let title: String
-    let snippet: String
+    let snippet: AttributedString
     let isSelected: Bool
     let action: () -> Void
 
@@ -1562,7 +1576,7 @@ private struct BotRow: View {
     let isSelected: Bool
     var animates = true
     /// Words found in its conversation by a search: shown in place of what it's doing.
-    var snippet: String?
+    var snippet: AttributedString?
     let action: () -> Void
     @Environment(Workspace.self) private var workspace
     @Environment(Bots.self) private var bots
