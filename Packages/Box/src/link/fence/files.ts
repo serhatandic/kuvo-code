@@ -18,9 +18,12 @@ export interface FencePlaces {
   /** `bin/kuvo-fence`, and the Linux script beside it. */
   launcher: string;
   runner: string;
-  /** Folders of Kuvo Code's own whose folders are each a conversation's own (bots', chats'): in
-   * one, a command gets that folder back, and not its neighbours. */
+  /** Folders of Kuvo Code's own whose folders are each a conversation's own (bots'): in one, a
+   * command gets that folder back, and not its neighbours. */
   inside: string[];
+  /** Folders of Kuvo Code's own that conversations work in themselves (the chats', which every chat
+   * shares): in one, or a folder in it, a command gets that folder back. */
+  shared: string[];
   /** The box's own check's folder (`state.ts`, `probe`), also given back. */
   probe: string;
   /** Where kuvo-wake keeps a conversation's wake-ups and watches: its bot's folder in `bots`, or its
@@ -43,7 +46,7 @@ const sh = (text: string) => `'${text.replace(/'/g, `'\\''`)}'`;
 
 /** `bin/kuvo-fence`: the shell the engine runs each command with (`kuvo-fence -c <command>`). */
 export function launcherScript(places: FencePlaces): string {
-  const insideCases = [...places.inside.map(folder => `${sh(folder)}/?*`), sh(places.probe)].join("|");
+  const insideCases = [...places.inside.map(folder => `${sh(folder)}/?*`), ...places.shared.flatMap(folder => [sh(folder), `${sh(folder)}/?*`]), sh(places.probe)].join("|");
   const run = places.platform === "darwin"
     ? [
         // Its refusals, in macOS's log, name its conversation and the command, by a sum of it (a
@@ -68,13 +71,13 @@ export function launcherScript(places: FencePlaces): string {
     "# The engine runs each command an agent (or you, with !) runs through this: the command's own",
     "# shell, in the sandbox. Its plugin (kuvo-sandbox.js) names the conversation's folder.",
     `F=${sh(places.folder)}`,
-    `shell=\${KUVO_FENCE_SHELL:-/bin/sh} work=\${KUVO_FENCE_WORK-} git=\${KUVO_FENCE_GIT-} runtime=\${KUVO_FENCE_RUNTIME-}`,
+    `shell=\${KUVO_FENCE_SHELL:-/bin/sh} work=\${KUVO_FENCE_WORK-} work_at=\${KUVO_FENCE_WORK_AT-} git=\${KUVO_FENCE_GIT-} runtime=\${KUVO_FENCE_RUNTIME-}`,
     // A coding agent run whole in it (the agents' bridge names them): its homes and the folders it
     // only reads, one a line; in its homes, the folders of its state and what it never writes, by
     // name (`*` for any letters), one a line; and its Kuvo Code tools' port.
     // And whether its program is the engine's runtime, run as Bun (Cursor's SDK, in a process of its own).
     `own_list=\${KUVO_FENCE_OWN-} read_list=\${KUVO_FENCE_READ-} state_list=\${KUVO_FENCE_STATE-} kept_list=\${KUVO_FENCE_KEPT-} port=\${KUVO_FENCE_PORT:-0} as_bun=\${KUVO_FENCE_BUN-}`,
-    "unset KUVO_FENCE_SHELL KUVO_FENCE_WORK KUVO_FENCE_GIT KUVO_FENCE_RUNTIME KUVO_FENCE_OWN KUVO_FENCE_READ KUVO_FENCE_STATE KUVO_FENCE_KEPT KUVO_FENCE_PORT KUVO_FENCE_BUN",
+    "unset KUVO_FENCE_SHELL KUVO_FENCE_WORK KUVO_FENCE_WORK_AT KUVO_FENCE_GIT KUVO_FENCE_RUNTIME KUVO_FENCE_OWN KUVO_FENCE_READ KUVO_FENCE_STATE KUVO_FENCE_KEPT KUVO_FENCE_PORT KUVO_FENCE_BUN",
     `case $port in *[!0-9]*|'') port=0 ;; esac`,
     `agent=; [ "$port" = 0 ] || agent=-agent`,
     ...Array.from({ length: AGENT_FOLDERS }, (_, at) => `o${at}=$F/none q${at}=- k${at}=$F/none`),
@@ -93,6 +96,10 @@ export function launcherScript(places: FencePlaces): string {
     "unset SSH_AUTH_SOCK KUVO_WAKE_FOLDER",
     `case $work in /*) ;; *) echo "This command can't run in the sandbox here: its conversation's folder wasn't given." >&2; exit 126 ;; esac`,
     `work=$(cd "$work" 2>/dev/null && pwd -P) || { echo "This command can't run: its conversation's folder isn't there." >&2; exit 126; }`,
+    // Where the folder really was as the engine opened it (its plugin names it): a folder traded
+    // since for a link to somewhere else (by another conversation's command, in a folder it writes)
+    // isn't worked in there.
+    `case $work_at in ''|"$work") ;; *) echo "This command can't run: its conversation's folder now leads somewhere else than when it was opened (it was replaced by a link). Ask the user." >&2; exit 126 ;; esac`,
     `case $git in /*) git=$(cd "$git" 2>/dev/null && pwd -P) || git=$work ;; *) git=$work ;; esac`,
     "profile=project",
     `case $work in ${insideCases}) profile=inside ;; esac`,
@@ -217,14 +224,22 @@ export function pluginScript(places: FencePlaces, version: string): string {
 // Each command the engine runs (the agent's, and yours with !) goes through Kuvo Code's sandbox:
 // its shell in bin/kuvo-fence, which may write only in this conversation's folder and its git
 // repository, and can't read Kuvo Code's own folders or your secrets.
+import { execFileSync } from "node:child_process"
 import crypto from "node:crypto"
 import fs from "node:fs"
+import os from "node:os"
 import path from "node:path"
 
 const FOLDER = ${JSON.stringify(places.folder)}
 const KEY = ${JSON.stringify(places.key)}
 const LAUNCHER = ${JSON.stringify(places.launcher)}
 const VERSION = ${JSON.stringify(version)}
+const MOVES = path.join(FOLDER, "moves.json")
+// Written whole, then put in place, so no engine reads half of it.
+function noteMoves(moves) {
+  const made = MOVES + "." + process.pid
+  try { fs.writeFileSync(made, JSON.stringify(Object.fromEntries(Object.entries(moves).slice(-200)))); fs.renameSync(made, MOVES) } catch { try { fs.rmSync(made, { force: true }) } catch {} }
+}
 
 // The folder's git repository, which its commands may write too: its .git folder, or for a
 // worktree the repository's own (where its commits go), found from the engine's folder upwards.
@@ -260,11 +275,78 @@ function repository(folder) {
   return ""
 }
 
+// Where a path really is, as the system follows it, a name at a time: through its links (a ..
+// after one goes up from where it leads), also to a place that isn't there yet (which writing it
+// would make). A loop of links ends it where it's written.
+function located(where) {
+  let at = "/"
+  let rest = path.resolve(where).split("/").filter(Boolean)
+  for (let links = 0; rest.length; ) {
+    const name = rest.shift()
+    if (name === ".") continue
+    if (name === "..") { at = path.dirname(at); continue }
+    const next = path.join(at, name)
+    let link
+    try { link = fs.lstatSync(next).isSymbolicLink() ? fs.readlinkSync(next) : undefined } catch { return path.join(next, ...rest) }
+    if (link === undefined) { at = next; continue }
+    if (++links > 40) return where
+    if (link.startsWith("/")) at = "/"
+    rest = [...link.split("/").filter(Boolean), ...rest]
+  }
+  return at
+}
+// Where a folder really is as the launcher finds it (the shell's pwd -P, which keeps the letters
+// it's given: their case, and how an accent is written), or "" if it isn't there.
+function opened(folder) {
+  try { return execFileSync("/bin/sh", ["-c", 'cd "$1" && pwd -P', "sh", folder], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).replace(/\\n$/, "") } catch { return "" }
+}
+const within = (where, folder) => !!folder && (where === folder || where.startsWith(folder + path.sep))
+// A path as the engine takes it: ~ is your home folder, anything else from the folder given.
+const resolved = (from, given) => path.resolve(from, given === "~" ? os.homedir() : given.startsWith("~/") ? path.join(os.homedir(), given.slice(2)) : given)
+// The folder the engine counts as the conversation's project too, as it finds it: the first folder
+// up from where it really is with a .git (a repository it can read) or a .hg.
+function topOf(folder) {
+  for (let at = real(folder); at && at !== path.dirname(at); at = path.dirname(at)) {
+    try { fs.lstatSync(path.join(at, ".hg")); return at } catch {}
+    try { fs.lstatSync(path.join(at, ".git")) } catch { continue }
+    return repository(real(folder)) ? at : ""
+  }
+  return ""
+}
+// What the read tool reads instead of a file that isn't there: the one file beside it whose name is
+// the same but for how it's written (composed accents, no-break spaces, curly quotes).
+function lookalike(where) {
+  const same = (name) => name.normalize("NFC").replace(/[\u00a0\u202f]/g, " ").replace(/[\u2018\u2019]/g, "'")
+  const name = same(path.basename(where))
+  try {
+    const found = fs.readdirSync(path.dirname(where)).filter(each => same(each) === name && fs.statSync(path.join(path.dirname(where), each)).isFile())
+    return found.length === 1 ? path.join(path.dirname(where), found[0]) : ""
+  } catch { return "" }
+}
+
+// The engine's own file tools run outside the sandbox, and tell a place outside the conversation's
+// folder by the path as it's written: through a link a command made in the folder (to your keys, or
+// a start-up script), they'd go there as if it were the folder's. So a path in the folder that a
+// link leads out of it is given as where it really is, which the engine's rules for a folder
+// outside the project then apply to (Settings › Permissions, a bot's own).
+const PATHS = { read: "path", write: "path", edit: "path", glob: "path", grep: "path" }
+// A patch's lines that name a file, as the engine reads them: each line (without a last \\r) with
+// the spaces around it trimmed.
+const PATCHED = ["*** Add File: ", "*** Update File: ", "*** Delete File: ", "*** Move to: "]
+
 export default {
   id: "kuvo-code.sandbox",
   setup: async (ctx) => {
     const work = ctx.location?.directory ?? ""
-    const git = work ? repository(work) : ""
+    // A folder this engine moved a conversation to: where it really was when the move was checked,
+    // and its repository and project then (taken once, as the engine opens it). Where the folder is
+    // a link now, it's never where the link leads.
+    let moved
+    try {
+      const moves = JSON.parse(fs.readFileSync(MOVES, "utf8"))
+      if (typeof moves[work]?.at === "string") { moved = moves[work]; delete moves[work]; noteMoves(moves) }
+    } catch {}
+    const git = moved ? moved.git || "" : work ? repository(work) : ""
     // Tells the box this engine sends its commands through the sandbox. As it first does, before any
     // command runs in it: a new key for the box's sockets, so one a command read before (it could
     // read the box's folder then) opens nothing.
@@ -276,12 +358,73 @@ export default {
       try { fs.writeFileSync(made, crypto.randomBytes(32).toString("hex") + "\\n", { mode: 0o600 }); fs.renameSync(made, KEY) } catch { try { fs.rmSync(made, { force: true }) } catch {} }
     }
     try { fs.writeFileSync(note, JSON.stringify({ pid: process.pid, version: VERSION })) } catch {}
+    const folder = moved ? moved.at : work ? real(work) : ""
+    // (And as it's named: the letters a move's keeps, their case, an accent's form. Both taken as
+    // the engine opens it, never where a link put in its place since leads.)
+    const asNamed = moved ? moved.at : work ? located(work) : ""
+    const openedAt = moved ? moved.at : work ? opened(work) : ""
     await ctx.shell.hook("create.before", (input) => {
       input.env.KUVO_FENCE_SHELL = input.shell
       input.env.KUVO_FENCE_WORK = work
+      input.env.KUVO_FENCE_WORK_AT = openedAt
       input.env.KUVO_FENCE_GIT = git
       input.env.KUVO_FENCE_RUNTIME = process.execPath
       input.shell = LAUNCHER
+    })
+    const top = moved ? moved.top || "" : work ? topOf(work) : ""
+    const ours = [work, folder, top].filter(Boolean)
+    const really = (given, tool) => {
+      if (typeof given !== "string" || !given || !work) return given
+      const written = resolved(work, given)
+      if (!ours.some(each => within(written, each))) return given
+      let where = located(written)
+      // A file that isn't there, which read takes a look-alike's place for.
+      if (tool === "read" && ours.some(each => within(where, each))) {
+        try { fs.statSync(written) } catch { where = located(lookalike(written) || written) }
+      }
+      return ours.some(each => within(where, each)) ? given : where
+    }
+    await ctx.tool?.hook("execute.before", (call) => {
+      const input = call.input
+      if (!input || typeof input !== "object") return
+      const field = PATHS[call.tool]
+      if (field) {
+        const given = really(input[field], call.tool)
+        if (given !== input[field]) call.input = { ...input, [field]: given }
+      } else if ((call.tool === "patch" || call.tool === "apply_patch") && typeof input.patchText === "string") {
+        const patchText = input.patchText.split("\\n").map((line) => {
+          const read = (line.endsWith("\\r") ? line.slice(0, -1) : line).trim()
+          const head = PATCHED.find(each => read.startsWith(each))
+          if (!head) return line
+          const given = read.slice(head.length).trim()
+          const where = really(given)
+          if (where === given) return line
+          // (Never a place whose name would make lines of its own.)
+          if (/[\\r\\n\\u2028\\u2029]/.test(where)) throw new Error("This patch names a file through a link out of the conversation's folder to a place this can't name. Ask the user.")
+          return head + where
+        }).join("\\n")
+        if (patchText !== input.patchText) call.input = { ...input, patchText }
+      } else if (call.tool === "session_move" || call.tool === "opencode_session_move") {
+        // Its commands run in its folder's sandbox, so a conversation moved to another folder (your
+        // home folder) would write there: only itself, within its folder, or to its repository's
+        // worktree.
+        const other = input.sessionID !== undefined && input.sessionID !== call.sessionID
+        const named = !other && typeof input.directory === "string" ? resolved(work, input.directory.trim()) : ""
+        // Where it is, and where its commands will take it to be (pwd -P): both within.
+        const to = named ? located(named) : ""
+        const at = to ? opened(named) || to : ""
+        const inside = (where) => within(where, folder) || within(where, asNamed) || !!(git && repository(where) === git)
+        if (!to || !inside(to) || !inside(at)) {
+          throw new Error("This conversation's commands run in Kuvo Code's sandbox, in its own folder, so it can't move itself to another one. Ask the user to move it.")
+        }
+        // The engine moves it later, by the folder's name: noted where it was as it was checked, so
+        // its commands don't run where a link put in its place meanwhile leads.
+        let moves = {}
+        try { moves = JSON.parse(fs.readFileSync(MOVES, "utf8")) } catch {}
+        delete moves[named]
+        moves[named] = { at, git: repository(at), top: topOf(at) }
+        noteMoves(moves)
+      }
     })
   },
 }

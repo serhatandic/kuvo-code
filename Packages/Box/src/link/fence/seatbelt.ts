@@ -20,6 +20,7 @@
 // `watch`: each refusal is allowed and logged instead (with its tag), for what would have been
 // stopped (`log show --predicate 'sender == "Sandbox"'`).
 
+import path from "node:path";
 import { MOST_FOLDERS } from "./allowed";
 import type { FencePolicy } from "./policy";
 
@@ -113,12 +114,28 @@ export function seatbeltProfile(policy: FencePolicy, options: SeatbeltOptions): 
   // The conversation's folder and its repository's, themselves: never removed or made again, so
   // never traded for a link to somewhere else (another bot's folder) the next command would work in.
   deny("file-write-unlink file-write-create", `(literal (param "WORK"))`, `(literal (param "GIT"))`);
+  // Nor any folder that holds what's kept from commands (a secret in a cache they write, what runs
+  // later, Kuvo Code's own): moved away or cloned whole (clonefile, checked only for the folder),
+  // what's in it would be read or changed by its new name; nor one that isn't there yet traded for a
+  // link to a folder of its own. (One that isn't there yet can still be made, so moved into place.)
+  const holders = new Set<string>();
+  for (const kept of [...policy.secrets, ...policy.readOnly, ...policy.kuvo])
+    for (let at = path.dirname(kept); at !== path.dirname(at); at = path.dirname(at)) holders.add(at);
+  const held = [...[...holders].map(folder => `(literal ${quote(folder)})`), ...(policy.patternFolders ?? []).map(regex)];
+  deny("file-write-unlink file-clone", ...held);
+  deny("file-write-create", ...held.map(folder => `(require-all ${folder} (vnode-type SYMLINK))`));
+  // Nor your agents' sockets or their folders in the temporary folders commands write (moved, one
+  // would be reached by a name the rule below doesn't know).
+  deny("file-write-unlink", ...(policy.socketPatterns ?? []).map(regex),
+    ...(policy.socketFolders ?? []).map(folder => `(require-all ${regex(folder)} (vnode-type DIRECTORY))`));
   deny("file-write*", under("WORK_RE", "/" + GUARDED), under("GIT_RE", "/" + GIT_GUARDED),
     ...Array.from({ length: MOST_FOLDERS }, (_, at) => under(`ALLOW${at}_RE`, "/" + GUARDED)));
   deny("file-write*", ...homes.map(home => inHome(home, `"/(.*/)?(" (param "KEPT") ")(/|$)"`)));
 
   out.push(";; your secrets");
-  deny("file-read*", ...policy.secrets.map(subpath));
+  // Never read, nor moved, named again or replaced: one in a folder commands write (cargo's sign-in
+  // in its cache) would be read by another name.
+  deny("file-read* file-write*", ...policy.secrets.map(subpath));
 
   out.push(";; Kuvo Code's own servers and sockets");
   deny("network-outbound", ...policy.ports.map(port => `(remote tcp ${quote(`localhost:${port}`)})`));
@@ -127,7 +144,8 @@ export function seatbeltProfile(policy: FencePolicy, options: SeatbeltOptions): 
   deny("network-outbound", ...policy.kuvo.map(folder => `(remote unix-socket ${subpath(folder)})`),
     ...policy.kuvoPatterns.map(pattern => `(remote unix-socket ${regex(pattern)})`));
   out.push(";; other apps' sockets that run what they're asked outside it");
-  deny("network-outbound", ...(policy.sockets ?? []).map(folder => `(remote unix-socket ${subpath(folder)})`));
+  deny("network-outbound", ...(policy.sockets ?? []).map(folder => `(remote unix-socket ${subpath(folder)})`),
+    ...(policy.socketPatterns ?? []).map(pattern => `(remote unix-socket ${regex(pattern)})`));
   // But its own, in its temporary folder (in the app's on this Mac).
   allow("network-outbound", `(remote unix-socket ${param("TMP")})`);
   // And its own SSH agent, Kuvo Code's (vault/ssh.ts), in `/tmp/kuvo-ssh-<uid>` with the app's

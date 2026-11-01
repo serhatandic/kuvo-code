@@ -24,6 +24,9 @@ export interface FencePolicy {
   /** On macOS, patterns for every copy's folders (`run.kuvo.code…`), wherever the system keeps
    * an app's: regular expressions over whole paths. */
   kuvoPatterns: string[];
+  /** On macOS, the folders that hold what those patterns and `readOnlyPatterns` name (where the
+   * system keeps apps' folders, your temporary folder): regular expressions over whole paths. */
+  patternFolders?: string[];
   /** Inside them, what commands may run: Kuvo Code's own helpers (`bin`). */
   kuvoReadable: string[];
   /** Written besides WORK, GIT and TMP: the system's temporary folders, devices, tools' caches. */
@@ -43,8 +46,17 @@ export interface FencePolicy {
    * passwords are in files a command can't read. */
   ports: number[];
   /** Other apps' sockets that run what they're asked, outside the sandbox (folders), refused where
-   * the system can (macOS): the ChatGPT app's, and Grok's shared leader's (`~/.grok/leader.sock`). */
+   * the system can (macOS): the ChatGPT app's, Grok's shared leader's (`~/.grok/leader.sock`), and
+   * your SSH agents', which sign with the keys commands can't read (ssh-agent's, 1Password's, Secretive's,
+   * Bitwarden's, yubikey-agent's, the box's own `SSH_AUTH_SOCK`). */
   sockets?: string[];
+  /** On macOS, more of them by name: regular expressions over whole paths (the system's SSH agent's,
+   * where launchd keeps it, one a shell started, gpg-agent's), neither moved nor removed where
+   * commands write, so never reached by another name. */
+  socketPatterns?: string[];
+  /** Their folders where commands write, which aren't moved either (only the folders: a file or a
+   * socket of the command's own by such a name, like ssh's shared connection, is its own). */
+  socketFolders?: string[];
 }
 
 // Tools' caches, written by installs and builds in any project.
@@ -53,8 +65,10 @@ const CACHES = [".npm", ".bun", ".cache", ".cargo", ".rustup", ".swiftpm", ".gra
 const MAC_CACHES = ["Library/pnpm/store", "Library/Caches", "Library/Developer"];
 const LINUX_CACHES = [".local/share/pnpm/store"];
 // In them, what you run later, outside the sandbox: installed programs (on your PATH), tools'
-// settings that name programs, scripts they run as they start, packages npx runs as they are.
-const RUNS_LATER = [".cargo/bin", ".cargo/config", ".cargo/config.toml", ".bun/bin", ".bun/install/global", ".deno/bin",
+// settings that name programs, scripts they run as they start, packages npx runs as they are, and
+// what your shell profile sources as it starts (rustup's, deno's and bun's installers add those).
+const RUNS_LATER = [".cargo/bin", ".cargo/config", ".cargo/config.toml", ".cargo/env", ".cargo/env.fish", ".cargo/env.nu",
+  ".bun/bin", ".bun/install/global", ".bun/_bun", ".deno/bin", ".deno/env", ".deno/env.fish",
   ".dotnet/tools", ".gradle/init.d", ".gradle/init.gradle", ".gradle/init.gradle.kts", ".gradle/gradle.properties",
   ".m2/settings.xml", ".npm/_npx", ".rustup/settings.toml", ".rustup/toolchains", ".pub-cache/bin", "go/bin"];
 // In your cache folder (`~/.cache`, and your own `XDG_CACHE_HOME`), tools' caches whole: pre-commit's
@@ -172,8 +186,23 @@ export function fencePolicy(ports: number[] = []): FencePolicy {
         `^${escapeRegex(home)}/Library/[^/]+/run\\.kuvo\\.code[^/]*(/|$)`,
         `^/private/var/folders/[^/]+/[^/]+/[^/]+/run\\.kuvo\\.code[^/]*(/|$)`,
       ],
+      patternFolders: [`^${escapeRegex(home)}/Library/[^/]+$`, `^/private/var/folders/[^/]+/[^/]+/[^/]+$`],
       writable: ["/private/tmp", "/private/var/tmp", "/dev", ...userTemporary(), ...inHome([...CACHES, ...MAC_CACHES])],
-      sockets: inHome([".codex/ipc", ".grok"]),
+      sockets: [...inHome([".codex/ipc", ".grok", ".ssh/agent", "Library/Group Containers/2BUA8C4S2C.com.1password/t",
+        "Library/Containers/com.maxgoedjen.Secretive.SecretAgent/Data", ".bitwarden-ssh-agent.sock",
+        "Library/Containers/com.bitwarden.desktop/Data"]),
+        "/opt/homebrew/var/run/yubikey-agent.sock", "/usr/local/var/run/yubikey-agent.sock",
+        // (And the one this box was started with, wherever it is.)
+        ...(process.env.SSH_AUTH_SOCK && path.isAbsolute(process.env.SSH_AUTH_SOCK) ? [realish(process.env.SSH_AUTH_SOCK)] : [])],
+      socketPatterns: [
+        // The system's, where launchd keeps it, and one your shell starts (`eval $(ssh-agent)`; since
+        // OpenSSH 10.1 in ~/.ssh/agent, above).
+        "^/private/(var/run|tmp)/com\\.apple\\.launchd\\.[^/]+/",
+        "^/private/tmp/ssh-[^/]+/agent\\.", "^/private/var/folders/[^/]+/[^/]+/T/ssh-[^/]+/agent\\.",
+        // gpg-agent's own (not its key store's or keyserver helper's, which hold no keys).
+        `^${escapeRegex(home)}/\\.gnupg/S\\.(gpg-agent|scdaemon)`,
+      ],
+      socketFolders: ["^/private/tmp/com\\.apple\\.launchd\\.[^/]+$", "^/private/tmp/ssh-[^/]+$", "^/private/var/folders/[^/]+/[^/]+/T/ssh-[^/]+$"],
       secrets: [...inHome([...SECRETS, ...MAC_SECRETS]), ...keychainDaemons(home).map(realish), ...sshKeys(home).map(realish), ...ghHosts(home).map(realish)],
     };
   }

@@ -89,11 +89,35 @@ const decidedBy = box => {
 // shell its plugins give it, with the environment they set, then the conversation's (`session`,
 // as the engine names it after its plugins). With no plugin of the sandbox's, as before.
 async function engineRuns(box, folder, command, session) {
-  const input = { command, cwd: folder, timeout: 0, shell: "/bin/sh", env: { PATH: process.env.PATH, HOME: root, KUVO_BOTS: box.bots, KUVO_WAKES: box.wakes } };
+  return (await engineOpens(box, folder))(command, session);
+}
+
+// The engine opening `folder` now, and what runs a command there later (as `engineRuns`).
+async function engineOpens(box, folder) {
+  let hook;
+  const tools = [];
   if (fs.existsSync(box.plugin)) {
     const plugin = (await import(`${pathToFileURL(box.plugin)}?${Math.random()}`)).default;
-    let hook;
-    await plugin.setup({ location: { directory: folder }, shell: { hook: async (name, take) => { assert.equal(name, "create.before"); hook = take; } } });
+    await plugin.setup({ location: { directory: folder }, shell: { hook: async (name, take) => { assert.equal(name, "create.before"); hook = take; } }, tool: { hook: async (name, take) => { if (name === "execute.before") tools.push(take); } } });
+  }
+  const runs = (command, session) => engineRunsOpened(box, folder, hook, command, session);
+  // And one of its tools called there later, as engineCalls does.
+  runs.calls = async (tool, input) => {
+    const call = { tool, sessionID: ENGINE_SESSION, agent: "build", messageID: "msg_tools", id: "call_tools", input };
+    try {
+      for (const each of tools) await each(call);
+    } catch (error) {
+      return { refused: error.message };
+    }
+    return { input: call.input };
+  };
+  return runs;
+}
+
+// A command in `folder`, through what the plugin did as the engine opened it (`hook`).
+function engineRunsOpened(box, folder, hook, command, session) {
+  const input = { command, cwd: folder, timeout: 0, shell: "/bin/sh", env: { PATH: process.env.PATH, HOME: root, KUVO_BOTS: box.bots, KUVO_WAKES: box.wakes } };
+  if (hook) {
     hook(input);
     // (The plugin names the engine's runtime, its own: here that's this test's, so on Linux,
     // without Bun, the Bun this box's engine is.)
@@ -103,6 +127,42 @@ async function engineRuns(box, folder, command, session) {
   const run = spawnSync(input.shell, ["-c", input.command], { cwd: input.cwd, env: input.env, encoding: "utf8" });
   return { status: run.status, out: run.stdout + run.stderr };
 }
+
+const ENGINE_SESSION = "ses_tools";
+
+// The engine, opening `folder` and calling one of its own tools there (`tool`, with `input`), as
+// its plugins see the call before it runs: what the tool is given then, or what it's refused with.
+async function engineCalls(box, folder, tool, input) {
+  const call = { tool, sessionID: ENGINE_SESSION, agent: "build", messageID: "msg_tools", id: "call_tools", input };
+  const plugin = (await import(`${pathToFileURL(box.plugin)}?${Math.random()}`)).default;
+  const hooks = [];
+  await plugin.setup({ location: { directory: folder }, shell: { hook: async () => {} }, tool: { hook: async (name, take) => { if (name === "execute.before") hooks.push(take); } } });
+  try {
+    for (const hook of hooks) await hook(call);
+  } catch (error) {
+    return { refused: error.message };
+  }
+  return { input: call.input };
+}
+
+// Whether the engine asks before its file tools go to `given` in `folder`: where the path, as
+// written (~ your home folder), is in neither the folder nor its project's top folder, `top` (its
+// own check, `FileAccess.resolve`, by the path alone; links aren't followed).
+const engineAsks = (folder, given, top = folder) => {
+  const home = os.homedir();
+  const where = path.resolve(folder, given === "~" ? home : given.startsWith("~/") ? path.join(home, given.slice(2)) : given);
+  return ![folder, top].some(inside => where === inside || where.startsWith(inside + path.sep));
+};
+
+// The first file a patch names, as the engine reads it (engine 2.2.0's patch parser): each line
+// without a last \r, trimmed, starting with a header.
+const patchedFile = text => {
+  for (const line of text.split("\n")) {
+    const read = (line.endsWith("\r") ? line.slice(0, -1) : line).trim();
+    const head = ["*** Add File: ", "*** Update File: ", "*** Delete File: "].find(each => read.startsWith(each));
+    if (head) return read.slice(head.length).trim();
+  }
+};
 
 // What a command could do, each line `<what>: allowed` or `refused`.
 const tries = lines => lines.map(([what, command]) => `if ( ${command} ) >/dev/null 2>&1; then echo "${what}: allowed"; else echo "${what}: refused"; fi`).join("\n");
@@ -604,6 +664,245 @@ test("this Mac's box hides its app's whole folder, its chats but the conversatio
   } finally {
     await running.stop();
     tools.close();
+  }
+});
+
+test("a chat's command works in the Chats folder, where every chat works, and the rest of Kuvo Code's folder stays hidden", async () => {
+  // (This Mac's chats are in its app's folder, a machine's in its own: each hidden but for them.)
+  const box = boxAt(linux ? "chats-machine" : "run.kuvo.code.chats-test", !linux);
+  const chats = linux ? path.join(box.home, "chats") : path.join(box.app, "Chats");
+  fs.mkdirSync(chats, { recursive: true });
+  fs.writeFileSync(path.join(chats, "notes.md"), "a chat's\n");
+  const running = await start(box);
+  try {
+    assert.equal((await running.ask("GET", "kuvo/sandbox")).value.able, true);
+    const ran = await engineRuns(box, chats, tries([
+      ["read what's there", "cat notes.md"],
+      ["write there", "echo ok > reply.md"],
+      ["read the box's files", `cat ${JSON.stringify(path.join(box.home, "run", "engine.json"))}`],
+    ]), "ses_chat");
+    assert.deepEqual(outcome(ran.out), { "read what's there": "allowed", "write there": "allowed", "read the box's files": "refused" }, ran.out);
+    assert.equal(fs.readFileSync(path.join(chats, "reply.md"), "utf8"), "ok\n");
+  } finally {
+    await running.stop();
+  }
+});
+
+test("a link a command makes doesn't take the engine's own file tools out of the folder without asking", async () => {
+  const box = boxAt("tools-through-links");
+  const project = path.join(root, "tools-project");
+  fs.mkdirSync(project);
+  fs.writeFileSync(path.join(project, "notes.md"), "the project's\n");
+  // Somewhere commands can't read or write: your keys, and a start-up script that isn't there yet.
+  const keys = path.join(root, "your-keys");
+  fs.mkdirSync(keys);
+  fs.writeFileSync(path.join(keys, "id_test"), "a key\n");
+  const profile = path.join(root, "profile-to-be");
+  const running = await start(box);
+  try {
+    assert.equal((await running.ask("GET", "kuvo/sandbox")).value.able, true);
+    const key = JSON.stringify(path.join(keys, "id_test"));
+    const made = await engineRuns(box, project, `ln -s ${key} key.txt && ln -s ${JSON.stringify(keys)} keys && ln -s ${JSON.stringify(profile)} profile && ln -s ${key} "look alike.txt" && ln -s ${key} "spaced.txt " && ln -s ${JSON.stringify(path.join(root, "deep-to-be"))} deep && ln -s ${JSON.stringify(keys)} x && ln -s x/../your-keys/new.sh up`);
+    fs.symlinkSync(keys, path.join(project, "ok\u2028keys"));
+    assert.equal(made.status, 0, made.out);
+    const asked = {};
+    for (const [what, tool, input, given] of [
+      ["read the key", "read", { path: "key.txt" }, input => input.path],
+      ["read the key by its own path", "read", { path: path.join(project, "key.txt") }, input => input.path],
+      ["edit in its folder", "edit", { path: "keys/id_test", oldString: "a", newString: "b" }, input => input.path],
+      ["write the script that isn't there yet", "write", { path: "profile", content: "x" }, input => input.path],
+      ["list its folder", "glob", { pattern: "*", path: "keys" }, input => input.path],
+      ["search its folder", "grep", { pattern: "key", path: "keys" }, input => input.path],
+      ["patch the key", "patch", { patchText: "*** Begin Patch\n*** Update File: keys/id_test\n@@\n-a key\n+b key\n*** End Patch" }, input => patchedFile(input.patchText)],
+      // (The engine takes a patch's lines without the spaces around them.)
+      ["patch the key, the line indented", "patch", { patchText: "*** Begin Patch\n  *** Update File: keys/id_test \n@@\n-a key\n+b key\n*** End Patch" }, input => patchedFile(input.patchText)],
+      // (Read reads the one file beside a name that isn't there whose name is the same but for a
+      // no-break space; and the engine takes a name with the spaces it has.)
+      ["read the key by a look-alike name", "read", { path: "look\u00a0alike.txt" }, input => input.path],
+      ["read the key by a name ending in a space", "read", { path: "spaced.txt " }, input => input.path],
+      ["write far into a link to a place that isn't there yet", "write", { path: `deep/${"d/".repeat(41)}x`, content: "x" }, input => input.path],
+      // (A .. after a link goes up from where the link leads.)
+      ["write through a link that goes up from another", "write", { path: "up", content: "x" }, input => input.path],
+      // (The engine trims a line of any spaces, and splits lines only at \n.)
+      ["patch a new file, after a no-break space", "patch", { patchText: "*** Begin Patch\n\u00a0*** Add File: keys/new\n+x\n*** End Patch" }, input => patchedFile(input.patchText)],
+      ["patch a new file, by a name with a line separator", "patch", { patchText: "*** Begin Patch\n*** Add File: ok\u2028keys/new\n+x\n*** End Patch" }, input => patchedFile(input.patchText)],
+      ["read what's in the project", "read", { path: "notes.md" }, input => input.path],
+    ]) {
+      const called = await engineCalls(box, project, tool, input);
+      asked[what] = called.refused ? "refused" : engineAsks(project, given(called.input)) ? "asks" : "goes";
+    }
+    assert.deepEqual(asked, {
+      "read the key": "asks",
+      "read the key by its own path": "asks",
+      "edit in its folder": "asks",
+      "write the script that isn't there yet": "asks",
+      "list its folder": "asks",
+      "search its folder": "asks",
+      "patch the key": "asks",
+      "patch the key, the line indented": "asks",
+      "read the key by a look-alike name": "asks",
+      "read the key by a name ending in a space": "asks",
+      "write far into a link to a place that isn't there yet": "asks",
+      "write through a link that goes up from another": "asks",
+      "patch a new file, after a no-break space": "asks",
+      "patch a new file, by a name with a line separator": "asks",
+      "read what's in the project": "goes",
+    });
+    // A link that stays in the project stays as written.
+    assert.equal((await engineRuns(box, project, "ln -s notes.md also.md")).status, 0);
+    assert.equal((await engineCalls(box, project, "read", { path: "also.md" })).input.path, "also.md");
+    // A place outside, as written, stays as written (on a Mac, /tmp is a link to /private/tmp): what
+    // you've always allowed there still holds.
+    assert.equal((await engineCalls(box, project, "read", { path: "/tmp/notes.md" })).input.path, "/tmp/notes.md");
+  } finally {
+    await running.stop();
+  }
+});
+
+test("a folder above the project that only looks like a repository doesn't count as the project's for the engine's file tools", async () => {
+  const box = boxAt("tools-stray-git");
+  // Your home folder, say, with a .git that isn't a repository, and your keys in it.
+  const above = path.join(root, "stray-above");
+  const project = path.join(above, "project");
+  fs.mkdirSync(path.join(above, ".git"), { recursive: true });
+  fs.mkdirSync(path.join(above, "keys"));
+  fs.writeFileSync(path.join(above, "keys", "id_test"), "a key\n");
+  fs.mkdirSync(project);
+  const running = await start(box);
+  try {
+    assert.equal((await running.ask("GET", "kuvo/sandbox")).value.able, true);
+    assert.equal((await engineRuns(box, project, "ln -s ../keys/id_test key.txt")).status, 0);
+    // The engine counts only the folder as the project, so the key, by the link's real place, asks.
+    const called = await engineCalls(box, project, "read", { path: "key.txt" });
+    assert.equal(engineAsks(project, called.input.path), true, called.input.path);
+  } finally {
+    await running.stop();
+  }
+});
+
+test("a conversation's folder traded for a link by another's command isn't worked in where the link leads", async () => {
+  const box = boxAt("folder-traded");
+  // One conversation in the project, another in a folder in it (which the first's commands write).
+  const project = path.join(root, "traded-project");
+  const inner = path.join(project, "inner");
+  const moved = path.join(project, "moved");
+  for (const folder of [inner, moved]) fs.mkdirSync(folder, { recursive: true });
+  // Another of your projects, a repository.
+  const elsewhere = path.join(root, "traded-elsewhere");
+  fs.mkdirSync(elsewhere);
+  assert.equal(spawnSync("git", ["init", "-q", elsewhere]).status, 0);
+  const running = await start(box);
+  try {
+    assert.equal((await running.ask("GET", "kuvo/sandbox")).value.able, true);
+    const opened = await engineOpens(box, inner);
+    assert.equal(opened("echo first > first").status, 0);
+    // A conversation moved into the project's other folder: checked, then moved later, by its name.
+    assert.equal((await engineCalls(box, project, "opencode_session_move", { directory: "moved" })).refused, undefined);
+    const traded = await engineRuns(box, project, `mv inner inner.old && ln -s ${JSON.stringify(elsewhere)} inner && mv moved moved.old && ln -s ${JSON.stringify(elsewhere)} moved`);
+    assert.equal(traded.status, 0, traded.out);
+    // Refused as the launcher refuses it: no command runs there at all.
+    const said = run => run.status === 126 && /now leads somewhere else/.test(run.out) ? "refused" : `ran (${run.status}): ${run.out}`;
+    const tries = {};
+    tries["the one in it already"] = said(opened(`echo planted > ${JSON.stringify(path.join(elsewhere, "planted"))}`));
+    const movedOpened = await engineOpens(box, moved);
+    tries["the one moved there"] = said(movedOpened(`echo planted > ${JSON.stringify(path.join(elsewhere, "planted"))}`));
+    // Nor moved on to where the link leads, from where it really was as it was opened, or checked.
+    const movesOn = async (opens) => (await opens.calls("opencode_session_move", { directory: path.join(elsewhere, "on") })).refused ? "refused" : "moves";
+    tries["the one in it already, moved on there"] = await movesOn(opened);
+    tries["the one moved there, moved on there"] = await movesOn(movedOpened);
+    // Nor its file tools taken to write there as in its own project (asked, as outside it).
+    const writes = async (opens) => (await opens.calls("write", { path: "written.txt", content: "x" })).input.path === "written.txt" ? "as its own" : "asks";
+    tries["the one in it already, writing there"] = await writes(opened);
+    tries["the one moved there, writing there"] = await writes(movedOpened);
+    assert.deepEqual(tries, {
+      "the one in it already": "refused", "the one moved there": "refused",
+      "the one in it already, moved on there": "refused", "the one moved there, moved on there": "refused",
+      "the one in it already, writing there": "asks", "the one moved there, writing there": "asks",
+    });
+    assert.equal(fs.existsSync(path.join(elsewhere, "planted")), false);
+  } finally {
+    await running.stop();
+  }
+});
+
+test("a project named in another case or Unicode form than its folder's on disk still runs its commands", { skip: linux && "Linux's folders are named one way only" }, async () => {
+  const box = boxAt("folder-named-otherwise");
+  // On disk: "Case Project" and "café" (é one letter); given: "case project" and "café" (e, then its accent).
+  const folders = [[path.join(root, "Case Project"), path.join(root, "case project")], [path.join(root, "caf\u00e9"), path.join(root, "cafe\u0301")]];
+  for (const [disk] of folders) fs.mkdirSync(path.join(disk, "sub"), { recursive: true });
+  // The engine's plugin as the engine runs it, on Bun: the shell and environment it gives a command.
+  const opens = path.join(root, "opens.mjs");
+  fs.writeFileSync(opens, `const plugin = (await import(process.argv[2])).default
+let hook, tools
+await plugin.setup({ location: { directory: process.argv[3] }, shell: { hook: async (name, take) => { hook = take } }, tool: { hook: async (name, take) => { tools = take } } })
+const input = { command: "", cwd: process.argv[3], shell: "/bin/sh", env: {} }
+hook(input)
+// And moving its conversation to a folder in it.
+let moves = "moves"
+try { await tools({ tool: "opencode_session_move", sessionID: "ses_case", input: { directory: "sub" } }) } catch { moves = "refused" }
+console.log(JSON.stringify({ shell: input.shell, env: input.env, moves }))
+`);
+  const bun = testBun();
+  assert.ok(bun, NO_BUN);
+  const running = await start(box);
+  try {
+    assert.equal((await running.ask("GET", "kuvo/sandbox")).value.able, true);
+    for (const [disk, given] of folders) {
+      const opened = spawnSync(bun, [opens, pathToFileURL(box.plugin).href, given], { encoding: "utf8", env: { ...process.env, BUN_BE_BUN: "1" } });
+      assert.equal(opened.status, 0, opened.stderr);
+      const { shell, env, moves } = JSON.parse(opened.stdout);
+      assert.equal(moves, "moves", given);
+      const ran = spawnSync(shell, ["-c", "echo ran > ran.txt"], { cwd: given, env: { PATH: process.env.PATH, HOME: root, ...env }, encoding: "utf8" });
+      assert.equal(ran.status, 0, `${given}: ${ran.stdout}${ran.stderr}`);
+      assert.equal(fs.readFileSync(path.join(disk, "ran.txt"), "utf8"), "ran\n");
+    }
+  } finally {
+    await running.stop();
+  }
+});
+
+test("an agent can't move its own conversation out of its folder while its commands run in the sandbox", async () => {
+  const box = boxAt("moving-out");
+  const project = path.join(root, "moving-project");
+  fs.mkdirSync(path.join(project, "sub"), { recursive: true });
+  assert.equal(spawnSync("git", ["init", "-q", project]).status, 0);
+  assert.equal(spawnSync("git", ["-C", project, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "first"]).status, 0);
+  const worktree = path.join(root, "moving-worktree");
+  assert.equal(spawnSync("git", ["-C", project, "worktree", "add", "-q", worktree]).status, 0);
+  const another = path.join(root, "moving-another");
+  fs.mkdirSync(another);
+  const running = await start(box);
+  try {
+    assert.equal((await running.ask("GET", "kuvo/sandbox")).value.able, true);
+    const moves = {};
+    // (As the agent calls it from code mode, and as the engine offers it without.)
+    for (const [what, tool, directory] of [
+      ["to your home folder", "opencode_session_move", root],
+      ["to another folder", "session_move", another],
+      ["to a folder in its own", "opencode_session_move", path.join(project, "sub")],
+      ["to its repository's worktree", "opencode_session_move", worktree],
+      // (The engine takes ~ as your home folder, and the folder without the spaces around it.)
+      ["to ~", "opencode_session_move", "~"],
+      ["to your home folder, after a space", "opencode_session_move", ` ${os.homedir()}`],
+    ]) {
+      const called = await engineCalls(box, project, tool, { directory });
+      moves[what] = called.refused ? "refused" : "moves";
+    }
+    // Another conversation, whose folder the engine takes a folder from.
+    moves["another conversation"] = (await engineCalls(box, project, "opencode_session_move", { sessionID: "ses_another", directory: "sub" })).refused ? "refused" : "moves";
+    moves["itself, by its own id"] = (await engineCalls(box, project, "opencode_session_move", { sessionID: ENGINE_SESSION, directory: "sub" })).refused ? "refused" : "moves";
+    assert.deepEqual(moves, {
+      "to your home folder": "refused",
+      "to another folder": "refused",
+      "to a folder in its own": "moves",
+      "to its repository's worktree": "moves",
+      "to ~": "refused",
+      "to your home folder, after a space": "refused",
+      "another conversation": "refused",
+      "itself, by its own id": "moves",
+    });
+  } finally {
+    await running.stop();
   }
 });
 

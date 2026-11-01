@@ -2999,9 +2999,13 @@ whose conversation it is; for its seat in a group chat, the bot the agents bridg
 and written in place, never made, moved or removed; a coding agent's conversation named to the
 launcher as the engine names its own, `OPENCODE_SESSION_ID`), the system's temporary folders, devices and tools'
 caches, but not what in them runs later outside the sandbox (installed programs like
-`~/.cargo/bin` and `~/.bun/bin`, tools' settings and start-up scripts, npx's packages, the caches of
+`~/.cargo/bin` and `~/.bun/bin`, tools' settings and start-up scripts, what your shell profile
+sources from them (`~/.cargo/env`, `~/.deno/env`, `~/.bun/_bun`), npx's packages, the caches of
 pre-commit, pnpm, uv and corepack in `~/.cache` and your own `XDG_CACHE_HOME`, pnpm's in
-`~/Library/Caches`, and on macOS bunx's packages in your temporary folder). Its npm, pnpm (11 and
+`~/Library/Caches`, and on macOS bunx's packages in your temporary folder; on macOS no folder that
+holds those, your secrets or Kuvo Code's own is moved, removed or cloned whole, which would leave
+what's in it under another name, nor one that isn't there yet made a link, though it can be made as
+a folder, so moved into place). Its npm, pnpm (11 and
 later), uv and corepack use caches of Kuvo Code's own instead (`npm_config_cache`,
 `pnpm_config_cache_dir`, `UV_CACHE_DIR` and `UV_TOOL_DIR`, `COREPACK_HOME`: `cache/sandbox-…`,
 on this Mac in the app's `Library/Caches` folder), and on Linux uv copies what it installs
@@ -3016,7 +3020,19 @@ secrets (cloud, package and git tokens, browsers' and password managers' data, p
 every file in `~/.ssh` but its config, known hosts and public keys; gh's `hosts.yml` when it holds
 the token). A bot's or a chat's command gets its own folder back, and not its neighbours'. Its
 environment has none of the engine's `OPENCODE_…` (but `OPENCODE_SESSION_ID`), no `KUVO_…` password,
-secret, token or key, and no `SSH_AUTH_SOCK` but its own SSH agent's (below).
+secret, token or key, and no `SSH_AUTH_SOCK` but its own SSH agent's (below); on macOS it can't
+reach your SSH and GPG agents' sockets either, which sign with the keys it can't read: the
+system's (where launchd keeps it), one your shell started (in `~/.ssh/agent`, or `/tmp` and your
+temporary folder, whose agents' folders and sockets it can't move to give them another name, nor
+remove a folder of its own named as theirs are, `ssh-…`; its own sockets there, like ssh's shared
+connections, it uses and removes), the
+box's own `SSH_AUTH_SOCK`, gpg-agent's, 1Password's, Secretive's, Bitwarden's and yubikey-agent's,
+by their usual places (an `IdentityAgent` your ssh config names elsewhere, or a `GNUPGHOME`, isn't
+known). So `ssh`, and git over SSH, use only the vault's keys there, and signing a commit with
+your GPG key doesn't work; nor does an X11
+program, whose display (XQuartz's) is in launchd's folder too. (Linux can't refuse a socket: there
+a command isn't told where your SSH agent is, but can find one on its own, such as gpg-agent's in
+its usual place.)
 On macOS your Keychain stays readable, as gh and git's Keychain helper read their sign-ins from it in
 their own process (each item keeps its own access list, Kuvo Code's too, though one that trusts
 `security` reads without asking, and the file itself can be copied), but not the system's own
@@ -3080,7 +3096,20 @@ the engine's own Bun sets up through `bun:ffi`, Linux 5.13 or later); and the en
 `kuvo-sandbox.js` in its settings' `opencode/plugins`. The plugin names, for each folder the engine
 opens, that folder (the engine's own, never the command's) and its repository, and sends each
 command's shell through `bin/kuvo-fence`, which refuses to run one without a folder (exit `126`). The
-box first runs a command through it and checks that it can't read or write what's hidden; only then
+engine's own file tools (`read`, `write`, `edit`, `patch`, `glob`, `grep`) run outside the sandbox and
+tell a place outside the folder by the path as written, so the plugin gives them a path in the folder
+(or the top folder the engine counts as the project's) that a link leads out of as where it really
+is, taking the path as the engine does (`~`, the spaces a patch's lines are trimmed of, the
+look-alike name `read` falls back to), and the engine's rules for a folder outside the project apply
+to it (a link a command made to your keys asks, as your keys' own path would). And it refuses
+`session_move` (the engine's, or code mode's `opencode_session_move`) of another conversation, or to
+a folder outside the conversation's own and its repository's worktrees: commands would write
+wherever it moved. A command's folder is where it really was as the engine opened it (for a
+move, as the move was checked): one traded since for a link (by another conversation's command, in a
+folder it writes) runs no command (exit `126`). (A link swapped in between the plugin's look and a
+file tool's own isn't caught: only the engine could, as it opens the file. Nor is a folder traded
+before the engine opens it again: after a restart, or once the engine has let it go after an idle
+hour; nor one a coding agent starts in, which the agents bridge takes as it is then.) The box first runs a command through it and checks that it can't read or write what's hidden; only then
 does it give the engine the plugin, and it takes it away (with what the engine noted of it, so
 it's `on` again only once the engine has loaded it again) when a check fails, so commands run as
 before rather than not at all. (Kuvo Code's own kill switch, for a rollout, does the same: the box
