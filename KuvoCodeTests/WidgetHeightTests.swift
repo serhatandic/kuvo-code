@@ -70,6 +70,7 @@ import WebKit
     @Test(arguments: [
         #"<canvas style="position: absolute; top: 0; left: 0; width: 200px; height: 300px"></canvas>"#,
         #"<div style="position: relative; height: 50px"><canvas style="position: absolute; top: 0; width: 200px; height: 300px"></canvas></div>"#,
+        #"<div id="game"><canvas style="position: absolute; top: 0; width: 200px; height: 300px"></canvas></div>"#,
     ])
     func aPlacedDrawingStaysWholeWhenMeasuredAgain(html: String) async throws {
         let reports = Reports()
@@ -97,11 +98,15 @@ import WebKit
         #expect(wide > narrow / 3, "\(wide) cuts the timeline off")
     }
 
-    /// A box of fixed height whose table runs out of it (as boxes in pages often do): all of the
-    /// table shows.
-    @Test func whatSpillsOutOfABoxOfFixedHeightShowsWhole() async throws {
+    /// A long table in a box of fixed height, spilling out of it, on a page with a doctype or
+    /// without: it shows whole, and stays whole as the window changes width.
+    @Test(arguments: [
+        #"<div style="height: 100px"><div style="height: 600px; background: #eee">A long table</div></div>"#,
+        #"<html><body><div style="height: 100px"><div style="height: 600px">A long table</div></div></body></html>"#,
+    ])
+    func whatSpillsOutOfABoxOfFixedHeightShowsWhole(html: String) async throws {
         let reports = Reports()
-        let page = try await load(#"<div style="height: 100px"><div style="height: 600px; background: #eee">A long table</div></div>"#, reports: reports)
+        let page = try await load(html, reports: reports)
         #expect(try #require(reports.height) >= 600)
         try await fit(page, reports)
         page.frame.size.width = 520
@@ -122,6 +127,74 @@ import WebKit
         #expect(abs(try #require(reports.height) - 128) <= 4)
     }
 
+    /// What follows the window: a sheet placed against its bottom, partly below it, or a wrapper
+    /// as tall as the window. Given more room, it asks for as much more again: the widget stops
+    /// growing rather than growing each time something on it changes.
+    @Test(arguments: [
+        #"<div><div id="count" style="height: 120px">0</div><div style="position: absolute; bottom: -12px; height: 40px">Sheet</div></div>"#,
+        #"<div id="count" style="height: 120px">0</div><div style="position: absolute; bottom: -12px; height: 40px">Sheet</div>"#,
+        #"<div style="min-height: 100vh"><div id="count">0</div></div>"#,
+    ])
+    func whatFollowsTheWindowDoesntGrowIt(html: String) async throws {
+        let reports = Reports()
+        let page = try await load(html, reports: reports)
+        let first = try #require(reports.height)
+        var heights: [Double] = []
+        for count in 1...4 {
+            try await fit(page, reports)
+            try await change(page, #"document.getElementById("count").textContent = "\#(count)""#)
+            heights.append(try #require(reports.height))
+        }
+        #expect(heights[2] == heights[3])
+        #expect(heights[3] <= first + 24)
+    }
+
+    /// A feed that loads another row once it's given room, as tall as the room it was just
+    /// given: it isn't taken for what follows the window, and the row shows.
+    @Test func aRowThatComesWithTheRoomShows() async throws {
+        let reports = Reports()
+        let addRow = #"{ const row = document.createElement("div"); row.style.height = "40px"; document.getElementById("rows").append(row) }"#
+        let page = try await load(#"<div id="rows"><div style="height: 40px"></div></div><script>addEventListener("resize", () => { if (window.armed) { window.armed = false; "# + addRow + "} })</script>", reports: reports)
+        try await fit(page, reports)
+        try await change(page, addRow + "; window.armed = true")
+        let two = try #require(reports.height)
+        try await fit(page, reports)
+        #expect(try #require(reports.height) >= two + 40)
+    }
+
+    /// A menu kept closed below the last row, hidden until it's opened: it leaves no space.
+    @Test func aClosedMenuLeavesNoSpace() async throws {
+        let reports = Reports()
+        _ = try await load(#"<div><div style="height: 120px">Rows</div><ul style="position: absolute; visibility: hidden; height: 200px">Menu</ul></div>"#, reports: reports)
+        #expect(abs(try #require(reports.height) - 128) <= 4)
+    }
+
+    /// An <html> or <head> written in a comment or a script before the page's own: the policy
+    /// (no fetching, no sending) and the app's look still come with the page, not inside them.
+    @Test(arguments: [
+        #"<!-- an <html> template --><!doctype html><html><body><div style="height: 120px">A chart</div></body></html>"#,
+        #"<script>const template = "<html><head></head></html>";</script><div style="height: 120px">A chart</div>"#,
+        #"<!doctype html><script>const template = "<head>";</script><div style="height: 120px">A chart</div>"#,
+    ])
+    func thePolicyComesWithThePageWhateverItsScriptsSay(html: String) async throws {
+        let reports = Reports()
+        let page = try await load(html, reports: reports)
+        #expect(try await page.evaluateJavaScript(#"document.head.querySelector('meta[http-equiv="Content-Security-Policy"]') !== null"#) as? Bool == true)
+        #expect(try await page.evaluateJavaScript("getComputedStyle(document.body).fontSize") as? String == "13px")
+        #expect(try await page.evaluateJavaScript("document.compatMode") as? String == "CSS1Compat")
+    }
+
+    /// A whole page without a doctype: the policy and the app's look come before it, and its own
+    /// <html> keeps what it says (its language) and its own <head> what's in it.
+    @Test func aWholePageWithoutADoctypeKeepsItsOwnHead() async throws {
+        let reports = Reports()
+        let page = try await load(#"<html lang="en"><head><title>Scores</title></head><body><div style="height: 120px">A chart</div></body></html>"#, reports: reports)
+        #expect(try await page.evaluateJavaScript(#"document.head.querySelector('meta[http-equiv="Content-Security-Policy"]') !== null"#) as? Bool == true)
+        #expect(try await page.evaluateJavaScript("document.documentElement.lang") as? String == "en")
+        #expect(try await page.evaluateJavaScript("document.title") as? String == "Scores")
+        #expect(try await page.evaluateJavaScript("getComputedStyle(document.body).fontSize") as? String == "13px")
+    }
+
     /// A whole page with its own doctype stays a standard page: the app's look goes in after it,
     /// not before (which would lay it out the old way, as pages without one are).
     @Test func aWholePageKeepsItsOwnDoctype() async throws {
@@ -140,6 +213,20 @@ import WebKit
         for _ in 0..<3 { try await fit(page, reports) }
         #expect(reports.height == first)
         #expect(abs(first - 160) <= 8)
+    }
+
+    /// A page without a doctype, which fills its view however little is on it: details shown
+    /// and hidden again, the widget gets its height back.
+    @Test func aPageWithoutADoctypeGetsShorterAgain() async throws {
+        let reports = Reports()
+        let page = try await load(#"<html><body><div id="chart" style="height: 120px">A chart</div></body></html>"#, reports: reports)
+        let first = try #require(reports.height)
+        try await fit(page, reports)
+        try await change(page, #"document.getElementById("chart").style.height = "420px""#)
+        #expect(try #require(reports.height) >= first + 290)
+        try await fit(page, reports)
+        try await change(page, #"document.getElementById("chart").style.height = "120px""#)
+        #expect(reports.height == first)
     }
 
     /// A page made to fill its window (`height: 100%`) whose chart is drawn in once it has its
