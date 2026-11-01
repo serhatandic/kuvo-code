@@ -225,14 +225,14 @@ struct ToolCallView: View {
             return (isActive ? "Editing " : "Edited ") + (files.count == 1 ? files[0] : files.isEmpty ? "files" : "\(files.count) files")
         case "shell":
             if let wake = wake { return Self.summary(of: wake, isActive: isActive, failed: !exitSuffix.isEmpty) + exitSuffix }
-            return (isActive ? "Running " : "Ran ") + (string("command").map(InlineCode.command) ?? "a command") + exitSuffix
+            return (isActive ? "Running " : "Ran ") + (string("command").flatMap(InlineCode.command) ?? "a command") + exitSuffix
         case "grep": return "Searched for “\(string("pattern") ?? "")”" + (path.map { " in \($0)" } ?? "")
         case "glob": return "Found files matching \(string("pattern") ?? "")"
         case "webfetch": return (isActive ? "Fetching " : "Fetched ") + (string("url") ?? "a page")
         case "websearch": return "Searched the web for “\(string("query") ?? "")”"
         case "question": return isActive ? "Asking you a question" : "Asked you a question"
         case _ where isSandboxAsk:
-            let command = string("command").map(InlineCode.command) ?? "a command"
+            let command = string("command").flatMap(InlineCode.command) ?? "a command"
             // Asking until its ask was seen open and then answered; once allowed, the command runs
             // in the same call. (One not listed yet is still asking.)
             if isActive { return (isRunningOutside ? "Running " : "Asking to run ") + command + " outside the sandbox" }

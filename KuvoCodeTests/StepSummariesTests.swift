@@ -74,6 +74,8 @@ import Testing
         #expect(lines.code == ["npm install …"])
         #expect(lines.text == "Asking to run npm install … outside the sandbox")
         #expect(shown(try words("shell", ["command": "\n\nswift build\n"])).code == ["swift build"])
+        #expect(shown(try words("shell", ["command": "swift build \\\n\n"])).code == ["swift build"])
+        #expect(try words("shell", ["command": " \n "]) == "Ran a command")
     }
 
     @Test func searches() throws {
