@@ -89,11 +89,23 @@ const decidedBy = box => {
 // shell its plugins give it, with the environment they set, then the conversation's (`session`,
 // as the engine names it after its plugins). With no plugin of the sandbox's, as before.
 async function engineRuns(box, folder, command, session) {
-  const input = { command, cwd: folder, timeout: 0, shell: "/bin/sh", env: { PATH: process.env.PATH, HOME: root, KUVO_BOTS: box.bots, KUVO_WAKES: box.wakes } };
+  return (await engineOpens(box, folder))(command, session);
+}
+
+// The engine opening `folder` now, and what runs a command there later (as `engineRuns`).
+async function engineOpens(box, folder) {
+  let hook;
   if (fs.existsSync(box.plugin)) {
     const plugin = (await import(`${pathToFileURL(box.plugin)}?${Math.random()}`)).default;
-    let hook;
     await plugin.setup({ location: { directory: folder }, shell: { hook: async (name, take) => { assert.equal(name, "create.before"); hook = take; } }, tool: { hook: async () => {} } });
+  }
+  return (command, session) => engineRunsOpened(box, folder, hook, command, session);
+}
+
+// A command in `folder`, through what the plugin did as the engine opened it (`hook`).
+function engineRunsOpened(box, folder, hook, command, session) {
+  const input = { command, cwd: folder, timeout: 0, shell: "/bin/sh", env: { PATH: process.env.PATH, HOME: root, KUVO_BOTS: box.bots, KUVO_WAKES: box.wakes } };
+  if (hook) {
     hook(input);
     // (The plugin names the engine's runtime, its own: here that's this test's, so on Linux,
     // without Bun, the Bun this box's engine is.)
@@ -128,6 +140,16 @@ const engineAsks = (folder, given, top = folder) => {
   const home = os.homedir();
   const where = path.resolve(folder, given === "~" ? home : given.startsWith("~/") ? path.join(home, given.slice(2)) : given);
   return ![folder, top].some(inside => where === inside || where.startsWith(inside + path.sep));
+};
+
+// The first file a patch names, as the engine reads it (engine 2.2.0's patch parser): each line
+// without a last \r, trimmed, starting with a header.
+const patchedFile = text => {
+  for (const line of text.split("\n")) {
+    const read = (line.endsWith("\r") ? line.slice(0, -1) : line).trim();
+    const head = ["*** Add File: ", "*** Update File: ", "*** Delete File: "].find(each => read.startsWith(each));
+    if (head) return read.slice(head.length).trim();
+  }
 };
 
 // What a command could do, each line `<what>: allowed` or `refused`.
@@ -668,7 +690,8 @@ test("a link a command makes doesn't take the engine's own file tools out of the
   try {
     assert.equal((await running.ask("GET", "kuvo/sandbox")).value.able, true);
     const key = JSON.stringify(path.join(keys, "id_test"));
-    const made = await engineRuns(box, project, `ln -s ${key} key.txt && ln -s ${JSON.stringify(keys)} keys && ln -s ${JSON.stringify(profile)} profile && ln -s ${key} "look alike.txt" && ln -s ${key} "spaced.txt " && ln -s ${JSON.stringify(path.join(root, "deep-to-be"))} deep`);
+    const made = await engineRuns(box, project, `ln -s ${key} key.txt && ln -s ${JSON.stringify(keys)} keys && ln -s ${JSON.stringify(profile)} profile && ln -s ${key} "look alike.txt" && ln -s ${key} "spaced.txt " && ln -s ${JSON.stringify(path.join(root, "deep-to-be"))} deep && ln -s ${JSON.stringify(keys)} x && ln -s x/../your-keys/new.sh up`);
+    fs.symlinkSync(keys, path.join(project, "ok\u2028keys"));
     assert.equal(made.status, 0, made.out);
     const asked = {};
     for (const [what, tool, input, given] of [
@@ -678,14 +701,19 @@ test("a link a command makes doesn't take the engine's own file tools out of the
       ["write the script that isn't there yet", "write", { path: "profile", content: "x" }, input => input.path],
       ["list its folder", "glob", { pattern: "*", path: "keys" }, input => input.path],
       ["search its folder", "grep", { pattern: "key", path: "keys" }, input => input.path],
-      ["patch the key", "patch", { patchText: "*** Begin Patch\n*** Update File: keys/id_test\n@@\n-a key\n+b key\n*** End Patch" }, input => input.patchText.match(/^\s*\*\*\* Update File: (.+)$/m)[1].trim()],
+      ["patch the key", "patch", { patchText: "*** Begin Patch\n*** Update File: keys/id_test\n@@\n-a key\n+b key\n*** End Patch" }, input => patchedFile(input.patchText)],
       // (The engine takes a patch's lines without the spaces around them.)
-      ["patch the key, the line indented", "patch", { patchText: "*** Begin Patch\n  *** Update File: keys/id_test \n@@\n-a key\n+b key\n*** End Patch" }, input => input.patchText.match(/^\s*\*\*\* Update File: (.+)$/m)[1].trim()],
+      ["patch the key, the line indented", "patch", { patchText: "*** Begin Patch\n  *** Update File: keys/id_test \n@@\n-a key\n+b key\n*** End Patch" }, input => patchedFile(input.patchText)],
       // (Read reads the one file beside a name that isn't there whose name is the same but for a
       // no-break space; and the engine takes a name with the spaces it has.)
       ["read the key by a look-alike name", "read", { path: "look\u00a0alike.txt" }, input => input.path],
       ["read the key by a name ending in a space", "read", { path: "spaced.txt " }, input => input.path],
       ["write far into a link to a place that isn't there yet", "write", { path: `deep/${"d/".repeat(41)}x`, content: "x" }, input => input.path],
+      // (A .. after a link goes up from where the link leads.)
+      ["write through a link that goes up from another", "write", { path: "up", content: "x" }, input => input.path],
+      // (The engine trims a line of any spaces, and splits lines only at \n.)
+      ["patch a new file, after a no-break space", "patch", { patchText: "*** Begin Patch\n\u00a0*** Add File: keys/new\n+x\n*** End Patch" }, input => patchedFile(input.patchText)],
+      ["patch a new file, by a name with a line separator", "patch", { patchText: "*** Begin Patch\n*** Add File: ok\u2028keys/new\n+x\n*** End Patch" }, input => patchedFile(input.patchText)],
       ["read what's in the project", "read", { path: "notes.md" }, input => input.path],
     ]) {
       const called = await engineCalls(box, project, tool, input);
@@ -703,6 +731,9 @@ test("a link a command makes doesn't take the engine's own file tools out of the
       "read the key by a look-alike name": "asks",
       "read the key by a name ending in a space": "asks",
       "write far into a link to a place that isn't there yet": "asks",
+      "write through a link that goes up from another": "asks",
+      "patch a new file, after a no-break space": "asks",
+      "patch a new file, by a name with a line separator": "asks",
       "read what's in the project": "goes",
     });
     // A link that stays in the project stays as written.
@@ -732,6 +763,34 @@ test("a folder above the project that only looks like a repository doesn't count
     // The engine counts only the folder as the project, so the key, by the link's real place, asks.
     const called = await engineCalls(box, project, "read", { path: "key.txt" });
     assert.equal(engineAsks(project, called.input.path), true, called.input.path);
+  } finally {
+    await running.stop();
+  }
+});
+
+test("a conversation's folder traded for a link by another's command isn't worked in where the link leads", async () => {
+  const box = boxAt("folder-traded");
+  // One conversation in the project, another in a folder in it (which the first's commands write).
+  const project = path.join(root, "traded-project");
+  const inner = path.join(project, "inner");
+  const moved = path.join(project, "moved");
+  for (const folder of [inner, moved]) fs.mkdirSync(folder, { recursive: true });
+  const elsewhere = path.join(root, "traded-elsewhere");
+  fs.mkdirSync(elsewhere);
+  const running = await start(box);
+  try {
+    assert.equal((await running.ask("GET", "kuvo/sandbox")).value.able, true);
+    const opened = await engineOpens(box, inner);
+    assert.equal(opened("echo first > first").status, 0);
+    // A conversation moved into the project's other folder: checked, then moved later, by its name.
+    assert.equal((await engineCalls(box, project, "opencode_session_move", { directory: "moved" })).refused, undefined);
+    const traded = await engineRuns(box, project, `mv inner inner.old && ln -s ${JSON.stringify(elsewhere)} inner && mv moved moved.old && ln -s ${JSON.stringify(elsewhere)} moved`);
+    assert.equal(traded.status, 0, traded.out);
+    const tries = {};
+    tries["the one in it already"] = opened(`echo planted > ${JSON.stringify(path.join(elsewhere, "planted"))}`).status === 0 ? "allowed" : "refused";
+    tries["the one moved there"] = (await engineRuns(box, moved, `echo planted > ${JSON.stringify(path.join(elsewhere, "planted"))}`)).status === 0 ? "allowed" : "refused";
+    assert.deepEqual(tries, { "the one in it already": "refused", "the one moved there": "refused" });
+    assert.equal(fs.existsSync(path.join(elsewhere, "planted")), false);
   } finally {
     await running.stop();
   }

@@ -3087,7 +3087,11 @@ look-alike name `read` falls back to), and the engine's rules for a folder outsi
 to it (a link a command made to your keys asks, as your keys' own path would). And it refuses
 `session_move` (the engine's, or code mode's `opencode_session_move`) of another conversation, or to
 a folder outside the conversation's own and its repository's worktrees: commands would write
-wherever it moved. (A link swapped in between the plugin's look and the tool's own isn't caught.) The box first runs a command through it and checks that it can't read or write what's hidden; only then
+wherever it moved. A command's folder is where it really was as the engine opened it (for a
+move, as the move was checked): one traded since for a link (by another conversation's command, in a
+folder it writes) runs no command (exit `126`). (A link swapped in between the plugin's look and a
+file tool's own isn't caught: only the engine could, as it opens the file. Nor is a folder traded
+before the engine first opens it, after a restart.) The box first runs a command through it and checks that it can't read or write what's hidden; only then
 does it give the engine the plugin, and it takes it away (with what the engine noted of it, so
 it's `on` again only once the engine has loaded it again) when a check fails, so commands run as
 before rather than not at all. (Kuvo Code's own kill switch, for a rollout, does the same: the box

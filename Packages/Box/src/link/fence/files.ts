@@ -71,13 +71,13 @@ export function launcherScript(places: FencePlaces): string {
     "# The engine runs each command an agent (or you, with !) runs through this: the command's own",
     "# shell, in the sandbox. Its plugin (kuvo-sandbox.js) names the conversation's folder.",
     `F=${sh(places.folder)}`,
-    `shell=\${KUVO_FENCE_SHELL:-/bin/sh} work=\${KUVO_FENCE_WORK-} git=\${KUVO_FENCE_GIT-} runtime=\${KUVO_FENCE_RUNTIME-}`,
+    `shell=\${KUVO_FENCE_SHELL:-/bin/sh} work=\${KUVO_FENCE_WORK-} work_at=\${KUVO_FENCE_WORK_AT-} git=\${KUVO_FENCE_GIT-} runtime=\${KUVO_FENCE_RUNTIME-}`,
     // A coding agent run whole in it (the agents' bridge names them): its homes and the folders it
     // only reads, one a line; in its homes, the folders of its state and what it never writes, by
     // name (`*` for any letters), one a line; and its Kuvo Code tools' port.
     // And whether its program is the engine's runtime, run as Bun (Cursor's SDK, in a process of its own).
     `own_list=\${KUVO_FENCE_OWN-} read_list=\${KUVO_FENCE_READ-} state_list=\${KUVO_FENCE_STATE-} kept_list=\${KUVO_FENCE_KEPT-} port=\${KUVO_FENCE_PORT:-0} as_bun=\${KUVO_FENCE_BUN-}`,
-    "unset KUVO_FENCE_SHELL KUVO_FENCE_WORK KUVO_FENCE_GIT KUVO_FENCE_RUNTIME KUVO_FENCE_OWN KUVO_FENCE_READ KUVO_FENCE_STATE KUVO_FENCE_KEPT KUVO_FENCE_PORT KUVO_FENCE_BUN",
+    "unset KUVO_FENCE_SHELL KUVO_FENCE_WORK KUVO_FENCE_WORK_AT KUVO_FENCE_GIT KUVO_FENCE_RUNTIME KUVO_FENCE_OWN KUVO_FENCE_READ KUVO_FENCE_STATE KUVO_FENCE_KEPT KUVO_FENCE_PORT KUVO_FENCE_BUN",
     `case $port in *[!0-9]*|'') port=0 ;; esac`,
     `agent=; [ "$port" = 0 ] || agent=-agent`,
     ...Array.from({ length: AGENT_FOLDERS }, (_, at) => `o${at}=$F/none q${at}=- k${at}=$F/none`),
@@ -96,6 +96,10 @@ export function launcherScript(places: FencePlaces): string {
     "unset SSH_AUTH_SOCK KUVO_WAKE_FOLDER",
     `case $work in /*) ;; *) echo "This command can't run in the sandbox here: its conversation's folder wasn't given." >&2; exit 126 ;; esac`,
     `work=$(cd "$work" 2>/dev/null && pwd -P) || { echo "This command can't run: its conversation's folder isn't there." >&2; exit 126; }`,
+    // Where the folder really was as the engine opened it (its plugin names it): a folder traded
+    // since for a link to somewhere else (by another conversation's command, in a folder it writes)
+    // isn't worked in there.
+    `case $work_at in ''|"$work") ;; *) echo "This command can't run: its conversation's folder has been replaced since it was opened. Ask the user to open it again." >&2; exit 126 ;; esac`,
     `case $git in /*) git=$(cd "$git" 2>/dev/null && pwd -P) || git=$work ;; *) git=$work ;; esac`,
     "profile=project",
     `case $work in ${insideCases}) profile=inside ;; esac`,
@@ -229,6 +233,7 @@ const FOLDER = ${JSON.stringify(places.folder)}
 const KEY = ${JSON.stringify(places.key)}
 const LAUNCHER = ${JSON.stringify(places.launcher)}
 const VERSION = ${JSON.stringify(version)}
+const MOVES = path.join(FOLDER, "moves.json")
 
 // The folder's git repository, which its commands may write too: its .git folder, or for a
 // worktree the repository's own (where its commits go), found from the engine's folder upwards.
@@ -264,27 +269,25 @@ function repository(folder) {
   return ""
 }
 
-// Where a path really is: through its links, also a link to a place that isn't there yet (which
-// writing it would make). Only links are counted (a loop of them ends it), never the folders up to
-// the first one that's there.
-function located(where, links = 0) {
-  try { return fs.realpathSync(where) } catch {}
-  const missing = []
-  for (let at = where; ; at = path.dirname(at)) {
+// Where a path really is, as the system follows it, a name at a time: through its links (a ..
+// after one goes up from where it leads), also to a place that isn't there yet (which writing it
+// would make). A loop of links ends it where it's written.
+function located(where) {
+  let at = "/"
+  let rest = path.resolve(where).split("/").filter(Boolean)
+  for (let links = 0; rest.length; ) {
+    const name = rest.shift()
+    if (name === ".") continue
+    if (name === "..") { at = path.dirname(at); continue }
+    const next = path.join(at, name)
     let link
-    try { link = fs.lstatSync(at).isSymbolicLink() ? fs.readlinkSync(at) : undefined } catch {
-      if (at === path.dirname(at)) return where
-      missing.unshift(path.basename(at))
-      continue
-    }
-    if (link === undefined) {
-      let base = at
-      try { base = fs.realpathSync(at) } catch {}
-      return path.join(base, ...missing)
-    }
-    if (links >= 40) return where
-    return located(path.join(path.resolve(path.dirname(at), link), ...missing), links + 1)
+    try { link = fs.lstatSync(next).isSymbolicLink() ? fs.readlinkSync(next) : undefined } catch { return path.join(next, ...rest) }
+    if (link === undefined) { at = next; continue }
+    if (++links > 40) return where
+    if (link.startsWith("/")) at = "/"
+    rest = [...link.split("/").filter(Boolean), ...rest]
   }
+  return at
 }
 const within = (where, folder) => !!folder && (where === folder || where.startsWith(folder + path.sep))
 // A path as the engine takes it: ~ is your home folder, anything else from the folder given.
@@ -295,7 +298,7 @@ function topOf(folder) {
   for (let at = real(folder); at && at !== path.dirname(at); at = path.dirname(at)) {
     try { fs.lstatSync(path.join(at, ".hg")); return at } catch {}
     try { fs.lstatSync(path.join(at, ".git")) } catch { continue }
-    return repository(folder) ? at : ""
+    return repository(real(folder)) ? at : ""
   }
   return ""
 }
@@ -316,7 +319,9 @@ function lookalike(where) {
 // link leads out of it is given as where it really is, which the engine's rules for a folder
 // outside the project then apply to (Settings › Permissions, a bot's own).
 const PATHS = { read: "path", write: "path", edit: "path", glob: "path", grep: "path" }
-const PATCHED = /^([ \\t]*\\*\\*\\* (?:Add File|Update File|Delete File|Move to): )(.+)$/gm
+// A patch's lines that name a file, as the engine reads them: each line (without a last \\r) with
+// the spaces around it trimmed.
+const PATCHED = ["*** Add File: ", "*** Update File: ", "*** Delete File: ", "*** Move to: "]
 
 export default {
   id: "kuvo-code.sandbox",
@@ -334,16 +339,24 @@ export default {
       try { fs.writeFileSync(made, crypto.randomBytes(32).toString("hex") + "\\n", { mode: 0o600 }); fs.renameSync(made, KEY) } catch { try { fs.rmSync(made, { force: true }) } catch {} }
     }
     try { fs.writeFileSync(note, JSON.stringify({ pid: process.pid, version: VERSION })) } catch {}
+    const folder = work ? real(work) : ""
+    // A folder this engine moved a conversation to: where it really was when the move was checked
+    // (taken once, as the engine opens it).
+    let movedTo = ""
+    try {
+      const moves = JSON.parse(fs.readFileSync(MOVES, "utf8"))
+      if (typeof moves[work] === "string") { movedTo = moves[work]; delete moves[work]; fs.writeFileSync(MOVES, JSON.stringify(moves)) }
+    } catch {}
     await ctx.shell.hook("create.before", (input) => {
       input.env.KUVO_FENCE_SHELL = input.shell
       input.env.KUVO_FENCE_WORK = work
+      input.env.KUVO_FENCE_WORK_AT = movedTo || folder
       input.env.KUVO_FENCE_GIT = git
       input.env.KUVO_FENCE_RUNTIME = process.execPath
       input.shell = LAUNCHER
     })
-    const folder = work ? real(work) : ""
     const top = work ? topOf(work) : ""
-    const ours = [work, folder, top, top && real(top)].filter(Boolean)
+    const ours = [work, folder, top].filter(Boolean)
     const really = (given, tool) => {
       if (typeof given !== "string" || !given || !work) return given
       const written = resolved(work, given)
@@ -351,7 +364,7 @@ export default {
       let where = located(written)
       // A file that isn't there, which read takes a look-alike's place for.
       if (tool === "read" && ours.some(each => within(where, each))) {
-        try { fs.lstatSync(written) } catch { where = located(lookalike(written) || written) }
+        try { fs.statSync(written) } catch { where = located(lookalike(written) || written) }
       }
       return ours.some(each => within(where, each)) ? given : where
     }
@@ -363,12 +376,14 @@ export default {
         const given = really(input[field], call.tool)
         if (given !== input[field]) call.input = { ...input, [field]: given }
       } else if ((call.tool === "patch" || call.tool === "apply_patch") && typeof input.patchText === "string") {
-        // Each file's path as the engine takes it, without the spaces around it.
-        const patchText = input.patchText.replace(PATCHED, (line, head, given) => {
-          const trimmed = given.trim()
-          const where = really(trimmed)
-          return where === trimmed ? line : head + where
-        })
+        const patchText = input.patchText.split("\\n").map((line) => {
+          const read = (line.endsWith("\\r") ? line.slice(0, -1) : line).trim()
+          const head = PATCHED.find(each => read.startsWith(each))
+          if (!head) return line
+          const given = read.slice(head.length).trim()
+          const where = really(given)
+          return where === given ? line : head + where
+        }).join("\\n")
         if (patchText !== input.patchText) call.input = { ...input, patchText }
       } else if (call.tool === "session_move" || call.tool === "opencode_session_move") {
         // Its commands run in its folder's sandbox, so a conversation moved to another folder (your
@@ -379,6 +394,13 @@ export default {
         if (!to || (!within(to, folder) && !(git && repository(to) === git))) {
           throw new Error("This conversation's commands run in Kuvo Code's sandbox, in its own folder, so it can't move itself to another one. Ask the user to move it.")
         }
+        // The engine moves it later, by the folder's name: noted where it really is now, so its
+        // commands don't run there once the folder is traded for a link meanwhile.
+        let moves = {}
+        try { moves = JSON.parse(fs.readFileSync(MOVES, "utf8")) } catch {}
+        delete moves[resolved(work, input.directory.trim())]
+        moves[resolved(work, input.directory.trim())] = to
+        try { fs.writeFileSync(MOVES, JSON.stringify(Object.fromEntries(Object.entries(moves).slice(-200)))) } catch {}
       }
     })
   },
