@@ -1276,7 +1276,9 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     it works again or you sign in again (kept in `run/ended-sign-ins.json`, so every part of the box,
     `box route` too, says the same); `POST kuvo/accounts/<provider>/forget` is Disconnect, as
     Settings › Accounts does it: that box's sign-ins and keys for that plan (`404` for one that
-    isn't a plan there, an integration's server among them). Every box from bridge 0.9.61
+    isn't a plan there, an integration's server among them; from bridge 0.9.149, `502 {message}`
+    when the engine wouldn't remove one, which stays, its plan still said to have ended, and `503
+    {message}` when the engine can't list them). Every box from bridge 0.9.61
     (`accounts.ended`); a Mac before answered them itself.
   - `GET kuvo/accounts/found` → `{agents, opencode, shell, connected}`: what the computer already has, for
     the first launch's Bring your subscriptions. `agents`: the coding agents' programs (`{id, name,
@@ -1286,7 +1288,9 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     sign each other out), and `connected` says the engine has a working one for it already (a key in the shell aside). `shell`: keys in
     the shell the engine uses (`{integrationID, name, variable}`). `connected` (from bridge 0.9.91):
     the engine's providers signed in and working, by integration (an expired sign-in or a key in the
-    shell aside). Names
+    shell aside). `unread` (from bridge 0.9.149): the parts whose server isn't running or
+    didn't answer just now, `engine` and `agents`; theirs are empty for now, not signed out, so a
+    client keeps what it last read of them. Names
     only, never a key. `POST
     kuvo/accounts/found/use {id}` copies an opencode key in as the plan's sign-in in use (`200 {}`;
     `404` for one that isn't there, `409` for a sign-in, `503` with the engine down, `502` when it

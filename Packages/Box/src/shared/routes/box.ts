@@ -86,12 +86,15 @@ export const CREDENTIALS = object({ credentials: list(object({ id: string, integ
  * key): the coding agents' programs and their sign-ins; the keys (`key`, brought over with
  * `kuvo/accounts/found/use`) and sign-ins (`signIn`, done again here) of an opencode used apart
  * from Kuvo Code, `connected` when the engine has one for it already; and the keys in the shell
- * the engine uses; and the engine's providers signed in to already (`connected`, by integration). */
+ * the engine uses; and the engine's providers signed in to already (`connected`, by integration).
+ * `unread` names the parts whose server isn't running or didn't answer (`engine`, `agents`): theirs
+ * are empty for now, not signed out. */
 export const FOUND = object({
   agents: list(object({ id: string, name: string, installed: bool, signedIn: bool, "label?": string })),
   opencode: list(object({ id: string, integrationID: string, name: string, kind: words("key", "signIn"), connected: bool })),
   shell: list(object({ integrationID: string, name: string, variable: string })),
   "connected?": list(string),
+  "unread?": list(words("engine", "agents")),
 });
 
 export type BoxInfo = Infer<typeof INFO>;

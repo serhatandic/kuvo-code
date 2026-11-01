@@ -102,22 +102,28 @@ export async function endedProviders(engine: Target): Promise<string[]> {
 }
 
 // Signs this box out of one of your plans (Settings › Accounts' Disconnect): its sign-ins and keys,
-// never an integration's server. False for what isn't a plan here.
-export async function forgetPlan(engine: Target, id: string): Promise<boolean> {
+// never an integration's server. 404 for what isn't a plan here; when the engine can't list them or
+// won't remove one, why, with what it didn't remove still there (and its plan still said to have
+// ended, if it had).
+export async function forgetPlan(engine: Target, id: string): Promise<{ status: 200 | 404 } | { status: 502 | 503; message: string }> {
   const integrations = (await engineGet(engine, "api/integration") as UncheckedAnswer)?.data;
-  const plan = (Array.isArray(integrations) ? integrations as EngineIntegration[] : []).find(each => each?.id === id);
-  if (!plan || plan.metadata?.source === "mcp") return false;
   const entries = (await engineGet(engine, "api/credential") as UncheckedAnswer)?.data;
-  for (const entry of Array.isArray(entries) ? entries as EngineCredential[] : []) {
+  if (!Array.isArray(integrations) || !Array.isArray(entries)) return { status: 503, message: "The engine isn't answering. Try again in a moment." };
+  const plan = (integrations as EngineIntegration[]).find(each => each?.id === id);
+  if (!plan || plan.metadata?.source === "mcp") return { status: 404 };
+  let refused = 0;
+  for (const entry of entries as EngineCredential[]) {
     if (entry?.integrationID !== id || typeof entry.id !== "string") continue;
-    await fetch(`http://127.0.0.1:${engine.port}/api/credential/${encodeURIComponent(entry.id)}`, {
+    const removed = await fetch(`http://127.0.0.1:${engine.port}/api/credential/${encodeURIComponent(entry.id)}`, {
       method: "DELETE",
       headers: { authorization: `Basic ${Buffer.from(`opencode:${engine.password}`).toString("base64")}` },
       signal: AbortSignal.timeout(10_000),
-    }).then(response => response.body?.cancel()).catch(() => {});
+    }).then(response => (response.body?.cancel(), response.ok), () => false);
+    if (!removed) refused++;
   }
+  if (refused) return { status: 502, message: refused === 1 ? "The engine didn't remove a sign-in. Try again." : `The engine didn't remove ${refused} sign-ins. Try again.` };
   changeEndedSignIns(each => each.delete(id));
-  return true;
+  return { status: 200 };
 }
 
 // The plans whose sign-in ran out and couldn't be renewed (a run on one was refused), and
@@ -135,7 +141,8 @@ export async function* accountsRoute(context: RouteContext): AsyncGenerator<Answ
   let id: string | null = null;
   try { id = decodeURIComponent(route.slice("kuvo/accounts/".length, -"/forget".length)); } catch {}
   if (!id || id.includes("/")) return yield* json(404, {});
-  return yield* ((await forgetPlan(engine, id).catch(() => false)) ? json(200, {}) : json(404, {}));
+  const forgot = await forgetPlan(engine, id).catch(() => ({ status: 503 as const, message: "The engine isn't answering. Try again in a moment." }));
+  return yield* json(forgot.status, "message" in forgot ? { message: forgot.message } : {});
 }
 
 // This machine's sign-ins, listed (`api/credential` has what each is signed in with too).
