@@ -1246,22 +1246,25 @@ private struct SideQuestionTag: View {
 private struct AttachmentStrip<Chip: View>: View {
     let files: [URL]
     @ViewBuilder let chip: (URL) -> Chip
-    /// Each chip's trailing edge, from the strip's visible leading edge.
-    @State private var ends: [URL: CGFloat] = [:]
-    @State private var width: CGFloat = .infinity
+    /// The chips not wholly in view past the trailing edge. Each says when it crosses the edge,
+    /// not where it is on every frame of a scroll.
+    @State private var past: Set<URL> = []
+    /// More chips than fit: the count keeps its room then, so the strip doesn't widen and slide
+    /// the chips over as the last one comes into view.
+    @State private var overflows = false
     @State private var position = ScrollPosition(idType: URL.self)
 
-    /// The chips not wholly in view past the trailing edge.
-    private var past: [URL] { files.filter { (ends[$0] ?? 0) > width + 1 } }
-
     var body: some View {
+        let next = files.first(where: past.contains)
         // The count beside the row, not over it: the chips' names never run under it.
         HStack(spacing: 6) {
             ScrollView(.horizontal) {
                 HStack(spacing: 8) {
                     ForEach(files, id: \.self) { file in
                         chip(file)
-                            .onGeometryChange(for: CGFloat.self, of: { $0.frame(in: .scrollView).maxX }) { ends[file] = $0 }
+                            .onGeometryChange(for: Bool.self, of: { $0.frame(in: .scrollView).maxX > ($0.bounds(of: .scrollView)?.width ?? .infinity) + 1 }) { isPast in
+                                if isPast { past.insert(file) } else { past.remove(file) }
+                            }
                     }
                 }
                 .scrollTargetLayout()
@@ -1274,11 +1277,11 @@ private struct AttachmentStrip<Chip: View>: View {
             }
             .scrollPosition($position)
             .scrollIndicators(.hidden)
-            .onScrollGeometryChange(for: CGFloat.self, of: \.containerSize.width) { _, new in width = new }
+            .onScrollGeometryChange(for: Bool.self, of: { $0.contentSize.width > $0.containerSize.width + 1 }) { _, new in overflows = new }
             .fadingScrollEdges(24, axis: .horizontal)
-            if let next = past.first {
-                Button { withAnimation(.ui) { position.scrollTo(id: next, anchor: .trailing) } } label: {
-                    Text("+\(past.count)")
+            if overflows {
+                Button { if let next { withAnimation(.ui) { position.scrollTo(id: next, anchor: .trailing) } } } label: {
+                    Text("+\(max(past.count, 1))")
                         .font(.system(size: 12, weight: .semibold))
                         .monospacedDigit()
                         .padding(.horizontal, 9)
@@ -1289,10 +1292,15 @@ private struct AttachmentStrip<Chip: View>: View {
                 .padding(.top, 6)
                 .help(past.count == 1 ? "One more file" : "\(past.count) more files")
                 .accessibilityLabel(past.count == 1 ? "One more file" : "\(past.count) more files")
+                // At the end, it fades where it is: the strip keeps its width.
+                .opacity(next == nil ? 0 : 1)
+                .disabled(next == nil)
+                .accessibilityHidden(next == nil)
                 .transition(.opacity)
             }
         }
-        .animation(.ui, value: past.isEmpty)
-        .onChange(of: files) { ends = ends.filter { files.contains($0.key) } }
+        .animation(.ui, value: next == nil)
+        .animation(.ui, value: overflows)
+        .onChange(of: files) { past.formIntersection(files) }
     }
 }
