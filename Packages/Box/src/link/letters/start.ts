@@ -8,7 +8,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isObject } from "../../shared/json";
-import { asked, call } from "../engine/client";
+import { asked, call, engineGet } from "../engine/client";
+import { writtenByYou } from "../engine/queue";
 import { messageID } from "../engine/sessions";
 import { BOTS, CHATS, HERE, homeFolder } from "../home";
 import { changeProjects, PROJECTS_FILE, readProjects } from "../areas/projects";
@@ -177,6 +178,24 @@ const projectNames = () => readProjects().filter(each => !each.removed).map(each
 /** A new session with `given`'s task, from the conversation `by` (null: from a client). A bot's
  * (and its sessions') are its work: marked so, held to the limits you set for it, if any, with a
  * net against a runaway; another conversation's, a few in a while (`limits.ts`). */
+// Whether `session`'s turn answers what you wrote: its latest message to it is yours, not a
+// letter, a wake-up or the box's (looked for back past a long turn's steps, page by page).
+async function answersYou(target: Target, session: string): Promise<boolean> {
+  const address = encodeURIComponent(session);
+  let query = "limit=100&order=desc";
+  for (let pages = 0; pages < 20; pages++) {
+    const page = await engineGet(target, `api/session/${address}/message?${query}`).catch(() => null) as { data?: unknown; cursor?: { next?: string; previous?: string } | null } | null;
+    const messages: unknown[] = Array.isArray(page?.data) ? page.data : [];
+    const latest = messages.find(message => isObject(message) && message.type === "user") as { text?: unknown; metadata?: unknown } | undefined;
+    if (latest) return writtenByYou(latest.text, latest.metadata);
+    // (Older, as reading the whole conversation pages back.)
+    const next = page?.cursor?.next ?? page?.cursor?.previous;
+    if (!messages.length || !next) return false;
+    query = `limit=100&cursor=${encodeURIComponent(next)}`;
+  }
+  return false;
+}
+
 export async function startSession(given: StartGiven, by: Starter | null, place: StartPlace): Promise<{ started: Started } | { refused: StartRefusal }> {
   const no = (status: StartRefusal["status"], message: string, session?: string) => ({ refused: { status, message, ...(session ? { session } : {}) } });
   const task = typeof given.task === "string" ? given.task.trim() : "";
@@ -215,9 +234,10 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   const bot: WorksFor | null = ownBot ?? (by?.place ? worksFor(by.place.data) : null);
   const depth = ownBot ? 1 : depthOf(by?.place?.data) + 1;
   // The goal its bot is at, if any. Paused by you, nothing of it goes on until you resume it, so
-  // none of its sessions (one woken by a letter, say) starts another meanwhile.
+  // none of its sessions (one woken by a letter, say) starts another meanwhile, nor the bot's own
+  // conversation, but for what you ask it for there (its turn answering what you wrote).
   const goal = bot ? runningGoal(bot.bot) : null;
-  if (goal?.heldByYou) return no(403, "The user paused this goal: nothing new starts until they resume it.");
+  if (goal?.heldByYou && !(ownBot && by?.place && await answersYou(by.place.target, by.session))) return no(403, "The user paused this goal: nothing new starts until they resume it.");
   // Where it runs: the engine, the coding agents' bridge for one of theirs, or the conversation's.
   let engine: Target | null = null;
   try { engine = place.readEngine(); } catch {}

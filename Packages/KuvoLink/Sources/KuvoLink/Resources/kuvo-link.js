@@ -1220,7 +1220,8 @@ async function sendNow(target, session, item) {
   return true;
 }
 var NOT_YOURS = ["[Message from ", "[Wake-up]", "[Work from ", "[Session ", "[Goal started]", "[Goal changed]", "[Goal's end]", "[Goal resumed]", "[Not now]", "[Limit reset]", "[The user answered]"];
-var isYours = (item) => item.type === "user" && !isBoxNote(item.payload?.metadata) && !NOT_YOURS.some((start) => String(item.payload?.text ?? "").startsWith(start));
+var writtenByYou = (text, metadata) => !isBoxNote(metadata) && !NOT_YOURS.some((start) => String(text ?? "").startsWith(start));
+var isYours = (item) => item.type === "user" && writtenByYou(item.payload?.text, item.payload?.metadata);
 function queueWatcher(target, { after = DRAIN_AFTER, schedule = setTimeout, cancel = clearTimeout } = {}) {
   const drains = new Map;
   const stops = new Map;
@@ -16937,6 +16938,22 @@ function findProject(named) {
   return found ? { directory: found.directory, name: found.name ?? path63.basename(found.directory) } : null;
 }
 var projectNames = () => readProjects().filter((each) => !each.removed).map((each) => each.name ?? path63.basename(each.directory)).slice(0, 12);
+async function answersYou(target, session) {
+  const address = encodeURIComponent(session);
+  let query = "limit=100&order=desc";
+  for (let pages = 0;pages < 20; pages++) {
+    const page = await engineGet(target, `api/session/${address}/message?${query}`).catch(() => null);
+    const messages = Array.isArray(page?.data) ? page.data : [];
+    const latest = messages.find((message) => isObject(message) && message.type === "user");
+    if (latest)
+      return writtenByYou(latest.text, latest.metadata);
+    const next = page?.cursor?.next ?? page?.cursor?.previous;
+    if (!messages.length || !next)
+      return false;
+    query = `limit=100&cursor=${encodeURIComponent(next)}`;
+  }
+  return false;
+}
 async function startSession(given, by, place) {
   const no = (status, message, session) => ({ refused: { status, message, ...session ? { session } : {} } });
   const task = typeof given.task === "string" ? given.task.trim() : "";
@@ -16982,7 +16999,7 @@ async function startSession(given, by, place) {
   const bot = ownBot ?? (by?.place ? worksFor(by.place.data) : null);
   const depth = ownBot ? 1 : depthOf(by?.place?.data) + 1;
   const goal = bot ? runningGoal(bot.bot) : null;
-  if (goal?.heldByYou)
+  if (goal?.heldByYou && !(ownBot && by?.place && await answersYou(by.place.target, by.session)))
     return no(403, "The user paused this goal: nothing new starts until they resume it.");
   let engine = null;
   try {

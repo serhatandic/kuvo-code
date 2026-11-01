@@ -38,7 +38,7 @@ const by = { bot: "bot_pixel00001", name: "Pixel" };
 
 // The engine: Pixel's conversation and a session of its work; what each was sent, what each asks,
 // and how each ask was answered.
-let sessions, prompts, made, asked, replied, interrupted, active, forms, dismissed, failures;
+let sessions, prompts, made, asked, replied, interrupted, active, forms, dismissed, failures, written, stepsSince;
 const tokens = () => ({ input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } });
 function resetEngine() {
   sessions = new Map([
@@ -54,6 +54,8 @@ function resetEngine() {
   forms = new Map();
   dismissed = [];
   failures = new Map();
+  written = new Map();
+  stepsSince = new Map();
 }
 resetEngine();
 const withSource = ask => ({ ...ask, source: { type: "tool", messageID: `msg_${ask.id}`, id: `call_${ask.id}` } });
@@ -91,6 +93,14 @@ const engine = http.createServer((request, response) => {
     if (one?.[2] === "/message" && url.searchParams.get("order") === "desc" && failures.has(id)) {
       // Its last turn, failed: as the engine ends one.
       return reply({ data: [{ id: `idle_${id}`, type: "idle", outcome: "failed", error: { message: failures.get(id) } }] });
+    }
+    if (one?.[2] === "/message" && written.has(id)) {
+      // What was written to it, newest first, after its turn's steps since, a page at a time.
+      const steps = Array.from({ length: stepsSince.get(id) ?? 0 }, (_, at) => ({ id: `step_${id}_${at}`, type: "assistant", content: [{ type: "text", text: "Looking." }] }));
+      const all = [...steps, ...written.get(id).map((text, at) => ({ id: `msg_${id}_${at}`, type: "user", text }))];
+      const from = Number(url.searchParams.get("cursor") ?? 0);
+      const limit = Number(url.searchParams.get("limit") ?? 100);
+      return reply({ data: all.slice(from, from + limit), cursor: { next: from + limit < all.length ? String(from + limit) : null } });
     }
     if (one?.[2] === "/message") {
       const calls = (asked.get(id) ?? []).map(withSource).map(ask => ({ id: ask.source.messageID, type: "assistant",
@@ -502,7 +512,7 @@ test("Pause, from any app, stops the bot's turn and its goal's sessions at once,
   assert.match(sent[0].text, /goal_progress/);
 });
 
-test("while you have a goal paused, none of its sessions starts another, however one of them is woken; once you resume it, they can", async () => {
+test("while you have a goal paused, none of its sessions starts another, however one of them is woken; the bot still starts one you ask it for in its chat, not one a letter asks for, and once you resume the goal, they can again", async () => {
   await startedGoal();
   await tool("start_session", { task: "Build the site.", project: "Driftwood", step: 1 });
   const site = made[0].id;
@@ -514,10 +524,22 @@ test("while you have a goal paused, none of its sessions starts another, however
   assert.equal(refused.isError, true, refused.text);
   assert.match(refused.text, /paused/);
   assert.equal(made.length, 1, "nothing new started");
+  // The bot's own conversation, woken by another agent's letter: nor does it.
+  written.set("ses_pixel", ["[Message from Scout · ses_scout] (To answer, use send_message to ses_scout.)\n\nShall I start on the copy?"]);
+  const woken = await tool("start_session", { task: "Write the copy.", project: "Driftwood" });
+  assert.equal(woken.isError, true, woken.text);
+  assert.equal(made.length, 1);
+  // You, in the bot's own conversation meanwhile, asking it for something: it starts that.
+  // (A long turn: it read and tried a good while before starting it.)
+  written.set("ses_pixel", ["Check the logo looks right on dark backgrounds.", ...written.get("ses_pixel")]);
+  stepsSince.set("ses_pixel", 150);
+  const asked = await tool("start_session", { task: "Check the logo.", project: "Driftwood" });
+  assert.equal(asked.isError, false, asked.text);
+  assert.equal(made.length, 2);
   await holds(goalEvent("ses_pixel", "working"));
   const started = await tool("start_session", { task: "Write the copy.", project: "Driftwood" }, { session: site });
   assert.equal(started.isError, false, started.text);
-  assert.equal(made.length, 2);
+  assert.equal(made.length, 3);
 });
 
 test("Pause on a conversation's own goal stops its turn and holds it until Resume", async () => {

@@ -2054,7 +2054,8 @@ Grok). With none to answer, the goal pauses and says so. A client reaches them a
   turn holds nothing more), stops the turn under way, keeping what was said, and holds the
   conversation as Stop does (its queue paused: what reaches it meanwhile waits on the box); for a
   bot's goal, its sessions at work stop too, and nothing of it goes on, not even at a limit's reset
-  (bridge 0.9.143), nor a session one of its sessions starts (`start_session` answers 403). The box keeps the hold through a restart and, finding the bridge again, reads
+  (bridge 0.9.143), nor a session one of its sessions starts (`start_session` answers 403; the bot's own
+  conversation still starts one in a turn answering what you wrote there, not a letter or a wake-up). The box keeps the hold through a restart and, finding the bridge again, reads
   each goal it holds for: one resumed meanwhile goes on, one taken away leaves its conversation
   paused for Resume. `…/resume` lets it go: the conversation's queue on this box goes on, its last
   turn is checked (however it ended), and it carries on unless that met it; a bot is told to carry
