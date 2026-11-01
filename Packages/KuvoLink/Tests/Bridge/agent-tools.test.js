@@ -242,11 +242,13 @@ test("read_conversation reads another's conversation as the export words it, or 
   assert.deepEqual(self, { text: "That's this conversation: you have it already.", isError: true });
 });
 
-test("read_conversation never gives what the box wrote to an agent as the user's words: each is its note, as the export shows it", async () => {
+test("read_conversation never gives what the box wrote to an agent as the user's words: each is from its note's sender, whole, as the agent read it", async () => {
   const read = await tool("read_conversation", { of: "ses_goal" }, "ses_lead");
   assert.equal(read.isError, false, read.text);
   assert.equal(read.text.slice(read.text.indexOf("# Launch")),
-    "# Launch\n\n**Goal**\n\nGoal started\n\n**Its sessions**\n\n“Sign-in” finished\n\n**User**\n\nShip it on Friday.\n\n**Launch**\n\nOn it.\n");
+    "# Launch\n\n**Goal**\n\n[Goal started] The user approved the plan. Work through it now: 1. Sign in.\n\n"
+    + "**Its sessions**\n\n[Session finished] \"Sign-in\" in web (address ses_sign), after 3 min:\nDelete the old keys first, then rotate them all.\n\n"
+    + "**User**\n\nShip it on Friday.\n\n**Launch**\n\nOn it.\n");
 });
 
 test("start_session starts one where its conversation works, on its model and approval, marked as started by it", async () => {

@@ -18,7 +18,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 - A coding agent too slow to answer whether it's signed in (on a busy Mac or machine) no longer looks signed out: Claude Code, Codex, Grok and Cursor keep their accounts and models as they last said, so a bot's or a session's model isn't taken away mid-goal. Only the agent saying you're signed out is a sign-out.
 - Bots on Claude Code, Codex, Cursor, Grok or Antigravity can write their memory again: the sandbox had kept them out of it.
-- An agent reading another's conversation no longer takes what Kuvo Code told that agent (a goal's reminder, its sessions' news) for your words: it reads each as the note you see.
+- An agent reading another's conversation no longer takes what Kuvo Code told that agent (a goal's reminder, its sessions' news) for your words: it reads each as what Kuvo Code told it.
 - After a launch, an update or a restart, coding agents wait for the computer's sandbox to be set up before they start, so a bot on Claude Code, Codex or another coding agent can take a goal on its own. Where one started before the sandbox still runs outside it, the goal's card says so, with **Restart Agents**, instead of saying the sandbox doesn't cover it yet.
 - "Still loading your accounts and models…", Open Quickly, the command palette and an agent's sign-in, code or step card over the window center on the page you're looking at, not the whole window, and move with it as the sidebar, the panel or Settings open and close.
 - The text pointer no longer shows over buttons and bars on top of a reply, the composer or a file, like Scroll to the End or a code block's Copy. Copy and a diagram's Code button show the pointing hand.

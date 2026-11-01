@@ -63,9 +63,10 @@ export function conversationMarkdown(title: string, messages: ReadMessage[], age
       const written = String(message.text ?? "");
       const mail = /^\[Message from (.*) · (ses_\S+|unknown)\] \([^\n]*\)\n\n([\s\S]*)$/.exec(written);
       const work = /^\[Work from (.*) · [^\]\n]+\]\n\n([\s\S]*?)(\n\n---\n[\s\S]*)?$/.exec(written);
-      // What the box told the agent (a goal's word, its sessions' news): never the user's.
+      // What the box told the agent (a goal's word, its sessions' news): never the user's, and
+      // whole, as the agent read it (the export shows its line).
       const note = boxNoteOf(written, message.metadata);
-      if (note) say(note.from, note.line);
+      if (note) say(note.from, written.trim());
       else if (mail) say(`Message from ${mail[1]}`, mail[3]);
       else if (written.startsWith("[Wake-up] ")) say("Wake-up", written.slice("[Wake-up] ".length));
       else if (work) say(`Work from ${work[1]}`, work[2].trim());

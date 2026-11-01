@@ -14946,7 +14946,7 @@ function conversationMarkdown(title, messages, agent) {
       const work = /^\[Work from (.*) · [^\]\n]+\]\n\n([\s\S]*?)(\n\n---\n[\s\S]*)?$/.exec(written);
       const note = boxNoteOf(written, message.metadata);
       if (note)
-        say(note.from, note.line);
+        say(note.from, written.trim());
       else if (mail)
         say(`Message from ${mail[1]}`, mail[3]);
       else if (written.startsWith("[Wake-up] "))
