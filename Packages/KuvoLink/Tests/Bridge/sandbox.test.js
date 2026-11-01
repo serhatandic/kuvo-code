@@ -93,7 +93,7 @@ async function engineRuns(box, folder, command, session) {
   if (fs.existsSync(box.plugin)) {
     const plugin = (await import(`${pathToFileURL(box.plugin)}?${Math.random()}`)).default;
     let hook;
-    await plugin.setup({ location: { directory: folder }, shell: { hook: async (name, take) => { assert.equal(name, "create.before"); hook = take; } } });
+    await plugin.setup({ location: { directory: folder }, shell: { hook: async (name, take) => { assert.equal(name, "create.before"); hook = take; } }, tool: { hook: async () => {} } });
     hook(input);
     // (The plugin names the engine's runtime, its own: here that's this test's, so on Linux,
     // without Bun, the Bun this box's engine is.)
@@ -103,6 +103,29 @@ async function engineRuns(box, folder, command, session) {
   const run = spawnSync(input.shell, ["-c", input.command], { cwd: input.cwd, env: input.env, encoding: "utf8" });
   return { status: run.status, out: run.stdout + run.stderr };
 }
+
+// The engine, opening `folder` and calling one of its own tools there (`tool`, with `input`), as
+// its plugins see the call before it runs: what the tool is given then, or what it's refused with.
+async function engineCalls(box, folder, tool, input) {
+  const call = { tool, sessionID: "ses_tools", agent: "build", messageID: "msg_tools", id: "call_tools", input };
+  const plugin = (await import(`${pathToFileURL(box.plugin)}?${Math.random()}`)).default;
+  const hooks = [];
+  await plugin.setup({ location: { directory: folder }, shell: { hook: async () => {} }, tool: { hook: async (name, take) => { if (name === "execute.before") hooks.push(take); } } });
+  try {
+    for (const hook of hooks) await hook(call);
+  } catch (error) {
+    return { refused: error.message };
+  }
+  return { input: call.input };
+}
+
+// Whether the engine asks before its file tools go to `given` in `folder`: where the path, as
+// written, isn't in the folder (its own check, `FileAccess.resolve`, by the path alone; links
+// aren't followed).
+const engineAsks = (folder, given) => {
+  const where = path.resolve(folder, given);
+  return where !== folder && !where.startsWith(folder + path.sep);
+};
 
 // What a command could do, each line `<what>: allowed` or `refused`.
 const tries = lines => lines.map(([what, command]) => `if ( ${command} ) >/dev/null 2>&1; then echo "${what}: allowed"; else echo "${what}: refused"; fi`).join("\n");
@@ -623,6 +646,88 @@ test("a chat's command works in the Chats folder, where every chat works, and th
     ]), "ses_chat");
     assert.deepEqual(outcome(ran.out), { "read what's there": "allowed", "write there": "allowed", "read the box's files": "refused" }, ran.out);
     assert.equal(fs.readFileSync(path.join(chats, "reply.md"), "utf8"), "ok\n");
+  } finally {
+    await running.stop();
+  }
+});
+
+test("a link a command makes doesn't take the engine's own file tools out of the folder without asking", async () => {
+  const box = boxAt("tools-through-links");
+  const project = path.join(root, "tools-project");
+  fs.mkdirSync(project);
+  fs.writeFileSync(path.join(project, "notes.md"), "the project's\n");
+  // Somewhere commands can't read or write: your keys, and a start-up script that isn't there yet.
+  const keys = path.join(root, "your-keys");
+  fs.mkdirSync(keys);
+  fs.writeFileSync(path.join(keys, "id_test"), "a key\n");
+  const profile = path.join(root, "profile-to-be");
+  const running = await start(box);
+  try {
+    assert.equal((await running.ask("GET", "kuvo/sandbox")).value.able, true);
+    const made = await engineRuns(box, project, `ln -s ${JSON.stringify(path.join(keys, "id_test"))} key.txt && ln -s ${JSON.stringify(keys)} keys && ln -s ${JSON.stringify(profile)} profile`);
+    assert.equal(made.status, 0, made.out);
+    const asked = {};
+    for (const [what, tool, input, given] of [
+      ["read the key", "read", { path: "key.txt" }, input => input.path],
+      ["read the key by its own path", "read", { path: path.join(project, "key.txt") }, input => input.path],
+      ["edit in its folder", "edit", { path: "keys/id_test", oldString: "a", newString: "b" }, input => input.path],
+      ["write the script that isn't there yet", "write", { path: "profile", content: "x" }, input => input.path],
+      ["list its folder", "glob", { pattern: "*", path: "keys" }, input => input.path],
+      ["search its folder", "grep", { pattern: "key", path: "keys" }, input => input.path],
+      ["patch the key", "patch", { patchText: "*** Begin Patch\n*** Update File: keys/id_test\n@@\n-a key\n+b key\n*** End Patch" }, input => input.patchText.match(/^\*\*\* Update File: (.+)$/m)[1]],
+      ["read what's in the project", "read", { path: "notes.md" }, input => input.path],
+    ]) {
+      const called = await engineCalls(box, project, tool, input);
+      asked[what] = called.refused ? "refused" : engineAsks(project, given(called.input)) ? "asks" : "goes";
+    }
+    assert.deepEqual(asked, {
+      "read the key": "asks",
+      "read the key by its own path": "asks",
+      "edit in its folder": "asks",
+      "write the script that isn't there yet": "asks",
+      "list its folder": "asks",
+      "search its folder": "asks",
+      "patch the key": "asks",
+      "read what's in the project": "goes",
+    });
+    // A place outside, as written, stays as written (on a Mac, /tmp is a link to /private/tmp): what
+    // you've always allowed there still holds.
+    assert.equal((await engineCalls(box, project, "read", { path: "/tmp/notes.md" })).input.path, "/tmp/notes.md");
+  } finally {
+    await running.stop();
+  }
+});
+
+test("an agent can't move its own conversation out of its folder while its commands run in the sandbox", async () => {
+  const box = boxAt("moving-out");
+  const project = path.join(root, "moving-project");
+  fs.mkdirSync(path.join(project, "sub"), { recursive: true });
+  assert.equal(spawnSync("git", ["init", "-q", project]).status, 0);
+  assert.equal(spawnSync("git", ["-C", project, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "first"]).status, 0);
+  const worktree = path.join(root, "moving-worktree");
+  assert.equal(spawnSync("git", ["-C", project, "worktree", "add", "-q", worktree]).status, 0);
+  const another = path.join(root, "moving-another");
+  fs.mkdirSync(another);
+  const running = await start(box);
+  try {
+    assert.equal((await running.ask("GET", "kuvo/sandbox")).value.able, true);
+    const moves = {};
+    // (As the agent calls it from code mode, and as the engine offers it without.)
+    for (const [what, tool, directory] of [
+      ["to your home folder", "opencode_session_move", root],
+      ["to another folder", "session_move", another],
+      ["to a folder in its own", "opencode_session_move", path.join(project, "sub")],
+      ["to its repository's worktree", "opencode_session_move", worktree],
+    ]) {
+      const called = await engineCalls(box, project, tool, { directory });
+      moves[what] = called.refused ? "refused" : "moves";
+    }
+    assert.deepEqual(moves, {
+      "to your home folder": "refused",
+      "to another folder": "refused",
+      "to a folder in its own": "moves",
+      "to its repository's worktree": "moves",
+    });
   } finally {
     await running.stop();
   }

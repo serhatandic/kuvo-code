@@ -5595,6 +5595,35 @@ function repository(folder) {
   return ""
 }
 
+// Where a path really is: through its links, also a link to a place that isn't there yet (which
+// writing it would make).
+function located(where, depth = 0) {
+  try { return fs.realpathSync(where) } catch {}
+  if (depth > 40) return where
+  try {
+    if (fs.lstatSync(where).isSymbolicLink()) return located(path.resolve(path.dirname(where), fs.readlinkSync(where)), depth + 1)
+  } catch {}
+  const parent = path.dirname(where)
+  return parent === where ? where : path.join(located(parent, depth + 1), path.basename(where))
+}
+const within = (where, folder) => !!folder && (where === folder || where.startsWith(folder + path.sep))
+// The top folder of the repository a folder is in (the one with its .git), which the engine counts
+// as the conversation's too.
+function topOf(folder) {
+  for (let at = folder; at && at !== path.dirname(at); at = path.dirname(at)) {
+    try { fs.lstatSync(path.join(at, ".git")); return at } catch {}
+  }
+  return ""
+}
+
+// The engine's own file tools run outside the sandbox, and tell a place outside the conversation's
+// folder by the path as it's written: through a link a command made in the folder (to your keys, or
+// a start-up script), they'd go there as if it were the folder's. So a path in the folder that a
+// link leads out of it is given as where it really is, which the engine's rules for a folder
+// outside the project then apply to (Settings › Permissions, a bot's own).
+const PATHS = { read: "path", write: "path", edit: "path", glob: "path", grep: "path" }
+const PATCHED = /^(\\*\\*\\* (?:Add File|Update File|Delete File|Move to): )(.+)$/gm
+
 export default {
   id: "kuvo-code.sandbox",
   setup: async (ctx) => {
@@ -5617,6 +5646,35 @@ export default {
       input.env.KUVO_FENCE_GIT = git
       input.env.KUVO_FENCE_RUNTIME = process.execPath
       input.shell = LAUNCHER
+    })
+    const folder = work ? real(work) : ""
+    const top = work ? topOf(work) : ""
+    const ours = [work, folder, top, top && real(top)].filter(Boolean)
+    const really = (given) => {
+      if (typeof given !== "string" || !given.trim() || !work) return given
+      const written = path.resolve(work, given.trim())
+      if (!ours.some(each => within(written, each))) return given
+      const where = located(written)
+      return ours.some(each => within(where, each)) ? given : where
+    }
+    await ctx.tool?.hook("execute.before", (call) => {
+      const input = call.input
+      if (!input || typeof input !== "object") return
+      const field = PATHS[call.tool]
+      if (field) {
+        const given = really(input[field])
+        if (given !== input[field]) call.input = { ...input, [field]: given }
+      } else if (call.tool === "patch" && typeof input.patchText === "string") {
+        const patchText = input.patchText.replace(PATCHED, (line, head, given) => head + really(given))
+        if (patchText !== input.patchText) call.input = { ...input, patchText }
+      } else if (/(^|_)session_move$/.test(call.tool)) {
+        // Its commands run in its folder's sandbox, so a conversation moved to another folder (your
+        // home folder) would write there: only within its folder, or to its repository's worktree.
+        const to = typeof input.directory === "string" ? located(path.resolve(work, input.directory)) : ""
+        if (!within(to, folder) && !(git && repository(to) === git)) {
+          throw new Error("This conversation's commands run in Kuvo Code's sandbox, in its own folder, so it can't move itself to another one. Ask the user to move it.")
+        }
+      }
     })
   },
 }

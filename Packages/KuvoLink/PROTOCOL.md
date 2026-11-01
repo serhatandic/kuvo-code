@@ -3076,7 +3076,14 @@ the engine's own Bun sets up through `bun:ffi`, Linux 5.13 or later); and the en
 `kuvo-sandbox.js` in its settings' `opencode/plugins`. The plugin names, for each folder the engine
 opens, that folder (the engine's own, never the command's) and its repository, and sends each
 command's shell through `bin/kuvo-fence`, which refuses to run one without a folder (exit `126`). The
-box first runs a command through it and checks that it can't read or write what's hidden; only then
+engine's own file tools (`read`, `write`, `edit`, `patch`, `glob`, `grep`) run outside the sandbox and
+tell a place outside the folder by the path as written, so the plugin gives them a path in the folder
+(or its repository's top folder) that a link leads out of as where it really is, and the engine's
+rules for a folder outside the project apply to it (a link a command made to your keys asks, as your
+keys' own path would). And it refuses `session_move` (the engine's, or code mode's
+`opencode_session_move`) to a folder outside the conversation's own and its repository's worktrees:
+commands would write wherever it moved. (A link swapped in between the plugin's look and the tool's
+own isn't caught.) The box first runs a command through it and checks that it can't read or write what's hidden; only then
 does it give the engine the plugin, and it takes it away (with what the engine noted of it, so
 it's `on` again only once the engine has loaded it again) when a check fails, so commands run as
 before rather than not at all. (Kuvo Code's own kill switch, for a rollout, does the same: the box
