@@ -20,7 +20,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - Bots on Claude Code, Codex, Cursor, Grok or Antigravity can write their memory again: the sandbox had kept them out of it.
 - Agents' commands in chats on your Mac can read and write the chats' folder again: the sandbox had kept them out of it.
 - The agent's own file tools ask before following a link its commands made out of the project, as for any folder outside it, and an agent can no longer move its conversation to another folder to get around the sandbox.
-- A command in the sandbox on a Mac can no longer move a folder it writes, like `~/.cargo`, to read a secret in it or change what runs from it later.
+- A command in the sandbox on a Mac can no longer move or clone a folder it writes, like `~/.cargo`, to read a secret in it or change what runs from it later.
 - After a launch, an update or a restart, coding agents wait for the computer's sandbox to be set up before they start, so a bot on Claude Code, Codex or another coding agent can take a goal on its own. Where one started before the sandbox still runs outside it, the goal's card says so, with **Restart Agents**, instead of saying the sandbox doesn't cover it yet.
 - "Still loading your accounts and models…", Open Quickly, the command palette and an agent's sign-in, code or step card over the window center on the page you're looking at, not the whole window, and move with it as the sidebar, the panel or Settings open and close.
 - The text pointer no longer shows over buttons and bars on top of a reply, the composer or a file, like Scroll to the End or a code block's Copy. Copy and a diagram's Code button show the pointing hand.

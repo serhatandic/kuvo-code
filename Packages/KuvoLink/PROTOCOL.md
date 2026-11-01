@@ -2998,8 +2998,9 @@ caches, but not what in them runs later outside the sandbox (installed programs 
 `~/.cargo/bin` and `~/.bun/bin`, tools' settings and start-up scripts, npx's packages, the caches of
 pre-commit, pnpm, uv and corepack in `~/.cache` and your own `XDG_CACHE_HOME`, pnpm's in
 `~/Library/Caches`, and on macOS bunx's packages in your temporary folder; on macOS no folder that
-holds those, your secrets or Kuvo Code's own is moved or removed, which would leave what's in it
-under another name, though one that isn't there yet can be made). Its npm, pnpm (11 and
+holds those, your secrets or Kuvo Code's own is moved, removed or cloned whole, which would leave
+what's in it under another name, nor one that isn't there yet made a link, though it can be made as
+a folder, so moved into place). Its npm, pnpm (11 and
 later), uv and corepack use caches of Kuvo Code's own instead (`npm_config_cache`,
 `pnpm_config_cache_dir`, `UV_CACHE_DIR` and `UV_TOOL_DIR`, `COREPACK_HOME`: `cache/sandbox-…`,
 on this Mac in the app's `Library/Caches` folder), and on Linux uv copies what it installs

@@ -115,12 +115,15 @@ export function seatbeltProfile(policy: FencePolicy, options: SeatbeltOptions): 
   // never traded for a link to somewhere else (another bot's folder) the next command would work in.
   deny("file-write-unlink file-write-create", `(literal (param "WORK"))`, `(literal (param "GIT"))`);
   // Nor any folder that holds what's kept from commands (a secret in a cache they write, what runs
-  // later, Kuvo Code's own): moved away, what's in it would be read or changed by its new name. (One
-  // that isn't there yet can still be made, so moved into place.)
+  // later, Kuvo Code's own): moved away or cloned whole (clonefile, checked only for the folder),
+  // what's in it would be read or changed by its new name; nor one that isn't there yet traded for a
+  // link to a folder of its own. (One that isn't there yet can still be made, so moved into place.)
   const holders = new Set<string>();
   for (const kept of [...policy.secrets, ...policy.readOnly, ...policy.kuvo])
     for (let at = path.dirname(kept); at !== path.dirname(at); at = path.dirname(at)) holders.add(at);
-  deny("file-write-unlink", ...[...holders].map(folder => `(literal ${quote(folder)})`), ...(policy.patternFolders ?? []).map(regex));
+  const held = [...[...holders].map(folder => `(literal ${quote(folder)})`), ...(policy.patternFolders ?? []).map(regex)];
+  deny("file-write-unlink file-clone", ...held);
+  deny("file-write-create", ...held.map(folder => `(require-all ${folder} (vnode-type SYMLINK))`));
   deny("file-write*", under("WORK_RE", "/" + GUARDED), under("GIT_RE", "/" + GIT_GUARDED),
     ...Array.from({ length: MOST_FOLDERS }, (_, at) => under(`ALLOW${at}_RE`, "/" + GUARDED)));
   deny("file-write*", ...homes.map(home => inHome(home, `"/(.*/)?(" (param "KEPT") ")(/|$)"`)));
