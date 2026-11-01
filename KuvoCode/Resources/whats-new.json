@@ -6,27 +6,27 @@
         {
           "title": "Voice input",
           "line": "Click the microphone in the composer, or hold ⇧⌘Space, to talk instead of typing; your words are written on your Mac, and nothing is sent until you send it.",
-          "symbol": "mic"
+          "symbol": "mic.fill"
         },
         {
           "title": "Goals that keep going",
           "line": "Write `/goal all tests pass`, and the agent works turn after turn until a check says it's met.",
-          "symbol": "target"
+          "symbol": "flag.checkered"
         },
         {
           "title": "What your agents made",
           "line": "A bot's Shelf keeps its pages, pictures and memory, with every change on its Timeline.",
-          "symbol": "tray.full"
+          "symbol": "tray.full.fill"
         },
         {
           "title": "Answers you can try",
           "line": "Agents show charts, diagrams and things to click right in the conversation.",
-          "symbol": "chart.xyaxis.line"
+          "symbol": "chart.bar.fill"
         },
         {
           "title": "Settings that guide you",
           "line": "Pick folders, plugins and models from what's there instead of typing them.",
-          "symbol": "slider.horizontal.3",
+          "symbol": "gearshape.fill",
           "open": "settings/worktrees"
         }
       ],

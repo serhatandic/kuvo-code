@@ -8,11 +8,11 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### Highlights
 
-- **Voice input**: click the microphone in the composer, or hold ⇧⌘Space, to talk instead of typing; your words are written on your Mac, and nothing is sent until you send it. <!-- symbol: mic -->
-- **Goals that keep going**: write `/goal all tests pass`, and the agent works turn after turn until a check says it's met. <!-- symbol: target -->
-- **What your agents made**: a bot's Shelf keeps its pages, pictures and memory, with every change on its Timeline. <!-- symbol: tray.full -->
-- **Answers you can try**: agents show charts, diagrams and things to click right in the conversation. <!-- symbol: chart.xyaxis.line -->
-- **Settings that guide you**: pick folders, plugins and models from what's there instead of typing them. <!-- symbol: slider.horizontal.3; open: settings/worktrees -->
+- **Voice input**: click the microphone in the composer, or hold ⇧⌘Space, to talk instead of typing; your words are written on your Mac, and nothing is sent until you send it. <!-- symbol: mic.fill -->
+- **Goals that keep going**: write `/goal all tests pass`, and the agent works turn after turn until a check says it's met. <!-- symbol: flag.checkered -->
+- **What your agents made**: a bot's Shelf keeps its pages, pictures and memory, with every change on its Timeline. <!-- symbol: tray.full.fill -->
+- **Answers you can try**: agents show charts, diagrams and things to click right in the conversation. <!-- symbol: chart.bar.fill -->
+- **Settings that guide you**: pick folders, plugins and models from what's there instead of typing them. <!-- symbol: gearshape.fill; open: settings/worktrees -->
 
 ### All Changes
 
