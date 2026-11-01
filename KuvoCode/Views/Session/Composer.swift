@@ -41,6 +41,8 @@ struct Composer: View {
     var keywords: [Keyword] = []
     /// Puts the cursor here when it changes.
     var focusRequest = 0
+    /// Opens the model picker when it changes.
+    var modelMenuRequest = 0
     /// The engine it sends to can't be reached now (its machine is reconnecting): you can write,
     /// not send.
     var isOffline = false
@@ -325,7 +327,7 @@ struct Composer: View {
                                     .disabled(isOffline)
                             }
                             if showsModel {
-                                ModelChip(selection: model, onSelect: onSelectModel, scope: modelScope, inUse: modelInUse)
+                                ModelChip(selection: model, onSelect: onSelectModel, scope: modelScope, inUse: modelInUse, openRequest: modelMenuRequest)
                                     .disabled(isOffline)
                             }
                             if let worktree {

@@ -92,7 +92,7 @@ struct SessionView: View {
 }
 
 /// Something that didn't work (a message that didn't go, an undo), over the composer until you
-/// dismiss it or send again.
+/// dismiss it or send again. Its words say what happened, so they're its headline.
 struct FailureBar: View {
     let text: String
     let dismiss: () -> Void
@@ -101,15 +101,11 @@ struct FailureBar: View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(.orange)
-            VStack(alignment: .leading, spacing: 1) {
-                Text("Something went wrong")
-                    .font(.system(size: 13, weight: .medium))
-                Text(text)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(3)
-                    .textSelection(.enabled)
-            }
+                .accessibilityHidden(true)
+            Text(text)
+                .font(.system(size: 13, weight: .medium))
+                .lineLimit(3)
+                .textSelection(.enabled)
             Spacer(minLength: 8)
             Button(action: dismiss) { Image(systemName: "xmark") }
                 .buttonStyle(IconButtonStyle())
@@ -487,6 +483,7 @@ private struct BottomStack: View {
                         commands: commands,
                         keywords: model.keywords,
                         focusRequest: model.composerFocus,
+                        modelMenuRequest: model.modelMenuRequest,
                         isOffline: offlineMachine != nil,
                         blurRequest: model.composerBlur,
                         commentCount: model.reviewComments.count,

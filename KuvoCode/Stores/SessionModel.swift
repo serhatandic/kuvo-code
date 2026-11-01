@@ -347,6 +347,8 @@ final class SessionModel {
     }
     /// Goes up to put the cursor in the composer (after a message comes back to it for editing).
     private(set) var composerFocus = 0
+    /// Goes up to open the composer's model picker (a failed turn's Switch Model).
+    private(set) var modelMenuRequest = 0
     /// Goes up to open the find bar on the conversation (⌘F).
     private(set) var findRequest = 0
     /// Goes up with each message you send, so the conversation goes back to its end.
@@ -368,6 +370,7 @@ final class SessionModel {
     }
 
     func focusComposer() { composerFocus += 1 }
+    func openModelMenu() { modelMenuRequest += 1 }
 
     /// A question came: the composer lets go of the keyboard for it, unless you're writing.
     func yieldComposer() {

@@ -220,7 +220,7 @@ struct TranscriptView: View {
         return RowStack(items: rows, id: \.id, same: ==, estimate: Self.estimate, animatesNew: !rowCache.isBulk, text: { $0.copiedText(folders: model.folders()) },
                  whole: \.copiesWhole,
                  space: { row, index in index == 0 ? 0 : row.spacing(after: rows[index - 1]) }) { row, index in
-            RowView(row: row, directory: model.session.location.directory, folders: model.folders, heard: model.heard, cancel: model.cancelPending, undo: model.undo(from:), redo: model.redo, fork: fork(_:), retry: model.retry(_:), buildPlan: model.agent == "plan" && !isOffline ? { model.buildPlan() } as () -> Void : nil, reply: model.reply(to:))
+            RowView(row: row, directory: model.session.location.directory, folders: model.folders, heard: model.heard, cancel: model.cancelPending, undo: model.undo(from:), redo: model.redo, fork: fork(_:), retry: model.retry(_:), switchModel: model.openModelMenu, buildPlan: model.agent == "plan" && !isOffline ? { model.buildPlan() } as () -> Void : nil, reply: model.reply(to:))
                 .equatable()
                 .environment(\.findHighlight, find.highlight(for: row.id))
                 .padding(.top, index == 0 ? 0 : row.spacing(after: rows[index - 1]))
@@ -231,7 +231,7 @@ struct TranscriptView: View {
     /// The rows, in the lazy stack (KUVO_PERF_LAZY).
     @ViewBuilder private func stackRows(_ rows: [Row]) -> some View {
         ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
-            RowView(row: row, directory: model.session.location.directory, folders: model.folders, heard: model.heard, cancel: model.cancelPending, undo: model.undo(from:), redo: model.redo, fork: fork(_:), retry: model.retry(_:), buildPlan: model.agent == "plan" && !isOffline ? { model.buildPlan() } as () -> Void : nil, reply: model.reply(to:))
+            RowView(row: row, directory: model.session.location.directory, folders: model.folders, heard: model.heard, cancel: model.cancelPending, undo: model.undo(from:), redo: model.redo, fork: fork(_:), retry: model.retry(_:), switchModel: model.openModelMenu, buildPlan: model.agent == "plan" && !isOffline ? { model.buildPlan() } as () -> Void : nil, reply: model.reply(to:))
                 .equatable()
                 .environment(\.findHighlight, find.highlight(for: row.id))
                 .conversationRow(row.id)
@@ -720,6 +720,8 @@ private struct RowView: View, Equatable {
     /// New Session From Here.
     let fork: (Message.User) -> Void
     let retry: (Message.User) -> Void
+    /// Opens the composer's model picker.
+    let switchModel: () -> Void
     /// While the session is in Plan mode: build what the last answer planned.
     let buildPlan: (() -> Void)?
     /// Quotes a reply (or the part of it you selected) in the composer.
@@ -799,6 +801,7 @@ private struct RowView: View, Equatable {
             SubagentRow(call: call, directory: directory)
         case .turnEnd(let idle, let stats, let isLast):
             TurnEndView(idle: idle, stats: stats, directory: directory, retry: isLast && !isOffline && !takesNoMessages ? stats.message.map { message in { retry(message) } } : nil,
+                        switchModel: isLast && !isOffline && !takesNoMessages ? switchModel : nil,
                         build: isLast && stats.agent == "plan" ? buildPlan : nil, reply: reply)
         case .shell(let shell):
             ShellRow(shell: shell)
@@ -1078,7 +1081,7 @@ private struct AssistantStepView: View {
                     .foregroundStyle(.orange)
             }
             if showsError, let error = message.error {
-                ErrorCard(message: error.message)
+                FailureCard(error)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1288,73 +1291,75 @@ private struct TurnEndView: View {
     let directory: String
     /// Sends the turn's message again; offered on the last turn when it failed.
     var retry: (() -> Void)?
+    /// Opens the composer's model picker; offered on the last turn when it failed for its model.
+    var switchModel: (() -> Void)?
     /// Builds what a plan described; offered under Plan mode's last answer.
     var build: (() -> Void)?
     var reply: ((String) -> Void)?
     @Environment(AppModel.self) private var app
 
-    /// The model's account was refused because its sign-in couldn't be renewed: the engine says only
-    /// "Request failed: 400" then (a key refused, the service says why itself).
-    private var signInEnded: Bool {
-        idle.error?.type == "provider.auth" && idle.error?.message.hasPrefix("Request failed") == true
+    /// What kind of failure it was, for the card's headline and its way out.
+    private var kind: FailureWords.Kind {
+        guard let error = idle.error else { return .other }
+        let kind = FailureWords.kind(type: error.type, message: error.message)
+        // A provider that turned the request down for want of a sign-in, whatever the engine calls it.
+        if FailureWords.way(kind) != .signIn, Catalog.isSignInRefusal(error.message) { return .signIn(ended: false) }
+        return kind
     }
 
-    /// What went wrong; an ended sign-in said plainly, with the service's words after it.
-    /// A provider that turned the request down for want of a sign-in, whatever the engine calls it.
-    private var refused: Bool {
-        idle.error.map { $0.type == "provider.auth" || Catalog.isSignInRefusal($0.message) } == true
-    }
-
-    private var message: String {
-        guard let error = idle.error else { return "The run failed." }
-        guard signInEnded else {
-            guard refused, error.type != "provider.auth" else { return error.message }
-            let there = RemoteFolder.machine(of: directory).map { " on \($0)" } ?? ""
-            return "This model’s account isn’t signed in\(there), so the request was refused (\(error.message)). Sign in to it again in Accounts, or choose another model."
-        }
-        let ended = "This model's sign-in has ended and couldn't be renewed, so the request was refused (\(error.message))."
+    /// The engine's words under the headline; for a sign-in that ended, which the engine says only
+    /// as "Request failed: 400", what happened and where to sign in again.
+    private var detail: String? {
+        guard let error = idle.error else { return nil }
+        guard kind == .signIn(ended: true) else { return error.message }
         // A machine signs in on its own, to its plans, or to a plan's coding agent there.
         if let machine = RemoteFolder.machine(of: directory) {
-            return ended + " Sign in to it on \(machine) in Accounts, or use its plan's coding agent there (Codex for ChatGPT)."
+            return "It couldn’t be renewed, so the request was refused. Sign in to it on \(machine) in Accounts, or use its plan’s coding agent there (Codex for ChatGPT)."
         }
-        return ended + " Sign in to its account again."
+        return "It couldn’t be renewed, so the request was refused. Sign in to its account again."
     }
 
     var body: some View {
         switch idle.outcome {
         case .failed:
             VStack(alignment: .leading, spacing: 8) {
-                ErrorCard(message: message)
-                HStack(spacing: 8) {
-                    // The model's account to sign in to again: in Accounts, where this conversation
-                    // runs (a machine signs in on its own).
-                    if refused {
+                let way = FailureWords.way(kind)
+                FailureCard(headline: FailureWords.headline(kind), detail: detail, hasActions: retry != nil || switchModel != nil && way == .switchModel || way == .signIn) {
+                    switch way {
+                    // The model's account, or a coding agent's, to sign in to: in Accounts, where
+                    // this conversation runs (a machine signs in on its own).
+                    case .signIn:
                         let machine = RemoteFolder.machine(of: directory)
-                        Button(signInEnded ? "Sign In Again" : "Open Accounts") { app.openAccounts(on: machine) }
-                            .buttonStyle(.glass)
-                            .controlSize(.small)
-                            .help(machine.map { "Accounts, on \($0)" } ?? "Accounts")
-                    }
-                    // A coding agent to sign in to: where this conversation runs (a machine signs in
-                    // on its own), Accounts open on it.
-                    if idle.error?.type == "signin" {
-                        let machine = RemoteFolder.machine(of: directory)
-                        Button(machine.map { "Sign In on \($0)" } ?? "Open Accounts") { app.openAccounts(on: machine) }
-                            .buttonStyle(.glass)
-                            .controlSize(.small)
-                            .help(machine.map { "Sign in to the coding agents on \($0): its sign-ins are its own" } ?? "Sign in to the coding agents")
+                        if kind == .agentSignIn {
+                            Button(machine.map { "Sign In on \($0)" } ?? "Open Accounts") { app.openAccounts(on: machine) }
+                                .help(machine.map { "Sign in to the coding agents on \($0): its sign-ins are its own" } ?? "Sign in to the coding agents")
+                        } else {
+                            Button(kind == .signIn(ended: true) ? "Sign In Again" : "Open Accounts") { app.openAccounts(on: machine) }
+                                .help(machine.map { "Accounts, on \($0)" } ?? "Accounts")
+                        }
+                    case .switchModel:
+                        if let switchModel {
+                            Button("Switch Model", action: switchModel)
+                                .help("Choose another model for this conversation")
+                        }
+                    case .none:
+                        EmptyView()
                     }
                     if let retry {
                         Button("Try Again", action: retry)
-                            .buttonStyle(.glass)
-                            .controlSize(.small)
                             .help("Send your last message again")
                     }
-                    // What it changed and said before failing.
-                    if !stats.files.isEmpty {
-                        TurnFiles(files: stats.files, directory: directory)
+                }
+                .buttonStyle(.glass)
+                .controlSize(.small)
+                // What it changed and said before failing.
+                if !stats.files.isEmpty || !stats.text.isEmpty {
+                    HStack(spacing: 6) {
+                        if !stats.files.isEmpty {
+                            TurnFiles(files: stats.files, directory: directory)
+                        }
+                        replyButtons
                     }
-                    replyButtons
                 }
             }
         // (One a newer engine says that this app doesn't know: it stopped.)
@@ -1575,6 +1580,54 @@ struct CopyButton: View {
         }
         .buttonStyle(IconButtonStyle())
         .help(copied ? "Copied" : help)
+    }
+}
+
+/// Something that failed in a conversation, in one design wherever it shows: what happened as
+/// the headline (`FailureWords`, the phone's too), the engine's own words under it, and the ways
+/// out inside the card.
+struct FailureCard<Actions: View>: View {
+    let headline: String
+    var detail: String?
+    /// Whether it offers any (only the last turn does).
+    var hasActions = true
+    @ViewBuilder var actions: Actions
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(headline)
+                        .font(.system(size: 13, weight: .semibold))
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let detail, !detail.isEmpty {
+                        SelectableText(text: NSAttributedString(string: detail, attributes: [.font: NSFont.preferredFont(forTextStyle: .callout), .foregroundColor: NSColor.secondaryLabelColor]))
+                    }
+                }
+                if hasActions {
+                    HStack(spacing: 8) { actions }
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .recessedWell(RoundedRectangle(cornerRadius: 12))
+        .accessibilityElement(children: .contain)
+    }
+}
+
+extension FailureCard where Actions == EmptyView {
+    init(headline: String, detail: String?) {
+        self.init(headline: headline, detail: detail, hasActions: false) { EmptyView() }
+    }
+
+    /// An error the engine named, as its card says it.
+    init(_ error: StructuredError) {
+        self.init(headline: FailureWords.headline(FailureWords.kind(type: error.type, message: error.message)), detail: error.message)
     }
 }
 
