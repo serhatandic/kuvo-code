@@ -229,6 +229,7 @@ private struct SubagentConversation: View {
                 .environment(\.subagentStarter, workspace.botName?(parent) ?? SubagentStarter.name(of: workspace.session(parent) ?? workspace.subSession(parent)))
                 .environment(\.isOffline, isOffline)
                 .environment(\.takesNoMessages, !messages.takesMessages)
+                .environment(\.picksModel, !isAgentsOwn)
                 .frame(maxHeight: .infinity)
                 .conversationBar {
                     VStack(spacing: 10) {
@@ -370,6 +371,7 @@ private struct SubagentConversation: View {
             folders: [model.session.location.directory],
             commands: catalog.commands(in: model.session.location.directory),
             focusRequest: model.composerFocus,
+            modelMenuRequest: model.modelMenuRequest,
             isOffline: isOffline,
             onSelectAgent: { _ in },
             onSelectApproval: { _ in },

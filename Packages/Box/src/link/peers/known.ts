@@ -193,11 +193,7 @@ export function movedOf(link: LinkState | null | undefined): Map<string, string>
   const now = Date.now();
   const words: { session: string; key: string; at: number }[] = movedAway(now);
   const peers = new Set(peersOf(link).map(peer => peer.key));
-  let own = new Set<string>();
-  try {
-    const listed = JSON.parse(fs.readFileSync(path.join(RUN, "agents.json"), "utf8")) as { machine?: unknown; agents?: { session?: unknown; machine?: unknown }[] };
-    own = new Set((listed?.agents ?? []).filter(agent => (agent?.machine ?? null) === (listed?.machine ?? null)).map(agent => String(agent?.session)));
-  } catch {}
+  const own = new Set(ownListed().map(agent => agent.session));
   try {
     const told = JSON.parse(fs.readFileSync(path.join(RUN, "peer-agents.json"), "utf8")) as Record<string, { moved?: unknown }>;
     for (const [peer, each] of Object.entries(told ?? {})) {
@@ -208,6 +204,17 @@ export function movedOf(link: LinkState | null | undefined): Map<string, string>
   } catch {}
   for (const { session, key } of words.sort((one, other) => one.at - other.at)) moved.set(session, key);
   return moved;
+}
+
+/** This box's own agents as `run/agents.json` lists them: each one's session and name. */
+export function ownListed(): { session: string; name: string | null }[] {
+  try {
+    const listed = JSON.parse(fs.readFileSync(path.join(RUN, "agents.json"), "utf8")) as { machine?: unknown; agents?: { session?: unknown; name?: unknown; machine?: unknown }[] };
+    return (listed?.agents ?? []).filter(agent => (agent?.machine ?? null) === (listed?.machine ?? null))
+      .map(agent => ({ session: String(agent?.session), name: typeof agent?.name === "string" ? agent.name : null }));
+  } catch {
+    return [];
+  }
 }
 
 // This box's peers now: every box its Macs name, itself left out.

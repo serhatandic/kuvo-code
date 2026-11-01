@@ -161,6 +161,8 @@ struct StatusMarkInk: Equatable {
     var accent: Color.Resolved
     var orange: Color.Resolved
     var red: Color.Resolved
+    /// What's drawn on a red fill.
+    var onRed: Color.Resolved
 
     init(scheme: ColorScheme, accent: Color, label: Label = .standard) {
         var environment = EnvironmentValues()
@@ -182,6 +184,7 @@ struct StatusMarkInk: Equatable {
         self.accent = accent.resolve(in: environment)
         orange = Color.orange.resolve(in: environment)
         red = Color.red.resolve(in: environment)
+        onRed = Color.white.resolve(in: environment)
     }
 }
 
@@ -377,9 +380,11 @@ final class StatusMarkLayer: CALayer {
                 once(disc, "opacity", values: [0, 1, 1], duration: 0.62)
             }
         case .failed:
-            _ = shape(circle(6), stroke: ink.red)
-            _ = shape(lines([(CGPoint(x: 8, y: 5), CGPoint(x: 8, y: 8.6))]), stroke: ink.red)
-            _ = shape(dot(8, 10.9, 0.9), fill: ink.red)
+            // Filled, as small marks are: the unread dot beside it is, and a ring read lighter than
+            // the thing it warns about. Its "!" in white, the disc's own knockout.
+            _ = shape(dot(8, 8, 6.75), fill: ink.red)
+            _ = shape(lines([(CGPoint(x: 8, y: 4.9), CGPoint(x: 8, y: 8.5))]), stroke: ink.onRed, width: max(1.4, 1.7 * k))
+            _ = shape(dot(8, 11.1, 1.05), fill: ink.onRed)
             if arrives { once(self, "transform.translation.x", values: [0, -1.5, 1.5, -0.8, 0], duration: 0.5) }
         case .wake:
             _ = shape(circle(6), stroke: ink.accent)

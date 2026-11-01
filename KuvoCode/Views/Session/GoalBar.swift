@@ -4,8 +4,8 @@ import SwiftUI
 
 /// A conversation's goal ("/goal …"), in a bar over the composer like the others that say what
 /// goes on out of sight: one line with where it stands (working, being checked, paused, met), and
-/// under it the goal and what the last check found. Pause and Stop are on the line (Resume once
-/// paused); a goal that's over is put away with ✕. The box runs it, so it goes on with the
+/// under it the goal and what the last check found. Pause is on the line (Resume once paused),
+/// and Stop under it, with the goal; a goal that's over is put away with ✕. The box runs it, so it goes on with the
 /// window closed.
 struct GoalBar: View {
     let goal: Goal
@@ -44,6 +44,23 @@ struct GoalBar: View {
         }
         .animation(.ui, value: goal.state)
         .animation(.ui, value: goal.checking)
+        // Stopping it can't be undone: the turn under way ends, and the goal goes.
+        .closesWhenKept($confirmsStop)
+        .confirmationDialog("Stop the goal?", isPresented: $confirmsStop) {
+            Button("Stop the Goal", role: .destructive) {
+                // Only a goal still under way: one met meanwhile stays to be read.
+                guard canStop else { return }
+                stop()
+            }
+        } message: {
+            Text(goal.state == .working
+                 ? "The agent stops what it's doing, and the goal is taken away." + (hasWaiting ? " Messages waiting stay paused." : "")
+                 : "The goal is taken away.")
+        }
+        // A goal that ended, or that can't be changed now, has nothing to stop: the question goes.
+        .onChange(of: canStop) { _, can in
+            if !can { confirmsStop = false }
+        }
     }
 
     // MARK: The line
@@ -62,11 +79,11 @@ struct GoalBar: View {
                 .font(.system(size: 13))
                 .foregroundStyle(.tint)
         case .paused where needsYou, .unmet:
-            Image(systemName: "exclamationmark.circle")
+            Image(systemName: "exclamationmark.circle.fill")
                 .font(.system(size: 13))
                 .foregroundStyle(.orange)
         case .paused:
-            Image(systemName: "pause.circle")
+            Image(systemName: "pause.circle.fill")
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
         case .met:
@@ -110,19 +127,16 @@ struct GoalBar: View {
         }
     }
 
-    private var actions: some View {
-        HStack(spacing: 2) {
+    /// The line's one action: Pause, or Resume once paused.
+    @ViewBuilder private var actions: some View {
+        Group {
             switch goal.state {
             case .working:
                 Button("Pause", action: pause)
                     .help("Stop the turn under way and hold the goal until you resume it")
-                Button("Stop") { confirmsStop = true }
-                    .help("Stop the agent and take the goal away")
             case .paused:
                 Button("Resume", action: resume)
                     .help("Check what it last did, and carry on unless that met the goal")
-                Button("Stop") { confirmsStop = true }
-                    .help("Take the goal away")
             case .met, .unmet:
                 EmptyView()
             }
@@ -130,22 +144,6 @@ struct GoalBar: View {
         .buttonStyle(TextButtonStyle())
         .font(.system(size: 13))
         .disabled(isChanging)
-        // Stopping it can't be undone: the turn under way ends, and the goal goes.
-        .confirmationDialog("Stop the goal?", isPresented: $confirmsStop) {
-            Button("Stop the Goal", role: .destructive) {
-                // Only a goal still under way: one met meanwhile stays to be read.
-                guard canStop else { return }
-                stop()
-            }
-        } message: {
-            Text(goal.state == .working
-                 ? "The agent stops what it's doing, and the goal is taken away." + (hasWaiting ? " Messages waiting stay paused." : "")
-                 : "The goal is taken away.")
-        }
-        // A goal that ended, or that can't be changed now, has nothing to stop: the question goes.
-        .onChange(of: canStop) { _, can in
-            if !can { confirmsStop = false }
-        }
     }
 
     // MARK: Under the line
@@ -169,6 +167,13 @@ struct GoalBar: View {
                         .textSelection(.enabled)
                 }
                 .foregroundStyle(.secondary)
+            }
+            if goal.state == .working || goal.state == .paused {
+                Button("Stop the Goal…") { confirmsStop = true }
+                    .buttonStyle(TextButtonStyle(outset: true))
+                    .font(.system(size: 13))
+                    .disabled(isChanging)
+                    .help(goal.state == .working ? "Stop the agent and take the goal away" : "Take the goal away")
             }
         }
     }

@@ -1,4 +1,5 @@
 import AppKit
+import ClientDesign
 import OpenCodeKit
 import SwiftUI
 
@@ -47,6 +48,37 @@ struct MCPSettings: View {
         box.machine == nil ? MCPCatalog.servers : MCPCatalog.servers.filter { !MCPCatalog.macOnly.contains($0.id) }
     }
 
+    private func popularRow(_ server: MCPCatalog.Server) -> some View {
+        SettingsRowLayout {
+            HStack(alignment: .center, spacing: 12) {
+                BrandMarkView(server.id, size: 17)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 22)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(server.title)
+                    Text(server.summary)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .settingsText()
+            Group {
+                if config.value(at: Self.path + [server.id]) != nil, integrationsHere, Integrations.service(server.id) != nil {
+                    // Added as an integration: kept on that page, not in Servers above.
+                    Button("In Integrations…") { app.settingsTabs.show(.integrations, on: box) }
+                        .help("Added from Integrations, where it's kept with its sign-in")
+                } else if config.value(at: Self.path + [server.id]) != nil {
+                    Label("Added", systemImage: "checkmark")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Button("Add") { MCPCatalog.add(server, to: config) }
+                        .accessibilityLabel("Add \(server.title)")
+                }
+            }
+        }
+    }
+
     var body: some View {
         ScrollingSettingsForm {
             Section {
@@ -67,37 +99,23 @@ struct MCPSettings: View {
 
             ConfigProblem()
 
-            Section {
-                ForEach(popular) { server in
-                    SettingsRowLayout {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("\(server.title)  \(Text(server.access.title).font(.subheadline).foregroundStyle(.secondary))")
-                            Text(server.summary)
-                                .font(.callout)
+            // Popular servers in groups by what they need, so no row carries a tag of its own.
+            ForEach(MCPCatalog.Access.allCases, id: \.self) { access in
+                let servers = popular.filter { $0.access == access }
+                if !servers.isEmpty {
+                    Section {
+                        ForEach(servers) { server in popularRow(server) }
+                    } header: {
+                        // Read on from the first: "Popular Servers That Need an Account", then
+                        // "No Account Needed", "Run on This Mac".
+                        Text(access.title(on: box.machine == nil ? "This Mac" : app.name(of: box)))
+                    } footer: {
+                        if access == MCPCatalog.Access.allCases.last(where: { a in popular.contains { $0.access == a } }) {
+                            Text("Popular servers, each from the company behind it, as listed in the official MCP Registry. One that needs an account asks you to sign in once it's added.")
                                 .foregroundStyle(.secondary)
-                        }
-                        .settingsText()
-                        Group {
-                        if config.value(at: Self.path + [server.id]) != nil, integrationsHere, Integrations.service(server.id) != nil {
-                            // Added as an integration: kept on that page, not in Servers above.
-                            Button("In Integrations…") { app.settingsTabs.show(.integrations, on: box) }
-                                .help("Added from Integrations, where it's kept with its sign-in")
-                        } else if config.value(at: Self.path + [server.id]) != nil {
-                            Label("Added", systemImage: "checkmark")
-                                .font(.callout)
-                                .foregroundStyle(.secondary)
-                        } else {
-                            Button("Add") { MCPCatalog.add(server, to: config) }
-                                .accessibilityLabel("Add \(server.title)")
-                        }
                         }
                     }
                 }
-            } header: {
-                Text("Popular Servers")
-            } footer: {
-                Text("Each from the company behind it, as listed in the official MCP Registry. One that needs an account asks you to sign in here once it's added.")
-                    .foregroundStyle(.secondary)
             }
 
             Section {

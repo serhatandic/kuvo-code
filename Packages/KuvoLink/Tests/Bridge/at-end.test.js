@@ -14,8 +14,8 @@ import { fileURLToPath } from "node:url";
 const fixture = fileURLToPath(new URL("at-end-fixture.js", import.meta.url));
 
 // The fixture's run, once it has ended: its exit code, what it reported, and whether its process
-// and folder are still there.
-async function run(how) {
+// and folder are still there. (`signal`: sent to the file's own process once its test has started.)
+async function run(how, signal) {
   const outside = fs.mkdtempSync(path.join(os.tmpdir(), "kae-"));
   const folder = path.join(outside, "file");
   fs.mkdirSync(path.join(folder, "run"), { recursive: true });
@@ -25,7 +25,13 @@ async function run(how) {
   let said = "";
   child.stdout.setEncoding("utf8").on("data", chunk => (said += chunk));
   child.stderr.setEncoding("utf8").on("data", chunk => (said += chunk));
-  const code = await new Promise(resolve => child.once("close", resolve));
+  const closed = new Promise(resolve => child.once("close", resolve));
+  if (signal) {
+    const told = path.join(folder, "run", "file-pid");
+    while (!fs.existsSync(told) || !fs.readFileSync(told, "utf8")) await new Promise(resolve => setImmediate(resolve));
+    process.kill(Number(fs.readFileSync(told, "utf8")), signal);
+  }
+  const code = await closed;
   let pid = null;
   try { pid = Number(fs.readFileSync(path.join(folder, "run", "pid"), "utf8")); } catch {}
   const running = (() => {
@@ -100,4 +106,13 @@ test("anything else left open (a folder watched) fails the file, named, and is c
   assert.doesNotMatch(said, /a server listening|a process never stopped/);
   assert.equal(running, false);
   assert.equal(kept, false);
+});
+
+test("a run stopped part way, before its tests are done, still stops what it started and removes its folder", { timeout: 60_000 }, async () => {
+  for (const signal of ["SIGTERM", "SIGINT"]) {
+    const { code, said, running, kept } = await run("stopped part way", signal);
+    assert.notEqual(code, 0, said);
+    assert.equal(running, false, `${signal}: the process it started is stopped`);
+    assert.equal(kept, false, `${signal}: its folder is removed`);
+  }
 });

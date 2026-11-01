@@ -99,7 +99,12 @@ cd Packages/Box && bun install && bun run check && bun test
 The bridge's tests that run the box itself need a Bun: `bun` on your PATH, or
 `KUVO_TEST_BUN` naming one or an engine (a machine's `~/.kuvo-code/engine/<version>/opencode`,
 which they run as Bun). Run them on a Linux machine too, in a test folder of your own with
-`TMPDIR` inside it, before calling a box change done.
+`TMPDIR` inside it, before calling a box change done:
+`scripts/heavy.sh box scripts/test-linux.sh <ssh-host> sandbox.test.js …` does that on a machine
+that has Kuvo Code's engine, with a Node of its own and the tools some tests need, all in a folder
+in its `~/.kuvo-code-test` that it removes afterwards (tests that run the engine itself, like
+`outside-asks-live.test.js`, run that machine's). Run it again with `--engine`: the tests then
+run on the engine's own runner, so the boxes they start run on Bun, as a machine's does.
 
 A bridge test file cleans up with `atEnd` and `removeAtEnd` from `Tests/Bridge/at-end.js`, never
 node:test's `after` (a test's own `t.after` is fine). They stop what the file started, latest

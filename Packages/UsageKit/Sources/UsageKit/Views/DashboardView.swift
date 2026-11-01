@@ -126,6 +126,8 @@ struct DashboardView: View {
                     // consuming it) also lets the Options menu's Settings item carry ⌘, as a label
                     // without a second SwiftUI registration fighting it.
                     onSettings: {
+                        // Fork change: in the host's Settings when it has a page for them.
+                        if layout.screen != .settings, UsageMenuBar.shared.openSettingsInHost() { return true }
                         withAnimation(Motion.modeSwitch) {
                             layout.screen = layout.screen == .settings ? .dashboard : .settings
                         }

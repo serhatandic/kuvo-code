@@ -328,6 +328,7 @@ struct WakeBar: View {
             .buttonStyle(TextButtonStyle())
             .font(.system(size: 13))
             .help("All wake-ups and watches")
+            .closesWhenKept($showsAll)
             .popover(isPresented: $showsAll, arrowEdge: .top) {
                 ScrollView {
                     WakeList(owner: owner, name: "the agent")

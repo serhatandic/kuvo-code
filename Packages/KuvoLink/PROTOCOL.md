@@ -267,7 +267,9 @@ connection.
   - **Sender side**: a sender takes `delivered` only from the box it sent to, and an answer for a
     waiting tool only from that box; an answer from it stands for `delivered` should that be lost. Until `delivered` comes, it sends again each minute, for two
     days, oldest first, and a letter whose agent no box lists now waits. One for a conversation that
-    moved (`moved`) goes where it lives now, whichever box it was left for. Before a
+    moved (`moved`) goes where it lives now, whichever box it was left for; one that moved to the
+    sending box itself is delivered there, as a tool's there is (its answer to the tool waiting,
+    relay or not). Before a
     letter goes, its sender is told of to that box, if it wasn't: it waits until that's sent (or
     couldn't be), a minute at most. Its words are cut on a character's
     boundary.
@@ -556,19 +558,24 @@ the same for every client and with none connected, and keeps them in `run/queues
 - **Goes on**: a run that ends well, or a message queued while nothing runs, is followed a moment
   later (1.5 s) by the next waiting message, unless the queue is paused: what Stop held, in its
   order, then one for the next step (by resuming), then the queue, first queued first (by steering
-  it). A run the engine ended itself (`superseded`, `inactivity`) goes on the same way, and so do
-  the latest sessions' queues when a box starts again (or its stream comes back) beside the same
-  engine, for a run that ended while it couldn't hear (one that was stopped or failed, its newest
-  answer ending in an error, is held and paused instead).
+  it). A session still at work by then (the coding agents' bridge keeping the files a run changed)
+  is looked at again once the bridge says it's free: `session.idle` `{sessionID}`, which it sends
+  whenever a turn, an Undo or a Redo leaves the session idle (the engine sends none). A run the
+  engine ended itself (`superseded`, `inactivity`) goes on the same way, and so do the latest
+  sessions' queues when a box starts again (or its stream comes back) beside the same engine, for
+  a run that ended while it couldn't hear (one that was stopped or failed, as its newest message says:
+  the run's end, `idle` with an `outcome` other than `succeeded`, or an answer ending in an error,
+  is held and paused instead); one at work then is settled so once it's free.
 - **Pauses**: Stop, from any client (the box's `stop`, or an interrupt a client sent the engine
   itself: with no run started again a moment later, as Send Now's resume does at once; while the
-  session still says it's at work, looked at again, a few times); a run that failed; and a queue
-  found with nothing running once the engine started anew (each engine process looked over once,
-  as `run/queues-scanned.json` keeps, so a box that starts again beside it doesn't). Each holds
-  what was for the next step in the queue, ahead of what was queued, the latest first: only what's
-  still waiting once it's moved there. A message you write to go now (`steer`) unpauses it;
-  another agent's letter, a wake-up or a note doesn't. A Resume or Send Now just after an interrupt
-  wins over the look at it. The box's `stop` pauses it whether anything waits or not (a bot's
+  bridge's session still says it's at work, looked at again once it's free, and Resume pressed
+  meanwhile goes on then); a run that failed (Resume pressed while the bridge still keeps its files
+  goes on once it's free, too); and a queue found with nothing running (or, the bridge's, at work
+  until it's free) once the engine started anew (each engine process looked over once, as
+  `run/queues-scanned.json` keeps, so a box that starts again beside it doesn't). Each holds what was for the next step in the queue, ahead of what was
+  queued, the latest first: only what's still waiting once it's moved there. A message you write
+  to go now (`steer`) unpauses it; another agent's letter, a wake-up or a note doesn't. A Resume or
+  Send Now just after an interrupt wins over the look at it. The box's `stop` pauses it whether anything waits or not (a bot's
   `stop_session` on its own work only when something does, as a failed run); once paused, it stays
   so until Resume, Send Now or a message of yours to go now, though nothing is left waiting.
 - **What arrives waits** (bridge 0.9.128, `queue.waits`): the engine would run everything waiting
@@ -1578,7 +1585,10 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   box (a Mac's by its own box from bridge 0.9.35; before, by the app), with the Mac closed too.
   A Mac's app reaches every box's the same way, its own included, and follows its own as they
   change. Each box names a worktree's branch after its session once that has a title (in Latin
-  letters: "Исправить вход" is `ispravit-vhod`), when its records are read, and tells the session.
+  letters: "Исправить вход" is `ispravit-vhod`), as it hears of the title (one a session was made
+  with too), as a machine's follows its engine again (a title given meanwhile; a Mac's own box,
+  as its app reads them), and when its records are read, and tells every session working there.
+  A branch a remote has (pushed, tracked or not) keeps its name.
   - `GET kuvo/worktrees` → `{"worktrees": [{path, folder, project, projectName, branch, base?,
     sessions, working, uncommitted?, ahead?, size?}]}`: `path` is the worktree's folder, `folder`
     where its session runs (the project's place in its repository), `project` its project's,
@@ -3054,14 +3064,22 @@ launcher as the engine names its own, `OPENCODE_SESSION_ID`), the system's tempo
 caches, but not what in them runs later outside the sandbox (installed programs like
 `~/.cargo/bin` and `~/.bun/bin`, tools' settings and start-up scripts, what your shell profile
 sources from them (`~/.cargo/env`, `~/.deno/env`, `~/.bun/_bun`), npx's packages, the caches of
-pre-commit, pnpm, uv and corepack in `~/.cache` and your own `XDG_CACHE_HOME`, pnpm's in
-`~/Library/Caches`, and on macOS bunx's packages in your temporary folder; on macOS no folder that
+pre-commit, pnpm, uv and corepack in `~/.cache` and your own `XDG_CACHE_HOME`, and what zsh loads
+from there as a terminal starts (p10k's instant prompt and state, by your account's name, and on
+macOS any `p10k-` file, as p10k moves each into place; gitstatus, oh-my-zsh's and prezto's
+completions, a `zsh` folder of your own, antidote, zsh4humans, oh-my-posh), pnpm's and antidote's in
+`~/Library/Caches`, on macOS mise's trusted configs in `~/.local/state` (not on Linux, where keeping
+them would stop commands making new folders there), and on macOS bunx's packages in your temporary folder; on macOS no folder that
 holds those, your secrets or Kuvo Code's own is moved, removed or cloned whole, which would leave
 what's in it under another name, nor one that isn't there yet made a link, though it can be made as
 a folder, so moved into place). Its npm, pnpm (11 and
 later), uv and corepack use caches of Kuvo Code's own instead (`npm_config_cache`,
 `pnpm_config_cache_dir`, `UV_CACHE_DIR` and `UV_TOOL_DIR`, `COREPACK_HOME`: `cache/sandbox-…`,
-on this Mac in the app's `Library/Caches` folder), and on Linux uv copies what it installs
+on this Mac in the app's `Library/Caches` folder), with pnpm's global virtual store off
+(`pnpm_config_enable_global_virtual_store=false`: with it, `pnpm dlx` runs a package from the copies
+in your pnpm store, which your own pnpm runs later; so in a project you set to use it, the sandbox's
+`pnpm install` stops, as pnpm won't change a project's store without asking in a terminal, and
+leaves it as it is: the agent asks with `sandbox_ask`), and on Linux uv copies what it installs
 (`UV_LINK_MODE=copy`). What it can't close yet, on Linux: a file linked to one it may write, as pnpm's
 store and Bun's cache link theirs into a project's `node_modules` and pnpm's into its `dlx` cache, and
 as your own uv links its cache's into a project's `.venv`; bunx's packages in `/tmp`; and a new
@@ -3318,7 +3336,9 @@ vault does (`run/vault.sock`); another passes them on.
   project, command, why, stopped?, error?, always?, machine?, owner?}`. `session` is the conversation's root
   (a bot's sub-agent asks as its bot's conversation). `stopped`, on macOS: what the sandbox refused
   that command, from the system's log, each `{kind, path?}` (`kind`: `write`, `read`, `connect`,
-  `job`, `app` or `other`; `path`, the file, folder or address). `always`: what Always for This would
+  `job`, `app` or `other`; `path`, the file, folder or address). macOS logs it a while after (on a
+  busy Mac, seconds), so an ask can go up without it and get it, with `always`, in a later line of
+  the events (the box reads the log again for about a minute); a client shows the ask as it is now. `always`: what Always for This would
   keep besides running it, `{kind: "write", path}`, the one place the sandbox stopped it writing,
   when that's all it stopped and it's one that may be given (below); without it, the command can
   only be allowed once. A command itself is never let out for good: what it runs (its scripts, its

@@ -55,7 +55,6 @@ struct SessionView: View {
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
         // Its machine out of reach: the conversation to read, without what needs the engine.
         .environment(\.isOffline, Self.offlineMachine(of: model, in: app) != nil)
-        .navigationTitle(model.session.title ?? "New Session")
         // A conversation as last seen is read once its machine is back.
         // A copy shown while the engine reads (this Mac's) is read too; one waiting for its
         // machine is read once the machine is back.
@@ -92,7 +91,7 @@ struct SessionView: View {
 }
 
 /// Something that didn't work (a message that didn't go, an undo), over the composer until you
-/// dismiss it or send again.
+/// dismiss it or send again. Its words say what happened, so they're its headline.
 struct FailureBar: View {
     let text: String
     let dismiss: () -> Void
@@ -101,15 +100,11 @@ struct FailureBar: View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(.orange)
-            VStack(alignment: .leading, spacing: 1) {
-                Text("Something went wrong")
-                    .font(.system(size: 13, weight: .medium))
-                Text(text)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(3)
-                    .textSelection(.enabled)
-            }
+                .accessibilityHidden(true)
+            Text(text)
+                .font(.system(size: 13, weight: .medium))
+                .lineLimit(3)
+                .textSelection(.enabled)
             Spacer(minLength: 8)
             Button(action: dismiss) { Image(systemName: "xmark") }
                 .buttonStyle(IconButtonStyle())
@@ -126,6 +121,8 @@ extension EnvironmentValues {
     /// The conversation shown takes no messages (a review's part, watched, not steered): nothing
     /// offers to send one, Try Again included.
     @Entry var takesNoMessages = false
+    /// Its composer has a model picker: a failed turn offers Switch Model.
+    @Entry var picksModel = true
 }
 
 /// What's over the conversation's end: questions and permission requests as solid cards, then
@@ -191,7 +188,7 @@ private struct BottomStack: View {
                 guard let review = model.review else { return BarStripItem(bar: bar, symbol: Keyword.review.symbol, words: "Review") }
                 switch review.state {
                 case .reviewing: return BarStripItem(bar: bar, symbol: nil, words: "Reviewing…")
-                case .failed: return BarStripItem(bar: bar, symbol: "exclamationmark.circle", words: "Review couldn’t be done")
+                case .failed: return BarStripItem(bar: bar, symbol: "exclamationmark.circle.fill", words: "Review couldn’t be done")
                 case .done: return review.findings.isEmpty
                     ? BarStripItem(bar: bar, symbol: "checkmark.circle.fill", isDone: true, words: "Nothing to fix")
                     : BarStripItem(bar: bar, symbol: Keyword.review.symbol, words: "Review · \(review.findings.count)")
@@ -254,14 +251,22 @@ private struct BottomStack: View {
         return found
     }
 
-    /// Whether a bar is folded: its own way with fewer than three, the card's with more.
+    /// Whether a bar is folded: its own way with fewer than three, the card's with more. Two or
+    /// more, and the last one open folded by its chevron: they tuck into one line (nothing
+    /// floats over the card to do it).
     private func hidden(_ bar: ComposerBar, _ own: Binding<Bool>) -> Binding<Bool> {
         Binding(get: { folds.isHidden(bar, among: bars, asking: isAsking, own: own.wrappedValue) },
                 set: { hidden in
                     var left = own.wrappedValue
                     folds.set(bar, hidden: hidden, among: bars, own: &left)
                     if left != own.wrappedValue { own.wrappedValue = left }
+                    if hidden, liveBars.count >= 2, allFolded { model.tuck.hide() }
                 })
+    }
+
+    /// Every bar showing is folded to its line.
+    private var allFolded: Bool {
+        liveBars.allSatisfy { folds.isHidden($0, among: bars, asking: isAsking, own: self.own($0).wrappedValue) }
     }
 
     /// What in a bar is worth opening it for: a review that found something, a side question
@@ -393,18 +398,6 @@ private struct BottomStack: View {
                         .modifier(ComposerSurface())
                         .transition(.opacity)
                 }
-                // Two bars or more: one tab, just over the card's edge (clear of its bars'
-                // buttons), tucks them all into a line.
-                if liveBars.count >= 2, !tucked {
-                    HStack {
-                        Spacer()
-                        HideBarsTab { model.tuck.hide() }
-                    }
-                    // Its end over the bars' ✕ itself (narrower than its button).
-                    .padding(.trailing, BarEnd.trailing + 8)
-                    .padding(.bottom, -8)
-                    .transition(.opacity)
-                }
                 // The bars, what's waiting and the composer: one card.
                 VStack(spacing: 0) {
                     if tucked {
@@ -491,6 +484,9 @@ private struct BottomStack: View {
                         commands: commands,
                         keywords: model.keywords,
                         focusRequest: model.composerFocus,
+                        modelMenuRequest: model.modelMenuRequest,
+                        sideQuestion: model.asksSideThread ? { model.composerAsksSide = false } : nil,
+                        sideQuestionAnswering: model.sideThreadAnswering,
                         isOffline: offlineMachine != nil,
                         blurRequest: model.composerBlur,
                         commentCount: model.reviewComments.count,
@@ -750,7 +746,6 @@ struct DraftSessionView: View {
             Spacer()
             Spacer()
         }
-        .navigationTitle("New Session")
         .task(id: directory) { await catalog.loadCommands(in: directory) }
         .onAppear { Analytics.shared.onboardingStep("composer") }
     }

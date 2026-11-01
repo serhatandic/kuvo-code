@@ -221,4 +221,31 @@ import Testing
         try await until { model.failure != nil }
         #expect(model.draftText == "/goal pause")
     }
+
+    /// A goal put back in the composer stays one when a "/goal pause" that can't be done comes
+    /// back beside it: the pause puts nothing there, so nothing goes ahead of the goal to make it
+    /// plain words.
+    @Test func aGoalPauseThatCantBeDoneLeavesAGoalPutBackAGoal() async throws {
+        defer { clean() }
+        serve(Conversation(verdicts: []))
+        let bridge = try await RealBridge.start(engine: engine, folder: folder)
+        defer { bridge.stop() }
+        let elsewhere = try JSONDecoder().decode(Session.self, from: JSONSerialization.data(withJSONObject: StubEngine.session("ses_elsewhere", directory: "/tmp")))
+        let model = SessionModel(session: elsewhere, api: engine.api)
+        model.goalBridge = { bridge.agents }
+        // Not a bot's conversation: its goal isn't asked of a bot first (an app made by another
+        // test leaves that asking set, and the goal would come back only after it).
+        let askBot = SessionModel.askBotForGoal
+        SessionModel.askBotForGoal = nil
+        defer { SessionModel.askBotForGoal = askBot }
+        model.draftText = "/goal pause"
+        model.submitDraft(for: nil, queue: false, commands: [])
+        // A goal sent while the pause is on its way can't be set yet, and comes back as one.
+        model.draftText = "/goal ship v2"
+        model.submitDraft(for: nil, queue: false, commands: [])
+        #expect(model.draftText == "/goal ship v2")
+        // Then the computer answers: the pause couldn't be done.
+        try await until { model.failure != nil }
+        #expect(model.draftText == "/goal ship v2", "\(model.draftText), \(model.failure ?? "")")
+    }
 }

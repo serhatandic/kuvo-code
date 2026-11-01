@@ -1712,13 +1712,17 @@ export class Sessions {
 
   /**
    * A turn is over and what it changed is kept, or the files are put back: the session is idle,
-   * what waited goes, and Undo and Redo calls waiting go on (finding a turn if one started).
+   * what waited goes, and Undo and Redo calls waiting go on (finding a turn if one started). Still
+   * idle, `session.idle` says so: a run's end comes before its files are kept, and a box's queue
+   * goes on only once the session's free.
    */
   private free(id: string, live: Live, ended?: Outcome) {
     live.doing = { kind: "idle" }
     this.advance(id, live, ended)
     for (const waiting of live.waiting.splice(0)) waiting()
-    if (live.doing.kind === "idle") this.closeWhenIdle(id, live)
+    if (live.doing.kind !== "idle") return
+    this.closeWhenIdle(id, live)
+    emit("session.idle", { sessionID: id }, this.store.get(id)?.session.location.directory)
   }
 
   /** A turn an agent began on its own, taken but not yet started: let go of (it stops). */

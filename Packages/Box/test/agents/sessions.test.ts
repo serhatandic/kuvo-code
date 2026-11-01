@@ -2678,6 +2678,26 @@ describe("what comes in while a turn starts, ends or is stopped, step by step", 
     expect(sessions.active()).not.toContain(id)
   })
 
+  test("a turn's end is followed by word that the session is free once its files are kept, for a box's queue to go on", async () => {
+    const snapshots = withSteps()
+    const ends = heldRuns()
+    const id = create()
+    send(id, "work")
+    await drain()
+    snapshots.hold.take = true
+    ends[0]({ outcome: "succeeded" })
+    await drain()
+    const kinds = () => events.filter((event) => event.data.sessionID === id && /^session\.(execution\.|idle)/.test(event.type)).map((event) => event.type)
+    // Ended, but still at work while it keeps what the turn changed: not free yet.
+    expect(kinds()).toEqual(["session.execution.started", "session.execution.succeeded"])
+    expect(sessions.active()).toContain(id)
+    snapshots.hold.take = false
+    snapshots.release("take")
+    await drain()
+    expect(sessions.active()).not.toContain(id)
+    expect(kinds()).toEqual(["session.execution.started", "session.execution.succeeded", "session.idle"])
+  })
+
   test("a message the agent turns away just as its turn ends goes next, once", async () => {
     const ends = heldRuns()
     const id = create()

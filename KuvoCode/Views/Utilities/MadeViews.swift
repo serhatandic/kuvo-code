@@ -83,6 +83,7 @@ struct MadeButton: View {
                 .help(title)
                 .accessibilityLabel(title)
                 .accessibilityValue(hasNew(things) ? "Something new" : "")
+                .closesWhenKept($isOpen)
                 .popover(isPresented: $isOpen, arrowEdge: .bottom) {
                     MadePopover(things: things, place: place) { isOpen = false }
                     .popoverContent()

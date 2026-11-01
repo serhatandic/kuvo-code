@@ -9,6 +9,10 @@
 // connections out, kept alive for reuse, and an HTTP server's, which it lets go when idle. Timers
 // aren't looked at: nothing says which end.)
 //
+// A run stopped part way (Ctrl-C, a runner's time running out) never gets to that hook: then, as
+// the process is told to stop, its steps run and its folders are removed, so nothing's left in
+// ~/.kuvo-code-test either way.
+//
 // A file uses `atEnd` and `removeAtEnd` in place of `after`.
 import { after } from "node:test";
 import { ChildProcess } from "node:child_process";
@@ -25,14 +29,7 @@ export const atEnd = step => void steps.push(step);
 export const removeAtEnd = folder => void folders.push(folder);
 
 after(async () => {
-  const failed = [];
-  for (const step of steps.reverse()) {
-    try {
-      await step();
-    } catch (error) {
-      failed.push(error);
-    }
-  }
+  const failed = [...await stepped()];
   const left = await leftOpen();
   for (const folder of folders) {
     try {
@@ -45,6 +42,41 @@ after(async () => {
   if (failed.length === 1) throw failed[0];
   if (failed.length) throw new AggregateError(failed, failed.map(error => error.message).join("\n"));
 });
+
+// The steps, run once (by the hook, or a run stopped part way): what failed.
+let stepping;
+const stepped = () => stepping ??= (async () => {
+  const failed = [];
+  for (const step of steps.reverse()) {
+    try {
+      await step();
+    } catch (error) {
+      failed.push(error);
+    }
+  }
+  return failed;
+})();
+
+// A run stopped part way: its steps run (for a little while at most), what's still running that it
+// started killed, and its folders removed; then it stops as it was told (unless the runner hears
+// that too, and ends it its own way). On an exit before the hook, only what can be done at once.
+let stopping = false;
+function removeNow() {
+  for (const handle of process._getActiveHandles?.() ?? []) if (handle instanceof ChildProcess && !ended(handle)) handle.kill("SIGKILL");
+  for (const folder of folders) {
+    try { fs.rmSync(folder, { recursive: true, force: true, maxRetries: 3 }); } catch {}
+  }
+}
+process.once("exit", removeNow);
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+  process.once(signal, async () => {
+    if (stopping) return;
+    stopping = true;
+    await Promise.race([stepped(), new Promise(resolve => setTimeout(resolve, 10_000).unref())]);
+    removeNow();
+    if (!process.listenerCount(signal)) process.kill(process.pid, signal);
+  });
+}
 
 // What the file still has open: the runner's own stdio aside, and what's on its way out let go
 // first (a process told to stop or done answering, until it has; then its pipes, which a process of its own may still

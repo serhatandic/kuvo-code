@@ -46,6 +46,13 @@ struct GoalPlanBar: View {
                                 ForEach(plan.waiting) { item in waitingRow(item, now: context.date) }
                             }
                         }
+                        if plan.state == .running {
+                            Button("Stop the Goal…") { confirmsStop = true }
+                                .buttonStyle(TextButtonStyle(outset: true))
+                                .font(.system(size: 13))
+                                .disabled(isBusy)
+                                .help("End the goal: \(plan.name) stops working on it")
+                        }
                         if isOver, let report = plan.report {
                             Text(report)
                                 .font(.callout)
@@ -63,6 +70,20 @@ struct GoalPlanBar: View {
             }
         }
         .animation(.ui, value: plan.state)
+        .closesWhenKept($confirmsStop)
+        .confirmationDialog("Stop the goal?", isPresented: $confirmsStop) {
+            Button("Stop the Goal", role: .destructive) {
+                guard plan.state == .running else { return }
+                Task {
+                    do { try await app.goalPlans.answer(plan, on: box, .stop) } catch { failed(error.localizedDescription) }
+                }
+            }
+        } message: {
+            Text("\(plan.name) stops working on it, and its sessions for it end. What’s done stays.")
+        }
+        .onChange(of: plan.state) { _, state in
+            if state != .running { confirmsStop = false }
+        }
     }
 
     // MARK: The line
@@ -72,11 +93,11 @@ struct GoalPlanBar: View {
         case .done:
             Image(systemName: "checkmark.circle.fill").font(.system(size: 13)).foregroundStyle(.green)
         case .stopped, .declined:
-            Image(systemName: "stop.circle").font(.system(size: 13)).foregroundStyle(.secondary)
+            Image(systemName: "stop.circle.fill").font(.system(size: 13)).foregroundStyle(.secondary)
         case .running where isPaused:
-            Image(systemName: "pause.circle").font(.system(size: 13)).foregroundStyle(.secondary)
+            Image(systemName: "pause.circle.fill").font(.system(size: 13)).foregroundStyle(.secondary)
         case .running where GoalPlanWords.next(plan) != nil:
-            Image(systemName: "clock").font(.system(size: 13)).foregroundStyle(.secondary)
+            Image(systemName: "clock.fill").font(.system(size: 13)).foregroundStyle(.secondary)
         default:
             Image(systemName: "scope").font(.system(size: 13)).foregroundStyle(.tint)
         }
@@ -108,8 +129,9 @@ struct GoalPlanBar: View {
             .padding(.horizontal, 2)
     }
 
+    /// The line's one action: Pause, or Resume once paused. Stop is under it, with the plan.
     private var actions: some View {
-        HStack(spacing: 2) {
+        Group {
             if plan.state == .running {
                 if let goal, goal.state == .working {
                     Button("Pause", action: pause)
@@ -118,26 +140,11 @@ struct GoalPlanBar: View {
                     Button("Resume", action: resume)
                         .help("Carry on with the plan")
                 }
-                Button("Stop") { confirmsStop = true }
-                    .help("End the goal: \(plan.name) stops working on it")
             }
         }
         .buttonStyle(TextButtonStyle())
         .font(.system(size: 13))
         .disabled(isBusy)
-        .confirmationDialog("Stop the goal?", isPresented: $confirmsStop) {
-            Button("Stop the Goal", role: .destructive) {
-                guard plan.state == .running else { return }
-                Task {
-                    do { try await app.goalPlans.answer(plan, on: box, .stop) } catch { failed(error.localizedDescription) }
-                }
-            }
-        } message: {
-            Text("\(plan.name) stops working on it, and its sessions for it end. What’s done stays.")
-        }
-        .onChange(of: plan.state) { _, state in
-            if state != .running { confirmsStop = false }
-        }
     }
 
     // MARK: What waits for you

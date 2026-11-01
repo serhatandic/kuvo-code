@@ -49,9 +49,12 @@ here.
   changed or removed: the panel shows it as the user's own, like one from the environment.
 - **The menu bar item is compact by default**: its Icon Style starts as Bars, not Text
   (`Stores/LayoutPersistence.swift`); a style you picked stays.
+- **Its settings in the host's Settings** (`Embedding/UsageSettingsSections.swift`): the
+  panel's settings as sections of the host's own Usage page, and the panel's Settings opens that
+  page (`UsageMenuBar.settingsInHost`); Theme and Launch at Login are left to the host's.
 - **A Bars style for the dashboard**, the default (`Views/UsageBarsView.swift`): one compact bar
-  per provider in a pastel of its brand color, in the system's type with lining digits, showing the limit closest to running out, and today's spend
-  as one bar on top, the bars concentric with the panel's corners. Clicking a bar opens every metric underneath in the same style
+  per provider in a pastel of its brand color, in the system's type with lining digits, showing the limit closest to running out, and the spend
+  as one bar on top (its period a menu, each provider's share under it once two or more spent), the bars concentric with the panel's corners. Clicking a bar opens every metric underneath in the same style
   (`Views/UsageBarDetail.swift`), not the card. It folds open and closed with the panel: laid out with the window's own height while the
   panel moves, so the bars below never run under the footer (`Fold` in `UsageBarsView`, `PanelHeightChange`), and the panel is drawn
   with each new frame (`PanelHeightController`).

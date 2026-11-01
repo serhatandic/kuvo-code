@@ -144,9 +144,13 @@ export function launcherScript(places: FencePlaces): string {
     // for commands, never used outside the sandbox (yours run outside it, so commands only read
     // them); and uv's tools folder, which uvx writes in as it runs one. (pnpm 11 and later read
     // `pnpm_config_cache_dir`; pnpm 10 only an `npm_config_` one, which npm warns of in every
-    // command, so it's left out: pnpm 10's `pnpm dlx` is refused, as it would write in yours.)
+    // command, so it's left out: pnpm 10's `pnpm dlx` is refused, as it would write in yours. And
+    // pnpm 11's global virtual store is off: with it, `pnpm dlx` runs a package from its store's
+    // copies, in your store, which your own pnpm runs from later. In a project you set to use it,
+    // `pnpm install` in the sandbox stops then, changing nothing, as it won't change the project's
+    // store without asking in a terminal.)
     `(umask 077; mkdir -p ${[places.caches.npm, places.caches.pnpm, `${places.caches.uv}/cache`, `${places.caches.uv}/tools`, places.caches.corepack].map(sh).join(" ")})`,
-    `export npm_config_cache=${sh(places.caches.npm)} pnpm_config_cache_dir=${sh(places.caches.pnpm)} UV_CACHE_DIR=${sh(`${places.caches.uv}/cache`)} UV_TOOL_DIR=${sh(`${places.caches.uv}/tools`)} COREPACK_HOME=${sh(places.caches.corepack)}`,
+    `export npm_config_cache=${sh(places.caches.npm)} pnpm_config_cache_dir=${sh(places.caches.pnpm)} pnpm_config_enable_global_virtual_store=false UV_CACHE_DIR=${sh(`${places.caches.uv}/cache`)} UV_TOOL_DIR=${sh(`${places.caches.uv}/tools`)} COREPACK_HOME=${sh(places.caches.corepack)}`,
     // On Linux uv links what it installs to its cache's files, which every conversation's commands
     // write: a project's environment it makes copies them instead. (macOS clones them, apart.)
     ...(places.platform === "linux" ? ["export UV_LINK_MODE=copy"] : []),

@@ -284,7 +284,14 @@ final class StatusItemController: NSObject {
     /// Opens the dashboard popover on the Settings screen — Settings is an in-popover screen, not a
     /// separate window. The screen is set before showing the panel so it opens already sized to Settings.
     private func openSettings() {
+        // Fork change: in the host's Settings when it has a page for them.
+        if UsageMenuBar.shared.openSettingsInHost() { return }
         open(.settings)
+    }
+
+    /// Closes the panel, if it's open (fork addition).
+    func close() {
+        if panel.isVisible { hidePanel() }
     }
 
     /// Opens the panel on `screen` (fork addition: the host's Settings window links here).

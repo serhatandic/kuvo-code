@@ -45,11 +45,14 @@ fs.mkdirSync(path.join(support, "bin"), { recursive: true });
 fs.writeFileSync(process.env.KUVO_WAKE_COMMAND, script + "\n", { mode: 0o755 });
 
 // The engine: the conversations it has (each test's), its tools all connected, and the prompts
-// it's sent.
+// it's sent. Each answer closes its connection. The box's fetch (in this process) gives one it keeps
+// open a timer, on the clock of whichever test is going then (a test's own, below); when the engine
+// closes it seconds later, in another test, Node's mocked clock (22.15) takes it off that test's
+// clock by its old place there, and that test's next timer never goes. Now and then, on a busy Mac.
 const conversations = new Set();
 const prompted = [];
 const engine = http.createServer((request, response) => {
-  const reply = (status, value) => { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value)); };
+  const reply = (status, value) => { response.writeHead(status, { "content-type": "application/json", connection: "close" }); response.end(JSON.stringify(value)); };
   const asked = /^\/api\/session\/(ses_[A-Za-z0-9_]+)(\/prompt)?$/.exec(request.url);
   if (asked && !conversations.has(asked[1])) return reply(404, {});
   if (asked && asked[2]) {
@@ -261,10 +264,8 @@ test("two conversations you stopped, with the same wake-up (bots made from one t
   fs.writeFileSync(path.join(second, "wakes", `${now() - 5}-ghijkl-1d`), "Check the inbox");
   await fire();
   const waiting = session => (link.queueOf(session).waiting ?? []).map(each => [each.from, each.text]);
-  // (What there is, said when it isn't so: once, under a whole suite's load, the second's came back empty.)
-  const found = () => JSON.stringify({ queues: fs.readFileSync(queues, "utf8"), second: fs.readdirSync(second, { recursive: true }), prompted: prompted.filter(each => each.session.startsWith("ses_inbox")) });
-  assert.deepEqual(waiting("ses_inbox1"), [["Wake-up", "Check the inbox"]], found());
-  assert.deepEqual(waiting("ses_inbox2"), [["Wake-up", "Check the inbox"]], `the other's waiting isn't this one's: ${found()}`);
+  assert.deepEqual(waiting("ses_inbox1"), [["Wake-up", "Check the inbox"]]);
+  assert.deepEqual(waiting("ses_inbox2"), [["Wake-up", "Check the inbox"]], "the other's waiting isn't this one's");
   assert.deepEqual(prompted.filter(each => each.session.startsWith("ses_inbox")), []);
 });
 

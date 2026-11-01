@@ -22,6 +22,8 @@ struct ScreenCrossLinkRow: View {
 
     var body: some View {
         Button {
+            // Fork change: Settings in the host's Settings when it has a page for them.
+            if destination == .settings, UsageMenuBar.shared.openSettingsInHost() { return }
             withAnimation(Motion.modeSwitch) {
                 layout.screen = destination
             }

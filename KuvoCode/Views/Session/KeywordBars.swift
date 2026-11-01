@@ -129,10 +129,8 @@ struct KeywordBars: View {
             .transition(.fold)
         }
         if let thread = model.shownSideThread {
-            SideThreadBar(thread: thread, threads: model.sideThreads, isHidden: hidden(.sideQuestion, $model.hidesSideQuestion), unsent: $model.unsentFollowUp) { show in
+            SideThreadBar(thread: thread, threads: model.sideThreads, isHidden: hidden(.sideQuestion, $model.hidesSideQuestion)) { show in
                 model.shownSideQuestion = show.latest.id
-            } ask: { question in
-                model.askFollowUp(question)
             } addToChat: { answer in
                 model.addQuote(answer, how: "side thread")
             } newThread: {
@@ -141,10 +139,7 @@ struct KeywordBars: View {
                 model.removeSideThread(thread)
             } done: {
                 model.shownSideQuestion = nil
-            } leave: {
-                model.focusComposer()
             }
-            // Its own per conversation and thread: a follow-up half written for one never shows in another.
             .id(model.id + "/" + thread.id)
             .modifier(CardRow())
             .transition(.fold)
@@ -153,27 +148,20 @@ struct KeywordBars: View {
 }
 
 /// A side thread ("/btw") in the card over the composer: its questions and answers in place, the
-/// earlier ones quieter, the newest with Copy and Reply as a reply has them, and a field to ask a follow-up,
-/// answered with the thread so far. ⋯ goes to this conversation's other threads, starts a new one
-/// or takes this one away; ✕ puts it away (it stays with the conversation's side questions in the
-/// sidebar).
+/// earlier ones quieter, the newest with Copy and Reply as a reply has them. While it shows, the
+/// composer asks it follow-ups, answered with the thread so far (its "Side question" tag says
+/// so). ⋯ goes to this conversation's other threads, starts a new one or takes this one away; ✕
+/// puts it away (it stays with the conversation's side questions in the sidebar).
 struct SideThreadBar: View {
     let thread: SideThread
     /// This conversation's, in the order they were started, this one too.
     let threads: [SideThread]
     @Binding var isHidden: Bool
-    /// A follow-up that couldn't be asked: back in the field.
-    @Binding var unsent: String?
     let show: (SideThread) -> Void
-    let ask: (String) -> Void
     let addToChat: (String) -> Void
     let newThread: () -> Void
     let remove: () -> Void
     let done: () -> Void
-    /// The keyboard back to the message field.
-    var leave: () -> Void = {}
-    @State private var followUp = ""
-    @FocusState private var followUpFocused: Bool
     @State private var follows = FollowsEnd()
 
     /// KUVO_DEMO_SIDE_THREAD_HOVER: the answer's Copy shown as with the pointer over it.
@@ -189,13 +177,7 @@ struct SideThreadBar: View {
                     accessory: AnyView(menu), showHelp: "Show the thread", hideHelp: "Hide it: this line stays", isHidden: $isHidden,
                     close: done, closeHelp: "Put this away: it stays with this conversation’s side questions in the sidebar")
             if !isHidden {
-                VStack(alignment: .leading, spacing: 10) {
-                    turns
-                    field
-                    Text("Asks only, changes nothing")
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(.tertiary)
-                }
+                turns
                 .padding(.leading, 42)
                 .padding(.trailing, 16)
                 .padding(.bottom, 12)
@@ -204,11 +186,6 @@ struct SideThreadBar: View {
         }
         .animation(.ui, value: latest.state)
         .animation(.ui, value: thread.questions.count)
-        .onChange(of: unsent) {
-            guard let unsent else { return }
-            followUp = unsent
-            self.unsent = nil
-        }
     }
 
     /// Each question and its answer, the newest at the bottom: it opens at the end, and an answer
@@ -289,56 +266,18 @@ struct SideThreadBar: View {
         .accessibilityElement(children: .contain)
     }
 
-    /// "Ask a follow-up…", answered with the thread so far; Return sends it.
-    private var field: some View {
-        HStack(spacing: 6) {
-            TextField("Ask a follow-up…", text: $followUp, axis: .vertical)
-                .textFieldStyle(.plain)
-                .font(.system(size: 13))
-                .lineLimit(1...4)
-                .focused($followUpFocused)
-                .onSubmit(send)
-                // Escape: back to the message field.
-                .onExitCommand {
-                    followUpFocused = false
-                    leave()
-                }
-            Button(action: send) {
-                Image(systemName: "arrow.up")
-                    .font(.system(size: 11, weight: .semibold))
-            }
-            .buttonStyle(IconButtonStyle(width: 22, height: 22))
-            .foregroundStyle(canSend ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary))
-            .disabled(!canSend)
-            .help(isAnswering ? "Wait for the answer" : "Ask it")
-            .accessibilityLabel("Ask Follow-up")
-        }
-        .padding(.leading, 10)
-        .padding(.trailing, 5)
-        .padding(.vertical, 5)
-        .background(.quaternary.opacity(0.6), in: .rect(cornerRadius: 9))
-    }
-
-    private var canSend: Bool { !isAnswering && !followUp.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-
-    private func send() {
-        guard canSend else { return }
-        ask(followUp)
-        followUp = ""
-        followUpFocused = true
-    }
-
     @ViewBuilder private var mark: some View {
-        // Only what the title doesn't say: that it's being answered, or couldn't be.
+        // Its mark, as every line of the card has one: a spinner while it's answered.
         if isAnswering {
             Spinner(size: 14)
         } else if latest.state == .failed {
-            Image(systemName: "exclamationmark.circle")
+            Image(systemName: "exclamationmark.circle.fill")
                 .font(.system(size: 13))
                 .foregroundStyle(.orange)
         } else {
-            // Its column kept, so the title stays where it is when one comes.
-            Color.clear.frame(height: 1)
+            Image(systemName: Keyword.btw.symbol + ".fill")
+                .font(.system(size: 12))
+                .foregroundStyle(.tint)
         }
     }
 
@@ -452,6 +391,7 @@ struct ReviewBar: View {
                     Color.clear
                         .frame(width: 24, height: 24)
                         .padding(.trailing, 8)
+                        .closesWhenKept($confirmsCancel)
                         .popover(isPresented: $confirmsCancel, arrowEdge: .bottom) {
                             StopReviewConfirmation(inParts: review.progress != nil) {
                                 confirmsCancel = false
@@ -502,17 +442,15 @@ struct ReviewBar: View {
         .onChange(of: review.id) { newest = [] }
     }
 
-    /// While it reads in parts, Stop (and Fix… for what it found so far); once done, Fix….
+    /// One action on the line: while it reads in parts, Stop (Fix… for what it found so far is
+    /// with those findings under it); once done, Fix….
     private var accessory: AnyView? {
         let fixes = !review.findings.isEmpty && review.state != .failed
         guard review.state == .reviewing, review.progress != nil else { return fixes ? AnyView(fixMenu(nil, label: "Fix All…")) : nil }
-        return AnyView(HStack(spacing: 2) {
-            if fixes { fixMenu(nil, label: "Fix All…") }
-            Button("Stop", action: stop)
-                .buttonStyle(TextButtonStyle())
-                .font(.system(size: 13))
-                .help("Stop reading: what it found so far stays")
-        })
+        return AnyView(Button("Stop", action: stop)
+            .buttonStyle(TextButtonStyle())
+            .font(.system(size: 13))
+            .help("Stop reading: what it found so far stays"))
     }
 
     @ViewBuilder private var mark: some View {
@@ -520,7 +458,7 @@ struct ReviewBar: View {
         case .reviewing:
             Spinner(size: 14)
         case .failed:
-            Image(systemName: "exclamationmark.circle")
+            Image(systemName: "exclamationmark.circle.fill")
                 .font(.system(size: 13))
                 .foregroundStyle(.orange)
         case .done:
@@ -581,7 +519,7 @@ struct ReviewBar: View {
         }
         .menuStyle(.button)
         .menuIndicator(.hidden)
-        .modifier(FixLook(isChip: findings == nil, outset: outset))
+        .modifier(FixLook(outset: outset))
         .fixedSize()
         .help(findings == nil ? "Fix what it found: in a new session, here, or elsewhere" : "Fix this one: in a new session, here, or elsewhere")
     }
@@ -592,9 +530,12 @@ struct ReviewBar: View {
             VStack(alignment: .leading, spacing: 6) {
                 if let parts = shownParts { ReviewPartList(parts: parts, open: openPart) }
                 if !review.findings.isEmpty {
-                    Text("Found so far:")
-                        .font(.system(size: 12.5))
-                        .foregroundStyle(.secondary)
+                    HStack(spacing: 8) {
+                        Text("Found so far:")
+                            .font(.system(size: 12.5))
+                            .foregroundStyle(.secondary)
+                        fixMenu(nil, label: "Fix All…", outset: true)
+                    }
                     findingList
                 }
             }
@@ -745,21 +686,14 @@ private struct ReviewPartRow: View {
     }
 }
 
-/// Fix…'s look: for them all, a chip on the bar's line; for one, a word on its row.
+/// Fix…'s look: a word, as each line's one action is (Pause, Stop, Open).
 private struct FixLook: ViewModifier {
-    let isChip: Bool
     let outset: Bool
 
     func body(content: Content) -> some View {
-        if isChip {
-            content
-                .buttonStyle(ChipButtonStyle())
-                .font(.system(size: 12, weight: .medium))
-        } else {
-            content
-                .buttonStyle(TextButtonStyle(outset: outset))
-                .font(.system(size: 13))
-        }
+        content
+            .buttonStyle(TextButtonStyle(outset: outset))
+            .font(.system(size: 13))
     }
 }
 
@@ -1084,8 +1018,8 @@ struct HandoffBar: View {
         Group {
             switch handoff.state {
             case .writing: Spinner(size: 14)
-            case .failed: Image(systemName: "exclamationmark.circle").foregroundStyle(.orange)
-            case .done: Image(systemName: Keyword.handoff.symbol).foregroundStyle(.tint)
+            case .failed: Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.orange)
+            case .done: Image(systemName: Keyword.handoff.symbol + ".fill").foregroundStyle(.tint)
             }
         }
         .font(.system(size: 13))

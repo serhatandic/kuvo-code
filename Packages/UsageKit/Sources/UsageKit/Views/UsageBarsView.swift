@@ -338,9 +338,9 @@ enum BarPalette {
     }
 }
 
-/// What the providers cost over a period, as one bar: the total, and each provider's share as
-/// a strip of its color along the bottom. Clicking steps through Today, Yesterday and the last
-/// 30 days.
+/// What the providers cost over a period, as one bar: the period (a menu of the others) and the
+/// total, and with two or more providers spending, each one's share as a little chart of its
+/// colors under them.
 private struct SpendBar: View {
     @Environment(LayoutStore.self) private var layout
     @Environment(WidgetDataStore.self) private var dataStore
@@ -354,12 +354,9 @@ private struct SpendBar: View {
     }
 
     var body: some View {
-        SpendBarBody(period: period, projection: projection)
-            .onTapGesture {
-                let all = TotalSpendPeriod.allCases
-                let next = all[((all.firstIndex(of: period) ?? 0) + 1) % all.count]
-                withAnimation(Motion.spring) { periodRawValue = next.rawValue }
-            }
+        SpendBarBody(period: period, projection: projection) { picked in
+            withAnimation(Motion.spring) { periodRawValue = picked.rawValue }
+        }
     }
 }
 
@@ -367,14 +364,42 @@ private struct SpendBar: View {
 struct SpendBarBody: View {
     let period: TotalSpendPeriod
     let projection: TotalSpendProjection
+    var choose: (TotalSpendPeriod) -> Void = { _ in }
     @Environment(\.colorScheme) private var scheme
+
+    /// The shares worth a mark: only with two or more, one alone being the whole bar.
+    var shares: [TotalSpendProjectedSlice] {
+        let spent = projection.slices.filter { $0.displayAmount > 0 }
+        return spent.count >= 2 && projection.centerValue > 0 ? spent : []
+    }
+
+    private static let gap: CGFloat = 2
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
-                Text(period.rawValue)
-                    .fontWeight(.medium)
+                Menu {
+                    Picker("Period", selection: Binding(get: { period }, set: choose)) {
+                        ForEach(TotalSpendPeriod.allCases) { Text($0.rawValue).tag($0) }
+                    }
+                    .pickerStyle(.inline)
+                    .labelsHidden()
+                } label: {
+                    HStack(spacing: 3) {
+                        Text(period.rawValue)
+                            .fontWeight(.medium)
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 9, weight: .semibold))
+                    }
                     .foregroundStyle(.secondary)
+                }
+                .menuStyle(.button)
+                .menuIndicator(.hidden)
+                .buttonStyle(.plain)
+                .fixedSize()
+                .help("Spent over another period")
+                .accessibilityLabel("Period")
+                .accessibilityValue(period.rawValue)
                 Spacer(minLength: 6)
                 Text((projection.isEstimated ? "~" : "") + MetricFormatter.number(projection.centerValue, kind: .dollars, style: .full))
                     .monospacedDigit()
@@ -382,27 +407,37 @@ struct SpendBarBody: View {
             .font(.body)
             .padding(.horizontal, 8)
             .frame(maxHeight: .infinity)
-            GeometryReader { proxy in
-                HStack(spacing: 0) {
-                    ForEach(projection.slices) { slice in
-                        Rectangle()
-                            .fill(BarPalette.pastel(slice.provider.id, scheme: scheme))
-                            .frame(width: projection.centerValue > 0 ? proxy.size.width * slice.displayAmount / projection.centerValue : 0)
+            if !shares.isEmpty {
+                GeometryReader { proxy in
+                    let room = proxy.size.width - Self.gap * CGFloat(shares.count - 1)
+                    HStack(spacing: Self.gap) {
+                        ForEach(shares) { slice in
+                            Capsule()
+                                .fill(BarPalette.pastel(slice.provider.id, scheme: scheme))
+                                .frame(width: max(3, room * slice.displayAmount / projection.centerValue))
+                        }
                     }
+                    // Many tiny ones at their least width never run past the bar.
+                    .frame(width: proxy.size.width, alignment: .leading)
+                    .clipShape(.capsule)
                 }
+                .frame(height: 4)
+                .padding(.horizontal, 8)
+                .padding(.bottom, 6)
+                .accessibilityElement()
+                .accessibilityLabel("By provider")
+                .accessibilityValue(shares.map { "\($0.provider.displayName) \(MetricFormatter.number($0.displayAmount, kind: .dollars, style: .full))" }.formatted(.list(type: .and)))
             }
-            .frame(height: 3)
         }
-        .frame(height: ProviderBar.height)
+        .frame(height: ProviderBar.height + (shares.isEmpty ? 0 : 6))
         .background(Color.primary.opacity(0.055))
         .clipShape(.rect(cornerRadius: ProviderBar.radius))
-        .contentShape(.rect(cornerRadius: ProviderBar.radius))
         .help(help)
     }
 
     private var help: String {
         let lines = projection.slices.map { "\($0.provider.displayName): \(MetricFormatter.number($0.displayAmount, kind: .dollars, style: .full))" }
-        return ([period.rawValue] + (lines.isEmpty ? ["Nothing spent"] : lines) + ["Click for another period"]).joined(separator: "\n")
+        return ([period.rawValue] + (lines.isEmpty ? ["Nothing spent"] : lines)).joined(separator: "\n")
     }
 }
 

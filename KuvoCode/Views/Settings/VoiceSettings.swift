@@ -7,15 +7,13 @@ struct VoiceSettings: View {
     @AppStorage(VoiceStyle.key) private var style = VoiceStyle.composer.rawValue
 
     var body: some View {
-        Section {
+        // Titled above its card, as General's other sections are.
+        Section("Voice Input") {
             VStack(alignment: .leading, spacing: 10) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Voice input")
-                    Text("Talk instead of typing. Your words are recognized on this Mac, and nothing is sent until you press Send.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                Text("Talk instead of typing. Your words are recognized on this Mac, and nothing is sent until you press Send.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 12) {
                     ForEach(VoiceStyle.allCases) { each in
                         VoiceStyleTile(style: each, isOn: style == each.rawValue) { style = each.rawValue }
@@ -49,8 +47,9 @@ private struct VoiceStyleTile: View {
             VStack(alignment: .leading, spacing: 8) {
                 picture
                     .frame(height: 92)
-                    .frame(maxWidth: .infinity)
-                    .background(.quaternary.opacity(0.6), in: .rect(cornerRadius: 8))
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                    .background(ground)
+                    .clipShape(.rect(cornerRadius: 8))
                 HStack(spacing: 6) {
                     Image(systemName: isOn ? "largecircle.fill.circle" : "circle")
                         .foregroundStyle(isOn ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary))
@@ -75,36 +74,51 @@ private struct VoiceStyleTile: View {
         .accessibilityAddTraits(isOn ? [.isButton, .isSelected] : .isButton)
     }
 
-    /// The composer listening, its chips a trace; or the window stepped back behind your words.
+    @Environment(\.colorScheme) private var scheme
+
+    /// The desktop the pictures sit on, as Settings › Appearance draws it.
+    private var ground: Color { scheme == .dark ? Color(red: 0.2, green: 0.21, blue: 0.24) : Color(red: 0.84, green: 0.86, blue: 0.89) }
+
+    /// A corner of each, run off the tile's right and bottom edges: the composer listening, its
+    /// wave live in it; or the Voice Field over the stepped-back window, your words and its wave.
     @ViewBuilder private var picture: some View {
         switch style {
         case .composer:
-            VStack {
-                Spacer(minLength: 0)
-                HStack(spacing: 8) {
-                    Circle().fill(.red).frame(width: 5, height: 5)
-                    Spacer(minLength: 12)
-                    HStack(spacing: 2) {
-                        ForEach(0..<26, id: \.self) { index in
-                            Capsule().fill(.tint).frame(width: 2, height: 4 + CGFloat((index * 7) % 11))
-                        }
+            HStack(spacing: 8) {
+                Image(systemName: "mic.fill")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.red)
+                HStack(spacing: 2) {
+                    ForEach(0..<40, id: \.self) { index in
+                        Capsule().fill(.tint).frame(width: 2, height: 4 + CGFloat((index * 7) % 13))
                     }
                 }
-                .padding(.horizontal, 10)
-                .frame(height: 26)
-                .background(.background, in: .rect(cornerRadius: 7))
-                .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(.tint, lineWidth: 1))
-                .padding(10)
             }
+            .padding(.horizontal, 12)
+            .frame(minWidth: 260, maxWidth: .infinity, minHeight: 40, maxHeight: 40, alignment: .leading)
+            .background(.background, in: UnevenRoundedRectangle(topLeadingRadius: 12, bottomLeadingRadius: 12))
+            .overlay(UnevenRoundedRectangle(topLeadingRadius: 12, bottomLeadingRadius: 12).strokeBorder(.tint, lineWidth: 1.5))
+            .shadow(color: .black.opacity(0.12), radius: 4, y: 1)
+            .padding(.leading, 14)
+            // Past the tile's right edge, however wide it is.
+            .padding(.trailing, -12)
+            .padding(.top, 38)
         case .field:
-            VStack(spacing: 6) {
-                Capsule().fill(.secondary.opacity(0.5)).frame(width: 110, height: 5)
-                Capsule().fill(.secondary.opacity(0.5)).frame(width: 74, height: 5)
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Pause the timer when the tab")
+                    .font(.system(size: 13, weight: .medium))
+                    .lineLimit(1)
+                    .fixedSize()
                 VoiceWave(level: 0.45)
-                    .frame(height: 18)
-                    .padding(.horizontal, 14)
-                    .padding(.top, 4)
+                    .frame(width: 120, height: 16)
             }
+            .padding(12)
+            .frame(minWidth: 260, maxWidth: .infinity, minHeight: 90, maxHeight: 90, alignment: .topLeading)
+            .background(.background, in: UnevenRoundedRectangle(topLeadingRadius: 14))
+            .shadow(color: .black.opacity(0.14), radius: 5, y: 1)
+            .padding(.leading, 14)
+            .padding(.trailing, -12)
+            .padding(.top, 16)
         }
     }
 }

@@ -544,7 +544,7 @@ private struct TypingRow: View {
                     .font(.callout)
             }
             ForEach(Array(activity.enumerated()), id: \.offset) { _, step in
-                Text(Self.line(step, in: bot.directory))
+                Text(InlineCode.attributed(Self.line(step, in: bot.directory), size: NSFont.preferredFont(forTextStyle: .caption1).pointSize))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)

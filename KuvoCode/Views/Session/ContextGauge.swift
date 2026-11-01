@@ -37,6 +37,7 @@ struct ContextGauge: View {
             .clickablePointer()
             .animation(.ui, value: fraction)
             .help("Context window: \(used.compactTokens) of \(limit.compactTokens) tokens")
+            .closesWhenKept($showsDetails)
             .popover(isPresented: $showsDetails, arrowEdge: .bottom) {
                 // A coding agent makes room in its own context, as it does in its own app.
                 ContextDetails(used: used, limit: limit, cost: model.session.cost, plan: planLimits, openUsage: {

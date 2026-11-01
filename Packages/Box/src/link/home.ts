@@ -13,24 +13,39 @@ export function homeFolder(): string {
   return process.env.HOME || os.homedir();
 }
 
-let account: string | undefined;
-/** Your account's own home folder, as the system has it, whatever HOME says (Bun's `os.userInfo()`
- * follows HOME): `id -P` on macOS, `getent passwd` on Linux, the password file without it. */
-export function accountHome(): string {
+let account: { name: string; home: string } | undefined;
+/** Your account as the system has it, whatever HOME and USER say (Bun's `os.userInfo()` follows
+ * them, and a machine's keeper starts the engine with neither USER nor LOGNAME): `id -P` on macOS,
+ * `getent passwd` on Linux, the password file without it. */
+function accountEntry(): { name: string; home: string } {
   if (account) return account;
-  const uid = os.userInfo().uid;
-  const field = (line: string | undefined, at: number) => line?.trim().split(":")[at] || "";
-  let found = "";
+  // (Never `os.userInfo()` alone: it throws for an account with no passwd entry, as a container's.)
+  const uid = process.getuid?.() ?? -1;
+  let line: string | undefined;
   if (process.platform === "darwin") {
-    found = field(spawnSync("/usr/bin/id", ["-P"], { encoding: "utf8", timeout: 5000 }).stdout, 8);
+    line = spawnSync("/usr/bin/id", ["-P"], { encoding: "utf8", timeout: 5000 }).stdout;
   } else {
-    found = field(spawnSync("getent", ["passwd", String(uid)], { encoding: "utf8", timeout: 5000 }).stdout, 5);
-    if (!found) {
-      try { found = field(fs.readFileSync("/etc/passwd", "utf8").split("\n").find(line => line.split(":")[2] === String(uid)), 5); } catch {}
+    line = spawnSync("getent", ["passwd", String(uid)], { encoding: "utf8", timeout: 5000 }).stdout;
+    if (!line?.trim()) {
+      try { line = fs.readFileSync("/etc/passwd", "utf8").split("\n").find(each => each.split(":")[2] === String(uid)); } catch {}
     }
   }
-  account = path.isAbsolute(found) ? found : os.userInfo().homedir;
+  const fields = line?.trim().split(":") ?? [];
+  let home = fields[process.platform === "darwin" ? 8 : 5] || "";
+  if (!path.isAbsolute(home)) try { home = os.userInfo().homedir; } catch { home = homeFolder(); }
+  account = { name: fields[0] || "", home };
   return account;
+}
+
+/** Your account's own home folder, as the system has it, whatever HOME says. */
+export function accountHome(): string {
+  return accountEntry().home;
+}
+
+/** Your account's name, as the system has it (zsh's `%n`), whatever USER says: empty when it has
+ * none (an account with no passwd entry). */
+export function accountName(): string {
+  return accountEntry().name;
 }
 
 export const K = process.env.KUVO_HOME || path.join(homeFolder(), ".kuvo-code");
@@ -132,9 +147,7 @@ export function located(folder: string): string {
 // copy's), however it's named.
 export const REAL_BOX = (() => {
   const home = located(K);
-  let own = homeFolder();
-  try { own = os.userInfo().homedir; } catch {}
-  return home === located(path.join(own, ".kuvo-code")) || path.basename(path.dirname(home)).toLowerCase().startsWith("run.kuvo.code");
+  return home === located(path.join(accountHome(), ".kuvo-code")) || path.basename(path.dirname(home)).toLowerCase().startsWith("run.kuvo.code");
 })();
 // A test's folder, where a test's stand-ins for npm and GitHub are taken.
 export const IN_TEST_FOLDER = !REAL_BOX;

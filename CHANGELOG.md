@@ -8,25 +8,48 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### Highlights
 
-- **Voice input**: click the microphone in the composer, or hold ⇧⌘Space, to talk instead of typing; your words are written on your Mac, and nothing is sent until you send it. <!-- symbol: mic -->
-- **Goals that keep going**: write `/goal all tests pass`, and the agent works turn after turn until a check says it's met. <!-- symbol: target -->
-- **What your agents made**: a bot's Shelf keeps its pages, pictures and memory, with every change on its Timeline. <!-- symbol: tray.full -->
-- **Answers you can try**: agents show charts, diagrams and things to click right in the conversation. <!-- symbol: chart.xyaxis.line -->
-- **Settings that guide you**: pick folders, plugins and models from what's there instead of typing them. <!-- symbol: slider.horizontal.3; open: settings/worktrees -->
+- **Voice input**: click the microphone in the composer, or hold ⇧⌘Space, to talk instead of typing; your words are written on your Mac, and nothing is sent until you send it. <!-- symbol: mic.fill -->
+- **Goals that keep going**: write `/goal all tests pass`, and the agent works turn after turn until a check says it's met. <!-- symbol: flag.checkered -->
+- **What your agents made**: a bot's Shelf keeps its pages, pictures and memory, with every change on its Timeline. <!-- symbol: tray.full.fill -->
+- **Answers you can try**: agents show charts, diagrams and things to click right in the conversation. <!-- symbol: chart.bar.fill -->
+- **Settings that guide you**: pick folders, plugins and models from what's there instead of typing them. <!-- symbol: gearshape.fill; open: settings/worktrees -->
 
 ### All Changes
 
+- A turn that fails says what happened in its headline (the provider is rate limiting you, the sign-in has ended, the usage limit is reached, the provider couldn't be reached) with the details under it, and offers the way out in the same card: Try Again, and Switch Model, Sign In Again or Open Accounts where that's what helps.
+- A failed conversation's mark in the sidebar is a filled red disc, easier to tell from the others.
+- While a side question shows over the composer, what you send asks it a follow-up: a "Side question" tag says so, and its × sends the next message to the conversation again. The card no longer has a second text field of its own.
+- The cards over the composer read as one list: each line has its mark, its name and one action, then its chevron and ×. Stop moved under a goal, with its details, and folding the last open card tucks them into one line, instead of a Hide button over the card.
+- The menu bar panel's spend bar has a menu for its period (Today, Yesterday, Last 30 Days), and shows each provider's share under it only when two or more spent.
+- New Bot shows the templates as faces with their names, and one line for what the picked one does.
+- Settings › Appearance and Voice Input show a corner of the window, large enough to see, instead of a whole window shrunk into a box.
+- Settings › Storage lists only what takes room, largest first, with the smallest parts in Other, and draws its bar in shades of one color. Privacy's links are one line each.
+- The usage panel's settings live in Settings › Usage: the panel's own Settings opens that page, which also sets the shortcut that opens the panel.
+- Providers, coding agents, integrations and MCP servers show their own marks, which come with the app: Cursor no longer shows a stock sparkle, a provider without a mark shows a plain server instead of its first letter, and Settings › Integrations and MCP Servers show Slack, Gmail, GitHub and the rest by their marks (or a plain symbol of what they are) instead of stand-in icons.
+- Diffs read as code: a long line wraps under its own indent instead of back at the margin, and removed lines leave the number column blank, so it counts the file as it is now.
+- Steps, thoughts and group chats show `code` in the code face instead of its backticks.
+- Settings › Permissions says what each choice does (Allow, Ask First, Don't Allow) instead of "Default" on every row; a row you changed says so, and its menu sets it back.
+- Settings › MCP Servers groups its popular servers by whether they need an account, instead of a tag on every row, and Settings › Agents describes the built-in agents in a line each.
+- Bring your subscriptions shows each kind as one list, and the mode menu in the composer has a chevron like the model menu beside it.
+- A reply's steps show one "Worked for" line again, where some showed two when the engine gave the agent more guidance partway through.
+- A session an agent or a bot starts in a worktree, with a title, gets its branch named after that title, as yours do, also with your Mac closed; so does one titled while Kuvo Code there was restarting. They used to keep a made-up name like `kuvo/brave-otter`. Every session working in that worktree is told the new name, and a branch already pushed keeps its name.
 - Agents ask before working in a folder outside the project, as Settings › Permissions says they do: the engine had let them read and change files anywhere, your SSH keys included. Your own rules there still decide, and files you send with a message, skills and the agent's saved outputs open without asking.
 - Kuvo Code no longer quits when a file the panel shows with Quick Look (a PDF, a spreadsheet, a video) is followed by the next one as its window closes.
+- On a busy Mac, the card for a command the sandbox stopped fills in what was stopped, and **Always for** its folder, as soon as macOS has noted it, instead of showing only the command's error.
+- With pnpm 11, `pnpm dlx` in the sandbox runs what it fetches from Kuvo Code's own cache, no longer from copies it left in your own pnpm store, which your pnpm runs outside the sandbox.
 - A bot's goal you pause while its computer is restarting, or briefly out of reach, still stops and stays paused once it's back, rather than carrying on with reminders.
 - A bot still hears that its sessions finished, failed or asked something while its computer was restarting, when Kuvo Code or its coding agents were slow to come back. It used to miss what happened meanwhile.
 - An agent that starts a session is promised it'll hear when it finishes only when it will; otherwise it's told to write to it instead.
 - An agent that asks a session it started something and waits for the answer gets it once, not again as that session finishes.
+- A message an agent sends to a conversation on another computer reaches it when that conversation is moved to the agent's own computer just then, instead of never arriving.
+- In a Claude Code or Codex conversation, the next message waiting goes once a run is done, also when saving what the run changed takes a moment, and Resume pressed right after Stop goes on. Both used to leave it waiting until you sent something else.
+- When Kuvo Code or a computer's box starts again after a conversation's run failed or was stopped, the messages waiting there stay paused for you to resume, instead of going on into the same error.
 - While you have a bot's goal paused, none of its sessions starts new work for it, even one woken by a message meanwhile. The bot still starts what you ask it for in its chat.
 - A widget gets shorter again when its content does (details hidden, a tab with less in it, a wider window), with no empty space left under it.
 - A widget the agent writes as a whole page is laid out as its page asks: it kept losing its doctype, so it was drawn the old way, as a page without one.
 - A widget made to fill its window (a wrapper as tall as the window, a sheet against its bottom) no longer grows a little more each time something on it changes.
 - A widget whose script or comments mention `<head>` or `<html>` keeps its safeguards: it still can't fetch or send anything on its own.
+- Going back to a session from a new session's, a group chat's or a terminal's tab is about twice as quick, and finds it scrolled where you were reading.
 - The side panel slides in sooner, and comes back as you left it: where you'd scrolled, the files you'd folded and a comment you were writing in Changes. While it's hidden it stops checking git and files, and its pages and terminals stop drawing.
 - A coding agent too slow to answer whether it's signed in (on a busy Mac or machine) no longer looks signed out: Claude Code, Codex, Grok and Cursor keep their accounts and models as they last said, so a bot's or a session's model isn't taken away mid-goal. Only the agent saying you're signed out is a sign-out.
 - While this Mac's engine or the coding agents restart, the first launch's subscriptions step keeps showing what you're signed in to, instead of offering every sign-in again.
@@ -40,7 +63,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - The agent's own file tools ask before following a link its commands made out of the project, as for any folder outside it, and an agent can no longer get around the sandbox by moving its conversation to another folder, or by replacing an open conversation's folder with a link.
 - A command in the sandbox on a Mac can no longer move or clone a folder it writes, like `~/.cargo`, to read a secret in it or change what runs from it later.
 - On a Mac, a command in the sandbox can no longer use your SSH or GPG agent (the system's, gpg-agent, 1Password, Secretive, Bitwarden or yubikey-agent) to sign with your keys. So there, git over SSH has only the keys the vault gives it, and GPG-signed commits don't work.
-- A command in the sandbox can no longer change what your shell runs as it starts from the tools' folders it writes (`~/.cargo/env`, `~/.deno/env`, `~/.bun/_bun`).
+- A command in the sandbox can no longer change what your shell runs as it starts from the tools' folders it writes (`~/.cargo/env`, `~/.deno/env`, `~/.bun/_bun`), nor what zsh loads from your cache folder as a terminal opens (p10k's instant prompt, gitstatus, oh-my-zsh's and prezto's completions, antidote's and zsh4humans' plugins, oh-my-posh), and on a Mac the configs mise trusts (so you trust a project in mise yourself).
 - After a launch, an update or a restart, coding agents wait for the computer's sandbox to be set up before they start, so a bot on Claude Code, Codex or another coding agent can take a goal on its own. Where one started before the sandbox still runs outside it, the goal's card says so, with **Restart Agents**, instead of saying the sandbox doesn't cover it yet.
 - "Still loading your accounts and models…", Open Quickly, the command palette and an agent's sign-in, code or step card over the window center on the page you're looking at, not the whole window, and move with it as the sidebar, the panel or Settings open and close.
 - The text pointer no longer shows over buttons and bars on top of a reply, your own messages, the composer or a file, like Scroll to the End or a code block's Copy. Copy and a diagram's Code button show the pointing hand. Text fields, in Settings, sheets and the panel, show it only where nothing is drawn over them. Your messages are drawn as the composer draws them, and you can select across them and the replies in one go.

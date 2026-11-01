@@ -60,6 +60,10 @@ if (how === "clean") {
   let said = "";
   for await (const chunk of command.stdout) said += chunk;
   if (said !== "done") throw new Error(`It said ${said}`);
+} else if (how === "stopped part way") {
+  // A run stopped before its tests are done (a runner's time running out): its test never ends.
+  atEnd(() => new Promise(resolve => { child.once("close", resolve); child.kill(); }));
+  atEnd(() => server.close());
 } else if (how === "watching") {
   atEnd(() => new Promise(resolve => { child.once("close", resolve); child.kill(); }));
   atEnd(() => server.close());
@@ -69,4 +73,7 @@ if (how === "clean") {
 
 test("it started", async () => {
   while (!fs.existsSync(path.join(folder, "run", "pid"))) await new Promise(resolve => setImmediate(resolve));
+  if (how !== "stopped part way") return;
+  fs.writeFileSync(path.join(folder, "run", "file-pid"), String(process.pid));
+  await new Promise(() => {});
 });

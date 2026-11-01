@@ -16,10 +16,12 @@ export interface Asked {
 
 export interface AskBook<A extends Asked, R> {
   /** Asks you; the answer comes when a client gives it, or `no` after `patience` (or when `signal`
-   * says the agent stopped waiting). */
-  ask(what: Omit<A, "id" | "at">, signal?: AbortSignal, patience?: number): Promise<R>;
+   * says the agent stopped waiting). `made` hears its id as it's asked. */
+  ask(what: Omit<A, "id" | "at">, signal?: AbortSignal, patience?: number, made?: (id: string) => void): Promise<R>;
   /** A client's answer to `id`: false for one that isn't asked (any more). */
   answer(id: string, given: R): boolean;
+  /** What's known of `id` since it was asked, added to it while it's asked: false once it isn't. */
+  update(id: string, more: Partial<Omit<A, "id" | "at">>): boolean;
   /** What's asked now, oldest first. */
   list(): A[];
   /** Hears each change to what's asked; gives back how to stop hearing. */
@@ -44,7 +46,7 @@ export function askBook<A extends Asked, R>(prefix: string, no: R): AskBook<A, R
   return {
     list,
     onChanged,
-    ask(what, signal, patience = PATIENCE) {
+    ask(what, signal, patience = PATIENCE, made) {
       const asked = { id: newID(prefix), at: Date.now(), ...what } as A;
       return new Promise(resolve => {
         const finish = (answer: R) => {
@@ -61,12 +63,20 @@ export function askBook<A extends Asked, R>(prefix: string, no: R): AskBook<A, R
         signal?.addEventListener("abort", stopped, { once: true });
         open.set(asked.id, { asked, done: finish, timer: setTimeout(() => finish(no), patience) });
         changed();
+        made?.(asked.id);
       });
     },
     answer(id, given) {
       const found = open.get(id);
       if (!found) return false;
       found.done(given);
+      return true;
+    },
+    update(id, more) {
+      const found = open.get(id);
+      if (!found) return false;
+      found.asked = { ...found.asked, ...more };
+      changed();
       return true;
     },
     watch(notice, tell, answered = () => {}, after = 2000) {

@@ -25,7 +25,7 @@ struct AppearanceSettings: View {
                 // In a narrow window, two to a row.
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: 18) { modes }
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 112), spacing: 12, alignment: .leading)], alignment: .leading, spacing: 12) { modes }
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 124), spacing: 12, alignment: .leading)], alignment: .leading, spacing: 12) { modes }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 6)
@@ -131,30 +131,32 @@ struct AppearanceSettings: View {
     }
 }
 
-/// A small drawing of the window in a mode, to pick it by.
+/// A corner of the window in a mode, to pick it by: large enough to see, run off the tile's edges.
 private struct ModeThumbnail: View {
     let mode: Appearance
     let isSelected: Bool
     let action: () -> Void
     @Environment(\.colorScheme) private var scheme
 
+    static let size = CGSize(width: 124, height: 80)
+
     var body: some View {
         Button(action: action) {
             VStack(spacing: 7) {
                 Group {
                     switch mode {
-                    case .light: MiniWindow(dark: false)
-                    case .dark: MiniWindow(dark: true)
+                    case .light: WindowCorner(dark: false)
+                    case .dark: WindowCorner(dark: true)
                     case .system:
-                        // Half and half, as the Mac switches through the day.
+                        // Light and dark, split on a diagonal, as the Mac switches through the day.
                         ZStack {
-                            MiniWindow(dark: false)
-                            MiniWindow(dark: true)
-                                .mask(alignment: .trailing) { Rectangle().frame(width: 56) }
+                            WindowCorner(dark: false)
+                            WindowCorner(dark: true)
+                                .mask { Diagonal() }
                         }
                     }
                 }
-                .frame(width: 112, height: 72)
+                .frame(width: Self.size.width, height: Self.size.height)
                 .clipShape(.rect(cornerRadius: 9))
                 .overlay {
                     RoundedRectangle(cornerRadius: 9)
@@ -170,47 +172,70 @@ private struct ModeThumbnail: View {
         .clickablePointer()
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
+
+    /// The lower right half, from the top right corner to the bottom left.
+    private nonisolated struct Diagonal: Shape {
+        func path(in rect: CGRect) -> Path {
+            Path { path in
+                path.move(to: CGPoint(x: rect.maxX, y: rect.minY))
+                path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+                path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+                path.closeSubpath()
+            }
+        }
+    }
 }
 
-/// The window, drawn small: the canvas, a sidebar, and a card with a message and a reply.
-private struct MiniWindow: View {
+/// The window's top left corner over the desktop, cut by the tile's right and bottom edges: its
+/// traffic lights, bots in the sidebar, and a message with the reply under it.
+private struct WindowCorner: View {
     let dark: Bool
     @Environment(\.accent) private var accent
 
+    private static let looks = BotTemplate.all.prefix(3).map(\.look)
+
     var body: some View {
-        let canvas = dark ? Color(red: 0.075, green: 0.078, blue: 0.09) : Color(red: 0.95, green: 0.94, blue: 0.92)
-        let card = dark ? Color(red: 0.12, green: 0.125, blue: 0.14) : .white
-        let ink = dark ? Color.white.opacity(0.22) : Surface.slate.opacity(0.14)
-        HStack(alignment: .top, spacing: 5) {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 2) {
-                    ForEach([Color.red, .yellow, .green], id: \.self) { Circle().fill($0.opacity(0.8)).frame(width: 3.5, height: 3.5) }
+        let ground = dark ? Color(red: 0.2, green: 0.21, blue: 0.24) : Color(red: 0.84, green: 0.86, blue: 0.89)
+        let window = dark ? Color(red: 0.1, green: 0.105, blue: 0.12) : Color(red: 0.96, green: 0.955, blue: 0.945)
+        let card = dark ? Color(red: 0.15, green: 0.155, blue: 0.175) : .white
+        let ink = dark ? Color.white.opacity(0.26) : Surface.slate.opacity(0.16)
+        HStack(alignment: .top, spacing: 0) {
+            VStack(alignment: .leading, spacing: 7) {
+                HStack(spacing: 3.5) {
+                    ForEach([Color.red, .yellow, .green], id: \.self) { Circle().fill($0.opacity(0.85)).frame(width: 6, height: 6) }
                 }
                 .padding(.bottom, 3)
-                ForEach(0..<4) { index in
-                    Capsule().fill(index == 1 ? accent.opacity(0.45) : ink).frame(width: index == 1 ? 22 : 18, height: 3.5)
+                ForEach(Array(Self.looks.enumerated()), id: \.offset) { index, look in
+                    HStack(spacing: 5) {
+                        BotAvatar(look: look, size: 12, animates: false)
+                        Capsule().fill(ink).frame(width: index == 1 ? 16 : 20, height: 3.5)
+                    }
                 }
             }
-            .padding(.top, 5)
-            .padding(.leading, 6)
-            VStack(alignment: .trailing, spacing: 5) {
-                Capsule().fill(accent.opacity(dark ? 0.5 : 0.3)).frame(width: 34, height: 7)
-                VStack(alignment: .leading, spacing: 3.5) {
+            .padding(.top, 8)
+            .padding(.leading, 8)
+            .frame(width: 50, alignment: .leading)
+            VStack(alignment: .leading, spacing: 7) {
+                Capsule().fill(accent.opacity(dark ? 0.55 : 0.32)).frame(width: 40, height: 11)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                VStack(alignment: .leading, spacing: 4) {
+                    Capsule().fill(ink).frame(width: 56, height: 3.5)
+                    Capsule().fill(ink).frame(width: 46, height: 3.5)
                     Capsule().fill(ink).frame(width: 52, height: 3.5)
-                    Capsule().fill(ink).frame(width: 44, height: 3.5)
-                    Capsule().fill(ink).frame(width: 48, height: 3.5)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                Spacer(minLength: 0)
-                RoundedRectangle(cornerRadius: 3).fill(ink.opacity(0.6)).frame(height: 9)
             }
-            .padding(6)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(card, in: .rect(cornerRadius: 5))
-            .padding([.top, .trailing, .bottom], 5)
+            .padding(8)
+            .frame(width: 96, height: 90, alignment: .topLeading)
+            .background(card, in: UnevenRoundedRectangle(topLeadingRadius: 6))
+            .padding(.top, 6)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(canvas)
+        .frame(width: 160, height: 100, alignment: .topLeading)
+        .background(window, in: UnevenRoundedRectangle(topLeadingRadius: 10))
+        .shadow(color: .black.opacity(dark ? 0.35 : 0.12), radius: 4, y: 1)
+        .padding(.leading, 14)
+        .padding(.top, 12)
+        .frame(width: ModeThumbnail.size.width, height: ModeThumbnail.size.height, alignment: .topLeading)
+        .background(ground)
     }
 }
 
