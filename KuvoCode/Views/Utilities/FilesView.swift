@@ -727,17 +727,34 @@ struct FileViewer: View {
         (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
     }
 
+    /// How much of the file's place the header has room for.
+    private enum HeaderFit { case path, name, nameWithIconOpen, cutName }
+
     private var header: some View {
+        // The whole path where it fits, else the file's name whole, then Open as its app's icon
+        // alone to make room for it; the name is cut in its middle only when nothing else fits.
+        ViewThatFits(in: .horizontal) {
+            headerRow(.path)
+            headerRow(.name)
+            headerRow(.nameWithIconOpen)
+            headerRow(.cutName)
+        }
+        .padding(.leading, 14)
+        .padding(.trailing, 8)
+        .frame(height: 40)
+    }
+
+    private func headerRow(_ fit: HeaderFit) -> some View {
         HStack(spacing: 6) {
-            // The whole path where it fits, else only the file's name: never cut in a word.
-            ViewThatFits(in: .horizontal) {
-                breadcrumb
-                    .lineLimit(1)
-                    .fixedSize()
-                Text(url.lastPathComponent)
-                    .font(.system(size: 13, weight: .semibold))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+            Group {
+                switch fit {
+                case .path:
+                    breadcrumb.lineLimit(1).fixedSize()
+                case .name, .nameWithIconOpen:
+                    fileName.fixedSize()
+                case .cutName:
+                    fileName.truncationMode(.middle)
+                }
             }
             .help(url.path)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -758,11 +775,14 @@ struct FileViewer: View {
             .buttonStyle(CardActionStyle())
             .help(showsTree ? "Hide Files" : "Show Files")
             // A machine's files open nowhere on this Mac.
-            if url.isFileURL { OpenMenu(url: url) }
+            if url.isFileURL { OpenMenu(url: url, saysOpen: fit == .path || fit == .name) }
         }
-        .padding(.leading, 14)
-        .padding(.trailing, 8)
-        .frame(height: 40)
+    }
+
+    private var fileName: some View {
+        Text(url.lastPathComponent)
+            .font(.system(size: 13, weight: .semibold))
+            .lineLimit(1)
     }
 
     /// "kuvo-ai › Sources › App.swift".
@@ -823,6 +843,8 @@ struct FileViewer: View {
 /// (A menu behind a long press went unnoticed: a click only ever opened the default.)
 private struct OpenMenu: View {
     let url: URL
+    /// "Open" beside the app's icon; the icon alone where the header is tight.
+    var saysOpen = true
 
     var body: some View {
         let workspace = NSWorkspace.shared
@@ -835,9 +857,10 @@ private struct OpenMenu: View {
                             .resizable()
                             .frame(width: 16, height: 16)
                     }
-                    Text("Open")
+                    if saysOpen || defaultApp == nil { Text("Open") }
                 }
             }
+            .accessibilityLabel(defaultApp.map { "Open in \(OpenWith.name(of: $0))" } ?? "Open")
             .buttonStyle(TextButtonStyle(cornerRadius: 7))
             .help(defaultApp.map { "Open in \(OpenWith.name(of: $0))" } ?? "Open")
             // An AppKit menu: SwiftUI's leaves out the apps' icons.

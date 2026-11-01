@@ -27,7 +27,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - A wake-up's form has its title and a close button at the top, the reviewer keyword shows a magnifying glass, and Also Allowed's button reads Add Folder.
 - Search results show the words around the match from the message itself, not a tool's steps, and cut at whole words.
 - In Changes, Commit keeps its full name in a narrow panel and a comment names its line ("Line 12, before").
-- The panel's Files hides .DS_Store and version control folders, and a narrow header shows the file's name with the full path on hover.
+- The panel's Files hides .DS_Store and version control folders, and a narrow header shows the file's name whole, with Open as its app's icon, and the full path on hover.
 - Settings pages fade at their top and bottom edges as you scroll; worktrees placed in Kuvo Code's own folder say so instead of a long path.
 - More of the app's icon buttons read their names in VoiceOver.
 - The two terminal commands say where they open: **New Terminal** (⌃⇧`) as a tab, **New Terminal in Panel** (⌃`) in the side panel.
