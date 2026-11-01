@@ -167,7 +167,9 @@ enum InlineCode {
     static func command(_ command: String) -> String? {
         let lines = command.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         guard var first = lines.first else { return nil }
-        if first.hasSuffix("\\") { first = String(first.dropLast()).trimmingCharacters(in: .whitespaces) }
+        // Only a backslash a line break follows carries it on; one at the very end is the command's.
+        let continues = command.drop { $0.isWhitespace }.contains { $0.isNewline }
+        if continues, first.hasSuffix("\\") { first = String(first.dropLast()).trimmingCharacters(in: .whitespaces) }
         return span(lines.count > 1 ? first + " …" : first)
     }
 

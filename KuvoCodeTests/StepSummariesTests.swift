@@ -76,6 +76,8 @@ import Testing
         #expect(shown(try words("shell", ["command": "\n\nswift build\n"])).code == ["swift build"])
         #expect(shown(try words("shell", ["command": "swift build \\\n\n"])).code == ["swift build"])
         #expect(try words("shell", ["command": " \n "]) == "Ran a command")
+        // A backslash at the very end is the command's own (an escaped space), not a line carried on.
+        #expect(shown(try words("shell", ["command": "ls my\\ "])).code == ["ls my\\"])
     }
 
     @Test func searches() throws {
