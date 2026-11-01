@@ -67,6 +67,11 @@ struct MachinesSettings: View {
         .settingsDetail(isPresented: $showsAdd, title: "Add a Machine") {
             MachineForm(style: .settings, added: { _ in showsAdd = false }, cancel: { showsAdd = false })
         }
+        .onChange(of: app.addsMachine, initial: true) { _, adds in
+            guard adds else { return }
+            app.addsMachine = false
+            showsAdd = true
+        }
         #if DEBUG
         // KUVO_DEMO_ADD_MACHINE: Add a Machine, open. KUVO_DEMO_REMOVE_MACHINE=<id>: its Remove
         // dialog, open.

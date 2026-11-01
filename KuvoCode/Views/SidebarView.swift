@@ -55,7 +55,7 @@ struct SidebarView: View {
     @State private var search = ""
     /// Sessions whose sub-sessions show under them: folded until you unfold one, or open one of them.
     @State private var unfolded: Set<String> = []
-    /// How far a swipe has pulled the boxes' pages, which the name strip above them follows.
+    /// How far a swipe has pulled the boxes' pages.
     @State private var boxMotion = BoxPagerMotion()
     /// Sessions whose conversations have the search, with the words around it.
     /// What each box found in its conversations, by the box: one's earlier finds stay until it
@@ -121,7 +121,7 @@ struct SidebarView: View {
                 SidebarSearchRow(text: $search)
 
                 if boxes.count > 1, search.isEmpty {
-                    BoxNameStrip(boxes: boxes, selected: boxBinding, motion: boxMotion)
+                    BoxNameStrip(boxes: boxes, selected: boxBinding)
                         .padding(.top, 8)
                 }
 

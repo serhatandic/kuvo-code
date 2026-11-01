@@ -129,6 +129,9 @@ final class AppModel {
     @ObservationIgnored private var starting: UUID?
     /// Settings fill the main window in place of the sessions while this is on.
     var showsSettings = false
+    /// Settings › Machines opens on Add a Machine, asked for from outside it (the sidebar's
+    /// computers).
+    var addsMachine = false
     /// Help › Report a Problem…'s sheet, over the main window.
     var showsProblemReport = false
     /// What's New: the highlights over the main window, once after an update or from Help.
