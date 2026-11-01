@@ -9,7 +9,7 @@ import { join } from "node:path"
 import { providerID, type AgentAccount } from "../accounts"
 import type { Agent, AgentContext, Account, MessageInput, RunInput, RunResult, SignInAttempt, SignInOptions, SubagentMessages, SubagentRun, Thread, TurnHooks, PromptFile } from "../agent"
 import type { Limit } from "../auto"
-import { accountName, ContextWindows, failure, KnownAccount, model } from "../agent"
+import { accountName, ContextWindows, failure, KnownAccount, model, signOutWith } from "../agent"
 import { fileDiff, fromPatch } from "../diff"
 import { emit } from "../events"
 import { allowedFolders, fenceAgent, fenceAttachments, fenceCopy, fenceKey, fenceRules, seatBot } from "../fence"
@@ -107,11 +107,23 @@ export class CodexAgent implements Agent {
   /** Your plan's usage windows as Codex last said, by limit ("codex" is the plan's; others, a model's). */
   rateLimits = new Map<string, any>()
 
+  /** Its own sign-in on a machine: Kuvo Code's, in its folder there, so signed out here. */
+  signOut?: () => Promise<void>
+
   constructor(
     readonly context: AgentContext,
     readonly instance: AgentAccount = { id: "default" },
   ) {
     this.providerID = providerID("codex", instance.id)
+    if (instance.id === "default" && instance.home) {
+      this.signOut = async () => {
+        await signOutWith("Codex", this.executable(), ["logout"], { ...process.env, CODEX_HOME: instance.home })
+        // Its app-servers read the sign-in as they start: the next one, signed out.
+        this.shutdown()
+        this.known.reset()
+        this.modelList = undefined
+      }
+    }
   }
 
   executable(): string | undefined {

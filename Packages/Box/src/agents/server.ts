@@ -107,7 +107,9 @@ async function maintainedSoon(agent: Agent, fresh: boolean): Promise<Maintenance
 
 export async function integration(agent: Agent, fresh = false, auto?: Auto): Promise<Integration> {
   const [account, maintained] = await Promise.all([
-    agent.account(fresh).catch((error): Account => ({ installed: false, signedIn: false, message: String(error?.message ?? error) })),
+    // A check that fails is its program's (each agent says itself when it isn't installed): it's
+    // there, and says why, rather than offering its installer again.
+    agent.account(fresh).catch((error): Account => ({ installed: true, signedIn: false, message: String(error?.message ?? error) })),
     maintainedSoon(agent, fresh),
   ])
   const before = lastSeen.get(agent.providerID)

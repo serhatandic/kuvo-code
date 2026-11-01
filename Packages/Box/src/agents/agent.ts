@@ -7,6 +7,7 @@ import type { InstallResult, Maintenance, UpdateResult } from "./maintenance"
 import type { Deps } from "./deps"
 import type { Turn, Outcome } from "./turn"
 import type { Decision, FormAnswer, FormField, IntegrationMethod, Model, ModelRef, OAuthStatus, Session, StructuredError } from "./wire"
+import { run } from "./proc"
 
 /** What every agent gets from the bridge: its folders and the SDK installer. */
 export interface AgentContext {
@@ -39,6 +40,19 @@ export class TookTooLong extends Error {}
  * that took too long is taken as signed in (a run on it says so if it isn't, where a model taken
  * away mid-goal can't be put back), and one that failed throws why.
  */
+/**
+ * Signs an agent's program out with its own command (`claude auth logout`), in its environment: an
+ * agent's own sign-in on a machine, which is Kuvo Code's, in its folder there (`AgentAccount.home`),
+ * not yours in your home. Says why when it couldn't.
+ */
+export async function signOutWith(name: string, executable: string | undefined, args: string[], env: Record<string, string | undefined>) {
+  if (!executable) throw new Error(`${name} isn't installed here any more.`)
+  const ran = await run(executable, args, { timeout: 20_000, env })
+  if (ran.code === 0 && !ran.timedOut) return
+  const why = (ran.stderr || ran.stdout).trim() || (ran.timedOut ? "It took too long." : `It stopped with ${ran.code}.`)
+  throw new Error(`${name} couldn't sign out: ${why}`)
+}
+
 export class KnownAccount {
   private known?: { at: number; account: Account }
   private checking?: Promise<{ account: Account } | { error: unknown }>

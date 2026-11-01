@@ -2615,6 +2615,15 @@ import { join as join10 } from "path";
 // Packages/Box/src/agents/agent.ts
 class TookTooLong extends Error {
 }
+async function signOutWith(name, executable, args, env) {
+  if (!executable)
+    throw new Error(`${name} isn't installed here any more.`);
+  const ran = await run(executable, args, { timeout: 20000, env });
+  if (ran.code === 0 && !ran.timedOut)
+    return;
+  const why = (ran.stderr || ran.stdout).trim() || (ran.timedOut ? "It took too long." : `It stopped with ${ran.code}.`);
+  throw new Error(`${name} couldn't sign out: ${why}`);
+}
 
 class KnownAccount {
   keep;
@@ -9432,10 +9441,18 @@ class ClaudeAgent {
   modelList;
   loadingModels;
   program = 0;
+  signOut;
   constructor(context, instance = { id: "default" }) {
     this.context = context;
     this.instance = instance;
     this.providerID = providerID("claude", instance.id);
+    if (instance.id === "default" && instance.home) {
+      this.signOut = async () => {
+        await signOutWith("Claude Code", this.executable(), ["auth", "logout"], this.env());
+        this.known.reset();
+        this.modelList = undefined;
+      };
+    }
   }
   executable() {
     return which("claude", places);
@@ -11168,10 +11185,19 @@ class CodexAgent {
   skillRoots = new Map;
   rootsSet = new WeakMap;
   rateLimits = new Map;
+  signOut;
   constructor(context, instance = { id: "default" }) {
     this.context = context;
     this.instance = instance;
     this.providerID = providerID("codex", instance.id);
+    if (instance.id === "default" && instance.home) {
+      this.signOut = async () => {
+        await signOutWith("Codex", this.executable(), ["logout"], { ...process.env, CODEX_HOME: instance.home });
+        this.shutdown();
+        this.known.reset();
+        this.modelList = undefined;
+      };
+    }
   }
   executable() {
     return which("codex", places2);
@@ -13957,10 +13983,18 @@ class GrokAgent {
       writeFileSync16(this.effortsFile, JSON.stringify(known));
     } catch {}
   }
+  signOut;
   constructor(context, instance = { id: "default" }) {
     this.context = context;
     this.instance = instance;
     this.providerID = providerID("grok", instance.id);
+    if (instance.id === "default" && instance.home) {
+      this.signOut = async () => {
+        await signOutWith("Grok", this.executable(), ["logout"], this.env());
+        this.known.reset();
+        this.status = undefined;
+      };
+    }
   }
   executable() {
     return which("grok", places3);
@@ -21864,7 +21898,7 @@ async function maintainedSoon(agent, fresh) {
 }
 async function integration(agent, fresh = false, auto) {
   const [account, maintained] = await Promise.all([
-    agent.account(fresh).catch((error) => ({ installed: false, signedIn: false, message: String(error?.message ?? error) })),
+    agent.account(fresh).catch((error) => ({ installed: true, signedIn: false, message: String(error?.message ?? error) })),
     maintainedSoon(agent, fresh)
   ]);
   const before = lastSeen.get(agent.providerID);
@@ -22670,4 +22704,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents ae7744568018558da91ea033df990e68f5baddfb606520a01d6ba674b003b3ce
+// Built from Packages/Box/src/agents d2e45a6753e967ed8ce39be954e24634340fb8698debe29e0fd52904332fbb82
