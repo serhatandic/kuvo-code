@@ -5406,7 +5406,7 @@ function seatbeltProfile(policy, options) {
   deny("file-write*", under("WORK_RE", "/" + GUARDED), under("GIT_RE", "/" + GIT_GUARDED), ...Array.from({ length: MOST_FOLDERS }, (_, at) => under(`ALLOW${at}_RE`, "/" + GUARDED)));
   deny("file-write*", ...homes.map((home) => inHome(home, `"/(.*/)?(" (param "KEPT") ")(/|$)"`)));
   out.push(";; your secrets");
-  deny("file-read*", ...policy.secrets.map(subpath));
+  deny("file-read* file-write*", ...policy.secrets.map(subpath));
   out.push(";; Kuvo Code's own servers and sockets");
   deny("network-outbound", ...policy.ports.map((port) => `(remote tcp ${quote2(`localhost:${port}`)})`));
   if (options.agent)

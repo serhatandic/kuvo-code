@@ -118,7 +118,9 @@ export function seatbeltProfile(policy: FencePolicy, options: SeatbeltOptions): 
   deny("file-write*", ...homes.map(home => inHome(home, `"/(.*/)?(" (param "KEPT") ")(/|$)"`)));
 
   out.push(";; your secrets");
-  deny("file-read*", ...policy.secrets.map(subpath));
+  // Never read, nor moved, named again or replaced: one in a folder commands write (cargo's sign-in
+  // in its cache) would be read by another name.
+  deny("file-read* file-write*", ...policy.secrets.map(subpath));
 
   out.push(";; Kuvo Code's own servers and sockets");
   deny("network-outbound", ...policy.ports.map(port => `(remote tcp ${quote(`localhost:${port}`)})`));
