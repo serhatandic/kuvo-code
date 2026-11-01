@@ -23,7 +23,8 @@ fs.mkdirSync(tidepool, { recursive: true });
 const by = { bot: "bot_pixel00001", name: "Pixel" };
 const toldFile = path.join(home, "run", "work", "told.json");
 
-// A stand-in for the engine or the coding agents' bridge: its sessions, each with its last reply;
+// A stand-in for the engine or the coding agents' bridge: its sessions, each with its last reply
+// (none when `replied` is null) and any message after it (`after`'s id);
 // `listing` false answers its list as an engine still starting does, and `unread` the sessions
 // whose messages it can't read (an engine too slow); `looking` runs as it's asked what's working.
 function place(sessions) {
@@ -43,7 +44,11 @@ function place(sessions) {
       const id = one && decodeURIComponent(one[1]);
       if (one && !one[2]) return sessions[id] ? reply({ data: sessions[id] }) : reply({ message: "No such session." }, 404);
       if (one?.[2] === "/message" && state.unread.has(id)) return reply({ message: "Busy." }, 503);
-      if (one?.[2] === "/message" && sessions[id]) return reply({ data: [{ id: `msg_${id}`, type: "assistant", time: { created: sessions[id].replied ?? 9 }, content: [{ type: "text", text: sessions[id].said ?? "Done." }] }] });
+      if (one?.[2] === "/message" && sessions[id]) {
+        const after = sessions[id].after ? [{ id: sessions[id].after, type: "user", time: { created: 10 }, content: [] }] : [];
+        if (sessions[id].replied === null) return reply({ data: after });
+        return reply({ data: [...after, { id: `msg_${id}`, type: "assistant", time: { created: sessions[id].replied ?? 9 }, content: [{ type: "text", text: sessions[id].said ?? "Done." }] }] });
+      }
       if (one?.[2] === "/prompt" && sessions[id]) {
         state.prompts.push({ to: id, ...JSON.parse(body) });
         return reply({});
@@ -85,6 +90,8 @@ beforeEach(() => {
   engine.unread.clear();
   delete engine.looking;
   delete engine.sessions.ses_review;
+  delete engine.sessions.ses_build;
+  delete engine.sessions.ses_fix;
   engine.sessions.ses_signin.time = { created: 1, updated: 10 };
   fs.rmSync(path.join(home, "run", "work"), { recursive: true, force: true });
   fs.mkdirSync(path.dirname(toldFile), { recursive: true });
@@ -225,4 +232,26 @@ test("a session that finishes while the box looks back, unheard (its connection 
   await next.runAll();
   assert.equal(engine.prompts.length, 2, "Review, as the box starts again");
   assert.match(engine.prompts[1].text, /^\[Session finished\] "Review"/);
+});
+
+test("a session whose turn failed before it replied while the box was down is told it failed: its first turn, or one after a reply told before", async () => {
+  // Build failed on its first turn, before it said anything (its model couldn't be reached, say).
+  engine.sessions.ses_build = { ...engine.sessions.ses_signin, id: "ses_build", title: "Build", outcome: "failed", replied: null, after: "msg_build_you" };
+  // Fix finished once, told as it did (at 7); its next turn failed before a reply, at 10.
+  engine.sessions.ses_fix = { ...engine.sessions.ses_signin, id: "ses_fix", title: "Fix", outcome: "failed", said: "Fixed the first one.", after: "msg_fix_you" };
+  fs.writeFileSync(toldFile, JSON.stringify({ since: 5, sessions: { ses_fix: { reply: "msg_ses_fix", at: 7 } } }));
+  const first = clock();
+  await link.workWatcher(engine.target, () => [engine.target], { schedule: first.schedule, now: first.now }).caughtUp;
+  await first.runAll();
+  assert.equal(engine.prompts.length, 1);
+  assert.match(engine.prompts[0].text, /\[Session failed\] "Build" in tidepool \(address ses_build\) stopped with an error/);
+  assert.match(engine.prompts[0].text, /\[Session failed\] "Fix" in tidepool \(address ses_fix\) stopped with an error/);
+  assert.match(engine.prompts[0].text, /\[Session finished\] "Sign-in"/);
+  // Not again as the box starts the next time, though nothing new was said.
+  engine.sessions.ses_build.time = { created: 1, updated: 1500 };
+  const next = clock();
+  next.at = 2000;
+  await link.workWatcher(engine.target, () => [engine.target], { schedule: next.schedule, now: next.now }).caughtUp;
+  await next.runAll();
+  assert.equal(engine.prompts.length, 1, "told once");
 });

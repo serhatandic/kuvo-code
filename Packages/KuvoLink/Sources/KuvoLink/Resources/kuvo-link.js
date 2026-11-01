@@ -7483,12 +7483,9 @@ var changeTold = (file, change, from, until) => {
 };
 async function lastReply(target, session) {
   const page = await call(target, "GET", `/api/session/${encodeURIComponent(session)}/message?limit=6&order=desc`);
-  for (const message of Array.isArray(page) ? page : []) {
-    if (!isObject(message) || message.type !== "assistant" || typeof message.id !== "string")
-      continue;
-    return { id: message.id, at: isObject(message.time) && typeof message.time.created === "number" ? message.time.created : null };
-  }
-  return null;
+  const messages = (Array.isArray(page) ? page : []).filter((message) => isObject(message) && typeof message.id === "string");
+  const reply = messages.find((message) => message.type === "assistant");
+  return { id: reply?.id ?? null, at: isObject(reply?.time) && typeof reply.time.created === "number" ? reply.time.created : null, latest: messages[0]?.id ?? null };
 }
 function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, now = Date.now, file = WORK_WAKES, toldFile = WORK_TOLD, bridgeRuns = () => peerPlaces().bridge, signal, from = ENGINE } = {}) {
   const due = new Set;
@@ -7564,6 +7561,8 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
     }
     if (note.at)
       its.at = note.at;
+    if (note.turn)
+      its.turn = note.turn;
     if (note.ask)
       its.asks = [...(its.asks ?? []).filter((each) => each !== note.ask), note.ask].slice(-20);
     delete told.sessions[session];
@@ -7656,21 +7655,23 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
     if (!wakes.includes("finished") || working.has(data.id))
       return;
     const at = now();
-    const reply = await lastReply(source, data.id);
-    if (!reply || reply.id === was.reply)
-      return;
-    if (was.at && (reply.at ?? data.time?.updated ?? Infinity) <= was.at)
-      return noteTold(data.id, { reply: reply.id });
+    const last = await lastReply(source, data.id);
     const outcome = data.outcome;
-    if (outcome === "interrupted")
-      return noteTold(data.id, { reply: reply.id });
     const failed = outcome === "failed";
+    const reply = last.id && last.id !== was.reply ? last.id : null;
+    const failedBare = failed && !reply && !!last.latest && ![was.turn, was.reply].includes(last.latest);
+    if (!reply && !failedBare)
+      return;
+    if (reply && was.at && (last.at ?? data.time?.updated ?? Infinity) <= was.at)
+      return noteTold(data.id, { reply });
+    if (outcome === "interrupted")
+      return noteTold(data.id, { reply });
     const line = await wakeLine({ type: failed ? "session.execution.failed" : "session.execution.succeeded", data: { sessionID: data.id } }, data, source);
     if (line && !failed)
-      return tellUnlessAnswered(data.id, starter, reply.id, line, at);
+      return tellUnlessAnswered(data.id, starter, reply, line, at);
     if (line)
       tell(starter, line, false);
-    noteTold(data.id, { reply: reply.id });
+    noteTold(data.id, { reply, turn: failed ? last.latest : null });
   };
   const catchingUp = () => catchUp().catch(() => {
     if (signal?.aborted)
@@ -7710,7 +7711,8 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
       if (!starter || !kind || !wakes.includes(kind))
         return;
       const at = now();
-      const reply = kind === "finished" ? (await lastReply(source, session.id).catch(() => null))?.id : undefined;
+      const last = kind === "finished" ? await lastReply(source, session.id).catch(() => null) : null;
+      const reply = last?.id ?? undefined;
       const line = await wakeLine(event, session, source);
       if (!line)
         return;
@@ -7718,7 +7720,7 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
         return tellUnlessAnswered(session.id, starter, reply, line, at);
       tell(starter, line, kind === "asks");
       const ask = event.data?.id ?? event.data?.form?.id;
-      noteTold(session.id, kind === "asks" ? { ask: typeof ask === "string" ? ask : undefined } : { reply, at });
+      noteTold(session.id, kind === "asks" ? { ask: typeof ask === "string" ? ask : undefined } : { reply, at, turn: event.type === "session.execution.failed" ? last?.latest : null });
     })().catch(() => {});
   };
   return Object.assign(watch, { caughtUp });
