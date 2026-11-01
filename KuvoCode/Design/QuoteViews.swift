@@ -50,11 +50,10 @@ struct QuoteBlock: View {
                 .fill(.secondary.opacity(0.45))
                 .frame(width: 3)
             VStack(alignment: .leading, spacing: 4) {
-                Text(FindText.marked(AttributedString(text), highlight))
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(isExpanded ? nil : 4)
-                    .textSelection(.enabled)
+                // AppKit's text, as your words': its pointer shows only where nothing's drawn over it.
+                SelectableText(text: MessageMentions.attributed(FindText.marked(AttributedString(text), highlight),
+                                                                font: .preferredFont(forTextStyle: .callout), color: .secondaryLabelColor).text,
+                               lineLimit: isExpanded ? nil : 4)
                 if isLong {
                     Button(isExpanded ? "Show Less" : "Show All") { withAnimation(.ui) { isExpanded.toggle() } }
                         .buttonStyle(TextButtonStyle())

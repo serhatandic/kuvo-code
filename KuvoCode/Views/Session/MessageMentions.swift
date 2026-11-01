@@ -33,8 +33,8 @@ nonisolated enum MessageMentions {
 
     /// What stands for an agent's "&": a bot's face, or a conversation's mark, before its name.
     enum Marks {
-        /// In SwiftUI's Text (your bubbles, the queue): the "&" is marked (`AgentMark`), and
-        /// `text(_:size:)` draws it as a picture.
+        /// In your words (your bubbles, the queue): the "&" is marked (`AgentMark`), and
+        /// `attributed(_:font:)` or `text(_:size:)` draws it as a picture.
         case inline
         /// In Textual's (a bot's message): an attachment in its place.
         case attachments
@@ -116,8 +116,8 @@ nonisolated enum MessageMentions {
         return text.characters.isEmpty ? token : token + AttributedString(" ") + text
     }
 
-    /// `attributed` as SwiftUI's Text, each marked "&" drawn as its face or mark, `size` points,
-    /// and its links marked for `LinkPointer`.
+    /// `attributed` as SwiftUI's Text (the queue's, a key page's line), each marked "&" drawn as its
+    /// face or mark, `size` points, and its links marked for `LinkPointer`.
     @MainActor static func text(_ attributed: AttributedString, size: CGFloat) -> Text {
         guard attributed.runs.contains(where: { $0[AgentMark.self] != nil || $0[PictureMark.self] != nil || $0[KeywordTokenMark.self] != nil || $0.link != nil }) else { return Text(attributed) }
         var pieces: [Text] = []
@@ -145,6 +145,46 @@ nonisolated enum MessageMentions {
             pieces.append(piece)
         }
         return pieces.reduce(Text("")) { Text("\($0)\($1)") }
+    }
+
+    /// `attributed` for AppKit's text (`SelectableText`), in `font`, drawn as the composer draws
+    /// it, in `color` where it sets none: each marked "&" its face or mark, a keyword's "/" its mark, a picture's name its mark
+    /// for the "[" and without the "]", each over the character it stands for, which stays (so
+    /// it's copied and found as written). Bold, color, links and Find's marks as they're set.
+    @MainActor static func attributed(_ attributed: AttributedString, font: NSFont, color: NSColor = .labelColor) -> (text: NSAttributedString, faces: TextFaces) {
+        let text = NSMutableAttributedString()
+        var faces = TextFaces()
+        faces.size = (font.pointSize * 1.1).rounded()
+        let bold = NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask)
+        let italic = NSFontManager.shared.convert(font, toHaveTrait: .italicFontMask)
+        for run in attributed.runs {
+            let intent = run.inlinePresentationIntent ?? []
+            let runFont = intent.contains(.stronglyEmphasized) ? bold : intent.contains(.emphasized) ? italic : font
+            var attributes: [NSAttributedString.Key: Any] = [
+                .font: runFont,
+                .foregroundColor: run.swiftUI.foregroundColor.map { NSColor($0) } ?? color,
+            ]
+            if let background = run.swiftUI.backgroundColor { attributes[.backgroundColor] = NSColor(background) }
+            if run.swiftUI.strikethroughStyle != nil { attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
+            if let link = run.link { attributes[.link] = link }
+            let start = text.length
+            text.append(NSAttributedString(string: String(attributed[run.range].characters), attributes: attributes))
+            let span = NSRange(location: start, length: text.length - start)
+            let ink = attributes[.foregroundColor] as? NSColor ?? color
+            if let symbol = run[KeywordTokenMark.self] {
+                faces.add(TextFaces.symbol(symbol, size: faces.size, ink: ink), at: span, in: text, font: runFont)
+            } else if let mark = run[PictureMark.self] {
+                if mark == .open {
+                    faces.add(TextFaces.symbol("photo", size: faces.size), at: span, in: text, font: runFont)
+                } else {
+                    faces.hide(span, in: text, font: runFont)
+                }
+            } else if let agent = run[AgentMark.self] {
+                let face = agent.look.flatMap { face($0, size: faces.size) } ?? TextFaces.symbol("bubble.left", size: faces.size)
+                faces.add(face, at: span, in: text, font: runFont)
+            }
+        }
+        return (text, faces)
     }
 
     /// A bot's face as a picture of `size` points, drawn once for each look and size.
@@ -336,14 +376,15 @@ nonisolated enum PictureMark: AttributedStringKey {
     static let name = "kuvo.pictureMark"
 }
 
-/// A keyword's "/" in a bubble, which `MessageMentions.text(_:size:)` draws as its mark (the
-/// keyword's symbol).
+/// A keyword's "/" in a bubble, which `MessageMentions.attributed(_:font:color:)` (and
+/// `text(_:size:)` in the queue) draws as its mark (the keyword's symbol).
 nonisolated enum KeywordTokenMark: AttributedStringKey {
     typealias Value = String
     static let name = "kuvo.keywordTokenMark"
 }
 
-/// An agent's "&" in a bubble, which `MessageMentions.text(_:size:)` draws as its face or mark.
+/// An agent's "&" in a bubble, which `MessageMentions.attributed(_:font:color:)` (and
+/// `text(_:size:)` in the queue) draws as its face or mark.
 nonisolated enum AgentMark: AttributedStringKey {
     typealias Value = MessageMentions.Agent
     static let name = "kuvo.agentMark"

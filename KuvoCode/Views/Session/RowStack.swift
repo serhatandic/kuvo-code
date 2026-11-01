@@ -595,7 +595,7 @@ final class RowStackView: NSView, NSUserInterfaceValidations {
         var found: [NSTextView] = []
         func walk(_ view: NSView) {
             for sub in view.subviews where !sub.isHidden {
-                if sub is ReplyTextView || sub is ReplyCodeTextView, let text = sub as? NSTextView { found.append(text) } else { walk(sub) }
+                if sub is ReplyTextView || sub is ReplyCodeTextView || sub is SelectableTextView, let text = sub as? NSTextView { found.append(text) } else { walk(sub) }
             }
         }
         walk(view)
