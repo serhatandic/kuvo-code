@@ -24,8 +24,9 @@ const by = { bot: "bot_pixel00001", name: "Pixel" };
 const toldFile = path.join(home, "run", "work", "told.json");
 
 // A stand-in for the engine or the coding agents' bridge: its sessions, each with its last reply
-// (none when `replied` is null), a turn after it that wrote none (`after`, your message's id), and
-// messages after that (`later`: a command you ran, a model switch);
+// (none when `replied` is null), a turn after it that wrote none (`after`, the id of your message, or
+// of the box's own with `startedBy: "synthetic"`), and messages after that (`later`: commands you
+// ran, a model switch);
 // `listing` false answers its list as an engine still starting does, and `unread` the sessions
 // whose messages it can't read (an engine too slow); `looking` runs as it's asked what's working.
 function place(sessions) {
@@ -46,11 +47,14 @@ function place(sessions) {
       if (one && !one[2]) return sessions[id] ? reply({ data: sessions[id] }) : reply({ message: "No such session." }, 404);
       if (one?.[2] === "/message" && state.unread.has(id)) return reply({ message: "Busy." }, 503);
       if (one?.[2] === "/message" && sessions[id]) {
-        // A turn you started after its reply that wrote none: your message, then its end (newest first).
-        const after = sessions[id].after ? [{ id: `${sessions[id].after}_end`, type: "idle", time: { created: 10 }, outcome: "failed" }, { id: sessions[id].after, type: "user", time: { created: 10 }, content: [] }] : [];
+        // A turn started after its reply that wrote none: what started it (your message, or the box's
+        // own, as a goal's nudge), then its end (newest first). As many as the page asks for.
+        const after = sessions[id].after ? [{ id: `${sessions[id].after}_end`, type: "idle", time: { created: 10 }, outcome: "failed" }, { id: sessions[id].after, type: sessions[id].startedBy ?? "user", time: { created: 10 }, content: [] }] : [];
         const later = (sessions[id].later ?? []).map(each => ({ ...each, time: { created: 11 } }));
-        if (sessions[id].replied === null) return reply({ data: [...later, ...after] });
-        return reply({ data: [...later, ...after, { id: `msg_${id}`, type: "assistant", time: { created: sessions[id].replied ?? 9 }, content: [{ type: "text", text: sessions[id].said ?? "Done." }] }, { id: `msg_${id}_asked`, type: "user", time: { created: 8 }, content: [] }] });
+        const limit = Number(new URL(request.url, "http://engine").searchParams.get("limit") ?? Infinity);
+        const page = data => reply({ data: data.slice(0, limit) });
+        if (sessions[id].replied === null) return page([...later, ...after]);
+        return page([...later, ...after, { id: `msg_${id}`, type: "assistant", time: { created: sessions[id].replied ?? 9 }, content: [{ type: "text", text: sessions[id].said ?? "Done." }] }, { id: `msg_${id}_asked`, type: "user", time: { created: 8 }, content: [] }]);
       }
       if (one?.[2] === "/prompt" && sessions[id]) {
         state.prompts.push({ to: id, ...JSON.parse(body) });
@@ -285,4 +289,22 @@ test("a failure told once isn't told again: not as it was heard, after a command
   await link.workWatcher(engine.target, () => [engine.target], { schedule: next.schedule, now: next.now }).caughtUp;
   await next.runAll();
   assert.equal(engine.prompts.length, 2, `told once: ${engine.prompts.slice(2).map(each => each.text)}`);
+});
+
+test("a failed turn the box started itself (a goal's nudge) is told after the box was down, and one with commands you ran after it", async () => {
+  // Ship's goal nudged it on after its reply, and that turn failed before it replied.
+  engine.sessions.ses_ship = { ...engine.sessions.ses_signin, id: "ses_ship", title: "Ship", outcome: "failed", said: "Not yet.", after: "msg_ship_nudge", startedBy: "synthetic" };
+  // Lint failed on its first turn; then you ran commands in it, more than a few.
+  engine.sessions.ses_lint = { ...engine.sessions.ses_signin, id: "ses_lint", title: "Lint", outcome: "failed", replied: null, after: "msg_lint_you",
+    later: Array.from({ length: 8 }, (_, index) => ({ id: `msg_lint_shell${index}`, type: "shell" })) };
+  // Ship's reply was told as it came (at 7).
+  const told = JSON.parse(fs.readFileSync(toldFile, "utf8"));
+  told.sessions.ses_ship = { reply: "msg_ses_ship", at: 7 };
+  fs.writeFileSync(toldFile, JSON.stringify(told));
+  const first = clock();
+  await link.workWatcher(engine.target, () => [engine.target], { schedule: first.schedule, now: first.now }).caughtUp;
+  await first.runAll();
+  assert.equal(engine.prompts.length, 1);
+  assert.match(engine.prompts[0].text, /\[Session failed\] "Ship"/);
+  assert.match(engine.prompts[0].text, /\[Session failed\] "Lint"/);
 });

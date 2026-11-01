@@ -7482,7 +7482,7 @@ var changeTold = (file, change, from, until) => {
   } catch {}
 };
 async function lastReply(target, session) {
-  const page = await call(target, "GET", `/api/session/${encodeURIComponent(session)}/message?limit=6&order=desc`);
+  const page = await call(target, "GET", `/api/session/${encodeURIComponent(session)}/message?limit=20&order=desc`);
   const messages = (Array.isArray(page) ? page : []).filter((message) => isObject(message) && typeof message.id === "string");
   const at = (message) => isObject(message?.time) && typeof message.time.created === "number" ? message.time.created : null;
   const newest = (type) => {
@@ -7490,7 +7490,8 @@ async function lastReply(target, session) {
     return index < 0 ? Infinity : index;
   };
   const reply = messages[newest("assistant")];
-  const ended = newest("idle") < newest("user") && newest("user") < newest("assistant") ? messages[newest("idle")] : undefined;
+  const started = Math.min(newest("user"), newest("synthetic"));
+  const ended = newest("idle") < started && started < newest("assistant") ? messages[newest("idle")] : undefined;
   return { id: reply?.id ?? null, at: at(reply), turn: ended?.id ?? null, turnAt: at(ended) };
 }
 function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, now = Date.now, file = WORK_WAKES, toldFile = WORK_TOLD, bridgeRuns = () => peerPlaces().bridge, signal, from = ENGINE } = {}) {

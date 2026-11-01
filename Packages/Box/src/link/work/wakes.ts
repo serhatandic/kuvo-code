@@ -191,16 +191,18 @@ const changeTold = (file: string, change: (told: Told) => void, from: string | n
 };
 
 // A session's last reply (its id, and when it was written; null for none), and the end of a turn
-// you started after it that wrote none (`turn`, its idle message, and when: a turn that failed
+// started after it that wrote none (`turn`, its idle message, and when: a turn that failed
 // before it replied); it throws when it can't be read.
 async function lastReply(target: Target, session: string): Promise<{ id: string | null; at: number | null; turn: string | null; turnAt: number | null }> {
-  const page = await call(target, "GET", `/api/session/${encodeURIComponent(session)}/message?limit=6&order=desc`);
+  const page = await call(target, "GET", `/api/session/${encodeURIComponent(session)}/message?limit=20&order=desc`);
   const messages = (Array.isArray(page) ? page : []).filter(message => isObject(message) && typeof message.id === "string");
   const at = (message: { time?: unknown } | undefined) => isObject(message?.time) && typeof message.time.created === "number" ? message.time.created : null;
   const newest = (type: string) => { const index = messages.findIndex(message => message.type === type); return index < 0 ? Infinity : index; };
   const reply = messages[newest("assistant")];
-  // (Newest first: the turn's end, then your message, then the reply before them, if any.)
-  const ended = newest("idle") < newest("user") && newest("user") < newest("assistant") ? messages[newest("idle")] : undefined;
+  // (Newest first: the turn's end, then what started it, your message or the box's own (a goal's
+  // nudge, a handoff), then the reply before them, if any.)
+  const started = Math.min(newest("user"), newest("synthetic"));
+  const ended = newest("idle") < started && started < newest("assistant") ? messages[newest("idle")] : undefined;
   return { id: reply?.id ?? null, at: at(reply), turn: ended?.id ?? null, turnAt: at(ended) };
 }
 
