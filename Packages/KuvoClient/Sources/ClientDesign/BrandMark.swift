@@ -108,25 +108,28 @@ public enum BrandMark {
 public struct BrandMarkView: View {
     let id: String
     let size: CGFloat
-    let fallback: String
+    let fallback: String?
 
-    /// `fallback`: the symbol for an id with neither a mark nor a symbol of its own (an
-    /// integration's own, say); a server's by default.
+    /// `fallback`: the symbol for an id with no mark (an integration's own, so two services of a
+    /// kind keep theirs apart); without one, the plain symbol for what it is, else a server's.
     public init(_ id: String, size: CGFloat, fallback: String? = nil) {
         self.id = id
         self.size = size
-        self.fallback = fallback ?? BrandMark.fallbackSymbol
+        self.fallback = fallback
     }
 
     public var body: some View {
         Group {
             if let image = BrandMark.image(id) {
+                // Marks fill their whole square, symbols don't: a little smaller, so the two
+                // weigh the same in a list.
                 image
                     .resizable()
                     .interpolation(.high)
                     .aspectRatio(contentMode: .fit)
+                    .padding(size * 0.075)
             } else {
-                Image(systemName: BrandMark.symbol(id) ?? fallback)
+                Image(systemName: fallback ?? BrandMark.symbol(id) ?? BrandMark.fallbackSymbol)
                     .font(.system(size: size * 0.88))
             }
         }

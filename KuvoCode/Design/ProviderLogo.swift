@@ -92,11 +92,10 @@ actor LogoCache {
         if let task = inflight[id] { return await task.value }
 
         let task = Task<NSImage?, Never> {
-            guard let url = URL(string: "https://models.opencode.ai/logos/\(id).svg"),
-                  let (data, response) = try? await URLSession.shared.data(from: url),
-                  (response as? HTTPURLResponse)?.statusCode == 200,
-                  !Self.isStock(data),
-                  let image = NSImage(data: data) else { return nil }
+            guard let data = await Self.fetch(id), let image = NSImage(data: data) else { return nil }
+            // What it sends for an id it has no logo for, fetched once to compare.
+            if stock == nil { stock = .some(await Self.fetch("kuvo-code-no-such-logo")) }
+            if let stock = stock ?? nil, stock == data { return nil }
             image.isTemplate = true
             return image
         }
@@ -107,9 +106,13 @@ actor LogoCache {
         return image
     }
 
-    /// The picture the logo service sends for an id it has no logo for (four sparkles), by the
-    /// start of its first path.
-    nonisolated static func isStock(_ data: Data) -> Bool {
-        String(decoding: data.prefix(400), as: UTF8.self).contains("M9.8132 15.9038L9 18.75L8.1868 15.9038")
+    /// The logo service's stock picture (four sparkles), once asked for.
+    private var stock: Data??
+
+    nonisolated private static func fetch(_ id: String) async -> Data? {
+        guard let url = URL(string: "https://models.opencode.ai/logos/\(id).svg"),
+              let (data, response) = try? await URLSession.shared.data(from: url),
+              (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+        return data
     }
 }

@@ -428,7 +428,7 @@ nonisolated enum Integrations {
         Service(id: "google-calendar", title: "Google Calendar", summary: "Google's own server, in preview: with an app in your Google Cloud project", kind: .mail, symbol: "calendar.circle", site: "https://calendar.google.com",
                 way: .officialApp(url: "https://calendarmcp.googleapis.com/mcp/v1", help: "https://developers.google.com/workspace/guides/configure-mcp-servers")),
         // Chat
-        Service(id: "slack", title: "Slack", summary: "Channels, messages and search, through an app you add to your workspace", kind: .chat, symbol: "number", site: "https://app.slack.com",
+        Service(id: "slack", title: "Slack", summary: "Channels, messages and search, through an app you add to your workspace", kind: .chat, symbol: "bubble.left.and.bubble.right", site: "https://app.slack.com",
                 way: .officialApp(url: "https://mcp.slack.com/mcp", help: "https://docs.slack.dev/ai/mcp-server/")),
         Service(id: "discord", title: "Discord", summary: "Your servers and messages", kind: .chat, symbol: "bubble.left.and.bubble.right", site: "https://discord.com/app", way: .browser),
         Service(id: "telegram", title: "Telegram", summary: "Your chats", kind: .chat, symbol: "paperplane", site: "https://web.telegram.org", way: .browser),
