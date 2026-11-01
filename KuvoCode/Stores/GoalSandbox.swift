@@ -168,7 +168,7 @@ enum GoalSandbox {
             // On, but commands there can still reach your login's services (systemd runs anything
             // outside it), so the box doesn't let a goal go on alone.
             return Row(title: "\(computer) can’t work on its own",
-                       text: "Its commands can still reach your login’s services there, so \(bot) works while you’re here. Ask whoever runs it to \(status.needs == "util-linux" ? "install util-linux" : "allow user namespaces").",
+                       text: "\(computer)’s commands can still reach your login’s services, so \(bot) works while you’re here. Ask whoever runs it to \(status.needs == "util-linux" ? "install util-linux" : "allow user namespaces").",
                        buttons: [Button(label: "How to Check…", action: .open(machinesPage))])
         case nil where status.on:
             // A box from before it said `agents` has none of theirs outside it. Any coding agent's

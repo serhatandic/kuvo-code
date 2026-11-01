@@ -300,7 +300,6 @@ function able(): Checked {
       ? { able: false, passed: false, why: `This machine doesn't let commands have a namespace of their own (it restricts unprivileged user namespaces, as Ubuntu 24.04 and later do), ${services}.`, reason: "namespaces", needs: withoutNamespace }
       : { able: false, passed: false, why: `This machine has no unshare (util-linux's), ${services}.`, reason: "namespaces", needs: withoutNamespace };
   }
-  if (WITHOUT_NAMESPACE === "off") withoutNamespace = null;
   return { able: true, passed: false };
 }
 
@@ -491,8 +490,11 @@ export function keepFence(): void {
     if (!fenceWanted()) return;
     try {
       if (checked.passed) writeProfiles();
-      // A failed check, tried again each minute (it holds the box up while it runs).
-      if (checked.passed ? textOf(PLUGIN) !== pluginScript(places, VERSION) : round % 6 === 0) setUpFence();
+      // A failed check, tried again each minute (it holds the box up while it runs); and on Linux,
+      // set up again once commands can have a namespace of their own after all (allowed since), or
+      // no longer can (each would fail at unshare).
+      const namespaces = checked.passed && platform === "linux" && round % 6 === 5 && !ownNamespace() !== !namespace;
+      if (checked.passed ? namespaces || textOf(PLUGIN) !== pluginScript(places, VERSION) : round % 6 === 0) setUpFence();
     } catch {}
   }, 10_000).unref?.();
 }

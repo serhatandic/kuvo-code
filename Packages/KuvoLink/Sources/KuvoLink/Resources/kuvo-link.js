@@ -6247,8 +6247,6 @@ function able() {
     const services = "which the sandbox needs to keep commands from the services your login runs: systemd, your keyring, your agents";
     return withoutNamespace === "user namespaces" ? { able: false, passed: false, why: `This machine doesn't let commands have a namespace of their own (it restricts unprivileged user namespaces, as Ubuntu 24.04 and later do), ${services}.`, reason: "namespaces", needs: withoutNamespace } : { able: false, passed: false, why: `This machine has no unshare (util-linux's), ${services}.`, reason: "namespaces", needs: withoutNamespace };
   }
-  if (WITHOUT_NAMESPACE === "off")
-    withoutNamespace = null;
   return { able: true, passed: false };
 }
 function probe() {
@@ -6440,7 +6438,8 @@ function keepFence() {
     try {
       if (checked.passed)
         writeProfiles();
-      if (checked.passed ? textOf(PLUGIN) !== pluginScript(places, VERSION) : round % 6 === 0)
+      const namespaces = checked.passed && platform === "linux" && round % 6 === 5 && !ownNamespace() !== !namespace;
+      if (checked.passed ? namespaces || textOf(PLUGIN) !== pluginScript(places, VERSION) : round % 6 === 0)
         setUpFence();
     } catch {}
   }, 1e4).unref?.();
