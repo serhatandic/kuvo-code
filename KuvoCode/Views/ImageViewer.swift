@@ -222,6 +222,7 @@ private struct ImageLightbox: View {
         .buttonStyle(.glass)
         .buttonBorderShape(.circle)
         .disabled(!request.items.indices.contains(index + direction))
+        .accessibilityLabel(direction < 0 ? "Previous" : "Next")
         .help(direction < 0 ? "Previous (←)" : "Next (→)")
     }
 

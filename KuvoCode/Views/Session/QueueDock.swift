@@ -196,6 +196,7 @@ struct QueueRow: View {
                     .clickablePointer()
                     .menuIndicator(.hidden)
                     .fixedSize()
+                    .accessibilityLabel("More")
                     .help(isRunning && isQueued && !isOnBox ? "Send Now (stops the current step), Edit, Remove" : "Edit, Remove")
                 } else {
                     // Its buttons where the other rows' are.

@@ -291,6 +291,7 @@ private struct QuestionPager: View {
                     .help("Next Question")
             }
             Button(action: dismiss) { Image(systemName: "xmark") }
+                .accessibilityLabel("Dismiss")
                 .help("Dismiss: the agent carries on without your answers")
                 .padding(.leading, 4)
         }
@@ -558,6 +559,7 @@ private struct FormCard: View {
                 Spacer()
                 Button(action: dismiss) { Image(systemName: "xmark") }
                     .buttonStyle(IconButtonStyle())
+                    .accessibilityLabel("Dismiss")
                     .help("Dismiss: the agent carries on without an answer")
             }
             if let message = form.message, !message.isEmpty {

@@ -50,6 +50,7 @@ struct ArchivedSessionsSettings: View {
                                     Image(systemName: "trash")
                                 }
                                 .buttonStyle(IconButtonStyle(width: 28, height: 24))
+                                .accessibilityLabel("Delete")
                                 .help("Delete")
                             }
                         } label: {

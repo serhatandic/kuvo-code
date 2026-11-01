@@ -307,6 +307,7 @@ private struct TabButton: View {
                 }
                 .buttonStyle(IconButtonStyle(width: 16, height: 16, cornerRadius: 8))
                 .opacity(isHovering ? 1 : 0)
+                .accessibilityLabel("Close Tab")
                 .help("Close Tab")
             }
         }

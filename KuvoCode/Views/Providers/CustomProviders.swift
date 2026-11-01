@@ -232,6 +232,7 @@ struct CustomProviderEditor: View {
                             Image(systemName: "minus.circle.fill")
                         }
                         .buttonStyle(RemoveButtonStyle())
+                        .accessibilityLabel("Remove Model")
                         .help("Remove Model")
                     }
                 }

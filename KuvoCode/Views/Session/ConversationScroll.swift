@@ -262,6 +262,7 @@ struct ConversationScroll<Rows: View>: View {
                 }
                 .buttonStyle(.glass)
                 .buttonBorderShape(.circle)
+                .accessibilityLabel("Scroll to the End")
                 .help("Scroll to the End")
                 .padding(.bottom, 12)
                 .transition(.opacity.combined(with: .scale(scale: 0.8)))

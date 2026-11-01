@@ -171,6 +171,7 @@ private struct AutoLists: View {
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
                 .fixedSize()
+                .accessibilityLabel("More")
                 .help("More")
             }
             .id(list.id)
@@ -316,6 +317,7 @@ private struct AutoEntryRow: View {
             }
             .menuIndicator(.hidden)
             .fixedSize()
+            .accessibilityLabel("More")
             .help("More")
         }
         .opacity(status == nil ? 1 : 0.75)

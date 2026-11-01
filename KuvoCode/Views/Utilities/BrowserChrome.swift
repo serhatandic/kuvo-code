@@ -275,6 +275,7 @@ struct BrowserDownloadBar<Detail: View, Actions: View>: View {
                 .clickablePointer()
                 .foregroundStyle(.secondary)
                 .disabled(!canHide)
+                .accessibilityLabel("Hide")
                 .help("Hide")
             }
         }
