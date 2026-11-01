@@ -1283,7 +1283,8 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   - `GET kuvo/accounts/ended` → `{providers: [id]}`, the plans whose sign-in in use ended (a run
     on one was refused, and it couldn't be renewed; the Mac says "Sign-in ended"), until a run on
     it works again or you sign in again (kept in `run/ended-sign-ins.json`, so every part of the box,
-    `box route` too, says the same); `POST kuvo/accounts/<provider>/forget` is Disconnect, as
+    `box route` too, says the same; `503 {message}` while its engine can't say which sign-in each
+    plan uses, so a client keeps what it last read); `POST kuvo/accounts/<provider>/forget` is Disconnect, as
     Settings › Accounts does it: that box's sign-ins and keys for that plan (`404` for one that
     isn't a plan there, an integration's server among them; from bridge 0.9.150, `502 {message}`
     when the engine wouldn't remove one, which stays, its plan still said to have ended, and `503

@@ -392,7 +392,7 @@ async function call(target, method, route, body, signal, folder) {
   });
   const value = await response.json().catch(() => ({}));
   if (!response.ok)
-    throw new Error(typeof value?.message === "string" && value.message || `It answered ${response.status}.`);
+    throw Object.assign(new Error(typeof value?.message === "string" && value.message || `It answered ${response.status}.`), { status: response.status });
   return value?.data ?? value;
 }
 async function fetched(url, most, timeout) {
@@ -8488,7 +8488,9 @@ async function lookAtGoals(tell, targets, { file = GOALS_FILE, here, now = Date.
     }
     if (!bridge)
       continue;
-    const loop = await call(bridge, "GET", `/api/kuvo/goals/${encodeURIComponent(goal.session)}`, undefined, signal).then((data) => isObject(data) ? data : null, () => null);
+    const loop = await call(bridge, "GET", `/api/kuvo/goals/${encodeURIComponent(goal.session)}`, undefined, signal).then((data) => isObject(data) ? data : null, (error) => error?.status === 404 ? null : undefined);
+    if (loop === undefined)
+      continue;
     if (!loop) {
       await setGoalLoop(goal, loopCondition(goal), targets, file);
       continue;
@@ -13177,17 +13179,21 @@ async function noteSignIn(event, source) {
   if (active?.method === "oauth" && active.id)
     changeEndedSignIns((each) => each.set(provider, active.id));
 }
-async function activeCredential(engine, provider) {
+async function signInsInUse(engine) {
   const integrations = (await engineGet(engine, "api/integration"))?.data;
-  return (Array.isArray(integrations) ? integrations : []).find((each) => each?.id === provider)?.connections?.find((each) => each?.type === "credential") ?? null;
+  if (!Array.isArray(integrations))
+    throw new Error("The engine didn't list its plans.");
+  return (provider) => integrations.find((each) => each?.id === provider)?.connections?.find((each) => each?.type === "credential") ?? null;
+}
+async function activeCredential(engine, provider) {
+  return (await signInsInUse(engine))(provider);
 }
 async function endedProviders(engine) {
-  const providers = [];
-  for (const [provider, credential] of readEndedSignIns()) {
-    if ((await activeCredential(engine, provider).catch(() => null))?.id === credential)
-      providers.push(provider);
-  }
-  return providers.sort();
+  const ended = readEndedSignIns();
+  if (!ended.size)
+    return [];
+  const inUse = await signInsInUse(engine);
+  return [...ended].filter(([provider, credential]) => inUse(provider)?.id === credential).map(([provider]) => provider).sort();
 }
 async function forgetPlan(engine, id) {
   const integrations = (await engineGet(engine, "api/integration"))?.data;
@@ -13225,7 +13231,10 @@ async function* accountsRoute(context) {
   if (route === "kuvo/accounts/ended") {
     if (!["GET", "HEAD"].includes(request.method.toUpperCase()))
       return yield* json(405, {});
-    return yield* json(200, { providers: await endedProviders(engine).catch(() => []) });
+    const providers = await endedProviders(engine).catch(() => null);
+    if (!providers)
+      return yield* json(503, { message: "The engine isn't answering. Try again in a moment." });
+    return yield* json(200, { providers });
   }
   if (request.method.toUpperCase() !== "POST")
     return yield* json(405, {});
@@ -19134,7 +19143,7 @@ import fs69 from "node:fs";
 import path73 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.152";
+var BRIDGE_VERSION = "0.9.153";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

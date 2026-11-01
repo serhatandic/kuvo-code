@@ -3474,9 +3474,17 @@ class Goals {
     this.now = now;
     try {
       const saved = JSON.parse(readFileSync9(file, "utf8"));
-      for (const goal of Array.isArray(saved) ? saved : [])
-        if (typeof goal?.session === "string" && typeof goal?.condition === "string")
-          this.goals.set(goal.session, { ...goal, checking: false });
+      for (const goal of Array.isArray(saved) ? saved : []) {
+        if (typeof goal?.session !== "string" || typeof goal?.condition !== "string")
+          continue;
+        const kept = { ...goal, checking: false };
+        if (kept.long && kept.state === "paused" && (kept.pausedBy === "error" || kept.pausedBy === "you" && kept.note !== PAUSED_BY_YOU)) {
+          kept.state = "working";
+          delete kept.pausedBy;
+          delete kept.note;
+        }
+        this.goals.set(goal.session, kept);
+      }
     } catch {}
   }
   start() {
@@ -3689,7 +3697,7 @@ class Goals {
       return this.save();
     }
     const cutShort = idle.outcome === "interrupted" && afterStart;
-    if (!resumed && !cutShort && idle.outcome === "interrupted") {
+    if (!resumed && !cutShort && idle.outcome === "interrupted" && !goal.long) {
       if (await this.isActive(session, place))
         return;
       if (!current())
@@ -3702,6 +3710,8 @@ class Goals {
       const words = idle.error?.message ? String(idle.error.message) : "";
       if (isLimit(words))
         return this.pauseUntil(goal, resetsIn(words, Number(idle.time?.created) || this.now()) ?? this.now() + unknownReset2, words);
+      if (goal.long)
+        return this.save();
       return this.pause(goal, "error", words ? `The turn failed: ${sentence(words)}` : "The turn failed.");
     }
     if (goal.long) {
@@ -9449,6 +9459,7 @@ class ClaudeAgent {
     if (instance.id === "default" && instance.home) {
       this.signOut = async () => {
         await signOutWith("Claude Code", this.executable(), ["auth", "logout"], this.env());
+        this.programUpdated();
         this.known.reset();
         this.modelList = undefined;
       };
@@ -13999,6 +14010,7 @@ class GrokAgent {
     if (instance.id === "default" && instance.home) {
       this.signOut = async () => {
         await signOutWith("Grok", this.executable(), ["logout"], this.env());
+        this.programUpdated();
         this.known.reset();
         this.status = undefined;
       };
@@ -22717,4 +22729,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 265bc5d1d44b1ca554c5f1ffe4cf0a89de951da748572148777761b48c6de7a5
+// Built from Packages/Box/src/agents 2b56a6fb28f0b98ee5db364bc26bc694b066d6ea3aa8a0964428e3c68e087686

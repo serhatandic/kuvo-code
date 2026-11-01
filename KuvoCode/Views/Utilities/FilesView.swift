@@ -927,12 +927,15 @@ enum OpenWith {
     }
 }
 
-/// Quick Look, for anything the panel doesn't draw itself.
-private struct QuickLookView: NSViewRepresentable {
+/// Quick Look, for anything the panel doesn't draw itself. Closed when SwiftUI takes it away, never
+/// by its window closing: SwiftUI can still hand it the next file then, and Quick Look aborts the
+/// app when a closed preview is given one.
+struct QuickLookView: NSViewRepresentable {
     let url: URL
 
     func makeNSView(context: Context) -> QLPreviewView {
         let view = QLPreviewView(frame: .zero, style: .normal)!
+        view.shouldCloseWithWindow = false
         view.autostarts = true
         updateNSView(view, context: context)
         return view

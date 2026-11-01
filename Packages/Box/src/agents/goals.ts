@@ -125,7 +125,18 @@ export class Goals {
   ) {
     try {
       const saved = JSON.parse(readFileSync(file, "utf8"))
-      for (const goal of Array.isArray(saved) ? saved : []) if (typeof goal?.session === "string" && typeof goal?.condition === "string") this.goals.set(goal.session, { ...goal, checking: false })
+      for (const goal of Array.isArray(saved) ? saved : []) {
+        if (typeof goal?.session !== "string" || typeof goal?.condition !== "string") continue
+        const kept: Kept = { ...goal, checking: false }
+        // A bot's long goal a box from before paused for a turn that failed or was stopped: its
+        // plan carries on with it, so it's at work.
+        if (kept.long && kept.state === "paused" && (kept.pausedBy === "error" || (kept.pausedBy === "you" && kept.note !== PAUSED_BY_YOU))) {
+          kept.state = "working"
+          delete kept.pausedBy
+          delete kept.note
+        }
+        this.goals.set(goal.session, kept)
+      }
     } catch {}
   }
 
@@ -359,7 +370,9 @@ export class Goals {
     }
     // Cut short as the box stopped (found so as it starts again), not by you: checked as any turn.
     const cutShort = idle.outcome === "interrupted" && afterStart
-    if (!resumed && !cutShort && idle.outcome === "interrupted") {
+    // (A bot's long goal: its plan tells it to carry on after a turn stopped or failed, as after any;
+    // only a model's limit pauses it here, which the plan shows.)
+    if (!resumed && !cutShort && idle.outcome === "interrupted" && !goal.long) {
       // Stopped to carry on another way (a model picked partway): it's at work again.
       if (await this.isActive(session, place)) return
       if (!current()) return
@@ -372,6 +385,7 @@ export class Goals {
       // its words, or a while), and carries on by itself then.
       const words = idle.error?.message ? String(idle.error.message) : ""
       if (isLimit(words)) return this.pauseUntil(goal, resetsIn(words, Number(idle.time?.created) || this.now()) ?? this.now() + unknownReset, words)
+      if (goal.long) return this.save()
       return this.pause(goal, "error", words ? `The turn failed: ${sentence(words)}` : "The turn failed.")
     }
     // A bot's long goal: its plan says what's next; a turn here is only kept.

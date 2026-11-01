@@ -91,7 +91,7 @@ export async function call(target: Target, method: string, route: string, body?:
   // Whatever it answered, as JSON ({} for none), read for its `message` (why it failed, in words,
   // as their APIs say it) and `data` where it has them.
   const value = await response.json().catch(() => ({})) as Fields<"message" | "data"> | null;
-  if (!response.ok) throw new Error((typeof value?.message === "string" && value.message) || `It answered ${response.status}.`);
+  if (!response.ok) throw Object.assign(new Error((typeof value?.message === "string" && value.message) || `It answered ${response.status}.`), { status: response.status });
   return value?.data ?? value;
 }
 

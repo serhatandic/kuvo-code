@@ -51,4 +51,44 @@ import Testing
         await catalog.refresh()
         #expect(catalog.hasEndedSignIn("github-copilot"))
     }
+
+    @Test func aSignInThisMacSawWorkIsntMarkedAgainBeforeTheBoxHearsSo() async throws {
+        let box = try await TestBox(engine: engine.url)
+        defer {
+            box.stop()
+            engine.stop()
+        }
+        plans(copilot: "crd_old")
+        let ended = BoxProcess.run.appending(path: "ended-sign-ins.json")
+        try FileManager.default.createDirectory(at: BoxProcess.run, withIntermediateDirectories: true)
+        try Data(#"{"github-copilot":"crd_old"}"#.utf8).write(to: ended)
+        let catalog = Catalog()
+        catalog.api = engine.api
+        catalog.box = box.client(engine: engine.url)
+        await catalog.refresh()
+        #expect(catalog.hasEndedSignIn("github-copilot"))
+
+        // A step on it ended well here (renewed after all), and the box, a moment behind, still
+        // lists it: it works.
+        catalog.signInWorks("github-copilot")
+        await catalog.refresh()
+        #expect(!catalog.hasEndedSignIn("github-copilot"))
+
+        // The box caught up; then a run on it is refused again, while no app watched: marked.
+        try FileManager.default.removeItem(at: ended)
+        await catalog.refresh()
+        #expect(!catalog.hasEndedSignIn("github-copilot"))
+        try Data(#"{"github-copilot":"crd_old"}"#.utf8).write(to: ended)
+        await catalog.refresh()
+        #expect(catalog.hasEndedSignIn("github-copilot"))
+
+        // Worked here while the box listed nothing; then a run on it is refused while no app
+        // watched (the Mac asleep): marked when the box is read.
+        try FileManager.default.removeItem(at: ended)
+        await catalog.refresh()
+        catalog.signInWorks("github-copilot")
+        try Data(#"{"github-copilot":"crd_old"}"#.utf8).write(to: ended)
+        await catalog.refresh()
+        #expect(catalog.hasEndedSignIn("github-copilot"))
+    }
 }

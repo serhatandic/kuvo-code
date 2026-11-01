@@ -138,6 +138,8 @@ const target = () => [{ port: engine.address().port, password: "p" }];
 // The agents bridge, beside the engine: the conversation's goal (its loop), as it's set, taken away
 // and read, and every goal it keeps.
 let loops;
+// Reads of a conversation's goal the bridge fails (busy, or restarting), before it answers again.
+let readsFailing = 0;
 const bridge = http.createServer((request, response) => {
   let body = "";
   request.on("data", chunk => { body += chunk; });
@@ -153,6 +155,10 @@ const bridge = http.createServer((request, response) => {
       return reply({ data: loops.get(session) });
     }
     if (request.method === "DELETE") return loops.delete(session) ? reply({}) : reply({ message: "That conversation has no goal." }, 404);
+    if (readsFailing > 0) {
+      readsFailing -= 1;
+      return reply({ message: "Busy." }, 500);
+    }
     return loops.has(session) ? reply({ data: loops.get(session) }) : reply({ message: "That conversation has no goal." }, 404);
   });
 });
@@ -164,6 +170,7 @@ atEnd(() => { bridge.closeAllConnections(); bridge.close(); bridgeProcess.kill()
 beforeEach(() => {
   resetEngine();
   loops = new Map();
+  readsFailing = 0;
   for (const each of ["box", "run", "Developer", "bots", "bin", "work"]) fs.rmSync(path.join(home, each), { recursive: true, force: true });
   fs.mkdirSync(driftwood, { recursive: true });
   spawnSync("git", ["init", "-q", driftwood], { env: { ...process.env, HOME: home } });
@@ -540,6 +547,20 @@ test("while you have a goal paused, none of its sessions starts another, however
   const started = await tool("start_session", { task: "Write the copy.", project: "Driftwood" }, { session: site });
   assert.equal(started.isError, false, started.text);
   assert.equal(made.length, 3);
+});
+
+test("a goal you paused stays paused when the bridge can't say how it is for a moment: it isn't set again, so it isn't resumed", async () => {
+  await startedGoal();
+  const holds = link.goalHolds(target);
+  loops.set("ses_pixel", goalEvent("ses_pixel", "paused", "you").data.goal);
+  await holds(goalEvent("ses_pixel", "paused", "you"));
+  const before = prompts.length;
+  readsFailing = 1;
+  await look();
+  assert.equal(loops.get("ses_pixel").state, "paused", "the conversation's goal is as you left it");
+  await look();
+  assert.equal(loops.get("ses_pixel").state, "paused");
+  assert.deepEqual(prompts.slice(before), [], "and the bot isn't told to carry on");
 });
 
 test("Pause on a conversation's own goal stops its turn and holds it until Resume", async () => {

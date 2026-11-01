@@ -84,6 +84,8 @@ export class GrokAgent implements Agent {
     if (instance.id === "default" && instance.home) {
       this.signOut = async () => {
         await signOutWith("Grok", this.executable(), ["logout"], this.env())
+        // A session's Grok holds the sign-in it started with: its next message starts one signed out.
+        this.programUpdated()
         this.known.reset()
         this.status = undefined
       }

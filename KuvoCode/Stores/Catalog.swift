@@ -476,6 +476,11 @@ final class Catalog {
     private var endedSignIns: [String: String] = [:]
     /// The plans the box last listed as ended: one it no longer lists works again.
     @ObservationIgnored private var boxEnded: Set<String> = []
+    /// Plans the box listed as ended that this Mac saw work again since: the box may be a moment
+    /// behind, so the next read of its list doesn't mark them again. Only that one: by the read
+    /// after, the box has heard, and one it lists then ended again (a run refused while the Mac
+    /// slept).
+    @ObservationIgnored private var worksAhead: Set<String> = []
 
     /// A run on `provider`'s model was refused its account: its sign-in in use, if that's one (a
     /// key refused says why itself).
@@ -483,11 +488,13 @@ final class Catalog {
         guard !OutsideAgents.runsInBridge(provider), let active = activeCredential(of: provider),
               active.method == "oauth", let id = active.credentialID, endedSignIns[provider] != id else { return }
         endedSignIns[provider] = id
+        worksAhead.remove(provider)
     }
 
     /// A step on `provider`'s model ended well: its sign-in works (renewed after all).
     func signInWorks(_ provider: String) {
         if endedSignIns[provider] != nil { endedSignIns[provider] = nil }
+        if boxEnded.contains(provider) { worksAhead.insert(provider) }
     }
 
     /// The plans whose sign-in ended, as the box keeps them (`kuvo/accounts/ended`): one noted
@@ -497,13 +504,15 @@ final class Catalog {
     private func readEndedSignIns() async {
         guard let box else { return }
         struct Ended: Decodable { var providers: [String] }
+        let ahead = worksAhead
         guard let ended = try? await box.value(Ended.self, "GET", "kuvo/accounts/ended") else { return }
         let listed = Set(ended.providers)
         var now = endedSignIns
         for provider in boxEnded.subtracting(listed) { now[provider] = nil }
-        for provider in listed {
+        for provider in listed.subtracting(worksAhead) {
             if let id = activeCredential(of: provider)?.credentialID { now[provider] = id }
         }
+        worksAhead.subtract(ahead)
         boxEnded = listed
         if now != endedSignIns { endedSignIns = now }
     }
