@@ -10681,11 +10681,12 @@ import path46 from "node:path";
 function freeBranch(folder, name) {
   for (let suffix = 1;suffix <= 20; suffix++) {
     const candidate = suffix === 1 ? name : `${name}-${suffix}`;
-    if (gitIn(folder, ["rev-parse", "--verify", "--quiet", `refs/heads/${candidate}`]) === null)
+    if (gitIn(folder, ["rev-parse", "--verify", "--quiet", `refs/heads/${candidate}`]) === null && !onRemote(folder, candidate))
       return candidate;
   }
   return null;
 }
+var onRemote = (folder, branch) => Boolean(gitIn(folder, ["for-each-ref", "--count=1", "--format=%(refname)", `refs/remotes/*/${branch}`]));
 var LATIN = Object.fromEntries([
   ...[..."абвгдеёжзийклмнопрстуфхцчшщъыьэюяіїєґ"].map((letter, at) => [letter, ["a", "b", "v", "g", "d", "e", "e", "z", "z", "i", "j", "k", "l", "m", "n", "o", "p", "r", "s", "t", "u", "f", "h", "c", "c", "s", "s", "", "y", "", "e", "u", "a", "i", "i", "e", "g"][at]]),
   ...[..."αβγδεζηθικλμνξοπρσςτυφχψω"].map((letter, at) => [letter, ["a", "b", "g", "d", "e", "z", "e", "th", "i", "k", "l", "m", "n", "x", "o", "p", "r", "s", "s", "t", "y", "ph", "ch", "ps", "o"][at]])
@@ -10737,7 +10738,7 @@ var inside2 = (folder, root) => folder === root || folder?.startsWith(root + "/"
 function renameWorktree(tree, to) {
   if (gitIn(tree.root, ["rev-parse", "--abbrev-ref", `${tree.branch}@{upstream}`]) !== null)
     return false;
-  if (gitIn(tree.root, ["for-each-ref", "--count=1", "--format=%(refname)", `refs/remotes/*/${tree.branch}`]))
+  if (onRemote(tree.root, tree.branch))
     return false;
   const name = freeBranch(tree.root, to);
   if (!name || gitIn(tree.root, ["branch", "-m", tree.branch, name]) === null) {
@@ -10765,11 +10766,17 @@ async function nameWorktreeBranch(engine, sessionID) {
   await tellRenamed(engine, tree, sessionID);
   return true;
 }
-async function tellRenamed(engine, tree, sessionID) {
-  await tellWorktree(engine, sessionID);
+async function tellRenamed(source, tree, sessionID) {
+  await tellWorktree(source, sessionID);
   const told = new Set([sessionID]);
+  const places = [source];
+  try {
+    places.push(readEngineFile());
+  } catch {}
   const bridge = bridgeTarget();
-  for (const target of bridge?.port && bridge.port !== engine.port ? [engine, bridge] : [engine]) {
+  if (bridge)
+    places.push(bridge);
+  for (const target of places.filter((each, at) => each.port && places.findIndex((other) => other.port === each.port) === at)) {
     for (const session of (await sessionsHere(target, undefined, null))?.sessions ?? []) {
       if (told.has(session.id) || isHiddenRun(session) || !inside2(session.location?.directory ?? session.directory, tree.root))
         continue;

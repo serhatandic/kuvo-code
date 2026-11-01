@@ -8,7 +8,7 @@ import { parsed } from "../../shared/json";
 import type { Fields } from "../../shared/json";
 import type { EngineRecord, Target } from "../../shared/records";
 import type { ListedWorktree, WorktreeRecordShape, Worktrees, WorktreesWhere } from "../../shared/routes/worktrees";
-import { bridgeTarget, call, engineGet } from "../engine/client";
+import { bridgeTarget, call, engineGet, readEngineFile } from "../engine/client";
 import type { EngineAnswer } from "../engine/client";
 import { isHiddenRun } from "../engine/sessions";
 import type { EngineSession } from "../engine/sessions";
@@ -48,14 +48,18 @@ export type WorktreesAnswer = JSONAnswer<Worktrees | WorktreeRecordShape | { mes
 /** A project as `kuvo/worktrees/where` tells of it. */
 type WhereProject = WorktreesWhere["projects"][number];
 
-/** `name`, or `name-2` and so on when that's a branch already, as the Mac's Git.newBranch picks. */
+/** `name`, or `name-2` and so on when that's a branch already, here or on a remote (an old pull
+ * request's, deleted here), as the Mac's Git.newBranch picks. */
 function freeBranch(folder: string, name: string): string | null {
   for (let suffix = 1; suffix <= 20; suffix++) {
     const candidate = suffix === 1 ? name : `${name}-${suffix}`;
-    if (gitIn(folder, ["rev-parse", "--verify", "--quiet", `refs/heads/${candidate}`]) === null) return candidate;
+    if (gitIn(folder, ["rev-parse", "--verify", "--quiet", `refs/heads/${candidate}`]) === null && !onRemote(folder, candidate)) return candidate;
   }
   return null;
 }
+
+/** Whether a remote has `branch` (pushed from here, tracked or not, as git last heard). */
+const onRemote = (folder: string, branch: string): boolean => Boolean(gitIn(folder, ["for-each-ref", "--count=1", "--format=%(refname)", `refs/remotes/*/${branch}`]));
 
 // Cyrillic and Greek letters in Latin ones, as ICU writes them without their marks: "Исправить
 // вход" is ispravit-vhod, "Διόρθωση σύνδεσης" diorthose-syndeses.
@@ -120,7 +124,7 @@ const inside = (folder: string | undefined, root: string) => folder === root || 
 function renameWorktree(tree: WorktreeRecord, to: string): boolean {
   if (gitIn(tree.root, ["rev-parse", "--abbrev-ref", `${tree.branch}@{upstream}`]) !== null) return false;
   // Pushed without tracking it (`git push origin HEAD`): a remote has it all the same.
-  if (gitIn(tree.root, ["for-each-ref", "--count=1", "--format=%(refname)", `refs/remotes/*/${tree.branch}`])) return false;
+  if (onRemote(tree.root, tree.branch)) return false;
   const name = freeBranch(tree.root, to);
   if (!name || gitIn(tree.root, ["branch", "-m", tree.branch, name]) === null) {
     // Renamed meanwhile (by this box's other process, named as it was read): kept as git has it.
@@ -151,12 +155,16 @@ export async function nameWorktreeBranch(engine: Target, sessionID: unknown): Pr
 }
 
 /** Each session working in `tree` (on its engine, and with the coding agents), told its branch's
- * new name: the one whose title named it, and any other there, which was told the old one. */
-async function tellRenamed(engine: Target, tree: WorktreeRecord, sessionID: string): Promise<void> {
-  await tellWorktree(engine, sessionID);
+ * new name: the one whose title named it (on `source`, either), and any other there, which was
+ * told the old one. */
+async function tellRenamed(source: Target, tree: WorktreeRecord, sessionID: string): Promise<void> {
+  await tellWorktree(source, sessionID);
   const told = new Set([sessionID]);
+  const places = [source];
+  try { places.push(readEngineFile()); } catch {}
   const bridge = bridgeTarget();
-  for (const target of bridge?.port && bridge.port !== engine.port ? [engine, bridge] : [engine]) {
+  if (bridge) places.push(bridge);
+  for (const target of places.filter((each, at) => each.port && places.findIndex(other => other.port === each.port) === at)) {
     for (const session of (await sessionsHere(target, undefined, null))?.sessions ?? []) {
       if (told.has(session.id) || isHiddenRun(session) || !inside(session.location?.directory ?? session.directory, tree.root)) continue;
       told.add(session.id);

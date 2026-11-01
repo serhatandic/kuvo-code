@@ -272,6 +272,47 @@ test("every session working in a worktree is told its branch's new name, not onl
   assert.equal((await ask("POST", "kuvo/worktrees/remove", { path: made.root, forget: true })).status, 200);
 });
 
+test("a Claude Code session's title names the branch, and an engine session in the same worktree is told the new name too", async () => {
+  // The coding agents' bridge, where the title was given: its session, told as the engine's are.
+  const bridgeSessions = [];
+  const bridgeTold = [];
+  const bridge = http.createServer((request, response) => {
+    let body = "";
+    request.on("data", chunk => { body += chunk; });
+    request.on("end", () => {
+      const url = new URL(request.url, "http://x");
+      const send = value => { response.writeHead(200, { "content-type": "application/json" }); response.end(JSON.stringify(value)); };
+      if (url.pathname === "/api/session") return send({ data: bridgeSessions });
+      if (url.pathname === "/api/session/active") return send({ data: {} });
+      if (request.method === "PUT") return bridgeTold.push(url.pathname) && send({});
+      if (url.pathname.startsWith("/api/session/")) return send({ data: bridgeSessions.find(each => each.id === decodeURIComponent(url.pathname.split("/").pop())) ?? null });
+      response.writeHead(404);
+      response.end();
+    });
+  });
+  await new Promise(resolve => bridge.listen(0, "127.0.0.1", resolve));
+  // The box's engine, as its record says.
+  const engineFile = path.join(process.env.KUVO_HOME, "run", "engine.json");
+  fs.mkdirSync(path.dirname(engineFile), { recursive: true });
+  fs.writeFileSync(engineFile, JSON.stringify(atEngine));
+  try {
+    const made = (await ask("POST", "kuvo/worktrees", { project, branchPrefix: "kuvo/" })).value;
+    sessions.push({ id: "ses_opencode", location: { directory: made.folder } });
+    bridgeSessions.push({ id: "ses_claude_titled", title: "Speed up images", location: { directory: made.folder } });
+    told.length = 0;
+    await link.nameWorktreeBranch({ port: bridge.address().port, password: "pw" }, "ses_claude_titled");
+    assert.equal(git(made.root, "symbolic-ref", "--short", "HEAD"), "kuvo/speed-up-images");
+    assert.deepEqual(bridgeTold, ["/api/experimental/session/ses_claude_titled/instructions/entries/kuvo.worktree"]);
+    assert.match(told.find(each => each.url.includes("/ses_opencode/"))?.value ?? "", /on the branch kuvo\/speed-up-images,/);
+    sessions.splice(sessions.findIndex(each => each.id === "ses_opencode"), 1);
+    assert.equal((await ask("POST", "kuvo/worktrees/remove", { path: made.root, forget: true })).status, 200);
+  } finally {
+    fs.rmSync(engineFile, { force: true });
+    bridge.closeAllConnections();
+    bridge.close();
+  }
+});
+
 test("a subagent's title, working in a session's worktree, doesn't name its branch", async () => {
   const made = (await ask("POST", "kuvo/worktrees", { project, branchPrefix: "kuvo/" })).value;
   sessions.push({ id: "ses_helper", parentID: "ses_lead", title: "Explore the codebase", location: { directory: made.folder } });
@@ -420,6 +461,14 @@ test("a branch already pushed keeps its name: its pull request would lose track 
   assert.equal(git(plain.root, "symbolic-ref", "--short", "HEAD"), plain.branch);
   sessions.splice(sessions.findIndex(each => each.id === "ses_pushed_plain"), 1);
   assert.equal((await ask("POST", "kuvo/worktrees/remove", { path: plain.root, forget: true })).status, 200);
+  // A name a remote has already (an old pull request's branch, deleted here): taken with a number.
+  git(project, "update-ref", "refs/remotes/origin/kuvo/fix-checkout", "HEAD");
+  const again = (await ask("POST", "kuvo/worktrees", { project, branchPrefix: "kuvo/" })).value;
+  sessions.push({ id: "ses_again", title: "Fix checkout", location: { directory: again.folder } });
+  await link.nameWorktreeBranch(atEngine, "ses_again");
+  assert.equal(git(again.root, "symbolic-ref", "--short", "HEAD"), "kuvo/fix-checkout-2");
+  sessions.splice(sessions.findIndex(each => each.id === "ses_again"), 1);
+  assert.equal((await ask("POST", "kuvo/worktrees/remove", { path: again.root, forget: true })).status, 200);
   git(project, "remote", "remove", "origin");
 });
 
