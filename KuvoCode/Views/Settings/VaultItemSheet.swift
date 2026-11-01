@@ -46,17 +46,16 @@ struct VaultItemSheet: View {
                 Section { fields }
                 Section {
                     // The bots that may use it; the others are a menu away, not a "No" each.
-                    ForEach(bots.filter { bot in isListed(bot) }) { bot in
+                    ForEach(listedBots) { bot in
                         whoRow(name: bot.name, who: .init(bot: bot.id)) { BotAvatar(look: bot.look, size: 22, animates: false) }
                     }
-                    ForEach(grants.compactMap(\.who.project), id: \.self) { project in
+                    ForEach(listedProjects, id: \.self) { project in
                         whoRow(name: URL(filePath: project).lastPathComponent, who: .init(project: project)) {
                             Image(systemName: "folder").frame(width: 22)
                         }
                     }
                     // "Others" only under someone listed above it.
-                    let anyListed = bots.contains { isListed($0) } || grants.contains { $0.who.project != nil }
-                    whoRow(name: anyListed ? "Other sessions and bots" : "Every agent", who: .init(everyone: true)) {
+                    whoRow(name: listedBots.isEmpty && listedProjects.isEmpty ? "Every agent" : "Other sessions and bots", who: .init(everyone: true)) {
                         Image(systemName: "person.2").frame(width: 22).foregroundStyle(.secondary)
                     }
                     let others = bots.filter { bot in !isListed(bot) }
@@ -163,6 +162,10 @@ struct VaultItemSheet: View {
         default: field.replacingOccurrences(of: "_", with: " ").capitalized
         }
     }
+
+    /// The bots listed by name, and the projects whose sessions were always allowed.
+    private var listedBots: [Bot] { bots.filter(isListed) }
+    private var listedProjects: [String] { grants.compactMap(\.who.project) }
 
     /// Who may use it, and how (nil: no one), once you've confirmed it's you.
     private func isListed(_ bot: Bot) -> Bool {
