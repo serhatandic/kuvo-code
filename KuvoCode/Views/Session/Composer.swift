@@ -203,23 +203,10 @@ struct Composer: View {
                 .help("Your comments on the changes go with this message.")
             }
             if !files.isEmpty {
-                ScrollView(.horizontal) {
-                    HStack(spacing: 8) {
-                        ForEach(files, id: \.self) { file in
-                            ComposerAttachment(url: file, route: Attachments.route(file, for: currentModel, onMachine: RemoteFolder.machine(of: folders.first ?? "") != nil),
-                                               number: imageFiles.firstIndex(of: file).map { $0 + 1 }) { detach(file) }
-                        }
-                    }
-                    // Room for each chip's remove button, which sits on its corner, and for
-                    // the hairline around each chip.
-                    .padding(.top, 6)
-                    .padding(.trailing, 6)
-                    .padding(.leading, 1)
-                    .padding(.bottom, 1)
+                AttachmentStrip(files: files) { file in
+                    ComposerAttachment(url: file, route: Attachments.route(file, for: currentModel, onMachine: RemoteFolder.machine(of: folders.first ?? "") != nil),
+                                       number: imageFiles.firstIndex(of: file).map { $0 + 1 }) { detach(file) }
                 }
-                .scrollIndicators(.hidden)
-                // A chip past the edge fades there, rather than showing as a cut sliver.
-                .fadingScrollEdges(24, axis: .horizontal)
             }
 
             // Each quote with your answer to it, in the order they go.
@@ -1250,5 +1237,62 @@ private struct SideQuestionTag: View {
         .padding(.vertical, 3)
         .background(.tint.opacity(0.12), in: .capsule)
         .help("Asks on the side: answered from the conversation, changing nothing")
+    }
+}
+
+/// The files going with a message, in a row that scrolls sideways. A chip past the edge fades
+/// there, rather than showing as a cut sliver, and "+3" says how many are past it: clicking it
+/// brings the next one in.
+private struct AttachmentStrip<Chip: View>: View {
+    let files: [URL]
+    @ViewBuilder let chip: (URL) -> Chip
+    /// Each chip's trailing edge, from the strip's visible leading edge.
+    @State private var ends: [URL: CGFloat] = [:]
+    @State private var width: CGFloat = .infinity
+    @State private var position = ScrollPosition(idType: URL.self)
+
+    /// The chips not wholly in view past the trailing edge.
+    private var past: [URL] { files.filter { (ends[$0] ?? 0) > width + 1 } }
+
+    var body: some View {
+        // The count beside the row, not over it: the chips' names never run under it.
+        HStack(spacing: 6) {
+            ScrollView(.horizontal) {
+                HStack(spacing: 8) {
+                    ForEach(files, id: \.self) { file in
+                        chip(file)
+                            .onGeometryChange(for: CGFloat.self, of: { $0.frame(in: .scrollView).maxX }) { ends[file] = $0 }
+                    }
+                }
+                .scrollTargetLayout()
+                // Room for each chip's remove button, which sits on its corner, and for the
+                // hairline around each chip.
+                .padding(.top, 6)
+                .padding(.trailing, 6)
+                .padding(.leading, 1)
+                .padding(.bottom, 1)
+            }
+            .scrollPosition($position)
+            .scrollIndicators(.hidden)
+            .onScrollGeometryChange(for: CGFloat.self, of: \.containerSize.width) { _, new in width = new }
+            .fadingScrollEdges(24, axis: .horizontal)
+            if let next = past.first {
+                Button { withAnimation(.ui) { position.scrollTo(id: next, anchor: .trailing) } } label: {
+                    Text("+\(past.count)")
+                        .font(.system(size: 12, weight: .semibold))
+                        .monospacedDigit()
+                        .padding(.horizontal, 9)
+                        .frame(height: 24)
+                }
+                .buttonStyle(FilledButtonStyle(shape: .capsule, rest: 0.06))
+                .fixedSize()
+                .padding(.top, 6)
+                .help(past.count == 1 ? "One more file" : "\(past.count) more files")
+                .accessibilityLabel(past.count == 1 ? "One more file" : "\(past.count) more files")
+                .transition(.opacity)
+            }
+        }
+        .animation(.ui, value: past.isEmpty)
+        .onChange(of: files) { ends = ends.filter { files.contains($0.key) } }
     }
 }
