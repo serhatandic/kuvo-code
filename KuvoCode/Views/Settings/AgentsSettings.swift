@@ -1,3 +1,4 @@
+import ClientText
 import OpenCodeKit
 import SwiftUI
 
@@ -28,7 +29,7 @@ struct AgentsSettings: View {
                 id,
                 live?.name ?? id,
                 settings?["mode"]?.string ?? live?.mode ?? "primary",
-                settings?["description"]?.string ?? live?.description,
+                settings?["description"]?.string ?? AgentWords.builtIn(id) ?? live?.description,
                 BuiltInAgents.shown.contains(id),
                 settings?["disabled"]?.bool == true
             ))
@@ -69,7 +70,7 @@ struct AgentsSettings: View {
                                 Text(description)
                                     .font(.callout)
                                     .foregroundStyle(.secondary)
-                                    .lineLimit(2)
+                                    .lineLimit(1)
                                     .help(description)
                             }
                         }
@@ -299,7 +300,7 @@ private struct AgentEditor: View {
 
     @ViewBuilder private var editor: some View {
         // A built-in agent's own description, shown until you write another.
-        let builtInDescription = isBuiltIn ? id.flatMap { id in catalog.agents.first(where: { $0.id == id })?.description } : nil
+        let builtInDescription = isBuiltIn ? id.flatMap { id in AgentWords.builtIn(id) ?? catalog.agents.first(where: { $0.id == id })?.description } : nil
         Section {
             Picker("Use as", selection: Binding(get: { mode }, set: { mode in
                 if let id { config.changeAgent(id, "mode", to: .string(mode)) } else { config.set(.string(mode), at: path + ["mode"]) }

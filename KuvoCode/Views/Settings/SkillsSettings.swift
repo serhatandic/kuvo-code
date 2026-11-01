@@ -86,7 +86,7 @@ struct SkillsSettings: View {
                                 Text(Self.summary(description))
                                     .font(.callout)
                                     .foregroundStyle(.secondary)
-                                    .lineLimit(2)
+                                    .lineLimit(1)
                                     .help(description)
                             }
                         }
