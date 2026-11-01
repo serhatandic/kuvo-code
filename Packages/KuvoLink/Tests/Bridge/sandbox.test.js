@@ -1172,6 +1172,10 @@ test("pnpm dlx fetches a package and runs it, in the sandbox, from a cache of Ku
     assert.equal(ran.status, 0, ran.out);
     const cache = fs.realpathSync(path.join(box.home, "cache", "sandbox-pnpm"));
     assert.ok(ran.out.includes(`ran from ${cache}/dlx/`), `it ran from Kuvo Code's own cache for commands: ${ran.out}`);
+    // Nor from pnpm's store, which commands write as a cache: pnpm 11 runs what it fetched from the
+    // store's own copies (its `links`), which your pnpm runs too, outside the sandbox.
+    const store = path.join(project, ".store");
+    for (const version of fs.readdirSync(store)) assert.equal(fs.existsSync(path.join(store, version, "links")), false, `${version}/links in pnpm's store`);
     // Not yours (where pnpm finds it with this test's HOME).
     for (const yours of [path.join(root, ".cache", "pnpm"), path.join(root, "Library", "Caches", "pnpm")]) assert.equal(fs.existsSync(yours), false, yours);
   } finally {
