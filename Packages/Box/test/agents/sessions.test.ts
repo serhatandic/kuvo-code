@@ -2,7 +2,7 @@
 // Auto down its list, and what a session keeps. Each test has a folder of its own, removed after.
 
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { AcpThread } from "../../src/agents/acp"
@@ -770,6 +770,35 @@ describe("asks and conversations", () => {
     sessions.replyPermission(id, sessions.permissions(id)[0].id, "reject")
     await settled(id, 1)
     expect(seen).toEqual(["once", "once", "always", "once", "reject"])
+  })
+
+  test("a project whose folder is reached through a link doesn't ask for its own files, named where they really are", async () => {
+    // (The temporary folder is the bridge's own, never outside: taken for another here.)
+    const tmp = process.env.TMPDIR
+    process.env.TMPDIR = "/nowhere/tmp"
+    try {
+      const real = mkdtempSync(join(root, "real-"))
+      writeFileSync(join(real, "a.ts"), "export {}\n")
+      const linked = join(root, "project")
+      symlinkSync(real, linked)
+      const seen: unknown[] = []
+      a.script = async (_input, turn, hooks) => {
+        // Claude Code names files from where it runs, which the system gives as the real folder.
+        seen.push(await hooks.permission({ action: "read", resources: [join(realpathSync(real), "a.ts")] }))
+        seen.push(await hooks.permission({ action: "write", resources: [join(realpathSync(real), "new.ts")] }))
+        seen.push(await hooks.permission({ action: "read", resources: [join(linked, "a.ts")] }))
+        turn.startStep()
+        turn.endStep()
+        return { outcome: "succeeded" }
+      }
+      const id = sessions.create({ model: { providerID: "alpha", id: "one" }, location: { directory: linked } }).id
+      send(id, "read it")
+      await settled(id, 1)
+      expect(sessions.permissions(id)).toEqual([])
+      expect(seen).toEqual(["once", "once", "once"])
+    } finally {
+      process.env.TMPDIR = tmp
+    }
   })
 
   test("Stop while an agent gets ready stops the turn", async () => {

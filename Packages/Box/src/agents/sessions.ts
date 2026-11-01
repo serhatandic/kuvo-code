@@ -9,7 +9,7 @@
 
 import { createHash } from "node:crypto"
 import { spawn as spawnProcess } from "node:child_process"
-import { readFileSync, statSync } from "node:fs"
+import { readFileSync, realpathSync, statSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -714,7 +714,19 @@ export function outsidePaths(ask: PermissionAsk, directory: string, attached: Se
     // Paths, from the session's folder (`../x` too), not patterns of names (`*.ts`).
     .filter((resource) => resource && resource !== "*" && (resource.startsWith("/") || resource.startsWith("~/") || !/[*?[]/.test(resource)))
     .map((resource) => resolve(directory, resource.startsWith("~/") ? join(homedir(), resource.slice(2)) : resource))
-  return paths.filter((path) => !within(path, [directory, ...own]) && !attached.has(path) && !owns?.(path))
+  // The folder where it really is too: an agent names files from where it runs, which the system
+  // gives as the real folder (a project reached through a link, /tmp on a Mac).
+  const places = [directory, realFolder(directory), ...own]
+  return paths.filter((path) => !within(path, places) && !attached.has(path) && !owns?.(path))
+}
+
+/** Where a folder really is, its links followed (as it's named, if it isn't there). */
+function realFolder(folder: string): string {
+  try {
+    return realpathSync(folder)
+  } catch {
+    return folder
+  }
 }
 
 /**

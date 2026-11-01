@@ -14310,7 +14310,7 @@ async function branchRoutes(places, method, parts, body) {
 // Packages/Box/src/agents/sessions.ts
 import { createHash as createHash6 } from "crypto";
 import { spawn as spawnProcess } from "child_process";
-import { readFileSync as readFileSync23, statSync as statSync9 } from "fs";
+import { readFileSync as readFileSync23, realpathSync as realpathSync5, statSync as statSync9 } from "fs";
 import { homedir as homedir5 } from "os";
 import { dirname as dirname13, join as join25, resolve as resolve7 } from "path";
 import { fileURLToPath as fileURLToPath2 } from "url";
@@ -15292,7 +15292,15 @@ function outsidePaths(ask, directory, attached, own = ownPlaces(), owns) {
   if (!fileActions.has(ask.action))
     return [];
   const paths = ask.resources.filter((resource) => resource && resource !== "*" && (resource.startsWith("/") || resource.startsWith("~/") || !/[*?[]/.test(resource))).map((resource) => resolve7(directory, resource.startsWith("~/") ? join25(homedir5(), resource.slice(2)) : resource));
-  return paths.filter((path) => !within(path, [directory, ...own]) && !attached.has(path) && !owns?.(path));
+  const places = [directory, realFolder(directory), ...own];
+  return paths.filter((path) => !within(path, places) && !attached.has(path) && !owns?.(path));
+}
+function realFolder(folder) {
+  try {
+    return realpathSync5(folder);
+  } catch {
+    return folder;
+  }
 }
 function outsideFolders(ask, paths) {
   const isFolder = (path) => {
@@ -22744,4 +22752,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 14e1d6f188e99db2559b712b5b526ec9418c4a182e5f7321f81c2cece0c09b01
+// Built from Packages/Box/src/agents d9d8f78a7c4784d5baec608a8578cb9170c1791f488ef2411f9ad6ab3ae6a753
