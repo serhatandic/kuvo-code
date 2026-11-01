@@ -19143,7 +19143,7 @@ import fs69 from "node:fs";
 import path73 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.153";
+var BRIDGE_VERSION = "0.9.154";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -19470,7 +19470,7 @@ function askBook(prefix, no) {
   return {
     list,
     onChanged,
-    ask(what, signal, patience = PATIENCE) {
+    ask(what, signal, patience = PATIENCE, made) {
       const asked = { id: newID(prefix), at: Date.now(), ...what };
       return new Promise((resolve) => {
         const finish = (answer) => {
@@ -19489,6 +19489,7 @@ function askBook(prefix, no) {
         signal?.addEventListener("abort", stopped, { once: true });
         open.set(asked.id, { asked, done: finish, timer: setTimeout(() => finish(no), patience) });
         changed();
+        made?.(asked.id);
       });
     },
     answer(id, given) {
@@ -19496,6 +19497,14 @@ function askBook(prefix, no) {
       if (!found)
         return false;
       found.done(given);
+      return true;
+    },
+    update(id, more) {
+      const found = open.get(id);
+      if (!found)
+        return false;
+      found.asked = { ...found.asked, ...more };
+      changed();
       return true;
     },
     watch(notice, tell, answered = () => {}, after = 2000) {
@@ -19645,6 +19654,7 @@ var SANDBOX_TOOL_NAMES = SANDBOX_TOOLS.map((tool) => tool.name);
 var MOST_OUTPUT2 = 64 * 1024;
 var CALL_BUDGET = 15.5 * 60000;
 var MOST_STOPS = 20;
+var LOG_LATER = [1000, 2000, 4000, 8000, 15000, 30000];
 var KINDS = [
   [/^file-write/, "write"],
   [/^file-read/, "read"],
@@ -19653,14 +19663,15 @@ var KINDS = [
   [/^(appleevent-send|mach-lookup)/, "app"]
 ];
 var commandSum = (command) => crypto29.createHash("sha256").update(command).digest("hex").slice(0, 16);
-async function stopsFor(session, command, minutes = 3) {
-  if (process.platform !== "darwin" || !/^ses_[A-Za-z0-9_]{1,80}$/.test(session))
+async function stopsFor(session, command, minutes = 3, signal) {
+  if (process.platform !== "darwin" || !/^ses_[A-Za-z0-9_]{1,80}$/.test(session) || signal?.aborted)
     return [];
   const tagged = `kuvo-sandbox ${session} ${commandSum(command)}`;
   const read = await new Promise((resolve) => {
     const child = spawn9("/usr/bin/log", ["show", "--last", `${minutes}m`, "--style", "ndjson", "--predicate", `sender == "Sandbox" AND eventMessage CONTAINS "${tagged}"`], { stdio: ["ignore", "pipe", "ignore"] });
     let out = "";
     const timer = setTimeout(() => child.kill("SIGKILL"), 20000);
+    signal?.addEventListener("abort", () => child.kill("SIGKILL"), { once: true });
     child.stdout.setEncoding("utf8").on("data", (chunk) => {
       if (out.length < 16 * 1024 * 1024)
         out += chunk;
@@ -19756,7 +19767,24 @@ async function askToRun(caller, args, signal) {
   if (!project)
     return failed("This conversation's folder isn't there, so nothing can run for it.");
   const stopped = caller.session ? await stopsFor(caller.session, String(args.command)) : [];
-  const always = alwaysFor(stopped, project);
+  let always = alwaysFor(stopped, project);
+  let asking;
+  const heard = new AbortController;
+  if (!stopped.length && caller.session && process.platform === "darwin")
+    (async () => {
+      for (const wait of LOG_LATER) {
+        await new Promise((resolve) => setTimeout(resolve, wait).unref?.());
+        if (heard.signal.aborted)
+          return;
+        const found = await stopsFor(caller.session, String(args.command), 3, heard.signal);
+        if (heard.signal.aborted || !found.length)
+          continue;
+        always = alwaysFor(found, project);
+        if (asking)
+          book.update(asking, { stopped: found, ...always ? { always } : {} });
+        return;
+      }
+    })();
   const answered = await book.ask({
     ...caller.root ? { session: caller.root, ...caller.sessionName ? { sessionName: caller.sessionName } : {} } : {},
     ...caller.bot ? { bot: caller.bot, botName: caller.botName } : {},
@@ -19768,7 +19796,10 @@ async function askToRun(caller, args, signal) {
     ...always ? { always } : {},
     ...IS_MAC ? {} : { machine: os8.hostname() },
     owner: ownerOf(project)
-  }, signal);
+  }, signal, undefined, (id) => {
+    asking = id;
+  });
+  heard.abort();
   if (answered.unanswered)
     return { text: "Nobody answered in time, so it didn't run. Don't get around the sandbox another way: go on without it, or ask the user when they're back.", isError: false };
   if (answered.answer === "no")
