@@ -30,7 +30,7 @@ final class TerminalSession: NSObject {
         view = LocalProcessTerminalView(frame: NSRect(x: 0, y: 0, width: 640, height: 400))
         self.directory = directory
         machine = RemoteFolder.parse(directory)?.machine
-        untitled = label ?? Self.folderName(RemoteFolder.parse(directory)?.path ?? directory)
+        untitled = label ?? Self.folderName(RemoteFolder.parse(directory)?.path ?? directory, isStart: true)
         title = untitled
         var environment = environment
         environment["TERM"] = "xterm-256color"
@@ -298,19 +298,23 @@ extension TerminalSession: @preconcurrency LocalProcessTerminalViewDelegate {
         let marks: Set<Character> = ["✳", "✶", "✻", "✽", "✢", "✺", "·", "•", "●", "○", "◐", "◓", "◑", "◒", "⏺"]
         let kept = title.drop { $0.isWhitespace || marks.contains($0) || $0.unicodeScalars.allSatisfy { (0x2800...0x28FF).contains($0.value) } }
         var named = kept.trimmingCharacters(in: .whitespaces)
-        if let shell = named.wholeMatch(of: /[\w.-]+@[A-Za-z][\w.-]*(?::\s*(.*))?/) {
-            named = shell.1.map { String($0).trimmingCharacters(in: .whitespaces) } ?? ""
+        // A shell's user@host (a container's host may start with a digit, when a folder follows);
+        // a version, like npm@10.8.1, isn't one.
+        if let shell = named.wholeMatch(of: /[\w.-]+@([\w.-]+)(?::\s*(.*))?/), shell.2 != nil || shell.1.first?.isLetter == true {
+            named = shell.2.map { String($0).trimmingCharacters(in: .whitespaces) } ?? ""
         }
         if named.isEmpty { return untitled }
         return named.hasPrefix("/") || named.hasPrefix("~") ? folderName(named) : named
     }
 
-    /// A folder as a tab names it: its last part, a home folder (this Mac's, or a machine's) as ~,
-    /// and the top as /.
-    static func folderName(_ path: String) -> String {
+    /// A folder as a tab names it: its last part, your home folder as ~, and the top as /. Where
+    /// the terminal starts (`isStart`), a machine's home folder too, which its shell would call ~;
+    /// once the shell names its folder, only its own home is ~.
+    static func folderName(_ path: String, isStart: Bool = false) -> String {
         let path = path.count > 1 && path.hasSuffix("/") ? String(path.dropLast()) : path
         if path == "/" { return "/" }
-        if path == "~" || path == NSHomeDirectory() || path == "/root" || path.wholeMatch(of: /\/(home|Users)\/[^\/]+/) != nil { return "~" }
+        if path == "~" || path == NSHomeDirectory() { return "~" }
+        if isStart, path == "/root" || (path.wholeMatch(of: /\/(home|Users)\/[^\/]+/) != nil && path != "/Users/Shared") { return "~" }
         return (path as NSString).lastPathComponent
     }
 
@@ -418,8 +422,6 @@ final class MainTerminals {
     struct Entry {
         let session: TerminalSession
         let directory: String
-        /// The tab's name until the program in the terminal names itself.
-        let label: String
         let opened = Date()
     }
 
@@ -436,9 +438,15 @@ final class MainTerminals {
     func open(in directory: String, command: String?, environment: [String: String]) -> String {
         let key = TabKey.terminal(UUID().uuidString).text
         let command = command?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
-        let label = command.map { String($0.split(separator: " ").first ?? "Terminal") } ?? "Terminal"
-        entries[key] = Entry(session: TerminalSession(directory: directory, environment: environment, command: command, label: command == nil ? nil : label), directory: directory, label: label)
+        entries[key] = Entry(session: TerminalSession(directory: directory, environment: environment, command: command, label: command.flatMap(Self.program)), directory: directory)
         return key
+    }
+
+    /// The program a command runs, by its name: past any `NAME=value` settings before it, without
+    /// its folder.
+    static func program(_ command: String) -> String? {
+        guard let word = command.split(separator: " ").first(where: { !$0.contains("=") }) else { return nil }
+        return (String(word) as NSString).lastPathComponent
     }
 
     /// Ends the terminal's shell and whatever runs in it.

@@ -119,9 +119,15 @@ import Testing
         #expect(session.title == "/", "the top folder, not home")
         session.view.feed(text: "\u{1b}]0;npm@10.8.1\u{07}")
         #expect(session.title == "npm@10.8.1", "a version, not a host")
+        session.view.feed(text: "\u{1b}]0;root@3f2a9bc1d2e4: /app\u{07}")
+        #expect(session.title == "app", "a container's host, digits first")
+        session.view.feed(text: "\u{1b}]0;serhat@lokum: /home/alice\u{07}")
+        #expect(session.title == "alice", "someone else's home, by its name")
         // A machine's home folder, before its shell names it.
-        #expect(TerminalSession.folderName("/home/serhat") == "~")
-        #expect(TerminalSession.folderName("/home/serhat/src/app/") == "app")
+        #expect(TerminalSession.folderName("/home/serhat", isStart: true) == "~")
+        #expect(TerminalSession.folderName("/root", isStart: true) == "~")
+        #expect(TerminalSession.folderName("/Users/Shared", isStart: true) == "Shared")
+        #expect(TerminalSession.folderName("/home/serhat/src/app/", isStart: true) == "app")
     }
 
     /// A project's own terminal (Terminal Instead of Chat) is named for its command until what
@@ -130,13 +136,16 @@ import Testing
         let terminals = MainTerminals()
         let command = terminals.open(in: folder.path, command: "sleep 60", environment: shell)
         let plain = terminals.open(in: folder.path, command: nil, environment: shell)
+        let configured = terminals.open(in: folder.path, command: "KUVO_TEST=1 /bin/sleep 60", environment: shell)
         defer {
             terminals.close(command)
             terminals.close(plain)
+            terminals.close(configured)
             try? FileManager.default.removeItem(at: folder)
         }
         #expect(terminals.entry(command)?.session.title == "sleep")
         #expect(terminals.entry(plain)?.session.title == folder.lastPathComponent)
+        #expect(terminals.entry(configured)?.session.title == "sleep", "the program, not its settings or its path")
     }
 
     /// Waits for the session's shell to end, as the terminal hears it.
