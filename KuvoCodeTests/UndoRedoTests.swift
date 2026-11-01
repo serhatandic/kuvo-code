@@ -181,6 +181,32 @@ import Testing
         #expect(model.draftText == "Summarize the commits weekly\n\nfix the tests")
     }
 
+    /// Undoing past a goal: the goal Undo just put back loses its "/goal" as the message before it
+    /// goes ahead of it, so no "/goal" is left in the middle to go as plain words.
+    @Test func undoingPastAGoalLeavesNoGoalInTheMiddle() async throws {
+        defer { done() }
+        let first: [String: Any] = ["id": "msg_01", "type": "user", "time": ["created": 1], "text": "fix tests"]
+        let goal: [String: Any] = ["id": "msg_03", "type": "user", "time": ["created": 3], "text": SentWithKeyword.message("ship v2", typed: "/goal")]
+        engine.list([StubEngine.session(id, title: "Undo", directory: "/tmp/kuvo-tests-undo")])
+        engine.conversation(id, [first, goal])
+        engine.on("POST", "/api/session/\(id)/revert/stage") { request in
+            StubWeb.json(["data": ["messageID": request.body["messageID"] as? String ?? ""]])
+        }
+        await workspace.refresh()
+        let model = try #require(workspace.model(for: id))
+        await model.load()
+        model.undo(from: try user(goal))
+        try await until { model.draftText == "/goal ship v2" }
+        model.undo(from: try user(first))
+        try await until { model.draftText != "/goal ship v2" }
+        #expect(model.draftText == "fix tests\n\nship v2")
+        // Redo takes both back out, as it found the composer.
+        engine.on("DELETE", "/api/session/\(id)/revert", json: [:])
+        model.redo()
+        try await until { model.session.revert == nil }
+        #expect(model.draftText == "")
+    }
+
     /// What Undo says it does before you confirm (B6): in a git repository (a folder inside one
     /// too), the files the agent changed go back with the conversation; anywhere else they stay,
     /// as the engine can't put them back, and it says so.

@@ -834,6 +834,7 @@ final class SessionModel {
             // Final: there's nothing left to redo, and the conversation no longer ends at the undo.
             session.revert = nil
             undone = nil
+            restoredGoal = ""
         default:
             break
         }
@@ -1110,6 +1111,7 @@ final class SessionModel {
         let files = draftFiles
         draftText = ""
         draftFiles = []
+        restoredGoal = ""
         if !isCommand { draftQuotes = [] }
         submit(text, files: files, for: model, queue: queue, commands: commands)
     }
@@ -2080,13 +2082,18 @@ final class SessionModel {
     /// Puts a message back in the composer, ahead of anything already there: its text, its
     /// attached files (each once, and only those on this Mac), its comments on the changes and
     /// what it replied to; a goal as one (`SentWithKeyword.draft`), into an empty composer: beside
-    /// your words, "/goal" in front would make them the goal too.
-    private func restoreDraft(_ message: String, files picked: [URL] = []) {
+    /// your words, "/goal" in front would make them the goal too. Returns the text it put.
+    @discardableResult private func restoreDraft(_ message: String, files picked: [URL] = []) -> String {
         let (quoted, comments, paths, _) = SentMessage.split(message)
         let (quotes, words) = Quoting.draft(of: quoted)
         let text = draftText.isEmpty ? SentWithKeyword.draft(words, keyword: SentMessage.keyword(of: message)) : words
         restore(text: text, files: Attachments.restored(picked, noting: paths), quotes: quotes, comments: comments)
+        if text != words { restoredGoal = text }
+        return text
     }
+
+    /// A goal put back in the composer, as it was put.
+    @ObservationIgnored private var restoredGoal = ""
 
     /// The text of sends that didn't go, put back at the start of the composer one after another.
     @ObservationIgnored private var restoredFailed = ""
@@ -2109,11 +2116,21 @@ final class SessionModel {
 
     /// Puts these in the composer, ahead of anything already there.
     private func restore(text: String, files: [URL] = [], quotes: [Drafts.Quote] = [], comments: [ReviewComment] = []) {
+        if !text.isEmpty { dropRestoredGoal() }
         draftQuotes = quotes + draftQuotes
         draftText = [text, draftText].filter { !$0.isEmpty }.joined(separator: "\n\n")
         draftFiles = files + draftFiles.filter { file in !files.contains { $0.path == file.path } }
         reviewComments = comments + reviewComments
         composerFocus += 1
+    }
+
+    /// A goal put back (Undo, Edit), still at the composer's start as it was put, goes on as its
+    /// words once something is put ahead of it: "/goal" in the middle would go as plain words. One
+    /// you typed stays as you wrote it.
+    private func dropRestoredGoal() {
+        guard !restoredGoal.isEmpty, draftText == restoredGoal || draftText.hasPrefix(restoredGoal + "\n\n") else { return }
+        draftText.removeFirst("/goal ".count)
+        restoredGoal = ""
     }
 
     /// What was in the composer before an undo, and after it: Redo puts the first back if the
@@ -2188,10 +2205,9 @@ final class SessionModel {
                 } else if let undone, !undone.put.isEmpty, now.text == undone.put || now.text.hasPrefix(undone.put + "\n\n") {
                     before.text = String(now.text.dropFirst(min(now.text.count, undone.put.count + 2)))
                 }
-                restoreDraft(CommandMessages.shared.text(of: copy), files: Self.files(of: message, stored: copy))
-                let after = composerState
                 // The text this undo put ahead of what was there.
-                let put = after.text == now.text ? "" : now.text.isEmpty ? after.text : String(after.text.dropLast(now.text.count + 2))
+                let put = restoreDraft(CommandMessages.shared.text(of: copy), files: Self.files(of: message, stored: copy))
+                let after = composerState
                 undone = (before, after, put)
             } catch {
                 fail(error)
@@ -2253,6 +2269,7 @@ final class SessionModel {
         editTranscript { $0.commitRevert(to: revert.messageID) }
         session.revert = nil
         undone = nil
+        restoredGoal = ""
     }
 
     /// Takes back an undo: the conversation and the files come back as they were.
@@ -2265,6 +2282,7 @@ final class SessionModel {
                 session.revert = nil
                 if let undone, composerState == undone.after { composerState = undone.before }
                 undone = nil
+                restoredGoal = ""
             } catch {
                 fail(error)
             }

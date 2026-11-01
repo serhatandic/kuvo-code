@@ -439,6 +439,45 @@ import Testing
         #expect(back.body["delivery"] as? String == "queue", "it should wait behind the run, as it did")
     }
 
+    /// Edit on a waiting message after Undo put a goal back: the goal loses its "/goal" as the
+    /// message goes ahead of it, so no "/goal" is left in the middle to go as plain words.
+    @Test func editingAMessageBackAfterAnUndoneGoalLeavesNoGoalInTheMiddle() async throws {
+        let queued: [String: Any] = ["id": "msg_04", "sessionID": id, "type": "user", "delivery": "queue", "payload": ["text": "Then run the linter"]]
+        let (model, box, _) = try await open(running: true, inbox: [queued])
+        defer { box.stop(); engine.stop() }
+        let goal: [String: Any] = ["id": "msg_03", "type": "user", "time": ["created": 3], "text": SentWithKeyword.message("Ship v2", typed: "/goal")]
+        engine.on("POST", "/api/experimental/session/\(id)/wait", json: [:])
+        engine.on("POST", "/api/session/\(id)/revert/stage") { request in
+            StubWeb.json(["data": ["messageID": request.body["messageID"] as? String ?? ""]])
+        }
+        guard case .user(let undone) = try JSONDecoder().decode(Message.self, from: JSONSerialization.data(withJSONObject: goal)) else { return }
+        model.undo(from: undone)
+        try await until { model.draftText == "/goal Ship v2" }
+        model.edit(try #require(model.waiting.first { $0.id == "msg_04" }))
+        try await until { !engine.requests("DELETE", "/inbox/msg_04").isEmpty }
+        model.apply(try engine.event("session.inbox.cancelled", session: id, ["inboxID": "msg_04"]))
+        try await until { model.draftText != "/goal Ship v2" }
+        #expect(model.draftText == "Then run the linter\n\nShip v2")
+        model.draftText = ""
+    }
+
+    /// Edit on a waiting goal, then on another waiting message: the goal Edit put back loses its
+    /// "/goal" as the other goes ahead of it.
+    @Test func editingTwoWaitingMessagesBackLeavesNoGoalInTheMiddle() async throws {
+        let goal: [String: Any] = ["id": "msg_04", "sessionID": id, "type": "user", "delivery": "queue", "payload": ["text": SentWithKeyword.message("Ship v2", typed: "/goal")]]
+        let lint: [String: Any] = ["id": "msg_05", "sessionID": id, "type": "user", "delivery": "queue", "payload": ["text": "Then run the linter"]]
+        let (model, box, _) = try await open(running: true, inbox: [goal, lint])
+        defer { box.stop(); engine.stop() }
+        for (message, composer) in [("msg_04", "/goal Ship v2"), ("msg_05", "Then run the linter\n\nShip v2")] {
+            model.edit(try #require(model.waiting.first { $0.id == message }))
+            try await until { !engine.requests("DELETE", "/inbox/\(message)").isEmpty }
+            model.apply(try engine.event("session.inbox.cancelled", session: id, ["inboxID": message]))
+            try await until { model.draftText.hasPrefix(message == "msg_04" ? "/goal" : "Then") }
+            #expect(model.draftText == composer)
+        }
+        model.draftText = ""
+    }
+
     /// A queued message that carries its file in itself (one queued from the phone, or for a
     /// machine, read again after a relaunch): its bubble shows the file, and Edit and Undo bring
     /// it back with the file, rather than the words alone.
