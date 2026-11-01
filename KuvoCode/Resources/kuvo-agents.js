@@ -3474,9 +3474,17 @@ class Goals {
     this.now = now;
     try {
       const saved = JSON.parse(readFileSync9(file, "utf8"));
-      for (const goal of Array.isArray(saved) ? saved : [])
-        if (typeof goal?.session === "string" && typeof goal?.condition === "string")
-          this.goals.set(goal.session, { ...goal, checking: false });
+      for (const goal of Array.isArray(saved) ? saved : []) {
+        if (typeof goal?.session !== "string" || typeof goal?.condition !== "string")
+          continue;
+        const kept = { ...goal, checking: false };
+        if (kept.long && kept.state === "paused" && (kept.pausedBy === "error" || kept.pausedBy === "you" && kept.note !== PAUSED_BY_YOU)) {
+          kept.state = "working";
+          delete kept.pausedBy;
+          delete kept.note;
+        }
+        this.goals.set(goal.session, kept);
+      }
     } catch {}
   }
   start() {
@@ -22708,4 +22716,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 65fa6402f8703168fe8318412a717e8cb1cb68b27cffc81f370731761bf6fc41
+// Built from Packages/Box/src/agents e6e95e2440c4c7aa10f105947f5f9ea6729e2b0c921e13e13d8fa4064b35f6b4

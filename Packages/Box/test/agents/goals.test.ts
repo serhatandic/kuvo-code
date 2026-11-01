@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { EngineLink } from "../../src/agents/engine"
@@ -7,6 +7,7 @@ import { subscribe } from "../../src/agents/events"
 import { server } from "../../src/agents/groups/api"
 import { goalRoutes, Goals, quietLimit, transcript, type Goal, type GoalPlaces } from "../../src/agents/goals"
 import type { ServerEvent } from "../../src/agents/wire"
+import { PAUSED_BY_YOU } from "../../src/shared/goals"
 import { StandIn } from "./support/standin"
 
 // Goals as a box runs them: a conversation given a goal works toward it turn after turn, checked
@@ -297,6 +298,17 @@ describe("a goal", () => {
     await turnOn("[Goal] Carry on.")
     expect(goal()).toMatchObject({ state: "working", long: true })
     expect(goals.pauseByYou("ses_work")).toMatchObject({ state: "paused", pausedBy: "you" })
+  })
+
+  test("a bot's long goal kept paused by a turn that failed or was stopped (by a box from before) is at work again once the box starts; one you paused stays paused", async () => {
+    goals.stopAll()
+    const kept = (session: string, pausedBy: string, note: string) => ({ session, condition: "the site is live", long: true, state: "paused", pausedBy, note, started: 1, turns: 0, checking: false, quiet: 0, limit: 50 })
+    for (const session of ["ses_failed", "ses_stopped", "ses_held"]) engine.session(session, [{ id: "msg_0000", type: "idle", outcome: "succeeded", time: { created: 1 } }])
+    writeFileSync(join(root, "goals.json"), JSON.stringify([kept("ses_failed", "error", "The turn failed: Internal server error."), kept("ses_stopped", "you", "The turn was stopped."), kept("ses_held", "you", PAUSED_BY_YOU)]))
+    goals = makeGoals()
+    expect(goal("ses_failed")).toMatchObject({ state: "working" })
+    expect(goal("ses_stopped")).toMatchObject({ state: "working" })
+    expect(goal("ses_held")).toMatchObject({ state: "paused", pausedBy: "you" })
   })
 
   test(`pauses once the agent does nothing for ${quietLimit} turns in a row`, async () => {

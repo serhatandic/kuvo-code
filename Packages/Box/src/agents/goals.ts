@@ -125,7 +125,18 @@ export class Goals {
   ) {
     try {
       const saved = JSON.parse(readFileSync(file, "utf8"))
-      for (const goal of Array.isArray(saved) ? saved : []) if (typeof goal?.session === "string" && typeof goal?.condition === "string") this.goals.set(goal.session, { ...goal, checking: false })
+      for (const goal of Array.isArray(saved) ? saved : []) {
+        if (typeof goal?.session !== "string" || typeof goal?.condition !== "string") continue
+        const kept: Kept = { ...goal, checking: false }
+        // A bot's long goal a box from before paused for a turn that failed or was stopped: its
+        // plan carries on with it, so it's at work.
+        if (kept.long && kept.state === "paused" && (kept.pausedBy === "error" || (kept.pausedBy === "you" && kept.note !== PAUSED_BY_YOU))) {
+          kept.state = "working"
+          delete kept.pausedBy
+          delete kept.note
+        }
+        this.goals.set(goal.session, kept)
+      }
     } catch {}
   }
 
