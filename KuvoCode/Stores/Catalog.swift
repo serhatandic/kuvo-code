@@ -476,6 +476,9 @@ final class Catalog {
     private var endedSignIns: [String: String] = [:]
     /// The plans the box last listed as ended: one it no longer lists works again.
     @ObservationIgnored private var boxEnded: Set<String> = []
+    /// Plans this Mac saw work again: the box may be a moment behind, so its list doesn't mark them
+    /// again until a read of it doesn't list them.
+    @ObservationIgnored private var worksAhead: Set<String> = []
 
     /// A run on `provider`'s model was refused its account: its sign-in in use, if that's one (a
     /// key refused says why itself).
@@ -483,11 +486,13 @@ final class Catalog {
         guard !OutsideAgents.runsInBridge(provider), let active = activeCredential(of: provider),
               active.method == "oauth", let id = active.credentialID, endedSignIns[provider] != id else { return }
         endedSignIns[provider] = id
+        worksAhead.remove(provider)
     }
 
     /// A step on `provider`'s model ended well: its sign-in works (renewed after all).
     func signInWorks(_ provider: String) {
         if endedSignIns[provider] != nil { endedSignIns[provider] = nil }
+        worksAhead.insert(provider)
     }
 
     /// The plans whose sign-in ended, as the box keeps them (`kuvo/accounts/ended`): one noted
@@ -501,7 +506,8 @@ final class Catalog {
         let listed = Set(ended.providers)
         var now = endedSignIns
         for provider in boxEnded.subtracting(listed) { now[provider] = nil }
-        for provider in listed {
+        worksAhead.formIntersection(listed)
+        for provider in listed.subtracting(worksAhead) {
             if let id = activeCredential(of: provider)?.credentialID { now[provider] = id }
         }
         boxEnded = listed
