@@ -183,7 +183,9 @@ final class AppContainer {
     /// Settings-only preferences. Deliberately untouched: provider credentials and cached usage
     /// snapshots. Launch at Login lives outside the container; the Settings screen resets it alongside
     /// this call.
-    func resetAllSettings() {
+    /// `keepsAppearance` (fork addition): the host's Settings page, which leaves Theme to the
+    /// host's own, leaves it as it is.
+    func resetAllSettings(keepsAppearance: Bool = false) {
         layout.resetToDefault()
         // The menu-bar Icon Style is a Settings preference, not part of the Customize layout reset.
         layout.menuBarStyle = .bars
@@ -195,14 +197,14 @@ final class AppContainer {
         // Removing an `@AppStorage` key restores its declared default; the Settings screen's
         // `@AppStorage` properties observe the change. New settings must be added here.
         for key in [
-            AppearanceSetting.key, TimeFormatSetting.key, DensitySetting.key,
+            TimeFormatSetting.key, DensitySetting.key,
             ReduceAnimationsSetting.key, LogLevelSetting.key, TotalSpendSetting.key,
             TotalSpendSetting.periodKey, TotalSpendSetting.metricKey,
-        ] {
+        ] + (keepsAppearance ? [] : [AppearanceSetting.key]) {
             UserDefaults.standard.removeObject(forKey: key)
         }
         KeyboardShortcuts.reset(.togglePopover)
-        AppearanceSetting.applyCurrent()
+        if !keepsAppearance { AppearanceSetting.applyCurrent() }
         AppLog.reloadLevel()
         AppLog.info(.config, "All settings reset to defaults")
     }

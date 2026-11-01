@@ -277,11 +277,8 @@ struct UsageSettings: View {
                     Text("Providers")
                     Text("Which accounts the menu bar shows, and in what order.")
                 }
-            } footer: {
-                Text("Usage tracking is a fork of OpenUsage by Robin Ebers (MIT). It isn’t affiliated with or endorsed by OpenUsage.")
-                    .foregroundStyle(.secondary)
             }
-            UsageSettingsSections()
+            UsageSettingsSections(footer: Text("Usage tracking is a fork of OpenUsage by Robin Ebers (MIT). It isn’t affiliated with or endorsed by OpenUsage."))
         }
     }
 }

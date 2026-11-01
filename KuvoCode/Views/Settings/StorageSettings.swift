@@ -8,6 +8,7 @@ import SwiftUI
 struct StorageSettings: View {
     @Environment(Workspace.self) private var workspace
     @Environment(AppModel.self) private var app
+    @Environment(\.accent) private var accent
     @State private var report: StorageReport?
     @State private var cleaningUp = false
     @State private var confirmingLogs = false
@@ -37,7 +38,7 @@ struct StorageSettings: View {
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), alignment: .leading)], alignment: .leading, spacing: 10) {
                             ForEach(Array(shown.enumerated()), id: \.element.id) { index, kind in
                                 HStack(alignment: .firstTextBaseline, spacing: 7) {
-                                    Circle().fill(StorageReport.color(kind, at: index, of: shown.count)).frame(width: 8, height: 8)
+                                    Circle().fill(StorageReport.color(kind, at: index, of: shown.count, accent: accent)).frame(width: 8, height: 8)
                                     VStack(alignment: .leading, spacing: 1) {
                                         Text(kind.title)
                                         Text(Self.format(kind.size))
@@ -46,7 +47,7 @@ struct StorageSettings: View {
                                             .monospacedDigit()
                                     }
                                 }
-                                .help(kind.detail)
+                                .help(kind.id == .other ? report.otherDetail : kind.detail)
                             }
                         }
                         Button {
@@ -293,12 +294,13 @@ struct StorageSettings: View {
 private struct StorageBar: View {
     let kinds: [StorageReport.Kind]
     let total: Int64
+    @Environment(\.accent) private var accent
 
     var body: some View {
         GeometryReader { proxy in
             HStack(spacing: 2) {
                 ForEach(Array(kinds.enumerated()), id: \.element.id) { index, kind in
-                    StorageReport.color(kind, at: index, of: kinds.count)
+                    StorageReport.color(kind, at: index, of: kinds.count, accent: accent)
                         .frame(width: max(3, proxy.size.width * CGFloat(kind.size) / CGFloat(max(total, 1)) - 2))
                 }
                 Spacer(minLength: 0)
@@ -355,17 +357,29 @@ nonisolated struct StorageReport: Sendable {
     var shown: [Kind] {
         let total = max(self.total, 1)
         let parts = kinds.filter { $0.id != .other && $0.size > 0 }
-        let small = parts.filter { Double($0.size) / Double(total) < 0.01 }
-        let other = size(of: .other) + small.reduce(0) { $0 + $1.size }
+        let other = size(of: .other) + folded.reduce(0) { $0 + $1.size }
         let large = parts.filter { Double($0.size) / Double(total) >= 0.01 }.sorted { $0.size > $1.size }
         return large + (other > 0 ? [Kind(id: .other, size: other)] : [])
     }
 
+    /// The kinds too small to show on their own, counted in Other.
+    var folded: [Kind] {
+        let total = max(self.total, 1)
+        return kinds.filter { $0.id != .other && $0.size > 0 && Double($0.size) / Double(total) < 0.01 }
+    }
+
+    /// Other's tooltip, naming the kinds it took in.
+    var otherDetail: String {
+        let other = Kind(id: .other, size: 0).detail
+        let names = folded.map(\.title).formatted(.list(type: .and))
+        return folded.isEmpty ? other : "\(other) Also \(names), too small to show apart."
+    }
+
     /// One ramp of the accent, deepest for the largest; Other in gray.
-    static func color(_ kind: Kind, at index: Int, of count: Int) -> Color {
+    static func color(_ kind: Kind, at index: Int, of count: Int, accent: Color) -> Color {
         if kind.id == .other { return Color.secondary.opacity(0.5) }
         let steps = max(count - 1, 1)
-        return Color.accentColor.opacity(1 - 0.65 * Double(index) / Double(steps))
+        return accent.opacity(1 - 0.65 * Double(index) / Double(steps))
     }
 
     let kinds: [Kind]

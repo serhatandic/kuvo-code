@@ -95,11 +95,13 @@ private struct VoiceStyleTile: View {
                 }
             }
             .padding(.horizontal, 12)
-            .frame(width: 260, height: 40, alignment: .leading)
+            .frame(minWidth: 260, maxWidth: .infinity, minHeight: 40, maxHeight: 40, alignment: .leading)
             .background(.background, in: UnevenRoundedRectangle(topLeadingRadius: 12, bottomLeadingRadius: 12))
             .overlay(UnevenRoundedRectangle(topLeadingRadius: 12, bottomLeadingRadius: 12).strokeBorder(.tint, lineWidth: 1.5))
             .shadow(color: .black.opacity(0.12), radius: 4, y: 1)
             .padding(.leading, 14)
+            // Past the tile's right edge, however wide it is.
+            .padding(.trailing, -12)
             .padding(.top, 38)
         case .field:
             VStack(alignment: .leading, spacing: 8) {
@@ -111,10 +113,11 @@ private struct VoiceStyleTile: View {
                     .frame(width: 120, height: 16)
             }
             .padding(12)
-            .frame(width: 260, height: 90, alignment: .topLeading)
+            .frame(minWidth: 260, maxWidth: .infinity, minHeight: 90, maxHeight: 90, alignment: .topLeading)
             .background(.background, in: UnevenRoundedRectangle(topLeadingRadius: 14))
             .shadow(color: .black.opacity(0.14), radius: 5, y: 1)
             .padding(.leading, 14)
+            .padding(.trailing, -12)
             .padding(.top, 16)
         }
     }

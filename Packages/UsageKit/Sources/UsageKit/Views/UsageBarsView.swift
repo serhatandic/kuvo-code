@@ -398,6 +398,8 @@ struct SpendBarBody: View {
                 .buttonStyle(.plain)
                 .fixedSize()
                 .help("Spent over another period")
+                .accessibilityLabel("Period")
+                .accessibilityValue(period.rawValue)
                 Spacer(minLength: 6)
                 Text((projection.isEstimated ? "~" : "") + MetricFormatter.number(projection.centerValue, kind: .dollars, style: .full))
                     .monospacedDigit()
@@ -415,11 +417,16 @@ struct SpendBarBody: View {
                                 .frame(width: max(3, room * slice.displayAmount / projection.centerValue))
                         }
                     }
+                    // Many tiny ones at their least width never run past the bar.
+                    .frame(width: proxy.size.width, alignment: .leading)
+                    .clipShape(.capsule)
                 }
                 .frame(height: 4)
                 .padding(.horizontal, 8)
                 .padding(.bottom, 6)
-                .accessibilityHidden(true)
+                .accessibilityElement()
+                .accessibilityLabel("By provider")
+                .accessibilityValue(shares.map { "\($0.provider.displayName) \(MetricFormatter.number($0.displayAmount, kind: .dollars, style: .full))" }.formatted(.list(type: .and)))
             }
         }
         .frame(height: ProviderBar.height + (shares.isEmpty ? 0 : 6))

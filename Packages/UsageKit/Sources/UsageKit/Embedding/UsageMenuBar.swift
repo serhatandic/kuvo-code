@@ -1,4 +1,5 @@
 import AppKit
+import Observation
 
 /// Runs the usage dashboard in the host app's menu bar. (Fork addition: it takes the place of
 /// OpenUsage's app delegate, without the parts that belong to a standalone menu-bar app — the
@@ -7,14 +8,16 @@ import AppKit
 /// On first run nothing asks for Keychain access until the user turns the panel on: in the host's
 /// own first launch (`turnOnFirstLaunch`), or with a first click on the menu bar item. (Fork change:
 /// OpenUsage's welcome window is gone; the host's first launch has its row.)
+/// Observable so the host's Settings page shows the panel's settings once they've loaded.
 @MainActor
+@Observable
 public final class UsageMenuBar {
     public static let shared = UsageMenuBar()
 
     private(set) var container: AppContainer?
     private var statusItemController: StatusItemController?
-    private var openHost: (@MainActor () -> Void)?
-    private var started = false
+    @ObservationIgnored private var openHost: (@MainActor () -> Void)?
+    @ObservationIgnored private var started = false
 
     private init() {}
 
@@ -84,14 +87,14 @@ public final class UsageMenuBar {
         if !added.isEmpty { Task { await container.dataStore.refreshAll() } }
     }
 
-    private var pendingConnected: Set<String>?
+    @ObservationIgnored private var pendingConnected: Set<String>?
 
     /// Called each time the panel opens, for the host's own records.
-    public var onPanelShown: (() -> Void)?
+    @ObservationIgnored public var onPanelShown: (() -> Void)?
 
     /// Shows the host's own page for the panel's settings (`UsageSettingsSections`), where they
     /// live; the panel's Settings opens it instead of its own screen. (Fork addition.)
-    public var settingsInHost: (@MainActor () -> Void)?
+    @ObservationIgnored public var settingsInHost: (@MainActor () -> Void)?
 
     /// The panel's Settings, in the host when it has a page for them: false when it doesn't.
     func openSettingsInHost() -> Bool {
@@ -153,7 +156,7 @@ public final class UsageMenuBar {
         if HostAccounts.haveArrived { container.startRefreshing() } else { refreshesOnHostAccounts = true }
     }
 
-    private var refreshesOnHostAccounts = false
+    @ObservationIgnored private var refreshesOnHostAccounts = false
 
     /// The host's accounts are in: refreshing starts, if it was waiting for them.
     func hostAccountsArrived() {
@@ -192,7 +195,7 @@ public final class UsageMenuBar {
         return await run.value
     }
 
-    private var turningOn: Task<FirstLaunchResult, Never>?
+    @ObservationIgnored private var turningOn: Task<FirstLaunchResult, Never>?
 
     private func turnOn(_ container: AppContainer) async -> FirstLaunchResult {
         let setup = FirstLaunchSetup(
