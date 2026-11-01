@@ -429,6 +429,22 @@ test("a permission answered in the engine during its hold never reaches your pho
   }
 });
 
+test("an ask to work outside the project names the folder as you know it on your phone, not the engine's pattern", async () => {
+  const engine = await engineWith({ ses_main: { id: "ses_main", title: "Fix the tests", location: { directory: "/home/me/shop" } } });
+  const stop = new AbortController();
+  let told;
+  const notice = new Promise(resolve => { told = resolve; });
+  try {
+    link.watchEvents(engine.read, each => { told(each); return true; }, stop.signal, () => {});
+    await engine.following;
+    engine.send({ type: "permission.asked", data: { id: "per_1", sessionID: "ses_main", action: "external_directory", resources: [`${os.homedir()}/other-project/*`, "/opt/data/*"] } });
+    assert.equal((await notice).body, "Wants to work outside the project: ~/other-project · /opt/data");
+  } finally {
+    stop.abort();
+    engine.close();
+  }
+});
+
 test("an ask a Mac answers during its hold never reaches your phones", async () => {
   const ask = { id: "ask-1", kind: "code", host: "github.com", prompt: "The code GitHub sent" };
   // Asked at two looks (so it's told), then answered.

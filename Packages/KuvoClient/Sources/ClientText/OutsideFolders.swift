@@ -25,10 +25,14 @@ public enum OutsideFolders {
     }
 
     /// The path a pattern names: its trailing "/*" or "/**" (everything in it) gone, and a
-    /// trailing slash; "" for everything ("*").
+    /// trailing slash; "" for everything ("*"). Another star stays, as it means another thing.
     private static func folder(of pattern: String) -> String {
         var path = pattern.trimmingCharacters(in: .whitespacesAndNewlines)
-        while path.hasSuffix("*") { path.removeLast() }
+        if path == "*" || path == "**" { return "" }
+        if let glob = ["/**", "/*"].first(where: path.hasSuffix) {
+            path.removeLast(glob.count)
+            if path.isEmpty { path = "/" }
+        }
         while path.count > 1, path.hasSuffix("/") { path.removeLast() }
         return path
     }

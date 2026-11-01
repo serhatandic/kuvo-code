@@ -61,7 +61,7 @@ struct PermissionCard: View {
                     Text(allowed.shown)
                         .transcriptCodeFont()
                         .textSelection(.enabled)
-                        .accessibilityLabel(allowed.spoken ?? allowed.shown)
+                        .accessibilityLabel(allowed.spoken.map(Text.init) ?? Text(allowed.shown))
                         .padding(10)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }

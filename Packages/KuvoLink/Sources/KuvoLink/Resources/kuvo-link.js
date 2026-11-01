@@ -4,7 +4,7 @@
 import { spawn as spawn10 } from "node:child_process";
 import crypto36 from "node:crypto";
 import fs81 from "node:fs";
-import os13 from "node:os";
+import os14 from "node:os";
 import path84 from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 
@@ -24,6 +24,21 @@ function prefixBytes(text, bytes) {
     out += character;
   }
   return out;
+}
+function outsideShown(pattern, home) {
+  let path = pattern.trim();
+  if (path === "*" || path === "**")
+    return "Any folder";
+  for (const glob of ["/**", "/*"])
+    if (path.endsWith(glob)) {
+      path = path.slice(0, -glob.length) || "/";
+      break;
+    }
+  while (path.length > 1 && path.endsWith("/"))
+    path = path.slice(0, -1);
+  const own = home?.replace(/(?<=.)\/+$/, "");
+  const rest = path === "~" ? "" : path.startsWith("~/") ? path.slice(2) : own && path === own ? "" : own && path.startsWith(own + "/") ? path.slice(own.length + 1) : null;
+  return rest === null ? path : rest ? `~/${rest}` : "~";
 }
 var cut = (text, count) => text.length <= count ? text : text.slice(0, count - 1) + "…";
 var quote = (text) => `'${String(text).replace(/'/g, `'\\''`)}'`;
@@ -4529,6 +4544,7 @@ async function repairRules(target, here, sessionID) {
 }
 
 // Packages/Box/src/link/notices/news.ts
+import os4 from "node:os";
 import path23 from "node:path";
 
 // Packages/Box/src/link/notices/mask.ts
@@ -4650,9 +4666,9 @@ var showsAll = (text) => [...text].length <= SHOWN_LENGTH && masked(text) === te
 
 // Packages/Box/src/link/notices/news.ts
 var plain = (text) => String(text ?? "").replace(/^[ \t]{0,3}(#{1,6}|>+)[ \t]+/gm, "").replace(/!?\[([^\]]*)\]\([^)\s]*\)/g, "$1").replace(/(?<![\w*_])[*_]{1,3}(?=\S)|(?<=\S)[*_]{1,3}(?![\w*_])/g, "").replace(/`/g, "").replace(/\s+/g, " ").trim();
-function describePermission(request) {
+function describePermission(request, home) {
   const what = { edit: "edit files", write: "edit files", patch: "edit files", shell: "run a command", bash: "run a command", read: "read a file", external_directory: "work outside the project", webfetch: "open a web page" }[request.action] ?? request.action;
-  const shown = (Array.isArray(request.resources) ? request.resources : []).filter((each) => each !== "*");
+  const shown = (Array.isArray(request.resources) ? request.resources : []).filter((each) => each !== "*").map((each) => home !== undefined && request.action === "external_directory" ? outsideShown(String(each), home) : each);
   if (!shown.length)
     return `Wants to ${what}.`;
   const more = shown.length > 4 ? ` · and ${shown.length - 4} more` : "";
@@ -4727,7 +4743,7 @@ async function noticeFor(event, get) {
       const where = await shown(data.sessionID);
       if (isHiddenRun(where))
         return null;
-      const body = describePermission(data);
+      const body = describePermission(data, os4.homedir());
       return about(where, "permission", body, { request: data.id, ...where.id !== data.sessionID ? { requestSession: data.sessionID } : {} }, { answerable: showsAllCovered(data) && showsAll(body), untitled: "Kuvo Code" });
     }
     case "form.created": {
@@ -4965,7 +4981,7 @@ import path29 from "node:path";
 import { spawnSync as spawnSync3 } from "node:child_process";
 import crypto9 from "node:crypto";
 import fs26 from "node:fs";
-import os5 from "node:os";
+import os6 from "node:os";
 import path28 from "node:path";
 
 // Packages/Box/src/link/fence/allowed.ts
@@ -4975,7 +4991,7 @@ import path26 from "node:path";
 
 // Packages/Box/src/link/fence/policy.ts
 import fs24 from "node:fs";
-import os4 from "node:os";
+import os5 from "node:os";
 import path25 from "node:path";
 var CACHES = [
   ".npm",
@@ -5090,12 +5106,12 @@ function ghHosts(home) {
 function appTemporary() {
   if (!IS_MAC)
     return null;
-  const tmp = path25.dirname(path25.resolve(os4.tmpdir()));
+  const tmp = path25.dirname(path25.resolve(os5.tmpdir()));
   return path25.basename(tmp) === path25.basename(path25.dirname(path25.resolve(K))) ? tmp : null;
 }
 function sandboxCaches() {
   const tmp = appTemporary();
-  const root = realish(tmp ? path25.join(os4.userInfo().homedir, "Library", "Caches", path25.basename(tmp)) : path25.join(K, "cache"));
+  const root = realish(tmp ? path25.join(os5.userInfo().homedir, "Library", "Caches", path25.basename(tmp)) : path25.join(K, "cache"));
   return { npm: path25.join(root, "sandbox-npm"), pnpm: path25.join(root, "sandbox-pnpm"), uv: path25.join(root, "sandbox-uv"), corepack: path25.join(root, "sandbox-corepack") };
 }
 function macFolders(home) {
@@ -5109,14 +5125,14 @@ function macFolders(home) {
     path25.join(home, "Library", "WebKit", bundle),
     path25.join(home, "Library", "HTTPStorages", bundle),
     path25.join(home, "Library", "Preferences", `${bundle}.plist`),
-    `/private/tmp/kuvo-ssh-${os4.userInfo().uid}`
+    `/private/tmp/kuvo-ssh-${os5.userInfo().uid}`
   ];
   if (tmp)
     kuvo.push(tmp);
   return { kuvo, readable: [path25.join(app, "bin")] };
 }
 function fencePolicy(ports = []) {
-  const home = realish(os4.userInfo().homedir);
+  const home = realish(os5.userInfo().homedir);
   const inHome = (names) => names.map((name) => realish(path25.join(home, name)));
   const own = IS_MAC ? macFolders(home) : { kuvo: [K, path25.join(home, ".kuvo-code")], readable: [path25.join(K, "bin")] };
   const kuvo = [...new Set(own.kuvo.map(realish))];
@@ -5179,7 +5195,7 @@ function fencePolicy(ports = []) {
   };
 }
 function userTemporary() {
-  let t = os4.tmpdir();
+  let t = os5.tmpdir();
   try {
     t = fs24.realpathSync(t);
   } catch {}
@@ -6141,7 +6157,7 @@ function able() {
   if (!runtime())
     return { able: false, passed: false, why: "The engine isn't installed here yet.", reason: "engineMissing" };
   if (!fs26.existsSync("/sys/kernel/security/landlock") && !/landlock/.test(textOf("/sys/kernel/security/lsm") ?? "landlock")) {
-    return { able: false, passed: false, why: `Linux ${os5.release().split("-")[0]} can't sandbox commands: it needs Landlock (Linux 5.13 or later, with it on).`, reason: "kernel", needs: "Linux 5.13" };
+    return { able: false, passed: false, why: `Linux ${os6.release().split("-")[0]} can't sandbox commands: it needs Landlock (Linux 5.13 or later, with it on).`, reason: "kernel", needs: "Linux 5.13" };
   }
   return { able: true, passed: false };
 }
@@ -6162,7 +6178,7 @@ function probe() {
     `exit 0`
   ].join(`
 `);
-  const env = { PATH: process.env.PATH || "/usr/bin:/bin", HOME: os5.userInfo().homedir, KUVO_FENCE_SHELL: "/bin/sh", KUVO_FENCE_WORK: PROBE };
+  const env = { PATH: process.env.PATH || "/usr/bin:/bin", HOME: os6.userInfo().homedir, KUVO_FENCE_SHELL: "/bin/sh", KUVO_FENCE_WORK: PROBE };
   const bun = runtime();
   if (bun)
     env.KUVO_FENCE_RUNTIME = bun;
@@ -9556,7 +9572,7 @@ function phoneSeenLately(file = SEEN_FILE, now = Date.now()) {
 import { spawnSync as spawnSync4 } from "node:child_process";
 import crypto15 from "node:crypto";
 import fs39 from "node:fs";
-import os6 from "node:os";
+import os7 from "node:os";
 import path43 from "node:path";
 var UPDATE_KEYS = ["iLSFoygG8wg+r2yj+/qnoMHpZIhPKRNLlf9vpEKmx0A="];
 var UPDATE_URL = "https://github.com/serhatandic/kuvo-code/releases/latest/download/boxes.json";
@@ -9851,7 +9867,7 @@ async function update({ now = false, keys = UPDATE_KEYS, url = UPDATE_URL, block
     const engineFolder = path43.join(K, "engine", manifest.engine);
     let staged = null;
     if (!fs39.existsSync(path43.join(engineFolder, "opencode"))) {
-      const kind = { x64: "x86_64", arm64: "aarch64" }[os6.arch()];
+      const kind = { x64: "x86_64", arm64: "aarch64" }[os7.arch()];
       const build = manifest.linux?.[kind];
       if (!build?.url || !/^sha512-/.test(build.integrity ?? ""))
         throw new Error("The release has no engine for this machine.");
@@ -16282,7 +16298,7 @@ function macTell(notice) {
 }
 
 // Packages/Box/src/link/mac/relay.ts
-import os11 from "node:os";
+import os12 from "node:os";
 
 // Packages/Box/src/link/letters/take.ts
 import fs61 from "node:fs";
@@ -18411,7 +18427,7 @@ function snippet(text, at, length) {
 // Packages/Box/src/link/areas/changes.ts
 import { execFile as execFile4, execFileSync as execFileSync3, spawn as spawn7 } from "node:child_process";
 import fs67 from "node:fs";
-import os7 from "node:os";
+import os8 from "node:os";
 import path71 from "node:path";
 
 // Packages/Box/src/link/areas/file.ts
@@ -18576,7 +18592,7 @@ function trash(file) {
   if (process.platform === "darwin" && !process.env.KUVO_CHANGES_TRASH) {
     if (fs67.existsSync("/usr/bin/trash"))
       return void execFileSync3("/usr/bin/trash", [file], { stdio: "ignore" });
-    const bin = path71.join(os7.homedir(), ".Trash");
+    const bin = path71.join(os8.homedir(), ".Trash");
     into = path71.join(bin, name);
     for (let n = 2;fs67.existsSync(into); n++)
       into = path71.join(bin, `${name} ${n}`);
@@ -19455,7 +19471,7 @@ async function* programsRoute(context) {
 import { spawn as spawn9 } from "node:child_process";
 import crypto29 from "node:crypto";
 import fs72 from "node:fs";
-import os8 from "node:os";
+import os9 from "node:os";
 import path76 from "node:path";
 
 // Packages/Box/src/link/notices/asking.ts
@@ -19775,7 +19791,7 @@ async function askToRun(caller, args, signal) {
     ...stopped.length ? { stopped } : {},
     ...error ? { error } : {},
     ...always ? { always } : {},
-    ...IS_MAC ? {} : { machine: os8.hostname() },
+    ...IS_MAC ? {} : { machine: os9.hostname() },
     owner: ownerOf(project)
   }, signal);
   if (answered.unanswered)
@@ -20089,7 +20105,7 @@ function serveAgent(socket, source) {
 }
 
 // Packages/Box/src/link/vault/use.ts
-import os9 from "node:os";
+import os10 from "node:os";
 
 // Packages/Box/src/link/vault/activity.ts
 import fs74 from "node:fs";
@@ -20269,7 +20285,7 @@ var tell2 = () => false;
 var setVaultTell = (to) => {
   tell2 = to;
 };
-var machineName = () => IS_MAC ? undefined : os9.hostname();
+var machineName = () => IS_MAC ? undefined : os10.hostname();
 var whoOf = (caller) => ({
   ...caller.bot ? { bot: caller.bot } : {},
   ...caller.botName ? { botName: caller.botName } : {},
@@ -21659,7 +21675,7 @@ async function fill(given, caller, signal) {
 // Packages/Box/src/link/vault/tools.ts
 import crypto33 from "node:crypto";
 import fs80 from "node:fs";
-import os10 from "node:os";
+import os11 from "node:os";
 import path83 from "node:path";
 
 // Packages/Box/src/link/vault/mask.ts
@@ -21803,7 +21819,7 @@ async function askForItem(caller, args, signal) {
     ...site ? { site } : {},
     ...caller.bot ? { bot: caller.bot, botName: caller.botName } : {},
     ...caller.root ? { session: caller.root, sessionName: caller.sessionName } : {},
-    ...IS_MAC ? {} : { machine: os10.hostname() }
+    ...IS_MAC ? {} : { machine: os11.hostname() }
   }, signal);
   const item = answered.item ? readItems().find((each) => each.id === answered.item) : undefined;
   if (answered.answer === "no" || !item)
@@ -22392,7 +22408,7 @@ async function* toApp(request, phone, signal) {
     yield { body: Buffer.from(chunk) };
   }
 }
-function macFront(handle = engineHandler(readEngineFile, { name: os11.hostname() })) {
+function macFront(handle = engineHandler(readEngineFile, { name: os12.hostname() })) {
   return async function* (request, phone, signal) {
     const route = String(request.path ?? "").split("?")[0];
     if (macAnswers(route) || /^api(\/|$)/.test(route) || route.startsWith(AGENTS))
@@ -22476,8 +22492,8 @@ async function runMacLink() {
 // Packages/Box/src/link/server/serve.ts
 import crypto35 from "node:crypto";
 import http from "node:http";
-import os12 from "node:os";
-function serveBox(password, handle = engineHandler(readEngineFile, { name: os12.hostname() })) {
+import os13 from "node:os";
+function serveBox(password, handle = engineHandler(readEngineFile, { name: os13.hostname() })) {
   const expected = Buffer.from("Basic " + Buffer.from(`opencode:${password}`).toString("base64"));
   return http.createServer(async (request, response) => {
     const given = Buffer.from(request.headers.authorization ?? "");
@@ -22645,7 +22661,7 @@ async function run2() {
   watchAsks(tell, { answered });
   keepEngineDefaults();
   keepFence();
-  holdVault(engineHandler(readEngineFile, { name: os13.hostname() }));
+  holdVault(engineHandler(readEngineFile, { name: os14.hostname() }));
   setVaultTell(tell);
   watchVaultAsks(tell, answered);
   watchSandboxAsks(tell, answered);
@@ -22711,11 +22727,11 @@ async function run2() {
     } catch {}
     const host = new LinkHost({
       key: Buffer.from(link.key, "base64url"),
-      hello: { v: 1, kind: "machine", name: link.name || os13.hostname(), app: BRIDGE_VERSION, engine: engine.version ?? null },
+      hello: { v: 1, kind: "machine", name: link.name || os14.hostname(), app: BRIDGE_VERSION, engine: engine.version ?? null },
       authorize: authorizePhone,
       confirmed: confirmPhone,
       mail: (_from, body) => receiveMail(body, host, (sender, payload) => peerMail(sender, payload, host, peerPlaces), (mac, given, at) => hold.attend(`mac:${mac}`, given, at)),
-      handle: engineHandler(readEngineFile, { name: link.name || os13.hostname() }, readBridgeFile, (changed) => host.keepOnly(new Set((changed.phones ?? []).map((phone) => phone.key))), hold),
+      handle: engineHandler(readEngineFile, { name: link.name || os14.hostname() }, readBridgeFile, (changed) => host.keepOnly(new Set((changed.phones ?? []).map((phone) => phone.key))), hold),
       connect: engineConnect(readEngineFile),
       send: () => {}
     });
@@ -22778,7 +22794,7 @@ async function box(command) {
       try {
         given = JSON.parse(await input());
       } catch {}
-      const handle = engineHandler(readEngineFile, { name: os13.hostname() }, readBridgeFile);
+      const handle = engineHandler(readEngineFile, { name: os14.hostname() }, readBridgeFile);
       const folder = given?.headers?.["x-opencode-directory"];
       const vaultHeaders = {};
       for (const name of ["x-kuvo-vault-key", "x-kuvo-vault-proof"]) {
@@ -22883,7 +22899,7 @@ async function serve() {
     addMacDefaults();
   if (IS_MAC)
     macLink.hold = macNoticeHold();
-  const server = serveBox(password, engineHandler(readEngineFile, { name: os13.hostname() }, readBridgeFile, () => {}, macLink.hold));
+  const server = serveBox(password, engineHandler(readEngineFile, { name: os14.hostname() }, readBridgeFile, () => {}, macLink.hold));
   await new Promise((resolve, reject) => {
     server.once("error", reject);
     server.listen(0, "127.0.0.1", resolve);
@@ -22895,7 +22911,7 @@ async function serve() {
   keepFence();
   keepEngineDefaults();
   console.log(JSON.stringify({ url: `http://127.0.0.1:${server.address().port}` }));
-  holdVault(engineHandler(readEngineFile, { name: os13.hostname() }, readBridgeFile));
+  holdVault(engineHandler(readEngineFile, { name: os14.hostname() }, readBridgeFile));
   if (IS_MAC)
     (async () => {
       for (let tries = 0;tries < 120; tries++) {
@@ -22980,7 +22996,7 @@ async function setup() {
     if (!next.phones.length && !peersOf(next).length)
       return current ? next : null;
     next.relay = String(input.relay);
-    next.name = String(input.name || next.name || os13.hostname()).slice(0, 100);
+    next.name = String(input.name || next.name || os14.hostname()).slice(0, 100);
     link = next;
     return next;
   });
@@ -23045,7 +23061,7 @@ function leave(mac) {
 }
 function pair(relay) {
   const link = updateLink((current) => {
-    const next = current ?? { secret: crypto36.randomBytes(32).toString("base64url"), key: newKey().toString("base64url"), name: os13.hostname(), phones: [] };
+    const next = current ?? { secret: crypto36.randomBytes(32).toString("base64url"), key: newKey().toString("base64url"), name: os14.hostname(), phones: [] };
     next.sign ??= newSigningSeed();
     if (relay)
       next.relay = relay;

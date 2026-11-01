@@ -30,5 +30,7 @@ struct OutsideFoldersTests {
         #expect(OutsideFolders.shown("*", home: home) == "Any folder")
         #expect(OutsideFolders.shown("~/notes/*", home: nil) == "~/notes")
         #expect(OutsideFolders.spoken("~/notes/*", home: nil) == "Home, notes")
+        // Only "everything in it" goes: another star means another thing.
+        #expect(OutsideFolders.shown("/Users/me/proj*", home: home) == "~/proj*")
     }
 }

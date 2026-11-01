@@ -26,6 +26,19 @@ export function prefixBytes(text: string, bytes: number) {
   }
   return out;
 }
+/** A folder or file an agent asks to work in outside its project, as people know it (as the apps'
+ * ClientText `OutsideFolders.shown` has it): "~/notes" for "<home>/notes/*", "/" for the whole disk,
+ * "Any folder" for "*"; a path elsewhere whole. */
+export function outsideShown(pattern: string, home: string | null): string {
+  let path = pattern.trim();
+  if (path === "*" || path === "**") return "Any folder";
+  for (const glob of ["/**", "/*"]) if (path.endsWith(glob)) { path = path.slice(0, -glob.length) || "/"; break; }
+  while (path.length > 1 && path.endsWith("/")) path = path.slice(0, -1);
+  const own = home?.replace(/(?<=.)\/+$/, "");
+  const rest = path === "~" ? "" : path.startsWith("~/") ? path.slice(2) : own && path === own ? "" : own && path.startsWith(own + "/") ? path.slice(own.length + 1) : null;
+  return rest === null ? path : rest ? `~/${rest}` : "~";
+}
+
 /** `text` at most `count` UTF-16 units, ending in "…" when it's cut. */
 export const cut = (text: string, count: number) => text.length <= count ? text : text.slice(0, count - 1) + "…";
 /** `text` as one word for sh, in single quotes. */
