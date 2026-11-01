@@ -9113,7 +9113,7 @@ import { spawn as spawn5 } from "child_process";
 import { randomUUID } from "crypto";
 import { existsSync as existsSync13, readFileSync as readFileSync18, statSync as statSync8 } from "fs";
 import { homedir } from "os";
-import { join as join20 } from "path";
+import { join as join20, resolve as resolve6 } from "path";
 import { pathToFileURL as pathToFileURL3 } from "url";
 
 // Packages/Box/src/agents/maintenance.ts
@@ -10593,6 +10593,8 @@ class ClaudeThread {
       return {};
     const ask = permissionAsk(String(input.tool_name ?? ""), input.tool_input ?? {});
     let verdict = hooks.check(ask, true);
+    if (verdict === "ask" && this.ownFile(ask))
+      verdict = undefined;
     if (verdict === "ask" && ask.action === "edit" && this.opened?.plan)
       verdict = undefined;
     if (verdict === "ask" && !this.active && !this.backgroundLane(input.agent_id))
@@ -10651,6 +10653,8 @@ class ClaudeThread {
     }
     if (name === "ExitPlanMode")
       return { behavior: "allow", updatedInput: input, toolUseID };
+    if (this.ownFile(permissionAsk(name, input)) && hooks.check(permissionAsk(name, input), true) !== "deny")
+      return { behavior: "allow", updatedInput: input, toolUseID };
     return this.decide(name, input, options, background ? (ask) => background.run.permission(ask) : hooks.permission);
   }
   async stopSubagent(callID) {
@@ -10669,6 +10673,14 @@ class ClaudeThread {
     const callID = typeof agentID === "string" ? this.tasks.get(agentID)?.toolUseID : undefined;
     const lane = callID ? this.keptLane(callID) ?? this.active?.subagents.get(callID) : undefined;
     return lane?.background ? lane : undefined;
+  }
+  ownFile(ask) {
+    const settings = this.agent.instance.home ?? process.env.CLAUDE_CONFIG_DIR ?? join20(homedir(), ".claude");
+    const kept = ask.action === "read" ? /^projects\/[^/]+\/[^/]+\/tool-results\/[^/]+$/ : ask.action === "edit" ? /^plans\/[^/]+\.md$/ : undefined;
+    return !!kept && ask.resources.length > 0 && ask.resources.every((path) => {
+      const file = resolve6(path);
+      return file.startsWith(settings + "/") && kept.test(file.slice(settings.length + 1));
+    });
   }
   async decide(name, input, options, permission) {
     const toolUseID = options?.toolUseID;
@@ -14292,7 +14304,7 @@ import { createHash as createHash6 } from "crypto";
 import { spawn as spawnProcess } from "child_process";
 import { readFileSync as readFileSync23, statSync as statSync9 } from "fs";
 import { homedir as homedir5 } from "os";
-import { dirname as dirname13, join as join25, resolve as resolve6 } from "path";
+import { dirname as dirname13, join as join25, resolve as resolve7 } from "path";
 import { fileURLToPath as fileURLToPath2 } from "url";
 
 // Packages/Box/src/agents/handover.ts
@@ -14852,7 +14864,8 @@ function runCommand(command, directory, started = () => {}) {
 var engineDefaults = [
   { action: "read", resource: "*.env", effect: "ask" },
   { action: "read", resource: "*.env.*", effect: "ask" },
-  { action: "read", resource: "*.env.example", effect: "allow" }
+  { action: "read", resource: "*.env.example", effect: "allow" },
+  { action: "external_directory", resource: "*", effect: "ask" }
 ];
 function commandParts(line) {
   const whole = line.trim();
@@ -15270,7 +15283,7 @@ function ownPlaces() {
 function outsidePaths(ask, directory, attached, own = ownPlaces()) {
   if (!fileActions.has(ask.action))
     return [];
-  const paths = ask.resources.filter((resource) => resource && resource !== "*" && (resource.startsWith("/") || resource.startsWith("~/") || !/[*?[]/.test(resource))).map((resource) => resolve6(directory, resource.startsWith("~/") ? join25(homedir5(), resource.slice(2)) : resource));
+  const paths = ask.resources.filter((resource) => resource && resource !== "*" && (resource.startsWith("/") || resource.startsWith("~/") || !/[*?[]/.test(resource))).map((resource) => resolve7(directory, resource.startsWith("~/") ? join25(homedir5(), resource.slice(2)) : resource));
   return paths.filter((path) => !within(path, [directory, ...own]) && !attached.has(path));
 }
 function outsideAsk(ask, paths) {
@@ -15352,7 +15365,7 @@ class Sessions {
         continue;
       changed = true;
       for (const path of found.made)
-        this.cited.push({ path: resolve6(record.session.location.directory, path), at: found.at });
+        this.cited.push({ path: resolve7(record.session.location.directory, path), at: found.at });
     }
     if (record.session.title?.includes(":codex-") && parseProvider(record.session.model?.providerID ?? "")?.kind === "codex") {
       record.session.title = plainCitations(record.session.title);
@@ -22704,4 +22717,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 7ae9ba88368c10c310e32623411414a18f2bd178d8cf86f6ae1207c16b582e76
+// Built from Packages/Box/src/agents bb5304861d421f85c846e5556ab086b741d6e0c2646a6badc7b885a6d53d35cf

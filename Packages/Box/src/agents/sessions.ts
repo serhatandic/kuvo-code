@@ -248,11 +248,16 @@ interface SnapshotNote {
   failed?: boolean
 }
 
-/** What the engine asks first about whatever else you've set (reading a .env file), for when it can't say its own. */
+/**
+ * What the engine asks first about whatever else you've set (reading a .env file, and working
+ * outside the project, which each box's engine plugin gives its agents: link/engine/defaults.ts),
+ * for when it can't say its own. They don't take an agent off running on its own (`approvesAll`).
+ */
 const engineDefaults: PermissionRule[] = [
   { action: "read", resource: "*.env", effect: "ask" },
   { action: "read", resource: "*.env.*", effect: "ask" },
   { action: "read", resource: "*.env.example", effect: "allow" },
+  { action: "external_directory", resource: "*", effect: "ask" },
 ]
 
 /**

@@ -816,6 +816,24 @@ describe("Claude Code's permissions", () => {
     expect(await answer).toMatchObject({ behavior: "allow" })
   })
 
+  test("reading a file outside the project asks first, as the engine's agents do, but not reading back a long output it saved", async () => {
+    const { id } = await begin()
+    const keys = join(homedir(), ".ssh", "id_ed25519")
+    expect((await fake.hook("Read", { file_path: keys }, "toolu_1")).decision).toBe("ask")
+    const answer = fake.canUse("Read", { file_path: keys }, "toolu_1")
+    await until(() => sessions.permissions(id).length === 1)
+    expect(sessions.permissions(id)[0]).toMatchObject({ action: "external_directory", resources: [keys] })
+    sessions.replyPermission(id, sessions.permissions(id)[0].id, "reject")
+    expect(await answer).toMatchObject({ behavior: "deny" })
+    // What it saved of a long output, as Claude Code saves it, which it's told to read.
+    const saved = join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"), "projects", "-tmp-project", "0b5e1f1c-0000-4000-8000-000000000000", "tool-results", "toolu_0.txt")
+    expect((await fake.hook("Read", { file_path: saved }, "toolu_2")).decision).toBeUndefined()
+    expect(await fake.canUse("Read", { file_path: saved }, "toolu_2")).toMatchObject({ behavior: "allow" })
+    // (Only that: a path that climbs out of it is outside.)
+    expect((await fake.hook("Read", { file_path: join(saved, "..", "..", "..", "..", "settings.json") }, "toolu_3")).decision).toBe("ask")
+    expect(sessions.permissions(id)).toHaveLength(0)
+  })
+
   test("your Blocks refuse a tool before it runs, under Approve All too: any command in a line counts, and Claude Code is told why", async () => {
     sessions = withBlocks([{ action: "shell", resource: "rm *", effect: "deny" }])
     const { id } = await begin()

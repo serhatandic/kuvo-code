@@ -3,7 +3,7 @@
 
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
-import { tmpdir } from "node:os"
+import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { AcpThread } from "../../src/agents/acp"
 import { AntigravityFollower } from "../../src/agents/agents/antigravity"
@@ -679,7 +679,8 @@ describe("asks and conversations", () => {
   test("Claude Code's own plan mode isn't refused its plan file by the hook", async () => {
     let checked: unknown[] = []
     a.script = async (input, turn, hooks, thread) => {
-      checked = [hooks.check({ action: "edit", resources: ["/home/me/.claude/plans/plan.md"] }, true), hooks.check({ action: "edit", resources: ["/tmp/project/a.ts"] })]
+      // (Its plan, where Claude Code writes it: its own place, not a folder outside the project.)
+      checked = [hooks.check({ action: "edit", resources: [join(homedir(), ".claude", "plans", "plan.md")] }, true), hooks.check({ action: "edit", resources: ["/tmp/project/a.ts"] })]
       return replies(input, turn, hooks, thread)
     }
     const id = create()
@@ -705,6 +706,37 @@ describe("asks and conversations", () => {
     sessions.replyPermission(id, sessions.permissions(id)[0].id, "once")
     await settled(id, 1)
     expect(decided).toEqual(["once", "once"])
+  })
+
+  test("working outside the project asks first, as the engine's agents now do, without taking an agent off running on its own", async () => {
+    const outside = { action: "external_directory", resource: "*", effect: "ask" } as const
+    // Build's rules as a box's engine has them (engine/defaults.ts), and as the bridge takes them
+    // when the engine can't say.
+    const agents = new Map([a, b].map((agent) => [agent.providerID, agent]))
+    for (const engineAnswers of [true, false]) {
+      sessions.closeAll()
+      sessions = new Sessions(store, { find: (provider: string | undefined) => (provider ? agents.get(provider) : undefined) } as unknown as Roster, auto, undefined, async () => [], async () =>
+        engineAnswers
+          ? { permissions: [{ action: "*", resource: "*", effect: "allow" }, { action: "read", resource: "*.env", effect: "ask" }, outside, { action: "external_directory", resource: "/box/attachments/*", effect: "allow" }] }
+          : undefined,
+      )
+      const seen: unknown[] = []
+      a.script = async (_input, turn, hooks) => {
+        seen.push(hooks.approvesAll())
+        seen.push(await hooks.permission({ action: "read", resources: ["/tmp/project/a.ts"] }))
+        seen.push(await hooks.permission({ action: "read", resources: ["/home/me/.ssh/id_ed25519"] }))
+        turn.startStep()
+        turn.endStep()
+        return { outcome: "succeeded" }
+      }
+      const id = create()
+      send(id, "read the keys")
+      await until(() => sessions.permissions(id).length === 1)
+      expect(sessions.permissions(id)[0]).toMatchObject({ action: "external_directory", resources: ["/home/me/.ssh/id_ed25519"] })
+      sessions.replyPermission(id, sessions.permissions(id)[0].id, "reject")
+      await settled(id, 1)
+      expect(seen).toEqual([true, "once", "reject"])
+    }
   })
 
   test("Stop while an agent gets ready stops the turn", async () => {

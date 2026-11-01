@@ -6,7 +6,7 @@ import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { existsSync, readFileSync, statSync } from "node:fs"
 import { homedir } from "node:os"
-import { join } from "node:path"
+import { join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import { providerID, type AgentAccount } from "../accounts"
 import type { Agent, AgentContext, Account, MessageInput, OwnTurn, RunInput, RunResult, SignInAttempt, SignInOptions, SubagentMessages, SubagentRun, Thread, TurnHooks, PromptFile } from "../agent"
@@ -1397,6 +1397,8 @@ class ClaudeThread implements Thread {
     if (!hooks) return {}
     const ask = permissionAsk(String(input.tool_name ?? ""), input.tool_input ?? {})
     let verdict = hooks.check(ask, true)
+    // Its own files (a long output it saved, read back; its plan): not "outside the project".
+    if (verdict === "ask" && this.ownFile(ask)) verdict = undefined
     // In plan mode its edits are its own to weigh: its plan, to its file, goes; any other edit it
     // asks about, and that's refused. Asking first would refuse its plan too.
     if (verdict === "ask" && ask.action === "edit" && this.opened?.plan) verdict = undefined
@@ -1458,6 +1460,7 @@ class ClaudeThread implements Thread {
       }
     }
     if (name === "ExitPlanMode") return { behavior: "allow", updatedInput: input, toolUseID }
+    if (this.ownFile(permissionAsk(name, input)) && hooks.check(permissionAsk(name, input), true) !== "deny") return { behavior: "allow", updatedInput: input, toolUseID }
     return this.decide(name, input, options, background ? (ask) => background.run.permission(ask) : hooks.permission)
   }
 
@@ -1479,6 +1482,21 @@ class ClaudeThread implements Thread {
     const callID = typeof agentID === "string" ? this.tasks.get(agentID)?.toolUseID : undefined
     const lane = callID ? (this.keptLane(callID) ?? this.active?.subagents.get(callID)) : undefined
     return lane?.background ? lane : undefined
+  }
+
+  /**
+   * Its own files in its settings folder, never asked about as a folder outside the project: what
+   * it saved of a long output (`projects/<project>/<session>/tool-results`), which it's told to
+   * read back, as the engine's long outputs are the engine's; and its plans (`plans`, which it
+   * writes in plan mode, its own or yours).
+   */
+  private ownFile(ask: { action: string; resources: string[] }): boolean {
+    const settings = this.agent.instance.home ?? process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude")
+    const kept = ask.action === "read" ? /^projects\/[^/]+\/[^/]+\/tool-results\/[^/]+$/ : ask.action === "edit" ? /^plans\/[^/]+\.md$/ : undefined
+    return !!kept && ask.resources.length > 0 && ask.resources.every((path) => {
+      const file = resolve(path)
+      return file.startsWith(settings + "/") && kept.test(file.slice(settings.length + 1))
+    })
   }
 
   /** A tool asked about: allowed, or not, as you answer (or your rules do). */
