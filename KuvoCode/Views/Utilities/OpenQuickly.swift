@@ -43,7 +43,7 @@ struct OpenQuickly: View {
                                     .resizable()
                                     .frame(width: 16, height: 16)
                                 // What you typed in semibold, as the command palette marks it.
-                                Text(CommandPalette.marked(file.name, query: query))
+                                Text(CommandPalette.marked(file.name, query: query, weight: .medium))
                                     .font(.system(size: 13, weight: .medium))
                                 let folder = (file.path as NSString).deletingLastPathComponent
                                 if !folder.isEmpty {
