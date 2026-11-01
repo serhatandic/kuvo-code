@@ -3059,8 +3059,12 @@ launcher as the engine names its own, `OPENCODE_SESSION_ID`), the system's tempo
 caches, but not what in them runs later outside the sandbox (installed programs like
 `~/.cargo/bin` and `~/.bun/bin`, tools' settings and start-up scripts, what your shell profile
 sources from them (`~/.cargo/env`, `~/.deno/env`, `~/.bun/_bun`), npx's packages, the caches of
-pre-commit, pnpm, uv and corepack in `~/.cache` and your own `XDG_CACHE_HOME`, pnpm's in
-`~/Library/Caches`, and on macOS bunx's packages in your temporary folder; on macOS no folder that
+pre-commit, pnpm, uv and corepack in `~/.cache` and your own `XDG_CACHE_HOME`, and what zsh loads
+from there as a terminal starts (p10k's instant prompt and state, by your account's name, and on
+macOS any `p10k-` file, as p10k moves each into place; gitstatus, oh-my-zsh's and prezto's
+completions, a `zsh` folder of your own, antidote, zsh4humans, oh-my-posh), pnpm's and antidote's in
+`~/Library/Caches`, on macOS mise's trusted configs in `~/.local/state` (not on Linux, where keeping
+them would stop commands making new folders there), and on macOS bunx's packages in your temporary folder; on macOS no folder that
 holds those, your secrets or Kuvo Code's own is moved, removed or cloned whole, which would leave
 what's in it under another name, nor one that isn't there yet made a link, though it can be made as
 a folder, so moved into place). Its npm, pnpm (11 and
