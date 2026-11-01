@@ -47,6 +47,7 @@ import { newSigningSeed, ownSign, SIGN } from "./documents/format";
 import { docsWork, ownDocs, pruneDocs } from "./documents/work";
 import { peerPlaces, peerTargets, readBridgeFile, readEngineFile } from "./engine/client";
 import { engineConfigContent } from "./engine/compatibility";
+import { keepEngineDefaults } from "./engine/defaults";
 import { watchBox } from "./engine/watch";
 import { watchMoves } from "./moves/move";
 import { writePrivate } from "./files";
@@ -309,6 +310,9 @@ async function run(): Promise<void> {
   // Moves to and from your other computers, carried on the same connection.
   watchMoves(() => current);
   watchAsks(tell, { answered });
+  // Working outside a conversation's project asks first, as Settings › Permissions says
+  // (engine/defaults.ts).
+  keepEngineDefaults();
   // Agents' commands, in the sandbox wherever it can run (fence/state.ts), set up before the vault
   // goes by it.
   keepFence();
@@ -552,6 +556,7 @@ async function serve(): Promise<void> {
   try { socketKey(); } catch {}
   fenceOwnPort((server.address() as AddressInfo).port);
   keepFence();
+  keepEngineDefaults();
   console.log(JSON.stringify({ url: `http://127.0.0.1:${(server.address() as AddressInfo).port}` }));
   // The vault, held here (on a machine, `run` holds it; a test's box serves alone), its asks told
   // to your phones through this Mac's link.
