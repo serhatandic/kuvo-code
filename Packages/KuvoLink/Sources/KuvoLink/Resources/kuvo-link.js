@@ -1222,7 +1222,7 @@ async function sendNow(target, session, item) {
 var NOT_YOURS = ["[Message from ", "[Wake-up]", "[Work from ", "[Session ", "[Goal started]", "[Goal changed]", "[Goal's end]", "[Goal resumed]", "[Not now]", "[Limit reset]", "[The user answered]"];
 var writtenByYou = (text, metadata) => !isBoxNote(metadata) && !NOT_YOURS.some((start) => String(text ?? "").startsWith(start));
 var isYours = (item) => item.type === "user" && writtenByYou(item.payload?.text, item.payload?.metadata);
-function queueWatcher(target, { after = DRAIN_AFTER, schedule = setTimeout, cancel = clearTimeout } = {}) {
+function queueWatcher(target, { after = DRAIN_AFTER, schedule = setTimeout, cancel = clearTimeout, found } = {}) {
   const drains = new Map;
   const stops = new Map;
   const later = (timers, session, work) => {
@@ -1238,6 +1238,21 @@ function queueWatcher(target, { after = DRAIN_AFTER, schedule = setTimeout, canc
       cancel(timers.get(session));
     timers.delete(session);
   };
+  const ends = new Map;
+  const look = (session, end, waited) => later(end.timers, session, async () => {
+    if (ends.get(session) !== end)
+      return;
+    const running = await isRunning(target, session).catch(() => false);
+    if (running || ends.get(session) !== end)
+      return;
+    ends.delete(session);
+    await end.then(waited);
+  });
+  const ended = (session, timers, then) => {
+    const end = { timers, then };
+    ends.set(session, end);
+    look(session, end, false);
+  };
   return (event) => {
     const session = event.data?.sessionID;
     if (!session)
@@ -1246,30 +1261,49 @@ function queueWatcher(target, { after = DRAIN_AFTER, schedule = setTimeout, canc
       case "session.execution.started":
         forget(drains, session);
         forget(stops, session);
+        ends.delete(session);
         break;
       case "session.execution.succeeded":
         forget(stops, session);
-        later(drains, session, () => drain(target, session).catch(() => drain(target, session)));
+        ended(session, drains, () => drain(target, session).catch(() => drain(target, session)));
         break;
       case "session.execution.interrupted": {
         if (event.data?.reason === "superseded" || event.data?.reason === "inactivity") {
-          later(drains, session, () => drain(target, session));
+          ended(session, drains, () => drain(target, session));
           break;
         }
         const at = Date.now();
-        const look = (left) => later(stops, session, async () => {
-          if (!await isRunning(target, session))
+        ended(session, stops, async (waited) => {
+          if ((queueOf(session).resumed ?? 0) < at)
             await holdQueue(target, session, at);
-          else if (left > 0)
-            look(left - 1);
+          else if (waited)
+            await drain(target, session);
         });
-        look(10);
         break;
       }
-      case "session.execution.failed":
-        forget(stops, session);
-        holdQueue(target, session).catch(() => {});
+      case "session.idle": {
+        const end = ends.get(session);
+        const known = found?.get(session);
+        found?.delete(session);
+        if (end)
+          look(session, end, true);
+        else if (known !== undefined)
+          later(drains, session, async () => {
+            if (!await isRunning(target, session))
+              await settleFound(target, session, known);
+          });
         break;
+      }
+      case "session.execution.failed": {
+        forget(stops, session);
+        const at = Date.now();
+        holdQueue(target, session, at).catch(() => {});
+        ended(session, stops, async (waited) => {
+          if (waited && (queueOf(session).resumed ?? 0) >= at)
+            await drain(target, session);
+        });
+        break;
+      }
       case "session.inbox.enqueued":
         if (event.data?.item?.delivery === "steer" && isYours(event.data.item))
           changeQueue2(session, (state) => ({ ...state, paused: false }));
@@ -1286,6 +1320,7 @@ function queueWatcher(target, { after = DRAIN_AFTER, schedule = setTimeout, canc
       case "session.deleted":
         forget(drains, session);
         forget(stops, session);
+        ends.delete(session);
         forgetQueue(session);
         break;
       case "session.inbox.delivered":
@@ -1308,9 +1343,17 @@ async function endedBadly(target, session) {
   if (!Array.isArray(page?.data))
     return true;
   const last = page.data[0];
+  if (last?.type === "idle")
+    return last.outcome !== "succeeded";
   return last?.type === "assistant" && isObject(last.error);
 }
-async function scanQueues(target) {
+async function settleFound(target, session, known) {
+  if (known && !await endedBadly(target, session))
+    await drain(target, session);
+  else
+    await holdQueue(target, session);
+}
+async function scanQueues(target, found) {
   const known = locked(FILES.lock, () => {
     let scanned = {};
     try {
@@ -1330,12 +1373,14 @@ async function scanQueues(target) {
     if (typeof session.id !== "string" || (session.time?.updated ?? 0) < week)
       continue;
     try {
-      if (!(await inboxOf(target, session.id)).length || await isRunning(target, session.id))
+      if (!(await inboxOf(target, session.id)).length)
         continue;
-      if (known && !await endedBadly(target, session.id))
-        await drain(target, session.id);
-      else
-        await holdQueue(target, session.id);
+      if (await isRunning(target, session.id)) {
+        found?.set(session.id, known);
+        if (!found || await isRunning(target, session.id) || !found.delete(session.id))
+          continue;
+      }
+      await settleFound(target, session.id, known);
     } catch {}
   }
   for (const [session, state] of Object.entries(readQueues2())) {
@@ -13165,7 +13210,8 @@ async function watchEvents(read, tell, signal, answered = () => {}, { bots = fal
     try {
       const source = read();
       const steer = steers ? steering((session) => backgroundTools(source, session).catch(() => {}), { after: steerAfter, signal: connection.signal }) : null;
-      const queue = queues ? queueWatcher(source) : null;
+      const found = new Map;
+      const queue = queues ? queueWatcher(source, { found }) : null;
       const followWork = work ? workWatcher(source, peerTargets, { signal: connection.signal, from: work }) : null;
       const goalHeld = goals ? goalHolds(peerTargets) : null;
       const response = await fetch(`http://127.0.0.1:${source.port}/api/event`, {
@@ -13181,7 +13227,7 @@ async function watchEvents(read, tell, signal, answered = () => {}, { bots = fal
       lastLearned = 0;
       learn(source);
       if (queues)
-        scanQueues(source).catch(() => {});
+        scanQueues(source, found).catch(() => {});
       if (goalHeld)
         settleGoalHolds(source, goalHeld).catch(() => {});
       for await (const event of serverEvents(response.body)) {

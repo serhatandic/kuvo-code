@@ -16159,8 +16159,10 @@ ${others.join(`
     this.advance(id, live, ended);
     for (const waiting of live.waiting.splice(0))
       waiting();
-    if (live.doing.kind === "idle")
-      this.closeWhenIdle(id, live);
+    if (live.doing.kind !== "idle")
+      return;
+    this.closeWhenIdle(id, live);
+    emit("session.idle", { sessionID: id }, this.store.get(id)?.session.location.directory);
   }
   turnAwayOwn(live) {
     const own = live?.own;
@@ -22704,4 +22706,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 7ae9ba88368c10c310e32623411414a18f2bd178d8cf86f6ae1207c16b582e76
+// Built from Packages/Box/src/agents 25c5c60b7b4f6d5c733af53ef63573360ef081de6d2ef2f8c0731f58f2789944

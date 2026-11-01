@@ -11,7 +11,7 @@ import { engineGet, peerTargets, readBridgeFile, readEngineFile } from "./client
 import { learnCompatibility } from "./compatibility";
 import { goalHolds, settleGoalHolds } from "../work/goals";
 import { workWatcher } from "../work/wakes";
-import { queueWatcher, scanQueues } from "./queue";
+import { queueWatcher, scanQueues, type ScanFound } from "./queue";
 import type { Target } from "../../shared/records";
 import type { SignInEvent } from "../areas/accounts";
 import type { NoticeHold } from "../notices/hold";
@@ -256,7 +256,9 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
     try {
       const source = read();
       const steer = steers ? steering(session => backgroundTools(source, session).catch(() => {}), { after: steerAfter, signal: connection.signal }) : null;
-      const queue = queues ? queueWatcher(source) : null;
+      // (What the scan finds at work, the watcher settles once it's free.)
+      const found: ScanFound = new Map();
+      const queue = queues ? queueWatcher(source, { found }) : null;
       const followWork = work ? workWatcher(source, peerTargets, { signal: connection.signal, from: work }) : null;
       // A goal paused or resumed (the agents' bridge says so): its conversation held or let go.
       const goalHeld = goals ? goalHolds(peerTargets) : null;
@@ -273,7 +275,7 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
       freshenBots(source).catch(() => {});
       lastLearned = 0;
       learn(source);
-      if (queues) scanQueues(source).catch(() => {});
+      if (queues) scanQueues(source, found).catch(() => {});
       // A goal's change it missed meanwhile: what's held for one let go, or kept, as it is now.
       if (goalHeld) settleGoalHolds(source, goalHeld).catch(() => {});
       for await (const event of serverEvents(response.body)) {

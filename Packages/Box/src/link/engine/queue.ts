@@ -462,6 +462,9 @@ const isYours = (item: NonNullable<NonNullable<QueueEvent["data"]>["item"]>) => 
 /** How the queue's watcher waits (a test's clock). */
 export interface QueueWatch {
   after?: number;
+  /** The sessions `scanQueues` found at work as this stream connected (`ScanFound`): each settled
+   * as it would have, once the session says it's free. */
+  found?: ScanFound;
   schedule?: (run: () => void, ms: number) => unknown;
   cancel?: (timer: unknown) => void;
 }
@@ -474,7 +477,7 @@ export interface QueueWatch {
  * later; one for the next step: the queue isn't paused any more (you sent a message to go now).
  * One delivered or taken back leaves what's held. Paused, it stays so until Resume, Send Now or a
  * message of yours to go now, though nothing is left waiting: what arrives then waits on the box. */
-export function queueWatcher(target: Target, { after = DRAIN_AFTER, schedule = setTimeout, cancel = clearTimeout as (timer: unknown) => void }: QueueWatch = {}): (event: QueueEvent) => void {
+export function queueWatcher(target: Target, { after = DRAIN_AFTER, schedule = setTimeout, cancel = clearTimeout as (timer: unknown) => void, found }: QueueWatch = {}): (event: QueueEvent) => void {
   const drains = new Map<string, unknown>();
   const stops = new Map<string, unknown>();
   const later = (timers: Map<string, unknown>, session: string, work: () => Promise<unknown>) => {
@@ -488,6 +491,23 @@ export function queueWatcher(target: Target, { after = DRAIN_AFTER, schedule = s
     if (timers.has(session)) cancel(timers.get(session));
     timers.delete(session);
   };
+  // A run's end, a moment on: `then`, once the session's no longer at work (`waited`: it said it
+  // was free since). Still at work (the coding agents' bridge keeping the files a run changed),
+  // looked at again once it says it's free (`session.idle`). Only the latest end, until a run starts.
+  interface End { timers: Map<string, unknown>; then: (waited: boolean) => Promise<unknown> }
+  const ends = new Map<string, End>();
+  const look = (session: string, end: End, waited: boolean) => later(end.timers, session, async () => {
+    if (ends.get(session) !== end) return;
+    const running = await isRunning(target, session).catch(() => false);
+    if (running || ends.get(session) !== end) return;
+    ends.delete(session);
+    await end.then(waited);
+  });
+  const ended = (session: string, timers: Map<string, unknown>, then: End["then"]) => {
+    const end = { timers, then };
+    ends.set(session, end);
+    look(session, end, false);
+  };
   return event => {
     const session = event.data?.sessionID;
     if (!session) return;
@@ -495,31 +515,47 @@ export function queueWatcher(target: Target, { after = DRAIN_AFTER, schedule = s
       case "session.execution.started":
         forget(drains, session);
         forget(stops, session);
+        ends.delete(session);
         break;
       case "session.execution.succeeded":
         forget(stops, session);
-        later(drains, session, () => drain(target, session).catch(() => drain(target, session)));
+        ended(session, drains, () => drain(target, session).catch(() => drain(target, session)));
         break;
       case "session.execution.interrupted": {
         if (event.data?.reason === "superseded" || event.data?.reason === "inactivity") {
-          later(drains, session, () => drain(target, session));
+          ended(session, drains, () => drain(target, session));
           break;
         }
-        // (Not when it was resumed since: Resume or Send Now goes on.)
+        // A Stop: held and paused, unless it was resumed since (Resume, or Send Now's stop-and-go,
+        // which go on by themselves). Resumed by the time the bridge says it's free (Resume's own
+        // look may have found it still at work), its next goes now.
         const at = Date.now();
-        // Still at work a moment later (the bridge keeping files after a turn): looked at again,
-        // a few times.
-        const look = (left: number): void => later(stops, session, async () => {
-          if (!(await isRunning(target, session))) await holdQueue(target, session, at);
-          else if (left > 0) look(left - 1);
+        ended(session, stops, async waited => {
+          if ((queueOf(session).resumed ?? 0) < at) await holdQueue(target, session, at);
+          else if (waited) await drain(target, session);
         });
-        look(10);
         break;
       }
-      case "session.execution.failed":
-        forget(stops, session);
-        holdQueue(target, session).catch(() => {});
+      case "session.idle": {
+        // Free now (the coding agents' bridge, once it kept what a run changed or put files
+        // back): what its end left to do; one this stream connected to while it was at work (a
+        // run's end not heard), as `scanQueues` would have.
+        const end = ends.get(session);
+        const known = found?.get(session);
+        found?.delete(session);
+        if (end) look(session, end, true);
+        else if (known !== undefined) later(drains, session, async () => { if (!(await isRunning(target, session))) await settleFound(target, session, known); });
         break;
+      }
+      case "session.execution.failed": {
+        forget(stops, session);
+        // (Not when resumed since.) Resumed while the bridge was still keeping what it changed:
+        // its next goes once it's free.
+        const at = Date.now();
+        holdQueue(target, session, at).catch(() => {});
+        ended(session, stops, async waited => { if (waited && (queueOf(session).resumed ?? 0) >= at) await drain(target, session); });
+        break;
+      }
       case "session.inbox.enqueued":
         // You writing to it for now: it goes on. (Not a letter, a wake-up or a note.)
         if (event.data?.item?.delivery === "steer" && isYours(event.data.item)) changeQueue(session, state => ({ ...state, paused: false }));
@@ -538,6 +574,7 @@ export function queueWatcher(target: Target, { after = DRAIN_AFTER, schedule = s
         // Gone: its queue and what waited for it with it.
         forget(drains, session);
         forget(stops, session);
+        ends.delete(session);
         forgetQueue(session);
         break;
       case "session.inbox.delivered":
@@ -559,20 +596,33 @@ export function queueWatcher(target: Target, { after = DRAIN_AFTER, schedule = s
 // `run/` so a box that starts again beside the same engine doesn't take it for a new one.
 const SCANNED_FILE = path.join(RUN, "queues-scanned.json");
 
-// Whether `session`'s last run was stopped or failed, as its newest message says (an answer that
-// ended in an error); unknown, it was.
+// Whether `session`'s last run was stopped or failed, as its newest message says (the run's end,
+// as the engine and the bridge mark it, or an answer that ended in an error); unknown, it was.
 async function endedBadly(target: Target, session: string): Promise<boolean> {
-  const page = await asked(target, "GET", `api/session/${address(session)}/message?limit=1&order=desc`).catch(() => null) as { data?: { type?: string; error?: unknown }[] } | null;
+  const page = await asked(target, "GET", `api/session/${address(session)}/message?limit=1&order=desc`).catch(() => null) as { data?: { type?: string; outcome?: unknown; error?: unknown }[] } | null;
   if (!Array.isArray(page?.data)) return true;
   const last = page.data[0];
+  if (last?.type === "idle") return last.outcome !== "succeeded";
   return last?.type === "assistant" && isObject(last.error);
+}
+
+/** Sessions with messages waiting that `scanQueues` found at work: whether it knew their engine
+ * (else it started anew), for the watcher to settle each once it's free. */
+export type ScanFound = Map<string, boolean>;
+
+// A queue found as an engine was found: one the same engine left (`known`) goes on unless its run
+// stopped or failed; else held and paused, as Stop holds them.
+async function settleFound(target: Target, session: string, known: boolean): Promise<void> {
+  if (known && !(await endedBadly(target, session))) await drain(target, session);
+  else await holdQueue(target, session);
 }
 
 /** Once for each engine started anew (its process changed): each of its latest sessions with
  * messages waiting and nothing running held and paused, as Stop holds them. The same engine (the
  * box started again, or its stream dropped and came back): their queues go on, as after a run
- * that ended while it couldn't hear; held and paused as above if it was stopped or failed. */
-export async function scanQueues(target: Target & { pid?: number }): Promise<void> {
+ * that ended while it couldn't hear; held and paused as above if it was stopped or failed. One at
+ * work then goes in `found`, for the watcher. */
+export async function scanQueues(target: Target & { pid?: number }, found?: ScanFound): Promise<void> {
   const known = locked(FILES.lock, () => {
     let scanned: Record<string, unknown> = {};
     try { scanned = JSON.parse(fs.readFileSync(SCANNED_FILE, "utf8")) ?? {}; } catch {}
@@ -586,9 +636,14 @@ export async function scanQueues(target: Target & { pid?: number }): Promise<voi
   for (const session of page?.data ?? []) {
     if (typeof session.id !== "string" || (session.time?.updated ?? 0) < week) continue;
     try {
-      if (!(await inboxOf(target, session.id)).length || (await isRunning(target, session.id))) continue;
-      if (known && !(await endedBadly(target, session.id))) await drain(target, session.id);
-      else await holdQueue(target, session.id);
+      if (!(await inboxOf(target, session.id)).length) continue;
+      if (await isRunning(target, session.id)) {
+        found?.set(session.id, known);
+        // (Its word that it's free may have come before it was found: free now, it's settled here,
+        // unless the watcher heard that and took it.)
+        if (!found || (await isRunning(target, session.id)) || !found.delete(session.id)) continue;
+      }
+      await settleFound(target, session.id, known);
     } catch {}
   }
   // What waits on the box for one that isn't paused (the box stopped before it went): it goes now.
