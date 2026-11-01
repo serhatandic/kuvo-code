@@ -335,21 +335,23 @@ private struct BottomStack: View {
         Group {
             VStack(spacing: 12) {
                 // What asks you something: solid cards over the composer's, apart from it.
+                // Return and Escape answer the card on top only; one answered waits for the engine.
                 ForEach(model.permissions) { request in
                     PermissionCard(request: request, command: model.permissionCommands[request.id], directory: model.session.location.directory) { decision in
                         model.reply(to: request, decision)
                     }
-                    .disabled(offlineMachine != nil)
+                    .environment(\.takesCardKeys, takesCardKeys && model.keyedAsk == request.id)
+                    .disabled(offlineMachine != nil || model.answering.contains(request.id))
                     .modifier(ComposerSurface())
                 }
-                ForEach(Array(forms.enumerated()), id: \.element.id) { index, form in
+                ForEach(forms) { form in
                     QuestionCard(form: form, progress: Binding(get: { model.questionProgress[form.id] ?? QuestionProgress() }, set: { model.questionProgress[form.id] = $0 }),
-                                 takesKeys: index == 0 && takesCardKeys) { answer in
+                                 takesKeys: takesCardKeys && (model.keyedAsk ?? forms.first?.id) == form.id) { answer in
                         model.answer(form, with: FormFieldsView.payload(form.fields, answer))
                     } dismiss: {
                         model.dismiss(form)
                     }
-                    .disabled(offlineMachine != nil)
+                    .disabled(offlineMachine != nil || model.answering.contains(form.id))
                     .modifier(ComposerSurface())
                 }
                 ForEach(app.browserAsks.asks(for: model.session.id)) { ask in

@@ -32,9 +32,16 @@ final class Workspace {
     /// A machine's coding agents (the agents bridge beside its engine), by the machine's name.
     @ObservationIgnored var machineAgents: (String) -> OutsideAgents? = { _ in nil }
 
-    /// A conversation's goal, as its computer's agents bridge runs it (where its folder is now).
+    /// A conversation's goal, as its computer's agents bridge runs it (where its folder is now), and
+    /// its asks settled with no event for them.
     private func followGoals(of model: SessionModel) {
         model.goalBridge = { [weak self, weak model] in model.flatMap { self?.agents(forFolder: $0.session.location.directory) } }
+        // An ask found settled without a word of it (answered elsewhere first): off the Dock's
+        // count and the notifications too.
+        model.askSettled = { [weak self] request in
+            self?.asking[request] = nil
+            Notifier.shared.clear(request: request)
+        }
     }
 
     /// The agents bridge a folder's sessions with the coding agents run in: its machine's, or
