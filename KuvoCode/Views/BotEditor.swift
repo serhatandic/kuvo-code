@@ -700,7 +700,9 @@ private struct TemplatePicker: View {
     var body: some View {
         WellGroup {
             VStack(alignment: .leading, spacing: 10) {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 66), spacing: 4)], spacing: 4) {
+                // Two even rows across the well: wrapping by width left a short last row under
+                // a gap.
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 60), spacing: 4), count: (BotTemplate.all.count + 1) / 2), spacing: 4) {
                     ForEach(BotTemplate.all) { template in
                         TemplateFace(template: template, isOn: selection == template.id) { pick(template) }
                     }
