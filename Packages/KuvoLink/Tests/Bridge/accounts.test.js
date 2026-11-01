@@ -61,7 +61,8 @@ async function engineWith() {
     }
     if (url.pathname === "/api/credential") return send(200, { data: engine.credentials });
     if (url.pathname === "/api/integration") {
-      const plan = id => ({ id, connections: engine.inUse[id] ? [{ type: "credential", ...engine.inUse[id] }] : [] });
+      // As the engine lists a sign-in in use: its credential's `id`.
+      const plan = id => ({ id, connections: engine.inUse[id] ? [{ type: "credential", id: engine.inUse[id].credentialID, method: engine.inUse[id].method }] : [] });
       return send(200, { data: [plan("openai"), plan("anthropic"), plan("sirket-proxy"), plan("şirket-proxy"), { id: "notion", metadata: { source: "mcp" }, connections: [] }] });
     }
     const session = engine.sessions[decodeURIComponent(url.pathname.split("/").pop())];

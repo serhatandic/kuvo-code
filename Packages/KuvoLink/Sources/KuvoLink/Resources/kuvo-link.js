@@ -12726,8 +12726,8 @@ async function noteSignIn(event, source) {
   if (!ended)
     return void changeEndedSignIns((each) => each.delete(provider));
   const active = await activeCredential(source, provider);
-  if (active?.method === "oauth" && active.credentialID)
-    changeEndedSignIns((each) => each.set(provider, active.credentialID));
+  if (active?.method === "oauth" && active.id)
+    changeEndedSignIns((each) => each.set(provider, active.id));
 }
 async function activeCredential(engine, provider) {
   const integrations = (await engineGet(engine, "api/integration"))?.data;
@@ -12736,7 +12736,7 @@ async function activeCredential(engine, provider) {
 async function endedProviders(engine) {
   const providers = [];
   for (const [provider, credential] of readEndedSignIns()) {
-    if ((await activeCredential(engine, provider).catch(() => null))?.credentialID === credential)
+    if ((await activeCredential(engine, provider).catch(() => null))?.id === credential)
       providers.push(provider);
   }
   return providers.sort();

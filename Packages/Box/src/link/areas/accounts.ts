@@ -31,11 +31,11 @@ interface EngineIntegration {
 }
 
 /** One of a provider's connections: a sign-in's (`credential`) says how it's signed in and which
- * of its credentials it is. */
+ * of its credentials it is (`id`). */
 interface EngineConnection {
   type?: string;
   method?: string;
-  credentialID?: string;
+  id?: string;
 }
 
 /** A sign-in (or a key) as the engine keeps it and lists it (`api/credential`): the integration
@@ -83,7 +83,7 @@ export async function noteSignIn(event: SignInEvent, source: Target): Promise<vo
   if (typeof provider !== "string") return;
   if (!ended) return void changeEndedSignIns(each => each.delete(provider));
   const active = await activeCredential(source, provider);
-  if (active?.method === "oauth" && active.credentialID) changeEndedSignIns(each => each.set(provider, active.credentialID!));
+  if (active?.method === "oauth" && active.id) changeEndedSignIns(each => each.set(provider, active.id!));
 }
 
 // `provider`'s sign-in in use, as its engine lists it.
@@ -96,7 +96,7 @@ async function activeCredential(engine: Target, provider: string): Promise<Engin
 export async function endedProviders(engine: Target): Promise<string[]> {
   const providers: string[] = [];
   for (const [provider, credential] of readEndedSignIns()) {
-    if ((await activeCredential(engine, provider).catch(() => null))?.credentialID === credential) providers.push(provider);
+    if ((await activeCredential(engine, provider).catch(() => null))?.id === credential) providers.push(provider);
   }
   return providers.sort();
 }
