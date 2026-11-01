@@ -10760,11 +10760,12 @@ import path46 from "node:path";
 function freeBranch(folder, name) {
   for (let suffix = 1;suffix <= 20; suffix++) {
     const candidate = suffix === 1 ? name : `${name}-${suffix}`;
-    if (gitIn(folder, ["rev-parse", "--verify", "--quiet", `refs/heads/${candidate}`]) === null)
+    if (gitIn(folder, ["rev-parse", "--verify", "--quiet", `refs/heads/${candidate}`]) === null && !onRemote(folder, candidate))
       return candidate;
   }
   return null;
 }
+var onRemote = (folder, branch) => Boolean(gitIn(folder, ["for-each-ref", "--count=1", "--format=%(refname)", `refs/remotes/*/${branch}`]));
 var LATIN = Object.fromEntries([
   ...[..."абвгдеёжзийклмнопрстуфхцчшщъыьэюяіїєґ"].map((letter, at) => [letter, ["a", "b", "v", "g", "d", "e", "e", "z", "z", "i", "j", "k", "l", "m", "n", "o", "p", "r", "s", "t", "u", "f", "h", "c", "c", "s", "s", "", "y", "", "e", "u", "a", "i", "i", "e", "g"][at]]),
   ...[..."αβγδεζηθικλμνξοπρσςτυφχψω"].map((letter, at) => [letter, ["a", "b", "g", "d", "e", "z", "e", "th", "i", "k", "l", "m", "n", "x", "o", "p", "r", "s", "s", "t", "y", "ph", "ch", "ps", "o"][at]])
@@ -10795,7 +10796,7 @@ async function sessionsHere(engine, signal, bridge = bridgeTarget()) {
   if (!engine?.port)
     return null;
   const here = { sessions: [], active: new Set };
-  for (const target of bridge?.port ? [engine, bridge] : [engine]) {
+  for (const target of bridge?.port && bridge.port !== engine.port ? [engine, bridge] : [engine]) {
     const headers = { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}` };
     try {
       const listed = await fetch(`http://127.0.0.1:${target.port}/api/session?parentID=null&limit=200&order=desc`, { headers, signal: AbortSignal.timeout(1e4) });
@@ -10816,6 +10817,8 @@ var inside2 = (folder, root) => folder === root || folder?.startsWith(root + "/"
 function renameWorktree(tree, to) {
   if (gitIn(tree.root, ["rev-parse", "--abbrev-ref", `${tree.branch}@{upstream}`]) !== null)
     return false;
+  if (onRemote(tree.root, tree.branch))
+    return false;
   const name = freeBranch(tree.root, to);
   if (!name || gitIn(tree.root, ["branch", "-m", tree.branch, name]) === null) {
     const now = gitIn(tree.root, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
@@ -10828,16 +10831,41 @@ function renameWorktree(tree, to) {
 }
 async function nameWorktreeBranch(engine, sessionID) {
   if (typeof sessionID !== "string")
-    return;
+    return false;
   const session = (await engineGet(engine, `api/session/${encodeURIComponent(sessionID)}`))?.data;
   if (!session || session.parentID || isHiddenRun(session))
-    return;
+    return false;
   const folder = session.location?.directory ?? session.directory;
   const tree = readWorktrees().find((each) => (each.folder ?? each.root) === folder);
   const slug = branchSlug(session.title ?? "");
   if (!tree?.made || tree.branch !== tree.made || !slug)
-    return;
-  if (renameWorktree(tree, (tree.prefix ?? "") + slug))
+    return false;
+  if (!renameWorktree(tree, (tree.prefix ?? "") + slug))
+    return false;
+  await tellRenamed(engine, tree, sessionID);
+  return true;
+}
+async function tellRenamed(source, tree, sessionID) {
+  await tellWorktree(source, sessionID);
+  const told = new Set([sessionID]);
+  const places = [source];
+  try {
+    places.push(readEngineFile());
+  } catch {}
+  const bridge = bridgeTarget();
+  if (bridge)
+    places.push(bridge);
+  for (const target of places.filter((each, at) => each.port && places.findIndex((other) => other.port === each.port) === at)) {
+    for (const session of (await sessionsHere(target, undefined, null))?.sessions ?? []) {
+      if (told.has(session.id) || isHiddenRun(session) || !inside2(session.location?.directory ?? session.directory, tree.root))
+        continue;
+      told.add(session.id);
+      await tellWorktree(target, session.id).catch(() => {});
+    }
+  }
+}
+async function settleNewSession(engine, sessionID) {
+  if (!await nameWorktreeBranch(engine, sessionID))
     await tellWorktree(engine, sessionID);
 }
 async function nameDueWorktrees(engine, signal) {
@@ -13536,6 +13564,8 @@ async function watchEvents(read, tell, signal, answered = () => {}, { bots = fal
       learn(source);
       if (queues)
         scanQueues(source, found).catch(() => {});
+      if (!bots)
+        nameDueWorktrees(source, connection.signal).catch(() => {});
       if (goalHeld)
         settleGoalHolds(source, goalHeld).catch(() => {});
       for await (const event of serverEvents(response.body)) {
@@ -13550,7 +13580,7 @@ async function watchEvents(read, tell, signal, answered = () => {}, { bots = fal
           noteSignIn(event, source).catch(() => {}).finally(() => signedIn(event));
         if (!bots) {
           if (event.type === "session.created")
-            tellWorktree(source, event.data?.sessionID ?? event.data?.info?.id).catch(() => {});
+            settleNewSession(source, event.data?.sessionID ?? event.data?.info?.id).catch(() => {});
           if (event.type === "session.renamed")
             nameWorktreeBranch(source, event.data?.sessionID).catch(() => {});
         }
@@ -17641,7 +17671,7 @@ async function startSession(given, by, place) {
   if (project?.folders.length) {
     await call(target, "PUT", `/api/experimental/session/${address}/instructions/entries/kuvo.project-folders`, { value: projectsNote(folder, project.folders) }).catch(() => {});
   }
-  await tellWorktree(target, session).catch(() => {});
+  await settleNewSession(target, session).catch(() => {});
   let wakes = wakesFrom(given.wake, Boolean(ownBot), given.wait === true);
   let marked = false;
   if (by?.place) {
@@ -19302,7 +19332,7 @@ import fs69 from "node:fs";
 import path73 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.158";
+var BRIDGE_VERSION = "0.9.159";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

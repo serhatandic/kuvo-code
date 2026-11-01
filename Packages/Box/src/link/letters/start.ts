@@ -14,7 +14,7 @@ import { messageID } from "../engine/sessions";
 import { BOTS, CHATS, HERE, homeFolder } from "../home";
 import { changeProjects, PROJECTS_FILE, readProjects } from "../areas/projects";
 import { readWorktrees } from "../areas/worktree-records";
-import { answerWorktrees, tellWorktree } from "../areas/worktrees";
+import { answerWorktrees, settleNewSession } from "../areas/worktrees";
 import { permissionsHere, refreshedRules } from "../bots/tell";
 import { composeLetter } from "./letter";
 import { allowed, noteStarting, startedAs, startsBefore, takeBack } from "./limits";
@@ -345,7 +345,7 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   if (project?.folders.length) {
     await call(target, "PUT", `/api/experimental/session/${address}/instructions/entries/kuvo.project-folders`, { value: projectsNote(folder, project.folders) }).catch(() => {});
   }
-  await tellWorktree(target, session).catch(() => {});
+  await settleNewSession(target, session).catch(() => {});
   let wakes = wakesFrom(given.wake, Boolean(ownBot), given.wait === true);
   // What its starter hears of it, only once it's marked so: none for an agent outside any
   // conversation here, or for a mark the engine didn't take (it's told to write to it instead).
