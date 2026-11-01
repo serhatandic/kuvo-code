@@ -631,7 +631,11 @@ client shows it from the same routes.
 - **Marked as its work**: a session a bot starts, and every one under it, has metadata
   `kuvo: {startedBy, by: {bot, name}, depth, wake?}`: the bot it works for, how deep it is
   (1 for one the bot started), and what its starter hears of it (a bot: both, or only its asks
-  when it waited for the answer). What a starter hears is gathered a few seconds and sent as one
+  when it waited for the answer). A finish heard while its starter waits for its answer
+  (`send_message` with `wait`) waits for that wait to end, and is told unless the wait ended with
+  that same reply, which came to it in the tool; a failure is told at once. (Each wait is a file in
+  `run/work/awaited`, kept by whichever process waits, with its reply's id for a minute after.)
+  What a starter hears is gathered a few seconds and sent as one
   message (an ask to be read at its next step), kept in `run/work/wakes.json` until it's sent (for a
   conversation the engine doesn't know while the coding agents' bridge isn't running, a day at most,
   since it may be the bridge's; and so is an answer given late, below; for an archived one, until
@@ -717,7 +721,8 @@ client shows it from the same routes.
   `run/work/told.json` says was told: the engine's and the coding agents' bridge's each as it's
   found, from when the box last heard of that one, and only once it could list them all (one slow or
   not there yet is looked at again a minute on; a session it couldn't read doesn't hold back the
-  others, and is looked at again a few times, then as the box starts the next time, on a few starts at most). An answer to an ask given after its tool stopped waiting
+  others, and is looked at again a few times, then as the box starts the next time, on a few starts at most). A finish that was waiting for its starter's wait
+  to end (`told.json`'s `held`) is looked at whenever it finished. An answer to an ask given after its tool stopped waiting
   goes to its conversation if it hadn't.
 
 **Projects** (bridge 0.9.107, feature `work.projects`): a bot makes new projects on its box, in a
