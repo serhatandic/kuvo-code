@@ -315,6 +315,9 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - A /goal (or /loop, /btw, /handoff, /review) that can't be done comes back in front of what you typed while it was being sent without its keyword, so your new words don't become part of the goal.
 - Copying a selection that runs across a command you ran with ! copies its command too, not only what it printed.
 - An ask to work outside the project names the folder as you know it, like ~/other-project, instead of a pattern ending in /*, on its card and in notifications, and VoiceOver reads it as Home, other-project.
+- Models their provider is retiring are no longer offered in the model picker or to agents, and a new conversation doesn't start on one; one already on it carries on.
+- Sending a message on a model that's gone from its account now says so before it's sent (choose another model), rather than failing the same way again on Try Again.
+- New Bot on your phone offers a model the computer can use: no longer one whose account was signed out there, which failed to make the bot.
 - With no GitHub Copilot account, a conversation started without picking a model (one an agent or a bot started, say) no longer fails every message with "missing required Authorization header": the engine's default model had become one of Copilot's. It's one of OpenCode's free models again: on a new install from the start, and on one that had the problem once its engine has started again after its first run with this update.
 - A short message of yours in a narrow window shows all of its lines, instead of being cut at twelve with no Show More.
 

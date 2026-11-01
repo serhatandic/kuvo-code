@@ -12396,6 +12396,71 @@ async function* groupsRoute(context) {
 import crypto21 from "node:crypto";
 import fs48 from "node:fs";
 import path51 from "node:path";
+
+// Packages/Box/src/link/work/models.ts
+function modelsIn(listed, target, agents, ready) {
+  const models = [];
+  for (const each of Array.isArray(listed) ? listed : []) {
+    if (!isObject(each) || typeof each.id !== "string" || typeof each.providerID !== "string" || each.enabled === false)
+      continue;
+    if (each.status === "deprecated")
+      continue;
+    if (ready && !ready.has(each.providerID))
+      continue;
+    const efforts = Array.isArray(each.variants) ? each.variants.map((variant) => isObject(variant) ? variant.id : null).filter((id) => typeof id === "string") : [];
+    models.push({ providerID: each.providerID, id: each.id, name: typeof each.name === "string" && each.name ? each.name : each.id, efforts, target, agents });
+  }
+  return models;
+}
+async function usableModels(engine, bridge, signal) {
+  const models = [];
+  if (engine) {
+    const [providers, listed] = await Promise.all([call(engine, "GET", "/api/provider", undefined, signal).catch(() => null), call(engine, "GET", "/api/model", undefined, signal).catch(() => null)]);
+    const ready = new Set((Array.isArray(providers) ? providers : []).map((each) => isObject(each) ? each.id : null).filter((id) => typeof id === "string"));
+    models.push(...modelsIn(listed, engine, false, ready));
+  }
+  if (bridge)
+    models.push(...modelsIn(await call(bridge, "GET", "/api/model", undefined, signal).catch(() => null), bridge, true, null));
+  return models;
+}
+function describeModels(models) {
+  if (!models.length)
+    return `There's no model with an account on ${HERE}. Ask the user to sign in to one in Settings › Accounts.`;
+  const line = (model) => `- ${model.providerID}/${model.id} (${model.name})${model.efforts.length ? `, efforts: ${model.efforts.join(", ")}` : ""}`;
+  return `Models you can start a session on, as provider/model (give it to start_session as model, and an effort as effort):
+${models.map(line).join(`
+`)}`;
+}
+function pickModel(given, effort, models) {
+  let providerID = "", id = "";
+  if (typeof given === "string") {
+    const at = given.trim().indexOf("/");
+    if (at > 0)
+      [providerID, id] = [given.trim().slice(0, at), given.trim().slice(at + 1)];
+    else
+      id = given.trim();
+  } else if (isObject(given) && typeof given.id === "string") {
+    id = given.id;
+    providerID = typeof given.providerID === "string" ? given.providerID : "";
+  }
+  if (!id)
+    return { refused: "Name the model as provider/model, from list_models." };
+  const matches = models.filter((model) => model.id === id && (!providerID || model.providerID === providerID));
+  if (!matches.length) {
+    const known = providerID && models.some((model) => model.providerID === providerID);
+    return { refused: known ? `There's no ${id} among ${providerID}'s models here. Use list_models to see what there is.` : `There's no account for ${providerID || id} on ${HERE}. Use list_models to see the models you can use.` };
+  }
+  const model = matches[0];
+  if (effort === undefined || effort === null || effort === "")
+    return { model, variant: null };
+  if (!model.efforts.length)
+    return { refused: `${model.name} has no efforts to choose from: leave effort out.` };
+  if (typeof effort !== "string" || !model.efforts.includes(effort))
+    return { refused: `${model.name}'s efforts are ${model.efforts.join(", ")}.` };
+  return { model, variant: effort };
+}
+
+// Packages/Box/src/link/bots/make.ts
 var fitsLook = (looks, look) => Boolean(look) && looks.colors.includes(look.color) && looks.shapes.includes(look.shape) && looks.faces.includes(look.face);
 async function signInRefusal(model, engine, signal) {
   const ready = await call(engine, "GET", "/api/provider", undefined, signal).catch(() => {
@@ -12403,6 +12468,26 @@ async function signInRefusal(model, engine, signal) {
   });
   const ids = Array.isArray(ready) ? ready.map((each) => each?.id) : [];
   return ids.length && !ids.includes(model.providerID) ? `${model.id} needs a sign-in on ${HERE}: sign in to it in Settings › Accounts, or choose another model.` : null;
+}
+async function startingModelHere(named, readEngine, signal) {
+  if (named && runsWithAgents(named))
+    return named;
+  let engine = null;
+  try {
+    engine = readEngine();
+  } catch {}
+  if (!engine)
+    return named;
+  const models = await usableModels(engine, null, signal);
+  if (!models.length)
+    return named;
+  const usable = (model) => Boolean(model) && models.some((each) => each.id === model?.id && each.providerID === model?.providerID);
+  if (usable(named))
+    return named;
+  const fallback = await call(engine, "GET", "/api/model/default", undefined, signal).catch(() => null);
+  if (isObject(fallback) && usable(fallback))
+    return { id: fallback.id, providerID: fallback.providerID };
+  return { id: models[0].id, providerID: models[0].providerID };
 }
 var REQUEST = /^[A-Za-z0-9_-]{8,64}$/;
 var MADE_FOR = 3600000;
@@ -12458,7 +12543,7 @@ async function makeOnce(given, readEngine, readBridge, machine, signal) {
   const looks = kit.looks;
   const pick = (list) => list[crypto21.randomInt(list.length)];
   const look = fitsLook(looks, given.look) ? botLook(given.look) : template?.look ?? { color: pick(looks.colors), shape: pick(looks.shapes), face: pick(looks.faces) };
-  const model = isModel(given.model) ? botModel(given.model) : kit.startingModel;
+  const model = isModel(given.model) ? botModel(given.model) : await startingModelHere(kit.startingModel ?? null, readEngine, signal);
   if (!model)
     return no(422, `There’s no model to start it on here: sign in to an account on ${HERE} first.`);
   const agents = runsWithAgents(model);
@@ -17220,69 +17305,6 @@ async function* engineRoute(context) {
 // Packages/Box/src/link/letters/start.ts
 import fs63 from "node:fs";
 import path66 from "node:path";
-
-// Packages/Box/src/link/work/models.ts
-function modelsIn(listed, target, agents, ready) {
-  const models = [];
-  for (const each of Array.isArray(listed) ? listed : []) {
-    if (!isObject(each) || typeof each.id !== "string" || typeof each.providerID !== "string" || each.enabled === false)
-      continue;
-    if (ready && !ready.has(each.providerID))
-      continue;
-    const efforts = Array.isArray(each.variants) ? each.variants.map((variant) => isObject(variant) ? variant.id : null).filter((id) => typeof id === "string") : [];
-    models.push({ providerID: each.providerID, id: each.id, name: typeof each.name === "string" && each.name ? each.name : each.id, efforts, target, agents });
-  }
-  return models;
-}
-async function usableModels(engine, bridge, signal) {
-  const models = [];
-  if (engine) {
-    const [providers, listed] = await Promise.all([call(engine, "GET", "/api/provider", undefined, signal).catch(() => null), call(engine, "GET", "/api/model", undefined, signal).catch(() => null)]);
-    const ready = new Set((Array.isArray(providers) ? providers : []).map((each) => isObject(each) ? each.id : null).filter((id) => typeof id === "string"));
-    models.push(...modelsIn(listed, engine, false, ready));
-  }
-  if (bridge)
-    models.push(...modelsIn(await call(bridge, "GET", "/api/model", undefined, signal).catch(() => null), bridge, true, null));
-  return models;
-}
-function describeModels(models) {
-  if (!models.length)
-    return `There's no model with an account on ${HERE}. Ask the user to sign in to one in Settings › Accounts.`;
-  const line = (model) => `- ${model.providerID}/${model.id} (${model.name})${model.efforts.length ? `, efforts: ${model.efforts.join(", ")}` : ""}`;
-  return `Models you can start a session on, as provider/model (give it to start_session as model, and an effort as effort):
-${models.map(line).join(`
-`)}`;
-}
-function pickModel(given, effort, models) {
-  let providerID = "", id = "";
-  if (typeof given === "string") {
-    const at = given.trim().indexOf("/");
-    if (at > 0)
-      [providerID, id] = [given.trim().slice(0, at), given.trim().slice(at + 1)];
-    else
-      id = given.trim();
-  } else if (isObject(given) && typeof given.id === "string") {
-    id = given.id;
-    providerID = typeof given.providerID === "string" ? given.providerID : "";
-  }
-  if (!id)
-    return { refused: "Name the model as provider/model, from list_models." };
-  const matches = models.filter((model) => model.id === id && (!providerID || model.providerID === providerID));
-  if (!matches.length) {
-    const known = providerID && models.some((model) => model.providerID === providerID);
-    return { refused: known ? `There's no ${id} among ${providerID}'s models here. Use list_models to see what there is.` : `There's no account for ${providerID || id} on ${HERE}. Use list_models to see the models you can use.` };
-  }
-  const model = matches[0];
-  if (effort === undefined || effort === null || effort === "")
-    return { model, variant: null };
-  if (!model.efforts.length)
-    return { refused: `${model.name} has no efforts to choose from: leave effort out.` };
-  if (typeof effort !== "string" || !model.efforts.includes(effort))
-    return { refused: `${model.name}'s efforts are ${model.efforts.join(", ")}.` };
-  return { model, variant: effort };
-}
-
-// Packages/Box/src/link/letters/start.ts
 var OUTSIDE = { session: "unknown", place: null, name: "another agent" };
 var ASKS_FIRST = [{ action: "shell", resource: "*", effect: "ask" }];
 var goalNote = "This is part of a goal the user may not be watching: what you ask can wait a while, so carry on with what doesn't depend on it. Prepare rather than act on the world: don't publish, deploy, send or pay anything unless your task says it's approved, and report what you couldn't do.";
@@ -18997,13 +19019,14 @@ async function* attentionRoute(context) {
 
 // Packages/Box/src/link/areas/bots.ts
 async function* botTemplatesRoute(context) {
-  const { request, info, json } = context;
+  const { request, signal, readEngine, info, json } = context;
   if (!["GET", "HEAD"].includes(request.method.toUpperCase()))
     return yield* json(405, {});
   const kit = readKit();
   if (!kit)
     return yield* json(409, { message: NO_KIT });
-  return yield* json(200, botTemplates(kit, info.name));
+  const startingModel = await startingModelHere(kit.startingModel ?? null, readEngine, signal);
+  return yield* json(200, botTemplates({ ...kit, startingModel }, info.name));
 }
 async function* newBotRoute(context) {
   const { request, signal, readEngine, bridge, info, json } = context;

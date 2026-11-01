@@ -647,7 +647,7 @@ client shows it from the same routes.
   finished, failed, stopped; its model, tokens and last reply's first lines), `stop_session`
   (`{session, archive?}`; only one of its own), `answer_ask` (`{session, ask, decision: allow|deny,
   reason}`, or `{session, ask, answer, reason}` for a question), `list_models` (the models there's
-  an account for here, `provider/model`, with their efforts).
+  an account for here, `provider/model`, with their efforts; none its provider is retiring).
 - **Answering asks, until the sandbox** (`work/policy.ts`): reading a command can't be made
   airtight, so until sessions run in the sandbox a bot answers only two kinds of ask, judged by
   the tool call itself (its whole input, found by the ask's `source`: never only what the ask
@@ -1764,7 +1764,9 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   what New Bot offers there: `{"templates": [{id, name, job, instructions, look, personality,
   wantsProject}], "personalities": [{id, name, description, custom}], "looks": {colors, shapes,
   faces}, "startingModel": {"<place>": {providerID, id, variant} | null}, "projects": [{directory,
-  name, machine}]}`. `startingModel` has one key: `mac` on a Mac, the machine's name on a machine.
+  name, machine}]}`. `startingModel` has one key: `mac` on a Mac, the machine's name on a machine;
+  it's the model the box's Mac named (picked last there) while the box can use it (its account
+  signed in there, and not one being retired), else the engine's default, else the first it can.
   A template's `personality` and a project's `machine` are left out when there's none. `POST
   kuvo/bots` with `{name, look?, personality?, model?, project?, template?, job?}` makes one:
   `personality` by id (`preset.*`, or `custom.*` for one you made); without `look` or

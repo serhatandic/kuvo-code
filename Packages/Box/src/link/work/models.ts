@@ -21,6 +21,8 @@ function modelsIn(listed: unknown, target: Target, agents: boolean, ready: Set<s
   const models: Usable[] = [];
   for (const each of Array.isArray(listed) ? listed : []) {
     if (!isObject(each) || typeof each.id !== "string" || typeof each.providerID !== "string" || each.enabled === false) continue;
+    // One its provider is retiring, as the engine's own picker leaves it out.
+    if (each.status === "deprecated") continue;
     if (ready && !ready.has(each.providerID)) continue;
     const efforts = Array.isArray(each.variants) ? each.variants.map(variant => (isObject(variant) ? variant.id : null)).filter((id): id is string => typeof id === "string") : [];
     models.push({ providerID: each.providerID, id: each.id, name: typeof each.name === "string" && each.name ? each.name : each.id, efforts, target, agents });

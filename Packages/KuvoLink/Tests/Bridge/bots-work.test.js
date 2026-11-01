@@ -96,6 +96,8 @@ const standIn = onBridge => (request, response) => {
         { id: "claude-opus-5-5", providerID: "anthropic", name: "Claude Opus 5.5", variants: [{ id: "high" }, { id: "max" }], enabled: true },
         { id: "claude-sonnet-5-5", providerID: "anthropic", name: "Claude Sonnet 5.5", variants: [{ id: "low" }, { id: "high" }], enabled: true },
         { id: "deepseek-v4", providerID: "deepseek", name: "DeepSeek V4", variants: [], enabled: true },
+        // Retired soon by its provider: the engine's own picker leaves it out.
+        { id: "deepseek-v3", providerID: "deepseek", name: "DeepSeek V3", variants: [], enabled: true, status: "deprecated" },
         { id: "gpt-5", providerID: "openai", name: "GPT-5", variants: [], enabled: true },
       ] });
     }
@@ -362,6 +364,7 @@ test("list_models lists the models there are accounts for, with their efforts", 
   assert.match(said.text, /- anthropic\/claude-opus-5-5 \(Claude Opus 5\.5\), efforts: high, max/);
   assert.match(said.text, /- deepseek\/deepseek-v4 \(DeepSeek V4\)/);
   assert.doesNotMatch(said.text, /gpt-5/, "no account for OpenAI");
+  assert.doesNotMatch(said.text, /deepseek-v3/, "deprecated");
 });
 
 test("a client sees a bot's work: its sessions, the answers it gave and today's count", async () => {

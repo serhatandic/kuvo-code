@@ -16,6 +16,7 @@ import { botInstructions, NO_KIT, readKit, runsWithAgents } from "./kit";
 import { listBots } from "./list";
 import { noteTold, toldDigest } from "./tell";
 import { withAlwaysAsk } from "../work/always";
+import { usableModels } from "../work/models";
 import type { Target } from "../../shared/records";
 import type { BotLook, BotModel } from "../../shared/routes/bots";
 import type { MadeBot } from "../../shared/routes/bots";
@@ -58,6 +59,24 @@ export async function signInRefusal(model: BotModel, engine: Target, signal?: Ab
   const ready = await call(engine, "GET", "/api/provider", undefined, signal).catch(() => undefined);
   const ids = Array.isArray(ready) ? (ready as (Fields<"id"> | null)[]).map(each => each?.id) : [];
   return ids.length && !ids.includes(model.providerID) ? `${model.id} needs a sign-in on ${HERE}: sign in to it in Settings › Accounts, or choose another model.` : null;
+}
+
+// The model a new bot starts on here, as New Bot offers it: the one its Mac named (the model picked
+// last there) while this box can use it (its account signed in here); else the engine's default, or
+// the first model this box can use. As the Mac named it when the engine can't say, and a coding
+// agent's (the bridge says for itself whether it can run it).
+export async function startingModelHere(named: BotModel | null, readEngine: () => Target, signal?: AbortSignal): Promise<BotModel | null> {
+  if (named && runsWithAgents(named)) return named;
+  let engine: Target | null = null;
+  try { engine = readEngine(); } catch {}
+  if (!engine) return named;
+  const models = await usableModels(engine, null, signal);
+  if (!models.length) return named;
+  const usable = (model: Partial<BotModel> | null | undefined) => Boolean(model) && models.some(each => each.id === model?.id && each.providerID === model?.providerID);
+  if (usable(named)) return named;
+  const fallback = await call(engine, "GET", "/api/model/default", undefined, signal).catch(() => null);
+  if (isObject(fallback) && usable(fallback as Partial<BotModel>)) return { id: fallback.id as string, providerID: fallback.providerID as string };
+  return { id: models[0].id, providerID: models[0].providerID };
 }
 
 // `POST kuvo/bots`, as the Mac's: the bot made here, its folder, conversation and instructions,
@@ -113,7 +132,7 @@ async function makeOnce(given: GivenBot | null | undefined, readEngine: () => Ta
   const looks = kit.looks;
   const pick = (list: string[]): string => list[crypto.randomInt(list.length)];
   const look = fitsLook(looks, given.look) ? botLook(given.look) : template?.look ?? { color: pick(looks.colors), shape: pick(looks.shapes), face: pick(looks.faces) };
-  const model = isModel(given.model) ? botModel(given.model) : kit.startingModel;
+  const model = isModel(given.model) ? botModel(given.model) : await startingModelHere(kit.startingModel ?? null, readEngine, signal);
   if (!model) return no(422, `There’s no model to start it on here: sign in to an account on ${HERE} first.`);
   const agents = runsWithAgents(model);
   let target: Target | null | undefined;
