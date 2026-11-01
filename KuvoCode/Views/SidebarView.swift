@@ -2242,7 +2242,7 @@ private struct AccountsRow: View {
 
     private var label: String {
         let accounts = catalog.signedInAccounts
-        switch accounts.count {
+        return switch accounts.count {
         case 0: "Connect an Account"
         case 1: accounts[0].name
         case let count: "\(count) Accounts"
