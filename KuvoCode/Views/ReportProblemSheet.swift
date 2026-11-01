@@ -20,13 +20,20 @@ struct ReportProblemSheet: View {
         ]
     }
 
-    /// The Mac's chip, by its name ("Apple M2"), not the model's code ("Mac14,7").
+    /// The Mac's chip by its name, and the model's code after it, which tells an Air from a Pro
+    /// ("Apple M2 (Mac14,7)").
     private static var chip: String {
+        let name = sysctl("machdep.cpu.brand_string") ?? "Apple silicon"
+        return sysctl("hw.model").map { "\(name) (\($0))" } ?? name
+    }
+
+    private static func sysctl(_ key: String) -> String? {
         var size = 0
-        sysctlbyname("machdep.cpu.brand_string", nil, &size, nil, 0)
-        var name = [CChar](repeating: 0, count: max(size, 1))
-        sysctlbyname("machdep.cpu.brand_string", &name, &size, nil, 0)
-        return String(decoding: name.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
+        guard sysctlbyname(key, nil, &size, nil, 0) == 0, size > 1 else { return nil }
+        var value = [CChar](repeating: 0, count: size)
+        guard sysctlbyname(key, &value, &size, nil, 0) == 0 else { return nil }
+        let text = String(decoding: value.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
+        return text.isEmpty ? nil : text
     }
 
     private var report: ProblemReport { ProblemReport(description: description, versions: Self.versions) }
