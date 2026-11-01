@@ -32,7 +32,7 @@ struct VaultItemSheet: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
-                VaultKindTile(kind: current.kind, size: 32)
+                VaultKindTile(kind: current.kind, size: 32, site: current.sites.first)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(current.name).font(.headline)
                     Text([current.kind.title, current.sites.first].compactMap { $0 }.joined(separator: " · ")).foregroundStyle(.secondary)

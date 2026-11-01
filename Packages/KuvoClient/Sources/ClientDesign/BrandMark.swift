@@ -16,6 +16,31 @@ public enum BrandMark {
     /// Whether the app comes with a mark for `id`.
     public static func has(_ id: String) -> Bool { assetName(id) != nil }
 
+    /// The bundled mark's id for a site ("github.com", "https://dashboard.stripe.com/login"), as a
+    /// vault item names it: by the site's own name, or the service it is ("mail.google.com" is
+    /// Gmail). Nil for a site with no bundled mark.
+    public static func id(forSite site: String) -> String? {
+        var host = site.lowercased().trimmingCharacters(in: .whitespaces)
+        if let scheme = host.range(of: "://") { host = String(host[scheme.upperBound...]) }
+        host = String(host.prefix { $0 != "/" && $0 != ":" && $0 != "?" })
+        if host.hasPrefix("www.") { host.removeFirst(4) }
+        let labels = host.split(separator: ".").map(String.init)
+        guard labels.count >= 2 else { return nil }
+        for length in stride(from: labels.count, through: 2, by: -1) {
+            if let id = sites[labels.suffix(length).joined(separator: ".")] { return id }
+        }
+        let name = labels[labels.count - 2]
+        return has(name) ? name : nil
+    }
+
+    /// Sites named for something other than their service's mark.
+    static let sites: [String: String] = [
+        "mail.google.com": "gmail", "calendar.google.com": "google-calendar",
+        "twitter.com": "x", "claude.ai": "claude", "chatgpt.com": "openai", "bsky.app": "bluesky",
+        "ai.studio": "google", "aistudio.google.com": "google", "copilot.microsoft.com": "copilot",
+        "web.telegram.org": "telegram", "t.me": "telegram", "wa.me": "whatsapp", "zoom.us": "zoom",
+    ]
+
     /// The bundled mark for `id`, if there is one.
     public static func image(_ id: String) -> Image? {
         guard let name = assetName(id) else { return nil }

@@ -21,6 +21,20 @@ import Testing
         }
     }
 
+    /// A vault item's site shows its service's mark, however the site is written.
+    @Test func aSiteShowsItsServicesMark() {
+        #expect(BrandMark.id(forSite: "github.com") == "github")
+        #expect(BrandMark.id(forSite: "https://dashboard.stripe.com/login?next=/") == "stripe")
+        #expect(BrandMark.id(forSite: "www.Figma.com") == "figma")
+        #expect(BrandMark.id(forSite: "mail.google.com") == "gmail")
+        #expect(BrandMark.id(forSite: "accounts.google.com") == "google")
+        #expect(BrandMark.id(forSite: "twitter.com") == "x")
+        #expect(BrandMark.id(forSite: "localhost:3000") == nil)
+        #expect(BrandMark.id(forSite: "my-bank.example") == nil)
+        #expect(BrandMark.id(forSite: "") == nil)
+        for id in BrandMark.sites.values { #expect(BrandMark.has(id), "\(id) has no mark") }
+    }
+
     @Test func servicesWithoutAMarkGetASymbolOfWhatTheyAre() {
         for id in ["slack", "microsoft-365", "linkedin", "apple-calendar", "context7"] {
             #expect(BrandMark.platformImage(id) == nil)

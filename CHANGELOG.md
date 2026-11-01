@@ -39,6 +39,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - What a bot made is as tall as its list, and its Shelf no longer shows the bot's own job as something it made.
 - When a goal can't run alone yet, its plan lists the sandbox first among what's yours, with its fix on the row, instead of a separate notice above.
 - Search results under In Conversations show the words you searched for in bold.
+- A vault item for a site shows that site's mark, like GitHub's or Stripe's, where Kuvo Code has one.
 - A turn that fails says what happened in its headline (the provider is rate limiting you, the sign-in has ended, the usage limit is reached, the provider couldn't be reached) with the details under it, and offers the way out in the same card: Try Again, and Switch Model, Sign In Again or Open Accounts where that's what helps.
 - A failed conversation's mark in the sidebar is a filled red disc, easier to tell from the others.
 - While a side question shows over the composer, what you send asks it a follow-up: a "Side question" tag says so, and its × sends the next message to the conversation again. The card no longer has a second text field of its own.

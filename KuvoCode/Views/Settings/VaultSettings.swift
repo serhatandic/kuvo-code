@@ -268,12 +268,26 @@ struct VaultSettings: View {
     }
 }
 
-/// An item's kind, as a small colored tile.
+/// An item's kind, as a small colored tile; for an item with a site, the site's mark instead,
+/// where the app has one, as Passwords shows it.
 struct VaultKindTile: View {
     let kind: VaultItem.Kind
     var size: CGFloat = 24
+    var site: String?
+    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
+        if let mark = site.flatMap(BrandMark.id(forSite:)) {
+            BrandMarkView(mark, size: size * 0.6)
+                .foregroundStyle(.primary)
+                .frame(width: size, height: size)
+                .background(Color.primary.opacity(scheme == .dark ? 0.12 : 0.07), in: .rect(cornerRadius: size * 0.27))
+        } else {
+            tile
+        }
+    }
+
+    private var tile: some View {
         Image(systemName: symbol)
             .font(.system(size: size * 0.5, weight: .semibold))
             .foregroundStyle(.white)
@@ -309,7 +323,7 @@ struct VaultItemRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            VaultKindTile(kind: item.kind)
+            VaultKindTile(kind: item.kind, site: item.sites.first)
             VStack(alignment: .leading, spacing: 1) {
                 Text(item.name).lineLimit(1)
                 Text(item.subtitle).font(.callout).foregroundStyle(.secondary).lineLimit(1)
