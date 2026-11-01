@@ -239,6 +239,7 @@ struct ModelChip<Label: View>: View {
         .clickablePointer()
         .help(isUnavailable ? "\(catalog.model(selection)?.name ?? selection?.id ?? "") isn't available now: choose another model" : "Model and effort")
         .background(ScreenRoomReader(room: anchor))
+        .closesWhenKept($isOpen)
         .popover(isPresented: $isOpen, arrowEdge: placement.below ? .bottom : .top) {
             ModelPicker(catalog: catalog, selection: selection, onSelect: onSelect, close: { isOpen = false }, scope: scope, offersAuto: offersAuto,
                         startsExpanded: startsExpanded, startsOnList: startsOnList, maxHeight: placement.height,

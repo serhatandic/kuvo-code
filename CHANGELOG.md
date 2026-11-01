@@ -28,6 +28,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - A widget the agent writes as a whole page is laid out as its page asks: it kept losing its doctype, so it was drawn the old way, as a page without one.
 - A widget made to fill its window (a wrapper as tall as the window, a sheet against its bottom) no longer grows a little more each time something on it changes.
 - A widget whose script or comments mention `<head>` or `<html>` keeps its safeguards: it still can't fetch or send anything on its own.
+- Going back to a session from a new session's, a group chat's or a terminal's tab is about twice as quick, and finds it scrolled where you were reading.
 - The side panel slides in sooner, and comes back as you left it: where you'd scrolled, the files you'd folded and a comment you were writing in Changes. While it's hidden it stops checking git and files, and its pages and terminals stop drawing.
 - A coding agent too slow to answer whether it's signed in (on a busy Mac or machine) no longer looks signed out: Claude Code, Codex, Grok and Cursor keep their accounts and models as they last said, so a bot's or a session's model isn't taken away mid-goal. Only the agent saying you're signed out is a sign-out.
 - While this Mac's engine or the coding agents restart, the first launch's subscriptions step keeps showing what you're signed in to, instead of offering every sign-in again.

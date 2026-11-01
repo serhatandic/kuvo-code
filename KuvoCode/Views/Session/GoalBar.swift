@@ -131,6 +131,7 @@ struct GoalBar: View {
         .font(.system(size: 13))
         .disabled(isChanging)
         // Stopping it can't be undone: the turn under way ends, and the goal goes.
+        .closesWhenKept($confirmsStop)
         .confirmationDialog("Stop the goal?", isPresented: $confirmsStop) {
             Button("Stop the Goal", role: .destructive) {
                 // Only a goal still under way: one met meanwhile stays to be read.

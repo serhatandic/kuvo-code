@@ -125,6 +125,7 @@ struct GoalPlanBar: View {
         .buttonStyle(TextButtonStyle())
         .font(.system(size: 13))
         .disabled(isBusy)
+        .closesWhenKept($confirmsStop)
         .confirmationDialog("Stop the goal?", isPresented: $confirmsStop) {
             Button("Stop the Goal", role: .destructive) {
                 guard plan.state == .running else { return }

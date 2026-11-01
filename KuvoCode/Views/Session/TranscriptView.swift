@@ -1443,6 +1443,7 @@ private struct TurnFiles: View {
         }
         .buttonStyle(TextButtonStyle(outset: true))
         .help("What this turn changed")
+        .closesWhenKept($isShowing)
         .popover(isPresented: $isShowing, arrowEdge: .bottom) {
             VStack(alignment: .leading, spacing: 2) {
                 ForEach(files) { file in

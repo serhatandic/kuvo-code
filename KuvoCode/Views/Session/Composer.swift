@@ -131,6 +131,8 @@ struct Composer: View {
     @State private var reviewerIndex = 0
     /// The field has the keyboard: the shortcut's voice input would go here.
     @State private var fieldHasKeyboard = false
+    /// Its card is kept made under another tab's: as good as gone, until its tab is back.
+    @Environment(\.isKeptOutOfSight) private var isKept
     /// The "/review" list closed with Escape (its title, or "models"): another one still opens.
     @State private var dismissedReviewList: String?
     /// What the box said of this folder for "/review"'s lists: what it offers, and how much each reads.
@@ -376,9 +378,11 @@ struct Composer: View {
         .onChange(of: quoteFocus) { _, focus in answerFocus = focus.map { (id: $0.id, request: MessageField.FocusRequest()) } }
         // Gone (another kind of tab, Settings over it): what it was listening for stops, rather
         // than going on unseen, and the shortcut has nowhere here to start.
-        .onDisappear {
-            if isDictating { app.dictation.cancel() }
-            app.dictation.withdraw(voiceOwner)
+        .onDisappear { stopListening() }
+        // Kept made under another tab's card, it's as good as gone (its fields let go of the
+        // keyboard themselves); back, it has the keyboard, as it would made anew.
+        .onChange(of: isKept) { _, kept in
+            if kept { stopListening() } else if focusesOnAppear { focusAtEnd() }
         }
         .onChange(of: session) { old, _ in
             // Listening for the session it showed: that stops, rather than going on unseen, and
@@ -418,6 +422,12 @@ struct Composer: View {
             }
             #endif
         }
+    }
+
+    /// What it was listening for stops, and the voice shortcut has nowhere here to start.
+    private func stopListening() {
+        if isDictating { app.dictation.cancel() }
+        app.dictation.withdraw(voiceOwner)
     }
 
     /// Puts the cursor in the field, after what's there.

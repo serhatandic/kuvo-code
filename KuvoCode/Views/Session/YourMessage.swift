@@ -143,6 +143,7 @@ struct YourMessage: View {
             if let fork, !isOffline { Button("New Session From Here", action: fork) }
             if !isOffline, undoesChanges { Button("Undo From Here…") { confirmsUndo = true } }
         }
+        .closesWhenKept($confirmsUndo)
         .alert("Undo from this message?", isPresented: $confirmsUndo) {
             Button("Undo", action: undo)
             Button("Cancel", role: .cancel) {}

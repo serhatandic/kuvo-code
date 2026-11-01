@@ -52,6 +52,7 @@ struct MicButton: View {
         .accessibilityLabel("Voice Input")
         .accessibilityValue(progress ?? "")
         .accessibilityHint("Talk instead of typing")
+        .closesWhenKept(Binding { tip } set: { if !$0 { closeTip() } })
         .popover(isPresented: Binding { tip } set: { if !$0 { closeTip() } }, arrowEdge: .bottom) {
             VoiceTipPopover(turnOn: {
                 closeTip()

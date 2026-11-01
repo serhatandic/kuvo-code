@@ -40,7 +40,14 @@ struct RowStack<Item, Row: View>: NSViewRepresentable {
         // AppKit too: its rows are views of their own, which would still follow the pointer and
         // set it (an I-beam over their text) under what's in sight, from buttons to the panel.
         let isShown = context.environment.isConversationShown
-        if view.isHidden == isShown { view.isHidden = !isShown }
+        if view.isHidden == isShown {
+            // Text picked in a row lets go of the keyboard first: hidden, AppKit would hand it on
+            // to the next view that takes it, wherever that is, as if you'd pressed Tab.
+            if !isShown, let window = view.window, let responder = window.firstResponder as? NSView, responder.isDescendant(of: view) {
+                window.makeFirstResponder(nil)
+            }
+            view.isHidden = !isShown
+        }
         let old = context.coordinator.items
         let oldSpaces = context.coordinator.spaces
         var now: [String: Item] = [:]
