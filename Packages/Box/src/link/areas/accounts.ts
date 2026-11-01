@@ -86,19 +86,25 @@ export async function noteSignIn(event: SignInEvent, source: Target): Promise<vo
   if (active?.method === "oauth" && active.id) changeEndedSignIns(each => each.set(provider, active.id!));
 }
 
-// `provider`'s sign-in in use, as its engine lists it.
-async function activeCredential(engine: Target, provider: string): Promise<EngineConnection | null> {
+// Each plan's sign-in in use, as its engine lists them; it throws when the engine can't say.
+async function signInsInUse(engine: Target): Promise<(provider: string) => EngineConnection | null> {
   const integrations = (await engineGet(engine, "api/integration") as UncheckedAnswer)?.data;
-  return (Array.isArray(integrations) ? integrations as EngineIntegration[] : []).find(each => each?.id === provider)?.connections?.find(each => each?.type === "credential") ?? null;
+  if (!Array.isArray(integrations)) throw new Error("The engine didn't list its plans.");
+  return provider => (integrations as EngineIntegration[]).find(each => each?.id === provider)?.connections?.find(each => each?.type === "credential") ?? null;
 }
 
-// The plans whose sign-in in use ended.
+// `provider`'s sign-in in use, as its engine lists it.
+async function activeCredential(engine: Target, provider: string): Promise<EngineConnection | null> {
+  return (await signInsInUse(engine))(provider);
+}
+
+// The plans whose sign-in in use ended. It throws when the engine can't say which it uses: none
+// of them is said to work again for that.
 export async function endedProviders(engine: Target): Promise<string[]> {
-  const providers: string[] = [];
-  for (const [provider, credential] of readEndedSignIns()) {
-    if ((await activeCredential(engine, provider).catch(() => null))?.id === credential) providers.push(provider);
-  }
-  return providers.sort();
+  const ended = readEndedSignIns();
+  if (!ended.size) return [];
+  const inUse = await signInsInUse(engine);
+  return [...ended].filter(([provider, credential]) => inUse(provider)?.id === credential).map(([provider]) => provider).sort();
 }
 
 // Signs this box out of one of your plans (Settings › Accounts' Disconnect): its sign-ins and keys,
@@ -136,7 +142,9 @@ export async function* accountsRoute(context: RouteContext): AsyncGenerator<Answ
   if (!engine?.port) return yield* json(503, { message: "The engine isn't running." });
   if (route === "kuvo/accounts/ended") {
     if (!["GET", "HEAD"].includes(request.method.toUpperCase())) return yield* json(405, {});
-    return yield* json(200, { providers: await endedProviders(engine).catch(() => []) });
+    const providers = await endedProviders(engine).catch(() => null);
+    if (!providers) return yield* json(503, { message: "The engine isn't answering. Try again in a moment." });
+    return yield* json(200, { providers });
   }
   if (request.method.toUpperCase() !== "POST") return yield* json(405, {});
   let id: string | null = null;

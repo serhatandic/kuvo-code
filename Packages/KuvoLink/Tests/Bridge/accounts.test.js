@@ -66,6 +66,8 @@ async function engineWith() {
     }
     if (url.pathname === "/api/credential") return send(200, { data: engine.credentials });
     if (url.pathname === "/api/integration") {
+      // Restarting, or too busy to answer.
+      if (engine.notAnswering) return send(503, { message: "Starting." });
       // As the engine lists a sign-in in use: its credential's `id`.
       const plan = id => ({ id, connections: engine.inUse[id] ? [{ type: "credential", id: engine.inUse[id].credentialID, method: engine.inUse[id].method }] : [] });
       return send(200, { data: [plan("openai"), plan("anthropic"), plan("sirket-proxy"), plan("şirket-proxy"), { id: "notion", metadata: { source: "mcp" }, connections: [] }] });
@@ -112,6 +114,18 @@ test("a plan whose sign-in ran out is listed, until it works again or you sign i
   await link.noteSignIn({ type: "session.execution.failed", data: { sessionID: "ses_a", error: { type: "provider.auth", message: "Invalid model" } } }, engine.source);
   await link.noteSignIn({ type: "session.execution.failed", data: { sessionID: "ses_a", error: { type: "unknown", message: "Request failed" } } }, engine.source);
   assert.deepEqual(await ended(), []);
+});
+
+test("a plan whose sign-in ran out isn't said to work again while the engine can't say which sign-in it uses: the box says it couldn't read it", async () => {
+  engine.inUse.openai = { credentialID: "crd_1", method: "oauth" };
+  await refused("ses_a");
+  assert.deepEqual(await ended(), ["openai"]);
+  engine.notAnswering = true;
+  const answer = await ask("GET", "kuvo/accounts/ended");
+  engine.notAnswering = false;
+  assert.equal(answer.status, 503);
+  assert.deepEqual(await ended(), ["openai"]);
+  await link.noteSignIn({ type: "session.step.ended", data: { sessionID: "ses_a" } }, engine.source);
 });
 
 test("Disconnect signs the box out of that plan alone, and of nothing that isn't one", async () => {
