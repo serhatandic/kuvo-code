@@ -282,55 +282,32 @@ struct AccentBadgeButtonStyle: ButtonStyle {
 
 /// Hover that still arrives under a view that takes the pointer, like the text selection Textual
 /// lays over a whole reply: an AppKit tracking area sees the pointer whatever is on top of it.
-/// Put it behind the control; it never takes clicks. It also shows `cursor` there: the layer on
-/// top sets its own (Textual's I-beam) on every move, so this sets it again just after.
+/// Put it behind the control; it never takes clicks, and leaves the pointer to the control
+/// (`clickablePointer`).
 struct HoverTracker: NSViewRepresentable {
-    var cursor: NSCursor? = .pointingHand
     let changed: (Bool) -> Void
 
-    func makeNSView(context: Context) -> TrackingView { TrackingView(cursor: cursor, changed: changed) }
+    func makeNSView(context: Context) -> TrackingView { TrackingView(changed: changed) }
 
     func updateNSView(_ view: TrackingView, context: Context) {
-        view.cursor = cursor
         view.changed = changed
     }
 
     final class TrackingView: NSView {
-        var cursor: NSCursor?
         var changed: (Bool) -> Void
-        private var isInside = false
 
-        init(cursor: NSCursor?, changed: @escaping (Bool) -> Void) {
-            self.cursor = cursor
+        init(changed: @escaping (Bool) -> Void) {
             self.changed = changed
             super.init(frame: .zero)
-            addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .mouseMoved, .activeInActiveApp, .inVisibleRect], owner: self))
+            addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect], owner: self))
         }
 
         required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-        override func mouseEntered(with event: NSEvent) {
-            isInside = true
-            changed(true)
-            showCursor()
-        }
+        override func mouseEntered(with event: NSEvent) { changed(true) }
 
-        override func mouseMoved(with event: NSEvent) { showCursor() }
-
-        override func mouseExited(with event: NSEvent) {
-            isInside = false
-            changed(false)
-        }
+        override func mouseExited(with event: NSEvent) { changed(false) }
 
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
-
-        /// Now, and again once the event has been handled, after whatever set the cursor on top.
-        private func showCursor() {
-            guard let cursor else { return }
-            cursor.set()
-            DispatchQueue.main.async { [weak self] in
-                if self?.isInside == true { cursor.set() }
-            }
-        }
     }
 }

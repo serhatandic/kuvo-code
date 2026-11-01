@@ -15,6 +15,7 @@ import type { EngineMessage } from "../engine/conversations";
 import { isHiddenRun } from "../engine/sessions";
 import type { EngineSession } from "../engine/sessions";
 import { SEARCH } from "../home";
+import { isBoxWritten } from "../../shared/queues";
 import type { Target } from "../../shared/records";
 import type { SearchFound } from "../../shared/routes/misc";
 import type { AnswerPiece, RouteContext } from "../server/context";
@@ -194,6 +195,8 @@ export function searchText(messages: EngineMessage[], directory: string): string
       const written = String(message.text ?? "");
       const mail = /^\[Message from (.*) · (ses_\S+|unknown)\] \([^\n]*\)\n\n([\s\S]*)$/.exec(written);
       const work = /^\[Work from (.*) · [^\]\n]+\]\n\n([\s\S]*?)(\n\n---\n[\s\S]*)?$/.exec(written);
+      // What the box told the agent: never what was said.
+      if (isBoxWritten(written, message.metadata)) continue;
       if (mail) blocks.push(mail[3]!);
       else if (written.startsWith("[Wake-up] ")) blocks.push(written.slice("[Wake-up] ".length));
       else if (work) blocks.push(work[2]!.trim());
@@ -224,6 +227,9 @@ export function searchText(messages: EngineMessage[], directory: string): string
  * files it brought. */
 function ownWords(written: string): string {
   let words = written.trim();
+  // /goal in a bot's chat as a box sent it before it went in the block: its marker, then the note.
+  const oldGoal = "\n\n(The user asked for this as a goal: plan it, check what it needs, and put it to them with propose_goal before doing any of the work.)";
+  if (words.startsWith("[Goal] ") && words.endsWith(oldGoal)) return words.slice("[Goal] ".length, -oldGoal.length).trim();
   const kept: string[] = [];
   for (;;) {
     const block = [["<attached-files>", "</attached-files>"], ["<review-comments>", "</review-comments>"], ["<named-agents>", "</named-agents>"], ["<sent-with>", "</sent-with>"], ["<from-widget>", "</from-widget>"], ["<from-phone>", "</from-phone>"]]

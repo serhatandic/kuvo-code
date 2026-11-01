@@ -291,6 +291,29 @@ describe("what's waiting", () => {
     expect(a.runs).toHaveLength(1)
   })
 
+  // What the box writes to a bot comes marked, and every app shows it as a line, not your bubble:
+  // the mark stays on it waiting, as it goes in and once the bridge starts again.
+  test("a message's metadata stays with it, waiting and sent", async () => {
+    a.script = works
+    const id = create()
+    send(id, "first")
+    await until(() => a.runs.length === 1)
+    const metadata = { kuvo: { note: { from: "Goal", line: "Goal started" } } }
+    sessions.prompt(id, { id: "msg_marked000001", text: "[Goal started] Work through it now.", files: [], delivery: "steer", metadata })
+    expect(sessions.inbox(id)[0].payload).toMatchObject({ text: "[Goal started] Work through it now.", metadata })
+    const enqueued = events.find((event) => event.type === "session.inbox.enqueued" && (event.data as any).inboxID === "msg_marked000001")
+    expect((enqueued?.data as any).item.payload.metadata).toEqual(metadata)
+    a.script = replies
+    a.threads[0].onStop!()
+    await settled(id, 1)
+    sessions.setDelivery(id, "msg_marked000001", "steer")
+    await settled(id, 2)
+    expect(a.runs.map((run) => run.text)).toEqual(["first", "[Goal started] Work through it now."])
+    sessions.closeAll()
+    make()
+    expect(sessions.messages(id).find((message) => message.id === "msg_marked000001")).toMatchObject({ type: "user", metadata })
+  })
+
   test("what waits outlasts the bridge", async () => {
     a.script = works
     const id = create()

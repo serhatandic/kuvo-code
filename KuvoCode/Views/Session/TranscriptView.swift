@@ -329,7 +329,7 @@ struct TranscriptView: View {
             switch message {
             case .user(let user):
                 turn = TurnStats(started: user.time.created, message: user)
-                rows.append(.user(user))
+                rows.append(.message(user))
             case .assistant(let assistant):
                 turn.add(assistant)
                 // The run's error shows once, at the end of the turn. A step you stopped isn't an
@@ -454,7 +454,7 @@ struct TranscriptView: View {
         }
         // Messages waiting their turn are listed above the composer instead.
         let waiting = Set(model.waiting.map(\.id))
-        rows += model.transcript.pending.filter { !waiting.contains($0.id) }.map(Row.pending)
+        rows += model.transcript.pending.filter { !waiting.contains($0.id) }.map(Row.waiting)
         // Always while it works, with the time since your message, so a long step is plainly
         // still going.
         if model.transcript.isRunning {
@@ -590,6 +590,17 @@ enum Row: Identifiable, Hashable {
     /// `followsHeard`: quiet since the model last sent anything, which new words move on without
     /// the rows being made again (see `RowView.heard`).
     case working(since: Milliseconds?, quiet: Milliseconds?, followsHeard: Bool, holds: Bool)
+
+    /// A message in the conversation as its row: yours as your bubble; one the box wrote to the
+    /// agent (a goal starting, its sessions' news) as the line of what happened.
+    static func message(_ user: Message.User) -> Row {
+        BoxNote.of(user).map { .notice(user.id, $0.symbol, $0.line) } ?? .user(user)
+    }
+
+    /// A message on its way in, the same way.
+    static func waiting(_ item: Transcript.Pending) -> Row {
+        BoxNote.of(text: item.text, metadata: item.metadata).map { .notice(item.id, $0.symbol, $0.line) } ?? .pending(item)
+    }
 
     /// The words Find looks in, as the row shows them: messages, replies, and commands you ran
     /// with what they printed.
@@ -1710,9 +1721,7 @@ private struct FoldingCard<Header: View, Accessory: View, Content: View>: View {
                                 .truncationMode(.tail)
                         }
                     }
-                    // A fill under the pointer that reaches past the words without moving them,
-                    // and the pointing hand, which the conversation's selection layer on top
-                    // would otherwise turn into an I-beam.
+                    // A fill under the pointer that reaches past the words without moving them.
                     .padding(.horizontal, 6)
                     .padding(.vertical, 3)
                     .background(isHoveringHeader ? Pressable.hoverFill : .clear, in: .rect(cornerRadius: 6))
@@ -1723,6 +1732,7 @@ private struct FoldingCard<Header: View, Accessory: View, Content: View>: View {
                     .animation(.easeOut(duration: 0.12), value: isHoveringHeader)
                 }
                 .buttonStyle(.plain)
+                .clickablePointer()
                 .help(open ? "Fold it to its first line" : "Show all of it")
                 Spacer(minLength: 8)
                 accessory

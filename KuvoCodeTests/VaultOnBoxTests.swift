@@ -100,6 +100,75 @@ import WebKit
         #expect(agentsOwn("example.com") == "me@example.com", "still theirs")
     }
 
+    /// A phone answering a sign-in card (`POST kuvo/asks/<id>`) does what the Mac's card does:
+    /// saves in the vault, and lets agents sign in there on their own, over https only; and a
+    /// saved account whose password can't be read says so and keeps the card, rather than going
+    /// as if answered while the agent still waits.
+    @Test func aPhonesSignInAnswerIsTheCardsOverHttpsOnly() async throws {
+        defer { done() }
+        #expect(await Passwords.ready())
+        let asks = BrowserAsks()
+        let link = PhoneLink()
+        link.browserAsks = asks
+        func ask(_ host: String) -> String {
+            // Each in a conversation of its own: one asking again soon after is answered as before.
+            let id = UUID().uuidString
+            asks.add(BrowserAsks.Ask(id: id, kind: .signIn(username: true, password: true), host: host, machine: nil, session: "ses_\(id)")) { _ in }
+            return id
+        }
+        func phone(_ path: String, _ body: [String: Any]? = nil) async throws -> (status: Int, json: [String: Any]?) {
+            let request = LinkRequest(method: body == nil ? "GET" : "POST", path: path, headers: ["content-type": "application/json"],
+                                      body: try body.map { try JSONSerialization.data(withJSONObject: $0) } ?? Data())
+            var status = 0
+            var data = Data()
+            for try await part in PhoneLink.respond(to: request, link: link, engine: URL(string: "http://127.0.0.1:9/")!, password: nil, agents: nil) {
+                switch part {
+                case .head(let code, _): status = code
+                case .body(let chunk): data += chunk
+                }
+            }
+            return (status, try? JSONSerialization.jsonObject(with: data) as? [String: Any])
+        }
+        func listed(_ id: String) async throws -> [String: Any]? {
+            try await (phone("kuvo/asks").json?["asks"] as? [[String: Any]])?.first { $0["id"] as? String == id }
+        }
+
+        // A page over http: never offered to save, and saving or agents asked for anyway are left out.
+        let plain = ask("http://example.org")
+        #expect(try await listed(plain)?["offersToSave"] as? Bool == false)
+        #expect(try await phone("kuvo/asks/\(plain)", ["answer": "signIn", "username": "ada", "password": "plain-password", "save": true, "agents": true]).status == 200)
+        #expect(Vaults.shared[BoxClient.mac].vault?.items == [], "nothing kept from a page over http")
+
+        // Over https: saved, with agents signing in on their own as asked.
+        let secure = ask("example.com")
+        #expect(try await listed(secure)?["offersToSave"] as? Bool == true)
+        #expect(try await phone("kuvo/asks/\(secure)", ["answer": "signIn", "username": "ada", "password": "first-password", "save": true, "agents": true]).status == 200)
+        #expect(Passwords.logins(for: "example.com").first.flatMap(Passwords.password(for:)) == "first-password")
+        #expect(agentsOwn("example.com") == "ada", "Let agents sign in here on their own, from the phone")
+
+        // A saved account picked, with agents allowed: theirs too.
+        #expect(await Passwords.save(host: "github.com", account: "kuvo-bots", password: "bots-password") != nil)
+        let github = ask("github.com")
+        #expect(try await phone("kuvo/asks/\(github)", ["answer": "signIn", "saved": "kuvo-bots", "agents": true]).status == 200)
+        #expect(agentsOwn("github.com") == "kuvo-bots", "agents allowed for a saved account (the phone asked for Face ID)")
+
+        // Its password typed anew (the account saved, so nothing offered to save): kept, or agents
+        // would sign in with the old one.
+        let changed = ask("github.com")
+        #expect(try await listed(changed)?["offersToSave"] as? Bool == false)
+        #expect(try await phone("kuvo/asks/\(changed)", ["answer": "signIn", "username": "kuvo-bots", "password": "new-bots-password", "save": false]).status == 200)
+        #expect(Passwords.logins(for: "github.com").first.flatMap(Passwords.password(for:)) == "new-bots-password")
+
+        // A saved account whose password this Mac can't read: says so, and the card stays.
+        let item = try #require(Vaults.shared[BoxClient.mac].vault?.signIns(for: "github.com").first)
+        #expect(VaultValues.remove(item.id))
+        let unreadable = ask("github.com")
+        let refused = try await phone("kuvo/asks/\(unreadable)", ["answer": "signIn", "saved": "kuvo-bots"])
+        #expect(refused.status == 422)
+        #expect((refused.json?["message"] as? String)?.contains("couldn’t be read") == true)
+        #expect(asks.asks.map(\.id) == [unreadable], "still waiting to be answered another way")
+    }
+
     /// Shows `html` in the panel's browser as the page at `address`, once it's finished.
     private func show(_ html: String, at address: String, in browser: BrowserSession) async {
         await withCheckedContinuation { (finished: CheckedContinuation<Void, Never>) in

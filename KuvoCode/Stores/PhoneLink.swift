@@ -807,6 +807,16 @@ final class PhoneLink {
             }
         }
         if route == "kuvo/asks/events" { return Self.following { link?.asksJSON() } }
+        // A sign-in answered from a phone is kept in this Mac's vault before the answer goes back.
+        if route.hasPrefix("kuvo/asks/"), request.method.uppercased() == "POST" {
+            let id = String(route.dropFirst("kuvo/asks/".count))
+            return AsyncThrowingStream { continuation in
+                Task { @MainActor in
+                    let (status, body) = await link?.answerAsk(id, with: request.body) ?? (503, Data())
+                    Self.sendJSON(status, body, to: continuation)
+                }
+            }
+        }
         if route == "kuvo/usage/events" { return Self.following { link?.usageJSON() } }
         return AsyncThrowingStream { [routed] continuation in
             Task { @MainActor in
@@ -983,7 +993,7 @@ final class PhoneLink {
     /// `engine.start` and `update`), and the Mac's own. `usage` is added while the usage panel is.
     static let features = [
         "accounts.credentials", "accounts.found", "agents", "artifacts", "asks", "attention", "bots", "bots.edit", "bots.events", "bots.job", "bots.keys", "bots.make", "branch", "btw", "btw.threads", "config", "config.apply", "engine.restart",
-        "file", "folders", "folders.files", "git", "goals", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "handoff", "integrations", "keys", "mcp.catalog", "moves",
+        "file", "folders", "folders.files", "git", "git.merge", "git.pull-request", "git.push", "goals", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "handoff", "integrations", "keys", "mcp.catalog", "moves",
         "named", "personalities", "phones", "phones.pair", "plugins.search", "programs", "projects", "providers.models", "reviews", "reviews.parts", "reviews.scopes", "search", "sessions.agents", "shell.stop", "sign-in.return", "skills",
         "personalities.events", "skills.trash", "sandbox", "sandbox.check", "sandbox.asks", "vault", "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events", "worktrees.where",
         "agent-tools", "sessions.start", "letters-read", "queue", "queue.waits", "work", "work.projects", "work.goals",
@@ -1055,8 +1065,6 @@ final class PhoneLink {
             if Self.usageSample { return (200, Data("{}".utf8)) }
             #endif
             return UsageMenuBar.shared.refreshAll() ? (200, Data("{}".utf8)) : (404, Data())
-        case let path where path.hasPrefix("kuvo/asks/") && request.method.uppercased() == "POST":
-            return answerAsk(String(path.dropFirst("kuvo/asks/".count)), with: request.body)
         case let path where path.hasPrefix("kuvo/asks/"):
             return (405, Data("{}".utf8))
         case "kuvo/engine/restart" where request.method.uppercased() == "POST":
@@ -1120,7 +1128,7 @@ final class PhoneLink {
                 listed.password = password
                 let saved = Passwords.logins(for: ask.host).map(\.account)
                 listed.saved = saved
-                listed.offersToSave = saved.isEmpty && Passwords.offersToSave && !Passwords.neverSites.contains(ask.host)
+                listed.offersToSave = BrowserAsks.isSecure(ask.host) && saved.isEmpty && Passwords.offersToSave && !Passwords.neverSites.contains(ask.host)
             case .code(let prompt):
                 listed.kind = "code"
                 listed.prompt = prompt
@@ -1135,36 +1143,51 @@ final class PhoneLink {
         return (try? encoder.encode(Listed(asks: asks))) ?? Data()
     }
 
-    /// A phone's answer, as the card's: a sign-in typed there (kept in Passwords if asked) or one
-    /// of the site's saved ones, which this Mac fills in itself; a code; done; or no.
-    private func answerAsk(_ id: String, with body: Data) -> (Int, Data) {
+    /// A phone's answer, as the card's: a sign-in typed there or one of the site's saved ones,
+    /// which this Mac fills in itself, kept in the vault and let agents sign in on their own as the
+    /// card would (over https only); a code; done; or no.
+    private func answerAsk(_ id: String, with body: Data) async -> (Int, Data) {
         struct Given: Decodable {
             var answer: String
             var username: String?
             var password: String?
-            /// An account Passwords keeps for the site: its password, from here.
+            /// An account the vault keeps for the site: its password, from here.
             var saved: String?
             var save: Bool?
+            /// Let agents sign in here on their own. The phone asks for your Face ID first when
+            /// it's a saved account's.
+            var agents: Bool?
             var code: String?
         }
         guard let asks = browserAsks, let ask = asks.asks.first(where: { $0.id == id }) else { return (404, Data()) }
         guard let given = try? JSONDecoder().decode(Given.self, from: body) else { return (400, Data()) }
         switch (given.answer, ask.kind) {
         case ("signIn", .signIn):
+            let host = ask.host
+            let username: String?, password: String?, savedPassword: String?
             if let account = given.saved {
-                guard let login = Passwords.logins(for: ask.host).first(where: { $0.account == account }),
-                      let password = Passwords.password(for: login) else { return (404, Data()) }
-                asks.answer(id, .signIn(username: account.isEmpty ? nil : account, password: password))
-            } else {
-                let username = given.username.flatMap { $0.isEmpty ? nil : $0 }
-                let password = given.password.flatMap { $0.isEmpty ? nil : $0 }
-                guard username != nil || password != nil else { return (400, Data()) }
-                if given.save == true, let password {
-                    let host = ask.host
-                    Task { await Passwords.save(host: host, account: username ?? "", password: password) }
+                // Said, and the card left up: a 404 would tell the phone it was answered.
+                guard let login = Passwords.logins(for: host).first(where: { $0.account == account }) else {
+                    return (422, Self.message("No password is saved for \(account.isEmpty ? host : account) any more. Type it instead."))
                 }
-                asks.answer(id, .signIn(username: username, password: password))
+                guard let saved = Passwords.password(for: login) else {
+                    return (422, Self.message("The saved password for \(host) couldn’t be read. Type it instead."))
+                }
+                (username, password, savedPassword) = (account.isEmpty ? nil : account, saved, saved)
+            } else {
+                username = given.username.flatMap { $0.isEmpty ? nil : $0 }
+                password = given.password.flatMap { $0.isEmpty ? nil : $0 }
+                // A saved account's password typed anew is kept too, as the card keeps it.
+                savedPassword = Passwords.logins(for: host).first { $0.account == (username ?? "") }.flatMap(Passwords.password(for:))
+                guard username != nil || password != nil else { return (400, Data()) }
             }
+            asks.answer(id, .signIn(username: username, password: password))
+            if let failure = await BrowserAsks.keep(host: host, account: username ?? "", password: password ?? "", saving: given.save == true,
+                                                    savedPassword: savedPassword, allowAgents: given.agents == true) {
+                if let session = ask.session { workspace?.model(for: session)?.failure = failure }
+                return (200, Self.message(failure))
+            }
+            return (200, Data("{}".utf8))
         case ("code", .code):
             guard let code = given.code?.trimmingCharacters(in: .whitespaces), !code.isEmpty else { return (400, Data()) }
             asks.answer(id, .code(code))

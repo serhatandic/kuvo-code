@@ -20,6 +20,7 @@ import { emit } from "./events"
 import type { Requester } from "./groups/api"
 import { freshAnswer, sessionInfo, type SessionInfo } from "./oneoff"
 import { isLimit, resetsIn, resetTime } from "../shared/limits"
+import { PAUSED_BY_YOU } from "../shared/goals"
 
 export type GoalState = "working" | "paused" | "met" | "unmet"
 export type Verdict = "met" | "not_met" | "impossible"
@@ -179,7 +180,8 @@ export class Goals {
     return shown(goal)
   }
 
-  /** Holds a goal: the turn under way ends as it would, and no other starts. */
+  /** Holds a goal: no other turn starts. (The box, told of it, stops the turn under way and holds
+   * the conversation until Resume: the link's `goalHolds`.) */
   pauseByYou(session: string): Goal {
     const goal = this.found(session)
     if (goal.state === "met" || goal.state === "unmet") throw new GoalError(409, "That goal is over.")
@@ -187,7 +189,7 @@ export class Goals {
       goal.epoch = (goal.epoch ?? 0) + 1
       this.cancelResume(session)
       delete goal.resumesAt
-      this.pause(goal, "you", "You paused it.")
+      this.pause(goal, "you", PAUSED_BY_YOU)
     }
     return shown(goal)
   }

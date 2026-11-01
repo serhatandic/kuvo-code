@@ -240,6 +240,36 @@ final class BrowserAsks {
         }
     }
 
+    /// A site an ask names that's over https: a plain host, not "http://…" nor a file. Only these
+    /// are saved in the vault, filled from it, and signed in to by agents on their own.
+    static func isSecure(_ host: String) -> Bool {
+        !host.hasPrefix("http://") && !host.hasPrefix("a file")
+    }
+
+    /// What answering a sign-in does with its password: saved when you asked to save a new one,
+    /// or when a saved account's password changed (or agents allowed to sign in on their own would
+    /// keep using the old one); and whether it's one you typed now, which allowing agents doesn't
+    /// ask your Touch ID for (one filled in from the vault does).
+    static func handling(password: String, saving: Bool, secure: Bool, savedPassword: String?) -> (saves: Bool, typedNow: Bool) {
+        let typedNow = !password.isEmpty && password != savedPassword
+        return (secure && typedNow && (saving || savedPassword != nil), typedNow)
+    }
+
+    /// A sign-in answered (on its card, or from a phone) kept as `handling` says, over https only:
+    /// saved in this Mac's vault, and agents let sign in there on their own when `allowAgents` (you
+    /// allowed it already). Why it wasn't saved, when it wasn't.
+    static func keep(host: String, account: String, password: String, saving: Bool, savedPassword: String?, allowAgents: Bool) async -> String? {
+        guard isSecure(host), !password.isEmpty else { return nil }
+        if handling(password: password, saving: saving, secure: true, savedPassword: savedPassword).saves {
+            if await Passwords.save(host: host, account: account, password: password, allowAgents: allowAgents) == nil {
+                return "The password for \(host) wasn’t saved: this Mac’s vault didn’t answer. Sign in again to save it."
+            }
+        } else if allowAgents {
+            await Passwords.setAgentSignIn(host, true, account: account)
+        }
+        return nil
+    }
+
     #if DEBUG
     /// KUVO_DEMO_ANSWER_ASKS=<username>|<password>|<code>[|<seconds>]: answers every ask after a
     /// moment (2 seconds unless given), as if typed in (a step to do is answered as done).

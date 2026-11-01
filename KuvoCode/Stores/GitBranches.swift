@@ -41,6 +41,10 @@ nonisolated extension Git {
     /// Merges `branch` into what `directory` has checked out. A merge that conflicts is
     /// taken back, so the folder is as it was.
     static func merge(_ branch: String, into directory: String, environment: [String: String]) -> MergeResult {
+        // One you're in the middle of there is yours: never taken back with this one.
+        if run(["rev-parse", "-q", "--verify", "MERGE_HEAD"], in: directory) != nil {
+            return .failed("The project’s folder is in the middle of a merge. Finish it there first.")
+        }
         guard let failure = report(["merge", "--no-edit", branch], in: directory, environment: environment) else { return .merged }
         // By their names as they are: not quoted or escaped, whatever letters are in them.
         let conflicted = (run(["-c", "core.quotepath=off", "diff", "--name-only", "-z", "--diff-filter=U"], in: directory) ?? "").split(separator: "\0").map(String.init)

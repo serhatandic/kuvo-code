@@ -114,15 +114,32 @@ extension View {
         modifier(AccentGlass(shape: shape, isOn: isOn))
     }
 
-    /// A text field drawn into the surface: sunken, with no bezel and no focus outline, like the
-    /// sidebar's search. For fields outside a grouped form (a form's own fields stay native).
-    public func wellField(cornerRadius: CGFloat = 10) -> some View {
-        modifier(WellField(cornerRadius: cornerRadius))
+    /// What you've picked from a list or a set of choices, drawn the same everywhere (the sidebar's
+    /// rows and computers, Settings' pages, a bot's look and personality): accent glass under the
+    /// one that's on, a soft fill under the pointer on the others. It starts `leading` in, so what
+    /// hangs beside a row (the lines sub-sessions hang from) stays in view, and neither moves or
+    /// resizes it. The one that's on changes at once, as in a Mac's sidebars.
+    public func pickHighlight<S: InsettableShape>(_ shape: S, isOn: Bool, leading: CGFloat = 0) -> some View {
+        modifier(PickHighlight(shape: shape, isOn: isOn, leading: leading))
     }
 
-    /// A recessed well, one step below the card, with a subtle inner border: for code.
-    public func recessedWell<S: InsettableShape>(_ shape: S) -> some View {
-        modifier(RecessedWell(shape: shape))
+    /// A text field drawn into the surface: sunken, with no bezel, like the sidebar's search. For
+    /// fields outside a grouped form (a form's own fields stay native). While you type in it, it
+    /// has the focus rim.
+    public func wellField(cornerRadius: CGFloat = 10, isFocused: Bool = false) -> some View {
+        modifier(WellField(cornerRadius: cornerRadius, isFocused: isFocused))
+    }
+
+    /// A recessed well, one step below the card, with a subtle inner border: for code, and for
+    /// the rows of a form, which pass `isFocused` while you type in one of them.
+    public func recessedWell<S: InsettableShape>(_ shape: S, isFocused: Bool = false) -> some View {
+        modifier(RecessedWell(shape: shape, isFocused: isFocused))
+    }
+
+    /// What marks the well you're typing in, the same for every one: a rim in the accent color
+    /// along its edge. The well's fill doesn't change.
+    public func focusRim<S: InsettableShape>(_ shape: S, isOn: Bool) -> some View {
+        modifier(FocusRim(shape: shape, isOn: isOn))
     }
 }
 
@@ -277,25 +294,58 @@ private struct AccentGlass<S: InsettableShape>: ViewModifier {
             .overlay {
                 if isOn {
                     shape
-                        .strokeBorder(
-                            LinearGradient(
-                                colors: [
-                                    .white.opacity(scheme == .dark ? 0.2 : 0.85),
-                                    accent.opacity(scheme == .dark ? 0.4 : 0.25),
-                                ],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            ),
-                            lineWidth: 1
-                        )
+                        .strokeBorder(Self.edge(scheme, accent: accent), lineWidth: 1)
                         .allowsHitTesting(false)
                 }
             }
+    }
+
+    /// Its luminous edge: white at the top into the accent.
+    static func edge(_ scheme: ColorScheme, accent: Color) -> LinearGradient {
+        LinearGradient(
+            colors: [
+                .white.opacity(scheme == .dark ? 0.2 : 0.85),
+                accent.opacity(scheme == .dark ? 0.4 : 0.25),
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+    }
+}
+
+private struct PickHighlight<S: InsettableShape>: ViewModifier {
+    let shape: S
+    let isOn: Bool
+    let leading: CGFloat
+    @State private var isHovering = false
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.accent) private var accent
+
+    func body(content: Content) -> some View {
+        content
+            .background(alignment: .leading) {
+                ZStack {
+                    shape.fill(isOn ? Surface.accentWash(scheme, accent: accent) : Color.primary.opacity(isHovering ? 0.06 : 0))
+                    if isOn {
+                        shape.strokeBorder(AccentGlass<S>.edge(scheme, accent: accent), lineWidth: 1)
+                    }
+                }
+                .padding(.leading, leading)
+                // At once: faded with a tab switch's animation, the sidebar's had the whole
+                // sidebar drawn again on each of its frames.
+                .transaction(value: isOn) { $0.animation = nil }
+            }
+            .contentShape(shape)
+            .onHover { isHovering = $0 }
+            .animation(.easeOut(duration: 0.12), value: isHovering)
+            // So VoiceOver says which one is open or picked, too.
+            .accessibilityAddTraits(isOn ? .isSelected : [])
     }
 }
 
 private struct WellField: ViewModifier {
     let cornerRadius: CGFloat
+    let isFocused: Bool
     @Environment(\.colorScheme) private var scheme
 
     func body(content: Content) -> some View {
@@ -305,11 +355,13 @@ private struct WellField: ViewModifier {
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
             .background(Surface.well(scheme), in: .rect(cornerRadius: cornerRadius))
+            .focusRim(.rect(cornerRadius: cornerRadius), isOn: isFocused)
     }
 }
 
 private struct RecessedWell<S: InsettableShape>: ViewModifier {
     let shape: S
+    let isFocused: Bool
     @Environment(\.colorScheme) private var scheme
 
     func body(content: Content) -> some View {
@@ -320,6 +372,25 @@ private struct RecessedWell<S: InsettableShape>: ViewModifier {
                     .strokeBorder(Surface.wellBorder(scheme), lineWidth: 1)
                     .allowsHitTesting(false)
             }
+            .focusRim(shape, isOn: isFocused)
+    }
+}
+
+private struct FocusRim<S: InsettableShape>: ViewModifier {
+    let shape: S
+    let isOn: Bool
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    func body(content: Content) -> some View {
+        content.overlay {
+            if isOn {
+                // The tint, so it follows the accent (Graphite too); full strength and wider with
+                // Increase Contrast.
+                shape
+                    .strokeBorder(.tint.opacity(contrast == .increased ? 1 : 0.8), lineWidth: contrast == .increased ? 2 : 1.5)
+                    .allowsHitTesting(false)
+            }
+        }
     }
 }
 

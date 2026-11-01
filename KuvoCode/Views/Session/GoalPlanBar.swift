@@ -75,6 +75,8 @@ struct GoalPlanBar: View {
             Image(systemName: "stop.circle").font(.system(size: 13)).foregroundStyle(.secondary)
         case .running where isPaused:
             Image(systemName: "pause.circle").font(.system(size: 13)).foregroundStyle(.secondary)
+        case .running where GoalPlanWords.next(plan) != nil:
+            Image(systemName: "clock").font(.system(size: 13)).foregroundStyle(.secondary)
         default:
             Image(systemName: "scope").font(.system(size: 13)).foregroundStyle(.tint)
         }
@@ -85,7 +87,7 @@ struct GoalPlanBar: View {
         case .done: "Goal met"
         case .stopped, .declined: "Goal stopped"
         case .running where isPaused: "Goal paused"
-        default: "Working toward a goal"
+        default: GoalPlanWords.next(plan) ?? "Working toward a goal"
         }
     }
 
@@ -111,7 +113,7 @@ struct GoalPlanBar: View {
             if plan.state == .running {
                 if let goal, goal.state == .working {
                     Button("Pause", action: pause)
-                        .help("Let the turn under way finish, then hold the goal")
+                        .help("Stop the turn under way and hold the goal until you resume it")
                 } else if let goal, goal.state == .paused {
                     Button("Resume", action: resume)
                         .help("Carry on with the plan")

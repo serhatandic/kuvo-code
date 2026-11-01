@@ -331,6 +331,8 @@ final class SessionModel {
         for message in transcript.messages {
             let text: String
             switch message {
+            // Not what the box told the agent.
+            case .user(let user) where BoxNote.of(user) != nil: continue
             case .user(let user): text = SentMessage.words(of: CommandMessages.shared.text(of: user))
             // Commands you ran come back as you typed them.
             case .shell(let shell): text = "!" + shell.command
@@ -567,8 +569,10 @@ final class SessionModel {
     /// Whether `item` waits on the box rather than in the engine.
     func isOnBox(_ item: Transcript.Pending) -> Bool { onBox.contains { $0.id == item.id } }
 
-    /// Who a message waiting on the box is from: an agent's name, "Wake-up"…; nil for one of yours.
-    func sender(of item: Transcript.Pending) -> String? { onBox.first { $0.id == item.id }?.from }
+    /// Who a waiting message is from: an agent's name, "Wake-up", "Goal"…; nil for one of yours.
+    func sender(of item: Transcript.Pending) -> String? {
+        onBox.first { $0.id == item.id }?.from ?? BoxNote.of(text: item.text, metadata: item.metadata)?.from
+    }
 
     private var hasQueue: Bool { transcript.pending.contains { $0.delivery == .queue } || !waitingOnBox.isEmpty }
 

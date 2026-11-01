@@ -528,7 +528,7 @@ private struct TreeRow: View {
             .padding(.leading, 6 + CGFloat(depth) * 14)
             .padding(.trailing, 6)
             .frame(height: 26)
-            .hoverHighlight(in: RoundedRectangle(cornerRadius: 6), selected: isSelected)
+            .pickHighlight(RoundedRectangle(cornerRadius: 6), isOn: isSelected)
         }
         .buttonStyle(.plain)
         .clickablePointer()

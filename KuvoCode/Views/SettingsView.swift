@@ -84,6 +84,7 @@ struct SettingsView: View {
             // material makes it), black text came out a washed-out gray on white.
             .environment(\.backgroundMaterial, nil)
             .background(WindowXReader { tabs.contentX = $0 })
+            .contentCard(.settings)
             // Doing something in the page in view keeps its tab (see `SettingsTabs`).
             .background(InteractionWatcher { tabs.keepSelected() })
             .background(Surface.cardFill(scheme, focused: true), in: .rect(cornerRadius: Metrics.cardRadius))

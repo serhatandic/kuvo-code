@@ -2219,6 +2219,15 @@
             "literal": "git"
            },
            {
+            "literal": "git.merge"
+           },
+           {
+            "literal": "git.pull-request"
+           },
+           {
+            "literal": "git.push"
+           },
+           {
             "literal": "goals"
            },
            {
@@ -2486,6 +2495,15 @@
            },
            {
             "literal": "git"
+           },
+           {
+            "literal": "git.merge"
+           },
+           {
+            "literal": "git.pull-request"
+           },
+           {
+            "literal": "git.push"
            },
            {
             "literal": "goals"
@@ -3209,6 +3227,52 @@
    "answers": {
     "200": {
      "object": {}
+    },
+    "422": {
+     "object": {
+      "message": "string",
+      "committed?": {
+       "literal": true
+      },
+      "pushed?": {
+       "literal": false
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/git/push",
+   "answers": {
+    "200": {
+     "object": {}
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/git/merge",
+   "answers": {
+    "200": {
+     "object": {}
+    },
+    "409": {
+     "object": {
+      "message": "string",
+      "conflicts?": {
+       "list": "string"
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/git/pull-request",
+   "answers": {
+    "200": {
+     "object": {
+      "url?": "string",
+      "compareURL?": "string"
+     }
     }
    }
   },
@@ -4775,6 +4839,7 @@
       "why?": "string",
       "able": "bool",
       "agents": "bool",
+      "outside?": "bool",
       "restart?": "bool",
       "reason?": {
        "oneOf": [
@@ -4861,6 +4926,7 @@
       "why?": "string",
       "able": "bool",
       "agents": "bool",
+      "outside?": "bool",
       "restart?": "bool",
       "reason?": {
        "oneOf": [
@@ -4947,6 +5013,7 @@
       "why?": "string",
       "able": "bool",
       "agents": "bool",
+      "outside?": "bool",
       "restart?": "bool",
       "reason?": {
        "oneOf": [
@@ -7179,6 +7246,7 @@
              "list": "string"
             },
             "resumes?": "number",
+            "until?": "number",
             "began?": "number",
             "ended?": "number"
            }
@@ -7335,6 +7403,7 @@
          "watching": {
           "list": "string"
          },
+         "next?": "number",
          "lastDigest?": {
           "object": {
            "at": "number",
@@ -7421,6 +7490,7 @@
              "list": "string"
             },
             "resumes?": "number",
+            "until?": "number",
             "began?": "number",
             "ended?": "number"
            }
@@ -7577,6 +7647,7 @@
          "watching": {
           "list": "string"
          },
+         "next?": "number",
          "lastDigest?": {
           "object": {
            "at": "number",
@@ -7682,6 +7753,7 @@
             "list": "string"
            },
            "resumes?": "number",
+           "until?": "number",
            "began?": "number",
            "ended?": "number"
           }
@@ -7838,6 +7910,7 @@
         "watching": {
          "list": "string"
         },
+        "next?": "number",
         "lastDigest?": {
          "object": {
           "at": "number",

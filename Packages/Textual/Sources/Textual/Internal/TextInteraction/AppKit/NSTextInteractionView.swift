@@ -32,6 +32,8 @@
     /// A right-click (or Control-click) that did, its menu shown once they come in: before, it
     /// would find no word under it, and be empty.
     private var pendingMenuEvent: NSEvent?
+    /// The I-beam, or a link's pointing hand, where it's what's under the pointer.
+    private let pointer = PointerClaim()
 
     init(
       model: TextSelectionModel,
@@ -44,6 +46,7 @@
 
       super.init(frame: .zero)
       self.wantsLayer = false
+      addTrackingArea(PointerClaim.trackingArea(owner: self, in: self))
       watchLayouts()
     }
 
@@ -76,6 +79,43 @@
       } else {
         return super.hitTest(point)
       }
+    }
+
+    // MARK: The pointer
+
+    override func cursorUpdate(with event: NSEvent) {
+      pointerMoved(event)
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+      pointerMoved(event)
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+      pointerMoved(event)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+      pointer.show(nil)
+    }
+
+    // Removed under the pointer (a reply rebuilt, a pane closed): no `mouseExited` comes.
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+      super.viewWillMove(toWindow: newWindow)
+      if newWindow == nil { pointer.show(nil) }
+    }
+
+    /// Where it's on top (not under a control drawn over the text, nor over a code block it lets
+    /// through): the I-beam or a link's hand, and selection readied while the pointer rests.
+    private func pointerMoved(_ event: NSEvent) {
+      guard PointerClaim.isTopmost(self, at: event.locationInWindow) else { return pointer.show(nil) }
+      // The pointer rests on it, in the app you're using, not scrolling past: selecting may
+      // come, so its text tells where it's laid out from now on.
+      if !model.isActive, NSApp.isActive, ScrollWatch.isIdle {
+        model.isActive = true
+      }
+      let location = convert(event.locationInWindow, from: nil)
+      pointer.show(model.url(for: location) != nil ? .pointingHand : .iBeam)
     }
 
     override func mouseDown(with event: NSEvent) {

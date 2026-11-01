@@ -228,7 +228,7 @@ struct WakeList: View {
     private var form: some View {
         VStack(alignment: .leading, spacing: 10) {
             // A field: its well stays, in a popover too.
-            WellGroup(isActive: noteFocused) {
+            WellGroup(isFocused: noteFocused) {
                 WellRow {
                     Image(systemName: "clock")
                 } content: {

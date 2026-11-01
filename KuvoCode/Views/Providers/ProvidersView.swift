@@ -246,8 +246,8 @@ struct ProvidersView: View {
     }
 }
 
-/// A rounded search field that lives in the content, not in a toolbar: a recessed well with no
-/// outline, a touch deeper while you type. Also filters the skills in Settings.
+/// A rounded search field that lives in the content, not in a toolbar: a recessed well, with the
+/// focus rim while you type. Also filters the skills in Settings.
 struct SearchField: View {
     @Binding var text: String
     let prompt: String
@@ -274,9 +274,9 @@ struct SearchField: View {
         .font(.body)
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
-        // Sunken, like the sidebar's search, with no outline; a touch deeper while you type.
-        .background((scheme == .dark ? Color.black : Surface.slate).opacity(isFocused ? 0.05 : 0), in: .rect(cornerRadius: 10))
+        // Sunken, like the sidebar's search.
         .background(Surface.well(scheme), in: .rect(cornerRadius: 10))
+        .focusRim(.rect(cornerRadius: 10), isOn: isFocused)
         .contentShape(.rect)
         .onTapGesture { isFocused = true }
     }

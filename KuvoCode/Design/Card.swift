@@ -375,8 +375,7 @@ extension NSView {
     }
 }
 
-/// What's at the top of a card's content stays put (a widget opened larger, a sub-session's row
-/// with the way back): nothing scrolls up under the header there, so it doesn't fade what's under it.
+/// What's at the top of a card's content stays put (a sub-session's row with the way back): nothing scrolls up under the header there, so it doesn't fade what's under it.
 struct CardTopIsFixed: PreferenceKey {
     static let defaultValue = false
     static func reduce(value: inout Bool, nextValue: () -> Bool) { value = value || nextValue() }

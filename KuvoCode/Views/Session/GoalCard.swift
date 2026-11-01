@@ -1,5 +1,6 @@
 import AppKit
 import ClientDesign
+import ClientSandbox
 import ClientSessions
 import OpenCodeKit
 import SwiftUI
@@ -27,7 +28,13 @@ struct GoalCard: View {
     @State private var periods: [GoalPlan.Spend.Period] = []
     @State private var sandbox: GoalSandbox.Reading?
     @State private var sandboxBusy = false
+    /// You said to restart the agents started before the sandbox: they do between turns.
+    @State private var restartingAgents = false
+    /// You said to restart the box's sessions: until they're back.
+    @State private var restartingSessions = false
     @State private var failure: String?
+    /// What a sandbox button couldn't do, said in its row.
+    @State private var sandboxFailure: String?
     @State private var sent: GoalPlanAnswer.Action?
     /// How tall what's between its header and its buttons can be before it scrolls.
     @Environment(\.cardRoom) private var room
@@ -74,14 +81,50 @@ struct GoalCard: View {
         }
         .padding(16)
         .onAppear(perform: takeIn)
-        .onChange(of: plan.id) { takeIn() }
-        .task(id: "\(plan.id)|\(box)|\(plan.alone)|\(sandboxRound)") {
+        .onChange(of: plan.id) {
+            // What you started on another plan's box isn't this one's.
+            restartingAgents = false
+            restartingSessions = false
+            sandboxFailure = nil
+            takeIn()
+        }
+        .onChange(of: sandboxFailure) { _, failure in
+            if let failure { AccessibilityNotification.Announcement(failure).post() }
+        }
+        .task(id: "\(plan.id)|\(box)|\(plan.alone)|\(bot?.agents == true)|\(sandboxRound)") {
             guard !plan.alone else { return }
-            // Read again while it's being checked, less often each time.
+            // Read again while it's being checked (or the agents or sessions restart), less often
+            // each time. Sessions get seven reads, about two minutes, to come back.
             var wait = 2.0
+            var reads = 0
+            // A row showing as this starts (read again, or after a button): its clearing means the
+            // plan may run alone now.
+            var hadRow = sandboxRow != nil
             while !Task.isCancelled {
-                sandbox = await app.goalPlans.sandbox(on: box)
-                guard case .status(let status) = sandbox, status.reason == "checking" else { return }
+                let now = await app.goalPlans.sandbox(on: box)
+                guard !Task.isCancelled else { return }
+                reads += 1
+                // While its sessions restart, a box may not answer for a moment: what it said last
+                // stands until they've had their time.
+                if !(restartingSessions && now == .unreadable) { sandbox = now }
+                // The agents restarted (or none is outside any more), the sessions are back: nothing
+                // more to wait for.
+                if case .status(let status) = sandbox {
+                    if status.outside != true { restartingAgents = false }
+                    if !GoalSandbox.sessionsHold(status) { restartingSessions = false }
+                }
+                if restartingSessions, reads >= 7 {
+                    restartingSessions = false
+                    sandbox = now
+                    sandboxFailure = "Sessions \(onThisMac ? "on this Mac" : "on \(computer)") haven’t restarted yet."
+                }
+                guard let row = sandboxRow else {
+                    // Fixed since: the plan may run alone now, which its box says.
+                    if hadRow { await app.goalPlans.read(box) }
+                    return
+                }
+                hadRow = true
+                guard row.checking else { return }
                 try? await Task.sleep(for: .seconds(wait))
                 wait = min(wait * 2, 60)
             }
@@ -174,7 +217,7 @@ struct GoalCard: View {
 
     private var sandboxRow: GoalSandbox.Row? {
         GoalSandbox.row(sandbox, computer: computer, onThisMac: onThisMac, bot: plan.name,
-                        agent: bot?.agents == true ? OutsideAgents.name(bot?.model?.providerID) : nil)
+                        codingAgent: bot?.agents == true, restarting: restartingAgents, restartingSessions: restartingSessions)
     }
 
     private func sandboxView(_ row: GoalSandbox.Row) -> some View {
@@ -197,6 +240,12 @@ struct GoalCard: View {
                     Text(row.text)
                         .font(.callout)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if let sandboxFailure {
+                    Text(sandboxFailure)
+                        .font(.callout)
+                        .foregroundStyle(.orange)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -222,13 +271,23 @@ struct GoalCard: View {
         case .reportProblem: app.reportProblem()
         case .updateMachine: app.openSettings(.machines)
         case .checkForUpdates: updates.check()
-        case .editBot: if let bot { app.tabs.openBotEditor(bot: bot) }
-        case .readAgain, .route:
+        case .readAgain, .route, .restartAgents, .restartSessions:
             sandboxBusy = true
+            sandboxFailure = nil
             Task {
                 defer { sandboxBusy = false }
-                if case .route(let method, let path) = action {
-                    do { try await app.goalPlans.sandboxRoute(method, path, on: box) } catch { failure = error.localizedDescription }
+                if action == .restartAgents {
+                    do {
+                        try await app.goalPlans.sandboxRoute("POST", SandboxRoutes.restart, body: ["restart": true], on: box)
+                        restartingAgents = true
+                    } catch { sandboxFailure = error.localizedDescription }
+                } else if case .restartSessions(let method, let path) = action {
+                    do {
+                        try await app.goalPlans.sandboxRoute(method, path, on: box)
+                        restartingSessions = true
+                    } catch { sandboxFailure = error.localizedDescription }
+                } else if case .route(let method, let path) = action {
+                    do { try await app.goalPlans.sandboxRoute(method, path, on: box) } catch { sandboxFailure = error.localizedDescription }
                     // Fixed, the plan may run alone now: its box says.
                     await app.goalPlans.read(box)
                 }

@@ -55,6 +55,17 @@ prerelease, and only copies with **Settings › General › Get beta updates** o
 are offered it. Its build version is `X.Y.ZbN` (`scripts/build-version.sh`),
 which Sparkle orders before the release.
 
+Before tagging one, try its update the way people will get it:
+
+```sh
+./scripts/try-update.sh            # the next beta after the newest tag, or name a version
+```
+
+It builds this checkout as that version, signed with your Developer ID and the update key from
+your keychain, serves it from `127.0.0.1`, and points the Kuvo Code in /Applications at it. Choose
+**Check for Updates…** there to go through the update window, the install, the restart and
+What's New. Ctrl-C stops the server and puts the real feed back.
+
 A release also carries what remote machines run, for them to update themselves
 with, once the `KUVO_BOX_SIGNING_KEY` secret (an Ed25519 key) is set
 (`scripts/set-box-key.sh` makes it once, keeps it in your login keychain, uploads
@@ -448,8 +459,6 @@ when you're there to answer.
 | `KUVO_DEMO_CONNECTED` | With `KUVO_DEMO_SETTINGS=integrations`: that integration's sign-in sheet, on its last step |
 | `KUVO_DEMO_WIDGET_SNAPSHOTS` | A folder: each widget an agent made, once drawn, saved there as a picture (a background copy's window draws no web pages) |
 | `KUVO_DEMO_WHATS_NEW` | What's New's sheet over the window, with the newest highlights |
-| `KUVO_DEMO_WIDGET_LARGE` | The first widget shown opens larger, as Open Larger does |
-| `KUVO_DEMO_WIDGET_PILL` | Each widget's Open Larger and Copy pill shown, as with the pointer over it |
 | `KUVO_PERF_STILL_BOTS` | Every bot holds still, to compare what their motion costs |
 | `KUVO_ANALYTICS_URL` | Send anonymous usage to this collector, e.g. `http://127.0.0.1:8787/kuvo/code`; debug builds send none otherwise |
 | `KUVO_DEMO_AGENTS_FAILED` | This Mac's coding agents' bridge (and its group chats) as if it had stopped for good, with that reason |

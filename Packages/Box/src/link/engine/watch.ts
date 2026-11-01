@@ -9,6 +9,7 @@ import { freshenBot, freshenBots } from "../bots/tell";
 import { ANSWERED, GROUP_NEWS, NEWS, RUN_ENDS, groupNotice, noticeFor, settleHeld } from "../notices/news";
 import { engineGet, peerTargets, readBridgeFile, readEngineFile } from "./client";
 import { learnCompatibility } from "./compatibility";
+import { goalHolds, settleGoalHolds } from "../work/goals";
 import { workWatcher } from "../work/wakes";
 import { queueWatcher, scanQueues } from "./queue";
 import type { Target } from "../../shared/records";
@@ -84,6 +85,8 @@ export interface WatchOptions {
   learned?: () => void;
   queues?: boolean;
   work?: boolean;
+  /** The agents' bridge's, which keeps conversations' goals: one paused or resumed held or let go. */
+  goals?: boolean;
 }
 
 // The events in a `text/event-stream` body, parsed.
@@ -217,7 +220,7 @@ function backgroundTools(engine: Target, session: string): Promise<Response> {
 export function watchBox({ tell = () => true, hold = null, bots = false, notices = !bots, signal, signedIn, learned }: WatchBoxOptions = {}): void {
   const answered = (id: string | undefined) => hold?.resolve(id);
   watchEvents(readEngineFile, tell, signal, answered, { bots, notices, signIns: true, hold, signedIn, steers: true, learns: true, learned, queues: true, work: true });
-  watchEvents(readBridgeFile, tell, signal, answered, { bots, notices, queues: true, work: true });
+  watchEvents(readBridgeFile, tell, signal, answered, { bots, notices, queues: true, work: true, goals: true });
 }
 
 // Follows `source`'s events (the engine's, or the coding agents' bridge's: `read` gives its port
@@ -235,7 +238,7 @@ export function watchBox({ tell = () => true, hold = null, bots = false, notices
 // GitHub Copilot brings new models); `learned` told each time.
 // `queues`: its sessions' queues carried on (engine/queue.ts). `work`: whoever started a session
 // told as it finishes or asks (work/wakes.ts).
-export async function watchEvents(read: () => Target, tell: (notice: Notice) => void, signal?: AbortSignal, answered: (id: string | undefined) => void = () => {}, { bots = false, notices = !bots, signIns = false, hold = null, signedIn = () => {}, steers = false, steerAfter, learns = false, learned = () => {}, queues = false, work = false }: WatchOptions = {}): Promise<void> {
+export async function watchEvents(read: () => Target, tell: (notice: Notice) => void, signal?: AbortSignal, answered: (id: string | undefined) => void = () => {}, { bots = false, notices = !bots, signIns = false, hold = null, signedIn = () => {}, steers = false, steerAfter, learns = false, learned = () => {}, queues = false, work = false, goals = false }: WatchOptions = {}): Promise<void> {
   let attempt = 0;
   let lastLearned = 0;
   const learn = (source: Target) => {
@@ -253,6 +256,8 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
       const steer = steers ? steering(session => backgroundTools(source, session).catch(() => {}), { after: steerAfter, signal: connection.signal }) : null;
       const queue = queues ? queueWatcher(source) : null;
       const followWork = work ? workWatcher(source, peerTargets, { signal: connection.signal }) : null;
+      // A goal paused or resumed (the agents' bridge says so): its conversation held or let go.
+      const goalHeld = goals ? goalHolds(peerTargets) : null;
       const response = await fetch(`http://127.0.0.1:${source.port}/api/event`, {
         headers: { authorization: `Basic ${Buffer.from(`opencode:${source.password}`).toString("base64")}`, accept: "text/event-stream" },
         signal,
@@ -267,6 +272,8 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
       lastLearned = 0;
       learn(source);
       if (queues) scanQueues(source).catch(() => {});
+      // A goal's change it missed meanwhile: what's held for one let go, or kept, as it is now.
+      if (goalHeld) settleGoalHolds(source, goalHeld).catch(() => {});
       for await (const event of serverEvents(response.body)) {
         // The box's own work, Mac connected or not: a session made in one of its worktrees told
         // so; a worktree's branch named after its session; a bot's job read from its memory as
@@ -277,6 +284,7 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
         steer?.(event);
         queue?.(event as QueueEvent);
         followWork?.(event);
+        goalHeld?.(event).catch(() => {});
         if (signIns) noteSignIn(event, source).catch(() => {}).finally(() => signedIn(event));
         if (!bots) {
           if (event.type === "session.created") tellWorktree(source, event.data?.sessionID ?? event.data?.info?.id).catch(() => {});

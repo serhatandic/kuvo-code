@@ -57,7 +57,12 @@ public struct MessageBlock: Sendable {
 /// set another loop.
 public enum SentWithKeyword {
     public static let heading = "The user sent this with a Kuvo Code keyword, which Kuvo Code has already done (switched to Plan, or set the message to repeat), so there's nothing for you to do about it:"
-    private static let block = MessageBlock(start: "<sent-with>", end: "</sent-with>", headings: [heading])
+    /// /goal in a bot's chat, as every box sends it (`askGoal` in the box's work/goals.ts, in these
+    /// words): the bot is to plan it before any of the work.
+    public static let goalHeading = "The user sent this as a goal, with Kuvo Code's /goal. Plan it, check what it needs, and put it to them with propose_goal before doing any of the work:"
+    private static let block = MessageBlock(start: "<sent-with>", end: "</sent-with>", headings: [heading, goalHeading])
+    // How a box sent /goal before it went in the block: its marker, the words, then this.
+    private static let oldGoal = (marker: "[Goal] ", note: "\n\n(The user asked for this as a goal: plan it, check what it needs, and put it to them with propose_goal before doing any of the work.)")
 
     /// `text` sent with `typed` ("/plan", "/loop every hour").
     public static func message(_ text: String, typed: String) -> String {
@@ -70,6 +75,9 @@ public enum SentWithKeyword {
     /// A message's words without the block, and the keyword it was sent with as typed ("/loop
     /// every hour"); a message sent without one as it is, and nil.
     public static func split(_ text: String) -> (text: String, keyword: String?) {
+        if text.hasPrefix(oldGoal.marker), text.hasSuffix(oldGoal.note) {
+            return (String(text.dropFirst(oldGoal.marker.count).dropLast(oldGoal.note.count)).trimmingCharacters(in: .whitespacesAndNewlines), "/goal")
+        }
         guard let (before, lines) = block.split(text), let typed = lines.dropFirst().first.map(String.init), typed.hasPrefix("/") else { return (text, nil) }
         return (before.trimmingCharacters(in: .whitespacesAndNewlines), typed)
     }
@@ -96,7 +104,7 @@ public enum WidgetAnswer {
         return (before.trimmingCharacters(in: .whitespacesAndNewlines), lines.dropFirst().joined(separator: " ").trimmingCharacters(in: .whitespaces))
     }
 
-    /// What a widget is called, in its caption and in the chip over what it sent: its title, or
+    /// What a widget is called, to VoiceOver and in the chip over what it sent: its title, or
     /// words of our own.
     public static func name(_ title: String?) -> String {
         title.flatMap { $0.isEmpty ? nil : $0 } ?? "Made for you"

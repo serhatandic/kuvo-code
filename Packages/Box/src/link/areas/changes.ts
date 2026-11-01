@@ -1,7 +1,8 @@
 // A project's changes on this box, as the Changes panel shows and works them (PROTOCOL.md,
 // "Changes"): what git says changed, staging, unstaging and discarding a file, a file as git keeps
-// it (a picture's old side), and committing. A client parses the diff itself; the box runs git, in
-// the box's own folders, with the box's git and its settings.
+// it (a picture's old side), committing and pushing, and bringing a branch's work back (Merge
+// into…, Create Pull Request). A client parses the diff itself; the box runs git, in the box's own
+// folders, with the box's git and its settings.
 
 import { execFile, execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
@@ -12,6 +13,7 @@ import type { GitChanges } from "../../shared/routes/changes";
 import { K } from "../home";
 import type { AnswerPiece, RouteContext } from "../server/context";
 import { FILE_LIMIT } from "./file";
+import { readWorktrees } from "./worktree-records";
 
 // git's empty tree: what a repository with no commits yet is compared with.
 const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
@@ -34,11 +36,11 @@ interface Ran {
  * ten minutes (stuck on a lock or a hung disk); what changes the repository (a commit's hooks, a
  * push) takes as long as it takes.
  */
-function git(folder: string, args: string[], changing = false, more: Record<string, string> = {}): Promise<Ran> {
+function git(folder: string, args: string[], changing = false, more: Record<string, string> = {}, program = "git", timeout = 600_000): Promise<Ran> {
   const env = { ...process.env, GIT_TERMINAL_PROMPT: "0", ...(changing ? {} : { GIT_OPTIONAL_LOCKS: "0" }), ...more };
   if (!changing) {
     return new Promise(resolve => {
-      execFile("git", args, { cwd: folder, env, encoding: "buffer", maxBuffer: 1024 * 1024 * 1024, timeout: 600_000 }, (error, stdout, stderr) =>
+      execFile(program, args, { cwd: folder, env, encoding: "buffer", maxBuffer: 1024 * 1024 * 1024, timeout }, (error, stdout, stderr) =>
         resolve({ ok: !error, out: stdout ?? Buffer.alloc(0), said: String(stderr ?? "").trim() }));
     });
   }
@@ -46,10 +48,10 @@ function git(folder: string, args: string[], changing = false, more: Record<stri
   return new Promise(resolve => {
     const out: Buffer[] = [];
     const said: Buffer[] = [];
-    const child = spawn("git", args, { cwd: folder, env, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(program, args, { cwd: folder, env, stdio: ["ignore", "pipe", "pipe"] });
     child.stdout.on("data", piece => out.push(piece));
     child.stderr.on("data", piece => said.push(piece));
-    child.on("error", () => resolve({ ok: false, out: Buffer.alloc(0), said: "git isn’t there." }));
+    child.on("error", () => resolve({ ok: false, out: Buffer.alloc(0), said: `${program} isn’t there.` }));
     child.on("exit", code => setImmediate(() => {
       child.stdout.destroy();
       child.stderr.destroy();
@@ -273,26 +275,168 @@ export async function perform(action: "stage" | "unstage" | "discard", root: str
 
 /** Commits what's staged, or everything in `directory` when nothing is, and pushes if asked; null
  * when it went, else what git said. */
-export async function commit(directory: string, message: string, push: boolean, author: Record<string, string>): Promise<string | null> {
+/** What git said when it refused, from `root` (with `author`'s settings), or null when it didn't. */
+const refusal = (root: string, author: Record<string, string> = {}) => async (args: string[]) => {
+  const ran = await git(root, args, true, author);
+  if (ran.ok) return null;
+  const words = (ran.out.toString("utf8") + "\n" + ran.said).trim();
+  return words || `git ${args[0]} failed.`;
+};
+
+/** Pushes what `root` has checked out; a new branch pushed and tracked, as `git push -u` would.
+ * What git said when it didn't go. */
+async function pushFrom(root: string, said = refusal(root)): Promise<string | null> {
+  const pushed = await said(["push"]);
+  return pushed?.includes("no upstream branch") ? said(["push", "-u", "origin", "HEAD"]) : pushed;
+}
+
+/** Commits (and pushes, with `push`): why it didn't, and whether the commit itself landed (only the
+ * push not going through), so a client offers Push rather than committing again. */
+export async function commit(directory: string, message: string, push: boolean, author: Record<string, string>): Promise<{ failed: string; committed: boolean } | null> {
   const root = (await text(directory, ["rev-parse", "--show-toplevel"]))?.trim();
-  if (!root) return "Not a git repository.";
-  const said = async (args: string[]) => {
-    const ran = await git(root, args, true, author);
-    if (ran.ok) return null;
-    const words = (ran.out.toString("utf8") + "\n" + ran.said).trim();
-    return words || `git ${args[0]} failed.`;
-  };
+  if (!root) return { failed: "Not a git repository.", committed: false };
+  const said = refusal(root, author);
   if (!(await hasStaged(root))) {
     const relative = path.relative(realOr(root), realOr(directory));
     const failed = await said(["add", "-A", "--", relative && !relative.startsWith("..") ? relative : "."]);
-    if (failed) return failed;
+    if (failed) return { failed, committed: false };
   }
   const failed = await said(["commit", "-m", message]);
-  if (failed || !push) return failed;
-  let pushed = await said(["push"]);
-  // A new branch: pushed and tracked, as `git push -u` would.
-  if (pushed?.includes("no upstream branch")) pushed = await said(["push", "-u", "origin", "HEAD"]);
-  return pushed && `Committed, but the push didn’t go through:\n${pushed}`;
+  if (failed) return { failed, committed: false };
+  if (!push) return null;
+  const pushed = await pushFrom(root, said);
+  return pushed ? { failed: `Committed, but the push didn’t go through:\n${pushed}`, committed: true } : null;
+}
+
+/** The branch `directory` has checked out, or null. */
+const branchOf = async (directory: string) => (await text(directory, ["symbolic-ref", "--quiet", "--short", "HEAD"]))?.trim() || null;
+
+/** Why `directory`'s branch can't go into `target` yet, if it can't: changes not committed (only
+ * what's committed goes), or nothing `target` doesn't have. */
+async function unready(directory: string, branch: string, target: string): Promise<string | null> {
+  const status = await text(directory, ["status", "--porcelain", "--untracked-files=normal"]);
+  if (status === null || status.trim()) return "Commit the changes first. Only what’s committed goes.";
+  const ahead = (await text(directory, ["rev-list", "--count", `${target}..HEAD`]))?.trim();
+  if (ahead === undefined) return `There’s no branch ${target} to compare with.`;
+  return ahead === "0" ? `${branch} has nothing ${target} doesn’t have yet.` : null;
+}
+
+/** The box's worktree `directory` is in (its record), if it's one. */
+function worktreeOf(directory: string) {
+  const real = realOr(directory);
+  return readWorktrees().find(tree => real === realOr(tree.root) || real.startsWith(realOr(tree.root) + path.sep));
+}
+
+/** Merge into…: what's committed on a worktree's branch merged into `into`, in the project's
+ * folder, which must have `into` checked out (as the Mac's own Merge into… does). A merge that
+ * conflicts is taken back, so the project's folder is as it was, and names the files. */
+export async function mergeInto(directory: string, into: string, author: Record<string, string> = {}): Promise<{ status: number; failed: string; conflicts?: string[] } | null> {
+  const tree = worktreeOf(directory);
+  if (!tree || !fs.existsSync(tree.project)) return { status: 409, failed: "Only a worktree’s branch is merged here. Create a pull request instead." };
+  const branch = await branchOf(directory);
+  if (!branch) return { status: 409, failed: "This folder isn’t on a branch." };
+  const target = tree.project;
+  const checkedOut = await branchOf(target);
+  if (checkedOut !== into) {
+    return { status: 409, failed: checkedOut ? `The project’s folder is on ${checkedOut} now. Switch it back to ${into} to merge, or create a pull request.` : "The project’s folder isn’t on a branch." };
+  }
+  // One you're in the middle of there is yours: never taken back with this one.
+  if ((await git(target, ["rev-parse", "-q", "--verify", "MERGE_HEAD"])).ok) return { status: 409, failed: "The project’s folder is in the middle of a merge. Finish it there first." };
+  const why = await unready(directory, branch, into);
+  if (why) return { status: 409, failed: why };
+  const said = refusal(target, author);
+  const failed = await said(["merge", "--no-edit", branch]);
+  if (!failed) return null;
+  // By their names as they are: not quoted or escaped, whatever letters are in them.
+  const conflicts = ((await text(target, ["-c", "core.quotepath=off", "diff", "--name-only", "-z", "--diff-filter=U"])) ?? "").split("\0").filter(Boolean);
+  // Stopped partway for another reason (a hook, signing the commit): taken back too, or the folder
+  // stays in the middle of a merge.
+  if ((await git(target, ["rev-parse", "-q", "--verify", "MERGE_HEAD"])).ok) await said(["merge", "--abort"]);
+  if (!conflicts.length) return { status: 422, failed };
+  const named = conflicts.slice(0, 5).join(", ") + (conflicts.length > 5 ? ` and ${conflicts.length - 5} more` : "");
+  return { status: 409, failed: `${into} changed some of the same lines: ${named}. Nothing was merged.`, conflicts };
+}
+
+/** A remote's web page: `git@github.com:me/app.git` and `https://github.com/me/app.git` are both
+ * https://github.com/me/app. */
+export function webPage(remote: string): URL | null {
+  let address = remote.trim().replace(/\.git$/, "");
+  if (/^(ssh|git):\/\//.test(address)) address = "https://" + address.replace(/^[a-z]+:\/\//, "").replace(/^[^@/]*@/, "");
+  else if (!address.includes("://") && address.includes(":")) {
+    // scp-like: git@host:owner/repo
+    const colon = address.indexOf(":");
+    address = "https://" + address.slice(0, colon).replace(/^[^@]*@/, "") + "/" + address.slice(colon + 1);
+  }
+  try {
+    const page = new URL(address);
+    if (page.protocol !== "https:" && page.protocol !== "http:") return null;
+    page.protocol = "https:";
+    page.username = page.password = page.port = "";
+    return page;
+  } catch {
+    return null;
+  }
+}
+
+/** The page that opens a pull request for `branch` on GitHub, or a merge request on GitLab, with
+ * its title and description when given (null for other hosts). Without a base, the host compares
+ * with the repository's main branch. */
+export function comparePage(remote: string, branch: string, base: string | undefined, title?: string, body?: string): string | null {
+  const page = webPage(remote);
+  if (!page) return null;
+  const at = page.toString().replace(/\/$/, "");
+  const query = new URLSearchParams();
+  if (page.hostname.includes("gitlab")) {
+    query.set("merge_request[source_branch]", branch);
+    if (base) query.set("merge_request[target_branch]", base);
+    if (title) query.set("merge_request[title]", title);
+    if (body) query.set("merge_request[description]", body);
+    return `${at}/-/merge_requests/new?${query}`;
+  }
+  if (!page.hostname.includes("github")) return null;
+  query.set("expand", "1");
+  if (title) query.set("title", title);
+  if (body) query.set("body", body);
+  // A branch's "/" stays, as in GitHub's own links.
+  const named = (branch: string) => encodeURIComponent(branch).replace(/%2F/g, "/");
+  return `${at}/compare/${(base ? `${named(base)}...` : "") + named(branch)}?${query}`;
+}
+
+/** Create Pull Request: `directory`'s branch pushed, and a pull request made with `gh` when it's
+ * there and signed in, on origin's GitHub repository (`url`, also one already open for the branch),
+ * or the host's page to open one (`compareURL`; neither for a host other than GitHub's or
+ * GitLab's). Its base is its worktree's, from the box's worktrees; else origin's main branch. */
+export async function pullRequest(directory: string, title?: string, body?: string): Promise<{ status: number; failed: string } | { url?: string; compareURL?: string }> {
+  const branch = await branchOf(directory);
+  if (!branch) return { status: 409, failed: "This folder isn’t on a branch." };
+  const root = (await text(directory, ["rev-parse", "--show-toplevel"]))?.trim() ?? directory;
+  const recorded = worktreeOf(directory)?.base;
+  // Origin's main branch, as git last heard of it.
+  const main = recorded ? undefined : (await text(root, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"]))?.trim().replace(/^origin\//, "") || undefined;
+  const base = recorded ?? main;
+  if (base === branch || (!base && ["main", "master"].includes(branch))) return { status: 409, failed: `${branch} is the branch a pull request goes into. Make one from a branch of its own.` };
+  // What the branch has that its base doesn't, compared with the base here, or origin's.
+  const against = base && ((await git(root, ["rev-parse", "--verify", "-q", base])).ok ? base : (await git(root, ["rev-parse", "--verify", "-q", `origin/${base}`])).ok ? `origin/${base}` : undefined);
+  if (against) {
+    const why = await unready(directory, branch, against);
+    if (why) return { status: 409, failed: why.replace(`origin/${base}`, base!) };
+  }
+  const pushed = await refusal(root)(["push", "-u", "origin", "HEAD"]);
+  if (pushed) return { status: 422, failed: pushed };
+  const remote = (await text(root, ["remote", "get-url", "origin"]))?.trim();
+  const page = remote ? webPage(remote) : null;
+  if (page?.hostname.includes("github")) {
+    // On origin's repository (not a fork's parent), never asking anything, and given up after two
+    // minutes without an answer.
+    const repository = page.hostname + page.pathname.replace(/\/$/, "");
+    const made = await git(root, ["pr", "create", "--repo", repository, "--head", branch, ...(base ? ["--base", base] : []), ...(title ? ["--title", title, "--body", body ?? ""] : ["--fill"])], false,
+      { GH_PROMPT_DISABLED: "1", NO_COLOR: "1" }, "gh", 120_000);
+    // Made, or one already open for the branch: gh names it either way.
+    const url = (made.out.toString("utf8") + "\n" + made.said).match(/https:\/\/\S+\/pull\/\d+/)?.[0];
+    if (url) return { url };
+  }
+  const compareURL = remote ? comparePage(remote, branch, base, title, body) : null;
+  return compareURL ? { compareURL } : {};
 }
 
 // `diff --quiet` fails when there are differences.
@@ -310,6 +454,12 @@ export async function commitDiff(directory: string, limit = 40_000): Promise<{ d
     if (untracked) diff += "\nNew files:\n" + untracked;
   }
   return { diff: diff.length > limit ? diff.slice(0, limit) + "\n…" : diff, staged };
+}
+
+/** The git author settings a client sent along (`author`), the only ones taken. */
+function authorOf(body: Record<string, unknown>): Record<string, string> {
+  const given = (body.author ?? {}) as Record<string, unknown>;
+  return Object.fromEntries(AUTHOR.flatMap(key => (typeof given[key] === "string" ? [[key, given[key] as string]] : [])));
 }
 
 // `kuvo/git/…` (PROTOCOL.md, "Changes").
@@ -355,10 +505,27 @@ export async function* changesRoute(context: RouteContext): AsyncGenerator<Answe
     if (route === "kuvo/git/commit-diff") return yield* json(200, await commitDiff(directory));
     const message = typeof body.message === "string" ? body.message : "";
     if (!message.trim()) return yield* json(400, { message: "Write a commit message." });
-    const given = (body.author ?? {}) as Record<string, unknown>;
-    const author = Object.fromEntries(AUTHOR.flatMap(key => (typeof given[key] === "string" ? [[key, given[key] as string]] : [])));
-    const failed = await commit(directory, message, body.push === true, author);
-    return yield* failed ? json(422, { message: failed }) : json(200, {});
+    const done = await commit(directory, message, body.push === true, authorOf(body));
+    return yield* done ? json(422, { message: done.failed, ...(done.committed ? { committed: true, pushed: false } : {}) }) : json(200, {});
+  }
+  if (route === "kuvo/git/push" || route === "kuvo/git/merge" || route === "kuvo/git/pull-request") {
+    const directory = folderAt(body.directory);
+    if (!directory) return yield* json(404, { message: "That folder isn’t there." });
+    if (route === "kuvo/git/push") {
+      const root = (await text(directory, ["rev-parse", "--show-toplevel"]))?.trim();
+      if (!root) return yield* json(422, { message: "Not a git repository." });
+      const failed = await pushFrom(root);
+      return yield* failed ? json(422, { message: failed }) : json(200, {});
+    }
+    if (route === "kuvo/git/merge") {
+      const into = body.into;
+      if (typeof into !== "string" || !into || into.startsWith("-")) return yield* json(400, { message: "Name the branch to merge into." });
+      const failed = await mergeInto(directory, into, authorOf(body));
+      return yield* failed ? json(failed.status, { message: failed.failed, ...(failed.conflicts ? { conflicts: failed.conflicts } : {}) }) : json(200, {});
+    }
+    const words = (value: unknown) => (typeof value === "string" && value.trim() ? value.trim() : undefined);
+    const made = await pullRequest(directory, words(body.title), words(body.body));
+    return yield* "failed" in made ? json(made.status, { message: made.failed }) : json(200, made);
   }
   return yield* json(404, {});
 }

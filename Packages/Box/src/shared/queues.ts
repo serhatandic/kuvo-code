@@ -35,6 +35,9 @@ export interface QueueState {
   resumed?: number;
   /** What waits on the box until the queue goes on, first come first (none: left out). */
   waiting?: Waiting[];
+  /** Paused as its goal was (the goal's Pause, `link/work/goals.ts`'s `goalHolds`), until the goal
+   * goes on: kept only while it's paused, never in a route's answer. */
+  heldFor?: "goal";
 }
 
 /** A message waiting on the box for a paused conversation, as clients show it: who it's from (an
@@ -54,7 +57,29 @@ export interface Outgoing {
   text: string;
   files?: unknown[];
   delivery: "steer" | "queue";
+  /** What the engine keeps with it: `boxNote`'s mark, for one the box writes. */
+  metadata?: Record<string, unknown>;
 }
+
+/** The mark on a message the box writes to an agent (a goal's word, its sessions' news, your answer
+ * told late), which the engine keeps with it (`metadata.kuvo.note`): it's never your words, so a
+ * client shows `line` from `from` in its place (KuvoClient's BoxNote), and the agent reads the
+ * whole text. */
+export const boxNote = (from: string, line: string) => ({ kuvo: { note: { from, line } } });
+
+/** Whether a message the engine has (its `metadata`) is one the box wrote (`boxNote`). */
+export const isBoxNote = (metadata: unknown): boolean => isObject(metadata) && isObject(metadata.kuvo) && isObject(metadata.kuvo.note);
+
+// How a box opened them before it marked them (KuvoClient's BoxNote reads them the same way).
+const BOX_NOTE_OPENINGS = [
+  "[Goal started] The user approved the plan.", "[Not now] The user didn't start this goal.", "[Goal changed] The user changed the goal's limits.",
+  "[Goal's end] The end the user set has come.", "[Goal] Nothing of the goal is at work now.", "[Goal resumed] The user resumed the goal you paused.",
+  "[The user answered] ",
+];
+const BOX_NOTE_PATTERNS = [/^\[Limit reset\] .+? has reset\. Carry on/, /^\[Session (finished|failed|asks)\] "/];
+
+/** Whether a user message in a conversation is one the box wrote: marked, or from before it was. */
+export const isBoxWritten = (text: string, metadata: unknown): boolean => isBoxNote(metadata) || BOX_NOTE_OPENINGS.some(start => text.startsWith(start)) || BOX_NOTE_PATTERNS.some(pattern => pattern.test(text));
 
 /** How a message waiting on the box is shown and kept: who it's from, what it says as clients show
  * it, and what goes instead of its text once it waits (a letter whose sender stops waiting). */
@@ -81,6 +106,7 @@ const keptState = (value: unknown): QueueState => {
     held: isObject(value) && Array.isArray(value.held) ? value.held.filter((id): id is string => typeof id === "string") : [],
     ...(isObject(value) && typeof value.resumed === "number" ? { resumed: value.resumed } : {}),
     ...(waiting.length ? { waiting } : {}),
+    ...(isObject(value) && value.paused === true && value.heldFor === "goal" ? { heldFor: "goal" as const } : {}),
   };
 };
 

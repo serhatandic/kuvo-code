@@ -57,6 +57,8 @@ socket.on("close", () => process.exit(0));
   fs.writeFileSync(path.join(build, "chrome"), `#!/bin/sh\nBUN_BE_BUN=1 exec ${JSON.stringify(process.execPath)} ${JSON.stringify(path.join(build, "chrome.js"))}\n`, { mode: 0o755 });
 
   const chrome = new Heard();
+  // What Chrome answers a call, by its method, where a test says (else nothing much).
+  const answers = new Map();
   let toKeeper;
   const pipe = net.createServer((socket) => {
     toKeeper = socket;
@@ -70,7 +72,8 @@ socket.on("close", () => process.exit(0));
         buffer = buffer.slice(end + 1);
         chrome.add(message);
         // Every call answered, as Chrome does once it's done it.
-        if (message.id !== undefined) socket.write(JSON.stringify({ id: message.id, result: message.method === "Browser.getVersion" ? { product: "Chrome/155.0.0.0" } : {}, ...(message.sessionId ? { sessionId: message.sessionId } : {}) }) + "\0");
+        const result = answers.get(message.method)?.(message.params ?? {}) ?? (message.method === "Browser.getVersion" ? { product: "Chrome/155.0.0.0" } : {});
+        if (message.id !== undefined) socket.write(JSON.stringify({ id: message.id, result, ...(message.sessionId ? { sessionId: message.sessionId } : {}) }) + "\0");
       }
     });
   });
@@ -125,5 +128,8 @@ socket.on("close", () => process.exit(0));
     return { heard, send };
   }
 
-  return { home, chrome, event, client };
+  /** Chrome's answer to each call of `method` from now on. */
+  const answer = (method, give) => answers.set(method, give);
+
+  return { home, chrome, event, client, answer };
 }

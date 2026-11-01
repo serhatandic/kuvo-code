@@ -44,14 +44,17 @@ public struct Transcript: Sendable, Equatable {
         /// Files the message carries in itself (a photo sent from a phone), with no copy picked
         /// here: they go on the message once it's delivered.
         public var inlineFiles: [Message.User.Attachment]
+        /// What the engine keeps with it (`Message.User.metadata`).
+        public var metadata: JSONValue?
 
-        public init(id: String, text: String, delivery: InboxItem.Delivery, isLocal: Bool, files: [URL] = [], inlineFiles: [Message.User.Attachment] = []) {
+        public init(id: String, text: String, delivery: InboxItem.Delivery, isLocal: Bool, files: [URL] = [], inlineFiles: [Message.User.Attachment] = [], metadata: JSONValue? = nil) {
             self.id = id
             self.text = text
             self.delivery = delivery
             self.isLocal = isLocal
             self.files = files
             self.inlineFiles = inlineFiles
+            self.metadata = metadata
         }
     }
 
@@ -76,10 +79,10 @@ public struct Transcript: Sendable, Equatable {
         let picked = Dictionary(pending.map { ($0.id, $0.files) }, uniquingKeysWith: { first, _ in first })
         pending = inbox.filter { $0.type == "user" }.map { item in
             let read = Pending(id: item.id, text: item.text ?? "", delivery: item.delivery, isLocal: false, files: item.files,
-                               inlineFiles: InboxItem.inlineFiles(in: item.payload))
+                               inlineFiles: InboxItem.inlineFiles(in: item.payload), metadata: item.payload["metadata"])
             // Those picked here were what it carries inline, if any.
             if let files = picked[item.id], Self.keepsLocalFiles(files, over: read) {
-                return Pending(id: item.id, text: item.text ?? "", delivery: item.delivery, isLocal: false, files: files)
+                return Pending(id: item.id, text: item.text ?? "", delivery: item.delivery, isLocal: false, files: files, metadata: read.metadata)
             }
             return read
         } + local
@@ -374,7 +377,8 @@ public struct Transcript: Sendable, Equatable {
             // Delivered already: a read since has it as a message.
             guard !hasMessage(enqueued.inboxID) else { return }
             var item = Pending(id: enqueued.inboxID, text: enqueued.item.payload["text"]?.string ?? "", delivery: enqueued.item.delivery, isLocal: false,
-                               files: InboxItem.files(in: enqueued.item.payload), inlineFiles: InboxItem.inlineFiles(in: enqueued.item.payload))
+                               files: InboxItem.files(in: enqueued.item.payload), inlineFiles: InboxItem.inlineFiles(in: enqueued.item.payload),
+                               metadata: enqueued.item.payload["metadata"])
             if let index = pending.firstIndex(where: { $0.id == item.id }) {
                 // A local copy knows the files on this Mac as they were picked, before any
                 // conversion: the same ones it carries inline, if it does. One that only carries
@@ -402,7 +406,7 @@ public struct Transcript: Sendable, Equatable {
             // but the event that delivers it doesn't, and they'd vanish from the message.
             let files = item.files.map { Message.User.Attachment(mime: Self.mime(of: $0), name: $0.isFileURL ? $0.lastPathComponent : nil, source: .uri($0.absoluteString)) }
                 + item.inlineFiles
-            append(.user(Message.User(id: item.id, time: Message.Time(created: now), text: item.text, files: files.isEmpty ? nil : files)))
+            append(.user(Message.User(id: item.id, time: Message.Time(created: now), text: item.text, files: files.isEmpty ? nil : files, metadata: item.metadata)))
         case "session.inbox.cancelled":
             let id = try event.payload(as: EventPayload.InboxChanged.self).inboxID
             pending.removeAll { $0.id == id }

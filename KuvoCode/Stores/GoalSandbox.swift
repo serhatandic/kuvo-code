@@ -1,3 +1,4 @@
+import ClientSandbox
 import Foundation
 
 /// Why a box can't work on a bot's goal on its own, for the row on the goal's card: what its
@@ -12,6 +13,10 @@ enum GoalSandbox {
         var able: Bool?
         /// The coding agents' own commands are in it too.
         var agents: Bool?
+        /// One of their processes started before it was on, and still runs outside it.
+        var outside: Bool?
+        /// It asks you to restart those (a box from before `outside` says only this).
+        var restart: Bool?
         var reason: String?
         var action: String?
         /// The box's route that does the action: "POST kuvo/sandbox/check".
@@ -20,12 +25,14 @@ enum GoalSandbox {
         var check: String?
         var failures: Int?
 
-        init(on: Bool, why: String? = nil, able: Bool? = nil, agents: Bool? = nil, reason: String? = nil, action: String? = nil,
-             route: String? = nil, needs: String? = nil, check: String? = nil, failures: Int? = nil) {
+        init(on: Bool, why: String? = nil, able: Bool? = nil, agents: Bool? = nil, outside: Bool? = nil, restart: Bool? = nil, reason: String? = nil,
+             action: String? = nil, route: String? = nil, needs: String? = nil, check: String? = nil, failures: Int? = nil) {
             self.on = on
             self.why = why
             self.able = able
             self.agents = agents
+            self.outside = outside
+            self.restart = restart
             self.reason = reason
             self.action = action
             self.route = route
@@ -56,10 +63,13 @@ enum GoalSandbox {
         case updateMachine
         /// The app's own update window.
         case checkForUpdates
-        /// Edit Bot, to run it on the engine.
-        case editBot
         /// Read again.
         case readAgain
+        /// The agents started before the sandbox, restarted in it (`POST kuvo/sandbox/restart`).
+        case restartAgents
+        /// The box's sessions restarted (the route it names, "POST kuvo/engine/restart"), then
+        /// followed until they're back.
+        case restartSessions(method: String, path: String)
     }
 
     struct Button: Equatable {
@@ -93,18 +103,16 @@ enum GoalSandbox {
     }
 
     /// The row for a goal that can't run alone on `computer` ("This Mac", or a machine's name).
-    /// `agent`: the coding agent the bot runs on ("Claude Code"), nil for one on the engine. None
-    /// where there's nothing to fix: the sandbox is on. It's always on; a box reports it not on with
-    /// no reason only while it's switched off for the rollout, with nothing here to press.
-    static func row(_ reading: Reading?, computer: String, onThisMac: Bool, bot: String, agent: String?) -> Row? {
+    /// `codingAgent`: the bot runs on a coding agent (Claude Code), whose commands are in the sandbox
+    /// once no coding agent's process started before it still runs there (`restarting`: you said to
+    /// restart them; `restartingSessions`: you said to restart the box's sessions, not back yet).
+    /// None where there's nothing to fix: the sandbox is on. It's always on; a box reports it not
+    /// on with no reason only while it's switched off for the rollout, with nothing here to press.
+    static func row(_ reading: Reading?, computer: String, onThisMac: Bool, bot: String, codingAgent: Bool, restarting: Bool = false,
+                    restartingSessions: Bool = false) -> Row? {
         let cant = "\(computer) can’t work on its own yet"
         let withYou = "Until then, \(bot) works while you’re here."
-        // A coding agent's commands aren't in the sandbox, whatever it says: the engine is the way.
-        if let agent, !coversAgents(reading) {
-            return Row(title: "\(bot) can’t work on its own yet",
-                       text: "\(bot) runs on \(agent), and the sandbox doesn’t cover \(agent)’s commands yet. \(bot) works while you’re here.",
-                       buttons: [Button(label: "Use the Engine…", action: .editBot)])
-        }
+        let there = onThisMac ? "on this Mac" : "on \(computer)"
         guard let reading else {
             return Row(title: "Checking the sandbox…", text: "", buttons: [], checking: true)
         }
@@ -123,7 +131,10 @@ enum GoalSandbox {
         }
         let route = status.route.flatMap(Self.route)
         let retry = Button(label: "Try Again", action: route.map { .route(method: $0.method, path: $0.path) } ?? .readAgain)
-        let restart = Button(label: "Restart Engine", action: .route(method: route?.method ?? "POST", path: route?.path ?? "kuvo/engine/restart"))
+        let restart = Button(label: "Restart Sessions", action: .restartSessions(method: route?.method ?? "POST", path: route?.path ?? "kuvo/engine/restart"))
+        if restartingSessions, sessionsHold(status) {
+            return Row(title: "Restarting sessions in the sandbox…", text: "\(bot) works while you’re here until they’re back.", buttons: [], checking: true)
+        }
         switch status.reason {
         case "kernel":
             return Row(title: "\(computer) can’t work on its own",
@@ -133,7 +144,7 @@ enum GoalSandbox {
             return Row(title: "\(computer) can’t work on its own", text: "This version of macOS can’t run the sandbox. \(bot) works while you’re here.",
                        buttons: [Button(label: "Software Update…", action: .open(softwareUpdate))])
         case "engineMissing":
-            return Row(title: cant, text: "Its engine isn’t set up yet. \(withYou)", buttons: [retry] + report(status))
+            return Row(title: cant, text: "Kuvo Code \(there) is still being set up. \(withYou)", buttons: [retry] + report(status))
         case "checking":
             return Row(title: "Checking the sandbox…", text: "\(bot) works while you’re here until it’s checked.", buttons: [retry] + report(status), checking: true)
         case "checkFailed":
@@ -141,14 +152,25 @@ enum GoalSandbox {
             return Row(title: cant, text: "Its check \(again ? "failed again:" : "found that") \(found(status.check)), so commands run outside the sandbox for now. Try Again checks it again.",
                        buttons: [retry] + report(status))
         case "plugin":
-            return Row(title: cant, text: "The sandbox’s part in the engine was changed or removed. Fix It puts it back.",
+            return Row(title: cant, text: "Something changed the sandbox’s setup \(there). Fix It puts it back.",
                        buttons: [Button(label: "Fix It", action: retry.action)])
         case "engineDown":
-            return Row(title: cant, text: "The engine isn’t running, so the sandbox can’t be checked. \(withYou)", buttons: [restart])
+            return Row(title: cant, text: "Sessions \(there) aren’t running, so the sandbox can’t be checked. \(withYou)", buttons: [restart])
         case "waiting":
-            return Row(title: cant, text: "The engine hasn’t loaded the sandbox yet. \(withYou)", buttons: [restart])
+            return Row(title: cant, text: "Sessions \(there) started before the sandbox was set up. Restart them to run them in it. \(withYou)", buttons: [restart])
         case nil where status.on:
-            return nil
+            // A box from before it said `agents` has none of theirs outside it. Any coding agent's
+            // process outside it keeps the bot's goal from going on alone, whichever agent it is.
+            guard codingAgent, status.agents == false else { return nil }
+            guard status.outside == true || status.restart == true else {
+                return Row(title: "Checking the sandbox…", text: "\(bot) works while you’re here until it’s checked.", buttons: [], checking: true)
+            }
+            if restarting {
+                return Row(title: "Restarting agents in the sandbox…", text: "Each restarts once it finishes what it’s doing. \(bot) works while you’re here until then.", buttons: [], checking: true)
+            }
+            return Row(title: "Agents started before the sandbox",
+                       text: "Some coding agents \(there) still run outside it, so \(bot) works while you’re here. Restart them in the sandbox, and \(bot) works on its own.",
+                       buttons: [Button(label: SandboxRestart.restart, action: .restartAgents)])
         case nil:
             return Row(title: cant, text: "\(bot) works while you’re here.", buttons: [])
         default:
@@ -157,11 +179,8 @@ enum GoalSandbox {
         }
     }
 
-    /// Whether the box's sandbox takes in the coding agents' own commands too.
-    private static func coversAgents(_ reading: Reading?) -> Bool {
-        if case .status(let status) = reading { return status.agents == true }
-        return false
-    }
+    /// The box's sessions are down, or started before the sandbox: what Restart Sessions fixes.
+    static func sessionsHold(_ status: Status) -> Bool { status.reason == "engineDown" || status.reason == "waiting" }
 
     /// Report a Problem, once a check has failed twice in a row.
     private static func report(_ status: Status) -> [Button] {
@@ -198,10 +217,10 @@ extension GoalPlans {
         }
     }
 
-    /// A route of `box`'s sandbox (check again, fix, restart the engine).
-    func sandboxRoute(_ method: String, _ path: String, on box: String) async throws {
+    /// A route of `box`'s sandbox (check again, fix, restart its sessions or its agents).
+    func sandboxRoute(_ method: String, _ path: String, body: [String: Bool] = [:], on box: String) async throws {
         guard let client = client(box) else { throw BoxRefusal(status: 503, message: "Its computer can’t be reached now.") }
-        let (status, data) = try await client.send(method, path, body: method == "GET" ? nil : Data("{}".utf8))
+        let (status, data) = try await client.send(method, path, body: method == "GET" ? nil : try JSONEncoder().encode(body))
         guard (200..<300).contains(status) else { throw BoxRefusal(status: status, data: data) }
     }
 }

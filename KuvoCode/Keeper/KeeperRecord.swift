@@ -30,7 +30,9 @@ nonisolated struct KeeperRecord: Codable, Equatable, Sendable {
         return record.isAlive ? record : nil
     }
 
-    var isAlive: Bool { kill(pid, 0) == 0 || errno == EPERM }
+    /// One of another user's has its process ID now (it was reused after a restart): the keeper
+    /// is always yours.
+    var isAlive: Bool { kill(pid, 0) == 0 }
 
     /// Started from another version of the app than this one (it was updated since): it makes way
     /// for this one's once nothing is under way.

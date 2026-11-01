@@ -86,6 +86,7 @@ export interface UserMessage {
   time: MessageTime
   text: string
   files?: Attachment[]
+  metadata?: Record<string, unknown>
 }
 
 export interface AssistantMessage {

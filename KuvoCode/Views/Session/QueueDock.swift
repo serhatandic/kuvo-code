@@ -1,4 +1,5 @@
 import ClientDesign
+import ClientSessions
 import OpenCodeKit
 import SwiftUI
 
@@ -241,6 +242,8 @@ private struct QueueRow: View {
 
     /// A message's first line, or what's attached when there's no text.
     static func summary(of item: Transcript.Pending) -> String {
+        // What the box told the agent: what happened, in a line.
+        if let note = BoxNote.of(text: item.text, metadata: item.metadata) { return note.line }
         let (text, comments, paths) = UserBubble.split(item.text)
         if let line = text.split(separator: "\n").first(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) {
             return String(line)

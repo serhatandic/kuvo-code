@@ -1241,9 +1241,9 @@ struct SidebarSearchRow: View {
         }
         .padding(.horizontal, 10)
         .frame(height: SidebarMetrics.rowHeight)
-        // Sunken, without a border of its own; a touch deeper while you type in it.
-        .background((scheme == .dark ? Color.black : Surface.slate).opacity(isFocused ? 0.05 : 0), in: .rect(cornerRadius: 8))
+        // Sunken, without a border of its own; the focus rim while you type in it, as every well.
         .background(Surface.well(scheme), in: .rect(cornerRadius: 8))
+        .focusRim(.rect(cornerRadius: 8), isOn: isFocused)
         .contentShape(.rect)
         .onTapGesture { isFocused = true }
         .padding(.vertical, 4)
@@ -1255,30 +1255,14 @@ enum SidebarMetrics {
     static let iconWidth: CGFloat = 18
 }
 
-/// A row's highlight: a neutral fill under the open one, and a lighter one under the pointer, the
-/// same in the sidebar, Settings and the pickers. It starts where the row's own content does
-/// (`leading`), so the lines sub-sessions hang from stay in view beside it. The accent is left
-/// for what's new and what you set. Neither moves or resizes the row.
+/// A row's highlight, the sidebar's and Settings': what you pick from a list, drawn as everywhere
+/// else (`pickHighlight`), from where the row's own content starts (`leading`).
 struct RowHighlight: ViewModifier {
     let isSelected: Bool
     var leading: CGFloat = 0
-    @State private var isHovering = false
-    @Environment(\.colorScheme) private var scheme
 
     func body(content: Content) -> some View {
-        let shape = RoundedRectangle(cornerRadius: 8)
-        let fill = isSelected ? (scheme == .dark ? 0.1 : 0.08) : isHovering ? (scheme == .dark ? 0.06 : 0.045) : 0
-        content
-            .background(alignment: .leading) {
-                shape.fill(Color.primary.opacity(fill))
-                    .padding(.leading, leading)
-                    // The open one's moves at once, as a Mac's sidebars do. Faded with a tab switch's
-                    // animation, it had the whole sidebar drawn again on each of its frames.
-                    .transaction(value: isSelected) { $0.animation = nil }
-            }
-            .contentShape(shape)
-            .onHover { isHovering = $0 }
-            .animation(.easeOut(duration: 0.12), value: isHovering)
+        content.pickHighlight(RoundedRectangle(cornerRadius: 8), isOn: isSelected, leading: leading)
     }
 }
 

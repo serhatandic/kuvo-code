@@ -88,6 +88,15 @@ import Testing
         #expect(reason.contains("the database disk image is malformed"), "with what the engine wrote: \(reason)")
         #expect(engineStarts <= 4, "not started over for ever: \(engineStarts) starts")
         #expect(!FileManager.default.fileExists(atPath: crashFile))
+
+        // You try again: it's ready, and one stop after that is started over by itself as before,
+        // not given up on at once for the stops before you tried.
+        await app.restart()
+        #expect(app.engine == .ready)
+        let before = engineStarts
+        crash()
+        try await until { engineStarts > before && app.engine == .ready || { if case .failed = app.engine { true } else { false } }() }
+        #expect(app.engine == .ready, "started over by itself: \(app.engine)")
     }
 
     /// Accounts and onboarding's subscriptions say the engine stopped (dimming what needs it) only

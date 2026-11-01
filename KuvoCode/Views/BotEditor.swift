@@ -449,8 +449,8 @@ struct BotEditor: View {
             }
             .frame(width: 92)
             VStack(alignment: .leading, spacing: 8) {
-                WellGroup(isActive: focus == .name) {
-                    WellRow(isActive: focus == .name) {
+                WellGroup(isFocused: focus == .name) {
+                    WellRow {
                         Image(systemName: "face.smiling")
                     } content: {
                         TextField("Name", text: $name, prompt: Text("Name, like Scout"))
@@ -665,8 +665,8 @@ private struct JobFields: View {
                 .font(.callout)
                 .transition(.opacity)
             }
-            WellGroup(isActive: focus != nil) {
-                WellRow(isActive: focus == .line) {
+            WellGroup(isFocused: focus != nil) {
+                WellRow {
                     Image(systemName: "briefcase")
                 } content: {
                     TextField("In a Few Words", text: $job.line, prompt: Text("In a few words, like Keeps the build green"))
@@ -729,8 +729,7 @@ private struct TemplatePicker: View {
                 }
                 .padding(10)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(isOn ? AnyShapeStyle(.tint.opacity(0.14)) : isHovering ? AnyShapeStyle(Color.primary.opacity(0.06)) : AnyShapeStyle(.clear), in: .rect(cornerRadius: 10))
-                .contentShape(.rect(cornerRadius: 10))
+                .pickHighlight(RoundedRectangle(cornerRadius: 10), isOn: isOn)
             }
             .buttonStyle(.plain)
             .clickablePointer()
@@ -811,7 +810,6 @@ private struct LookPicker: View {
         let help: String
         let action: () -> Void
         @ViewBuilder let label: Label
-        @State private var isHovering = false
 
         var body: some View {
             Button {
@@ -819,14 +817,10 @@ private struct LookPicker: View {
             } label: {
                 label
                     .frame(width: 38, height: 38)
-                    .background(isHovering && !isOn ? Pressable.hoverFill : .clear, in: .rect(cornerRadius: 10))
-                    .accentGlass(RoundedRectangle(cornerRadius: 10), isOn: isOn)
-                    .contentShape(.rect(cornerRadius: 10))
+                    .pickHighlight(RoundedRectangle(cornerRadius: 10), isOn: isOn)
             }
             .buttonStyle(.plain)
             .clickablePointer()
-            .onHover { isHovering = $0 }
-            .animation(.easeOut(duration: 0.12), value: isHovering)
             .help(help)
             .accessibilityLabel(help)
             .accessibilityAddTraits(isOn ? .isSelected : [])
@@ -932,8 +926,8 @@ private struct PersonalityPicker: View {
     /// Making or changing one of yours: its name, and how it talks.
     private var form: some View {
         VStack(alignment: .leading, spacing: 10) {
-            WellGroup(isActive: draftFocus != nil) {
-                WellRow(isActive: draftFocus == .name) {
+            WellGroup(isFocused: draftFocus != nil) {
+                WellRow {
                     Image(systemName: "person.crop.circle")
                 } content: {
                     TextField("Name", text: Binding(get: { draft?.name ?? "" }, set: { draft?.name = $0; refusal = nil }), prompt: Text("Name, like Night Owl"))
@@ -1023,7 +1017,6 @@ private struct PersonalityPicker: View {
         let isOn: Bool
         var isQuiet = false
         let action: () -> Void
-        @State private var isHovering = false
 
         var body: some View {
             Button {
@@ -1041,14 +1034,10 @@ private struct PersonalityPicker: View {
                 }
                 .padding(.horizontal, 10)
                 .frame(height: 34)
-                .background(isHovering && !isOn ? Pressable.hoverFill : .clear, in: .rect(cornerRadius: 8))
-                .accentGlass(RoundedRectangle(cornerRadius: 8), isOn: isOn)
-                .contentShape(.rect(cornerRadius: 8))
+                .pickHighlight(RoundedRectangle(cornerRadius: 8), isOn: isOn)
             }
             .buttonStyle(.plain)
             .clickablePointer()
-            .onHover { isHovering = $0 }
-            .animation(.easeOut(duration: 0.12), value: isHovering)
             .accessibilityAddTraits(isOn ? .isSelected : [])
         }
     }

@@ -64,6 +64,7 @@ private struct FieldView: View {
     @Binding var value: FormValue?
     let style: FormFieldsView.Style
     @State private var custom = ""
+    @FocusState private var isFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -93,7 +94,8 @@ private struct FieldView: View {
                 }
                 if allowsCustom {
                     TextField("Something else…", text: $custom)
-                        .wellField()
+                        .wellField(isFocused: isFocused)
+                        .focused($isFocused)
                         .onChange(of: custom) { old, text in
                             if !text.isEmpty { value = .string(text) }
                             // Cleared: no answer, rather than its last letter (a choice picked
@@ -103,11 +105,13 @@ private struct FieldView: View {
                 }
             } else if format == "password" {
                 SecureField(placeholder ?? "", text: stringBinding)
-                    .wellField()
+                    .wellField(isFocused: isFocused)
+                    .focused($isFocused)
                     .accessibilityLabel(name)
             } else {
                 TextField(placeholder ?? "", text: stringBinding)
-                    .wellField()
+                    .wellField(isFocused: isFocused)
+                    .focused($isFocused)
                     .accessibilityLabel(name)
             }
         case .number(let isInteger, _, _, _):
@@ -115,7 +119,8 @@ private struct FieldView: View {
                 get: { if case .number(let n) = value { n } else { nil } },
                 set: { value = $0.map { .number(isInteger ? $0.rounded() : $0) } }
             ), format: .number)
-            .wellField()
+            .wellField(isFocused: isFocused)
+            .focused($isFocused)
             .accessibilityLabel(name)
             .frame(maxWidth: 160)
         case .boolean:
@@ -132,7 +137,8 @@ private struct FieldView: View {
             }
             if allowsCustom {
                 TextField("Something else…", text: $custom)
-                    .wellField()
+                    .wellField(isFocused: isFocused)
+                    .focused($isFocused)
                     .onSubmit {
                         guard !custom.isEmpty else { return }
                         value = .list(listValue + [custom])
@@ -196,7 +202,8 @@ private struct OptionList: View {
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 9)
-                    .background(isSelected ? AnyShapeStyle(.tint.opacity(0.12)) : AnyShapeStyle(.clear), in: .rect(cornerRadius: 10))
+                    // Picked, it's lit as what you pick from a list is everywhere (`pickHighlight`).
+                    .accentGlass(RoundedRectangle(cornerRadius: 10), isOn: isSelected)
                 }
                 // An option lights up under the pointer, like the button it is.
                 .buttonStyle(FilledButtonStyle(shape: .rect(cornerRadius: 10), rest: isSelected ? 0 : 0.045))

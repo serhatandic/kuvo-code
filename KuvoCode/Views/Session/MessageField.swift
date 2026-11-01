@@ -245,7 +245,7 @@ final class FieldScrollView: NSScrollView {
 }
 
 /// The text view under `MessageField`.
-final class MessageTextView: NSTextView {
+final class MessageTextView: PointerAwareTextView {
     var onKey: (MessageField.Key) -> Bool = { _ in false }
     var onFocus: (Bool) -> Void = { _ in }
     var onPaste: (NSPasteboard) -> [String]? = { _ in nil }

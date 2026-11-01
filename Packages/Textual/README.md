@@ -37,6 +37,12 @@ frame after it appeared, and the conversation jumped while you scrolled up into 
   document's own pictures and refuses anything that isn't a file, so a previewed README doesn't
   reach the hosts its badges name.
 
+- **The pointer only where the text is on top (macOS).** Upstream's selection set the I-beam (or
+  a link's hand) with `onContinuousHover` on every move anywhere in the text's frame, also under
+  a button drawn over it, and pushed and popped it. The selection's view claims it itself here,
+  through `PointerClaim`: only where a hit test of the window finds it, letting go elsewhere.
+  `PointerClaim` is public, so Kuvo Code's own text views follow the same rule.
+
 - **Task lists.** An unordered list item that starts with `[ ] ` or `[x] ` (GitHub's task list)
   shows a checkbox in the bullet's place, without the brackets (`UnorderedList.swift`).
 - **Math found as the Markdown is read.** Upstream's `.math` matched `$…$` and `$$…$$` in the

@@ -1,3 +1,4 @@
+import ClientAccounts
 import ClientDesign
 import OpenCodeKit
 import SwiftUI
@@ -40,6 +41,8 @@ struct ConnectView: View {
     @State private var step = Step.choose
     @State private var answers: FormAnswer = [:]
     @State private var key = ""
+    @FocusState private var isKeyFocused: Bool
+    @FocusState private var isCodeFocused: Bool
     @State private var pastedCode = ""
     /// A sign-in that finishes by itself, whose page gave a code instead: the field to paste it.
     @State private var isPastingCode = false
@@ -220,9 +223,23 @@ struct ConnectView: View {
                 Text("API key")
                     .font(.callout.weight(.medium))
                 SecureField("Paste your key", text: $key)
-                    .wellField()
+                    .wellField(isFocused: isKeyFocused)
+                    .focused($isKeyFocused)
                     .onSubmit { connectKey(method) }
                     .onChange(of: key) { keyError = nil }
+                    .accessibilityLabel("API key")
+                    .accessibilityHint(keyPage?.line ?? "")
+                // A key that comes with a subscription says so, so it doesn't read as pay-as-you-go.
+                // The field's hint already reads the line, so VoiceOver gets only the link here.
+                if let keyPage {
+                    Text(Self.keyLine(keyPage))
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityRepresentation {
+                            if let url = keyPage.url { Link(keyPage.linkTitle, destination: url) }
+                        }
+                }
             }
             if !method.form.isEmpty {
                 FormFieldsView(fields: method.form, answers: $answers)
@@ -243,6 +260,18 @@ struct ConnectView: View {
             .controlSize(.large)
         }
         .animation(.ui, value: keyError)
+    }
+
+    /// Where the key comes from, and a link to the page that has it.
+    private static func keyLine(_ page: KeyPage) -> AttributedString {
+        guard let url = page.url else { return AttributedString(page.line) }
+        var link = AttributedString(page.linkTitle)
+        link.link = url
+        return AttributedString(page.line + " ") + link
+    }
+
+    private var keyPage: KeyPage? {
+        KeyPage.page(for: integrationID, name: title, docs: integration?.metadata?["doc"]?.string.flatMap(URL.init(string:)))
     }
 
     /// Getting ready (an agent downloading first, its page not there yet): what it's doing, not
@@ -292,7 +321,8 @@ struct ConnectView: View {
                     Text(attempt.instructions)
                         .foregroundStyle(.secondary)
                     TextField("Paste the code", text: $pastedCode)
-                        .wellField()
+                        .wellField(isFocused: isCodeFocused)
+                        .focused($isCodeFocused)
                         .onSubmit { complete(attempt) }
                     HStack {
                         Spacer()
@@ -322,7 +352,8 @@ struct ConnectView: View {
                             .foregroundStyle(.secondary)
                         HStack(spacing: 8) {
                             TextField("Paste the code", text: $pastedCode)
-                                .wellField()
+                                .wellField(isFocused: isCodeFocused)
+                                .focused($isCodeFocused)
                                 .onSubmit { submitCode(attempt) }
                             Button("Continue") { submitCode(attempt) }
                                 .buttonStyle(.glassProminent)

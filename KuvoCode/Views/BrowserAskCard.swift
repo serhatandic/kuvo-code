@@ -4,7 +4,8 @@ import ClientText
 import SwiftUI
 
 /// Asks Kuvo Code can't show in a conversation: from a bot in a group chat, or from an agent it
-/// couldn't tell. A card at the top of the window, over whatever is in view, for the oldest one.
+/// couldn't tell. A card at the top of the window, over whatever is in view (centered on its
+/// content card), for the oldest one.
 /// The rest show in the conversation that asked, over its composer.
 struct BrowserAskOverlay: View {
     @Environment(AppModel.self) private var app
@@ -20,6 +21,7 @@ struct BrowserAskOverlay: View {
                 .frame(width: 400)
                 .glassEffect(.regular, in: .rect(cornerRadius: Metrics.composerRadius))
                 .shadow(color: .black.opacity(0.18), radius: 18, y: 6)
+                .centeredOnContentCard()
                 .padding(.top, 52)
                 .frame(maxHeight: .infinity, alignment: .top)
                 .transition(.move(edge: .top).combined(with: .opacity))
@@ -53,11 +55,6 @@ struct BrowserAskCard: View {
 
     private enum Field { case username, password, code }
 
-    /// A site an ask names that's over https: a plain host, not "http://…" nor a file.
-    private static func isSecure(_ host: String) -> Bool {
-        !host.hasPrefix("http://") && !host.hasPrefix("a file")
-    }
-
     /// The site's saved logins, read once from the keychain rather than on every redraw.
     @State private var saved: [Passwords.Login] = []
 
@@ -85,7 +82,7 @@ struct BrowserAskCard: View {
             case .signIn:
                 saved = Passwords.logins(for: ask.host)
                 if let login = saved.first { use(login) }
-                saves = Self.isSecure(ask.host) && saved.isEmpty && Passwords.offersToSave && !Passwords.neverSites.contains(ask.host)
+                saves = BrowserAsks.isSecure(ask.host) && saved.isEmpty && Passwords.offersToSave && !Passwords.neverSites.contains(ask.host)
                 if mayFocus { focus = username.isEmpty ? .username : .password }
             case .code: if mayFocus { focus = .code }
             case .action: break
@@ -160,11 +157,11 @@ struct BrowserAskCard: View {
     private var signIn: some View {
         VStack(alignment: .leading, spacing: 8) {
             TextField("Username or email", text: $username)
-                .wellField()
+                .wellField(isFocused: focus == .username)
                 .focused($focus, equals: .username)
                 .onSubmit { focus = .password }
             SecureField("Password", text: $password)
-                .wellField()
+                .wellField(isFocused: focus == .password)
                 .focused($focus, equals: .password)
                 .onSubmit(send)
             HStack(alignment: .top) {
@@ -182,7 +179,7 @@ struct BrowserAskCard: View {
                 }
                 Spacer()
                 // Saved and filled over https only (a page over http, or a file, gets neither).
-                if Self.isSecure(ask.host) {
+                if BrowserAsks.isSecure(ask.host) {
                     VStack(alignment: .leading, spacing: 6) {
                         Toggle("Save in the Vault", isOn: $saves)
                             .disabled(!saved.isEmpty && saved.contains { $0.account == username })
@@ -207,7 +204,7 @@ struct BrowserAskCard: View {
             }
             TextField("Code", text: $code)
                 .font(.body.monospaced().weight(.medium))
-                .wellField()
+                .wellField(isFocused: focus == .code)
                 .focused($focus, equals: .code)
                 .onSubmit(send)
         }
@@ -246,15 +243,6 @@ struct BrowserAskCard: View {
         return false
     }
 
-    /// What answering a sign-in does with its password: saved when you asked to save a new one,
-    /// or when a saved account's password changed (or agents allowed to sign in on their own would
-    /// keep using the old one); and whether it's one you typed now, which allowing agents doesn't
-    /// ask your Touch ID for (one filled in from Passwords does).
-    static func handling(password: String, saving: Bool, secure: Bool, savedPassword: String?) -> (saves: Bool, typedNow: Bool) {
-        let typedNow = !password.isEmpty && password != savedPassword
-        return (secure && typedNow && (saving || savedPassword != nil), typedNow)
-    }
-
     private func use(_ login: Passwords.Login) {
         username = login.account
         password = Passwords.password(for: login) ?? ""
@@ -265,24 +253,19 @@ struct BrowserAskCard: View {
         case .signIn:
             guard !username.isEmpty || !password.isEmpty else { return }
             let savedPassword = saved.first { $0.account == username }.flatMap(Passwords.password(for:))
-            let handling = Self.handling(password: password, saving: saves, secure: Self.isSecure(ask.host), savedPassword: savedPassword)
-            let typed = handling.typedNow, saving = handling.saves
+            let typed = BrowserAsks.handling(password: password, saving: saves, secure: BrowserAsks.isSecure(ask.host), savedPassword: savedPassword).typedNow
             let answer = BrowserAsks.Answer.signIn(username: username.isEmpty ? nil : username, password: password.isEmpty ? nil : password)
-            let wantsAgents = allowsAgents && Self.isSecure(ask.host) && !password.isEmpty
+            let wantsAgents = allowsAgents && BrowserAsks.isSecure(ask.host) && !password.isEmpty
             // A password you typed now is yours to allow; one filled in from the vault asks you
             // first, as showing it in Settings does. Saved once the page has it.
-            let host = ask.host, id = ask.id, asks = app.browserAsks, answerUsername = username, answerPassword = password
+            let host = ask.host, id = ask.id, asks = app.browserAsks, answerUsername = username, answerPassword = password, saving = saves
             let conversation = ask.session.flatMap { app.workspace.model(for: $0) }
             Task {
                 let allowed = wantsAgents ? (typed ? true : await Passwords.authenticate(reason: "let agents sign in to \(host) with its saved password")) : false
                 asks.answer(id, answer)
-                if saving {
-                    // Said over its conversation's composer, where the card was.
-                    if await Passwords.save(host: host, account: answerUsername, password: answerPassword, allowAgents: allowed) == nil {
-                        conversation?.failure = "The password for \(host) wasn’t saved: this Mac’s vault didn’t answer. Sign in again to save it."
-                    }
-                } else if allowed {
-                    await Passwords.setAgentSignIn(host, true, account: answerUsername)
+                // Said over its conversation's composer, where the card was.
+                if let failure = await BrowserAsks.keep(host: host, account: answerUsername, password: answerPassword, saving: saving, savedPassword: savedPassword, allowAgents: allowed) {
+                    conversation?.failure = failure
                 }
             }
         case .code:

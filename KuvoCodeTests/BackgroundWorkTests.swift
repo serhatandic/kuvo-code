@@ -436,6 +436,73 @@ import Testing
         #expect(!Self.macHeldAwake)
     }
 
+    /// Background work is on, but the keeper launchd was asked to start didn't come up this time
+    /// (the app gave it its while, and Settings says it didn't start): the app runs this Mac's box
+    /// itself from then on, rather than asking for the keeper again and waiting for it, over and
+    /// over, with no engine meanwhile.
+    @Test func aKeeperThatDidntComeUpIsntWaitedForAgain() async throws {
+        let node = try #require(TestBox.node, "Node runs this Mac's box in the tests")
+        try #require(KeeperRecord.read() == nil, "no keeper runs for the tests")
+        let binary = try standIns(node: node)
+        setenv("KUVO_OPENCODE_BINARY", binary.path(percentEncoded: false), 1)
+        // Registered and allowed, as KUVO_KEEPER=follow has it, and none started.
+        setenv("KUVO_KEEPER", "follow", 1)
+        try await StubWeb.listen(port: 47921)
+        // What the app heard once the keeper's while was up.
+        BackgroundWork.shared.didntStart = true
+        let app = AppModel()
+        defer {
+            app.stop()
+            app.stopBox()
+            BackgroundWork.shared.didntStart = false
+            unsetenv("KUVO_OPENCODE_BINARY")
+            unsetenv("KUVO_KEEPER")
+            try? FileManager.default.removeItem(at: folder)
+            StubWeb.stopListening(port: 47921)
+            engine.stop()
+        }
+        engine.on("GET", "/api/info", json: ["version": OpenCodeEngine.version, "pid": 1])
+        engine.list([StubEngine.session("ses_here", title: "Here", directory: "/tmp/kuvo-tests-keeper")])
+
+        await app.start()
+        #expect(app.engine == .ready, "the app runs its own engine rather than wait for the keeper again")
+        #expect(app.workspace.session("ses_here") != nil)
+        #expect(engineStarts == 1)
+        #expect(!app.keepsWorkingAfterQuit, "quitting stops the work, which nothing would carry on")
+    }
+
+    /// You quit the app a moment after opening it, before it found the keeper: the keeper's engine
+    /// goes on where the box and your other computers find it, and the app opened next finds it too.
+    @Test func quittingBeforeTheAppFoundTheKeeperLeavesItsEngineFound() async throws {
+        let node = try #require(TestBox.node, "Node runs this Mac's box in the tests")
+        let binary = try standIns(node: node)
+        setenv("KUVO_OPENCODE_BINARY", binary.path(percentEncoded: false), 1)
+        setenv("KUVO_KEEPER", "follow", 1)
+        try await StubWeb.listen(port: 47921)
+        let keeper = MacBoxRunner(box: BoxProcess(), agents: OutsideAgents(), host: HostInterface())
+        let app = AppModel()
+        defer {
+            app.stop()
+            app.stopBox()
+            keeper.stop()
+            KeeperRecord.forget(pid: getpid())
+            unsetenv("KUVO_OPENCODE_BINARY")
+            unsetenv("KUVO_KEEPER")
+            try? FileManager.default.removeItem(at: folder)
+            StubWeb.stopListening(port: 47921)
+            engine.stop()
+        }
+        engine.on("GET", "/api/info", json: ["version": OpenCodeEngine.version, "pid": 1])
+        bridge.on("GET", "/api/info", json: ["version": OpenCodeEngine.version, "pid": 2])
+        try KeeperRecord(pid: getpid(), version: AppInfo.version, build: AppInfo.build, url: "http://127.0.0.1:9", password: "x", started: 0).write()
+        await keeper.start()
+        let running = try #require(recorded("engine.json"), "the keeper's engine runs")
+
+        app.stopBox()
+        #expect(recorded("engine.json") == running, "the keeper's engine is still where it's found")
+        #expect(engineStarts == 1)
+    }
+
     /// The keeper's control address, reached as it is rather than stood in for.
     private static func reach(keeper record: KeeperRecord?) throws {
         let record = try #require(record, "the keeper recorded itself")
