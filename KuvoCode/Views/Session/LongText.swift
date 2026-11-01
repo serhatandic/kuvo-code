@@ -85,7 +85,10 @@ final class LongTextView: PointerAwareTextView {
         }
         // Everything after the last finished paragraph, set again.
         let rest = text[text.utf8.index(text.startIndex, offsetBy: settled.source)...]
-        let open = rest.lastIndex(of: "\n").map { rest.index(after: $0) } ?? rest.startIndex
+        // Finished: up to the last line break, or all of it when what's after has no backtick to
+        // open a span (so a long line without one is only appended to).
+        let newline = rest.utf8.lastIndex(of: UInt8(ascii: "\n")).map { rest.utf8.index(after: $0) } ?? rest.startIndex
+        let open = rest[newline...].contains("`") ? newline : rest.endIndex
         let done = InlineCode.attributed(rest[..<open], font: font, color: color)
         let tail = InlineCode.attributed(rest[open...], font: font, color: color)
         storage.beginEditing()
@@ -141,25 +144,51 @@ final class LongTextView: PointerAwareTextView {
     }
 }
 
-/// `code` in plain text (a step's command, a thought): what's between two backticks on one line,
-/// without them, in the code face a step smaller, as replies draw it. A backtick left open stays.
+/// `code` in plain text (a step's command, a thought): a code span as Markdown has it, between two
+/// runs of as many backticks on one line, drawn without them in the code face a step smaller, as
+/// replies draw it. A run left open stays as it is.
 enum InlineCode {
+    /// `code` as a span, fenced with more backticks than any run inside it, so a command with
+    /// backticks of its own reads back whole.
+    static func span(_ code: String) -> String {
+        var longest = 0, run = 0
+        for character in code {
+            run = character == "`" ? run + 1 : 0
+            longest = max(longest, run)
+        }
+        let fence = String(repeating: "`", count: longest + 1)
+        let pad = longest > 0 ? " " : ""
+        return fence + pad + code + pad + fence
+    }
+
     static func pieces(_ text: Substring) -> [(text: Substring, isCode: Bool)] {
         var pieces: [(Substring, Bool)] = []
         var plain = text.startIndex
         var i = text.startIndex
         while i < text.endIndex {
-            if text[i] == "`" {
-                let after = text.index(after: i)
-                if let close = text[after...].firstIndex(where: { $0 == "`" || $0 == "\n" }), text[close] == "`", close > after {
-                    if plain < i { pieces.append((text[plain..<i], false)) }
-                    pieces.append((text[after..<close], true))
-                    i = text.index(after: close)
-                    plain = i
-                    continue
+            guard text[i] == "`" else { i = text.index(after: i); continue }
+            let open = text[i...].prefix { $0 == "`" }
+            // The next run of exactly as many backticks on this line closes it.
+            var j = open.endIndex
+            var close: Substring?
+            while j < text.endIndex, text[j] != "\n" {
+                if text[j] == "`" {
+                    let run = text[j...].prefix { $0 == "`" }
+                    if run.count == open.count { close = run; break }
+                    j = run.endIndex
+                } else {
+                    j = text.index(after: j)
                 }
             }
-            i = text.index(after: i)
+            guard let close, close.startIndex > open.endIndex else { i = open.endIndex; continue }
+            var code = text[open.endIndex..<close.startIndex]
+            if code.count > 2, code.first == " ", code.last == " ", code.contains(where: { $0 != " " }) {
+                code = code.dropFirst().dropLast()
+            }
+            if plain < i { pieces.append((text[plain..<i], false)) }
+            pieces.append((code, true))
+            i = close.endIndex
+            plain = i
         }
         if plain < text.endIndex { pieces.append((text[plain...], false)) }
         return pieces

@@ -52,6 +52,24 @@ import Testing
         #expect(try words("shell", ["command": "npm run dev"], running: true) == "Running `npm run dev`")
     }
 
+    /// The command a step names is what shows as code, whole, never its backticks: also one with
+    /// backticks of its own, which a sandbox ask must show as it will run.
+    @Test func aCommandShowsAsCodeWhole() throws {
+        func shown(_ summary: String) -> (text: String, code: [String]) {
+            let pieces = InlineCode.pieces(summary[...])
+            return (pieces.map { String($0.text) }.joined(), pieces.filter(\.isCode).map { String($0.text) })
+        }
+        let plain = shown(try words("shell", ["command": "swift test"]))
+        #expect(plain.text == "Ran swift test")
+        #expect(plain.code == ["swift test"])
+        let ticks = #"git commit -m "fix `foo` and ``bar``""#
+        let asked = shown(try words("sandbox_ask", ["command": ticks], running: true))
+        #expect(asked.code == [ticks])
+        #expect(asked.text == "Asking to run \(ticks) outside the sandbox")
+        let edged = "`which swift`"
+        #expect(shown(try words("shell", ["command": edged])).code == [edged])
+    }
+
     @Test func searches() throws {
         #expect(try words("grep", ["pattern": "TODO", "path": "/Users/me/web/src"]) == "Searched for “TODO” in src")
         #expect(try words("tool_search", ["query": "send message"]) == "Looked for a tool: “send message”")
