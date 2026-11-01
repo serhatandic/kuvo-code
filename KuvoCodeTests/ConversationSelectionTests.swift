@@ -152,4 +152,30 @@ import Testing
         #expect(!word.isEmpty && !word.contains(" "), "one word: \(word)")
         #expect(bar != nil, "with its menu")
     }
+
+    /// With no room over the selection, and the composer just under it, the menu stays in what's
+    /// in sight: never under the composer.
+    @Test func theMenuStaysOutFromUnderTheComposer() throws {
+        defer { done() }
+        let stack = try #require(stack)
+        let scroll = try #require(stack.enclosingScrollView)
+        let (first, second) = (texts[0], texts[1])
+        func line(of text: NSTextView) -> NSRect {
+            text.convert(text.layoutManager!.lineFragmentRect(forGlyphAt: 0, effectiveRange: nil), to: stack)
+        }
+        // The header ends at the first line's top; the composer starts 10 pt under the second's.
+        let clip = stack.convert(scroll.contentView.bounds, from: scroll.contentView)
+        let top = line(of: first).minY - clip.minY, bottom = clip.maxY - line(of: second).maxY - 10
+        scroll.automaticallyAdjustsContentInsets = false
+        scroll.contentInsets = NSEdgeInsets(top: top, left: 0, bottom: bottom, right: 0)
+        scroll.contentView.scroll(to: scroll.contentView.bounds.origin)
+        window.contentView?.layoutSubtreeIfNeeded()
+
+        drag(in: first, from: point(in: first, x: 40), to: point(in: second, x: 160))
+        let menu = try #require(bar, "the menu shows once it's let go")
+        let shown = stack.convert(scroll.contentView.bounds, from: scroll.contentView)
+        let inSight = NSRect(x: shown.minX, y: shown.minY + scroll.contentInsets.top, width: shown.width,
+                             height: shown.height - scroll.contentInsets.top - scroll.contentInsets.bottom)
+        #expect(inSight.contains(menu.frame), "between the header and the composer \(inSight): \(menu.frame)")
+    }
 }

@@ -780,10 +780,7 @@ final class RowStackView: NSView, NSUserInterfaceValidations {
                 dragged = true
                 // Past the top or bottom of what's in sight (not under the header or the
                 // composer): the conversation scrolls, faster the further.
-                var view = convert(clip.bounds, from: clip)
-                if let insets = enclosingScrollView?.contentInsets {
-                    view = NSRect(x: view.minX, y: view.minY + insets.top, width: view.width, height: max(1, view.height - insets.top - insets.bottom))
-                }
+                let view = inSight
                 let past = point.y < view.minY ? point.y - view.minY : point.y > view.maxY ? point.y - view.maxY : 0
                 if past != 0, next.type == .periodic {
                     let step = max(-60, min(60, past / 2))
@@ -860,6 +857,14 @@ final class RowStackView: NSView, NSUserInterfaceValidations {
         placeMenu()
     }
 
+    /// What's in sight of the conversation: not under the header or the composer.
+    private var inSight: NSRect {
+        guard let scroll = enclosingScrollView else { return bounds }
+        let view = convert(scroll.contentView.bounds, from: scroll.contentView)
+        let insets = scroll.contentInsets
+        return NSRect(x: view.minX, y: view.minY + insets.top, width: view.width, height: max(1, view.height - insets.top - insets.bottom))
+    }
+
     private func hideMenu() {
         actionsBar?.removeFromSuperview()
         actionsBar = nil
@@ -872,11 +877,7 @@ final class RowStackView: NSView, NSUserInterfaceValidations {
     private func placeMenu() {
         guard let bar = actionsBar, let selected = orderedSelection, let first = edgeLine(of: selected, last: false) else { return hideMenu() }
         let size = bar.fittingSize
-        var visible = bounds
-        if let clip = enclosingScrollView?.contentView {
-            visible = convert(clip.bounds, from: clip)
-            visible.origin.y += enclosingScrollView?.contentInsets.top ?? 0
-        }
+        let visible = inSight
         let last = edgeLine(of: selected, last: true) ?? first
         let above = first.minY - size.height - 8
         let (line, y): (NSRect, CGFloat) = if above >= visible.minY {
