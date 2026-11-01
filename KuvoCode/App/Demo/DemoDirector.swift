@@ -533,6 +533,7 @@ enum DemoDirector {
         // KUVO_DEMO_REPLAY=<file>: a recorded run, played into a new session there (see PerfReplay).
         if let file = environment["KUVO_DEMO_REPLAY"] {
             let catalog = catalog(for: folder, app: app)
+            await DemoWait.until("the engine's models (KUVO_DEMO_REPLAY)") { catalog.isLoaded }
             guard let session = try? await workspace.createSession(in: folder, model: catalog.startingModel(LastModel.current), agent: nil) else { return }
             app.tabs.open(.session(session.id))
             await DemoWait.until("the replay's session to load", limit: .seconds(10)) { workspace.model(for: session.id)?.isLoaded == true }
@@ -554,9 +555,10 @@ enum DemoDirector {
         // engine's default only when you can use it). KUVO_DEMO_WORKTREE gives it a worktree of its own.
         // A folder on a machine: once the machine is connected and its models are known.
         if let engine = app.machines.engine(RemoteFolder.machine(of: folder)) {
-            await DemoWait.until("\(engine.machine.name)'s models (KUVO_DEMO_PROMPT)") { engine.isReady && engine.catalog.defaultModel != nil }
+            await DemoWait.until("\(engine.machine.name)'s models (KUVO_DEMO_PROMPT)") { engine.isReady && engine.catalog.isLoaded }
         }
         let catalog = catalog(for: folder, app: app)
+        await DemoWait.until("the engine's models (KUVO_DEMO_PROMPT)") { catalog.isLoaded }
         guard let session = try? await workspace.createSession(in: folder, model: model ?? catalog.startingModel(LastModel.current), agent: catalog.startingAgent(chosen: EngineConfig.of(catalog.machine)?.value(at: ["default_agent"])?.string), worktree: environment["KUVO_DEMO_WORKTREE"] != nil) else { return }
         app.tabs.open(.session(session.id))
         // KUVO_DEMO_FILES: comma-separated paths to attach.

@@ -42,21 +42,24 @@ export function readCompatibility(file = COMPATIBILITY_FILE): Record<string, unk
 /** Learns Copilot's Claude models from `engine`'s list, for the next start of it: none with no
  * Copilot account there (the engine lists Copilot's models anyway while its settings name it); one
  * that only these settings put there has no family, so it's left out, and the next start leaves it
- * out of its settings. An engine that can't say what accounts it has changes nothing (it throws).
- * True when the layer changed. */
+ * out of its settings. An account whose models haven't come yet leaves what was learned. It throws
+ * when the engine can't say what accounts it has (one just started answers 404 for a moment), and
+ * changes nothing. True when the layer changed. */
 export async function learnCompatibility(engine: Target, file = COMPATIBILITY_FILE): Promise<boolean> {
   const account = await engineGet(engine, "api/integration/github-copilot");
   const connections = isObject(account) && isObject(account.data) ? account.data.connections : undefined;
-  if (!Array.isArray(connections)) return false;
-  const listed = connections.length ? await engineGet(engine, "api/model") : [];
-  const models = (Array.isArray(listed) ? listed : isObject(listed) && Array.isArray(listed.data) ? listed.data : []) as unknown[];
-  const copilot = models.filter((model): model is Record<string, unknown> => isObject(model) && model.providerID === "github-copilot");
-  // An account whose models haven't come yet: what was learned stays.
-  if (connections.length && !copilot.length) return false;
-  const claude = copilot
-    .filter(model => typeof model.id === "string" && model.id.startsWith("claude-") && model.family != null)
-    .map(model => model.id as string)
-    .sort();
+  if (!Array.isArray(connections)) throw new Error("The engine didn't say what Copilot accounts it has.");
+  let claude: string[] = [];
+  if (connections.length) {
+    const listed = await engineGet(engine, "api/model");
+    const models = (Array.isArray(listed) ? listed : isObject(listed) && Array.isArray(listed.data) ? listed.data : []) as unknown[];
+    const copilot = models.filter((model): model is Record<string, unknown> => isObject(model) && model.providerID === "github-copilot");
+    if (!copilot.length) return false;
+    claude = copilot
+      .filter(model => typeof model.id === "string" && model.id.startsWith("claude-") && model.family != null)
+      .map(model => model.id as string)
+      .sort();
+  }
   const layer = JSON.stringify(compatibilityLayer(claude));
   let before: string | null = null;
   try { before = fs.readFileSync(file, "utf8"); } catch {}

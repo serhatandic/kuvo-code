@@ -25,9 +25,11 @@ const script = fileURLToPath(new URL("../../Sources/KuvoLink/Resources/kuvo-link
 const link = await import(script);
 
 // An engine whose models are `models`, with a Copilot account there or not (`copilot`; `null`: its
-// accounts can't be read), and whose events can be followed.
+// accounts can't be read, as one just started for a moment), and whose events can be followed.
 async function engineWith(models, { copilot = true } = {}) {
-  const engine = { models, followers: [], awaiting: [] };
+  const engine = { models, copilot, followers: [], awaiting: [] };
+  // An event for whoever follows it.
+  engine.say = () => { for (const follower of engine.followers) follower.write(`data: ${JSON.stringify({ type: "session.updated", data: {} })}\n\n`); };
   engine.nextFollower = () => new Promise(resolve => engine.awaiting.push(resolve));
   const server = http.createServer((request, response) => {
     if (request.url === "/api/event") {
@@ -40,8 +42,8 @@ async function engineWith(models, { copilot = true } = {}) {
     // As the engine answers it: its models under `data`.
     if (request.url === "/api/model") return response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ data: engine.models }));
     // Its accounts with Copilot: none, or one signed in to (`null`: it can't say).
-    if (request.url === "/api/integration/github-copilot" && copilot !== null) {
-      const connections = copilot ? [{ id: "cred_copilot", label: "GitHub Copilot", method: "device" }] : [];
+    if (request.url === "/api/integration/github-copilot" && engine.copilot !== null) {
+      const connections = engine.copilot ? [{ id: "cred_copilot", label: "GitHub Copilot", method: "device" }] : [];
       return response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ data: { id: "github-copilot", name: "GitHub Copilot", connections } }));
     }
     response.writeHead(404).end();
@@ -128,4 +130,39 @@ test("an engine that can't say whether there's a Copilot account leaves what the
   await new Promise(resolve => link.watchBox({ signal: stop.signal, learned: resolve }));
   stop.abort();
   assert.deepEqual(copilotModels(await engineConfig("")), ["claude-opus-5.6"]);
+});
+
+test("a Copilot account whose models haven't come yet leaves what the box learned as it was", async t => {
+  fs.mkdirSync(path.join(home, "run"), { recursive: true });
+  fs.writeFileSync(path.join(home, "run", "compatibility.json"), JSON.stringify({ providers: { "github-copilot": { models: { "claude-opus-5.6": setting } } } }));
+  const engine = await engineWith([{ providerID: "opencode", id: "big-pickle", family: "big-pickle" }]);
+  fs.writeFileSync(path.join(home, "run", "engine.json"), JSON.stringify(engine.source));
+  const stop = new AbortController();
+  t.after(() => stop.abort());
+  await new Promise(resolve => link.watchBox({ signal: stop.signal, learned: resolve }));
+  stop.abort();
+  assert.deepEqual(copilotModels(await engineConfig("")), ["claude-opus-5.6"]);
+});
+
+test("an engine that can't say at first (just started) is asked again with its next event, not ten minutes later", async t => {
+  fs.mkdirSync(path.join(home, "run"), { recursive: true });
+  // Learned by an older Kuvo Code from what the settings themselves put in the engine's list.
+  fs.writeFileSync(path.join(home, "run", "compatibility.json"), JSON.stringify({ providers: { "github-copilot": { models: { "claude-opus-5.6": setting } } } }));
+  const engine = await engineWith([{ providerID: "github-copilot", id: "claude-opus-5.6", family: "claude-opus" }], { copilot: null });
+  fs.writeFileSync(path.join(home, "run", "engine.json"), JSON.stringify(engine.source));
+  const stop = new AbortController();
+  t.after(() => stop.abort());
+  let waiting = [];
+  const learnedOnce = () => new Promise(resolve => waiting.push(resolve));
+  const first = learnedOnce();
+  link.watchBox({ signal: stop.signal, learned: () => { for (const resolve of waiting.splice(0)) resolve(); } });
+  await first;
+  assert.deepEqual(copilotModels(await engineConfig("")), ["claude-opus-5.6"]);
+  // It can say now: no account.
+  engine.copilot = false;
+  const second = learnedOnce();
+  engine.say();
+  await second;
+  stop.abort();
+  assert.equal((await engineConfig("")).providers?.["github-copilot"], undefined);
 });

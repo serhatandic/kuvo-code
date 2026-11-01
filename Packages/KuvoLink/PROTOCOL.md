@@ -2758,11 +2758,13 @@ in your settings. Today that's GitHub Copilot's Claude models named with
 while the box has a Copilot account: named in an engine's settings with none, Copilot counts as set
 up there and its newest model becomes the engine's default, which fails every message left to it.
 The box learns them from its own engine: `GET /api/integration/github-copilot` (an account when its
-`connections` aren't empty; an answer it can't read leaves what it learned), then `GET /api/model`
+`connections` aren't empty; an answer it can't read leaves what it learned, and it asks again with
+the engine's next event: one just started answers 404 for a moment), then `GET /api/model`
 (Copilot's models whose id starts `claude-` and that have a `family`; an account whose models
 haven't come yet leaves what it learned), as it finds the engine and every ten minutes at most
 while it's at work (on a machine, while its bridge runs: it has peers or phones), and keeps the
-layer in `run/compatibility.json` (nothing until it has learned, and nothing with no account). Whatever starts the engine asks the box: `kuvo-link.js
+layer in `run/compatibility.json` (nothing until it has learned, and nothing with no account). What
+it learns goes to the engine's next start; the box doesn't restart it for that. Whatever starts the engine asks the box: `kuvo-link.js
 engine-config` prints the `OPENCODE_CONFIG_CONTENT` it's run with, the layer merged on top. This
 Mac's app runs it as it starts its engine, and a machine's start scripts do, so an engine started
 after a restart with no Mac there gets it too; a box too old to know it starts its engine as

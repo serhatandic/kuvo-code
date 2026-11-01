@@ -13050,13 +13050,16 @@ async function learnCompatibility(engine, file = COMPATIBILITY_FILE) {
   const account = await engineGet(engine, "api/integration/github-copilot");
   const connections = isObject(account) && isObject(account.data) ? account.data.connections : undefined;
   if (!Array.isArray(connections))
-    return false;
-  const listed = connections.length ? await engineGet(engine, "api/model") : [];
-  const models = Array.isArray(listed) ? listed : isObject(listed) && Array.isArray(listed.data) ? listed.data : [];
-  const copilot = models.filter((model) => isObject(model) && model.providerID === "github-copilot");
-  if (connections.length && !copilot.length)
-    return false;
-  const claude = copilot.filter((model) => typeof model.id === "string" && model.id.startsWith("claude-") && model.family != null).map((model) => model.id).sort();
+    throw new Error("The engine didn't say what Copilot accounts it has.");
+  let claude = [];
+  if (connections.length) {
+    const listed = await engineGet(engine, "api/model");
+    const models = Array.isArray(listed) ? listed : isObject(listed) && Array.isArray(listed.data) ? listed.data : [];
+    const copilot = models.filter((model) => isObject(model) && model.providerID === "github-copilot");
+    if (!copilot.length)
+      return false;
+    claude = copilot.filter((model) => typeof model.id === "string" && model.id.startsWith("claude-") && model.family != null).map((model) => model.id).sort();
+  }
   const layer = JSON.stringify(compatibilityLayer(claude));
   let before = null;
   try {
@@ -13442,11 +13445,17 @@ function watchBox({ tell = () => true, hold = null, bots = false, notices = !bot
 async function watchEvents(read, tell, signal, answered = () => {}, { bots = false, notices = !bots, signIns = false, hold = null, signedIn = () => {}, steers = false, steerAfter, learns = false, learned = () => {}, queues = false, work = false, goals = false } = {}) {
   let attempt = 0;
   let lastLearned = 0;
+  let learning = false;
   const learn = (source) => {
-    if (!learns || Date.now() - lastLearned < LEARN_EVERY)
+    if (!learns || learning || Date.now() - lastLearned < LEARN_EVERY)
       return;
-    lastLearned = Date.now();
-    learnCompatibility(source).catch(() => {}).finally(learned);
+    learning = true;
+    learnCompatibility(source).then(() => {
+      lastLearned = Date.now();
+    }, () => {}).finally(() => {
+      learning = false;
+      learned();
+    });
   };
   while (!signal?.aborted) {
     const connection = new AbortController;
