@@ -92,6 +92,11 @@ final class SessionModel {
     /// The subagents' bar shows only its line, which still says they work.
     var hidesSubagents = false
     private(set) var forms: [FormRequest] = []
+    /// Asks whose answer is on its way, or has gone and waits for the engine to say so: answered
+    /// once (a second click, or Return again, sends nothing).
+    private(set) var answering: Set<String> = []
+    /// The ask Return and Escape answer: the card on top (a permission first, then a question).
+    var keyedAsk: String? { permissions.first?.id ?? forms.first?.id }
     /// How much of the context window the last step used.
     private(set) var contextUsed: Int?
     /// The model its latest reply came from: on Auto, the one in your list at work now.
@@ -128,6 +133,11 @@ final class SessionModel {
             if commands != permissionCommands { permissionCommands = commands }
         }
         if forms != transcript.forms { forms = transcript.forms }
+        // Settled: answered here or elsewhere, or gone with its run.
+        if !answering.isEmpty {
+            let asking = Set(permissions.map(\.id) + forms.map(\.id))
+            if !answering.isSubset(of: asking) { answering.formIntersection(asking) }
+        }
         let inline = Self.inlineShells(in: transcript.messages)
         if inlineShells != inline { inlineShells = inline }
         let used = Self.contextUsed(in: transcript.messages)
@@ -289,6 +299,8 @@ final class SessionModel {
     @ObservationIgnored var isReachable: () -> Bool = { true }
     /// Its computer's agents bridge, which runs goals there (the workspace sets it).
     @ObservationIgnored var goalBridge: () -> OutsideAgents? = { nil }
+    /// An ask found settled with no event for it (the workspace sets it).
+    @ObservationIgnored var askSettled: (String) -> Void = { _ in }
     /// What's done here waits while its engine can't be reached: it would only fail.
     var canReach: Bool { !waitsForEngine && isReachable() }
     private(set) var changes: [FileDiff] = []
@@ -2499,12 +2511,29 @@ final class SessionModel {
     }
 
     func reply(to request: PermissionRequest, _ decision: PermissionRequest.Decision, message: String? = nil) {
-        guard canReach else { return }
+        guard canReach, answering.insert(request.id).inserted else { return }
         Analytics.shared.track("permission_answered", ["action": Analytics.action(request.action), "decision": decision.rawValue])
         Task {
             // In the session that asked: a subagent's own, for one of its asks shown here.
-            do { try await api.reply(session: request.sessionID, permission: request.id, decision: decision, message: message) } catch { fail(error) }
+            do { try await api.reply(session: request.sessionID, permission: request.id, decision: decision, message: message) } catch {
+                await answerFailed(request.id, error) { api in try await api.permissions(session: request.sessionID).contains { $0.id == request.id } }
+            }
         }
+    }
+
+    /// An answer that didn't go: an ask gone meanwhile (answered elsewhere, its run ended) just
+    /// goes; one still waiting says why, and can be answered again.
+    private func answerFailed(_ ask: String, _ error: any Error, waits: (OpenCodeAPI) async throws -> Bool) async {
+        // Answered once still, while it's read: it goes with the ask if it's gone.
+        guard (try? await waits(api)) == false else {
+            answering.remove(ask)
+            return fail(error)
+        }
+        transcript.permissions.removeAll { $0.id == ask }
+        transcript.forms.removeAll { $0.id == ask }
+        live?.permissions.removeAll { $0.id == ask }
+        live?.forms.removeAll { $0.id == ask }
+        askSettled(ask)
     }
 
     /// What some subagents ask now, read side by side; one that can't be read asks nothing here.
@@ -2551,10 +2580,12 @@ final class SessionModel {
     static let runEnds: Set<String> = ["session.execution.succeeded", "session.execution.failed", "session.execution.interrupted"]
 
     func answer(_ form: FormRequest, with answer: FormAnswer) {
-        guard canReach else { return }
+        guard canReach, answering.insert(form.id).inserted else { return }
         Analytics.shared.track("question_answered", ["kind": form.isQuestion ? "question" : "form"])
         Task {
-            do { try await api.reply(session: form.sessionID, form: form.id, answer: answer, directory: folder(of: form)) } catch { fail(error) }
+            do { try await api.reply(session: form.sessionID, form: form.id, answer: answer, directory: folder(of: form)) } catch {
+                await answerFailed(form.id, error) { [folder = folder(of: form)] api in try await api.forms(session: form.sessionID, directory: folder).contains { $0.id == form.id } }
+            }
         }
     }
 
@@ -2564,9 +2595,13 @@ final class SessionModel {
     }
 
     func dismiss(_ form: FormRequest, message: String? = nil) {
-        guard canReach else { return }
+        guard canReach, answering.insert(form.id).inserted else { return }
         Analytics.shared.track("question_dismissed", ["kind": form.isQuestion ? "question" : "form"])
-        Task { try? await api.dismiss(session: form.sessionID, form: form.id, message: message, directory: folder(of: form)) }
+        Task {
+            do { try await api.dismiss(session: form.sessionID, form: form.id, message: message, directory: folder(of: form)) } catch {
+                await answerFailed(form.id, error) { [folder = folder(of: form)] api in try await api.forms(session: form.sessionID, directory: folder).contains { $0.id == form.id } }
+            }
+        }
     }
 
     // MARK: Background refreshes

@@ -345,6 +345,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - A project on a machine renamed or removed from your phone changes in the sidebar right away, as this Mac's own projects do, not only once you come back to the app.
 - A rename that doesn't reach the engine (a machine's connection dropped) goes back to the old name, instead of looking saved until the next launch.
 - Settings › Archived Sessions keeps two projects of the same name apart (on this Mac and on a machine, say), and names the machine a project is on.
+- With two asks showing (a permission beside a question, or two permissions), Return and Escape answer only the card on top, not every card at once. A card you've answered waits for the agent instead of sending your answer twice, and one already answered on your phone just goes, without an error.
 - With no GitHub Copilot account, a conversation started without picking a model (one an agent or a bot started, say) no longer fails every message with "missing required Authorization header": the engine's default model had become one of Copilot's. It's one of OpenCode's free models again: on a new install from the start, and on one that had the problem once its engine has started again after its first run with this update.
 - A short message of yours in a narrow window shows all of its lines, instead of being cut at twelve with no Show More.
 

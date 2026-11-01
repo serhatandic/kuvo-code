@@ -340,16 +340,19 @@ private struct BottomStack: View {
         Group {
             VStack(spacing: 12) {
                 // What asks you something: solid cards over the composer's, apart from it.
+                // Return and Escape answer the card on top only (one answered keeps them: a second
+                // Return answers nothing, rather than sending the composer's draft).
                 ForEach(model.permissions) { request in
                     PermissionCard(request: request, command: model.permissionCommands[request.id], directory: model.session.location.directory) { decision in
                         model.reply(to: request, decision)
                     }
+                    .environment(\.takesCardKeys, takesCardKeys && model.keyedAsk == request.id)
                     .disabled(offlineMachine != nil)
                     .modifier(ComposerSurface())
                 }
-                ForEach(Array(forms.enumerated()), id: \.element.id) { index, form in
+                ForEach(forms) { form in
                     QuestionCard(form: form, progress: Binding(get: { model.questionProgress[form.id] ?? QuestionProgress() }, set: { model.questionProgress[form.id] = $0 }),
-                                 takesKeys: index == 0 && takesCardKeys) { answer in
+                                 takesKeys: takesCardKeys && (model.keyedAsk ?? forms.first?.id) == form.id) { answer in
                         model.answer(form, with: FormFieldsView.payload(form.fields, answer))
                     } dismiss: {
                         model.dismiss(form)
@@ -357,8 +360,9 @@ private struct BottomStack: View {
                     .disabled(offlineMachine != nil)
                     .modifier(ComposerSurface())
                 }
-                ForEach(app.browserAsks.asks(for: model.session.id)) { ask in
+                ForEach(Array(app.browserAsks.asks(for: model.session.id).enumerated()), id: \.element.id) { index, ask in
                     BrowserAskCard(ask: ask)
+                        .environment(\.takesCardKeys, takesCardKeys && index == 0 && model.permissions.isEmpty && forms.isEmpty)
                         .modifier(ComposerSurface())
                 }
                 // What its agent asks of its computer's vault.
