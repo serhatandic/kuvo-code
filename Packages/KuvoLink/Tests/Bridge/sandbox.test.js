@@ -787,8 +787,10 @@ test("a conversation's folder traded for a link by another's command isn't worke
   const inner = path.join(project, "inner");
   const moved = path.join(project, "moved");
   for (const folder of [inner, moved]) fs.mkdirSync(folder, { recursive: true });
+  // Another of your projects, a repository.
   const elsewhere = path.join(root, "traded-elsewhere");
   fs.mkdirSync(elsewhere);
+  assert.equal(spawnSync("git", ["init", "-q", elsewhere]).status, 0);
   const running = await start(box);
   try {
     assert.equal((await running.ask("GET", "kuvo/sandbox")).value.able, true);
@@ -808,9 +810,14 @@ test("a conversation's folder traded for a link by another's command isn't worke
     const movesOn = async (opens) => (await opens.calls("opencode_session_move", { directory: path.join(elsewhere, "on") })).refused ? "refused" : "moves";
     tries["the one in it already, moved on there"] = await movesOn(opened);
     tries["the one moved there, moved on there"] = await movesOn(movedOpened);
+    // Nor its file tools taken to write there as in its own project (asked, as outside it).
+    const writes = async (opens) => (await opens.calls("write", { path: "written.txt", content: "x" })).input.path === "written.txt" ? "as its own" : "asks";
+    tries["the one in it already, writing there"] = await writes(opened);
+    tries["the one moved there, writing there"] = await writes(movedOpened);
     assert.deepEqual(tries, {
       "the one in it already": "refused", "the one moved there": "refused",
       "the one in it already, moved on there": "refused", "the one moved there, moved on there": "refused",
+      "the one in it already, writing there": "asks", "the one moved there, writing there": "asks",
     });
     assert.equal(fs.existsSync(path.join(elsewhere, "planted")), false);
   } finally {

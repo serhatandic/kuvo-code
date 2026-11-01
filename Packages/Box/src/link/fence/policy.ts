@@ -51,9 +51,12 @@ export interface FencePolicy {
    * Bitwarden's, yubikey-agent's, the box's own `SSH_AUTH_SOCK`). */
   sockets?: string[];
   /** On macOS, more of them by name: regular expressions over whole paths (the system's SSH agent's,
-   * where launchd keeps it, one a shell started, gpg-agent's), which also match their folders: in
-   * folders commands write, neither moved nor removed, so never reached by another name. */
+   * where launchd keeps it, one a shell started, gpg-agent's), neither moved nor removed where
+   * commands write, so never reached by another name. */
   socketPatterns?: string[];
+  /** Their folders where commands write, which aren't moved either (only the folders: a file or a
+   * socket of the command's own by such a name, like ssh's shared connection, is its own). */
+  socketFolders?: string[];
 }
 
 // Tools' caches, written by installs and builds in any project.
@@ -193,12 +196,13 @@ export function fencePolicy(ports: number[] = []): FencePolicy {
         ...(process.env.SSH_AUTH_SOCK && path.isAbsolute(process.env.SSH_AUTH_SOCK) ? [realish(process.env.SSH_AUTH_SOCK)] : [])],
       socketPatterns: [
         // The system's, where launchd keeps it, and one your shell starts (`eval $(ssh-agent)`; since
-        // OpenSSH 10.1 in ~/.ssh/agent, above): each with its folder, which isn't moved either.
-        "^/private/(var/run|tmp)/com\\.apple\\.launchd\\.[^/]+(/|$)",
-        "^/private/tmp/ssh-[^/]+(/agent\\.|$)", "^/private/var/folders/[^/]+/[^/]+/T/ssh-[^/]+(/agent\\.|$)",
+        // OpenSSH 10.1 in ~/.ssh/agent, above).
+        "^/private/(var/run|tmp)/com\\.apple\\.launchd\\.[^/]+/",
+        "^/private/tmp/ssh-[^/]+/agent\\.", "^/private/var/folders/[^/]+/[^/]+/T/ssh-[^/]+/agent\\.",
         // gpg-agent's own (not its key store's or keyserver helper's, which hold no keys).
         `^${escapeRegex(home)}/\\.gnupg/S\\.(gpg-agent|scdaemon)`,
       ],
+      socketFolders: ["^/private/tmp/com\\.apple\\.launchd\\.[^/]+$", "^/private/tmp/ssh-[^/]+$", "^/private/var/folders/[^/]+/[^/]+/T/ssh-[^/]+$"],
       secrets: [...inHome([...SECRETS, ...MAC_SECRETS]), ...keychainDaemons(home).map(realish), ...sshKeys(home).map(realish), ...ghHosts(home).map(realish)],
     };
   }

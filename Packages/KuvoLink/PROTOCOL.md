@@ -3019,7 +3019,9 @@ environment has none of the engine's `OPENCODE_…` (but `OPENCODE_SESSION_ID`),
 secret, token or key, and no `SSH_AUTH_SOCK` but its own SSH agent's (below); on macOS it can't
 reach your SSH and GPG agents' sockets either, which sign with the keys it can't read: the
 system's (where launchd keeps it), one your shell started (in `~/.ssh/agent`, or `/tmp` and your
-temporary folder, whose agents' folders and sockets it can't move to give them another name), the
+temporary folder, whose agents' folders and sockets it can't move to give them another name, nor
+remove a folder of its own named as theirs are, `ssh-…`; its own sockets there, like ssh's shared
+connections, it uses and removes), the
 box's own `SSH_AUTH_SOCK`, gpg-agent's, 1Password's, Secretive's, Bitwarden's and yubikey-agent's,
 by their usual places (an `IdentityAgent` your ssh config names elsewhere, or a `GNUPGHOME`, isn't
 known). So `ssh`, and git over SSH, use only the vault's keys there, and signing a commit with

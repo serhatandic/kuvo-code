@@ -5133,11 +5133,12 @@ function fencePolicy(ports = []) {
         ...process.env.SSH_AUTH_SOCK && path25.isAbsolute(process.env.SSH_AUTH_SOCK) ? [realish(process.env.SSH_AUTH_SOCK)] : []
       ],
       socketPatterns: [
-        "^/private/(var/run|tmp)/com\\.apple\\.launchd\\.[^/]+(/|$)",
-        "^/private/tmp/ssh-[^/]+(/agent\\.|$)",
-        "^/private/var/folders/[^/]+/[^/]+/T/ssh-[^/]+(/agent\\.|$)",
+        "^/private/(var/run|tmp)/com\\.apple\\.launchd\\.[^/]+/",
+        "^/private/tmp/ssh-[^/]+/agent\\.",
+        "^/private/var/folders/[^/]+/[^/]+/T/ssh-[^/]+/agent\\.",
         `^${escapeRegex(home)}/\\.gnupg/S\\.(gpg-agent|scdaemon)`
       ],
+      socketFolders: ["^/private/tmp/com\\.apple\\.launchd\\.[^/]+$", "^/private/tmp/ssh-[^/]+$", "^/private/var/folders/[^/]+/[^/]+/T/ssh-[^/]+$"],
       secrets: [...inHome([...SECRETS, ...MAC_SECRETS]), ...keychainDaemons(home).map(realish), ...sshKeys(home).map(realish), ...ghHosts(home).map(realish)]
     };
   }
@@ -5437,7 +5438,7 @@ function seatbeltProfile(policy, options) {
   const held = [...[...holders].map((folder) => `(literal ${quote2(folder)})`), ...(policy.patternFolders ?? []).map(regex)];
   deny("file-write-unlink file-clone", ...held);
   deny("file-write-create", ...held.map((folder) => `(require-all ${folder} (vnode-type SYMLINK))`));
-  deny("file-write-unlink", ...(policy.socketPatterns ?? []).map(regex));
+  deny("file-write-unlink", ...(policy.socketPatterns ?? []).map(regex), ...(policy.socketFolders ?? []).map((folder) => `(require-all ${regex(folder)} (vnode-type DIRECTORY))`));
   deny("file-write*", under("WORK_RE", "/" + GUARDED), under("GIT_RE", "/" + GIT_GUARDED), ...Array.from({ length: MOST_FOLDERS }, (_, at) => under(`ALLOW${at}_RE`, "/" + GUARDED)));
   deny("file-write*", ...homes.map((home) => inHome(home, `"/(.*/)?(" (param "KEPT") ")(/|$)"`)));
   out.push(";; your secrets");
@@ -5703,8 +5704,8 @@ export default {
   setup: async (ctx) => {
     const work = ctx.location?.directory ?? ""
     // A folder this engine moved a conversation to: where it really was when the move was checked,
-    // and its repository then (taken once, as the engine opens it). Where the folder is a link now,
-    // it's never where the link leads.
+    // and its repository and project then (taken once, as the engine opens it). Where the folder is
+    // a link now, it's never where the link leads.
     let moved
     try {
       const moves = JSON.parse(fs.readFileSync(MOVES, "utf8"))
@@ -5735,7 +5736,7 @@ export default {
       input.env.KUVO_FENCE_RUNTIME = process.execPath
       input.shell = LAUNCHER
     })
-    const top = work ? topOf(work) : ""
+    const top = moved ? moved.top || "" : work ? topOf(work) : ""
     const ours = [work, folder, top].filter(Boolean)
     const really = (given, tool) => {
       if (typeof given !== "string" || !given || !work) return given
@@ -5786,7 +5787,7 @@ export default {
         let moves = {}
         try { moves = JSON.parse(fs.readFileSync(MOVES, "utf8")) } catch {}
         delete moves[named]
-        moves[named] = { at, git: repository(at) }
+        moves[named] = { at, git: repository(at), top: topOf(at) }
         noteMoves(moves)
       }
     })

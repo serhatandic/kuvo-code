@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import { execFileSync } from "node:child_process"
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs"
 import net from "node:net"
-import { dirname, join } from "node:path"
+import { basename, dirname, join } from "node:path"
 import { escapeRegex, fencePolicy } from "../src/link/fence/policy"
 import { canFence, realFence } from "./agents/support/fence"
 
@@ -38,8 +38,10 @@ test.skipIf(!canFence || process.platform !== "darwin")("a command can't use you
       join(system, "Listeners"), join(started, "agent.123"), join(yours, "agent.123"), join(root, "own", "agent.sock"),
     ]
     // Ones that are no agent's, which a command reaches as it would any other: gpg's key store's
-    // (public keys, for checking signatures), and another program's.
-    const others = [join(home, ".gnupg/S.keyboxd"), join(root, "other.sock")]
+    // (public keys, for checking signatures), another program's, and ssh's own shared connection in
+    // /tmp (a ControlPath of `/tmp/ssh-%r@%h:%p`), which it removes too.
+    const shared = `/private/tmp/ssh-${basename(root)}@example.com:22`
+    const others = [join(home, ".gnupg/S.keyboxd"), join(root, "other.sock"), shared]
     for (const where of [...agents, ...others]) {
       mkdirSync(dirname(where), { recursive: true })
       const server = net.createServer()
@@ -48,6 +50,7 @@ test.skipIf(!canFence || process.platform !== "darwin")("a command can't use you
     }
     realFence(kuvo, (policy.sockets ?? []).map(toHome), {
       socketPatterns: (policy.socketPatterns ?? []).map(pattern => pattern.replace(escapeRegex(policy.home), escapeRegex(home))),
+      socketFolders: policy.socketFolders,
       // Written as they are on a box: /tmp and your temporary folder.
       writable: ["/dev", "/private/tmp", dirname(temporary)],
     })
@@ -57,16 +60,18 @@ test.skipIf(!canFence || process.platform !== "darwin")("a command can't use you
     const renamed = [[started, join(root, "started")], [system, join(root, "system")], [join(yours, "agent.123"), join(temporary, "moved.sock")]]
     const tries = [...agents, ...others].map(where => `if ( ${connects(where)} ) 2>/dev/null; then echo "${where}: allowed"; else echo "${where}: refused"; fi`)
     for (const [from, to] of renamed) tries.push(`mv ${JSON.stringify(from)} ${JSON.stringify(to)} 2>/dev/null; if ( ${connects(to.endsWith(".sock") ? to : join(to, from === system ? "Listeners" : "agent.123"))} ) 2>/dev/null; then echo "${to}: allowed"; else echo "${to}: refused"; fi`)
+    tries.push(`if rm ${JSON.stringify(shared)} 2>/dev/null; then echo "${shared} removed: allowed"; else echo "${shared} removed: refused"; fi`)
     const script = tries.join("\n")
     const ran = Bun.spawnSync([join(kuvo, "bin", "kuvo-fence"), "-c", script], { cwd: project, env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: home, KUVO_FENCE_WORK: project } })
     const out = ran.stdout.toString() + ran.stderr.toString()
     expect(Object.fromEntries(out.trim().split("\n").filter(line => /: (allowed|refused)$/.test(line)).map(line => line.split(": ")))).toEqual(
-      { ...Object.fromEntries([...agents, ...renamed.map(([, to]) => to)].map(where => [where, "refused"])), ...Object.fromEntries(others.map(where => [where, "allowed"])) })
+      { ...Object.fromEntries([...agents, ...renamed.map(([, to]) => to)].map(where => [where, "refused"])), ...Object.fromEntries([...others, `${shared} removed`].map(where => [where, "allowed"])) })
   } finally {
     if (said === undefined) delete process.env.SSH_AUTH_SOCK
     else process.env.SSH_AUTH_SOCK = said
     for (const server of servers) server.close()
     for (const folder of [root, system, started, yours]) rmSync(folder, { recursive: true, force: true })
     rmSync(join(temporary, "moved.sock"), { force: true })
+    rmSync(`/private/tmp/ssh-${basename(root)}@example.com:22`, { force: true })
   }
 })

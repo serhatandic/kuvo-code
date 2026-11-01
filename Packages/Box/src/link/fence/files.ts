@@ -339,8 +339,8 @@ export default {
   setup: async (ctx) => {
     const work = ctx.location?.directory ?? ""
     // A folder this engine moved a conversation to: where it really was when the move was checked,
-    // and its repository then (taken once, as the engine opens it). Where the folder is a link now,
-    // it's never where the link leads.
+    // and its repository and project then (taken once, as the engine opens it). Where the folder is
+    // a link now, it's never where the link leads.
     let moved
     try {
       const moves = JSON.parse(fs.readFileSync(MOVES, "utf8"))
@@ -371,7 +371,7 @@ export default {
       input.env.KUVO_FENCE_RUNTIME = process.execPath
       input.shell = LAUNCHER
     })
-    const top = work ? topOf(work) : ""
+    const top = moved ? moved.top || "" : work ? topOf(work) : ""
     const ours = [work, folder, top].filter(Boolean)
     const really = (given, tool) => {
       if (typeof given !== "string" || !given || !work) return given
@@ -422,7 +422,7 @@ export default {
         let moves = {}
         try { moves = JSON.parse(fs.readFileSync(MOVES, "utf8")) } catch {}
         delete moves[named]
-        moves[named] = { at, git: repository(at) }
+        moves[named] = { at, git: repository(at), top: topOf(at) }
         noteMoves(moves)
       }
     })
