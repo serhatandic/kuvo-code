@@ -565,28 +565,49 @@ struct OutputBlock: View {
     @Environment(\.findHighlight) private var highlight
     @Environment(\.colorScheme) private var scheme
     @Environment(\.messageFont) private var messageFont
+    @State private var isCut = false
+    /// Whether its lines are wider than the well (it scrolls sideways).
+    @State private var isWide = false
+    @State private var scrollers = OutputBlock.scrollerStyle()
 
     var body: some View {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let marked = FindText.marked(command.map { TerminalColors.colored(text, command: $0, dark: scheme == .dark) } ?? AttributedString(text), highlight)
+        let font = NSFont.monospacedSystemFont(ofSize: messageFont.size - 1.5, weight: .regular)
         ScrollView(.horizontal) {
-            let font = NSFont.monospacedSystemFont(ofSize: messageFont.size - 1.5, weight: .regular)
-            // As many lines as the well holds, faded at the cut (its lines never wrap: they're as
-            // the tool wrote them).
-            let lines = Int((Self.height - 24) / Self.lineHeights.defaultLineHeight(for: font))
+            // As many whole lines as the well holds, however tall a script's font makes them,
+            // faded at the cut (its lines never wrap: they're as the tool wrote them).
             // AppKit's text: its I-beam shows only where nothing's drawn over it.
-            SelectableText(text: MessageMentions.attributed(marked, font: font).text, lineLimit: lines)
+            SelectableText(text: MessageMentions.attributed(marked, font: font).text, maxHeight: Self.height - 24, cut: { isCut = $0 })
                 .fixedSize(horizontal: true, vertical: false)
-                .modifier(CutFade(isOn: text.utf8.count { $0 == 10 } >= lines))
+                // Masked from the start when it may well be cut, so the fade coming doesn't make
+                // it a new view.
+                .modifier(CutFade(isOn: isCut, isMasked: text.utf8.count { $0 == 10 } + 1 >= Self.lines(font) / 2))
                 .padding(12)
+                // A scroll bar that's always shown takes its height from the well: room for it
+                // under the last line when the lines are wider than the well.
+                .padding(.bottom, scrollers == .legacy && isWide ? NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy) : 0)
         }
-        .frame(maxHeight: Self.height)
+        // Said only as it changes, not on every width a window's resize goes through.
+        .onScrollGeometryChange(for: Bool.self) { $0.contentSize.width > $0.containerSize.width + 0.5 } action: { _, wide in isWide = wide }
+        .onReceive(NotificationCenter.default.publisher(for: NSScroller.preferredScrollerStyleDidChangeNotification)) { _ in
+            scrollers = Self.scrollerStyle()
+        }
         .clipShape(RoundedRectangle(cornerRadius: 10))
         .recessedWell(RoundedRectangle(cornerRadius: 10))
     }
 
     private static let height: CGFloat = 260
     private static let lineHeights = NSLayoutManager()
+
+    /// How many lines of `font` the well holds, at its plain line height.
+    private static func lines(_ font: NSFont) -> Int {
+        Int((height - 24) / lineHeights.defaultLineHeight(for: font))
+    }
+
+    /// The scroll bars' style: always shown, or over the content only while scrolling (System
+    /// Settings, or a mouse plugged in).
+    static var scrollerStyle: () -> NSScroller.Style = { NSScroller.preferredScrollerStyle }
 }
 
 /// What a subagent was asked, and the steps it took and what it said, as they happen, under

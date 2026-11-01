@@ -17,6 +17,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 ### All Changes
 
 - The text pointer no longer shows over buttons and bars on top of a reply, your own messages, the composer or a file, like Scroll to the End or a code block's Copy. Copy and a diagram's Code button show the pointing hand. Your messages are drawn as the composer draws them, and you can select across them and the replies in one go.
+- A tool's long output in the conversation keeps its last line in sight: a scroll bar that's always shown sits under it, and lines in another script's taller font fade at the well's bottom instead of being cut off.
 - Removing a worktree in Settings › Worktrees says whether it has changes that aren't committed and how many commits its branch keeps; an old failure note goes once a remove works, and removing one on this Mac while its engine is down says why instead of doing nothing.
 - When this Mac's engine stops, Settings › Accounts and the first launch's subscriptions step say so above the list, with Try Again, and dim what needs the engine until it's back, rather than offering sign-ins that fail. Coding agents still sign in meanwhile.
 - Settings › Storage says it measures only this Mac, once you've added a machine.

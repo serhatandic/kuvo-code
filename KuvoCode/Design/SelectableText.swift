@@ -13,11 +13,14 @@ struct SelectableText: View {
     /// Pictures drawn over characters kept in their place (`TextFaces`): a bot's face for its "&".
     var faces: TextFaces = TextFaces()
     var lineLimit: Int?
-    /// Told whether `lineLimit` cuts anything, as it changes.
+    /// As many whole lines as fit this high, for a text whose lines may be of different heights
+    /// (a tool's output, its other scripts in taller fonts).
+    var maxHeight: CGFloat?
+    /// Told whether `lineLimit` or `maxHeight` cuts anything, as it changes.
     var cut: ((Bool) -> Void)?
 
     var body: some View {
-        Host(text: text, faces: faces, lineLimit: lineLimit, cut: cut)
+        Host(text: text, faces: faces, lineLimit: lineLimit, maxHeight: maxHeight, cut: cut)
             // Lined up by its first line, as a Text is (an icon beside it).
             .alignmentGuide(.firstTextBaseline) { _ in firstBaseline }
     }
@@ -35,6 +38,7 @@ private struct Host: NSViewRepresentable {
     let text: NSAttributedString
     let faces: TextFaces
     let lineLimit: Int?
+    let maxHeight: CGFloat?
     let cut: ((Bool) -> Void)?
 
     func makeNSView(context: Context) -> SelectableTextView {
@@ -45,7 +49,7 @@ private struct Host: NSViewRepresentable {
         let openURL = context.environment.openURL
         view.openURL = { openURL($0) }
         view.cut = cut
-        view.show(text, faces: faces, lineLimit: lineLimit)
+        view.show(text, faces: faces, lineLimit: lineLimit, maxHeight: maxHeight)
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView view: SelectableTextView, context: Context) -> CGSize? {
@@ -66,6 +70,9 @@ struct TextFaces: Equatable {
     var all: [Face] = []
     /// How big each is drawn, in points.
     var size: CGFloat = 0
+    /// The characters VoiceOver leaves out: those under a picture (a bot's name is read without
+    /// its "&", as its face was), and those left out of sight (a picture's name's "]").
+    var unspoken = IndexSet()
 
     /// Makes room for `image` over the first character of `span` in `storage`, in `font` (the
     /// span's): that character unseen, as wide as the picture.
@@ -75,6 +82,52 @@ struct TextFaces: Equatable {
         let width = (first as NSString).size(withAttributes: [.font: font]).width
         storage.addAttributes([.foregroundColor: NSColor.clear, .kern: size + 1 - width], range: NSRange(location: span.location, length: 1))
         all.append(Face(at: span.location, image: image))
+        unspoken.insert(span.location)
+    }
+
+    /// Leaves `span` of `storage`, in `font`, out of sight and out of what VoiceOver reads, its
+    /// room taken back.
+    mutating func hide(_ span: NSRange, in storage: NSMutableAttributedString, font: NSFont) {
+        guard span.length > 0, span.upperBound <= storage.length else { return }
+        let width = (storage.string as NSString).substring(with: span).size(withAttributes: [.font: font]).width
+        storage.addAttributes([.foregroundColor: NSColor.clear, .kern: -width], range: span)
+        unspoken.insert(integersIn: span.location..<span.upperBound)
+    }
+
+    /// `text` as VoiceOver reads it: without the characters it leaves out.
+    func spoken(_ text: String) -> String {
+        guard !unspoken.isEmpty else { return text }
+        let text = text as NSString
+        return IndexSet(integersIn: 0..<text.length).subtracting(unspoken).rangeView
+            .map { text.substring(with: NSRange(location: $0.lowerBound, length: $0.count)) }.joined()
+    }
+
+    /// Where `index` of the text as written is in the text as it's read.
+    func spokenIndex(_ index: Int) -> Int {
+        index - unspoken.count(in: 0..<max(0, index))
+    }
+
+    /// Where `index` of the text as it's read is in the text as written: the character it reads,
+    /// past those left out before it.
+    func writtenIndex(_ index: Int) -> Int {
+        var written = index
+        for range in unspoken.rangeView where range.lowerBound <= written {
+            written += range.count
+        }
+        return written
+    }
+
+    /// `range` of the text as written, in the text as it's read.
+    func spoken(_ range: NSRange) -> NSRange {
+        let start = spokenIndex(range.location)
+        return NSRange(location: start, length: spokenIndex(range.location + range.length) - start)
+    }
+
+    /// `range` of the text as it's read, in the text as written.
+    func written(_ range: NSRange) -> NSRange {
+        let start = writtenIndex(range.location)
+        let end = range.length > 0 ? writtenIndex(range.location + range.length - 1) + 1 : start
+        return NSRange(location: start, length: end - start)
     }
 
     /// Draws them in `text`, each over its character.
@@ -116,6 +169,7 @@ final class SelectableTextView: PointerAwareTextView {
     var cut: ((Bool) -> Void)?
     private var faces = TextFaces()
     private var lineLimit: Int?
+    private var maxHeight: CGFloat?
     private var wasCut: Bool?
 
     init() {
@@ -148,10 +202,11 @@ final class SelectableTextView: PointerAwareTextView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    func show(_ text: NSAttributedString, faces: TextFaces, lineLimit: Int?) {
+    func show(_ text: NSAttributedString, faces: TextFaces, lineLimit: Int?, maxHeight: CGFloat? = nil) {
         guard let storage = textStorage, let container = textContainer else { return }
-        if lineLimit != self.lineLimit || !storage.isEqual(to: text) { sizes = [:] }
+        if lineLimit != self.lineLimit || maxHeight != self.maxHeight || !storage.isEqual(to: text) { sizes = [:] }
         self.lineLimit = lineLimit
+        self.maxHeight = maxHeight
         if !storage.isEqual(to: text) { storage.setAttributedString(text) }
         limit(container)
         if faces != self.faces {
@@ -175,8 +230,7 @@ final class SelectableTextView: PointerAwareTextView {
         // it then doesn't use (and a text this hugs is never shown at the width it's offered), and
         // a text view's own layout says its wrapped lines take all the width there is.
         let (layout, container) = measuring
-        if container.size.width != width { container.size = CGSize(width: width, height: .greatestFiniteMagnitude) }
-        limit(container)
+        limit(container, width: width)
         layout.ensureLayout(for: container)
         let used = layout.usedRect(for: container)
         // Never narrower than its lines (so they break where they were measured to).
@@ -194,8 +248,11 @@ final class SelectableTextView: PointerAwareTextView {
         return layoutManager?.defaultLineHeight(for: font ?? .systemFont(ofSize: NSFont.systemFontSize)) ?? 16
     }
 
-    /// Lays `container` out to the line limit, the last line cut short.
-    private func limit(_ container: NSTextContainer) {
+    /// Lays `container` out `width` wide (as it is, if nil) to the line limit, the last line cut
+    /// short, and to as many whole lines as fit in `maxHeight`.
+    private func limit(_ container: NSTextContainer, width: CGFloat? = nil) {
+        let size = CGSize(width: width ?? container.size.width, height: maxHeight ?? .greatestFiniteMagnitude)
+        if container.size != size { container.size = size }
         let limit = lineLimit ?? 0
         guard container.maximumNumberOfLines != limit else { return }
         container.maximumNumberOfLines = limit
@@ -217,7 +274,7 @@ final class SelectableTextView: PointerAwareTextView {
     private func tellCut() {
         guard let cut, let layout = layoutManager, let container = textContainer, let storage = textStorage else { return }
         var isCut = false
-        if lineLimit != nil, storage.length > 0 {
+        if lineLimit != nil || maxHeight != nil, storage.length > 0 {
             // Only as far as its lines go: all of a long text's glyphs aren't needed to see it's cut.
             let laid = layout.glyphRange(for: container)
             isCut = layout.characterRange(forGlyphRange: laid, actualGlyphRange: nil).upperBound < storage.length
@@ -233,9 +290,66 @@ final class SelectableTextView: PointerAwareTextView {
         super.setFrameSize(newSize)
         // Not to nothing: a view is given no room for a moment while it's put in place.
         guard newSize.width > 0, let container = textContainer else { return }
-        if container.size.width != newSize.width { container.size = NSSize(width: newSize.width, height: .greatestFiniteMagnitude) }
+        limit(container, width: newSize.width)
         // Whether it's cut at the width it's shown at (said again only when that changes).
         tellCut()
+    }
+
+    // VoiceOver reads it as words on the page, as it does a Text, never as a text area to edit,
+    // and reads its pictures' characters as it read the pictures: a bot's name without its "&".
+    override func accessibilityRole() -> NSAccessibility.Role? { .staticText }
+
+    override func accessibilityRoleDescription() -> String? {
+        NSAccessibility.Role.staticText.description(with: nil)
+    }
+
+    override func accessibilityValue() -> String? {
+        faces.spoken(string)
+    }
+
+    // The rest of what VoiceOver asks, by character, word and line, of the text as it's read.
+    override func accessibilityNumberOfCharacters() -> Int {
+        faces.unspoken.isEmpty ? super.accessibilityNumberOfCharacters() : (faces.spoken(string) as NSString).length
+    }
+
+    override func accessibilityString(for range: NSRange) -> String? {
+        guard !faces.unspoken.isEmpty else { return super.accessibilityString(for: range) }
+        let spoken = faces.spoken(string) as NSString
+        guard range.location >= 0, range.location + range.length <= spoken.length else { return nil }
+        return spoken.substring(with: range)
+    }
+
+    override func accessibilityAttributedString(for range: NSRange) -> NSAttributedString? {
+        guard !faces.unspoken.isEmpty else { return super.accessibilityAttributedString(for: range) }
+        return accessibilityString(for: range).map { NSAttributedString(string: $0) }
+    }
+
+    override func accessibilityVisibleCharacterRange() -> NSRange {
+        faces.unspoken.isEmpty ? super.accessibilityVisibleCharacterRange() : faces.spoken(super.accessibilityVisibleCharacterRange())
+    }
+
+    override func accessibilitySelectedTextRange() -> NSRange {
+        faces.unspoken.isEmpty ? super.accessibilitySelectedTextRange() : faces.spoken(super.accessibilitySelectedTextRange())
+    }
+
+    override func accessibilitySelectedText() -> String? {
+        faces.unspoken.isEmpty ? super.accessibilitySelectedText() : accessibilityString(for: accessibilitySelectedTextRange())
+    }
+
+    override func accessibilityLine(for index: Int) -> Int {
+        super.accessibilityLine(for: faces.unspoken.isEmpty ? index : faces.writtenIndex(index))
+    }
+
+    override func accessibilityRange(forLine line: Int) -> NSRange {
+        faces.unspoken.isEmpty ? super.accessibilityRange(forLine: line) : faces.spoken(super.accessibilityRange(forLine: line))
+    }
+
+    override func accessibilityRange(for point: NSPoint) -> NSRange {
+        faces.unspoken.isEmpty ? super.accessibilityRange(for: point) : faces.spoken(super.accessibilityRange(for: point))
+    }
+
+    override func accessibilityFrame(for range: NSRange) -> NSRect {
+        super.accessibilityFrame(for: faces.unspoken.isEmpty ? range : faces.written(range))
     }
 
     override func draw(_ dirtyRect: NSRect) {

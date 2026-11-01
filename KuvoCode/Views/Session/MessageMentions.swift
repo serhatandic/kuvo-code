@@ -175,8 +175,7 @@ nonisolated enum MessageMentions {
                 if mark == .open {
                     faces.add(TextFaces.symbol("photo", size: faces.size), at: span, in: text, font: runFont)
                 } else {
-                    let width = (text.string as NSString).substring(with: span).size(withAttributes: [.font: runFont]).width
-                    text.addAttributes([.foregroundColor: NSColor.clear, .kern: -width], range: span)
+                    faces.hide(span, in: text, font: runFont)
                 }
             } else if let agent = run[AgentMark.self] {
                 let face = agent.look.flatMap { face($0, size: faces.size) } ?? TextFaces.symbol("bubble.left", size: faces.size)
