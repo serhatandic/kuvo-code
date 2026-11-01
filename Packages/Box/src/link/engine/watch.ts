@@ -84,7 +84,9 @@ export interface WatchOptions {
   learns?: boolean;
   learned?: () => void;
   queues?: boolean;
-  work?: boolean;
+  /** Whoever started a session told as it finishes or asks, as which of the box's places this is
+   * (`work/wakes.ts`, `WorkWatch.from`). */
+  work?: "engine" | "bridge" | false;
   /** The agents' bridge's, which keeps conversations' goals: one paused or resumed held or let go. */
   goals?: boolean;
 }
@@ -219,8 +221,8 @@ function backgroundTools(engine: Target, session: string): Promise<Response> {
 // `learned`: told each time it's read its engine's models for what they need (a test waits on it).
 export function watchBox({ tell = () => true, hold = null, bots = false, notices = !bots, signal, signedIn, learned }: WatchBoxOptions = {}): void {
   const answered = (id: string | undefined) => hold?.resolve(id);
-  watchEvents(readEngineFile, tell, signal, answered, { bots, notices, signIns: true, hold, signedIn, steers: true, learns: true, learned, queues: true, work: true });
-  watchEvents(readBridgeFile, tell, signal, answered, { bots, notices, queues: true, work: true, goals: true });
+  watchEvents(readEngineFile, tell, signal, answered, { bots, notices, signIns: true, hold, signedIn, steers: true, learns: true, learned, queues: true, work: "engine" });
+  watchEvents(readBridgeFile, tell, signal, answered, { bots, notices, queues: true, work: "bridge", goals: true });
 }
 
 // Follows `source`'s events (the engine's, or the coding agents' bridge's: `read` gives its port
@@ -237,7 +239,7 @@ export function watchBox({ tell = () => true, hold = null, bots = false, notices
 // the engine's: as it's found, then every ten minutes at most while it's at work (a sign-in to
 // GitHub Copilot brings new models); `learned` told each time.
 // `queues`: its sessions' queues carried on (engine/queue.ts). `work`: whoever started a session
-// told as it finishes or asks (work/wakes.ts).
+// told as it finishes or asks (work/wakes.ts), as the place it is ("engine" or "bridge").
 export async function watchEvents(read: () => Target, tell: (notice: Notice) => void, signal?: AbortSignal, answered: (id: string | undefined) => void = () => {}, { bots = false, notices = !bots, signIns = false, hold = null, signedIn = () => {}, steers = false, steerAfter, learns = false, learned = () => {}, queues = false, work = false, goals = false }: WatchOptions = {}): Promise<void> {
   let attempt = 0;
   let lastLearned = 0;
@@ -255,7 +257,7 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
       const source = read();
       const steer = steers ? steering(session => backgroundTools(source, session).catch(() => {}), { after: steerAfter, signal: connection.signal }) : null;
       const queue = queues ? queueWatcher(source) : null;
-      const followWork = work ? workWatcher(source, peerTargets, { signal: connection.signal }) : null;
+      const followWork = work ? workWatcher(source, peerTargets, { signal: connection.signal, from: work }) : null;
       // A goal paused or resumed (the agents' bridge says so): its conversation held or let go.
       const goalHeld = goals ? goalHolds(peerTargets) : null;
       const response = await fetch(`http://127.0.0.1:${source.port}/api/event`, {

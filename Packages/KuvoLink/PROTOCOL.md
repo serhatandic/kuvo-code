@@ -713,7 +713,9 @@ client shows it from the same routes.
   still to hear of them dropped. 404 for no such bot here, 503 with no engine.
 - **A box starting again** (its link): what its followed sessions did while it was down (finished,
   failed, asked; not one that was stopped) is told to their starters once, by what
-  `run/work/told.json` says was told, and an answer to an ask given after its tool stopped waiting
+  `run/work/told.json` says was told: the engine's and the coding agents' bridge's each as it's
+  found, from when the box last heard of that one, and only once it could list them all (one slow or
+  not there yet is looked at again a minute on). An answer to an ask given after its tool stopped waiting
   goes to its conversation if it hadn't.
 
 **Projects** (bridge 0.9.107, feature `work.projects`): a bot makes new projects on its box, in a

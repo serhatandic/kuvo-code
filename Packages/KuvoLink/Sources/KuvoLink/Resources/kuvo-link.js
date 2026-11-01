@@ -6198,7 +6198,7 @@ var wakesOf = (data) => {
   return Array.isArray(wake) ? wake.filter((each) => typeof each === "string") : [];
 };
 var isArchived = (data) => Boolean(data.time?.archived || data.metadata?.["kuvo.archived"] === true || data.metadata?.kuvo?.archived === true);
-async function workSessions(targets, signal, { archived = false } = {}) {
+async function workSessions(targets, signal, { archived = false, whole = false } = {}) {
   const found = [];
   for (const target of targets) {
     let query = "limit=200&order=desc&parentID=null";
@@ -6206,7 +6206,9 @@ async function workSessions(targets, signal, { archived = false } = {}) {
       let page;
       try {
         page = await engineGet(target, `api/session?${query}`);
-      } catch {
+      } catch (error) {
+        if (whole)
+          throw error;
         break;
       }
       const listed = Array.isArray(page?.data) ? page.data : [];
@@ -7199,22 +7201,34 @@ function wakeLineShown(lines) {
   return `“${said[2] || "New Session"}” ${what}`;
 }
 var LATE_AGAIN = 300000;
+var CATCH_UP_AGAIN = 60000;
 var ARCHIVED_FOR = 7 * 86400000;
 var readTold = (file) => {
   try {
     const kept = JSON.parse(fs30.readFileSync(file, "utf8"));
-    return isObject(kept) && typeof kept.since === "number" ? { since: kept.since, sessions: isObject(kept.sessions) ? kept.sessions : {} } : null;
+    if (!isObject(kept) || typeof kept.since !== "number")
+      return null;
+    const sinces = Object.fromEntries(Object.entries(isObject(kept.sinces) ? kept.sinces : {}).filter(([, at]) => typeof at === "number"));
+    return { since: kept.since, ...Object.keys(sinces).length ? { sinces } : {}, sessions: isObject(kept.sessions) ? kept.sessions : {} };
   } catch {
     return null;
   }
 };
-var changeTold = (file, change) => {
+var ENGINE = "engine";
+var OTHERS = ["bridge"];
+var sinceOf = (told, from) => from === ENGINE ? told.since : told.sinces?.[from] ?? told.since;
+var changeTold = (file, change, from) => {
   try {
     fs30.mkdirSync(path33.dirname(file), { recursive: true });
     locked(LOCK4 + "-told", () => {
       const told = readTold(file) ?? { since: Date.now(), sessions: {} };
       change(told);
-      told.since = Math.max(told.since, Date.now());
+      if (from === ENGINE) {
+        const theirs = Object.fromEntries(OTHERS.map((other) => [other, sinceOf(told, other)]));
+        told.sinces = { ...theirs, ...told.sinces };
+        told.since = Math.max(told.since, Date.now());
+      } else if (from)
+        told.sinces = { ...told.sinces, [from]: Math.max(sinceOf(told, from), Date.now()) };
       const ids = Object.keys(told.sessions);
       for (const id of ids.slice(0, Math.max(0, ids.length - 400)))
         delete told.sessions[id];
@@ -7223,13 +7237,13 @@ var changeTold = (file, change) => {
   } catch {}
 };
 async function lastReplyID(target, session) {
-  const page = await call(target, "GET", `/api/session/${encodeURIComponent(session)}/message?limit=6&order=desc`).catch(() => null);
+  const page = await call(target, "GET", `/api/session/${encodeURIComponent(session)}/message?limit=6&order=desc`);
   for (const message of Array.isArray(page) ? page : [])
     if (isObject(message) && message.type === "assistant" && typeof message.id === "string")
       return message.id;
   return null;
 }
-function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, file = WORK_WAKES, toldFile = WORK_TOLD, bridgeRuns = () => peerPlaces().bridge, signal } = {}) {
+function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, file = WORK_WAKES, toldFile = WORK_TOLD, bridgeRuns = () => peerPlaces().bridge, signal, from = ENGINE } = {}) {
   const due = new Set;
   const failures = new Map;
   const putBack = (starter, waiting) => changeWaiting(file, (all) => {
@@ -7290,6 +7304,7 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
     });
     soon(starter);
   };
+  let caught = false;
   const noteTold = (session, note) => changeTold(toldFile, (told) => {
     const now = told.sessions[session] ?? {};
     if (note.reply)
@@ -7298,19 +7313,26 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
       now.asks = [...(now.asks ?? []).filter((each) => each !== note.ask), note.ask].slice(-20);
     delete told.sessions[session];
     told.sessions[session] = now;
-  });
+  }, caught ? from : null);
+  const before = readTold(toldFile);
   const catchUp = async () => {
-    const told = readTold(toldFile);
-    if (!told)
-      return changeTold(toldFile, () => {});
-    const followed = (await workSessions([source])).filter((each) => startedByOf(each.data) && wakesOf(each.data).length && (each.data.time?.updated ?? 0) > told.since);
-    const working = await workingNow([source]);
+    if (!before) {
+      caught = true;
+      return changeTold(toldFile, () => {}, from);
+    }
+    const since = sinceOf(before, from);
+    const listed = await workSessions([source], signal, { whole: true });
+    const active = await call(source, "GET", "/api/session/active", undefined, signal);
+    if (signal?.aborted)
+      return;
+    const working = new Set(Array.isArray(active) ? active : isObject(active) ? Object.keys(active) : []);
+    const followed = listed.filter((each) => startedByOf(each.data) && wakesOf(each.data).length && (each.data.time?.updated ?? 0) > since);
     for (const { data } of followed) {
       const starter = startedByOf(data);
       const wakes = wakesOf(data);
-      const was = told.sessions[data.id] ?? {};
+      const was = readTold(toldFile)?.sessions[data.id] ?? {};
       if (wakes.includes("asks")) {
-        const { permissions, questions } = await asksIn(source, data.id).catch(() => ({ permissions: [], questions: [] }));
+        const { permissions, questions } = await asksIn(source, data.id);
         for (const permission of permissions.filter((each) => !was.asks?.includes(each.id))) {
           const line = await wakeLine({ type: "permission.asked", data: { id: permission.id, sessionID: data.id, action: permission.action, resources: permission.resources } }, data, source);
           if (line)
@@ -7338,9 +7360,16 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
         noteTold(data.id, { reply });
       }
     }
-    changeTold(toldFile, () => {});
+    caught = true;
+    changeTold(toldFile, () => {}, from);
   };
-  const caughtUp = Promise.all([catchUp().catch(() => {}), tellLateAnswers(targets, undefined, bridgeRuns).catch(() => {})]).then(() => {});
+  const catchingUp = () => catchUp().catch(() => {
+    if (signal?.aborted)
+      return;
+    const timer = schedule(() => catchingUp(), CATCH_UP_AGAIN);
+    timer?.unref?.();
+  });
+  const caughtUp = Promise.all([catchingUp(), tellLateAnswers(targets, undefined, bridgeRuns).catch(() => {})]).then(() => {});
   const lateAgain = () => {
     if (signal?.aborted)
       return;
@@ -7376,7 +7405,7 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
         return;
       tell(starter, line, kind === "asks");
       const ask = event.data?.id ?? event.data?.form?.id;
-      noteTold(session.id, kind === "asks" ? { ask: typeof ask === "string" ? ask : undefined } : { reply: await lastReplyID(source, session.id) });
+      noteTold(session.id, kind === "asks" ? { ask: typeof ask === "string" ? ask : undefined } : { reply: await lastReplyID(source, session.id).catch(() => null) });
     })().catch(() => {});
   };
   return Object.assign(watch, { caughtUp });
@@ -12974,8 +13003,8 @@ function backgroundTools(engine, session) {
 }
 function watchBox({ tell = () => true, hold = null, bots = false, notices = !bots, signal, signedIn, learned } = {}) {
   const answered = (id) => hold?.resolve(id);
-  watchEvents(readEngineFile, tell, signal, answered, { bots, notices, signIns: true, hold, signedIn, steers: true, learns: true, learned, queues: true, work: true });
-  watchEvents(readBridgeFile, tell, signal, answered, { bots, notices, queues: true, work: true, goals: true });
+  watchEvents(readEngineFile, tell, signal, answered, { bots, notices, signIns: true, hold, signedIn, steers: true, learns: true, learned, queues: true, work: "engine" });
+  watchEvents(readBridgeFile, tell, signal, answered, { bots, notices, queues: true, work: "bridge", goals: true });
 }
 async function watchEvents(read, tell, signal, answered = () => {}, { bots = false, notices = !bots, signIns = false, hold = null, signedIn = () => {}, steers = false, steerAfter, learns = false, learned = () => {}, queues = false, work = false, goals = false } = {}) {
   let attempt = 0;
@@ -12994,7 +13023,7 @@ async function watchEvents(read, tell, signal, answered = () => {}, { bots = fal
       const source = read();
       const steer = steers ? steering((session) => backgroundTools(source, session).catch(() => {}), { after: steerAfter, signal: connection.signal }) : null;
       const queue = queues ? queueWatcher(source) : null;
-      const followWork = work ? workWatcher(source, peerTargets, { signal: connection.signal }) : null;
+      const followWork = work ? workWatcher(source, peerTargets, { signal: connection.signal, from: work }) : null;
       const goalHeld = goals ? goalHolds(peerTargets) : null;
       const response = await fetch(`http://127.0.0.1:${source.port}/api/event`, {
         headers: { authorization: `Basic ${Buffer.from(`opencode:${source.password}`).toString("base64")}`, accept: "text/event-stream" },

@@ -19,7 +19,7 @@ import { describeForm, describePermission } from "../notices/news";
 import { noteWorkChanged, WORK_FOLDER } from "./changes";
 import { asksIn } from "./answers";
 import { tellLateAnswers } from "./asks";
-import { lastReplyOf, placeWords, startedByOf, wakesOf, workingNow, workSessions, worksFor } from "./tree";
+import { lastReplyOf, placeWords, startedByOf, wakesOf, workSessions, worksFor } from "./tree";
 import { projectNameOf } from "../notices/news";
 import type { Target } from "../../shared/records";
 import type { EngineSession } from "../engine/sessions";
@@ -121,30 +121,49 @@ export function wakeLineShown(lines: string[]): string {
 
 // How often answers given late that couldn't be told yet are tried again.
 const LATE_AGAIN = 300_000;
+// How soon what happened while the box was down is looked at again, when it couldn't be.
+const CATCH_UP_AGAIN = 60_000;
 
 // How long what a conversation would hear waits while it's archived.
 const ARCHIVED_FOR = 7 * 86_400_000;
 
-/** What a starter was told of each of its sessions, and when the box last heard of any. */
+/** What a starter was told of each of its sessions, and when the box last heard of any: from its
+ * engine (`since`), and from each other place they run (`sinces`: the coding agents' bridge), each
+ * its own, as each is found at a time of its own. */
 interface Told {
   since: number;
+  sinces?: Record<string, number>;
   sessions: Record<string, { reply?: string; asks?: string[] }>;
 }
 const readTold = (file: string): Told | null => {
   try {
     const kept = JSON.parse(fs.readFileSync(file, "utf8"));
-    return isObject(kept) && typeof kept.since === "number" ? { since: kept.since, sessions: isObject(kept.sessions) ? kept.sessions as Told["sessions"] : {} } : null;
+    if (!isObject(kept) || typeof kept.since !== "number") return null;
+    const sinces = Object.fromEntries(Object.entries(isObject(kept.sinces) ? kept.sinces : {}).filter(([, at]) => typeof at === "number")) as Record<string, number>;
+    return { since: kept.since, ...(Object.keys(sinces).length ? { sinces } : {}), sessions: isObject(kept.sessions) ? kept.sessions as Told["sessions"] : {} };
   } catch {
     return null;
   }
 };
-const changeTold = (file: string, change: (told: Told) => void) => {
+// Where the box's own engine's sessions are heard of (`WorkWatch.from`), and its other places.
+const ENGINE = "engine";
+const OTHERS = ["bridge"];
+// When the box last heard of `from`'s sessions (a box from before each had its own: the engine's).
+const sinceOf = (told: Told, from: string) => (from === ENGINE ? told.since : told.sinces?.[from] ?? told.since);
+// What was told changed; with `from`, the box has heard of everything of its until now.
+const changeTold = (file: string, change: (told: Told) => void, from: string | null) => {
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     locked(LOCK + "-told", () => {
       const told = readTold(file) ?? { since: Date.now(), sessions: {} };
       change(told);
-      told.since = Math.max(told.since, Date.now());
+      if (from === ENGINE) {
+        // (Each other place keeps the time the engine had, which was theirs too until now.)
+        const theirs = Object.fromEntries(OTHERS.map(other => [other, sinceOf(told, other)]));
+        told.sinces = { ...theirs, ...told.sinces };
+        told.since = Math.max(told.since, Date.now());
+      }
+      else if (from) told.sinces = { ...told.sinces, [from]: Math.max(sinceOf(told, from), Date.now()) };
       // The latest few hundred: older ones have long been told.
       const ids = Object.keys(told.sessions);
       for (const id of ids.slice(0, Math.max(0, ids.length - 400))) delete told.sessions[id];
@@ -153,9 +172,9 @@ const changeTold = (file: string, change: (told: Told) => void) => {
   } catch {}
 };
 
-// The id of a session's last reply, or null for none.
+// The id of a session's last reply, or null for none; it throws when it can't be read.
 async function lastReplyID(target: Target, session: string): Promise<string | null> {
-  const page = await call(target, "GET", `/api/session/${encodeURIComponent(session)}/message?limit=6&order=desc`).catch(() => null);
+  const page = await call(target, "GET", `/api/session/${encodeURIComponent(session)}/message?limit=6&order=desc`);
   for (const message of Array.isArray(page) ? page : []) if (isObject(message) && message.type === "assistant" && typeof message.id === "string") return message.id;
   return null;
 }
@@ -171,12 +190,15 @@ export interface WorkWatch {
   file?: string;
   /** Whether the coding agents' bridge runs now (a conversation the engine doesn't know may be its). */
   bridgeRuns?: () => boolean;
+  /** Which of the box's places `source` is: its engine (the default), or `bridge`, the coding
+   * agents' (each found at a time of its own, so each caught up from when it was last heard). */
+  from?: string;
 }
 
 /** Follows `source`'s events for the work of bots and of any conversation that started sessions:
  * each one that ends or asks, told to whoever started it (as its `kuvo.wake` says), close ones as
  * one message; each, a change to its bot's work. `targets()`: where conversations here run. */
-export function workWatcher(source: Target, targets: () => Target[], { gather = GATHER, schedule = setTimeout, file = WORK_WAKES, toldFile = WORK_TOLD, bridgeRuns = () => peerPlaces().bridge, signal }: WorkWatch = {}): ((event: WorkEvent) => Promise<void>) & { caughtUp: Promise<void> } {
+export function workWatcher(source: Target, targets: () => Target[], { gather = GATHER, schedule = setTimeout, file = WORK_WAKES, toldFile = WORK_TOLD, bridgeRuns = () => peerPlaces().bridge, signal, from = ENGINE }: WorkWatch = {}): ((event: WorkEvent) => Promise<void>) & { caughtUp: Promise<void> } {
   const due = new Set<string>();
   // How many tries in a row each has failed, for the wait before the next.
   const failures = new Map<string, number>();
@@ -237,6 +259,9 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
     });
     soon(starter);
   };
+  // Whether what happened while the box was down has been looked at: until then, what it hears
+  // doesn't move when it last heard of everything (a box stopped meanwhile looks from then again).
+  let caught = false;
   const noteTold = (session: string, note: { reply?: string | null; ask?: string }) => changeTold(toldFile, told => {
     const now = told.sessions[session] ?? {};
     if (note.reply) now.reply = note.reply;
@@ -244,20 +269,30 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
     // Last, as the latest told of: the oldest are let go first.
     delete told.sessions[session];
     told.sessions[session] = now;
-  });
-  // What happened while the box was down (its link starting again): each followed session that
-  // finished, failed or asked since it last heard of any, and hasn't been told, told now.
+  }, caught ? from : null);
+  // What happened while the box was down (its link starting again), or while `source` couldn't be
+  // heard: each followed session that finished, failed or asked since it last heard of any, and
+  // hasn't been told, told now. Only once it could look at them all: until then (`source` slow, or
+  // not there yet), looked at again a minute on, from the same time.
+  const before = readTold(toldFile);
   const catchUp = async () => {
-    const told = readTold(toldFile);
-    if (!told) return changeTold(toldFile, () => {});
-    const followed = (await workSessions([source])).filter(each => startedByOf(each.data) && wakesOf(each.data).length && (each.data.time?.updated ?? 0) > told.since);
-    const working = await workingNow([source]);
+    if (!before) {
+      caught = true;
+      return changeTold(toldFile, () => {}, from);
+    }
+    const since = sinceOf(before, from);
+    const listed = await workSessions([source], signal, { whole: true });
+    const active = await call(source, "GET", "/api/session/active", undefined, signal);
+    if (signal?.aborted) return;
+    const working = new Set(Array.isArray(active) ? active : isObject(active) ? Object.keys(active) : []);
+    const followed = listed.filter(each => startedByOf(each.data) && wakesOf(each.data).length && (each.data.time?.updated ?? 0) > since);
     for (const { data } of followed) {
       const starter = startedByOf(data)!;
       const wakes = wakesOf(data);
-      const was = told.sessions[data.id] ?? {};
+      // (As told by now: one heard of meanwhile isn't told twice.)
+      const was = readTold(toldFile)?.sessions[data.id] ?? {};
       if (wakes.includes("asks")) {
-        const { permissions, questions } = await asksIn(source, data.id).catch(() => ({ permissions: [], questions: [] }));
+        const { permissions, questions } = await asksIn(source, data.id);
         for (const permission of permissions.filter(each => !was.asks?.includes(each.id))) {
           const line = await wakeLine({ type: "permission.asked", data: { id: permission.id, sessionID: data.id, action: permission.action, resources: permission.resources } as WorkEvent["data"] }, data, source);
           if (line) tell(starter, line, true);
@@ -283,9 +318,15 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
         noteTold(data.id, { reply });
       }
     }
-    changeTold(toldFile, () => {});
+    caught = true;
+    changeTold(toldFile, () => {}, from);
   };
-  const caughtUp = Promise.all([catchUp().catch(() => {}), tellLateAnswers(targets, undefined, bridgeRuns).catch(() => {})]).then(() => {});
+  const catchingUp = (): Promise<void> => catchUp().catch(() => {
+    if (signal?.aborted) return;
+    const timer = schedule(() => catchingUp(), CATCH_UP_AGAIN);
+    (timer as { unref?: () => void } | undefined)?.unref?.();
+  });
+  const caughtUp = Promise.all([catchingUp(), tellLateAnswers(targets, undefined, bridgeRuns).catch(() => {})]).then(() => {});
   // Answers given late that waited (the coding agents' bridge not running), tried again every few
   // minutes while the box runs.
   const lateAgain = () => {
@@ -317,7 +358,7 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
       if (!line) return;
       tell(starter, line, kind === "asks");
       const ask = event.data?.id ?? event.data?.form?.id;
-      noteTold(session.id, kind === "asks" ? { ask: typeof ask === "string" ? ask : undefined } : { reply: await lastReplyID(source, session.id) });
+      noteTold(session.id, kind === "asks" ? { ask: typeof ask === "string" ? ask : undefined } : { reply: await lastReplyID(source, session.id).catch(() => null) });
     })().catch(() => {});
   };
   return Object.assign(watch, { caughtUp });
