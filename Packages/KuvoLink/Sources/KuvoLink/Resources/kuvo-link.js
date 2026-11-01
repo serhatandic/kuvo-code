@@ -5097,7 +5097,7 @@ function appTemporary() {
 }
 function sandboxCaches() {
   const tmp = appTemporary();
-  const root = realish(tmp ? path25.join(accountHome(), "Library", "Caches", path25.basename(tmp)) : path25.join(K, "cache"));
+  const root = realish(tmp ? path25.join(homeFolder(), "Library", "Caches", path25.basename(tmp)) : path25.join(K, "cache"));
   return { npm: path25.join(root, "sandbox-npm"), pnpm: path25.join(root, "sandbox-pnpm"), uv: path25.join(root, "sandbox-uv"), corepack: path25.join(root, "sandbox-corepack") };
 }
 function macFolders(home) {
@@ -5114,7 +5114,7 @@ function macFolders(home) {
     `/private/tmp/kuvo-ssh-${os4.userInfo().uid}`
   ];
   if (tmp)
-    kuvo.push(tmp);
+    kuvo.push(tmp, path25.dirname(sandboxCaches().npm));
   return { kuvo, readable: [path25.join(app, "bin")] };
 }
 function fencePolicy(ports = []) {

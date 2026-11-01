@@ -32,7 +32,9 @@ const linux = process.platform === "linux";
 // machine's own `~/.kuvo-code`, which a test's box hides from its commands as Kuvo Code's own, so
 // they run a link to it in this file's folder.
 const ownRuntime = (() => {
-  const kuvo = path.join(os.homedir(), ".kuvo-code") + "/";
+  let kuvo = path.join(os.homedir(), ".kuvo-code");
+  try { kuvo = fs.realpathSync(kuvo); } catch {}
+  kuvo += "/";
   if (!fs.realpathSync(process.execPath).startsWith(kuvo)) return process.execPath;
   const linked = path.join(root, "runtime");
   try { fs.linkSync(fs.realpathSync(process.execPath), linked); } catch { fs.copyFileSync(process.execPath, linked); fs.chmodSync(linked, 0o755); }
@@ -1120,6 +1122,27 @@ test("commands get caches of Kuvo Code's own for pnpm, uv and corepack, which th
     await running.stop();
     for (const parts of yourToolCaches) fs.rmSync(path.join(realHome, ...parts, mark), { recursive: true, force: true });
     for (const folder of made.reverse()) try { fs.rmdirSync(folder); } catch {}
+  }
+});
+
+test("this Mac's box keeps the caches for commands in its app's cache folder, in the home it's given, and none in your account's when that's another", { skip: linux && "this Mac's box only" }, async () => {
+  // (Its app's: the box's temporary folder in the app's, as the app gives it, `…/T/<bundle>/box`;
+  // its cache folder `Library/Caches/<bundle>`. This test's HOME isn't your account's.)
+  const bundle = `caches-mac-${process.pid}`;
+  const box = boxAt(bundle, true);
+  const project = path.join(root, "mac-caches-project");
+  fs.mkdirSync(project);
+  const temporary = path.join(root, "T", bundle, "box");
+  fs.mkdirSync(temporary, { recursive: true });
+  const running = await start(box, { TMPDIR: temporary + "/" });
+  try {
+    assert.equal((await running.ask("GET", "kuvo/sandbox")).value.able, true);
+    const ran = await engineRuns(box, project, `printf '%s\\n' "\${npm_config_cache-unset}"`);
+    assert.equal(ran.out.split("\n")[0], path.join(root, "Library", "Caches", bundle, "sandbox-npm"), ran.out);
+    assert.equal(fs.existsSync(path.join(realHome, "Library", "Caches", bundle)), false, "nothing in your account's own Library");
+  } finally {
+    await running.stop();
+    fs.rmSync(path.join(realHome, "Library", "Caches", bundle), { recursive: true, force: true });
   }
 });
 

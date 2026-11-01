@@ -13,7 +13,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { accountHome, IS_MAC, K } from "../home";
+import { accountHome, homeFolder, IS_MAC, K } from "../home";
 
 export interface FencePolicy {
   /** The home folder whose secrets are hidden. */
@@ -133,13 +133,13 @@ export function appTemporary(): string | null {
 /**
  * The caches of npm, pnpm and uv for commands in the sandbox, Kuvo Code's own: npx, `pnpm dlx` and
  * uvx fetch a package there and run it from it, so nothing they fetch runs outside the sandbox, as
- * it would from yours (which commands only read). In this Mac's app's cache folder, on its box; in
- * `cache` elsewhere (a machine's `~/.kuvo-code`). Never the engine's own (`cache/npm`), which runs
- * outside it.
+ * it would from yours (which commands only read). In this Mac's app's cache folder, on its box (in
+ * the home the box is given: a test's box keeps them in its own); in `cache` elsewhere (a machine's
+ * `~/.kuvo-code`). Never the engine's own (`cache/npm`), which runs outside it.
  */
 export function sandboxCaches(): { npm: string; pnpm: string; uv: string; corepack: string } {
   const tmp = appTemporary();
-  const root = realish(tmp ? path.join(accountHome(), "Library", "Caches", path.basename(tmp)) : path.join(K, "cache"));
+  const root = realish(tmp ? path.join(homeFolder(), "Library", "Caches", path.basename(tmp)) : path.join(K, "cache"));
   return { npm: path.join(root, "sandbox-npm"), pnpm: path.join(root, "sandbox-pnpm"), uv: path.join(root, "sandbox-uv"), corepack: path.join(root, "sandbox-corepack") };
 }
 
@@ -152,7 +152,8 @@ function macFolders(home: string): { kuvo: string[]; readable: string[] } {
   const kuvo = [app, path.join(home, "Library", "Caches", bundle), path.join(home, "Library", "Logs", "Kuvo Code"),
     path.join(home, "Library", "WebKit", bundle), path.join(home, "Library", "HTTPStorages", bundle),
     path.join(home, "Library", "Preferences", `${bundle}.plist`), `/private/tmp/kuvo-ssh-${os.userInfo().uid}`];
-  if (tmp) kuvo.push(tmp);
+  // (And its cache folder where the caches for commands are, in the home it's given.)
+  if (tmp) kuvo.push(tmp, path.dirname(sandboxCaches().npm));
   return { kuvo, readable: [path.join(app, "bin")] };
 }
 
