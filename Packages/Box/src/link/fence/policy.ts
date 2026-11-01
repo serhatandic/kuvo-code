@@ -56,8 +56,10 @@ const CACHES = [".npm", ".bun", ".cache", ".cargo", ".rustup", ".swiftpm", ".gra
 const MAC_CACHES = ["Library/pnpm/store", "Library/Caches", "Library/Developer"];
 const LINUX_CACHES = [".local/share/pnpm/store"];
 // In them, what you run later, outside the sandbox: installed programs (on your PATH), tools'
-// settings that name programs, scripts they run as they start, packages npx runs as they are.
-const RUNS_LATER = [".cargo/bin", ".cargo/config", ".cargo/config.toml", ".bun/bin", ".bun/install/global", ".deno/bin",
+// settings that name programs, scripts they run as they start, packages npx runs as they are, and
+// what your shell profile sources as it starts (rustup's, deno's and bun's installers add those).
+const RUNS_LATER = [".cargo/bin", ".cargo/config", ".cargo/config.toml", ".cargo/env", ".cargo/env.fish", ".cargo/env.nu",
+  ".bun/bin", ".bun/install/global", ".bun/_bun", ".deno/bin", ".deno/env", ".deno/env.fish",
   ".dotnet/tools", ".gradle/init.d", ".gradle/init.gradle", ".gradle/init.gradle.kts", ".gradle/gradle.properties",
   ".m2/settings.xml", ".npm/_npx", ".rustup/settings.toml", ".rustup/toolchains", ".pub-cache/bin", "go/bin"];
 // In your cache folder (`~/.cache`, and your own `XDG_CACHE_HOME`), tools' caches whole: pre-commit's

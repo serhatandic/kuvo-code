@@ -2995,7 +2995,8 @@ whose conversation it is; for its seat in a group chat, the bot the agents bridg
 and written in place, never made, moved or removed; a coding agent's conversation named to the
 launcher as the engine names its own, `OPENCODE_SESSION_ID`), the system's temporary folders, devices and tools'
 caches, but not what in them runs later outside the sandbox (installed programs like
-`~/.cargo/bin` and `~/.bun/bin`, tools' settings and start-up scripts, npx's packages, the caches of
+`~/.cargo/bin` and `~/.bun/bin`, tools' settings and start-up scripts, what your shell profile
+sources from them (`~/.cargo/env`, `~/.deno/env`, `~/.bun/_bun`), npx's packages, the caches of
 pre-commit, pnpm, uv and corepack in `~/.cache` and your own `XDG_CACHE_HOME`, pnpm's in
 `~/Library/Caches`, and on macOS bunx's packages in your temporary folder; on macOS no folder that
 holds those, your secrets or Kuvo Code's own is moved, removed or cloned whole, which would leave
@@ -3091,7 +3092,8 @@ wherever it moved. A command's folder is where it really was as the engine opene
 move, as the move was checked): one traded since for a link (by another conversation's command, in a
 folder it writes) runs no command (exit `126`). (A link swapped in between the plugin's look and a
 file tool's own isn't caught: only the engine could, as it opens the file. Nor is a folder traded
-before the engine first opens it, after a restart.) The box first runs a command through it and checks that it can't read or write what's hidden; only then
+before the engine opens it again: after a restart, or once the engine has let it go after an idle
+hour; nor one a coding agent starts in, which the agents bridge takes as it is then.) The box first runs a command through it and checks that it can't read or write what's hidden; only then
 does it give the engine the plugin, and it takes it away (with what the engine noted of it, so
 it's `on` again only once the engine has loaded it again) when a check fails, so commands run as
 before rather than not at all. (Kuvo Code's own kill switch, for a rollout, does the same: the box

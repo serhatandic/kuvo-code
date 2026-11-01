@@ -99,7 +99,7 @@ export function launcherScript(places: FencePlaces): string {
     // Where the folder really was as the engine opened it (its plugin names it): a folder traded
     // since for a link to somewhere else (by another conversation's command, in a folder it writes)
     // isn't worked in there.
-    `case $work_at in ''|"$work") ;; *) echo "This command can't run: its conversation's folder has been replaced since it was opened. Ask the user to open it again." >&2; exit 126 ;; esac`,
+    `case $work_at in ''|"$work") ;; *) echo "This command can't run: its conversation's folder now leads somewhere else than when it was opened (it was replaced by a link). Ask the user." >&2; exit 126 ;; esac`,
     `case $git in /*) git=$(cd "$git" 2>/dev/null && pwd -P) || git=$work ;; *) git=$work ;; esac`,
     "profile=project",
     `case $work in ${insideCases}) profile=inside ;; esac`,
@@ -224,6 +224,7 @@ export function pluginScript(places: FencePlaces, version: string): string {
 // Each command the engine runs (the agent's, and yours with !) goes through Kuvo Code's sandbox:
 // its shell in bin/kuvo-fence, which may write only in this conversation's folder and its git
 // repository, and can't read Kuvo Code's own folders or your secrets.
+import { execFileSync } from "node:child_process"
 import crypto from "node:crypto"
 import fs from "node:fs"
 import os from "node:os"
@@ -234,6 +235,11 @@ const KEY = ${JSON.stringify(places.key)}
 const LAUNCHER = ${JSON.stringify(places.launcher)}
 const VERSION = ${JSON.stringify(version)}
 const MOVES = path.join(FOLDER, "moves.json")
+// Written whole, then put in place, so no engine reads half of it.
+function noteMoves(moves) {
+  const made = MOVES + "." + process.pid
+  try { fs.writeFileSync(made, JSON.stringify(Object.fromEntries(Object.entries(moves).slice(-200)))); fs.renameSync(made, MOVES) } catch { try { fs.rmSync(made, { force: true }) } catch {} }
+}
 
 // The folder's git repository, which its commands may write too: its .git folder, or for a
 // worktree the repository's own (where its commits go), found from the engine's folder upwards.
@@ -288,6 +294,11 @@ function located(where) {
     rest = [...link.split("/").filter(Boolean), ...rest]
   }
   return at
+}
+// Where a folder really is as the launcher finds it (the shell's pwd -P, which keeps the letters
+// it's given: their case, and how an accent is written), or "" if it isn't there.
+function opened(folder) {
+  try { return execFileSync("/bin/sh", ["-c", 'cd "$1" && pwd -P', "sh", folder], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).replace(/\\n$/, "") } catch { return "" }
 }
 const within = (where, folder) => !!folder && (where === folder || where.startsWith(folder + path.sep))
 // A path as the engine takes it: ~ is your home folder, anything else from the folder given.
@@ -345,12 +356,13 @@ export default {
     let movedTo = ""
     try {
       const moves = JSON.parse(fs.readFileSync(MOVES, "utf8"))
-      if (typeof moves[work] === "string") { movedTo = moves[work]; delete moves[work]; fs.writeFileSync(MOVES, JSON.stringify(moves)) }
+      if (typeof moves[work] === "string") { movedTo = moves[work]; delete moves[work]; noteMoves(moves) }
     } catch {}
+    const openedAt = work ? opened(work) : ""
     await ctx.shell.hook("create.before", (input) => {
       input.env.KUVO_FENCE_SHELL = input.shell
       input.env.KUVO_FENCE_WORK = work
-      input.env.KUVO_FENCE_WORK_AT = movedTo || folder
+      input.env.KUVO_FENCE_WORK_AT = movedTo || openedAt
       input.env.KUVO_FENCE_GIT = git
       input.env.KUVO_FENCE_RUNTIME = process.execPath
       input.shell = LAUNCHER
@@ -382,7 +394,10 @@ export default {
           if (!head) return line
           const given = read.slice(head.length).trim()
           const where = really(given)
-          return where === given ? line : head + where
+          if (where === given) return line
+          // (Never a place whose name would make lines of its own.)
+          if (/[\\r\\n\\u2028\\u2029]/.test(where)) throw new Error("This patch names a file through a link out of the conversation's folder to a place this can't name. Ask the user.")
+          return head + where
         }).join("\\n")
         if (patchText !== input.patchText) call.input = { ...input, patchText }
       } else if (call.tool === "session_move" || call.tool === "opencode_session_move") {
@@ -398,9 +413,10 @@ export default {
         // commands don't run there once the folder is traded for a link meanwhile.
         let moves = {}
         try { moves = JSON.parse(fs.readFileSync(MOVES, "utf8")) } catch {}
-        delete moves[resolved(work, input.directory.trim())]
-        moves[resolved(work, input.directory.trim())] = to
-        try { fs.writeFileSync(MOVES, JSON.stringify(Object.fromEntries(Object.entries(moves).slice(-200)))) } catch {}
+        const named = resolved(work, input.directory.trim())
+        delete moves[named]
+        moves[named] = opened(named)
+        noteMoves(moves)
       }
     })
   },

@@ -786,11 +786,45 @@ test("a conversation's folder traded for a link by another's command isn't worke
     assert.equal((await engineCalls(box, project, "opencode_session_move", { directory: "moved" })).refused, undefined);
     const traded = await engineRuns(box, project, `mv inner inner.old && ln -s ${JSON.stringify(elsewhere)} inner && mv moved moved.old && ln -s ${JSON.stringify(elsewhere)} moved`);
     assert.equal(traded.status, 0, traded.out);
+    // Refused as the launcher refuses it: no command runs there at all.
+    const said = run => run.status === 126 && /now leads somewhere else/.test(run.out) ? "refused" : `ran (${run.status}): ${run.out}`;
     const tries = {};
-    tries["the one in it already"] = opened(`echo planted > ${JSON.stringify(path.join(elsewhere, "planted"))}`).status === 0 ? "allowed" : "refused";
-    tries["the one moved there"] = (await engineRuns(box, moved, `echo planted > ${JSON.stringify(path.join(elsewhere, "planted"))}`)).status === 0 ? "allowed" : "refused";
+    tries["the one in it already"] = said(opened(`echo planted > ${JSON.stringify(path.join(elsewhere, "planted"))}`));
+    tries["the one moved there"] = said(await engineRuns(box, moved, `echo planted > ${JSON.stringify(path.join(elsewhere, "planted"))}`));
     assert.deepEqual(tries, { "the one in it already": "refused", "the one moved there": "refused" });
     assert.equal(fs.existsSync(path.join(elsewhere, "planted")), false);
+  } finally {
+    await running.stop();
+  }
+});
+
+test("a project named in another case or Unicode form than its folder's on disk still runs its commands", { skip: linux && "Linux's folders are named one way only" }, async () => {
+  const box = boxAt("folder-named-otherwise");
+  // On disk: "Case Project" and "café" (é one letter); given: "case project" and "café" (e, then its accent).
+  const folders = [[path.join(root, "Case Project"), path.join(root, "case project")], [path.join(root, "caf\u00e9"), path.join(root, "cafe\u0301")]];
+  for (const [disk] of folders) fs.mkdirSync(disk);
+  // The engine's plugin as the engine runs it, on Bun: the shell and environment it gives a command.
+  const opens = path.join(root, "opens.mjs");
+  fs.writeFileSync(opens, `const plugin = (await import(process.argv[2])).default
+let hook
+await plugin.setup({ location: { directory: process.argv[3] }, shell: { hook: async (name, take) => { hook = take } }, tool: { hook: async () => {} } })
+const input = { command: "", cwd: process.argv[3], shell: "/bin/sh", env: {} }
+hook(input)
+console.log(JSON.stringify({ shell: input.shell, env: input.env }))
+`);
+  const bun = testBun();
+  assert.ok(bun, NO_BUN);
+  const running = await start(box);
+  try {
+    assert.equal((await running.ask("GET", "kuvo/sandbox")).value.able, true);
+    for (const [disk, given] of folders) {
+      const opened = spawnSync(bun, [opens, pathToFileURL(box.plugin).href, given], { encoding: "utf8", env: { ...process.env, BUN_BE_BUN: "1" } });
+      assert.equal(opened.status, 0, opened.stderr);
+      const { shell, env } = JSON.parse(opened.stdout);
+      const ran = spawnSync(shell, ["-c", "echo ran > ran.txt"], { cwd: given, env: { PATH: process.env.PATH, HOME: root, ...env }, encoding: "utf8" });
+      assert.equal(ran.status, 0, `${given}: ${ran.stdout}${ran.stderr}`);
+      assert.equal(fs.readFileSync(path.join(disk, "ran.txt"), "utf8"), "ran\n");
+    }
   } finally {
     await running.stop();
   }
