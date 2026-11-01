@@ -133,20 +133,21 @@ function sandboxAsk(box, session, args) {
 }
 
 // What's asked now, once something is: from the asks' stream, which says what's asked each time it
-// changes. (`call`: the call that should ask, which mustn't answer first.)
-async function asked(box, call) {
+// changes. (`call`: the call that should ask, which mustn't answer first.) `stops`: on a Mac, once
+// it says what the sandbox stopped, which macOS's log has a while after (on a busy Mac, seconds).
+async function asked(box, call, stops = false) {
   const stop = new AbortController();
   let done = false;
   const first = (what) => { if (!done) assert.fail(`answered without asking: ${what}`); };
   const answered = call.then(result => first(JSON.stringify(result.value ?? result)), error => first(String(error)));
   try {
-    return await Promise.race([answered, streamed(box, stop.signal)]);
+    return await Promise.race([answered, streamed(box, stop.signal, asks => !stops || linux || asks.some(each => each.stopped?.length))]);
   } finally {
     done = true;
     stop.abort();
   }
 }
-async function streamed(box, signal) {
+async function streamed(box, signal, ready = () => true) {
   const response = await fetch(`${box.url}/kuvo/sandbox/asks/events`, { headers: box.headers, signal });
   let buffered = "";
   try {
@@ -156,7 +157,7 @@ async function streamed(box, signal) {
       while ((at = buffered.indexOf("\n")) >= 0) {
         const { asks } = JSON.parse(buffered.slice(0, at));
         buffered = buffered.slice(at + 1);
-        if (asks.length) return asks;
+        if (asks.length && ready(asks)) return asks;
       }
     }
   } catch (error) {
@@ -229,7 +230,7 @@ test("a command the sandbox stopped runs outside it once you allow it once; the 
   assert.equal(fs.existsSync(target), false);
 
   const call = sandboxAsk(box, "ses_shop", { command, why: "To record the release outside the project.", error: inSandbox.out.trim() });
-  const [ask] = await asked(box, call);
+  const [ask] = await asked(box, call, true);
   assert.equal(ask.command, command);
   assert.equal(ask.why, "To record the release outside the project.");
   assert.equal(ask.sessionName, "Fix checkout");
@@ -292,7 +293,7 @@ test("a command is never let out of the sandbox for good: Always is only the fol
   const write = `echo line >> ${JSON.stringify(path.join(logs, "build.log"))}`;
   assert.notEqual((await engineRuns(shop, write, "ses_shop2")).status, 0, "the sandbox stops it");
   const wrote = sandboxAsk(box, "ses_shop2", { command: write, why: "To keep the build's log." });
-  const [writeAsk] = await asked(box, wrote);
+  const [writeAsk] = await asked(box, wrote, true);
   assert.deepEqual(writeAsk.always, { kind: "write", path: logs });
   assert.equal((await box.ask("POST", `kuvo/sandbox/asks/${writeAsk.id}`, { answer: "always" })).status, 200);
   assert.match((await wrote).value.text, /^Ran outside the sandbox · Always for this: from now on your commands can write in /);
@@ -310,7 +311,7 @@ test("a command is never let out of the sandbox for good: Always is only the fol
   const settings = `echo '{}' > ${JSON.stringify(path.join(shop, ".mcp.json"))}`;
   assert.notEqual((await engineRuns(shop, settings, "ses_shop2")).status, 0, "the sandbox stops it");
   const set = sandboxAsk(box, "ses_shop2", { command: settings, why: "To add a server." });
-  const [setAsk] = await asked(box, set);
+  const [setAsk] = await asked(box, set, true);
   assert.deepEqual(setAsk.stopped, [{ kind: "write", path: path.join(shop, ".mcp.json") }]);
   assert.equal(setAsk.always, undefined);
   await box.ask("POST", `kuvo/sandbox/asks/${setAsk.id}`, { answer: "no" });
@@ -386,7 +387,7 @@ test("a project's worktree writes in the folders Also Allowed gives the project,
   const command = write("always.txt");
   assert.notEqual((await engineRuns(branch, command, "ses_branch")).status, 0, "stopped again");
   const call = sandboxAsk(box, "ses_branch", { command, why: "To fill the shared cache." });
-  const [ask] = await asked(box, call);
+  const [ask] = await asked(box, call, true);
   assert.deepEqual(ask.always, { kind: "write", path: shared });
   assert.equal((await box.ask("POST", `kuvo/sandbox/asks/${ask.id}`, { answer: "always" })).status, 200);
   assert.match((await call).value.text, /^Ran outside the sandbox · Always for this/);

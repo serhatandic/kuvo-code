@@ -3293,7 +3293,9 @@ vault does (`run/vault.sock`); another passes them on.
   project, command, why, stopped?, error?, always?, machine?, owner?}`. `session` is the conversation's root
   (a bot's sub-agent asks as its bot's conversation). `stopped`, on macOS: what the sandbox refused
   that command, from the system's log, each `{kind, path?}` (`kind`: `write`, `read`, `connect`,
-  `job`, `app` or `other`; `path`, the file, folder or address). `always`: what Always for This would
+  `job`, `app` or `other`; `path`, the file, folder or address). macOS logs it a while after (on a
+  busy Mac, seconds), so an ask can go up without it and get it, with `always`, in a later line of
+  the events (the box reads the log again for half a minute); a client shows the ask as it is now. `always`: what Always for This would
   keep besides running it, `{kind: "write", path}`, the one place the sandbox stopped it writing,
   when that's all it stopped and it's one that may be given (below); without it, the command can
   only be allowed once. A command itself is never let out for good: what it runs (its scripts, its

@@ -65,6 +65,8 @@ const MOST_OUTPUT = 64 * 1024;
 // What a call may take, the asking included: a little under the tool servers' 16 minutes.
 const CALL_BUDGET = 15.5 * 60_000;
 const MOST_STOPS = 20;
+// When to read macOS's log again for what the sandbox refused, while it isn't there yet (ms).
+const LOG_LATER = [1000, 2000, 4000, 8000, 15_000, 30_000];
 
 const KINDS: [RegExp, SandboxStop["kind"]][] = [
   [/^file-write/, "write"], [/^file-read/, "read"], [/^network-/, "connect"], [/^job-creation/, "job"],
@@ -161,7 +163,22 @@ async function askToRun(caller: Caller, args: Record<string, unknown>, signal?: 
 
   // (By the command as it ran, whitespace and all.)
   const stopped = caller.session ? await stopsFor(caller.session, String(args.command)) : [];
-  const always = alwaysFor(stopped, project);
+  let always = alwaysFor(stopped, project);
+  // macOS writes what its sandbox refused to its log a while after (a busy Mac, seconds): until
+  // it's there, the ask goes up without it, and gets it once it is.
+  let asking: string | undefined;
+  let open = true;
+  const later = stopped.length || !caller.session || process.platform !== "darwin" ? undefined : (async () => {
+    for (const wait of LOG_LATER) {
+      await new Promise(resolve => setTimeout(resolve, wait).unref?.());
+      if (!open) return;
+      const found = await stopsFor(caller.session!, String(args.command));
+      if (!open || !found.length) continue;
+      always = alwaysFor(found, project);
+      if (asking) book.update(asking, { stopped: found, ...(always ? { always } : {}) });
+      return;
+    }
+  })();
   const answered = await book.ask({
     ...(caller.root ? { session: caller.root, ...(caller.sessionName ? { sessionName: caller.sessionName } : {}) } : {}),
     ...(caller.bot ? { bot: caller.bot, botName: caller.botName } : {}),
@@ -173,7 +190,9 @@ async function askToRun(caller: Caller, args: Record<string, unknown>, signal?: 
     ...(always ? { always } : {}),
     ...(IS_MAC ? {} : { machine: os.hostname() }),
     owner: ownerOf(project),
-  }, signal);
+  }, signal, undefined, id => { asking = id; });
+  open = false;
+  void later;
   if (answered.unanswered) return { text: "Nobody answered in time, so it didn't run. Don't get around the sandbox another way: go on without it, or ask the user when they're back.", isError: false };
   if (answered.answer === "no") return { text: "The user said no: don't run it, nor get around the sandbox another way. Find another way to do the task, or ask them why.", isError: false };
   let how: "once" | "always" = "once";
