@@ -28,6 +28,7 @@ struct ConnectView: View {
 
     @Environment(AppModel.self) private var app
     @Environment(Catalog.self) private var catalog
+    @Environment(\.openURL) private var openURL
 
     private enum Step: Equatable {
         case choose
@@ -228,16 +229,18 @@ struct ConnectView: View {
                     .onSubmit { connectKey(method) }
                     .onChange(of: key) { keyError = nil }
                     .accessibilityLabel("API key")
-                    .accessibilityHint(keyPage?.line ?? "")
                 // A key that comes with a subscription says so, so it doesn't read as pay-as-you-go.
-                // The field's hint already reads the line, so VoiceOver gets only the link here.
+                // VoiceOver reads it once, as one element that opens the link.
                 if let keyPage {
-                    Text(Self.keyLine(keyPage))
+                    Text(keyPage.linkedLine)
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-                        .accessibilityRepresentation {
-                            if let url = keyPage.url { Link(keyPage.linkTitle, destination: url) }
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(keyPage.spokenLine)
+                        .accessibilityAddTraits(keyPage.url == nil ? [] : .isLink)
+                        .accessibilityAction {
+                            if let url = keyPage.url { openURL(url) }
                         }
                 }
             }
@@ -260,14 +263,6 @@ struct ConnectView: View {
             .controlSize(.large)
         }
         .animation(.ui, value: keyError)
-    }
-
-    /// Where the key comes from, and a link to the page that has it.
-    private static func keyLine(_ page: KeyPage) -> AttributedString {
-        guard let url = page.url else { return AttributedString(page.line) }
-        var link = AttributedString(page.linkTitle)
-        link.link = url
-        return AttributedString(page.line + " ") + link
     }
 
     private var keyPage: KeyPage? {

@@ -27,6 +27,18 @@ public struct KeyPage: Equatable, Sendable {
     /// The link after the line.
     public var linkTitle: String { opensDocs ? "How to Get It" : "Get Your Key" }
 
+    /// The line as the key's field shows it, with the link at its end when there is one.
+    public var linkedLine: AttributedString {
+        guard let url else { return AttributedString(line) }
+        var link = AttributedString(linkTitle)
+        link.link = url
+        return AttributedString(line + " ") + link
+    }
+
+    /// What VoiceOver reads for the line, as one element that opens the link: the line, and the
+    /// link's title when there is one.
+    public var spokenLine: String { url == nil ? line : "\(line) \(linkTitle)" }
+
     /// The page for an engine's provider, given the name the engine lists it by and the docs its
     /// catalog links, if any; nil for a provider whose key is an ordinary one. A plan the table
     /// doesn't know links its docs.

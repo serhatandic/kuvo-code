@@ -70,6 +70,22 @@ import ClientAccounts
         #expect(odd?.line == "Your Acme Coding Plan subscription's key.")
     }
 
+    @Test func theLineShowsAndReadsItsLinkOnlyWhenThereIsOne() throws {
+        let zai = try #require(KeyPage.page(for: "zai-coding-plan", name: "Z.AI Coding Plan"))
+        let shown = zai.linkedLine
+        #expect(String(shown.characters) == "Your GLM Coding Plan subscription's key, from your Z.ai account. Get Your Key")
+        let linked = shown.runs.compactMap { run in run.link.map { (String(shown[run.range].characters), $0) } }
+        #expect(linked.map(\.0) == ["Get Your Key"])
+        #expect(linked.map(\.1) == [zai.url])
+        #expect(zai.spokenLine == "Your GLM Coding Plan subscription's key, from your Z.ai account. Get Your Key")
+
+        // No link: VoiceOver still reads the line, and nothing in it is a link.
+        let bare = try #require(KeyPage.page(for: "acme-coding-plan", name: "Acme Coding Plan"))
+        #expect(String(bare.linkedLine.characters) == "Your Acme Coding Plan subscription's key.")
+        #expect(bare.linkedLine.runs.allSatisfy { $0.link == nil })
+        #expect(bare.spokenLine == "Your Acme Coding Plan subscription's key.")
+    }
+
     @Test func aKnownPageWinsOverTheCatalogsDocs() {
         let page = KeyPage.page(for: "zai-coding-plan", name: "Z.AI Coding Plan", docs: URL(string: "https://docs.z.ai/devpack/overview"))
         #expect(page?.url?.absoluteString == "https://z.ai/manage-apikey/apikey-list")
