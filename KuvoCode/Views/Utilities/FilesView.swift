@@ -61,6 +61,10 @@ struct FilesView: View {
             }
         }
         .onGeometryChange(for: CGFloat.self, of: \.size.width) { width = $0 }
+        // In a narrow panel the file takes it all: the tree folds away once a file opens, or the
+        // panel narrows, and comes back from the toolbar.
+        .onChange(of: file) { if file != nil, isNarrow { showsTree = false } }
+        .onChange(of: isNarrow) { if isNarrow, file != nil { showsTree = false } }
         .task(id: reveal) {
             guard let reveal else { return }
             // In this project's tree, the tree shows beside the file.
@@ -68,6 +72,9 @@ struct FilesView: View {
             revealed()
         }
     }
+
+    /// Too narrow for the tree beside a file without squeezing its lines.
+    private var isNarrow: Bool { width < 520 }
 
     /// Beside a file, the tree takes up to 260 points, less in a narrow panel, so the file
     /// keeps most of the room.
