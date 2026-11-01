@@ -16,6 +16,20 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- The model menu says "Free" once in a provider's title when all its models are free, instead of on every row, and leaves out a model's mark where it's the provider's own.
+- A goal's plan lines its lanes up when only some have a site, shows only the note of each lane once the plan is met, and labels its days without crowding Today.
+- Find in a conversation no longer covers the first message, and quoting several passages says how many; a quote's answer field opens when you click it, not on every quote at once.
+- The composer's attachments fade at their edges when there are more than fit.
+- The sidebar's accounts stay while the coding agents restart, instead of briefly showing fewer.
+- The command palette shows the letters you typed in bold in each result, and Run shows a play mark.
+- Settings › Accounts has one Add Account menu for the subscriptions, and Edit Bot › Keys one Add Its Own Key menu, instead of a button on every row.
+- Settings › Vault lists only the bots that can use an item, with Let a Bot Use It to add one, and its activity says what you did on this Mac plainly.
+- A wake-up's form has its title and a close button at the top, the reviewer keyword shows a magnifying glass, and Also Allowed's button reads Add Folder.
+- Search results show the words around the match from the message itself, not a tool's steps, and cut at whole words.
+- In Changes, Commit keeps its full name in a narrow panel and a comment names its line ("Line 12, before").
+- The panel's Files hides .DS_Store and version control folders, and a narrow header shows the file's name with the full path on hover.
+- Settings pages fade at their top and bottom edges as you scroll; worktrees placed in Kuvo Code's own folder say so instead of a long path.
+- More of the app's icon buttons read their names in VoiceOver.
 - A turn that fails says what happened in its headline (the provider is rate limiting you, the sign-in has ended, the usage limit is reached, the provider couldn't be reached) with the details under it, and offers the way out in the same card: Try Again, and Switch Model, Sign In Again or Open Accounts where that's what helps.
 - A failed conversation's mark in the sidebar is a filled red disc, easier to tell from the others.
 - While a side question shows over the composer, what you send asks it a follow-up: a "Side question" tag says so, and its × sends the next message to the conversation again. The card no longer has a second text field of its own.
