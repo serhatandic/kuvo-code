@@ -988,7 +988,8 @@ private struct MessageText: View {
             // AppKit's text, as the composer's: its pointer shows only where nothing's drawn over it.
             // Asked whether the limit cuts it only while there is one: all of it showing says nothing
             // of what Show Less brings back.
-            SelectableText(text: shown.text, faces: shown.faces, lineLimit: isExpanded ? nil : Self.lines,
+            // A short one has no Show More: never cut, however narrow its bubble.
+            SelectableText(text: shown.text, faces: shown.faces, lineLimit: isExpanded || !mayBeLong ? nil : Self.lines,
                            cut: mayBeLong && !isExpanded ? { isLimited = $0 } : nil)
                 // Faded at the cut; masked only if it may be long (each mask is drawn off screen
                 // first), and then all along, so the fade comes and goes over the same words.

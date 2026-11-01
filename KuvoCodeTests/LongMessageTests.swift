@@ -87,4 +87,33 @@ import Testing
         try await until { message.isCut == false && message.width > 0 }
         #expect(abs(message.width - Self.lineWidth) <= 1, "as wide as its lines, \(Self.lineWidth), not \(message.width)")
     }
+
+    /// A message too short to be called long (a list and a paragraph) in a narrow conversation,
+    /// where it runs past the line limit's lines: all of it shows, since there's no Show More for it.
+    @Test func aShortMessageInANarrowConversationIsNeverCutWithoutShowMore() async throws {
+        TestEnvironment.prepare()
+        let app = AppModel()
+        let words = (1...8).map { "\($0). Salt" }.joined(separator: "\n")
+            + "\nAnd when you're at the harbor market, ask the keeper whether the lamp oil came in, since we'll need it before the ships come back tonight."
+        #expect(words.count < 300 && words.filter { $0 == "\n" }.count < 12, "short, as messages go")
+        let window = NSWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: 320, height: 900), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView: UserBubble(text: words).environment(app).frame(width: 320))
+        window.orderBack(nil)
+        defer { window.orderOut(nil); window.close() }
+        func text() -> SelectableTextView? {
+            func all(_ view: NSView) -> [SelectableTextView] { ((view as? SelectableTextView).map { [$0] } ?? []) + view.subviews.flatMap(all) }
+            return window.contentView.flatMap(all)?.first
+        }
+        try await until {
+            window.contentView?.layoutSubtreeIfNeeded()
+            return (text()?.bounds.height ?? 0) > 0
+        }
+        let shown = try #require(text())
+        let layout = try #require(shown.layoutManager), container = try #require(shown.textContainer)
+        var lines = 0
+        layout.enumerateLineFragments(forGlyphRange: layout.glyphRange(for: container)) { _, _, _, _, _ in lines += 1 }
+        #expect(lines > 12, "it runs past the limit's lines here: \(lines)")
+        #expect(layout.glyphRange(for: container).length == layout.numberOfGlyphs, "all of its words show")
+    }
 }
