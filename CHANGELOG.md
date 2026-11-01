@@ -16,6 +16,15 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- A turn that fails says what happened in its headline (the provider is rate limiting you, the sign-in has ended, the usage limit is reached, the provider couldn't be reached) with the details under it, and offers the way out in the same card: Try Again, and Switch Model, Sign In Again or Open Accounts where that's what helps.
+- A failed conversation's mark in the sidebar is a filled red disc, easier to tell from the others.
+- While a side question shows over the composer, what you send asks it a follow-up: a "Side question" tag says so, and its × sends the next message to the conversation again. The card no longer has a second text field of its own.
+- The cards over the composer read as one list: each line has its mark, its name and one action, then its chevron and ×. Stop moved under a goal, with its details, and folding the last open card tucks them into one line, instead of a Hide button over the card.
+- The menu bar panel's spend bar has a menu for its period (Today, Yesterday, Last 30 Days), and shows each provider's share under it only when two or more spent.
+- New Bot shows the templates as faces with their names, and one line for what the picked one does.
+- Settings › Appearance and Voice Input show a corner of the window, large enough to see, instead of a whole window shrunk into a box.
+- Settings › Storage lists only what takes room, largest first, with the smallest parts in Other, and draws its bar in shades of one color. Privacy's links are one line each.
+- The usage panel's settings live in Settings › Usage: the panel's own Settings opens that page, which also sets the shortcut that opens the panel.
 - Providers, coding agents, integrations and MCP servers show their own marks, which come with the app: Cursor no longer shows a stock sparkle, a provider without a mark shows a plain server instead of its first letter, and Settings › Integrations and MCP Servers show Slack, Gmail, GitHub and the rest by their marks (or a plain symbol of what they are) instead of stand-in icons.
 - Diffs read as code: a long line wraps under its own indent instead of back at the margin, and removed lines leave the number column blank, so it counts the file as it is now.
 - Steps, thoughts and group chats show `code` in the code face instead of its backticks.
