@@ -4,6 +4,7 @@ import SwiftUI
 /// Archived sessions: out of the sidebar, still searchable; brought back or deleted here.
 struct ArchivedSessionsSettings: View {
     @Environment(Workspace.self) private var workspace
+    @Environment(AppModel.self) private var app
     @State private var search = ""
     @State private var deleting: [String]?
 
@@ -15,10 +16,16 @@ struct ArchivedSessionsSettings: View {
             .sorted { $0.time.updated > $1.time.updated }
     }
 
-    /// By project, the most recently used first.
-    private var byProject: [(name: String, sessions: [Session])] {
-        let groups = Dictionary(grouping: archived) { workspace.projectName($0.location.directory) }
+    /// By project (its folder: two of the same name, on this Mac and a machine, say, are two), the
+    /// most recently used first.
+    private var byProject: [(directory: String, sessions: [Session])] {
+        let groups = Dictionary(grouping: archived) { workspace.projectDirectory(of: $0) }
         return groups.map { ($0.key, $0.value) }.sorted { ($0.sessions.first?.time.updated ?? 0) > ($1.sessions.first?.time.updated ?? 0) }
+    }
+
+    /// The machine a project is on, by name; nil for this Mac's.
+    private func machineName(_ directory: String) -> String? {
+        RemoteFolder.machine(of: directory).map { app.machines.engine($0)?.machine.name ?? $0 }
     }
 
     var body: some View {
@@ -38,7 +45,7 @@ struct ArchivedSessionsSettings: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            ForEach(byProject, id: \.name) { group in
+            ForEach(byProject, id: \.directory) { group in
                 Section {
                     ForEach(group.sessions) { session in
                         LabeledContent {
@@ -59,7 +66,11 @@ struct ArchivedSessionsSettings: View {
                     }
                 } header: {
                     HStack {
-                        Label(group.name, systemImage: "folder")
+                        Label(workspace.projectName(group.directory), systemImage: "folder")
+                        if let machine = machineName(group.directory) {
+                            Text(machine)
+                                .foregroundStyle(.secondary)
+                        }
                         Spacer()
                         Text(group.sessions.count.counting("session"))
                             .foregroundStyle(.secondary)
