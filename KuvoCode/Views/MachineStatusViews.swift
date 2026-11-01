@@ -57,9 +57,10 @@ struct MachineIndicator: View {
                 }
             }
         }
-        // The dot says it by its color: VoiceOver says it in words.
+        // The dot says it by its color: VoiceOver says it in words, and how far an install is.
         .accessibilityElement()
         .accessibilityLabel(words)
+        .accessibilityValue(progress.map { "\(Int(($0 * 100).rounded())) percent" } ?? "")
     }
 
     private var words: String {
