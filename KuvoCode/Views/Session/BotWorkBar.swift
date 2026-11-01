@@ -4,7 +4,8 @@ import OpenCodeKit
 import SwiftUI
 
 /// A bot's sessions at work, in a bar over its composer ("3 sessions at work"), like the one for
-/// its subagents: each with where it stands, Open and Stop. It stays, folded to its line, while the
+/// its subagents: each with where it stands, and Open and Stop under the pointer. While All's list
+/// is open, the bar is only its line, so nothing's listed twice. It stays, folded to its line, while the
 /// bot has done work today, for All: what's done, the asks it answered and why, and Stop All.
 struct BotWorkBar: View {
     let bot: Bot
@@ -24,7 +25,8 @@ struct BotWorkBar: View {
                 detail: atWork.count == 1 ? atWork.first.map { Text($0.title).font(.system(size: 12)) } : nil,
                 symbol: atWork.isEmpty ? "checkmark.circle" : nil,
                 accessory: AnyView(all),
-                showHelp: "Show the sessions \(bot.name) runs", hideHelp: "Hide them: this line stays while they work", isHidden: $isHidden) { item in
+                showHelp: "Show the sessions \(bot.name) runs", hideHelp: "Hide them: this line stays while they work",
+                isHidden: showsAll ? .constant(true) : $isHidden) { item in
             BotWorkRow(bot: bot, item: item)
         }
     }
@@ -70,13 +72,14 @@ struct BotWorkBar: View {
 }
 
 /// One of a bot's sessions: its title, then where it stands (its model and mode while it works,
-/// what it asks while it waits), Open and Stop.
+/// what it asks while it waits), and Open and Stop while the pointer's on it (VoiceOver has them always).
 private struct BotWorkRow: View {
     let bot: Bot
     let item: BotWorkReport.Item
     @Environment(AppModel.self) private var app
     @Environment(Catalog.self) private var catalog
     @State private var isStopping = false
+    @State private var isHovered = false
 
     var body: some View {
         HStack(spacing: 10) {
@@ -104,6 +107,7 @@ private struct BotWorkRow: View {
             .fixedSize()
             .help("Open its conversation, to watch it and talk to it")
             .accessibilityLabel("Open \(item.title)")
+            .opacity(showsActions ? 1 : 0)
             Button("Stop", systemImage: "stop.circle") { stop() }
                 .buttonStyle(TextButtonStyle())
                 .font(.system(size: 13))
@@ -111,8 +115,13 @@ private struct BotWorkRow: View {
                 .disabled(isStopping)
                 .help("Stop it: \(bot.name) hears it was stopped")
                 .accessibilityLabel("Stop \(item.title)")
+                .opacity(showsActions ? 1 : 0)
         }
+        .contentShape(Rectangle())
+        .onHover { hovering in withAnimation(.easeOut(duration: 0.12)) { isHovered = hovering } }
     }
+
+    private var showsActions: Bool { isHovered || isStopping }
 
     private func stop() {
         isStopping = true
