@@ -123,6 +123,8 @@ import Testing
             }
         }
         #expect(lines.count >= 2)
+        let scroll = try #require(stack.enclosingScrollView)
+        #expect(stack.convert(scroll.contentView.bounds, from: scroll.contentView).contains(menu.frame), "in sight: \(menu.frame)")
         for line in lines {
             #expect(!menu.frame.insetBy(dx: 0, dy: 1).intersects(line), "the menu \(menu.frame) covers a selected line \(line)")
         }

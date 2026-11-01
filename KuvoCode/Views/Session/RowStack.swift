@@ -865,8 +865,10 @@ final class RowStackView: NSView, NSUserInterfaceValidations {
         actionsBar = nil
     }
 
-    /// Over the selection's first line, centered on it; under its last when there's no room above
-    /// in what's in sight. Clear of the lines' text, leading and all. In front of the rows.
+    /// Over the selection's first line, centered on it; under its last, centered on that, when
+    /// there's no room above in what's in sight. Clear of the lines' text, leading and all, unless
+    /// what's selected runs past both edges of what's in sight: then at its top, in sight. In
+    /// front of the rows.
     private func placeMenu() {
         guard let bar = actionsBar, let selected = orderedSelection, let first = edgeLine(of: selected, last: false) else { return hideMenu() }
         let size = bar.fittingSize
@@ -875,9 +877,16 @@ final class RowStackView: NSView, NSUserInterfaceValidations {
             visible = convert(clip.bounds, from: clip)
             visible.origin.y += enclosingScrollView?.contentInsets.top ?? 0
         }
-        let x = min(max(first.midX - size.width / 2, bounds.minX + 4), bounds.maxX - size.width - 4)
+        let last = edgeLine(of: selected, last: true) ?? first
         let above = first.minY - size.height - 8
-        let y = above >= visible.minY ? above : (edgeLine(of: selected, last: true) ?? first).maxY + 8
+        let (line, y): (NSRect, CGFloat) = if above >= visible.minY {
+            (first, above)
+        } else if last.maxY + 8 + size.height <= visible.maxY {
+            (last, last.maxY + 8)
+        } else {
+            (first, visible.minY + 8)
+        }
+        let x = min(max(line.midX - size.width / 2, bounds.minX + 4), bounds.maxX - size.width - 4)
         bar.frame = NSRect(x: x, y: y, width: size.width, height: size.height)
         if subviews.last !== bar { addSubview(bar, positioned: .above, relativeTo: nil) }
     }
