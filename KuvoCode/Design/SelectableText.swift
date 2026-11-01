@@ -374,6 +374,19 @@ final class SelectableTextView: PointerAwareTextView {
         }
     }
 
+    // A right-click offers what's around the words (a message's Undo From Here…, a command's Copy
+    // Output), as one beside them does; on words selected, what the text offers for them.
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let index = characterIndexForInsertion(at: convert(event.locationInWindow, from: nil))
+        guard !selectedRanges.contains(where: { NSLocationInRange(index, $0.rangeValue) }) else { return super.menu(for: event) }
+        var view = superview
+        while let around = view {
+            if let menu = around.menu(for: event), !menu.items.isEmpty { return menu }
+            view = around.superview
+        }
+        return super.menu(for: event)
+    }
+
     // The keyboard goes to the conversation with its selection, never to one of its texts.
     override var acceptsFirstResponder: Bool {
         enclosingRowStack == nil && super.acceptsFirstResponder
