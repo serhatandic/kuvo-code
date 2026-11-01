@@ -35,6 +35,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - The model menu is as tall as what it lists, so a short list like Custom Auto's leaves no empty space under it.
 - In a narrow panel, Files gives an open file the whole width: the tree folds away and comes back from the toolbar.
 - A bot's work bar shows Open and Stop on the session under the pointer, and folds to its line while All is open, so its sessions aren't listed twice.
+- Edit Bot no longer ends each section with a paragraph: what you'd need to know is in the section itself, like "Pixel schedules these itself" under an empty Wake-Ups.
 - A turn that fails says what happened in its headline (the provider is rate limiting you, the sign-in has ended, the usage limit is reached, the provider couldn't be reached) with the details under it, and offers the way out in the same card: Try Again, and Switch Model, Sign In Again or Open Accounts where that's what helps.
 - A failed conversation's mark in the sidebar is a filled red disc, easier to tell from the others.
 - While a side question shows over the composer, what you send asks it a follow-up: a "Side question" tag says so, and its × sends the next message to the conversation again. The card no longer has a second text field of its own.

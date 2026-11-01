@@ -37,6 +37,7 @@ struct BotKeysSection: View {
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
+                .help("A key only \(bot.name) uses, in place of your shared one")
             }
             // Why they can't be seen or changed now, once, under them all.
             if case .unreadable(let why) = status {

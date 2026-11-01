@@ -93,7 +93,8 @@ struct WakeList: View {
                 WellRow {
                     Image(systemName: "alarm")
                 } content: {
-                    Text("None waiting")
+                    // What only a bot's list would leave you wondering: who fills it.
+                    Text(owner.isBot ? "\(name) schedules these itself, and you can add one." : "None waiting")
                         .foregroundStyle(.secondary)
                 }
             }
