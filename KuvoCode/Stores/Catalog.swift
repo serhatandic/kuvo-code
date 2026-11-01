@@ -343,9 +343,9 @@ final class Catalog {
         // What's new shows at once; each folder's own commands follow (reading one can start its
         // tools there, so not before).
         merge()
-        await readEndedSignIns()
         // Loaded once the models have been read: a new bot's model is checked against them.
         if modelsRead { isLoaded = true }
+        await readEndedSignIns()
         for directory in commandFolders { await loadCommands(in: directory) }
         merge()
         if starting { waitForEngine() } else { unavailableSince = nil }
@@ -387,7 +387,13 @@ final class Catalog {
         do { models = try await api.models() } catch { log.error("agents' models: \(String(describing: error), privacy: .public)") }
         // A read asked before one that's answered already (a fresh one, slow to check every agent,
         // overtaken by the one after you removed an account) is out of date.
-        guard listed != nil || models != nil, order > agentReadShown else { return }
+        guard listed != nil || models != nil else { return }
+        guard order > agentReadShown else {
+            // What every agent said just now is the bridge's to answer from: read again, after
+            // what overtook this one.
+            if fresh { await refreshAgents() }
+            return
+        }
         agentReadShown = order
         if let listed { agentIntegrations = listed }
         if let models { agentModels = models }
@@ -468,8 +474,8 @@ final class Catalog {
     /// Sign-ins that ran out and couldn't be renewed (the service refused them), by provider: the
     /// one a run on its model was refused. As the box keeps them, and as this Mac sees them end.
     private var endedSignIns: [String: String] = [:]
-    /// The providers whose mark changed here while the box's were being read: theirs stay as noted.
-    @ObservationIgnored private var notedDuringRead: Set<String>?
+    /// The plans the box last listed as ended: one it no longer lists works again.
+    @ObservationIgnored private var boxEnded: Set<String> = []
 
     /// A run on `provider`'s model was refused its account: its sign-in in use, if that's one (a
     /// key refused says why itself).
@@ -477,29 +483,28 @@ final class Catalog {
         guard !OutsideAgents.runsInBridge(provider), let active = activeCredential(of: provider),
               active.method == "oauth", let id = active.credentialID, endedSignIns[provider] != id else { return }
         endedSignIns[provider] = id
-        notedDuringRead?.insert(provider)
     }
 
     /// A step on `provider`'s model ended well: its sign-in works (renewed after all).
     func signInWorks(_ provider: String) {
         if endedSignIns[provider] != nil { endedSignIns[provider] = nil }
-        notedDuringRead?.insert(provider)
     }
 
     /// The plans whose sign-in ended, as the box keeps them (`kuvo/accounts/ended`): one noted
-    /// while no app watched (a bot's run overnight, with the Mac closed) is marked too, and one that
-    /// works again elsewhere isn't any more.
+    /// while no app watched (a bot's run overnight, with the Mac closed) is marked too, and one the
+    /// box no longer lists works again. One this Mac saw end stays marked until it works (the box
+    /// may not have noted it yet).
     private func readEndedSignIns() async {
         guard let box else { return }
         struct Ended: Decodable { var providers: [String] }
-        notedDuringRead = []
-        defer { notedDuringRead = nil }
         guard let ended = try? await box.value(Ended.self, "GET", "kuvo/accounts/ended") else { return }
-        var now: [String: String] = [:]
-        for provider in ended.providers {
+        let listed = Set(ended.providers)
+        var now = endedSignIns
+        for provider in boxEnded.subtracting(listed) { now[provider] = nil }
+        for provider in listed {
             if let id = activeCredential(of: provider)?.credentialID { now[provider] = id }
         }
-        for provider in notedDuringRead ?? [] { now[provider] = endedSignIns[provider] }
+        boxEnded = listed
         if now != endedSignIns { endedSignIns = now }
     }
 

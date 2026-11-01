@@ -13,6 +13,8 @@ import Testing
         private let lock = NSLock()
         private var accounts: [String]
         private var heldFresh: [@Sendable () -> Void] = []
+        /// What only a look at every agent finds: a newer Claude Code.
+        private var outdated = false
         private(set) var adds = 0
         let url: String
 
@@ -21,11 +23,18 @@ import Testing
             self.accounts = accounts
             StubWeb.handle(url + "/api/model") { _, _ in StubWeb.json(["data": []]) }
             // A look at every agent anew is slow: it answers with the accounts as they were when
-            // it was asked, once the test lets it.
+            // it was asked, once the test lets it, and finds a newer Claude Code, which the bridge
+            // answers from then on.
             StubWeb.hold(url + "/api/integration?fresh=1") { [weak self] _, _, reply in
                 guard let self else { return reply(StubWeb.Answer(status: 503)) }
-                let answer = self.list()
-                self.lock.withLock { self.heldFresh.append { reply(answer) } }
+                let asked = self.lock.withLock { self.accounts }
+                self.lock.withLock {
+                    self.heldFresh.append { [weak self] in
+                        guard let self else { return }
+                        self.lock.withLock { self.outdated = true }
+                        reply(self.list(asked))
+                    }
+                }
             }
             StubWeb.handle(url + "/api/integration") { [weak self] _, _ in self?.list() ?? StubWeb.Answer(status: 503) }
             StubWeb.handle(url + "/api/kuvo/accounts") { [weak self] request, _ in
@@ -43,12 +52,12 @@ import Testing
             }
         }
 
-        private func list() -> StubWeb.Answer {
-            let ids = lock.withLock { accounts }
+        private func list(_ given: [String]? = nil) -> StubWeb.Answer {
+            let (ids, outdated) = lock.withLock { (given ?? accounts, outdated) }
             return StubWeb.json(["data": ids.map { id in
                 [
                     "id": id, "name": "Claude Code", "methods": [], "connections": [],
-                    "metadata": ["source": "agent", "agent": "claude-code", "installed": true] as [String: Any],
+                    "metadata": ["source": "agent", "agent": "claude-code", "installed": true, "outdated": outdated] as [String: Any],
                 ] as [String: Any]
             }])
         }
@@ -89,6 +98,28 @@ import Testing
         await opening.value
         #expect(app.catalog.codingAgents.map(\.id) == ["claude-code"])
         #expect(!app.catalog.isRefreshingAgents)
+    }
+
+    @Test func whatALookAtEveryAgentFoundShowsThoughARoutineReadOvertookIt() async throws {
+        TestEnvironment.prepare()
+        StubWeb.start(hosts: ["127.0.0.1"])
+        defer { StubWeb.stop() }
+        let bridge = Bridge(port: 47934, accounts: ["claude-code"])
+        let app = AppModel()
+        app.catalog.outsideAgents = app.agents
+        app.agents.connect(bridge.endpoint, folderPrefix: "")
+        defer { app.agents.disconnect() }
+
+        // Settings › Accounts looks at every agent; meanwhile the app reads them as it does
+        // (the engine said something changed).
+        let opening = Task { await app.catalog.refreshAgents(fresh: true) }
+        try await until { bridge.isHolding }
+        await app.catalog.refreshAgents()
+        bridge.answerHeld()
+        await opening.value
+        // The look found a newer Claude Code: Update shows.
+        let claude = app.catalog.codingAgents.first { $0.id == "claude-code" }
+        #expect(claude?.metadata?["outdated"]?.bool == true)
     }
 
     @Test func addAnotherAccountTappedTwiceAddsOne() async throws {

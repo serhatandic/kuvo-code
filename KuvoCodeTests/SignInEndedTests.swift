@@ -45,5 +45,10 @@ import Testing
         await catalog.refresh()
         #expect(!catalog.hasEndedSignIn("github-copilot"))
         #expect(catalog.endedProviders.isEmpty)
+
+        // One this Mac saw end, before the box notes it: still marked after the box is read.
+        catalog.signInEnded("github-copilot")
+        await catalog.refresh()
+        #expect(catalog.hasEndedSignIn("github-copilot"))
     }
 }
