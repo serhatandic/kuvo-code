@@ -96,6 +96,8 @@ const standIn = onBridge => (request, response) => {
         { id: "claude-opus-5-5", providerID: "anthropic", name: "Claude Opus 5.5", variants: [{ id: "high" }, { id: "max" }], enabled: true },
         { id: "claude-sonnet-5-5", providerID: "anthropic", name: "Claude Sonnet 5.5", variants: [{ id: "low" }, { id: "high" }], enabled: true },
         { id: "deepseek-v4", providerID: "deepseek", name: "DeepSeek V4", variants: [], enabled: true },
+        // Retired soon by its provider: the engine's own picker leaves it out.
+        { id: "deepseek-v3", providerID: "deepseek", name: "DeepSeek V3", variants: [], enabled: true, status: "deprecated" },
         { id: "gpt-5", providerID: "openai", name: "GPT-5", variants: [], enabled: true },
       ] });
     }
@@ -242,7 +244,13 @@ test("a model there's no account for, or an effort it hasn't, is refused with wh
   assert.equal(made.length, 0);
 });
 
-test("a session's approval is never above its starter's: a bot that asks first starts sessions that ask first", async () => {
+test("a model its provider is retiring isn't offered, but a session on it can still start one on it (its own model, as a session left to its starter's takes)", async () => {
+  const said = await tool("start_session", { task: "Carry on.", project: "Tidepool", model: "deepseek/deepseek-v3" }, "ses_pixel");
+  assert.equal(said.isError, false, said.text);
+  assert.deepEqual(made[0].model, { providerID: "deepseek", id: "deepseek-v3" });
+});
+
+test("a session's approval is never above its starter's:a bot that asks first starts sessions that ask first", async () => {
   const said = await tool("start_session", { task: "Tidy the README.", project: "Tidepool", approval: "approveAll" }, "ses_mira");
   assert.equal(said.isError, false, said.text);
   assert.match(said.text, /asks first, as you do/);
@@ -362,6 +370,7 @@ test("list_models lists the models there are accounts for, with their efforts", 
   assert.match(said.text, /- anthropic\/claude-opus-5-5 \(Claude Opus 5\.5\), efforts: high, max/);
   assert.match(said.text, /- deepseek\/deepseek-v4 \(DeepSeek V4\)/);
   assert.doesNotMatch(said.text, /gpt-5/, "no account for OpenAI");
+  assert.doesNotMatch(said.text, /deepseek-v3/, "deprecated");
 });
 
 test("a client sees a bot's work: its sessions, the answers it gave and today's count", async () => {

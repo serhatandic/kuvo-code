@@ -335,8 +335,9 @@ const kit = {
 
 // An engine and the agents' bridge as a new bot needs them: conversations made, what each was told,
 // its greeting; the providers ready; group chats there (`chats`), listed and changed.
-// `heard`: told of each request as it comes, before it's answered.
-async function makingEngine(ready = ["opencode"], rules = {}, heard = () => {}) {
+// `heard`: told of each request as it comes, before it's answered. `listed`: its models and its
+// default, as it lists them (none listed when not given).
+async function makingEngine(ready = ["opencode"], rules = {}, heard = () => {}, listed = null) {
   const asked = [];
   const chats = new Map();
   let next = 1;
@@ -349,6 +350,8 @@ async function makingEngine(ready = ["opencode"], rules = {}, heard = () => {}) 
       heard(asked.at(-1));
       const reply = (value, status = 200) => { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value)); };
       if (request.method === "GET" && request.url === "/api/provider") return reply({ data: ready.map(id => ({ id })) });
+      if (listed && request.method === "GET" && request.url === "/api/model") return reply({ data: listed.models });
+      if (listed && request.method === "GET" && request.url === "/api/model/default") return reply({ data: listed.defaultModel });
       if (request.method === "POST" && request.url === "/api/session") return reply({ data: { id: `ses_made${next++}` } });
       const one = request.url.match(/^\/api\/session\/([^/]+)$/);
       if (one && request.method === "GET") return reply({ data: { id: one[1], permissions: rules[one[1]] ?? [] } });
@@ -382,6 +385,36 @@ test("New Bot offers the box's own projects once it keeps them, not those a Mac 
   link.changeProjects(projects => projects.map(each => (each.directory === fs.realpathSync(shop) ? { ...each, removed: true } : each)));
   const offered = await ask(handle, "GET", "kuvo/bots/templates");
   assert.deepEqual(offered.json.projects, [{ directory: fs.realpathSync(app), name: "App", machine: "my-server" }]);
+});
+
+test("New Bot here offers, and starts a bot on, a model this box can use: not the one its Mac last named once its account is signed out here, or once its provider is retiring it", async () => {
+  // The engine lists Flint first, and its default is Big Pickle.
+  const flint = { id: "flint", providerID: "opencode", name: "Flint", enabled: true };
+  const pickle = { id: "big-pickle", providerID: "opencode", name: "Big Pickle", enabled: true };
+  const sonnet = { id: "sonnet", providerID: "anthropic", name: "Sonnet", enabled: true };
+  const retiring = { id: "opus-old", providerID: "anthropic", name: "Opus Old", enabled: true, status: "deprecated" };
+  const offeredWith = async (named, ready, defaultModel) => {
+    write(path.join(bots, "kit.json"), JSON.stringify({ ...kit, startingModel: named }));
+    const engine = await makingEngine(ready, {}, () => {}, { models: [flint, pickle, sonnet, retiring], defaultModel });
+    try {
+      const handle = link.engineHandler(() => ({ port: engine.port, password: "p" }), { name: "my-server" }, () => null);
+      const offered = await ask(handle, "GET", "kuvo/bots/templates");
+      const made = await ask(handle, "POST", "kuvo/bots", { name: "Scout" });
+      assert.equal(made.status, 201, JSON.stringify(made.json));
+      assert.deepEqual(made.json.bot.model, offered.json.startingModel["my-server"], "it starts on the model it offers");
+      return offered.json.startingModel["my-server"];
+    } finally {
+      engine.close();
+    }
+  };
+  // The Mac named a model of an account this box isn't signed in to (signed out since, or never here): the engine's default.
+  assert.deepEqual(await offeredWith({ id: "sonnet", providerID: "anthropic" }, ["opencode"], pickle), { id: "big-pickle", providerID: "opencode" });
+  // One its provider is retiring, though its account is signed in here.
+  assert.deepEqual(await offeredWith({ id: "opus-old", providerID: "anthropic" }, ["opencode", "anthropic"], pickle), { id: "big-pickle", providerID: "opencode" });
+  // The engine's default can't run here either: the first model that can.
+  assert.deepEqual(await offeredWith({ id: "sonnet", providerID: "anthropic" }, ["opencode"], sonnet), { id: "flint", providerID: "opencode" });
+  // One it can: as the Mac named it.
+  assert.deepEqual(await offeredWith({ id: "sonnet", providerID: "anthropic" }, ["opencode", "anthropic"], pickle), { id: "sonnet", providerID: "anthropic" });
 });
 
 test("with the Mac closed, a bot is made here as New Bot makes it: its folder, conversation and instructions, and it writes first", async () => {

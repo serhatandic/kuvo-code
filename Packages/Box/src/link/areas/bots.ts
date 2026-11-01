@@ -6,7 +6,7 @@ import { changeBot, deleteBot } from "../bots/edit";
 import { botFollowers } from "../bots/here";
 import { botTemplates, NO_KIT, readKit } from "../bots/kit";
 import { listBots } from "../bots/list";
-import { makeBot } from "../bots/make";
+import { makeBot, startingModelHere } from "../bots/make";
 import { freshenBots, settleBot } from "../bots/tell";
 import { followed } from "../follow";
 import { BOTS } from "../home";
@@ -16,12 +16,13 @@ import type { GivenBot } from "../bots/make";
 import type { AnswerPiece, RouteContext } from "../server/context";
 
 export async function* botTemplatesRoute(context: RouteContext): AsyncGenerator<AnswerPiece> {
-  const { request, info, json } = context;
+  const { request, signal, readEngine, info, json } = context;
   // Read with GET or HEAD, as every box's lists are.
   if (!["GET", "HEAD"].includes(request.method.toUpperCase())) return yield* json(405, {});
   const kit = readKit();
   if (!kit) return yield* json(409, { message: NO_KIT });
-  return yield* json(200, botTemplates(kit, info.name));
+  const startingModel = await startingModelHere(kit.startingModel ?? null, readEngine, signal);
+  return yield* json(200, botTemplates({ ...kit, startingModel }, info.name));
 }
 
 // New bots, made here as New Bot makes them on the Mac, which takes them in when it next connects.

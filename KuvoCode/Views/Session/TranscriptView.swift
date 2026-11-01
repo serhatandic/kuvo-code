@@ -1302,7 +1302,7 @@ private struct TurnEndView: View {
     /// What went wrong; an ended sign-in said plainly, with the service's words after it.
     /// A provider that turned the request down for want of a sign-in, whatever the engine calls it.
     private var refused: Bool {
-        idle.error.map { $0.type == "provider.auth" || Catalog.isSignInRefusal($0.message) } == true
+        idle.error.map { Catalog.isSignInRefusal(type: $0.type, message: $0.message) } == true
     }
 
     private var message: String {

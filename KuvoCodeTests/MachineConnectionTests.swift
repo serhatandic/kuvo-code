@@ -120,15 +120,15 @@ import Testing
         let id = Self.name()
         let engine = add(id, at: machine)
         await app.connect(engine).value
-        try await until { clock.waits == [60, 600] }
-        #expect(clock.waits == [60, 600], "its wake-ups each minute, its sign-ins every ten")
+        try await until { clock.waits == [30, 60, 600] }
+        #expect(clock.waits == [30, 60, 600], "its projects followed again in half a minute (no box answers here), its wake-ups each minute, its sign-ins every ten")
         await app.reconnectNow(engine)?.value
-        try await until { clock.waits == [60, 600] }
-        #expect(clock.waits == [60, 600], "one set of syncs, not two")
+        try await until { clock.waits == [30, 60, 600] }
+        #expect(clock.waits == [30, 60, 600], "one set of syncs, not two")
         // A minute on: one round, then waiting for the next one, still one set.
         clock.pass(60)
-        try await until { clock.waits == [60, 600] }
-        #expect(clock.waits == [60, 600])
+        try await until { clock.waits == [30, 60, 600] }
+        #expect(clock.waits == [30, 60, 600])
     }
 
     /// Reconnected while the machine is slow to say whether a conversation open here is still
@@ -201,11 +201,11 @@ import Testing
         let second = add(two, at: other)
         await app.connect(first).value
         await app.connect(second).value
-        try await until { clock.waits == [60, 60, 600, 600] }
-        #expect(clock.waits == [60, 60, 600, 600])
+        try await until { clock.waits == [30, 30, 60, 60, 600, 600] }
+        #expect(clock.waits == [30, 30, 60, 60, 600, 600])
         app.personalitiesChanged()
-        try await until { clock.waits == [1, 1, 60, 60, 600, 600] }
-        #expect(clock.waits == [1, 1, 60, 60, 600, 600], "a round for each, a moment on")
+        try await until { clock.waits == [1, 1, 30, 30, 60, 60, 600, 600] }
+        #expect(clock.waits == [1, 1, 30, 30, 60, 60, 600, 600], "a round for each, a moment on")
         app.disconnect(first)
         let sent = ssh.scripts(to: one).count
         let sentThere = ssh.scripts(to: two).count

@@ -12,7 +12,7 @@ import Testing
 /// own move there once. Remove Project is the box's: it archives every session of the project,
 /// older ones too. The engine is a stand-in, listening on its port so the box can reach it.
 @MainActor
-@Suite(.serialized) struct ProjectsOnBoxTests {
+@Suite(.serialized, .timeLimit(.minutes(1))) struct ProjectsOnBoxTests {
     static let port: UInt16 = 47_950
     let engine = StubEngine(port: Int(port))
     let box: TestBox
@@ -27,7 +27,7 @@ import Testing
         shop = work.appending(path: "shop").path
         blog = work.appending(path: "blog").path
         for folder in [shop, blog] { try FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true) }
-        for key in ["projectFolders", "projectSettings", "projectsOnBox.mac", "projectsOnBox.lab", "projectsUnsent", "worktrees"] { UserDefaults.standard.removeObject(forKey: key) }
+        for key in ["projectFolders", "projectSettings", "projectsOnBox.mac", "projectsOnBox.lab", "projectsUnsent", "worktrees", "removedWorktrees"] { UserDefaults.standard.removeObject(forKey: key) }
         try? FileManager.default.removeItem(at: BoxProcess.home)
         engine.on("PATCH", "/api/session/*", json: ["data": [:]])
         box = try await TestBox(engine: engine.url)
@@ -36,7 +36,7 @@ import Testing
     private func done() {
         box.stop()
         engine.stop()
-        for key in ["projectFolders", "projectSettings", "projectsOnBox.mac", "projectsOnBox.lab", "projectsUnsent", "worktrees"] { UserDefaults.standard.removeObject(forKey: key) }
+        for key in ["projectFolders", "projectSettings", "projectsOnBox.mac", "projectsOnBox.lab", "projectsUnsent", "worktrees", "removedWorktrees"] { UserDefaults.standard.removeObject(forKey: key) }
         try? FileManager.default.removeItem(at: BoxProcess.home)
         try? FileManager.default.removeItem(at: work)
     }
@@ -160,6 +160,83 @@ import Testing
         #expect(workspace.folders == [RemoteFolder.folder("/home/me/app", on: "lab")])
     }
 
+    /// A machine's project renamed or removed from another client (a phone) shows here while the
+    /// machine is connected, as this Mac's own do, not only once the app is opened again.
+    @Test func aMachinesProjectsChangedElsewhereShowHere() async throws {
+        defer { done() }
+        UserDefaults.standard.set(true, forKey: "projectsOnBox.lab")
+        let workspace = Workspace()
+        let endpoint = try #require(box.process.endpoint)
+        let base = endpoint.url.absoluteString.hasSuffix("/") ? endpoint.url : URL(string: endpoint.url.absoluteString + "/")!
+        // The machine's box, as SSH reaches it: here, this test's own box.
+        workspace.boxes = { id in
+            id == "lab" ? BoxClient(box: id, transport: LocalBox { EngineRoutes.forward($0, to: base, password: endpoint.password, allowing: { path, _ in path.hasPrefix("kuvo/") }) }) : nil
+        }
+        let phone = try #require(workspace.boxes?("lab"))
+        let app = RemoteFolder.folder("/home/me/app", on: "lab")
+        // Followed from half a minute after it connects (its projects are read as it does).
+        let clock = TestClock(), realClock = MachineClock.clock
+        MachineClock.clock = { [clock] seconds in await clock.wait(seconds) }
+        defer { MachineClock.clock = realClock }
+        let following = Task { await workspace.followProjects(on: "lab") }
+        defer { following.cancel() }
+        try await until { clock.waits == [30] }
+        clock.pass(30)
+        _ = try await phone.send("PUT", "kuvo/projects?directory=" + Workspace.queryValue("/home/me/app"), body: Data("{}".utf8))
+        try await until { workspace.folders.contains(app) }
+        _ = try await phone.send("PUT", "kuvo/projects?directory=" + Workspace.queryValue("/home/me/app"), body: Data(#"{"name":"Storefront"}"#.utf8))
+        try await until { workspace.projectName(app) == "Storefront" }
+        _ = try await phone.send("PUT", "kuvo/projects?directory=" + Workspace.queryValue("/home/me/app"), body: Data(#"{"removed":true}"#.utf8))
+        try await until { !workspace.folders.contains(app) }
+    }
+
+    /// A machine removed while its projects were still to be read (waiting behind a change on its
+    /// way there): nothing more is asked of it, and its projects don't come back.
+    @Test func aMachineRemovedWhileItsProjectsWaitIsntAskedForThem() async throws {
+        defer { done() }
+        UserDefaults.standard.set(true, forKey: "projectsOnBox.lab")
+        let workspace = Workspace()
+        let endpoint = try #require(box.process.endpoint)
+        let base = endpoint.url.absoluteString.hasSuffix("/") ? endpoint.url : URL(string: endpoint.url.absoluteString + "/")!
+        // The machine's box, as SSH reaches it: here, this test's own box.
+        let held = HoldsFirstProjectChange(to: LocalBox { EngineRoutes.forward($0, to: base, password: endpoint.password, allowing: { path, _ in path.hasPrefix("kuvo/") }) })
+        workspace.boxes = { id in id == "lab" ? BoxClient(box: id, transport: held) : nil }
+        workspace.machines = ["lab"]
+        let app = workspace.addFolder(RemoteFolder.folder("/home/me/app", on: "lab"))
+        await workspace.projectsWritten()
+        held.holds = true
+        workspace.saveProject(app, settings: .init(name: "Storefront"))
+        await held.arrived()
+        let reading = Task { await workspace.loadProjects(on: "lab") }
+        workspace.machines = []
+        workspace.forget("lab", forGood: true)
+        let asked = held.sent.count
+        held.open()
+        await reading.value
+        await workspace.projectsWritten()
+        #expect(Array(held.sent.dropFirst(asked)) == [], "nothing went to it once it was removed")
+        #expect(!workspace.projects.contains { RemoteFolder.machine(of: $0.directory) == "lab" })
+    }
+
+    /// A worktree removed before its box kept them, whose session this Mac still shows under its
+    /// project: Remove Project archives that session too, so it doesn't bring the project back.
+    @Test func removeProjectReachesWorktreesRemovedBeforeTheBoxKeptThem() async throws {
+        defer { done() }
+        let tree = work.appending(path: "trees/long-gone").path
+        UserDefaults.standard.set([tree: shop], forKey: "removedWorktrees")
+        engine.list([StubEngine.session("ses_shop", directory: shop, created: 20), StubEngine.session("ses_tree", directory: tree, created: 10)])
+        let workspace = workspace()
+        await workspace.refresh()
+        await workspace.loadProjects(on: BoxClient.mac)
+        #expect(workspace.projects.first { $0.directory == shop }?.sessions.map(\.id) == ["ses_shop", "ses_tree"])
+
+        #expect(try await workspace.removeProject(shop) == 0)
+        let patched = Set(engine.requests("PATCH", "").compactMap { request -> String? in
+            ((request.body["metadata"] as? [String: Any])?["kuvo.archived"] as? Bool) == true ? String(request.path.split(separator: "/").last ?? "") : nil
+        })
+        #expect(patched == ["ses_shop", "ses_tree"])
+    }
+
     /// Worktrees this Mac kept before its box kept them go to the box, so Remove Project there
     /// archives their sessions too.
     @Test func removeProjectReachesWorktreesKeptHereBefore() async throws {
@@ -223,7 +300,11 @@ private final class HoldsFirstProjectChange: BoxTransport, @unchecked Sendable {
 
     nonisolated init(to inner: any BoxTransport) { self.inner = inner }
 
+    /// What was sent through it, in order ("GET kuvo/projects").
+    private(set) var sent: [String] = []
+
     func send(_ request: LinkRequest) -> AsyncThrowingStream<LinkResponsePart, Error> {
+        sent.append(request.method + " " + request.path)
         guard request.method == "PUT", request.path.hasPrefix("kuvo/projects") else { return inner.send(request) }
         let inner = inner
         return AsyncThrowingStream { continuation in

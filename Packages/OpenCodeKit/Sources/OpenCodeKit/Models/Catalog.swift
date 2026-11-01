@@ -57,6 +57,8 @@ public struct Model: Codable, Sendable, Hashable, Identifiable {
     public var key: String { providerID + "/" + id }
     public var acceptsImages: Bool { capabilities.input.contains("image") }
     public var isFree: Bool { cost.allSatisfy { $0.input == 0 && $0.output == 0 } }
+    /// Its provider is retiring it.
+    public var isDeprecated: Bool { status == "deprecated" }
 }
 
 /// Model-serving configuration that's ready to use (its integration is connected,

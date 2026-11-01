@@ -552,6 +552,8 @@ extension AppModel {
         // What its agents ask to run outside its sandbox, followed while it's connected.
         connection.run("sandbox-asks") { await Sandboxes.shared.follow(machine) }
         connection.run("goal-plans") { [weak self] in await self?.goalPlans.follow(machine) }
+        // Its projects as its box has them, changed from a phone too.
+        connection.run("projects") { [weak self] in await self?.workspace.followProjects(on: machine) }
     }
 
     /// Closes this Mac's connection to a machine. It runs on, as a box of its own: its sessions,

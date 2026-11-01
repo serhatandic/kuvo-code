@@ -740,7 +740,10 @@ final class Workspace {
         guard await takeWorktrees(from: box) != nil else {
             throw BoxRefusal(status: 503, message: box == BoxClient.mac ? "Kuvo Code’s background service on this Mac isn’t answering. Try again in a moment." : "\(box) isn’t answering. Try again in a moment.")
         }
-        let (status, data) = try await client.send("DELETE", "kuvo/projects?directory=" + Self.queryValue(Self.onBox(directory)))
+        // Its worktrees removed before its box kept them, whose sessions this Mac still shows under it.
+        let removed = removedWorktrees.filter { $0.value == directory && Self.box(of: $0.key) == box }.keys.map(Self.onBox).sorted()
+        let body = try JSONSerialization.data(withJSONObject: ["folders": removed])
+        let (status, data) = try await client.send("DELETE", "kuvo/projects?directory=" + Self.queryValue(Self.onBox(directory)), body: body)
         switch status {
         case 200:
             // All of them, there: so here too, as the engine has them now, and it's off the list.
@@ -1228,7 +1231,8 @@ final class Workspace {
     /// their own. A box that can't keep them yet, or isn't answering, is left as it was.
     func loadProjects(on box: String) async {
         await inTurn {
-            guard let client = self.boxes?(box), await Self.projects(of: client) != nil else { return }
+            // A machine disconnected or removed while this waited its turn isn't asked.
+            guard !self.isAway(box), let client = self.boxes?(box), await Self.projects(of: client) != nil else { return }
             if !Self.keepsProjects(box) {
                 // Its projects, and those it removed (their settings), as they were kept here.
                 let kept = Set(self.folders.filter { Self.box(of: $0) == box }).union(self.settings.keys.filter { Self.box(of: $0) == box })
@@ -1241,21 +1245,36 @@ final class Workspace {
         }
     }
 
-    /// This Mac's projects as its box has them, from now on: each change, wherever it was made
-    /// (a phone's too), as it's made.
-    func followProjects() async {
-        while !Task.isCancelled {
-            if let client = boxes?(BoxClient.mac) {
-                await loadProjects(on: BoxClient.mac)
+    /// `box`'s projects as it has them, from now on: each change, wherever it was made (a phone's
+    /// too), as it's made. This Mac's for as long as the app runs; a machine's while it's
+    /// connected (its connection ends this, and it ends with the machine removed), from half a
+    /// minute after it connects (they're read as it does, `refreshOnce`), and again that long
+    /// after its stream ends; an older Kuvo Code there, which can't keep them yet, now and then.
+    func followProjects(on box: String = BoxClient.mac) async {
+        let onThisMac = box == BoxClient.mac
+        var older = false
+        while !Task.isCancelled, !isRemoved(box) {
+            if !onThisMac {
+                await MachineClock.wait(older ? 300 : 30)
+                guard !Task.isCancelled, !isRemoved(box) else { return }
+            }
+            older = false
+            if let client = boxes?(box) {
+                // This Mac's are read first.
+                if onThisMac { await loadProjects(on: box) }
                 do {
                     for try await line in client.follow("kuvo/projects/events") {
-                        guard Self.keepsProjects(BoxClient.mac), let listed = try? JSONDecoder().decode(BoxProjects.self, from: line) else { continue }
-                        await inTurn { self.take(listed.projects, from: BoxClient.mac) }
+                        guard let listed = try? JSONDecoder().decode(BoxProjects.self, from: line) else { continue }
+                        // One it couldn't read as it connected: what's kept here goes to it first.
+                        guard Self.keepsProjects(box) else { await loadProjects(on: box); continue }
+                        await inTurn { if !self.isAway(box) { self.take(listed.projects, from: box) } }
                     }
+                } catch let refusal as BoxRefusal {
+                    older = refusal.status == 404
                 } catch {}
             }
-            // The box restarted, or isn't up yet: followed again in a moment.
-            try? await Task.sleep(for: .seconds(2))
+            // This Mac's box restarted, or isn't up yet: followed again in a moment.
+            if onThisMac { try? await Task.sleep(for: .seconds(2)) }
         }
     }
 
@@ -1338,8 +1357,8 @@ final class Workspace {
         await turn.value
     }
 
-    /// Your machines' projects read again (back in the app: a phone may have changed them; a
-    /// machine's aren't followed as this Mac's are).
+    /// Your machines' projects read again (back in the app, in case following one missed a change
+    /// while its connection dropped for a moment).
     func reloadMachinesProjects() {
         for machine in connectedMachines { Task { await loadProjects(on: machine) } }
     }
@@ -1577,11 +1596,21 @@ final class Workspace {
         Drafts.shared.remove(id)
     }
 
+    /// Shown at once; put back as it was if the engine doesn't take it (as `setFlag`), unless it
+    /// was renamed again meanwhile.
     func rename(_ id: String, to title: String) async {
-        guard !Moves.isFrozen(id), let index = sessions.firstIndex(where: { $0.id == id }), api(forSession: id) != nil else { return }
+        guard !Moves.isFrozen(id), let index = sessions.firstIndex(where: { $0.id == id }), let api = api(forSession: id) else { return }
+        let before = sessions[index].title
         sessions[index].title = title
         if let machine = RemoteFolder.machine(of: sessions[index].location.directory) { keepList(of: machine) }
-        try? await api(forSession: id)?.renameSession(id, title: title)
+        do {
+            try await api.renameSession(id, title: title)
+        } catch {
+            guard let index = sessions.firstIndex(where: { $0.id == id }), sessions[index].title == title else { return }
+            sessions[index].title = before
+            // A machine's list as it's kept here for while it's away, too.
+            if let machine = RemoteFolder.machine(of: sessions[index].location.directory) { keepList(of: machine) }
+        }
     }
 
     // MARK: Sync
@@ -2043,6 +2072,13 @@ final class Workspace {
     /// Machines you removed (`forget(_:forGood:)`), which nothing waits for; a bot there among
     /// them.
     private var removedMachines: Set<String> = []
+
+    private func isRemoved(_ box: String) -> Bool { box != BoxClient.mac && removedMachines.contains(box) }
+
+    /// A machine you removed, or one of yours that isn't connected now: nothing is asked of it.
+    private func isAway(_ box: String) -> Bool {
+        isRemoved(box) || box != BoxClient.mac && machines.contains(box) && !connectedMachines.contains(box)
+    }
 
     func forget(_ machine: String, forGood: Bool = false) {
         let gone = Set(sessions.filter { RemoteFolder.machine(of: $0.location.directory) == machine }.map(\.id))
