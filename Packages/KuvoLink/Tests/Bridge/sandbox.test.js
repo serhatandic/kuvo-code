@@ -12,6 +12,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
 import net from "node:net";
@@ -1285,7 +1286,8 @@ test("a commit runs pre-commit's hooks, which set themselves up as they first ru
 test("a command's own socket in its temporary folder works, as a server's tests or Python's multiprocessing make one", { skip: linux && "this Mac's box only (a machine's is in its own short ~/.kuvo-code, where this test's folder is deeper)" }, async () => {
   // This Mac's box as the app starts it, its temporary files in the app's temporary folder (named
   // as long as the app's own), its folder as deep as `~/Library/Application Support/<bundle>`.
-  const bundle = "kuvo.sock.tst";
+  // A name of its own each run, as long as the app's, so two runs at once don't share it.
+  const bundle = `kuvo.sock.${crypto.randomBytes(2).toString("hex").slice(0, 3)}`;
   const box = boxAt(path.join("Library", "Application Support", bundle), true);
   const temporary = path.join(os.tmpdir(), bundle);
   fs.rmSync(temporary, { recursive: true, force: true });
