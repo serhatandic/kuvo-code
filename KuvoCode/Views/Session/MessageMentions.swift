@@ -116,8 +116,8 @@ nonisolated enum MessageMentions {
         return text.characters.isEmpty ? token : token + AttributedString(" ") + text
     }
 
-    /// `attributed` as SwiftUI's Text (the queue's, a key page's line), each marked "&" drawn as its
-    /// face or mark, `size` points, and its links marked for `LinkPointer`.
+    /// `attributed` as SwiftUI's Text (the queue's, the key page's line), each marked "&" drawn as
+    /// its face or mark, `size` points, and its links marked for `LinkPointer`.
     @MainActor static func text(_ attributed: AttributedString, size: CGFloat) -> Text {
         guard attributed.runs.contains(where: { $0[AgentMark.self] != nil || $0[PictureMark.self] != nil || $0[KeywordTokenMark.self] != nil || $0.link != nil }) else { return Text(attributed) }
         var pieces: [Text] = []
