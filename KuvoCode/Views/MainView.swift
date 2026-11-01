@@ -937,8 +937,8 @@ struct MainView: View {
         if actions.hasProject {
             add("Run", "play", "⌘R", detail: runCommand, actions.run)
         }
-        add("New Terminal", "terminal", "⌃`", actions.newTerminal)
-        add("New Terminal Tab", "apple.terminal", "⌃⇧`", actions.newTerminalTab)
+        add("New Terminal", "apple.terminal", "⌃⇧`", actions.newTerminalTab)
+        add("New Terminal in Panel", "terminal", "⌃`", actions.newTerminal)
         add("New Browser Tab", "globe", "⌥⌘B", actions.newBrowser)
         add("Show Changes", "plusminus", "⌥⌘I", actions.showChanges)
         if actions.hasProject {

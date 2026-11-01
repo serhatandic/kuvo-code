@@ -30,6 +30,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - The panel's Files hides .DS_Store and version control folders, and a narrow header shows the file's name with the full path on hover.
 - Settings pages fade at their top and bottom edges as you scroll; worktrees placed in Kuvo Code's own folder say so instead of a long path.
 - More of the app's icon buttons read their names in VoiceOver.
+- The two terminal commands say where they open: **New Terminal** (⌃⇧`) as a tab, **New Terminal in Panel** (⌃`) in the side panel.
 - A turn that fails says what happened in its headline (the provider is rate limiting you, the sign-in has ended, the usage limit is reached, the provider couldn't be reached) with the details under it, and offers the way out in the same card: Try Again, and Switch Model, Sign In Again or Open Accounts where that's what helps.
 - A failed conversation's mark in the sidebar is a filled red disc, easier to tell from the others.
 - While a side question shows over the composer, what you send asks it a follow-up: a "Side question" tag says so, and its × sends the next message to the conversation again. The card no longer has a second text field of its own.
