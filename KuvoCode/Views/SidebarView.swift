@@ -61,6 +61,8 @@ struct SidebarView: View {
     /// What each box found in its conversations, by the box: one's earlier finds stay until it
     /// answers the newer search, as on the phone.
     @State private var conversationFinds: [String: [Workspace.ConversationFind]] = [:]
+    /// The words `conversationFinds` were found for, to mark in them while you type on.
+    @State private var findsQuery = ""
     /// Everything found in conversations, the latest first.
     private var conversationResults: [Workspace.ConversationFind] {
         Array(conversationFinds.values.flatMap(\.self).sorted { $0.session.time.updated > $1.session.time.updated }.prefix(20))
@@ -257,6 +259,7 @@ struct SidebarView: View {
                 guard !Task.isCancelled else { return }
                 answered.insert(box)
                 searchAnswered.insert(box)
+                findsQuery = query
                 conversationFinds[box] = finds
             }
             guard !Task.isCancelled else { return }
@@ -544,9 +547,9 @@ struct SidebarView: View {
                 }
                 switch result.found {
                 case .bot(let bot):
-                    botRow(bot, snippet: SearchSnippet.text(result.snippet, found: search), action: show)
+                    botRow(bot, snippet: SearchSnippet.text(result.snippet, found: findsQuery), action: show)
                 case .session(let session):
-                    ConversationResultRow(title: session.title ?? "New Session", snippet: SearchSnippet.text(result.snippet, found: search), isSelected: selection == session.id, action: show)
+                    ConversationResultRow(title: session.title ?? "New Session", snippet: SearchSnippet.text(result.snippet, found: findsQuery), isSelected: selection == session.id, action: show)
                         .contextMenu { menu(for: session) }
                 }
             }
