@@ -14,7 +14,7 @@ for Linux's tools).
 
 | Scenario | Suites | Not guarded yet |
 | --- | --- | --- |
-| A1, J2 A model ready, or the one you picked when it can't run | StartingModelTests; Copilot's Claude models on each box: `compatibility.test.js` (bridge), RebootTests; the engine starts when the box doesn't answer for its settings: MacBoxTests | |
+| A1, J2 A model ready, or the one you picked when it can't run | StartingModelTests; Copilot's Claude models on each box, and only with a Copilot account: `compatibility.test.js` (bridge), RebootTests; a new box's first message on the real engine's default: `compatibility-live.test.js` (bridge, with OPENCODE_TEST_BINARY); the engine starts when the box doesn't answer for its settings: MacBoxTests | |
 | A2, A3 First launch with no account, then connecting one | StartingModelTests (the model a session starts on, free ones without an account) | the welcome card and the Accounts sheet (UI; tests that drive the window would take over your keyboard and mouse, so the end-to-end runs try them) |
 | A8 Your accounts in Settings › Accounts: a coding agent's account you remove staying gone while every agent is checked anew, Add Another Account clicked twice adding one; a plan's sign-in that ended while Kuvo Code was closed marked when it opens; Disconnect the engine refuses saying so; a machine's own Claude Code, Codex and Grok signing out | AgentAccountsTests, SignInEndedTests; the bridge's accounts.test.js (Disconnect); the Box package's accounts-check.test.ts (an agent's check failing, signing out on a machine) | the account rows and their menu (UI; a look in a demo copy) |
 | A5 Theme, accent and text size everywhere | | all on screen (UI; the end-to-end runs) |
@@ -28,7 +28,7 @@ for Linux's tools).
 | B24 What agents made: each file's versions with who made them; Keep holds every version past the budget for older ones and after the box starts again; a bot's Final; putting a version back | the box's artifacts.test.ts; KuvoLink's ArtifactsTests (how Kept, Final and the Shelf's sections read) | the popover itself (UI) |
 | B8 A session in a worktree, merged back; a machine's worktrees kept by the machine | WorktreeSessionTests, GitBranchesTests, the bridge's worktrees.test.js | making one on a machine from the Mac (by hand, on a test machine) |
 | B9 Plan first, then Build It | AgentAsksTests | |
-| B10 Ask First: allow once, always, deny | ComposerReturnsTests, ProjectFoldersTests, PermissionCardsTests, AlwaysAllowedTests | |
+| B10 Ask First: allow once, always, deny | ComposerReturnsTests, ProjectFoldersTests, PermissionCardsTests, OutsideAskCardTests, AlwaysAllowedTests | |
 | The sandbox's Also Allowed: every folder at once under whose it is (a project, a bot's own folder, the chats, where one counts for every chat), added for whom you pick and removed, from a box from before owners too; a deleted bot's go with it, and a folder that's gone still shows | AlsoAllowedTests, SandboxAsksTests (the card's words); KuvoClient's SandboxTests; the bridge's sandbox-asks.test.js | the list itself (UI; a look in a demo copy with `KUVO_DEMO_SANDBOX_RULES`); the phone's side: kuvo-code-ios SandboxTests |
 | B11, L38 The agent asks questions, answered in the card or skipped | AgentAsksTests | |
 | B12 Queue while it works, Stop, Resume; a message removed or edited on its way, and Undo putting a removed one back where it was while it's stopped | ComposerReturnsTests, QueueTests, MessagesOnTheirWayTests; the bridge's queue.test.js (the box's order) | |

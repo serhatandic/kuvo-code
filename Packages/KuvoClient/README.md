@@ -14,6 +14,8 @@ The rules for what a message says, the same in both apps. Foundation only: no vi
   one, and the icons a page declares.
 - `TypedEchoes`: a message field's own typing handed back to it late by a busy app, told apart from
   a change by the app, so no key is lost.
+- `OutsideFolders`: a folder or file an agent asks to work in outside its project, as people know
+  it ("~/notes", not the engine's "/Users/me/notes/*"), and as VoiceOver reads it ("Home, notes").
 
 ## ClientAccounts
 

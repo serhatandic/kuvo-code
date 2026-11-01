@@ -1,6 +1,7 @@
 import AppKit
 import ClientChanges
 import ClientDesign
+import ClientText
 import OpenCodeKit
 import SwiftUI
 
@@ -56,9 +57,11 @@ struct PermissionCard: View {
                 }
             } else if !request.resources.isEmpty {
                 AllowedWell(maxHeight: 180) {
-                    Text(command ?? request.resources.map(relative).joined(separator: "\n"))
+                    let allowed = allowed
+                    Text(allowed.shown)
                         .transcriptCodeFont()
                         .textSelection(.enabled)
+                        .accessibilityLabel(allowed.spoken.map(Text.init) ?? Text(allowed.shown))
                         .padding(10)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -111,7 +114,23 @@ struct PermissionCard: View {
         }
     }
 
-    private var alwaysHelp: String {
+    /// What Allow allows, as the card shows it, and as VoiceOver reads it (nil: as shown). Folders
+    /// outside the project as people know them ("~/notes"), not the engine's pattern for them
+    /// ("/Users/me/notes/*", read as "slash star").
+    var allowed: (shown: String, spoken: String?) {
+        if let command { return (command, nil) }
+        guard request.action == "external_directory" else { return (request.resources.map(relative).joined(separator: "\n"), nil) }
+        let home = self.home
+        return (request.resources.map { OutsideFolders.shown($0, home: home) }.joined(separator: "\n"),
+                request.resources.map { OutsideFolders.spoken($0, home: home) }.joined(separator: "; "))
+    }
+
+    /// The home folder of the computer that asks: this Mac's (a machine's isn't known here).
+    private var home: String? {
+        RemoteFolder.parse(directory) == nil ? NSHomeDirectory() : nil
+    }
+
+    var alwaysHelp: String {
         let patterns = request.save ?? request.resources
         guard !patterns.isEmpty, patterns != ["*"] else {
             // Everything of its kind, which "*" doesn't say.
@@ -123,7 +142,8 @@ struct PermissionCard: View {
             }
             return "Don't ask again for \(kind) in this project"
         }
-        return "Don't ask again for: " + patterns.joined(separator: ", ")
+        let named = request.action == "external_directory" ? patterns.map { OutsideFolders.shown($0, home: home) } : patterns
+        return "Don't ask again for: " + named.joined(separator: ", ")
     }
 
     private func relative(_ path: String) -> String {

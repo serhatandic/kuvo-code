@@ -243,10 +243,16 @@ export function watchBox({ tell = () => true, hold = null, bots = false, notices
 export async function watchEvents(read: () => Target, tell: (notice: Notice) => void, signal?: AbortSignal, answered: (id: string | undefined) => void = () => {}, { bots = false, notices = !bots, signIns = false, hold = null, signedIn = () => {}, steers = false, steerAfter, learns = false, learned = () => {}, queues = false, work = false, goals = false }: WatchOptions = {}): Promise<void> {
   let attempt = 0;
   let lastLearned = 0;
+  let learning = false;
+  // Counted once it's learned: one the engine couldn't answer yet (just started) goes again with
+  // its next event.
   const learn = (source: Target) => {
-    if (!learns || Date.now() - lastLearned < LEARN_EVERY) return;
-    lastLearned = Date.now();
-    learnCompatibility(source).catch(() => {}).finally(learned);
+    if (!learns || learning || Date.now() - lastLearned < LEARN_EVERY) return;
+    learning = true;
+    learnCompatibility(source).then(() => { lastLearned = Date.now(); }, () => {}).finally(() => {
+      learning = false;
+      learned();
+    });
   };
   while (!signal?.aborted) {
     // What this connection set going ends with it: what it heard of can't be settled once it's gone.

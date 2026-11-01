@@ -1970,7 +1970,7 @@ final class Workspace {
             }
             for request in permissions {
                 found[request.id] = request.sessionID
-                if tell, asking[request.id] == nil { notifyAsk(request.sessionID, body: Self.describe(request), request: request.id, isPermission: true, answerable: Self.showsAll(request)) }
+                if tell, asking[request.id] == nil { notifyAsk(request.sessionID, body: Self.describe(request, home: askHome(request.sessionID)), request: request.id, isPermission: true, answerable: Self.showsAll(request)) }
             }
             for form in forms where form.sessionID != FormRequest.anySession {
                 found[form.id] = form.sessionID
@@ -2498,7 +2498,7 @@ final class Workspace {
         case "permission.asked":
             guard let request = try? event.payload(as: PermissionRequest.self) else { return }
             asking[request.id] = request.sessionID
-            notifyAsk(request.sessionID, body: Self.describe(request), request: request.id, isPermission: true, answerable: Self.showsAll(request))
+            notifyAsk(request.sessionID, body: Self.describe(request, home: askHome(request.sessionID)), request: request.id, isPermission: true, answerable: Self.showsAll(request))
         case "permission.replied":
             if let reply = try? event.payload(as: EventPayload.PermissionReplied.self) {
                 asking[reply.requestID] = nil
@@ -2617,8 +2617,13 @@ final class Workspace {
         request.resources.filter { $0 != "*" }.count <= 4
     }
 
+    /// The home folder of the computer a session asks on: this Mac's (a machine's isn't known here).
+    private func askHome(_ session: String) -> String? {
+        sessionMachines[session] == nil && RemoteFolder.parse(self.session(session)?.location.directory ?? "") == nil ? NSHomeDirectory() : nil
+    }
+
     /// "Wants to run a command: npm test".
-    private static func describe(_ request: PermissionRequest) -> String {
+    private static func describe(_ request: PermissionRequest, home: String?) -> String {
         let what = switch request.action {
         case "edit", "write", "patch": "edit files"
         case "shell", "bash": "run a command"
@@ -2627,8 +2632,11 @@ final class Workspace {
         case "webfetch": "open a web page"
         default: request.action
         }
-        // Every one it covers (a command line's commands each): Allow takes them all.
-        let shown = request.resources.filter { $0 != "*" }
+        // Every one it covers (a command line's commands each): Allow takes them all. Folders
+        // outside the project as people know them ("~/notes", not "/Users/me/notes/*").
+        let shown = request.resources.filter { $0 != "*" }.map {
+            request.action == "external_directory" ? OutsideFolders.shown($0, home: home) : $0
+        }
         guard !shown.isEmpty else { return "Wants to \(what)." }
         let more = shown.count > 4 ? " · and \(shown.count - 4) more" : ""
         return "Wants to \(what): " + shown.prefix(4).joined(separator: " · ") + more

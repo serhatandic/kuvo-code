@@ -57,8 +57,8 @@ final class BoxProcess {
     }
 
     /// `content` (what the engine starts with in `OPENCODE_CONFIG_CONTENT`) with what some providers
-    /// need from the engine on top, as this Mac's box last learned it from its engine, or Kuvo Code
-    /// knows them before it has (`kuvo-link.js engine-config`, as a machine's start adds it); as it
+    /// need from the engine on top, as this Mac's box last learned it from its engine (nothing before
+    /// it has; `kuvo-link.js engine-config`, as a machine's start adds it); as it
     /// is when that can't be run, or doesn't answer within `timeout` seconds (the engine's start never
     /// waits on it longer), or the box's start was refused (what it would run isn't what it was), or
     /// it isn't any more (checked again here when the box's own check is over a minute old: the

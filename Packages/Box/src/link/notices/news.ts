@@ -1,8 +1,9 @@
 // What's news for your phones in an engine's or a group chat's events, said as the Mac's
 // notifications say it.
 
+import os from "node:os";
 import path from "node:path";
-import { cut } from "../../shared/text";
+import { cut, outsideShown } from "../../shared/text";
 import { readProjects } from "../areas/projects";
 import { readRemovedWorktrees, readWorktrees } from "../areas/worktree-records";
 import { engineGet } from "../engine/client";
@@ -88,10 +89,13 @@ const plain = (text: unknown): string => String(text ?? "")
   .replace(/\s+/g, " ").trim();
 
 // "Wants to run a command: npm test", as the Mac says it: every one it covers (a command line's
-// commands each, as Allow takes them all), up to four, then how many more.
-export function describePermission(request: Pick<PermissionAsked, "action" | "resources">): string {
+// commands each, as Allow takes them all), up to four, then how many more. With `home` (for people:
+// a notice), folders outside the project as they know them ("~/notes", not "/Users/me/notes/*");
+// an agent's told the paths.
+export function describePermission(request: Pick<PermissionAsked, "action" | "resources">, home?: string): string {
   const what = ({ edit: "edit files", write: "edit files", patch: "edit files", shell: "run a command", bash: "run a command", read: "read a file", external_directory: "work outside the project", webfetch: "open a web page" } as Record<string, string>)[request.action] ?? request.action;
-  const shown = (Array.isArray(request.resources) ? request.resources : []).filter(each => each !== "*");
+  const shown = (Array.isArray(request.resources) ? request.resources : []).filter(each => each !== "*")
+    .map(each => home !== undefined && request.action === "external_directory" ? outsideShown(String(each), home) : each);
   if (!shown.length) return `Wants to ${what}.`;
   const more = shown.length > 4 ? ` · and ${shown.length - 4} more` : "";
   return `Wants to ${what}: ${shown.slice(0, 4).join(" · ")}${more}`;
@@ -177,7 +181,7 @@ export async function noticeFor(event: EngineEvent, get: EngineAsk): Promise<Not
     case "permission.asked": {
       const where = await shown(data.sessionID!);
       if (isHiddenRun(where)) return null;
-      const body = describePermission(data as PermissionAsked);
+      const body = describePermission(data as PermissionAsked, os.homedir());
       return about(where, "permission", body, { request: data.id, ...(where.id !== data.sessionID ? { requestSession: data.sessionID } : {}) },
         { answerable: showsAllCovered(data) && showsAll(body), untitled: "Kuvo Code" });
     }
