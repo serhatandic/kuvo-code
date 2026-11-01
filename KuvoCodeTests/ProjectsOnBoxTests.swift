@@ -12,7 +12,7 @@ import Testing
 /// own move there once. Remove Project is the box's: it archives every session of the project,
 /// older ones too. The engine is a stand-in, listening on its port so the box can reach it.
 @MainActor
-@Suite(.serialized) struct ProjectsOnBoxTests {
+@Suite(.serialized, .timeLimit(.minutes(1))) struct ProjectsOnBoxTests {
     static let port: UInt16 = 47_950
     let engine = StubEngine(port: Int(port))
     let box: TestBox
@@ -158,6 +158,30 @@ import Testing
         let lab = try await #require(workspace.boxes?("lab")).value([String: [Workspace.BoxProject]].self, "GET", "kuvo/projects")
         #expect(lab["projects"]?.map(\.directory) == ["/home/me/app"])
         #expect(workspace.folders == [RemoteFolder.folder("/home/me/app", on: "lab")])
+    }
+
+    /// A machine's project renamed or removed from another client (a phone) shows here while the
+    /// machine is connected, as this Mac's own do, not only once the app is opened again.
+    @Test func aMachinesProjectsChangedElsewhereShowHere() async throws {
+        defer { done() }
+        UserDefaults.standard.set(true, forKey: "projectsOnBox.lab")
+        let workspace = Workspace()
+        let endpoint = try #require(box.process.endpoint)
+        let base = endpoint.url.absoluteString.hasSuffix("/") ? endpoint.url : URL(string: endpoint.url.absoluteString + "/")!
+        // The machine's box, as SSH reaches it: here, this test's own box.
+        workspace.boxes = { id in
+            id == "lab" ? BoxClient(box: id, transport: LocalBox { EngineRoutes.forward($0, to: base, password: endpoint.password, allowing: { path, _ in path.hasPrefix("kuvo/") }) }) : nil
+        }
+        let phone = try #require(workspace.boxes?("lab"))
+        let app = RemoteFolder.folder("/home/me/app", on: "lab")
+        let following = Task { await workspace.followProjects(on: "lab") }
+        defer { following.cancel() }
+        _ = try await phone.send("PUT", "kuvo/projects?directory=" + Workspace.queryValue("/home/me/app"), body: Data("{}".utf8))
+        try await until { workspace.folders.contains(app) }
+        _ = try await phone.send("PUT", "kuvo/projects?directory=" + Workspace.queryValue("/home/me/app"), body: Data(#"{"name":"Storefront"}"#.utf8))
+        try await until { workspace.projectName(app) == "Storefront" }
+        _ = try await phone.send("PUT", "kuvo/projects?directory=" + Workspace.queryValue("/home/me/app"), body: Data(#"{"removed":true}"#.utf8))
+        try await until { !workspace.folders.contains(app) }
     }
 
     /// Worktrees this Mac kept before its box kept them go to the box, so Remove Project there

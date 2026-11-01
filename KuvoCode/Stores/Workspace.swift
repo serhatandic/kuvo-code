@@ -1241,21 +1241,23 @@ final class Workspace {
         }
     }
 
-    /// This Mac's projects as its box has them, from now on: each change, wherever it was made
-    /// (a phone's too), as it's made.
-    func followProjects() async {
+    /// `box`'s projects as it has them, from now on: each change, wherever it was made (a phone's
+    /// too), as it's made. This Mac's for as long as the app runs; a machine's while it's
+    /// connected (its connection ends this).
+    func followProjects(on box: String = BoxClient.mac) async {
         while !Task.isCancelled {
-            if let client = boxes?(BoxClient.mac) {
-                await loadProjects(on: BoxClient.mac)
+            if let client = boxes?(box) {
+                await loadProjects(on: box)
                 do {
                     for try await line in client.follow("kuvo/projects/events") {
-                        guard Self.keepsProjects(BoxClient.mac), let listed = try? JSONDecoder().decode(BoxProjects.self, from: line) else { continue }
-                        await inTurn { self.take(listed.projects, from: BoxClient.mac) }
+                        guard Self.keepsProjects(box), let listed = try? JSONDecoder().decode(BoxProjects.self, from: line) else { continue }
+                        await inTurn { self.take(listed.projects, from: box) }
                     }
                 } catch {}
             }
-            // The box restarted, or isn't up yet: followed again in a moment.
-            try? await Task.sleep(for: .seconds(2))
+            // The box restarted, or isn't up yet (a machine's that can't keep them yet, read
+            // again now and then): followed again in a moment.
+            try? await Task.sleep(for: .seconds(box == BoxClient.mac ? 2 : 30))
         }
     }
 
@@ -1338,8 +1340,8 @@ final class Workspace {
         await turn.value
     }
 
-    /// Your machines' projects read again (back in the app: a phone may have changed them; a
-    /// machine's aren't followed as this Mac's are).
+    /// Your machines' projects read again (back in the app, in case following one missed a change
+    /// while its connection dropped for a moment).
     func reloadMachinesProjects() {
         for machine in connectedMachines { Task { await loadProjects(on: machine) } }
     }
