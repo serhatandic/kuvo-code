@@ -5,7 +5,7 @@
 // here. Every box answers them alike, through `POST kuvo/agent-tools`.
 
 import { call, readEngineFile } from "../engine/client";
-import { agentsCommandsInSandbox, engineCommandsInSandbox } from "../fence/state";
+import { agentsCommandsInSandbox, engineCommandsInSandbox, fenceWhole } from "../fence/state";
 import { stopSession } from "../engine/queue";
 import { holdArchived } from "../areas/wakes";
 import { noteWorkChanged } from "./changes";
@@ -109,10 +109,11 @@ export async function stopSessionTool(caller: Caller, args: Record<string, unkno
 
 /** Whether the commands `permission` asks about run in the sandbox: the engine's, as it stands; a
  * coding agent's, as the agents' bridge says of the one asking (its whole program in it, started
- * while the sandbox was on), and while it's still on. */
+ * while the sandbox was on), and while it's still on; and kept from all it hides (`fenceWhole`). */
 function commandsInSandbox(target: Target, permission: PendingPermission): boolean {
   let engine = false;
   try { engine = readEngineFile().port === target.port; } catch {}
+  if (!fenceWhole()) return false;
   return engine ? engineCommandsInSandbox() : permission.sandboxed === true && agentsCommandsInSandbox();
 }
 

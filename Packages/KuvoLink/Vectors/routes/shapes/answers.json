@@ -4859,6 +4859,9 @@
          "literal": "kernel"
         },
         {
+         "literal": "namespaces"
+        },
+        {
          "literal": "macos"
         },
         {
@@ -4917,6 +4920,9 @@
          "literal": "writesOwn"
         },
         {
+         "literal": "services"
+        },
+        {
          "literal": "didntRun"
         },
         {
@@ -4924,7 +4930,16 @@
         }
        ]
       },
-      "failures?": "number"
+      "failures?": "number",
+      "gaps?": {
+       "list": {
+        "oneOf": [
+         {
+          "literal": "services"
+         }
+        ]
+       }
+      }
      }
     }
    }
@@ -4946,6 +4961,9 @@
          "literal": "kernel"
         },
         {
+         "literal": "namespaces"
+        },
+        {
          "literal": "macos"
         },
         {
@@ -5004,6 +5022,9 @@
          "literal": "writesOwn"
         },
         {
+         "literal": "services"
+        },
+        {
          "literal": "didntRun"
         },
         {
@@ -5011,7 +5032,16 @@
         }
        ]
       },
-      "failures?": "number"
+      "failures?": "number",
+      "gaps?": {
+       "list": {
+        "oneOf": [
+         {
+          "literal": "services"
+         }
+        ]
+       }
+      }
      }
     }
    }
@@ -5033,6 +5063,9 @@
          "literal": "kernel"
         },
         {
+         "literal": "namespaces"
+        },
+        {
          "literal": "macos"
         },
         {
@@ -5091,6 +5124,9 @@
          "literal": "writesOwn"
         },
         {
+         "literal": "services"
+        },
+        {
          "literal": "didntRun"
         },
         {
@@ -5098,7 +5134,16 @@
         }
        ]
       },
-      "failures?": "number"
+      "failures?": "number",
+      "gaps?": {
+       "list": {
+        "oneOf": [
+         {
+          "literal": "services"
+         }
+        ]
+       }
+      }
      }
     },
     "503": {

@@ -7,14 +7,17 @@ import { any, bool, type Infer, list, NOTHING, number, object, type RouteShape, 
  * commands are sandboxed too (`outside`: one started before it was on still runs outside it), and whether it asks you to restart those started before it was on
  * (`restart`, once: `POST kuvo/sandbox/restart`, `{restart}` true or false). When it isn't on: why, as a word a client maps (`reason`), what you
  * can do (`action`) and the box's route that does it (`route`); what the computer needs first
- * (`needs`), which part of the check failed (`check`), and how many checks failed in a row. */
+ * (`needs`), which part of the check failed (`check`), and how many checks failed in a row. While
+ * it's on, what it can't keep commands from here (`gaps`: `services`, the services your login runs,
+ * where commands can't have a namespace of their own; `needs` says what for). */
 export const SANDBOX = object({
   on: bool, "why?": string, able: bool, agents: bool, "outside?": bool, "restart?": bool,
-  "reason?": words("kernel", "macos", "engineMissing", "checking", "checkFailed", "plugin", "engineDown", "waiting"),
+  "reason?": words("kernel", "namespaces", "macos", "engineMissing", "checking", "checkFailed", "plugin", "engineDown", "waiting"),
   "action?": words("help", "softwareUpdate", "retry", "fix", "restartEngine"),
   "route?": string, "needs?": string,
-  "check?": words("folder", "tempFiles", "readsOwn", "writesOwn", "didntRun", "setup"),
+  "check?": words("folder", "tempFiles", "readsOwn", "writesOwn", "services", "didntRun", "setup"),
   "failures?": number,
+  "gaps?": list(words("services")),
 });
 
 export type SandboxState = Infer<typeof SANDBOX>;

@@ -37,6 +37,18 @@ struct SandboxNoticeTests {
         #expect(try state(#"{"on": false, "able": false, "reason": "macos", "action": "softwareUpdate"}"#).notice.buttons.map(\.action) == [.softwareUpdate])
     }
 
+    @Test func aMachineWhereItCantKeepCommandsFromYourServicesSaysSo() throws {
+        // (A Linux machine whose commands can't have a namespace of their own: on, with a gap.)
+        let without = try state(#"{"on": true, "able": true, "agents": true, "gaps": ["services"], "needs": "user namespaces"}"#).notice
+        #expect(without.look == .needsYou, "not the green line that says all's well")
+        #expect(without.title == "Commands can still reach your login’s services")
+        #expect(without.detail.contains("Until it allows user namespaces, agents don’t use your vault here and goals don’t run on their own"))
+        #expect(without.buttons.map(\.action) == [.help])
+        #expect(try state(#"{"on": true, "able": true, "agents": true, "gaps": ["services"], "needs": "util-linux"}"#).notice.detail.contains("Until it has util-linux"))
+        // A gap a newer box adds reads as none.
+        #expect(try state(#"{"on": true, "able": true, "agents": true, "gaps": ["later"]}"#).notice.detail.contains("can’t read your keys"))
+    }
+
     @Test func aReasonFromANewerBoxShowsItsOwnWords() throws {
         let newer = try state(#"{"on": false, "reason": "somethingNew", "why": "Its new part isn't ready.", "route": "kuvo/sandbox/check"}"#).notice
         #expect(newer.look == .needsYou)

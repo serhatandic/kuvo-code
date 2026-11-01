@@ -8,6 +8,7 @@
 // now is used from the next command on, with no restart.
 
 import { MOST_FOLDERS } from "./allowed";
+import { HIDE } from "./landlock";
 import { AGENT_FOLDERS } from "./seatbelt";
 
 /** Where the box keeps the sandbox's own files (profiles, the plugin's note, commands' temporary
@@ -55,7 +56,7 @@ export function launcherScript(places: FencePlaces): string {
         `c_sum=$( (printf '%s' "\${c_last-}" | shasum -a 256) 2>/dev/null | cut -c 1-16)`,
         `case \${OPENCODE_SESSION_ID-} in ses_*[!A-Za-z0-9_]*|ses_|'') tag="kuvo-sandbox" ;; *) tag="kuvo-sandbox $OPENCODE_SESSION_ID $c_sum" ;; esac`,
         `[ "$as_bun" != 1 ] || export BUN_BE_BUN=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0`,
-        `exec /usr/bin/sandbox-exec -D TAG="$tag" -D WORK="$work" -D GIT="$git" -D TMP="$tmp" -D WAKES="$own" -D MEMORY="$memory" -D SSH="$ssh" -D WORK_RE="$(escaped "$work")" -D GIT_RE="$(escaped "$git")" ${Array.from({ length: MOST_FOLDERS }, (_, at) => `-D ALLOW${at}="$a${at}" -D ALLOW${at}_RE="$r${at}"`).join(" ")} ${Array.from({ length: AGENT_FOLDERS }, (_, at) => `-D OWN${at}="$o${at}" -D OWN${at}_RE="$q${at}" -D READ${at}="$k${at}"`).join(" ")} -D STATE="$(names "$state_list")" -D KEPT="$(names "$kept_list")" -D PORT="$port" -f "$F/$profile$agent.sb" "$shell" "$@"`,
+        `PATH=$user_path exec /usr/bin/sandbox-exec -D TAG="$tag" -D WORK="$work" -D GIT="$git" -D TMP="$tmp" -D WAKES="$own" -D MEMORY="$memory" -D SSH="$ssh" -D WORK_RE="$(escaped "$work")" -D GIT_RE="$(escaped "$git")" ${Array.from({ length: MOST_FOLDERS }, (_, at) => `-D ALLOW${at}="$a${at}" -D ALLOW${at}_RE="$r${at}"`).join(" ")} ${Array.from({ length: AGENT_FOLDERS }, (_, at) => `-D OWN${at}="$o${at}" -D OWN${at}_RE="$q${at}" -D READ${at}="$k${at}"`).join(" ")} -D STATE="$(names "$state_list")" -D KEPT="$(names "$kept_list")" -D PORT="$port" -f "$F/$profile$agent.sb" "$shell" "$@"`,
       ]
     : [
         // Kuvo Code's own commands (kuvo-wake's watches) run it with no engine: the box names the
@@ -63,7 +64,12 @@ export function launcherScript(places: FencePlaces): string {
         // agent writes: Bun's settings (`bunfig.toml`, its preloads) and a `.env` from nowhere.
         `[ -n "$runtime" ] || runtime=$(cat "$F/runtime" 2>/dev/null)`,
         `[ -x "$runtime" ] || { echo "This command can't run in the sandbox here: the engine's runtime wasn't given." >&2; exit 126; }`,
-        `KUVO_FENCE_OWN="$own_list" KUVO_FENCE_READ="$read_list" KUVO_FENCE_MEMORY="$memory" KUVO_FENCE_BUN="$as_bun" BUN_BE_BUN=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 exec "$runtime" --config=/dev/null --no-env-file ${sh(places.runner)} "$F/policy.json" "$work" "$git" "$tmp" "$own" "$allowed" "$shell" "$@"`,
+        // In a namespace of its own, where your session's services aren't (fence/landlock.ts, HIDE):
+        // the box names the `unshare` that gives it one, or `-` where it runs without, as it was set up.
+        `ns=$(cat "$F/namespace" 2>/dev/null)`,
+        `set -- "$runtime" --config=/dev/null --no-env-file ${sh(places.runner)} "$F/policy.json" "$work" "$git" "$tmp" "$own" "$allowed" "$shell" "$@"`,
+        `case $ns in /*) set -- "$ns" -Urm /bin/sh -c ${sh(HIDE)} "$ns" "$(id -u)" "$(id -g)" "$(id -un 2>/dev/null)" "$F/ns" "$F/sockets" "$@" ;; -) ;; *) echo "This command can't run in the sandbox here: it isn't set up." >&2; exit 126 ;; esac`,
+        `PATH=$user_path KUVO_FENCE_OWN="$own_list" KUVO_FENCE_READ="$read_list" KUVO_FENCE_MEMORY="$memory" KUVO_FENCE_BUN="$as_bun" BUN_BE_BUN=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 exec "$@"`,
       ];
   return [
     "#!/bin/sh",
@@ -71,6 +77,9 @@ export function launcherScript(places: FencePlaces): string {
     "# The engine runs each command an agent (or you, with !) runs through this: the command's own",
     "# shell, in the sandbox. Its plugin (kuvo-sandbox.js) names the conversation's folder.",
     `F=${sh(places.folder)}`,
+    // Until the command runs, only the system's programs: never one a command put on your PATH
+    // (in a folder it writes), run here outside the sandbox.
+    `user_path=\${PATH-/usr/bin:/bin}; PATH=/usr/sbin:/usr/bin:/sbin:/bin`,
     `shell=\${KUVO_FENCE_SHELL:-/bin/sh} work=\${KUVO_FENCE_WORK-} work_at=\${KUVO_FENCE_WORK_AT-} git=\${KUVO_FENCE_GIT-} runtime=\${KUVO_FENCE_RUNTIME-}`,
     // A coding agent run whole in it (the agents' bridge names them): its homes and the folders it
     // only reads, one a line; in its homes, the folders of its state and what it never writes, by
@@ -156,6 +165,9 @@ export function launcherScript(places: FencePlaces): string {
     ...(places.platform === "linux" ? ["export UV_LINK_MODE=copy"] : []),
     // (As the sandbox compares paths: through links, `/var` being `/private/var`.)
     ...(places.platform === "darwin" ? [`tmp=$(cd "$tmp" 2>/dev/null && pwd -P) || { echo "This command can't run: its temporary folder isn't there." >&2; exit 126; }`] : []),
+    // tmux's server, in it too: one a command starts is there for the conversation's next ones, and
+    // never the one your terminals attach to (yours, which types into them, commands can't reach).
+    `export TMUX_TMPDIR="$tmp"`,
     // Its conversation's wake-ups and watches (kuvo-wake): its bot's folder, or its own in the
     // box's wakes folder, which this makes with the folder it works in (never the command's: a
     // watch's check runs there). The engine names the conversation; your ! commands have none, and

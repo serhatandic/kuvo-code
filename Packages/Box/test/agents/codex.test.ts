@@ -814,8 +814,9 @@ describe.skipIf(!canFence)("Codex in the box's sandbox", () => {
     const other = await listen(elsewhere)
     try {
       const id = await run([[tries, { app: ["connect", join(home, "ipc", "s.sock")], other: ["connect", join(elsewhere, "s.sock")] }]], { permissions: askFirst })
-      // (Linux can't refuse a socket: a machine has no ChatGPT app.)
-      expect(said(id)).toBe(`app=${process.platform === "darwin" ? "no" : "yes"} other=yes`)
+      // (On Linux each command's namespace hides the sockets it's given, where the machine lets it.)
+      const refused = process.platform === "darwin" || readFileSync(join(kuvo, "run", "fence", "namespace"), "utf8") !== "-"
+      expect(said(id)).toBe(`app=${refused ? "no" : "yes"} other=yes`)
       // The box's own rules name your Codex's socket so (and Grok's shared leader's).
       if (process.platform === "darwin") expect(fencePolicy().sockets?.filter((folder) => folder.endsWith("/.codex/ipc") || folder.endsWith("/.grok"))).toHaveLength(2)
     } finally {

@@ -632,6 +632,8 @@ test("a coding agent's session that runs in the sandbox lets a bot allow its com
   // the box's sandbox is set up and checked.
   write(path.join(home, "run", "bridge.json"), JSON.stringify({ port: bridge.address().port, password: "b", pid: await runningAs("kuvo-agents", t) }));
   write(path.join(home, "run", "fence", "on"), "set up");
+  // (On Linux, each command in a namespace of its own, as the box notes it there.)
+  write(path.join(home, "run", "fence", "namespace"), "/usr/bin/unshare");
   t.after(() => fs.rmSync(path.join(home, "run", "bridge.json"), { force: true }));
   t.after(() => fs.rmSync(path.join(home, "run", "fence"), { recursive: true, force: true }));
   // Pixel's session, its conversation now with a coding agent on the bridge.
@@ -649,6 +651,14 @@ test("a coding agent's session that runs in the sandbox lets a bot allow its com
   assert.match((await answer("push")).text, /pushing/);
   // An agent started before the sandbox was on (or one not run in it): what a bot can't read as safe comes to you.
   assert.match((await answer("outside")).text, /always comes to the user/);
+  // A Linux machine whose commands can't have a namespace of their own: one could have your
+  // login's systemd run anything outside the sandbox, so that comes to you there too.
+  if (process.platform === "linux") {
+    write(path.join(home, "run", "fence", "namespace"), "-");
+    asked.set(session, [{ id: "without", sessionID: session, action: "shell", resources: ["npm install"], sandboxed: true }]);
+    assert.match((await answer("without")).text, /always comes to the user/);
+    write(path.join(home, "run", "fence", "namespace"), "/usr/bin/unshare");
+  }
   // The sandbox gone (its check failed): even an agent that said so leaves it to you.
   fs.rmSync(path.join(home, "run", "fence"), { recursive: true, force: true });
   asked.set(session, [{ id: "again", sessionID: session, action: "shell", resources: ["npm install"], sandboxed: true }]);
@@ -717,6 +727,8 @@ test("the first time the sandbox is on with agents that started before it still 
 test("in the sandbox, what pushes, deploys or sends however it's phrased still comes to you: through git's aliases and its other commands, a package runner, or find", async t => {
   write(path.join(home, "run", "bridge.json"), JSON.stringify({ port: bridge.address().port, password: "b", pid: await runningAs("kuvo-agents", t) }));
   write(path.join(home, "run", "fence", "on"), "set up");
+  // (On Linux, each command in a namespace of its own, as the box notes it there.)
+  write(path.join(home, "run", "fence", "namespace"), "/usr/bin/unshare");
   t.after(() => fs.rmSync(path.join(home, "run", "bridge.json"), { force: true }));
   t.after(() => fs.rmSync(path.join(home, "run", "fence"), { recursive: true, force: true }));
   const session = startedAddress(await tool("start_session", { task: "Ship the docs.", title: "Docs", project: "Tidepool" }, "ses_pixel"));

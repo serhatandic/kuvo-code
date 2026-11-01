@@ -49,6 +49,13 @@ public struct SandboxNotice: Equatable, Sendable {
 extension SandboxState {
     /// Its line or row, as the box says it is now.
     public var notice: SandboxNotice {
+        if on, gaps?.contains(.services) == true {
+            // On, but not all of it: systemd can run what a command asks outside it.
+            let fix = needs == "util-linux" ? "has util-linux" : "allows user namespaces"
+            return SandboxNotice(look: .needsYou, title: "Commands can still reach your login’s services",
+                                 detail: "They run in the sandbox, but this machine doesn’t let it keep them from services like systemd. Until it \(fix), agents don’t use your vault here and goals don’t run on their own.",
+                                 buttons: [.init(title: "How to Check…", action: .help)])
+        }
         if on { return SandboxNotice(look: .on, title: nil, detail: "Agents’ commands run in a sandbox: they can’t read your keys or sign-ins.", buttons: []) }
         let check = SandboxNotice.Button(title: "Try Again", action: .check)
         switch reason {

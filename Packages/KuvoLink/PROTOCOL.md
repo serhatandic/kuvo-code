@@ -3101,9 +3101,27 @@ box's own `SSH_AUTH_SOCK`, gpg-agent's, 1Password's, Secretive's, Bitwarden's an
 by their usual places (an `IdentityAgent` your ssh config names elsewhere, or a `GNUPGHOME`, isn't
 known). So `ssh`, and git over SSH, use only the vault's keys there, and signing a commit with
 your GPG key doesn't work; nor does an X11
-program, whose display (XQuartz's) is in launchd's folder too. (Linux can't refuse a socket: there
-a command isn't told where your SSH agent is, but can find one on its own, such as gpg-agent's in
-its usual place.)
+program, whose display (XQuartz's) is in launchd's folder too. Nor can it reach your tmux's server
+(`/private/tmp/tmux-<uid>`), which types into your terminals: its `TMUX_TMPDIR` is its temporary
+folder, so a tmux a command starts is its conversation's own, there for its next commands, on both
+systems. Linux's Landlock can't refuse a socket, so there each command runs in a namespace of its
+own (util-linux's `unshare`, as an unprivileged user namespace) where your session's folder
+(`/run/user/<uid>`: systemd's, which runs whatever it's asked outside the sandbox, your bus and
+keyring, your SSH and GPG agents), your tmux's, screen's and shell-started SSH agents' folders, the X
+server's, Neovim's and Emacs' servers', and VS Code's and Cursor's sockets in `/tmp` are empty or refuse, as do the other apps'
+sockets the box lists (gpg-agent's in `~/.gnupg`, OpenSSH's `~/.ssh/agent`, 1Password's,
+Bitwarden's, Grok's shared leader's, the box's own `SSH_AUTH_SOCK`); it runs as you, with your groups,
+and `XDG_RUNTIME_DIR` and a `DBUS_SESSION_BUS_ADDRESS` in that folder are unset. They're hidden as
+the command starts: one made later in `/tmp` (tmux started, or an `ssh -A` login, after a command a
+conversation left running) isn't. A machine that doesn't allow that (user namespaces off, or
+restricted by AppArmor, as Ubuntu 24.04 and later do, or without `unshare`) runs the sandbox without
+it: commands there can still reach those services (systemd can start anything outside the sandbox),
+so its state says so (`gaps`, below), the vault stays closed to agents, goals don't go on alone and
+a bot doesn't answer its sessions' asks for commands there. Abstract sockets are kept inside the sandbox from Linux 6.12 (Landlock 6);
+before, an X server's abstract one, or a bus `dbus-launch` started (`unix:abstract=`), stays
+reachable. On both systems, the launcher sets each command up with the system's own programs
+(`/usr/bin`, `/bin` and their `sbin`), never ones a command put on your PATH; the command has your
+PATH.
 On macOS your Keychain stays readable, as gh and git's Keychain helper read their sign-ins from it in
 their own process (each item keeps its own access list, Kuvo Code's too, though one that trusts
 `security` reads without asking, and the file itself can be copied), but not the system's own
@@ -3287,16 +3305,20 @@ it's empty.
   stderr goes nowhere, as it can hold its keys. Another set of servers (one added or taken away)
   starts Codex's thread, Cursor's agent and an ACP agent again and is told to Claude Code; a key you
   changed reaches the relay alone, from the agent's next turn.
+  While it's on, `gaps` lists what it can't keep commands from on this computer: `services`, the
+  services your login runs (a Linux machine whose commands can't have a namespace of their own;
+  `needs`: `"user namespaces"`, or `"util-linux"` without `unshare`). A client says so beside it.
   When it isn't on, also `reason`, a word for a client to map rather than reading `why`, with what
   you can do (`action`) and the box's route that does it (`route`, where there is one):
 
   | `reason` | when | `action` | `route` |
   | --- | --- | --- | --- |
   | `kernel` | Linux without Landlock; `needs`: `"Linux 5.13"` | `help` | |
+  | `namespaces` | Linux that doesn't let commands have a namespace of their own, from a box that doesn't run without one (none does now: `gaps`); `needs`: `"user namespaces"`, or `"util-linux"` without `unshare` | `help` | |
   | `macos` | this macOS has no sandbox | `softwareUpdate` | |
   | `engineMissing` | a machine without its engine yet | `retry` | `POST kuvo/sandbox/check` |
   | `checking` | not checked yet | `retry` | `POST kuvo/sandbox/check` |
-  | `checkFailed` | its check failed; `check`: `folder`, `tempFiles`, `readsOwn`, `writesOwn`, `didntRun` or `setup` | `retry` | `POST kuvo/sandbox/check` |
+  | `checkFailed` | its check failed; `check`: `folder`, `tempFiles`, `readsOwn`, `writesOwn`, `services` (on Linux, a command could reach your session's services), `didntRun` or `setup` | `retry` | `POST kuvo/sandbox/check` |
   | `plugin` | its plugin for the engine was changed or removed | `fix` | `POST kuvo/sandbox/check` |
   | `engineDown` | the engine isn't running | `restartEngine` | `POST kuvo/engine/restart` |
   | `waiting` | the engine hasn't loaded it yet | `restartEngine` | `POST kuvo/engine/restart` |

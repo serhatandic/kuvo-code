@@ -274,13 +274,15 @@ final class Sandboxes {
 
     #if DEBUG
     /// KUVO_DEMO_SANDBOX_STATE: how every box's sandbox says it is, for a look at Settings ›
-    /// Permissions: `on`, `checking`, `checkFailed`,
+    /// Permissions: `on`, `services` (on, on a machine where it can't keep commands from your
+    /// login's services), `checking`, `checkFailed`,
     /// `failedAgain`, `plugin`, `waiting`, `engineDown`, `engineMissing`, `kernel` or `macos`.
     /// KUVO_DEMO_SANDBOX_RULES=1: Also Allowed has a folder for the first project, one for the first
     /// bot and two for the chats; `empty`, none.
     static let demoState: SandboxState? = ProcessInfo.processInfo.environment["KUVO_DEMO_SANDBOX_STATE"].map { kind in
         switch kind {
         case "on": SandboxState(on: true, agents: true)
+        case "services": SandboxState(on: true, agents: true, needs: "user namespaces", gaps: [.services])
         case "checkFailed": SandboxState(on: false, reason: .checkFailed, action: .retry, route: SandboxRoutes.check, check: .readsOwn, failures: 1)
         case "failedAgain": SandboxState(on: false, reason: .checkFailed, action: .retry, route: SandboxRoutes.check, check: .writesOwn, failures: 3)
         case "kernel": SandboxState(on: false, why: "Linux 5.10 can't sandbox commands: it needs Landlock (Linux 5.13 or later, with it on).", able: false, reason: .kernel, action: .help, needs: "Linux 5.13")
