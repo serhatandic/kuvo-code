@@ -7,15 +7,13 @@ struct VoiceSettings: View {
     @AppStorage(VoiceStyle.key) private var style = VoiceStyle.composer.rawValue
 
     var body: some View {
-        Section {
+        // Titled above its card, as General's other sections are.
+        Section("Voice Input") {
             VStack(alignment: .leading, spacing: 10) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Voice input")
-                    Text("Talk instead of typing. Your words are recognized on this Mac, and nothing is sent until you press Send.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                Text("Talk instead of typing. Your words are recognized on this Mac, and nothing is sent until you press Send.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 12) {
                     ForEach(VoiceStyle.allCases) { each in
                         VoiceStyleTile(style: each, isOn: style == each.rawValue) { style = each.rawValue }
