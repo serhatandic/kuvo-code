@@ -24,21 +24,26 @@ const by = { bot: "bot_pixel00001", name: "Pixel" };
 const toldFile = path.join(home, "run", "work", "told.json");
 
 // A stand-in for the engine or the coding agents' bridge: its sessions, each with its last reply;
-// `listing` false answers its list as an engine still starting does.
+// `listing` false answers its list as an engine still starting does, and `unread` the sessions
+// whose messages it can't read (an engine too slow); `looking` runs as it's asked what's working.
 function place(sessions) {
-  const state = { listing: true, prompts: [] };
+  const state = { sessions, listing: true, unread: new Set(), prompts: [] };
   const server = http.createServer((request, response) => {
     let body = "";
     request.on("data", chunk => { body += chunk; });
     request.on("end", () => {
       const reply = (value, status = 200) => { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value)); };
       if (request.url.startsWith("/api/session?")) return state.listing ? reply({ data: Object.values(sessions) }) : reply({ message: "Starting." }, 503);
-      if (request.url === "/api/session/active") return reply({ data: {} });
+      if (request.url === "/api/session/active") {
+        state.looking?.();
+        return reply({ data: {} });
+      }
       if (/\/(permission|form)$/.test(request.url)) return reply({ data: [] });
       const one = request.url.match(/^\/api\/session\/([^/?]+)(\/[^?]*)?/);
       const id = one && decodeURIComponent(one[1]);
       if (one && !one[2]) return sessions[id] ? reply({ data: sessions[id] }) : reply({ message: "No such session." }, 404);
-      if (one?.[2] === "/message" && sessions[id]) return reply({ data: [{ id: `msg_${id}`, type: "assistant", content: [{ type: "text", text: sessions[id].said ?? "Done." }] }] });
+      if (one?.[2] === "/message" && state.unread.has(id)) return reply({ message: "Busy." }, 503);
+      if (one?.[2] === "/message" && sessions[id]) return reply({ data: [{ id: `msg_${id}`, type: "assistant", time: { created: sessions[id].replied ?? 9 }, content: [{ type: "text", text: sessions[id].said ?? "Done." }] }] });
       if (one?.[2] === "/prompt" && sessions[id]) {
         state.prompts.push({ to: id, ...JSON.parse(body) });
         return reply({});
@@ -65,16 +70,22 @@ const bridge = place({
 });
 await Promise.all([engine.ready, bridge.ready]);
 
-// The watcher's clock: what it would run later, run when the test says (and waited on).
+// The watcher's clock: the time (`at`, from 1000 on, later than all the sessions' times unless a
+// test says), and what it would run later, run when the test says (and waited on).
 function clock() {
   const later = [];
-  return { schedule: run => { later.push(run); }, runAll: async () => { for (const run of later.splice(0)) await run(); } };
+  const kept = { at: 1000 };
+  return Object.assign(kept, { now: () => kept.at, schedule: run => { later.push(run); }, runAll: async () => { for (const run of later.splice(0)) await run(); } });
 }
 
 beforeEach(() => {
   engine.prompts.length = 0;
   engine.listing = true;
   bridge.listing = true;
+  engine.unread.clear();
+  delete engine.looking;
+  delete engine.sessions.ses_review;
+  engine.sessions.ses_signin.time = { created: 1, updated: 10 };
   fs.rmSync(path.join(home, "run", "work"), { recursive: true, force: true });
   fs.mkdirSync(path.dirname(toldFile), { recursive: true });
   fs.writeFileSync(toldFile, JSON.stringify({ since: 5, sessions: {} }));
@@ -82,8 +93,8 @@ beforeEach(() => {
 
 test("what finished while the box was down still reaches the bot when its engine couldn't list it yet as the box started: looked at again, not taken for nothing", async () => {
   engine.listing = false;
-  const { schedule, runAll } = clock();
-  const watch = link.workWatcher(engine.target, () => [engine.target], { schedule });
+  const { schedule, runAll, now } = clock();
+  const watch = link.workWatcher(engine.target, () => [engine.target], { schedule, now });
   await watch.caughtUp;
   await runAll();
   assert.deepEqual(engine.prompts, [], "nothing to tell yet: it couldn't look");
@@ -98,13 +109,13 @@ test("what finished while the box was down still reaches the bot when its engine
 test("a box stopped again before it could look still tells it as it starts the next time", async () => {
   engine.listing = false;
   const first = clock();
-  const watch = link.workWatcher(engine.target, () => [engine.target], { schedule: first.schedule });
+  const watch = link.workWatcher(engine.target, () => [engine.target], { schedule: first.schedule, now: first.now });
   await watch.caughtUp;
   // Meanwhile another of Pixel's sessions finishes, heard as it happens.
   await watch({ type: "session.execution.succeeded", data: { sessionID: "ses_docs" } });
   engine.listing = true;
   const again = clock();
-  await link.workWatcher(engine.target, () => [engine.target], { schedule: again.schedule }).caughtUp;
+  await link.workWatcher(engine.target, () => [engine.target], { schedule: again.schedule, now: again.now }).caughtUp;
   await again.runAll();
   assert.equal(engine.prompts.length, 1, "with what it heard meanwhile, as one message");
   assert.match(engine.prompts[0].text, /\[Session finished\] "Docs"/);
@@ -114,21 +125,104 @@ test("a box stopped again before it could look still tells it as it starts the n
 test("a coding agents' bridge found after the engine still tells what finished there while the box was down", async () => {
   const targets = () => [engine.target, bridge.target];
   const first = clock();
-  await link.workWatcher(engine.target, targets, { schedule: first.schedule }).caughtUp;
+  await link.workWatcher(engine.target, targets, { schedule: first.schedule, now: first.now }).caughtUp;
   await first.runAll();
   assert.equal(engine.prompts.length, 1, "the engine's told");
   assert.match(engine.prompts[0].text, /^\[Session finished\] "Sign-in"/);
   // The bridge listens a moment later (it waits for the box's sandbox).
   const then = clock();
-  await link.workWatcher(bridge.target, targets, { schedule: then.schedule, from: "bridge" }).caughtUp;
+  await link.workWatcher(bridge.target, targets, { schedule: then.schedule, now: then.now, from: "bridge" }).caughtUp;
   await then.runAll();
   assert.equal(engine.prompts.length, 2, "the bridge's too");
   assert.equal(engine.prompts[1].to, "ses_pixel");
   assert.match(engine.prompts[1].text, /^\[Session finished\] "Port" in tidepool \(address ses_port\)[^\n]*:\nPorted to Swift 6\./);
   // And not again, from either, as the box starts the next time.
   const next = clock();
-  await link.workWatcher(engine.target, targets, { schedule: next.schedule }).caughtUp;
-  await link.workWatcher(bridge.target, targets, { schedule: next.schedule, from: "bridge" }).caughtUp;
+  await link.workWatcher(engine.target, targets, { schedule: next.schedule, now: next.now }).caughtUp;
+  await link.workWatcher(bridge.target, targets, { schedule: next.schedule, now: next.now, from: "bridge" }).caughtUp;
   await next.runAll();
   assert.equal(engine.prompts.length, 2);
+});
+
+test("a session told as it finished while the box couldn't look back yet isn't told again once it can, even when its reply couldn't be read then", async () => {
+  engine.listing = false;
+  const { schedule, runAll, now } = clock();
+  const watch = link.workWatcher(engine.target, () => [engine.target], { schedule, now });
+  await watch.caughtUp;
+  // Sign-in's finish is heard as it happens, with its engine too slow to show its reply.
+  engine.unread.add("ses_signin");
+  await watch({ type: "session.execution.succeeded", data: { sessionID: "ses_signin" } });
+  engine.unread.clear();
+  // Changed since (renamed, say), with nothing new said.
+  engine.sessions.ses_signin.time = { created: 1, updated: 1500 };
+  engine.listing = true;
+  await runAll();
+  await runAll();
+  assert.equal(engine.prompts.length, 1);
+  assert.equal(engine.prompts[0].text.match(/\[Session finished\] "Sign-in"/g)?.length, 1, "told once");
+});
+
+test("one session whose reply can't be read doesn't keep the bot from hearing of the others", async () => {
+  // Review, started after Sign-in, finished too; its engine can't show its messages.
+  engine.sessions.ses_review = { ...engine.sessions.ses_signin, id: "ses_review", title: "Review", time: { created: 2, updated: 10 }, said: "Reviewed." };
+  engine.unread.add("ses_review");
+  const { schedule, runAll, now } = clock();
+  await link.workWatcher(engine.target, () => [engine.target], { schedule, now }).caughtUp;
+  await runAll();
+  assert.equal(engine.prompts.length, 1, "Sign-in, told");
+  assert.match(engine.prompts[0].text, /^\[Session finished\] "Sign-in"/);
+  assert.equal(JSON.parse(fs.readFileSync(toldFile, "utf8")).since, 5, "not counted as looked at: Review wasn't");
+  // Once Review can be read, it's told too, and Sign-in not again.
+  engine.unread.clear();
+  await runAll();
+  await runAll();
+  assert.equal(engine.prompts.length, 2);
+  assert.match(engine.prompts[1].text, /^\[Session finished\] "Review"[^\n]*:\nReviewed\./);
+});
+
+test("a session that can't be read for long is let go of for now, and told as the box starts the next time", async () => {
+  engine.sessions.ses_review = { ...engine.sessions.ses_signin, id: "ses_review", title: "Review", time: { created: 2, updated: 10 }, said: "Reviewed." };
+  engine.unread.add("ses_review");
+  const first = clock();
+  await link.workWatcher(engine.target, () => [engine.target], { schedule: first.schedule, now: first.now }).caughtUp;
+  for (let tries = 0; tries < 12; tries++) await first.runAll();
+  assert.equal(engine.prompts.length, 1, "Sign-in, told");
+  engine.unread.clear();
+  const next = clock();
+  await link.workWatcher(engine.target, () => [engine.target], { schedule: next.schedule, now: next.now }).caughtUp;
+  await next.runAll();
+  assert.equal(engine.prompts.length, 2);
+  assert.match(engine.prompts[1].text, /^\[Session finished\] "Review"/);
+});
+
+test("a session that can't be read on a few starts in a row is let go of, so what comes after is looked back on from then", async () => {
+  engine.sessions.ses_review = { ...engine.sessions.ses_signin, id: "ses_review", title: "Review", time: { created: 2, updated: 10 }, said: "Reviewed." };
+  engine.unread.add("ses_review");
+  for (const at of [1000, 2000, 3000]) {
+    const start = clock();
+    start.at = at;
+    await link.workWatcher(engine.target, () => [engine.target], { schedule: start.schedule, now: start.now }).caughtUp;
+    for (let tries = 0; tries < 12; tries++) await start.runAll();
+  }
+  assert.equal(engine.prompts.length, 1, "Sign-in, told once");
+  assert.equal(JSON.parse(fs.readFileSync(toldFile, "utf8")).since, 3000, "from the third start on");
+});
+
+test("a session that finishes while the box looks back, unheard (its connection lost), is still told as it starts the next time", async () => {
+  // Review finishes just after the list was read (as the box asks what's working), before it's
+  // done looking.
+  const first = clock();
+  engine.looking = () => {
+    delete engine.looking;
+    engine.sessions.ses_review = { ...engine.sessions.ses_signin, id: "ses_review", title: "Review", time: { created: 2, updated: 1500 }, replied: 1500, said: "Reviewed." };
+    first.at = 2000;
+  };
+  await link.workWatcher(engine.target, () => [engine.target], { schedule: first.schedule, now: first.now }).caughtUp;
+  await first.runAll();
+  assert.equal(engine.prompts.length, 1, "Sign-in, told");
+  const next = clock();
+  await link.workWatcher(engine.target, () => [engine.target], { schedule: next.schedule, now: next.now }).caughtUp;
+  await next.runAll();
+  assert.equal(engine.prompts.length, 2, "Review, as the box starts again");
+  assert.match(engine.prompts[1].text, /^\[Session finished\] "Review"/);
 });
