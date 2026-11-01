@@ -445,8 +445,9 @@ public enum ArtifactWords {
     }
 
     /// The Shelf: each section with what's in it (none empty), newest first, memory's own file first.
+    /// Not the bot's job (`job.json`): that's the bot, not something it made; its Timeline keeps it.
     public static func shelf(_ artifacts: [ArtifactSummary]) -> [(section: Section, artifacts: [ArtifactSummary])] {
-        let grouped = Dictionary(grouping: artifacts, by: section(of:))
+        let grouped = Dictionary(grouping: artifacts.filter { !($0.kind == .memory && $0.name == "job.json") }, by: section(of:))
         return Section.allCases.compactMap { section in
             guard var items = grouped[section], !items.isEmpty else { return nil }
             items.sort { a, b in
