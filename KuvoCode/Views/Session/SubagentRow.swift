@@ -114,14 +114,14 @@ struct SubagentRow: View {
                 .lineLimit(1)
                 .layoutPriority(-1)
                 .padding(.leading, 4)
-            Spacer(minLength: 0)
+            // After the words, as a step's, so it stays by them in a wide window.
             if session != nil {
                 Image(systemName: "chevron.right")
                     .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.secondary)
                     .rotationEffect(.degrees(isExpanded ? 90 : 0))
                     .accessibilityHidden(true)
             }
+            Spacer(minLength: 0)
         }
         .font(.callout)
         .contentShape(.rect)
