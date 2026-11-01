@@ -17,6 +17,11 @@ release, Unreleased is renamed to the version; the release notes come from that 
 ### All Changes
 
 - A coding agent too slow to answer whether it's signed in (on a busy Mac or machine) no longer looks signed out: Claude Code, Codex, Grok and Cursor keep their accounts and models as they last said, so a bot's or a session's model isn't taken away mid-goal. Only the agent saying you're signed out is a sign-out.
+- While this Mac's engine or the coding agents restart, the first launch's subscriptions step keeps showing what you're signed in to, instead of offering every sign-in again.
+- A coding agent whose sign-in check fails no longer offers Install as if it weren't there.
+- On a machine, Claude Code, Codex and Grok's own sign-ins have Sign Out in Settings › Accounts.
+- Disconnecting a plan says so when the engine couldn't remove its sign-in, instead of looking done; a plan whose sign-in ended while Kuvo Code was closed shows Sign In Again when it opens.
+- A coding agent's account you remove no longer comes back when Settings › Accounts finishes checking every agent. Add Another Account clicked twice adds one account, and its sign-in opens without waiting on the other agents' checks.
 - Bots on Claude Code, Codex, Cursor, Grok or Antigravity can write their memory again: the sandbox had kept them out of it.
 - After a launch, an update or a restart, coding agents wait for the computer's sandbox to be set up before they start, so a bot on Claude Code, Codex or another coding agent can take a goal on its own. Where one started before the sandbox still runs outside it, the goal's card says so, with **Restart Agents**, instead of saying the sandbox doesn't cover it yet.
 - "Still loading your accounts and models…", Open Quickly, the command palette and an agent's sign-in, code or step card over the window center on the page you're looking at, not the whole window, and move with it as the sidebar, the panel or Settings open and close.
