@@ -32,6 +32,8 @@ final class LongTextView: PointerAwareTextView {
     /// What it shows, as last given, to tell what was added.
     private var shown = ""
     private var attributes: [NSAttributedString.Key: Any] = [:]
+    /// Where its finished paragraphs end: in what it was given (bytes) and in what it shows.
+    private var settled = (source: 0, display: 0)
     /// The width it was last laid out for.
     private(set) var width: CGFloat?
 
@@ -68,18 +70,29 @@ final class LongTextView: PointerAwareTextView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    /// Shows `text`: what's new at its end added, the rest left as it's laid out.
+    /// Shows `text`: what's new at its end added, the rest left as it's laid out. Its `code` spans
+    /// are drawn as code; the last paragraph is set again as it grows, since a span it opens may
+    /// close later.
     func show(_ text: String, font: NSFont, color: NSColor) {
         let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color]
         guard let storage = textStorage else { return }
         let restyled = !NSDictionary(dictionary: attributes).isEqual(to: self.attributes)
-        if !restyled, Self.text(text, startsWith: shown) {
-            guard text.utf8.count > shown.utf8.count else { return }
-            let added = text[text.utf8.index(text.startIndex, offsetBy: shown.utf8.count)...]
-            storage.append(NSAttributedString(string: String(added), attributes: attributes))
-        } else {
-            storage.setAttributedString(NSAttributedString(string: text, attributes: attributes))
+        if restyled || !Self.text(text, startsWith: shown) {
+            storage.setAttributedString(NSAttributedString())
+            settled = (0, 0)
+        } else if text.utf8.count == shown.utf8.count {
+            return
         }
+        // Everything after the last finished paragraph, set again.
+        let rest = text[text.utf8.index(text.startIndex, offsetBy: settled.source)...]
+        let open = rest.lastIndex(of: "\n").map { rest.index(after: $0) } ?? rest.startIndex
+        let done = InlineCode.attributed(rest[..<open], font: font, color: color)
+        let tail = InlineCode.attributed(rest[open...], font: font, color: color)
+        storage.beginEditing()
+        storage.replaceCharacters(in: NSRange(location: settled.display, length: storage.length - settled.display), with: done)
+        storage.append(tail)
+        storage.endEditing()
+        settled = (settled.source + rest[..<open].utf8.count, settled.display + done.length)
         shown = text
         self.attributes = attributes
         typingAttributes = attributes
@@ -125,5 +138,50 @@ final class LongTextView: PointerAwareTextView {
         self.width = width
         layout.ensureLayout(for: container)
         return ceil(layout.usedRect(for: container).height)
+    }
+}
+
+/// `code` in plain text (a step's command, a thought): what's between two backticks on one line,
+/// without them, in the code face a step smaller, as replies draw it. A backtick left open stays.
+enum InlineCode {
+    static func pieces(_ text: Substring) -> [(text: Substring, isCode: Bool)] {
+        var pieces: [(Substring, Bool)] = []
+        var plain = text.startIndex
+        var i = text.startIndex
+        while i < text.endIndex {
+            if text[i] == "`" {
+                let after = text.index(after: i)
+                if let close = text[after...].firstIndex(where: { $0 == "`" || $0 == "\n" }), text[close] == "`", close > after {
+                    if plain < i { pieces.append((text[plain..<i], false)) }
+                    pieces.append((text[after..<close], true))
+                    i = text.index(after: close)
+                    plain = i
+                    continue
+                }
+            }
+            i = text.index(after: i)
+        }
+        if plain < text.endIndex { pieces.append((text[plain...], false)) }
+        return pieces
+    }
+
+    static func attributed(_ text: Substring, font: NSFont, color: NSColor) -> NSAttributedString {
+        let code = NSFont.monospacedSystemFont(ofSize: (font.pointSize * 0.9).rounded(), weight: .regular)
+        let result = NSMutableAttributedString()
+        for piece in pieces(text) {
+            result.append(NSAttributedString(string: String(piece.text), attributes: [.font: piece.isCode ? code : font, .foregroundColor: color]))
+        }
+        return result
+    }
+
+    /// For a SwiftUI `Text` set in `size`-point type.
+    static func attributed(_ text: String, size: CGFloat) -> AttributedString {
+        var result = AttributedString()
+        for piece in pieces(text[...]) {
+            var run = AttributedString(piece.text)
+            if piece.isCode { run.font = .system(size: (size * 0.9).rounded(), design: .monospaced) }
+            result += run
+        }
+        return result
     }
 }

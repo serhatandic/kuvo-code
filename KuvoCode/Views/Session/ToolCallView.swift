@@ -126,7 +126,7 @@ struct ToolCallView: View {
         HStack(spacing: Self.iconGap) {
             icon
                 .frame(width: Self.iconWidth)
-            Text(summary)
+            Text(InlineCode.attributed(summary, size: NSFont.preferredFont(forTextStyle: .callout).pointSize))
                 .lineLimit(1)
                 .truncationMode(.middle)
             if let since = call.time?.created?.date {
