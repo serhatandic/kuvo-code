@@ -216,31 +216,38 @@ function homeFolder() {
   return process.env.HOME || os.homedir();
 }
 var account;
-function accountHome() {
+function accountEntry() {
   if (account)
     return account;
   const uid = process.getuid?.() ?? -1;
-  const field = (line, at) => line?.trim().split(":")[at] || "";
-  let found = "";
+  let line;
   if (process.platform === "darwin") {
-    found = field(spawnSync("/usr/bin/id", ["-P"], { encoding: "utf8", timeout: 5000 }).stdout, 8);
+    line = spawnSync("/usr/bin/id", ["-P"], { encoding: "utf8", timeout: 5000 }).stdout;
   } else {
-    found = field(spawnSync("getent", ["passwd", String(uid)], { encoding: "utf8", timeout: 5000 }).stdout, 5);
-    if (!found) {
+    line = spawnSync("getent", ["passwd", String(uid)], { encoding: "utf8", timeout: 5000 }).stdout;
+    if (!line?.trim()) {
       try {
-        found = field(fs2.readFileSync("/etc/passwd", "utf8").split(`
-`).find((line) => line.split(":")[2] === String(uid)), 5);
+        line = fs2.readFileSync("/etc/passwd", "utf8").split(`
+`).find((each) => each.split(":")[2] === String(uid));
       } catch {}
     }
   }
-  if (!path2.isAbsolute(found))
+  const fields = line?.trim().split(":") ?? [];
+  let home = fields[process.platform === "darwin" ? 8 : 5] || "";
+  if (!path2.isAbsolute(home))
     try {
-      found = os.userInfo().homedir;
+      home = os.userInfo().homedir;
     } catch {
-      found = homeFolder();
+      home = homeFolder();
     }
-  account = found;
+  account = { name: fields[0] || "", home };
   return account;
+}
+function accountHome() {
+  return accountEntry().home;
+}
+function accountName() {
+  return accountEntry().name;
 }
 var K = process.env.KUVO_HOME || path2.join(homeFolder(), ".kuvo-code");
 var RUN = path2.join(K, "run");
@@ -5025,8 +5032,27 @@ var RUNS_LATER = [
   ".pub-cache/bin",
   "go/bin"
 ];
-var TOOL_CACHES = ["pre-commit", "pnpm", "uv", "node/corepack"];
-var MAC_RUNS_LATER = ["Library/Caches/pnpm"];
+var TOOL_CACHES = [
+  "pre-commit",
+  "pnpm",
+  "uv",
+  "node/corepack",
+  "gitstatus",
+  "oh-my-zsh",
+  "prezto",
+  "zsh",
+  "antidote",
+  "zsh4humans",
+  "oh-my-posh"
+];
+var SHELL_CACHES = (me) => [
+  `p10k-instant-prompt-${me}.zsh`,
+  `p10k-instant-prompt-${me}.zsh.zwc`,
+  `p10k-dump-${me}.zsh`,
+  `p10k-dump-${me}.zsh.zwc`,
+  `p10k-${me}`
+];
+var MAC_RUNS_LATER = ["Library/Caches/pnpm", "Library/Caches/antidote", ".local/state/mise/trusted-configs"];
 var SECRETS = [
   ".aws",
   ".config/gcloud",
@@ -5131,7 +5157,7 @@ function fencePolicy(ports = []) {
   const yourCaches = [realish(path25.join(home, ".cache"))];
   if (ownCache && path25.isAbsolute(ownCache) && !kuvo.some((folder) => realish(ownCache) === folder || realish(ownCache).startsWith(folder + "/")))
     yourCaches.push(realish(ownCache));
-  const runsLater = [...inHomes(RUNS_LATER), ...new Set(yourCaches.flatMap((folder) => TOOL_CACHES.map((name) => path25.join(folder, name))))];
+  const runsLater = [...inHomes(RUNS_LATER), ...new Set(yourCaches.flatMap((folder) => [...TOOL_CACHES, ...SHELL_CACHES(accountName())].map((name) => path25.join(folder, name))))];
   if (process.platform === "darwin") {
     return {
       home,
@@ -5140,7 +5166,10 @@ function fencePolicy(ports = []) {
       readOnly: [...runsLater, ...inHomes(MAC_RUNS_LATER)],
       ports,
       commandCaches,
-      readOnlyPatterns: userTemporary().map((folder) => `^${escapeRegex(folder)}/T/bunx-`),
+      readOnlyPatterns: [
+        ...userTemporary().map((folder) => `^${escapeRegex(folder)}/T/bunx-`),
+        ...yourCaches.map((folder) => `^${escapeRegex(folder)}/p10k-`)
+      ],
       kuvoPatterns: [
         `^${escapeRegex(home)}/Library/[^/]+/run\\.kuvo\\.code[^/]*(/|$)`,
         `^/private/var/folders/[^/]+/[^/]+/[^/]+/run\\.kuvo\\.code[^/]*(/|$)`

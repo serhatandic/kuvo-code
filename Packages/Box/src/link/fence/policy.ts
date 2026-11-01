@@ -13,7 +13,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { accountHome, homeFolder, IS_MAC, K } from "../home";
+import { accountHome, accountName, homeFolder, IS_MAC, K } from "../home";
 
 export interface FencePolicy {
   /** The home folder whose secrets are hidden. */
@@ -38,7 +38,7 @@ export interface FencePolicy {
    * settings, scripts they run as they start). */
   readOnly: string[];
   /** On macOS, more of them by name: regular expressions over whole paths (bunx's packages in your
-   * temporary folder). */
+   * temporary folder, p10k's files in your cache folder). */
   readOnlyPatterns?: string[];
   /** Never read: your secrets (folders or files). */
   secrets: string[];
@@ -74,8 +74,17 @@ const RUNS_LATER = [".cargo/bin", ".cargo/config", ".cargo/config.toml", ".cargo
 // In your cache folder (`~/.cache`, and your own `XDG_CACHE_HOME`), tools' caches whole: pre-commit's
 // hooks, what `pnpm dlx` and uvx fetched, and the pnpm and yarn corepack fetched run from them, and
 // what's installed from them is linked to their files. (pnpm's own on a Mac is in `Library/Caches`.)
-const TOOL_CACHES = ["pre-commit", "pnpm", "uv", "node/corepack"];
-const MAC_RUNS_LATER = ["Library/Caches/pnpm"];
+// And what zsh sources as a terminal starts: p10k's instant prompt and its state (named for your
+// account; on macOS every `p10k-` name, its temporary files too, which p10k moves into place),
+// gitstatusd's program, oh-my-zsh's and prezto's completions, a `zsh` folder of your own for them,
+// antidote's and zsh4humans' plugins, oh-my-posh's init.
+const TOOL_CACHES = ["pre-commit", "pnpm", "uv", "node/corepack", "gitstatus", "oh-my-zsh", "prezto", "zsh", "antidote",
+  "zsh4humans", "oh-my-posh"];
+const SHELL_CACHES = (me: string) => [`p10k-instant-prompt-${me}.zsh`, `p10k-instant-prompt-${me}.zsh.zwc`,
+  `p10k-dump-${me}.zsh`, `p10k-dump-${me}.zsh.zwc`, `p10k-${me}`];
+// (antidote's on a Mac; and in `~/.local/state`, which Linux's Landlock would no longer let commands
+// make a folder in, so only on a Mac, the configs mise trusts to run.)
+const MAC_RUNS_LATER = ["Library/Caches/pnpm", "Library/Caches/antidote", ".local/state/mise/trusted-configs"];
 
 // Your secrets (each a folder or a file in your home folder).
 const SECRETS = [".aws", ".config/gcloud", ".azure", ".kube", ".docker/config.json", ".oci", ".config/doctl",
@@ -181,13 +190,15 @@ export function fencePolicy(ports: number[] = []): FencePolicy {
   const ownCache = "KUVO_OWN_XDG_CACHE_HOME" in process.env ? process.env.KUVO_OWN_XDG_CACHE_HOME : process.env.XDG_CACHE_HOME;
   const yourCaches = [realish(path.join(home, ".cache"))];
   if (ownCache && path.isAbsolute(ownCache) && !kuvo.some(folder => realish(ownCache) === folder || realish(ownCache).startsWith(folder + "/"))) yourCaches.push(realish(ownCache));
-  const runsLater = [...inHomes(RUNS_LATER), ...new Set(yourCaches.flatMap(folder => TOOL_CACHES.map(name => path.join(folder, name))))];
+  const runsLater = [...inHomes(RUNS_LATER), ...new Set(yourCaches.flatMap(folder => [...TOOL_CACHES, ...SHELL_CACHES(accountName())].map(name => path.join(folder, name))))];
   if (process.platform === "darwin") {
     return {
       home, kuvo, kuvoReadable, readOnly: [...runsLater, ...inHomes(MAC_RUNS_LATER)], ports, commandCaches,
       // bunx's packages, in your temporary folder (`T/bunx-<uid>-<package>`), which it runs again
-      // as they are. (A command's own bunx is in its own temporary folder.)
-      readOnlyPatterns: userTemporary().map(folder => `^${escapeRegex(folder)}/T/bunx-`),
+      // as they are (a command's own bunx is in its own temporary folder); and p10k's files in your
+      // cache folder by any name, as it writes each beside it first (`.tmp.<pid>`), then moves it.
+      readOnlyPatterns: [...userTemporary().map(folder => `^${escapeRegex(folder)}/T/bunx-`),
+        ...yourCaches.map(folder => `^${escapeRegex(folder)}/p10k-`)],
       // Every copy's (`run.kuvo.code…`), wherever the system keeps an app's.
       kuvoPatterns: [
         `^${escapeRegex(home)}/Library/[^/]+/run\\.kuvo\\.code[^/]*(/|$)`,
