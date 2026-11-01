@@ -966,42 +966,33 @@ private struct MessageText: View {
     @Environment(\.findHighlight) private var highlight
     @Environment(\.messageFont) private var messageFont
     @State private var isExpanded = false
-    @State private var shownHeight: CGFloat = 0
-    @State private var fullHeight: CGFloat = 0
+    /// The line limit leaves words out.
+    @State private var isLimited = false
     private static let lines = 12
 
-    /// Short messages can't reach the limit, so they aren't measured twice.
+    /// Short messages can't reach the limit, so they aren't asked whether it cuts them.
     private var mayBeLong: Bool {
         text.count > 300 || text.utf8.count { $0 == 10 } >= Self.lines
     }
 
-    private var isCut: Bool { isExpanded || fullHeight > shownHeight + 1 }
+    private var isCut: Bool { isExpanded || (mayBeLong && isLimited) }
 
-    /// The words, with Find's marks.
-    private var shown: AttributedString {
-        FindText.marked(styled ?? AttributedString(text), highlight)
+    /// The words, with Find's marks, as AppKit's text draws them.
+    private var shown: (text: NSAttributedString, faces: TextFaces) {
+        MessageMentions.attributed(FindText.marked(styled ?? AttributedString(text), highlight), font: messageFont.field)
     }
 
     var body: some View {
         VStack(alignment: .trailing, spacing: 4) {
-            MessageMentions.text(shown, size: messageFont.size * 1.1)
-                .transcriptFont()
-                .lineLimit(isExpanded ? nil : Self.lines)
-                .modifier(LinkPointer(isOn: styled?.runs.contains { $0.link != nil } == true))
-                .textSelection(.enabled)
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if mayBeLong { shownHeight = $0 } }
-                .background(alignment: .top) {
-                    // The whole text, unseen, to tell whether the limit cuts anything.
-                    if mayBeLong, !isExpanded {
-                        MessageMentions.text(shown, size: messageFont.size * 1.1)
-                            .transcriptFont()
-                            .fixedSize(horizontal: false, vertical: true)
-                            .hidden()
-                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { fullHeight = $0 }
-                    }
-                }
-                // Faded at the cut; a mask only then (each is drawn off screen first).
-                .modifier(CutFade(isOn: isCut && !isExpanded))
+            let shown = shown
+            // AppKit's text, as the composer's: its pointer shows only where nothing's drawn over it.
+            // Asked whether the limit cuts it only while there is one: all of it showing says nothing
+            // of what Show Less brings back.
+            SelectableText(text: shown.text, faces: shown.faces, lineLimit: isExpanded ? nil : Self.lines,
+                           cut: mayBeLong && !isExpanded ? { isLimited = $0 } : nil)
+                // Faded at the cut; masked only if it may be long (each mask is drawn off screen
+                // first), and then all along, so the fade comes and goes over the same words.
+                .modifier(CutFade(isOn: isCut && !isExpanded, isMasked: mayBeLong))
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
                 // Your words in accent glass, apart from the agent's on the card.
@@ -1574,8 +1565,7 @@ struct ErrorCard: View {
 
     var body: some View {
         Label {
-            Text(message)
-                .textSelection(.enabled)
+            SelectableText(text: NSAttributedString(string: message, attributes: [.font: NSFont.preferredFont(forTextStyle: .callout), .foregroundColor: NSColor.labelColor]))
         } icon: {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(.red)
@@ -1821,20 +1811,28 @@ private struct GroupWorkRow: View {
 }
 
 /// A bot woke itself up, as it planned: its note to itself, in place of a message from you.
-private struct WakeRow: View {
+struct WakeRow: View {
     let note: String
     let at: Milliseconds
     @Environment(\.findHighlight) private var highlight
+
+    /// "Woke up", then its note.
+    private var words: NSAttributedString {
+        let font = NSFont.preferredFont(forTextStyle: .callout)
+        let words = NSMutableAttributedString(string: "Woke up  ", attributes: [
+            .font: NSFont.systemFont(ofSize: font.pointSize, weight: .semibold), .foregroundColor: NSColor.labelColor,
+        ])
+        words.append(MessageMentions.attributed(FindText.marked(AttributedString(note), highlight), font: font, color: .secondaryLabelColor).text)
+        return words
+    }
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Image(systemName: "alarm")
                 .foregroundStyle(.tint)
                 .frame(width: 16)
-            Text("\(Text("Woke up").fontWeight(.semibold).foregroundStyle(.primary))  \(Text(FindText.marked(AttributedString(note), highlight)).foregroundStyle(.secondary))")
-                // Room for what a watch saw, after its note.
-                .lineLimit(6)
-                .textSelection(.enabled)
+            // Room for what a watch saw, after its note.
+            SelectableText(text: words, lineLimit: 6)
             Spacer(minLength: 8)
             Text(Date(timeIntervalSince1970: at / 1000), format: .dateTime.hour().minute())
                 .font(.caption)
@@ -1967,14 +1965,17 @@ final class RowCache {
     var isBulk = true
 }
 
-/// The end of a message that's cut short, fading out.
-private struct CutFade: ViewModifier {
+/// The end of a message or a tool's output that's cut short, fading out.
+struct CutFade: ViewModifier {
     let isOn: Bool
+    /// Masked whether it fades or not, so turning the fade on and off keeps what's under it (a
+    /// text and its selection) rather than drawing it anew. By default, masked only while it fades.
+    var isMasked = false
 
     func body(content: Content) -> some View {
-        if isOn {
+        if isOn || isMasked {
             content.mask {
-                LinearGradient(stops: [.init(color: .black, location: 0.7), .init(color: .black.opacity(0.15), location: 1)], startPoint: .top, endPoint: .bottom)
+                LinearGradient(stops: [.init(color: .black, location: 0.7), .init(color: .black.opacity(isOn ? 0.15 : 1), location: 1)], startPoint: .top, endPoint: .bottom)
             }
         } else {
             content

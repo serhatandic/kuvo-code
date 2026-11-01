@@ -3,12 +3,11 @@ import SwiftUI
 import Testing
 @testable import KuvoCode
 
-/// The pointer over a conversation scrolled up, with Scroll to the End floating over its replies:
-/// over the button the reply under it shows no I-beam (the button's pointer shows), over the
-/// reply's words beside it the I-beam, over a link the pointing hand. Real rows and replies, in a
-/// window of the test's own; nothing moves the real pointer, the text is asked what it would show.
+/// A conversation scrolled up, with Scroll to the End floating over its rows: real rows in a
+/// window of the test's own. Nothing moves the real pointer: the texts are asked what they'd show,
+/// or told of a move as AppKit tells them.
 @MainActor
-@Suite(.serialized) struct PointerOverTextTests {
+final class ScrolledConversation {
     struct Item: Identifiable, Equatable {
         let id: String
         let text: String
@@ -17,23 +16,50 @@ import Testing
     let scroller = ConversationScroller()
     let window = NSWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: 720, height: 520), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
 
-    init() async throws {
+    /// Six rows of long paragraphs (so their words run under the button at the bottom's middle),
+    /// each starting with a link, drawn by `row`.
+    init(row: @escaping (Item) -> AnyView) async {
         TestEnvironment.prepare()
-        // Long paragraphs, so their words run under the button at the bottom's middle.
         let words = String(repeating: "The keeper climbed the stairs at dusk and lit the great lamp for the ships out at sea. ", count: 14)
         let items = (0..<6).map { Item(id: "\($0)", text: "Read [the harbor log](https://example.com/log) first. " + words) }
         let view = ConversationScroll(scroller: scroller, change: 0, quote: { _ in }) {
-            RowStack(items: items, id: \.id, same: ==, estimate: { _ in 400 }) { item, _ in
-                ReplyView(markdown: item.text, parser: FileLinkingParser(folders: { [] }))
-            }
+            RowStack(items: items, id: \.id, same: ==, estimate: { _ in 400 }) { item, _ in row(item) }
         }
         window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(rootView: view.frame(width: 720, height: 520))
         window.orderBack(nil)
         await settle { !texts.isEmpty }
-        // Scrolled up: Scroll to the End shows, over a reply's words.
+        // Scrolled up, so Scroll to the End shows, with the middle of a row's text level with the
+        // bottom's middle (where the button is), so the words run all the way under it however
+        // tall the rows are. Lined up again until the rows have their heights (a long message
+        // grows a Show More once it's laid out).
         scroller.scroll(to: 0)
-        await settle { !pointsUnderAControl().isEmpty && besideTheControl() != nil }
+        await settle {
+            lineUpATextWithTheControl()
+            return pointsUnderAControl().count > 10 && besideTheControl() != nil
+        }
+    }
+
+    private static let band: CGFloat = 46
+    private var linedUpTo: CGFloat?
+
+    private func lineUpATextWithTheControl() {
+        guard let top = distanceFromTop, let text = texts
+            .filter({ $0.window != nil })
+            .map({ $0.convert($0.bounds, to: nil) })
+            .filter({ $0.height > 120 && $0.midY >= Self.band - 1 })
+            .min(by: { $0.midY < $1.midY }) else { return }
+        // Up the conversation brings its words down the window.
+        let target = top - (text.midY - Self.band)
+        guard abs(text.midY - Self.band) > 1, target != linedUpTo else { return }
+        linedUpTo = target
+        scroller.scroll(to: target)
+    }
+
+    /// How far down the conversation is scrolled.
+    private var distanceFromTop: CGFloat? {
+        guard let clip = stack?.enclosingScrollView?.contentView, let document = clip.documentView else { return nil }
+        return document.isFlipped ? clip.bounds.minY : document.frame.height - clip.bounds.maxY
     }
 
     /// Lets the window lay out and SwiftUI and the rows catch up, until `ready`.
@@ -47,7 +73,7 @@ import Testing
         }
     }
 
-    private func done() {
+    func done() {
         NSCursor.arrow.set()
         window.orderOut(nil)
         window.close()
@@ -55,7 +81,7 @@ import Testing
 
     /// The pointer moved to `point` (in the window), as AppKit tells it: a move to the owner of each
     /// text's tracking area for moves that has the point.
-    private func move(to point: NSPoint) throws {
+    func move(to point: NSPoint) throws {
         let event = try #require(NSEvent.mouseEvent(with: .mouseMoved, location: point, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 0, pressure: 0))
         for text in texts where text.window != nil {
             let local = text.convert(point, from: nil)
@@ -71,24 +97,25 @@ import Testing
         return ((view as? T).map { [$0] } ?? []) + view.subviews.flatMap { all(type, in: $0) }
     }
 
-    private var texts: [ReplyTextView] { all(ReplyTextView.self, in: window.contentView) }
+    /// The rows' texts.
+    var texts: [PointerAwareTextView] { all(PointerAwareTextView.self, in: stack) }
     private var stack: RowStackView? { all(RowStackView.self, in: window.contentView).first }
 
-    /// The reply text laid out under `point` (in the window), whatever is over it.
-    private func text(under point: NSPoint) -> ReplyTextView? {
+    /// The text laid out under `point` (in the window), whatever is over it.
+    func text(under point: NSPoint) -> PointerAwareTextView? {
         texts.first { $0.window != nil && $0.convert($0.bounds, to: nil).contains(point) }
     }
 
     /// What a click at `point` reaches.
-    private func hit(_ point: NSPoint) -> NSView? {
+    func hit(_ point: NSPoint) -> NSView? {
         var root = window.contentView
         while let parent = root?.superview { root = parent }
         return root?.hitTest(point)
     }
 
-    /// Points along the bottom's middle with a reply's text laid out under them but something
+    /// Points along the bottom's middle with a row's text laid out under them but something
     /// drawn over the conversation on top: Scroll to the End.
-    private func pointsUnderAControl() -> [NSPoint] {
+    func pointsUnderAControl() -> [NSPoint] {
         guard let stack else { return [] }
         return (2...90).map { NSPoint(x: 360, y: CGFloat($0)) }.filter { point in
             guard text(under: point) != nil, let hit = hit(point) else { return false }
@@ -96,45 +123,18 @@ import Testing
         }
     }
 
-    /// A point on the reply's words left of the button, level with its middle.
-    private func besideTheControl() -> NSPoint? {
+    /// A point on a row's words beside the button, level with its middle.
+    func besideTheControl() -> NSPoint? {
         let under = pointsUnderAControl()
         guard !under.isEmpty else { return nil }
         let middle = under[under.count / 2].y
-        return (40...300).map { NSPoint(x: CGFloat($0), y: middle) }.first { hit($0) is ReplyTextView }
+        return (40...700).map { NSPoint(x: CGFloat($0), y: middle) }.first { (hit($0) as? PointerAwareTextView)?.pointer(at: $0) == .iBeam }
     }
 
-    @Test func noIBeamOverScrollToTheEnd() throws {
-        defer { done() }
-        let under = pointsUnderAControl()
-        #expect(under.count > 10)
-        for point in under {
-            let text = try #require(text(under: point))
-            #expect(text.pointer(at: point) == nil, "the I-beam at \(point.y), over Scroll to the End")
-        }
-        // Beside the button, on the same line of words: the I-beam.
-        let beside = try #require(besideTheControl())
-        let text = try #require(text(under: beside))
-        #expect(text.pointer(at: beside) == .iBeam)
-    }
-
-    @Test func movingOntoScrollToTheEndLetsTheIBeamGo() throws {
-        defer { done() }
-        let beside = try #require(besideTheControl())
-        let under = try #require(pointsUnderAControl().first { abs($0.y - beside.y) < 1 })
-        NSCursor.arrow.set()
-        try move(to: beside)
-        #expect(NSCursor.current == .iBeam, "on the words")
-        try move(to: under)
-        #expect(NSCursor.current != .iBeam, "over Scroll to the End")
-        try move(to: beside)
-        #expect(NSCursor.current == .iBeam, "back on the words")
-    }
-
-    @Test func aLinkShowsThePointingHand() throws {
-        defer { done() }
-        // The middle of the link at the start of a reply in view, with nothing over it.
-        let found = texts.compactMap { text -> (ReplyTextView, NSPoint, NSPoint)? in
+    /// The middle of the first link in a row in view with nothing over it, and a point on the
+    /// words at its start.
+    func aLink() -> (text: PointerAwareTextView, onLink: NSPoint, onWords: NSPoint)? {
+        texts.compactMap { text -> (PointerAwareTextView, NSPoint, NSPoint)? in
             guard let layout = text.layoutManager, let container = text.textContainer, let storage = text.textStorage else { return nil }
             var link: NSRange?
             storage.enumerateAttribute(.link, in: NSRange(location: 0, length: storage.length)) { value, range, stop in
@@ -146,11 +146,103 @@ import Testing
             let origin = text.textContainerOrigin
             let onLink = NSPoint(x: rect.midX + origin.x, y: rect.midY + origin.y)
             guard text.visibleRect.contains(onLink), hit(text.convert(onLink, to: nil)) === text else { return nil }
-            return (text, text.convert(onLink, to: nil), text.convert(NSPoint(x: 8, y: onLink.y), to: nil))
+            return (text, text.convert(onLink, to: nil), text.convert(NSPoint(x: origin.x + 2, y: onLink.y), to: nil))
         }.first
-        let (text, onLink, onWords) = try #require(found)
+    }
+
+    // The checks each suite makes of its rows.
+
+    func checkNoIBeamOverScrollToTheEnd() throws {
+        let under = pointsUnderAControl()
+        #expect(under.count > 10, "a row's text under Scroll to the End at \(under.count) points")
+        for point in under {
+            let text = try #require(text(under: point))
+            #expect(text.pointer(at: point) == nil, "the I-beam at \(point.y), over Scroll to the End")
+        }
+        // Beside the button, on the same line of words: the I-beam.
+        let beside = try #require(besideTheControl())
+        let text = try #require(hit(beside) as? PointerAwareTextView)
+        #expect(text.pointer(at: beside) == .iBeam)
+    }
+
+    func checkMovingOntoScrollToTheEndLetsTheIBeamGo() throws {
+        let beside = try #require(besideTheControl())
+        let under = try #require(pointsUnderAControl().first { abs($0.y - beside.y) < 1 })
+        NSCursor.arrow.set()
+        try move(to: beside)
+        #expect(NSCursor.current == .iBeam, "on the words")
+        try move(to: under)
+        #expect(NSCursor.current != .iBeam, "over Scroll to the End")
+        try move(to: beside)
+        #expect(NSCursor.current == .iBeam, "back on the words")
+    }
+
+    func checkALinkShowsThePointingHand() throws {
+        let (text, onLink, onWords) = try #require(aLink())
         #expect(text.pointer(at: onLink) == .pointingHand, "\(String(describing: text.pointer(at: onLink))) at \(onLink) in \(text.string.prefix(30))")
         #expect(text.pointer(at: onWords) == .iBeam)
+    }
+}
+
+/// The pointer over replies with Scroll to the End floating over them: over the button the reply
+/// under it shows no I-beam (the button's pointer shows), over the reply's words beside it the
+/// I-beam, over a link the pointing hand.
+@MainActor
+@Suite(.serialized) struct PointerOverTextTests {
+    let scene: ScrolledConversation
+
+    init() async throws {
+        scene = await ScrolledConversation { item in
+            AnyView(ReplyView(markdown: item.text, parser: FileLinkingParser(folders: { [] })))
+        }
+    }
+
+    @Test func noIBeamOverScrollToTheEnd() throws {
+        defer { scene.done() }
+        try scene.checkNoIBeamOverScrollToTheEnd()
+    }
+
+    @Test func movingOntoScrollToTheEndLetsTheIBeamGo() throws {
+        defer { scene.done() }
+        try scene.checkMovingOntoScrollToTheEndLetsTheIBeamGo()
+    }
+
+    @Test func aLinkShowsThePointingHand() throws {
+        defer { scene.done() }
+        try scene.checkALinkShowsThePointingHand()
+    }
+}
+
+/// The same over your own messages: their words are drawn by AppKit's text as the composer's are,
+/// so the I-beam shows only where they're on top, never under Scroll to the End. (SwiftUI's
+/// selectable Text, which drew them before, kept its I-beam over its whole frame.)
+@MainActor
+@Suite(.serialized) struct PointerOverYourMessagesTests {
+    let app = AppModel()
+    let scene: ScrolledConversation
+
+    init() async throws {
+        let app = app
+        scene = await ScrolledConversation { item in
+            // As sent: a web address (a link, as the bubble makes it) and long words after it.
+            let words = item.text.replacingOccurrences(of: "[the harbor log](https://example.com/log)", with: "https://example.com/harbor-log")
+            return AnyView(UserBubble(text: words).environment(app))
+        }
+    }
+
+    @Test func noIBeamOverScrollToTheEnd() throws {
+        defer { scene.done() }
+        try scene.checkNoIBeamOverScrollToTheEnd()
+    }
+
+    @Test func movingOntoScrollToTheEndLetsTheIBeamGo() throws {
+        defer { scene.done() }
+        try scene.checkMovingOntoScrollToTheEndLetsTheIBeamGo()
+    }
+
+    @Test func aLinkShowsThePointingHand() throws {
+        defer { scene.done() }
+        try scene.checkALinkShowsThePointingHand()
     }
 }
 

@@ -365,17 +365,6 @@ final class ReplyTextView: PointerAwareTextView, NSTextViewDelegate {
         enclosingRowStack == nil && super.acceptsFirstResponder
     }
 
-    /// The link under `point`, if one is.
-    private func link(at point: NSPoint) -> (value: Any, index: Int)? {
-        guard let layout = layoutManager, let container = textContainer, let storage = textStorage, storage.length > 0 else { return nil }
-        let inContainer = NSPoint(x: point.x - textContainerOrigin.x, y: point.y - textContainerOrigin.y)
-        let glyph = layout.glyphIndex(for: inContainer, in: container)
-        guard layout.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: container).contains(inContainer) else { return nil }
-        let index = layout.characterIndexForGlyph(at: glyph)
-        guard index < storage.length, let value = storage.attribute(.link, at: index, effectiveRange: nil) else { return nil }
-        return (value, index)
-    }
-
     // Outside a conversation: another text taking the keyboard leaves this one's selection
     // behind; clear it, so only one selection shows at a time, as in Textual.
     override func resignFirstResponder() -> Bool {
@@ -626,7 +615,7 @@ final class ReplyCodeView: NSView {
 final class ReplyCodeTextView: PointerAwareTextView {
     convenience init() {
         let storage = NSTextStorage()
-        let layout = ReplyCodeLayoutManager()
+        let layout = SelectionLayoutManager()
         storage.addLayoutManager(layout)
         let container = NSTextContainer(size: NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude))
         container.lineFragmentPadding = 0
@@ -883,8 +872,9 @@ enum ReplyText {
     }
 }
 
-/// A code block's layout: its selection in the color of the conversation's.
-nonisolated final class ReplyCodeLayoutManager: NSLayoutManager {
+/// A text's layout in a conversation (a code block's, a message's): its part of the selection in
+/// the color of the conversation's.
+nonisolated final class SelectionLayoutManager: NSLayoutManager {
     override func fillBackgroundRectArray(_ rectArray: UnsafePointer<NSRect>, count rectCount: Int, forCharacterRange charRange: NSRange, color: NSColor) {
         super.fillBackgroundRectArray(rectArray, count: rectCount, forCharacterRange: charRange, color: SelectionColor.shown(color, in: firstTextView, for: charRange))
     }
