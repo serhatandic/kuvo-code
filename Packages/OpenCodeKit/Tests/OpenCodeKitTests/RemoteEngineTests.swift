@@ -24,6 +24,27 @@ struct RemoteEngineTests {
         #expect(SSHConnection(destination: "box").arguments(running: "true", shared: false).contains("ControlPath=none"))
     }
 
+    /// A demo copy's stand-in machine (a name under `.invalid`) is never reached: running a script
+    /// there fails without starting `ssh`, and `ssh` started any other way can open no connection,
+    /// whatever your SSH config says (a jump host for every host, say).
+    @Test func aStandInMachineIsNeverContacted() async {
+        for destination in ["lab.invalid", "me@lab.invalid", "LAB.INVALID."] {
+            let connection = SSHConnection(destination: destination)
+            #expect(connection.isStandIn)
+            await #expect(throws: RemoteEngineError.self) { try await connection.run("touch /tmp/should-not-exist") }
+            let arguments = connection.arguments(running: "true")
+            #expect(arguments.prefix(4) == ["-F", "/dev/null", "-o", "ProxyCommand=/usr/bin/false"])
+        }
+        // A real host goes as before.
+        #expect(!SSHConnection(destination: "lab").isStandIn)
+        #expect(!SSHConnection(destination: "lab").arguments(running: "true").contains("ProxyCommand=/usr/bin/false"))
+        // Nor is it reached at another address it's routed to.
+        let name = "home-\(UUID().uuidString.prefix(6))"
+        defer { SSHConnection.route(name, to: nil) }
+        SSHConnection.route(name, to: "demo.invalid")
+        #expect(SSHConnection(destination: name).isStandIn)
+    }
+
     /// A machine with several addresses (its local name, its VPN one): every connection to it goes
     /// to the one in use, by the name it was added under, and back to that name when let go.
     @Test func aMachineIsReachedAtTheAddressInUse() {

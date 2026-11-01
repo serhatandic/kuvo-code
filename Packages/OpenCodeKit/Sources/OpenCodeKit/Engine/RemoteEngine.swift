@@ -78,7 +78,23 @@ public struct SSHConnection: Sendable, Hashable, Codable {
     /// way, so the script goes as base64, which no shell changes, for `sh` to decode and run. Its
     /// standard input stays the command's.
     public func arguments(running script: String, extra: [String] = [], shared: Bool = true) -> [String] {
-        Self.options + (shared ? Self.sharing : Self.separate) + extra + [address, Self.command(running: script)]
+        Self.unreachable(address) + Self.options + (shared ? Self.sharing : Self.separate) + extra + [address, Self.command(running: script)]
+    }
+
+    /// A machine under `.invalid`, a name that never resolves (RFC 6761): a stand-in a demo copy
+    /// shows (`KUVO_DEMO_MACHINE`), which nothing ever goes to.
+    public var isStandIn: Bool { Self.isStandIn(address) || Self.isStandIn(destination) }
+
+    public static func isStandIn(_ address: String) -> Bool {
+        let host = address.split(separator: "@").last.map(String.init) ?? address
+        return host.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ".")).hasSuffix(".invalid")
+    }
+
+    /// For a stand-in, `ssh` started any way at all opens no connection: your SSH config is left
+    /// out (a jump host it names would be asked for the name), and it connects through `false`.
+    /// Nothing else: `run` never starts it for one.
+    static func unreachable(_ address: String) -> [String] {
+        isStandIn(address) ? ["-F", "/dev/null", "-o", "ProxyCommand=/usr/bin/false"] : []
     }
 
     /// The command line for the machine's login shell that runs `script` with `sh`. Without a
@@ -110,6 +126,8 @@ public struct SSHConnection: Sendable, Hashable, Codable {
             return output
         }
         #endif
+        // (A test's stand-in answers first: its machines are under `.invalid` too.)
+        guard !isStandIn else { throw RemoteEngineError.ssh(status: 255, message: "Couldn’t reach \(destination).") }
         let stdin: ChildProcess.Input = input.map { url in sent.map { .reported(url, read: $0) } ?? .file(url) } ?? .nothing
         let result = try await ChildProcess.run("/usr/bin/ssh", arguments(running: script), input: stdin, cancellable: cancellable)
         guard result.succeeded else { throw RemoteEngineError.ssh(status: result.status, message: result.errorText) }
@@ -119,6 +137,7 @@ public struct SSHConnection: Sendable, Hashable, Codable {
     /// Runs `script` on the machine with what it prints going to `output` as it is (an archive of
     /// a folder there, say), not read as text. `input` is sent to it. As long as it takes, as `run`.
     public func run(_ script: String, input: URL? = nil, output: URL) async throws {
+        guard !isStandIn else { throw RemoteEngineError.ssh(status: 255, message: "Couldn’t reach \(destination).") }
         guard FileManager.default.createFile(atPath: output.path, contents: nil, attributes: [.posixPermissions: 0o600]) else { throw CocoaError(.fileWriteUnknown) }
         let result = try await ChildProcess.run("/usr/bin/ssh", arguments(running: script), input: input.map { .file($0) } ?? .nothing,
                                                 output: .file(output), cancellable: false)
@@ -1125,7 +1144,7 @@ public final class RemoteServer: @unchecked Sendable {
         process.executableURL = URL(filePath: "/usr/bin/ssh")
         // Not `-N`: a command on the machine that reads this app's end of a pipe, so the tunnel
         // ends when the app does, however it ends (a crash, a force quit), like this Mac's engine.
-        process.arguments = SSHConnection.options + SSHConnection.separate + forwards + [connection.address, "cat >/dev/null"]
+        process.arguments = SSHConnection.unreachable(connection.address) + SSHConnection.options + SSHConnection.separate + forwards + [connection.address, "cat >/dev/null"]
         process.standardInput = Pipe.unshared()
         process.standardOutput = FileHandle.nullDevice
         let stderr = Pipe.unshared()
