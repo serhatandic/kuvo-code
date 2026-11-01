@@ -15,14 +15,15 @@ nonisolated enum MCPCatalog {
         var settings: JSONValue
     }
 
-    enum Access: Sendable {
+    enum Access: Sendable, CaseIterable {
         case signIn, open, local
 
-        var title: String {
+        /// Its group's title, for a computer named `computer`.
+        func title(on computer: String) -> String {
             switch self {
-            case .signIn: "Needs an account"
-            case .open: "No account needed"
-            case .local: "Runs on this Mac"
+            case .signIn: "Needs an Account"
+            case .open: "No Account Needed"
+            case .local: "Runs on \(computer)"
             }
         }
     }
