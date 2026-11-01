@@ -32,11 +32,12 @@ struct StorageSettings: View {
                             Spacer()
                             Button("Refresh") { Task { await load() } }
                         }
-                        StorageBar(kinds: report.kinds, total: report.total)
+                        let shown = report.shown
+                        StorageBar(kinds: shown, total: report.total)
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), alignment: .leading)], alignment: .leading, spacing: 10) {
-                            ForEach(report.kinds) { kind in
+                            ForEach(Array(shown.enumerated()), id: \.element.id) { index, kind in
                                 HStack(alignment: .firstTextBaseline, spacing: 7) {
-                                    Circle().fill(kind.color).frame(width: 8, height: 8)
+                                    Circle().fill(StorageReport.color(kind, at: index, of: shown.count)).frame(width: 8, height: 8)
                                     VStack(alignment: .leading, spacing: 1) {
                                         Text(kind.title)
                                         Text(Self.format(kind.size))
@@ -296,8 +297,8 @@ private struct StorageBar: View {
     var body: some View {
         GeometryReader { proxy in
             HStack(spacing: 2) {
-                ForEach(kinds.filter { $0.size > 0 }) { kind in
-                    kind.color
+                ForEach(Array(kinds.enumerated()), id: \.element.id) { index, kind in
+                    StorageReport.color(kind, at: index, of: kinds.count)
                         .frame(width: max(3, proxy.size.width * CGFloat(kind.size) / CGFloat(max(total, 1)) - 2))
                 }
                 Spacer(minLength: 0)
@@ -347,19 +348,24 @@ nonisolated struct StorageReport: Sendable {
             }
         }
 
-        var color: Color {
-            switch id {
-            case .sessions: .blue
-            case .snapshots: .purple
-            case .logs: .orange
-            case .engine: .teal
-            case .agents: .indigo
-            case .worktrees: .green
-            case .browser: .pink
-            case .attachments: .yellow
-            case .other: .gray
-            }
-        }
+    }
+
+    /// What the page lists, largest first: none that's empty, and any under 1% of the total in
+    /// Other, which comes last.
+    var shown: [Kind] {
+        let total = max(self.total, 1)
+        let parts = kinds.filter { $0.id != .other && $0.size > 0 }
+        let small = parts.filter { Double($0.size) / Double(total) < 0.01 }
+        let other = size(of: .other) + small.reduce(0) { $0 + $1.size }
+        let large = parts.filter { Double($0.size) / Double(total) >= 0.01 }.sorted { $0.size > $1.size }
+        return large + (other > 0 ? [Kind(id: .other, size: other)] : [])
+    }
+
+    /// One ramp of the accent, deepest for the largest; Other in gray.
+    static func color(_ kind: Kind, at index: Int, of count: Int) -> Color {
+        if kind.id == .other { return Color.secondary.opacity(0.5) }
+        let steps = max(count - 1, 1)
+        return Color.accentColor.opacity(1 - 0.65 * Double(index) / Double(steps))
     }
 
     let kinds: [Kind]

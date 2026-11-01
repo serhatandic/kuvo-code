@@ -34,4 +34,17 @@ import Testing
                 "bots' and chats' folders are counted")
         #expect(report.total >= StorageReport.size(of: support), "everything in the data folder is counted: \(report.total) of \(StorageReport.size(of: support))")
     }
+
+    /// The page lists what takes room, largest first: nothing empty, and what's under 1% of the
+    /// total counted in Other, at the end.
+    @Test func thePageListsWhatTakesRoom() {
+        let report = StorageReport(kinds: [
+            .init(id: .sessions, size: 300), .init(id: .snapshots, size: 0), .init(id: .logs, size: 5),
+            .init(id: .engine, size: 600), .init(id: .other, size: 90), .init(id: .browser, size: 0),
+            .init(id: .attachments, size: 5),
+        ], linuxEngine: 0)
+        #expect(report.shown.map(\.id) == [.engine, .sessions, .other])
+        #expect(report.shown.last?.size == 100)
+        #expect(report.shown.reduce(0) { $0 + $1.size } == report.total)
+    }
 }

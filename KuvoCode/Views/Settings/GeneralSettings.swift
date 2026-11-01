@@ -247,44 +247,30 @@ struct PrivacySettings: View {
                 LabeledContent("What’s sent") {
                     Link("Privacy and Data", destination: URL(string: "https://www.kuvo.run/code/docs/privacy/")!)
                 }
-            }
-            Section {
-                LabeledContent {
+                // What stays on this Mac, a line each, with the page where it's kept.
+                LabeledContent("Sessions and accounts stay on this Mac") {
                     Button("Storage…") { app.settingsTabs.show(.storage) }
-                } label: {
-                    Text("Sessions and accounts")
-                    Text("Kept on this Mac. Messages go only to your providers.")
                 }
-                LabeledContent {
+                .help("Messages go only to your providers.")
+                LabeledContent("The panel’s browser is kept apart") {
                     Button("Browser…") { app.settingsTabs.show(.browser) }
-                } label: {
-                    Text("The panel’s browser")
-                    Text("Kept apart from your other browsers.")
                 }
-                LabeledContent {
+                .help("Its website data and history aren’t shared with your other browsers.")
+                LabeledContent("Agents use the vault without seeing it") {
                     Button("Vault…") { app.settingsTabs.show(.vault) }
-                } label: {
-                    Text("The vault")
-                    Text("Sign-ins, keys and files your agents use without seeing them.")
                 }
-            } header: {
-                Text("On This Mac")
+                .help("Sign-ins, keys and files your agents use without seeing them.")
             }
         }
     }
 }
 
-/// Usage has its own settings in the menu bar panel; this page points there.
+/// Usage: the menu bar panel's settings, which live here, and the providers it shows, which its
+/// Customize screen sets.
 struct UsageSettings: View {
     var body: some View {
         ScrollingSettingsForm {
             Section {
-                LabeledContent {
-                    Button("Open…") { UsageMenuBar.shared.open(.settings) }
-                } label: {
-                    Text("Usage settings")
-                    Text("Plan limits, pace and spend, in the menu bar.")
-                }
                 LabeledContent {
                     Button("Choose…") { UsageMenuBar.shared.open(.customize) }
                 } label: {
