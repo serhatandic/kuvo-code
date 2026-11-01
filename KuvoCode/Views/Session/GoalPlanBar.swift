@@ -507,6 +507,18 @@ struct GoalLanes: View {
         }
     }
 
+    /// The days that get a label of their own: every day across a week or where each has room for
+    /// its date; else one every few days, counted out from Today (or the first day) so the labels
+    /// keep clear of it and of each other, and a week apart once that's most of a week.
+    static func labeledDays(_ days: [Date], dayWidth: CGFloat, week: Bool, now: Date, calendar: Calendar = .current) -> Set<Date> {
+        let fit = dayWidth > 0 ? Int((56 / dayWidth).rounded(.up)) : 7
+        let step = week || dayWidth >= 52 ? 1 : fit >= 5 ? 7 * Int((Double(fit) / 7).rounded(.up)) : max(fit, 1)
+        let origin = calendar.startOfDay(for: days.contains { calendar.isDate($0, inSameDayAs: now) } ? now : days.first ?? now)
+        return Set(days.filter { day in
+            (calendar.dateComponents([.day], from: origin, to: calendar.startOfDay(for: day)).day ?? 1) % step == 0
+        })
+    }
+
     /// The days along a long goal's axis, each at its start.
     private static func days(_ timeline: GoalTimeline) -> [Date] {
         let calendar = Calendar.current
@@ -549,23 +561,13 @@ struct GoalLanes: View {
     }
 
     /// The days' labels, each over its day: every day's name across a week ("Tue"), every day's
-    /// date where the days have room ("Tue 3"), else Mondays ("Mon 26"); and Today, with no label
-    /// running into it.
+    /// date where the days have room ("Tue 3"), else one every few days ("Mon 26"); and Today,
+    /// with no label running into it.
     private func dayHeader(_ days: [Date], x: AxisX, width: CGFloat, window: DateInterval?, shown: CGRect) -> some View {
         let calendar = Calendar.current
         let week = (window?.duration ?? 0) <= 7 * 86400
-        let roomy = days.first.map { x($0.addingTimeInterval(86400)) - x($0) } ?? 0 >= 52
-        let everyDay = week || roomy
-        // Days too narrow for a label each: one every few days, counted out from Today (or the
-        // first day) so the labels keep clear of it and of each other; a week apart once that's
-        // most of a week.
         let dayWidth = days.first.map { x($0.addingTimeInterval(86400)) - x($0) } ?? 0
-        let fit = dayWidth > 0 ? Int((56 / dayWidth).rounded(.up)) : 7
-        let step = everyDay ? 1 : fit >= 5 ? 7 * Int((Double(fit) / 7).rounded(.up)) : max(fit, 1)
-        let origin = calendar.startOfDay(for: days.contains { calendar.isDate($0, inSameDayAs: now) } ? now : days.first ?? now)
-        let labeled = { (day: Date) in
-            (calendar.dateComponents([.day], from: origin, to: calendar.startOfDay(for: day)).day ?? 1) % step == 0
-        }
+        let labeled = Self.labeledDays(days, dayWidth: dayWidth, week: week, now: now)
         // Clear of the edges of what shows, where it would be cut.
         let clears = { (center: CGFloat) in shown.width == 0 || (center > shown.minX + 22 && center < shown.maxX - 22) }
         // Today, where its label shows: the days beside it make room for it.
@@ -583,7 +585,7 @@ struct GoalLanes: View {
                         .foregroundStyle(accent)
                         .fixedSize()
                         .position(x: center, y: Self.headerHeight / 2)
-                } else if labeled(day) {
+                } else if labeled.contains(day) {
                     Text(day.formatted(week ? .dateTime.weekday(.abbreviated) : .dateTime.weekday(.abbreviated).day()))
                         .font(.system(size: 11).monospacedDigit())
                         .foregroundStyle(.tertiary)
