@@ -45,6 +45,9 @@ struct ModelPicker: View {
     /// The rail's choice; until you make one, the current model's provider.
     @State private var chosenRail: String?
     @State private var showsOlder = false
+    /// How tall the list's rows and the rail's marks are, for the list's height to fit them.
+    @State private var contentHeight: CGFloat = 0
+    @State private var railHeight: CGFloat = 0
     @State private var query = ""
     /// The row under the pointer or the arrow keys.
     @State private var highlight: String?
@@ -171,6 +174,7 @@ struct ModelPicker: View {
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 1) { listContent }
                             .padding(6)
+                            .onGeometryChange(for: CGFloat.self, of: \.size.height) { contentHeight = $0 }
                     }
                     .scrollIndicators(.never)
                     .frame(height: listHeight)
@@ -184,7 +188,12 @@ struct ModelPicker: View {
         .onChange(of: query) { highlight = visibleRows.first.map(rowID) }
     }
 
-    private var listHeight: CGFloat { min(380, max(maxHeight - 41, 160)) }
+    /// As tall as what it lists, up to its most, and never shorter than the rail beside it, so a
+    /// short list leaves no empty band under it.
+    private var listHeight: CGFloat {
+        let most = min(380, max(maxHeight - 41, 160))
+        return min(most, max(contentHeight, railHeight - 41, 120))
+    }
 
     @ViewBuilder private var listContent: some View {
         if !query.isEmpty {
@@ -552,6 +561,7 @@ struct ModelPicker: View {
                 }
             }
             .padding(.vertical, 8)
+            .onGeometryChange(for: CGFloat.self, of: \.size.height) { railHeight = $0 }
         }
         .scrollIndicators(.never)
         .frame(width: 46, height: listHeight + 41)
