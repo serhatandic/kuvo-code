@@ -55,18 +55,26 @@ struct SubscriptionsStep: View {
                                 .environment(\.backgroundMaterial, nil)
                                 .transition(.opacity)
                         }
+                        // Each kind one list, as Settings › Accounts has them: one card, one place
+                        // for the eye to land, not a card per row.
                         heading("Plans")
-                        switch onboarding.agents(failure: app.agents.failure) {
-                        case .listed: EmptyView()
-                        case .looking: AgentsPendingRow(failure: nil, again: lookAgain)
-                        case .failed(let why): AgentsPendingRow(failure: why, again: lookAgain)
+                        OnboardingGroup {
+                            switch onboarding.agents(failure: app.agents.failure) {
+                            case .listed: EmptyView()
+                            case .looking: AgentsPendingRow(failure: nil, again: lookAgain)
+                            case .failed(let why): AgentsPendingRow(failure: why, again: lookAgain)
+                            }
+                            ForEach(offers.plans) { row(for: $0) }
                         }
-                        ForEach(offers.plans) { row(for: $0) }
                         heading("Free")
-                        FreeModelsRow()
+                        OnboardingGroup {
+                            FreeModelsRow()
+                        }
                         if showsKeys, !offers.keys.isEmpty {
                             heading("API Keys")
-                            ForEach(offers.keys) { row(for: $0) }
+                            OnboardingGroup {
+                                ForEach(offers.keys) { row(for: $0) }
+                            }
                         }
                         links(offers)
                         if onboarding.offersUsage {
@@ -344,6 +352,7 @@ private struct OnboardingRow<Icon: View, Trailing: View>: View {
     @ViewBuilder var icon: Icon
     @ViewBuilder var trailing: Trailing
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.onboardingRowGrouped) private var isGrouped
 
     var body: some View {
         HStack(spacing: 12) {
@@ -362,12 +371,60 @@ private struct OnboardingRow<Icon: View, Trailing: View>: View {
             trailing
         }
         .padding(10)
-        // White in light mode, a step above the window in dark.
-        .background(Surface.cardFill(scheme, focused: scheme == .light), in: .rect(cornerRadius: 12))
-        .specularRim(RoundedRectangle(cornerRadius: 12))
-        .environment(\.backgroundMaterial, nil)
+        .modifier(OnboardingCard(isOn: !isGrouped))
         .accessibilityElement(children: .contain)
     }
+}
+
+/// White in light mode, a step above the window in dark.
+private struct OnboardingCard: ViewModifier {
+    var isOn = true
+    @Environment(\.colorScheme) private var scheme
+
+    func body(content: Content) -> some View {
+        if isOn {
+            content
+                .background(Surface.cardFill(scheme, focused: scheme == .light), in: .rect(cornerRadius: 12))
+                .specularRim(RoundedRectangle(cornerRadius: 12))
+                .environment(\.backgroundMaterial, nil)
+        } else {
+            content
+        }
+    }
+}
+
+/// Rows of one kind on one card, a hairline between them from the text's edge.
+private struct OnboardingGroup<Content: View>: View {
+    @ViewBuilder var content: Content
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        Group(subviews: content) { rows in
+            if !rows.isEmpty {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(rows) { row in
+                        row
+                            .overlay(alignment: .top) {
+                                if row.id != rows.first?.id {
+                                    Rectangle()
+                                        .fill(Surface.hairline(scheme))
+                                        .frame(height: 1)
+                                        .padding(.leading, 54)
+                                        .padding(.trailing, 10)
+                                }
+                            }
+                    }
+                }
+                .environment(\.onboardingRowGrouped, true)
+                .modifier(OnboardingCard())
+            }
+        }
+    }
+}
+
+extension EnvironmentValues {
+    /// A row inside an `OnboardingGroup`, whose card it shares.
+    @Entry fileprivate var onboardingRowGrouped = false
 }
 
 /// A check and a word, for what needs nothing more.
