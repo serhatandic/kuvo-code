@@ -16,6 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- Kuvo Code no longer quits when a file the panel shows with Quick Look (a PDF, a spreadsheet, a video) is followed by the next one as its window closes.
 - A bot's goal you pause while its computer is restarting, or briefly out of reach, still stops and stays paused once it's back, rather than carrying on with reminders.
 - A widget gets shorter again when its content does (details hidden, a tab with less in it, a wider window), with no empty space left under it.
 - A widget the agent writes as a whole page is laid out as its page asks: it kept losing its doctype, so it was drawn the old way, as a page without one.
