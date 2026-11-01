@@ -97,7 +97,7 @@ struct CommandPalette: View {
                             .padding(.top, section.id == sections.first?.id ? 4 : 10)
                             .padding(.bottom, 3)
                         ForEach(section.items) { item in
-                            row(item, isSelected: item.id == current)
+                            row(item, isSelected: item.id == current, query: query)
                         }
                     }
                 }
@@ -139,7 +139,7 @@ struct CommandPalette: View {
         }
     }
 
-    private func row(_ item: PaletteItem, isSelected: Bool) -> some View {
+    private func row(_ item: PaletteItem, isSelected: Bool, query: String) -> some View {
         Button { choose(item) } label: {
             HStack(spacing: 8) {
                 Group {
@@ -152,7 +152,7 @@ struct CommandPalette: View {
                     }
                 }
                 .frame(width: 16, height: 16)
-                Text(item.title)
+                Text(Self.marked(item.title, query: item.kind == .file ? "" : query))
                     .font(.system(size: 13, weight: .medium))
                 if let detail = item.detail {
                     Text(detail)
@@ -172,6 +172,21 @@ struct CommandPalette: View {
             .frame(height: 30)
         }
         .buttonStyle(ListRowButtonStyle(isSelected: isSelected, cornerRadius: 8))
+    }
+
+    /// The title with what the query matched in it in semibold, the rest regular, so a loose
+    /// match ("nt" finding "New Terminal") shows why it's there. As it is before anything's typed.
+    static func marked(_ title: String, query: String) -> AttributedString {
+        var marked = AttributedString(title)
+        let ranges = Fuzzy.ranges(query, title)
+        guard !ranges.isEmpty else { return marked }
+        marked.font = .system(size: 13)
+        for range in ranges {
+            guard let lower = AttributedString.Index(range.lowerBound, within: marked),
+                  let upper = AttributedString.Index(range.upperBound, within: marked) else { continue }
+            marked[lower..<upper].font = .system(size: 13, weight: .semibold)
+        }
+        return marked
     }
 
     private func choose(_ item: PaletteItem) {
@@ -197,5 +212,39 @@ nonisolated enum Fuzzy {
         let parts = query.split(separator: " ")
         if parts.count > 1, parts.allSatisfy({ part in words.contains { $0.hasPrefix(part) } }) { return 4 }
         return nil
+    }
+
+    /// Where in `text` `query` matched, as `rank` matched it; none when it doesn't.
+    static func ranges(_ query: String, _ text: String) -> [Range<String.Index>] {
+        let query = query.trimmingCharacters(in: .whitespaces)
+        guard let rank = rank(query, text) else { return [] }
+        let words = wordRanges(text)
+        func prefix(_ part: some StringProtocol, of word: Range<String.Index>) -> Range<String.Index>? {
+            text[word].range(of: part, options: [.caseInsensitive, .anchored])
+        }
+        switch rank {
+        case 0: return text.range(of: query, options: [.caseInsensitive, .anchored]).map { [$0] } ?? []
+        case 1: return words.lazy.compactMap { prefix(query, of: $0) }.first.map { [$0] } ?? []
+        case 2: return words.prefix(query.count).map { $0.lowerBound..<text.index(after: $0.lowerBound) }
+        case 3: return text.range(of: query, options: .caseInsensitive).map { [$0] } ?? []
+        default:
+            return query.split(separator: " ").compactMap { part in words.lazy.compactMap { prefix(part, of: $0) }.first }
+        }
+    }
+
+    /// Each run of letters and digits in `text`.
+    private static func wordRanges(_ text: String) -> [Range<String.Index>] {
+        var words: [Range<String.Index>] = []
+        var start: String.Index?
+        for index in text.indices {
+            let isWord = text[index].isLetter || text[index].isNumber
+            if isWord, start == nil { start = index }
+            if !isWord, let begun = start {
+                words.append(begun..<index)
+                start = nil
+            }
+        }
+        if let start { words.append(start..<text.endIndex) }
+        return words
     }
 }

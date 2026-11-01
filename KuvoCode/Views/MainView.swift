@@ -935,7 +935,7 @@ struct MainView: View {
         }
         add("New Session", "square.and.pencil", "⌘N", actions.newSession)
         if actions.hasProject {
-            add("Run", "play.fill", "⌘R", detail: runCommand, actions.run)
+            add("Run", "play", "⌘R", detail: runCommand, actions.run)
         }
         add("New Terminal", "terminal", "⌃`", actions.newTerminal)
         add("New Terminal Tab", "apple.terminal", "⌃⇧`", actions.newTerminalTab)
