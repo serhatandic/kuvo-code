@@ -18,6 +18,9 @@ nonisolated final class StubWeb: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) private static var requestRoutes: [String: @Sendable (URLRequest, Data) -> Answer] = [:]
     /// Answers for every address under a prefix, from the whole request (its method and body).
     nonisolated(unsafe) private static var handlers: [(prefix: String, answer: @Sendable (URLRequest, Data) -> Answer)] = []
+    /// Answers given when a test says so (a slow server), ahead of the rest: what's asked meanwhile
+    /// is answered as usual.
+    nonisolated(unsafe) private static var heldHandlers: [(prefix: String, answer: @Sendable (URLRequest, Data, @escaping @Sendable (Answer) -> Void) -> Void)] = []
     nonisolated(unsafe) private static var hosts: Set<String> = []
     /// Whether an address on those hosts that nothing here answers for goes out as it is, to a
     /// real server a test started (the agents bridge), rather than answering 404.
@@ -31,6 +34,7 @@ nonisolated final class StubWeb: URLProtocol, @unchecked Sendable {
             routes = [:]
             requestRoutes = [:]
             handlers = []
+            heldHandlers = []
             asked = []
             real = false
             realPorts = []
@@ -73,6 +77,12 @@ nonisolated final class StubWeb: URLProtocol, @unchecked Sendable {
         lock.withLock { handlers.append((prefix, answer)) }
     }
 
+    /// Answers requests to addresses starting with `prefix` (its query too) whenever `answer` calls
+    /// `reply`, which may be long after.
+    static func hold(_ prefix: String, _ answer: @escaping @Sendable (URLRequest, Data, _ reply: @escaping @Sendable (Answer) -> Void) -> Void) {
+        lock.withLock { heldHandlers.append((prefix, answer)) }
+    }
+
     static func json(_ value: Any, status: Int = 200) -> Answer {
         Answer(status: status, body: (try? JSONSerialization.data(withJSONObject: value)) ?? Data())
     }
@@ -86,7 +96,7 @@ nonisolated final class StubWeb: URLProtocol, @unchecked Sendable {
             bare?.query = nil
             let address = bare?.string ?? ""
             return answers[url.absoluteString] != nil || routes[address] != nil || requestRoutes[address] != nil
-                || handlers.contains { url.absoluteString.hasPrefix($0.prefix) }
+                || handlers.contains { url.absoluteString.hasPrefix($0.prefix) } || heldHandlers.contains { url.absoluteString.hasPrefix($0.prefix) }
         }
     }
 
@@ -121,7 +131,31 @@ nonisolated final class StubWeb: URLProtocol, @unchecked Sendable {
 
     override func startLoading() {
         let url = request.url!
-        let answer = Self.answer(for: request, body: Self.body(of: request))
+        let body = Self.body(of: request)
+        if let held = Self.lock.withLock({ Self.heldHandlers.first { url.absoluteString.hasPrefix($0.prefix) }?.answer }) {
+            // Answered on the thread that asked, whenever the test replies.
+            nonisolated(unsafe) let thread = Thread.current
+            let modes = [RunLoop.Mode.common.rawValue, RunLoop.current.currentMode?.rawValue].compactMap { $0 }
+            Self.lock.withLock { Self.asked.append(url.absoluteString) }
+            held(request, body) { [weak self] answer in
+                guard let self else { return }
+                TestPulse.beat()
+                self.perform(#selector(self.finish(_:)), on: thread, with: Box(answer), waitUntilDone: false, modes: modes)
+            }
+            TestPulse.beat()
+            return
+        }
+        finish(Box(Self.answer(for: request, body: body)))
+    }
+
+    private final class Box: NSObject, @unchecked Sendable {
+        let answer: Answer
+        init(_ answer: Answer) { self.answer = answer }
+    }
+
+    @objc private func finish(_ box: Box) {
+        let url = request.url!
+        let answer = box.answer
         let response = HTTPURLResponse(url: url, statusCode: answer.status, httpVersion: "HTTP/1.1", headerFields: nil)!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: answer.body)

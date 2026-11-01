@@ -367,26 +367,40 @@ final class Catalog {
     /// answering from what it knew a moment ago.
     func refreshAgents(fresh: Bool = false) async {
         guard let api = outsideAgents?.api else { return }
+        agentReads += 1
+        let order = agentReads
         if fresh {
+            freshAgentReads += 1
             isRefreshingAgents = true
             lastFreshAgents = .now
         }
-        defer { if fresh { isRefreshingAgents = false } }
+        defer {
+            if fresh {
+                freshAgentReads -= 1
+                isRefreshingAgents = freshAgentReads > 0
+            }
+        }
         // The accounts first: one that changed has other models.
-        var read = false
-        do {
-            agentIntegrations = try await api.agentIntegrations(fresh: fresh)
-            read = true
-        } catch { log.error("agents: \(String(describing: error), privacy: .public)") }
-        do { agentModels = try await api.models() } catch { log.error("agents' models: \(String(describing: error), privacy: .public)") }
+        var listed: [Integration]?
+        var models: [Model]?
+        do { listed = try await api.agentIntegrations(fresh: fresh) } catch { log.error("agents: \(String(describing: error), privacy: .public)") }
+        do { models = try await api.models() } catch { log.error("agents' models: \(String(describing: error), privacy: .public)") }
+        // A read asked before one that's answered already (a fresh one, slow to check every agent,
+        // overtaken by the one after you removed an account) is out of date.
+        guard listed != nil || models != nil, order > agentReadShown else { return }
+        agentReadShown = order
+        if let listed { agentIntegrations = listed }
+        if let models { agentModels = models }
         merge()
-        if read { areAgentsLoaded = true }
+        if listed != nil { areAgentsLoaded = true }
     }
 
     /// The agents bridge stopped for good, or isn't there (a machine's engine started without
     /// it): its agents and their models aren't there to use. `untilBack`: it's away for now (its
     /// machine disconnected), and they're unknown until it's back, not gone.
     func forgetAgents(untilBack: Bool = false) {
+        // Nor does a read still on its way bring them back.
+        agentReadShown = agentReads
         agentIntegrations = []
         agentModels = []
         merge()
@@ -395,6 +409,10 @@ final class Catalog {
 
     /// True while the agents are being asked anew.
     private(set) var isRefreshingAgents = false
+    /// The coding agents' reads, as asked, and the latest whose answer shows.
+    @ObservationIgnored private var agentReads = 0
+    @ObservationIgnored private var agentReadShown = 0
+    @ObservationIgnored private var freshAgentReads = 0
     @ObservationIgnored private var lastFreshAgents: ContinuousClock.Instant?
 
     /// The agents asked anew, unless they were a moment ago: when you come back to the app.
