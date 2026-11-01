@@ -161,6 +161,7 @@ struct Card<Icon: View, Actions: View, Content: View>: View {
                     .padding(.trailing, 6)
             } else {
                 Text(title)
+                    .layoutPriority(1)
             }
             // The project, secondary: the title's weight is the session's alone.
             if let detail {

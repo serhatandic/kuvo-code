@@ -498,8 +498,13 @@ private struct SettingsSidebar: View {
 
     private func row(_ page: SettingsPage, on box: SidebarBox) -> some View {
         Button {
-            clicked = page
-            if NSEvent.modifierFlags.contains(.command) { openInNewTab(page, box) } else { open(page, box) }
+            if NSEvent.modifierFlags.contains(.command) {
+                openInNewTab(page, box)
+            } else {
+                // Only a click that changes the page is answered by onChange, which clears it.
+                if page != self.page { clicked = page }
+                open(page, box)
+            }
         } label: {
             HStack(spacing: 10) {
                 Image(systemName: page.symbol)

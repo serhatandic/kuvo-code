@@ -106,6 +106,8 @@ struct MCPSettings: View {
                     Section {
                         ForEach(servers) { server in popularRow(server) }
                     } header: {
+                        // Read on from the first: "Popular Servers That Need an Account", then
+                        // "No Account Needed", "Run on This Mac".
                         Text(access.title(on: box.machine == nil ? "This Mac" : app.name(of: box)))
                     } footer: {
                         if access == MCPCatalog.Access.allCases.last(where: { a in popular.contains { $0.access == a } }) {

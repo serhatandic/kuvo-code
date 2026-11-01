@@ -21,9 +21,9 @@ nonisolated enum MCPCatalog {
         /// Its group's title, for a computer named `computer`.
         func title(on computer: String) -> String {
             switch self {
-            case .signIn: "Needs an Account"
+            case .signIn: "Popular Servers That Need an Account"
             case .open: "No Account Needed"
-            case .local: "Runs on \(computer)"
+            case .local: "Run on \(computer)"
             }
         }
     }
