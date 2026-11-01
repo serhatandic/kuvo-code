@@ -1020,6 +1020,10 @@ struct MainView: View {
             showsSidebar: { showsSidebar },
             showSidebar: { showSidebar($0) },
             showPalette: { showsPalette = true },
+            openQuickly: {
+                showsPalette = false
+                showsOpenQuickly = true
+            },
             renameInView: { if let session = activeModel?.session { renaming = session } },
             runProject: { runProject() },
             newProject: { tabs.openProjectEditor(ProjectEditorRequest(project: nil, folders: $0)) }

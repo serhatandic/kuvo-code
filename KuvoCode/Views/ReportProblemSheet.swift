@@ -6,7 +6,7 @@ import SwiftUI
 /// plainly that issues are public, and shows everything that goes with it: nothing else does.
 struct ReportProblemSheet: View {
     let close: () -> Void
-    @State private var description = ""
+    @State private var description = DemoTyped.problem
     @FocusState private var isFocused: Bool
 
     /// What's in use here, as the issue says it.

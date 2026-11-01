@@ -260,6 +260,14 @@ struct ChangesPanel: View {
             // Kept while its form is open, so a push problem stays readable after the commit.
             if changes.isRepository, !changes.files.isEmpty && changes.hasUncommitted || isCommitting {
                 Button("Commit…") { isCommitting = true }
+                    #if DEBUG
+                    // KUVO_DEMO_COMMIT=<message>: its form open, with that typed in it (`DemoTyped`).
+                    .task {
+                        guard ProcessInfo.processInfo.environment["KUVO_DEMO_COMMIT"] != nil, !isCommitting else { return }
+                        await DemoWait.pause(.conversationShows)
+                        isCommitting = true
+                    }
+                    #endif
                     .buttonStyle(.borderless)
                     .font(.system(size: 12, weight: .medium))
                     .fixedSize()
@@ -416,7 +424,7 @@ private struct CommitForm: View {
     var fallback: OpenCodeAPI? = nil
     let done: () -> Void
     @State private var isSuggesting = false
-    @State private var message = ""
+    @State private var message = DemoTyped.commit
     @State private var hasStaged: Bool?
     @State private var failure: String?
     @State private var isWorking = false
@@ -568,6 +576,21 @@ private struct BranchMenu: View {
         .disabled(isWorking)
         .help(isWorktree ? "This session works on its own branch, \(tree.branch). Merge it or create a pull request." : "Create a pull request for \(tree.branch)")
         .accessibilityLabel(isWorktree ? "Merge or Create Pull Request" : "Create Pull Request")
+        #if DEBUG
+        // KUVO_DEMO_BRANCH=merged|conflict|pushed|failed: what Merge or Create Pull Request said,
+        // as if it had just run (nothing is merged or pushed).
+        .task {
+            guard let shown = ProcessInfo.processInfo.environment["KUVO_DEMO_BRANCH"] else { return }
+            await DemoWait.pause(.conversationShows)
+            switch shown {
+            case "merged": outcome = .merged(into: tree.base ?? "main")
+            case "conflict": outcome = .conflict(["src/timer.js", "test/timer.test.js"], into: tree.base ?? "main")
+            case "pushed": outcome = .pushed
+            case "failed": outcome = .failed(title: "Couldn’t Push", message: "fatal: could not read Username for 'https://github.com': terminal prompts disabled")
+            default: break
+            }
+        }
+        #endif
         .alert(title, isPresented: Binding(get: { outcome != nil }, set: { if !$0 { outcome = nil } })) {
             if case .conflict(_, let target) = outcome, let model {
                 Button("Ask the Agent to Fix It") {

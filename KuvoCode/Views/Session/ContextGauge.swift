@@ -48,6 +48,14 @@ struct ContextGauge: View {
                 })
                 .popoverContent()
             }
+            #if DEBUG
+            // KUVO_DEMO_CONTEXT=1: its details open once the conversation shows.
+            .task {
+                guard ProcessInfo.processInfo.environment["KUVO_DEMO_CONTEXT"] != nil else { return }
+                await DemoWait.pause(.conversationShows)
+                showsDetails = true
+            }
+            #endif
         }
     }
 

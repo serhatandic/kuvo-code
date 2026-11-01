@@ -509,9 +509,40 @@ final class RowStackView: NSView, NSUserInterfaceValidations {
                     MainActor.assumeIsolated { self?.updateEmphasis() }
                 })
             }
+            #if DEBUG
+            showDemoSelection()
+            #endif
         }
         updateEmphasis()
     }
+
+    #if DEBUG
+    /// Once, in the conversation in view: KUVO_DEMO_SELECTION_MENU's.
+    private static var demoSelectionShown = false
+
+    /// KUVO_DEMO_SELECTION_MENU=<x>,<y>: the paragraph at that point of the window (from its top
+    /// left) selected, as a triple click selects it, with the menu over it (Add to Chat, Copy),
+    /// once the conversation there has its rows.
+    private func showDemoSelection() {
+        guard !Self.demoSelectionShown, let spec = ProcessInfo.processInfo.environment["KUVO_DEMO_SELECTION_MENU"] else { return }
+        let xy = spec.split(separator: ",").compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
+        guard xy.count == 2 else { return }
+        Task { @MainActor [weak self] in
+            for _ in 0..<20 {
+                await DemoWait.pause(.beat)
+                guard let self, !Self.demoSelectionShown else { return }
+                guard let window, let content = window.contentView, !isHiddenOrHasHiddenAncestor else { continue }
+                let point = convert(NSPoint(x: xy[0], y: content.bounds.height - xy[1]), from: nil)
+                guard visibleRect.contains(point), let pressed = spot(at: point), pressed.unit != .max,
+                      let paragraph = unit(around: pressed, by: .selectByParagraph) else { continue }
+                Self.demoSelectionShown = true
+                select(paragraph.start, paragraph.end)
+                showMenu()
+                return
+            }
+        }
+    }
+    #endif
 
     private var keyWatch: [NSObjectProtocol] = []
 

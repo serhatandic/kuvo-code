@@ -336,7 +336,7 @@ when you're there to answer.
 | `KUVO_DEMO_PROVIDERS` | Open Accounts (on a provider's sign-in if it names one) |
 | `KUVO_DEMO_APPEARANCE` | `light` or `dark` |
 | `KUVO_DEMO_CHANGES` | Show the side panel |
-| `KUVO_DEMO_PANEL` | Open tools in the panel, comma-separated: `terminal`, `browser=<address>`, `machine=<machine>` (its browser), `files`, `file=<path>`, `folder=<path>` (Files, open down to it), `changes`, `run`, `expand`, `toggle=<seconds>` (expands and collapses it a few times) |
+| `KUVO_DEMO_PANEL` | Open tools in the panel, comma-separated: `terminal`, `browser=<address>`, `machine=<machine>` (its browser; a `KUVO_DEMO_MACHINE` stand-in's in a new session's draft there), `files`, `file=<path>`, `folder=<path>` (Files, open down to it), `changes`, `run`, `expand`, `toggle=<seconds>` (expands and collapses it a few times) |
 | `KUVO_DEMO_WINDOW` | Window size, as `WIDTHxHEIGHT`, moved onto the screen if it was past its edge |
 | `KUVO_DEMO_OFFSCREEN` | With `KUVO_DEMO_WINDOW`: the window past the screen's right edge, so the pointer can't hover over what you capture (`screencapture -l` still gets all of it) |
 | `KUVO_DEMO_ACTIVE` | The window drawn as the one in front while it's behind (a background copy), for captures |
@@ -407,7 +407,14 @@ when you're there to answer.
 | `KUVO_DEMO_FAILURE` | Over the composer of the session in view, as if something had just failed with this message |
 | `KUVO_DEMO_QUESTIONS` | The agent asking three questions at once, over the composer of the session in view; a number opens that question (from 0) |
 | `KUVO_DEMO_QUOTE` | Replying to this text (several, separated by `\|\|`), over the composer of the session in view |
-| `KUVO_DEMO_SELECTION_MENU` | `<x>,<y>`: the menu over selected text (Add to Chat, Copy), shown there in the conversation |
+| `KUVO_DEMO_SELECTION_MENU` | `<x>,<y>` in the window: the paragraph there in the conversation selected, with the menu over it (Add to Chat, Copy) |
+| `KUVO_DEMO_SUBAGENT` | The first subagent of the session in view (or of the session with this ID or title) in its place, as its Open does, once its agent has started one; with `KUVO_DEMO_PROMPT`, of that prompt's session |
+| `KUVO_DEMO_OPEN_QUICKLY` | Open Quickly, with this typed in it (empty for none) |
+| `KUVO_DEMO_REPORT_PROBLEM` | Help › Report a Problem…'s sheet, with this typed in it (empty for none) |
+| `KUVO_DEMO_CONTEXT` | `1`: the context gauge's details (beside the composer) open once the conversation shows |
+| `KUVO_DEMO_COMMIT` | With `KUVO_DEMO_PANEL=changes`: its Commit… form open, with this typed as the message (empty for none) |
+| `KUVO_DEMO_BRANCH` | With `KUVO_DEMO_PANEL=changes` on a branch or worktree: what Merge or Create Pull Request says, as if it had just run (`merged`, `conflict`, `pushed` or `failed`; nothing is merged or pushed) |
+| `KUVO_DEMO_POINTER` | With `KUVO_DEMO_PANEL=browser=<address>`: the agent's pointer over the page at `<x>,<y>` (its points), about to `click` (or `,type`, `,select`, `,hover`), held in view |
 | `KUVO_DEMO_DRAG` | `<x1>,<y1>,<x2>,<y2>`: a drag over the conversation, as events (`KUVO_DEMO_DRAG_AT` seconds after it opens); `KUVO_DEMO_DRAG_DIRECT=1` hands them to the view itself, as a window in the background takes a first click only to come forward |
 | `KUVO_DEMO_INTEGRATION_KEY` | `<id>\|<NAME>\|<value>`: saves an integration's key as Add Key… does, before the engine starts (no value removes it) |
 | `KUVO_DEMO_ADD_INTEGRATION` | With Settings › Integrations open: adds those integrations (comma-separated), as Connect does |
@@ -450,6 +457,7 @@ when you're there to answer.
 | `KUVO_DEMO_MACHINE_NOT_PEER` | `<machine>`, or `<machine>\|another`: Settings › Machines as when agents on your other computers can't reach that machine's (its bridge out of date, or another Mac runs its engine) |
 | `KUVO_DEMO_MACHINE_HOME` | `<machine>\|<Mac>`: Settings › Machines shows that machine as run by that Mac, with Make This Mac Its Home… (nothing moves unless you click) |
 | `KUVO_DEMO_MAKE_HOME` | `<machine>`, with `KUVO_DEMO_SETTINGS=machines`: once it's connected, makes this Mac its home, as Make This Mac Its Home… does (to try a move between two demo copies) |
+| `KUVO_DEMO_MACHINE` | Stand-in machines, as `<name>=<status>,…`: `connected`, `reading`, `connecting`, `starting`, `downloading`, `copying`, `reconnecting`, `failed`, `notConnected` or `stopped`. Each is named under `.invalid` and never contacted (no SSH, install or keeper), nor saved with your machines; `KUVO_DEMO_MACHINE_FAILURE` is what a `failed` one says, and `KUVO_DEMO_MACHINE_BROWSER` how its browser shows (`installing`, `connecting` or `failed`) |
 | `KUVO_DEMO_MACHINE_ROOT` | A folder of its own in machines' home folders (like `.kuvo-code-demo`), so the demo copy's engine and browser there never touch your own copy's. What it starts there stops when it quits, except in `.kuvo-code-demo` while its phone link is on, so a phone tried with it reaches its bots with the Mac shut |
 | `KUVO_DEMO_COMMENT` | Add a review comment to the session in view, as `<path in the project>:<line>:<text>` |
 | `KUVO_DEMO_VOICE` | With `KUVO_DEMO_SESSION`: voice input listening for it with sample words, `composer` (in the composer) or `field` (the voice field), without the microphone; `tip`, the one-time tip about more accurate voice input, from the mic |
