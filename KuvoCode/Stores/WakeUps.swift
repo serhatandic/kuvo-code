@@ -174,7 +174,8 @@ final class WakeUps {
         try Data(owner.session.utf8).write(to: URL(filePath: Self.path(owner, "session")))
         try Data(directory.utf8).write(to: URL(filePath: Self.path(owner, "directory")))
         if owner.agents { try Data("bridge".utf8).write(to: URL(filePath: Self.path(owner, "via"))) }
-        if app?.workspace.session(owner.session).map(Workspace.isArchived) == true { try await setPaused(true, owner, byArchiving: true) }
+        // (Held only: its archiving stopped it already, if it waited on you.)
+        if app?.workspace.session(owner.session).map(Workspace.isArchived) == true { try await setPaused(true, owner, byArchiving: true, stops: false) }
     }
 
     /// A wake-up you add: at `due`, `note` arrives in the conversation, and again at each repeat,
@@ -335,11 +336,12 @@ final class WakeUps {
     /// go. On a computer that can't be reached, nothing changes, and this says so. A session's
     /// with none has nothing to hold. `byArchiving`: held while the session is archived, which
     /// leaves a hold of yours as it is, and lets go of only its own.
-    func setPaused(_ pause: Bool, _ owner: Owner, byArchiving: Bool = false) async throws {
+    func setPaused(_ pause: Bool, _ owner: Owner, byArchiving: Bool = false, stops: Bool = true) async throws {
         // Held by a move under way (`Moves`), which lets them go once it's there.
         if Moves.isFrozen(owner.key) || Moves.isFrozen(owner.session) { throw Moves.Failure.moving }
-        struct Pausing: Encodable { var paused: Bool?; var archived: Bool? }
-        let asked = byArchiving ? Pausing(archived: pause) : Pausing(paused: pause)
+        // Archived, its box also stops it if it waits on you, unless it `stops` false.
+        struct Pausing: Encodable { var paused: Bool?; var archived: Bool?; var stop: Bool? }
+        let asked = byArchiving ? Pausing(archived: pause, stop: stops ? nil : false) : Pausing(paused: pause)
         take(try await box(of: owner).value(Listed.self, "POST", Self.route(owner, "pause"), body: asked), for: owner.key)
     }
 

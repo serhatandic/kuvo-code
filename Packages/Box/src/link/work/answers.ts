@@ -134,7 +134,11 @@ export async function asksIn(target: Target, session: string, signal?: AbortSign
 export async function stopIfWaiting(target: Target, session: string): Promise<boolean> {
   const { permissions, questions } = await asksIn(target, session).catch(() => ({ permissions: [], questions: [] }));
   if (!permissions.length && !questions.length) return false;
-  return stopSession(target, session, false).then(() => true, () => false);
+  await stopSession(target, session, false).catch(() => {});
+  // A subagent that asks stops too: one at work in the background goes on past its session's stop.
+  const askers = new Set([...permissions, ...questions].map(each => each.asker).filter(each => each !== session));
+  for (const asker of askers) await call(target, "POST", `/api/session/${encodeURIComponent(asker)}/interrupt`).catch(() => {});
+  return true;
 }
 
 /** The ask `ask` in `session` (or one of its subagents), as it's asked now; null when it isn't

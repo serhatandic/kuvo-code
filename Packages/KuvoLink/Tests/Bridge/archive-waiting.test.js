@@ -27,6 +27,8 @@ const engine = http.createServer((request, response) => {
     const url = new URL(request.url, "http://engine");
     const session = /^\/api\/session\/([^/]+)/.exec(url.pathname)?.[1];
     if (url.pathname === "/api/session") {
+      // A project's, as Remove Project reads them: ses_perm1 and ses_busy1 work in `home`.
+      if (url.searchParams.get("directory") === home) return reply({ data: ["ses_perm1", "ses_busy1"].map(id => ({ id, location: { directory: home }, metadata: metadata[id] ?? {} })) });
       const parent = url.searchParams.get("parentID");
       return reply({ data: parent === "ses_form1" ? [{ id: "ses_formsub", parentID: "ses_form1" }] : [] });
     }
@@ -57,12 +59,12 @@ test("archived from a phone while it waits on you, its run stops; one that waits
   assert.equal(await ask("PATCH", "api/session/ses_perm1", { metadata: { "kuvo.archived": true } }), 200);
   assert.deepEqual(stopped, ["ses_perm1"], "a permission it waits on");
   assert.equal(await ask("PATCH", "api/session/ses_form1", { metadata: { "kuvo.archived": true } }), 200);
-  assert.deepEqual(stopped, ["ses_perm1", "ses_form1"], "its subagent's question");
+  assert.deepEqual(stopped, ["ses_perm1", "ses_form1", "ses_formsub"], "its subagent's question: the subagent too, which may work on in the background");
   assert.equal(await ask("PATCH", "api/session/ses_busy1", { metadata: { "kuvo.archived": true } }), 200);
   // Brought back, or pinned while archived: nothing stops.
   assert.equal(await ask("PATCH", "api/session/ses_perm1", { metadata: { "kuvo.archived": false } }), 200);
   assert.equal(await ask("PATCH", "api/session/ses_form1", { metadata: { "kuvo.archived": true, "kuvo.pinned": true } }), 200);
-  assert.deepEqual(stopped, ["ses_perm1", "ses_form1"]);
+  assert.deepEqual(stopped, ["ses_perm1", "ses_form1", "ses_formsub"]);
 });
 
 test("archived on a Mac while it waits on you (its wake-ups held by archiving), its run stops too", async () => {
@@ -72,5 +74,16 @@ test("archived on a Mac while it waits on you (its wake-ups held by archiving), 
   assert.equal(await ask("POST", "kuvo/wakes/ses_busy1/pause", { archived: true }), 200);
   assert.equal(await ask("POST", "kuvo/wakes/ses_perm1/pause", { archived: false }), 200);
   assert.equal(await ask("POST", "kuvo/wakes/ses_perm1/pause", { paused: true }), 200);
+  // A first wake-up made for one archived before: held, not stopped (you may be at work in it).
+  assert.equal(await ask("POST", "kuvo/wakes/ses_perm1/pause", { archived: true, stop: false }), 200);
   assert.deepEqual(stopped, ["ses_perm1"], "only archiving stops it");
+});
+
+test("Remove Project on its box, with no Mac about, stops its sessions that wait on you", async () => {
+  stopped.length = 0;
+  for (const id of ["ses_perm1", "ses_busy1"]) metadata[id] = {};
+  assert.equal(await ask("PUT", `kuvo/projects?directory=${encodeURIComponent(home)}`, { name: "Home" }), 200);
+  assert.equal(await ask("DELETE", `kuvo/projects?directory=${encodeURIComponent(home)}`), 200);
+  assert.equal(metadata.ses_perm1["kuvo.archived"], true);
+  assert.deepEqual(stopped, ["ses_perm1"]);
 });

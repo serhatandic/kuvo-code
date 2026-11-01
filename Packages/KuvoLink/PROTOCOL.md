@@ -1942,13 +1942,14 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   and its wake-ups wait, or come back, when the flag changes (it can go with every change to its
   metadata); a Mac sees to it, and a machine's bridge does with the Mac closed too; a session's
   first wake-up or watch made while it's archived, by a client or by its agent's `kuvo-wake` on any
-  box, is held from the start, and any its box finds archived when they're due is held then; a pause of your own stays through both). Archived while it waits on you (a permission or a question, its subagents' too), either way, its box stops its run, as a bot's Stop and Archive does: the asks go with it. `POST kuvo/wakes/<session>` with `{"due", "every"?,
+  box, is held from the start, and any its box finds archived when they're due is held then; a pause of your own stays through both). Archived while it waits on you (a permission or a question, its subagents' too), either way or by the box's Remove Project, its box stops its run (and those subagents'), as a bot's Stop and Archive does: the asks go with it. `POST kuvo/wakes/<session>` with `{"due", "every"?,
   "note"}` adds one, as the bar over the Mac's composer does (`due` at least a minute away;
   `every` 30m, 2h, 1d, 1w or weekdays, at least 5m), with the computer's own clock and weekends;
   `400 {"message"}` for what can't be one, `409` with 50 waiting. `POST
   kuvo/wakes/<session>/pause` with `{"paused": true}` holds them (a pause of your own), `false`
   lets them go (not archiving's hold: they still wait until it's back, bridge 0.9.121); with `{"archived": true}` they're held as archiving holds them (a client that
-  archived it on the engine directly says so), `false` lets go of only that hold. Both answer the
+  archived it on the engine directly says so, and its box stops it if it waits on you; with
+  `"stop": false`, only held: a first wake-up made for one archived before), `false` lets go of only that hold. Both answer the
   list as it is then. `POST
   kuvo/wakes/<session>/cancel` with `{"wake": "<id>"}` or `{"watch": "<letters>"}` cancels one;
   `POST kuvo/wakes/<session>/now` with `{"wake": "<id>"}` sends it now (one that repeats still

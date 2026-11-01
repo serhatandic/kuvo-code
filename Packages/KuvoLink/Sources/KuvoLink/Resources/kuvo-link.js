@@ -3922,7 +3922,11 @@ async function stopIfWaiting(target, session) {
   const { permissions, questions } = await asksIn(target, session).catch(() => ({ permissions: [], questions: [] }));
   if (!permissions.length && !questions.length)
     return false;
-  return stopSession(target, session, false).then(() => true, () => false);
+  await stopSession(target, session, false).catch(() => {});
+  const askers = new Set([...permissions, ...questions].map((each) => each.asker).filter((each) => each !== session));
+  for (const asker of askers)
+    await call(target, "POST", `/api/session/${encodeURIComponent(asker)}/interrupt`).catch(() => {});
+  return true;
 }
 async function pendingAsk(target, session, ask, signal) {
   const { permissions, questions } = await asksIn(target, session, signal);
@@ -4256,7 +4260,7 @@ async function* answerWakes(session, action, request, readEngine, bridge, signal
     if (folder && isMoving(folder))
       return yield* json(409, { message: MOVING });
     holdArchived(session, given.archived);
-    const where = given.archived ? await whereIs(session, readEngine, bridge) : null;
+    const where = given.archived && given.stop !== false ? await whereIs(session, readEngine, bridge) : null;
     if (where)
       await stopIfWaiting(where.target, session);
     return yield* changed(200, listed());
@@ -4445,6 +4449,7 @@ async function archiveProject(directory, also, readEngine, readBridge, signal) {
           try {
             await call(target, "PATCH", `/api/session/${encodeURIComponent(session.id)}`, { metadata: { ...session.metadata ?? {}, "kuvo.archived": true } }, signal);
             holdArchived(session.id, true);
+            await stopIfWaiting(target, session.id);
             archived += 1;
           } catch {
             kept += 1;

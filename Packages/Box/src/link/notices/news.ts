@@ -103,7 +103,6 @@ export function describePermission(request: Pick<PermissionAsked, "action" | "re
   return `Wants to ${what}: ${shown.slice(0, 4).join(" · ")}${more}`;
 }
 
-// Whether a permission's notice shows all it covers: Allow there would allow what it leaves out.
 // Whether Always for This saves only what a permission's notice shows. The engine's rule for it can
 // be wider (`git push *` for `git push origin main`, any file for one): then its notification offers
 // Allow Once and Don't Allow, as the Mac's does (`Notifier.offersAlways`).
@@ -113,6 +112,7 @@ const offersAlways = (request: { resources?: unknown; save?: unknown }): boolean
   const saved = Array.isArray(request.save) ? strings(request.save) : shown;
   return saved.length > 0 && !saved.includes("*") && saved.every(each => shown.includes(each));
 };
+// Whether a permission's notice shows all it covers: Allow there would allow what it leaves out.
 const showsAllCovered = (request: { resources?: unknown }): boolean => (Array.isArray(request.resources) ? request.resources : []).filter(each => each !== "*").length <= 4;
 
 // A question's one field and its choices, as the Mac answers it from a notification.

@@ -376,8 +376,9 @@ export async function* answerWakes(session: string, action: WakeAction | undefin
   if (action === "pause" && typeof given.archived === "boolean") {
     if (folder && isMoving(folder)) return yield* json(409, { message: MOVING });
     holdArchived(session, given.archived);
-    // Archived while it waits on you: it stops, as a phone's Archive has it.
-    const where = given.archived ? await whereIs(session, readEngine, bridge) : null;
+    // Archived while it waits on you: it stops, as a phone's Archive has it. (Not for a hold that
+    // only follows an archive from before, `stop: false`: a first wake-up made for it.)
+    const where = given.archived && given.stop !== false ? await whereIs(session, readEngine, bridge) : null;
     if (where) await stopIfWaiting(where.target, session);
     return yield* changed(200, listed());
   }

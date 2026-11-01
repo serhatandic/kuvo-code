@@ -336,6 +336,12 @@ import Testing
         app.workspace.handle(try event("session.execution.interrupted", ["sessionID": id]))
         #expect(app.workspace.waitingCount == 0, "off the Dock")
 
+        // Opened from search and worked in, archived still: a first wake-up added to it holds, and
+        // stops nothing (the stand-in still says it waits).
+        try await app.wakeUps.add(to: WakeUps.owner(of: try #require(app.workspace.session(id))), at: .now.addingTimeInterval(86_400), every: nil, note: "Check again")
+        #expect(app.wakeUps.paused.contains(id))
+        #expect(stopped() == 1, "a wake-up isn't an archive")
+
         work = []
         await app.workspace.setArchived(id, false)
         for task in work { await task.value }

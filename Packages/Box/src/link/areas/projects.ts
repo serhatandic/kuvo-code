@@ -13,6 +13,7 @@ import { followed } from "../follow";
 import { K } from "../home";
 import type { AnswerPiece, LinkRequest } from "../server/context";
 import { holdArchived } from "./wakes";
+import { stopIfWaiting } from "../work/answers";
 import { readRemovedWorktrees, readWorktrees } from "./worktree-records";
 
 export const PROJECTS_FILE = path.join(K, "box", "projects.json");
@@ -112,6 +113,8 @@ async function archiveProject(directory: string, also: string[], readEngine: () 
           try {
             await call(target, "PATCH", `/api/session/${encodeURIComponent(session.id)}`, { metadata: { ...(session.metadata ?? {}), "kuvo.archived": true } }, signal);
             holdArchived(session.id, true);
+            // One that waits on you stops, as any archived one does.
+            await stopIfWaiting(target, session.id);
             archived += 1;
           } catch {
             kept += 1;
