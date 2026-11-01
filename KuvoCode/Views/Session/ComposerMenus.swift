@@ -113,6 +113,11 @@ struct ModeChip: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+                // The model chip's chevron: two menus side by side look alike.
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+                    .accessibilityHidden(true)
             }
             .font(.callout)
             .foregroundStyle(agent == "plan" ? AnyShapeStyle(.orange) : AnyShapeStyle(.foreground))

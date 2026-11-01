@@ -162,8 +162,12 @@ struct Card<Icon: View, Actions: View, Content: View>: View {
             } else {
                 Text(title)
             }
+            // The project, secondary: the title's weight is the session's alone.
             if let detail {
-                Text(" | " + detail)
+                Text(detail)
+                    .fontWeight(.regular)
+                    .foregroundStyle(isFocused ? .secondary : .tertiary)
+                    .padding(.leading, 6)
             }
         }
         .font(.system(size: 13, weight: .semibold))
