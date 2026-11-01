@@ -1053,6 +1053,10 @@ private struct WindowCards<Sessions: View, Conversation: View, Split: View, Pane
     @ViewBuilder let settings: (Double, ClosedRange<Double>) -> Settings
     /// The room the conversation and the panel share: what the panel takes, expanded.
     @State private var mainAreaWidth: CGFloat = 0
+    /// The panel has shown, and is kept from then on.
+    @State private var panelMade = false
+    /// How wide the panel was last shown: kept, hidden.
+    @State private var panelWidth: CGFloat = 0
 
     var body: some View {
         // Cards are sized from the room the window actually has, so they never spill
@@ -1136,13 +1140,29 @@ private struct WindowCards<Sessions: View, Conversation: View, Split: View, Pane
                             }
                     }
                     .onGeometryChange(for: CGFloat.self, of: \.size.width) { mainAreaWidth = $0 }
-                    if tabs.showsPanel, layout.changes != nil || expands {
+                    // Made the first time it shows, then kept while it's hidden, out past the
+                    // window's right edge, as the sidebar is: showing it again only slides it in.
+                    // Made again each time, it (and the tab in it) took half of the slide's first
+                    // frame. What it shows stops its work meanwhile (`isPanelShown`).
+                    let shown = tabs.showsPanel && (layout.changes != nil || expands)
+                    if shown || panelMade {
+                        // Going, as it was: a terminal or a page in it isn't laid out again for
+                        // another width as it slides away.
+                        let width = shown ? (expands ? mainAreaWidth : layout.changes ?? mainAreaWidth) : panelWidth
                         panel
-                            .frame(width: expands ? mainAreaWidth : layout.changes ?? mainAreaWidth)
+                            .frame(width: width)
+                            .onGeometryChange(for: CGFloat.self, of: \.size.width) { if shown { panelWidth = $0 } }
                             .contentCard(expands ? .expandedPanel : nil, layout: cardsShown)
-                            .environment(\.windowControlsInset, expands ? controlsInset : 0)
+                            .environment(\.windowControlsInset, tabs.panelExpanded ? controlsInset : 0)
                             .environment(\.windowControlsTrailingInset, showsTabBar ? 0 : 36)
+                            .environment(\.isPanelShown, shown)
+                            .offset(x: shown ? 0 : width + Metrics.paneGap * 2)
+                            .opacity(shown ? 1 : 0)
+                            .allowsHitTesting(shown)
+                            .disabled(!shown)
+                            .accessibilityHidden(!shown)
                             .transition(.move(edge: .trailing).combined(with: .opacity))
+                            .onAppear { panelMade = true }
                     }
                 }
             }

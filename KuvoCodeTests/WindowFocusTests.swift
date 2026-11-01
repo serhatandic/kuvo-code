@@ -276,6 +276,65 @@ import Testing
         #expect(app.tabs.focus == .conversation)
     }
 
+    /// The panel hidden and shown again is as you left it, and draws nothing meanwhile: its
+    /// terminal is the same one, kept in the window, hidden once the panel has slid away and
+    /// shown again as it comes back.
+    @Test func theHiddenPanelKeepsItsTerminalOutOfSight() async throws {
+        defer { done() }
+        _ = try #require(reply)
+        let terminal = try await terminalInThePanel()
+        let hides = terminal.view.observe(\.isHidden) { _, _ in TestPulse.beat() }
+        defer { hides.invalidate() }
+
+        withAnimation(.ui) { app.tabs.showPanel(false) }
+        try await until { terminal.view.isHidden }
+        #expect(terminal.view.window === window, "kept, for showing again")
+
+        withAnimation(.ui) { app.tabs.showPanel(true) }
+        try await until { !terminal.view.isHidden }
+        #expect(terminal.view.window === window)
+    }
+
+    /// The panel slides out showing what's in it: its terminal is hidden only once it's away.
+    @Test func thePanelSlidesOutShowingItsTerminal() async throws {
+        defer { done() }
+        _ = try #require(reply)
+        let terminal = try await terminalInThePanel()
+        let hides = terminal.view.observe(\.isHidden) { _, _ in TestPulse.beat() }
+        defer { hides.invalidate() }
+
+        withAnimation(.ui) { app.tabs.showPanel(false) }
+        // The slide's first frame, laid out at once.
+        window.contentView?.layoutSubtreeIfNeeded()
+        #expect(!terminal.view.isHidden, "still sliding out")
+        try await until { terminal.view.isHidden }
+    }
+
+    /// In a window short of room, the panel slides away as wide as it showed: its terminal isn't
+    /// laid out again for another width (and a program in it drawn again) as it goes.
+    @Test func thePanelGoesAsWideAsItShowed() async throws {
+        defer {
+            UserDefaults.standard.removeObject(forKey: "splitWidth")
+            done()
+        }
+        _ = try #require(reply)
+        // A wide session beside the conversation, for the panel to show narrower than it would.
+        UserDefaults.standard.set(900.0, forKey: "splitWidth")
+        app.tabs.openBeside(harbor)
+        try await until { composers.count == 2 }
+        let terminal = try await terminalInThePanel()
+        let shown = try #require(app.tabs.layout().changes)
+        try #require(shown < app.tabs.room.changes, "the panel narrower than it is with room")
+        let width = terminal.view.frame.width
+        let hides = terminal.view.observe(\.isHidden) { _, _ in TestPulse.beat() }
+        defer { hides.invalidate() }
+
+        withAnimation(.ui) { app.tabs.showPanel(false) }
+        try await until { terminal.view.isHidden }
+        window.contentView?.layoutSubtreeIfNeeded()
+        #expect(terminal.view.frame.width == width)
+    }
+
     /// With a session beside the conversation, the keyboard goes back to the half you worked in:
     /// here the session beside.
     @Test func closingThePanelInASplitGivesTheKeyboardBackToTheHalfYouWorkedIn() async throws {

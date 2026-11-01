@@ -16,6 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- The side panel slides in sooner, and comes back as you left it: where you'd scrolled, the files you'd folded and a comment you were writing in Changes. While it's hidden it stops checking git and files, and its pages and terminals stop drawing.
 - A coding agent too slow to answer whether it's signed in (on a busy Mac or machine) no longer looks signed out: Claude Code, Codex, Grok and Cursor keep their accounts and models as they last said, so a bot's or a session's model isn't taken away mid-goal. Only the agent saying you're signed out is a sign-out.
 - Bots on Claude Code, Codex, Cursor, Grok or Antigravity can write their memory again: the sandbox had kept them out of it.
 - After a launch, an update or a restart, coding agents wait for the computer's sandbox to be set up before they start, so a bot on Claude Code, Codex or another coding agent can take a goal on its own. Where one started before the sandbox still runs outside it, the goal's card says so, with **Restart Agents**, instead of saying the sandbox doesn't cover it yet.

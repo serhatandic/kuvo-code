@@ -374,12 +374,16 @@ private struct TerminalRepresentable: NSViewRepresentable {
             DispatchQueue.main.async { session.view.window?.makeFirstResponder(session.view) }
         }
         session.wasShown = true
+        context.coordinator.update(session.view, in: context)
         return session.view
     }
 
     func updateNSView(_ view: LocalProcessTerminalView, context: Context) {
         session.apply(dark: dark, focused: focused)
+        context.coordinator.update(view, in: context)
     }
+
+    func makeCoordinator() -> PanelVisibility { PanelVisibility() }
 }
 
 /// Terminals that are tabs of the window, in place of a conversation: a project's own terminal

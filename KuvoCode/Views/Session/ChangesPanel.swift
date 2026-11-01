@@ -47,6 +47,7 @@ struct ChangesPanel: View {
     @Environment(Workspace.self) private var workspace
     @Environment(Catalog.self) private var catalog
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.isPanelShown) private var isShown
     @State private var isCommitting = false
 
     /// The session's own worktree, when it has one.
@@ -90,6 +91,13 @@ struct ChangesPanel: View {
     /// as the agent knows the project's folders.
     private var commentPrefix: String { isPrimary ? "" : (changes.directory as NSString).lastPathComponent + "/" }
 
+    /// Git asked again now, as the agent works: not while the panel's hidden, where it's asked as
+    /// it shows again.
+    private func lookAgain() {
+        guard isShown else { return }
+        Task { await changes.refresh(fallback: engineChanges, edits: editedFiles) }
+    }
+
     /// Moves the session's comments, and the one being written, to where their lines are in
     /// `files` now, from where they were in the list before. Only where lines are the files on
     /// disk, which is what the agent reads the numbers against (not Staged's, not the engine's).
@@ -126,9 +134,11 @@ struct ChangesPanel: View {
         }
         // Git is quick to ask; look again every few seconds while the panel is open. Started over
         // for another session in the same folder: the loop reads the session it began with.
-        // (Its machine away or back: started over, so it's back's look comes at once.)
-        .task(id: "\(changes.directory)\n\(changes.scope)\n\(changes.base ?? "")\n\(model?.id ?? "")\n\(isMachineAway)") {
+        // (Its machine away or back: started over, so it's back's look comes at once. The panel
+        // hidden: stopped, and started over as it shows again.)
+        .task(id: "\(changes.directory)\n\(changes.scope)\n\(changes.base ?? "")\n\(model?.id ?? "")\n\(isMachineAway)\n\(isShown)") {
             changes.isAway = isMachineAway
+            guard isShown else { return }
             while !Task.isCancelled {
                 await changes.refresh(fallback: engineChanges, edits: editedFiles)
                 try? await Task.sleep(for: .seconds(3))
@@ -145,9 +155,9 @@ struct ChangesPanel: View {
         // A comment half written is the session's it was begun in: not saved to another's.
         .onChange(of: model?.id) { draft = nil }
         .onChange(of: changes.directory) { draft = nil }
-        .onChange(of: model?.isRunning) { Task { await changes.refresh(fallback: engineChanges, edits: editedFiles) } }
-        .onChange(of: engineChanges) { Task { await changes.refresh(fallback: engineChanges, edits: editedFiles) } }
-        .onChange(of: editedFiles) { Task { await changes.refresh(fallback: engineChanges, edits: editedFiles) } }
+        .onChange(of: model?.isRunning) { lookAgain() }
+        .onChange(of: engineChanges) { lookAgain() }
+        .onChange(of: editedFiles) { lookAgain() }
     }
 
     // MARK: Header

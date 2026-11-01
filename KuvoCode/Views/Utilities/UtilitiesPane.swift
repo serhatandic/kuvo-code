@@ -345,3 +345,49 @@ private struct TabsOverflow: Equatable {
     var before = false
     var after = false
 }
+
+extension EnvironmentValues {
+    /// The panel is on screen. Hidden, it's kept as it was for showing again, and what it shows
+    /// stops its work meanwhile: no looking at git or files again, no live page from a machine,
+    /// and its pages and terminals hidden from AppKit (`PanelVisibility`), so they don't draw.
+    @Entry var isPanelShown = true
+}
+
+/// A page or a terminal in the panel, hidden from AppKit as the panel is: once it has slid out of
+/// sight (it slides out showing), and shown again as it comes back. Hidden, a page is as it was
+/// out of the window, which it was while the panel was made again each time: it stops drawing.
+@MainActor
+final class PanelVisibility {
+    private var isShown = true
+    /// Counts the panel's hides and shows, for a slide's end to tell whether it's still the latest.
+    private var turns = 0
+
+    /// `away` stops what else the view does while it's hidden: called with true as it's hidden,
+    /// false as it's back.
+    func update<Host: NSViewRepresentable>(_ view: NSView, in context: NSViewRepresentableContext<Host>, away: ((Bool) -> Void)? = nil) {
+        let shown = context.environment.isPanelShown
+        defer { isShown = shown }
+        if shown {
+            if !isShown { turns += 1 }
+            if view.isHidden {
+                view.isHidden = false
+                away?(false)
+            }
+        } else if isShown {
+            turns += 1
+            let turn = turns
+            context.animate {} completion: { [weak self, weak view] in
+                // Unless it's come back since, or gone again and still sliding.
+                guard let self, let view, self.turns == turn, !view.isHidden else { return }
+                // Hidden with the keyboard in it, AppKit would hand the keyboard to the next view
+                // along; it goes nowhere, as when the panel left the window, for the window to
+                // give it back to where you typed.
+                if let window = view.window, let responder = window.firstResponder as? NSView, responder.isDescendant(of: view) {
+                    window.makeFirstResponder(nil)
+                }
+                view.isHidden = true
+                away?(true)
+            }
+        }
+    }
+}
