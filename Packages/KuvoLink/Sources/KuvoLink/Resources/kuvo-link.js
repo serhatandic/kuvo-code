@@ -13032,7 +13032,6 @@ function macDocsChanged() {
 import fs51 from "node:fs";
 import path54 from "node:path";
 var COMPATIBILITY_FILE = path54.join(RUN, "compatibility.json");
-var KNOWN = ["claude-opus-5.5", "claude-sonnet-5.5", "claude-haiku-5.5", "claude-fable-5.1"];
 function compatibilityLayer(models) {
   if (!models.length)
     return {};
@@ -13045,13 +13044,17 @@ function readCompatibility(file = COMPATIBILITY_FILE) {
     if (isObject(kept))
       return kept;
   } catch {}
-  return compatibilityLayer(KNOWN);
+  return {};
 }
 async function learnCompatibility(engine, file = COMPATIBILITY_FILE) {
-  const listed = await engineGet(engine, "api/model");
+  const account = await engineGet(engine, "api/integration/github-copilot");
+  const connections = isObject(account) && isObject(account.data) ? account.data.connections : undefined;
+  if (!Array.isArray(connections))
+    return false;
+  const listed = connections.length ? await engineGet(engine, "api/model") : [];
   const models = Array.isArray(listed) ? listed : isObject(listed) && Array.isArray(listed.data) ? listed.data : [];
   const copilot = models.filter((model) => isObject(model) && model.providerID === "github-copilot");
-  if (!copilot.length)
+  if (connections.length && !copilot.length)
     return false;
   const claude = copilot.filter((model) => typeof model.id === "string" && model.id.startsWith("claude-") && model.family != null).map((model) => model.id).sort();
   const layer = JSON.stringify(compatibilityLayer(claude));

@@ -14,7 +14,7 @@ for Linux's tools).
 
 | Scenario | Suites | Not guarded yet |
 | --- | --- | --- |
-| A1, J2 A model ready, or the one you picked when it can't run | StartingModelTests; Copilot's Claude models on each box: `compatibility.test.js` (bridge), RebootTests; the engine starts when the box doesn't answer for its settings: MacBoxTests | |
+| A1, J2 A model ready, or the one you picked when it can't run | StartingModelTests; Copilot's Claude models on each box, and only with a Copilot account: `compatibility.test.js` (bridge), RebootTests; a new box's first message on the real engine's default: `compatibility-live.test.js` (bridge, with OPENCODE_TEST_BINARY); the engine starts when the box doesn't answer for its settings: MacBoxTests | |
 | A2, A3 First launch with no account, then connecting one | StartingModelTests (the model a session starts on, free ones without an account) | the welcome card and the Accounts sheet (UI; tests that drive the window would take over your keyboard and mouse, so the end-to-end runs try them) |
 | A8 Your accounts in Settings › Accounts: a coding agent's account you remove staying gone while every agent is checked anew, Add Another Account clicked twice adding one; a plan's sign-in that ended while Kuvo Code was closed marked when it opens; Disconnect the engine refuses saying so; a machine's own Claude Code, Codex and Grok signing out | AgentAccountsTests, SignInEndedTests; the bridge's accounts.test.js (Disconnect); the Box package's accounts-check.test.ts (an agent's check failing, signing out on a machine) | the account rows and their menu (UI; a look in a demo copy) |
 | A5 Theme, accent and text size everywhere | | all on screen (UI; the end-to-end runs) |

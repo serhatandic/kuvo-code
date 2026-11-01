@@ -2754,12 +2754,15 @@ as `{status, bodyBase64, type}`. (`kuvo-link.js box read | change` are the same,
 What some providers need from the engine until opencode handles it is each box's own too: a
 settings layer its engine starts with, on top of everything else (`OPENCODE_CONFIG_CONTENT`), never
 in your settings. Today that's GitHub Copilot's Claude models named with
-`{"compatibility": {"supportsThinkingBlockBinding": false}}` (anomalyco/opencode#55160). The box
-learns them from its own engine's `GET /api/model` (Copilot's models whose id starts `claude-` and
-that have a `family`; an engine with no Copilot model leaves what it learned) as it finds the engine
-and every ten minutes at most while it's at work (on a machine, while its bridge runs: it has
-peers or phones), and keeps the layer in `run/compatibility.json` (Copilot's Claude models as of
-October 2026 until it has learned any). Whatever starts the engine asks the box: `kuvo-link.js
+`{"compatibility": {"supportsThinkingBlockBinding": false}}` (anomalyco/opencode#55160), only
+while the box has a Copilot account: named in an engine's settings with none, Copilot counts as set
+up there and its newest model becomes the engine's default, which fails every message left to it.
+The box learns them from its own engine: `GET /api/integration/github-copilot` (an account when its
+`connections` aren't empty; an answer it can't read leaves what it learned), then `GET /api/model`
+(Copilot's models whose id starts `claude-` and that have a `family`; an account whose models
+haven't come yet leaves what it learned), as it finds the engine and every ten minutes at most
+while it's at work (on a machine, while its bridge runs: it has peers or phones), and keeps the
+layer in `run/compatibility.json` (nothing until it has learned, and nothing with no account). Whatever starts the engine asks the box: `kuvo-link.js
 engine-config` prints the `OPENCODE_CONFIG_CONTENT` it's run with, the layer merged on top. This
 Mac's app runs it as it starts its engine, and a machine's start scripts do, so an engine started
 after a restart with no Mac there gets it too; a box too old to know it starts its engine as

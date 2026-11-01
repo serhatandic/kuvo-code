@@ -1,8 +1,11 @@
 // What some providers need from the engine until opencode handles it, kept by each box for its own
 // engine (PROTOCOL.md, "Settings per box"): GitHub Copilot's Claude models named in its settings so
-// it leaves out the field they reject. Each box learns them from its own engine's models, and its
-// engine starts with them (`engine-config`, which this Mac's app and a machine's start scripts run),
-// so a machine restarted with no Mac there starts right too. The engine is a stand-in.
+// it leaves out the field they reject, only while it has a Copilot account (named there with none,
+// Copilot becomes the engine's default model, which fails every message). Each box learns them from
+// its own engine, and its engine starts with them (`engine-config`, which this Mac's app and a
+// machine's start scripts run), so a machine restarted with no Mac there starts right too. The
+// engine is a stand-in, answering as the real one does; `compatibility-live.test.js` runs the real
+// one.
 //
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/compatibility.test.js`.
 import assert from "node:assert/strict";
@@ -21,8 +24,9 @@ removeAtEnd(home);
 const script = fileURLToPath(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
 const link = await import(script);
 
-// An engine whose models are `models`, and whose events can be followed.
-async function engineWith(models) {
+// An engine whose models are `models`, with a Copilot account there or not (`copilot`; `null`: its
+// accounts can't be read), and whose events can be followed.
+async function engineWith(models, { copilot = true } = {}) {
   const engine = { models, followers: [], awaiting: [] };
   engine.nextFollower = () => new Promise(resolve => engine.awaiting.push(resolve));
   const server = http.createServer((request, response) => {
@@ -35,6 +39,11 @@ async function engineWith(models) {
     }
     // As the engine answers it: its models under `data`.
     if (request.url === "/api/model") return response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ data: engine.models }));
+    // Its accounts with Copilot: none, or one signed in to (`null`: it can't say).
+    if (request.url === "/api/integration/github-copilot" && copilot !== null) {
+      const connections = copilot ? [{ id: "cred_copilot", label: "GitHub Copilot", method: "device" }] : [];
+      return response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ data: { id: "github-copilot", name: "GitHub Copilot", connections } }));
+    }
     response.writeHead(404).end();
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
@@ -59,12 +68,11 @@ async function engineConfig(content, folder = home) {
 const copilotModels = config => Object.keys(config.providers?.["github-copilot"]?.models ?? {}).sort();
 const setting = { compatibility: { supportsThinkingBlockBinding: false } };
 
-test("before its engine has listed any models, a box's engine starts with Copilot's Claude models as Kuvo Code knows them", async t => {
+test("before its engine has said whether there's a Copilot account, a box's engine starts with nothing of Copilot's in its settings", async t => {
   const fresh = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-compatibility-fresh-"));
   t.after(() => fs.rmSync(fresh, { recursive: true, force: true }));
   const config = await engineConfig(undefined, fresh);
-  assert.deepEqual(copilotModels(config), ["claude-fable-5.1", "claude-haiku-5.5", "claude-opus-5.5", "claude-sonnet-5.5"]);
-  assert.deepEqual(config.providers["github-copilot"].models["claude-opus-5.5"], setting);
+  assert.equal(config.providers?.["github-copilot"], undefined);
 });
 
 test("a box learns Copilot's Claude models from its own engine as it finds it, and its next start names those, on top of what it starts with", async t => {
@@ -91,14 +99,33 @@ test("a box learns Copilot's Claude models from its own engine as it finds it, a
   assert.equal(config.mcp.browser.url, "http://127.0.0.1:1/mcp");
 });
 
-test("an engine with no Copilot account there leaves what the box learned as it was", async t => {
+test("an engine with no Copilot account there: the box forgets Copilot's models, though the engine lists them while its settings name Copilot", async t => {
   fs.mkdirSync(path.join(home, "run"), { recursive: true });
   fs.writeFileSync(path.join(home, "run", "compatibility.json"), JSON.stringify({ providers: { "github-copilot": { models: { "claude-opus-5.6": setting, "claude-sonnet-5.5": setting } } } }));
-  const engine = await engineWith([{ providerID: "anthropic", id: "claude-opus-5.6", family: "claude-opus" }]);
+  // As the real engine lists them then: every one of Copilot's, with its family, and no account.
+  const engine = await engineWith([
+    { providerID: "github-copilot", id: "gpt-6.1-terra", family: "gpt-terra" },
+    { providerID: "github-copilot", id: "claude-opus-5.6", family: "claude-opus" },
+    { providerID: "opencode", id: "big-pickle", family: "big-pickle" },
+  ], { copilot: false });
   fs.writeFileSync(path.join(home, "run", "engine.json"), JSON.stringify(engine.source));
   const stop = new AbortController();
   t.after(() => stop.abort());
   await new Promise(resolve => link.watchBox({ signal: stop.signal, learned: resolve }));
   stop.abort();
-  assert.deepEqual(copilotModels(await engineConfig("")), ["claude-opus-5.6", "claude-sonnet-5.5"]);
+  const config = await engineConfig(JSON.stringify({ mcp: { browser: { type: "remote", url: "http://127.0.0.1:1/mcp" } } }));
+  assert.equal(config.providers?.["github-copilot"], undefined);
+  assert.equal(config.mcp.browser.url, "http://127.0.0.1:1/mcp");
+});
+
+test("an engine that can't say whether there's a Copilot account leaves what the box learned as it was", async t => {
+  fs.mkdirSync(path.join(home, "run"), { recursive: true });
+  fs.writeFileSync(path.join(home, "run", "compatibility.json"), JSON.stringify({ providers: { "github-copilot": { models: { "claude-opus-5.6": setting } } } }));
+  const engine = await engineWith([{ providerID: "github-copilot", id: "claude-opus-5.6", family: "claude-opus" }], { copilot: null });
+  fs.writeFileSync(path.join(home, "run", "engine.json"), JSON.stringify(engine.source));
+  const stop = new AbortController();
+  t.after(() => stop.abort());
+  await new Promise(resolve => link.watchBox({ signal: stop.signal, learned: resolve }));
+  stop.abort();
+  assert.deepEqual(copilotModels(await engineConfig("")), ["claude-opus-5.6"]);
 });

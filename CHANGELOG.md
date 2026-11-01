@@ -315,6 +315,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - A /goal (or /loop, /btw, /handoff, /review) that can't be done comes back in front of what you typed while it was being sent without its keyword, so your new words don't become part of the goal.
 - Copying a selection that runs across a command you ran with ! copies its command too, not only what it printed.
 - An ask to work outside the project names the folder as you know it, like ~/other-project, instead of a pattern ending in /*, on its card and in notifications, and VoiceOver reads it as Home, other-project.
+- With no GitHub Copilot account, a conversation started without picking a model (one an agent or a bot started, say) no longer fails every message with "missing required Authorization header": the engine's default model had become one of Copilot's. It's one of OpenCode's free models again, from the engine's next start.
 - A short message of yours in a narrow window shows all of its lines, instead of being cut at twelve with no Show More.
 
 ## 0.7.2
