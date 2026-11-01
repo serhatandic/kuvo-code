@@ -149,6 +149,17 @@ test("with its engine down and the coding agents' bridge up, Remove Project says
   const removed = await ask(handle, "DELETE", `kuvo/projects?directory=${encodeURIComponent(shop)}`);
   assert.equal(removed.status, 503, JSON.stringify(removed.json));
   assert.equal((await ask(handle, "GET", "kuvo/projects")).json.projects[0].removed, undefined);
+
+  // Its record left by one that ended without a word: the same, and the bridge's sessions are left as they were.
+  const bridgeSessions = [session("ses_agent", shop)];
+  const agents = await engineWith(bridgeSessions);
+  t.after(agents.close);
+  const gone = await engineWith([]);
+  gone.close();
+  const stale = link.engineHandler(() => ({ port: gone.port, password: "p" }), { name: "box" }, () => ({ port: agents.port, password: agents.password, pid }));
+  const again = await ask(stale, "DELETE", `kuvo/projects?directory=${encodeURIComponent(shop)}`);
+  assert.equal(again.status, 503, JSON.stringify(again.json));
+  assert.deepEqual(bridgeSessions[0].metadata, {});
 });
 
 test("Remove Project archives the sessions of a worktree of it that was removed since, which the sidebar still shows under it", async t => {
@@ -162,6 +173,17 @@ test("Remove Project archives the sessions of a worktree of it that was removed 
   assert.deepEqual(removed.json, { archived: 2 });
   assert.equal(sessions.find(each => each.id === "ses_gone").metadata["kuvo.archived"], true);
   assert.deepEqual(sessions.find(each => each.id === "ses_else").metadata, {}, "another project's");
+});
+
+test("Remove Project archives the sessions of folders the client shows under it that the box doesn't know (worktrees removed before it kept them)", async t => {
+  const old = path.join(work, "trees", "long-gone");
+  const sessions = [session("ses_shop", shop), session("ses_old_tree", old)];
+  const engine = await engineWith(sessions);
+  t.after(engine.close);
+  const handle = link.engineHandler(() => engine, { name: "box" }, () => null);
+  const removed = await ask(handle, "DELETE", `kuvo/projects?directory=${encodeURIComponent(shop)}`, { folders: [old, "relative/one"] });
+  assert.deepEqual(removed.json, { archived: 2 });
+  assert.equal(sessions.find(each => each.id === "ses_old_tree").metadata["kuvo.archived"], true);
 });
 
 test("the list followed: a line now, and another when it changes", async () => {

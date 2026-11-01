@@ -27,7 +27,7 @@ import Testing
         shop = work.appending(path: "shop").path
         blog = work.appending(path: "blog").path
         for folder in [shop, blog] { try FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true) }
-        for key in ["projectFolders", "projectSettings", "projectsOnBox.mac", "projectsOnBox.lab", "projectsUnsent", "worktrees"] { UserDefaults.standard.removeObject(forKey: key) }
+        for key in ["projectFolders", "projectSettings", "projectsOnBox.mac", "projectsOnBox.lab", "projectsUnsent", "worktrees", "removedWorktrees"] { UserDefaults.standard.removeObject(forKey: key) }
         try? FileManager.default.removeItem(at: BoxProcess.home)
         engine.on("PATCH", "/api/session/*", json: ["data": [:]])
         box = try await TestBox(engine: engine.url)
@@ -36,7 +36,7 @@ import Testing
     private func done() {
         box.stop()
         engine.stop()
-        for key in ["projectFolders", "projectSettings", "projectsOnBox.mac", "projectsOnBox.lab", "projectsUnsent", "worktrees"] { UserDefaults.standard.removeObject(forKey: key) }
+        for key in ["projectFolders", "projectSettings", "projectsOnBox.mac", "projectsOnBox.lab", "projectsUnsent", "worktrees", "removedWorktrees"] { UserDefaults.standard.removeObject(forKey: key) }
         try? FileManager.default.removeItem(at: BoxProcess.home)
         try? FileManager.default.removeItem(at: work)
     }
@@ -182,6 +182,25 @@ import Testing
         try await until { workspace.projectName(app) == "Storefront" }
         _ = try await phone.send("PUT", "kuvo/projects?directory=" + Workspace.queryValue("/home/me/app"), body: Data(#"{"removed":true}"#.utf8))
         try await until { !workspace.folders.contains(app) }
+    }
+
+    /// A worktree removed before its box kept them, whose session this Mac still shows under its
+    /// project: Remove Project archives that session too, so it doesn't bring the project back.
+    @Test func removeProjectReachesWorktreesRemovedBeforeTheBoxKeptThem() async throws {
+        defer { done() }
+        let tree = work.appending(path: "trees/long-gone").path
+        UserDefaults.standard.set([tree: shop], forKey: "removedWorktrees")
+        engine.list([StubEngine.session("ses_shop", directory: shop, created: 20), StubEngine.session("ses_tree", directory: tree, created: 10)])
+        let workspace = workspace()
+        await workspace.refresh()
+        await workspace.loadProjects(on: BoxClient.mac)
+        #expect(workspace.projects.first { $0.directory == shop }?.sessions.map(\.id) == ["ses_shop", "ses_tree"])
+
+        #expect(try await workspace.removeProject(shop) == 0)
+        let patched = Set(engine.requests("PATCH", "").compactMap { request -> String? in
+            ((request.body["metadata"] as? [String: Any])?["kuvo.archived"] as? Bool) == true ? String(request.path.split(separator: "/").last ?? "") : nil
+        })
+        #expect(patched == ["ses_shop", "ses_tree"])
     }
 
     /// Worktrees this Mac kept before its box kept them go to the box, so Remove Project there

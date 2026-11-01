@@ -76,14 +76,17 @@ function keptProject(directory: string, given: Record<string, unknown>, before: 
 }
 
 /** Every session of the project, its worktrees' too (those removed since included, whose sessions
- * clients still show under it), archived, on the engine and the coding agents' bridge, page after
- * page; how many weren't. None without the engine (`kept` null): its sessions are most of them,
- * and the project would come back with them. */
-async function archiveProject(directory: string, readEngine: () => EngineRecord, readBridge: () => BridgeRecord, signal: AbortSignal | undefined): Promise<{ archived: number; kept: number | null }> {
+ * clients still show under it, and `also`, folders a client shows under it that this box doesn't
+ * know: worktrees removed before it kept them), archived, on the engine and the coding agents'
+ * bridge, page after page; how many weren't. None while the engine doesn't answer (`kept` null):
+ * its sessions are most of them, and the project would come back with them. */
+async function archiveProject(directory: string, also: string[], readEngine: () => EngineRecord, readBridge: () => BridgeRecord, signal: AbortSignal | undefined): Promise<{ archived: number; kept: number | null }> {
   const removed = Object.entries(readRemovedWorktrees()).filter(([, project]) => project === directory).map(([folder]) => folder);
-  const folders = [...new Set([directory, ...readWorktrees().filter(tree => tree.project === directory && typeof tree.folder === "string").map(tree => tree.folder!), ...removed])];
+  const folders = [...new Set([directory, ...readWorktrees().filter(tree => tree.project === directory && typeof tree.folder === "string").map(tree => tree.folder!), ...removed, ...also])];
   const targets: Target[] = [];
   try { targets.push(readEngine()); } catch { return { archived: 0, kept: null }; }
+  // Its record left by one that ended without a word: nothing archived, the bridge's neither.
+  try { await call(targets[0], "GET", "/api/session?limit=1", undefined, signal); } catch { return { archived: 0, kept: null }; }
   try {
     const bridge = readBridge();
     if (bridge?.port && bridge?.password && runs(bridge.pid, "kuvo-agents")) targets.push(bridge);
@@ -152,8 +155,10 @@ export async function* answerProjects(request: LinkRequest, readEngine: () => En
     return yield* json(200, { project } satisfies { project: Project });
   }
   if (method === "DELETE") {
-    const { archived, kept } = await archiveProject(given, readEngine, readBridge, signal);
-    if (kept === null) return yield* json(503, { message: "Its sessions can’t be reached: the engine isn’t running." });
+    const body = parsed(request.body);
+    const also = isObject(body) && Array.isArray(body.folders) ? body.folders.filter((folder): folder is string => typeof folder === "string" && path.isAbsolute(folder)) : [];
+    const { archived, kept } = await archiveProject(given, also, readEngine, readBridge, signal);
+    if (kept === null) return yield* json(503, { message: "Its sessions can’t be archived now: the engine isn’t running. Try again in a moment." });
     if (kept > 0) return yield* json(409, { message: `${kept === 1 ? "One of its sessions" : `${kept} of its sessions`} couldn’t be archived, so it stays with them. Try again in a moment.`, archived, kept } satisfies { message: string; archived: number; kept: number });
     changeProjects(projects => {
       const before = projects.find(each => each.directory === given);

@@ -740,7 +740,10 @@ final class Workspace {
         guard await takeWorktrees(from: box) != nil else {
             throw BoxRefusal(status: 503, message: box == BoxClient.mac ? "Kuvo Code’s background service on this Mac isn’t answering. Try again in a moment." : "\(box) isn’t answering. Try again in a moment.")
         }
-        let (status, data) = try await client.send("DELETE", "kuvo/projects?directory=" + Self.queryValue(Self.onBox(directory)))
+        // Its worktrees removed before its box kept them, whose sessions this Mac still shows under it.
+        let removed = removedWorktrees.filter { $0.value == directory && Self.box(of: $0.key) == box }.keys.map(Self.onBox).sorted()
+        let body = try JSONSerialization.data(withJSONObject: ["folders": removed])
+        let (status, data) = try await client.send("DELETE", "kuvo/projects?directory=" + Self.queryValue(Self.onBox(directory)), body: body)
         switch status {
         case 200:
             // All of them, there: so here too, as the engine has them now, and it's off the list.
@@ -1246,18 +1249,23 @@ final class Workspace {
     /// connected (its connection ends this).
     func followProjects(on box: String = BoxClient.mac) async {
         while !Task.isCancelled {
+            var older = false
             if let client = boxes?(box) {
                 await loadProjects(on: box)
                 do {
                     for try await line in client.follow("kuvo/projects/events") {
-                        guard Self.keepsProjects(box), let listed = try? JSONDecoder().decode(BoxProjects.self, from: line) else { continue }
+                        guard let listed = try? JSONDecoder().decode(BoxProjects.self, from: line) else { continue }
+                        // One it couldn't read as it connected: what's kept here goes to it first.
+                        guard Self.keepsProjects(box) else { await loadProjects(on: box); continue }
                         await inTurn { self.take(listed.projects, from: box) }
                     }
+                } catch let refusal as BoxRefusal {
+                    older = refusal.status == 404
                 } catch {}
             }
-            // The box restarted, or isn't up yet (a machine's that can't keep them yet, read
-            // again now and then): followed again in a moment.
-            try? await Task.sleep(for: .seconds(box == BoxClient.mac ? 2 : 30))
+            // The box restarted, or isn't up yet: followed again in a moment. A machine's that
+            // can't keep them yet (an older Kuvo Code there), now and then.
+            try? await Task.sleep(for: .seconds(older ? 300 : box == BoxClient.mac ? 2 : 30))
         }
     }
 
@@ -1589,7 +1597,10 @@ final class Workspace {
         do {
             try await api.renameSession(id, title: title)
         } catch {
-            if let index = sessions.firstIndex(where: { $0.id == id }), sessions[index].title == title { sessions[index].title = before }
+            guard let index = sessions.firstIndex(where: { $0.id == id }), sessions[index].title == title else { return }
+            sessions[index].title = before
+            // A machine's list as it's kept here for while it's away, too.
+            if let machine = RemoteFolder.machine(of: sessions[index].location.directory) { keepList(of: machine) }
         }
     }
 

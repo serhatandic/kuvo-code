@@ -2623,10 +2623,12 @@ while a box is away goes there when it's back.
   as its sessions run there (a link isn't followed), and whether it's there now or not (a drive
   that's away).
 - `DELETE kuvo/projects?directory=<folder>` is Remove Project: every session of it, its worktrees'
-  too (removed ones included), archived on the engine and the coding agents' bridge, older ones
-  included, then it's marked `removed`. `200 {archived}`; `409 {message, archived, kept}` when
-  some couldn't be archived (it stays listed); `503 {"message"}` without its engine, the coding
-  agents' bridge running or not.
+  too (removed ones included, and the folders an optional body `{folders}` names: those a client
+  shows under it that the box doesn't know, worktrees removed before it kept them), archived on
+  the engine and the coding agents' bridge, older ones included, then it's marked `removed`.
+  `200 {archived}`; `409 {message, archived, kept}` when some couldn't be archived (it stays
+  listed); `503 {"message"}` while its engine doesn't answer, the coding agents' bridge running
+  or not (nothing is archived).
 - `GET kuvo/projects/events`: `application/x-ndjson`, the list now, then again each time it
   changes.
 

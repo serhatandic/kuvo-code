@@ -1995,12 +1995,17 @@ function keptProject(directory, given, before = {}) {
       delete project[key];
   return project;
 }
-async function archiveProject(directory, readEngine, readBridge, signal) {
+async function archiveProject(directory, also, readEngine, readBridge, signal) {
   const removed = Object.entries(readRemovedWorktrees()).filter(([, project]) => project === directory).map(([folder]) => folder);
-  const folders = [...new Set([directory, ...readWorktrees().filter((tree) => tree.project === directory && typeof tree.folder === "string").map((tree) => tree.folder), ...removed])];
+  const folders = [...new Set([directory, ...readWorktrees().filter((tree) => tree.project === directory && typeof tree.folder === "string").map((tree) => tree.folder), ...removed, ...also])];
   const targets = [];
   try {
     targets.push(readEngine());
+  } catch {
+    return { archived: 0, kept: null };
+  }
+  try {
+    await call(targets[0], "GET", "/api/session?limit=1", undefined, signal);
   } catch {
     return { archived: 0, kept: null };
   }
@@ -2074,9 +2079,11 @@ async function* answerProjects(request, readEngine = readEngineFile, readBridge 
     return yield* json(200, { project });
   }
   if (method === "DELETE") {
-    const { archived, kept } = await archiveProject(given, readEngine, readBridge, signal);
+    const body = parsed(request.body);
+    const also = isObject(body) && Array.isArray(body.folders) ? body.folders.filter((folder) => typeof folder === "string" && path12.isAbsolute(folder)) : [];
+    const { archived, kept } = await archiveProject(given, also, readEngine, readBridge, signal);
     if (kept === null)
-      return yield* json(503, { message: "Its sessions can’t be reached: the engine isn’t running." });
+      return yield* json(503, { message: "Its sessions can’t be archived now: the engine isn’t running. Try again in a moment." });
     if (kept > 0)
       return yield* json(409, { message: `${kept === 1 ? "One of its sessions" : `${kept} of its sessions`} couldn’t be archived, so it stays with them. Try again in a moment.`, archived, kept });
     changeProjects((projects) => {

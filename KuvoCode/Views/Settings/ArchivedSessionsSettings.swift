@@ -12,7 +12,7 @@ struct ArchivedSessionsSettings: View {
         workspace.sessions
             // On a machine that's away, they wait for it: deleting or unarchiving needs it.
             .filter { Workspace.isArchived($0) && $0.parentID == nil && workspace.waitingMachine(for: $0.id) == nil }
-            .filter { search.isEmpty || ($0.title ?? "").localizedCaseInsensitiveContains(search) || workspace.projectName($0.location.directory).localizedCaseInsensitiveContains(search) }
+            .filter { search.isEmpty || ($0.title ?? "").localizedCaseInsensitiveContains(search) || workspace.projectName($0.location.directory).localizedCaseInsensitiveContains(search) || machineName($0.location.directory)?.localizedCaseInsensitiveContains(search) == true }
             .sorted { $0.time.updated > $1.time.updated }
     }
 
@@ -67,9 +67,18 @@ struct ArchivedSessionsSettings: View {
                 } header: {
                     HStack {
                         Label(workspace.projectName(group.directory), systemImage: "folder")
+                            .lineLimit(1)
+                            .layoutPriority(1)
+                        // Which machine it's on, as the sidebar says it.
                         if let machine = machineName(group.directory) {
-                            Text(machine)
-                                .foregroundStyle(.secondary)
+                            HStack(spacing: 4) {
+                                Image(systemName: "server.rack")
+                                    .font(.system(size: 9, weight: .semibold))
+                                Text(machine)
+                                    .lineLimit(1)
+                            }
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.secondary)
                         }
                         Spacer()
                         Text(group.sessions.count.counting("session"))
