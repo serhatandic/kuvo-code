@@ -102,6 +102,7 @@ struct WorkAskCard: View {
         }
         .padding(16)
         .onAppear { if picked == nil { picked = ask.suggested } }
+        .closesWhenKept($browsing)
         .sheet(isPresented: $browsing) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Where Projects Go on \(computer)")

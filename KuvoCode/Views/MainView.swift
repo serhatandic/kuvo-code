@@ -44,6 +44,10 @@ struct MainView: View {
     private var terminals: MainTerminals { app.mainTerminals }
     /// A tab's session being renamed, and the title being typed.
     @State private var renaming: Session?
+    /// The session last in the middle card, kept made (out of sight) under another tab's card, a
+    /// draft's, a group chat's or a terminal's: going back to a session finds the conversations
+    /// it keeps, and its composer, as they were, rather than making them all again.
+    @State private var keptSession: String?
     /// The window's content width; the title bar is sized from it.
     @State private var contentWidth: CGFloat = 1200
     /// Where the middle card starts and where the title bar's items start, in the window: the
@@ -545,7 +549,99 @@ struct MainView: View {
         .onCardClick(isOn: !overlayShown, keyboard: { keyboardReturn.remember($0, in: .split) }) { tabs.focus = .split }
     }
 
+    /// The middle card: the session's in view, or another tab's over the session's last in view,
+    /// kept made underneath.
     @ViewBuilder private var conversationCard: some View {
+        let inView = sessionInView
+        ZStack {
+            if let model = inView ?? keptModel {
+                sessionCard(model, kept: inView == nil)
+                    .modifier(KeptOutOfSight(isKept: inView == nil))
+            }
+            if inView == nil { otherCard }
+        }
+        // Named here, for the card in view: a kept one under it isn't asked.
+        .navigationTitle(windowTitle(inView))
+        .onChange(of: inView?.id, initial: true) { _, id in if let id { keptSession = id } }
+        .onCardClick(isOn: !overlayShown, keyboard: { keyboardReturn.remember($0, in: .conversation) }) { tabs.focus = .conversation }
+        // What you open last keeps its place when the window is short of room (a split, from
+        // Open Beside: coming back to a tab that has one isn't opening it).
+        .onChange(of: showsSidebar) { _, shows in if shows { tabs.keep(.sessions) } }
+    }
+
+    /// The session kept made under another tab's card, while its tab is open, and not beside the
+    /// tab in view (where it's made already).
+    private var keptModel: SessionModel? {
+        guard let id = keptSession, id != besideID, tabs.isOpen(.session(id)) else { return nil }
+        return workspace.model(for: id)
+    }
+
+    /// The session whose card the tab in view shows, if that's what it shows: not with an editor
+    /// over it, nor for a terminal's, a group chat's or a subagent's conversation.
+    private var sessionInView: SessionModel? {
+        guard tabs.groupEditor == nil, tabs.botEditor == nil else { return nil }
+        if let key = selection, terminals.entry(key.text) != nil { return nil }
+        if let id = groupID, groups.group(id) != nil { return nil }
+        guard let id = sessionID, workspace.session(id) != nil || workspace.parent(of: id) == nil else { return nil }
+        return workspace.model(for: id)
+    }
+
+    /// The window's title: the session's in view, a new session's, or Kuvo Code's own.
+    private func windowTitle(_ inView: SessionModel?) -> String {
+        if let inView { return inView.session.title ?? "New Session" }
+        guard tabs.groupEditor == nil, tabs.botEditor == nil, let directory = draftDirectory, machine(for: directory)?.isReady ?? true else { return AppInfo.name }
+        return "New Session"
+    }
+
+    /// A session's card, in view or kept (`keptSession`).
+    @ViewBuilder private func sessionCard(_ model: SessionModel, kept: Bool) -> some View {
+        let id = model.id
+        let directory = model.session.location.directory
+        let machine = machine(for: directory)
+        let bot = bots.bot(forSession: id)
+        // A bot's card has its name only: its avatar shows where it lives.
+        Card(title: bot?.name ?? model.session.title ?? "New Session", detail: bot == nil ? workspace.projectName(directory) : nil, isFocused: focus == .conversation, rename: bot == nil ? rename(model.session) : nil) {
+            if let bot {
+                // Still: in view, the bot moves in its conversation.
+                BotAvatar(look: bot.look, size: 18, mood: bots.mood(of: bot, in: workspace), animates: false)
+                    .overlay(alignment: .bottomTrailing) {
+                        if let machine = bot.machine { MachineBadge(machine: machine, size: 10).offset(x: 3, y: 3) }
+                    }
+            } else if let logo = logo(for: model.session.model, in: directory) { ProviderLogo(id: logo, size: 14) } else { Image(systemName: "bubble.left") }
+        } actions: {
+            // What it made, in a popover over the conversation: a bot's Shelf, or a
+            // session's outputs besides code (its Changes are in the panel).
+            MadeButton(place: bot.map { .bot($0) } ?? .session(id, box: RemoteFolder.parse(directory)?.machine ?? BoxClient.mac))
+            if let bot {
+                Button("Edit Bot", systemImage: "slider.horizontal.3") { tabs.openBotEditor(bot: bot) }
+                    .help("Edit Bot: its look, job, wake-ups and memory")
+            }
+            if Workspace.isChat(directory) {
+                MoveToProjectButton(sessionID: id)
+            }
+            if !(machine?.isLive ?? app.isLive) {
+                Image(systemName: "bolt.horizontal.circle")
+                    .foregroundStyle(.orange)
+                    .help(machine.map { "Reconnecting to \($0.machine.name)…" } ?? "Reconnecting to the engine…")
+            }
+            ContextGauge(model: model)
+                .disabled(machine.map { !$0.isReady || !$0.isLive } ?? false)
+            Button("Close Tab", systemImage: "xmark") { tabs.close(.session(id)) }
+                .help("Close Tab")
+        } content: {
+            SessionView(model: model)
+                .environment(\.bot, bot)
+                .environment(\.takesCardKeys, !kept && !(focus == .split && besideID != nil))
+                // Typing here is working here, however the keyboard got here.
+                .environment(\.composerFocused) { tabs.focus = .conversation }
+        }
+        .onTitle(bot.map { "Edit \($0.name)" }, bot.map { bot in { tabs.openBotEditor(bot: bot) } })
+        .environment(catalog(for: directory))
+    }
+
+    /// Any other tab's card: an editor, a terminal, a group chat, a subagent's conversation, a
+    /// session waiting for its machine, a new session, or the welcome.
+    @ViewBuilder private var otherCard: some View {
         Group {
             if let request = tabs.groupEditor {
                 Card(title: request.group.map { "Edit \($0.name)" } ?? "New Group Chat", isFocused: focus == .conversation) {
@@ -618,48 +714,6 @@ struct MainView: View {
                 }
                 .onAppear { workspace.rememberOpened(id) }
                 .id(id)
-            } else if let id = sessionID, let model = workspace.model(for: id) {
-                let directory = model.session.location.directory
-                let machine = machine(for: directory)
-                let bot = bots.bot(forSession: id)
-                // A bot's card has its name only: its avatar shows where it lives.
-                Card(title: bot?.name ?? model.session.title ?? "New Session", detail: bot == nil ? workspace.projectName(directory) : nil, isFocused: focus == .conversation, rename: bot == nil ? rename(model.session) : nil) {
-                    if let bot {
-                        // Still: in view, the bot moves in its conversation.
-                        BotAvatar(look: bot.look, size: 18, mood: bots.mood(of: bot, in: workspace), animates: false)
-                            .overlay(alignment: .bottomTrailing) {
-                                if let machine = bot.machine { MachineBadge(machine: machine, size: 10).offset(x: 3, y: 3) }
-                            }
-                    } else if let logo = logo(for: model.session.model, in: directory) { ProviderLogo(id: logo, size: 14) } else { Image(systemName: "bubble.left") }
-                } actions: {
-                    // What it made, in a popover over the conversation: a bot's Shelf, or a
-                    // session's outputs besides code (its Changes are in the panel).
-                    MadeButton(place: bot.map { .bot($0) } ?? .session(id, box: RemoteFolder.parse(directory)?.machine ?? BoxClient.mac))
-                    if let bot {
-                        Button("Edit Bot", systemImage: "slider.horizontal.3") { tabs.openBotEditor(bot: bot) }
-                            .help("Edit Bot: its look, job, wake-ups and memory")
-                    }
-                    if Workspace.isChat(directory) {
-                        MoveToProjectButton(sessionID: id)
-                    }
-                    if !(machine?.isLive ?? app.isLive) {
-                        Image(systemName: "bolt.horizontal.circle")
-                            .foregroundStyle(.orange)
-                            .help(machine.map { "Reconnecting to \($0.machine.name)…" } ?? "Reconnecting to the engine…")
-                    }
-                    ContextGauge(model: model)
-                        .disabled(machine.map { !$0.isReady || !$0.isLive } ?? false)
-                    Button("Close Tab", systemImage: "xmark") { tabs.close(.session(id)) }
-                        .help("Close Tab")
-                } content: {
-                    SessionView(model: model)
-                        .environment(\.bot, bot)
-                        .environment(\.takesCardKeys, !(focus == .split && besideID != nil))
-                        // Typing here is working here, however the keyboard got here.
-                        .environment(\.composerFocused) { tabs.focus = .conversation }
-                }
-                .onTitle(bot.map { "Edit \($0.name)" }, bot.map { bot in { tabs.openBotEditor(bot: bot) } })
-                .environment(catalog(for: directory))
             } else if let id = sessionID, let engine = app.machines.engine(workspace.waitingMachine(for: id)) {
                 Card(title: workspace.remoteTitle(id) ?? "Session", detail: engine.machine.name, isFocused: focus == .conversation) {
                     Image(systemName: "server.rack")
@@ -705,10 +759,6 @@ struct MainView: View {
                 }
             }
         }
-        .onCardClick(isOn: !overlayShown, keyboard: { keyboardReturn.remember($0, in: .conversation) }) { tabs.focus = .conversation }
-        // What you open last keeps its place when the window is short of room (a split, from
-        // Open Beside: coming back to a tab that has one isn't opening it).
-        .onChange(of: showsSidebar) { _, shows in if shows { tabs.keep(.sessions) } }
     }
 
     private func paneLayout(available: Double) -> PaneLayout {
@@ -1199,6 +1249,54 @@ private struct WindowCards<Sessions: View, Conversation: View, Split: View, Pane
         }
         .animation(.ui, value: tabs.showsPanel)
         .animation(.ui, value: tabs.panelExpanded)
+    }
+}
+
+/// A card kept made under the one in view: out of sight, out of reach of the pointer, the
+/// keyboard and VoiceOver, and out of sight to its conversations (whose rows would otherwise still
+/// follow the pointer) and its composer.
+private struct KeptOutOfSight: ViewModifier {
+    let isKept: Bool
+    @Environment(\.isConversationShown) private var isShown
+    /// The size it had in view, which it keeps while kept: resizing the window (or the panel
+    /// coming and going) lays out only the card in view, as SessionView's hidden ones do.
+    @State private var size: CGSize?
+
+    func body(content: Content) -> some View {
+        content
+            .frame(width: isKept ? size?.width : nil, height: isKept ? size?.height : nil)
+            .onGeometryChange(for: CGSize.self) { $0.size } action: { if !isKept { size = $0 } }
+            // However big that was, the card is the size it's given.
+            .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .top)
+            .environment(\.isConversationShown, isShown && !isKept)
+            .environment(\.isKeptOutOfSight, isKept)
+            .opacity(isKept ? 0 : 1)
+            .allowsHitTesting(!isKept)
+            .disabled(isKept)
+            .accessibilityHidden(isKept)
+    }
+}
+
+extension EnvironmentValues {
+    /// The card is kept made under another tab's (`KeptOutOfSight`): as good as gone, until its
+    /// tab is back.
+    @Entry var isKeptOutOfSight = false
+}
+
+extension View {
+    /// A popover, sheet or dialog shown from a card that's then kept out of sight closes, rather
+    /// than staying over another tab's card for one you can't see.
+    func closesWhenKept(_ isPresented: Binding<Bool>) -> some View {
+        modifier(ClosesWhenKept(isPresented: isPresented))
+    }
+}
+
+private struct ClosesWhenKept: ViewModifier {
+    @Binding var isPresented: Bool
+    @Environment(\.isKeptOutOfSight) private var isKept
+
+    func body(content: Content) -> some View {
+        content.onChange(of: isKept) { _, kept in if kept, isPresented { isPresented = false } }
     }
 }
 

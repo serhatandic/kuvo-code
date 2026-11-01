@@ -399,6 +399,126 @@ import Testing
         try await until { composerHasKeys }
     }
 
+    /// The rows of the conversation in view in this window (other suites' windows show
+    /// conversations meanwhile): those not hidden, as the kept ones' are.
+    private var shownRows: RowStackView? {
+        func views(in view: NSView) -> [NSView] { [view] + view.subviews.flatMap(views) }
+        guard let content = window.contentView else { return nil }
+        return views(in: content).lazy.compactMap { $0 as? RowStackView }.first { !$0.isHiddenOrHasHiddenAncestor }
+    }
+
+    /// How far the conversation in view is from its end, once it's laid out and long enough to
+    /// read back up.
+    private var fromEnd: CGFloat? {
+        window.contentView?.layoutSubtreeIfNeeded()
+        TestPulse.beat()
+        guard let scroll = shownRows?.enclosingScrollView, let document = scroll.documentView,
+              document.frame.height > scroll.contentView.bounds.height * 2 else { return nil }
+        let clip = scroll.contentView.bounds
+        return document.isFlipped ? document.frame.height - clip.maxY : clip.minY
+    }
+
+    /// How far down the conversation in view is scrolled: where you're reading.
+    private var fromTop: CGFloat? {
+        guard fromEnd != nil, let scroll = shownRows?.enclosingScrollView, let document = scroll.documentView else { return nil }
+        let clip = scroll.contentView.bounds
+        return document.isFlipped ? clip.minY : document.frame.height - clip.maxY
+    }
+
+    /// A day's question and the keeper's long answer, for a conversation long enough to read back up.
+    private func exchange(in session: String, day: Int) -> [[String: Any]] {
+        let asked = Double(day * 2 + 1), answered = Double(day * 2 + 2)
+        let question: [String: Any] = ["id": "\(session)_\(day)_q", "type": "user", "time": ["created": asked], "text": "And day \(day)?"]
+        let text = "Day \(day): the wind came round to the north, and the keeper wrote down the ships that passed and the oil the lamp burned through the night."
+        let answer: [String: Any] = ["id": "\(session)_\(day)_a", "type": "assistant", "agent": "build",
+                                     "time": ["created": answered, "completed": answered],
+                                     "model": ["id": "glm", "providerID": "opencode"],
+                                     "content": [["type": "text", "text": text]]]
+        return [question, answer]
+    }
+
+    /// Reading back up a long conversation, then over to a new session's tab and back: it's
+    /// still where you were reading, rather than made again at its end.
+    @Test func aSessionIsWhereYouWereReadingAfterANewSessionsTab() async throws {
+        defer { done() }
+        _ = try #require(reply)
+        let log = "ses_focus_log"
+        engine.list([StubEngine.session(lamp, title: "The lamp", directory: folder, created: 2),
+                     StubEngine.session(harbor, title: "The harbor", directory: folder, created: 1),
+                     StubEngine.session(log, title: "The log", directory: folder, created: 3)])
+        engine.conversation(log, (0..<30).flatMap { exchange(in: log, day: $0) })
+        await app.workspace.refresh()
+        app.tabs.open(.session(log))
+        try await until { fromEnd.map { $0 < 2 } ?? false }
+
+        // Read back up to the start: the end isn't followed any more, as when you scroll up.
+        let rows = try #require(shownRows)
+        let scroll = try #require(rows.enclosingScrollView)
+        let document = try #require(scroll.documentView)
+        try #require(rows.scrollAnchor).stopFollowing()
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: document.isFlipped ? 0 : document.frame.height - scroll.contentView.bounds.height))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        try await until { (fromEnd ?? 0) > 500 }
+        try await drain()
+        let reading = try #require(fromTop)
+
+        app.tabs.newSession(in: folder, conversation: true)
+        try await drain()
+        app.tabs.open(.session(log))
+        try await until { fromEnd != nil }
+        try await drain()
+        #expect(abs((fromTop ?? .infinity) - reading) < 2, "still where you were reading")
+    }
+
+    /// The session's tab closed, nothing in its place: its composer (kept, out of sight) lets go
+    /// of the keyboard, and nothing you type goes into it.
+    @Test func aSessionsTabClosedLeavesNothingTypingIntoIt() async throws {
+        defer { done() }
+        _ = try #require(reply)
+        #expect(composerHasKeys)
+        let model = try #require(app.workspace.model(for: lamp))
+        app.tabs.close(.session(lamp))
+        try await drain()
+        #expect(!composerHasKeys, "no composer has the keyboard")
+        (window.firstResponder as? NSTextView)?.insertText("ahoy", replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(model.draftText.isEmpty)
+    }
+
+    /// From a new session's tab back to a session's with ⌃Tab: its composer has the keyboard,
+    /// and what you type goes into it.
+    @Test func backOnASessionsTabItsComposerHasTheKeyboard() async throws {
+        defer { done() }
+        _ = try #require(reply)
+        let model = try #require(app.workspace.model(for: lamp))
+        app.tabs.newSession(in: folder, conversation: true)
+        try await drain()
+        app.tabs.cycle(by: -1)
+        #expect(app.tabs.sessionID == lamp)
+        try await drain()
+        try await until { composerHasKeys }
+        let field = try #require(window.firstResponder as? MessageTextView)
+        field.insertText("ahoy", replacementRange: NSRange(location: NSNotFound, length: 0))
+        try await until { model.draftText == "ahoy" }
+    }
+
+    /// A session kept under a new session's tab asking for the keyboard (a message it couldn't
+    /// send coming back, say) doesn't take it: what you type goes on into the new session.
+    @Test func aSessionUnderANewSessionsTabDoesntTakeTheKeyboard() async throws {
+        defer { done() }
+        _ = try #require(reply)
+        let model = try #require(app.workspace.model(for: lamp))
+        app.tabs.newSession(in: folder, conversation: true)
+        try await drain()
+        try await until { composerHasKeys }
+        let draft = try #require(window.firstResponder as? MessageTextView)
+        let drafted = model.draftText
+        model.focusComposer()
+        try await drain()
+        #expect(window.firstResponder === draft, "the new session's composer keeps the keyboard")
+        (window.firstResponder as? NSTextView)?.insertText("ahoy", replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(model.draftText == drafted)
+    }
+
 }
 
 /// An event queued after a test's clicks: once it's handled, so are they.
