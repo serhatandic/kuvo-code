@@ -314,6 +314,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - A coding agent looking through a folder outside the project that your Permissions rules allow (searching it, listing it) no longer asks, as the engine's agents don't; and **Always** on a folder it asks about allows that folder, not the one it's in. A project reached through a link (or in /tmp on a Mac) no longer has Claude Code asking about each of its own files as if they were outside it.
 - A /goal (or /loop, /btw, /handoff, /review) that can't be done comes back in front of what you typed while it was being sent without its keyword, so your new words don't become part of the goal.
 - Copying a selection that runs across a command you ran with ! copies its command too, not only what it printed.
+- An ask to work outside the project names the folder as you know it, like ~/other-project, instead of a pattern ending in /*, and VoiceOver reads it as Home, other-project.
 - A short message of yours in a narrow window shows all of its lines, instead of being cut at twelve with no Show More.
 
 ## 0.7.2

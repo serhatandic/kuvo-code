@@ -2627,8 +2627,11 @@ final class Workspace {
         case "webfetch": "open a web page"
         default: request.action
         }
-        // Every one it covers (a command line's commands each): Allow takes them all.
-        let shown = request.resources.filter { $0 != "*" }
+        // Every one it covers (a command line's commands each): Allow takes them all. Folders
+        // outside the project as people know them ("~/notes", not "/Users/me/notes/*").
+        let shown = request.resources.filter { $0 != "*" }.map {
+            request.action == "external_directory" ? OutsideFolders.shown($0, home: NSHomeDirectory()) : $0
+        }
         guard !shown.isEmpty else { return "Wants to \(what)." }
         let more = shown.count > 4 ? " · and \(shown.count - 4) more" : ""
         return "Wants to \(what): " + shown.prefix(4).joined(separator: " · ") + more
