@@ -193,7 +193,7 @@ async function sendMessage(args: Record<string, unknown>, caller: string | null,
     // Stopped by the user: it waits there for them, and nothing waits for its answer.
     if (went === "waits") return said(pausedNote(target.name));
     if (!waits) return said(`Sent to ${target.name}. Its answer, if it writes one, comes to you as a message.`);
-    const answer = await answerTo(here.target, target.session, id, { wait: place.step, signal: place.signal });
+    const answer = await answerTo(here.target, target.session, id, { wait: place.step, signal: place.signal, by: caller });
     return said(answer ? `${target.name} answered:\n\n${answer}` : `${target.name} hasn't answered yet. It may still write back with send_message.`);
   }
   // On another of your computers: by mail. Without a conversation to answer, or off the relay,

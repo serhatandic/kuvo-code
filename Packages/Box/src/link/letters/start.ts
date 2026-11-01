@@ -370,7 +370,7 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   const started: Started = { session, title, folder, project: project?.name ?? null, ...(picked.length ? { picked: picked.join(" · ") } : {}), ...(askedFirst ? { askedFirst } : {}), ...(wakes.length ? { wakes } : {}) };
   if (!waits) return { started };
   // A new session: anything it says is its answer.
-  return { started: { ...started, answer: await answerTo(target, session, id, { wait: place.step, signal: place.signal }) } };
+  return { started: { ...started, answer: await answerTo(target, session, id, { wait: place.step, signal: place.signal, by: by?.place ? by.session : null }) } };
 }
 
 /** How a start went, in the words the tool gives its agent. */

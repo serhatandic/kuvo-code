@@ -18,6 +18,9 @@ import { atEnd, removeAtEnd } from "./at-end.js";
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-agent-tools-")));
 removeAtEnd(home);
 const script = fileURLToPath(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
+// (The box's link itself, here, for what it hears of the engine.)
+process.env.KUVO_HOME = home;
+const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
 const write = (file, text) => {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, text);
@@ -62,6 +65,7 @@ let busy = new Map();
 // What a conversation does with a message instead of answering it at once, given the message.
 let replaceAnswer = {};
 const promptHeard = [];
+const lookHeard = [];
 const engine = http.createServer((request, response) => {
   let body = "";
   request.on("data", chunk => { body += chunk; });
@@ -77,6 +81,7 @@ const engine = http.createServer((request, response) => {
       return reply({ data: { id } });
     }
     if (url.pathname === "/api/session/active") {
+      for (const heard of lookHeard.splice(0)) heard();
       // A session given a message is at work for one look, then answers.
       const active = Object.fromEntries([...busy.entries()].filter(([, looks]) => looks > 0).map(([id]) => [id, {}]));
       for (const [id, looks] of busy) busy.set(id, looks - 1);
@@ -322,4 +327,212 @@ test("a tool call that waits for an answer, stopped by its caller, stops waiting
   child.kill("SIGTERM");
   const { body } = await answering;
   assert.deepEqual(body, { text: "Quiet hasn't answered yet. It may still write back with send_message.", isError: false });
+});
+
+// Task, a session Lead started to hear when it finishes, and the box's watch over the engine's
+// sessions (its clock the test's); `heard` runs as the tool waiting for Task's answer first looks
+// whether it's still at work.
+async function watchingTask() {
+  sessions.set("ses_task", { id: "ses_task", title: "Task", location: { directory: project }, time: { created: 9, updated: 9 }, metadata: { kuvo: { startedBy: "ses_lead", depth: 1, wake: ["finished"] } } });
+  messages.delete("ses_task");
+  fs.rmSync(path.join(home, "run", "work"), { recursive: true, force: true });
+  const later = [];
+  const source = { port: engine.address().port, password: "p" };
+  // Another, as the engine's stream connects again: the clock at `at`, and what it would run later
+  // with the one before's.
+  const clock = { at: 1000 };
+  let current;
+  const watcher = async (at, place = { source }) => {
+    current?.abort();
+    current = new AbortController();
+    clock.at = at;
+    const watch = link.workWatcher(place.source, () => [source], { schedule: run => { later.push(run); }, now: () => clock.at, signal: current.signal, from: place.from });
+    await watch.caughtUp;
+    return watch;
+  };
+  const watch = await watcher(1000);
+  return {
+    watch,
+    clock,
+    reconnected: (at = 6000) => watcher(at),
+    // The engine's stream lost, not yet connected again.
+    dropped: () => current.abort(),
+    // The link started again: what the one before would have run later, gone with it.
+    restarted: (at, place) => {
+      later.length = 0;
+      return watcher(at, place);
+    },
+    runAll: async () => { for (const run of later.splice(0)) await run(); },
+    whenWaiting: heard => new Promise(resolve => promptHeard.push(() => lookHeard.push(() => resolve(heard())))),
+    toLead: () => prompts.filter(each => each.to === "ses_lead"),
+  };
+}
+
+test("a conversation waiting for the answer of a session it started gets it from send_message, and isn't told again that the session finished with it, heard while it waited or after; a later finish is told", async () => {
+  const { watch, runAll, whenWaiting, toLead } = await watchingTask();
+  const heard = whenWaiting(() => watch({ type: "session.execution.succeeded", data: { sessionID: "ses_task" } }));
+  const said = await tool("send_message", { to: "ses_task", text: "Is the sign-in done?", wait: true }, "ses_lead");
+  assert.deepEqual(said, { text: "Task answered:\n\nOn it (ses_task).", isError: false });
+  await heard;
+  await runAll();
+  assert.deepEqual(toLead(), [], "the answer came in the tool");
+  // Heard once the tool's answered: the same.
+  await watch({ type: "session.execution.succeeded", data: { sessionID: "ses_task" } });
+  await runAll();
+  assert.deepEqual(toLead(), []);
+  // Later, it finishes again with more to say: that's told.
+  messages.get("ses_task").push({ id: "msg_zzz", type: "assistant", content: [{ type: "text", text: "Also fixed the tests." }] });
+  await watch({ type: "session.execution.succeeded", data: { sessionID: "ses_task" } });
+  await runAll();
+  assert.equal(toLead().length, 1);
+  assert.match(toLead()[0].text, /^\[Session finished\] "Task" in api \(address ses_task\)[^\n]*:\nAlso fixed the tests\./);
+});
+
+test("a session that finishes while its starter waits for its answer, and the wait's given up (its turn stopped), is told it finished once the wait ends", async () => {
+  const { watch, runAll, whenWaiting, toLead } = await watchingTask();
+  // Task finishes as far as the box hears, while the tool still sees it at work.
+  const heard = whenWaiting(() => {
+    busy.set("ses_task", Infinity);
+    return watch({ type: "session.execution.succeeded", data: { sessionID: "ses_task" } });
+  });
+  let child;
+  const answering = route("POST", "kuvo/agent-tools", { name: "send_message", arguments: { to: "ses_task", text: "Is the sign-in done?", wait: true }, session: "ses_lead" }, started => { child = started; });
+  await heard;
+  await runAll();
+  assert.deepEqual(toLead(), [], "not while it waits");
+  child.kill("SIGTERM");
+  assert.match((await answering).body.text, /^Task hasn't answered yet/);
+  await runAll();
+  await runAll();
+  assert.equal(toLead().length, 1);
+  assert.match(toLead()[0].text, /^\[Session finished\] "Task"/);
+});
+
+test("a session that fails while its starter waits for its answer is told at once", async () => {
+  const { watch, runAll, whenWaiting, toLead } = await watchingTask();
+  const heard = whenWaiting(() => watch({ type: "session.execution.failed", data: { sessionID: "ses_task" } }));
+  await tool("send_message", { to: "ses_task", text: "Is the sign-in done?", wait: true }, "ses_lead");
+  await heard;
+  await runAll();
+  assert.equal(toLead().length, 1);
+  assert.match(toLead()[0].text, /^\[Session failed\] "Task"/);
+});
+
+test("a finish heard while its starter waited isn't told as the engine's stream connects again, once the answer came in the tool", async () => {
+  const { watch, runAll, whenWaiting, reconnected, toLead } = await watchingTask();
+  const heard = whenWaiting(() => {
+    sessions.get("ses_task").time.updated = 5000;
+    return watch({ type: "session.execution.succeeded", data: { sessionID: "ses_task" } });
+  });
+  assert.equal((await tool("send_message", { to: "ses_task", text: "Is the sign-in done?", wait: true }, "ses_lead")).text, "Task answered:\n\nOn it (ses_task).");
+  await heard;
+  // The watch connected again after looks back and finds it dealt with.
+  await reconnected();
+  await runAll();
+  await runAll();
+  assert.deepEqual(toLead(), [], "the answer came in the tool");
+});
+
+test("a finish heard while its starter waited, the wait given up, is told once as the engine's stream connects again", async () => {
+  const { watch, runAll, whenWaiting, reconnected, toLead } = await watchingTask();
+  const heard = whenWaiting(() => {
+    busy.set("ses_task", Infinity);
+    sessions.get("ses_task").time.updated = 5000;
+    return watch({ type: "session.execution.succeeded", data: { sessionID: "ses_task" } });
+  });
+  let child;
+  const answering = route("POST", "kuvo/agent-tools", { name: "send_message", arguments: { to: "ses_task", text: "Is the sign-in done?", wait: true }, session: "ses_lead" }, started => { child = started; });
+  await heard;
+  child.kill("SIGTERM");
+  await answering;
+  busy.delete("ses_task");
+  // Told by whichever watch finds it first.
+  await reconnected();
+  await runAll();
+  await runAll();
+  assert.equal(toLead().length, 1);
+  assert.match(toLead()[0].text, /^\[Session finished\] "Task"/);
+});
+
+test("a finish held while its starter waited is told after the link starts again, though the box has heard of everything since", async () => {
+  const { watch, runAll, whenWaiting, reconnected, restarted, toLead } = await watchingTask();
+  const heard = whenWaiting(() => {
+    busy.set("ses_task", Infinity);
+    sessions.get("ses_task").time.updated = 5000;
+    return watch({ type: "session.execution.succeeded", data: { sessionID: "ses_task" } });
+  });
+  let child;
+  const answering = route("POST", "kuvo/agent-tools", { name: "send_message", arguments: { to: "ses_task", text: "Is the sign-in done?", wait: true }, session: "ses_lead" }, started => { child = started; });
+  await heard;
+  // The stream connects again while the wait goes on: it looks at everything up to now, and holds
+  // the finish too.
+  await reconnected(6000);
+  assert.deepEqual(toLead(), []);
+  child.kill("SIGTERM");
+  await answering;
+  busy.delete("ses_task");
+  // Then the link stops before either looks again, and starts.
+  await restarted(7000);
+  await runAll();
+  assert.equal(toLead().length, 1);
+  assert.match(toLead()[0].text, /^\[Session finished\] "Task"/);
+});
+
+test("a finish held while its starter waited, told once the engine's stream was lost, doesn't hide what the session said meanwhile", async () => {
+  const { watch, clock, runAll, whenWaiting, dropped, restarted, toLead } = await watchingTask();
+  const heard = whenWaiting(() => {
+    busy.set("ses_task", Infinity);
+    return watch({ type: "session.execution.succeeded", data: { sessionID: "ses_task" } });
+  });
+  let child;
+  const answering = route("POST", "kuvo/agent-tools", { name: "send_message", arguments: { to: "ses_task", text: "Is the sign-in done?", wait: true }, session: "ses_lead" }, started => { child = started; });
+  await heard;
+  // The stream's lost; meanwhile the session finishes again, unheard.
+  dropped();
+  clock.at = 2000;
+  messages.get("ses_task").push({ id: "msg_zzz", type: "assistant", time: { created: 2000 }, content: [{ type: "text", text: "Also fixed the tests." }] });
+  sessions.get("ses_task").time.updated = 2000;
+  // The wait's given up later: the finish it held is told.
+  clock.at = 3000;
+  child.kill("SIGTERM");
+  await answering;
+  busy.delete("ses_task");
+  await runAll();
+  await runAll();
+  assert.equal(toLead().length, 1);
+  // The link starts again: what the session said meanwhile is told too.
+  await restarted(4000);
+  await runAll();
+  assert.equal(toLead().length, 2);
+  assert.match(toLead()[1].text, /Also fixed the tests\./);
+});
+
+test("a finish held in the coding agents' bridge while its starter waited is told after the link starts again, though the engine was looked at first", async () => {
+  const { runAll, whenWaiting, restarted, toLead } = await watchingTask();
+  // The bridge's watch, having heard of everything until 6000.
+  const bridge = { source: { port: engine.address().port, password: "p" }, from: "bridge" };
+  const theBridge = await restarted(6000, bridge);
+  const heard = whenWaiting(() => {
+    busy.set("ses_task", Infinity);
+    sessions.get("ses_task").time.updated = 5000;
+    return theBridge({ type: "session.execution.succeeded", data: { sessionID: "ses_task" } });
+  });
+  let child;
+  const answering = route("POST", "kuvo/agent-tools", { name: "send_message", arguments: { to: "ses_task", text: "Is the sign-in done?", wait: true }, session: "ses_lead" }, started => { child = started; });
+  await heard;
+  // The link starts again: the engine (which has none of the bridge's sessions) is looked at first.
+  const empty = http.createServer((request, response) => response.end("[]"));
+  await new Promise(resolve => empty.listen(0, "127.0.0.1", resolve));
+  try {
+    await restarted(7000, { source: { port: empty.address().port, password: "p" } });
+  } finally {
+    empty.close();
+  }
+  child.kill("SIGTERM");
+  await answering;
+  busy.delete("ses_task");
+  await restarted(8000, bridge);
+  await runAll();
+  assert.equal(toLead().length, 1);
+  assert.match(toLead()[0].text, /^\[Session finished\] "Task"/);
 });

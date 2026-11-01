@@ -16,6 +16,7 @@ import { LETTERS_SEEN, LETTER_ID, LETTER_LIFE, LETTER_MEMORY, composeLetter, cut
 import { READ_BY_MAIL, excerpt, readConversation } from "./conversation";
 import { allowed, takeBack } from "./limits";
 import { ANSWER_TEXT, answered } from "./outbox";
+import { awaitingAnswer } from "../work/awaited";
 import type { ListedAgent, Target, ToldAgents } from "../../shared/records";
 import type { EngineAnswer } from "../engine/client";
 import type { Peer } from "../peers/known";
@@ -94,20 +95,26 @@ function noteSeen(id: string, now = Date.now()) {
 const delivering = new Set<string>();
 
 
-/** How `answerTo` waits: between looks (ms), and until its asker goes (`signal`). */
+/** How `answerTo` waits: between looks (ms), until its asker goes (`signal`), and for whom (`by`:
+ * the conversation that wrote, which hears of it there rather than as it finishes). */
 export interface AnswerWait {
   wait?: number;
   signal?: AbortSignal;
+  by?: string | null;
 }
 
 // Its answer to message `id` (one this box made, so later ones sort after it): what it wrote after,
 // once it's done, ten minutes at most; null for none, or once its asker went.
-export async function answerTo(target: Target, session: string, id: string, { wait = 2000, signal }: AnswerWait = {}): Promise<string | null> {
+export async function answerTo(target: Target, session: string, id: string, { wait = 2000, signal, by }: AnswerWait = {}): Promise<string | null> {
+  return (await awaitingAnswer(session, by, () => waitForAnswer(target, session, id, wait, signal))).text;
+}
+// (With the id of its last reply, the one the box hears it finish with.)
+async function waitForAnswer(target: Target, session: string, id: string, wait: number, signal?: AbortSignal): Promise<{ text: string | null; reply?: string }> {
   const began = Date.now();
   let started = false;
   while (Date.now() - began < 600_000) {
     await pause(wait, signal);
-    if (signal?.aborted) return null;
+    if (signal?.aborted) return { text: null };
     // (As the engine and the agents' bridge answer it: the sessions at work, as a list or by id.)
     const active: string[] | Record<string, unknown> = (await asked(target, "GET", "api/session/active").catch(() => null) as EngineAnswer<string[] | Record<string, unknown>> | null)?.data ?? {};
     if (Array.isArray(active) ? active.includes(session) : active[session]) {
@@ -116,11 +123,12 @@ export async function answerTo(target: Target, session: string, id: string, { wa
     }
     if (!started && Date.now() - began < 3 * wait) continue;
     const page: { data?: EngineMessage[] } | null = await asked(target, "GET", `api/session/${encodeURIComponent(session)}/message?limit=20&order=desc`).catch(() => null) as EngineAnswer<EngineMessage[]> | null;
-    const replies = answerAfter((page?.data ?? []).slice().reverse(), id);
-    if (replies.length) return cutText(replies.join("\n\n"), ANSWER_TEXT);
+    const messages = (page?.data ?? []).slice().reverse();
+    const replies = answerAfter(messages, id);
+    if (replies.length) return { text: cutText(replies.join("\n\n"), ANSWER_TEXT), reply: messages.filter(message => message.type === "assistant").at(-1)?.id };
     if (started) break;
   }
-  return null;
+  return { text: null };
 }
 
 // Not known to the engine while the coding agents' bridge isn't running (it's starting, or starting
