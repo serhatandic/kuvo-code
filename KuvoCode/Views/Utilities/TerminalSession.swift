@@ -10,7 +10,8 @@ import SwiftUI
 @Observable
 final class TerminalSession: NSObject {
     let view: LocalProcessTerminalView
-    private(set) var title = "Terminal"
+    /// What its tab says: what runs in it, else its folder (`tabTitle`).
+    private(set) var title: String
     private(set) var isRunning = true
     /// Add to Message in the right-click menu, with the selected text.
     @ObservationIgnored var addToMessage: ((String) -> Void)?
@@ -25,6 +26,7 @@ final class TerminalSession: NSObject {
         view = LocalProcessTerminalView(frame: NSRect(x: 0, y: 0, width: 640, height: 400))
         self.directory = directory
         machine = RemoteFolder.parse(directory)?.machine
+        title = Self.tabTitle("", folder: RemoteFolder.parse(directory)?.path ?? directory)
         var environment = environment
         environment["TERM"] = "xterm-256color"
         environment["COLORTERM"] = "truecolor"
@@ -279,16 +281,28 @@ extension TerminalSession: @preconcurrency LocalProcessTerminalViewDelegate {
     func setTerminalTitle(source: LocalProcessTerminalView, title: String) {
         // Only when it says something new, without the spinner some agents turn at its start: one
         // changing every tenth of a second would draw the tabs and the sidebar again as often.
-        let steady = Self.steady(title)
+        let steady = Self.tabTitle(title, folder: RemoteFolder.parse(directory)?.path ?? directory)
         if self.title != steady { self.title = steady }
     }
 
-    /// A title without the spinner or mark an agent keeps changing at its start (Braille dots, ✳).
-    static func steady(_ title: String) -> String {
+    /// What a tab says, as Terminal and VS Code name theirs: what runs in it, by the title it
+    /// sets, without the spinner or mark an agent keeps changing at its start (Braille dots, ✳);
+    /// else the folder it's in. A shell's own "user@host: ~/src/app" says only the folder ("app"),
+    /// so two shells on one machine don't read alike, cut off at the same place.
+    static func tabTitle(_ title: String, folder: String) -> String {
         let marks: Set<Character> = ["✳", "✶", "✻", "✽", "✢", "✺", "·", "•", "●", "○", "◐", "◓", "◑", "◒", "⏺"]
         let kept = title.drop { $0.isWhitespace || marks.contains($0) || $0.unicodeScalars.allSatisfy { (0x2800...0x28FF).contains($0.value) } }
-        let named = kept.trimmingCharacters(in: .whitespaces)
-        return named.isEmpty ? "Terminal" : named
+        var named = kept.trimmingCharacters(in: .whitespaces)
+        if let shell = named.wholeMatch(of: /[\w.-]+@[\w.-]+(?::\s*(.*))?/) {
+            named = shell.1.map { String($0).trimmingCharacters(in: .whitespaces) } ?? ""
+        }
+        if named.isEmpty { named = folder }
+        // A path: its last folder; the home folder as ~.
+        if named.hasPrefix("/") || named.hasPrefix("~") {
+            let last = (named as NSString).lastPathComponent
+            return named == "~" || named == NSHomeDirectory() || last.isEmpty || last == "/" ? "~" : last
+        }
+        return named
     }
 
     func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}

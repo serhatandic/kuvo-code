@@ -101,6 +101,22 @@ import Testing
         #expect(session.view.process.running && session.view.process.shellPid != first)
     }
 
+    /// A tab says what runs in it, else its folder, as Terminal does: a shell's own
+    /// "user@host: ~/dir" title names only the folder, so two shells on one machine tell apart.
+    @Test func aTabIsNamedByWhatRunsInItElseItsFolder() {
+        let session = TerminalSession(directory: folder.path, environment: shell)
+        defer { done(session) }
+        #expect(session.title == folder.lastPathComponent, "before the shell names it")
+        session.view.feed(text: "\u{1b}]0;serhat@lokum: ~/src/kuvo-web\u{07}")
+        #expect(session.title == "kuvo-web")
+        session.view.feed(text: "\u{1b}]0;serhat@lokum: ~\u{07}")
+        #expect(session.title == "~")
+        session.view.feed(text: "\u{1b}]0;⠋ claude\u{07}")
+        #expect(session.title == "claude")
+        session.view.feed(text: "\u{1b}]0;serhat@lokum\u{07}")
+        #expect(session.title == folder.lastPathComponent)
+    }
+
     /// Waits for the session's shell to end, as the terminal hears it.
     private func ended(_ session: TerminalSession) async {
         while session.isRunning {

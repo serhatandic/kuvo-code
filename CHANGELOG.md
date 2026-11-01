@@ -28,6 +28,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - Setting up the browser on a machine shows one progress bar, its percentage on the line above it.
 - Report a Problem names your Mac's chip, says once what happens on GitHub, and lists what's included with the report.
 - Open Quickly shows the letters you typed in bold, as the command palette does.
+- A terminal tab is named for what runs in it, else its folder, instead of user@host.
 - The sidebar's accounts stay while the coding agents restart, instead of briefly showing fewer.
 - The command palette shows the letters you typed in bold in each result, and Run shows a play mark.
 - Settings › Accounts has one Add Account menu for the subscriptions, and Edit Bot › Keys one Add Its Own Key menu, instead of a button on every row, and a coding agent's accounts sit right under its name.
