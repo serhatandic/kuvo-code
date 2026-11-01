@@ -229,10 +229,14 @@ final class Catalog {
 
     /// Why a message on `ref` can't be sent (on the machine named `on`), said before it's sent;
     /// nil when it can go.
-    /// A model of the engine's that's gone (retired, turned off) is said too, as the engine would
-    /// only fail it; a coding agent's missing while the agents start goes to them.
+    /// A model gone from an account the engine has (retired, turned off) is said too, as the engine
+    /// would only fail it. Not one of a provider it doesn't list here (one a project's own settings
+    /// add, listed only in that project), nor a coding agent's missing from their list while its
+    /// account is signed in: those go to the engine or the agents.
     func refusal(_ ref: ModelRef, on machine: String? = nil) -> String? {
-        needsSignIn(ref) || isUnavailable(ref) && !OutsideAgents.runsInBridge(ref.providerID) ? unavailable(ref, on: machine) : nil
+        guard isUnavailable(ref), integrations.contains(where: { $0.id == ref.providerID }) else { return nil }
+        if OutsideAgents.runsInBridge(ref.providerID), !needsSignIn(ref) { return nil }
+        return unavailable(ref, on: machine)
     }
 
     /// Why `ref` can't run here, and what to do, for one `isUnavailable` turned down: its account
@@ -259,7 +263,7 @@ final class Catalog {
     private static let notSignIn: Set<String> = ["provider.content-filter", "provider.quota", "provider.rate-limit", "provider.free-limit", "provider.budget-limit", "provider.model-budget-limit"]
 
     /// Whether a provider's error means it isn't signed in.
-    static func isSignInRefusal(_ error: String) -> Bool {
+    private static func isSignInRefusal(_ error: String) -> Bool {
         error.range(of: #"authorization header|unauthori[sz]ed|\b401\b|\b403\b|forbidden|invalid api key"#, options: [.regularExpression, .caseInsensitive]) != nil
     }
 

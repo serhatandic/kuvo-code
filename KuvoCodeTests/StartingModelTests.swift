@@ -177,5 +177,7 @@ import Testing
         #expect(catalog.refusal(ModelRef(id: "chat", providerID: "deepseek")) == "chat needs a sign-in: sign in to Deepseek in Settings › Accounts, or choose another model.")
         #expect(catalog.refusal(ModelRef(id: "sonnet-next", providerID: "anthropic")) == nil)
         #expect(catalog.refusal(ModelRef(id: "opus", providerID: "claude-code")) == nil, "its agents still loading")
+        // A provider the project's own settings add, which the engine lists only in that project: it goes.
+        #expect(catalog.refusal(ModelRef(id: "qwen", providerID: "lmstudio")) == nil)
     }
 }
