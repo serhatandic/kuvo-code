@@ -128,7 +128,8 @@ struct MadeButton: View {
     }
 
     private func newest(_ things: MadeThings) -> Double {
-        things.artifacts.filter(place.shows).map(\.updated).max() ?? 0
+        // The bot's job changes as you tell it more: not something new it made.
+        things.artifacts.filter { place.shows($0) && !ArtifactWords.isJob($0) }.map(\.updated).max() ?? 0
     }
 
     private var seenTimes: [String: Double] {
@@ -199,8 +200,16 @@ struct MadePopover: View {
     private var height: CGFloat {
         let room = (NSScreen.main?.visibleFrame.height ?? 800) - 160
         let most = min(560, max(room, 260))
+        // Nothing made yet: room for its few words, not a tall empty box.
+        if opened == nil, isEmpty { return 260 }
         guard opened == nil, let rows, listFrame > contentFrame else { return most }
         return min(most, max(220, listFrame - contentFrame + rows))
+    }
+
+    /// Loaded, with nothing to list.
+    private var isEmpty: Bool {
+        guard case .loaded = showsTimeline ? things.timelineState : things.state else { return false }
+        return showsTimeline ? things.entries.isEmpty : shown.isEmpty || (!place.isSession && ArtifactWords.shelf(things.artifacts).isEmpty)
     }
 
     private var showsTimeline: Bool { place.isGroup || (!place.isSession && things.mode == .timeline) }
@@ -326,7 +335,7 @@ struct MadePopover: View {
                         } else {
                             TimelineList(things: things, colored: place.isGroup, open: open)
                         }
-                    } else if shown.isEmpty || (!place.isSession && ArtifactWords.shelf(things.artifacts).isEmpty) {
+                    } else if isEmpty {
                         empty
                     } else if place.isSession {
                         ScrollView {

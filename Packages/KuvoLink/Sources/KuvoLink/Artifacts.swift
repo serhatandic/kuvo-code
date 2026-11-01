@@ -444,10 +444,16 @@ public enum ArtifactWords {
         }
     }
 
+    /// The bot's own job (`job.json`), which it rewrites as you tell it more: not something it
+    /// made, so it neither shows on the Shelf nor counts as new.
+    public static func isJob(_ artifact: ArtifactSummary) -> Bool {
+        artifact.kind == .memory && artifact.name == "job.json"
+    }
+
     /// The Shelf: each section with what's in it (none empty), newest first, memory's own file first.
-    /// Not the bot's job (`job.json`): that's the bot, not something it made; its Timeline keeps it.
+    /// Not the bot's job (`isJob`): that's the bot, not something it made; its Timeline keeps it.
     public static func shelf(_ artifacts: [ArtifactSummary]) -> [(section: Section, artifacts: [ArtifactSummary])] {
-        let grouped = Dictionary(grouping: artifacts.filter { !($0.kind == .memory && $0.name == "job.json") }, by: section(of:))
+        let grouped = Dictionary(grouping: artifacts.filter { !isJob($0) }, by: section(of:))
         return Section.allCases.compactMap { section in
             guard var items = grouped[section], !items.isEmpty else { return nil }
             items.sort { a, b in

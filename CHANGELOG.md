@@ -36,7 +36,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - In a narrow panel, Files gives an open file the whole width: the tree folds away and comes back from the toolbar.
 - A bot's work bar shows Open and Stop on the session under the pointer, and folds to its line while All is open, so its sessions aren't listed twice.
 - Edit Bot no longer ends each section with a paragraph: what you'd need to know is in the section itself, like "Pixel schedules these itself" under an empty Wake-Ups.
-- What a bot made is as tall as its list, and its Shelf no longer shows the bot's own job as something it made.
+- What a bot made is as tall as its list (short while it's empty), its Shelf no longer shows the bot's own job as something it made, and its button's dot no longer lights up for it.
 - When a goal can't run alone yet, its plan lists the sandbox first among what's yours, with its fix on the row, instead of a separate notice above.
 - Search results under In Conversations show the words you searched for in bold.
 - A vault item for a site shows that site's mark, like GitHub's or Stripe's, where Kuvo Code has one.
