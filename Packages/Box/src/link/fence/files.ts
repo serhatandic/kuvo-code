@@ -222,6 +222,7 @@ export function pluginScript(places: FencePlaces, version: string): string {
 // repository, and can't read Kuvo Code's own folders or your secrets.
 import crypto from "node:crypto"
 import fs from "node:fs"
+import os from "node:os"
 import path from "node:path"
 
 const FOLDER = ${JSON.stringify(places.folder)}
@@ -264,24 +265,49 @@ function repository(folder) {
 }
 
 // Where a path really is: through its links, also a link to a place that isn't there yet (which
-// writing it would make).
-function located(where, depth = 0) {
+// writing it would make). Only links are counted (a loop of them ends it), never the folders up to
+// the first one that's there.
+function located(where, links = 0) {
   try { return fs.realpathSync(where) } catch {}
-  if (depth > 40) return where
-  try {
-    if (fs.lstatSync(where).isSymbolicLink()) return located(path.resolve(path.dirname(where), fs.readlinkSync(where)), depth + 1)
-  } catch {}
-  const parent = path.dirname(where)
-  return parent === where ? where : path.join(located(parent, depth + 1), path.basename(where))
+  const missing = []
+  for (let at = where; ; at = path.dirname(at)) {
+    let link
+    try { link = fs.lstatSync(at).isSymbolicLink() ? fs.readlinkSync(at) : undefined } catch {
+      if (at === path.dirname(at)) return where
+      missing.unshift(path.basename(at))
+      continue
+    }
+    if (link === undefined) {
+      let base = at
+      try { base = fs.realpathSync(at) } catch {}
+      return path.join(base, ...missing)
+    }
+    if (links >= 40) return where
+    return located(path.join(path.resolve(path.dirname(at), link), ...missing), links + 1)
+  }
 }
 const within = (where, folder) => !!folder && (where === folder || where.startsWith(folder + path.sep))
-// The top folder of the repository a folder is in (the one with its .git), which the engine counts
-// as the conversation's too.
+// A path as the engine takes it: ~ is your home folder, anything else from the folder given.
+const resolved = (from, given) => path.resolve(from, given === "~" ? os.homedir() : given.startsWith("~/") ? path.join(os.homedir(), given.slice(2)) : given)
+// The folder the engine counts as the conversation's project too, as it finds it: the first folder
+// up from where it really is with a .git (a repository it can read) or a .hg.
 function topOf(folder) {
-  for (let at = folder; at && at !== path.dirname(at); at = path.dirname(at)) {
-    try { fs.lstatSync(path.join(at, ".git")); return at } catch {}
+  for (let at = real(folder); at && at !== path.dirname(at); at = path.dirname(at)) {
+    try { fs.lstatSync(path.join(at, ".hg")); return at } catch {}
+    try { fs.lstatSync(path.join(at, ".git")) } catch { continue }
+    return repository(folder) ? at : ""
   }
   return ""
+}
+// What the read tool reads instead of a file that isn't there: the one file beside it whose name is
+// the same but for how it's written (composed accents, no-break spaces, curly quotes).
+function lookalike(where) {
+  const same = (name) => name.normalize("NFC").replace(/[\u00a0\u202f]/g, " ").replace(/[\u2018\u2019]/g, "'")
+  const name = same(path.basename(where))
+  try {
+    const found = fs.readdirSync(path.dirname(where)).filter(each => same(each) === name && fs.statSync(path.join(path.dirname(where), each)).isFile())
+    return found.length === 1 ? path.join(path.dirname(where), found[0]) : ""
+  } catch { return "" }
 }
 
 // The engine's own file tools run outside the sandbox, and tell a place outside the conversation's
@@ -290,7 +316,7 @@ function topOf(folder) {
 // link leads out of it is given as where it really is, which the engine's rules for a folder
 // outside the project then apply to (Settings › Permissions, a bot's own).
 const PATHS = { read: "path", write: "path", edit: "path", glob: "path", grep: "path" }
-const PATCHED = /^(\\*\\*\\* (?:Add File|Update File|Delete File|Move to): )(.+)$/gm
+const PATCHED = /^([ \\t]*\\*\\*\\* (?:Add File|Update File|Delete File|Move to): )(.+)$/gm
 
 export default {
   id: "kuvo-code.sandbox",
@@ -318,11 +344,15 @@ export default {
     const folder = work ? real(work) : ""
     const top = work ? topOf(work) : ""
     const ours = [work, folder, top, top && real(top)].filter(Boolean)
-    const really = (given) => {
-      if (typeof given !== "string" || !given.trim() || !work) return given
-      const written = path.resolve(work, given.trim())
+    const really = (given, tool) => {
+      if (typeof given !== "string" || !given || !work) return given
+      const written = resolved(work, given)
       if (!ours.some(each => within(written, each))) return given
-      const where = located(written)
+      let where = located(written)
+      // A file that isn't there, which read takes a look-alike's place for.
+      if (tool === "read" && ours.some(each => within(where, each))) {
+        try { fs.lstatSync(written) } catch { where = located(lookalike(written) || written) }
+      }
       return ours.some(each => within(where, each)) ? given : where
     }
     await ctx.tool?.hook("execute.before", (call) => {
@@ -330,16 +360,23 @@ export default {
       if (!input || typeof input !== "object") return
       const field = PATHS[call.tool]
       if (field) {
-        const given = really(input[field])
+        const given = really(input[field], call.tool)
         if (given !== input[field]) call.input = { ...input, [field]: given }
-      } else if (call.tool === "patch" && typeof input.patchText === "string") {
-        const patchText = input.patchText.replace(PATCHED, (line, head, given) => head + really(given))
+      } else if ((call.tool === "patch" || call.tool === "apply_patch") && typeof input.patchText === "string") {
+        // Each file's path as the engine takes it, without the spaces around it.
+        const patchText = input.patchText.replace(PATCHED, (line, head, given) => {
+          const trimmed = given.trim()
+          const where = really(trimmed)
+          return where === trimmed ? line : head + where
+        })
         if (patchText !== input.patchText) call.input = { ...input, patchText }
-      } else if (/(^|_)session_move$/.test(call.tool)) {
+      } else if (call.tool === "session_move" || call.tool === "opencode_session_move") {
         // Its commands run in its folder's sandbox, so a conversation moved to another folder (your
-        // home folder) would write there: only within its folder, or to its repository's worktree.
-        const to = typeof input.directory === "string" ? located(path.resolve(work, input.directory)) : ""
-        if (!within(to, folder) && !(git && repository(to) === git)) {
+        // home folder) would write there: only itself, within its folder, or to its repository's
+        // worktree.
+        const other = input.sessionID !== undefined && input.sessionID !== call.sessionID
+        const to = !other && typeof input.directory === "string" ? located(resolved(work, input.directory.trim())) : ""
+        if (!to || (!within(to, folder) && !(git && repository(to) === git))) {
           throw new Error("This conversation's commands run in Kuvo Code's sandbox, in its own folder, so it can't move itself to another one. Ask the user to move it.")
         }
       }

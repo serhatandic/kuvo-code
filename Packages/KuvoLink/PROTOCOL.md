@@ -2997,7 +2997,9 @@ launcher as the engine names its own, `OPENCODE_SESSION_ID`), the system's tempo
 caches, but not what in them runs later outside the sandbox (installed programs like
 `~/.cargo/bin` and `~/.bun/bin`, tools' settings and start-up scripts, npx's packages, the caches of
 pre-commit, pnpm, uv and corepack in `~/.cache` and your own `XDG_CACHE_HOME`, pnpm's in
-`~/Library/Caches`, and on macOS bunx's packages in your temporary folder). Its npm, pnpm (11 and
+`~/Library/Caches`, and on macOS bunx's packages in your temporary folder; on macOS no folder that
+holds those, your secrets or Kuvo Code's own is moved or removed, which would leave what's in it
+under another name, though one that isn't there yet can be made). Its npm, pnpm (11 and
 later), uv and corepack use caches of Kuvo Code's own instead (`npm_config_cache`,
 `pnpm_config_cache_dir`, `UV_CACHE_DIR` and `UV_TOOL_DIR`, `COREPACK_HOME`: `cache/sandbox-…`,
 on this Mac in the app's `Library/Caches` folder), and on Linux uv copies what it installs
@@ -3078,12 +3080,13 @@ opens, that folder (the engine's own, never the command's) and its repository, a
 command's shell through `bin/kuvo-fence`, which refuses to run one without a folder (exit `126`). The
 engine's own file tools (`read`, `write`, `edit`, `patch`, `glob`, `grep`) run outside the sandbox and
 tell a place outside the folder by the path as written, so the plugin gives them a path in the folder
-(or its repository's top folder) that a link leads out of as where it really is, and the engine's
-rules for a folder outside the project apply to it (a link a command made to your keys asks, as your
-keys' own path would). And it refuses `session_move` (the engine's, or code mode's
-`opencode_session_move`) to a folder outside the conversation's own and its repository's worktrees:
-commands would write wherever it moved. (A link swapped in between the plugin's look and the tool's
-own isn't caught.) The box first runs a command through it and checks that it can't read or write what's hidden; only then
+(or the top folder the engine counts as the project's) that a link leads out of as where it really
+is, taking the path as the engine does (`~`, the spaces a patch's lines are trimmed of, the
+look-alike name `read` falls back to), and the engine's rules for a folder outside the project apply
+to it (a link a command made to your keys asks, as your keys' own path would). And it refuses
+`session_move` (the engine's, or code mode's `opencode_session_move`) of another conversation, or to
+a folder outside the conversation's own and its repository's worktrees: commands would write
+wherever it moved. (A link swapped in between the plugin's look and the tool's own isn't caught.) The box first runs a command through it and checks that it can't read or write what's hidden; only then
 does it give the engine the plugin, and it takes it away (with what the engine noted of it, so
 it's `on` again only once the engine has loaded it again) when a check fails, so commands run as
 before rather than not at all. (Kuvo Code's own kill switch, for a rollout, does the same: the box

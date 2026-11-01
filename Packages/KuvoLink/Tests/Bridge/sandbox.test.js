@@ -104,10 +104,12 @@ async function engineRuns(box, folder, command, session) {
   return { status: run.status, out: run.stdout + run.stderr };
 }
 
+const ENGINE_SESSION = "ses_tools";
+
 // The engine, opening `folder` and calling one of its own tools there (`tool`, with `input`), as
 // its plugins see the call before it runs: what the tool is given then, or what it's refused with.
 async function engineCalls(box, folder, tool, input) {
-  const call = { tool, sessionID: "ses_tools", agent: "build", messageID: "msg_tools", id: "call_tools", input };
+  const call = { tool, sessionID: ENGINE_SESSION, agent: "build", messageID: "msg_tools", id: "call_tools", input };
   const plugin = (await import(`${pathToFileURL(box.plugin)}?${Math.random()}`)).default;
   const hooks = [];
   await plugin.setup({ location: { directory: folder }, shell: { hook: async () => {} }, tool: { hook: async (name, take) => { if (name === "execute.before") hooks.push(take); } } });
@@ -120,11 +122,12 @@ async function engineCalls(box, folder, tool, input) {
 }
 
 // Whether the engine asks before its file tools go to `given` in `folder`: where the path, as
-// written, isn't in the folder (its own check, `FileAccess.resolve`, by the path alone; links
-// aren't followed).
-const engineAsks = (folder, given) => {
-  const where = path.resolve(folder, given);
-  return where !== folder && !where.startsWith(folder + path.sep);
+// written (~ your home folder), is in neither the folder nor its project's top folder, `top` (its
+// own check, `FileAccess.resolve`, by the path alone; links aren't followed).
+const engineAsks = (folder, given, top = folder) => {
+  const home = os.homedir();
+  const where = path.resolve(folder, given === "~" ? home : given.startsWith("~/") ? path.join(home, given.slice(2)) : given);
+  return ![folder, top].some(inside => where === inside || where.startsWith(inside + path.sep));
 };
 
 // What a command could do, each line `<what>: allowed` or `refused`.
@@ -664,7 +667,8 @@ test("a link a command makes doesn't take the engine's own file tools out of the
   const running = await start(box);
   try {
     assert.equal((await running.ask("GET", "kuvo/sandbox")).value.able, true);
-    const made = await engineRuns(box, project, `ln -s ${JSON.stringify(path.join(keys, "id_test"))} key.txt && ln -s ${JSON.stringify(keys)} keys && ln -s ${JSON.stringify(profile)} profile`);
+    const key = JSON.stringify(path.join(keys, "id_test"));
+    const made = await engineRuns(box, project, `ln -s ${key} key.txt && ln -s ${JSON.stringify(keys)} keys && ln -s ${JSON.stringify(profile)} profile && ln -s ${key} "look alike.txt" && ln -s ${key} "spaced.txt " && ln -s ${JSON.stringify(path.join(root, "deep-to-be"))} deep`);
     assert.equal(made.status, 0, made.out);
     const asked = {};
     for (const [what, tool, input, given] of [
@@ -674,7 +678,14 @@ test("a link a command makes doesn't take the engine's own file tools out of the
       ["write the script that isn't there yet", "write", { path: "profile", content: "x" }, input => input.path],
       ["list its folder", "glob", { pattern: "*", path: "keys" }, input => input.path],
       ["search its folder", "grep", { pattern: "key", path: "keys" }, input => input.path],
-      ["patch the key", "patch", { patchText: "*** Begin Patch\n*** Update File: keys/id_test\n@@\n-a key\n+b key\n*** End Patch" }, input => input.patchText.match(/^\*\*\* Update File: (.+)$/m)[1]],
+      ["patch the key", "patch", { patchText: "*** Begin Patch\n*** Update File: keys/id_test\n@@\n-a key\n+b key\n*** End Patch" }, input => input.patchText.match(/^\s*\*\*\* Update File: (.+)$/m)[1].trim()],
+      // (The engine takes a patch's lines without the spaces around them.)
+      ["patch the key, the line indented", "patch", { patchText: "*** Begin Patch\n  *** Update File: keys/id_test \n@@\n-a key\n+b key\n*** End Patch" }, input => input.patchText.match(/^\s*\*\*\* Update File: (.+)$/m)[1].trim()],
+      // (Read reads the one file beside a name that isn't there whose name is the same but for a
+      // no-break space; and the engine takes a name with the spaces it has.)
+      ["read the key by a look-alike name", "read", { path: "look\u00a0alike.txt" }, input => input.path],
+      ["read the key by a name ending in a space", "read", { path: "spaced.txt " }, input => input.path],
+      ["write far into a link to a place that isn't there yet", "write", { path: `deep/${"d/".repeat(41)}x`, content: "x" }, input => input.path],
       ["read what's in the project", "read", { path: "notes.md" }, input => input.path],
     ]) {
       const called = await engineCalls(box, project, tool, input);
@@ -688,11 +699,39 @@ test("a link a command makes doesn't take the engine's own file tools out of the
       "list its folder": "asks",
       "search its folder": "asks",
       "patch the key": "asks",
+      "patch the key, the line indented": "asks",
+      "read the key by a look-alike name": "asks",
+      "read the key by a name ending in a space": "asks",
+      "write far into a link to a place that isn't there yet": "asks",
       "read what's in the project": "goes",
     });
+    // A link that stays in the project stays as written.
+    assert.equal((await engineRuns(box, project, "ln -s notes.md also.md")).status, 0);
+    assert.equal((await engineCalls(box, project, "read", { path: "also.md" })).input.path, "also.md");
     // A place outside, as written, stays as written (on a Mac, /tmp is a link to /private/tmp): what
     // you've always allowed there still holds.
     assert.equal((await engineCalls(box, project, "read", { path: "/tmp/notes.md" })).input.path, "/tmp/notes.md");
+  } finally {
+    await running.stop();
+  }
+});
+
+test("a folder above the project that only looks like a repository doesn't count as the project's for the engine's file tools", async () => {
+  const box = boxAt("tools-stray-git");
+  // Your home folder, say, with a .git that isn't a repository, and your keys in it.
+  const above = path.join(root, "stray-above");
+  const project = path.join(above, "project");
+  fs.mkdirSync(path.join(above, ".git"), { recursive: true });
+  fs.mkdirSync(path.join(above, "keys"));
+  fs.writeFileSync(path.join(above, "keys", "id_test"), "a key\n");
+  fs.mkdirSync(project);
+  const running = await start(box);
+  try {
+    assert.equal((await running.ask("GET", "kuvo/sandbox")).value.able, true);
+    assert.equal((await engineRuns(box, project, "ln -s ../keys/id_test key.txt")).status, 0);
+    // The engine counts only the folder as the project, so the key, by the link's real place, asks.
+    const called = await engineCalls(box, project, "read", { path: "key.txt" });
+    assert.equal(engineAsks(project, called.input.path), true, called.input.path);
   } finally {
     await running.stop();
   }
@@ -718,15 +757,25 @@ test("an agent can't move its own conversation out of its folder while its comma
       ["to another folder", "session_move", another],
       ["to a folder in its own", "opencode_session_move", path.join(project, "sub")],
       ["to its repository's worktree", "opencode_session_move", worktree],
+      // (The engine takes ~ as your home folder, and the folder without the spaces around it.)
+      ["to ~", "opencode_session_move", "~"],
+      ["to your home folder, after a space", "opencode_session_move", ` ${os.homedir()}`],
     ]) {
       const called = await engineCalls(box, project, tool, { directory });
       moves[what] = called.refused ? "refused" : "moves";
     }
+    // Another conversation, whose folder the engine takes a folder from.
+    moves["another conversation"] = (await engineCalls(box, project, "opencode_session_move", { sessionID: "ses_another", directory: "sub" })).refused ? "refused" : "moves";
+    moves["itself, by its own id"] = (await engineCalls(box, project, "opencode_session_move", { sessionID: ENGINE_SESSION, directory: "sub" })).refused ? "refused" : "moves";
     assert.deepEqual(moves, {
       "to your home folder": "refused",
       "to another folder": "refused",
       "to a folder in its own": "moves",
       "to its repository's worktree": "moves",
+      "to ~": "refused",
+      "to your home folder, after a space": "refused",
+      "another conversation": "refused",
+      "itself, by its own id": "moves",
     });
   } finally {
     await running.stop();
