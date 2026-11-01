@@ -20,7 +20,7 @@ const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
 
 // The engine: each session's inbox and whether it runs; what was asked of it, each time a test
 // waits on it looking again.
-let inboxes, running, asked, prompted, unsure = false, taken = new Set(), waiting = [], latest = {};
+let inboxes, running, asked, prompted, unsure = false, taken = new Set(), waiting = [], latest = {}, looks = 0, whenLooked = null;
 const heard = () => new Promise(resolve => waiting.push(resolve));
 const engine = http.createServer((request, response) => {
   let body = "";
@@ -31,7 +31,14 @@ const engine = http.createServer((request, response) => {
     const [, session, rest] = url.pathname.match(/^\/api\/session\/([^/]+)(\/.*)?$/) ?? [];
     let answer = null;
     if (url.pathname === "/api/session") answer = { data: Object.keys(inboxes).map(id => ({ id, time: { updated: Date.now() } })) };
-    else if (url.pathname === "/api/session/active") answer = unsure ? null : { data: Object.fromEntries([...running].map(id => [id, {}])) };
+    else if (url.pathname === "/api/session/active") {
+      looks++;
+      answer = unsure ? null : { data: Object.fromEntries([...running].map(id => [id, {}])) };
+      // (What happens just as it's answered, once.)
+      const then = whenLooked;
+      whenLooked = null;
+      then?.();
+    }
     else if (session && !rest && request.method === "GET") answer = inboxes[session] ? { data: { id: session } } : null;
     else if (rest === "/inbox") answer = { data: inboxes[session] ?? [] };
     // Its newest message (the queue only asks for the one).
@@ -73,6 +80,7 @@ beforeEach(() => {
   unsure = false;
   taken = new Set();
   latest = {};
+  whenLooked = null;
   fs.rmSync(path.join(home, "run", "queues.json"), { force: true });
   fs.rmSync(path.join(home, "run", "waiting"), { recursive: true, force: true });
 });
@@ -84,14 +92,15 @@ async function askedAfter(count) {
 }
 
 // The box watching the engine, on a clock the test moves.
-function box() {
+function box(found) {
   let time = 0;
   let timers = [];
   const hear = link.queueWatcher(target, {
     schedule: (run, ms) => { const timer = { at: time + ms, run }; timers.push(timer); return timer; },
     cancel: timer => { timers = timers.filter(each => each !== timer); },
+    found,
   });
-  return {
+  const box = {
     hear: (type, data = {}, session = "ses_1") => hear({ type, data: { sessionID: session, ...data } }),
     wait: ms => {
       time += ms;
@@ -100,7 +109,16 @@ function box() {
         due.run();
       }
     },
+    // Moved on `ms`, until the box has looked whether a session is at work (and a few turns more,
+    // for what it does with the answer).
+    looked: async ms => {
+      const before = looks;
+      box.wait(ms);
+      while (looks === before) await heard();
+      for (let turn = 0; turn < 20; turn++) await new Promise(resolve => setImmediate(resolve));
+    },
   };
+  return box;
 }
 
 // The box's routes, as a client asks them.
@@ -229,15 +247,16 @@ test("a queue left with nothing running when the engine started again waits for 
 test("a run that ended while the box was starting again, beside the same engine: what waits goes on, unless it's paused, or the run was stopped or failed", async () => {
   await link.scanQueues({ ...target, pid: 30 });
   inboxes.ses_1 = [{ id: "msg_q1", delivery: "queue" }];
-  latest.ses_1 = { id: "msg_a1", type: "assistant", content: [{ type: "text", text: "Done." }] };
+  // (Each run's end as the engine says it: its newest message, how the run went.)
+  latest.ses_1 = { id: "msg_i1", type: "idle", outcome: "succeeded" };
   inboxes.ses_2 = [{ id: "msg_q2", delivery: "queue" }];
   inboxes.ses_3 = [{ id: "msg_q3", delivery: "queue" }];
   running.add("ses_3");
   // Stopped (from a client that couldn't reach the box), and failed.
   inboxes.ses_4 = [{ id: "msg_q4", delivery: "queue" }, { id: "msg_s4", delivery: "steer" }];
-  latest.ses_4 = { id: "msg_a4", type: "assistant", content: [], error: { type: "aborted", message: "Stopped." } };
+  latest.ses_4 = { id: "msg_i4", type: "idle", outcome: "interrupted" };
   inboxes.ses_5 = [{ id: "msg_q5", delivery: "queue" }];
-  latest.ses_5 = { id: "msg_a5", type: "assistant", content: [], error: { type: "provider", message: "Overloaded." } };
+  latest.ses_5 = { id: "msg_i5", type: "idle", outcome: "failed", error: { type: "provider", message: "Overloaded." } };
   await ask("POST", "kuvo/sessions/ses_2/queue/hold");
   await link.scanQueues({ ...target, pid: 30 });
   assert.deepEqual(asked.filter(each => each.endsWith(" steer") || each.endsWith(" resume")), ["ses_1 msg_q1 steer"], "the one waiting goes; the paused one, the one at work, the stopped and the failed don't");
@@ -554,4 +573,151 @@ test("your own message waits shown as you wrote it, though what goes to the agen
   assert.deepEqual((await ask("GET", "kuvo/sessions/ses_1/queue")).json.waiting.map(each => each.text), ["Look at this."]);
   await ask("POST", "kuvo/sessions/ses_1/queue/resume");
   assert.deepEqual(prompted.map(each => each.text), [whole]);
+});
+
+test("a coding agents' run still keeping its files as it ends doesn't leave the next message waiting: it goes once the bridge says the session's free", { timeout: 10_000 }, async () => {
+  inboxes.ses_1 = [];
+  await ask("POST", "kuvo/sessions/ses_1/stop");
+  await ask("POST", "kuvo/sessions/ses_1/queue/add", { id: "msg_w1", text: "Check the build." });
+  await ask("POST", "kuvo/sessions/ses_1/queue/add", { id: "msg_w2", text: "Then deploy." });
+  await ask("POST", "kuvo/sessions/ses_1/queue/resume");
+  assert.deepEqual(prompted.map(each => each.id), ["msg_w1"]);
+  const b = box();
+  b.hear("session.execution.started");
+  // It ends, and the bridge still lists it at work while it keeps the files it changed (a big
+  // folder: a while).
+  running.add("ses_1");
+  b.hear("session.execution.succeeded");
+  await b.looked(1500);
+  b.wait(60_000);
+  for (let turn = 0; turn < 20; turn++) await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(prompted.map(each => each.id), ["msg_w1"]);
+  running.delete("ses_1");
+  b.hear("session.idle");
+  b.wait(1500);
+  while (prompted.length < 2) await heard();
+  assert.deepEqual(prompted.map(each => each.id), ["msg_w1", "msg_w2"]);
+  assert.deepEqual(link.queueOf("ses_1").waiting, undefined);
+});
+
+test("Resume pressed after a Stop while the coding agents' run still keeps its files goes on once the session's free", { timeout: 10_000 }, async () => {
+  inboxes.ses_1 = [{ id: "msg_q1", delivery: "queue" }, { id: "msg_q2", delivery: "queue" }];
+  running.add("ses_1");
+  await ask("POST", "kuvo/sessions/ses_1/stop");
+  const b = box();
+  b.hear("session.execution.interrupted");
+  await b.looked(1500);
+  const resumed = await ask("POST", "kuvo/sessions/ses_1/queue/resume");
+  assert.equal(resumed.json.paused, false);
+  b.wait(60_000);
+  for (let turn = 0; turn < 20; turn++) await new Promise(resolve => setImmediate(resolve));
+  assert.ok(!asked.some(each => each.endsWith(" steer")), "nothing goes while it's still at work");
+  running.delete("ses_1");
+  b.hear("session.idle");
+  b.wait(1500);
+  assert.deepEqual(await askedAfter(asked.length + 1).then(all => all.filter(each => each.endsWith(" steer"))), ["ses_1 msg_q1 steer"]);
+  assert.equal(link.queueOf("ses_1").paused, false);
+});
+
+// Each step the box takes in turn: what it was asked once it's had time to act (a few turns of
+// the event loop for each answer).
+const settle = async () => { for (let turn = 0; turn < 50; turn++) await new Promise(resolve => setImmediate(resolve)); };
+
+test("Resume pressed after a failed coding agents' run, while it still keeps its files, goes on once the session's free", { timeout: 10_000 }, async () => {
+  inboxes.ses_1 = [{ id: "msg_q1", delivery: "queue" }];
+  running.add("ses_1");
+  const b = box();
+  b.hear("session.execution.failed");
+  await until(state => state.paused);
+  await ask("POST", "kuvo/sessions/ses_1/queue/resume");
+  await b.looked(1500);
+  assert.ok(!asked.some(each => each.endsWith(" steer")), "nothing goes while it's still at work");
+  running.delete("ses_1");
+  b.hear("session.idle");
+  b.wait(1500);
+  assert.deepEqual((await askedAfter(1)).filter(each => each.endsWith(" steer")), ["ses_1 msg_q1 steer"]);
+  b.wait(1500);
+  await settle();
+  assert.deepEqual(asked, ["ses_1 msg_q1 steer"], "once");
+});
+
+test("the coding agents' bridge saying a session's free right as a Stop ends it still holds and pauses its queue; Resume then sends the next one once", { timeout: 10_000 }, async () => {
+  inboxes.ses_1 = [{ id: "msg_q1", delivery: "queue" }, { id: "msg_s1", delivery: "steer" }];
+  const b = box();
+  // A client's own interrupt (not the box's Stop): the bridge ends the run and is free at once.
+  b.hear("session.execution.interrupted");
+  b.hear("session.idle");
+  b.wait(1500);
+  assert.deepEqual(await until(state => state.paused), { paused: true, held: ["msg_s1"] });
+  await settle();
+  assert.deepEqual(asked, ["ses_1 msg_s1 queue"]);
+  // Stopped and freed again, and Resume pressed straight after: what Stop held goes, once.
+  b.hear("session.execution.interrupted");
+  b.hear("session.idle");
+  await ask("POST", "kuvo/sessions/ses_1/queue/resume");
+  assert.deepEqual(asked.slice(1), ["ses_1 msg_s1 steer"]);
+  running.add("ses_1");
+  b.hear("session.execution.started");
+  b.wait(1500);
+  await settle();
+  assert.deepEqual(asked.slice(1), ["ses_1 msg_s1 steer"], "nothing more: it's running again");
+});
+
+test("a coding agents' session at work as the box finds its bridge started anew (finishing a turn cut short) is held and paused once it's free, not run on", { timeout: 10_000 }, async () => {
+  inboxes.ses_1 = [{ id: "msg_q1", delivery: "queue" }, { id: "msg_q2", delivery: "queue" }];
+  running.add("ses_1");
+  const found = new Map();
+  const b = box(found);
+  await link.scanQueues({ ...target, pid: 50 }, found);
+  assert.deepEqual(link.queueOf("ses_1"), { paused: false, held: [] }, "left while it's at work");
+  running.delete("ses_1");
+  b.hear("session.idle");
+  b.wait(1500);
+  assert.equal((await until(state => state.paused)).paused, true);
+  b.wait(1500);
+  await settle();
+  assert.ok(!asked.some(each => each.endsWith(" steer")), "nothing sent");
+});
+
+test("a coding agents' session the box finds at work that's free by the time it's looked at goes on, though its word that it's free came first", { timeout: 10_000 }, async () => {
+  inboxes.ses_1 = [];
+  await link.scanQueues({ ...target, pid: 52 });
+  inboxes.ses_1 = [{ id: "msg_q1", delivery: "queue" }];
+  latest.ses_1 = { id: "msg_i1", type: "idle", outcome: "succeeded" };
+  running.add("ses_1");
+  const found = new Map();
+  const b = box(found);
+  // The bridge frees it just as it says it's at work, and says so before the box has its answer.
+  whenLooked = () => {
+    running.delete("ses_1");
+    b.hear("session.idle");
+  };
+  await link.scanQueues({ ...target, pid: 52 }, found);
+  assert.deepEqual(asked, ["ses_1 msg_q1 steer"]);
+  b.wait(1500);
+  await settle();
+  assert.deepEqual(asked, ["ses_1 msg_q1 steer"], "once");
+});
+
+test("the box's stream connecting again while a coding agents' run kept its files: once it's free, its queue goes on, unless that run failed", { timeout: 10_000 }, async () => {
+  inboxes.ses_1 = [];
+  await link.scanQueues({ ...target, pid: 51 });
+  inboxes.ses_1 = [{ id: "msg_q1", delivery: "queue" }];
+  inboxes.ses_2 = [{ id: "msg_q2", delivery: "queue" }];
+  latest.ses_2 = { id: "msg_i2", type: "idle", outcome: "failed", error: { type: "provider", message: "Overloaded." } };
+  running.add("ses_1");
+  running.add("ses_2");
+  const found = new Map();
+  const b = box(found);
+  // The same bridge (its stream dropped and came back), its runs' ends unheard.
+  await link.scanQueues({ ...target, pid: 51 }, found);
+  running.clear();
+  b.hear("session.idle");
+  b.hear("session.idle", {}, "ses_2");
+  b.wait(1500);
+  assert.deepEqual(await askedAfter(1), ["ses_1 msg_q1 steer"]);
+  assert.equal((await until(state => state.paused, "ses_2")).paused, true, "not into the same error");
+  b.wait(1500);
+  await settle();
+  assert.deepEqual(asked, ["ses_1 msg_q1 steer"]);
 });

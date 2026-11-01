@@ -12,14 +12,16 @@ import { asked, peerPlaces, peerTargets, readEngineFile } from "../engine/client
 import { sendInto } from "../engine/queue";
 import { messageID } from "../engine/sessions";
 import { listOf, writePrivate } from "../files";
-import { IS_MAC, RUN } from "../home";
+import { HERE, IS_MAC, RUN } from "../home";
+import { frozen } from "../moves/records";
 import { announce, toldPeers } from "../peers/agents";
 import { isPutAway, peerOf, readPeerAgents } from "../peers/directory";
-import { mailFor, movedOf, peersOf } from "../peers/known";
+import { mailFor, movedOf, ownKey, ownListed, peersOf } from "../peers/known";
 import { bridgeAsk, giveUpSeat, ONLINE_STEP, SEAT_LETTER_LIFE, seatAge, seatRounds, sendSeatLetter } from "../peers/seats";
 import { readLink } from "../state";
-import { READ_BY_MAIL } from "./conversation";
-import { composeLetter, cutText, LETTER_ID, LETTER_LIFE, LETTER_MEMORY, letterTries, OUTBOX, placeOfSession, SENDING } from "./letter";
+import { excerpt, READ_BY_MAIL, readConversation } from "./conversation";
+import { composeLetter, cutText, LETTER_ID, LETTER_LIFE, LETTER_MEMORY, letterTries, OUTBOX, pausedNote, placeOfSession, SENDING } from "./letter";
+import { answerTo } from "./take";
 import type { Target } from "../../shared/records";
 import type { PutAwayable } from "../peers/directory";
 import type { Peer } from "../peers/known";
@@ -190,6 +192,63 @@ export function letterWent(sender: Pick<Peer, "key">, { id, ok, why, retry, answ
   else if (answer === false) reply(id, { note: words ?? "It got your message, but its answer can't come back to you here." });
 }
 
+// Letters being delivered here (`deliverHere`), so the next round doesn't too.
+const deliveringHere = new Set<string>();
+
+// A letter for a conversation that moved to this box since it was left: delivered here as a tool's
+// here is, by its sender's name, and with `wait`, its answer to the tool (or why none comes), or once
+// that stopped waiting, to its conversation as a message. One moving on again, or that can't be
+// reached now (the coding agents' bridge starting), is tried again the next minute.
+async function deliverHere(id: string, file: string, letter: OutboxLetter, step: number): Promise<void> {
+  if (deliveringHere.has(id) || frozen().has(letter.to)) return;
+  deliveringHere.add(id);
+  try {
+    const place = await placeOfSession(letter.to, peerTargets()).catch(() => undefined);
+    if (place === undefined || (place === null && !peerPlaces().bridge)) return;
+    const own = ownListed();
+    const nameOf = (session: string | null | undefined) => own.find(agent => agent.session === session)?.name ?? undefined;
+    const done = (value?: LetterReply) => {
+      fs.rmSync(file, { force: true });
+      letterTries.delete(id);
+      if (value && letter.wait === true) reply(id, value);
+    };
+    if (!place) return done({ failed: "There's no such conversation here." });
+    const kuvo = place.data?.metadata?.kuvo ?? {};
+    if (place.data?.parentID || kuvo.seat || isPutAway(place.data as PutAwayable)) return done({ failed: "That conversation doesn't take messages." });
+    const name = nameOf(letter.to) ?? (place.data?.title || "New session");
+    if (isObject(letter.read)) {
+      const query = typeof letter.read.query === "string" && letter.read.query.trim() ? letter.read.query.trim() : null;
+      return done({ text: excerpt(await readConversation(place.target, letter.to, place.data ?? {}, name), query, READ_BY_MAIL), read: true });
+    }
+    const sender = nameOf(letter.from) ?? (IS_MAC ? "another agent" : `an agent on ${HERE}`);
+    const by = letter.from ?? "unknown";
+    const words = cutText(letter.text);
+    const prompt = messageID();
+    const went = await sendInto(place.target, letter.to, { id: prompt, text: composeLetter(sender, by, words, letter.wait === true), delivery: "steer" },
+      { from: sender, words, kept: composeLetter(sender, by, words, false) });
+    // Stopped by the user here: it waits for them, and its answer comes as a message.
+    if (went === "waits") return done({ note: pausedNote(name) });
+    done();
+    if (letter.wait !== true) return;
+    const text = await answerTo(place.target, letter.to, prompt, { wait: step, by: letter.from ?? null });
+    if (!text) return;
+    const said = cutText(text, ANSWER_TEXT);
+    const waiter = IS_MAC ? macWaiting.get(id) : null;
+    let alive = 0;
+    try { alive = fs.statSync(path.join(REPLIES, `${id}.alive`)).mtimeMs; } catch {}
+    if (IS_MAC ? waiter && !waiter.gone() : Date.now() - alive <= 10_000) return reply(id, { text: said, to: letter.from, from: letter.to, name });
+    // Its tool stopped waiting: to the conversation that asked, as a message.
+    const asker = letter.from ? await placeOfSession(letter.from, peerTargets()).catch(() => null) : null;
+    if (!asker || !letter.from) return;
+    await sendInto(asker.target, letter.from, { id: messageID(), text: composeLetter(name, letter.to, said, false), delivery: "steer" },
+      { from: name, words: said, kept: composeLetter(name, letter.to, said, false) });
+  } catch {
+    // Tried again the next minute.
+  } finally {
+    deliveringHere.delete(id);
+  }
+}
+
 // The answer (`letter`) to letter `answers`, from the box it went to, for the tool waiting for it
 // here: true when one still waits (it notes it does, `<id>.alive`, every two seconds as it looks);
 // else it comes as a message. One the tool doesn't take after all (it stopped as it came) comes as
@@ -283,7 +342,7 @@ export function letterMail(peer: Pick<Peer, "key" | "address">, letter: MailedLe
 // (`replies/<id>.gaveup`) has its letter go on without waiting, and an answer that comes later
 // reaches its conversation as a message. A group chat's letters given up are told to the coding
 // agents' bridge (`ask`); the tellings are what it returns.
-export function sendOutbox(host: Pick<LinkHost, "send">, link: LinkState | null = readLink(), now = Date.now(), offline = 0, ask: BridgeAsk = bridgeAsk): Promise<void[]> {
+export function sendOutbox(host: Pick<LinkHost, "send">, link: LinkState | null = readLink(), now = Date.now(), offline = 0, ask: BridgeAsk = bridgeAsk, step = 2000): Promise<void[]> {
   const telling: Promise<void>[] = [];
   if (!link?.key) return Promise.all(telling);
   const peers = peersOf(link);
@@ -307,6 +366,8 @@ export function sendOutbox(host: Pick<LinkHost, "send">, link: LinkState | null 
     givenUp(id);
   }
   const listed = new Set<string>();
+  const mine = ownKey(link);
+  const ownHere = new Set(ownListed().map(agent => agent.session));
   // Oldest first, as they were left.
   const waiting: { name: string; letter: InSending | null }[] = [];
   for (const name of listOf(SENDING)) {
@@ -351,6 +412,14 @@ export function sendOutbox(host: Pick<LinkHost, "send">, link: LinkState | null 
     if (now - made > LETTER_MEMORY) {
       fs.rmSync(file, { force: true });
       if (letter.wait === true) reply(id, { failed: "Its agent couldn't be reached." });
+      continue;
+    }
+    // Moved here since it was left (as the box it went from says, or as this box lists it now): here,
+    // relay or not.
+    if (lives === mine || (!lives && ownHere.has(letter.to))) {
+      if (now - (letterTries.get(id) ?? 0) < 60_000) continue;
+      letterTries.set(id, now);
+      telling.push(deliverHere(id, file, letter, step));
       continue;
     }
     // No box lists its agent now (lists change as boxes come and go): it waits.

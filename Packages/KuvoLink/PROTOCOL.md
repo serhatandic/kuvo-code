@@ -267,7 +267,9 @@ connection.
   - **Sender side**: a sender takes `delivered` only from the box it sent to, and an answer for a
     waiting tool only from that box; an answer from it stands for `delivered` should that be lost. Until `delivered` comes, it sends again each minute, for two
     days, oldest first, and a letter whose agent no box lists now waits. One for a conversation that
-    moved (`moved`) goes where it lives now, whichever box it was left for. Before a
+    moved (`moved`) goes where it lives now, whichever box it was left for; one that moved to the
+    sending box itself is delivered there, as a tool's there is (its answer to the tool waiting,
+    relay or not). Before a
     letter goes, its sender is told of to that box, if it wasn't: it waits until that's sent (or
     couldn't be), a minute at most. Its words are cut on a character's
     boundary.
@@ -556,19 +558,24 @@ the same for every client and with none connected, and keeps them in `run/queues
 - **Goes on**: a run that ends well, or a message queued while nothing runs, is followed a moment
   later (1.5 s) by the next waiting message, unless the queue is paused: what Stop held, in its
   order, then one for the next step (by resuming), then the queue, first queued first (by steering
-  it). A run the engine ended itself (`superseded`, `inactivity`) goes on the same way, and so do
-  the latest sessions' queues when a box starts again (or its stream comes back) beside the same
-  engine, for a run that ended while it couldn't hear (one that was stopped or failed, its newest
-  answer ending in an error, is held and paused instead).
+  it). A session still at work by then (the coding agents' bridge keeping the files a run changed)
+  is looked at again once the bridge says it's free: `session.idle` `{sessionID}`, which it sends
+  whenever a turn, an Undo or a Redo leaves the session idle (the engine sends none). A run the
+  engine ended itself (`superseded`, `inactivity`) goes on the same way, and so do the latest
+  sessions' queues when a box starts again (or its stream comes back) beside the same engine, for
+  a run that ended while it couldn't hear (one that was stopped or failed, as its newest message says:
+  the run's end, `idle` with an `outcome` other than `succeeded`, or an answer ending in an error,
+  is held and paused instead); one at work then is settled so once it's free.
 - **Pauses**: Stop, from any client (the box's `stop`, or an interrupt a client sent the engine
   itself: with no run started again a moment later, as Send Now's resume does at once; while the
-  session still says it's at work, looked at again, a few times); a run that failed; and a queue
-  found with nothing running once the engine started anew (each engine process looked over once,
-  as `run/queues-scanned.json` keeps, so a box that starts again beside it doesn't). Each holds
-  what was for the next step in the queue, ahead of what was queued, the latest first: only what's
-  still waiting once it's moved there. A message you write to go now (`steer`) unpauses it;
-  another agent's letter, a wake-up or a note doesn't. A Resume or Send Now just after an interrupt
-  wins over the look at it. The box's `stop` pauses it whether anything waits or not (a bot's
+  bridge's session still says it's at work, looked at again once it's free, and Resume pressed
+  meanwhile goes on then); a run that failed (Resume pressed while the bridge still keeps its files
+  goes on once it's free, too); and a queue found with nothing running (or, the bridge's, at work
+  until it's free) once the engine started anew (each engine process looked over once, as
+  `run/queues-scanned.json` keeps, so a box that starts again beside it doesn't). Each holds what was for the next step in the queue, ahead of what was
+  queued, the latest first: only what's still waiting once it's moved there. A message you write
+  to go now (`steer`) unpauses it; another agent's letter, a wake-up or a note doesn't. A Resume or
+  Send Now just after an interrupt wins over the look at it. The box's `stop` pauses it whether anything waits or not (a bot's
   `stop_session` on its own work only when something does, as a failed run); once paused, it stays
   so until Resume, Send Now or a message of yours to go now, though nothing is left waiting.
 - **What arrives waits** (bridge 0.9.128, `queue.waits`): the engine would run everything waiting
