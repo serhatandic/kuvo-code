@@ -78,7 +78,7 @@ public struct SSHConnection: Sendable, Hashable, Codable {
     /// way, so the script goes as base64, which no shell changes, for `sh` to decode and run. Its
     /// standard input stays the command's.
     public func arguments(running script: String, extra: [String] = [], shared: Bool = true) -> [String] {
-        Self.unreachable(address) + Self.options + (shared ? Self.sharing : Self.separate) + extra + [address, Self.command(running: script)]
+        unreachable + Self.options + (shared ? Self.sharing : Self.separate) + extra + [address, Self.command(running: script)]
     }
 
     /// A machine under `.invalid`, a name that never resolves (RFC 6761): a stand-in a demo copy
@@ -93,8 +93,8 @@ public struct SSHConnection: Sendable, Hashable, Codable {
     /// For a stand-in, `ssh` started any way at all opens no connection: your SSH config is left
     /// out (a jump host it names would be asked for the name), and it connects through `false`.
     /// Nothing else: `run` never starts it for one.
-    static func unreachable(_ address: String) -> [String] {
-        isStandIn(address) ? ["-F", "/dev/null", "-o", "ProxyCommand=/usr/bin/false"] : []
+    var unreachable: [String] {
+        isStandIn ? ["-F", "/dev/null", "-o", "ProxyCommand=/usr/bin/false"] : []
     }
 
     /// The command line for the machine's login shell that runs `script` with `sh`. Without a
@@ -1144,7 +1144,7 @@ public final class RemoteServer: @unchecked Sendable {
         process.executableURL = URL(filePath: "/usr/bin/ssh")
         // Not `-N`: a command on the machine that reads this app's end of a pipe, so the tunnel
         // ends when the app does, however it ends (a crash, a force quit), like this Mac's engine.
-        process.arguments = SSHConnection.unreachable(connection.address) + SSHConnection.options + SSHConnection.separate + forwards + [connection.address, "cat >/dev/null"]
+        process.arguments = connection.unreachable + SSHConnection.options + SSHConnection.separate + forwards + [connection.address, "cat >/dev/null"]
         process.standardInput = Pipe.unshared()
         process.standardOutput = FileHandle.nullDevice
         let stderr = Pipe.unshared()

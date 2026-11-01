@@ -43,6 +43,11 @@ struct RemoteEngineTests {
         defer { SSHConnection.route(name, to: nil) }
         SSHConnection.route(name, to: "demo.invalid")
         #expect(SSHConnection(destination: name).isStandIn)
+        // Nor when a stand-in is routed to a real address: ssh started for it still goes nowhere.
+        let standIn = "lab-\(UUID().uuidString.prefix(6)).invalid"
+        defer { SSHConnection.route(standIn, to: nil) }
+        SSHConnection.route(standIn, to: "192.0.2.1")
+        #expect(SSHConnection(destination: standIn).arguments(running: "true").contains("ProxyCommand=/usr/bin/false"))
     }
 
     /// A machine with several addresses (its local name, its VPN one): every connection to it goes
