@@ -44,10 +44,12 @@ process.exit(lib.symbols.clonefile(Buffer.from(process.argv[2] + "\\0"), Buffer.
       ["move its folder and read it", `mv ${cargo} ${away} && { cat ${join(away, "credentials.toml")}; read=$?; mv ${away} ${cargo}; exit $read; }`],
       ["move the folder of what runs later and change it", `mv ${cargo} ${away} && { echo planted > ${join(away, "bin", "tool")}; made=$?; mv ${away} ${cargo}; exit $made; }`],
       ["link the folder of what runs later into place and change it", `ln -s ${join(elsewhere, "tools")} ${join(cargo, "tools")} && mkdir -p ${join(elsewhere, "tools", "bin")} && echo planted > ${join(cargo, "tools", "bin", "tool")}`],
-      ...(mac ? [["clone its folder and read it", `${process.execPath} ${clone} ${cargo} ${join(elsewhere, "cloned")} && cat ${join(elsewhere, "cloned", "credentials.toml")}`]] : []),
+      ...(mac ? [["clone its folder and read it", `${JSON.stringify(process.execPath)} ${clone} ${cargo} ${join(elsewhere, "cloned")} && cat ${join(elsewhere, "cloned", "credentials.toml")}`]] : []),
     ]
     const script = tries.map(([what, command]) => `if ( ${command} ) >/dev/null 2>&1; then echo "${what}: allowed"; else echo "${what}: refused"; fi`).join("\n")
-    const ran = Bun.spawnSync([join(kuvo, "bin", "kuvo-fence"), "-c", script], { cwd: project, env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: join(root, "home"), KUVO_FENCE_WORK: project } })
+    // (The clone runs on this Bun, quoted, as it is: an engine's, `BUN_BE_BUN=1`, is in a folder
+    // with a space in its name.)
+    const ran = Bun.spawnSync([join(kuvo, "bin", "kuvo-fence"), "-c", script], { cwd: project, env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: join(root, "home"), KUVO_FENCE_WORK: project, ...(process.env.BUN_BE_BUN ? { BUN_BE_BUN: process.env.BUN_BE_BUN } : {}) } })
     const out = ran.stdout.toString() + ran.stderr.toString()
     const seen = Object.fromEntries(out.trim().split("\n").filter(line => /: (allowed|refused)$/.test(line)).map(line => line.split(": ")))
     expect(seen).toEqual({
