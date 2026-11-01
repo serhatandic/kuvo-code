@@ -2493,8 +2493,11 @@ final class SessionModel {
     /// An answer that didn't go: an ask gone meanwhile (answered elsewhere, its run ended) just
     /// goes; one still waiting says why, and can be answered again.
     private func answerFailed(_ ask: String, _ error: any Error, waits: (OpenCodeAPI) async throws -> Bool) async {
-        answering.remove(ask)
-        guard (try? await waits(api)) == false else { return fail(error) }
+        // Answered once still, while it's read: it goes with the ask if it's gone.
+        guard (try? await waits(api)) == false else {
+            answering.remove(ask)
+            return fail(error)
+        }
         transcript.permissions.removeAll { $0.id == ask }
         transcript.forms.removeAll { $0.id == ask }
         live?.permissions.removeAll { $0.id == ask }

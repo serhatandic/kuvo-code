@@ -39,8 +39,8 @@ final class Workspace {
         // An ask found settled without a word of it (answered elsewhere first): off the Dock's
         // count and the notifications too.
         model.askSettled = { [weak self] request in
-            self?.asking[request] = nil
-            Notifier.shared.clear(request: request)
+            self?.sharedForms[request] = nil
+            self?.settled(request)
         }
     }
 
@@ -2543,28 +2543,19 @@ final class Workspace {
             asking[request.id] = request.sessionID
             notifyAsk(request.sessionID, body: Self.describe(request, home: askHome(request.sessionID)), request: request.id, isPermission: true, answerable: Self.showsAll(request))
         case "permission.replied":
-            if let reply = try? event.payload(as: EventPayload.PermissionReplied.self) {
-                asking[reply.requestID] = nil
-                Notifier.shared.clear(request: reply.requestID)
-            }
+            if let reply = try? event.payload(as: EventPayload.PermissionReplied.self) { settled(reply.requestID) }
         case "form.created":
             guard let form = try? event.payload(as: EventPayload.FormCreated.self).form else { return }
             asking[form.id] = form.sessionID
             let question = Self.question(in: form)
             notifyAsk(form.sessionID, body: question?.text ?? (form.isQuestion ? "Has a question for you." : "Needs your answer."), request: form.id, question: question)
         case "form.replied", "form.cancelled":
-            if let settled = try? event.payload(as: EventPayload.FormSettled.self) {
-                asking[settled.id] = nil
-                Notifier.shared.clear(request: settled.id)
-            }
+            if let form = try? event.payload(as: EventPayload.FormSettled.self) { settled(form.id) }
         case _ where SessionModel.runEnds.contains(event.type):
             // The engine lets what a run asked go with it, without a word (the coding agents'
             // bridge says itself). Its permissions are named `per_…`.
             guard let ended = event.sessionID, !isBridgeSession(ended) else { return }
-            for (request, session) in asking where session == ended && request.hasPrefix("per_") {
-                asking[request] = nil
-                Notifier.shared.clear(request: request)
-            }
+            for (request, session) in asking where session == ended && request.hasPrefix("per_") { settled(request) }
         default:
             break
         }
@@ -2619,11 +2610,28 @@ final class Workspace {
 
     /// `request` is the permission or the form, for a notification whose buttons answer it.
     /// `answerable`: its buttons answer it (not when the notification can't show all it covers).
+    /// Asks whose notification is being made (its session read first), and those of them
+    /// answered or gone meanwhile.
+    @ObservationIgnored private var notifying: Set<String> = []
+    @ObservationIgnored private var settledWhileNotifying: Set<String> = []
+
+    /// An ask answered (here or elsewhere) or gone with its run: off the Dock's count, and its
+    /// notification goes, or isn't posted if it's still being made.
+    private func settled(_ request: String) {
+        asking[request] = nil
+        if notifying.contains(request) { settledWhileNotifying.insert(request) }
+        Notifier.shared.clear(request: request)
+    }
+
     private func notifyAsk(_ id: String, body: String, request: String, isPermission: Bool = false, answerable: Bool = true, question: Notifier.Question? = nil) {
         // A seat's requests are answered by its group chat.
         guard !seats.contains(id) else { return }
-        let noted = asking[request] != nil
+        notifying.insert(request)
         Task {
+            defer {
+                notifying.remove(request)
+                settledWhileNotifying.remove(request)
+            }
             // A subagent's session has no row or tab of its own; its request shows in the
             // session that started it.
             var session = session(id)
@@ -2645,7 +2653,7 @@ final class Workspace {
                 return
             }
             // Answered (or gone) while its session was read: no notification for it.
-            guard !noted || asking[request] != nil else { return }
+            guard settledWhileNotifying.remove(request) == nil else { return }
             // Buttons only when the notification hides none of what they'd answer.
             let shown = Notifier.showsAll(body) && (question?.choices.allSatisfy { Notifier.showsAll($0.label) } ?? true)
             Notifier.shared.notify(session: session?.id ?? id, title: session.flatMap { botName?($0.id) } ?? session?.title ?? AppInfo.name,
@@ -3133,10 +3141,9 @@ final class Workspace {
                 }
             }
         case "form.replied", "form.cancelled":
-            guard let settled = try? event.payload(as: EventPayload.FormSettled.self) else { return }
-            asking[settled.id] = nil
-            sharedForms[settled.id] = nil
-            Notifier.shared.clear(request: settled.id)
+            guard let form = try? event.payload(as: EventPayload.FormSettled.self) else { return }
+            sharedForms[form.id] = nil
+            settled(form.id)
         default:
             break
         }

@@ -335,13 +335,14 @@ private struct BottomStack: View {
         Group {
             VStack(spacing: 12) {
                 // What asks you something: solid cards over the composer's, apart from it.
-                // Return and Escape answer the card on top only; one answered waits for the engine.
+                // Return and Escape answer the card on top only (one answered keeps them: a second
+                // Return answers nothing, rather than sending the composer's draft).
                 ForEach(model.permissions) { request in
                     PermissionCard(request: request, command: model.permissionCommands[request.id], directory: model.session.location.directory) { decision in
                         model.reply(to: request, decision)
                     }
                     .environment(\.takesCardKeys, takesCardKeys && model.keyedAsk == request.id)
-                    .disabled(offlineMachine != nil || model.answering.contains(request.id))
+                    .disabled(offlineMachine != nil)
                     .modifier(ComposerSurface())
                 }
                 ForEach(forms) { form in
@@ -351,11 +352,12 @@ private struct BottomStack: View {
                     } dismiss: {
                         model.dismiss(form)
                     }
-                    .disabled(offlineMachine != nil || model.answering.contains(form.id))
+                    .disabled(offlineMachine != nil)
                     .modifier(ComposerSurface())
                 }
-                ForEach(app.browserAsks.asks(for: model.session.id)) { ask in
+                ForEach(Array(app.browserAsks.asks(for: model.session.id).enumerated()), id: \.element.id) { index, ask in
                     BrowserAskCard(ask: ask)
+                        .environment(\.takesCardKeys, takesCardKeys && index == 0 && model.permissions.isEmpty && forms.isEmpty)
                         .modifier(ComposerSurface())
                 }
                 // What its agent asks of its computer's vault.
