@@ -56,8 +56,8 @@ const isArchived = (data: Partial<EngineSession>) => Boolean(data.time?.archived
 
 /** Every session here that's someone's work (started by another conversation), the latest first,
  * from the engine and the coding agents' bridge; those put away left out, unless `archived` (as
- * limits count them). */
-export async function workSessions(targets: Target[], signal?: AbortSignal, { archived = false }: { archived?: boolean } = {}): Promise<Listed[]> {
+ * limits count them). A page that can't be read ends that one's list, or with `whole`, throws. */
+export async function workSessions(targets: Target[], signal?: AbortSignal, { archived = false, whole = false }: { archived?: boolean; whole?: boolean } = {}): Promise<Listed[]> {
   const found: Listed[] = [];
   for (const target of targets) {
     // Page after page (a few thousand at most), so a bot's work further back is still its.
@@ -66,7 +66,8 @@ export async function workSessions(targets: Target[], signal?: AbortSignal, { ar
       let page: { data?: unknown; cursor?: { next?: string } | null } | null;
       try {
         page = await engineGet(target, `api/session?${query}`) as typeof page;
-      } catch {
+      } catch (error) {
+        if (whole) throw error;
         break;
       }
       const listed = Array.isArray(page?.data) ? page.data as Listed["data"][] : [];

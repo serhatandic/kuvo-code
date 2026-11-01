@@ -1220,7 +1220,8 @@ async function sendNow(target, session, item) {
   return true;
 }
 var NOT_YOURS = ["[Message from ", "[Wake-up]", "[Work from ", "[Session ", "[Goal started]", "[Goal changed]", "[Goal's end]", "[Goal resumed]", "[Not now]", "[Limit reset]", "[The user answered]"];
-var isYours = (item) => item.type === "user" && !isBoxNote(item.payload?.metadata) && !NOT_YOURS.some((start) => String(item.payload?.text ?? "").startsWith(start));
+var writtenByYou = (text, metadata) => !isBoxNote(metadata) && !NOT_YOURS.some((start) => String(text ?? "").startsWith(start));
+var isYours = (item) => item.type === "user" && writtenByYou(item.payload?.text, item.payload?.metadata);
 function queueWatcher(target, { after = DRAIN_AFTER, schedule = setTimeout, cancel = clearTimeout } = {}) {
   const drains = new Map;
   const stops = new Map;
@@ -6372,7 +6373,7 @@ var wakesOf = (data) => {
   return Array.isArray(wake) ? wake.filter((each) => typeof each === "string") : [];
 };
 var isArchived = (data) => Boolean(data.time?.archived || data.metadata?.["kuvo.archived"] === true || data.metadata?.kuvo?.archived === true);
-async function workSessions(targets, signal, { archived = false } = {}) {
+async function workSessions(targets, signal, { archived = false, whole = false } = {}) {
   const found = [];
   for (const target of targets) {
     let query = "limit=200&order=desc&parentID=null";
@@ -6380,7 +6381,9 @@ async function workSessions(targets, signal, { archived = false } = {}) {
       let page;
       try {
         page = await engineGet(target, `api/session?${query}`);
-      } catch {
+      } catch (error) {
+        if (whole)
+          throw error;
         break;
       }
       const listed = Array.isArray(page?.data) ? page.data : [];
@@ -7373,22 +7376,38 @@ function wakeLineShown(lines) {
   return `“${said[2] || "New Session"}” ${what}`;
 }
 var LATE_AGAIN = 300000;
+var CATCH_UP_AGAIN = 60000;
+var CATCH_UP_TRIES = 10;
+var UNREAD_STARTS = 3;
 var ARCHIVED_FOR = 7 * 86400000;
 var readTold = (file) => {
   try {
     const kept = JSON.parse(fs30.readFileSync(file, "utf8"));
-    return isObject(kept) && typeof kept.since === "number" ? { since: kept.since, sessions: isObject(kept.sessions) ? kept.sessions : {} } : null;
+    if (!isObject(kept) || typeof kept.since !== "number")
+      return null;
+    const numbers = (value) => Object.fromEntries(Object.entries(isObject(value) ? value : {}).filter(([, number]) => typeof number === "number"));
+    const sinces = numbers(kept.sinces);
+    const unread = numbers(kept.unread);
+    return { since: kept.since, ...Object.keys(sinces).length ? { sinces } : {}, sessions: isObject(kept.sessions) ? kept.sessions : {}, ...Object.keys(unread).length ? { unread } : {} };
   } catch {
     return null;
   }
 };
-var changeTold = (file, change) => {
+var ENGINE = "engine";
+var OTHERS = ["bridge"];
+var sinceOf = (told, from) => from === ENGINE ? told.since : told.sinces?.[from] ?? told.since;
+var changeTold = (file, change, from, until) => {
   try {
     fs30.mkdirSync(path34.dirname(file), { recursive: true });
     locked(LOCK4 + "-told", () => {
-      const told = readTold(file) ?? { since: Date.now(), sessions: {} };
+      const told = readTold(file) ?? { since: until, sessions: {} };
       change(told);
-      told.since = Math.max(told.since, Date.now());
+      if (from === ENGINE) {
+        const theirs = Object.fromEntries(OTHERS.map((other) => [other, sinceOf(told, other)]));
+        told.sinces = { ...theirs, ...told.sinces };
+        told.since = Math.max(told.since, until);
+      } else if (from)
+        told.sinces = { ...told.sinces, [from]: Math.max(sinceOf(told, from), until) };
       const ids = Object.keys(told.sessions);
       for (const id of ids.slice(0, Math.max(0, ids.length - 400)))
         delete told.sessions[id];
@@ -7396,14 +7415,16 @@ var changeTold = (file, change) => {
     });
   } catch {}
 };
-async function lastReplyID(target, session) {
-  const page = await call(target, "GET", `/api/session/${encodeURIComponent(session)}/message?limit=6&order=desc`).catch(() => null);
-  for (const message of Array.isArray(page) ? page : [])
-    if (isObject(message) && message.type === "assistant" && typeof message.id === "string")
-      return message.id;
+async function lastReply(target, session) {
+  const page = await call(target, "GET", `/api/session/${encodeURIComponent(session)}/message?limit=6&order=desc`);
+  for (const message of Array.isArray(page) ? page : []) {
+    if (!isObject(message) || message.type !== "assistant" || typeof message.id !== "string")
+      continue;
+    return { id: message.id, at: isObject(message.time) && typeof message.time.created === "number" ? message.time.created : null };
+  }
   return null;
 }
-function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, file = WORK_WAKES, toldFile = WORK_TOLD, bridgeRuns = () => peerPlaces().bridge, signal } = {}) {
+function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, now = Date.now, file = WORK_WAKES, toldFile = WORK_TOLD, bridgeRuns = () => peerPlaces().bridge, signal, from = ENGINE } = {}) {
   const due = new Set;
   const failures = new Map;
   const putBack = (starter, waiting) => changeWaiting(file, (all) => {
@@ -7464,57 +7485,100 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
     });
     soon(starter);
   };
+  let caught = false;
   const noteTold = (session, note) => changeTold(toldFile, (told) => {
-    const now = told.sessions[session] ?? {};
+    const its = told.sessions[session] ?? {};
     if (note.reply)
-      now.reply = note.reply;
+      its.reply = note.reply;
+    if (note.at)
+      its.at = note.at;
     if (note.ask)
-      now.asks = [...(now.asks ?? []).filter((each) => each !== note.ask), note.ask].slice(-20);
+      its.asks = [...(its.asks ?? []).filter((each) => each !== note.ask), note.ask].slice(-20);
     delete told.sessions[session];
-    told.sessions[session] = now;
-  });
+    told.sessions[session] = its;
+  }, caught ? from : null, now());
+  const before = readTold(toldFile);
+  let tries = 0;
   const catchUp = async () => {
-    const told = readTold(toldFile);
-    if (!told)
-      return changeTold(toldFile, () => {});
-    const followed = (await workSessions([source])).filter((each) => startedByOf(each.data) && wakesOf(each.data).length && (each.data.time?.updated ?? 0) > told.since);
-    const working = await workingNow([source]);
+    if (!before) {
+      caught = true;
+      return changeTold(toldFile, () => {}, from, now());
+    }
+    const since = sinceOf(before, from);
+    const looked = now();
+    const listed = await workSessions([source], signal, { whole: true });
+    const active = await call(source, "GET", "/api/session/active", undefined, signal);
+    if (signal?.aborted)
+      return;
+    const working = new Set(Array.isArray(active) ? active : isObject(active) ? Object.keys(active) : []);
+    const followed = listed.filter((each) => startedByOf(each.data) && wakesOf(each.data).length && (each.data.time?.updated ?? 0) > since);
+    const unread = [];
     for (const { data } of followed) {
-      const starter = startedByOf(data);
-      const wakes = wakesOf(data);
-      const was = told.sessions[data.id] ?? {};
-      if (wakes.includes("asks")) {
-        const { permissions, questions } = await asksIn(source, data.id).catch(() => ({ permissions: [], questions: [] }));
-        for (const permission of permissions.filter((each) => !was.asks?.includes(each.id))) {
-          const line = await wakeLine({ type: "permission.asked", data: { id: permission.id, sessionID: data.id, action: permission.action, resources: permission.resources } }, data, source);
-          if (line)
-            tell(starter, line, true);
-          noteTold(data.id, { ask: permission.id });
-        }
-        for (const question of questions.filter((each) => !was.asks?.includes(each.id))) {
-          tell(starter, `[Session asks] "${data.title || "New Session"}" (address ${data.id}) asks: ${question.text} (ask ${question.id}). Answer with answer_ask (answer), or tell the user in a line and carry on.`, true);
-          noteTold(data.id, { ask: question.id });
-        }
-      }
-      if (wakes.includes("finished") && !working.has(data.id)) {
-        const reply = await lastReplyID(source, data.id);
-        if (!reply || reply === was.reply)
-          continue;
-        const outcome = data.outcome;
-        if (outcome === "interrupted") {
-          noteTold(data.id, { reply });
-          continue;
-        }
-        const failed = outcome === "failed";
-        const line = await wakeLine({ type: failed ? "session.execution.failed" : "session.execution.succeeded", data: { sessionID: data.id } }, data, source);
+      if (signal?.aborted)
+        return;
+      await tellWhatHappened(data, working).catch(() => {
+        unread.push(data);
+      });
+    }
+    if (signal?.aborted)
+      return;
+    if (unread.length && ++tries < CATCH_UP_TRIES)
+      throw new Error("Some of its sessions couldn't be read.");
+    const starts = readTold(toldFile)?.unread ?? {};
+    const held = unread.filter((data) => (starts[data.id] ?? 0) + 1 < UNREAD_STARTS);
+    caught = !held.length;
+    changeTold(toldFile, (told) => {
+      const counts = { ...told.unread };
+      for (const { data } of followed)
+        delete counts[data.id];
+      for (const data of held)
+        counts[data.id] = (starts[data.id] ?? 0) + 1;
+      if (Object.keys(counts).length)
+        told.unread = counts;
+      else
+        delete told.unread;
+    }, from, Math.min(looked, ...held.map((data) => (data.time?.updated ?? 0) - 1)));
+  };
+  const tellWhatHappened = async (data, working) => {
+    const starter = startedByOf(data);
+    const wakes = wakesOf(data);
+    const was = readTold(toldFile)?.sessions[data.id] ?? {};
+    if (wakes.includes("asks")) {
+      const { permissions, questions } = await asksIn(source, data.id);
+      for (const permission of permissions.filter((each) => !was.asks?.includes(each.id))) {
+        const line = await wakeLine({ type: "permission.asked", data: { id: permission.id, sessionID: data.id, action: permission.action, resources: permission.resources } }, data, source);
         if (line)
-          tell(starter, line, false);
-        noteTold(data.id, { reply });
+          tell(starter, line, true);
+        noteTold(data.id, { ask: permission.id });
+      }
+      for (const question of questions.filter((each) => !was.asks?.includes(each.id))) {
+        tell(starter, `[Session asks] "${data.title || "New Session"}" (address ${data.id}) asks: ${question.text} (ask ${question.id}). Answer with answer_ask (answer), or tell the user in a line and carry on.`, true);
+        noteTold(data.id, { ask: question.id });
       }
     }
-    changeTold(toldFile, () => {});
+    if (!wakes.includes("finished") || working.has(data.id))
+      return;
+    const reply = await lastReply(source, data.id);
+    if (!reply || reply.id === was.reply)
+      return;
+    if (was.at && (reply.at ?? data.time?.updated ?? Infinity) <= was.at)
+      return noteTold(data.id, { reply: reply.id });
+    const outcome = data.outcome;
+    if (outcome === "interrupted")
+      return noteTold(data.id, { reply: reply.id });
+    const failed = outcome === "failed";
+    const line = await wakeLine({ type: failed ? "session.execution.failed" : "session.execution.succeeded", data: { sessionID: data.id } }, data, source);
+    if (line)
+      tell(starter, line, false);
+    noteTold(data.id, { reply: reply.id });
   };
-  const caughtUp = Promise.all([catchUp().catch(() => {}), tellLateAnswers(targets, undefined, bridgeRuns).catch(() => {})]).then(() => {});
+  const catchingUp = () => catchUp().catch(() => {
+    if (signal?.aborted)
+      return;
+    const timer = schedule(() => catchingUp(), CATCH_UP_AGAIN);
+    timer?.unref?.();
+  });
+  const caughtUp = Promise.all([catchingUp(), tellLateAnswers(targets, undefined, bridgeRuns).catch(() => {})]).then(() => {});
   const lateAgain = () => {
     if (signal?.aborted)
       return;
@@ -7550,7 +7614,7 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
         return;
       tell(starter, line, kind === "asks");
       const ask = event.data?.id ?? event.data?.form?.id;
-      noteTold(session.id, kind === "asks" ? { ask: typeof ask === "string" ? ask : undefined } : { reply: await lastReplyID(source, session.id) });
+      noteTold(session.id, kind === "asks" ? { ask: typeof ask === "string" ? ask : undefined } : { reply: (await lastReply(source, session.id).catch(() => null))?.id, at: now() });
     })().catch(() => {});
   };
   return Object.assign(watch, { caughtUp });
@@ -13148,8 +13212,8 @@ function backgroundTools(engine, session) {
 }
 function watchBox({ tell = () => true, hold = null, bots = false, notices = !bots, signal, signedIn, learned } = {}) {
   const answered = (id) => hold?.resolve(id);
-  watchEvents(readEngineFile, tell, signal, answered, { bots, notices, signIns: true, hold, signedIn, steers: true, learns: true, learned, queues: true, work: true });
-  watchEvents(readBridgeFile, tell, signal, answered, { bots, notices, queues: true, work: true, goals: true });
+  watchEvents(readEngineFile, tell, signal, answered, { bots, notices, signIns: true, hold, signedIn, steers: true, learns: true, learned, queues: true, work: "engine" });
+  watchEvents(readBridgeFile, tell, signal, answered, { bots, notices, queues: true, work: "bridge", goals: true });
 }
 async function watchEvents(read, tell, signal, answered = () => {}, { bots = false, notices = !bots, signIns = false, hold = null, signedIn = () => {}, steers = false, steerAfter, learns = false, learned = () => {}, queues = false, work = false, goals = false } = {}) {
   let attempt = 0;
@@ -13168,7 +13232,7 @@ async function watchEvents(read, tell, signal, answered = () => {}, { bots = fal
       const source = read();
       const steer = steers ? steering((session) => backgroundTools(source, session).catch(() => {}), { after: steerAfter, signal: connection.signal }) : null;
       const queue = queues ? queueWatcher(source) : null;
-      const followWork = work ? workWatcher(source, peerTargets, { signal: connection.signal }) : null;
+      const followWork = work ? workWatcher(source, peerTargets, { signal: connection.signal, from: work }) : null;
       const goalHeld = goals ? goalHolds(peerTargets) : null;
       const response = await fetch(`http://127.0.0.1:${source.port}/api/event`, {
         headers: { authorization: `Basic ${Buffer.from(`opencode:${source.password}`).toString("base64")}`, accept: "text/event-stream" },
@@ -17048,6 +17112,22 @@ function findProject(named) {
   return found ? { directory: found.directory, name: found.name ?? path64.basename(found.directory) } : null;
 }
 var projectNames = () => readProjects().filter((each) => !each.removed).map((each) => each.name ?? path64.basename(each.directory)).slice(0, 12);
+async function answersYou(target, session) {
+  const address = encodeURIComponent(session);
+  let query = "limit=100&order=desc";
+  for (let pages = 0;pages < 20; pages++) {
+    const page = await engineGet(target, `api/session/${address}/message?${query}`).catch(() => null);
+    const messages = Array.isArray(page?.data) ? page.data : [];
+    const latest = messages.find((message) => isObject(message) && message.type === "user");
+    if (latest)
+      return writtenByYou(latest.text, latest.metadata);
+    const next = page?.cursor?.next ?? page?.cursor?.previous;
+    if (!messages.length || !next)
+      return false;
+    query = `limit=100&cursor=${encodeURIComponent(next)}`;
+  }
+  return false;
+}
 async function startSession(given, by, place) {
   const no = (status, message, session) => ({ refused: { status, message, ...session ? { session } : {} } });
   const task = typeof given.task === "string" ? given.task.trim() : "";
@@ -17093,6 +17173,8 @@ async function startSession(given, by, place) {
   const bot = ownBot ?? (by?.place ? worksFor(by.place.data) : null);
   const depth = ownBot ? 1 : depthOf(by?.place?.data) + 1;
   const goal = bot ? runningGoal(bot.bot) : null;
+  if (goal?.heldByYou && !(ownBot && by?.place && await answersYou(by.place.target, by.session)))
+    return no(403, "The user paused this goal: nothing new starts until they resume it.");
   let engine = null;
   try {
     engine = place.readEngine();
@@ -17201,13 +17283,16 @@ async function startSession(given, by, place) {
     await call(target, "PUT", `/api/experimental/session/${address}/instructions/entries/kuvo.project-folders`, { value: projectsNote(folder, project.folders) }).catch(() => {});
   }
   await tellWorktree(target, session).catch(() => {});
-  const wakes = wakesFrom(given.wake, Boolean(ownBot), given.wait === true);
+  let wakes = wakesFrom(given.wake, Boolean(ownBot), given.wait === true);
+  let marked = false;
   if (by?.place) {
     const kuvo = { startedBy: by.session, ...bot ? { by: bot, depth } : {}, ...wakes.length ? { wake: wakes } : {} };
-    await call(target, "PATCH", `/api/session/${address}`, { metadata: { kuvo } }).catch(() => {});
+    marked = await call(target, "PATCH", `/api/session/${address}`, { metadata: { kuvo } }).then(() => true, () => false);
     if (bot)
       noteWorkChanged(bot.bot);
   }
+  if (!marked)
+    wakes = [];
   if (bot && goal && given.step !== undefined && given.step !== null)
     linkSession(bot.bot, given.step, session);
   const waits = given.wait === true;

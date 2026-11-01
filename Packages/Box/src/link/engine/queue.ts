@@ -456,8 +456,8 @@ export interface QueueEvent {
 // wake-up, a group chat's work, a note).
 // (Those marked as the box's own, and the ones a box sent before it marked them.)
 const NOT_YOURS = ["[Message from ", "[Wake-up]", "[Work from ", "[Session ", "[Goal started]", "[Goal changed]", "[Goal's end]", "[Goal resumed]", "[Not now]", "[Limit reset]", "[The user answered]"];
-const isYours = (item: NonNullable<NonNullable<QueueEvent["data"]>["item"]>) =>
-  item.type === "user" && !isBoxNote(item.payload?.metadata) && !NOT_YOURS.some(start => String(item.payload?.text ?? "").startsWith(start));
+export const writtenByYou = (text: unknown, metadata: unknown) => !isBoxNote(metadata) && !NOT_YOURS.some(start => String(text ?? "").startsWith(start));
+const isYours = (item: NonNullable<NonNullable<QueueEvent["data"]>["item"]>) => item.type === "user" && writtenByYou(item.payload?.text, item.payload?.metadata);
 
 /** How the queue's watcher waits (a test's clock). */
 export interface QueueWatch {

@@ -17,6 +17,9 @@ release, Unreleased is renamed to the version; the release notes come from that 
 ### All Changes
 
 - A bot's goal you pause while its computer is restarting, or briefly out of reach, still stops and stays paused once it's back, rather than carrying on with reminders.
+- A bot still hears that its sessions finished, failed or asked something while its computer was restarting, when Kuvo Code or its coding agents were slow to come back. It used to miss what happened meanwhile.
+- An agent that starts a session is promised it'll hear when it finishes only when it will; otherwise it's told to write to it instead.
+- While you have a bot's goal paused, none of its sessions starts new work for it, even one woken by a message meanwhile. The bot still starts what you ask it for in its chat.
 - A widget gets shorter again when its content does (details hidden, a tab with less in it, a wider window), with no empty space left under it.
 - A widget the agent writes as a whole page is laid out as its page asks: it kept losing its doctype, so it was drawn the old way, as a page without one.
 - A widget made to fill its window (a wrapper as tall as the window, a sheet against its bottom) no longer grows a little more each time something on it changes.
