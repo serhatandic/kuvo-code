@@ -29,6 +29,8 @@ public enum BrandMark {
         for length in stride(from: labels.count, through: 2, by: -1) {
             if let id = sites[labels.suffix(length).joined(separator: ".")] { return id }
         }
+        // A site of someone's own on a host's domain ("me.github.io") is theirs, not the host's.
+        if labels.count > 2, hosts.contains(labels.suffix(2).joined(separator: ".")) { return nil }
         let name = labels[labels.count - 2]
         return has(name) ? name : nil
     }
@@ -39,6 +41,13 @@ public enum BrandMark {
         "twitter.com": "x", "claude.ai": "claude", "chatgpt.com": "openai", "bsky.app": "bluesky",
         "ai.studio": "google", "aistudio.google.com": "google", "copilot.microsoft.com": "copilot",
         "web.telegram.org": "telegram", "t.me": "telegram", "wa.me": "whatsapp", "zoom.us": "zoom",
+        "x.ai": "xai", "z.ai": "zai",
+    ]
+
+    /// Domains where people's own sites live, under a name of their own.
+    static let hosts: Set<String> = [
+        "github.io", "vercel.app", "supabase.co", "netlify.app", "pages.dev", "workers.dev", "web.app",
+        "firebaseapp.com", "herokuapp.com", "fly.dev", "onrender.com", "gitlab.io", "hf.space",
     ]
 
     /// The bundled mark for `id`, if there is one.

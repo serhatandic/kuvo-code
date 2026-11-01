@@ -32,6 +32,15 @@ import Testing
         #expect(BrandMark.id(forSite: "localhost:3000") == nil)
         #expect(BrandMark.id(forSite: "my-bank.example") == nil)
         #expect(BrandMark.id(forSite: "") == nil)
+        // A maker's console under its own short domain, not another service's mark.
+        #expect(BrandMark.id(forSite: "console.x.ai") == "xai")
+        #expect(BrandMark.id(forSite: "z.ai") == "zai")
+        // Someone's own site on a host's domain is theirs, not the host's.
+        for site in ["me.github.io", "shop.vercel.app", "abc123.supabase.co", "blog.netlify.app", "app.pages.dev"] {
+            #expect(BrandMark.id(forSite: site) == nil, "\(site) shows its host's mark")
+        }
+        #expect(BrandMark.id(forSite: "vercel.com") == "vercel")
+        #expect(BrandMark.id(forSite: "supabase.com") == "supabase")
         for id in BrandMark.sites.values { #expect(BrandMark.has(id), "\(id) has no mark") }
     }
 
