@@ -16,6 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- Providers, coding agents, integrations and MCP servers show their own marks, which come with the app: Cursor no longer shows a stock sparkle, a provider without a mark shows a plain server instead of its first letter, and Settings › Integrations and MCP Servers show Slack, Gmail, GitHub and the rest by their marks (or a plain symbol of what they are) instead of stand-in icons.
 - Diffs read as code: a long line wraps under its own indent instead of back at the margin, and removed lines leave the number column blank, so it counts the file as it is now.
 - Steps, thoughts and group chats show `code` in the code face instead of its backticks.
 - Settings › Permissions says what each choice does (Allow, Ask First, Don't Allow) instead of "Default" on every row; a row you changed says so, and its menu sets it back.

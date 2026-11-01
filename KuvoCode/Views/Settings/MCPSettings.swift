@@ -1,4 +1,5 @@
 import AppKit
+import ClientDesign
 import OpenCodeKit
 import SwiftUI
 
@@ -49,11 +50,16 @@ struct MCPSettings: View {
 
     private func popularRow(_ server: MCPCatalog.Server) -> some View {
         SettingsRowLayout {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(server.title)
-                Text(server.summary)
-                    .font(.callout)
+            HStack(alignment: .center, spacing: 12) {
+                BrandMarkView(server.id, size: 17)
                     .foregroundStyle(.secondary)
+                    .frame(width: 22)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(server.title)
+                    Text(server.summary)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
             }
             .settingsText()
             Group {

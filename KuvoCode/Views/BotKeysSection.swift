@@ -55,7 +55,7 @@ struct BotKeysSection: View {
 
     private func row(_ service: Integrations.Service) -> some View {
         WellRow(height: 52) {
-            Image(systemName: service.symbol)
+            BrandMarkView(service.id, size: 16, fallback: service.symbol)
         } content: {
             HStack(spacing: 10) {
                 VStack(alignment: .leading, spacing: 2) {

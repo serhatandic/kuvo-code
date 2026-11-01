@@ -60,8 +60,7 @@ struct SiteSignInPage: View {
 
     private var header: some View {
         HStack(spacing: 14) {
-            Image(systemName: service.symbol)
-                .font(.system(size: 19))
+            BrandMarkView(service.id, size: 22, fallback: service.symbol)
                 .foregroundStyle(.secondary)
                 .frame(width: 42, height: 42)
                 .background(Surface.well(scheme), in: .rect(cornerRadius: 11))
