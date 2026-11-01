@@ -886,14 +886,19 @@ final class RowStackView: NSView, NSUserInterfaceValidations {
         guard let selected = orderedSelection else { return "" }
         var parts: [String] = []
         for index in selected.start.row...selected.end.row where index < ids.count {
-            // The rows it ends in, taken in part: made again if they were let go, for the part.
+            // The rows it ends in, taken in part: made again if they were let go, for the part. Those
+            // between, whole as they're copied, whether they're made or not (a command you ran with
+            // its command, though only what it printed is text to select in); by their texts if
+            // they're copied as nothing.
             let isEnd = index == selected.start.row || index == selected.end.row
+            let whole = takesWhole(index, in: selected) ? rowText(index).trimmingCharacters(in: .whitespacesAndNewlines) : ""
+            if !isEnd, !whole.isEmpty {
+                parts.append(whole)
+                continue
+            }
             let texts = (isEnd ? madeHost(index) : hosts[ids[index]]).map { units(in: $0.view) } ?? []
             if texts.isEmpty {
-                if takesWhole(index, in: selected) {
-                    let words = rowText(index).trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !words.isEmpty { parts.append(words) }
-                }
+                if !whole.isEmpty { parts.append(whole) }
                 continue
             }
             var row: [String] = []

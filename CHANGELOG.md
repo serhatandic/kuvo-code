@@ -313,6 +313,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - Right-clicking the words of a message you sent offers its own menu again (Copy, Undo From Here…, New Session From Here), and so do a command's output (Copy Command, Copy Output) and other rows; on words you selected, you get the text's menu (Copy, Look Up).
 - A coding agent looking through a folder outside the project that your Permissions rules allow (searching it, listing it) no longer asks, as the engine's agents don't; and **Always** on a folder it asks about allows that folder, not the one it's in. A project reached through a link (or in /tmp on a Mac) no longer has Claude Code asking about each of its own files as if they were outside it.
 - A /goal (or /loop, /btw, /handoff, /review) that can't be done comes back in front of what you typed while it was being sent without its keyword, so your new words don't become part of the goal.
+- Copying a selection that runs across a command you ran with ! copies its command too, not only what it printed, and what's copied no longer depends on which rows are on screen.
 
 ## 0.7.2
 
