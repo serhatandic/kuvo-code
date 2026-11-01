@@ -353,7 +353,12 @@ struct GoalLanes: View {
             fold("\(lanes.count) later", shows: $showsLater, ink: AnyShapeStyle(.secondary), what: "steps for later")
         case .lane(let lane):
             HStack(spacing: 5) {
-                if let site = lane.step.site { SiteServiceMark(site: site) }
+                // The mark's slot kept where another lane has one, so the names line up.
+                if let site = lane.step.site {
+                    SiteServiceMark(site: site)
+                } else if hasMarks {
+                    ServiceMark(icon: nil, name: "").hidden()
+                }
                 Text(lane.step.text)
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -399,7 +404,8 @@ struct GoalLanes: View {
                 .foregroundStyle(.tertiary)
                 .lineLimit(1)
         case .lane(let lane):
-            let said = status(lane.step)
+            // Once the goal is met, "Done" is the header's to say: a lane keeps only its note.
+            let said = plan.state == .done && lane.step.state == .done ? (text: lane.step.note ?? "", style: AnyShapeStyle(.secondary)) : status(lane.step)
             Text(said.text)
                 .foregroundStyle(said.style)
                 .lineLimit(1)
@@ -407,6 +413,9 @@ struct GoalLanes: View {
                 .help(said.text)
         }
     }
+
+    /// Whether any lane has a service's mark before its name.
+    private var hasMarks: Bool { plan.steps.contains { $0.site != nil } }
 
     /// What a fold holds, in a few words: its phases, or its steps.
     private func outline(_ lanes: [GoalTimeline.Lane]) -> String {
@@ -538,26 +547,31 @@ struct GoalLanes: View {
         .frame(width: width, height: Self.headerHeight, alignment: .topLeading)
     }
 
-    /// The days' labels, each over its day: every day's name across a week ("Tue"), Mondays across
-    /// longer ("Mon 26"), and Today.
+    /// The days' labels, each over its day: every day's name across a week ("Tue"), every day's
+    /// date where the days have room ("Tue 3"), else Mondays ("Mon 26"); and Today, with no label
+    /// running into it.
     private func dayHeader(_ days: [Date], x: AxisX, width: CGFloat, window: DateInterval?, shown: CGRect) -> some View {
         let calendar = Calendar.current
-        let everyDay = (window?.duration ?? 0) <= 7 * 86400
+        let week = (window?.duration ?? 0) <= 7 * 86400
+        let roomy = days.first.map { x($0.addingTimeInterval(86400)) - x($0) } ?? 0 >= 52
+        let everyDay = week || roomy
+        let todayX = days.first { calendar.isDate($0, inSameDayAs: now) }.map { (x($0) + x($0.addingTimeInterval(86400))) / 2 }
         return ZStack(alignment: .topLeading) {
             ForEach(days, id: \.self) { day in
                 let center = (x(day) + x(day.addingTimeInterval(86400))) / 2
-                // Clear of the edges of what shows, where it would be cut.
+                // Clear of the edges of what shows, where it would be cut, and of Today.
                 let clear = shown.width == 0 || (center > shown.minX + 22 && center < shown.maxX - 22)
-                if !clear {
+                let isToday = calendar.isDate(day, inSameDayAs: now)
+                if !clear || (!isToday && todayX.map { abs($0 - center) < 46 } == true) {
                     EmptyView()
-                } else if calendar.isDate(day, inSameDayAs: now) {
+                } else if isToday {
                     Text("Today")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(accent)
                         .fixedSize()
                         .position(x: center, y: Self.headerHeight / 2)
                 } else if everyDay || calendar.component(.weekday, from: day) == 2 {
-                    Text(day.formatted(everyDay ? .dateTime.weekday(.abbreviated) : .dateTime.weekday(.abbreviated).day()))
+                    Text(day.formatted(week ? .dateTime.weekday(.abbreviated) : .dateTime.weekday(.abbreviated).day()))
                         .font(.system(size: 11).monospacedDigit())
                         .foregroundStyle(.tertiary)
                         .fixedSize()

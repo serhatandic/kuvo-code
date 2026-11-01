@@ -236,7 +236,8 @@ struct ReviewerList: View {
 
     private func row(_ choice: ReviewerChoice) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: "sparkle")
+            // A reviewer reads: the Review bar's own mark.
+            Image(systemName: "magnifyingglass")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .frame(width: 18)

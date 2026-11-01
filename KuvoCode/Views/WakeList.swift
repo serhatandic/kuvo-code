@@ -227,6 +227,16 @@ struct WakeList: View {
     /// When, how often, and what the bot does then.
     private var form: some View {
         VStack(alignment: .leading, spacing: 10) {
+            // Closed with its ✕, so Cancel and Save stay the editor's own.
+            HStack {
+                Text("New Wake-Up")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Don’t Add", systemImage: "xmark") { draft = nil }
+                    .buttonStyle(IconButtonStyle())
+                    .help("Don’t add it")
+            }
             // A field: its well stays, in a popover too.
             WellGroup(isFocused: noteFocused) {
                 WellRow {
@@ -251,8 +261,6 @@ struct WakeList: View {
                         .foregroundStyle(.red)
                 }
                 Spacer()
-                Button("Cancel") { draft = nil }
-                    .buttonStyle(.glass)
                 Button("Add Wake-Up", action: add)
                     .buttonStyle(.glassProminent)
                     .disabled(isAdding || (draft?.note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true))

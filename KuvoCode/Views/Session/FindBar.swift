@@ -412,20 +412,24 @@ private struct FindModifier<Version: Hashable>: ViewModifier {
     let searchEarlier: (() -> Void)?
     let folders: () -> [String]
     let rows: () -> [ConversationFind.Row]
+    /// The bar's height, as drawn (it grows with larger text).
+    @State private var barHeight: CGFloat = 73
 
     func body(content: Content) -> some View {
         content
             .overlay(alignment: .topTrailing) {
                 if find.isOn {
                     FindBar(find: find, isSearchingEarlier: isSearchingEarlier, searchEarlier: searchEarlier)
+                        .onGeometryChange(for: CGFloat.self, of: \.size.height) { barHeight = $0 }
                         .padding(.top, 10)
                         .padding(.trailing, 12)
                         .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .topTrailing)))
                 }
             }
             .animation(.ui, value: find.isOn)
-            // Room for the bar over the conversation's top, so it doesn't cover the first message.
-            .environment(\.conversationTopRoom, find.isOn ? 56 : 0)
+            // Room for the whole bar over the conversation's top, as Safari's find bar makes, so it
+            // doesn't cover the first message. (The conversation's own top inset is 16.)
+            .environment(\.conversationTopRoom, find.isOn ? 10 + barHeight + 8 - 16 : 0)
             .onAppear { find.scroller = scroller }
             .onChange(of: find.query) { look(showsFirst: true) }
             .onChange(of: find.isOn) { look(showsFirst: true) }

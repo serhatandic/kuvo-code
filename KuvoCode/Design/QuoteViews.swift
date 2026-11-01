@@ -4,6 +4,8 @@ import SwiftUI
 /// Over the composer: what you're replying to, shortened, with a way to drop it.
 struct QuoteCard: View {
     let text: String
+    /// "Replying to" over it: where nothing else says what it is.
+    var says = true
     let remove: () -> Void
 
     var body: some View {
@@ -12,9 +14,11 @@ struct QuoteCard: View {
                 .fill(.tint)
                 .frame(width: 3)
             VStack(alignment: .leading, spacing: 2) {
-                Text("Replying to")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.secondary)
+                if says {
+                    Text("Replying to")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                }
                 Text(text)
                     .font(.callout)
                     .foregroundStyle(.secondary)

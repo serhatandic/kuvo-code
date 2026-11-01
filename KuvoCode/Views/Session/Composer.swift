@@ -218,6 +218,8 @@ struct Composer: View {
                     .padding(.bottom, 1)
                 }
                 .scrollIndicators(.hidden)
+                // A chip past the edge fades there, rather than showing as a cut sliver.
+                .fadingScrollEdges(24, axis: .horizontal)
             }
 
             // Each quote with your answer to it, in the order they go.
@@ -332,6 +334,7 @@ struct Composer: View {
                             }
                             .buttonStyle(.plain)
                             .clickablePointer()
+                            .accessibilityLabel("Attach Files")
                             .help("Attach Files… You can also drop files here, or paste them.")
                             // Set on the engine: not while it's out of reach.
                             if showsMode {

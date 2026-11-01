@@ -4,7 +4,8 @@ import SwiftUI
 
 /// The quotes you're answering, each with your answer under it: as tall as they are up to a
 /// point, then they scroll, made as they come into view (there can be hundreds), with the
-/// one you're answering in view.
+/// one you're answering in view. A quote's own field shows while it has words or the keyboard,
+/// or once you click the quote; the rest are only the quotes, over the composer's own field.
 struct QuoteList: View {
     @Binding var quotes: [Drafts.Quote]
     /// The quote whose answer is to take the keyboard.
@@ -21,6 +22,10 @@ struct QuoteList: View {
     /// How tall they are together, measured as they lay out.
     @State private var height: CGFloat = 0
     @State private var position = ScrollPosition(idType: UUID.self)
+    /// The quote whose field shows though it's empty: the one you clicked, or that took the keyboard.
+    @State private var open: UUID?
+    /// Clicking a quote gives its field the keyboard.
+    @State private var clicked: (id: UUID, request: MessageField.FocusRequest)?
 
     private static let tallest: CGFloat = 260
 
@@ -38,7 +43,7 @@ struct QuoteList: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            if quotes.count > 2 {
+            if quotes.count > 1 {
                 HStack {
                     Text("\(quotes.count) quotes")
                         .font(.subheadline)
@@ -53,15 +58,31 @@ struct QuoteList: View {
                 LazyVStack(alignment: .leading, spacing: 6) {
                     ForEach(quotes) { quote in
                         VStack(alignment: .leading, spacing: 6) {
-                            QuoteCard(text: quote.text) {
+                            // "Replying to" once there's one; with more, the count above says it.
+                            QuoteCard(text: quote.text, says: quotes.count == 1) {
                                 let id = quote.id
                                 withAnimation(.ui) { quotes.removeAll { $0.id == id } }
                             }
-                            MessageField(text: response(to: quote.id), placeholder: "Your answer to this…", font: font, maxLines: 10,
-                                         focus: focus?.id == quote.id ? focus?.request : nil, blur: blur, images: images,
-                                         onKey: onKey, onFocus: { onFocus(quote.id, $0) }, onPaste: onPaste, identifier: "quote-answer", label: "Your Answer")
-                                .padding(.leading, 12)
-                                .padding(.bottom, 4)
+                            .contentShape(.rect)
+                            .onTapGesture { answer(quote.id) }
+                            .clickablePointer()
+                            .accessibilityAction(named: "Answer This") { answer(quote.id) }
+                            if !quote.response.isEmpty || open == quote.id {
+                                MessageField(text: response(to: quote.id), placeholder: "Your answer to this…", font: font, maxLines: 10,
+                                             focus: focus?.id == quote.id ? focus?.request : (clicked?.id == quote.id ? clicked?.request : nil),
+                                             blur: blur, images: images,
+                                             onKey: onKey, onFocus: { focused in
+                                                 onFocus(quote.id, focused)
+                                                 if focused {
+                                                     open = quote.id
+                                                 } else if open == quote.id, quotes.first(where: { $0.id == quote.id })?.response.isEmpty != false {
+                                                     withAnimation(.ui) { open = nil }
+                                                 }
+                                             }, onPaste: onPaste, identifier: "quote-answer", label: "Your Answer")
+                                    .padding(.leading, 12)
+                                    .padding(.bottom, 4)
+                                    .transition(.opacity)
+                            }
                         }
                         .id(quote.id)
                         .transition(.opacity.combined(with: .offset(y: 4)))
@@ -85,11 +106,17 @@ struct QuoteList: View {
             .fixedSize(horizontal: false, vertical: height == 0)
             .onChange(of: focus?.id, initial: true) { _, id in
                 guard let id else { return }
+                open = id
                 Task {
                     await Task.yield()
                     position.scrollTo(id: id)
                 }
             }
         }
+    }
+
+    private func answer(_ id: UUID) {
+        withAnimation(.ui) { open = id }
+        clicked = (id: id, request: MessageField.FocusRequest())
     }
 }
