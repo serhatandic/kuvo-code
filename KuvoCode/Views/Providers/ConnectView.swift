@@ -237,7 +237,7 @@ struct ConnectView: View {
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-                        .modifier(LinkPointer(isOn: keyPage.url != nil))
+                        .modifier(LinkPointer(isOn: keyPage.url != nil, isSelectable: false))
                         .accessibilityRepresentation {
                             if let url = keyPage.url { Link(keyPage.linkTitle, destination: url) }
                         }
