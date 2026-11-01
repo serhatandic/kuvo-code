@@ -161,6 +161,16 @@ enum InlineCode {
         return fence + pad + code + pad + fence
     }
 
+    /// A command as a step's one line names it: as a span (`span`), its first line and "…" when
+    /// it has more (a span can't run past a line), without the backslash that carries it on.
+    static func command(_ command: String) -> String {
+        let lines = command.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        guard var first = lines.first else { return span(command) }
+        guard lines.count > 1 else { return span(first) }
+        if first.hasSuffix("\\") { first = String(first.dropLast()).trimmingCharacters(in: .whitespaces) }
+        return span(first + " …")
+    }
+
     static func pieces(_ text: Substring) -> [(text: Substring, isCode: Bool)] {
         var pieces: [(Substring, Bool)] = []
         var plain = text.startIndex

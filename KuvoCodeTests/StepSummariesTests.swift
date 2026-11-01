@@ -68,6 +68,12 @@ import Testing
         #expect(asked.text == "Asking to run \(ticks) outside the sandbox")
         let edged = "`which swift`"
         #expect(shown(try words("shell", ["command": edged])).code == [edged])
+        // A command of several lines: its first, and that there's more, never its backticks
+        // (the whole of it shows once the step is open).
+        let lines = shown(try words("sandbox_ask", ["command": "npm install \\\n  --save left-pad\nnpm test"], running: true))
+        #expect(lines.code == ["npm install …"])
+        #expect(lines.text == "Asking to run npm install … outside the sandbox")
+        #expect(shown(try words("shell", ["command": "\n\nswift build\n"])).code == ["swift build"])
     }
 
     @Test func searches() throws {

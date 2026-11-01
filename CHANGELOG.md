@@ -33,6 +33,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - VoiceOver reads the context gauge as the context window, with how full it is and its token counts.
 - A vault item's sharing says **Every agent** until it's shared with a session or bot by name.
 - A goal's card counts what's yours to do only where there's a button for it.
+- A command of several lines shows as its first line and … in a step, never its backticks.
 - The sidebar's accounts stay while the coding agents restart, instead of briefly showing fewer.
 - The command palette shows the letters you typed in bold in each result, and Run shows a play mark.
 - Settings › Accounts has one Add Account menu for the subscriptions, and Edit Bot › Keys one Add Its Own Key menu, instead of a button on every row, and a coding agent's accounts sit right under its name.
