@@ -33,8 +33,8 @@ nonisolated enum MessageMentions {
 
     /// What stands for an agent's "&": a bot's face, or a conversation's mark, before its name.
     enum Marks {
-        /// In SwiftUI's Text (your bubbles, the queue): the "&" is marked (`AgentMark`), and
-        /// `text(_:size:)` draws it as a picture.
+        /// In your words (your bubbles, the queue): the "&" is marked (`AgentMark`), and
+        /// `attributed(_:font:)` or `text(_:size:)` draws it as a picture.
         case inline
         /// In Textual's (a bot's message): an attachment in its place.
         case attachments
@@ -116,13 +116,13 @@ nonisolated enum MessageMentions {
         return text.characters.isEmpty ? token : token + AttributedString(" ") + text
     }
 
-    /// `attributed` as SwiftUI's Text, each marked "&" drawn as its face or mark, `size` points,
-    /// and its links marked for `LinkPointer`.
+    /// `attributed` as SwiftUI's Text (the queue's), each marked "&" drawn as its face or mark,
+    /// `size` points.
     @MainActor static func text(_ attributed: AttributedString, size: CGFloat) -> Text {
-        guard attributed.runs.contains(where: { $0[AgentMark.self] != nil || $0[PictureMark.self] != nil || $0[KeywordTokenMark.self] != nil || $0.link != nil }) else { return Text(attributed) }
+        guard attributed.runs.contains(where: { $0[AgentMark.self] != nil || $0[PictureMark.self] != nil || $0[KeywordTokenMark.self] != nil }) else { return Text(attributed) }
         var pieces: [Text] = []
         for run in attributed.runs {
-            var piece: Text
+            let piece: Text
             if let symbol = run[KeywordTokenMark.self] {
                 // A keyword's mark in place of its "/", in its colour.
                 piece = Text("\(Image(systemName: symbol))\u{2009}").font(.system(size: size * 0.82))
@@ -140,11 +140,50 @@ nonisolated enum MessageMentions {
             } else {
                 piece = Text(AttributedString(attributed[run.range]))
             }
-            // A link's words and its face both open it.
-            if let link = run.link { piece = piece.customAttribute(LinkRun(url: link)) }
             pieces.append(piece)
         }
         return pieces.reduce(Text("")) { Text("\($0)\($1)") }
+    }
+
+    /// `attributed` for AppKit's text (`SelectableText`), in `font`, drawn as the composer draws
+    /// it, in `color` where it sets none: each marked "&" its face or mark, a keyword's "/" its mark, a picture's name its mark
+    /// for the "[" and without the "]", each over the character it stands for, which stays (so
+    /// it's copied and found as written). Bold, color, links and Find's marks as they're set.
+    @MainActor static func attributed(_ attributed: AttributedString, font: NSFont, color: NSColor = .labelColor) -> (text: NSAttributedString, faces: TextFaces) {
+        let text = NSMutableAttributedString()
+        var faces = TextFaces()
+        faces.size = (font.pointSize * 1.1).rounded()
+        let bold = NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask)
+        let italic = NSFontManager.shared.convert(font, toHaveTrait: .italicFontMask)
+        for run in attributed.runs {
+            let intent = run.inlinePresentationIntent ?? []
+            let runFont = intent.contains(.stronglyEmphasized) ? bold : intent.contains(.emphasized) ? italic : font
+            var attributes: [NSAttributedString.Key: Any] = [
+                .font: runFont,
+                .foregroundColor: run.swiftUI.foregroundColor.map { NSColor($0) } ?? color,
+            ]
+            if let background = run.swiftUI.backgroundColor { attributes[.backgroundColor] = NSColor(background) }
+            if run.swiftUI.strikethroughStyle != nil { attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
+            if let link = run.link { attributes[.link] = link }
+            let start = text.length
+            text.append(NSAttributedString(string: String(attributed[run.range].characters), attributes: attributes))
+            let span = NSRange(location: start, length: text.length - start)
+            let ink = attributes[.foregroundColor] as? NSColor ?? color
+            if let symbol = run[KeywordTokenMark.self] {
+                faces.add(TextFaces.symbol(symbol, size: faces.size, ink: ink), at: span, in: text, font: runFont)
+            } else if let mark = run[PictureMark.self] {
+                if mark == .open {
+                    faces.add(TextFaces.symbol("photo", size: faces.size), at: span, in: text, font: runFont)
+                } else {
+                    let width = (text.string as NSString).substring(with: span).size(withAttributes: [.font: runFont]).width
+                    text.addAttributes([.foregroundColor: NSColor.clear, .kern: -width], range: span)
+                }
+            } else if let agent = run[AgentMark.self] {
+                let face = agent.look.flatMap { face($0, size: faces.size) } ?? TextFaces.symbol("bubble.left", size: faces.size)
+                faces.add(face, at: span, in: text, font: runFont)
+            }
+        }
+        return (text, faces)
     }
 
     /// A bot's face as a picture of `size` points, drawn once for each look and size.
@@ -190,154 +229,21 @@ nonisolated enum MessageMentions {
     }
 }
 
-/// The links in a text made by `MessageMentions.text(_:size:)`, as links anywhere else: the
-/// pointing hand over them, and a click opening them (with `openURL`). SwiftUI's Text shows no
-/// hand over its links, and a selectable one keeps its text cursor over a pointer style, so a
-/// view of AppKit's lies over each. Only for a text with links in it.
-struct LinkPointer: ViewModifier {
-    var isOn: Bool
-    @State private var spots = LinkSpots()
-    @Environment(\.openURL) private var openURL
-
-    func body(content: Content) -> some View {
-        if isOn {
-            content
-                .textRenderer(LinkPlaces(spots: spots))
-                .overlay { LinkArea(spots: spots, open: { openURL($0) }) }
-        } else {
-            content
-        }
-    }
-}
-
-/// A run of a link, for `LinkPointer`.
-nonisolated struct LinkRun: TextAttribute {
-    var url: URL
-}
-
-/// Where a text's links are drawn, kept by `LinkPlaces` as it draws, for `LinkArea`.
-nonisolated final class LinkSpots: Sendable {
-    struct Spot: Equatable, Sendable {
-        var rect: CGRect
-        var url: URL
-    }
-
-    private let spots = OSAllocatedUnfairLock<[Spot]>(initialState: [])
-
-    var all: [Spot] { spots.withLock { $0 } }
-
-    func set(_ new: [Spot]) {
-        spots.withLock { $0 = new }
-    }
-}
-
-/// Draws a text as it is, keeping where its links are.
-nonisolated private struct LinkPlaces: TextRenderer {
-    let spots: LinkSpots
-
-    func draw(layout: Text.Layout, in context: inout GraphicsContext) {
-        var found: [LinkSpots.Spot] = []
-        for line in layout {
-            for run in line {
-                if let link = run[LinkRun.self] { found.append(.init(rect: run.typographicBounds.rect, url: link.url)) }
-                context.draw(run)
-            }
-        }
-        spots.set(found)
-    }
-}
-
-/// A text's links in AppKit: the pointing hand over each, and a click on one opening it. Away from
-/// them, the pointer and clicks go on to the text below.
-private struct LinkArea: NSViewRepresentable {
-    let spots: LinkSpots
-    let open: (URL) -> Void
-
-    func makeNSView(context: Context) -> LinkAreaView {
-        let view = LinkAreaView()
-        view.spots = spots
-        view.open = open
-        return view
-    }
-
-    func updateNSView(_ view: LinkAreaView, context: Context) {
-        view.open = open
-    }
-}
-
-private final class LinkAreaView: NSView {
-    var spots: LinkSpots?
-    var open: ((URL) -> Void)?
-    private var pressed: LinkSpots.Spot?
-
-    override var isFlipped: Bool { true }
-
-    private func spot(at point: NSPoint) -> LinkSpots.Spot? {
-        spots?.all.first { $0.rect.contains(point) }
-    }
-
-    override func hitTest(_ point: NSPoint) -> NSView? {
-        guard !isHidden, let superview else { return nil }
-        return spot(at: convert(point, from: superview)) == nil ? nil : self
-    }
-
-    // The hand over a link, where nothing is drawn over it (`PointerClaim`).
-    private let claim = PointerClaim()
-    private var tracking: NSTrackingArea?
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let tracking { removeTrackingArea(tracking) }
-        let area = PointerClaim.trackingArea(owner: self, in: self)
-        addTrackingArea(area)
-        tracking = area
-    }
-
-    private func pointerMoved(_ event: NSEvent) {
-        let onLink = PointerClaim.isTopmost(self, at: event.locationInWindow)
-        // Off a link, still on the words: the selectable text's I-beam, as it shows elsewhere.
-        let onText = bounds.contains(convert(event.locationInWindow, from: nil))
-        claim.show(onLink ? .pointingHand : nil, otherwise: onText ? .iBeam : .arrow)
-    }
-
-    override func cursorUpdate(with event: NSEvent) { pointerMoved(event) }
-    override func mouseEntered(with event: NSEvent) { pointerMoved(event) }
-    override func mouseMoved(with event: NSEvent) { pointerMoved(event) }
-    override func mouseExited(with event: NSEvent) { claim.show(nil) }
-
-    // Removed under the pointer: no `mouseExited` comes.
-    override func viewWillMove(toWindow newWindow: NSWindow?) {
-        super.viewWillMove(toWindow: newWindow)
-        if newWindow == nil { claim.show(nil) }
-    }
-
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-
-    override func mouseDown(with event: NSEvent) {
-        pressed = spot(at: convert(event.locationInWindow, from: nil))
-    }
-
-    override func mouseUp(with event: NSEvent) {
-        defer { pressed = nil }
-        guard let pressed, spot(at: convert(event.locationInWindow, from: nil))?.url == pressed.url else { return }
-        open?(pressed.url)
-    }
-}
-
 /// A picture's name in your words: its "[" is drawn as a picture's mark, its "]" left out.
 nonisolated enum PictureMark: AttributedStringKey {
     enum Value: Hashable, Sendable { case open, close }
     static let name = "kuvo.pictureMark"
 }
 
-/// A keyword's "/" in a bubble, which `MessageMentions.text(_:size:)` draws as its mark (the
-/// keyword's symbol).
+/// A keyword's "/" in a bubble, which `MessageMentions.attributed(_:font:color:)` (and
+/// `text(_:size:)` in the queue) draws as its mark (the keyword's symbol).
 nonisolated enum KeywordTokenMark: AttributedStringKey {
     typealias Value = String
     static let name = "kuvo.keywordTokenMark"
 }
 
-/// An agent's "&" in a bubble, which `MessageMentions.text(_:size:)` draws as its face or mark.
+/// An agent's "&" in a bubble, which `MessageMentions.attributed(_:font:color:)` (and
+/// `text(_:size:)` in the queue) draws as its face or mark.
 nonisolated enum AgentMark: AttributedStringKey {
     typealias Value = MessageMentions.Agent
     static let name = "kuvo.agentMark"

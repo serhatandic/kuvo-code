@@ -262,7 +262,7 @@ final class MessageTextView: PointerAwareTextView {
     private var wantsKeyboard = false
     /// What's drawn in place of a mark's first character: a bot's face, a conversation's or a
     /// picture's mark.
-    private var faces: [(at: Int, image: NSImage)] = []
+    private var faces = TextFaces()
 
     var lineHeight: CGFloat {
         layoutManager?.defaultLineHeight(for: font ?? .systemFont(ofSize: NSFont.systemFontSize)) ?? 17
@@ -418,26 +418,23 @@ final class MessageTextView: PointerAwareTextView {
             || (length < Self.longest && (text.contains("http") || text.contains("www."))))
         guard mayMark || token != nil || styled || font != styledFont else { return }
         styledFont = font
-        var faces: [(at: Int, image: NSImage)] = []
+        var faces = TextFaces()
         var marks: [NSRange] = []
         storage.beginEditing()
         storage.setAttributes([.font: font, .foregroundColor: NSColor.textColor], range: all)
         let bold = NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask)
         let size = (font.pointSize * 1.1).rounded()
+        faces.size = size
         /// The first character of a mark makes room for its face, unseen.
         func face(_ image: NSImage?, at span: NSRange) {
-            guard let image else { return }
-            let first = (text as NSString).substring(with: NSRange(location: span.location, length: 1))
-            let width = (first as NSString).size(withAttributes: [.font: bold]).width
-            storage.addAttributes([.foregroundColor: NSColor.clear, .kern: size + 1 - width], range: NSRange(location: span.location, length: 1))
-            faces.append((span.location, image))
+            faces.add(image, at: span, in: storage, font: bold)
         }
         if let token, token.length > 1, token.length <= length {
             let span = NSRange(location: 0, length: token.length)
             let ink = NSColor(Color.accentColor)
             storage.addAttributes([.font: bold, .foregroundColor: ink], range: span)
             // Not one piece for Backspace: what's typed stays text you can correct a letter at a time.
-            face(Self.symbol(token.symbol, size: size, ink: ink), at: span)
+            face(TextFaces.symbol(token.symbol, size: size, ink: ink), at: span)
         }
         if mayMark, length > 0 {
             for (range, _) in length < Self.longest ? WebLinks.find(in: text) : [] {
@@ -451,14 +448,14 @@ final class MessageTextView: PointerAwareTextView {
                     let look = agents.first { $0.reference.session == reference.session }?.look
                     let ink = look.map { NSColor(GroupMentions.ink($0)) } ?? NSColor(Color.accentColor)
                     storage.addAttributes([.font: bold, .foregroundColor: ink], range: span)
-                    face(look.flatMap { MessageMentions.face($0, size: size) } ?? Self.symbol("bubble.left", size: size), at: span)
+                    face(look.flatMap { MessageMentions.face($0, size: size) } ?? TextFaces.symbol("bubble.left", size: size), at: span)
                     marks.append(span)
                 }
             }
             for (range, number) in ImageReferences.find(in: text) where number <= images {
                 let span = NSRange(range, in: text)
                 storage.addAttributes([.font: bold, .foregroundColor: NSColor(Color.accentColor)], range: span)
-                face(Self.symbol("photo", size: size), at: span)
+                face(TextFaces.symbol("photo", size: size), at: span)
                 // Its "]" is left out, as in the message once sent.
                 let close = NSRange(location: NSMaxRange(span) - 1, length: 1)
                 let width = ("]" as NSString).size(withAttributes: [.font: bold]).width
@@ -469,7 +466,7 @@ final class MessageTextView: PointerAwareTextView {
         storage.endEditing()
         self.faces = faces
         self.marks = marks
-        styled = !faces.isEmpty || mayMark || token != nil
+        styled = !faces.all.isEmpty || mayMark || token != nil
         // What you type next is plain, also right after a mark.
         typingAttributes = [.font: font, .foregroundColor: NSColor.textColor]
         needsDisplay = true
@@ -494,22 +491,7 @@ final class MessageTextView: PointerAwareTextView {
             let attributes: [NSAttributedString.Key: Any] = [.font: font ?? .systemFont(ofSize: NSFont.systemFontSize), .foregroundColor: NSColor.placeholderTextColor]
             if line.width > 40 { (example as NSString).draw(with: line, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine], attributes: attributes) }
         }
-        guard let layoutManager, let textContainer, !faces.isEmpty else { return }
-        let size = ((font?.pointSize ?? 13) * 1.1).rounded()
-        for (at, image) in faces where at < (string as NSString).length {
-            let glyphs = layoutManager.glyphRange(forCharacterRange: NSRange(location: at, length: 1), actualCharacterRange: nil)
-            let rect = layoutManager.boundingRect(forGlyphRange: glyphs, in: textContainer).offsetBy(dx: origin.x, dy: origin.y)
-            // As wide as its room, as tall as its shape makes it (a symbol isn't square).
-            let height = image.size.width > 0 ? size * image.size.height / image.size.width : size
-            image.draw(in: NSRect(x: rect.minX, y: rect.midY - height / 2, width: size, height: height), from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
-        }
-    }
-
-    /// A symbol as a mark, drawn in secondary ink as in a sent message (a keyword's in its own).
-    private static func symbol(_ name: String, size: CGFloat, ink: NSColor = .secondaryLabelColor) -> NSImage? {
-        let configuration = NSImage.SymbolConfiguration(pointSize: size * 0.82, weight: .regular)
-            .applying(.init(hierarchicalColor: ink))
-        return NSImage(systemSymbolName: name, accessibilityDescription: nil)?.withSymbolConfiguration(configuration)
+        faces.draw(in: self)
     }
 }
 
