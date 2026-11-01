@@ -17,6 +17,9 @@ final class Catalog {
     /// The machine whose engine this is (nil: this Mac's): sign-ins to its agents finish in this
     /// Mac's browser.
     @ObservationIgnored var machine: String?
+    /// Its computer's box, which keeps what its engine's accounts don't say (the plans whose
+    /// sign-in ended).
+    @ObservationIgnored var box: BoxClient?
 
     /// The engine's integrations, and the outside agents' after them.
     private(set) var integrations: [Integration] = []
@@ -340,6 +343,7 @@ final class Catalog {
         // What's new shows at once; each folder's own commands follow (reading one can start its
         // tools there, so not before).
         merge()
+        await readEndedSignIns()
         // Loaded once the models have been read: a new bot's model is checked against them.
         if modelsRead { isLoaded = true }
         for directory in commandFolders { await loadCommands(in: directory) }
@@ -444,8 +448,10 @@ final class Catalog {
     }
 
     /// Sign-ins that ran out and couldn't be renewed (the service refused them), by provider: the
-    /// one a run on its model was refused.
+    /// one a run on its model was refused. As the box keeps them, and as this Mac sees them end.
     private var endedSignIns: [String: String] = [:]
+    /// The providers whose mark changed here while the box's were being read: theirs stay as noted.
+    @ObservationIgnored private var notedDuringRead: Set<String>?
 
     /// A run on `provider`'s model was refused its account: its sign-in in use, if that's one (a
     /// key refused says why itself).
@@ -453,11 +459,30 @@ final class Catalog {
         guard !OutsideAgents.runsInBridge(provider), let active = activeCredential(of: provider),
               active.method == "oauth", let id = active.credentialID, endedSignIns[provider] != id else { return }
         endedSignIns[provider] = id
+        notedDuringRead?.insert(provider)
     }
 
     /// A step on `provider`'s model ended well: its sign-in works (renewed after all).
     func signInWorks(_ provider: String) {
         if endedSignIns[provider] != nil { endedSignIns[provider] = nil }
+        notedDuringRead?.insert(provider)
+    }
+
+    /// The plans whose sign-in ended, as the box keeps them (`kuvo/accounts/ended`): one noted
+    /// while no app watched (a bot's run overnight, with the Mac closed) is marked too, and one that
+    /// works again elsewhere isn't any more.
+    private func readEndedSignIns() async {
+        guard let box else { return }
+        struct Ended: Decodable { var providers: [String] }
+        notedDuringRead = []
+        defer { notedDuringRead = nil }
+        guard let ended = try? await box.value(Ended.self, "GET", "kuvo/accounts/ended") else { return }
+        var now: [String: String] = [:]
+        for provider in ended.providers {
+            if let id = activeCredential(of: provider)?.credentialID { now[provider] = id }
+        }
+        for provider in notedDuringRead ?? [] { now[provider] = endedSignIns[provider] }
+        if now != endedSignIns { endedSignIns = now }
     }
 
     /// The plans whose sign-in in use ended.
