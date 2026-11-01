@@ -16,7 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
-- A goal you pause while its computer is restarting, or briefly out of reach, still stops and stays paused once it's back, rather than carrying on with reminders.
+- A bot's goal you pause while its computer is restarting, or briefly out of reach, still stops and stays paused once it's back, rather than carrying on with reminders.
 - A widget gets shorter again when its content does (details hidden, a tab with less in it, a wider window), with no empty space left under it.
 - A coding agent too slow to answer whether it's signed in (on a busy Mac or machine) no longer looks signed out: Claude Code, Codex, Grok and Cursor keep their accounts and models as they last said, so a bot's or a session's model isn't taken away mid-goal. Only the agent saying you're signed out is a sign-out.
 - Bots on Claude Code, Codex, Cursor, Grok or Antigravity can write their memory again: the sandbox had kept them out of it.
