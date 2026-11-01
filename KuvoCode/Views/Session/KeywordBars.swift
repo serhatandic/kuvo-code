@@ -441,17 +441,15 @@ struct ReviewBar: View {
         .onChange(of: review.id) { newest = [] }
     }
 
-    /// While it reads in parts, Stop (and Fix… for what it found so far); once done, Fix….
+    /// One action on the line: while it reads in parts, Stop (Fix… for what it found so far is
+    /// with those findings under it); once done, Fix….
     private var accessory: AnyView? {
         let fixes = !review.findings.isEmpty && review.state != .failed
         guard review.state == .reviewing, review.progress != nil else { return fixes ? AnyView(fixMenu(nil, label: "Fix All…")) : nil }
-        return AnyView(HStack(spacing: 2) {
-            if fixes { fixMenu(nil, label: "Fix All…") }
-            Button("Stop", action: stop)
-                .buttonStyle(TextButtonStyle())
-                .font(.system(size: 13))
-                .help("Stop reading: what it found so far stays")
-        })
+        return AnyView(Button("Stop", action: stop)
+            .buttonStyle(TextButtonStyle())
+            .font(.system(size: 13))
+            .help("Stop reading: what it found so far stays"))
     }
 
     @ViewBuilder private var mark: some View {
@@ -459,7 +457,7 @@ struct ReviewBar: View {
         case .reviewing:
             Spinner(size: 14)
         case .failed:
-            Image(systemName: "exclamationmark.circle")
+            Image(systemName: "exclamationmark.circle.fill")
                 .font(.system(size: 13))
                 .foregroundStyle(.orange)
         case .done:
@@ -520,7 +518,7 @@ struct ReviewBar: View {
         }
         .menuStyle(.button)
         .menuIndicator(.hidden)
-        .modifier(FixLook(isChip: findings == nil, outset: outset))
+        .modifier(FixLook(outset: outset))
         .fixedSize()
         .help(findings == nil ? "Fix what it found: in a new session, here, or elsewhere" : "Fix this one: in a new session, here, or elsewhere")
     }
@@ -531,9 +529,12 @@ struct ReviewBar: View {
             VStack(alignment: .leading, spacing: 6) {
                 if let parts = shownParts { ReviewPartList(parts: parts, open: openPart) }
                 if !review.findings.isEmpty {
-                    Text("Found so far:")
-                        .font(.system(size: 12.5))
-                        .foregroundStyle(.secondary)
+                    HStack(spacing: 8) {
+                        Text("Found so far:")
+                            .font(.system(size: 12.5))
+                            .foregroundStyle(.secondary)
+                        fixMenu(nil, label: "Fix All…", outset: true)
+                    }
                     findingList
                 }
             }
@@ -684,21 +685,14 @@ private struct ReviewPartRow: View {
     }
 }
 
-/// Fix…'s look: for them all, a chip on the bar's line; for one, a word on its row.
+/// Fix…'s look: a word, as each line's one action is (Pause, Stop, Open).
 private struct FixLook: ViewModifier {
-    let isChip: Bool
     let outset: Bool
 
     func body(content: Content) -> some View {
-        if isChip {
-            content
-                .buttonStyle(ChipButtonStyle())
-                .font(.system(size: 12, weight: .medium))
-        } else {
-            content
-                .buttonStyle(TextButtonStyle(outset: outset))
-                .font(.system(size: 13))
-        }
+        content
+            .buttonStyle(TextButtonStyle(outset: outset))
+            .font(.system(size: 13))
     }
 }
 
@@ -1023,8 +1017,8 @@ struct HandoffBar: View {
         Group {
             switch handoff.state {
             case .writing: Spinner(size: 14)
-            case .failed: Image(systemName: "exclamationmark.circle").foregroundStyle(.orange)
-            case .done: Image(systemName: Keyword.handoff.symbol).foregroundStyle(.tint)
+            case .failed: Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.orange)
+            case .done: Image(systemName: Keyword.handoff.symbol + ".fill").foregroundStyle(.tint)
             }
         }
         .font(.system(size: 13))

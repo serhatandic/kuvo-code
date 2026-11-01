@@ -80,31 +80,3 @@ struct BarStrip: View {
         }
     }
 }
-
-/// Over the card's top edge, at its end: tucks all its bars away into one line.
-struct HideBarsTab: View {
-    let hide: () -> Void
-    @Environment(\.colorScheme) private var scheme
-
-    var body: some View {
-        Button(action: hide) {
-            HStack(spacing: 4) {
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 9, weight: .bold))
-                Text("Hide")
-                    .font(.system(size: 11.5, weight: .medium))
-            }
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 9)
-            .frame(height: 22)
-            .background(Capsule().fill(Surface.cardFill(scheme, focused: false)))
-            .overlay(Capsule().strokeBorder(scheme == .dark ? Color.white.opacity(0.08) : Color.black.opacity(0.12), lineWidth: 1))
-            .shadow(color: .black.opacity(scheme == .dark ? 0.25 : 0.06), radius: 3, y: 1)
-            .contentShape(Capsule())
-        }
-        .buttonStyle(.plain)
-        .clickablePointer()
-        .help("Tuck the bars into one line")
-        .accessibilityLabel("Hide the bars")
-    }
-}

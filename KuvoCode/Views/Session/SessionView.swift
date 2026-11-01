@@ -250,14 +250,22 @@ private struct BottomStack: View {
         return found
     }
 
-    /// Whether a bar is folded: its own way with fewer than three, the card's with more.
+    /// Whether a bar is folded: its own way with fewer than three, the card's with more. Two or
+    /// more, and the last one open folded by its chevron: they tuck into one line (nothing
+    /// floats over the card to do it).
     private func hidden(_ bar: ComposerBar, _ own: Binding<Bool>) -> Binding<Bool> {
         Binding(get: { folds.isHidden(bar, among: bars, asking: isAsking, own: own.wrappedValue) },
                 set: { hidden in
                     var left = own.wrappedValue
                     folds.set(bar, hidden: hidden, among: bars, own: &left)
                     if left != own.wrappedValue { own.wrappedValue = left }
+                    if hidden, liveBars.count >= 2, allFolded { model.tuck.hide() }
                 })
+    }
+
+    /// Every bar showing is folded to its line.
+    private var allFolded: Bool {
+        liveBars.allSatisfy { folds.isHidden($0, among: bars, asking: isAsking, own: self.own($0).wrappedValue) }
     }
 
     /// What in a bar is worth opening it for: a review that found something, a side question
@@ -384,18 +392,6 @@ private struct BottomStack: View {
                     MachineOfflineBar(engine: engine)
                         .modifier(ComposerSurface())
                         .transition(.opacity)
-                }
-                // Two bars or more: one tab, just over the card's edge (clear of its bars'
-                // buttons), tucks them all into a line.
-                if liveBars.count >= 2, !tucked {
-                    HStack {
-                        Spacer()
-                        HideBarsTab { model.tuck.hide() }
-                    }
-                    // Its end over the bars' ✕ itself (narrower than its button).
-                    .padding(.trailing, BarEnd.trailing + 8)
-                    .padding(.bottom, -8)
-                    .transition(.opacity)
                 }
                 // The bars, what's waiting and the composer: one card.
                 VStack(spacing: 0) {
