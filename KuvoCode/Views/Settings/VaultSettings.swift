@@ -330,13 +330,19 @@ struct VaultItemRow: View {
     }
 }
 
-/// How an item's used, at a glance: on its own, by asking, or by no one.
+/// How an item's used, at a glance: on its own or by asking. Nothing where no one may use it,
+/// as most items are: the exception is marked, not the rule.
 struct VaultWhoPill: View {
     let grants: [VaultGrant]
 
     var body: some View {
-        let (words, color): (String, Color) = grants.contains { $0.how == .own } ? ("On its own", .green)
-            : grants.isEmpty ? ("No one", .secondary) : ("Asks", .blue)
+        if !grants.isEmpty {
+            let (words, color): (String, Color) = grants.contains { $0.how == .own } ? ("On its own", .green) : ("Asks", .blue)
+            pill(words, color)
+        }
+    }
+
+    private func pill(_ words: String, _ color: Color) -> some View {
         Text(words)
             .font(.caption.weight(.medium))
             .foregroundStyle(color)
@@ -374,7 +380,7 @@ struct VaultActivityRow: View {
                 .font(.caption)
                 .frame(width: 14)
             VStack(alignment: .leading, spacing: 1) {
-                Text(entry.sentence).lineLimit(2)
+                Text(entry.sentence(here: "Mac")).lineLimit(2)
                 Text("\(entry.date, format: .relative(presentation: .named))\(entry.why.map { " · \($0)" } ?? "")")
                     .font(.caption)
                     .foregroundStyle(.secondary)

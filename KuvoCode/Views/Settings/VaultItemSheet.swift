@@ -43,7 +43,8 @@ struct VaultItemSheet: View {
             ScrollingSettingsForm {
                 Section { fields }
                 Section {
-                    ForEach(bots) { bot in
+                    // The bots that may use it; the others are a menu away, not a "No" each.
+                    ForEach(bots.filter { bot in grants.contains { $0.who == .init(bot: bot.id) } }) { bot in
                         whoRow(name: bot.name, who: .init(bot: bot.id)) { BotAvatar(look: bot.look, size: 22, animates: false) }
                     }
                     ForEach(grants.compactMap(\.who.project), id: \.self) { project in
@@ -53,6 +54,16 @@ struct VaultItemSheet: View {
                     }
                     whoRow(name: bots.isEmpty ? "Every agent" : "Other sessions and bots", who: .init(everyone: true)) {
                         Image(systemName: "person.2").frame(width: 22).foregroundStyle(.secondary)
+                    }
+                    let others = bots.filter { bot in !grants.contains { $0.who == .init(bot: bot.id) } }
+                    if !others.isEmpty {
+                        Menu("Let a Bot Use It") {
+                            ForEach(others) { bot in
+                                Button(bot.name + "…") { grant(.init(bot: bot.id), .ask) }
+                            }
+                        }
+                        .menuStyle(.borderlessButton)
+                        .fixedSize()
                     }
                 } header: {
                     Text("Who Can Use It")
@@ -145,15 +156,18 @@ struct VaultItemSheet: View {
         }
     }
 
+    /// Who may use it, and how (nil: no one), once you've confirmed it's you.
+    private func grant(_ who: VaultGrant.Who, _ how: VaultGrant.How?) {
+        Task {
+            guard await Passwords.authenticate(reason: "change who can use “\(current.name)”") else { return }
+            do { try await Vaults.shared.grant(current, to: who, how: how, on: box) } catch { trouble = error.localizedDescription }
+        }
+    }
+
     private func whoRow<Icon: View>(name: String, who: VaultGrant.Who, @ViewBuilder icon: () -> Icon) -> some View {
         let how = grants.first { $0.who == who }?.how
         return LabeledContent {
-            Picker(name, selection: Binding(get: { how }, set: { new in
-                Task {
-                    guard await Passwords.authenticate(reason: "change who can use “\(current.name)”") else { return }
-                    do { try await Vaults.shared.grant(current, to: who, how: new, on: box) } catch { trouble = error.localizedDescription }
-                }
-            })) {
+            Picker(name, selection: Binding(get: { how }, set: { grant(who, $0) })) {
                 Text("On Its Own").tag(VaultGrant.How?.some(.own))
                 Text("Asks Each Time").tag(VaultGrant.How?.some(.ask))
                 Text("No").tag(VaultGrant.How?.none)

@@ -61,6 +61,17 @@ import Testing
         #expect(!VaultActivity(id: "a_4", at: 0, what: "refused", itemName: "GitHub", botName: "Scout", how: "no grant").isWarning)
     }
 
+    /// What you did from the app you're reading it in leads with what happened; who and where are
+    /// said only when it was somewhere else.
+    @Test func yourOwnActivityHereSaysOnlyWhatHappened() {
+        let added = VaultActivity(id: "a_5", at: 0, what: "added", itemName: "Stripe test key", client: "Mac")
+        #expect(added.sentence(here: "Mac") == "Added “Stripe test key”")
+        #expect(added.sentence(here: "Alex’s iPhone") == "You, on your Mac, added “Stripe test key”")
+        #expect(VaultActivity(id: "a_6", at: 0, what: "allowed", itemName: "GitHub", botName: "Ship", client: "Mac", how: "always").sentence(here: "Mac") == "Let Ship use “GitHub” from now on")
+        #expect(VaultActivity(id: "a_7", at: 0, what: "shown", itemName: "GitHub", client: "Mac").sentence(here: "Mac") == "Looked at “GitHub”")
+        #expect(VaultActivity(id: "a_8", at: 0, what: "used", itemName: "GitHub", botName: "Ship", client: "Mac").sentence(here: "Mac") == "Ship used “GitHub”")
+    }
+
     @Test func anAsksTitleSaysWhoWantsWhat() {
         #expect(VaultAsk(id: "q_1", kind: .use, botName: "Ship", itemName: "App Store Connect key").title == "Ship wants to use App Store Connect key")
         #expect(VaultAsk(id: "q_2", kind: .item, sessionName: "Fix checkout", need: "a GitHub token").title == "Fix checkout needs a GitHub token")
