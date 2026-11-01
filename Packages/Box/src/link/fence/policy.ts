@@ -45,14 +45,15 @@ export interface FencePolicy {
   /** Kuvo Code's own servers on 127.0.0.1, refused where the system can (macOS); everywhere their
    * passwords are in files a command can't read. */
   ports: number[];
-  /** Other apps' sockets that run what they're asked, outside the sandbox (folders), refused where
-   * the system can (macOS): the ChatGPT app's, Grok's shared leader's (`~/.grok/leader.sock`), and
-   * your SSH agents', which sign with the keys commands can't read (ssh-agent's, 1Password's, Secretive's,
-   * Bitwarden's, yubikey-agent's, the box's own `SSH_AUTH_SOCK`). */
+  /** Other apps' sockets that run what they're asked, outside the sandbox (folders or sockets),
+   * refused on macOS and hidden on Linux: the ChatGPT app's, Grok's shared leader's
+   * (`~/.grok/leader.sock`), and your SSH and GPG agents', which sign with the keys commands can't
+   * read (ssh-agent's, 1Password's, Secretive's, Bitwarden's, yubikey-agent's, the box's own
+   * `SSH_AUTH_SOCK`). */
   sockets?: string[];
   /** On macOS, more of them by name: regular expressions over whole paths (the system's SSH agent's,
-   * where launchd keeps it, one a shell started, gpg-agent's), neither moved nor removed where
-   * commands write, so never reached by another name. */
+   * where launchd keeps it, one a shell started, gpg-agent's, your tmux's), neither moved nor
+   * removed where commands write, so never reached by another name. */
   socketPatterns?: string[];
   /** Their folders where commands write, which aren't moved either (only the folders: a file or a
    * socket of the command's own by such a name, like ssh's shared connection, is its own). */
@@ -219,8 +220,11 @@ export function fencePolicy(ports: number[] = []): FencePolicy {
         "^/private/tmp/ssh-[^/]+/agent\\.", "^/private/var/folders/[^/]+/[^/]+/T/ssh-[^/]+/agent\\.",
         // gpg-agent's own (not its key store's or keyserver helper's, which hold no keys).
         `^${escapeRegex(home)}/\\.gnupg/S\\.(gpg-agent|scdaemon)`,
+        // Your tmux's server, which types into your terminals (a command's own is in its temporary
+        // folder: the launcher's TMUX_TMPDIR).
+        `^/private/tmp/tmux-${os.userInfo().uid}/`,
       ],
-      socketFolders: ["^/private/tmp/com\\.apple\\.launchd\\.[^/]+$", "^/private/tmp/ssh-[^/]+$", "^/private/var/folders/[^/]+/[^/]+/T/ssh-[^/]+$"],
+      socketFolders: [`^/private/tmp/tmux-${os.userInfo().uid}$`, "^/private/tmp/com\\.apple\\.launchd\\.[^/]+$", "^/private/tmp/ssh-[^/]+$", "^/private/var/folders/[^/]+/[^/]+/T/ssh-[^/]+$"],
       secrets: [...inHomes([...SECRETS, ...MAC_SECRETS]), ...keychainDaemons(home).map(realish), ...homes.flatMap(each => [...sshKeys(each), ...ghHosts(each)]).map(realish)],
     };
   }
@@ -228,6 +232,10 @@ export function fencePolicy(ports: number[] = []): FencePolicy {
     home, kuvo, kuvoReadable, readOnly: runsLater, ports, commandCaches,
     kuvoPatterns: [],
     writable: ["/tmp", "/var/tmp", "/dev", "/dev/shm", ...inHome([...CACHES, ...LINUX_CACHES])],
+    // (Hidden in each command's namespace, beside your session's own: fence/landlock.ts, HIDE.)
+    sockets: [...inHome([".grok/leader.sock", ".ssh/agent", ".1password/agent.sock", ".bitwarden-ssh-agent.sock",
+      ".gnupg/S.gpg-agent", ".gnupg/S.gpg-agent.ssh", ".gnupg/S.scdaemon"]),
+      ...(process.env.SSH_AUTH_SOCK && path.isAbsolute(process.env.SSH_AUTH_SOCK) ? [process.env.SSH_AUTH_SOCK] : [])],
     secrets: [...inHomes([...SECRETS, ...LINUX_SECRETS]), ...homes.flatMap(each => [...sshKeys(each), ...ghHosts(each)])],
   };
 }

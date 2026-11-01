@@ -6,12 +6,76 @@
 // inside the sandbox (from Linux's Landlock 6). What it can't refuse inside a folder it writes (git's
 // hooks, the engine's and the coding agents' settings there), it doesn't: Landlock grants a folder
 // whole.
+//
+// Nor can Landlock refuse a socket, and your session's services listen on them: systemd's in
+// `/run/user/<uid>` runs whatever it's asked outside the sandbox (`systemd-run --user`), beside your
+// bus, keyring and agents; tmux's server types into your sessions; an X server takes keystrokes. So
+// each command first gets a namespace of its own (`unshare`, util-linux's, which the machine has: a
+// process with threads, like Bun, can't make one itself) where those folders are empty, and then its
+// Landlock rules (`HIDE`).
 
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { FencePolicy } from "./policy";
 
 /** What the Linux script reads: the policy's parts it needs. */
 export function landlockPolicy(policy: FencePolicy): string {
   return JSON.stringify({ hidden: [...policy.kuvo, ...policy.secrets], readable: policy.kuvoReadable, writable: [...policy.writable, ...policy.commandCaches], readOnly: policy.readOnly }) + "\n";
+}
+
+/**
+ * `sh -c HIDE <unshare> <uid> <gid> <name> <own> <sockets> <program> [args…]`, run by `unshare -Urm`
+ * (as its own root, in a mount namespace of its own), with the system's programs only, never ones a
+ * command could have put on your PATH: your session's folder (`/run/user/<uid>`), your tmux's,
+ * screen's and shell-started SSH agents' in `/tmp` and `/run/screen`, the X server's, Neovim's,
+ * Emacs', VS Code's and Cursor's in `/tmp`, and the other apps' sockets the box lists in <sockets> (a
+ * folder or a socket a line), each empty or refusing; then the program, as you again, with no rights
+ * over the system left, and your PATH. Your groups stay, as they were. A folder that can't be hidden
+ * runs nothing.
+ *
+ * Each in `/tmp` is hidden from inside it (`.`), or checked once hidden, never through a link: one
+ * another conversation's command puts in its place isn't followed, nor hides the box's list. Being
+ * you again is a namespace inside this one that maps you, made by hand (util-linux's `--map-user` is
+ * newer than Ubuntu 22.04's and RHEL 9's): this one, still its root, writes its map once it's there,
+ * told through <own>, an empty folder of the box's that it first makes its own (and gives up, within
+ * seconds, if it never is).
+ */
+export const HIDE = String.raw`u=$1 g=$2 n=$3 own=$4 sockets=$5; shift 5
+p=$PATH; PATH=/usr/sbin:/usr/bin:/sbin:/bin
+fail() { echo "This command can't run in the sandbox here: $1" >&2; exit 126; }
+over() { ( cd -P "$1" 2>/dev/null || exit 1; [ -z "$3" ] || [ "$(pwd -P)" = "$1" ] || exit 1; [ "$3" != mine ] || [ -O . ] || exit 1; mount -c -t tmpfs -o "size=64k,mode=$2" kuvo-hidden . 2>/dev/null || exit 2 ) || { [ $? = 1 ] || fail "$1 can't be kept from it."; return 1; }; }
+off() { [ -S "$1" ] && { [ -z "$2" ] || [ ! -L "$1" ]; } || return 1; mount -c --bind /dev/null "$1" 2>/dev/null && [ -c "$1" ] && { [ -z "$2" ] || [ ! -L "$1" ]; } || fail "$1 can't be kept from it."; }
+[ -r "$sockets" ] || fail "it isn't set up."
+over "$own" 0700 || fail "it isn't set up."
+while IFS= read -r s; do case $s in /*) over "$s" 0700 || off "$s" ;; esac; done <"$sockets"
+over "/run/user/$u" 0700
+for d in "/tmp/tmux-$u" /tmp/ssh-* "/run/screen/S-$n" "/tmp/nvim.$n" "/tmp/emacs$u"; do over "$d" 0700 mine; done
+over /tmp/.X11-unix 1777 here
+for s in /tmp/vscode-ipc-*.sock /tmp/vscode-ssh-auth-*.sock /tmp/vscode-git-*.sock; do [ -O "$s" ] && off "$s" here; done
+[ "$XDG_RUNTIME_DIR" != "/run/user/$u" ] || unset XDG_RUNTIME_DIR
+case $DBUS_SESSION_BUS_ADDRESS in *"=/run/user/$u/"*) unset DBUS_SESSION_BUS_ADDRESS ;; esac
+mkfifo -m 600 "$own/in" "$own/on" || fail "it isn't set up."
+timeout 10 sh -c 'read _ <"$1" && echo "$2 0 1" >/proc/$0/uid_map && echo "$3 0 1" >/proc/$0/gid_map; echo >"$4"' $$ "$own/in" "$u" "$g" "$own/on" </dev/null >/dev/null 2>&1 &
+exec "$0" --user -- /bin/sh -c 'echo >"$0"; read _ <"$1"; [ "$(id -u)" = "$2" ] || { echo "This command can'"'"'t run in the sandbox here: it can'"'"'t run as you." >&2; exit 126; }; PATH=$3; shift 3; exec "$@"' "$own/in" "$own/on" "$u" "$p" "$@"`;
+
+/** Where util-linux's `unshare` is. */
+export const UNSHARE = ["/usr/bin/unshare", "/bin/unshare"];
+
+/** The `unshare` that gives commands here a namespace of their own, tried as the launcher runs it
+ * (each step, its mounts too); null where the machine doesn't let it (no `unshare`, user namespaces
+ * off, or AppArmor restricting them, as Ubuntu 24.04 and later do). */
+export function ownNamespace(): string | null {
+  const unshare = UNSHARE.find(each => fs.existsSync(each));
+  if (!unshare) return null;
+  const own = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-namespace-"));
+  try {
+    const tried = spawnSync(unshare, ["-Urm", "/bin/sh", "-c", HIDE, unshare, String(process.getuid?.() ?? -1), String(process.getgid?.() ?? -1), "", own, "/dev/null", "/bin/sh", "-c", "[ \"$(id -u)\" = \"$0\" ]", String(process.getuid?.() ?? -1)], { cwd: "/", stdio: "ignore", timeout: 10_000 });
+    return tried.status === 0 ? unshare : null;
+  } finally {
+    fs.rmSync(own, { recursive: true, force: true });
+  }
 }
 
 /**

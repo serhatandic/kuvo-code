@@ -10,10 +10,10 @@ import { any, bool, type Infer, list, NOTHING, number, object, type RouteShape, 
  * (`needs`), which part of the check failed (`check`), and how many checks failed in a row. */
 export const SANDBOX = object({
   on: bool, "why?": string, able: bool, agents: bool, "outside?": bool, "restart?": bool,
-  "reason?": words("kernel", "macos", "engineMissing", "checking", "checkFailed", "plugin", "engineDown", "waiting"),
+  "reason?": words("kernel", "namespaces", "macos", "engineMissing", "checking", "checkFailed", "plugin", "engineDown", "waiting"),
   "action?": words("help", "softwareUpdate", "retry", "fix", "restartEngine"),
   "route?": string, "needs?": string,
-  "check?": words("folder", "tempFiles", "readsOwn", "writesOwn", "didntRun", "setup"),
+  "check?": words("folder", "tempFiles", "readsOwn", "writesOwn", "services", "didntRun", "setup"),
   "failures?": number,
 });
 

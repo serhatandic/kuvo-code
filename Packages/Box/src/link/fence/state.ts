@@ -18,7 +18,7 @@ import { processRuns, sandboxGeneration } from "../../shared/platform";
 import { accountHome, BOTS, BRIDGE_FILE, CHATS, ENGINE_CONFIG, ENGINE_FILE, K, RUN, SANDBOX_NOTE, SESSION_WAKES, SOCKET_KEY_FILE, SSH_AGENTS, SSH_FOR } from "../home";
 import { tellLauncher } from "./allowed";
 import { agentShellScript, agentsNote, launcherScript, pluginScript, type FencePlaces } from "./files";
-import { LANDLOCK_RUNNER, landlockPolicy } from "./landlock";
+import { LANDLOCK_RUNNER, landlockPolicy, ownNamespace, UNSHARE } from "./landlock";
 import { appTemporary, fencePolicy, realish, sandboxCaches } from "./policy";
 import { seatbeltProfile } from "./seatbelt";
 
@@ -48,9 +48,9 @@ export interface FenceState {
   failures?: number;
 }
 
-export type FenceReason = "kernel" | "macos" | "engineMissing" | "checking" | "checkFailed" | "plugin" | "engineDown" | "waiting";
+export type FenceReason = "kernel" | "namespaces" | "macos" | "engineMissing" | "checking" | "checkFailed" | "plugin" | "engineDown" | "waiting";
 export type FenceAction = "help" | "softwareUpdate" | "retry" | "fix" | "restartEngine";
-export type FenceCheck = "folder" | "tempFiles" | "readsOwn" | "writesOwn" | "didntRun" | "setup";
+export type FenceCheck = "folder" | "tempFiles" | "readsOwn" | "writesOwn" | "services" | "didntRun" | "setup";
 
 const CHECK = "POST kuvo/sandbox/check";
 const RESTART = "POST kuvo/engine/restart";
@@ -193,6 +193,7 @@ function cannot(why: Checked): Partial<FenceState> {
   const said = why.why ? { why: why.why } : {};
   switch (why.reason) {
     case "kernel": return { ...said, reason: "kernel", action: "help", needs: why.needs };
+    case "namespaces": return { ...said, reason: "namespaces", action: "help", needs: why.needs };
     case "macos": return { ...said, reason: "macos", action: "softwareUpdate" };
     case "engineMissing": return { ...said, reason: "engineMissing", action: "retry", route: CHECK };
     case "checkFailed": return { ...said, reason: "checkFailed", check: why.check, action: "retry", route: CHECK, failures };
@@ -241,7 +242,9 @@ function writeProfiles(): void {
   const files: [string, string][] = platform === "darwin"
     ? [["project.sb", seatbeltProfile(policy, { inside: false })], ["inside.sb", seatbeltProfile(policy, { inside: true })],
         ["project-agent.sb", seatbeltProfile(policy, { inside: false, agent: true })], ["inside-agent.sb", seatbeltProfile(policy, { inside: true, agent: true })], ["policy.json", landlockPolicy(policy)]]
-    : [["policy.json", landlockPolicy(policy)], ["runtime", runtime() ?? ""]];
+    : [["policy.json", landlockPolicy(policy)], ["runtime", runtime() ?? ""], ["namespace", namespace ?? "-"], ["sockets", (policy.sockets ?? []).map(each => each + "\n").join("")]];
+  // (Each command's namespace's own folder, empty: fence/landlock.ts, HIDE.)
+  if (platform === "linux") fs.mkdirSync(path.join(FOLDER, "ns"), { recursive: true, mode: 0o700 });
   const text = files.map(([name, body]) => name + body).join("");
   if (text === lastProfiles) return;
   for (const [name, body] of files) writePrivate(path.join(FOLDER, name), body);
@@ -254,12 +257,28 @@ function writeExecutable(file: string, text: string): void {
   fs.chmodSync(file, 0o700);
 }
 
+/**
+ * Where a Linux machine doesn't let commands have a namespace of their own (fence/landlock.ts,
+ * `ownNamespace`): "off", the sandbox isn't on there, so commands go to the ask as where it can't
+ * run; "without", it runs without one, and commands can still reach your session's services.
+ */
+const WITHOUT_NAMESPACE: "off" | "without" = "off";
+/** The `unshare` each command's namespace comes from, as `able` last found it (Linux). */
+let namespace: string | null = null;
+
 /** Whether this computer can sandbox commands at all, and why not. */
 function able(): Checked {
   if (platform === "darwin") return fs.existsSync("/usr/bin/sandbox-exec") ? { able: true, passed: false } : { able: false, passed: false, why: "macOS's sandbox isn't on this Mac.", reason: "macos" };
   if (!runtime()) return { able: false, passed: false, why: "The engine isn't installed here yet.", reason: "engineMissing" };
   if (!fs.existsSync("/sys/kernel/security/landlock") && !/landlock/.test(textOf("/sys/kernel/security/lsm") ?? "landlock")) {
     return { able: false, passed: false, why: `Linux ${os.release().split("-")[0]} can't sandbox commands: it needs Landlock (Linux 5.13 or later, with it on).`, reason: "kernel", needs: "Linux 5.13" };
+  }
+  namespace = ownNamespace();
+  if (!namespace && WITHOUT_NAMESPACE === "off") {
+    const services = "which the sandbox needs to keep commands from the services your login runs: systemd, your keyring, your agents";
+    return UNSHARE.some(each => fs.existsSync(each))
+      ? { able: false, passed: false, why: `This machine doesn't let commands have a namespace of their own (it restricts unprivileged user namespaces, as Ubuntu 24.04 and later do), ${services}.`, reason: "namespaces", needs: "user namespaces" }
+      : { able: false, passed: false, why: `This machine has no unshare (util-linux's), ${services}.`, reason: "namespaces", needs: "util-linux" };
   }
   return { able: true, passed: false };
 }
@@ -280,6 +299,8 @@ function probe(): { passed: boolean; why?: string; check?: FenceCheck } {
     `echo ok > written && [ "$(cat written)" = ok ] || exit 11`,
     `echo ok > "$TMPDIR/probe" || exit 12`,
     `cat "$1" >/dev/null 2>&1 && exit 13`,
+    // (In its namespace, your session's folder is empty.)
+    ...(namespace ? [`[ -z "$(ls -A "/run/user/$(id -u)" 2>/dev/null)" ] || exit 14`] : []),
     `(echo escaped > "$2") 2>/dev/null`,
     `exit 0`,
   ].join("\n");
@@ -290,6 +311,7 @@ function probe(): { passed: boolean; why?: string; check?: FenceCheck } {
   const reasons: Record<number, [FenceCheck, string]> = {
     10: ["folder", "a command couldn't go to its own folder"], 11: ["folder", "a command couldn't write in its own folder"],
     12: ["tempFiles", "a command couldn't write its temporary files"], 13: ["readsOwn", "a command could read Kuvo Code's own files"],
+    14: ["services", "a command could reach your session's services"],
   };
   try {
     if (fs.existsSync(escaped)) return { passed: false, check: "writesOwn", why: "Its check failed: a command could write in Kuvo Code's own folder." };

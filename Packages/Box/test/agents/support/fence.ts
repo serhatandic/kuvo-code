@@ -3,7 +3,7 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { agentShellScript, launcherScript, type FencePlaces } from "../../../src/link/fence/files"
-import { LANDLOCK_RUNNER, landlockPolicy } from "../../../src/link/fence/landlock"
+import { LANDLOCK_RUNNER, landlockPolicy, ownNamespace } from "../../../src/link/fence/landlock"
 import type { FencePolicy } from "../../../src/link/fence/policy"
 import { seatbeltProfile } from "../../../src/link/fence/seatbelt"
 
@@ -32,6 +32,10 @@ export function realFence(kuvo: string, sockets: string[] = [], more: Partial<Fe
   else {
     write(places.runner, LANDLOCK_RUNNER, 0o700)
     write(join(folder, "runtime"), process.execPath)
+    // (Each command in a namespace of its own where the machine lets it, as the box sets it up.)
+    write(join(folder, "namespace"), ownNamespace() ?? "-")
+    write(join(folder, "sockets"), sockets.map(each => each + "\n").join(""))
+    mkdirSync(join(folder, "ns"), { recursive: true, mode: 0o700 })
   }
   write(join(folder, "on"), "set up")
   return folder
