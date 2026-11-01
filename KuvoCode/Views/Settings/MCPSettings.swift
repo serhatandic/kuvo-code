@@ -51,9 +51,10 @@ struct MCPSettings: View {
         }
     }
 
-    /// The popular servers Integrations has instead, by name ("Linear, Notion and Jira and Confluence").
+    /// The popular servers Integrations has instead, by their makers' names ("Linear, Notion and
+    /// Atlassian").
     private var inIntegrations: [String] {
-        integrationsHere ? MCPCatalog.servers.compactMap { Integrations.service($0.id)?.title } : []
+        integrationsHere ? MCPCatalog.servers.filter { Integrations.service($0.id) != nil }.map(\.title) : []
     }
 
     private func popularRow(_ server: MCPCatalog.Server) -> some View {
@@ -115,9 +116,9 @@ struct MCPSettings: View {
                         ForEach(servers) { server in popularRow(server) }
                         if access == .signIn, !inIntegrations.isEmpty {
                             LabeledContent {
-                                Button("In Integrations…") { app.settingsTabs.show(.integrations, on: box) }
+                                Button("Show Integrations") { app.settingsTabs.show(.integrations, on: box) }
                             } label: {
-                                Text(inIntegrations.formatted(.list(type: .and)))
+                                Text("\(inIntegrations.formatted(.list(type: .and))) connect in Integrations")
                                     .foregroundStyle(.secondary)
                             }
                         }
