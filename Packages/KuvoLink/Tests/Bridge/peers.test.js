@@ -149,8 +149,8 @@ async function engine(t) {
       // Archived, as a Mac (or a phone) archives one.
       if (request.url === "/api/session/ses_archived") return json({ data: { id: "ses_archived", metadata: { "kuvo.archived": true } } });
       if (request.url === "/api/session/ses_mine") return json({ data: { id: "ses_mine" } });
-      if (request.url === "/api/session/ses_target/prompt" && request.method === "POST") {
-        prompts.push(JSON.parse(body));
+      if (/^\/api\/session\/ses_(target|mine)\/prompt$/.test(request.url) && request.method === "POST") {
+        prompts.push({ ...JSON.parse(body), session: request.url.split("/")[3] });
         busy = 1;
         return json({});
       }
@@ -743,6 +743,54 @@ test("letters go oldest first; one whose conversation moved goes where it lives 
   }).filter(Boolean);
   assert.deepEqual(went.filter(each => each.to === "second").map(each => each.id), ["ltr_c_first", "ltr_b_second", "ltr_a_third"]);
   assert.deepEqual(went.filter(each => each.id === "ltr_moved").map(each => each.to), ["stranger"]);
+});
+
+test("a letter for a conversation that moved to this box since it was left is delivered here, by its sender's name, and its answer comes to the tool waiting; never mailed back to the box it left", async t => {
+  // Second says it moved ses_target here; this box doesn't list it yet.
+  fresh({ legacy: { [mac.pub]: { at: 1, peers: [mac.peer, second.peer] } } });
+  fs.writeFileSync(path.join(run, "peer-agents.json"), JSON.stringify({ [second.pub]: { at: 1, kind: "machine", list: [], moved: [{ session: "ses_target", key: here.pub, at: Date.now() }] } }));
+  const { prompts, target } = await engine(t);
+  fs.writeFileSync(path.join(run, "engine.json"), JSON.stringify(target));
+  t.after(() => fs.rmSync(path.join(run, "engine.json"), { force: true }));
+  const sending = path.join(run, "outbox", "sending");
+  fs.mkdirSync(sending, { recursive: true });
+  const now = Date.now();
+  fs.writeFileSync(path.join(sending, "ltr_left_before.json"), JSON.stringify({ from: "ses_here", to: "ses_target", text: "Is the build green?", peer: second.pub, wait: false, at: now - 1000 }));
+  const sent = [];
+  const host = { send: bytes => sent.push(bytes) };
+  // While it moves on again (to a third computer), it waits.
+  const move = path.join(run, "moves", "mov_on1.json");
+  fs.mkdirSync(path.dirname(move), { recursive: true });
+  fs.writeFileSync(move, JSON.stringify({ id: "mov_on1", kind: "chat", thing: "ses_target", name: "API", from: here.pub, to: stranger.pub, role: "from", stage: "sending", step: "send", sessions: ["ses_target"], peer: stranger.pub, tries: 0, started: now }));
+  await link.sendOutbox(host, link.readLink(), now - 60_000, 0, undefined, 10);
+  assert.deepEqual(prompts, []);
+  assert.ok(fs.existsSync(path.join(sending, "ltr_left_before.json")));
+  fs.rmSync(move);
+  await link.sendOutbox(host, link.readLink(), now, 0, undefined, 10);
+  assert.equal(sent.length, 0, "nothing mailed to second");
+  assert.equal(prompts.length, 1);
+  assert.match(prompts[0].text, /Is the build green\?/);
+  assert.ok(!fs.existsSync(path.join(sending, "ltr_left_before.json")));
+  // Once this box lists it as its own (second no longer says where it went), the same; this one
+  // waited for: its answer comes to the tool.
+  fs.writeFileSync(path.join(run, "agents.json"), JSON.stringify({ machine: "lokum", agents: [{ session: "ses_here", name: "Docs", kind: "session", machine: "lokum" }, { session: "ses_target", name: "API", kind: "session", machine: "lokum" }] }));
+  fs.writeFileSync(path.join(sending, "ltr_waited.json"), JSON.stringify({ from: "ses_here", to: "ses_target", text: "And the tests?", peer: second.pub, wait: true, at: now }));
+  // (Its tool, waiting.)
+  fs.mkdirSync(path.join(run, "replies"), { recursive: true });
+  fs.writeFileSync(path.join(run, "replies", "ltr_waited.alive"), "");
+  await link.sendOutbox(host, link.readLink(), now + 3000, 0, undefined, 10);
+  assert.equal(sent.length, 0, "nothing mailed to second");
+  assert.equal(prompts.length, 2);
+  assert.match(prompts[1].text, /Docs/);
+  assert.match(prompts[1].text, /And the tests\?/);
+  const answer = JSON.parse(fs.readFileSync(path.join(run, "replies", "ltr_waited.json"), "utf8"));
+  assert.equal(answer.text, "On it.");
+  // One whose tool stopped waiting: its answer comes to the conversation that asked, as a message.
+  fs.writeFileSync(path.join(sending, "ltr_given_up.json"), JSON.stringify({ from: "ses_mine", to: "ses_target", text: "And the docs?", peer: second.pub, wait: true, at: now }));
+  await link.sendOutbox(host, link.readLink(), now + 6000, 0, undefined, 10);
+  assert.deepEqual(prompts.map(each => each.session), ["ses_target", "ses_target", "ses_target", "ses_mine"]);
+  assert.match(prompts[3].text, /^\[Message from API · ses_target\][^\n]*\n\nOn it\./);
+  assert.equal(fs.existsSync(path.join(run, "replies", "ltr_given_up.json")), false);
 });
 
 test("a letter's words are cut where a character ends, never in the middle of one", async t => {

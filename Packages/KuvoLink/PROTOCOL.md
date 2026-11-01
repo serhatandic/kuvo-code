@@ -267,7 +267,9 @@ connection.
   - **Sender side**: a sender takes `delivered` only from the box it sent to, and an answer for a
     waiting tool only from that box; an answer from it stands for `delivered` should that be lost. Until `delivered` comes, it sends again each minute, for two
     days, oldest first, and a letter whose agent no box lists now waits. One for a conversation that
-    moved (`moved`) goes where it lives now, whichever box it was left for. Before a
+    moved (`moved`) goes where it lives now, whichever box it was left for; one that moved to the
+    sending box itself is delivered there, as a tool's there is (its answer to the tool waiting,
+    relay or not). Before a
     letter goes, its sender is told of to that box, if it wasn't: it waits until that's sent (or
     couldn't be), a minute at most. Its words are cut on a character's
     boundary.

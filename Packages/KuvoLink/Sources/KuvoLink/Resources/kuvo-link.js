@@ -6777,11 +6777,7 @@ function movedOf(link) {
   const now = Date.now();
   const words = movedAway(now);
   const peers = new Set(peersOf(link).map((peer) => peer.key));
-  let own = new Set;
-  try {
-    const listed = JSON.parse(fs28.readFileSync(path31.join(RUN, "agents.json"), "utf8"));
-    own = new Set((listed?.agents ?? []).filter((agent) => (agent?.machine ?? null) === (listed?.machine ?? null)).map((agent) => String(agent?.session)));
-  } catch {}
+  const own = new Set(ownListed().map((agent) => agent.session));
   try {
     const told = JSON.parse(fs28.readFileSync(path31.join(RUN, "peer-agents.json"), "utf8"));
     for (const [peer, each] of Object.entries(told ?? {})) {
@@ -6793,6 +6789,14 @@ function movedOf(link) {
   for (const { session, key } of words.sort((one, other) => one.at - other.at))
     moved.set(session, key);
   return moved;
+}
+function ownListed() {
+  try {
+    const listed = JSON.parse(fs28.readFileSync(path31.join(RUN, "agents.json"), "utf8"));
+    return (listed?.agents ?? []).filter((agent) => (agent?.machine ?? null) === (listed?.machine ?? null)).map((agent) => ({ session: String(agent?.session), name: typeof agent?.name === "string" ? agent.name : null }));
+  } catch {
+    return [];
+  }
 }
 function peersOf(link) {
   if (!link)
@@ -15075,13 +15079,13 @@ function startBridge() {
 
 // Packages/Box/src/link/letters/leave.ts
 import crypto27 from "node:crypto";
-import fs58 from "node:fs";
-import path61 from "node:path";
+import fs60 from "node:fs";
+import path62 from "node:path";
 
 // Packages/Box/src/link/letters/outbox.ts
 import crypto26 from "node:crypto";
-import fs57 from "node:fs";
-import path59 from "node:path";
+import fs59 from "node:fs";
+import path60 from "node:path";
 
 // Packages/Box/src/link/letters/conversation.ts
 var READ_LIMIT = 24000;
@@ -15252,10 +15256,289 @@ async function readConversation(target, session, data, name, signal) {
   return conversationMarkdown(name, messages, name);
 }
 
+// Packages/Box/src/link/letters/take.ts
+import fs58 from "node:fs";
+
+// Packages/Box/src/link/letters/limits.ts
+import fs57 from "node:fs";
+import path59 from "node:path";
+var LIMITS2 = {
+  messages: { most: 20, within: 600000 },
+  sessions: { most: 6, within: 600000 },
+  botSessions: { most: 40, within: 600000 }
+};
+var LIMITS_FILE = path59.join(RUN, "tool-limits.json");
+var LIMITS_LOCK = path59.join(RUN, ".tool-limits.lock");
+var STARTING_FOR = 120000;
+function changeCounts(now, change, file) {
+  return locked(LIMITS_LOCK, () => {
+    let counts = {};
+    try {
+      counts = JSON.parse(fs57.readFileSync(file, "utf8")) ?? {};
+    } catch {}
+    for (const kind of Object.keys(LIMITS2)) {
+      const byKey = counts[kind] ?? {};
+      for (const [key, times] of Object.entries(byKey)) {
+        const lately = Array.isArray(times) ? times.filter((at) => typeof at === "number" && now - at < LIMITS2[kind].within) : [];
+        if (lately.length)
+          byKey[key] = lately;
+        else
+          delete byKey[key];
+      }
+      counts[kind] = byKey;
+    }
+    const starting = {};
+    for (const [bot, starts] of Object.entries(isObject(counts.starting) ? counts.starting : {})) {
+      const lately = Object.entries(isObject(starts) ? starts : {}).filter(([, start]) => isObject(start) && typeof start.at === "number" && now - start.at < STARTING_FOR);
+      if (lately.length)
+        starting[bot] = Object.fromEntries(lately);
+    }
+    counts.starting = starting;
+    const value = change(counts);
+    try {
+      writePrivate(file, JSON.stringify(counts));
+    } catch {}
+    return value;
+  });
+}
+function allowed2(kind, key, now = Date.now(), file = LIMITS_FILE) {
+  return changeCounts(now, (counts) => {
+    const lately = counts[kind][key] ?? [];
+    if (lately.length >= LIMITS2[kind].most)
+      return null;
+    counts[kind][key] = [...lately, now];
+    return now;
+  }, file);
+}
+function takeBack2(kind, key, at, file = LIMITS_FILE) {
+  changeCounts(Date.now(), (counts) => {
+    const lately = counts[kind][key] ?? [];
+    const index = lately.indexOf(at);
+    if (index >= 0)
+      lately.splice(index, 1);
+    if (lately.length)
+      counts[kind][key] = lately;
+    else
+      delete counts[kind][key];
+  }, file);
+}
+function noteStarting(bot, now = Date.now(), file = LIMITS_FILE) {
+  const token = `${now}-${Math.random().toString(36).slice(2, 10)}`;
+  return changeCounts(now, (counts) => {
+    const starts = counts.starting[bot] ?? {};
+    counts.starting[bot] = { ...starts, [token]: { at: now } };
+    return { token, before: Object.keys(starts) };
+  }, file);
+}
+function startsBefore(bot, before, file = LIMITS_FILE) {
+  return changeCounts(Date.now(), (counts) => {
+    const starts = counts.starting[bot] ?? {};
+    return before.flatMap((token) => starts[token] ? [starts[token]] : []);
+  }, file);
+}
+function startedAs(bot, token, session, prompted = false, file = LIMITS_FILE) {
+  changeCounts(Date.now(), (counts) => {
+    const starts = counts.starting[bot] ?? {};
+    if (!starts[token])
+      return;
+    if (session)
+      starts[token] = { ...starts[token], session, ...prompted ? { prompted } : {} };
+    else
+      delete starts[token];
+    if (Object.keys(starts).length)
+      counts.starting[bot] = starts;
+    else
+      delete counts.starting[bot];
+  }, file);
+}
+
+// Packages/Box/src/link/letters/take.ts
+function answerAfter(messages, id) {
+  const replies = [];
+  let answered = false;
+  for (const message of messages) {
+    if (message.id <= id)
+      continue;
+    if (message.type === "assistant") {
+      const parts = message.content ?? [];
+      const text = parts.filter((part) => part.type === "text").map((part) => part.text).join(`
+`);
+      if (text)
+        replies.push(text);
+      answered = Boolean(text) && !parts.some((part) => part.type === "tool");
+    } else if (message.type === "user" && answered)
+      break;
+  }
+  return replies;
+}
+function lettersSeen(now) {
+  let seen = {};
+  try {
+    seen = JSON.parse(fs58.readFileSync(LETTERS_SEEN, "utf8"));
+  } catch {}
+  for (const [key, at] of Object.entries(seen))
+    if (now - at > LETTER_MEMORY)
+      delete seen[key];
+  return seen;
+}
+var seenAlready = (id, now = Date.now()) => (id in lettersSeen(now));
+function noteSeen(id, now = Date.now()) {
+  locked(PEER_LOCK, () => {
+    const seen = lettersSeen(now);
+    seen[id] = now;
+    writePrivate(LETTERS_SEEN, JSON.stringify(seen));
+  });
+}
+var delivering = new Set;
+async function answerTo(target, session, id, { wait = 2000, signal, by } = {}) {
+  return (await awaitingAnswer(session, by, () => waitForAnswer(target, session, id, wait, signal))).text;
+}
+async function waitForAnswer(target, session, id, wait, signal) {
+  const began = Date.now();
+  let started = false;
+  while (Date.now() - began < 600000) {
+    await pause(wait, signal);
+    if (signal?.aborted)
+      return { text: null };
+    const active = (await asked(target, "GET", "api/session/active").catch(() => null))?.data ?? {};
+    if (Array.isArray(active) ? active.includes(session) : active[session]) {
+      started = true;
+      continue;
+    }
+    if (!started && Date.now() - began < 3 * wait)
+      continue;
+    const page = await asked(target, "GET", `api/session/${encodeURIComponent(session)}/message?limit=20&order=desc`).catch(() => null);
+    const messages = (page?.data ?? []).slice().reverse();
+    const replies = answerAfter(messages, id);
+    if (replies.length)
+      return { text: cutText(replies.join(`
+
+`), ANSWER_TEXT), reply: messages.filter((message) => message.type === "assistant").at(-1)?.id };
+    if (started)
+      break;
+  }
+  return { text: null };
+}
+var BRIDGE_AWAY = "Its coding agents aren't running here now: it comes again once they are.";
+var BRIDGE_WAIT = 30 * 60000;
+var bridgeWaits = new Map;
+function noConversation(id, bridge, now) {
+  if (bridge) {
+    bridgeWaits.delete(id);
+    return ["There's no such conversation here.", false];
+  }
+  for (const [letter, since] of bridgeWaits)
+    if (now - since > LETTER_MEMORY)
+      bridgeWaits.delete(letter);
+  const since = bridgeWaits.get(id) ?? now;
+  bridgeWaits.set(id, since);
+  if (now - since < BRIDGE_WAIT)
+    return [BRIDGE_AWAY, true];
+  return ["There's no such conversation here, and its coding agents aren't running.", false];
+}
+async function takeLetter(sender, letter, { send, targets, answer = () => {}, told = readPeerAgents(), peers = peersOf(readLink()), moved = movedOf(readLink()), now = Date.now(), wait, moving = async () => false, bridge = true } = {}) {
+  if (!isObject(letter) || typeof letter.id !== "string" || !LETTER_ID.test(letter.id))
+    return;
+  const { id } = letter;
+  const no = (why, again = false) => send(sender, { delivered: { id, ok: false, why, ...again ? { retry: true } : {} } });
+  if (typeof letter.at !== "number" || Math.abs(now - letter.at) > LETTER_LIFE)
+    return no("It's too old to deliver.");
+  if (typeof letter.to !== "string" || !/^ses_[A-Za-z0-9]{1,60}$/.test(letter.to) || typeof letter.text !== "string" || !letter.text.trim())
+    return no("That isn't a letter.");
+  if (delivering.has(id))
+    return;
+  if (seenAlready(id, now))
+    return send(sender, { delivered: { id, ok: true } });
+  if (typeof letter.answers === "string" && LETTER_ID.test(letter.answers) && (answered(sender, letter, now) || isObject(letter.read))) {
+    noteSeen(id, now);
+    return send(sender, { delivered: { id, ok: true } });
+  }
+  if (isObject(letter.read))
+    return readFor(sender, letter, { send, targets, answer, now, moved, moving, bridge });
+  let counted = allowed2("messages", `peer:${sender.key}`, now);
+  if (counted === null)
+    return no("It's sent a lot of messages in the last few minutes.", true);
+  const notDelivered = (why, again = false) => {
+    if (again && counted !== null)
+      takeBack2("messages", `peer:${sender.key}`, counted);
+    counted = null;
+    return no(why, again);
+  };
+  delivering.add(id);
+  let place, prompt, fromAgent = null, went;
+  try {
+    const lives = moved.get(letter.to);
+    if (lives && lives !== ownKey(readLink() ?? {}) || await moving(letter.to))
+      return notDelivered("It's moving to another computer: it comes again once it's there.", true);
+    place = await placeOfSession(letter.to, targets);
+    if (!place)
+      return notDelivered(...noConversation(id, bridge, now));
+    bridgeWaits.delete(id);
+    const kuvo = place.data?.metadata?.kuvo ?? {};
+    if (place.data?.parentID || kuvo.seat || isPutAway(place.data))
+      return notDelivered("That conversation doesn't take messages.");
+    const listed = peerOf(letter.from, peers, told, moved)?.key === sender.key ? (told[sender.key]?.list ?? []).find((agent) => agent.session === letter.from) : null;
+    if (listed && !await placeOfSession(letter.from, targets).catch(() => ({})))
+      fromAgent = listed;
+    const name = fromAgent?.name ?? `an agent on ${plainName(sender.name) || "another computer"}`;
+    prompt = messageID();
+    const waits = letter.wait === true && Boolean(fromAgent);
+    const by = fromAgent ? letter.from : "unknown";
+    went = await sendInto(place.target, letter.to, { id: prompt, text: composeLetter(name, by, cutText(letter.text), waits), delivery: "steer" }, { from: name, words: cutText(letter.text), kept: composeLetter(name, by, cutText(letter.text), false) });
+  } catch (error) {
+    return notDelivered(`It didn't reach it: ${String(error?.message ?? error)}`, true);
+  } finally {
+    delivering.delete(id);
+  }
+  noteSeen(id, now);
+  if (letter.wait === true && !fromAgent)
+    return send(sender, { delivered: { id, ok: true, answer: false, why: "Its answer can't come back to you: it doesn't know who you are." } });
+  if (went === "waits")
+    return send(sender, { delivered: { id, ok: true, ...letter.wait === true ? { answer: false, why: pausedNote() } : {} } });
+  send(sender, { delivered: { id, ok: true } });
+  if (letter.wait !== true)
+    return;
+  const text = await answerTo(place.target, letter.to, prompt, { wait });
+  if (text)
+    answer({ from: letter.to, to: letter.from, text, answers: id, peer: sender.key });
+}
+async function readFor(sender, letter, { send, targets, answer = () => {}, now = Date.now(), moved = new Map, moving = async () => false, bridge = true }) {
+  const { id } = letter;
+  const no = (why, again = false) => send(sender, { delivered: { id, ok: false, why, ...again ? { retry: true } : {} } });
+  if (typeof letter.from !== "string" || !/^ses_[A-Za-z0-9]{1,60}$/.test(letter.from))
+    return no("Its answer has nowhere to go.");
+  if (delivering.has(id))
+    return;
+  delivering.add(id);
+  let words;
+  try {
+    const lives = moved.get(letter.to);
+    if (lives && lives !== ownKey(readLink() ?? {}) || await moving(letter.to))
+      return no("It's moving to another computer: it's read once it's there.", true);
+    const place = await placeOfSession(letter.to, targets);
+    if (!place)
+      return no(...noConversation(id, bridge, now));
+    bridgeWaits.delete(id);
+    const kuvo = place.data?.metadata?.kuvo ?? {};
+    if (place.data?.parentID || kuvo.seat || isPutAway(place.data))
+      return no("That conversation can't be read.");
+    const markdown = await readConversation(place.target, letter.to, place.data ?? {}, String(place.data?.title || "New session"));
+    const query = typeof letter.read.query === "string" && letter.read.query.trim() ? letter.read.query.trim() : null;
+    words = excerpt(markdown, query, READ_BY_MAIL);
+  } catch (error) {
+    return no(`It couldn't be read: ${String(error?.message ?? error)}`, true);
+  } finally {
+    delivering.delete(id);
+  }
+  noteSeen(id, now);
+  send(sender, { delivered: { id, ok: true } });
+  answer({ from: letter.to, to: letter.from, text: words, answers: id, peer: sender.key, read: {} });
+}
+
 // Packages/Box/src/link/letters/outbox.ts
 var introducing = new Map;
 var INTRODUCING_FOR = 60000;
-var REPLIES = path59.join(RUN, "replies");
+var REPLIES = path60.join(RUN, "replies");
 var LETTER_BYTES = 24000;
 var ANSWER_TEXT = 8000;
 var macWaiting = new Map;
@@ -15263,35 +15546,35 @@ function reply(id, value) {
   if (IS_MAC)
     return void macWaiting.get(id)?.done(value);
   try {
-    fs57.mkdirSync(REPLIES, { recursive: true, mode: 448 });
-    writePrivate(path59.join(REPLIES, `${id}.json`), JSON.stringify(value));
+    fs59.mkdirSync(REPLIES, { recursive: true, mode: 448 });
+    writePrivate(path60.join(REPLIES, `${id}.json`), JSON.stringify(value));
   } catch {}
 }
 function givenUp(id) {
-  const file = path59.join(SENDING, `${id}.json`);
+  const file = path60.join(SENDING, `${id}.json`);
   try {
-    const letter = JSON.parse(fs57.readFileSync(file, "utf8"));
+    const letter = JSON.parse(fs59.readFileSync(file, "utf8"));
     if (isObject(letter?.read))
-      fs57.rmSync(file, { force: true });
+      fs59.rmSync(file, { force: true });
     else
       writePrivate(file, JSON.stringify({ ...letter, wait: false }));
   } catch {}
 }
 function leaveLetter(letter, now = Date.now()) {
   try {
-    fs57.mkdirSync(SENDING, { recursive: true, mode: 448 });
+    fs59.mkdirSync(SENDING, { recursive: true, mode: 448 });
     const id = "ltr_" + crypto26.randomBytes(16).toString("base64url");
-    writePrivate(path59.join(SENDING, `${id}.json`), JSON.stringify({ ...letter, wait: false, at: now }));
+    writePrivate(path60.join(SENDING, `${id}.json`), JSON.stringify({ ...letter, wait: false, at: now }));
   } catch {}
 }
 var leaveAnswer = (letter) => leaveLetter(letter);
 function letterWent(sender, { id, ok, why, retry, answer }) {
   if (!LETTER_ID.test(id))
     return;
-  const file = path59.join(SENDING, `${id}.json`);
+  const file = path60.join(SENDING, `${id}.json`);
   let letter = null;
   try {
-    letter = JSON.parse(fs57.readFileSync(file, "utf8"));
+    letter = JSON.parse(fs59.readFileSync(file, "utf8"));
   } catch {
     return;
   }
@@ -15307,17 +15590,17 @@ function letterWent(sender, { id, ok, why, retry, answer }) {
     const waiter = IS_MAC ? macWaiting.get(id) : null;
     if (waiter) {
       waiter.sentTo = sender.key;
-      fs57.rmSync(file, { force: true });
+      fs59.rmSync(file, { force: true });
       return;
     }
     if (!IS_MAC)
       try {
-        fs57.mkdirSync(REPLIES, { recursive: true, mode: 448 });
-        fs57.renameSync(file, path59.join(REPLIES, `${id}.wait`));
+        fs59.mkdirSync(REPLIES, { recursive: true, mode: 448 });
+        fs59.renameSync(file, path60.join(REPLIES, `${id}.wait`));
         return;
       } catch {}
   }
-  fs57.rmSync(file, { force: true });
+  fs59.rmSync(file, { force: true });
   if (letter.wait !== true)
     return;
   if (!ok)
@@ -15325,8 +15608,66 @@ function letterWent(sender, { id, ok, why, retry, answer }) {
   else if (answer === false)
     reply(id, { note: words ?? "It got your message, but its answer can't come back to you here." });
 }
+var deliveringHere = new Set;
+async function deliverHere(id, file, letter, step) {
+  if (deliveringHere.has(id) || frozen().has(letter.to))
+    return;
+  deliveringHere.add(id);
+  try {
+    const place = await placeOfSession(letter.to, peerTargets()).catch(() => {
+      return;
+    });
+    if (place === undefined || place === null && !peerPlaces().bridge)
+      return;
+    const own = ownListed();
+    const nameOf = (session) => own.find((agent) => agent.session === session)?.name ?? undefined;
+    const done = (value) => {
+      fs59.rmSync(file, { force: true });
+      letterTries.delete(id);
+      if (value && letter.wait === true)
+        reply(id, value);
+    };
+    if (!place)
+      return done({ failed: "There's no such conversation here." });
+    const kuvo = place.data?.metadata?.kuvo ?? {};
+    if (place.data?.parentID || kuvo.seat || isPutAway(place.data))
+      return done({ failed: "That conversation doesn't take messages." });
+    const name = nameOf(letter.to) ?? (place.data?.title || "New session");
+    if (isObject(letter.read)) {
+      const query = typeof letter.read.query === "string" && letter.read.query.trim() ? letter.read.query.trim() : null;
+      return done({ text: excerpt(await readConversation(place.target, letter.to, place.data ?? {}, name), query, READ_BY_MAIL), read: true });
+    }
+    const sender = nameOf(letter.from) ?? (IS_MAC ? "another agent" : `an agent on ${HERE}`);
+    const by = letter.from ?? "unknown";
+    const words = cutText(letter.text);
+    const prompt = messageID();
+    const went = await sendInto(place.target, letter.to, { id: prompt, text: composeLetter(sender, by, words, letter.wait === true), delivery: "steer" }, { from: sender, words, kept: composeLetter(sender, by, words, false) });
+    if (went === "waits")
+      return done({ note: pausedNote(name) });
+    done();
+    if (letter.wait !== true)
+      return;
+    const text = await answerTo(place.target, letter.to, prompt, { wait: step, by: letter.from ?? null });
+    if (!text)
+      return;
+    const said = cutText(text, ANSWER_TEXT);
+    const waiter = IS_MAC ? macWaiting.get(id) : null;
+    let alive = 0;
+    try {
+      alive = fs59.statSync(path60.join(REPLIES, `${id}.alive`)).mtimeMs;
+    } catch {}
+    if (IS_MAC ? waiter && !waiter.gone() : Date.now() - alive <= 1e4)
+      return reply(id, { text: said, to: letter.from, from: letter.to, name });
+    const asker = letter.from ? await placeOfSession(letter.from, peerTargets()).catch(() => null) : null;
+    if (!asker || !letter.from)
+      return;
+    await sendInto(asker.target, letter.from, { id: messageID(), text: composeLetter(name, letter.to, said, false), delivery: "steer" }, { from: name, words: said, kept: composeLetter(name, letter.to, said, false) });
+  } catch {} finally {
+    deliveringHere.delete(id);
+  }
+}
 function answered(sender, { answers: id, text, from }, now = Date.now()) {
-  if (LETTER_ID.test(id) && fs57.existsSync(path59.join(SENDING, `${id}.json`)))
+  if (LETTER_ID.test(id) && fs59.existsSync(path60.join(SENDING, `${id}.json`)))
     letterWent(sender, { id, ok: true });
   if (IS_MAC) {
     const waiter = macWaiting.get(id);
@@ -15335,19 +15676,19 @@ function answered(sender, { answers: id, text, from }, now = Date.now()) {
     waiter.done({ text: cutText(text, waiter.most ?? ANSWER_TEXT) });
     return true;
   }
-  const waiting = path59.join(REPLIES, `${id}.wait`);
+  const waiting = path60.join(REPLIES, `${id}.wait`);
   let letter = null;
   try {
-    letter = JSON.parse(fs57.readFileSync(waiting, "utf8"));
+    letter = JSON.parse(fs59.readFileSync(waiting, "utf8"));
   } catch {
     return false;
   }
   if (letter?.sentTo !== sender.key)
     return false;
-  fs57.rmSync(waiting, { force: true });
+  fs59.rmSync(waiting, { force: true });
   let alive = 0;
   try {
-    alive = fs57.statSync(path59.join(REPLIES, `${id}.alive`)).mtimeMs;
+    alive = fs59.statSync(path60.join(REPLIES, `${id}.alive`)).mtimeMs;
   } catch {}
   if (now - alive > 1e4)
     return false;
@@ -15365,46 +15706,46 @@ async function deliverLeftAnswers(now = Date.now(), targets = peerTargets(), bri
     if (!name.endsWith(".json"))
       continue;
     const id = name.slice(0, -5);
-    const file = path59.join(REPLIES, name);
+    const file = path60.join(REPLIES, name);
     let answer;
     try {
-      answer = JSON.parse(fs57.readFileSync(file, "utf8"));
+      answer = JSON.parse(fs59.readFileSync(file, "utf8"));
     } catch {
       continue;
     }
     let alive = 0;
     try {
-      alive = fs57.statSync(path59.join(REPLIES, `${id}.alive`)).mtimeMs;
+      alive = fs59.statSync(path60.join(REPLIES, `${id}.alive`)).mtimeMs;
     } catch {}
-    if (!fs57.existsSync(path59.join(REPLIES, `${id}.gaveup`)) && now - alive <= 1e4)
+    if (!fs59.existsSync(path60.join(REPLIES, `${id}.gaveup`)) && now - alive <= 1e4)
       continue;
     if (answer?.read === true) {
-      fs57.rmSync(file, { force: true });
-      fs57.rmSync(path59.join(REPLIES, `${id}.gaveup`), { force: true });
+      fs59.rmSync(file, { force: true });
+      fs59.rmSync(path60.join(REPLIES, `${id}.gaveup`), { force: true });
       continue;
     }
     if (typeof answer?.text !== "string" || typeof answer.to !== "string")
       continue;
     const taken = `${file}.delivering`;
     try {
-      fs57.renameSync(file, taken);
+      fs59.renameSync(file, taken);
     } catch {
       continue;
     }
     try {
       const place = await placeOfSession(answer.to, targets);
-      if (place === null && !bridgeRuns && now - fs57.statSync(taken).mtimeMs <= LETTER_LIFE)
+      if (place === null && !bridgeRuns && now - fs59.statSync(taken).mtimeMs <= LETTER_LIFE)
         throw new Error("Its coding agents aren't running here now.");
       const kuvo = place?.data?.metadata?.kuvo ?? {};
       if (place && !place.data?.parentID && !kuvo.seat && !isPutAway(place.data)) {
         const name = String(answer.name ?? "another agent");
         await sendInto(place.target, answer.to, { id: messageID(), text: composeLetter(name, String(answer.from ?? "unknown"), answer.text, false), delivery: "steer" }, { from: name, words: answer.text });
       }
-      fs57.rmSync(taken, { force: true });
-      fs57.rmSync(path59.join(REPLIES, `${id}.gaveup`), { force: true });
+      fs59.rmSync(taken, { force: true });
+      fs59.rmSync(path60.join(REPLIES, `${id}.gaveup`), { force: true });
     } catch {
       try {
-        fs57.renameSync(taken, file);
+        fs59.renameSync(taken, file);
       } catch {}
     }
   }
@@ -15418,7 +15759,7 @@ function letterMail(peer, letter, link, now = Date.now()) {
   }
   return null;
 }
-function sendOutbox(host, link = readLink(), now = Date.now(), offline = 0, ask = bridgeAsk) {
+function sendOutbox(host, link = readLink(), now = Date.now(), offline = 0, ask = bridgeAsk, step = 2000) {
   const telling = [];
   if (!link?.key)
     return Promise.all(telling);
@@ -15429,31 +15770,33 @@ function sendOutbox(host, link = readLink(), now = Date.now(), offline = 0, ask 
     if (!name.endsWith(".json") || name.startsWith("."))
       continue;
     try {
-      fs57.mkdirSync(SENDING, { recursive: true, mode: 448 });
-      fs57.renameSync(path59.join(OUTBOX, name), path59.join(SENDING, name));
+      fs59.mkdirSync(SENDING, { recursive: true, mode: 448 });
+      fs59.renameSync(path60.join(OUTBOX, name), path60.join(SENDING, name));
     } catch {}
   }
   for (const name of listOf(REPLIES)) {
     if (!name.endsWith(".gaveup"))
       continue;
     const id = name.slice(0, -7);
-    fs57.rmSync(path59.join(REPLIES, name), { force: true });
-    fs57.rmSync(path59.join(REPLIES, `${id}.wait`), { force: true });
+    fs59.rmSync(path60.join(REPLIES, name), { force: true });
+    fs59.rmSync(path60.join(REPLIES, `${id}.wait`), { force: true });
     givenUp(id);
   }
   const listed = new Set;
+  const mine = ownKey(link);
+  const ownHere = new Set(ownListed().map((agent) => agent.session));
   const waiting = [];
   for (const name of listOf(SENDING)) {
     if (!name.endsWith(".json"))
       continue;
     try {
-      waiting.push({ name, letter: JSON.parse(fs57.readFileSync(path59.join(SENDING, name), "utf8")) });
+      waiting.push({ name, letter: JSON.parse(fs59.readFileSync(path60.join(SENDING, name), "utf8")) });
     } catch {}
   }
   waiting.sort((a, b) => (typeof a.letter?.at === "number" ? a.letter.at : now) - (typeof b.letter?.at === "number" ? b.letter.at : now));
   for (const { name, letter: kept } of waiting) {
     const id = name.slice(0, -5);
-    const file = path59.join(SENDING, name);
+    const file = path60.join(SENDING, name);
     let letter = kept;
     if (!isObject(letter))
       continue;
@@ -15488,9 +15831,16 @@ function sendOutbox(host, link = readLink(), now = Date.now(), offline = 0, ask 
     const lives = moved.get(letter.to);
     const peer = lives ? peers.find((each) => each.key === lives) ?? null : typeof letter.peer === "string" ? peers.find((each) => each.key === letter.peer) ?? null : peerOf(letter.to, peers, told, moved);
     if (now - made > LETTER_MEMORY) {
-      fs57.rmSync(file, { force: true });
+      fs59.rmSync(file, { force: true });
       if (letter.wait === true)
         reply(id, { failed: "Its agent couldn't be reached." });
+      continue;
+    }
+    if (lives === mine || !lives && ownHere.has(letter.to)) {
+      if (now - (letterTries.get(id) ?? 0) < 60000)
+        continue;
+      letterTries.set(id, now);
+      telling.push(deliverHere(id, file, letter, step));
       continue;
     }
     if (!peer)
@@ -15522,7 +15872,7 @@ function sendOutbox(host, link = readLink(), now = Date.now(), offline = 0, ask 
       ...isObject(letter.read) ? { read: typeof letter.read.query === "string" ? { query: letter.read.query } : {} } : {}
     }, link, now);
     if (!bytes) {
-      fs57.rmSync(file, { force: true });
+      fs59.rmSync(file, { force: true });
       if (letter.wait === true)
         reply(id, { failed: "It's too long to send." });
       continue;
@@ -15546,20 +15896,20 @@ function sendOutbox(host, link = readLink(), now = Date.now(), offline = 0, ask 
       introducing.delete(id);
   for (const name of listOf(REPLIES)) {
     try {
-      if (now - fs57.statSync(path59.join(REPLIES, name)).mtimeMs > LETTER_LIFE)
-        fs57.rmSync(path59.join(REPLIES, name), { force: true });
+      if (now - fs59.statSync(path60.join(REPLIES, name)).mtimeMs > LETTER_LIFE)
+        fs59.rmSync(path60.join(REPLIES, name), { force: true });
     } catch {}
   }
   return Promise.all(telling);
 }
 
 // Packages/Box/src/link/notices/hold.ts
-import path60 from "node:path";
+import path61 from "node:path";
 var ASK_HOLD = 30000;
 var NEWS_HOLD = 60000;
 var LONGEST_LEASE = 60000;
 var SHOWN_WITHIN = 1e4;
-var HELD_FILE = path60.join(RUN, "held-notices.json");
+var HELD_FILE = path61.join(RUN, "held-notices.json");
 var RESTORED_WAIT = 20000;
 var RETRY_EVERY = 5000;
 var TRY_FOR = 10 * 60000;
@@ -15775,21 +16125,21 @@ function macLetterAnswer(id, signal, most = LETTER_WAIT, cut) {
 }
 
 // Packages/Box/src/link/letters/leave.ts
-var RELAY_DOWN = path61.join(RUN, "relay-down");
+var RELAY_DOWN = path62.join(RUN, "relay-down");
 var DOWN_AFTER = 30000;
 function noteRelay(online, since, now = Date.now()) {
   try {
     if (online)
-      fs58.rmSync(RELAY_DOWN, { force: true });
-    else if (now - since > DOWN_AFTER && !fs58.existsSync(RELAY_DOWN))
+      fs60.rmSync(RELAY_DOWN, { force: true });
+    else if (now - since > DOWN_AFTER && !fs60.existsSync(RELAY_DOWN))
       writePrivate(RELAY_DOWN, "");
   } catch {}
 }
-var offRelay = () => IS_MAC ? !macLink.host?.welcomed : fs58.existsSync(RELAY_DOWN);
+var offRelay = () => IS_MAC ? !macLink.host?.welcomed : fs60.existsSync(RELAY_DOWN);
 function leaveLetter2(letter, now = Date.now()) {
   const id = "ltr_" + crypto27.randomBytes(16).toString("base64url");
-  fs58.mkdirSync(SENDING, { recursive: true, mode: 448 });
-  writePrivate(path61.join(SENDING, `${id}.json`), JSON.stringify({ ...letter, text: cutText(letter.text), at: now }));
+  fs60.mkdirSync(SENDING, { recursive: true, mode: 448 });
+  writePrivate(path62.join(SENDING, `${id}.json`), JSON.stringify({ ...letter, text: cutText(letter.text), at: now }));
   if (IS_MAC)
     macSendOutbox();
   return id;
@@ -15799,28 +16149,28 @@ async function letterAnswer(id, signal, { most = LETTER_WAIT, step = 2000, cut }
     const answer = await macLetterAnswer(id, signal, most, cut);
     return "text" in answer && answer.text === null ? null : answer;
   }
-  const file = path61.join(REPLIES, `${id}.json`);
-  const alive = path61.join(REPLIES, `${id}.alive`);
+  const file = path62.join(REPLIES, `${id}.json`);
+  const alive = path62.join(REPLIES, `${id}.alive`);
   const began = Date.now();
   try {
-    fs58.mkdirSync(REPLIES, { recursive: true, mode: 448 });
+    fs60.mkdirSync(REPLIES, { recursive: true, mode: 448 });
     while (Date.now() - began < most && !signal?.aborted) {
-      fs58.writeFileSync(alive, "", { mode: 384 });
+      fs60.writeFileSync(alive, "", { mode: 384 });
       await pause(step, signal);
       if (signal?.aborted)
         break;
       let answer = null;
       try {
-        answer = JSON.parse(fs58.readFileSync(file, "utf8"));
+        answer = JSON.parse(fs60.readFileSync(file, "utf8"));
       } catch {}
       if (!answer)
         continue;
-      fs58.rmSync(file, { force: true });
+      fs60.rmSync(file, { force: true });
       return answer;
     }
-    fs58.writeFileSync(path61.join(REPLIES, `${id}.gaveup`), "", { mode: 384 });
+    fs60.writeFileSync(path62.join(REPLIES, `${id}.gaveup`), "", { mode: 384 });
   } catch {} finally {
-    fs58.rmSync(alive, { force: true });
+    fs60.rmSync(alive, { force: true });
   }
   return null;
 }
@@ -15938,7 +16288,7 @@ function stopMacLink() {
 }
 
 // Packages/Box/src/link/mac/notices.ts
-import fs59 from "node:fs";
+import fs61 from "node:fs";
 
 // Packages/Box/src/link/notices/notice.ts
 var NOTICE_LIMIT = 2500;
@@ -15964,7 +16314,7 @@ function pushTo(phone, json, hostKey) {
 function macNoticeHold(clock = {}) {
   let held = [];
   try {
-    held = JSON.parse(fs59.readFileSync(HELD_FILE, "utf8"));
+    held = JSON.parse(fs61.readFileSync(HELD_FILE, "utf8"));
   } catch {}
   return new NoticeHold({
     ...clock,
@@ -15995,7 +16345,7 @@ function macNoticeHold(clock = {}) {
         if (entries.length)
           writePrivate(HELD_FILE, JSON.stringify(entries));
         else
-          fs59.rmSync(HELD_FILE, { force: true });
+          fs61.rmSync(HELD_FILE, { force: true });
       } catch {}
     }
   });
@@ -16008,285 +16358,6 @@ function macTell(notice) {
 
 // Packages/Box/src/link/mac/relay.ts
 import os11 from "node:os";
-
-// Packages/Box/src/link/letters/take.ts
-import fs61 from "node:fs";
-
-// Packages/Box/src/link/letters/limits.ts
-import fs60 from "node:fs";
-import path62 from "node:path";
-var LIMITS2 = {
-  messages: { most: 20, within: 600000 },
-  sessions: { most: 6, within: 600000 },
-  botSessions: { most: 40, within: 600000 }
-};
-var LIMITS_FILE = path62.join(RUN, "tool-limits.json");
-var LIMITS_LOCK = path62.join(RUN, ".tool-limits.lock");
-var STARTING_FOR = 120000;
-function changeCounts(now, change, file) {
-  return locked(LIMITS_LOCK, () => {
-    let counts = {};
-    try {
-      counts = JSON.parse(fs60.readFileSync(file, "utf8")) ?? {};
-    } catch {}
-    for (const kind of Object.keys(LIMITS2)) {
-      const byKey = counts[kind] ?? {};
-      for (const [key, times] of Object.entries(byKey)) {
-        const lately = Array.isArray(times) ? times.filter((at) => typeof at === "number" && now - at < LIMITS2[kind].within) : [];
-        if (lately.length)
-          byKey[key] = lately;
-        else
-          delete byKey[key];
-      }
-      counts[kind] = byKey;
-    }
-    const starting = {};
-    for (const [bot, starts] of Object.entries(isObject(counts.starting) ? counts.starting : {})) {
-      const lately = Object.entries(isObject(starts) ? starts : {}).filter(([, start]) => isObject(start) && typeof start.at === "number" && now - start.at < STARTING_FOR);
-      if (lately.length)
-        starting[bot] = Object.fromEntries(lately);
-    }
-    counts.starting = starting;
-    const value = change(counts);
-    try {
-      writePrivate(file, JSON.stringify(counts));
-    } catch {}
-    return value;
-  });
-}
-function allowed2(kind, key, now = Date.now(), file = LIMITS_FILE) {
-  return changeCounts(now, (counts) => {
-    const lately = counts[kind][key] ?? [];
-    if (lately.length >= LIMITS2[kind].most)
-      return null;
-    counts[kind][key] = [...lately, now];
-    return now;
-  }, file);
-}
-function takeBack2(kind, key, at, file = LIMITS_FILE) {
-  changeCounts(Date.now(), (counts) => {
-    const lately = counts[kind][key] ?? [];
-    const index = lately.indexOf(at);
-    if (index >= 0)
-      lately.splice(index, 1);
-    if (lately.length)
-      counts[kind][key] = lately;
-    else
-      delete counts[kind][key];
-  }, file);
-}
-function noteStarting(bot, now = Date.now(), file = LIMITS_FILE) {
-  const token = `${now}-${Math.random().toString(36).slice(2, 10)}`;
-  return changeCounts(now, (counts) => {
-    const starts = counts.starting[bot] ?? {};
-    counts.starting[bot] = { ...starts, [token]: { at: now } };
-    return { token, before: Object.keys(starts) };
-  }, file);
-}
-function startsBefore(bot, before, file = LIMITS_FILE) {
-  return changeCounts(Date.now(), (counts) => {
-    const starts = counts.starting[bot] ?? {};
-    return before.flatMap((token) => starts[token] ? [starts[token]] : []);
-  }, file);
-}
-function startedAs(bot, token, session, prompted = false, file = LIMITS_FILE) {
-  changeCounts(Date.now(), (counts) => {
-    const starts = counts.starting[bot] ?? {};
-    if (!starts[token])
-      return;
-    if (session)
-      starts[token] = { ...starts[token], session, ...prompted ? { prompted } : {} };
-    else
-      delete starts[token];
-    if (Object.keys(starts).length)
-      counts.starting[bot] = starts;
-    else
-      delete counts.starting[bot];
-  }, file);
-}
-
-// Packages/Box/src/link/letters/take.ts
-function answerAfter(messages, id) {
-  const replies = [];
-  let answered = false;
-  for (const message of messages) {
-    if (message.id <= id)
-      continue;
-    if (message.type === "assistant") {
-      const parts = message.content ?? [];
-      const text = parts.filter((part) => part.type === "text").map((part) => part.text).join(`
-`);
-      if (text)
-        replies.push(text);
-      answered = Boolean(text) && !parts.some((part) => part.type === "tool");
-    } else if (message.type === "user" && answered)
-      break;
-  }
-  return replies;
-}
-function lettersSeen(now) {
-  let seen = {};
-  try {
-    seen = JSON.parse(fs61.readFileSync(LETTERS_SEEN, "utf8"));
-  } catch {}
-  for (const [key, at] of Object.entries(seen))
-    if (now - at > LETTER_MEMORY)
-      delete seen[key];
-  return seen;
-}
-var seenAlready = (id, now = Date.now()) => (id in lettersSeen(now));
-function noteSeen(id, now = Date.now()) {
-  locked(PEER_LOCK, () => {
-    const seen = lettersSeen(now);
-    seen[id] = now;
-    writePrivate(LETTERS_SEEN, JSON.stringify(seen));
-  });
-}
-var delivering = new Set;
-async function answerTo(target, session, id, { wait = 2000, signal, by } = {}) {
-  return (await awaitingAnswer(session, by, () => waitForAnswer(target, session, id, wait, signal))).text;
-}
-async function waitForAnswer(target, session, id, wait, signal) {
-  const began = Date.now();
-  let started = false;
-  while (Date.now() - began < 600000) {
-    await pause(wait, signal);
-    if (signal?.aborted)
-      return { text: null };
-    const active = (await asked(target, "GET", "api/session/active").catch(() => null))?.data ?? {};
-    if (Array.isArray(active) ? active.includes(session) : active[session]) {
-      started = true;
-      continue;
-    }
-    if (!started && Date.now() - began < 3 * wait)
-      continue;
-    const page = await asked(target, "GET", `api/session/${encodeURIComponent(session)}/message?limit=20&order=desc`).catch(() => null);
-    const messages = (page?.data ?? []).slice().reverse();
-    const replies = answerAfter(messages, id);
-    if (replies.length)
-      return { text: cutText(replies.join(`
-
-`), ANSWER_TEXT), reply: messages.filter((message) => message.type === "assistant").at(-1)?.id };
-    if (started)
-      break;
-  }
-  return { text: null };
-}
-var BRIDGE_AWAY = "Its coding agents aren't running here now: it comes again once they are.";
-var BRIDGE_WAIT = 30 * 60000;
-var bridgeWaits = new Map;
-function noConversation(id, bridge, now) {
-  if (bridge) {
-    bridgeWaits.delete(id);
-    return ["There's no such conversation here.", false];
-  }
-  for (const [letter, since] of bridgeWaits)
-    if (now - since > LETTER_MEMORY)
-      bridgeWaits.delete(letter);
-  const since = bridgeWaits.get(id) ?? now;
-  bridgeWaits.set(id, since);
-  if (now - since < BRIDGE_WAIT)
-    return [BRIDGE_AWAY, true];
-  return ["There's no such conversation here, and its coding agents aren't running.", false];
-}
-async function takeLetter(sender, letter, { send, targets, answer = () => {}, told = readPeerAgents(), peers = peersOf(readLink()), moved = movedOf(readLink()), now = Date.now(), wait, moving = async () => false, bridge = true } = {}) {
-  if (!isObject(letter) || typeof letter.id !== "string" || !LETTER_ID.test(letter.id))
-    return;
-  const { id } = letter;
-  const no = (why, again = false) => send(sender, { delivered: { id, ok: false, why, ...again ? { retry: true } : {} } });
-  if (typeof letter.at !== "number" || Math.abs(now - letter.at) > LETTER_LIFE)
-    return no("It's too old to deliver.");
-  if (typeof letter.to !== "string" || !/^ses_[A-Za-z0-9]{1,60}$/.test(letter.to) || typeof letter.text !== "string" || !letter.text.trim())
-    return no("That isn't a letter.");
-  if (delivering.has(id))
-    return;
-  if (seenAlready(id, now))
-    return send(sender, { delivered: { id, ok: true } });
-  if (typeof letter.answers === "string" && LETTER_ID.test(letter.answers) && (answered(sender, letter, now) || isObject(letter.read))) {
-    noteSeen(id, now);
-    return send(sender, { delivered: { id, ok: true } });
-  }
-  if (isObject(letter.read))
-    return readFor(sender, letter, { send, targets, answer, now, moved, moving, bridge });
-  let counted = allowed2("messages", `peer:${sender.key}`, now);
-  if (counted === null)
-    return no("It's sent a lot of messages in the last few minutes.", true);
-  const notDelivered = (why, again = false) => {
-    if (again && counted !== null)
-      takeBack2("messages", `peer:${sender.key}`, counted);
-    counted = null;
-    return no(why, again);
-  };
-  delivering.add(id);
-  let place, prompt, fromAgent = null, went;
-  try {
-    const lives = moved.get(letter.to);
-    if (lives && lives !== ownKey(readLink() ?? {}) || await moving(letter.to))
-      return notDelivered("It's moving to another computer: it comes again once it's there.", true);
-    place = await placeOfSession(letter.to, targets);
-    if (!place)
-      return notDelivered(...noConversation(id, bridge, now));
-    bridgeWaits.delete(id);
-    const kuvo = place.data?.metadata?.kuvo ?? {};
-    if (place.data?.parentID || kuvo.seat || isPutAway(place.data))
-      return notDelivered("That conversation doesn't take messages.");
-    const listed = peerOf(letter.from, peers, told, moved)?.key === sender.key ? (told[sender.key]?.list ?? []).find((agent) => agent.session === letter.from) : null;
-    if (listed && !await placeOfSession(letter.from, targets).catch(() => ({})))
-      fromAgent = listed;
-    const name = fromAgent?.name ?? `an agent on ${plainName(sender.name) || "another computer"}`;
-    prompt = messageID();
-    const waits = letter.wait === true && Boolean(fromAgent);
-    const by = fromAgent ? letter.from : "unknown";
-    went = await sendInto(place.target, letter.to, { id: prompt, text: composeLetter(name, by, cutText(letter.text), waits), delivery: "steer" }, { from: name, words: cutText(letter.text), kept: composeLetter(name, by, cutText(letter.text), false) });
-  } catch (error) {
-    return notDelivered(`It didn't reach it: ${String(error?.message ?? error)}`, true);
-  } finally {
-    delivering.delete(id);
-  }
-  noteSeen(id, now);
-  if (letter.wait === true && !fromAgent)
-    return send(sender, { delivered: { id, ok: true, answer: false, why: "Its answer can't come back to you: it doesn't know who you are." } });
-  if (went === "waits")
-    return send(sender, { delivered: { id, ok: true, ...letter.wait === true ? { answer: false, why: pausedNote() } : {} } });
-  send(sender, { delivered: { id, ok: true } });
-  if (letter.wait !== true)
-    return;
-  const text = await answerTo(place.target, letter.to, prompt, { wait });
-  if (text)
-    answer({ from: letter.to, to: letter.from, text, answers: id, peer: sender.key });
-}
-async function readFor(sender, letter, { send, targets, answer = () => {}, now = Date.now(), moved = new Map, moving = async () => false, bridge = true }) {
-  const { id } = letter;
-  const no = (why, again = false) => send(sender, { delivered: { id, ok: false, why, ...again ? { retry: true } : {} } });
-  if (typeof letter.from !== "string" || !/^ses_[A-Za-z0-9]{1,60}$/.test(letter.from))
-    return no("Its answer has nowhere to go.");
-  if (delivering.has(id))
-    return;
-  delivering.add(id);
-  let words;
-  try {
-    const lives = moved.get(letter.to);
-    if (lives && lives !== ownKey(readLink() ?? {}) || await moving(letter.to))
-      return no("It's moving to another computer: it's read once it's there.", true);
-    const place = await placeOfSession(letter.to, targets);
-    if (!place)
-      return no(...noConversation(id, bridge, now));
-    bridgeWaits.delete(id);
-    const kuvo = place.data?.metadata?.kuvo ?? {};
-    if (place.data?.parentID || kuvo.seat || isPutAway(place.data))
-      return no("That conversation can't be read.");
-    const markdown = await readConversation(place.target, letter.to, place.data ?? {}, String(place.data?.title || "New session"));
-    const query = typeof letter.read.query === "string" && letter.read.query.trim() ? letter.read.query.trim() : null;
-    words = excerpt(markdown, query, READ_BY_MAIL);
-  } catch (error) {
-    return no(`It couldn't be read: ${String(error?.message ?? error)}`, true);
-  } finally {
-    delivering.delete(id);
-  }
-  noteSeen(id, now);
-  send(sender, { delivered: { id, ok: true } });
-  answer({ from: letter.to, to: letter.from, text: words, answers: id, peer: sender.key, read: {} });
-}
 
 // Packages/Box/src/link/peers/mail.ts
 var answeringAsk = null;
