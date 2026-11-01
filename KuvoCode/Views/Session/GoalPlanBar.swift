@@ -248,7 +248,8 @@ struct GoalLanes: View {
 
     private func lanes(_ timeline: GoalTimeline, window: DateInterval?, long: Bool, rows: [Row], footer: Bool, lanesHeight: CGFloat, height: CGFloat, total: CGFloat) -> some View {
         let showsWords = total >= Self.wordsFrom
-        let nameWidth: CGFloat = total < 420 ? 84 : 112
+        // A wide card gives the steps' names room to show whole.
+        let nameWidth: CGFloat = total < 420 ? 84 : total < 640 ? 112 : 148
         let room = max(40, total - nameWidth - 12 - (showsWords ? Self.wordsWidth + 12 : 0))
         let width = Self.width(timeline, window: window, room: room)
         let x = AxisX(timeline: timeline, width: width)
@@ -555,6 +556,16 @@ struct GoalLanes: View {
         let week = (window?.duration ?? 0) <= 7 * 86400
         let roomy = days.first.map { x($0.addingTimeInterval(86400)) - x($0) } ?? 0 >= 52
         let everyDay = week || roomy
+        // Days too narrow for a label each: one every few days, counted out from Today (or the
+        // first day) so the labels keep clear of it and of each other; a week apart once that's
+        // most of a week.
+        let dayWidth = days.first.map { x($0.addingTimeInterval(86400)) - x($0) } ?? 0
+        let fit = dayWidth > 0 ? Int((56 / dayWidth).rounded(.up)) : 7
+        let step = everyDay ? 1 : fit >= 5 ? 7 * Int((Double(fit) / 7).rounded(.up)) : max(fit, 1)
+        let origin = calendar.startOfDay(for: days.contains { calendar.isDate($0, inSameDayAs: now) } ? now : days.first ?? now)
+        let labeled = { (day: Date) in
+            (calendar.dateComponents([.day], from: origin, to: calendar.startOfDay(for: day)).day ?? 1) % step == 0
+        }
         // Clear of the edges of what shows, where it would be cut.
         let clears = { (center: CGFloat) in shown.width == 0 || (center > shown.minX + 22 && center < shown.maxX - 22) }
         // Today, where its label shows: the days beside it make room for it.
@@ -572,7 +583,7 @@ struct GoalLanes: View {
                         .foregroundStyle(accent)
                         .fixedSize()
                         .position(x: center, y: Self.headerHeight / 2)
-                } else if everyDay || calendar.component(.weekday, from: day) == 2 {
+                } else if labeled(day) {
                     Text(day.formatted(week ? .dateTime.weekday(.abbreviated) : .dateTime.weekday(.abbreviated).day()))
                         .font(.system(size: 11).monospacedDigit())
                         .foregroundStyle(.tertiary)
