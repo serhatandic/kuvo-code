@@ -717,8 +717,9 @@ client shows it from the same routes.
   stopped (held and paused, as the queue's Stop), and the bot's own turn too, with what it was
   still to hear of them dropped. 404 for no such bot here, 503 with no engine.
 - **A box starting again** (its link): what its followed sessions did while it was down (finished,
-  failed, asked; not one that was stopped) is told to their starters once, by what
-  `run/work/told.json` says was told: the engine's and the coding agents' bridge's each as it's
+  failed, also a turn that failed before it replied, asked; not one that was stopped) is told to
+  their starters once, by what `run/work/told.json` says was told (the reply, and a failed turn by
+  its end): the engine's and the coding agents' bridge's each as it's
   found, from when the box last heard of that one, and only once it could list them all (one slow or
   not there yet is looked at again a minute on; a session it couldn't read doesn't hold back the
   others, and is looked at again a few times, then as the box starts the next time, on a few starts at most). A finish that was waiting for its starter's wait
