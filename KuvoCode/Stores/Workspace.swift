@@ -2622,6 +2622,7 @@ final class Workspace {
     private func notifyAsk(_ id: String, body: String, request: String, isPermission: Bool = false, answerable: Bool = true, question: Notifier.Question? = nil) {
         // A seat's requests are answered by its group chat.
         guard !seats.contains(id) else { return }
+        let noted = asking[request] != nil
         Task {
             // A subagent's session has no row or tab of its own; its request shows in the
             // session that started it.
@@ -2643,6 +2644,8 @@ final class Workspace {
                 asking[request] = nil
                 return
             }
+            // Answered (or gone) while its session was read: no notification for it.
+            guard !noted || asking[request] != nil else { return }
             // Buttons only when the notification hides none of what they'd answer.
             let shown = Notifier.showsAll(body) && (question?.choices.allSatisfy { Notifier.showsAll($0.label) } ?? true)
             Notifier.shared.notify(session: session?.id ?? id, title: session.flatMap { botName?($0.id) } ?? session?.title ?? AppInfo.name,
