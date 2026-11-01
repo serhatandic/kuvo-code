@@ -18468,6 +18468,7 @@ function forgetGone(known, places) {
 function searchText(messages, directory) {
   const relative = (value) => directory && value.startsWith(directory + "/") ? value.slice(directory.length + 1) : value;
   const blocks = [];
+  const steps = [];
   for (const message of messages) {
     if (message.type === "user") {
       const written = String(message.text ?? "");
@@ -18495,7 +18496,7 @@ function searchText(messages, directory) {
           const input = part.state?.input ?? {};
           const named = [input.filePath, input.path].filter((value) => typeof value === "string").map(relative).concat([input.command, input.pattern, input.query, input.url, input.description].filter((value) => typeof value === "string"));
           if (named.length)
-            blocks.push(named.map((value) => value.split(`
+            steps.push(named.map((value) => value.split(`
 `)[0]).join(" "));
         }
       }
@@ -18506,7 +18507,7 @@ function searchText(messages, directory) {
 `));
     }
   }
-  return blocks.filter(Boolean).join(`
+  return [...blocks, ...steps].filter(Boolean).join(`
 
 `);
 }
@@ -18546,11 +18547,31 @@ function fold(text) {
   }).join("");
 }
 function snippet(text, at, length) {
-  const letters = Array.from(text);
-  const start = Math.max(0, at - 16);
-  const end = Math.min(letters.length, at + length + 80);
+  const all = Array.from(text);
+  const gap = (index) => all[index] === `
+` && all[index + 1] === `
+`;
+  let blockStart = at;
+  while (blockStart > 0 && !gap(blockStart - 2))
+    blockStart--;
+  let blockEnd = at + length;
+  while (blockEnd < all.length && !gap(blockEnd))
+    blockEnd++;
+  const letters = all.slice(0, blockEnd);
+  const space = (index) => /\s/.test(letters[index] ?? " ");
+  let start = Math.max(blockStart, at - 16);
+  for (let back = start;back > blockStart && back > start - 12; back--)
+    if (space(back - 1)) {
+      start = back;
+      break;
+    }
+  while (start > blockStart && start < at && !space(start - 1))
+    start++;
+  let end = Math.min(letters.length, at + length + 80);
+  while (end < letters.length && end > at + length && !space(end))
+    end--;
   const words = letters.slice(start, end).join("").replace(/[*`#>]/g, "").split(/\s+/).filter(Boolean).join(" ");
-  return (start > 0 ? "…" : "") + words + (end < letters.length ? "…" : "");
+  return (start > blockStart ? "…" : "") + words + (end < letters.length ? "…" : "");
 }
 
 // Packages/Box/src/link/areas/changes.ts

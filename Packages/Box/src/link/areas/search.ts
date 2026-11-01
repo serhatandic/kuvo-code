@@ -186,10 +186,12 @@ function forgetGone(known: Set<string>, places: string[]) {
  * you wrote (your review comments, and the files' names, not the rest Kuvo Code adds to its end),
  * what other agents and wake-ups said, the agent's replies, what each step worked on (its files
  * in the session's folder, its command, what it looked for), and the commands you ran with the
- * start of what they printed. */
+ * start of what they printed. What the steps worked on comes last, so words said in the
+ * conversation are found, and shown, there first. */
 export function searchText(messages: EngineMessage[], directory: string): string {
   const relative = (value: string) => directory && value.startsWith(directory + "/") ? value.slice(directory.length + 1) : value;
   const blocks: string[] = [];
+  const steps: string[] = [];
   for (const message of messages) {
     if (message.type === "user") {
       const written = String(message.text ?? "");
@@ -211,7 +213,7 @@ export function searchText(messages: EngineMessage[], directory: string): string
           const input = ((part.state as Record<string, unknown> | undefined)?.input ?? {}) as Record<string, unknown>;
           const named = [input.filePath, input.path].filter((value): value is string => typeof value === "string").map(relative)
             .concat([input.command, input.pattern, input.query, input.url, input.description].filter((value): value is string => typeof value === "string"));
-          if (named.length) blocks.push(named.map(value => value.split("\n")[0]).join(" "));
+          if (named.length) steps.push(named.map(value => value.split("\n")[0]).join(" "));
         }
       }
     } else if (message.type === "shell") {
@@ -219,7 +221,7 @@ export function searchText(messages: EngineMessage[], directory: string): string
       blocks.push([String(message.command ?? ""), output].filter(Boolean).join("\n\n"));
     }
   }
-  return blocks.filter(Boolean).join("\n\n");
+  return [...blocks, ...steps].filter(Boolean).join("\n\n");
 }
 
 /** A message as you wrote it: what Kuvo Code adds to its end comes off (who's named, a keyword it
@@ -256,11 +258,24 @@ function fold(text: string): string {
 }
 
 /** A line's worth of `text` from just before the match at `at` (in letters, `length` long),
- * without Markdown's marks, as the Mac's sidebar showed it. */
-function snippet(text: string, at: number, length: number): string {
-  const letters = Array.from(text);
-  const start = Math.max(0, at - 16);
-  const end = Math.min(letters.length, at + length + 80);
+ * without Markdown's marks, as the Mac's sidebar showed it: whole words, never cut in one. */
+export function snippet(text: string, at: number, length: number): string {
+  const all = Array.from(text);
+  // Only the block it's in (a message, or a step), not the one beside it.
+  const gap = (index: number) => all[index] === "\n" && all[index + 1] === "\n";
+  let blockStart = at;
+  while (blockStart > 0 && !gap(blockStart - 2)) blockStart--;
+  let blockEnd = at + length;
+  while (blockEnd < all.length && !gap(blockEnd)) blockEnd++;
+  const letters = all.slice(0, blockEnd);
+  const space = (index: number) => /\s/.test(letters[index] ?? " ");
+  let start = Math.max(blockStart, at - 16);
+  // Back to the start of the word it's in, or on to the next one where that's far.
+  for (let back = start; back > blockStart && back > start - 12; back--) if (space(back - 1)) { start = back; break; }
+  while (start > blockStart && start < at && !space(start - 1)) start++;
+  let end = Math.min(letters.length, at + length + 80);
+  // Back to the end of the last whole word.
+  while (end < letters.length && end > at + length && !space(end)) end--;
   const words = letters.slice(start, end).join("").replace(/[*`#>]/g, "").split(/\s+/).filter(Boolean).join(" ");
-  return (start > 0 ? "…" : "") + words + (end < letters.length ? "…" : "");
+  return (start > blockStart ? "…" : "") + words + (end < letters.length ? "…" : "");
 }
