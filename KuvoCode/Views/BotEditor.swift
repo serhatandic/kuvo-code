@@ -227,7 +227,7 @@ struct BotEditor: View {
     private var form: some View {
             VStack(alignment: .leading, spacing: 20) {
                 if isNew {
-                    section("Start From", note: "Fills in a name, look and personality, and writes its job in its conversation for you to send; or start from nothing and tell it there.") {
+                    section("Start From") {
                         TemplatePicker(selection: template) { use($0) }
                     }
                 }
@@ -690,23 +690,40 @@ private struct JobFields: View {
     }
 }
 
-/// Bots to start from: each with its look, name and job.
+/// Bots to start from: their faces and names, and one line for what the picked one does.
 private struct TemplatePicker: View {
     let selection: String?
     let pick: (BotTemplate) -> Void
 
+    private var picked: BotTemplate? { BotTemplate.all.first { $0.id == selection } }
+
     var body: some View {
         WellGroup {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 172), spacing: 6)], spacing: 6) {
-                ForEach(BotTemplate.all) { template in
-                    TemplateTile(template: template, isOn: selection == template.id) { pick(template) }
+            VStack(alignment: .leading, spacing: 10) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 66), spacing: 4)], spacing: 4) {
+                    ForEach(BotTemplate.all) { template in
+                        TemplateFace(template: template, isOn: selection == template.id) { pick(template) }
+                    }
                 }
+                Text(picked.map(Self.line) ?? "Fills in a name, look and job for you to send. Or start from nothing and tell it there.")
+                    .font(.callout)
+                    .foregroundStyle(picked == nil ? .secondary : .primary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 6)
+                    .contentTransition(.opacity)
+                    .animation(.ui, value: selection)
             }
             .padding(8)
         }
     }
 
-    private struct TemplateTile: View {
+    /// "Herald sends you a morning news digest."
+    static func line(_ template: BotTemplate) -> String {
+        let job = template.job.prefix(1).lowercased() + template.job.dropFirst()
+        return "\(template.name) \(job)."
+    }
+
+    private struct TemplateFace: View {
         let template: BotTemplate
         let isOn: Bool
         let action: () -> Void
@@ -714,29 +731,23 @@ private struct TemplatePicker: View {
 
         var body: some View {
             Button(action: action) {
-                HStack(alignment: .top, spacing: 10) {
-                    BotAvatar(look: template.look, size: 30, noticed: isHovering)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(template.name)
-                            .font(.system(size: 13, weight: .semibold))
-                        Text(template.job)
-                            .font(.system(size: 12))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    Spacer(minLength: 0)
+                VStack(spacing: 6) {
+                    BotAvatar(look: template.look, size: 36, noticed: isHovering)
+                    Text(template.name)
+                        .font(.system(size: 12, weight: isOn ? .semibold : .regular))
+                        .lineLimit(1)
                 }
-                .padding(10)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity)
                 .pickHighlight(RoundedRectangle(cornerRadius: 10), isOn: isOn)
             }
             .buttonStyle(.plain)
             .clickablePointer()
             .onHover { isHovering = $0 }
             .animation(.easeOut(duration: 0.12), value: isHovering)
+            .accessibilityLabel("\(template.name): \(template.job)")
             .accessibilityAddTraits(isOn ? .isSelected : [])
-            .help(template.wantsProject ? "Works best in one of your projects" : "")
+            .help(template.job + (template.wantsProject ? ". Works best in one of your projects" : ""))
         }
     }
 }
