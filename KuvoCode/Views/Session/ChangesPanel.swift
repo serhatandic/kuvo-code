@@ -253,6 +253,7 @@ struct ChangesPanel: View {
                 }
                 .buttonStyle(CardActionStyle())
                 .disabled(model.isRunning || isAsLastSeen)
+                .accessibilityLabel("Review")
                 .help(isAsLastSeen ? ChangesAway.waits("Review", for: machineName)
                       : model.isRunning ? "Review the changes once the agent is done" : "Have the agent review these changes (/review)")
             }
@@ -261,6 +262,7 @@ struct ChangesPanel: View {
                 Button("Commit…") { isCommitting = true }
                     .buttonStyle(.borderless)
                     .font(.system(size: 12, weight: .medium))
+                    .fixedSize()
                     .help(isAsLastSeen && !isCommitting ? ChangesAway.waits("Commit", for: machineName) : "Commit the changes, and push them if you like")
                     .disabled(isAsLastSeen && !isCommitting)
                     .popover(isPresented: $isCommitting, arrowEdge: .bottom) {
@@ -1082,6 +1084,7 @@ struct DiffLineRow: View {
                         }
                         .buttonStyle(AccentBadgeButtonStyle())
                         .offset(x: 2)
+                        .accessibilityLabel("Comment on This Line")
                         .help("Comment on This Line")
                     }
                 }
@@ -1207,7 +1210,7 @@ struct CommentCard: View {
                 Text("You")
                     .font(.system(size: 12, weight: .semibold))
                 Spacer()
-                Text("Comment on line \(comment.side == .old ? "L" : "R")\(comment.line)")
+                Text(comment.side == .old ? "Line \(comment.line), before" : "Line \(comment.line)")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }

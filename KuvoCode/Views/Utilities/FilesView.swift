@@ -226,12 +226,17 @@ final class FileTree {
         loading.remove(directory)
     }
 
+    /// What the tree leaves out: Finder's own file, and version control's folders, which nobody
+    /// works in by hand.
+    nonisolated static let unlisted: Set<String> = [".DS_Store", ".git", ".hg", ".svn"]
+
     /// A folder's entries, folders first, or why it can't be read. A link to a folder is a
     /// folder, as on a machine (a package manager's linked packages).
     nonisolated static func list(_ directory: URL) -> Result<[Entry], FolderFailure> {
         if !directory.isFileURL {
             return RemoteShell.list(directory).map { listed in
                 listed
+                    .filter { !unlisted.contains($0.name) }
                     .map { Entry(url: directory.appending(path: $0.name, directoryHint: $0.isDirectory ? .isDirectory : .notDirectory), isDirectory: $0.isDirectory) }
                     .sorted(by: Entry.inFinderOrder)
             }
@@ -244,7 +249,7 @@ final class FileTree {
             return .failure(FolderFailure(error))
         }
         return .success(names
-            .filter { $0 != ".DS_Store" }
+            .filter { !unlisted.contains($0) }
             .map { directory.appending(path: $0) }
             .map { url in
                 let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
@@ -346,6 +351,8 @@ private struct FileTreeView: View {
                 if !tree.filter.isEmpty {
                     Button { tree.filter = "" } label: { Image(systemName: "xmark.circle.fill") }
                         .buttonStyle(ClearFieldButtonStyle())
+                        .accessibilityLabel("Clear")
+                        .help("Clear")
                 }
             }
             .font(.system(size: 13))
@@ -715,10 +722,18 @@ struct FileViewer: View {
 
     private var header: some View {
         HStack(spacing: 6) {
-            breadcrumb
-                .lineLimit(1)
-                .truncationMode(.head)
-                .help(url.path)
+            // The whole path where it fits, else only the file's name: never cut in a word.
+            ViewThatFits(in: .horizontal) {
+                breadcrumb
+                    .lineLimit(1)
+                    .fixedSize()
+                Text(url.lastPathComponent)
+                    .font(.system(size: 13, weight: .semibold))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            .help(url.path)
+            .frame(maxWidth: .infinity, alignment: .leading)
             Spacer(minLength: 8)
             if isMarkdown {
                 Button(showsSource ? "View Rendered" : "View Source") { showsSource.toggle() }
@@ -728,6 +743,7 @@ struct FileViewer: View {
                     .padding(.horizontal, 10)
                     .frame(height: 26)
                     .hoverHighlight(in: Capsule())
+                    .fixedSize()
             }
             Button { withAnimation(.ui) { showsTree.toggle() } } label: {
                 Image(systemName: "sidebar.right")
@@ -831,6 +847,7 @@ private struct OpenMenu: View {
                     .frame(width: 20, height: 24)
                     .hoverHighlight(in: RoundedRectangle(cornerRadius: 7), mutesInk: true)
             }
+            .accessibilityLabel("Open With")
             .help("Open With")
         }
         .font(.system(size: 12, weight: .medium))
