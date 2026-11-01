@@ -244,7 +244,13 @@ test("a model there's no account for, or an effort it hasn't, is refused with wh
   assert.equal(made.length, 0);
 });
 
-test("a session's approval is never above its starter's: a bot that asks first starts sessions that ask first", async () => {
+test("a model its provider is retiring isn't offered, but a session on it can still start one on it (its own model, as a session left to its starter's takes)", async () => {
+  const said = await tool("start_session", { task: "Carry on.", project: "Tidepool", model: "deepseek/deepseek-v3" }, "ses_pixel");
+  assert.equal(said.isError, false, said.text);
+  assert.deepEqual(made[0].model, { providerID: "deepseek", id: "deepseek-v3" });
+});
+
+test("a session's approval is never above its starter's:a bot that asks first starts sessions that ask first", async () => {
   const said = await tool("start_session", { task: "Tidy the README.", project: "Tidepool", approval: "approveAll" }, "ses_mira");
   assert.equal(said.isError, false, said.text);
   assert.match(said.text, /asks first, as you do/);

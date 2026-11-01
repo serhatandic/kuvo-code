@@ -12403,12 +12403,10 @@ function modelsIn(listed, target, agents, ready) {
   for (const each of Array.isArray(listed) ? listed : []) {
     if (!isObject(each) || typeof each.id !== "string" || typeof each.providerID !== "string" || each.enabled === false)
       continue;
-    if (each.status === "deprecated")
-      continue;
     if (ready && !ready.has(each.providerID))
       continue;
     const efforts = Array.isArray(each.variants) ? each.variants.map((variant) => isObject(variant) ? variant.id : null).filter((id) => typeof id === "string") : [];
-    models.push({ providerID: each.providerID, id: each.id, name: typeof each.name === "string" && each.name ? each.name : each.id, efforts, target, agents });
+    models.push({ providerID: each.providerID, id: each.id, name: typeof each.name === "string" && each.name ? each.name : each.id, efforts, target, agents, retiring: each.status === "deprecated" });
   }
   return models;
 }
@@ -12423,7 +12421,8 @@ async function usableModels(engine, bridge, signal) {
     models.push(...modelsIn(await call(bridge, "GET", "/api/model", undefined, signal).catch(() => null), bridge, true, null));
   return models;
 }
-function describeModels(models) {
+function describeModels(all) {
+  const models = all.filter((model) => !model.retiring);
   if (!models.length)
     return `There's no model with an account on ${HERE}. Ask the user to sign in to one in Settings › Accounts.`;
   const line = (model) => `- ${model.providerID}/${model.id} (${model.name})${model.efforts.length ? `, efforts: ${model.efforts.join(", ")}` : ""}`;
@@ -12478,13 +12477,14 @@ async function startingModelHere(named, readEngine, signal) {
   } catch {}
   if (!engine)
     return named;
-  const models = await usableModels(engine, null, signal);
+  const step = signal ? AbortSignal.any([signal, AbortSignal.timeout(BOT_STEP)]) : AbortSignal.timeout(BOT_STEP);
+  const models = (await usableModels(engine, null, step)).filter((model) => !model.retiring);
   if (!models.length)
     return named;
   const usable = (model) => Boolean(model) && models.some((each) => each.id === model?.id && each.providerID === model?.providerID);
   if (usable(named))
     return named;
-  const fallback = await call(engine, "GET", "/api/model/default", undefined, signal).catch(() => null);
+  const fallback = await call(engine, "GET", "/api/model/default", undefined, step).catch(() => null);
   if (isObject(fallback) && usable(fallback))
     return { id: fallback.id, providerID: fallback.providerID };
   return { id: models[0].id, providerID: models[0].providerID };

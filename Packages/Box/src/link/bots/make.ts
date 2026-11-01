@@ -62,19 +62,21 @@ export async function signInRefusal(model: BotModel, engine: Target, signal?: Ab
 }
 
 // The model a new bot starts on here, as New Bot offers it: the one its Mac named (the model picked
-// last there) while this box can use it (its account signed in here); else the engine's default, or
-// the first model this box can use. As the Mac named it when the engine can't say, and a coding
-// agent's (the bridge says for itself whether it can run it).
+// last there) while this box can use it (its account signed in here, and not one being retired); else
+// the engine's default, or the first model this box can use. As the Mac named it when the engine
+// can't say (or doesn't answer in time), and a coding agent's (the bridge says for itself whether it
+// can run it).
 export async function startingModelHere(named: BotModel | null, readEngine: () => Target, signal?: AbortSignal): Promise<BotModel | null> {
   if (named && runsWithAgents(named)) return named;
   let engine: Target | null = null;
   try { engine = readEngine(); } catch {}
   if (!engine) return named;
-  const models = await usableModels(engine, null, signal);
+  const step = signal ? AbortSignal.any([signal, AbortSignal.timeout(BOT_STEP)]) : AbortSignal.timeout(BOT_STEP);
+  const models = (await usableModels(engine, null, step)).filter(model => !model.retiring);
   if (!models.length) return named;
   const usable = (model: Partial<BotModel> | null | undefined) => Boolean(model) && models.some(each => each.id === model?.id && each.providerID === model?.providerID);
   if (usable(named)) return named;
-  const fallback = await call(engine, "GET", "/api/model/default", undefined, signal).catch(() => null);
+  const fallback = await call(engine, "GET", "/api/model/default", undefined, step).catch(() => null);
   if (isObject(fallback) && usable(fallback as Partial<BotModel>)) return { id: fallback.id as string, providerID: fallback.providerID as string };
   return { id: models[0].id, providerID: models[0].providerID };
 }
