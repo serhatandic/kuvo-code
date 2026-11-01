@@ -18,11 +18,11 @@ import Testing
         catalog.api = OpenCodeAPI(endpoint: ServerEndpoint(url: URL(string: Self.engine)!, password: "test"))
     }
 
-    private static func model(_ provider: String, _ id: String, released: Int = 1, free: Bool = false) -> [String: Any] {
+    private static func model(_ provider: String, _ id: String, released: Int = 1, free: Bool = false, status: String = "active") -> [String: Any] {
         ["id": id, "modelID": id, "providerID": provider, "name": id,
          "capabilities": ["tools": true, "input": ["text"], "output": ["text"]], "variants": [],
          "time": ["released": released], "cost": [["input": free ? 0 : 1, "output": free ? 0 : 1]],
-         "status": "active", "enabled": true, "limit": ["context": 100_000, "output": 8_000]]
+         "status": status, "enabled": true, "limit": ["context": 100_000, "output": 8_000]]
     }
 
     private static func account(_ id: String, signedIn: Bool) -> [String: Any] {
@@ -149,5 +149,33 @@ import Testing
         machine.forgetAgents()
         #expect(machine.startingModel(claude) == luna)
         #expect(machine.isUnavailable(claude))
+    }
+
+    /// A model its provider has deprecated (it's retired soon): not offered for new conversations,
+    /// as the engine's own picker leaves it out, and a new one starts on the default; one already
+    /// on it carries on.
+    @Test func aDeprecatedModelIsntOfferedButCarriesOn() async throws {
+        defer { StubWeb.stop() }
+        try await engine(accounts: [Self.account("anthropic", signedIn: true), Self.account("openai", signedIn: true)],
+                         models: [Self.model("anthropic", "sonnet", status: "deprecated"), Self.model("openai", "luna")],
+                         defaultModel: Self.model("openai", "luna"))
+        #expect(!catalog.modelsByProvider.flatMap(\.models).contains { $0.ref.sameModel(as: sonnet) }, "not in the picker")
+        #expect(catalog.startingModel(sonnet) == luna)
+        #expect(!catalog.isUnavailable(sonnet), "a conversation on it isn't turned down")
+        #expect(catalog.refusal(sonnet) == nil)
+    }
+
+    /// Sending on a model that's gone from its signed-in account is turned down before it's sent,
+    /// saying to choose another (the engine would only fail it, and Try Again fail the same way);
+    /// signed out, it says to sign in. A coding agent's model missing while the agents start goes.
+    @Test func sendingOnAModelThatCantRunSaysWhy() async throws {
+        defer { StubWeb.stop() }
+        try await engine(accounts: [Self.account("anthropic", signedIn: true), Self.account("deepseek", signedIn: false)],
+                         models: [Self.model("anthropic", "sonnet-next"), Self.model("deepseek", "chat")],
+                         defaultModel: Self.model("anthropic", "sonnet-next"))
+        #expect(catalog.refusal(sonnet, on: "lokum") == "sonnet isn’t available on lokum now: choose another model.")
+        #expect(catalog.refusal(ModelRef(id: "chat", providerID: "deepseek")) == "chat needs a sign-in: sign in to Deepseek in Settings › Accounts, or choose another model.")
+        #expect(catalog.refusal(ModelRef(id: "sonnet-next", providerID: "anthropic")) == nil)
+        #expect(catalog.refusal(ModelRef(id: "opus", providerID: "claude-code")) == nil, "its agents still loading")
     }
 }

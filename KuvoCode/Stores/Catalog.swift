@@ -91,7 +91,14 @@ final class Catalog {
     /// sign in to (a local one). The engine lists every provider it knows, connected or not, and
     /// one that isn't only fails ("missing required Authorization header"); its models show once
     /// it's connected.
+    /// One its provider has deprecated (it's retired soon) isn't, as the engine's own picker leaves
+    /// it out; a conversation already on one carries on (`usable`).
     var offered: [Model] {
+        usable.filter { !$0.isDeprecated }
+    }
+
+    /// The models you can run now: those offered, and deprecated ones of the same accounts.
+    private var usable: [Model] {
         let byID = Dictionary(integrations.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         return models.filter { model in
             guard model.enabled else { return false }
@@ -169,7 +176,7 @@ final class Catalog {
     func offeredModel(_ ref: ModelRef?) -> Model? {
         guard let ref else { return nil }
         if ref.providerID == OutsideAgents.autoProvider { return isAutoAvailable(ref.id) ? autoModel(ref.id) : nil }
-        return offered.first { $0.id == ref.id && $0.providerID == ref.providerID }
+        return usable.first { $0.id == ref.id && $0.providerID == ref.providerID }
     }
 
     // MARK: Auto
@@ -220,6 +227,14 @@ final class Catalog {
         return integrations.contains { $0.id == ref.providerID && !$0.isConnected && !$0.methods.isEmpty }
     }
 
+    /// Why a message on `ref` can't be sent (on the machine named `on`), said before it's sent;
+    /// nil when it can go.
+    /// A model of the engine's that's gone (retired, turned off) is said too, as the engine would
+    /// only fail it; a coding agent's missing while the agents start goes to them.
+    func refusal(_ ref: ModelRef, on machine: String? = nil) -> String? {
+        needsSignIn(ref) || isUnavailable(ref) && !OutsideAgents.runsInBridge(ref.providerID) ? unavailable(ref, on: machine) : nil
+    }
+
     /// Why `ref` can't run here, and what to do, for one `isUnavailable` turned down: its account
     /// to sign in to (on the machine named `on`, as Settings › Accounts lists it), or another
     /// model. Without it, the engine takes the message and drops it without a word.
@@ -232,14 +247,16 @@ final class Catalog {
         return "\(name) isn’t available\(there) now: choose another model."
     }
 
-    /// A provider's refusal that means it isn't signed in (a request sent without its credentials,
-    /// or ones it turned down), in words saying what to do, for `ref`'s provider (on the machine
-    /// named `on`, or its model's when it's not known); any other error as it was said.
-    func plain(_ error: String, for ref: ModelRef?, on machine: String? = nil) -> String {
-        guard Self.isSignInRefusal(error) else { return error }
-        let there = machine.map { " on \($0)" } ?? ""
-        return "\(ref.map { signInName($0.providerID) } ?? "Its model’s account") isn’t signed in\(there): sign in to it again in Settings › Accounts, or choose another model."
+    /// Whether a run that failed with `type` (the engine's kind of error) and `message` was turned
+    /// down for want of a sign-in, whatever the engine calls it; not one it knows was for something
+    /// else (your input flagged, a limit reached), though the provider's words say 403.
+    static func isSignInRefusal(type: String?, message: String) -> Bool {
+        if type == "provider.auth" { return true }
+        if let type, notSignIn.contains(type) { return false }
+        return isSignInRefusal(message)
     }
+
+    private static let notSignIn: Set<String> = ["provider.content-filter", "provider.quota", "provider.rate-limit", "provider.free-limit", "provider.budget-limit", "provider.model-budget-limit"]
 
     /// Whether a provider's error means it isn't signed in.
     static func isSignInRefusal(_ error: String) -> Bool {
@@ -273,8 +290,9 @@ final class Catalog {
     func startingModel(_ wanted: ModelRef?..., scope: ModelScope = .all) -> ModelRef? {
         let wanted = wanted.compactMap(\.self).filter { scope.allows($0.providerID) }
         guard isLoaded else { return wanted.first ?? defaultModel?.ref }
-        if let ref = wanted.first(where: { offeredModel($0) != nil || !isKnown($0) }) { return ref }
-        if let model = offeredModel(defaultModel?.ref) { return model.ref }
+        // Not one being retired, for a new conversation.
+        if let ref = wanted.first(where: { offeredModel($0).map { !$0.isDeprecated } ?? !isKnown($0) }) { return ref }
+        if let model = offeredModel(defaultModel?.ref), !model.isDeprecated { return model.ref }
         // Only coding agents' accounts: one of theirs.
         return modelsByProvider.first?.models.first?.ref ?? offered.first { OutsideAgents.isAgent($0.providerID) && scope.allows($0.providerID) }?.ref
     }

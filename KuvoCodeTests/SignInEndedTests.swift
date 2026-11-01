@@ -91,4 +91,16 @@ import Testing
         await catalog.refresh()
         #expect(catalog.hasEndedSignIn("github-copilot"))
     }
+
+    /// A run a provider turned down for something other than a sign-in (your input flagged, a
+    /// quota or a rate limit), though its words say 403 or forbidden: the failure says what the
+    /// provider said, without telling you to sign in again. Refusals for want of one still do.
+    @Test func aRefusalThatIsntAboutSigningInIsntSaidToBe() {
+        #expect(!Catalog.isSignInRefusal(type: "provider.content-filter", message: "403 Forbidden: your input was flagged by moderation"))
+        #expect(!Catalog.isSignInRefusal(type: "provider.quota", message: "Forbidden: monthly quota exceeded"))
+        #expect(!Catalog.isSignInRefusal(type: "provider.rate-limit", message: "403 rate limited"))
+        #expect(Catalog.isSignInRefusal(type: "provider.auth", message: "Invalid credentials"))
+        #expect(Catalog.isSignInRefusal(type: "provider.invalid-request", message: "bad request: missing required Authorization header"))
+        #expect(Catalog.isSignInRefusal(type: nil, message: "401 Unauthorized"))
+    }
 }
