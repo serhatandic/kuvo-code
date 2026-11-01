@@ -19,7 +19,7 @@ import Testing
 
     private func step(_ id: String, at time: Double, command: String) -> [String: Any] {
         ["id": id, "type": "assistant", "agent": "build", "time": ["created": time, "completed": time + 1], "model": ["id": "m", "providerID": "p"],
-         "content": [["type": "tool", "name": "bash", "state": ["status": "completed", "input": ["command": command], "content": [["type": "text", "text": "ok"]]]]]]
+         "content": [["type": "tool", "id": "call_\(id)", "name": "bash","state": ["status": "completed", "input": ["command": command], "content": [["type": "text", "text": "ok"]]]]]]
     }
 
     /// The conversation's rows with what comes between the turn's two steps.
@@ -38,6 +38,7 @@ import Testing
         await workspace.refresh()
         let model = try #require(workspace.model(for: id))
         await model.load()
+        #expect(model.transcript.messages.count == conversation.count, "the whole conversation read")
         return TranscriptView.rows(of: model, catalog: Catalog(), detail: .summary)
     }
 
