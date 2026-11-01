@@ -11,15 +11,21 @@ public struct Found: Decodable, Equatable, Sendable {
     public var shell: [Shell]
     /// The engine's providers signed in to already (a plan, a key), by integration.
     public var connected: [String]
+    /// The parts the box couldn't read just now, their server not running or not answering (the
+    /// engine restarting, slow): theirs are empty for now, not signed out.
+    public var unread: Set<Part>
 
-    public init(agents: [Agent], opencode: [Opencode], shell: [Shell], connected: [String] = []) {
+    public enum Part: String, Sendable { case engine, agents }
+
+    public init(agents: [Agent], opencode: [Opencode], shell: [Shell], connected: [String] = [], unread: Set<Part> = []) {
         self.agents = agents
         self.opencode = opencode
         self.shell = shell
         self.connected = connected
+        self.unread = unread
     }
 
-    private enum CodingKeys: String, CodingKey { case agents, opencode, shell, connected }
+    private enum CodingKeys: String, CodingKey { case agents, opencode, shell, connected, unread }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -28,6 +34,30 @@ public struct Found: Decodable, Equatable, Sendable {
         shell = try c.decode([Shell].self, forKey: .shell)
         // A box from before bridge 0.9.91 doesn't say.
         connected = try c.decodeIfPresent([String].self, forKey: .connected) ?? []
+        // Before bridge 0.9.149 a box doesn't say (and its empty parts may be unread).
+        unread = Set((try c.decodeIfPresent([String].self, forKey: .unread) ?? []).compactMap(Part.init(rawValue:)))
+    }
+
+    /// This list, with what the box couldn't read now as `before` had it: an engine restarting or
+    /// slow to answer, or the agents' bridge, isn't everything signed out.
+    public func keeping(_ before: Found?) -> Found {
+        guard let before else { return self }
+        var kept = self
+        if unread.contains(.engine) {
+            kept.connected = before.connected
+            kept.shell = before.shell
+            // opencode's own are read without the engine; only their names and whether the engine
+            // has them come from it.
+            kept.opencode = opencode.map { item in
+                guard let known = before.opencode.first(where: { $0.id == item.id }) else { return item }
+                var item = item
+                item.name = known.name
+                item.connected = known.connected
+                return item
+            }
+        }
+        if unread.contains(.agents), agents.isEmpty { kept.agents = before.agents }
+        return kept
     }
 
     public struct Agent: Decodable, Equatable, Sendable {
