@@ -370,17 +370,29 @@ struct WidgetPage: NSViewRepresentable {
     })();
     """
 
-    /// Its height, whenever it changes: its content's, so it gets shorter again too. (The page's
-    /// scroll height is never less than the room it's given, so it's only taken when what's in it
-    /// runs past that.)
+    /// Its height, whenever it changes: what's on it, however tall the view is now, so it gets
+    /// shorter again too. That's the page's own box, anything drawn past it (placed where it
+    /// likes, or spilling out of a body of fixed height), and what runs past the room it has
+    /// (its scroll height, never less than that room, so taken only then). It's measured again
+    /// when the page's box changes and when anything on it does, as a chart drawn in a page that
+    /// fills its window. The same as the phone's.
     static let measure = """
     (() => {
-      const report = () => {
+      const measure = () => {
         const page = document.documentElement;
-        const height = Math.max(page.getBoundingClientRect().height, page.scrollHeight > page.clientHeight ? page.scrollHeight : 0);
-        window.webkit.messageHandlers.kuvo.postMessage({ type: "height", value: Math.ceil(height) });
+        let height = Math.max(page.getBoundingClientRect().height, page.scrollHeight > page.clientHeight ? page.scrollHeight : 0);
+        if (document.body) {
+          const range = document.createRange();
+          range.selectNodeContents(document.body);
+          const content = range.getBoundingClientRect();
+          if (content.height > 0) height = Math.max(height, content.bottom + window.scrollY);
+        }
+        return Math.ceil(height);
       };
+      const report = () => window.webkit.messageHandlers.kuvo.postMessage({ type: "height", value: measure() });
       new ResizeObserver(report).observe(document.documentElement);
+      new MutationObserver(report).observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
+      window.addEventListener("load", report);
       report();
     })();
     """
@@ -398,9 +410,13 @@ struct WidgetPage: NSViewRepresentable {
         private var lastDraft = Date.distantPast
         private var waitingDraft: Task<Void, Never>?
         /// Loading again with a height already (scrolled back to, or finished after its draft),
-        /// it keeps that height for a moment and only grows: a page draws in steps, and
-        /// coming in short would move the conversation under it.
+        /// it keeps that height and only grows until it's loaded, and a moment more: a page draws
+        /// in steps (its libraries coming first), and coming in short would move the
+        /// conversation under it.
         private var keepsHeightUntil = Date.distantPast
+        /// The load under way, and its height set once it's settled.
+        private var navigation: WKNavigation?
+        private var settling: Task<Void, Never>?
         private var measured: CGFloat?
         /// When the page last sent a message, for one a click.
         private var lastSent: Date?
@@ -427,12 +443,18 @@ struct WidgetPage: NSViewRepresentable {
             if draft { lastDraft = .now }
             loaded = page
             measured = nil
-            view?.loadHTMLString(page, baseURL: nil)
-            guard (height?.wrappedValue ?? 0) > 0 else { return }
+            settling?.cancel()
+            navigation = view?.loadHTMLString(page, baseURL: nil)
+            if (height?.wrappedValue ?? 0) > 0 { keepsHeightUntil = .distantFuture }
+        }
+
+        /// Loaded: what it measures a moment later stands, shorter too.
+        private func settle() {
+            guard keepsHeightUntil == .distantFuture else { return }
             keepsHeightUntil = .now.addingTimeInterval(1.5)
-            Task { @MainActor [weak self] in
+            settling = Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .seconds(1.6))
-                guard let self, let measured, let height, abs(height.wrappedValue - measured) > 0.5 else { return }
+                guard !Task.isCancelled, let self, let measured, let height, abs(height.wrappedValue - measured) > 0.5 else { return }
                 height.wrappedValue = measured
             }
         }
@@ -465,10 +487,17 @@ struct WidgetPage: NSViewRepresentable {
             }
         }
 
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            if navigation === self.navigation { settle() }
+            #if DEBUG
+            snapshot(webView)
+            #endif
+        }
+
         #if DEBUG
         /// KUVO_DEMO_WIDGET_SNAPSHOTS=<folder>: each page, once drawn, as a picture there (a
         /// background copy's window doesn't draw web pages, so they can't be captured).
-        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        private func snapshot(_ webView: WKWebView) {
             guard let folder = ProcessInfo.processInfo.environment["KUVO_DEMO_WIDGET_SNAPSHOTS"] else { return }
             Task { @MainActor in
                 try? await Task.sleep(for: .seconds(1.5))
@@ -511,7 +540,8 @@ struct WidgetPage: NSViewRepresentable {
         func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
             guard !restarted, let loaded else { return failed() }
             restarted = true
-            webView.loadHTMLString(loaded, baseURL: nil)
+            navigation = webView.loadHTMLString(loaded, baseURL: nil)
+            if (height?.wrappedValue ?? 0) > 0 { keepsHeightUntil = .distantFuture }
         }
 
         /// A link meant for a new window, too.
