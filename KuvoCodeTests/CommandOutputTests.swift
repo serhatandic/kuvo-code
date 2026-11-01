@@ -33,6 +33,23 @@ import Testing
         #expect(lines.contains(String(first)), "from a whole line, not the middle of one: \(first)")
     }
 
+    /// One long line (minified JSON, say), ended: its end, not nothing.
+    @Test func oneLongLineShowsItsEnd() async throws {
+        defer { engine.stop() }
+        let line = String(repeating: "{\"k\":1},", count: 5_000) + "{\"last\":true}"
+        keeps(line + "\n")
+        let end = try #require(await ShellOutputView.end(of: "sh_build", api: engine.api, directory: "/tmp/kuvo-tests-build"))
+        #expect(end.hasSuffix("{\"last\":true}"), "the line's end: \(end.suffix(40))")
+    }
+
+    /// With no line end, a read that starts partway into a character starts at the next whole one.
+    @Test func noHalfACharacter() async throws {
+        defer { engine.stop() }
+        // 30,001 bytes: the last 24,000 start on the second byte of an é.
+        keeps(String(repeating: "é", count: 15_000) + "x")
+        #expect(await ShellOutputView.end(of: "sh_build", api: engine.api, directory: "/tmp/kuvo-tests-build") == String(repeating: "é", count: 11_999) + "x")
+    }
+
     @Test func allOfItWhileTheresLittle() async throws {
         defer { engine.stop() }
         keeps("Starting the server\nListening on :3000\n")
