@@ -2006,7 +2006,7 @@ final class Workspace {
             }
             for request in permissions {
                 found[request.id] = request.sessionID
-                if tell, asking[request.id] == nil { notifyAsk(request.sessionID, body: Self.describe(request, home: askHome(request.sessionID)), request: request.id, isPermission: true, answerable: Self.showsAll(request)) }
+                if tell, asking[request.id] == nil { notifyAsk(request.sessionID, body: Self.describe(request, home: askHome(request.sessionID)), request: request.id, isPermission: true, answerable: Self.showsAll(request), offersAlways: Notifier.offersAlways(request)) }
             }
             for form in forms where form.sessionID != FormRequest.anySession {
                 found[form.id] = form.sessionID
@@ -2541,7 +2541,7 @@ final class Workspace {
         case "permission.asked":
             guard let request = try? event.payload(as: PermissionRequest.self) else { return }
             asking[request.id] = request.sessionID
-            notifyAsk(request.sessionID, body: Self.describe(request, home: askHome(request.sessionID)), request: request.id, isPermission: true, answerable: Self.showsAll(request))
+            notifyAsk(request.sessionID, body: Self.describe(request, home: askHome(request.sessionID)), request: request.id, isPermission: true, answerable: Self.showsAll(request), offersAlways: Notifier.offersAlways(request))
         case "permission.replied":
             if let reply = try? event.payload(as: EventPayload.PermissionReplied.self) { settled(reply.requestID) }
         case "form.created":
@@ -2623,7 +2623,7 @@ final class Workspace {
         Notifier.shared.clear(request: request)
     }
 
-    private func notifyAsk(_ id: String, body: String, request: String, isPermission: Bool = false, answerable: Bool = true, question: Notifier.Question? = nil) {
+    private func notifyAsk(_ id: String, body: String, request: String, isPermission: Bool = false, answerable: Bool = true, offersAlways: Bool = true, question: Notifier.Question? = nil) {
         // A seat's requests are answered by its group chat.
         guard !seats.contains(id) else { return }
         notifying.insert(request)
@@ -2658,7 +2658,7 @@ final class Workspace {
             let shown = Notifier.showsAll(body) && (question?.choices.allSatisfy { Notifier.showsAll($0.label) } ?? true)
             Notifier.shared.notify(session: session?.id ?? id, title: session.flatMap { botName?($0.id) } ?? session?.title ?? AppInfo.name,
                                    subtitle: session.flatMap { botName?($0.id) == nil ? projectName($0.location.directory) : nil }, body: body,
-                                   permission: isPermission && answerable && shown ? (session: id, request: request) : nil,
+                                   permission: isPermission && answerable && shown ? (session: id, request: request) : nil, offersAlways: offersAlways,
                                    question: shown ? question : nil,
                                    push: .init(isPermission ? .permission : .question, request: (session: id, id: request),
                                                machine: sessionMachines[id] ?? session.flatMap { RemoteFolder.machine(of: $0.location.directory) }, answerable: answerable && shown))

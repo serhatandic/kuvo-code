@@ -9,6 +9,7 @@
 import path from "node:path";
 import { isObject } from "../../shared/json";
 import { call } from "../engine/client";
+import { stopSession } from "../engine/queue";
 import { lockedWhile } from "../files";
 import { homeFolder } from "../home";
 import { permissionsHere } from "../bots/tell";
@@ -125,6 +126,15 @@ export async function asksIn(target: Target, session: string, signal?: AbortSign
     }
   }
   return { permissions, questions };
+}
+
+/** Archived while it waits on you (a permission or a question, its subagents' too): its run stops,
+ * as a bot's Stop and Archive has it, rather than wait out of sight for an answer no one sees (and
+ * keep counting on the Dock). One that waits on nothing goes on. Whether it was stopped. */
+export async function stopIfWaiting(target: Target, session: string): Promise<boolean> {
+  const { permissions, questions } = await asksIn(target, session).catch(() => ({ permissions: [], questions: [] }));
+  if (!permissions.length && !questions.length) return false;
+  return stopSession(target, session, false).then(() => true, () => false);
 }
 
 /** The ask `ask` in `session` (or one of its subagents), as it's asked now; null when it isn't

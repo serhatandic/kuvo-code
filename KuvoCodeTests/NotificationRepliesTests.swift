@@ -35,6 +35,27 @@ import Testing
         #expect(Notifier.response(to: Notifier.replyAction, info: [:], text: "hi") == nil)
     }
 
+    /// Always for This saves the engine's rule for a permission, which can be wider than its
+    /// notification shows (`git push *` for `git push origin main`, any file for one): then the
+    /// notification offers Allow Once and Don't Allow only, and an Always from it saves nothing.
+    @Test func alwaysIsOfferedOnlyForWhatTheNotificationShows() throws {
+        func request(_ resources: [String], save: [String]?) throws -> PermissionRequest {
+            var json: [String: Any] = ["id": "per_push", "sessionID": id, "action": "shell", "resources": resources]
+            if let save { json["save"] = save }
+            return try JSONDecoder().decode(PermissionRequest.self, from: JSONSerialization.data(withJSONObject: json))
+        }
+        #expect(!Notifier.offersAlways(try request(["git push origin main"], save: ["git push *"])), "a wider rule than it shows")
+        #expect(!Notifier.offersAlways(try request(["Sources/App.swift"], save: ["*"])), "any file, for one")
+        #expect(Notifier.offersAlways(try request(["npm test"], save: ["npm test"])))
+        #expect(Notifier.offersAlways(try request(["Sources/App.swift", "README.md"], save: nil)), "what it shows, when the engine names no rule")
+        #expect(Notifier.buttons(offeringAlways: false) == [.once, .reject])
+        #expect(Notifier.buttons(offeringAlways: true) == [.once, .always, .reject])
+
+        let info = Notifier.info(session: id, permission: (session: id, request: "per_push"), question: nil, offersAlways: false)
+        #expect(Notifier.response(to: Notifier.PermissionAnswer.always.rawValue, info: info, text: nil) == .open(session: id), "no Always from it")
+        #expect(Notifier.response(to: Notifier.PermissionAnswer.once.rawValue, info: info, text: nil) == .permission(session: id, request: "per_push", .once))
+    }
+
     @Test func aReplyGoesToTheConversation() async throws {
         defer { engine.stop() }
         engine.list([StubEngine.session(id, title: "Release notes", directory: "/tmp/kuvo-tests-note")], running: [id])

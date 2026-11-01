@@ -16,6 +16,7 @@ import { messageID } from "../engine/sessions";
 import type { EngineSession } from "../engine/sessions";
 import { listOf, textOf } from "../files";
 import { followed, watchFolders } from "../follow";
+import { stopIfWaiting } from "../work/answers";
 import { BOTS, OWN_RUNTIME, RUN, SCRIPT, SESSION_WAKES, WAKE_COMMAND } from "../home";
 import type { AnswerPiece, LinkRequest, RouteContext } from "../server/context";
 
@@ -235,17 +236,9 @@ const WAKE_LIMIT = 50;
 // session, its folder, whether the coding agents run it, and held while it's archived. Null when
 // it isn't a conversation here.
 async function wakeFolderFor(session: string, readEngine: () => EngineRecord, bridge: () => BridgeRecord | null): Promise<string | null> {
-  if (!/^ses_[A-Za-z0-9]+$/.test(session)) return null;
-  // (As the engine and the agents' bridge answer it: a session they have, whole.)
-  const ask = async (target: Target | null): Promise<EngineSession | null> => target ? (await engineGet(target, `api/session/${encodeURIComponent(session)}`).catch(() => null) as EngineAnswer<EngineSession> | null)?.data ?? null : null;
-  let engine: EngineRecord | null = null;
-  try { engine = readEngine(); } catch {}
-  let found = await ask(engine), agents = false;
-  if (!found) {
-    found = await ask(bridge());
-    agents = Boolean(found);
-  }
-  if (!found) return null;
+  const where = await whereIs(session, readEngine, bridge);
+  if (!where) return null;
+  const { found, agents } = where;
   const folder = path.join(SESSION_WAKES, session);
   fs.mkdirSync(folder, { recursive: true, mode: 0o700 });
   fs.writeFileSync(path.join(folder, "session"), session);
@@ -253,6 +246,19 @@ async function wakeFolderFor(session: string, readEngine: () => EngineRecord, br
   if (agents) fs.writeFileSync(path.join(folder, "via"), "bridge");
   if (found.metadata?.["kuvo.archived"] === true) fs.writeFileSync(path.join(folder, "paused"), "archived");
   return folder;
+}
+
+// The session as the engine or the agents' bridge has it (whole), and which: null for neither.
+async function whereIs(session: string, readEngine: () => EngineRecord, bridge: () => BridgeRecord | null): Promise<{ target: Target; found: EngineSession; agents: boolean } | null> {
+  if (!/^ses_[A-Za-z0-9]+$/.test(session)) return null;
+  const ask = async (target: Target | null): Promise<EngineSession | null> => target ? (await engineGet(target, `api/session/${encodeURIComponent(session)}`).catch(() => null) as EngineAnswer<EngineSession> | null)?.data ?? null : null;
+  let engine: EngineRecord | null = null;
+  try { engine = readEngine(); } catch {}
+  const here = await ask(engine);
+  if (engine && here) return { target: engine, found: here, agents: false };
+  const agents = bridge();
+  const there = await ask(agents);
+  return agents && there ? { target: agents, found: there, agents: true } : null;
 }
 
 // Takes a wake-up off the schedule by its letters, which a repeating one keeps as its time moves on.
@@ -370,6 +376,9 @@ export async function* answerWakes(session: string, action: WakeAction | undefin
   if (action === "pause" && typeof given.archived === "boolean") {
     if (folder && isMoving(folder)) return yield* json(409, { message: MOVING });
     holdArchived(session, given.archived);
+    // Archived while it waits on you: it stops, as a phone's Archive has it.
+    const where = given.archived ? await whereIs(session, readEngine, bridge) : null;
+    if (where) await stopIfWaiting(where.target, session);
     return yield* changed(200, listed());
   }
   if (action === "pause" && typeof given.paused !== "boolean") return yield* json(400, { message: "Send {\"paused\": true} or false." });

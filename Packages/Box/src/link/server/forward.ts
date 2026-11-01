@@ -6,6 +6,7 @@ import { engineDown, stopShell } from "../areas/engine";
 import { holdArchived } from "../areas/wakes";
 import { MOVING } from "../bots/here";
 import { frozen } from "../moves/records";
+import { stopIfWaiting } from "../work/answers";
 import { attachedIn } from "./attached";
 import type { ModelInput } from "./attached";
 import { namedIn, namingHere } from "./naming";
@@ -123,7 +124,11 @@ export async function* forward(target: Target, path: string, request: LinkReques
   if (changed && response.ok) {
     let archived: unknown;
     try { archived = JSON.parse(Buffer.from(request.body ?? []).toString("utf8"))?.metadata?.["kuvo.archived"]; } catch {}
-    if (typeof archived === "boolean" && archived !== wasArchived) try { holdArchived(decodeURIComponent(changed[1]!), archived); } catch {}
+    if (typeof archived === "boolean" && archived !== wasArchived) {
+      try { holdArchived(decodeURIComponent(changed[1]!), archived); } catch {}
+      // Archived while it waits on you: it stops, as a Mac's Archive has it.
+      if (archived) await stopIfWaiting(target, decodeURIComponent(changed[1]!));
+    }
   }
   yield { head: { status: response.status, headers: out } };
   if (!response.body) return;
