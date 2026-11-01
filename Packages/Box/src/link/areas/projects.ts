@@ -13,7 +13,7 @@ import { followed } from "../follow";
 import { K } from "../home";
 import type { AnswerPiece, LinkRequest } from "../server/context";
 import { holdArchived } from "./wakes";
-import { readWorktrees } from "./worktree-records";
+import { readRemovedWorktrees, readWorktrees } from "./worktree-records";
 
 export const PROJECTS_FILE = path.join(K, "box", "projects.json");
 const PROJECTS_LOCK = PROJECTS_FILE + ".lock";
@@ -75,17 +75,19 @@ function keptProject(directory: string, given: Record<string, unknown>, before: 
   return project;
 }
 
-/** Every session of the project, its worktrees' too, archived, on the engine and the coding
- * agents' bridge, page after page; how many weren't. */
+/** Every session of the project, its worktrees' too (those removed since included, whose sessions
+ * clients still show under it), archived, on the engine and the coding agents' bridge, page after
+ * page; how many weren't. None without the engine (`kept` null): its sessions are most of them,
+ * and the project would come back with them. */
 async function archiveProject(directory: string, readEngine: () => EngineRecord, readBridge: () => BridgeRecord, signal: AbortSignal | undefined): Promise<{ archived: number; kept: number | null }> {
-  const folders = [directory, ...readWorktrees().filter(tree => tree.project === directory && typeof tree.folder === "string").map(tree => tree.folder!)];
+  const removed = Object.entries(readRemovedWorktrees()).filter(([, project]) => project === directory).map(([folder]) => folder);
+  const folders = [...new Set([directory, ...readWorktrees().filter(tree => tree.project === directory && typeof tree.folder === "string").map(tree => tree.folder!), ...removed])];
   const targets: Target[] = [];
-  try { targets.push(readEngine()); } catch {}
+  try { targets.push(readEngine()); } catch { return { archived: 0, kept: null }; }
   try {
     const bridge = readBridge();
     if (bridge?.port && bridge?.password && runs(bridge.pid, "kuvo-agents")) targets.push(bridge);
   } catch {}
-  if (!targets.length) return { archived: 0, kept: null };
   let archived = 0, kept = 0;
   for (const target of targets) {
     for (const folder of folders) {

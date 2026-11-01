@@ -8,6 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, test } from "node:test";
 import { removeAtEnd } from "./at-end.js";
+import { runningAs } from "./running-as.js";
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-projects-"));
 process.env.KUVO_HOME = home;
@@ -137,6 +138,30 @@ test("a session the engine doesn't archive keeps its project, which says so", as
   // Without its engine, nothing can be archived: it says so.
   const down = link.engineHandler(() => { throw new Error("down"); }, { name: "box" }, () => null);
   assert.equal((await ask(down, "DELETE", `kuvo/projects?directory=${encodeURIComponent(shop)}`)).status, 503);
+});
+
+test("with its engine down and the coding agents' bridge up, Remove Project says it can't, and the project stays: its engine's sessions would come back", async t => {
+  const bridge = await engineWith([]);
+  t.after(bridge.close);
+  const pid = await runningAs("kuvo-agents", t);
+  const handle = link.engineHandler(() => { throw new Error("down"); }, { name: "box" }, () => ({ port: bridge.port, password: bridge.password, pid }));
+  await ask(handle, "PUT", `kuvo/projects?directory=${encodeURIComponent(shop)}`, { name: "Shop" });
+  const removed = await ask(handle, "DELETE", `kuvo/projects?directory=${encodeURIComponent(shop)}`);
+  assert.equal(removed.status, 503, JSON.stringify(removed.json));
+  assert.equal((await ask(handle, "GET", "kuvo/projects")).json.projects[0].removed, undefined);
+});
+
+test("Remove Project archives the sessions of a worktree of it that was removed since, which the sidebar still shows under it", async t => {
+  const gone = path.join(work, "trees", "quiet-heron");
+  fs.writeFileSync(path.join(home, "box", "worktrees.json"), JSON.stringify({ worktrees: [], removed: { [gone]: shop, [path.join(work, "trees", "elsewhere")]: blog } }));
+  const sessions = [session("ses_shop", shop), session("ses_gone", gone), session("ses_else", path.join(work, "trees", "elsewhere"))];
+  const engine = await engineWith(sessions);
+  t.after(engine.close);
+  const handle = link.engineHandler(() => engine, { name: "box" }, () => null);
+  const removed = await ask(handle, "DELETE", `kuvo/projects?directory=${encodeURIComponent(shop)}`);
+  assert.deepEqual(removed.json, { archived: 2 });
+  assert.equal(sessions.find(each => each.id === "ses_gone").metadata["kuvo.archived"], true);
+  assert.deepEqual(sessions.find(each => each.id === "ses_else").metadata, {}, "another project's");
 });
 
 test("the list followed: a line now, and another when it changes", async () => {

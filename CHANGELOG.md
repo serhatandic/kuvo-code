@@ -318,6 +318,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - Models their provider is retiring are no longer offered in the model picker or to agents, and a new conversation doesn't start on one; one already on it carries on.
 - Sending a message on a model that's gone from its account now says so before it's sent (choose another model), rather than failing the same way again on Try Again.
 - New Bot on your phone offers a model the computer can use: no longer one whose account was signed out there, which failed to make the bot.
+- Remove Project while Kuvo Code's engine is starting again says it can't yet, instead of seeming to work and bringing the project back a moment later; it also archives the conversations of a worktree of it you'd removed.
 - With no GitHub Copilot account, a conversation started without picking a model (one an agent or a bot started, say) no longer fails every message with "missing required Authorization header": the engine's default model had become one of Copilot's. It's one of OpenCode's free models again: on a new install from the start, and on one that had the problem once its engine has started again after its first run with this update.
 - A short message of yours in a narrow window shows all of its lines, instead of being cut at twelve with no Show More.
 
