@@ -1229,7 +1229,7 @@ final class SessionModel {
                 try await wakeUps.add(to: owner, at: schedule.firstWake(now: now), every: schedule.every, note: command.message)
                 if !schedule.keepsTimeOfDay { send(command.message, files: files, for: model, queue: false, typed: Keyword.loop.typed + " " + command.scheduleText) }
             } catch {
-                restore(text: written, files: files)
+                restoreWritten(written, files: files)
                 fail(error)
             }
         }
@@ -1269,7 +1269,7 @@ final class SessionModel {
                 bridge.took(asked)
                 shownSideQuestion = asked.id
             } catch {
-                if let written { restore(text: written) } else { unsentFollowUp = question }
+                if let written { restoreWritten(written) } else { unsentFollowUp = question }
                 fail(error)
             }
         }
@@ -1323,7 +1323,7 @@ final class SessionModel {
             do {
                 bridge.startedHandoff(try await api.handoff(session: session, next: next.isEmpty ? nil : next))
             } catch {
-                restore(text: written)
+                restoreWritten(written)
                 fail(error)
             }
         }
@@ -1364,7 +1364,7 @@ final class SessionModel {
             do {
                 bridge.took(try await api.startReview(session: session, model: command.reader?.ref, focus: command.focusAsked, scope: command.scopeAsked == .uncommitted ? nil : command.scopeAsked))
             } catch {
-                restore(text: written)
+                restoreWritten(written)
                 fail(error)
             }
         }
@@ -1476,7 +1476,7 @@ final class SessionModel {
                     if try await ask(session, words) { return }
                     runGoalHere(command, written: written)
                 } catch {
-                    restore(text: written)
+                    restoreWritten(written)
                     failure = error.localizedDescription
                 }
             }
@@ -1487,7 +1487,7 @@ final class SessionModel {
 
     private func runGoalHere(_ command: GoalCommand, written: String) {
         guard takesGoals else {
-            restore(text: written)
+            restoreWritten(written)
             failure = session.parentID != nil
                 ? "A subagent’s conversation can’t have a goal of its own. Set it in the conversation it works for."
                 : goalBridge()?.api != nil
@@ -1495,7 +1495,7 @@ final class SessionModel {
                 : Self.goalsNotRunning
             return
         }
-        changeGoal(command) { [weak self] in self?.restore(text: written) }
+        changeGoal(command) { [weak self] in self?.restoreWritten(written) }
     }
 
     private static let goalsNotRunning = "Goals run in the agents bridge beside the engine on this conversation’s computer, and it isn’t running now. Try again in a moment."
@@ -2122,6 +2122,19 @@ final class SessionModel {
         draftFiles = files + draftFiles.filter { file in !files.contains { $0.path == file.path } }
         reviewComments = comments + reviewComments
         composerFocus += 1
+    }
+
+    /// What was written for a keyword that couldn't be done ("/goal …", "/loop …") put back: as
+    /// written into an empty composer, ready to send again (a goal kept one, as `restoreDraft`
+    /// keeps it); beside words typed meanwhile, its words alone in front of them, which the
+    /// keyword would take in.
+    private func restoreWritten(_ written: String, files: [URL] = []) {
+        guard !draftText.isEmpty, let (_, words) = Keyword.parse(written) else {
+            restore(text: written, files: files)
+            if GoalCommand(written) != nil { restoredGoal = written }
+            return
+        }
+        restore(text: words, files: files)
     }
 
     /// A goal put back (Undo, Edit), still at the composer's start as it was put, goes on as its

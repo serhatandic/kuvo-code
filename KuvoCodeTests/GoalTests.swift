@@ -177,4 +177,24 @@ import Testing
         #expect(other.failure == "There's no such conversation here.")
         #expect(other.goal == nil)
     }
+
+    /// A goal that can't be set comes back, and words you typed while it was being set stay
+    /// yours: its words go in front of them without "/goal", which would make them part of the
+    /// goal (as Undo and Edit put a goal back beside your words).
+    @Test func aGoalThatCantBeSetComesBackBesideWhatYouTypedMeanwhileWithoutTakingItIn() async throws {
+        defer { clean() }
+        serve(Conversation(verdicts: []))
+        let bridge = try await RealBridge.start(engine: engine, folder: folder)
+        defer { bridge.stop() }
+        let elsewhere = try JSONDecoder().decode(Session.self, from: JSONSerialization.data(withJSONObject: StubEngine.session("ses_elsewhere", directory: "/tmp")))
+        let model = SessionModel(session: elsewhere, api: engine.api)
+        model.goalBridge = { bridge.agents }
+        model.draftText = "/goal the build is green"
+        model.submitDraft(for: nil, queue: false, commands: [])
+        // Typed while the box is asked.
+        model.draftText = "also update the docs"
+        try await until { model.failure != nil }
+        #expect(model.draftText == "the build is green\n\nalso update the docs")
+        #expect(model.failure == "There's no such conversation here.")
+    }
 }
