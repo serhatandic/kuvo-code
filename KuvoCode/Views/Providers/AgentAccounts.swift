@@ -26,6 +26,14 @@ struct SubscriptionsSection: View {
     @Environment(\.agentsBridge) private var bridge
     private var agents: OutsideAgents { bridge ?? app.agents }
     @Environment(\.colorScheme) private var scheme
+    /// Another account asked of a product, from the header's Add Account menu.
+    @State private var addRequest: AddRequest?
+
+    struct AddRequest: Equatable {
+        let product: String
+        private let asked = UUID()
+        init(_ product: String) { self.product = product }
+    }
 
     var body: some View {
         let products = self.products
@@ -46,6 +54,21 @@ struct SubscriptionsSection: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 12)
+                // Another account of one you use, once here rather than on each.
+                if !used.isEmpty, shows == .plans || machine.map(isRunning) != false {
+                    Menu {
+                        ForEach(used) { product in
+                            Button(product.title + "…") { addRequest = AddRequest(product.id) }
+                                .disabled(product.isAgent && (agents.api == nil || agents.addingAccount.contains(product.main.metadata?["agent"]?.string ?? "")))
+                        }
+                    } label: {
+                        Label("Add Account", systemImage: "plus")
+                            .font(.callout)
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    .help(shows == .agents ? "Another account, signed in on its own: each shows in the model picker" : "Another account: the engine uses one at a time")
+                }
                 if shows == .agents, !updatable.isEmpty {
                     Button { app.updateAllAgents() } label: {
                         Label("Update All", systemImage: "arrow.down.circle")
@@ -90,7 +113,7 @@ struct SubscriptionsSection: View {
                 if !used.isEmpty {
                     VStack(spacing: 0) {
                         ForEach(used) { product in
-                            ProductBlock(product: product, connect: connect)
+                            ProductBlock(product: product, connect: connect, addRequest: addRequest)
                             if product.id != used.last?.id {
                                 Divider().padding(.leading, 58)
                             }
@@ -236,6 +259,8 @@ extension Integration {
 private struct ProductBlock: View {
     let product: Product
     let connect: (Integration) -> Void
+    /// The header's Add Account menu asked for another account: this product's, when it names it.
+    var addRequest: SubscriptionsSection.AddRequest?
     @Environment(AppModel.self) private var app
     /// The agents shown: this Mac's, or a machine's (`agentsBridge`).
     @Environment(\.agentsBridge) private var bridge
@@ -301,6 +326,9 @@ private struct ProductBlock: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 11)
+        .onChange(of: addRequest) { _, request in
+            if request?.product == product.id { addAccount() }
+        }
         .alert("Add Another \(title) Account", isPresented: $naming) {
             TextField("Name, like Work or Personal", text: $name)
             Button("Add") { addNamed() }
@@ -393,14 +421,6 @@ private struct ProductBlock: View {
                         .help("You have \(version ?? "an older version"). Update it the way you installed it.")
                 }
             }
-            Button(action: addAccount) {
-                Label(product.hasAccounts ? "Add Another Account" : "Add Account", systemImage: "plus")
-                    .font(.callout)
-                    .lineLimit(1)
-            }
-            .buttonStyle(TextButtonStyle(outset: isUnder))
-            .disabled(isAgent && (agents.api == nil || agents.addingAccount.contains(main.metadata?["agent"]?.string ?? "")))
-            .help(isAgent ? "Another \(title) account, signed in on its own: each shows in the model picker" : "Another \(title) account: the engine uses one at a time")
         }
         // Each on one line: the row puts them under the name when they don't fit beside it, and
         // cuts them short only when nothing else fits.
@@ -800,6 +820,7 @@ private struct AccountLine<Menu: View>: View {
             .menuIndicator(.hidden)
             .fixedSize()
             .opacity(isHovering ? 1 : 0)
+            .accessibilityLabel("More")
             .help("More")
         }
         .frame(minHeight: 30)
