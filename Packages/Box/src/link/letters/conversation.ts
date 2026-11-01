@@ -2,6 +2,7 @@
 // What the user and others wrote, its replies and a line for each step, as Kuvo Code's export words
 // it; a long one as its start and its latest part, or with a query, the parts that mention it.
 
+import { boxNoteOf } from "../../shared/queues";
 import type { Target } from "../../shared/records";
 import type { EngineSession } from "../engine/sessions";
 
@@ -19,6 +20,8 @@ interface ReadMessage {
   content?: { type: string; text?: string; name?: string; state?: { input?: Record<string, unknown> } }[];
   command?: string;
   output?: { output?: string };
+  /** `boxNote`'s mark, on one the box wrote. */
+  metadata?: unknown;
 }
 
 /** A page of a session's messages, and where the next (older) one starts. */
@@ -60,7 +63,10 @@ export function conversationMarkdown(title: string, messages: ReadMessage[], age
       const written = String(message.text ?? "");
       const mail = /^\[Message from (.*) · (ses_\S+|unknown)\] \([^\n]*\)\n\n([\s\S]*)$/.exec(written);
       const work = /^\[Work from (.*) · [^\]\n]+\]\n\n([\s\S]*?)(\n\n---\n[\s\S]*)?$/.exec(written);
-      if (mail) say(`Message from ${mail[1]}`, mail[3]);
+      // What the box told the agent (a goal's word, its sessions' news): never the user's.
+      const note = boxNoteOf(written, message.metadata);
+      if (note) say(note.from, note.line);
+      else if (mail) say(`Message from ${mail[1]}`, mail[3]);
       else if (written.startsWith("[Wake-up] ")) say("Wake-up", written.slice("[Wake-up] ".length));
       else if (work) say(`Work from ${work[1]}`, work[2].trim());
       else {

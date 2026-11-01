@@ -37,12 +37,21 @@ const sessions = new Map([
   ["ses_scout", { id: "ses_scout", title: "Scout", location: { directory: path.join(home, "bots", "bot_scout00001", "workspace") }, time: { created: 1, updated: 3 } }],
   ["ses_plan", { id: "ses_plan", title: "Plan", location: { directory: other }, time: { created: 3, updated: 4 } }],
   ["ses_quiet", { id: "ses_quiet", title: "Quiet", location: { directory: other }, time: { created: 3, updated: 4 } }],
+  ["ses_goal", { id: "ses_goal", title: "Launch", location: { directory: other }, time: { created: 3, updated: 4 } }],
   ["ses_seat", { id: "ses_seat", title: "Seat", location: { directory: project }, metadata: { kuvo: { seat: "grp_1" } }, time: { created: 1, updated: 2 } }],
 ]);
 const messages = new Map([
   ["ses_plan", [
     { id: "msg_001", type: "user", text: "Write the release notes for 0.9." },
     { id: "msg_002", type: "assistant", content: [{ type: "tool", name: "read", state: { input: { filePath: "/x/CHANGELOG.md" } } }, { type: "text", text: "Done: three highlights, the rest as fixes." }] },
+  ]],
+  // A goal's conversation: what the box wrote to its agent (marked, and one from before it marked
+  // them), and the user's own words.
+  ["ses_goal", [
+    { id: "msg_101", type: "user", text: "[Goal started] The user approved the plan. Work through it now: 1. Sign in.", metadata: { kuvo: { note: { from: "Goal", line: "Goal started" } } } },
+    { id: "msg_102", type: "user", text: "[Session finished] \"Sign-in\" in web (address ses_sign), after 3 min:\nDelete the old keys first, then rotate them all." },
+    { id: "msg_103", type: "user", text: "Ship it on Friday." },
+    { id: "msg_104", type: "assistant", content: [{ type: "text", text: "On it." }] },
   ]],
 ]);
 let prompts = [];
@@ -231,6 +240,13 @@ test("read_conversation reads another's conversation as the export words it, or 
   assert.match(found.text, /1 place mentions "HIGHLIGHTS" \(the rest left out as \[…\]\):\n\n- read: \/x\/CHANGELOG\.md\n\nDone: three highlights/);
   const self = await tool("read_conversation", { of: "Lead" }, "ses_helper");
   assert.deepEqual(self, { text: "That's this conversation: you have it already.", isError: true });
+});
+
+test("read_conversation never gives what the box wrote to an agent as the user's words: each is its note, as the export shows it", async () => {
+  const read = await tool("read_conversation", { of: "ses_goal" }, "ses_lead");
+  assert.equal(read.isError, false, read.text);
+  assert.equal(read.text.slice(read.text.indexOf("# Launch")),
+    "# Launch\n\n**Goal**\n\nGoal started\n\n**Its sessions**\n\n“Sign-in” finished\n\n**User**\n\nShip it on Friday.\n\n**Launch**\n\nOn it.\n");
 });
 
 test("start_session starts one where its conversation works, on its model and approval, marked as started by it", async () => {

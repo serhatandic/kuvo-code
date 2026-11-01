@@ -756,17 +756,40 @@ var queueFiles = (run) => ({
 });
 var boxNote = (from, line) => ({ kuvo: { note: { from, line } } });
 var isBoxNote = (metadata) => isObject(metadata) && isObject(metadata.kuvo) && isObject(metadata.kuvo.note);
-var BOX_NOTE_OPENINGS = [
-  "[Goal started] The user approved the plan.",
-  "[Not now] The user didn't start this goal.",
-  "[Goal changed] The user changed the goal's limits.",
-  "[Goal's end] The end the user set has come.",
-  "[Goal] Nothing of the goal is at work now.",
-  "[Goal resumed] The user resumed the goal you paused.",
-  "[The user answered] "
+var GOAL_OPENINGS = [
+  ["[Goal started] The user approved the plan.", "Goal started"],
+  ["[Not now] The user didn't start this goal.", "You said not now"],
+  ["[Goal changed] The user changed the goal's limits.", "You changed the goal's limits"],
+  ["[Goal's end] The end the user set has come.", "The goal's end came"],
+  ["[Goal] Nothing of the goal is at work now.", "Reminded to carry on"],
+  ["[Goal resumed] The user resumed the goal you paused.", "Goal resumed"]
 ];
-var BOX_NOTE_PATTERNS = [/^\[Limit reset\] .+? has reset\. Carry on/, /^\[Session (finished|failed|asks)\] "/];
-var isBoxWritten = (text, metadata) => isBoxNote(metadata) || BOX_NOTE_OPENINGS.some((start) => text.startsWith(start)) || BOX_NOTE_PATTERNS.some((pattern) => pattern.test(text));
+var ANSWERED = "[The user answered] ";
+var SESSION_NEWS = /^\[Session (finished|failed|asks)\] "([^"\n]*)"/;
+function boxNoteOf(text, metadata) {
+  const note = isBoxNote(metadata) ? metadata.kuvo.note : null;
+  if (note && typeof note.from === "string" && typeof note.line === "string")
+    return { from: note.from, line: note.line };
+  const goal = GOAL_OPENINGS.find(([start]) => text.startsWith(start));
+  if (goal)
+    return { from: "Goal", line: goal[1] };
+  if (text.startsWith(ANSWERED))
+    return { from: "Your answer", line: `You answered: ${text.slice(ANSWERED.length)}` };
+  const reset = /^\[Limit reset\] (.+?) has reset\. Carry on/.exec(text);
+  if (reset)
+    return { from: "Goal", line: `${reset[1].charAt(0).toUpperCase()}${reset[1].slice(1)} reset` };
+  const news = SESSION_NEWS.exec(text);
+  if (!news)
+    return note ? { from: "Kuvo Code", line: text } : null;
+  const told = text.split(`
+
+`).filter((part) => SESSION_NEWS.test(part)).length;
+  if (told !== 1)
+    return { from: "Its sessions", line: `${told} updates from its sessions` };
+  const what = news[1] === "finished" ? "finished" : news[1] === "failed" ? "stopped with an error" : "asks something";
+  return { from: "Its sessions", line: `“${news[2] || "New Session"}” ${what}` };
+}
+var isBoxWritten = (text, metadata) => boxNoteOf(text, metadata) !== null;
 var WAITING_ID = /^msg_[A-Za-z0-9]{1,80}$/;
 var keptWaiting = (value) => (Array.isArray(value) ? value : []).flatMap((item) => {
   if (!isObject(item) || typeof item.id !== "string" || !WAITING_ID.test(item.id) || typeof item.text !== "string")
@@ -4758,7 +4781,7 @@ async function settleHeld(engine, hold, only) {
 }
 var NEWS = new Set(["permission.asked", "form.created", "session.execution.succeeded", "session.execution.failed"]);
 var GROUP_NEWS = new Set(["kuvo.group.met", "kuvo.group.done"]);
-var ANSWERED = new Set(["permission.replied", "form.replied", "form.cancelled"]);
+var ANSWERED2 = new Set(["permission.replied", "form.replied", "form.cancelled"]);
 var RUN_ENDS = new Set(["session.execution.succeeded", "session.execution.failed", "session.execution.interrupted"]);
 function groupNotice(event) {
   const data = event.data ?? {};
@@ -12999,7 +13022,7 @@ async function watchEvents(read, tell, signal, answered = () => {}, { bots = fal
         }
         if (!notices)
           continue;
-        if (ANSWERED.has(event.type))
+        if (ANSWERED2.has(event.type))
           answered(event.data?.requestID ?? event.data?.id);
         if (RUN_ENDS.has(event.type) && hold && typeof event.data?.sessionID === "string")
           await settleHeld(source, hold, event.data.sessionID).catch(() => {});
@@ -14921,7 +14944,10 @@ function conversationMarkdown(title, messages, agent) {
       const written = String(message.text ?? "");
       const mail = /^\[Message from (.*) · (ses_\S+|unknown)\] \([^\n]*\)\n\n([\s\S]*)$/.exec(written);
       const work = /^\[Work from (.*) · [^\]\n]+\]\n\n([\s\S]*?)(\n\n---\n[\s\S]*)?$/.exec(written);
-      if (mail)
+      const note = boxNoteOf(written, message.metadata);
+      if (note)
+        say(note.from, note.line);
+      else if (mail)
         say(`Message from ${mail[1]}`, mail[3]);
       else if (written.startsWith("[Wake-up] "))
         say("Wake-up", written.slice("[Wake-up] ".length));

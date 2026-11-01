@@ -70,16 +70,37 @@ export const boxNote = (from: string, line: string) => ({ kuvo: { note: { from, 
 /** Whether a message the engine has (its `metadata`) is one the box wrote (`boxNote`). */
 export const isBoxNote = (metadata: unknown): boolean => isObject(metadata) && isObject(metadata.kuvo) && isObject(metadata.kuvo.note);
 
-// How a box opened them before it marked them (KuvoClient's BoxNote reads them the same way).
-const BOX_NOTE_OPENINGS = [
-  "[Goal started] The user approved the plan.", "[Not now] The user didn't start this goal.", "[Goal changed] The user changed the goal's limits.",
-  "[Goal's end] The end the user set has come.", "[Goal] Nothing of the goal is at work now.", "[Goal resumed] The user resumed the goal you paused.",
-  "[The user answered] ",
+// How a box opened them before it marked them, with the line each shows (KuvoClient's BoxNote reads
+// them the same way).
+const GOAL_OPENINGS: [start: string, line: string][] = [
+  ["[Goal started] The user approved the plan.", "Goal started"], ["[Not now] The user didn't start this goal.", "You said not now"],
+  ["[Goal changed] The user changed the goal's limits.", "You changed the goal's limits"], ["[Goal's end] The end the user set has come.", "The goal's end came"],
+  ["[Goal] Nothing of the goal is at work now.", "Reminded to carry on"], ["[Goal resumed] The user resumed the goal you paused.", "Goal resumed"],
 ];
-const BOX_NOTE_PATTERNS = [/^\[Limit reset\] .+? has reset\. Carry on/, /^\[Session (finished|failed|asks)\] "/];
+const ANSWERED = "[The user answered] ";
+const SESSION_NEWS = /^\[Session (finished|failed|asks)\] "([^"\n]*)"/;
+
+/** The note a user message in a conversation is, if the box wrote it: who it's from and its line,
+ * as its mark says, or, from before it was marked, as clients read it by how it opens. */
+export function boxNoteOf(text: string, metadata: unknown): { from: string; line: string } | null {
+  const note = isBoxNote(metadata) ? (metadata as { kuvo: { note: Record<string, unknown> } }).kuvo.note : null;
+  if (note && typeof note.from === "string" && typeof note.line === "string") return { from: note.from, line: note.line };
+  const goal = GOAL_OPENINGS.find(([start]) => text.startsWith(start));
+  if (goal) return { from: "Goal", line: goal[1] };
+  if (text.startsWith(ANSWERED)) return { from: "Your answer", line: `You answered: ${text.slice(ANSWERED.length)}` };
+  const reset = /^\[Limit reset\] (.+?) has reset\. Carry on/.exec(text);
+  if (reset) return { from: "Goal", line: `${reset[1].charAt(0).toUpperCase()}${reset[1].slice(1)} reset` };
+  const news = SESSION_NEWS.exec(text);
+  if (!news) return note ? { from: "Kuvo Code", line: text } : null;
+  // (As `wakeLineShown` says it: one session's, or how many.)
+  const told = text.split("\n\n").filter(part => SESSION_NEWS.test(part)).length;
+  if (told !== 1) return { from: "Its sessions", line: `${told} updates from its sessions` };
+  const what = news[1] === "finished" ? "finished" : news[1] === "failed" ? "stopped with an error" : "asks something";
+  return { from: "Its sessions", line: `“${news[2] || "New Session"}” ${what}` };
+}
 
 /** Whether a user message in a conversation is one the box wrote: marked, or from before it was. */
-export const isBoxWritten = (text: string, metadata: unknown): boolean => isBoxNote(metadata) || BOX_NOTE_OPENINGS.some(start => text.startsWith(start)) || BOX_NOTE_PATTERNS.some(pattern => pattern.test(text));
+export const isBoxWritten = (text: string, metadata: unknown): boolean => boxNoteOf(text, metadata) !== null;
 
 /** How a message waiting on the box is shown and kept: who it's from, what it says as clients show
  * it, and what goes instead of its text once it waits (a letter whose sender stops waiting). */
