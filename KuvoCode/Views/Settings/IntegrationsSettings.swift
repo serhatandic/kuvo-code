@@ -220,8 +220,7 @@ struct IntegrationsSettings: View {
         let places = entry.added ? self.places(entry) : siteSignIns(entry)
         return SettingsRowLayout {
             HStack(alignment: .center, spacing: 12) {
-                Image(systemName: entry.symbol)
-                    .font(.system(size: 15))
+                BrandMarkView(entry.id, size: 17, fallback: entry.symbol)
                     .foregroundStyle(.secondary)
                     .frame(width: 22)
                 VStack(alignment: .leading, spacing: 2) {

@@ -125,8 +125,9 @@ struct ConnectView: View {
         VStack(spacing: 14) {
             Group {
                 if let symbol {
-                    Image(systemName: symbol)
-                        .font(.system(size: 28, weight: .medium))
+                    // An integration: its mark, else the plain symbol for what it is.
+                    BrandMarkView(integrationID, size: 32, fallback: symbol)
+                        .fontWeight(.medium)
                         .foregroundStyle(.primary)
                 } else {
                     ProviderLogo(id: OutsideAgents.logo(integrationID), size: 40)

@@ -377,6 +377,8 @@ private struct SettingsSidebar: View {
     @AppStorage(TabBar.showsKey) private var showsTabBar = TabBar.showsByDefault
     /// The computer whose pages are in view: the tab's, until you switch to another.
     @State private var shownBox = SidebarBox.mac
+    /// The page a click in this list opened, which is in sight already.
+    @State private var clicked: SettingsPage?
 
     private var boxes: [SidebarBox] { app.boxes }
 
@@ -450,12 +452,14 @@ private struct SettingsSidebar: View {
             .scrollIndicators(.never)
             .fadingScrollEdges()
             // The page in view is always in sight: opened from elsewhere (a link, ⌘K), or as
-            // Settings open on it.
+            // Settings open on it, in the middle, clear of the faded edges. One clicked is in
+            // sight already, and stays under the pointer.
             .onChange(of: page, initial: true) { _, page in
                 guard box == self.box else { return }
+                guard clicked != page else { clicked = nil; return }
                 Task {
                     await Task.yield()
-                    withAnimation(.ui) { reader.scrollTo(page) }
+                    withAnimation(.ui) { reader.scrollTo(page, anchor: .center) }
                 }
             }
         }
@@ -494,7 +498,13 @@ private struct SettingsSidebar: View {
 
     private func row(_ page: SettingsPage, on box: SidebarBox) -> some View {
         Button {
-            if NSEvent.modifierFlags.contains(.command) { openInNewTab(page, box) } else { open(page, box) }
+            if NSEvent.modifierFlags.contains(.command) {
+                openInNewTab(page, box)
+            } else {
+                // Only a click that changes the page is answered by onChange, which clears it.
+                if page != self.page { clicked = page }
+                open(page, box)
+            }
         } label: {
             HStack(spacing: 10) {
                 Image(systemName: page.symbol)

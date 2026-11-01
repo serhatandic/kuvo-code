@@ -233,7 +233,7 @@ struct VaultSettings: View {
             } header: {
                 Text("Integrations’ Keys")
             } footer: {
-                Text("Still kept and changed in Integrations. They move into the vault in a later update.")
+                Text("Kept and changed in Integrations.")
                     .foregroundStyle(.secondary)
             }
         }

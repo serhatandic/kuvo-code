@@ -284,7 +284,7 @@ struct TranscriptView: View {
     private var rows: [Row] {
         let key = RowCache.Key(version: model.transcriptVersion, detail: stepsDetail, revert: model.session.revert?.messageID, waiting: model.waiting.map(\.id))
         if rowCache.key == key { return rowCache.rows }
-        let rows = buildRows()
+        let rows = Self.rows(of: model, catalog: catalog, detail: stepsDetail)
         // A whole history arriving at once (opening, loading more) comes without its rows fading in.
         rowCache.isBulk = abs(rows.count - rowCache.rows.count) > 3
         rowCache.key = key
@@ -292,7 +292,7 @@ struct TranscriptView: View {
         return rows
     }
 
-    private func buildRows() -> [Row] {
+    static func rows(of model: SessionModel, catalog: Catalog, detail stepsDetail: StepsDetail) -> [Row] {
         var rows: [Row] = []
         var turn = TurnStats()
         // An undo waiting to be kept ends the conversation at its message: by where it is, as a
@@ -326,7 +326,12 @@ struct TranscriptView: View {
             steps = []
         }
         for (index, message) in messages.enumerated() {
-            if case .assistant = message {} else { flushSteps(live: false) }
+            // Only what shows ends the run of steps: guidance the engine adds partway through a
+            // turn shows nothing, so the turn's steps stay one line around it.
+            switch message {
+            case .assistant, .synthetic, .system, .other: break
+            default: flushSteps(live: false)
+            }
             switch message {
             case .user(let user):
                 turn = TurnStats(started: user.time.created, message: user)
@@ -413,32 +418,37 @@ struct TranscriptView: View {
                 // from it as one you started is from your message.
                 if turn.started == nil { turn.started = notice.time.created }
                 let sources = notice.instructionSources
+                var shown: Row?
                 if !sources.isEmpty, sources.allSatisfy({ $0.contains(ProjectFolders.instructionKey) }) {
-                    rows.append(.notice(notice.id, "folder", "Project folders updated"))
+                    shown = .notice(notice.id, "folder", "Project folders updated")
                 } else if !sources.isEmpty, sources.allSatisfy({ $0.hasPrefix("core/") || $0.contains(Workspace.worktreeInstructionKey) || $0.contains(Bots.instructionKey) }) {
                     // The engine's own guidance (for the browser tools, say), or what Kuvo Code
                     // adds for a worktree or a bot: nothing you set.
                     break
                 } else if notice.metadata?["source"]?.string == "shell" {
                     // A command the agent left running in the background ended, which wakes it.
-                    rows.append(.notice(notice.id, "terminal", Self.backgroundEnd(notice)))
+                    shown = .notice(notice.id, "terminal", Self.backgroundEnd(notice))
                 } else if notice.text.hasPrefix("<system-reminder>") {
                     // The engine's word to the model, not to you. Plan mode's rules say the mode,
                     // for a session that starts in it (a switch says so itself); not the one that
                     // says it's left ("You are NO LONGER in Plan mode", after Build It).
                     if notice.text.contains("Plan mode"), notice.text.range(of: "no longer in Plan mode", options: .caseInsensitive) == nil {
                         if case .notice(_, "list.bullet.clipboard", _)? = rows.last {} else {
-                            rows.append(.notice(notice.id, "list.bullet.clipboard", "Plan mode: it explores and plans, without changing files"))
+                            shown = .notice(notice.id, "list.bullet.clipboard", "Plan mode: it explores and plans, without changing files")
                         }
                     }
                 } else if notice.text.hasPrefix(Goal.marker) {
                     // The box keeping the agent at its goal: given it, or told what's left.
-                    rows.append(.notice(notice.id, "scope", notice.description ?? String(notice.text.dropFirst(Goal.marker.count))))
+                    shown = .notice(notice.id, "scope", notice.description ?? String(notice.text.dropFirst(Goal.marker.count)))
                 } else if let words = notice.carriedOn {
                     // The engine asking the model to go on after a reply was cut off or ran out of room.
-                    rows.append(.notice(notice.id, "arrow.turn.down.right", words))
+                    shown = .notice(notice.id, "arrow.turn.down.right", words)
                 } else {
-                    rows.append(.notice(notice.id, "info.circle", notice.description ?? notice.text))
+                    shown = .notice(notice.id, "info.circle", notice.description ?? notice.text)
+                }
+                if let shown {
+                    flushSteps(live: false)
+                    rows.append(shown)
                 }
             case .other:
                 break

@@ -54,8 +54,6 @@ struct MachinesSettings: View {
                     if let engine = app.machines.engine(machine.id) { row(engine) }
                 }
                 Button("Add Machine…") { showsAdd = true }
-            } header: {
-                Text("Machines")
             } footer: {
                 VStack(alignment: .leading, spacing: 6) {
                     if let folded = app.machines.folded {

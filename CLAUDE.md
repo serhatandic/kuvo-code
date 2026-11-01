@@ -210,6 +210,7 @@ Kuvo Code runs one pinned build of `@opencode/cli`. A new opencode release bring
 - **Textual**, `Packages/Textual`: a copy of [gonzalezreal/textual](https://github.com/gonzalezreal/textual) at the commit its README names, changed so replies lay out in one pass (the README lists what's different). Check upstream's releases, port fixes and features by hand while keeping those changes, and move the commit in the README.
 - **Prism**, `KuvoCode/Resources/prism-bundle.js`: rebundle when Textual's bundle script moves to a newer Prism.
 - **Mermaid**, `KuvoCode/Resources/mermaid.min.js` (version in `scripts/third-party-licenses.sh`, license in `Licenses/mermaid.txt`): npm's `mermaid` build, unchanged. Check for new releases (`https://registry.npmjs.org/mermaid/latest`), read their notes for changes to how diagrams look or what the page must allow, and move it in its own commit.
+- **Brand marks**, `Packages/KuvoClient/Sources/ClientDesign/Resources/Marks.xcassets` (listed in `BrandMark.swift`; sources in `scripts/third-party-licenses.sh`): providers' logos from models.dev (`https://models.dev/logos/<id>.svg`), services' marks from Simple Icons (pinned on jsDelivr) and UsageKit's provider icons, unchanged. When the app gains a provider, integration or MCP server, bundle its mark (read the SVG first: plain paths only), or give it a plain symbol in `BrandMark.symbols` where its maker has no mark to use.
 
 ### Swift packages and tooling
 

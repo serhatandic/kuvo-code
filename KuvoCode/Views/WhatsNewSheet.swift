@@ -109,8 +109,13 @@ private struct HighlightRow: View {
         }
     }
 
-    /// A line's own emphasis and code (`/goal`), as the changelog writes it.
+    /// A line's own emphasis and code (`/goal`), as the changelog writes it; code a step smaller,
+    /// as the conversation sets it, since the code face runs wide.
     static func markdown(_ line: String) -> AttributedString {
-        (try? AttributedString(markdown: line, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(line)
+        guard var text = try? AttributedString(markdown: line, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)) else { return AttributedString(line) }
+        for run in text.runs where run.inlinePresentationIntent?.contains(.code) == true {
+            text[run.range].font = .system(.callout, design: .monospaced)
+        }
+        return text
     }
 }

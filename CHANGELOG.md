@@ -8,14 +8,21 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### Highlights
 
-- **Voice input**: click the microphone in the composer, or hold ⇧⌘Space, to talk instead of typing; your words are written on your Mac, and nothing is sent until you send it. <!-- symbol: mic -->
-- **Goals that keep going**: write `/goal all tests pass`, and the agent works turn after turn until a check says it's met. <!-- symbol: target -->
-- **What your agents made**: a bot's Shelf keeps its pages, pictures and memory, with every change on its Timeline. <!-- symbol: tray.full -->
-- **Answers you can try**: agents show charts, diagrams and things to click right in the conversation. <!-- symbol: chart.xyaxis.line -->
-- **Settings that guide you**: pick folders, plugins and models from what's there instead of typing them. <!-- symbol: slider.horizontal.3; open: settings/worktrees -->
+- **Voice input**: click the microphone in the composer, or hold ⇧⌘Space, to talk instead of typing; your words are written on your Mac, and nothing is sent until you send it. <!-- symbol: mic.fill -->
+- **Goals that keep going**: write `/goal all tests pass`, and the agent works turn after turn until a check says it's met. <!-- symbol: flag.checkered -->
+- **What your agents made**: a bot's Shelf keeps its pages, pictures and memory, with every change on its Timeline. <!-- symbol: tray.full.fill -->
+- **Answers you can try**: agents show charts, diagrams and things to click right in the conversation. <!-- symbol: chart.bar.fill -->
+- **Settings that guide you**: pick folders, plugins and models from what's there instead of typing them. <!-- symbol: gearshape.fill; open: settings/worktrees -->
 
 ### All Changes
 
+- Providers, coding agents, integrations and MCP servers show their own marks, which come with the app: Cursor no longer shows a stock sparkle, a provider without a mark shows a plain server instead of its first letter, and Settings › Integrations and MCP Servers show Slack, Gmail, GitHub and the rest by their marks (or a plain symbol of what they are) instead of stand-in icons.
+- Diffs read as code: a long line wraps under its own indent instead of back at the margin, and removed lines leave the number column blank, so it counts the file as it is now.
+- Steps, thoughts and group chats show `code` in the code face instead of its backticks.
+- Settings › Permissions says what each choice does (Allow, Ask First, Don't Allow) instead of "Default" on every row; a row you changed says so, and its menu sets it back.
+- Settings › MCP Servers groups its popular servers by whether they need an account, instead of a tag on every row, and Settings › Agents describes the built-in agents in a line each.
+- Bring your subscriptions shows each kind as one list, and the mode menu in the composer has a chevron like the model menu beside it.
+- A reply's steps show one "Worked for" line again, where some showed two when the engine gave the agent more guidance partway through.
 - Agents ask before working in a folder outside the project, as Settings › Permissions says they do: the engine had let them read and change files anywhere, your SSH keys included. Your own rules there still decide, and files you send with a message, skills and the agent's saved outputs open without asking.
 - Kuvo Code no longer quits when a file the panel shows with Quick Look (a PDF, a spreadsheet, a video) is followed by the next one as its window closes.
 - On a busy Mac, the card for a command the sandbox stopped fills in what was stopped, and **Always for** its folder, as soon as macOS has noted it, instead of showing only the command's error.

@@ -2,9 +2,10 @@ import AppKit
 import ClientDesign
 import SwiftUI
 
-/// A provider's mark, from the same logo set opencode's own apps use
-/// (models.dev, by provider id). Monochrome, so it follows light and dark mode; `colored`
-/// draws it in its maker's own color where it has one, for badges like the tabs'.
+/// A provider's mark: the one bundled with the app (`BrandMark`), else the same logo set
+/// opencode's own apps use (models.dev, by provider id), else a plain server. Monochrome, so it
+/// follows light and dark mode; `colored` draws it in its maker's own color where it has one, for
+/// badges like the tabs'.
 struct ProviderLogo: View {
     let id: String
     var size: CGFloat = 20
@@ -12,26 +13,36 @@ struct ProviderLogo: View {
     /// like OpenAI's keep the ink around them.
     var colored = false
 
-    @State private var image: NSImage?
+    /// The logo service's, for a provider the app has no mark of: nil while it loads.
+    @State private var fetched: Fetched?
     @Environment(\.colorScheme) private var scheme
+
+    private enum Fetched { case logo(NSImage), missing }
 
     var body: some View {
         Group {
-            if let image {
+            if BrandMark.has(id) {
+                BrandMarkView(id, size: size)
+            } else if case .logo(let image) = fetched {
                 Image(nsImage: image)
                     .resizable()
                     .renderingMode(.template)
                     .interpolation(.high)
                     .aspectRatio(contentMode: .fit)
-            } else {
-                Text(String(id.prefix(1)).uppercased())
-                    .font(.system(size: size * 0.55, weight: .semibold, design: .rounded))
+            } else if case .missing = fetched {
+                BrandMarkView(id, size: size)
                     .foregroundStyle(.secondary)
+            } else {
+                // Loading: nothing yet, rather than a mark that's swapped out a moment later.
+                Color.clear
             }
         }
         .modifier(MakerInk(color: colored ? Self.makerColor(id, in: scheme) : nil))
         .frame(width: size, height: size)
-        .task(id: id) { image = await LogoCache.shared.logo(for: id) }
+        .task(id: id) {
+            guard !BrandMark.has(id) else { return }
+            fetched = await LogoCache.shared.logo(for: id).map(Fetched.logo) ?? .missing
+        }
     }
 
     /// Makers whose marks have a color of their own, by logo id. The rest are black and
@@ -61,7 +72,9 @@ private struct MakerInk: ViewModifier {
     }
 }
 
-/// Logos are tiny and shared by every row, so fetch each once and keep it.
+/// Logos are tiny and shared by every row, so fetch each once and keep it. The app's own marks
+/// come first; the logo service answers an id it has no logo for with a stock picture, which
+/// counts as none.
 actor LogoCache {
     static let shared = LogoCache()
 
@@ -71,14 +84,18 @@ actor LogoCache {
 
     func logo(for id: String) async -> NSImage? {
         if let image = images[id] { return image }
+        if let image = BrandMark.platformImage(id) {
+            images[id] = image
+            return image
+        }
         if missing.contains(id) { return nil }
         if let task = inflight[id] { return await task.value }
 
         let task = Task<NSImage?, Never> {
-            guard let url = URL(string: "https://models.opencode.ai/logos/\(id).svg"),
-                  let (data, response) = try? await URLSession.shared.data(from: url),
-                  (response as? HTTPURLResponse)?.statusCode == 200,
-                  let image = NSImage(data: data) else { return nil }
+            guard let data = await Self.fetch(id), let image = NSImage(data: data) else { return nil }
+            // What it sends for an id it has no logo for, fetched once to compare.
+            if stock == nil { stock = .some(await Self.fetch("kuvo-code-no-such-logo")) }
+            if let stock = stock ?? nil, stock == data { return nil }
             image.isTemplate = true
             return image
         }
@@ -87,5 +104,15 @@ actor LogoCache {
         inflight[id] = nil
         if let image { images[id] = image } else { missing.insert(id) }
         return image
+    }
+
+    /// The logo service's stock picture (four sparkles), once asked for.
+    private var stock: Data??
+
+    nonisolated private static func fetch(_ id: String) async -> Data? {
+        guard let url = URL(string: "https://models.opencode.ai/logos/\(id).svg"),
+              let (data, response) = try? await URLSession.shared.data(from: url),
+              (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+        return data
     }
 }

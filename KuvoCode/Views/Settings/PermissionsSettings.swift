@@ -178,7 +178,7 @@ struct PermissionsSettings: View {
     }
 }
 
-/// A choice for each kind of action (Default, Allow, Ask First, Don't Allow): a rule for every
+/// A choice for each kind of action (Allow, Ask First, Don't Allow, or back to the default): a rule for every
 /// resource ("*") in the rules list at `path`, kept at its front so rules for particular
 /// commands or files, after it, win.
 struct ActionChoices: View {
@@ -194,23 +194,52 @@ struct ActionChoices: View {
 
     var body: some View {
         ForEach(PermissionsSettings.actions, id: \.id) { action in
+            let changed = effect(for: action.id).wrappedValue != nil
             LabeledContent {
-                Picker(action.title, selection: effect(for: action.id)) {
-                    // What Default comes to, so it says what the agent may do.
-                    Text("Default (\(inherited(action.id).title))").tag(PermissionRule.Effect?.none)
-                    Text("Allow").tag(Optional(PermissionRule.Effect.allow))
-                    Text("Ask First").tag(Optional(PermissionRule.Effect.ask))
-                    Text("Don't Allow").tag(Optional(PermissionRule.Effect.deny))
+                // What the agent may do, whether chosen here or not; Reset goes back to the default.
+                Picker(action.title, selection: choice(for: action.id)) {
+                    Text("Allow").tag(Choice.effect(.allow))
+                    Text("Ask First").tag(Choice.effect(.ask))
+                    Text("Don't Allow").tag(Choice.effect(.deny))
                     // One a newer engine set, shown as it is (and kept, unless you pick another).
-                    if case .unknown? = effect(for: action.id).wrappedValue {
-                        Text(PermissionRule.Effect.newerTitle).tag(effect(for: action.id).wrappedValue)
+                    if case .unknown(let raw)? = effect(for: action.id).wrappedValue {
+                        Text(PermissionRule.Effect.newerTitle).tag(Choice.effect(.unknown(raw)))
+                    }
+                    if changed {
+                        Divider()
+                        Text("Reset to Default (\(inherited(action.id).title))").tag(Choice.reset)
                     }
                 }
                 .labelsHidden()
                 .fixedSize()
             } label: {
-                Text(action.title)
+                if changed {
+                    Text(action.title) + Text(" · changed").foregroundColor(.accentColor)
+                } else {
+                    Text(action.title)
+                }
                 if !action.detail.isEmpty { Text(action.detail) }
+            }
+        }
+    }
+
+    private enum Choice: Hashable {
+        case effect(PermissionRule.Effect)
+        case reset
+    }
+
+    /// The effect in force, chosen here or inherited. Picking what's inherited already sets
+    /// nothing, so a row reads as changed only when it differs by your choice.
+    private func choice(for action: String) -> Binding<Choice> {
+        let explicit = effect(for: action)
+        return Binding {
+            .effect(explicit.wrappedValue ?? inherited(action))
+        } set: { choice in
+            switch choice {
+            case .reset: explicit.wrappedValue = nil
+            case .effect(let effect):
+                if explicit.wrappedValue == nil, effect == inherited(action) { return }
+                explicit.wrappedValue = effect
             }
         }
     }

@@ -164,7 +164,7 @@ struct WidgetAnswerChip: View {
     let title: String
 
     var body: some View {
-        Label(WidgetAnswer.name(title), systemImage: "sparkles.rectangle.stack")
+        Label(WidgetAnswer.name(title), systemImage: "hand.tap.fill")
             .font(.system(size: 11, weight: .medium))
             .foregroundStyle(.secondary)
             .lineLimit(1)
