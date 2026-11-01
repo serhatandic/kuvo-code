@@ -160,6 +160,27 @@ import Testing
         #expect(model.draftText == "/goal Summarize the commits weekly")
     }
 
+    /// A goal taken back beside words already in the composer comes back as its words: one
+    /// composer holds one goal, at its start, and "/goal" ahead of your words would make them the
+    /// goal too.
+    @Test func aGoalUndoneBesideWhatYouTypedComesBackAsItsWords() async throws {
+        defer { done() }
+        let goal: [String: Any] = ["id": "msg_01", "type": "user", "time": ["created": 1],
+                                   "text": "Summarize the commits weekly\n\n<sent-with>\n\(SentWithKeyword.goalHeading)\n/goal\n</sent-with>"]
+        engine.list([StubEngine.session(id, title: "Undo", directory: "/tmp/kuvo-tests-undo")])
+        engine.conversation(id, [goal])
+        engine.on("POST", "/api/session/\(id)/revert/stage") { request in
+            StubWeb.json(["data": ["messageID": request.body["messageID"] as? String ?? ""]])
+        }
+        await workspace.refresh()
+        let model = try #require(workspace.model(for: id))
+        await model.load()
+        model.draftText = "fix the tests"
+        model.undo(from: try user(goal))
+        try await until { model.draftText != "fix the tests" }
+        #expect(model.draftText == "Summarize the commits weekly\n\nfix the tests")
+    }
+
     /// What Undo says it does before you confirm (B6): in a git repository (a folder inside one
     /// too), the files the agent changed go back with the conversation; anywhere else they stay,
     /// as the engine can't put them back, and it says so.

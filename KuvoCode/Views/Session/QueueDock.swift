@@ -126,7 +126,7 @@ struct QueueRow: View {
                     .lineLimit(1)
                     .fixedSize()
             }
-            MessageMentions.text(styledSummary, size: 14.5)
+            MessageMentions.text(Self.styledSummary(of: item, folders: [model.session.location.directory]), size: 14.5)
                 .font(.system(size: 13.5))
                 .lineLimit(1)
                 .truncationMode(.tail)
@@ -231,11 +231,10 @@ struct QueueRow: View {
 
     /// The summary, with the agents and files it names standing out and the keyword it was sent
     /// with drawn in front, as in its bubble.
-    private var styledSummary: AttributedString {
-        let (keyword, line) = Self.line(of: item)
+    static func styledSummary(of item: Transcript.Pending, folders: [String]) -> AttributedString {
+        let (keyword, line) = line(of: item)
         var styled = AttributedString(line)
         let references = SentMessage.split(item.text).references
-        let folders = [model.session.location.directory]
         MessageMentions.apply(to: &styled, agents: MessageMentions.agents(references), folders: folders, links: false)
         return keyword.map { MessageMentions.keyword($0, before: styled) } ?? styled
     }

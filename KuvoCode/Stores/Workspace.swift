@@ -1377,7 +1377,8 @@ final class Workspace {
         guard let api = api(forSession: id) else { return }
         let session = try await branch(id, before: message.id, api: api)
         upsert(session)
-        let (text, comments, paths, _) = SentMessage.split(CommandMessages.shared.text(of: message))
+        let sent = CommandMessages.shared.text(of: message)
+        let (text, comments, paths, _) = SentMessage.split(sent)
         // The engine's copy carries the attachments; one seen arrive live has them as picked.
         let recent = (try? await api.messages(session: id, limit: 100).data) ?? []
         var stored = message
@@ -1385,7 +1386,7 @@ final class Workspace {
         // What it replied to comes back over the composer, as you wrote it, and so do its comments
         // (a goal as one).
         let (quotes, written) = Quoting.draft(of: text)
-        let words = SentWithKeyword.draft(written, keyword: SentMessage.keyword(of: CommandMessages.shared.text(of: message)))
+        let words = SentWithKeyword.draft(written, keyword: SentMessage.keyword(of: sent))
         let files = Attachments.restored(SessionModel.files(of: message, stored: stored), noting: paths)
         var draft = Drafts.Draft(text: words, files: files, quotes: quotes)
         draft.comments = comments

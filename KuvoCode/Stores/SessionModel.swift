@@ -2079,11 +2079,12 @@ final class SessionModel {
 
     /// Puts a message back in the composer, ahead of anything already there: its text, its
     /// attached files (each once, and only those on this Mac), its comments on the changes and
-    /// what it replied to; a goal as one (`SentWithKeyword.draft`).
+    /// what it replied to; a goal as one (`SentWithKeyword.draft`), into an empty composer: beside
+    /// your words, "/goal" in front would make them the goal too.
     private func restoreDraft(_ message: String, files picked: [URL] = []) {
         let (quoted, comments, paths, _) = SentMessage.split(message)
         let (quotes, words) = Quoting.draft(of: quoted)
-        let text = SentWithKeyword.draft(words, keyword: SentMessage.keyword(of: message))
+        let text = draftText.isEmpty ? SentWithKeyword.draft(words, keyword: SentMessage.keyword(of: message)) : words
         restore(text: text, files: Attachments.restored(picked, noting: paths), quotes: quotes, comments: comments)
     }
 

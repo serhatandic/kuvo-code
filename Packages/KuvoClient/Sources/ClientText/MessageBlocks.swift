@@ -76,8 +76,7 @@ public enum SentWithKeyword {
     /// goal as one, "/goal" and its words, as sending it again asks for the goal again; another
     /// keyword's words alone, as sending those again shouldn't switch to Plan or set another loop.
     public static func draft(_ words: String, keyword: String?) -> String {
-        guard keyword == "/goal" else { return words }
-        return words.isEmpty ? "/goal " : "/goal " + words
+        keyword == "/goal" ? "/goal " + words : words
     }
 
     /// A message's words without the block, and the keyword it was sent with as typed ("/loop
