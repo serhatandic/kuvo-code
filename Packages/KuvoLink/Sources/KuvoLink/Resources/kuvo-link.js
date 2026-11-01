@@ -6082,7 +6082,11 @@ function fenceState() {
     return { ...base, on: false, why: "Kuvo Code has it turned off on this computer for now." };
   if (!checked.passed)
     return { ...base, on: false, ...cannot(checked) };
-  return { ...base, ...loaded() };
+  const now = loaded();
+  return { ...base, ...now, ...now.on && withoutNamespace ? { gaps: ["services"], needs: withoutNamespace } : {} };
+}
+function fenceWhole() {
+  return platform === "darwin" || (textOf(path29.join(FOLDER, "namespace")) ?? "").startsWith("/");
 }
 function loaded() {
   if (textOf(PLUGIN) !== pluginScript(places, VERSION))
@@ -6226,8 +6230,9 @@ function writeExecutable(file, text) {
   writePrivate(file, text);
   fs27.chmodSync(file, 448);
 }
-var WITHOUT_NAMESPACE = "off";
+var WITHOUT_NAMESPACE = "without";
 var namespace = null;
+var withoutNamespace = null;
 function able() {
   if (platform === "darwin")
     return fs27.existsSync("/usr/bin/sandbox-exec") ? { able: true, passed: false } : { able: false, passed: false, why: "macOS's sandbox isn't on this Mac.", reason: "macos" };
@@ -6237,10 +6242,13 @@ function able() {
     return { able: false, passed: false, why: `Linux ${os6.release().split("-")[0]} can't sandbox commands: it needs Landlock (Linux 5.13 or later, with it on).`, reason: "kernel", needs: "Linux 5.13" };
   }
   namespace = ownNamespace();
-  if (!namespace && WITHOUT_NAMESPACE === "off") {
+  withoutNamespace = namespace ? null : UNSHARE.some((each) => fs27.existsSync(each)) ? "user namespaces" : "util-linux";
+  if (withoutNamespace && WITHOUT_NAMESPACE === "off") {
     const services = "which the sandbox needs to keep commands from the services your login runs: systemd, your keyring, your agents";
-    return UNSHARE.some((each) => fs27.existsSync(each)) ? { able: false, passed: false, why: `This machine doesn't let commands have a namespace of their own (it restricts unprivileged user namespaces, as Ubuntu 24.04 and later do), ${services}.`, reason: "namespaces", needs: "user namespaces" } : { able: false, passed: false, why: `This machine has no unshare (util-linux's), ${services}.`, reason: "namespaces", needs: "util-linux" };
+    return withoutNamespace === "user namespaces" ? { able: false, passed: false, why: `This machine doesn't let commands have a namespace of their own (it restricts unprivileged user namespaces, as Ubuntu 24.04 and later do), ${services}.`, reason: "namespaces", needs: withoutNamespace } : { able: false, passed: false, why: `This machine has no unshare (util-linux's), ${services}.`, reason: "namespaces", needs: withoutNamespace };
   }
+  if (WITHOUT_NAMESPACE === "off")
+    withoutNamespace = null;
   return { able: true, passed: false };
 }
 function probe() {
@@ -6445,7 +6453,7 @@ function sandboxOn(agents = false) {
   if (IN_TEST_FOLDER && !realApp && process.env.KUVO_TEST_SANDBOX_ON === "1")
     return true;
   const sandbox = fenceState();
-  return sandbox.on && (!agents || sandbox.agents);
+  return sandbox.on && (!agents || sandbox.agents) && fenceWhole();
 }
 
 // Packages/Box/src/link/work/tree.ts
@@ -14891,13 +14899,13 @@ var agentsUseVault = () => {
   if (process.env.KUVO_VAULT_AGENTS === "1" && !REAL_BOX)
     return true;
   const sandbox = fenceState();
-  return sandbox.on && sandbox.agents;
+  return sandbox.on && sandbox.agents && fenceWhole();
 };
 var agentsWaitForOlder = () => {
   if (process.env.KUVO_VAULT_AGENTS === "1" && !REAL_BOX)
     return false;
   const sandbox = fenceState();
-  return sandbox.on && !sandbox.agents;
+  return sandbox.on && !sandbox.agents && fenceWhole();
 };
 var AGENTS_LATER = "The user's vault isn't open to agents on this computer yet: its items, keys, files and notes can't be used here. To sign in, call browser_sign_in without an item: a sign-in the user lets you use on this site fills on its own, or else they sign in. For anything else, ask the user in the chat.";
 
@@ -17707,6 +17715,8 @@ function commandsInSandbox(target, permission) {
   try {
     engine = readEngineFile().port === target.port;
   } catch {}
+  if (!fenceWhole())
+    return false;
   return engine ? engineCommandsInSandbox() : permission.sandboxed === true && agentsCommandsInSandbox();
 }
 var projectFolders = (folder) => readProjects().find((each) => each.directory === folder)?.folders ?? [];

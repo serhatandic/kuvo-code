@@ -19,6 +19,13 @@ public struct SandboxState: Codable, Equatable, Sendable {
         case folder, tempFiles, readsOwn, writesOwn, didntRun, setup
     }
 
+    /// While it's on, what it can't keep commands from on this computer.
+    public enum Gap: String, Codable, Sendable {
+        /// The services your login runs (systemd, your keyring, your SSH agent): a Linux machine
+        /// whose commands can't have a namespace of their own.
+        case services
+    }
+
     /// Every command the engine runs here goes through the sandbox, checked.
     public var on: Bool
     /// Why it isn't on, in the box's own words.
@@ -40,9 +47,12 @@ public struct SandboxState: Codable, Equatable, Sendable {
     public var failures: Int?
     /// It asks you, once, to restart the agents started before it was on (`SandboxRoutes.restart`).
     public var restart: Bool?
+    /// While it's on, what it can't keep commands from here (a newer box's words left out).
+    public var gaps: [Gap]?
 
-    public init(on: Bool, why: String? = nil, able: Bool = true, agents: Bool = false, outside: Bool? = nil, reason: Reason? = nil, action: Action? = nil, route: String? = nil, needs: String? = nil, check: Check? = nil, failures: Int? = nil, restart: Bool? = nil) {
+    public init(on: Bool, why: String? = nil, able: Bool = true, agents: Bool = false, outside: Bool? = nil, reason: Reason? = nil, action: Action? = nil, route: String? = nil, needs: String? = nil, check: Check? = nil, failures: Int? = nil, restart: Bool? = nil, gaps: [Gap]? = nil) {
         self.restart = restart
+        self.gaps = gaps
         self.on = on
         self.why = why
         self.able = able
@@ -70,6 +80,7 @@ public struct SandboxState: Codable, Equatable, Sendable {
         check = try? keys.decodeIfPresent(Check.self, forKey: .check)
         failures = try keys.decodeIfPresent(Int.self, forKey: .failures)
         restart = try? keys.decodeIfPresent(Bool.self, forKey: .restart)
+        gaps = (try? keys.decodeIfPresent([String].self, forKey: .gaps))?.compactMap(Gap.init(rawValue:))
     }
 }
 

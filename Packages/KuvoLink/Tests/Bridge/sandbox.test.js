@@ -71,8 +71,8 @@ function boxAt(name, mac = false) {
 }
 
 // `env`: what else the box starts with (`KUVO_SANDBOX: "off"`, Kuvo Code's own kill switch).
-async function start(box, env = {}) {
-  const child = spawn(process.execPath, [script, "serve"], { env: { ...box.env, ...env, OPENCODE_PASSWORD: "box-pw" }, stdio: ["pipe", "pipe", "pipe"] });
+async function start(box, env = {}, wrap = []) {
+  const child = spawn(wrap[0] ?? process.execPath, [...wrap.slice(1), ...(wrap.length ? [process.execPath] : []), script, "serve"], { env: { ...box.env, ...env, OPENCODE_PASSWORD: "box-pw" }, stdio: ["pipe", "pipe", "pipe"] });
   let out = "", err = "";
   child.stdout.setEncoding("utf8");
   child.stderr.setEncoding("utf8");
@@ -290,6 +290,8 @@ test("on, a command writes in its own project, git works there, and Kuvo Code's 
     state = (await running.ask("GET", "kuvo/sandbox")).value;
     assert.equal(state.on, true, "the engine loaded its plugin, and sends its commands through it");
     assert.equal(state.why, undefined);
+    assert.equal(state.gaps, undefined, "nothing it can't keep commands from");
+    assert.ok((await running.ask("GET", "kuvo/vault/tools")).value.tools.length > 0, "so the vault is open to agents here");
   } finally {
     await running.stop();
   }
@@ -938,6 +940,44 @@ test("a .git that names another folder doesn't let a command write there", async
       assert.deepEqual(outcome(ran.out), { "write where its .git points": "refused" }, `${path.basename(project)}: ${ran.out}`);
     }
     assert.equal(fs.existsSync(path.join(elsewhere, "planted")), false);
+  } finally {
+    await running.stop();
+  }
+});
+
+// A Linux machine that doesn't let commands have a namespace of their own, as Ubuntu 24.04 and
+// later don't (AppArmor): here the box runs in a user namespace that may make only one more, which
+// the wrapper takes for mapping you back to yourself, so the box's own `unshare` fails as it would
+// there. Where this machine can't make one at all, there's nothing to block.
+const blocked = linux ? ["unshare", "-Ur", "sh", "-c", `echo 1 > /proc/sys/user/max_user_namespaces && exec unshare -U --map-user=${process.getuid()} --map-group=${process.getgid()} -- "$@"`, "sh"] : [];
+const canBlock = linux && spawnSync(blocked[0], [...blocked.slice(1), "sh", "-c", "! unshare -Urm true 2>/dev/null"]).status === 0;
+
+test("where commands can't have a namespace of their own, the sandbox still runs, says your login's services stay reachable, and keeps the vault from agents", { skip: !canBlock && "a Linux machine whose user namespaces this test can block" }, async () => {
+  const box = boxAt("without-namespaces");
+  const project = path.join(root, "without-namespaces-project");
+  fs.mkdirSync(project);
+  const running = await start(box, {}, blocked);
+  try {
+    let state = (await running.ask("GET", "kuvo/sandbox")).value;
+    assert.equal(state.able, true, state.why);
+    assert.notEqual(state.reason, "namespaces", "it runs rather than asking before every command");
+    const ran = await engineRuns(box, project, tries([
+      ["write in its project", "echo ok > made.txt"],
+      ["read the box's files", `cat ${JSON.stringify(path.join(box.home, "run", "engine.json"))}`],
+      ["write in the box's folder", `echo x > ${JSON.stringify(path.join(box.home, "run", "planted"))}`],
+    ]));
+    const seen = outcome(ran.out);
+    assert.equal(seen["write in its project"], "allowed", ran.out);
+    assert.equal(seen["read the box's files"], "refused", ran.out);
+    assert.equal(seen["write in the box's folder"], "refused", ran.out);
+    state = (await running.ask("GET", "kuvo/sandbox")).value;
+    assert.equal(state.on, true, "commands run in the sandbox, without a namespace");
+    assert.deepEqual(state.gaps, ["services"], "and it says what it can't keep them from");
+    assert.equal(state.needs, "user namespaces");
+    assert.equal(fs.readFileSync(path.join(box.home, "run", "fence", "namespace"), "utf8"), "-");
+    // Nor is the vault open to agents there (its tools aren't listed), though every agent's
+    // commands run in the sandbox.
+    assert.deepEqual((await running.ask("GET", "kuvo/vault/tools")).value.tools, []);
   } finally {
     await running.stop();
   }

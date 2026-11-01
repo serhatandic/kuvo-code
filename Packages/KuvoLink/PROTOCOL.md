@@ -3090,8 +3090,10 @@ Bitwarden's, Grok's shared leader's, the box's own `SSH_AUTH_SOCK`); it runs as 
 and `XDG_RUNTIME_DIR` and a `DBUS_SESSION_BUS_ADDRESS` in that folder are unset. They're hidden as
 the command starts: one made later in `/tmp` (tmux started, or an `ssh -A` login, after a command a
 conversation left running) isn't. A machine that doesn't allow that (user namespaces off, or
-restricted by AppArmor, as Ubuntu 24.04 and later do, or without `unshare`) has no sandbox: `reason`
-`namespaces`, below. Abstract sockets are kept inside the sandbox from Linux 6.12 (Landlock 6);
+restricted by AppArmor, as Ubuntu 24.04 and later do, or without `unshare`) runs the sandbox without
+it: commands there can still reach those services (systemd can start anything outside the sandbox),
+so its state says so (`gaps`, below), the vault stays closed to agents, goals don't go on alone and
+a bot doesn't answer its sessions' asks for commands there. Abstract sockets are kept inside the sandbox from Linux 6.12 (Landlock 6);
 before, an X server's abstract one, or a bus `dbus-launch` started (`unix:abstract=`), stays
 reachable. On both systems, the launcher sets each command up with the system's own programs
 (`/usr/bin`, `/bin` and their `sbin`), never ones a command put on your PATH; the command has your
@@ -3279,13 +3281,16 @@ it's empty.
   stderr goes nowhere, as it can hold its keys. Another set of servers (one added or taken away)
   starts Codex's thread, Cursor's agent and an ACP agent again and is told to Claude Code; a key you
   changed reaches the relay alone, from the agent's next turn.
+  While it's on, `gaps` lists what it can't keep commands from on this computer: `services`, the
+  services your login runs (a Linux machine whose commands can't have a namespace of their own;
+  `needs`: `"user namespaces"`, or `"util-linux"` without `unshare`). A client says so beside it.
   When it isn't on, also `reason`, a word for a client to map rather than reading `why`, with what
   you can do (`action`) and the box's route that does it (`route`, where there is one):
 
   | `reason` | when | `action` | `route` |
   | --- | --- | --- | --- |
   | `kernel` | Linux without Landlock; `needs`: `"Linux 5.13"` | `help` | |
-  | `namespaces` | Linux that doesn't let commands have a namespace of their own; `needs`: `"user namespaces"`, or `"util-linux"` without `unshare` | `help` | |
+  | `namespaces` | Linux that doesn't let commands have a namespace of their own, from a box that doesn't run without one (none does now: `gaps`); `needs`: `"user namespaces"`, or `"util-linux"` without `unshare` | `help` | |
   | `macos` | this macOS has no sandbox | `softwareUpdate` | |
   | `engineMissing` | a machine without its engine yet | `retry` | `POST kuvo/sandbox/check` |
   | `checking` | not checked yet | `retry` | `POST kuvo/sandbox/check` |

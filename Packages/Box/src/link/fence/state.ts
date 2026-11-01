@@ -46,10 +46,16 @@ export interface FenceState {
   check?: FenceCheck;
   /** Checks failed in a row (`checkFailed`, `checking`). */
   failures?: number;
+  /** While it's on, what it can't keep commands from on this computer: `services`, the services
+   * your login runs (systemd, your keyring, your SSH agent), where commands can't have a namespace
+   * of their own (`needs` says what for). The vault isn't open to agents there, nor do goals go on
+   * alone: `fenceWhole`. */
+  gaps?: FenceGap[];
 }
 
 export type FenceReason = "kernel" | "namespaces" | "macos" | "engineMissing" | "checking" | "checkFailed" | "plugin" | "engineDown" | "waiting";
 export type FenceAction = "help" | "softwareUpdate" | "retry" | "fix" | "restartEngine";
+export type FenceGap = "services";
 export type FenceCheck = "folder" | "tempFiles" | "readsOwn" | "writesOwn" | "services" | "didntRun" | "setup";
 
 const CHECK = "POST kuvo/sandbox/check";
@@ -108,7 +114,17 @@ export function fenceState(): FenceState {
   // Kuvo Code's own kill switch: no reason a client shows, as there's nothing you can do.
   if (!fenceWanted()) return { ...base, on: false, why: "Kuvo Code has it turned off on this computer for now." };
   if (!checked.passed) return { ...base, on: false, ...cannot(checked) };
-  return { ...base, ...loaded() };
+  const now = loaded();
+  return { ...base, ...now, ...(now.on && withoutNamespace ? { gaps: ["services"], needs: withoutNamespace } : {}) };
+}
+
+/** Whether commands here are kept from all it hides, Kuvo Code's own included, by the sandbox as
+ * any of the box's processes can tell: a Mac's always; a Linux machine's only where each command
+ * has a namespace of its own (`run/fence/namespace` names its unshare), or one could have the
+ * services your login runs start anything outside it (`systemd-run --user`). What the vault and a
+ * goal going on alone ask for besides `on`. */
+export function fenceWhole(): boolean {
+  return platform === "darwin" || (textOf(path.join(FOLDER, "namespace")) ?? "").startsWith("/");
 }
 
 /** Whether the engine has the sandbox's plugin, as it is now: on, or why not. */
@@ -260,11 +276,14 @@ function writeExecutable(file: string, text: string): void {
 /**
  * Where a Linux machine doesn't let commands have a namespace of their own (fence/landlock.ts,
  * `ownNamespace`): "off", the sandbox isn't on there, so commands go to the ask as where it can't
- * run; "without", it runs without one, and commands can still reach your session's services.
+ * run; "without" (the user's choice, 2026-11-01), it runs without one, and commands can still reach
+ * your session's services: the state says so (`gaps`), and what needs it whole waits (`fenceWhole`).
  */
-const WITHOUT_NAMESPACE: "off" | "without" = "off";
+const WITHOUT_NAMESPACE: "off" | "without" = "without";
 /** The `unshare` each command's namespace comes from, as `able` last found it (Linux). */
 let namespace: string | null = null;
+/** Where it runs without one, what the machine needs for it (`FenceState.needs`). */
+let withoutNamespace: string | null = null;
 
 /** Whether this computer can sandbox commands at all, and why not. */
 function able(): Checked {
@@ -274,12 +293,14 @@ function able(): Checked {
     return { able: false, passed: false, why: `Linux ${os.release().split("-")[0]} can't sandbox commands: it needs Landlock (Linux 5.13 or later, with it on).`, reason: "kernel", needs: "Linux 5.13" };
   }
   namespace = ownNamespace();
-  if (!namespace && WITHOUT_NAMESPACE === "off") {
+  withoutNamespace = namespace ? null : UNSHARE.some(each => fs.existsSync(each)) ? "user namespaces" : "util-linux";
+  if (withoutNamespace && WITHOUT_NAMESPACE === "off") {
     const services = "which the sandbox needs to keep commands from the services your login runs: systemd, your keyring, your agents";
-    return UNSHARE.some(each => fs.existsSync(each))
-      ? { able: false, passed: false, why: `This machine doesn't let commands have a namespace of their own (it restricts unprivileged user namespaces, as Ubuntu 24.04 and later do), ${services}.`, reason: "namespaces", needs: "user namespaces" }
-      : { able: false, passed: false, why: `This machine has no unshare (util-linux's), ${services}.`, reason: "namespaces", needs: "util-linux" };
+    return withoutNamespace === "user namespaces"
+      ? { able: false, passed: false, why: `This machine doesn't let commands have a namespace of their own (it restricts unprivileged user namespaces, as Ubuntu 24.04 and later do), ${services}.`, reason: "namespaces", needs: withoutNamespace }
+      : { able: false, passed: false, why: `This machine has no unshare (util-linux's), ${services}.`, reason: "namespaces", needs: withoutNamespace };
   }
+  if (WITHOUT_NAMESPACE === "off") withoutNamespace = null;
   return { able: true, passed: false };
 }
 

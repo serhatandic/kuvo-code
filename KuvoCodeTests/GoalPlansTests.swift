@@ -173,6 +173,12 @@ import Testing
         // outside it (any agent's: the box can't say whose), holds it back: restarted in it, as the
         // box offers.
         #expect(row(.status(.init(on: true, agents: true)), true, true) == nil, "all in it: nothing to fix")
+        // A machine whose commands can still reach your login's services: on, but no goal alone.
+        let services = try #require(row(.status(.init(on: true, agents: true, needs: "user namespaces", gaps: ["services"])), false, false))
+        #expect(services.title == "lokum can’t work on its own")
+        #expect(services.text.contains("your login’s services") && services.text.contains("Pixel works while you’re here"))
+        #expect(services.buttons == [.init(label: "How to Check…", action: .open(GoalSandbox.machinesPage))])
+        #expect(row(.status(.init(on: true, agents: true, gaps: ["somethingNew"])), false, false) == nil, "a gap a newer box adds, unknown here, isn't taken for this one")
         #expect(row(status("engineDown", "POST kuvo/engine/restart"), true, true)?.buttons == [.init(label: "Restart Sessions", action: .restartSessions(method: "POST", path: "kuvo/engine/restart"))])
         let outside = try #require(row(.status(.init(on: true, agents: false, outside: true)), true, true))
         #expect(outside.title == "Agents started before the sandbox")
@@ -185,7 +191,7 @@ import Testing
                 "a box from before `outside` says it only by asking to restart them")
         #expect(row(.status(.init(on: true, agents: false, outside: true)), true, false) == nil, "a bot on the built-in models isn't held back by them")
         // Plain words: nothing about a sandbox that doesn't cover agents yet, nor the engine.
-        let every = [outside, restarting, notOn, kernel] + ["engineMissing", "plugin", "engineDown", "waiting"].compactMap { row(status($0, "POST kuvo/sandbox/check"), false, false) }
+        let every = [outside, restarting, notOn, kernel, services] + ["engineMissing", "plugin", "engineDown", "waiting"].compactMap { row(status($0, "POST kuvo/sandbox/check"), false, false) }
         for each in every {
             let words = "\(each.title) \(each.text) \(each.buttons.map(\.label))"
             #expect(!words.contains("doesn’t cover") && !words.localizedCaseInsensitiveContains("engine"), "\(words)")

@@ -24,9 +24,13 @@ enum GoalSandbox {
         var needs: String?
         var check: String?
         var failures: Int?
+        /// While it's on, what it can't keep commands from: "services", your login's (a Linux
+        /// machine whose commands can't have a namespace of their own).
+        var gaps: [String]?
 
         init(on: Bool, why: String? = nil, able: Bool? = nil, agents: Bool? = nil, outside: Bool? = nil, restart: Bool? = nil, reason: String? = nil,
-             action: String? = nil, route: String? = nil, needs: String? = nil, check: String? = nil, failures: Int? = nil) {
+             action: String? = nil, route: String? = nil, needs: String? = nil, check: String? = nil, failures: Int? = nil, gaps: [String]? = nil) {
+            self.gaps = gaps
             self.on = on
             self.why = why
             self.able = able
@@ -87,6 +91,8 @@ enum GoalSandbox {
 
     /// Where the docs say how to check a machine's Linux, until a sandbox page of their own exists.
     static let helpPage = URL(string: "https://www.kuvo.run/code/docs/")!
+    /// What a machine needs for the sandbox, and how to check it.
+    static let machinesPage = URL(string: "https://www.kuvo.run/code/docs/machines/#sandbox")!
     static let softwareUpdate = URL(string: "x-apple.systempreferences:com.apple.Software-Update-Settings.extension")!
 
     /// What a failed check found, by the check the box names.
@@ -158,6 +164,12 @@ enum GoalSandbox {
             return Row(title: cant, text: "Sessions \(there) aren’t running, so the sandbox can’t be checked. \(withYou)", buttons: [restart])
         case "waiting":
             return Row(title: cant, text: "Sessions \(there) started before the sandbox was set up. Restart them to run them in it. \(withYou)", buttons: [restart])
+        case nil where status.on && status.gaps?.contains("services") == true:
+            // On, but commands there can still reach your login's services (systemd runs anything
+            // outside it), so the box doesn't let a goal go on alone.
+            return Row(title: "\(computer) can’t work on its own",
+                       text: "Its commands can still reach your login’s services there, so \(bot) works while you’re here. Ask whoever runs it to \(status.needs == "util-linux" ? "install util-linux" : "allow user namespaces").",
+                       buttons: [Button(label: "How to Check…", action: .open(machinesPage))])
         case nil where status.on:
             // A box from before it said `agents` has none of theirs outside it. Any coding agent's
             // process outside it keeps the bot's goal from going on alone, whichever agent it is.

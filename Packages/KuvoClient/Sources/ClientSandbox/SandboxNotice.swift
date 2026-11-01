@@ -49,6 +49,9 @@ public struct SandboxNotice: Equatable, Sendable {
 extension SandboxState {
     /// Its line or row, as the box says it is now.
     public var notice: SandboxNotice {
+        if on, gaps?.contains(.services) == true {
+            return SandboxNotice(look: .on, title: nil, detail: "Agents’ commands run in a sandbox, but on this machine they can still reach your login’s services, like systemd, which can run things outside it.", buttons: [])
+        }
         if on { return SandboxNotice(look: .on, title: nil, detail: "Agents’ commands run in a sandbox: they can’t read your keys or sign-ins.", buttons: []) }
         let check = SandboxNotice.Button(title: "Try Again", action: .check)
         switch reason {
