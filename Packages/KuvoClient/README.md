@@ -16,6 +16,8 @@ The rules for what a message says, the same in both apps. Foundation only: no vi
   a change by the app, so no key is lost.
 - `OutsideFolders`: a folder or file an agent asks to work in outside its project, as people know
   it ("~/notes", not the engine's "/Users/me/notes/*"), and as VoiceOver reads it ("Home, notes").
+- `SearchMatches`: where a search's words are in the snippet a result shows, as the box matched
+  them, and the snippet with them in bold.
 
 ## ClientAccounts
 

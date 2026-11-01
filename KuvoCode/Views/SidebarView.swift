@@ -547,9 +547,9 @@ struct SidebarView: View {
                 }
                 switch result.found {
                 case .bot(let bot):
-                    botRow(bot, snippet: SearchSnippet.text(result.snippet, found: findsQuery), action: show)
+                    botRow(bot, snippet: SearchMatches.snippet(result.snippet, found: findsQuery), action: show)
                 case .session(let session):
-                    ConversationResultRow(title: session.title ?? "New Session", snippet: SearchSnippet.text(result.snippet, found: findsQuery), isSelected: selection == session.id, action: show)
+                    ConversationResultRow(title: session.title ?? "New Session", snippet: SearchMatches.snippet(result.snippet, found: findsQuery), isSelected: selection == session.id, action: show)
                         .contextMenu { menu(for: session) }
                 }
             }
@@ -1184,19 +1184,6 @@ private struct OpenInMenu: View {
                 }
             }
         }
-    }
-}
-
-/// The words around what a search found, the found words in bold.
-enum SearchSnippet {
-    static func text(_ snippet: String, found query: String) -> AttributedString {
-        var text = AttributedString(snippet)
-        for range in SearchMatches.ranges(of: query, in: snippet) {
-            guard let lower = AttributedString.Index(range.lowerBound, within: text),
-                  let upper = AttributedString.Index(range.upperBound, within: text) else { continue }
-            text[lower..<upper].inlinePresentationIntent = .stronglyEmphasized
-        }
-        return text
     }
 }
 
