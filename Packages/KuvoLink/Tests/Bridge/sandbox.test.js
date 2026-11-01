@@ -28,6 +28,16 @@ fs.mkdirSync(path.join(os.homedir(), ".kuvo-code-test"), { recursive: true });
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.homedir(), ".kuvo-code-test", "sb-")));
 removeAtEnd(root);
 const linux = process.platform === "linux";
+// This file's runtime, for the commands that run it: run on a machine's engine, that's in the
+// machine's own `~/.kuvo-code`, which a test's box hides from its commands as Kuvo Code's own, so
+// they run a link to it in this file's folder.
+const ownRuntime = (() => {
+  const kuvo = path.join(os.homedir(), ".kuvo-code") + "/";
+  if (!fs.realpathSync(process.execPath).startsWith(kuvo)) return process.execPath;
+  const linked = path.join(root, "runtime");
+  try { fs.linkSync(fs.realpathSync(process.execPath), linked); } catch { fs.copyFileSync(process.execPath, linked); fs.chmodSync(linked, 0o755); }
+  return linked;
+})();
 // kuvo-wake, as Wakes.swift has it and BoxFiles puts it in every box's bin.
 const swift = fs.readFileSync(new URL("../../../OpenCodeKit/Sources/OpenCodeKit/Engine/Wakes.swift", import.meta.url), "utf8");
 const opening = 'public static let script = #"""\n';
@@ -244,7 +254,7 @@ test("on, a command writes in its own project, git works there, and Kuvo Code's 
     // with what Kuvo Code's own processes give first (the box's socket key) left to find.
     const keyFile = path.join(box.home, "run", "socket.key");
     assert.ok(fs.existsSync(keyFile), "the box made its sockets' key");
-    const runtime = `BUN_BE_BUN=1 ${JSON.stringify(process.execPath)}`;
+    const runtime = `BUN_BE_BUN=1 ${JSON.stringify(ownRuntime)}`;
     const straight = `const s = require("net").createConnection(${JSON.stringify(path.join(box.home, "run", "vault.sock"))}); let h = ""; s.on("connect", () => s.write(JSON.stringify({ hello: "x" }) + "\\n")); s.on("data", c => { h += c; s.destroy(); }); s.on("error", () => process.exit(1)); s.on("close", () => process.exit(h ? 0 : 1));`;
     const fill = JSON.stringify({ method: "POST", path: "kuvo/vault/fill", body: Buffer.from("{}").toString("base64") });
     const ran = await engineRuns(box, project, tries([
@@ -970,7 +980,7 @@ test("a socket key a command kept from before the sandbox was on opens nothing o
   const running = await start(box);
   try {
     assert.equal((await running.ask("GET", "kuvo/sandbox")).value.able, true);
-    const runtime = `BUN_BE_BUN=1 ${JSON.stringify(process.execPath)}`;
+    const runtime = `BUN_BE_BUN=1 ${JSON.stringify(ownRuntime)}`;
     const withKept = `const key = require("fs").readFileSync("kept.key", "utf8").trim(); const s = require("net").createConnection(${JSON.stringify(path.join(box.home, "run", "vault.sock"))}); let h = ""; s.on("connect", () => s.write(JSON.stringify({ hello: "x", key }) + "\\n")); s.on("data", c => { h += c; s.destroy(); }); s.on("error", () => process.exit(1)); s.on("close", () => process.exit(h ? 0 : 1));`;
     const ran = await engineRuns(box, project, tries([
       ["run its runtime", `${runtime} -e 'process.exit(0)'`],

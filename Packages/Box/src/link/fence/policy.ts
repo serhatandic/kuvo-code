@@ -13,7 +13,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { IS_MAC, K } from "../home";
+import { accountHome, IS_MAC, K } from "../home";
 
 export interface FencePolicy {
   /** The home folder whose secrets are hidden. */
@@ -139,7 +139,7 @@ export function appTemporary(): string | null {
  */
 export function sandboxCaches(): { npm: string; pnpm: string; uv: string; corepack: string } {
   const tmp = appTemporary();
-  const root = realish(tmp ? path.join(os.userInfo().homedir, "Library", "Caches", path.basename(tmp)) : path.join(K, "cache"));
+  const root = realish(tmp ? path.join(accountHome(), "Library", "Caches", path.basename(tmp)) : path.join(K, "cache"));
   return { npm: path.join(root, "sandbox-npm"), pnpm: path.join(root, "sandbox-pnpm"), uv: path.join(root, "sandbox-uv"), corepack: path.join(root, "sandbox-corepack") };
 }
 
@@ -157,13 +157,19 @@ function macFolders(home: string): { kuvo: string[]; readable: string[] } {
 }
 
 /**
- * This box's policy, as its folders, your home folder and your SSH keys are now: this Mac's app's
+ * This box's policy, as its folders, your home folder (your account's, whatever HOME says, as
+ * `allowed.ts` has it: Bun's `os.userInfo()` follows HOME) and your SSH keys are now: this Mac's app's
  * folders on this Mac's box, a machine's folder on a machine's; the system's own paths and secrets
  * as the computer it runs on has them.
  */
 export function fencePolicy(ports: number[] = []): FencePolicy {
-  const home = realish(os.userInfo().homedir);
+  const home = realish(accountHome());
   const inHome = (names: string[]) => names.map(name => realish(path.join(home, name)));
+  // And what's kept from commands in the home HOME names, where that isn't your account's, as tools
+  // run from it look there.
+  const named = realish(process.env.HOME || home);
+  const homes = named === home ? [home] : [home, named];
+  const inHomes = (names: string[]) => homes.flatMap(each => names.map(name => realish(path.join(each, name))));
   // A machine's folder, and the real one if this is a test's own.
   const own = IS_MAC ? macFolders(home) : { kuvo: [K, path.join(home, ".kuvo-code")], readable: [path.join(K, "bin")] };
   const kuvo = [...new Set(own.kuvo.map(realish))];
@@ -174,10 +180,10 @@ export function fencePolicy(ports: number[] = []): FencePolicy {
   const ownCache = "KUVO_OWN_XDG_CACHE_HOME" in process.env ? process.env.KUVO_OWN_XDG_CACHE_HOME : process.env.XDG_CACHE_HOME;
   const yourCaches = [realish(path.join(home, ".cache"))];
   if (ownCache && path.isAbsolute(ownCache) && !kuvo.some(folder => realish(ownCache) === folder || realish(ownCache).startsWith(folder + "/"))) yourCaches.push(realish(ownCache));
-  const runsLater = [...inHome(RUNS_LATER), ...new Set(yourCaches.flatMap(folder => TOOL_CACHES.map(name => path.join(folder, name))))];
+  const runsLater = [...inHomes(RUNS_LATER), ...new Set(yourCaches.flatMap(folder => TOOL_CACHES.map(name => path.join(folder, name))))];
   if (process.platform === "darwin") {
     return {
-      home, kuvo, kuvoReadable, readOnly: [...runsLater, ...inHome(MAC_RUNS_LATER)], ports, commandCaches,
+      home, kuvo, kuvoReadable, readOnly: [...runsLater, ...inHomes(MAC_RUNS_LATER)], ports, commandCaches,
       // bunx's packages, in your temporary folder (`T/bunx-<uid>-<package>`), which it runs again
       // as they are. (A command's own bunx is in its own temporary folder.)
       readOnlyPatterns: userTemporary().map(folder => `^${escapeRegex(folder)}/T/bunx-`),
@@ -203,14 +209,14 @@ export function fencePolicy(ports: number[] = []): FencePolicy {
         `^${escapeRegex(home)}/\\.gnupg/S\\.(gpg-agent|scdaemon)`,
       ],
       socketFolders: ["^/private/tmp/com\\.apple\\.launchd\\.[^/]+$", "^/private/tmp/ssh-[^/]+$", "^/private/var/folders/[^/]+/[^/]+/T/ssh-[^/]+$"],
-      secrets: [...inHome([...SECRETS, ...MAC_SECRETS]), ...keychainDaemons(home).map(realish), ...sshKeys(home).map(realish), ...ghHosts(home).map(realish)],
+      secrets: [...inHomes([...SECRETS, ...MAC_SECRETS]), ...keychainDaemons(home).map(realish), ...homes.flatMap(each => [...sshKeys(each), ...ghHosts(each)]).map(realish)],
     };
   }
   return {
     home, kuvo, kuvoReadable, readOnly: runsLater, ports, commandCaches,
     kuvoPatterns: [],
     writable: ["/tmp", "/var/tmp", "/dev", "/dev/shm", ...inHome([...CACHES, ...LINUX_CACHES])],
-    secrets: [...inHome([...SECRETS, ...LINUX_SECRETS]), ...sshKeys(home), ...ghHosts(home)],
+    secrets: [...inHomes([...SECRETS, ...LINUX_SECRETS]), ...homes.flatMap(each => [...sshKeys(each), ...ghHosts(each)])],
   };
 }
 
