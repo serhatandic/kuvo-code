@@ -201,12 +201,18 @@ struct GoalCard: View {
         .accessibilityElement(children: .combine)
     }
 
-    /// "Pixel’s plan. Two things are yours first; the rest is ready."
     private var subtitle: String {
-        let count = yours.count + (sandboxItem.map { $0.checking ? 0 : 1 } ?? 0)
+        Self.subtitle(name: plan.name, yours: yours.count, sandbox: sandboxItem, hasReady: !plan.ready.isEmpty)
+    }
+
+    /// "Pixel’s plan. Two things are yours first; the rest is ready." What's yours is what you
+    /// can do something about: the sandbox's row counts once it has a button, not while it's
+    /// being checked or only says why it holds back.
+    static func subtitle(name: String, yours: Int, sandbox: GoalSandbox.Row?, hasReady: Bool) -> String {
+        let count = yours + (sandbox.map { $0.checking || $0.buttons.isEmpty ? 0 : 1 } ?? 0)
         let first = count == 0 ? "" : count == 1 ? " One thing is yours first" : " \(Self.spelled(count).capitalized) things are yours first"
-        let rest = plan.ready.isEmpty ? (count == 0 ? "" : ".") : (count == 0 ? " Everything’s ready." : "; the rest is ready.")
-        return "\(plan.name)’s plan.\(first)\(rest)"
+        let rest = !hasReady ? (count == 0 ? "" : ".") : (count == 0 ? " Everything’s ready." : "; the rest is ready.")
+        return "\(name)’s plan.\(first)\(rest)"
     }
 
     static func spelled(_ count: Int) -> String {
