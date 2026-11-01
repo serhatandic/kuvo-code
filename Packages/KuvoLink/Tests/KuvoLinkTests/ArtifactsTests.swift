@@ -42,6 +42,15 @@ import Testing
         #expect(ArtifactWords.shelf(try Self.list([("job.json", "memory", "")])).isEmpty)
     }
 
+    /// The bot rewrites its job as you tell it more: that's not something new it made, so the dot
+    /// that says there's something new doesn't light up for it.
+    @Test func aBotRewritingItsJobIsNothingNew() throws {
+        let things = try Self.list([("report.md", "document", ""), ("job.json", "memory", "")])
+        #expect(things[1].updated > things[0].updated)
+        #expect(ArtifactWords.newest(things) == things[0].updated)
+        #expect(ArtifactWords.newest(try Self.list([("job.json", "memory", "")])) == 0)
+    }
+
     /// What's kept at the top reads as one thing: what you keep is "Kept", what its bot marked final
     /// is "Final", and the Shelf's first section, which holds both, is "Kept".
     @Test func whatsKeptReadsAsKeptAndABotsMarkAsFinal() throws {

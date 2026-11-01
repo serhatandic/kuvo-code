@@ -128,8 +128,7 @@ struct MadeButton: View {
     }
 
     private func newest(_ things: MadeThings) -> Double {
-        // The bot's job changes as you tell it more: not something new it made.
-        things.artifacts.filter { place.shows($0) && !ArtifactWords.isJob($0) }.map(\.updated).max() ?? 0
+        ArtifactWords.newest(things.artifacts.filter(place.shows))
     }
 
     private var seenTimes: [String: Double] {
