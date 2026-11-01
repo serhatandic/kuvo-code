@@ -31,6 +31,10 @@ const folderOf = request => decodeURIComponent(request.headers["x-opencode-direc
 const sessions = [];
 const active = new Set();
 const told = [];
+// The engine's events, followed as each box follows them; and someone waiting for the next session told.
+const followers = [];
+let onTold = () => {};
+let onActive = () => {};
 // Worktrees made so far, for each a folder of its own.
 let made = 0;
 const engine = http.createServer((request, response) => {
@@ -38,6 +42,11 @@ const engine = http.createServer((request, response) => {
   request.on("data", chunk => { body += chunk; });
   request.on("end", () => {
     const url = new URL(request.url, "http://x");
+    if (url.pathname === "/api/event") {
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.write(": hello\n\n");
+      return followers.push(response);
+    }
     const send = (value, status = 200) => { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value)); };
     // Any folder in the repository (through a link too) is the project's.
     const real = (() => { try { return fs.realpathSync(folderOf(request)); } catch { return ""; } })();
@@ -58,10 +67,14 @@ const engine = http.createServer((request, response) => {
     if (url.pathname === "/api/session") return send({ data: sessions });
     if (request.method === "PUT" && url.pathname.includes("/instructions/entries/")) {
       told.push({ url: url.pathname, value: JSON.parse(body).value });
+      onTold();
       return send({});
     }
     if (url.pathname.startsWith("/api/session/") && url.pathname !== "/api/session/active") return send({ data: sessions.find(each => each.id === decodeURIComponent(url.pathname.split("/").pop())) ?? null });
-    if (url.pathname === "/api/session/active") return send({ data: Object.fromEntries([...active].map(id => [id, {}])) });
+    if (url.pathname === "/api/session/active") {
+      onActive();
+      return send({ data: Object.fromEntries([...active].map(id => [id, {}])) });
+    }
     send({}, 404);
   });
 });
@@ -300,6 +313,52 @@ test("a Mac reading the machine's worktrees as their session gets its title find
   assert.ok(refused >= 400, `answered ${refused}`);
   assert.equal(git(made.root, "symbolic-ref", "--short", "HEAD"), "kuvo/speed-up-checkout");
   sessions.splice(sessions.findIndex(each => each.id === "ses_titled"), 1);
+  assert.equal((await ask("POST", "kuvo/worktrees/remove", { path: made.root, forget: true })).status, 200);
+});
+
+test("a session started in a worktree with its title given (by an agent, a bot) names its branch as the box hears of it, Mac closed, and is told that name", async () => {
+  const made = (await ask("POST", "kuvo/worktrees", { project, branchPrefix: "kuvo/" })).value;
+  told.length = 0;
+  const heard = new Promise(resolve => { onTold = resolve; });
+  const caughtUp = new Promise(resolve => { onActive = resolve; });
+  const stop = new AbortController();
+  link.watchEvents(() => atEngine, () => true, stop.signal, () => {}, { notices: false });
+  try {
+    // Following the engine, it has looked for sessions titled meanwhile: none yet.
+    await caughtUp;
+    onActive = () => {};
+    sessions.push({ id: "ses_given", title: "Fix the cart total", location: { directory: made.folder } });
+    // The engine says it's made, with its title; it never says it's renamed.
+    followers.at(-1).write(`data: ${JSON.stringify({ type: "session.created", data: { sessionID: "ses_given" } })}\n\n`);
+    await heard;
+  } finally {
+    stop.abort();
+    onTold = () => {};
+  }
+  assert.equal(git(made.root, "symbolic-ref", "--short", "HEAD"), "kuvo/fix-the-cart-total");
+  assert.match(told[0].value, /on the branch kuvo\/fix-the-cart-total,/, "told the name it works on");
+  sessions.splice(sessions.findIndex(each => each.id === "ses_given"), 1);
+  assert.equal((await ask("POST", "kuvo/worktrees/remove", { path: made.root, forget: true })).status, 200);
+});
+
+test("a session titled while the box wasn't listening (it was restarting) has its branch named once the box follows its engine again", { timeout: 10_000 }, async t => {
+  const made = (await ask("POST", "kuvo/worktrees", { project, branchPrefix: "kuvo/" })).value;
+  sessions.push({ id: "ses_missed", title: "Tidy the footer", location: { directory: made.folder } });
+  told.length = 0;
+  const heard = new Promise(resolve => { onTold = resolve; });
+  const stop = new AbortController();
+  // (Stopped should the test end first: on the old code it's never named.)
+  t.signal.addEventListener("abort", () => stop.abort());
+  link.watchEvents(() => atEngine, () => true, stop.signal, () => {}, { notices: false });
+  try {
+    await heard;
+  } finally {
+    stop.abort();
+    onTold = () => {};
+  }
+  assert.equal(git(made.root, "symbolic-ref", "--short", "HEAD"), "kuvo/tidy-the-footer");
+  assert.match(told[0].value, /on the branch kuvo\/tidy-the-footer,/);
+  sessions.splice(sessions.findIndex(each => each.id === "ses_missed"), 1);
   assert.equal((await ask("POST", "kuvo/worktrees/remove", { path: made.root, forget: true })).status, 200);
 });
 

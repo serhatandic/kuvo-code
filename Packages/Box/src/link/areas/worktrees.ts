@@ -132,24 +132,33 @@ function renameWorktree(tree: WorktreeRecord, to: string): boolean {
 
 /** A worktree made here, named after its session once that has a title (this box names its own,
  * Mac connected or not; a Mac names only its own): one still on the branch it was made on, and
- * not pushed. Its session is told the new name, as it was told the one before. */
-export async function nameWorktreeBranch(engine: Target, sessionID: unknown): Promise<void> {
-  if (typeof sessionID !== "string") return;
+ * not pushed. Its session is told the new name, as it was told the one before: whether it was. */
+export async function nameWorktreeBranch(engine: Target, sessionID: unknown): Promise<boolean> {
+  if (typeof sessionID !== "string") return false;
   const session: EngineSession | undefined = (await engineGet(engine, `api/session/${encodeURIComponent(sessionID)}`) as EngineAnswer<EngineSession>)?.data;
   // Not after a subagent's title, nor an engine run's a coding agent's session started.
-  if (!session || session.parentID || isHiddenRun(session)) return;
+  if (!session || session.parentID || isHiddenRun(session)) return false;
   const folder = session.location?.directory ?? session.directory;
   // Read now, after the wait: what another naming did meanwhile shows.
   const tree = readWorktrees().find(each => (each.folder ?? each.root) === folder);
   const slug = branchSlug(session.title ?? "");
-  if (!tree?.made || tree.branch !== tree.made || !slug) return;
-  if (renameWorktree(tree, (tree.prefix ?? "") + slug)) await tellWorktree(engine, sessionID);
+  if (!tree?.made || tree.branch !== tree.made || !slug) return false;
+  if (!renameWorktree(tree, (tree.prefix ?? "") + slug)) return false;
+  await tellWorktree(engine, sessionID);
+  return true;
+}
+
+/** A session just made, in one of this box's worktrees or not: its branch named after the title it
+ * was made with (an agent's or a bot's, which the engine never says was renamed), and told where it
+ * works, by that name. */
+export async function settleNewSession(engine: Target, sessionID: unknown): Promise<void> {
+  if (!(await nameWorktreeBranch(engine, sessionID))) await tellWorktree(engine, sessionID);
 }
 
 /** The worktrees made here whose session has a title by now, named: as they're read, so a reader
  * never sees one before this box named it (it heard of the title a moment later, or wasn't
- * running then). */
-async function nameDueWorktrees(engine: Target | null, signal: AbortSignal | undefined): Promise<void> {
+ * running then), and as this box follows its engine again (a title given meanwhile). */
+export async function nameDueWorktrees(engine: Target | null, signal: AbortSignal | undefined): Promise<void> {
   const due = readWorktrees().filter(tree => tree.made && tree.branch === tree.made);
   if (!due.length || !engine?.port) return;
   const sessions = (await sessionsHere(engine, signal))?.sessions ?? [];
