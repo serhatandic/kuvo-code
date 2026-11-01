@@ -63,22 +63,27 @@ struct BoxNameStrip: View {
         let shown = Self.shown(widths: boxes.map { widths[$0] ?? 0 }, room: room, more: moreWidth, spacing: Self.spacing,
                                selected: boxes.firstIndex(of: selected) ?? 0)
         let rest = boxes.indices.filter { !shown.contains($0) }.map { names[$0] }
+        // Until every name is measured, what fits isn't known: nothing rather than a jump.
+        let measured = room > 0 && boxes.allSatisfy { widths[$0] != nil }
         HStack(spacing: Self.spacing) {
-            ForEach(shown, id: \.self) { index in
-                label(names[index])
+            ForEach(shown.map { names[$0] }, id: \.box) { name in
+                label(name)
             }
             if !rest.isEmpty {
                 more(rest)
             }
         }
+        .opacity(measured ? 1 : 0)
         .frame(maxWidth: .infinity, alignment: .leading)
         .frame(height: 24)
+        .clipped()
         .onGeometryChange(for: CGFloat.self, of: \.size.width) { room = $0 }
         .background(alignment: .topLeading) {
-            // Every name as it would show, and the count at its widest, to measure: never seen.
+            // Every name as it would show lit (its widest), and the count at its widest, to
+            // measure: never seen.
             HStack(spacing: Self.spacing) {
                 ForEach(names, id: \.box) { name in
-                    label(name)
+                    label(name, lit: true)
                         .onGeometryChange(for: CGFloat.self, of: \.size.width) { widths[name.box] = $0 }
                 }
                 moreLabel(count: boxes.count, mark: .new)
@@ -151,15 +156,18 @@ struct BoxNameStrip: View {
         }
     }
 
-    private func label(_ name: Name) -> some View {
+    /// `lit`: drawn in the lit one's weight, whichever it is, to measure.
+    private func label(_ name: Name, lit: Bool = false) -> some View {
         Button { pick(name.box) } label: {
             HStack(spacing: 5) {
                 Text(name.title)
-                    .font(.system(size: 12.5, weight: name.isOn ? .semibold : .medium))
+                    .font(.system(size: 12.5, weight: name.isOn || lit ? .semibold : .medium))
                     .foregroundStyle(name.isOn ? AnyShapeStyle(.primary) : name.isAway ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.secondary))
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .frame(maxWidth: 150, alignment: .leading)
+                    // As wide as the name, never the room it's offered.
+                    .fixedSize(horizontal: true, vertical: false)
                 if let connection = name.connection {
                     MachineIndicator(connection: connection, size: 5, quiet: true, progress: name.progress)
                 } else if let news = name.news {
@@ -183,7 +191,7 @@ struct BoxNameStrip: View {
         NativeMenuButton(name: "boxes", opensBelow: true) {
             let menu = NSMenu()
             for name in rest {
-                menu.addItem(ActionItem(name.title, subtitle: name.said, image: Self.dot(for: name)) { pick(name.box) })
+                menu.addItem(ActionItem(name.title, subtitle: name.said ?? name.status, image: Self.dot(for: name)) { pick(name.box) })
             }
             menu.addItem(.separator())
             menu.addItem(ActionItem("Add Machine…") {
@@ -231,7 +239,7 @@ struct BoxNameStrip: View {
         case .failed?: .systemOrange
         case .notConnected?, .stopped?: .secondaryLabelColor
         case .connecting?, .reconnecting?, .installing?: .tertiaryLabelColor
-        case .connected?, nil: name.news == .needsYou ? .systemOrange : .systemGreen
+        case .connected?, nil: name.news == .needsYou ? .systemOrange : name.news == .new ? .controlAccentColor : .systemGreen
         }
         let image = NSImage(size: NSSize(width: 16, height: 16), flipped: false) { _ in
             color.setFill()

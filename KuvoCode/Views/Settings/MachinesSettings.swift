@@ -5,6 +5,7 @@ import SwiftUI
 /// be connected again, disconnected or removed.
 struct MachinesSettings: View {
     @Environment(AppModel.self) private var app
+    @Environment(\.isEnabled) private var isEnabled
     @State private var showsAdd = false
     @State private var removing: Machine?
     /// Two machines you said were one computer, which said they're two.
@@ -67,7 +68,9 @@ struct MachinesSettings: View {
         .settingsDetail(isPresented: $showsAdd, title: "Add a Machine") {
             MachineForm(style: .settings, added: { _ in showsAdd = false }, cancel: { showsAdd = false })
         }
-        .onChange(of: app.addsMachine, initial: true) { _, adds in
+        // Asked for from the sidebar: taken by the Machines page in view, not one kept in a tab
+        // behind it (those are disabled).
+        .onChange(of: app.addsMachine && isEnabled, initial: true) { _, adds in
             guard adds else { return }
             app.addsMachine = false
             showsAdd = true
