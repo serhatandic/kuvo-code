@@ -118,7 +118,7 @@ struct MCPSettings: View {
                             LabeledContent {
                                 Button("Show Integrations") { app.settingsTabs.show(.integrations, on: box) }
                             } label: {
-                                Text("\(inIntegrations.formatted(.list(type: .and))) connect in Integrations")
+                                Text("\(inIntegrations.formatted(.list(type: .and))) are in Integrations")
                                     .foregroundStyle(.secondary)
                             }
                         }
