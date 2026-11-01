@@ -299,8 +299,9 @@ final class MessageTextView: PointerAwareTextView {
     func takeKeyboard() {
         wantsKeyboard = true
         DispatchQueue.main.async { [weak self] in
-            guard let self, wantsKeyboard, !isOutOfSight, let window else { return }
+            guard let self, wantsKeyboard, let window else { return }
             wantsKeyboard = false
+            guard !isOutOfSight else { return }
             if window.firstResponder !== self { window.makeFirstResponder(self) }
             setSelectedRange(NSRange(location: (string as NSString).length, length: 0))
             scrollRangeToVisible(selectedRange())

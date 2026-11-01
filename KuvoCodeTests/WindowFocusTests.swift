@@ -418,6 +418,13 @@ import Testing
         return document.isFlipped ? document.frame.height - clip.maxY : clip.minY
     }
 
+    /// How far down the conversation in view is scrolled: where you're reading.
+    private var fromTop: CGFloat? {
+        guard fromEnd != nil, let scroll = shownRows?.enclosingScrollView, let document = scroll.documentView else { return nil }
+        let clip = scroll.contentView.bounds
+        return document.isFlipped ? clip.minY : document.frame.height - clip.maxY
+    }
+
     /// A day's question and the keeper's long answer, for a conversation long enough to read back up.
     private func exchange(in session: String, day: Int) -> [[String: Any]] {
         let asked = Double(day * 2 + 1), answered = Double(day * 2 + 2)
@@ -448,20 +455,19 @@ import Testing
         let rows = try #require(shownRows)
         let scroll = try #require(rows.enclosingScrollView)
         let document = try #require(scroll.documentView)
-        rows.scrollAnchor?.stopFollowing()
+        try #require(rows.scrollAnchor).stopFollowing()
         scroll.contentView.scroll(to: NSPoint(x: 0, y: document.isFlipped ? 0 : document.frame.height - scroll.contentView.bounds.height))
         scroll.reflectScrolledClipView(scroll.contentView)
         try await until { (fromEnd ?? 0) > 500 }
         try await drain()
-        let reading = try #require(fromEnd)
-        #expect(reading > 500)
+        let reading = try #require(fromTop)
 
         app.tabs.newSession(in: folder, conversation: true)
         try await drain()
         app.tabs.open(.session(log))
         try await until { fromEnd != nil }
         try await drain()
-        #expect(abs((fromEnd ?? 0) - reading) < 2, "still where you were reading")
+        #expect(abs((fromTop ?? .infinity) - reading) < 2, "still where you were reading")
     }
 
     /// The session's tab closed, nothing in its place: its composer (kept, out of sight) lets go
