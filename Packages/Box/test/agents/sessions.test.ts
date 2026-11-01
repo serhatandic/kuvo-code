@@ -745,13 +745,15 @@ describe("asks and conversations", () => {
     const agents = new Map([a, b].map((agent) => [agent.providerID, agent]))
     sessions.closeAll()
     sessions = new Sessions(store, { find: (provider: string | undefined) => (provider ? agents.get(provider) : undefined) } as unknown as Roster, auto, undefined, async () => [], async () => ({
-      permissions: [{ action: "*", resource: "*", effect: "allow" }, { action: "external_directory", resource: "*", effect: "ask" }, { action: "external_directory", resource: join(notes, "*"), effect: "allow" }],
+      permissions: [{ action: "*", resource: "*", effect: "allow" }, { action: "external_directory", resource: "*", effect: "ask" }, { action: "external_directory", resource: join(notes, "*"), effect: "allow" }, { action: "external_directory", resource: join(notes, "keys*"), effect: "deny" }],
     }))
     const seen: unknown[] = []
     a.script = async (_input, turn, hooks) => {
       // Claude Code's LS and Glob name the folder itself.
       seen.push(await hooks.permission({ action: "list", resources: [notes] }))
       seen.push(await hooks.permission({ action: "read", resources: [join(notes, "a.md")] }))
+      // A rule refusing a file there holds for it.
+      seen.push(await hooks.permission({ action: "read", resources: [join(notes, "keys.txt")] }))
       seen.push(await hooks.permission({ action: "list", resources: [other] }))
       seen.push(await hooks.permission({ action: "read", resources: [join(other, "b.md")] }))
       seen.push(await hooks.permission({ action: "glob", resources: [home] }))
@@ -769,7 +771,7 @@ describe("asks and conversations", () => {
     expect(sessions.permissions(id)[0]).toMatchObject({ action: "external_directory", resources: [home] })
     sessions.replyPermission(id, sessions.permissions(id)[0].id, "reject")
     await settled(id, 1)
-    expect(seen).toEqual(["once", "once", "always", "once", "reject"])
+    expect(seen).toEqual(["once", "once", "reject", "always", "once", "reject"])
   })
 
   test("a project whose folder is reached through a link doesn't ask for its own files, named where they really are", async () => {
@@ -797,7 +799,8 @@ describe("asks and conversations", () => {
       expect(sessions.permissions(id)).toEqual([])
       expect(seen).toEqual(["once", "once", "once"])
     } finally {
-      process.env.TMPDIR = tmp
+      if (tmp === undefined) delete process.env.TMPDIR
+      else process.env.TMPDIR = tmp
     }
   })
 

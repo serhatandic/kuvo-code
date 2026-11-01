@@ -15303,14 +15303,17 @@ function realFolder(folder) {
   }
 }
 function outsideFolders(ask, paths) {
-  const isFolder = (path) => {
-    try {
-      return statSync9(path).isDirectory();
-    } catch {
-      return ask.action === "list" || ask.action === "glob";
-    }
-  };
-  return [...new Set(paths.map((path) => join25(isFolder(path) ? path : dirname13(path), "*")))];
+  return [...new Set(paths.map((path) => join25(isFolder(path, ask.action) ? path : dirname13(path), "*")))];
+}
+function outsideRefusable(ask, paths, folders) {
+  return [...paths.filter((path) => !isFolder(path, ask.action)), ...folders];
+}
+function isFolder(path, action) {
+  try {
+    return statSync9(path).isDirectory();
+  } catch {
+    return action === "list" || action === "glob";
+  }
 }
 function outsideAsk(ask, paths) {
   return { ...ask, action: "external_directory", resources: paths, save: outsideFolders(ask, paths), unclassified: false };
@@ -16865,11 +16868,12 @@ ${live.agentPrompt}` : ""
     const away = outsidePaths(ask, session.location.directory, this.attached(session.id), undefined, owns);
     if (away.length) {
       const folders = outsideFolders(ask, away);
-      if (live.blocks && strictest(live.blocks, "external_directory", [...away, ...folders]) === "deny")
+      const refusable = outsideRefusable(ask, away, folders);
+      if (live.blocks && strictest(live.blocks, "external_directory", refusable) === "deny")
+        return "deny";
+      if (strictest(rules, "external_directory", refusable) === "deny")
         return "deny";
       const outside = strictest(rules, "external_directory", folders);
-      if (outside === "deny")
-        return "deny";
       if (outside === "ask" && !this.allowedOutside(live, folders))
         return "ask";
     }
@@ -16924,12 +16928,13 @@ ${live.agentPrompt}` : ""
     const away = ask.weighed ? [] : outsidePaths(ask, session.location.directory, this.attached(id), undefined, this.ownedBy(turn));
     if (away.length) {
       const folders = outsideFolders(ask, away);
-      if (live.blocks && strictest(live.blocks, "external_directory", [...away, ...folders]) === "deny")
+      const refusable = outsideRefusable(ask, away, folders);
+      if (live.blocks && strictest(live.blocks, "external_directory", refusable) === "deny")
         return "reject";
       const rules = [...live.agentRules ?? engineDefaults, ...session.permissions ?? []];
-      const outside = strictest(rules, "external_directory", folders);
-      if (outside === "deny")
+      if (strictest(rules, "external_directory", refusable) === "deny")
         return "reject";
+      const outside = strictest(rules, "external_directory", folders);
       const own = strictest(rules, ask.action, parts) ?? "allow";
       if (outside === "ask" && own !== "deny" && (own === "allow" || this.allowedBefore(live, ask)) && !this.allowedOutside(live, folders)) {
         return this.askPermission(id, live, turn, { ...outsideAsk(ask, away), metadata: ask.metadata, message: ask.message, sandboxed: ask.sandboxed }, plan);
@@ -17129,7 +17134,6 @@ ${live.agentPrompt}` : ""
     }
   }
 }
-
 class NotFound extends Error {
 }
 
@@ -22752,4 +22756,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents d9d8f78a7c4784d5baec608a8578cb9170c1791f488ef2411f9ad6ab3ae6a753
+// Built from Packages/Box/src/agents 40041ef915bb5eb5895ee2c9c8e1d6e6f55043cab5cf83ce86b41802f2a35080

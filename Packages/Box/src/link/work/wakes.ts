@@ -190,14 +190,18 @@ const changeTold = (file: string, change: (told: Told) => void, from: string | n
   } catch {}
 };
 
-// A session's last reply (its id, and when it was written; null for none), and its newest message
-// of any kind (`latest`: a turn that failed before it replied ends with yours, or the end the
-// coding agents' bridge notes); it throws when it can't be read.
-async function lastReply(target: Target, session: string): Promise<{ id: string | null; at: number | null; latest: string | null }> {
+// A session's last reply (its id, and when it was written; null for none), and the end of a turn
+// you started after it that wrote none (`turn`, its idle message, and when: a turn that failed
+// before it replied); it throws when it can't be read.
+async function lastReply(target: Target, session: string): Promise<{ id: string | null; at: number | null; turn: string | null; turnAt: number | null }> {
   const page = await call(target, "GET", `/api/session/${encodeURIComponent(session)}/message?limit=6&order=desc`);
   const messages = (Array.isArray(page) ? page : []).filter(message => isObject(message) && typeof message.id === "string");
-  const reply = messages.find(message => message.type === "assistant");
-  return { id: reply?.id ?? null, at: isObject(reply?.time) && typeof reply.time.created === "number" ? reply.time.created : null, latest: messages[0]?.id ?? null };
+  const at = (message: { time?: unknown } | undefined) => isObject(message?.time) && typeof message.time.created === "number" ? message.time.created : null;
+  const newest = (type: string) => { const index = messages.findIndex(message => message.type === type); return index < 0 ? Infinity : index; };
+  const reply = messages[newest("assistant")];
+  // (Newest first: the turn's end, then your message, then the reply before them, if any.)
+  const ended = newest("idle") < newest("user") && newest("user") < newest("assistant") ? messages[newest("idle")] : undefined;
+  return { id: reply?.id ?? null, at: at(reply), turn: ended?.id ?? null, turnAt: at(ended) };
 }
 
 /** What `workWatcher` is given: how long it gathers (ms; a test's short), and its clock. */
@@ -390,9 +394,9 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
     const outcome = (data as { outcome?: string }).outcome;
     const failed = outcome === "failed";
     const reply = last.id && last.id !== was.reply ? last.id : null;
-    // A turn that failed before it replied (its model out of reach, say): told by its newest
-    // message, once.
-    const failedBare = failed && !reply && !!last.latest && ![was.turn, was.reply].includes(last.latest);
+    // A turn that failed before it replied (its model out of reach, say): told by its end, once
+    // (not again for one that ended before it was told of).
+    const failedBare = failed && !reply && !!last.turn && last.turn !== was.turn && !(was.at && (last.turnAt ?? Infinity) <= was.at);
     if (!reply && !failedBare) return;
     // Told as it finished, its reply unread then: this one was there by then.
     if (reply && was.at && (last.at ?? data.time?.updated ?? Infinity) <= was.at) return noteTold(data.id, { reply });
@@ -401,7 +405,7 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
     const line = await wakeLine({ type: failed ? "session.execution.failed" : "session.execution.succeeded", data: { sessionID: data.id } }, data, source);
     if (line && !failed) return tellUnlessAnswered(data.id, starter, reply!, line, at);
     if (line) tell(starter, line, false);
-    noteTold(data.id, { reply, turn: failed ? last.latest : null });
+    noteTold(data.id, { reply, turn: failed ? last.turn : null });
   };
   const catchingUp = (): Promise<void> => catchUp().catch(() => {
     if (signal?.aborted) return;
@@ -444,7 +448,7 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
       if (event.type === "session.execution.succeeded") return tellUnlessAnswered(session.id, starter, reply, line, at);
       tell(starter, line, kind === "asks");
       const ask = event.data?.id ?? event.data?.form?.id;
-      noteTold(session.id, kind === "asks" ? { ask: typeof ask === "string" ? ask : undefined } : { reply, at, turn: event.type === "session.execution.failed" ? last?.latest : null });
+      noteTold(session.id, kind === "asks" ? { ask: typeof ask === "string" ? ask : undefined } : { reply, at, turn: event.type === "session.execution.failed" ? last?.turn : null });
     })().catch(() => {});
   };
   return Object.assign(watch, { caughtUp });

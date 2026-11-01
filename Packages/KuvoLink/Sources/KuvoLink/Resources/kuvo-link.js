@@ -7484,8 +7484,14 @@ var changeTold = (file, change, from, until) => {
 async function lastReply(target, session) {
   const page = await call(target, "GET", `/api/session/${encodeURIComponent(session)}/message?limit=6&order=desc`);
   const messages = (Array.isArray(page) ? page : []).filter((message) => isObject(message) && typeof message.id === "string");
-  const reply = messages.find((message) => message.type === "assistant");
-  return { id: reply?.id ?? null, at: isObject(reply?.time) && typeof reply.time.created === "number" ? reply.time.created : null, latest: messages[0]?.id ?? null };
+  const at = (message) => isObject(message?.time) && typeof message.time.created === "number" ? message.time.created : null;
+  const newest = (type) => {
+    const index = messages.findIndex((message) => message.type === type);
+    return index < 0 ? Infinity : index;
+  };
+  const reply = messages[newest("assistant")];
+  const ended = newest("idle") < newest("user") && newest("user") < newest("assistant") ? messages[newest("idle")] : undefined;
+  return { id: reply?.id ?? null, at: at(reply), turn: ended?.id ?? null, turnAt: at(ended) };
 }
 function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, now = Date.now, file = WORK_WAKES, toldFile = WORK_TOLD, bridgeRuns = () => peerPlaces().bridge, signal, from = ENGINE } = {}) {
   const due = new Set;
@@ -7659,7 +7665,7 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
     const outcome = data.outcome;
     const failed = outcome === "failed";
     const reply = last.id && last.id !== was.reply ? last.id : null;
-    const failedBare = failed && !reply && !!last.latest && ![was.turn, was.reply].includes(last.latest);
+    const failedBare = failed && !reply && !!last.turn && last.turn !== was.turn && !(was.at && (last.turnAt ?? Infinity) <= was.at);
     if (!reply && !failedBare)
       return;
     if (reply && was.at && (last.at ?? data.time?.updated ?? Infinity) <= was.at)
@@ -7671,7 +7677,7 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
       return tellUnlessAnswered(data.id, starter, reply, line, at);
     if (line)
       tell(starter, line, false);
-    noteTold(data.id, { reply, turn: failed ? last.latest : null });
+    noteTold(data.id, { reply, turn: failed ? last.turn : null });
   };
   const catchingUp = () => catchUp().catch(() => {
     if (signal?.aborted)
@@ -7720,7 +7726,7 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
         return tellUnlessAnswered(session.id, starter, reply, line, at);
       tell(starter, line, kind === "asks");
       const ask = event.data?.id ?? event.data?.form?.id;
-      noteTold(session.id, kind === "asks" ? { ask: typeof ask === "string" ? ask : undefined } : { reply, at, turn: event.type === "session.execution.failed" ? last?.latest : null });
+      noteTold(session.id, kind === "asks" ? { ask: typeof ask === "string" ? ask : undefined } : { reply, at, turn: event.type === "session.execution.failed" ? last?.turn : null });
     })().catch(() => {});
   };
   return Object.assign(watch, { caughtUp });

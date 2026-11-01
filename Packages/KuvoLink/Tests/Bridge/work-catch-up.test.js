@@ -24,7 +24,8 @@ const by = { bot: "bot_pixel00001", name: "Pixel" };
 const toldFile = path.join(home, "run", "work", "told.json");
 
 // A stand-in for the engine or the coding agents' bridge: its sessions, each with its last reply
-// (none when `replied` is null) and any message after it (`after`'s id);
+// (none when `replied` is null), a turn after it that wrote none (`after`, your message's id), and
+// messages after that (`later`: a command you ran, a model switch);
 // `listing` false answers its list as an engine still starting does, and `unread` the sessions
 // whose messages it can't read (an engine too slow); `looking` runs as it's asked what's working.
 function place(sessions) {
@@ -45,9 +46,11 @@ function place(sessions) {
       if (one && !one[2]) return sessions[id] ? reply({ data: sessions[id] }) : reply({ message: "No such session." }, 404);
       if (one?.[2] === "/message" && state.unread.has(id)) return reply({ message: "Busy." }, 503);
       if (one?.[2] === "/message" && sessions[id]) {
-        const after = sessions[id].after ? [{ id: sessions[id].after, type: "user", time: { created: 10 }, content: [] }] : [];
-        if (sessions[id].replied === null) return reply({ data: after });
-        return reply({ data: [...after, { id: `msg_${id}`, type: "assistant", time: { created: sessions[id].replied ?? 9 }, content: [{ type: "text", text: sessions[id].said ?? "Done." }] }] });
+        // A turn you started after its reply that wrote none: your message, then its end (newest first).
+        const after = sessions[id].after ? [{ id: `${sessions[id].after}_end`, type: "idle", time: { created: 10 }, outcome: "failed" }, { id: sessions[id].after, type: "user", time: { created: 10 }, content: [] }] : [];
+        const later = (sessions[id].later ?? []).map(each => ({ ...each, time: { created: 11 } }));
+        if (sessions[id].replied === null) return reply({ data: [...later, ...after] });
+        return reply({ data: [...later, ...after, { id: `msg_${id}`, type: "assistant", time: { created: sessions[id].replied ?? 9 }, content: [{ type: "text", text: sessions[id].said ?? "Done." }] }, { id: `msg_${id}_asked`, type: "user", time: { created: 8 }, content: [] }] });
       }
       if (one?.[2] === "/prompt" && sessions[id]) {
         state.prompts.push({ to: id, ...JSON.parse(body) });
@@ -254,4 +257,32 @@ test("a session whose turn failed before it replied while the box was down is to
   await link.workWatcher(engine.target, () => [engine.target], { schedule: next.schedule, now: next.now }).caughtUp;
   await next.runAll();
   assert.equal(engine.prompts.length, 1, "told once");
+});
+
+test("a failure told once isn't told again: not as it was heard, after a command you ran in it, nor one told before the box kept the turn it was", async () => {
+  // Build failed before it replied, heard as it happened; then you ran a command in it.
+  engine.sessions.ses_build = { ...engine.sessions.ses_signin, id: "ses_build", title: "Build", outcome: "failed", replied: null, after: "msg_build_you", time: { created: 1, updated: 2 } };
+  const first = clock();
+  const watch = link.workWatcher(engine.target, () => [engine.target], { schedule: first.schedule, now: first.now });
+  await watch.caughtUp;
+  await first.runAll();
+  assert.equal(engine.prompts.length, 1, "Sign-in, as the box started");
+  first.at = 1500;
+  await watch({ type: "session.execution.failed", data: { sessionID: "ses_build" } });
+  await first.runAll();
+  assert.equal(engine.prompts.length, 2);
+  assert.match(engine.prompts[1].text, /^\[Session failed\] "Build"/);
+  engine.sessions.ses_build.later = [{ id: "msg_build_shell", type: "shell" }];
+  engine.sessions.ses_build.time = { created: 1, updated: 2500 };
+  // Fix failed after its reply, told by a box from before (which kept the reply it told, not
+  // the turn); renamed since.
+  engine.sessions.ses_fix = { ...engine.sessions.ses_signin, id: "ses_fix", title: "Fix", outcome: "failed", said: "Couldn't fix it.", time: { created: 1, updated: 2500 } };
+  const told = JSON.parse(fs.readFileSync(toldFile, "utf8"));
+  told.sessions.ses_fix = { reply: "msg_ses_fix" };
+  fs.writeFileSync(toldFile, JSON.stringify(told));
+  const next = clock();
+  next.at = 3000;
+  await link.workWatcher(engine.target, () => [engine.target], { schedule: next.schedule, now: next.now }).caughtUp;
+  await next.runAll();
+  assert.equal(engine.prompts.length, 2, `told once: ${engine.prompts.slice(2).map(each => each.text)}`);
 });

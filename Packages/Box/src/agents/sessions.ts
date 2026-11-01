@@ -735,14 +735,24 @@ function realFolder(folder: string): string {
  * files holds for the folder too).
  */
 function outsideFolders(ask: PermissionAsk, paths: string[]): string[] {
-  const isFolder = (path: string) => {
-    try {
-      return statSync(path).isDirectory()
-    } catch {
-      return ask.action === "list" || ask.action === "glob"
-    }
+  return [...new Set(paths.map((path) => join(isFolder(path, ask.action) ? path : dirname(path), "*")))]
+}
+
+/**
+ * What a rule refusing working outside the project is weighed on: those folders, and the files
+ * among the paths themselves (a rule or Block refusing a file holds for it).
+ */
+function outsideRefusable(ask: PermissionAsk, paths: string[], folders: string[]): string[] {
+  return [...paths.filter((path) => !isFolder(path, ask.action)), ...folders]
+}
+
+/** Whether a path an ask names is a folder (one not there yet: as a listing names it). */
+function isFolder(path: string, action: string): boolean {
+  try {
+    return statSync(path).isDirectory()
+  } catch {
+    return action === "list" || action === "glob"
   }
-  return [...new Set(paths.map((path) => join(isFolder(path) ? path : dirname(path), "*")))]
 }
 
 /** An ask about working outside the project, for these paths: "Always" allows their folders. */
@@ -2411,9 +2421,10 @@ export class Sessions {
     const away = outsidePaths(ask, session.location.directory, this.attached(session.id), undefined, owns)
     if (away.length) {
       const folders = outsideFolders(ask, away)
-      if (live.blocks && strictest(live.blocks, "external_directory", [...away, ...folders]) === "deny") return "deny"
+      const refusable = outsideRefusable(ask, away, folders)
+      if (live.blocks && strictest(live.blocks, "external_directory", refusable) === "deny") return "deny"
+      if (strictest(rules, "external_directory", refusable) === "deny") return "deny"
       const outside = strictest(rules, "external_directory", folders)
-      if (outside === "deny") return "deny"
       if (outside === "ask" && !this.allowedOutside(live, folders)) return "ask"
     }
     // Blocks not known (the engine didn't answer): asked, which reads them again.
@@ -2472,10 +2483,11 @@ export class Sessions {
     const away = ask.weighed ? [] : outsidePaths(ask, session.location.directory, this.attached(id), undefined, this.ownedBy(turn))
     if (away.length) {
       const folders = outsideFolders(ask, away)
-      if (live.blocks && strictest(live.blocks, "external_directory", [...away, ...folders]) === "deny") return "reject"
+      const refusable = outsideRefusable(ask, away, folders)
+      if (live.blocks && strictest(live.blocks, "external_directory", refusable) === "deny") return "reject"
       const rules = [...(live.agentRules ?? engineDefaults), ...(session.permissions ?? [])]
+      if (strictest(rules, "external_directory", refusable) === "deny") return "reject"
       const outside = strictest(rules, "external_directory", folders)
-      if (outside === "deny") return "reject"
       const own = strictest(rules, ask.action, parts) ?? "allow"
       if (outside === "ask" && own !== "deny" && (own === "allow" || this.allowedBefore(live, ask)) && !this.allowedOutside(live, folders)) {
         return this.askPermission(id, live, turn, { ...outsideAsk(ask, away), metadata: ask.metadata, message: ask.message, sandboxed: ask.sandboxed }, plan)
