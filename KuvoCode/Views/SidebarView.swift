@@ -1236,6 +1236,7 @@ struct SidebarSearchRow: View {
                     Image(systemName: "xmark.circle.fill")
                 }
                 .buttonStyle(ClearFieldButtonStyle())
+                .accessibilityLabel("Clear")
                 .help("Clear")
             }
         }
@@ -1396,6 +1397,7 @@ private struct ProjectRow: View {
             .buttonStyle(IconButtonStyle(width: 26, height: 24))
             .padding(.trailing, 4)
             .opacity(isHovering ? 1 : 0)
+            .accessibilityLabel("New Session in \(project.name)")
             .help("New Session in \(project.name)")
         }
         .onHover { isHovering = $0 }
@@ -2106,13 +2108,13 @@ private struct AccountsRow: View {
     var body: some View {
         NativeMenuButton(name: "account", menu: makeMenu) {
             HStack(spacing: 10) {
-                if catalog.connectedProviders.isEmpty {
+                if catalog.signedInAccounts.isEmpty {
                     Image(systemName: "person.crop.circle.badge.plus")
                         .font(.system(size: 15))
                         .foregroundStyle(.tint)
                 } else {
                     HStack(spacing: 8) {
-                        ForEach(catalog.connectedProviders.prefix(3)) { provider in
+                        ForEach(catalog.signedInAccounts.prefix(3)) { provider in
                             ProviderLogo(id: OutsideAgents.logo(provider.id), size: 18, colored: true)
                         }
                     }
@@ -2147,7 +2149,7 @@ private struct AccountsRow: View {
 
     private func makeMenu() -> NSMenu {
         let menu = NSMenu()
-        let providers = catalog.connectedProviders
+        let providers = catalog.signedInAccounts
         let accounts = ActionItem(
             providers.isEmpty ? "Connect an Account" : "Accounts",
             subtitle: !problems.isEmpty ? problemsText : providers.isEmpty ? "Sign in with a subscription, or add an API key" : Self.list(providers.map(\.name)),
@@ -2239,9 +2241,10 @@ private struct AccountsRow: View {
     }
 
     private var label: String {
-        switch catalog.connectedProviders.count {
+        let accounts = catalog.signedInAccounts
+        switch accounts.count {
         case 0: "Connect an Account"
-        case 1: catalog.connectedProviders[0].name
+        case 1: accounts[0].name
         case let count: "\(count) Accounts"
         }
     }

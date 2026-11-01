@@ -212,7 +212,9 @@ struct ModelPicker: View {
                 autoContent
             default:
                 if let provider = selectedProvider {
-                    railTitle(provider.name)
+                    // "Free" once, in the title, when it's true of every model there.
+                    let allFree = !provider.models.isEmpty && provider.models.allSatisfy(Self.isZenFree)
+                    railTitle(allFree ? "\(provider.name) · Free" : provider.name)
                     if let why = provider.unavailable {
                         note(why)
                         if provider.isAgent {
@@ -221,13 +223,13 @@ struct ModelPicker: View {
                     } else {
                         let (newest, older) = split(provider.models)
                         ForEach(Array(newest.enumerated()), id: \.element.key) { index, model in
-                            modelRow(model, number: index, showsProvider: false)
+                            modelRow(model, number: index, showsProvider: false, in: provider, saysFree: !allFree)
                         }
                         if !older.isEmpty {
                             disclosureRow(older.count)
                             if showsOlder {
                                 ForEach(Array(older.enumerated()), id: \.element.key) { index, model in
-                                    modelRow(model, number: newest.count + index, showsProvider: false)
+                                    modelRow(model, number: newest.count + index, showsProvider: false, in: provider, saysFree: !allFree)
                                 }
                             }
                         }
@@ -307,6 +309,7 @@ struct ModelPicker: View {
                     }
                     .buttonStyle(.plain)
                     .clickablePointer()
+                    .accessibilityLabel("Edit This List")
                     .help("Edit This List")
                     .opacity(highlight == id ? 1 : 0)
                 }
@@ -430,21 +433,39 @@ struct ModelPicker: View {
         .padding(.top, 2)
     }
 
-    private func modelRow(_ model: Model, number: Int, showsProvider: Bool) -> some View {
+    /// "Free" only for OpenCode Zen's free models; a $0 subscription model isn't free.
+    private static func isZenFree(_ model: Model) -> Bool {
+        model.providerID == "opencode" && (model.isFree || model.name.lowercased().hasSuffix(" free"))
+    }
+
+    /// A model's name without the "Free" Zen puts at the end of some: the row says that apart.
+    private static func shownName(_ model: Model) -> String {
+        guard isZenFree(model) else { return model.name }
+        for suffix in [" (free)", " free"] where model.name.lowercased().hasSuffix(suffix) {
+            return String(model.name.dropLast(suffix.count))
+        }
+        return model.name
+    }
+
+    /// A row of the list. In a provider's own list (`section`), the maker's mark shows only where
+    /// the maker isn't that provider, its slot kept so the names line up.
+    private func modelRow(_ model: Model, number: Int, showsProvider: Bool, in section: Catalog.PickerProvider? = nil, saysFree: Bool = true) -> some View {
         let id = rowID(model)
         let isCurrent = model.ref.sameModel(as: current?.ref)
         let isStarred = favoriteKeys.contains(model.key)
-        // "Free" only for OpenCode Zen's free models; a $0 subscription model isn't free.
-        let free = model.providerID == "opencode" && model.isFree && !model.name.localizedCaseInsensitiveContains("free")
+        let free = saysFree && Self.isZenFree(model)
         let detail = showsProvider ? catalog.providerName(model.providerID) + (free ? " · Free" : "") : (free ? "Free" : nil)
+        let showsMark = section.map { model.makerLogoID != $0.logo } ?? true
         return Button {
             pick(model)
         } label: {
             HStack(spacing: 9) {
                 ProviderLogo(id: model.makerLogoID, size: 15)
+                    .opacity(showsMark ? 1 : 0)
                     .frame(width: 18)
+                    .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(model.name)
+                    Text(Self.shownName(model))
                         .font(.system(size: 14))
                         .lineLimit(1)
                     if let detail {
@@ -475,6 +496,7 @@ struct ModelPicker: View {
                 .clickablePointer()
                 // Starred, or under the pointer: the star shows.
                 .opacity(isStarred || highlight == id ? 1 : 0)
+                .accessibilityLabel(isStarred ? "Unstar" : "Star")
                 .help(isStarred ? "Unstar" : "Star")
                 Image(systemName: "checkmark")
                     .font(.system(size: 13, weight: .medium))
@@ -553,6 +575,8 @@ struct ModelPicker: View {
         .clickablePointer()
         .hoverHighlight(in: RoundedRectangle(cornerRadius: 8), selected: isSelected)
         .help(name)
+        .accessibilityLabel(name)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     /// The first letter of an added account's name, for its mark in the rail.
