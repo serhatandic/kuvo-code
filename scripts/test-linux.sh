@@ -9,7 +9,8 @@
 # with a Node to run the tests on, and the pnpm and uv some sandbox tests need on the PATH, each
 # pinned here by the checksum its maker published and kept in build/linux-test for next time.
 # The sandbox runs on the machine's own engine (~/.kuvo-code/engine/<version>/opencode, as Kuvo
-# Code installed it; KUVO_TEST_BUN on the machine names another). Every folder the run uses
+# Code installed it; KUVO_TEST_BUN on the machine names another), as do the tests that run the
+# engine itself (OPENCODE_TEST_BINARY). Every folder the run uses
 # (TMPDIR, XDG_*, npm's and uv's caches) is inside that folder, which is removed afterwards. It
 # says what appeared in the machine's home folder, its ~/.kuvo-code-test and /tmp while it ran
 # (their own names, not what's inside them), which should be nothing.
@@ -70,7 +71,7 @@ send=$(mktemp -d "${TMPDIR:-/tmp}/kuvo-test-linux.XXXXXX")
 run=
 # (And the machine's folder, whatever stops this: the machine's side removes it too, once it runs.)
 trap 'rm -rf "$send"; [ -z "$run" ] || ssh "$host" "rm -rf ~/$run"' EXIT
-trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
+trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM; trap 'exit 141' PIPE
 mkdir -p "$send/tools/bin" "$send/tools/node" "$send/tools/pnpm"
 tar xJf "$tools/$node" -C "$send/tools/node" --strip-components=1
 tar xzf "$tools/$pnpm" -C "$send/tools/pnpm" --strip-components=1
@@ -98,7 +99,9 @@ export TMPDIR=$T/tmp XDG_CONFIG_HOME=$T/xdg/config XDG_DATA_HOME=$T/xdg/data XDG
 export npm_config_cache=$T/xdg/cache/npm UV_CACHE_DIR=$T/xdg/cache/uv
 mkdir -p "$TMPDIR" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_CACHE_HOME" "$XDG_STATE_HOME"
 export PATH=$T/tools/bin:$T/tools/node/bin:/usr/local/bin:/usr/bin:/bin
-export KUVO_TEST_BUN=${KUVO_TEST_BUN:-$HOME/.kuvo-code/engine/$engine/opencode}
+own=$HOME/.kuvo-code/engine/$engine/opencode
+# (The engine, for the tests that run it too: OPENCODE_TEST_BINARY.)
+export KUVO_TEST_BUN=${KUVO_TEST_BUN:-$own} OPENCODE_TEST_BINARY=${OPENCODE_TEST_BINARY:-${KUVO_TEST_BUN:-$own}}
 [ -x "$KUVO_TEST_BUN" ] || { echo "No engine $engine on $(hostname) ($KUVO_TEST_BUN): add the machine in Kuvo Code, which installs it, or set KUVO_TEST_BUN there" >&2; exit 1; }
 # (The tests' own folders are in ~/.kuvo-code-test, beside this one.)
 seen() { ls -a "$HOME" "$HOME/.kuvo-code-test" /tmp 2>/dev/null; }

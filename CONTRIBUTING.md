@@ -102,7 +102,8 @@ which they run as Bun). Run them on a Linux machine too, in a test folder of you
 `TMPDIR` inside it, before calling a box change done:
 `scripts/heavy.sh box scripts/test-linux.sh <ssh-host> sandbox.test.js …` does that on a machine
 that has Kuvo Code's engine, with a Node of its own and the tools some tests need, all in a folder
-in its `~/.kuvo-code-test` that it removes afterwards. Run it again with `--engine`: the tests then
+in its `~/.kuvo-code-test` that it removes afterwards (tests that run the engine itself, like
+`outside-asks-live.test.js`, run that machine's). Run it again with `--engine`: the tests then
 run on the engine's own runner, so the boxes they start run on Bun, as a machine's does.
 
 A bridge test file cleans up with `atEnd` and `removeAtEnd` from `Tests/Bridge/at-end.js`, never
