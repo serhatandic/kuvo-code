@@ -9566,6 +9566,14 @@ class ClaudeAgent {
     await this.context.deps.ensure(this.id, SDK, { optional: false });
     return this.context.deps.load(this.id, SDK[0].name);
   }
+  ownsPath(path) {
+    const file = resolve6(path);
+    const settings = this.instance.home ?? process.env.CLAUDE_CONFIG_DIR ?? join20(homedir(), ".claude");
+    if (file.startsWith(settings + "/") && /^(plans\/[^/]+\.md|projects\/[^/]+\/memory\/.+|projects\/[^/]+\/[^/]+\/tool-results\/.+)$/.test(file.slice(settings.length + 1)))
+      return true;
+    const uid = process.getuid?.();
+    return uid !== undefined && ["/tmp", "/private/tmp"].some((tmp) => file.startsWith(`${tmp}/claude-${uid}/`) && /^[^/]+\/[^/]+\/tasks\/[^/]+$/.test(file.slice(`${tmp}/claude-${uid}/`.length)));
+  }
   ownSkillFolders(directory) {
     const settings = this.instance.home ?? process.env.CLAUDE_CONFIG_DIR ?? join20(homedir(), ".claude");
     return [join20(settings, "skills"), ...upward(directory).map((folder) => join20(folder, ".claude", "skills"))];
@@ -10593,8 +10601,6 @@ class ClaudeThread {
       return {};
     const ask = permissionAsk(String(input.tool_name ?? ""), input.tool_input ?? {});
     let verdict = hooks.check(ask, true);
-    if (verdict === "ask" && this.ownFile(ask))
-      verdict = undefined;
     if (verdict === "ask" && ask.action === "edit" && this.opened?.plan)
       verdict = undefined;
     if (verdict === "ask" && !this.active && !this.backgroundLane(input.agent_id))
@@ -10653,8 +10659,6 @@ class ClaudeThread {
     }
     if (name === "ExitPlanMode")
       return { behavior: "allow", updatedInput: input, toolUseID };
-    if (this.ownFile(permissionAsk(name, input)) && hooks.check(permissionAsk(name, input), true) !== "deny")
-      return { behavior: "allow", updatedInput: input, toolUseID };
     return this.decide(name, input, options, background ? (ask) => background.run.permission(ask) : hooks.permission);
   }
   async stopSubagent(callID) {
@@ -10673,14 +10677,6 @@ class ClaudeThread {
     const callID = typeof agentID === "string" ? this.tasks.get(agentID)?.toolUseID : undefined;
     const lane = callID ? this.keptLane(callID) ?? this.active?.subagents.get(callID) : undefined;
     return lane?.background ? lane : undefined;
-  }
-  ownFile(ask) {
-    const settings = this.agent.instance.home ?? process.env.CLAUDE_CONFIG_DIR ?? join20(homedir(), ".claude");
-    const kept = ask.action === "read" ? /^projects\/[^/]+\/[^/]+\/tool-results\/[^/]+$/ : ask.action === "edit" ? /^plans\/[^/]+\.md$/ : undefined;
-    return !!kept && ask.resources.length > 0 && ask.resources.every((path) => {
-      const file = resolve6(path);
-      return file.startsWith(settings + "/") && kept.test(file.slice(settings.length + 1));
-    });
   }
   async decide(name, input, options, permission) {
     const toolUseID = options?.toolUseID;
@@ -15280,11 +15276,11 @@ function ownPlaces() {
     places.push(join25(dirname13(process.env.KUVO_AGENTS_HOME), "Attachments"));
   return [...places, ...skillFolders()];
 }
-function outsidePaths(ask, directory, attached, own = ownPlaces()) {
+function outsidePaths(ask, directory, attached, own = ownPlaces(), owns) {
   if (!fileActions.has(ask.action))
     return [];
   const paths = ask.resources.filter((resource) => resource && resource !== "*" && (resource.startsWith("/") || resource.startsWith("~/") || !/[*?[]/.test(resource))).map((resource) => resolve7(directory, resource.startsWith("~/") ? join25(homedir5(), resource.slice(2)) : resource));
-  return paths.filter((path) => !within(path, [directory, ...own]) && !attached.has(path));
+  return paths.filter((path) => !within(path, [directory, ...own]) && !attached.has(path) && !owns?.(path));
 }
 function outsideAsk(ask, paths) {
   return { ...ask, action: "external_directory", resources: paths, save: [...new Set(paths.map((path) => join25(dirname13(path), "*")))], unclassified: false };
@@ -16715,7 +16711,7 @@ ${live.agentPrompt}` : ""
           return !canAsk;
         return !live.blocks.some((rule) => holdsBack(rule.effect));
       },
-      check: (ask, ownPlan) => this.checkPermission(live, record.session, ask, plan && !ownPlan),
+      check: (ask, ownPlan) => this.checkPermission(live, record.session, ask, plan && !ownPlan, this.ownedBy(turn)),
       permission: (ask) => this.askPermission(id, live, turn, ask, plan),
       question: (ask) => this.askQuestion(id, live, turn, ask),
       subagent: (toolCallID, task) => this.startSubagent(id, live, turn, toolCallID, task, plan)
@@ -16826,7 +16822,7 @@ ${live.agentPrompt}` : ""
     }
     return going.length > 0;
   }
-  checkPermission(live, session, ask, plan) {
+  checkPermission(live, session, ask, plan, owns) {
     const parts = partsOf2(ask);
     if (live.blocks && strictest(live.blocks, ask.action, parts) === "deny")
       return "deny";
@@ -16836,7 +16832,7 @@ ${live.agentPrompt}` : ""
     const effect = strictest(rules, ask.action, parts);
     if (effect === "deny")
       return "deny";
-    const away = outsidePaths(ask, session.location.directory, this.attached(session.id));
+    const away = outsidePaths(ask, session.location.directory, this.attached(session.id), undefined, owns);
     if (away.length) {
       if (live.blocks && strictest(live.blocks, "external_directory", away) === "deny")
         return "deny";
@@ -16851,6 +16847,10 @@ ${live.agentPrompt}` : ""
     if (hidesFromBlocks(live.blocks, ask))
       return "ask";
     return effect === "ask" && !this.allowedBefore(live, ask) ? "ask" : undefined;
+  }
+  ownedBy(turn) {
+    const agent = this.agent(turn.currentModel.providerID);
+    return agent?.ownsPath ? (path) => agent.ownsPath(path) : undefined;
   }
   attached(id) {
     const paths = new Set;
@@ -16887,7 +16887,7 @@ ${live.agentPrompt}` : ""
       return "reject";
     if (plan && changes2.has(ask.action))
       return "reject";
-    const away = ask.weighed ? [] : outsidePaths(ask, session.location.directory, this.attached(id));
+    const away = ask.weighed ? [] : outsidePaths(ask, session.location.directory, this.attached(id), undefined, this.ownedBy(turn));
     if (away.length) {
       if (live.blocks && strictest(live.blocks, "external_directory", away) === "deny")
         return "reject";
@@ -22717,4 +22717,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents bb5304861d421f85c846e5556ab086b741d6e0c2646a6badc7b885a6d53d35cf
+// Built from Packages/Box/src/agents 265bc5d1d44b1ca554c5f1ffe4cf0a89de951da748572148777761b48c6de7a5

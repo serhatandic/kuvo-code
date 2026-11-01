@@ -2995,9 +2995,11 @@ folders of the skills the engine finds (learned again when they change, `skill.u
 The agents bridge takes the same ask as one of the engine's defaults, for when the engine can't
 say its agent's rules. It doesn't take a coding agent off running on its own (`approvesAll`), so
 Codex, Cursor, Grok and Antigravity keep their modes. Where the bridge sees a tool call (Claude
-Code's every one, and what the others ask about), one reaching outside the project asks first. Claude
-Code's own files in its settings folder are never outside: a long output it saved
-(`projects/<project>/<session>/tool-results`), read back, and its plans.
+Code's every one, and what the others ask about), one reaching outside the project asks first. An
+agent's own files are never outside (`ownsPath`), though your rules for what it does with them still
+hold: Claude Code's plans, each project's memory, what it saved of a long output
+(`projects/<project>/<session>/tool-results`), and its background commands' output in /tmp's
+`claude-<uid>` when the sandbox runs it.
 
 ### Sandbox
 

@@ -704,17 +704,17 @@ function ownPlaces(): string[] {
 }
 
 /**
- * The paths an ask about files names outside the session's folder (and Kuvo Code's own, and files
- * attached to the conversation): what your rules for working outside the project
+ * The paths an ask about files names outside the session's folder (and Kuvo Code's own, files
+ * attached to the conversation, and the agent's own that `owns` says): what your rules for working outside the project
  * (`external_directory`) say of, as the engine's do.
  */
-export function outsidePaths(ask: PermissionAsk, directory: string, attached: Set<string>, own = ownPlaces()): string[] {
+export function outsidePaths(ask: PermissionAsk, directory: string, attached: Set<string>, own = ownPlaces(), owns?: (path: string) => boolean): string[] {
   if (!fileActions.has(ask.action)) return []
   const paths = ask.resources
     // Paths, from the session's folder (`../x` too), not patterns of names (`*.ts`).
     .filter((resource) => resource && resource !== "*" && (resource.startsWith("/") || resource.startsWith("~/") || !/[*?[]/.test(resource)))
     .map((resource) => resolve(directory, resource.startsWith("~/") ? join(homedir(), resource.slice(2)) : resource))
-  return paths.filter((path) => !within(path, [directory, ...own]) && !attached.has(path))
+  return paths.filter((path) => !within(path, [directory, ...own]) && !attached.has(path) && !owns?.(path))
 }
 
 /** An ask about working outside the project, for these paths: "Always" allows their folders. */
@@ -2248,7 +2248,7 @@ export class Sessions {
         if (live.blocks === undefined) return !canAsk
         return !live.blocks.some((rule) => holdsBack(rule.effect))
       },
-      check: (ask, ownPlan) => this.checkPermission(live, record.session, ask, plan && !ownPlan),
+      check: (ask, ownPlan) => this.checkPermission(live, record.session, ask, plan && !ownPlan, this.ownedBy(turn)),
       permission: (ask) => this.askPermission(id, live, turn, ask, plan),
       question: (ask) => this.askQuestion(id, live, turn, ask),
       subagent: (toolCallID, task) => this.startSubagent(id, live, turn, toolCallID, task, plan),
@@ -2372,7 +2372,7 @@ export class Sessions {
   }
 
   /** What Blocks and rules say of an action without asking you: refused, or to ask first. */
-  private checkPermission(live: Live, session: Session, ask: PermissionAsk, plan: boolean): "deny" | "ask" | undefined {
+  private checkPermission(live: Live, session: Session, ask: PermissionAsk, plan: boolean, owns?: (path: string) => boolean): "deny" | "ask" | undefined {
     const parts = partsOf(ask)
     if (live.blocks && strictest(live.blocks, ask.action, parts) === "deny") return "deny"
     if (plan && changes.has(ask.action)) return "deny"
@@ -2380,7 +2380,7 @@ export class Sessions {
     const effect = strictest(rules, ask.action, parts)
     if (effect === "deny") return "deny"
     // Paths outside the project: your rules for working there too.
-    const away = outsidePaths(ask, session.location.directory, this.attached(session.id))
+    const away = outsidePaths(ask, session.location.directory, this.attached(session.id), undefined, owns)
     if (away.length) {
       if (live.blocks && strictest(live.blocks, "external_directory", away) === "deny") return "deny"
       const outside = strictest(rules, "external_directory", away)
@@ -2391,6 +2391,12 @@ export class Sessions {
     if (live.blocks === undefined && !looks.has(ask.action)) return "ask"
     if (hidesFromBlocks(live.blocks, ask)) return "ask"
     return effect === "ask" && !this.allowedBefore(live, ask) ? "ask" : undefined
+  }
+
+  /** What says which files are the own of the agent running `turn` (never outside the project). */
+  private ownedBy(turn: Turn): ((path: string) => boolean) | undefined {
+    const agent = this.agent(turn.currentModel.providerID)
+    return agent?.ownsPath ? (path) => agent.ownsPath!(path) : undefined
   }
 
   /** The files attached to a conversation's messages, by path. */
@@ -2429,7 +2435,7 @@ export class Sessions {
     if (plan && changes.has(ask.action)) return "reject"
     // Paths outside the project (the engine weighs its own asks): your rules for working there
     // too. One that asks, where the action itself doesn't, is asked as that.
-    const away = ask.weighed ? [] : outsidePaths(ask, session.location.directory, this.attached(id))
+    const away = ask.weighed ? [] : outsidePaths(ask, session.location.directory, this.attached(id), undefined, this.ownedBy(turn))
     if (away.length) {
       if (live.blocks && strictest(live.blocks, "external_directory", away) === "deny") return "reject"
       const rules = [...(live.agentRules ?? engineDefaults), ...(session.permissions ?? [])]

@@ -816,7 +816,7 @@ describe("Claude Code's permissions", () => {
     expect(await answer).toMatchObject({ behavior: "allow" })
   })
 
-  test("reading a file outside the project asks first, as the engine's agents do, but not reading back a long output it saved", async () => {
+  test("reading a file outside the project asks first, as the engine's agents do, but not Claude Code's own: its memory, a long output it saved, its background commands' output", async () => {
     const { id } = await begin()
     const keys = join(homedir(), ".ssh", "id_ed25519")
     expect((await fake.hook("Read", { file_path: keys }, "toolu_1")).decision).toBe("ask")
@@ -825,13 +825,34 @@ describe("Claude Code's permissions", () => {
     expect(sessions.permissions(id)[0]).toMatchObject({ action: "external_directory", resources: [keys] })
     sessions.replyPermission(id, sessions.permissions(id)[0].id, "reject")
     expect(await answer).toMatchObject({ behavior: "deny" })
-    // What it saved of a long output, as Claude Code saves it, which it's told to read.
-    const saved = join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"), "projects", "-tmp-project", "0b5e1f1c-0000-4000-8000-000000000000", "tool-results", "toolu_0.txt")
-    expect((await fake.hook("Read", { file_path: saved }, "toolu_2")).decision).toBeUndefined()
-    expect(await fake.canUse("Read", { file_path: saved }, "toolu_2")).toMatchObject({ behavior: "allow" })
-    // (Only that: a path that climbs out of it is outside.)
-    expect((await fake.hook("Read", { file_path: join(saved, "..", "..", "..", "..", "settings.json") }, "toolu_3")).decision).toBe("ask")
+    // Its own, where Claude Code keeps them: a long output it saved (a page of a PDF too), which
+    // it's told to read, the project's memory it reads and writes, a background command's output.
+    const settings = process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude")
+    const saved = join(settings, "projects", "-tmp-project", "0b5e1f1c-0000-4000-8000-000000000000", "tool-results", "toolu_0.txt")
+    const memory = join(settings, "projects", "-tmp-project", "memory", "MEMORY.md")
+    const own = [
+      ["Read", { file_path: saved }],
+      ["Read", { file_path: join(dirname(saved), "pages", "1.png") }],
+      ["Read", { file_path: memory }],
+      ["Write", { file_path: join(dirname(memory), "testing.md"), content: "Run the tests with bun test." }],
+      ["Read", { file_path: `/tmp/claude-${process.getuid!()}/-tmp-project/0b5e1f1c-0000-4000-8000-000000000000/tasks/b1.output` }],
+    ] as const
+    for (const [index, [tool, input]] of own.entries()) {
+      expect((await fake.hook(tool, input, `toolu_own${index}`)).decision).toBeUndefined()
+      expect(await fake.canUse(tool, input, `toolu_own${index}`)).toMatchObject({ behavior: "allow" })
+    }
+    // Only those: a path that climbs out of them, another program's files in /tmp, its settings.
+    for (const [index, path] of [`${saved}/../../../../../.ssh/id_ed25519`, `/tmp/claude-${process.getuid!()}/notes.txt`, join(settings, "settings.json")].entries()) {
+      expect((await fake.hook("Read", { file_path: path }, `toolu_out${index}`)).decision).toBe("ask")
+    }
     expect(sessions.permissions(id)).toHaveLength(0)
+  })
+
+  test("its own files aren't outside the project, but your rules still hold for them: Ask First asks before it writes its memory", async () => {
+    await begin({ permissions: askFirst })
+    const memory = join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"), "projects", "-tmp-project", "memory", "MEMORY.md")
+    expect((await fake.hook("Write", { file_path: memory, content: "-" }, "toolu_1")).decision).toBe("ask")
+    expect((await fake.hook("Read", { file_path: memory }, "toolu_2")).decision).toBeUndefined()
   })
 
   test("your Blocks refuse a tool before it runs, under Approve All too: any command in a line counts, and Claude Code is told why", async () => {

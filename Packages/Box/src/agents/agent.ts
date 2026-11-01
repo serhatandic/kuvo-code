@@ -384,6 +384,11 @@ export interface Agent {
   generate?(prompt: string, model?: ModelRef): Promise<string>
   /** A session here was deleted: its conversation where the agent keeps it goes too. */
   forgetConversation?(state: Record<string, unknown>): Promise<void>
+  /**
+   * A file of the agent's own, which it keeps for itself and reads or writes on its own (Claude
+   * Code's memory, plans, and long outputs it saved): never "outside the project".
+   */
+  ownsPath?(path: string): boolean
 }
 
 /**
