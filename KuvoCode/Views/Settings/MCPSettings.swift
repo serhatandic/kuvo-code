@@ -511,11 +511,12 @@ private struct ServerEditor: View {
                 }
             } else if kind == .local {
                 Section {
-                    ConfigKeyValueList(path: path + ["environment"], keyPrompt: "Variable, like GITHUB_TOKEN", valuePrompt: "Value")
+                    ConfigKeyValueList(path: path + ["environment"], keyPrompt: "NAME", valuePrompt: "Value")
                 } header: {
                     Text("Environment Variables")
                 } footer: {
-                    Self.keyNote
+                    Text("Each by its name, like GITHUB_TOKEN. To keep a key out of the settings file, write {env:NAME} to use one of your environment variables.")
+                        .foregroundStyle(.secondary)
                 }
             }
         }
