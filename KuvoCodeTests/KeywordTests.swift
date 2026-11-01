@@ -129,10 +129,11 @@ import Testing
         #expect(model.failure == nil)
     }
 
-    // A side thread: while it shows, what's sent from the composer is a follow-up, answered with
-    // the thread so far, kept in it, and joining nothing to the conversation; with its tag's ×
-    // the composer messages the conversation again; another /btw is a new thread; and a thread
-    // goes whole.
+    // A side thread: while it shows, folded too, what's sent from the composer is a follow-up,
+    // answered with the thread so far, kept in it, and joining nothing to the conversation; the
+    // next waits in the composer until it's answered; with its tag's ×, clicked as the follow-up
+    // went, the composer messages the conversation again and stays so; another /btw is a new
+    // thread; and a thread goes whole.
     @Test func aSideQuestionsFollowUpIsAnsweredWithItsThread() async throws {
         defer { clean() }
         serve(directory: "/tmp", answers: ["In `onBlur`.", "Because blur fires before the tab hides.", "A duration like 25m."])
@@ -143,11 +144,19 @@ import Testing
         model.draftText = "/btw where does it pause?"
         model.submitDraft(for: nil, queue: false, commands: [])
         try await until { model.sideQuestions.first?.state == .answered }
+        model.hidesSideQuestion = true
         #expect(model.asksSideThread)
         model.draftText = "why there?"
         model.submitDraft(for: nil, queue: false, commands: [])
         #expect(model.draftText.isEmpty)
+        model.draftText = "and on close?"
+        model.submitDraft(for: nil, queue: false, commands: [])
+        #expect(model.draftText == "and on close?")
+        // The tag's ×, before the follow-up is in: it stays off once it is.
+        model.composerAsksSide = false
+        model.draftText = ""
         try await until { model.shownSideThread?.questions.count == 2 && model.shownSideThread?.latest.state == .answered }
+        #expect(!model.asksSideThread)
         let thread = try #require(model.shownSideThread)
         #expect(thread.questions.map(\.question) == ["where does it pause?", "why there?"])
         #expect(thread.latest.answer == "Because blur fires before the tab hides.")
@@ -155,10 +164,8 @@ import Testing
         #expect(asked.last?.contains("In `onBlur`.") == true)
         #expect(told == 0)
 
-        // The tag's ×: the next message is the conversation's.
+        // So the next message is the conversation's.
         engine.on("POST", "/api/session/\(id)/prompt", json: ["data": [:]])
-        model.composerAsksSide = false
-        #expect(!model.asksSideThread)
         model.draftText = "Pause it on blur then."
         model.submitDraft(for: nil, queue: false, commands: [])
         try await until { told == 1 }

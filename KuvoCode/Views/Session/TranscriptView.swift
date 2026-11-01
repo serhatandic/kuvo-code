@@ -20,6 +20,13 @@ struct TranscriptView: View {
     @Environment(Workspace.self) private var workspace
     @Environment(Catalog.self) private var catalog
     @Environment(\.isOffline) private var isOffline
+    @Environment(\.picksModel) private var picksModel
+    /// A failed turn's Switch Model, where the composer has a model picker.
+    private var switchModel: (() -> Void)? {
+        guard picksModel else { return nil }
+        let model = model
+        return { model.openModelMenu() }
+    }
     @AppStorage(StepsDetail.key) private var stepsDetail = StepsDetail.summary
     @State private var scroller = ConversationScroller()
     @State private var rowCache = RowCache()
@@ -220,7 +227,7 @@ struct TranscriptView: View {
         return RowStack(items: rows, id: \.id, same: ==, estimate: Self.estimate, animatesNew: !rowCache.isBulk, text: { $0.copiedText(folders: model.folders()) },
                  whole: \.copiesWhole,
                  space: { row, index in index == 0 ? 0 : row.spacing(after: rows[index - 1]) }) { row, index in
-            RowView(row: row, directory: model.session.location.directory, folders: model.folders, heard: model.heard, cancel: model.cancelPending, undo: model.undo(from:), redo: model.redo, fork: fork(_:), retry: model.retry(_:), switchModel: model.openModelMenu, buildPlan: model.agent == "plan" && !isOffline ? { model.buildPlan() } as () -> Void : nil, reply: model.reply(to:))
+            RowView(row: row, directory: model.session.location.directory, folders: model.folders, heard: model.heard, cancel: model.cancelPending, undo: model.undo(from:), redo: model.redo, fork: fork(_:), retry: model.retry(_:), switchModel: switchModel, buildPlan: model.agent == "plan" && !isOffline ? { model.buildPlan() } as () -> Void : nil, reply: model.reply(to:))
                 .equatable()
                 .environment(\.findHighlight, find.highlight(for: row.id))
                 .padding(.top, index == 0 ? 0 : row.spacing(after: rows[index - 1]))
@@ -231,7 +238,7 @@ struct TranscriptView: View {
     /// The rows, in the lazy stack (KUVO_PERF_LAZY).
     @ViewBuilder private func stackRows(_ rows: [Row]) -> some View {
         ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
-            RowView(row: row, directory: model.session.location.directory, folders: model.folders, heard: model.heard, cancel: model.cancelPending, undo: model.undo(from:), redo: model.redo, fork: fork(_:), retry: model.retry(_:), switchModel: model.openModelMenu, buildPlan: model.agent == "plan" && !isOffline ? { model.buildPlan() } as () -> Void : nil, reply: model.reply(to:))
+            RowView(row: row, directory: model.session.location.directory, folders: model.folders, heard: model.heard, cancel: model.cancelPending, undo: model.undo(from:), redo: model.redo, fork: fork(_:), retry: model.retry(_:), switchModel: switchModel, buildPlan: model.agent == "plan" && !isOffline ? { model.buildPlan() } as () -> Void : nil, reply: model.reply(to:))
                 .equatable()
                 .environment(\.findHighlight, find.highlight(for: row.id))
                 .conversationRow(row.id)
@@ -720,8 +727,8 @@ private struct RowView: View, Equatable {
     /// New Session From Here.
     let fork: (Message.User) -> Void
     let retry: (Message.User) -> Void
-    /// Opens the composer's model picker.
-    let switchModel: () -> Void
+    /// Opens the composer's model picker, when it has one.
+    let switchModel: (() -> Void)?
     /// While the session is in Plan mode: build what the last answer planned.
     let buildPlan: (() -> Void)?
     /// Quotes a reply (or the part of it you selected) in the composer.
@@ -1334,7 +1341,8 @@ private struct TurnEndView: View {
                             Button(machine.map { "Sign In on \($0)" } ?? "Open Accounts") { app.openAccounts(on: machine) }
                                 .help(machine.map { "Sign in to the coding agents on \($0): its sign-ins are its own" } ?? "Sign in to the coding agents")
                         } else {
-                            Button(kind == .signIn(ended: true) ? "Sign In Again" : "Open Accounts") { app.openAccounts(on: machine) }
+                            // On a machine, the button names it: its sign-ins are its own.
+                            Button(kind == .signIn(ended: true) ? "Sign In Again" : machine.map { "Open Accounts on \($0)" } ?? "Open Accounts") { app.openAccounts(on: machine) }
                                 .help(machine.map { "Accounts, on \($0)" } ?? "Accounts")
                         }
                     case .switchModel:
@@ -1603,7 +1611,7 @@ struct FailureCard<Actions: View>: View {
                     Text(headline)
                         .font(.system(size: 13, weight: .semibold))
                         .fixedSize(horizontal: false, vertical: true)
-                    if let detail, !detail.isEmpty {
+                    if let detail = FailureWords.detail(detail, under: headline) {
                         SelectableText(text: NSAttributedString(string: detail, attributes: [.font: NSFont.preferredFont(forTextStyle: .callout), .foregroundColor: NSColor.secondaryLabelColor]))
                     }
                 }

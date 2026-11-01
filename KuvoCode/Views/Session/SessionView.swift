@@ -122,6 +122,8 @@ extension EnvironmentValues {
     /// The conversation shown takes no messages (a review's part, watched, not steered): nothing
     /// offers to send one, Try Again included.
     @Entry var takesNoMessages = false
+    /// Its composer has a model picker: a failed turn offers Switch Model.
+    @Entry var picksModel = true
 }
 
 /// What's over the conversation's end: questions and permission requests as solid cards, then
@@ -187,7 +189,7 @@ private struct BottomStack: View {
                 guard let review = model.review else { return BarStripItem(bar: bar, symbol: Keyword.review.symbol, words: "Review") }
                 switch review.state {
                 case .reviewing: return BarStripItem(bar: bar, symbol: nil, words: "Reviewing…")
-                case .failed: return BarStripItem(bar: bar, symbol: "exclamationmark.circle", words: "Review couldn’t be done")
+                case .failed: return BarStripItem(bar: bar, symbol: "exclamationmark.circle.fill", words: "Review couldn’t be done")
                 case .done: return review.findings.isEmpty
                     ? BarStripItem(bar: bar, symbol: "checkmark.circle.fill", isDone: true, words: "Nothing to fix")
                     : BarStripItem(bar: bar, symbol: Keyword.review.symbol, words: "Review · \(review.findings.count)")
@@ -481,6 +483,7 @@ private struct BottomStack: View {
                         focusRequest: model.composerFocus,
                         modelMenuRequest: model.modelMenuRequest,
                         sideQuestion: model.asksSideThread ? { model.composerAsksSide = false } : nil,
+                        sideQuestionAnswering: model.sideThreadAnswering,
                         isOffline: offlineMachine != nil,
                         blurRequest: model.composerBlur,
                         commentCount: model.reviewComments.count,

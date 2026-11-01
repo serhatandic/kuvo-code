@@ -46,6 +46,8 @@ struct Composer: View {
     /// While a side thread shows over it: what's sent goes there as a follow-up, which its tag
     /// says; the tag's × puts it back on the conversation.
     var sideQuestion: (() -> Void)?
+    /// Its last question is still being answered: the next waits.
+    var sideQuestionAnswering = false
     /// The engine it sends to can't be reached now (its machine is reconnecting): you can write,
     /// not send.
     var isOffline = false
@@ -150,12 +152,15 @@ struct Composer: View {
     private var canSend: Bool {
         if isOffline { return false }
         if isShell { return SessionModel.shellCommand(in: text) != nil }
+        if asksSide, sideQuestionAnswering { return false }
         let answered = quotes.wrappedValue.contains { !$0.response.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || answered || !files.isEmpty || commentCount > 0
     }
 
     /// "!" first: the message is a command to run in the project's folder, not words for the agent.
     private var isShell: Bool { text.hasPrefix("!") }
+    /// What's sent goes to the side thread: its tag shows (a command runs as typed instead).
+    private var asksSide: Bool { sideQuestion != nil && !isShell && !text.hasPrefix("/") }
     private var currentModel: Model? { catalog.model(model) ?? catalog.defaultModel }
 
     var body: some View {
@@ -178,7 +183,7 @@ struct Composer: View {
             } else if let named = agents.matches(in: text, excluding: session) {
                 AgentReferenceList(agents: named, selected: min(agents.selected, named.count - 1)) { agents.insert($0, into: $text) }
             }
-            if let sideQuestion {
+            if let sideQuestion, asksSide {
                 SideQuestionTag(close: sideQuestion)
                     .transition(.opacity)
             }
@@ -614,7 +619,7 @@ struct Composer: View {
     private var actionButton: some View {
         SendStopButton(
             stops: isRunning, canSend: canSend,
-            sendHelp: isOffline ? "Send once the connection is back" : isShell ? "Run the Command (Return)" : isRunning ? "Send: the agent reads it at its next step (Return). ⌘Return queues it for after this run." : "Send (Return)",
+            sendHelp: isOffline ? "Send once the connection is back" : asksSide && sideQuestionAnswering ? "Send once the side question is answered" : isShell ? "Run the Command (Return)" : isRunning ? "Send: the agent reads it at its next step (Return). ⌘Return queues it for after this run." : "Send (Return)",
             stopHelp: "Stop (⌘.)", send: send, stop: onStop
         ) {
             Button("Send", action: send)

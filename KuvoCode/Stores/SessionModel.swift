@@ -1106,12 +1106,15 @@ final class SessionModel {
             failure = unavailable
             return
         }
+        // A "!" or "/" command runs as typed; what you were replying to waits for a message.
+        let commands = Keyword.commands(commands, keywords: keywords)
+        let isCommand = Self.shellCommand(in: draftText) != nil || SlashCommands.parse(draftText, commands: commands) != nil || GoalCommand(draftText) != nil || typedKeyword(draftText) != nil
         // The side thread's tag on the composer: a follow-up there, answered with the thread so
         // far, not a message to the agent. A keyword or command still runs as typed; what's
         // attached stays (a side question takes none).
-        if asksSideThread, !draftText.hasPrefix("/"), Self.shellCommand(in: draftText) == nil {
-            // One at a time: it waits in the composer while the card says it's answering.
-            guard shownSideThread?.latest.state != .answering else { return }
+        if asksSideThread, !isCommand {
+            // One at a time: it waits in the composer while the last is answered.
+            guard !sideThreadAnswering else { return }
             let question = Quoting.message(quotes: draftQuotes, text: draftText)
             guard !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
             draftText = ""
@@ -1119,9 +1122,6 @@ final class SessionModel {
             askFollowUp(question)
             return
         }
-        // A "!" or "/" command runs as typed; what you were replying to waits for a message.
-        let commands = Keyword.commands(commands, keywords: keywords)
-        let isCommand = Self.shellCommand(in: draftText) != nil || SlashCommands.parse(draftText, commands: commands) != nil || GoalCommand(draftText) != nil || typedKeyword(draftText) != nil
         let text = isCommand ? draftText : Quoting.message(quotes: draftQuotes, text: draftText)
         let files = draftFiles
         draftText = ""
@@ -1258,14 +1258,25 @@ final class SessionModel {
     /// A question of the side thread that shows over the composer: the latest asked here, until
     /// it's put away. Another one showing puts the composer on its thread.
     var shownSideQuestion: String? {
-        didSet { if shownSideQuestion != nil, shownSideQuestion != oldValue { composerAsksSide = true } }
+        didSet {
+            // Another thread: the composer asks it. A follow-up in the same one leaves the tag as
+            // it is (its × may have been clicked while it was asked).
+            guard let shown = shownSideQuestion, shown != oldValue else { return }
+            let thread = { (id: String?) in self.sideQuestions.first { $0.id == id }?.threadID }
+            if oldValue == nil || thread(shown) != thread(oldValue) { composerAsksSide = true }
+        }
     }
 
     /// The composer asks the side thread rather than the conversation: from when a side question
     /// is asked or shown, until its tag's × puts the composer back on the conversation.
     var composerAsksSide = false
-    /// Whether what's sent now is a follow-up in the side thread: while it shows, open.
-    var asksSideThread: Bool { composerAsksSide && shownSideThread != nil && !hidesSideQuestion }
+    /// Whether what's sent now is a follow-up in the side thread: while it shows, folded too
+    /// (the tag says so either way).
+    var asksSideThread: Bool { composerAsksSide && shownSideThread != nil }
+    /// A follow-up on its way to the box, before its question is in the thread.
+    private var sendsFollowUp = false
+    /// The side thread's last question is still being answered: the next waits in the composer.
+    var sideThreadAnswering: Bool { sendsFollowUp || shownSideThread?.latest.state == .answering }
 
     /// The side thread that shows over the composer.
     var shownSideThread: SideThread? {
@@ -1278,6 +1289,7 @@ final class SessionModel {
     private func askSideQuestion(_ question: String, written: String, thread: String? = nil) {
         guard let bridge = goalBridge(), let api = bridge.api else { return keywordUnavailable(written) }
         let session = id
+        if thread != nil { sendsFollowUp = true }
         Task {
             do {
                 // Its list read first if it isn't yet (the conversation just opened), so the answer's
@@ -1285,8 +1297,10 @@ final class SessionModel {
                 if bridge.sideQuestions[session] == nil { await bridge.loadSideQuestions(of: session) }
                 let asked = try await api.askSideQuestion(question, about: session, thread: thread)
                 bridge.took(asked)
+                sendsFollowUp = false
                 shownSideQuestion = asked.id
             } catch {
+                sendsFollowUp = false
                 restoreWritten(written)
                 fail(error)
             }

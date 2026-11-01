@@ -28,7 +28,11 @@ public enum FailureWords {
         case "provider.transport", "provider.timeout": return .network
         case "provider.internal", "provider.invalid-output": return .providerTrouble
         case "provider.content-filter": return .declined
-        case "provider.no-route", "provider.unsupported-operation", "provider.unknown": return .unavailable
+        case "provider.no-route", "provider.unsupported-operation": return .unavailable
+        // Also every error a provider sends partway through a reply: by what it says.
+        case "provider.unknown":
+            let said = kind(of: message)
+            return said == .other ? .unavailable : said
         case "permission.rejected": return .permission
         case "tool.execution": return .tool
         case "provider.invalid-request": return isTooLong(message) ? .tooLong : .refused
@@ -40,15 +44,27 @@ public enum FailureWords {
     private static func kind(of message: String) -> Kind {
         func says(_ pattern: String) -> Bool { message.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil }
         if isTooLong(message) { return .tooLong }
-        if says(#"\b429\b|rate.?limit|too many requests"#) { return .rateLimit }
+        // A quota spent often comes as a 429 too: it's the limit, not the rate.
         if says(#"usage limit|quota|insufficient (credit|balance|funds)|billing|payment required|\b402\b"#) { return .usageLimit }
-        if says(#"authorization header|unauthori[sz]ed|\b401\b|\b403\b|forbidden|invalid api key|not (signed|logged) in"#) { return .signIn(ended: false) }
+        if says(#"\b429\b|rate.?limit|too many requests"#) { return .rateLimit }
+        if says(#"overloaded|internal server error"#) { return .providerTrouble }
+        if says(#"authorization header|unauthori[sz]ed|\b401\b|invalid api key|not (signed|logged) in"#) { return .signIn(ended: false) }
         if says(#"ECONNRESET|ECONNREFUSED|ETIMEDOUT|fetch failed|failed to fetch|timed out|network|offline"#) { return .network }
         return .other
     }
 
     private static func isTooLong(_ message: String) -> Bool {
         message.range(of: #"context.?(length|window)|too many tokens|prompt is too long|maximum context|input is too long"#, options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    /// The engine's words under the headline, without the headline again when they start with
+    /// it ("Free usage limit reached. Connect a provider…"); nil when nothing's left.
+    public static func detail(_ message: String?, under headline: String) -> String? {
+        guard var said = message?.trimmingCharacters(in: .whitespacesAndNewlines), !said.isEmpty else { return nil }
+        if said.lowercased().hasPrefix(headline.lowercased()) {
+            said = String(said.dropFirst(headline.count).drop { $0.isWhitespace || $0.isPunctuation })
+        }
+        return said.isEmpty ? nil : said
     }
 
     public static func headline(_ kind: Kind) -> String {
