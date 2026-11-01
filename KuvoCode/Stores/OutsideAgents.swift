@@ -580,9 +580,14 @@ final class OutsideAgents {
 
     // MARK: Accounts
 
-    /// Another account with an agent: its provider, to sign in to.
-    func addAccount(agent: String, label: String) async throws -> String {
+    /// The agents another account is being added to: one at a time each, so a second tap adds none.
+    private(set) var addingAccount: Set<String> = []
+
+    /// Another account with an agent: its provider, to sign in to; nil while one's being added.
+    func addAccount(agent: String, label: String) async throws -> String? {
         guard let api else { throw Failure.unavailable("Adding an account") }
+        guard addingAccount.insert(agent).inserted else { return nil }
+        defer { addingAccount.remove(agent) }
         return try await api.addAgentAccount(agent: agent, label: label)
     }
 

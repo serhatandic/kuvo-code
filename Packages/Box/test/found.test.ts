@@ -146,7 +146,25 @@ test("opencode's own sign-ins and keys are connected only when the engine's is w
 
 test("a fresh computer: nothing to bring over, and nothing fails", async () => {
   const what = await found({ engine: await serve([]), bridge: await serve([]), authFile: join(root, "none.json") });
-  expect(what).toEqual({ agents: [], opencode: [], shell: [], connected: [] });
+  expect(what).toEqual({ agents: [], opencode: [], shell: [], connected: [], unread: [] });
+});
+
+test("an engine or agents bridge that isn't running or doesn't answer is said to be unread, not taken for nothing signed in", async () => {
+  const authFile = opencode({ openrouter: { type: "api", key: "sk-or-1" } });
+  // Not running (restarting, stopped): nothing to ask.
+  expect((await found({ engine: null, bridge: null, authFile })).unread).toEqual(["engine", "agents"]);
+  // Running but answering with an error.
+  const broken = http.createServer((_, response) => response.writeHead(500).end());
+  servers.push(broken);
+  await new Promise<void>((done) => broken.listen(0, "127.0.0.1", done));
+  const failing = { port: (broken.address() as AddressInfo).port, password: "secret" };
+  const bridge = await serve([agent("claude-code", "Claude Code", true, "you@example.com")]);
+  const what = await found({ engine: failing, bridge, authFile });
+  expect(what.unread).toEqual(["engine"]);
+  expect(what.agents.map(each => each.id)).toEqual(["claude-code"]);
+  // Both answering: everything was read.
+  const engine = await serve([{ id: "openrouter", name: "OpenRouter", methods: [], connections: [credential] }]);
+  expect((await found({ engine, bridge, authFile })).unread).toEqual([]);
 });
 
 test("with the engine and the agents not running yet, opencode's keys are still listed", async () => {

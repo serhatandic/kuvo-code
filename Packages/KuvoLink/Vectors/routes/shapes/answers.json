@@ -3119,6 +3119,18 @@
       },
       "connected?": {
        "list": "string"
+      },
+      "unread?": {
+       "list": {
+        "oneOf": [
+         {
+          "literal": "engine"
+         },
+         {
+          "literal": "agents"
+         }
+        ]
+       }
       }
      }
     }

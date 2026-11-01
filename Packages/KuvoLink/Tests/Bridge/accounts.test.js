@@ -53,14 +53,21 @@ async function engineWith() {
     }
     const send = (status, body) => response.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(body));
     if (request.method === "DELETE" && url.pathname.startsWith("/api/credential/")) {
+      if (engine.refusesRemoving) return send(500, { message: "Busy." });
       const id = decodeURIComponent(url.pathname.split("/").pop());
+      // Removed meanwhile (Disconnect on the phone and the Mac at once): the engine has none.
+      if (engine.goneAlready) {
+        engine.credentials = engine.credentials.filter(each => each.id !== id);
+        return send(404, { message: "Not found." });
+      }
       engine.removed.push(id);
       engine.credentials = engine.credentials.filter(each => each.id !== id);
       return send(200, { data: true });
     }
     if (url.pathname === "/api/credential") return send(200, { data: engine.credentials });
     if (url.pathname === "/api/integration") {
-      const plan = id => ({ id, connections: engine.inUse[id] ? [{ type: "credential", ...engine.inUse[id] }] : [] });
+      // As the engine lists a sign-in in use: its credential's `id`.
+      const plan = id => ({ id, connections: engine.inUse[id] ? [{ type: "credential", id: engine.inUse[id].credentialID, method: engine.inUse[id].method }] : [] });
       return send(200, { data: [plan("openai"), plan("anthropic"), plan("sirket-proxy"), plan("şirket-proxy"), { id: "notion", metadata: { source: "mcp" }, connections: [] }] });
     }
     const session = engine.sessions[decodeURIComponent(url.pathname.split("/").pop())];
@@ -124,6 +131,39 @@ test("Disconnect signs the box out of that plan alone, and of nothing that isn't
   }
   assert.equal((await ask("GET", "kuvo/accounts/anthropic/forget")).status, 405);
   assert.deepEqual(engine.removed.sort(), ["crd_1", "crd_2"]);
+});
+
+test("Disconnect that the engine refuses says so, and the plan still says its sign-in ended", async () => {
+  engine.credentials.push({ id: "crd_7", integrationID: "openai", label: "me" });
+  engine.inUse.openai = { credentialID: "crd_7", method: "oauth" };
+  await refused("ses_a");
+  assert.deepEqual(await ended(), ["openai"]);
+  engine.refusesRemoving = true;
+  const answer = await ask("POST", "kuvo/accounts/openai/forget");
+  engine.refusesRemoving = false;
+  assert.equal(answer.status, 502);
+  assert.ok(answer.json?.message, "says why");
+  assert.ok(engine.credentials.some(each => each.id === "crd_7"));
+  assert.deepEqual(await ended(), ["openai"]);
+  // Tried again once the engine takes it: signed out, and nothing ended any more.
+  assert.equal((await ask("POST", "kuvo/accounts/openai/forget")).status, 200);
+  engine.inUse.openai = undefined;
+  assert.deepEqual(await ended(), []);
+});
+
+test("Disconnect of a sign-in removed meanwhile from another device is done, not refused", async () => {
+  engine.credentials.push({ id: "crd_8", integrationID: "openai", label: "me" });
+  engine.inUse.openai = { credentialID: "crd_8", method: "oauth" };
+  await refused("ses_a");
+  assert.deepEqual(await ended(), ["openai"]);
+  engine.goneAlready = true;
+  const answer = await ask("POST", "kuvo/accounts/openai/forget");
+  engine.goneAlready = false;
+  assert.equal(answer.status, 200);
+  assert.ok(!engine.credentials.some(each => each.id === "crd_8"));
+  // Nothing said to have ended any more.
+  assert.deepEqual(await ended(), []);
+  engine.inUse.openai = undefined;
 });
 
 test("a provider named in any language can be disconnected from a phone: by its plain id, or the name it was given before", async () => {

@@ -105,6 +105,55 @@ import UsageKit
         guard case .failed = onboarding.agents(failure: nil) else { Issue.record("still looking"); return }
     }
 
+    /// This Mac's box answering `kuvo/accounts/found` with each of `answers` in turn, the last again.
+    private func answering(_ answers: [String]) -> BoxClient {
+        let given = Given(answers)
+        return BoxClient(box: BoxClient.mac, transport: LocalBox { _ in
+            let body = given.next()
+            return AsyncThrowingStream { continuation in
+                continuation.yield(.head(status: 200, headers: ["content-type": "application/json"]))
+                continuation.yield(.body(Data(body.utf8)))
+                continuation.finish()
+            }
+        })
+    }
+
+    nonisolated final class Given: @unchecked Sendable {
+        private let lock = NSLock()
+        private var answers: [String]
+        init(_ answers: [String]) { self.answers = answers }
+        func next() -> String { lock.withLock { answers.count > 1 ? answers.removeFirst() : answers[0] } }
+    }
+
+    /// This Mac's engine restarts (or is slow to answer) while the step shows, and the agents'
+    /// bridge with it: the box can't read them, and says so. What's signed in stays so, rather than
+    /// turning to Sign In… and Use for as long as they're away; once they're back, they're read again.
+    @Test func whatsSignedInStaysSoWhileTheEngineIsAway() async {
+        let onboarding = Onboarding(defaults: defaults, launchedBefore: false, screen: ScreenAccess(source: Permissions().source))
+        let box = answering([
+            #"{"agents":[{"id":"claude-code","name":"Claude Code","installed":true,"signedIn":true,"label":"you@example.com"},{"id":"codex-cli","name":"Codex","installed":true,"signedIn":false}],"opencode":[{"id":"opencode:openrouter","integrationID":"openrouter","name":"OpenRouter","kind":"key","connected":true}],"shell":[],"connected":["github-copilot","openrouter"],"unread":[]}"#,
+            // As the box answers while neither is running: opencode's keys still listed, by their ids.
+            #"{"agents":[],"opencode":[{"id":"opencode:openrouter","integrationID":"openrouter","name":"openrouter","kind":"key","connected":false}],"shell":[],"connected":[],"unread":["engine","agents"]}"#,
+            // Back, with Copilot signed out meanwhile.
+            #"{"agents":[{"id":"claude-code","name":"Claude Code","installed":true,"signedIn":true,"label":"you@example.com"},{"id":"codex-cli","name":"Codex","installed":true,"signedIn":false}],"opencode":[{"id":"opencode:openrouter","integrationID":"openrouter","name":"OpenRouter","kind":"key","connected":true}],"shell":[],"connected":["openrouter"],"unread":[]}"#,
+        ])
+        func row(_ id: String) -> Offers.Row? { (onboarding.offers.plans + onboarding.offers.keys).first { $0.integrationID == id } }
+
+        await onboarding.look(in: box, agentsUp: true)
+        let before = onboarding.offers
+        #expect(row("github-copilot")?.action == .ready)
+
+        await onboarding.look(in: box, agentsUp: true)
+        #expect(onboarding.offers == before)
+        #expect(row("claude-code")?.detail == "Signed in as you@example.com")
+        #expect(row("openrouter")?.name == "OpenRouter")
+        #expect(row("openrouter")?.action == .ready)
+
+        await onboarding.look(in: box, agentsUp: true)
+        #expect(row("github-copilot")?.action == .signIn(integrationID: "github-copilot"))
+        #expect(row("claude-code")?.action == .ready)
+    }
+
     // MARK: Moving on once a permission is granted
 
     @Test func bothAllowedMovesOnByItself() {

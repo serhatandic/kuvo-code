@@ -11,7 +11,7 @@ import { pathToFileURL } from "node:url"
 import { providerID, type AgentAccount } from "../accounts"
 import type { Agent, AgentContext, Account, MessageInput, OwnTurn, RunInput, RunResult, SignInAttempt, SignInOptions, SubagentMessages, SubagentRun, Thread, TurnHooks, PromptFile } from "../agent"
 import type { Limit } from "../auto"
-import { accountName, ContextWindows, failure, KnownAccount, model, TookTooLong } from "../agent"
+import { accountName, ContextWindows, failure, KnownAccount, model, signOutWith, TookTooLong } from "../agent"
 import { fileDiff, fromPatch } from "../diff"
 import { install, maintenance, update, type MaintenanceDefinition } from "../maintenance"
 import { emit } from "../events"
@@ -80,11 +80,21 @@ export class ClaudeAgent implements Agent {
   /** Counts updates of Claude Code: a session's Claude Code started before the last one starts again. */
   program = 0
 
+  /** Its own sign-in on a machine: Kuvo Code's, in its folder there, so signed out here. */
+  signOut?: () => Promise<void>
+
   constructor(
     readonly context: AgentContext,
     readonly instance: AgentAccount = { id: "default" },
   ) {
     this.providerID = providerID("claude", instance.id)
+    if (instance.id === "default" && instance.home) {
+      this.signOut = async () => {
+        await signOutWith("Claude Code", this.executable(), ["auth", "logout"], this.env())
+        this.known.reset()
+        this.modelList = undefined
+      }
+    }
   }
 
   executable(): string | undefined {

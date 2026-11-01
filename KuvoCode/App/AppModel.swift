@@ -477,6 +477,7 @@ final class AppModel {
             guard launch == self.launch else { return }
             self.api = api
             catalog.api = api
+            catalog.box = box(BoxClient.mac)
             // An engine stuck starting (one of its own fetches never ended) is started over, once
             // a launch: after that, a stall is left to show. Not while macOS asks you something
             // (access to a folder the engine reads): it waits on your answer, and starting it over

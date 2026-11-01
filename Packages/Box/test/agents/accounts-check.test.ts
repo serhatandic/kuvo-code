@@ -4,7 +4,7 @@
 // Claude Code and Grok are fake programs on the PATH; Codex's app-server and Cursor's SDK are stand-ins.
 
 import { afterAll, afterEach, beforeAll, describe, expect, setSystemTime, test } from "bun:test"
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { delimiter, join } from "node:path"
 import { TookTooLong, type Agent } from "../../src/agents/agent"
@@ -182,11 +182,15 @@ describe("an agent's sign-in that can't be checked just now", () => {
     const said = await bridge([broken]).account(broken)
     expect(said.connections).toEqual([])
     expect(said.metadata.message).toBe("codex: cannot execute binary file")
+    // Its program is there: no Install, which would run its maker's installer again.
+    expect(said.metadata.installed).toBe(true)
 
     const claude = program("claude", { crashes: `echo 'Segmentation fault' >&2; exit 139` })
     claude("crashes")
     const crashing = new ClaudeAgent(context())
-    expect((await bridge([crashing]).account(crashing)).metadata.message).toBe("Claude Code couldn't say whether it's signed in: Segmentation fault")
+    const crashed = await bridge([crashing]).account(crashing)
+    expect(crashed.metadata.message).toBe("Claude Code couldn't say whether it's signed in: Segmentation fault")
+    expect(crashed.metadata.installed).toBe(true)
   })
 
   test("Grok: its models stay listed while `grok models` can't answer", async () => {
@@ -324,3 +328,45 @@ describe("an agent's sign-in that can't be checked just now", () => {
     expect((await box.models(agent))).toEqual([])
   })
 })
+
+describe("signing out of an agent's own sign-in", () => {
+  test("on a machine it's Kuvo Code's own, in its folder there: Sign Out signs it out with the agent's own command, or says why it couldn't; on a Mac it's yours, signed out where you signed in", async () => {
+    const said = join(root, "claude-logout")
+    const signedIn = `echo '{"loggedIn":true,"authMethod":"claude.ai","email":"ada@example.com"}'`
+    const claude = program("claude", {
+      in: `if [ "$2" = logout ]; then echo "$CLAUDE_CONFIG_DIR" > '${said}'; echo out > '${join(root, "claude.mode")}'; exit 0; fi; ${signedIn}`,
+      locked: `if [ "$2" = logout ]; then echo 'The Keychain is locked.' >&2; exit 1; fi; ${signedIn}`,
+      out: `echo '{"loggedIn":false,"authMethod":"none"}'; exit 1`,
+    })
+    const signOut = async (agent: Agent) => {
+      const answer = handler({ roster: { all: () => [agent], find: (id: string) => (id === agent.providerID ? agent : undefined) }, password: "pw" } as any)
+      const response = await answer(new Request(`http://box/api/integration/${encodeURIComponent(agent.providerID)}/disconnect`, { method: "POST", headers: { authorization: "Basic " + Buffer.from("opencode:pw").toString("base64") } }))
+      return { status: response.status, said: ((await response.json()) as any)?.message as string | undefined }
+    }
+
+    // This Mac's: your own Claude Code's, shared with claude in Terminal.
+    claude("in")
+    const yours = new ClaudeAgent(context())
+    expect((await bridge([yours]).account(yours)).metadata.signsOut).toBe(false)
+
+    // A machine's: in Kuvo Code's folder there.
+    const home = mkdtempSync(join(root, "machine-claude-"))
+    const machine = new ClaudeAgent(context(), { id: "default", home })
+    const box = bridge([machine])
+    const account = await box.account(machine)
+    expect(account.connections[0]?.label).toBe("ada@example.com")
+    expect(account.metadata.signsOut).toBe(true)
+
+    claude("locked")
+    const refused = await signOut(machine)
+    expect(refused.status).not.toBe(200)
+    expect(refused.said).toContain("The Keychain is locked.")
+    expect((await box.account(machine)).connections[0]?.label).toBe("ada@example.com")
+
+    claude("in")
+    expect((await signOut(machine)).status).toBe(200)
+    expect(readFileSync(said, "utf8").trim()).toBe(home)
+    expect((await box.account(machine)).connections).toEqual([])
+  })
+})
+

@@ -120,7 +120,8 @@ final class Onboarding {
         do {
             let answer = try await box.value(Found.self, "GET", "kuvo/accounts/found")
             guard look == looks else { return }
-            found = answer
+            // What the box couldn't read just now (this Mac's engine restarting) as it last was.
+            found = answer.keeping(found)
             lookedWithAgents = agentsUp
             lookFailure = nil
         } catch {

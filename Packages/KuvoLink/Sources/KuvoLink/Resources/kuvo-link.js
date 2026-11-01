@@ -12749,8 +12749,8 @@ async function noteSignIn(event, source) {
   if (!ended)
     return void changeEndedSignIns((each) => each.delete(provider));
   const active = await activeCredential(source, provider);
-  if (active?.method === "oauth" && active.credentialID)
-    changeEndedSignIns((each) => each.set(provider, active.credentialID));
+  if (active?.method === "oauth" && active.id)
+    changeEndedSignIns((each) => each.set(provider, active.id));
 }
 async function activeCredential(engine, provider) {
   const integrations = (await engineGet(engine, "api/integration"))?.data;
@@ -12759,28 +12759,35 @@ async function activeCredential(engine, provider) {
 async function endedProviders(engine) {
   const providers = [];
   for (const [provider, credential] of readEndedSignIns()) {
-    if ((await activeCredential(engine, provider).catch(() => null))?.credentialID === credential)
+    if ((await activeCredential(engine, provider).catch(() => null))?.id === credential)
       providers.push(provider);
   }
   return providers.sort();
 }
 async function forgetPlan(engine, id) {
   const integrations = (await engineGet(engine, "api/integration"))?.data;
-  const plan = (Array.isArray(integrations) ? integrations : []).find((each) => each?.id === id);
-  if (!plan || plan.metadata?.source === "mcp")
-    return false;
   const entries = (await engineGet(engine, "api/credential"))?.data;
-  for (const entry of Array.isArray(entries) ? entries : []) {
+  if (!Array.isArray(integrations) || !Array.isArray(entries))
+    return { status: 503, message: "The engine isn't answering. Try again in a moment." };
+  const plan = integrations.find((each) => each?.id === id);
+  if (!plan || plan.metadata?.source === "mcp")
+    return { status: 404 };
+  let refused = 0;
+  for (const entry of entries) {
     if (entry?.integrationID !== id || typeof entry.id !== "string")
       continue;
-    await fetch(`http://127.0.0.1:${engine.port}/api/credential/${encodeURIComponent(entry.id)}`, {
+    const removed = await fetch(`http://127.0.0.1:${engine.port}/api/credential/${encodeURIComponent(entry.id)}`, {
       method: "DELETE",
       headers: { authorization: `Basic ${Buffer.from(`opencode:${engine.password}`).toString("base64")}` },
       signal: AbortSignal.timeout(1e4)
-    }).then((response) => response.body?.cancel()).catch(() => {});
+    }).then((response) => (response.body?.cancel(), response.ok || response.status === 404), () => false);
+    if (!removed)
+      refused++;
   }
+  if (refused)
+    return { status: 502, message: refused === 1 ? "The engine didn't remove a sign-in. Try again." : `The engine didn't remove ${refused} sign-ins. Try again.` };
   changeEndedSignIns((each) => each.delete(id));
-  return true;
+  return { status: 200 };
 }
 async function* accountsRoute(context) {
   const { request, route, readEngine, json } = context;
@@ -12803,7 +12810,8 @@ async function* accountsRoute(context) {
   } catch {}
   if (!id || id.includes("/"))
     return yield* json(404, {});
-  return yield* await forgetPlan(engine, id).catch(() => false) ? json(200, {}) : json(404, {});
+  const forgot = await forgetPlan(engine, id).catch(() => ({ status: 503, message: "The engine isn't answering. Try again in a moment." }));
+  return yield* json(forgot.status, "message" in forgot ? { message: forgot.message } : {});
 }
 async function* credentialsRoute(context) {
   const { request, signal, readEngine, text } = context;
@@ -17622,10 +17630,10 @@ function readOpencode(file) {
 }
 async function integrations(target, signal, fresh = false) {
   if (!target?.port)
-    return [];
+    return null;
   const data = await call(target, "GET", `/api/integration${fresh ? "?fresh=1" : ""}`, undefined, signal ?? AbortSignal.timeout(20000)).catch(() => null);
   if (!Array.isArray(data))
-    return [];
+    return null;
   return data.filter(isObject).filter((each) => typeof each.id === "string").map((each) => ({
     id: each.id,
     name: typeof each.name === "string" ? each.name : each.id,
@@ -17634,7 +17642,10 @@ async function integrations(target, signal, fresh = false) {
   }));
 }
 async function found({ engine, bridge, authFile = readFrom() }, signal) {
-  const [engineList, agentList] = await Promise.all([integrations(engine, signal), integrations(bridge, signal, true)]);
+  const [engineRead, agentsRead] = await Promise.all([integrations(engine, signal), integrations(bridge, signal, true)]);
+  const unread = [...engineRead ? [] : ["engine"], ...agentsRead ? [] : ["agents"]];
+  const engineList = engineRead ?? [];
+  const agentList = agentsRead ?? [];
   const byID = new Map(engineList.map((integration) => [integration.id, integration]));
   const agents = agentList.filter((integration) => integration.metadata.source === "agent").map((integration) => {
     const signedIn = integration.connections.length > 0;
@@ -17651,7 +17662,7 @@ async function found({ engine, bridge, authFile = readFrom() }, signal) {
   });
   const shell = engineList.flatMap((integration) => integration.connections.filter((connection) => connection.type === "env" && typeof connection.name === "string" && connection.name).map((connection) => ({ integrationID: integration.id, name: integration.name, variable: connection.name })));
   const connected = engineList.filter((integration) => integration.connections.some(working)).map((integration) => integration.id);
-  return { agents, opencode, shell, connected };
+  return { agents, opencode, shell, connected, unread };
 }
 async function useFound(id, { engine, authFile = readFrom() }, signal) {
   const entry = id.startsWith("opencode:") ? readOpencode(authFile).find((each) => `opencode:${each.integrationID}` === id) : undefined;
@@ -17662,7 +17673,7 @@ async function useFound(id, { engine, authFile = readFrom() }, signal) {
   if (!engine?.port)
     return { status: 503, message: "The engine isn’t running." };
   try {
-    const known = (await integrations(engine, signal)).find((each) => each.id === entry.integrationID);
+    const known = (await integrations(engine, signal))?.find((each) => each.id === entry.integrationID);
     if (known?.connections.some((connection) => connection.type === "credential"))
       return { status: 200 };
     await call(engine, "POST", "/api/credential", { integrationID: entry.integrationID, label: "API key", value: entry.value, activate: true }, signal);
@@ -18673,7 +18684,7 @@ import fs68 from "node:fs";
 import path70 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.149";
+var BRIDGE_VERSION = "0.9.150";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

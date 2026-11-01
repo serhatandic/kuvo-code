@@ -6,7 +6,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { providerID, type AgentAccount } from "../accounts"
 import type { Agent, AgentContext, Account, SignInAttempt, SignInOptions, Thread } from "../agent"
-import { accountName, ContextWindows, KnownAccount, model, TookTooLong } from "../agent"
+import { accountName, ContextWindows, KnownAccount, model, signOutWith, TookTooLong } from "../agent"
 import { emit } from "../events"
 import { AcpThread, questionFields } from "../acp"
 import { withOwnFolders } from "../machine"
@@ -73,11 +73,21 @@ export class GrokAgent implements Agent {
     } catch {}
   }
 
+  /** Its own sign-in on a machine: Kuvo Code's, in its folder there, so signed out here. */
+  signOut?: () => Promise<void>
+
   constructor(
     readonly context: AgentContext,
     readonly instance: AgentAccount = { id: "default" },
   ) {
     this.providerID = providerID("grok", instance.id)
+    if (instance.id === "default" && instance.home) {
+      this.signOut = async () => {
+        await signOutWith("Grok", this.executable(), ["logout"], this.env())
+        this.known.reset()
+        this.status = undefined
+      }
+    }
   }
 
   executable(): string | undefined {

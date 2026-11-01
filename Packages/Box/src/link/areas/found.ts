@@ -69,11 +69,11 @@ interface Integration {
   connections: { type?: unknown; name?: unknown; status?: unknown }[];
 }
 
-/** `target`'s integrations, or none when it isn't running or doesn't answer. */
-async function integrations(target: Target | null, signal?: AbortSignal, fresh = false): Promise<Integration[]> {
-  if (!target?.port) return [];
+/** `target`'s integrations, or `null` when it isn't running or doesn't answer. */
+async function integrations(target: Target | null, signal?: AbortSignal, fresh = false): Promise<Integration[] | null> {
+  if (!target?.port) return null;
   const data = await call(target, "GET", `/api/integration${fresh ? "?fresh=1" : ""}`, undefined, signal ?? AbortSignal.timeout(20_000)).catch(() => null);
-  if (!Array.isArray(data)) return [];
+  if (!Array.isArray(data)) return null;
   return data.filter(isObject).filter(each => typeof each.id === "string").map(each => ({
     id: each.id as string,
     name: typeof each.name === "string" ? each.name : each.id as string,
@@ -82,10 +82,17 @@ async function integrations(target: Target | null, signal?: AbortSignal, fresh =
   }));
 }
 
-/** Lists what's found. A server that isn't running leaves its part empty. */
+/**
+ * Lists what's found. A server that isn't running or doesn't answer (restarting, slow) leaves its
+ * part empty and is named in `unread`, so a client keeps what it last read of it rather than
+ * taking it for nothing signed in.
+ */
 export async function found({ engine, bridge, authFile = readFrom() }: { engine: Target | null; bridge: Target | null; authFile?: string }, signal?: AbortSignal): Promise<Found> {
   // The agents' programs looked for again (an install a moment ago, a PATH changed since).
-  const [engineList, agentList] = await Promise.all([integrations(engine, signal), integrations(bridge, signal, true)]);
+  const [engineRead, agentsRead] = await Promise.all([integrations(engine, signal), integrations(bridge, signal, true)]);
+  const unread = [...(engineRead ? [] : ["engine" as const]), ...(agentsRead ? [] : ["agents" as const])];
+  const engineList = engineRead ?? [];
+  const agentList = agentsRead ?? [];
   const byID = new Map(engineList.map(integration => [integration.id, integration]));
   const agents = agentList
     .filter(integration => integration.metadata.source === "agent")
@@ -110,7 +117,7 @@ export async function found({ engine, bridge, authFile = readFrom() }: { engine:
     .filter(connection => connection.type === "env" && typeof connection.name === "string" && connection.name)
     .map((connection): Found["shell"][number] => ({ integrationID: integration.id, name: integration.name, variable: connection.name as string })));
   const connected = engineList.filter(integration => integration.connections.some(working)).map(integration => integration.id);
-  return { agents, opencode, shell, connected };
+  return { agents, opencode, shell, connected, unread };
 }
 
 /**
@@ -124,7 +131,7 @@ export async function useFound(id: string, { engine, authFile = readFrom() }: { 
   if (!engine?.port) return { status: 503, message: "The engine isn’t running." };
   try {
     // Brought over already (a second tap, the phone too): once is enough.
-    const known = (await integrations(engine, signal)).find(each => each.id === entry.integrationID);
+    const known = (await integrations(engine, signal))?.find(each => each.id === entry.integrationID);
     if (known?.connections.some(connection => connection.type === "credential")) return { status: 200 };
     await call(engine, "POST", "/api/credential", { integrationID: entry.integrationID, label: "API key", value: entry.value, activate: true }, signal);
     return { status: 200 };

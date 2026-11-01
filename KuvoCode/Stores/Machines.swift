@@ -137,7 +137,9 @@ final class MachineEngine {
         agents = OutsideAgents(machine: machine.id)
         catalog.outsideAgents = agents
         catalog.machine = machine.id
-        config = EngineConfig(remote: BoxSettings(client: BoxClient(box: machine.id, transport: MachineBoxTransport(connection: machine.connection))))
+        let box = BoxClient(box: machine.id, transport: MachineBoxTransport(connection: machine.connection))
+        catalog.box = box
+        config = EngineConfig(remote: BoxSettings(client: box))
     }
 
     /// The machine as it's kept now: another address, or what it calls itself, learned.

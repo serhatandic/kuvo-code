@@ -17,6 +17,9 @@ final class Catalog {
     /// The machine whose engine this is (nil: this Mac's): sign-ins to its agents finish in this
     /// Mac's browser.
     @ObservationIgnored var machine: String?
+    /// Its computer's box, which keeps what its engine's accounts don't say (the plans whose
+    /// sign-in ended).
+    @ObservationIgnored var box: BoxClient?
 
     /// The engine's integrations, and the outside agents' after them.
     private(set) var integrations: [Integration] = []
@@ -342,6 +345,7 @@ final class Catalog {
         merge()
         // Loaded once the models have been read: a new bot's model is checked against them.
         if modelsRead { isLoaded = true }
+        await readEndedSignIns()
         for directory in commandFolders { await loadCommands(in: directory) }
         merge()
         if starting { waitForEngine() } else { unavailableSince = nil }
@@ -363,26 +367,46 @@ final class Catalog {
     /// answering from what it knew a moment ago.
     func refreshAgents(fresh: Bool = false) async {
         guard let api = outsideAgents?.api else { return }
+        agentReads += 1
+        let order = agentReads
         if fresh {
+            freshAgentReads += 1
             isRefreshingAgents = true
             lastFreshAgents = .now
         }
-        defer { if fresh { isRefreshingAgents = false } }
+        defer {
+            if fresh {
+                freshAgentReads -= 1
+                isRefreshingAgents = freshAgentReads > 0
+            }
+        }
         // The accounts first: one that changed has other models.
-        var read = false
-        do {
-            agentIntegrations = try await api.agentIntegrations(fresh: fresh)
-            read = true
-        } catch { log.error("agents: \(String(describing: error), privacy: .public)") }
-        do { agentModels = try await api.models() } catch { log.error("agents' models: \(String(describing: error), privacy: .public)") }
+        var listed: [Integration]?
+        var models: [Model]?
+        do { listed = try await api.agentIntegrations(fresh: fresh) } catch { log.error("agents: \(String(describing: error), privacy: .public)") }
+        do { models = try await api.models() } catch { log.error("agents' models: \(String(describing: error), privacy: .public)") }
+        // A read asked before one that's answered already (a fresh one, slow to check every agent,
+        // overtaken by the one after you removed an account) is out of date.
+        guard listed != nil || models != nil else { return }
+        guard order > agentReadShown else {
+            // What every agent said just now is the bridge's to answer from: read again, after
+            // what overtook this one.
+            if fresh { await refreshAgents() }
+            return
+        }
+        agentReadShown = order
+        if let listed { agentIntegrations = listed }
+        if let models { agentModels = models }
         merge()
-        if read { areAgentsLoaded = true }
+        if listed != nil { areAgentsLoaded = true }
     }
 
     /// The agents bridge stopped for good, or isn't there (a machine's engine started without
     /// it): its agents and their models aren't there to use. `untilBack`: it's away for now (its
     /// machine disconnected), and they're unknown until it's back, not gone.
     func forgetAgents(untilBack: Bool = false) {
+        // Nor does a read still on its way bring them back.
+        agentReadShown = agentReads
         agentIntegrations = []
         agentModels = []
         merge()
@@ -391,6 +415,10 @@ final class Catalog {
 
     /// True while the agents are being asked anew.
     private(set) var isRefreshingAgents = false
+    /// The coding agents' reads, as asked, and the latest whose answer shows.
+    @ObservationIgnored private var agentReads = 0
+    @ObservationIgnored private var agentReadShown = 0
+    @ObservationIgnored private var freshAgentReads = 0
     @ObservationIgnored private var lastFreshAgents: ContinuousClock.Instant?
 
     /// The agents asked anew, unless they were a moment ago: when you come back to the app.
@@ -444,8 +472,10 @@ final class Catalog {
     }
 
     /// Sign-ins that ran out and couldn't be renewed (the service refused them), by provider: the
-    /// one a run on its model was refused.
+    /// one a run on its model was refused. As the box keeps them, and as this Mac sees them end.
     private var endedSignIns: [String: String] = [:]
+    /// The plans the box last listed as ended: one it no longer lists works again.
+    @ObservationIgnored private var boxEnded: Set<String> = []
 
     /// A run on `provider`'s model was refused its account: its sign-in in use, if that's one (a
     /// key refused says why itself).
@@ -458,6 +488,24 @@ final class Catalog {
     /// A step on `provider`'s model ended well: its sign-in works (renewed after all).
     func signInWorks(_ provider: String) {
         if endedSignIns[provider] != nil { endedSignIns[provider] = nil }
+    }
+
+    /// The plans whose sign-in ended, as the box keeps them (`kuvo/accounts/ended`): one noted
+    /// while no app watched (a bot's run overnight, with the Mac closed) is marked too, and one the
+    /// box no longer lists works again. One this Mac saw end stays marked until it works (the box
+    /// may not have noted it yet).
+    private func readEndedSignIns() async {
+        guard let box else { return }
+        struct Ended: Decodable { var providers: [String] }
+        guard let ended = try? await box.value(Ended.self, "GET", "kuvo/accounts/ended") else { return }
+        let listed = Set(ended.providers)
+        var now = endedSignIns
+        for provider in boxEnded.subtracting(listed) { now[provider] = nil }
+        for provider in listed {
+            if let id = activeCredential(of: provider)?.credentialID { now[provider] = id }
+        }
+        boxEnded = listed
+        if now != endedSignIns { endedSignIns = now }
     }
 
     /// The plans whose sign-in in use ended.

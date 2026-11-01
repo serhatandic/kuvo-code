@@ -399,7 +399,7 @@ private struct ProductBlock: View {
                     .lineLimit(1)
             }
             .buttonStyle(TextButtonStyle(outset: isUnder))
-            .disabled(isAgent && agents.api == nil)
+            .disabled(isAgent && (agents.api == nil || agents.addingAccount.contains(main.metadata?["agent"]?.string ?? "")))
             .help(isAgent ? "Another \(title) account, signed in on its own: each shows in the model picker" : "Another \(title) account: the engine uses one at a time")
         }
         // Each on one line: the row puts them under the name when they don't fit beside it, and
@@ -423,9 +423,14 @@ private struct ProductBlock: View {
         let label = name.trimmingCharacters(in: .whitespacesAndNewlines)
         Task {
             do {
-                let providerID = try await agents.addAccount(agent: kind, label: label)
-                await catalog.refreshAgents(fresh: true)
-                if let added = catalog.codingAgents.first(where: { $0.id == providerID }) { connect(added) }
+                guard let providerID = try await agents.addAccount(agent: kind, label: label) else { return }
+                // Listed at once (nothing to check anew): its sign-in opens without waiting on the others'.
+                await catalog.refreshAgents()
+                if let added = catalog.codingAgents.first(where: { $0.id == providerID }) {
+                    connect(added)
+                } else {
+                    failure = "It was added, but the accounts couldn’t be listed just now. Sign in to it once it shows."
+                }
             } catch {
                 failure = error.localizedDescription
             }
