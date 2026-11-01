@@ -50,8 +50,8 @@ here.
 - **The menu bar item is compact by default**: its Icon Style starts as Bars, not Text
   (`Stores/LayoutPersistence.swift`); a style you picked stays.
 - **A Bars style for the dashboard**, the default (`Views/UsageBarsView.swift`): one compact bar
-  per provider in a pastel of its brand color, in the system's type with lining digits, showing the limit closest to running out, and today's spend
-  as one bar on top, the bars concentric with the panel's corners. Clicking a bar opens every metric underneath in the same style
+  per provider in a pastel of its brand color, in the system's type with lining digits, showing the limit closest to running out, and the spend
+  as one bar on top (its period a menu, each provider's share under it once two or more spent), the bars concentric with the panel's corners. Clicking a bar opens every metric underneath in the same style
   (`Views/UsageBarDetail.swift`), not the card. It folds open and closed with the panel: laid out with the window's own height while the
   panel moves, so the bars below never run under the footer (`Fold` in `UsageBarsView`, `PanelHeightChange`), and the panel is drawn
   with each new frame (`PanelHeightController`).

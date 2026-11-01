@@ -15,7 +15,7 @@ struct CustomizeHintCard: View {
 
     var body: some View {
         DismissableHintCard(
-            systemImage: "slider.horizontal.3",
+            systemImage: "chart.bar.fill",
             title: "Your AI plans, in the menu bar",
             message: "We set you up with the AI tools found on your Mac. Add or hide providers any time.",
             buttonTitle: "Open Customize",
