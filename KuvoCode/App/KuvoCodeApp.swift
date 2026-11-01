@@ -138,6 +138,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Notifier.shared.shownHere = { [model] shown in model.attention.shown(shown) }
         Analytics.shared.start()
         UsageMenuBar.shared.onPanelShown = { Analytics.shared.track("usage_panel_opened") }
+        UsageMenuBar.shared.settingsInHost = { [model] in model.openSettings(.usage) }
         #if DEBUG
         // KUVO_DEMO_USAGE=off leaves the usage tracker out, so a second copy of the app
         // (for screenshots) never renews the logins the first one is using; `sample` too, and

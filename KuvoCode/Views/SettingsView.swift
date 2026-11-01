@@ -275,7 +275,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         case .storage: "What Kuvo Code keeps on this Mac."
         case .accounts: "Model providers you use, with a subscription or an API key."
         case .auto: "Models to switch through when one reaches a usage limit."
-        case .usage: nil
+        case .usage: "Plan limits and spend, in the menu bar."
         case .agents: "The agents you pick in the composer, and their subagents."
         case .permissions: "What the agent may do without asking first."
         case .commands: "Prompts you run by typing / and their name."

@@ -295,6 +295,7 @@ struct UsageSettings: View {
                 Text("Usage tracking is a fork of OpenUsage by Robin Ebers (MIT). It isn’t affiliated with or endorsed by OpenUsage.")
                     .foregroundStyle(.secondary)
             }
+            UsageSettingsSections()
         }
     }
 }

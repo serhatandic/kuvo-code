@@ -87,7 +87,8 @@ struct HeaderView: View {
         }
         .keyboardShortcut(.return, modifiers: [])
 
-        Button { toggle(.settings) } label: {
+        // Fork change: in the host's Settings when it has a page for them.
+        Button { if !UsageMenuBar.shared.openSettingsInHost() { toggle(.settings) } } label: {
             Label("Settings", systemImage: "gearshape")
         }
         .keyboardShortcut(",")

@@ -89,6 +89,19 @@ public final class UsageMenuBar {
     /// Called each time the panel opens, for the host's own records.
     public var onPanelShown: (() -> Void)?
 
+    /// Shows the host's own page for the panel's settings (`UsageSettingsSections`), where they
+    /// live; the panel's Settings opens it instead of its own screen. (Fork addition.)
+    public var settingsInHost: (@MainActor () -> Void)?
+
+    /// The panel's Settings, in the host when it has a page for them: false when it doesn't.
+    func openSettingsInHost() -> Bool {
+        guard let settingsInHost else { return false }
+        statusItemController?.close()
+        Self.openHostApp()
+        settingsInHost()
+        return true
+    }
+
     /// True once the menu bar item is up.
     public var isRunning: Bool { statusItemController != nil }
 
