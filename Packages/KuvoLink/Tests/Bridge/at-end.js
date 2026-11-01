@@ -9,6 +9,10 @@
 // connections out, kept alive for reuse, and an HTTP server's, which it lets go when idle. Timers
 // aren't looked at: nothing says which end.)
 //
+// A run stopped part way (Ctrl-C, a runner's time running out) never gets to that hook: then, as
+// the process is told to stop or exits, what it started is killed and its folders removed at once,
+// so nothing's left in ~/.kuvo-code-test either way.
+//
 // A file uses `atEnd` and `removeAtEnd` in place of `after`.
 import { after } from "node:test";
 import { ChildProcess } from "node:child_process";
@@ -18,6 +22,7 @@ import net from "node:net";
 
 const steps = [];
 const folders = [];
+let removed = false;
 
 /** `step` (stopping a server or a process), run once the file's tests are done: the latest first. */
 export const atEnd = step => void steps.push(step);
@@ -45,6 +50,24 @@ after(async () => {
   if (failed.length === 1) throw failed[0];
   if (failed.length) throw new AggregateError(failed, failed.map(error => error.message).join("\n"));
 });
+
+// A run stopped part way: what it started killed, its folders removed, then stopped as it was told
+// (unless the runner hears that too, and ends it its own way).
+function removeNow() {
+  if (removed) return;
+  removed = true;
+  for (const handle of process._getActiveHandles()) if (handle instanceof ChildProcess && !ended(handle)) handle.kill("SIGKILL");
+  for (const folder of folders) {
+    try { fs.rmSync(folder, { recursive: true, force: true }); } catch {}
+  }
+}
+process.once("exit", removeNow);
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+  process.once(signal, () => {
+    removeNow();
+    if (!process.listenerCount(signal)) process.kill(process.pid, signal);
+  });
+}
 
 // What the file still has open: the runner's own stdio aside, and what's on its way out let go
 // first (a process told to stop or done answering, until it has; then its pipes, which a process of its own may still
