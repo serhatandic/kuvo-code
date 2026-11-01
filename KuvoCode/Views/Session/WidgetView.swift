@@ -318,8 +318,12 @@ struct WidgetPage: NSViewRepresentable {
             page.insert(contentsOf: head, at: range.upperBound)
             return page
         }
-        if html.range(of: "<html", options: .caseInsensitive) != nil {
-            return head + html
+        // Just inside its <html>, after its doctype: before it, the page would be laid out the old
+        // way, as one without a doctype is.
+        if let open = html.range(of: "<html", options: .caseInsensitive), let end = html[open.upperBound...].firstIndex(of: ">") {
+            var page = html
+            page.insert(contentsOf: head, at: html.index(after: end))
+            return page
         }
         return "<!doctype html><html><head>\(head)</head><body>\(html)</body></html>"
     }
@@ -371,25 +375,38 @@ struct WidgetPage: NSViewRepresentable {
     """
 
     /// Its height, whenever it changes: what's on it, however tall the view is now, so it gets
-    /// shorter again too. That's the page's own box, anything drawn past it (placed where it
-    /// likes, or spilling out of a body of fixed height), and what runs past the room it has
-    /// (its scroll height, never less than that room, so taken only then). It's measured again
-    /// when the page's box changes and when anything on it does, as a chart drawn in a page that
-    /// fills its window. The same as the phone's.
+    /// shorter again too. That's the page's own box, what's in its body (a layer placed inside
+    /// it, a body of fixed height spilling out) and each of the body's own children, wherever
+    /// they're placed (only those, on a page without a doctype). Not what's fixed to the window
+    /// (a toast waiting below it), which is measured against the view and would grow it with each
+    /// measure. It's measured again when the page's box changes and when anything on it does (a
+    /// chart drawn in a page that fills its window), and sent only when it changed. The same as
+    /// the phone's.
     static let measure = """
     (() => {
       const measure = () => {
         const page = document.documentElement;
         let height = Math.max(page.getBoundingClientRect().height, page.scrollHeight > page.clientHeight ? page.scrollHeight : 0);
-        if (document.body) {
-          const range = document.createRange();
-          range.selectNodeContents(document.body);
-          const content = range.getBoundingClientRect();
-          if (content.height > 0) height = Math.max(height, content.bottom + window.scrollY);
+        const body = document.body;
+        if (body) {
+          // A page laid out the old way (no doctype) scrolls in its body, whose scroll height is
+          // then never less than the view: there only its children count.
+          if (document.compatMode !== "BackCompat") height = Math.max(height, body.getBoundingClientRect().top + window.scrollY + body.scrollHeight);
+          for (const child of body.children) {
+            if (getComputedStyle(child).position === "fixed") continue;
+            const box = child.getBoundingClientRect();
+            if (box.height > 0) height = Math.max(height, box.bottom + window.scrollY);
+          }
         }
         return Math.ceil(height);
       };
-      const report = () => window.webkit.messageHandlers.kuvo.postMessage({ type: "height", value: measure() });
+      let last;
+      const report = () => {
+        const height = measure();
+        if (height === last) return;
+        last = height;
+        window.webkit.messageHandlers.kuvo.postMessage({ type: "height", value: height });
+      };
       new ResizeObserver(report).observe(document.documentElement);
       new MutationObserver(report).observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
       window.addEventListener("load", report);
