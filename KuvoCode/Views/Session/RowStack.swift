@@ -21,6 +21,9 @@ struct RowStack<Item, Row: View>: NSViewRepresentable {
     /// A row's words as they're copied, for a selection that takes all of it (a row without text
     /// of its own to select in: your message, a line of steps; or one not made at the time).
     var text: (Item) -> String = { _ in "" }
+    /// A row copied by `text` from a selection that takes all of it, though it's made: its texts
+    /// don't hold all its words (a command you ran: only what it printed is text to select in).
+    var whole: (Item) -> Bool = { _ in false }
     /// The space a row leaves above itself (inside its view): a selection's tint leaves it out.
     var space: (Item, Int) -> CGFloat = { _, _ in 0 }
     @ViewBuilder let row: (Item, Int) -> Row
@@ -62,9 +65,10 @@ struct RowStack<Item, Row: View>: NSViewRepresentable {
         }
         context.coordinator.items = now
         context.coordinator.spaces = spaces
-        let items = items, row = row, estimate = estimate, text = text, space = space
+        let items = items, row = row, estimate = estimate, text = text, whole = whole, space = space
         let environment = context.environment
         view.rowText = { index in index < items.count ? text(items[index]) : "" }
+        view.rowWhole = { index in index < items.count && whole(items[index]) }
         view.rowSpace = { index in index < items.count ? space(items[index], index) : 0 }
         view.scrollAnchor = environment.scrollAnchor
         environment.scrollAnchor?.stack = view
@@ -581,6 +585,7 @@ final class RowStackView: NSView, NSUserInterfaceValidations {
         showSelection()
     }
     var rowText: (Int) -> String = { _ in "" }
+    var rowWhole: (Int) -> Bool = { _ in false }
     var rowSpace: (Int) -> CGFloat = { _ in 0 }
     /// The rows selected whole, each tinted behind.
     private var tints: [String: SelectionTint] = [:]
@@ -633,6 +638,12 @@ final class RowStackView: NSView, NSUserInterfaceValidations {
         let low = here == start ? min(selected.start.offset, length) : 0
         let high = here == end ? min(selected.end.offset, length) : length
         return high > low ? NSRange(location: low, length: high - low) : nil
+    }
+
+    /// Whether the selection takes all of a row: one between its ends, or one it ends in from its
+    /// start or past its end (as Select All does).
+    private func takesAll(_ row: Int, in selected: (start: Spot, end: Spot)) -> Bool {
+        (row != selected.start.row || (selected.start.unit == 0 && selected.start.offset == 0)) && (row != selected.end.row || selected.end.unit == .max)
     }
 
     /// Whether a row without text of its own is in the selection.
@@ -887,17 +898,13 @@ final class RowStackView: NSView, NSUserInterfaceValidations {
         var parts: [String] = []
         for index in selected.start.row...selected.end.row where index < ids.count {
             // The rows it ends in, taken in part: made again if they were let go, for the part. Those
-            // between, whole as they're copied, whether they're made or not (a command you ran with
-            // its command, though only what it printed is text to select in); by their texts if
-            // they're copied as nothing.
+            // between by their texts, or whole as they're copied: one with none (your message, or
+            // one not made), and one taken all of whose texts don't hold all its words (a command
+            // you ran with its command, though only what it printed is text to select in).
             let isEnd = index == selected.start.row || index == selected.end.row
-            let whole = takesWhole(index, in: selected) ? rowText(index).trimmingCharacters(in: .whitespacesAndNewlines) : ""
-            if !isEnd, !whole.isEmpty {
-                parts.append(whole)
-                continue
-            }
             let texts = (isEnd ? madeHost(index) : hosts[ids[index]]).map { units(in: $0.view) } ?? []
-            if texts.isEmpty {
+            if texts.isEmpty || (rowWhole(index) && takesAll(index, in: selected)) {
+                let whole = takesWhole(index, in: selected) ? rowText(index).trimmingCharacters(in: .whitespacesAndNewlines) : ""
                 if !whole.isEmpty { parts.append(whole) }
                 continue
             }

@@ -197,4 +197,28 @@ import Testing
         #expect(model.draftText == "the build is green\n\nalso update the docs")
         #expect(model.failure == "There's no such conversation here.")
     }
+
+    /// "/goal pause" that can't be done comes back as written into an empty composer; beside words
+    /// you typed meanwhile it isn't put back as "pause" (a word of yours to send), and the failure
+    /// says what didn't happen.
+    @Test func aGoalPauseThatCantBeDoneIsntPutBackAsAWord() async throws {
+        defer { clean() }
+        serve(Conversation(verdicts: []))
+        let bridge = try await RealBridge.start(engine: engine, folder: folder)
+        defer { bridge.stop() }
+        let elsewhere = try JSONDecoder().decode(Session.self, from: JSONSerialization.data(withJSONObject: StubEngine.session("ses_elsewhere", directory: "/tmp")))
+        let model = SessionModel(session: elsewhere, api: engine.api)
+        model.goalBridge = { bridge.agents }
+        model.draftText = "/goal pause"
+        model.submitDraft(for: nil, queue: false, commands: [])
+        model.draftText = "also update the docs"
+        try await until { model.failure != nil }
+        #expect(model.draftText == "also update the docs", "\(model.draftText)")
+
+        model.failure = nil
+        model.draftText = "/goal pause"
+        model.submitDraft(for: nil, queue: false, commands: [])
+        try await until { model.failure != nil }
+        #expect(model.draftText == "/goal pause")
+    }
 }

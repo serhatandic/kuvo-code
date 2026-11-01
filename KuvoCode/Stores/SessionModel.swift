@@ -2127,14 +2127,17 @@ final class SessionModel {
     /// What was written for a keyword that couldn't be done ("/goal …", "/loop …") put back: as
     /// written into an empty composer, ready to send again (a goal kept one, as `restoreDraft`
     /// keeps it); beside words typed meanwhile, its words alone in front of them, which the
-    /// keyword would take in.
+    /// keyword would take in. A goal's pause, resume or clear has no words of yours to put back
+    /// there ("pause" would go as a message): the failure says it didn't happen.
     private func restoreWritten(_ written: String, files: [URL] = []) {
+        let goal = GoalCommand(written)
+        let isSet = if case .set = goal { true } else { false }
         guard !draftText.isEmpty, let (_, words) = Keyword.parse(written) else {
             restore(text: written, files: files)
-            if GoalCommand(written) != nil { restoredGoal = written }
+            if isSet { restoredGoal = written }
             return
         }
-        restore(text: words, files: files)
+        restore(text: goal == nil || isSet ? words : "", files: files)
     }
 
     /// A goal put back (Undo, Edit), still at the composer's start as it was put, goes on as its

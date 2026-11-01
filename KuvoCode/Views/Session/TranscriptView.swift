@@ -218,6 +218,7 @@ struct TranscriptView: View {
         // Made again as Find's marks change (each row reads its own as it's laid out).
         _ = find.marksState
         return RowStack(items: rows, id: \.id, same: ==, estimate: Self.estimate, animatesNew: !rowCache.isBulk, text: { $0.copiedText(folders: model.folders()) },
+                 whole: \.copiesWhole,
                  space: { row, index in index == 0 ? 0 : row.spacing(after: rows[index - 1]) }) { row, index in
             RowView(row: row, directory: model.session.location.directory, folders: model.folders, heard: model.heard, cancel: model.cancelPending, undo: model.undo(from:), redo: model.redo, fork: fork(_:), retry: model.retry(_:), buildPlan: model.agent == "plan" && !isOffline ? { model.buildPlan() } as () -> Void : nil, reply: model.reply(to:))
                 .equatable()
@@ -621,6 +622,12 @@ enum Row: Identifiable, Hashable {
         default:
             return []
         }
+    }
+
+    /// Copied by `copiedText` from a selection that takes all of it, though its view is made: a
+    /// command you ran, whose command isn't text to select in (only what it printed is).
+    var copiesWhole: Bool {
+        if case .shell = self { true } else { false }
     }
 
     /// Its words as a selection across the conversation copies it whole: as it reads (Markdown

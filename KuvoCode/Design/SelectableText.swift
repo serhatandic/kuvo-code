@@ -375,10 +375,10 @@ final class SelectableTextView: PointerAwareTextView {
     }
 
     // A right-click offers what's around the words (a message's Undo From Here…, a command's Copy
-    // Output), as one beside them does; on words selected, what the text offers for them.
+    // Output), as one beside them does; on words selected or a link, what the text offers for them.
     override func menu(for event: NSEvent) -> NSMenu? {
-        let index = characterIndexForInsertion(at: convert(event.locationInWindow, from: nil))
-        guard !selectedRanges.contains(where: { NSLocationInRange(index, $0.rangeValue) }) else { return super.menu(for: event) }
+        let point = convert(event.locationInWindow, from: nil)
+        guard link(at: point) == nil, !selectedRanges.contains(where: { NSLocationInRange(character(at: point), $0.rangeValue) }) else { return super.menu(for: event) }
         var view = superview
         while let around = view {
             if let menu = around.menu(for: event), !menu.items.isEmpty { return menu }
@@ -406,6 +406,14 @@ final class SelectableTextView: PointerAwareTextView {
 }
 
 extension NSTextView {
+    /// The character under `point` (in the view), or the nearest one (its whole width, where an
+    /// insertion point goes by the nearer half).
+    func character(at point: NSPoint) -> Int {
+        guard let layout = layoutManager, let container = textContainer else { return NSNotFound }
+        let inContainer = NSPoint(x: point.x - textContainerOrigin.x, y: point.y - textContainerOrigin.y)
+        return layout.characterIndex(for: inContainer, in: container, fractionOfDistanceBetweenInsertionPoints: nil)
+    }
+
     /// The link under `point` (in the view), if one is.
     func link(at point: NSPoint) -> (value: Any, index: Int)? {
         guard let layout = layoutManager, let container = textContainer, let storage = textStorage, storage.length > 0 else { return nil }
