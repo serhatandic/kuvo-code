@@ -232,10 +232,12 @@ struct ConnectView: View {
                 // A key that comes with a subscription says so, so it doesn't read as pay-as-you-go.
                 // VoiceOver reads it once, as one element that opens the link.
                 if let keyPage {
-                    Text(keyPage.linkedLine)
+                    // (Its link with the pointing hand, as links anywhere else.)
+                    MessageMentions.text(keyPage.linkedLine, size: NSFont.preferredFont(forTextStyle: .callout).pointSize)
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+                        .modifier(LinkPointer(isOn: keyPage.url != nil, isSelectable: false))
                         .accessibilityElement(children: .ignore)
                         .accessibilityLabel(keyPage.spokenLine)
                         .accessibilityAddTraits(keyPage.url == nil ? [] : .isLink)

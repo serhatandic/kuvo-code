@@ -196,6 +196,8 @@ nonisolated enum MessageMentions {
 /// view of AppKit's lies over each. Only for a text with links in it.
 struct LinkPointer: ViewModifier {
     var isOn: Bool
+    /// Its words can be selected: the I-beam over them, off a link (otherwise the arrow).
+    var isSelectable = true
     @State private var spots = LinkSpots()
     @Environment(\.openURL) private var openURL
 
@@ -203,7 +205,7 @@ struct LinkPointer: ViewModifier {
         if isOn {
             content
                 .textRenderer(LinkPlaces(spots: spots))
-                .overlay { LinkArea(spots: spots, open: { openURL($0) }) }
+                .overlay { LinkArea(spots: spots, isSelectable: isSelectable, open: { openURL($0) }) }
         } else {
             content
         }
@@ -251,22 +253,26 @@ nonisolated private struct LinkPlaces: TextRenderer {
 /// them, the pointer and clicks go on to the text below.
 private struct LinkArea: NSViewRepresentable {
     let spots: LinkSpots
+    let isSelectable: Bool
     let open: (URL) -> Void
 
     func makeNSView(context: Context) -> LinkAreaView {
         let view = LinkAreaView()
         view.spots = spots
+        view.isSelectable = isSelectable
         view.open = open
         return view
     }
 
     func updateNSView(_ view: LinkAreaView, context: Context) {
+        view.isSelectable = isSelectable
         view.open = open
     }
 }
 
 private final class LinkAreaView: NSView {
     var spots: LinkSpots?
+    var isSelectable = true
     var open: ((URL) -> Void)?
     private var pressed: LinkSpots.Spot?
 
@@ -296,7 +302,7 @@ private final class LinkAreaView: NSView {
     private func pointerMoved(_ event: NSEvent) {
         let onLink = PointerClaim.isTopmost(self, at: event.locationInWindow)
         // Off a link, still on the words: the selectable text's I-beam, as it shows elsewhere.
-        let onText = bounds.contains(convert(event.locationInWindow, from: nil))
+        let onText = isSelectable && bounds.contains(convert(event.locationInWindow, from: nil))
         claim.show(onLink ? .pointingHand : nil, otherwise: onText ? .iBeam : .arrow)
     }
 

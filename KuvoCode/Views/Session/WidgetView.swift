@@ -313,13 +313,25 @@ struct WidgetPage: NSViewRepresentable {
         body { font: 13px/1.45 -apple-system, BlinkMacSystemFont, sans-serif; color: CanvasText; padding: 4px 2px; box-sizing: border-box; }
         </style>
         """
-        if let range = html.range(of: "<head>", options: .caseInsensitive) {
+        // Where its own markup starts, past space and comments: an <html> or <head> in a comment
+        // or a script's string further on is no place for the policy.
+        var start = html.startIndex
+        while true {
+            start = html[start...].firstIndex { !$0.isWhitespace && $0 != "\u{FEFF}" } ?? html.endIndex
+            guard html[start...].hasPrefix("<!--"), let close = html.range(of: "-->", range: html.index(start, offsetBy: 4)..<html.endIndex) else { break }
+            start = close.upperBound
+        }
+        let opening = html[start...].prefix(10).lowercased()
+        // A whole page's doctype comes first, then the app's look: before it, the page would be
+        // laid out the old way, as one without a doctype is.
+        if opening.hasPrefix("<!doctype"), let end = html[start...].firstIndex(of: ">") {
             var page = html
-            page.insert(contentsOf: head, at: range.upperBound)
+            page.insert(contentsOf: head, at: html.index(after: end))
             return page
         }
-        if html.range(of: "<html", options: .caseInsensitive) != nil {
-            return head + html
+        // A whole page without one, laid out the old way as its maker wrote it.
+        if ["<html", "<head"].contains(where: { opening.hasPrefix($0) && opening.dropFirst(5).first.map { $0 == ">" || $0.isWhitespace } ?? false }) {
+            return head + (html.first == "\u{FEFF}" ? String(html.dropFirst()) : html)
         }
         return "<!doctype html><html><head>\(head)</head><body>\(html)</body></html>"
     }
@@ -370,11 +382,88 @@ struct WidgetPage: NSViewRepresentable {
     })();
     """
 
-    /// Its height, whenever it changes.
+    /// Its height, whenever it changes: what's on it, however tall the view is now, so it gets
+    /// shorter again too. That's the page's own box, what's in its body, each of the body's own
+    /// children and words wherever they're placed, with what spills out of them, and the layers
+    /// placed against the page (only those, on a page without a doctype, which fills its view
+    /// however little is on it). Not what's fixed to the window (a toast waiting below it), which
+    /// is measured against the view and would grow it with each measure. It's measured again
+    /// when the page's box changes and when anything on it does (a chart drawn in a page that
+    /// fills its window), and sent only when it changed. The same as the phone's.
     static let measure = """
     (() => {
-      const report = () => window.webkit.messageHandlers.kuvo.postMessage({ type: "height", value: Math.ceil(document.documentElement.scrollHeight) });
+      const measure = () => {
+        const old = document.compatMode === "BackCompat";
+        let height = old ? 0 : document.documentElement.getBoundingClientRect().height;
+        const body = document.body;
+        if (!body) return Math.ceil(height);
+        if (!old) height = Math.max(height, body.getBoundingClientRect().top + window.scrollY + body.scrollHeight);
+        let bottom = 0;
+        // Layers placed against the page itself from inside a wrapper (a dropdown, a game's
+        // canvas), which no box around them takes in. Not a closed menu's, hidden, or anything
+        // under what's hidden, placed itself or a drawing, which can't be placed against the page.
+        const layers = parent => {
+          for (const node of parent.children) {
+            if (node instanceof SVGSVGElement || node.offsetParent === null) continue;
+            if (node.offsetParent === body) {
+              const style = getComputedStyle(node);
+              if (style.position === "absolute" && style.visibility !== "hidden") {
+                const box = node.getBoundingClientRect();
+                if (box.height > 0) bottom = Math.max(bottom, box.bottom);
+              }
+              if (style.position !== "static") continue;
+            }
+            layers(node);
+          }
+        };
+        for (const node of body.childNodes) {
+          if (node.nodeType === Node.TEXT_NODE) {
+            const range = document.createRange();
+            range.selectNodeContents(node);
+            const box = range.getBoundingClientRect();
+            if (box.height > 0) bottom = Math.max(bottom, box.bottom);
+          } else if (node.nodeType === Node.ELEMENT_NODE) {
+            const style = getComputedStyle(node);
+            if (style.position === "fixed" || (style.position === "absolute" && style.visibility === "hidden")) continue;
+            const box = node.getBoundingClientRect();
+            if (box.height > 0) bottom = Math.max(bottom, box.bottom + Math.max(0, parseFloat(style.marginBottom)));
+            // What spills out of it, unless it scrolls or is clipped inside it.
+            if (style.overflowY === "visible") bottom = Math.max(bottom, box.top + node.scrollHeight);
+            if (style.position === "static") layers(node);
+          }
+        }
+        if (bottom > 0) {
+          bottom += window.scrollY;
+          if (old) {
+            const style = getComputedStyle(body);
+            bottom += parseFloat(style.paddingBottom) + parseFloat(style.borderBottomWidth) + parseFloat(style.marginBottom);
+          }
+        }
+        return Math.ceil(Math.max(height, bottom));
+      };
+      // What follows the window (a wrapper of 100vh, a sheet placed against its bottom) asks for
+      // as much more than the window again once given it: then the widget keeps the height it
+      // has. It's told by measures taken as the window changes, before anything else does: twice
+      // in a row as much more, so content that grows as much as the window just did still shows.
+      let last, seen, follows, times = 0;
+      const same = (one, other) => other !== undefined && Math.abs(one - other) <= 1;
+      const report = () => {
+        const height = measure();
+        const view = { width: innerWidth, height: innerHeight, more: height - innerHeight };
+        if (!seen || view.width !== seen.width || view.more <= 0) { follows = undefined; times = 0; }
+        else if (view.height !== seen.height) {
+          times = same(view.more, seen.more) ? times + 1 : 0;
+          if (times >= 2) follows = view.more;
+        }
+        seen = view;
+        if (height === last || same(view.more, follows)) return;
+        last = height;
+        window.webkit.messageHandlers.kuvo.postMessage({ type: "height", value: height });
+      };
+      window.addEventListener("resize", report);
       new ResizeObserver(report).observe(document.documentElement);
+      new MutationObserver(report).observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
+      window.addEventListener("load", report);
       report();
     })();
     """
@@ -392,9 +481,13 @@ struct WidgetPage: NSViewRepresentable {
         private var lastDraft = Date.distantPast
         private var waitingDraft: Task<Void, Never>?
         /// Loading again with a height already (scrolled back to, or finished after its draft),
-        /// it keeps that height for a moment and only grows: a page draws in steps, and
-        /// coming in short would move the conversation under it.
+        /// it keeps that height and only grows until it's loaded, and a moment more: a page draws
+        /// in steps (its libraries coming first), and coming in short would move the
+        /// conversation under it.
         private var keepsHeightUntil = Date.distantPast
+        /// The load under way, and its height set once it's settled.
+        private var navigation: WKNavigation?
+        private var settling: Task<Void, Never>?
         private var measured: CGFloat?
         /// When the page last sent a message, for one a click.
         private var lastSent: Date?
@@ -421,12 +514,18 @@ struct WidgetPage: NSViewRepresentable {
             if draft { lastDraft = .now }
             loaded = page
             measured = nil
-            view?.loadHTMLString(page, baseURL: nil)
-            guard (height?.wrappedValue ?? 0) > 0 else { return }
+            settling?.cancel()
+            navigation = view?.loadHTMLString(page, baseURL: nil)
+            if (height?.wrappedValue ?? 0) > 0 { keepsHeightUntil = .distantFuture }
+        }
+
+        /// Loaded: what it measures a moment later stands, shorter too.
+        private func settle() {
+            guard keepsHeightUntil == .distantFuture else { return }
             keepsHeightUntil = .now.addingTimeInterval(1.5)
-            Task { @MainActor [weak self] in
+            settling = Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .seconds(1.6))
-                guard let self, let measured, let height, abs(height.wrappedValue - measured) > 0.5 else { return }
+                guard !Task.isCancelled, let self, let measured, let height, abs(height.wrappedValue - measured) > 0.5 else { return }
                 height.wrappedValue = measured
             }
         }
@@ -459,10 +558,17 @@ struct WidgetPage: NSViewRepresentable {
             }
         }
 
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            if navigation === self.navigation { settle() }
+            #if DEBUG
+            snapshot(webView)
+            #endif
+        }
+
         #if DEBUG
         /// KUVO_DEMO_WIDGET_SNAPSHOTS=<folder>: each page, once drawn, as a picture there (a
         /// background copy's window doesn't draw web pages, so they can't be captured).
-        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        private func snapshot(_ webView: WKWebView) {
             guard let folder = ProcessInfo.processInfo.environment["KUVO_DEMO_WIDGET_SNAPSHOTS"] else { return }
             Task { @MainActor in
                 try? await Task.sleep(for: .seconds(1.5))
@@ -505,7 +611,8 @@ struct WidgetPage: NSViewRepresentable {
         func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
             guard !restarted, let loaded else { return failed() }
             restarted = true
-            webView.loadHTMLString(loaded, baseURL: nil)
+            navigation = webView.loadHTMLString(loaded, baseURL: nil)
+            if (height?.wrappedValue ?? 0) > 0 { keepsHeightUntil = .distantFuture }
         }
 
         /// A link meant for a new window, too.

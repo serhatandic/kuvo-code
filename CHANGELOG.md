@@ -16,6 +16,11 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- A bot's goal you pause while its computer is restarting, or briefly out of reach, still stops and stays paused once it's back, rather than carrying on with reminders.
+- A widget gets shorter again when its content does (details hidden, a tab with less in it, a wider window), with no empty space left under it.
+- A widget the agent writes as a whole page is laid out as its page asks: it kept losing its doctype, so it was drawn the old way, as a page without one.
+- A widget made to fill its window (a wrapper as tall as the window, a sheet against its bottom) no longer grows a little more each time something on it changes.
+- A widget whose script or comments mention `<head>` or `<html>` keeps its safeguards: it still can't fetch or send anything on its own.
 - A coding agent too slow to answer whether it's signed in (on a busy Mac or machine) no longer looks signed out: Claude Code, Codex, Grok and Cursor keep their accounts and models as they last said, so a bot's or a session's model isn't taken away mid-goal. Only the agent saying you're signed out is a sign-out.
 - Bots on Claude Code, Codex, Cursor, Grok or Antigravity can write their memory again: the sandbox had kept them out of it.
 - An agent reading another's conversation no longer takes what Kuvo Code told that agent (a goal's reminder, its sessions' news) for your words: it reads each as what Kuvo Code told it.
