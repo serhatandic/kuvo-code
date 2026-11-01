@@ -16,6 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- Agents ask before working in a folder outside the project, as Settings › Permissions says they do: the engine had let them read and change files anywhere, your SSH keys included. Your own rules there still decide, and files you send with a message, skills and the agent's saved outputs open without asking.
 - A bot's goal you pause while its computer is restarting, or briefly out of reach, still stops and stays paused once it's back, rather than carrying on with reminders.
 - A widget gets shorter again when its content does (details hidden, a tab with less in it, a wider window), with no empty space left under it.
 - A widget the agent writes as a whole page is laid out as its page asks: it kept losing its doctype, so it was drawn the old way, as a page without one.
