@@ -2988,9 +2988,11 @@ Agents you add in Settings › Agents come from your settings, after the plugin,
 they work outside without asking unless a rule of yours says otherwise.
 
 What Kuvo Code and the engine keep for an agent stays open after that ask, for the agent to open:
-the box's `attachments` (and this Mac's app's `Attachments`), the agent's browser's downloads, the
-engine's long outputs saved whole (`tool-output`) and the repositories it reads (`repos`), and the
-folders of the skills the engine finds (learned again when they change, `skill.updated`).
+the box's `attachments` (and this Mac's app's `Attachments`), the agent's browser's downloads on a
+machine (this Mac's panel browser saves to `~/Downloads`, which asks), the engine's long outputs
+saved whole (`tool-output`), the repositories it reads (`repos`) and Plan's plans (`~/.opencode/plan`),
+and the folders of the skills the engine finds (learned again when they change, `skill.updated`;
+never `/` or a folder holding your home folder).
 
 The agents bridge takes the same ask as one of the engine's defaults, for when the engine can't
 say its agent's rules. It doesn't take a coding agent off running on its own (`approvesAll`), so

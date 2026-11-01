@@ -59,7 +59,8 @@ async function boxStarted(name, mac) {
   box.stderr.on("data", chunk => { err += chunk; });
   const exited = new Promise(resolve => box.once("exit", resolve));
   await new Promise((resolve, reject) => {
-    box.stdout.on("data", chunk => { out += chunk; if (out.includes("\n")) resolve(); });
+    // (Started once it says where it is: its engine's plugins are written by then.)
+    box.stdout.on("data", chunk => { out += chunk; if (out.split("\n").some(line => line.includes('"url"'))) resolve(); });
     exited.then(code => reject(new Error(`serve exited ${code}: ${err}`)));
   });
   box.stdin.end();
@@ -117,6 +118,7 @@ for (const mac of [false, true]) {
       if (mac) assert.equal(await engine.effect(agent, path.join(box.app, "Attachments", "ses_one")), "allow", `${agent} opens files this Mac's app attached`);
       assert.equal(await engine.effect(agent, path.join(box.data, "opencode", "tool-output")), "allow", `${agent} opens long outputs saved whole`);
       assert.equal(await engine.effect(agent, path.join(box.skill, "examples")), "allow", `${agent} opens a skill's files`);
+      assert.equal(await engine.effect(agent, path.join(box.home, ".opencode", "plan")), "allow", `${agent} opens Plan's plans`);
     }
   });
 }

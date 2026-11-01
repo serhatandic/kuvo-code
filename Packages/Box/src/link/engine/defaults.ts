@@ -14,7 +14,7 @@
 // What Kuvo Code and the engine keep for an agent to open stays open to it, with the same order:
 // files sent with a message (the box's `attachments`, this Mac's app's `Attachments`), what the
 // agent's browser downloads on a machine, the engine's long outputs saved whole and the repositories
-// it reads, and skills' folders, as the engine finds them.
+// it reads, Plan's plans, and skills' folders, as the engine finds them.
 
 import path from "node:path";
 import { textOf, writePrivate } from "../files";
@@ -37,13 +37,16 @@ export function defaultsPlugin(kept: string[]): string {
 // Working in a folder outside a conversation's project asks you first, as Settings › Permissions
 // says. The engine's own agents get that rule after their own and before your settings', so what
 // you set there wins. What's kept for the agent to open stays open to it: files sent with a
-// message, the engine's long outputs saved whole and the repositories it reads, skills' files.
+// message, the engine's long outputs saved whole and the repositories it reads, Plan's plans,
+// skills' files.
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 
 const KEPT = ${JSON.stringify(kept)}
 const DATA = path.join(process.env.XDG_DATA_HOME || path.join(os.homedir(), ".local", "share"), "opencode")
+// Where the engine keeps Plan's plans (its home folder's \`.opencode/plan\`).
+const PLANS = path.join(process.env.OPENCODE_TEST_HOME || os.homedir(), ".opencode", "plan")
 const OUTSIDE = "/kuvo-code/an/outside/folder/*"
 
 // A rule's pattern as the engine matches it: \`*\` any text, \`?\` one character, a trailing " *"
@@ -55,15 +58,19 @@ function matches(text, pattern) {
 }
 const letsOut = (rules) => rules.findLast((rule) => matches("external_directory", rule.action) && matches(OUTSIDE, rule.resource))?.effect !== "deny"
 const real = (folder) => { try { return fs.realpathSync(folder) } catch { return folder } }
+// (Never \`/\`, nor your home folder or one holding it, whatever a skill's folder says.)
+const HOME = real(process.env.OPENCODE_TEST_HOME || os.homedir())
 const opened = (folders) => [...new Set(folders.flatMap((folder) => [folder, real(folder)]))]
-  .map((folder) => ({ action: "external_directory", resource: folder.replace(/\\/+$/, "") + "/*", effect: "allow" }))
+  .map((folder) => path.resolve(folder))
+  .filter((folder) => folder !== "/" && !(HOME + "/").startsWith(folder.replace(/\\/+$/, "") + "/"))
+  .map((folder) => ({ action: "external_directory", resource: folder + "/*", effect: "allow" }))
 
 export default {
   id: "kuvo-code.defaults",
   setup: async (ctx) => {
     let skills = []
     await ctx.agent.transform((draft) => {
-      const rules = [{ action: "external_directory", resource: "*", effect: "ask" }, ...opened([...KEPT, path.join(DATA, "tool-output"), path.join(DATA, "repos"), ...skills])]
+      const rules = [{ action: "external_directory", resource: "*", effect: "ask" }, ...opened([...KEPT, path.join(DATA, "tool-output"), path.join(DATA, "repos"), PLANS, ...skills])]
       for (const agent of draft.list()) if (letsOut(agent.permissions)) draft.update(agent.id, (it) => { it.permissions.push(...rules) })
     })
     // Skills' folders, as the engine finds them: after this plugin is set up, and as they change.
