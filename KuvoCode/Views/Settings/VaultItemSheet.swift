@@ -54,7 +54,9 @@ struct VaultItemSheet: View {
                             Image(systemName: "folder").frame(width: 22)
                         }
                     }
-                    whoRow(name: bots.isEmpty ? "Every agent" : "Other sessions and bots", who: .init(everyone: true)) {
+                    // "Others" only under someone listed above it.
+                    let anyListed = bots.contains { isListed($0) } || grants.contains { $0.who.project != nil }
+                    whoRow(name: anyListed ? "Other sessions and bots" : "Every agent", who: .init(everyone: true)) {
                         Image(systemName: "person.2").frame(width: 22).foregroundStyle(.secondary)
                     }
                     let others = bots.filter { bot in !isListed(bot) }

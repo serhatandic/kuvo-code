@@ -31,6 +31,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - A terminal tab is named for what runs in it, else its folder, instead of user@host.
 - A subagent's row has its arrow at the end and its words at one size; **Open Conversation** is under its steps and in its right-click menu.
 - VoiceOver reads the context gauge as the context window, with how full it is and its token counts.
+- A vault item's sharing says **Every agent** until it's shared with a session or bot by name.
 - The sidebar's accounts stay while the coding agents restart, instead of briefly showing fewer.
 - The command palette shows the letters you typed in bold in each result, and Run shows a play mark.
 - Settings › Accounts has one Add Account menu for the subscriptions, and Edit Bot › Keys one Add Its Own Key menu, instead of a button on every row, and a coding agent's accounts sit right under its name.
