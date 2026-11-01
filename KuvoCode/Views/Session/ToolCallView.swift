@@ -564,20 +564,29 @@ struct OutputBlock: View {
     var command: String?
     @Environment(\.findHighlight) private var highlight
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.messageFont) private var messageFont
 
     var body: some View {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let marked = FindText.marked(command.map { TerminalColors.colored(text, command: $0, dark: scheme == .dark) } ?? AttributedString(text), highlight)
         ScrollView(.horizontal) {
-            Text(FindText.marked(command.map { TerminalColors.colored(text, command: $0, dark: scheme == .dark) } ?? AttributedString(text), highlight))
-                .transcriptCodeFont()
-                .textSelection(.enabled)
+            let font = NSFont.monospacedSystemFont(ofSize: messageFont.size - 1.5, weight: .regular)
+            // As many lines as the well holds, faded at the cut (its lines never wrap: they're as
+            // the tool wrote them).
+            let lines = Int((Self.height - 24) / Self.lineHeights.defaultLineHeight(for: font))
+            // AppKit's text: its I-beam shows only where nothing's drawn over it.
+            SelectableText(text: MessageMentions.attributed(marked, font: font).text, lineLimit: lines)
                 .fixedSize(horizontal: true, vertical: false)
+                .modifier(CutFade(isOn: text.utf8.count { $0 == 10 } >= lines))
                 .padding(12)
         }
-        .frame(maxHeight: 260)
+        .frame(maxHeight: Self.height)
         .clipShape(RoundedRectangle(cornerRadius: 10))
         .recessedWell(RoundedRectangle(cornerRadius: 10))
     }
+
+    private static let height: CGFloat = 260
+    private static let lineHeights = NSLayoutManager()
 }
 
 /// What a subagent was asked, and the steps it took and what it said, as they happen, under
@@ -615,11 +624,8 @@ struct SubagentSteps: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             if let task {
-                Text(task)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(4)
-                    .textSelection(.enabled)
+                SelectableText(text: NSAttributedString(string: task, attributes: [.font: NSFont.preferredFont(forTextStyle: .callout), .foregroundColor: NSColor.secondaryLabelColor]),
+                               lineLimit: 4)
             }
             if let model {
                 ForEach(model.transcript.messages) { message in
