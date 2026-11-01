@@ -9449,6 +9449,7 @@ class ClaudeAgent {
     if (instance.id === "default" && instance.home) {
       this.signOut = async () => {
         await signOutWith("Claude Code", this.executable(), ["auth", "logout"], this.env());
+        this.programUpdated();
         this.known.reset();
         this.modelList = undefined;
       };
@@ -13991,6 +13992,7 @@ class GrokAgent {
     if (instance.id === "default" && instance.home) {
       this.signOut = async () => {
         await signOutWith("Grok", this.executable(), ["logout"], this.env());
+        this.programUpdated();
         this.known.reset();
         this.status = undefined;
       };
@@ -22704,4 +22706,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 7ae9ba88368c10c310e32623411414a18f2bd178d8cf86f6ae1207c16b582e76
+// Built from Packages/Box/src/agents 1c176705fbb6c0a66e86fb63cb5ac13f7baa75dada198498c961573b21b56375

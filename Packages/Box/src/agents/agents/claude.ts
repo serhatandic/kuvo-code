@@ -91,6 +91,8 @@ export class ClaudeAgent implements Agent {
     if (instance.id === "default" && instance.home) {
       this.signOut = async () => {
         await signOutWith("Claude Code", this.executable(), ["auth", "logout"], this.env())
+        // A session's Claude Code holds the sign-in it started with: its next message starts one signed out.
+        this.programUpdated()
         this.known.reset()
         this.modelList = undefined
       }

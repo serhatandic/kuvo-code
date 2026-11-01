@@ -140,17 +140,20 @@ class FakeClaude {
 class TestClaude extends ClaudeAgent {
   /** Signed in with an API key (paid per token) rather than a plan. */
   key = false
+  /** Its program: one that fails, unless a test gives it another. */
+  at = "/bin/false"
   constructor(
     readonly fake: FakeClaude,
     home: string,
+    instance?: { id: string; home?: string },
   ) {
-    super({ home, temporary: home, deps: {} as any })
+    super({ home, temporary: home, deps: {} as any }, instance)
   }
   override async sdk(): Promise<any> {
     return { query: this.fake.query }
   }
   override executable() {
-    return "/bin/false"
+    return this.at
   }
   override usesKey() {
     return this.key
@@ -694,6 +697,21 @@ describe("Claude Code in the box's sandbox", () => {
     turnOn()
     sessions.prompt(id, { id: "msg_claude_turn_9001", text: "again", files: [], delivery: "steer" })
     await until(() => fake.options.spawnClaudeCodeProcess !== undefined)
+  })
+
+  test("signed out of its own sign-in on a machine, the Claude Code a session has open goes: its next message starts one signed out", async () => {
+    claude = new TestClaude(fake, root, { id: "default", home: join(root, "agents") })
+    claude.at = "/usr/bin/true"
+    const { id, first } = await begin()
+    fake.streams([first], [{ type: "text", text: "Done." }])
+    fake.result([first])
+    await until(() => idles(id).length === 1)
+    const started = fake.options
+    await claude.signOut!()
+    expect(fake.closed).toBe(false)
+    sessions.prompt(id, { id: "msg_claude_turn_9001", text: "again", files: [], delivery: "steer" })
+    await until(() => fake.closed)
+    await until(() => fake.options !== started)
   })
 
   test("restarted as you said to, a Claude Code started before the sandbox was on finishes its turn first, then its next starts in the sandbox, going on with its conversation", async () => {
