@@ -387,10 +387,12 @@ private struct WorktreesFolderSection: View {
             if let preview {
                 let projects = preview.projects
                 if projects.isEmpty {
-                    // No project in a repository here yet: the folder itself.
+                    // No project in a repository here yet: the folder itself, by its path (the
+                    // picker above already names it).
                     LabeledContent("New worktrees go in") {
-                        Text(chosen ?? WorktreePlace.ownFolder)
-                            .help(chosen == nil ? preview.default : "")
+                        let folder = chosen ?? preview.default
+                        Text(BoxPaths.display(folder, home: preview.home))
+                            .help(folder)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                             .truncationMode(.middle)
@@ -398,10 +400,10 @@ private struct WorktreesFolderSection: View {
                     }
                 } else if Set(projects.map(\.folder)).count == 1, let first = projects.first {
                     // The same folder for every project (one named in full): said once.
-                    WorktreePlace(project: projects.first(where: { $0.isInRepository }) ?? first, title: "New worktrees go in", home: preview.home, own: preview.default, onThisMac: box.machine == nil)
+                    WorktreePlace(project: projects.first(where: { $0.isInRepository }) ?? first, title: "New worktrees go in", home: preview.home, onThisMac: box.machine == nil)
                 } else {
                     ForEach(projects.prefix(Self.shown)) { project in
-                        WorktreePlace(project: project, home: preview.home, own: preview.default, onThisMac: box.machine == nil)
+                        WorktreePlace(project: project, home: preview.home, onThisMac: box.machine == nil)
                     }
                     if projects.count > Self.shown {
                         Text("And \((projects.count - Self.shown).counting("more project"))")
@@ -463,17 +465,14 @@ private struct WorktreePlace: View {
     /// Its name; another for the one folder every project's go in.
     var title: String?
     let home: String?
-    /// Where the engine puts them unless you choose: said by name, not its path deep in Kuvo Code's data.
-    let own: String
     let onThisMac: Bool
-
-    static let ownFolder = "Kuvo Code’s folder"
 
     var body: some View {
         LabeledContent {
             HStack(spacing: 6) {
                 if let folder = project.folder {
-                    Text(folder == own || folder.hasPrefix(own + "/") ? Self.ownFolder : BoxPaths.display(folder, home: home))
+                    // By its path, Kuvo Code's own folder too: the picker above names that one.
+                    Text(BoxPaths.display(folder, home: home))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
