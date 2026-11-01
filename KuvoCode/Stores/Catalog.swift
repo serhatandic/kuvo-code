@@ -422,6 +422,9 @@ final class Catalog {
         agentReadShown = agentReads
         agentIntegrations = []
         agentModels = []
+        // Gone for good, the sidebar stops naming their accounts too; only while they're on their
+        // way back does it keep them.
+        if !untilBack { lastAgentAccounts = [] }
         merge()
         areAgentsLoaded = !untilBack
     }

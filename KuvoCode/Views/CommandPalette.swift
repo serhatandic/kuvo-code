@@ -152,7 +152,7 @@ struct CommandPalette: View {
                     }
                 }
                 .frame(width: 16, height: 16)
-                Text(Self.marked(item.title, query: item.kind == .file ? "" : query))
+                Text(Self.marked(item.title, query: query))
                     .font(.system(size: 13, weight: .medium))
                 if let detail = item.detail {
                     Text(detail)
@@ -175,13 +175,13 @@ struct CommandPalette: View {
     }
 
     /// The title with what the query matched in it in semibold, the rest regular, so a loose
-    /// match ("nt" finding "New Terminal") shows why it's there. As it is before anything's typed.
+    /// match ("nt" finding "New Terminal") shows why it's there; every row regular once something's
+    /// typed, a file found by its folder too. As it is before anything's typed.
     static func marked(_ title: String, query: String) -> AttributedString {
         var marked = AttributedString(title)
-        let ranges = Fuzzy.ranges(query, title)
-        guard !ranges.isEmpty else { return marked }
+        guard !query.isEmpty else { return marked }
         marked.font = .system(size: 13)
-        for range in ranges {
+        for range in Fuzzy.ranges(query, title) {
             guard let lower = AttributedString.Index(range.lowerBound, within: marked),
                   let upper = AttributedString.Index(range.upperBound, within: marked) else { continue }
             marked[lower..<upper].font = .system(size: 13, weight: .semibold)

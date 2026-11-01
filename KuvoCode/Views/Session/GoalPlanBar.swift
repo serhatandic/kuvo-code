@@ -555,12 +555,14 @@ struct GoalLanes: View {
         let week = (window?.duration ?? 0) <= 7 * 86400
         let roomy = days.first.map { x($0.addingTimeInterval(86400)) - x($0) } ?? 0 >= 52
         let everyDay = week || roomy
-        let todayX = days.first { calendar.isDate($0, inSameDayAs: now) }.map { (x($0) + x($0.addingTimeInterval(86400))) / 2 }
+        // Clear of the edges of what shows, where it would be cut.
+        let clears = { (center: CGFloat) in shown.width == 0 || (center > shown.minX + 22 && center < shown.maxX - 22) }
+        // Today, where its label shows: the days beside it make room for it.
+        let todayX = days.first { calendar.isDate($0, inSameDayAs: now) }.map { (x($0) + x($0.addingTimeInterval(86400))) / 2 }.flatMap { clears($0) ? $0 : nil }
         return ZStack(alignment: .topLeading) {
             ForEach(days, id: \.self) { day in
                 let center = (x(day) + x(day.addingTimeInterval(86400))) / 2
-                // Clear of the edges of what shows, where it would be cut, and of Today.
-                let clear = shown.width == 0 || (center > shown.minX + 22 && center < shown.maxX - 22)
+                let clear = clears(center)
                 let isToday = calendar.isDate(day, inSameDayAs: now)
                 if !clear || (!isToday && todayX.map { abs($0 - center) < 46 } == true) {
                     EmptyView()
