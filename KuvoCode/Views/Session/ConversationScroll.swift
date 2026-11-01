@@ -18,6 +18,9 @@ final class ConversationScroller {
     /// Whether to keep the newest in view: true until you scroll up, true again once you scroll
     /// back to the end. Set only when it changes (`follow`): each setting draws the conversation again.
     var followsEnd = true
+    /// The end is in view (or all of it fits): no way back to it is needed, whether it's
+    /// followed or not (Find stops following it). Set only when it changes, as `followsEnd`.
+    fileprivate(set) var seesEnd = true
     /// All of it fits in view: nothing to scroll. (Not until it's known.)
     @ObservationIgnored fileprivate(set) var fits = false
     @ObservationIgnored fileprivate(set) var request: Request?
@@ -180,6 +183,7 @@ struct ConversationScroll<Rows: View>: View {
                                visible: geometry.containerSize.height, isPastEnd: geometry.contentOffset.y > end + 1, width: geometry.containerSize.width)
         } action: { old, new in
             scroller.fits = new.fits
+            if scroller.seesEnd != (new.atEnd || new.fits) { scroller.seesEnd = new.atEnd || new.fits }
             // Thinking that was under way is done: for a moment, the conversation getting much
             // shorter is it folding. (Seen here, as the layout that makes it shorter.)
             if fold.thinking != thinking {
@@ -245,8 +249,9 @@ struct ConversationScroll<Rows: View>: View {
         // an edge. (Under the composer they fade out in the card's color: `conversationBar`.)
         .scrollEdgeEffectStyle(Self.edgeStyle, for: .all)
         .overlay(alignment: .bottom) {
-            // Scrolled up: a way back to the newest, which also follows it again.
-            if !scroller.followsEnd {
+            // Scrolled up: a way back to the newest, which also follows it again. Not while the
+            // end is in view anyway (Find, say, stopped following it there).
+            if !scroller.followsEnd, !scroller.seesEnd {
                 Button {
                     // Gliding on from a flick too: the rest of the glide is let go, rather than
                     // carrying it away from the end again.
@@ -269,6 +274,7 @@ struct ConversationScroll<Rows: View>: View {
             }
         }
         .animation(.ui, value: scroller.followsEnd)
+        .animation(.ui, value: scroller.seesEnd)
         .onChange(of: scroller.requests) {
             switch scroller.request {
             case .end(let animated):
