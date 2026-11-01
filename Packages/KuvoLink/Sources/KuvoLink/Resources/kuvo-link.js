@@ -234,7 +234,7 @@ var account;
 function accountHome() {
   if (account)
     return account;
-  const uid = os.userInfo().uid;
+  const uid = process.getuid?.() ?? -1;
   const field = (line, at) => line?.trim().split(":")[at] || "";
   let found = "";
   if (process.platform === "darwin") {
@@ -248,7 +248,13 @@ function accountHome() {
       } catch {}
     }
   }
-  account = path2.isAbsolute(found) ? found : os.userInfo().homedir;
+  if (!path2.isAbsolute(found))
+    try {
+      found = os.userInfo().homedir;
+    } catch {
+      found = homeFolder();
+    }
+  account = found;
   return account;
 }
 var K = process.env.KUVO_HOME || path2.join(homeFolder(), ".kuvo-code");
@@ -323,11 +329,7 @@ function located(folder) {
 }
 var REAL_BOX = (() => {
   const home = located(K);
-  let own = homeFolder();
-  try {
-    own = os.userInfo().homedir;
-  } catch {}
-  return home === located(path2.join(own, ".kuvo-code")) || path2.basename(path2.dirname(home)).toLowerCase().startsWith("run.kuvo.code");
+  return home === located(path2.join(accountHome(), ".kuvo-code")) || path2.basename(path2.dirname(home)).toLowerCase().startsWith("run.kuvo.code");
 })();
 var IN_TEST_FOLDER = !REAL_BOX;
 var CONFIG_LOCK = path2.join(RUN, ".config.lock");
@@ -5156,7 +5158,7 @@ function appTemporary() {
 }
 function sandboxCaches() {
   const tmp = appTemporary();
-  const root = realish(tmp ? path25.join(os5.userInfo().homedir, "Library", "Caches", path25.basename(tmp)) : path25.join(K, "cache"));
+  const root = realish(tmp ? path25.join(homeFolder(), "Library", "Caches", path25.basename(tmp)) : path25.join(K, "cache"));
   return { npm: path25.join(root, "sandbox-npm"), pnpm: path25.join(root, "sandbox-pnpm"), uv: path25.join(root, "sandbox-uv"), corepack: path25.join(root, "sandbox-corepack") };
 }
 function macFolders(home) {
@@ -5173,12 +5175,15 @@ function macFolders(home) {
     `/private/tmp/kuvo-ssh-${os5.userInfo().uid}`
   ];
   if (tmp)
-    kuvo.push(tmp);
+    kuvo.push(tmp, path25.dirname(sandboxCaches().npm));
   return { kuvo, readable: [path25.join(app, "bin")] };
 }
 function fencePolicy(ports = []) {
-  const home = realish(os5.userInfo().homedir);
+  const home = realish(accountHome());
   const inHome = (names) => names.map((name) => realish(path25.join(home, name)));
+  const named = realish(process.env.HOME || home);
+  const homes = named === home ? [home] : [home, named];
+  const inHomes = (names) => homes.flatMap((each) => names.map((name) => realish(path25.join(each, name))));
   const own = IS_MAC ? macFolders(home) : { kuvo: [K, path25.join(home, ".kuvo-code")], readable: [path25.join(K, "bin")] };
   const kuvo = [...new Set(own.kuvo.map(realish))];
   const kuvoReadable = own.readable.map(realish);
@@ -5187,13 +5192,13 @@ function fencePolicy(ports = []) {
   const yourCaches = [realish(path25.join(home, ".cache"))];
   if (ownCache && path25.isAbsolute(ownCache) && !kuvo.some((folder) => realish(ownCache) === folder || realish(ownCache).startsWith(folder + "/")))
     yourCaches.push(realish(ownCache));
-  const runsLater = [...inHome(RUNS_LATER), ...new Set(yourCaches.flatMap((folder) => TOOL_CACHES.map((name) => path25.join(folder, name))))];
+  const runsLater = [...inHomes(RUNS_LATER), ...new Set(yourCaches.flatMap((folder) => TOOL_CACHES.map((name) => path25.join(folder, name))))];
   if (process.platform === "darwin") {
     return {
       home,
       kuvo,
       kuvoReadable,
-      readOnly: [...runsLater, ...inHome(MAC_RUNS_LATER)],
+      readOnly: [...runsLater, ...inHomes(MAC_RUNS_LATER)],
       ports,
       commandCaches,
       readOnlyPatterns: userTemporary().map((folder) => `^${escapeRegex(folder)}/T/bunx-`),
@@ -5224,7 +5229,7 @@ function fencePolicy(ports = []) {
         `^${escapeRegex(home)}/\\.gnupg/S\\.(gpg-agent|scdaemon)`
       ],
       socketFolders: ["^/private/tmp/com\\.apple\\.launchd\\.[^/]+$", "^/private/tmp/ssh-[^/]+$", "^/private/var/folders/[^/]+/[^/]+/T/ssh-[^/]+$"],
-      secrets: [...inHome([...SECRETS, ...MAC_SECRETS]), ...keychainDaemons(home).map(realish), ...sshKeys(home).map(realish), ...ghHosts(home).map(realish)]
+      secrets: [...inHomes([...SECRETS, ...MAC_SECRETS]), ...keychainDaemons(home).map(realish), ...homes.flatMap((each) => [...sshKeys(each), ...ghHosts(each)]).map(realish)]
     };
   }
   return {
@@ -5236,7 +5241,7 @@ function fencePolicy(ports = []) {
     commandCaches,
     kuvoPatterns: [],
     writable: ["/tmp", "/var/tmp", "/dev", "/dev/shm", ...inHome([...CACHES, ...LINUX_CACHES])],
-    secrets: [...inHome([...SECRETS, ...LINUX_SECRETS]), ...sshKeys(home), ...ghHosts(home)]
+    secrets: [...inHomes([...SECRETS, ...LINUX_SECRETS]), ...homes.flatMap((each) => [...sshKeys(each), ...ghHosts(each)])]
   };
 }
 function userTemporary() {
@@ -5615,7 +5620,7 @@ function launcherScript(places) {
     `(umask 077; mkdir -p "$tmp") && touch "$tmp" && export TMPDIR="$tmp/"`,
     `export PRE_COMMIT_HOME="$TMPDIR"pre-commit`,
     `(umask 077; mkdir -p ${[places.caches.npm, places.caches.pnpm, `${places.caches.uv}/cache`, `${places.caches.uv}/tools`, places.caches.corepack].map(sh).join(" ")})`,
-    `export npm_config_cache=${sh(places.caches.npm)} pnpm_config_cache_dir=${sh(places.caches.pnpm)} UV_CACHE_DIR=${sh(`${places.caches.uv}/cache`)} UV_TOOL_DIR=${sh(`${places.caches.uv}/tools`)} COREPACK_HOME=${sh(places.caches.corepack)}`,
+    `export npm_config_cache=${sh(places.caches.npm)} pnpm_config_cache_dir=${sh(places.caches.pnpm)} pnpm_config_enable_global_virtual_store=false UV_CACHE_DIR=${sh(`${places.caches.uv}/cache`)} UV_TOOL_DIR=${sh(`${places.caches.uv}/tools`)} COREPACK_HOME=${sh(places.caches.corepack)}`,
     ...places.platform === "linux" ? ["export UV_LINK_MODE=copy"] : [],
     ...places.platform === "darwin" ? [`tmp=$(cd "$tmp" 2>/dev/null && pwd -P) || { echo "This command can't run: its temporary folder isn't there." >&2; exit 126; }`] : [],
     `own=$F/none w_bot=`,
@@ -6223,7 +6228,7 @@ function probe() {
     `exit 0`
   ].join(`
 `);
-  const env = { PATH: process.env.PATH || "/usr/bin:/bin", HOME: os6.userInfo().homedir, KUVO_FENCE_SHELL: "/bin/sh", KUVO_FENCE_WORK: PROBE };
+  const env = { PATH: process.env.PATH || "/usr/bin:/bin", HOME: accountHome(), KUVO_FENCE_SHELL: "/bin/sh", KUVO_FENCE_WORK: PROBE };
   const bun = runtime();
   if (bun)
     env.KUVO_FENCE_RUNTIME = bun;
@@ -19297,7 +19302,7 @@ import fs69 from "node:fs";
 import path73 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.157";
+var BRIDGE_VERSION = "0.9.158";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

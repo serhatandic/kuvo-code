@@ -3063,7 +3063,11 @@ what's in it under another name, nor one that isn't there yet made a link, thoug
 a folder, so moved into place). Its npm, pnpm (11 and
 later), uv and corepack use caches of Kuvo Code's own instead (`npm_config_cache`,
 `pnpm_config_cache_dir`, `UV_CACHE_DIR` and `UV_TOOL_DIR`, `COREPACK_HOME`: `cache/sandbox-…`,
-on this Mac in the app's `Library/Caches` folder), and on Linux uv copies what it installs
+on this Mac in the app's `Library/Caches` folder), with pnpm's global virtual store off
+(`pnpm_config_enable_global_virtual_store=false`: with it, `pnpm dlx` runs a package from the copies
+in your pnpm store, which your own pnpm runs later; so in a project you set to use it, the sandbox's
+`pnpm install` stops, as pnpm won't change a project's store without asking in a terminal, and
+leaves it as it is: the agent asks with `sandbox_ask`), and on Linux uv copies what it installs
 (`UV_LINK_MODE=copy`). What it can't close yet, on Linux: a file linked to one it may write, as pnpm's
 store and Bun's cache link theirs into a project's `node_modules` and pnpm's into its `dlx` cache, and
 as your own uv links its cache's into a project's `.venv`; bunx's packages in `/tmp`; and a new

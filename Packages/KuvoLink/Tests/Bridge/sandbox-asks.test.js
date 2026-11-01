@@ -6,8 +6,10 @@
 // stand-in, as in sandbox.test.js: it loads the box's real plugin and runs commands through the
 // shell it gives; the sandbox itself is the system's own.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/sandbox-asks.test.js`; on Linux, with Bun (the
-// engine's: `BUN_BE_BUN=1 <engine> test sandbox-asks.test.js`).
+// Run with `node --test Packages/KuvoLink/Tests/Bridge/sandbox-asks.test.js`; on a Linux machine, with
+// `scripts/test-linux.sh <ssh-host> sandbox-asks.test.js`, and with `--engine` on the engine's own runner,
+// which the box runs on there (Bun's: `BUN_BE_BUN=1 <engine> test --timeout 120000 ./sandbox-asks.test.js`,
+// as its 5 seconds a test are too few for some).
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";

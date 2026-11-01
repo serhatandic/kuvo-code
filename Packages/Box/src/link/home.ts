@@ -18,7 +18,8 @@ let account: string | undefined;
  * follows HOME): `id -P` on macOS, `getent passwd` on Linux, the password file without it. */
 export function accountHome(): string {
   if (account) return account;
-  const uid = os.userInfo().uid;
+  // (Never `os.userInfo()` alone: it throws for an account with no passwd entry, as a container's.)
+  const uid = process.getuid?.() ?? -1;
   const field = (line: string | undefined, at: number) => line?.trim().split(":")[at] || "";
   let found = "";
   if (process.platform === "darwin") {
@@ -29,7 +30,8 @@ export function accountHome(): string {
       try { found = field(fs.readFileSync("/etc/passwd", "utf8").split("\n").find(line => line.split(":")[2] === String(uid)), 5); } catch {}
     }
   }
-  account = path.isAbsolute(found) ? found : os.userInfo().homedir;
+  if (!path.isAbsolute(found)) try { found = os.userInfo().homedir; } catch { found = homeFolder(); }
+  account = found;
   return account;
 }
 
@@ -132,9 +134,7 @@ export function located(folder: string): string {
 // copy's), however it's named.
 export const REAL_BOX = (() => {
   const home = located(K);
-  let own = homeFolder();
-  try { own = os.userInfo().homedir; } catch {}
-  return home === located(path.join(own, ".kuvo-code")) || path.basename(path.dirname(home)).toLowerCase().startsWith("run.kuvo.code");
+  return home === located(path.join(accountHome(), ".kuvo-code")) || path.basename(path.dirname(home)).toLowerCase().startsWith("run.kuvo.code");
 })();
 // A test's folder, where a test's stand-ins for npm and GitHub are taken.
 export const IN_TEST_FOLDER = !REAL_BOX;
