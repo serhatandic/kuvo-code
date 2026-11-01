@@ -43,9 +43,17 @@ struct MCPSettings: View {
     /// This computer has an Integrations page, which keeps integrations' servers.
     private var integrationsHere: Bool { SettingsPage.integrations.isShown(on: box) }
 
-    /// The popular servers that run here: on a machine, not those only a Mac can run.
+    /// The popular servers that run here: on a machine, not those only a Mac can run; and not an
+    /// integration's, which Integrations connects, so each is in one place.
     private var popular: [MCPCatalog.Server] {
-        box.machine == nil ? MCPCatalog.servers : MCPCatalog.servers.filter { !MCPCatalog.macOnly.contains($0.id) }
+        MCPCatalog.servers.filter { server in
+            (box.machine == nil || !MCPCatalog.macOnly.contains(server.id)) && !(integrationsHere && Integrations.service(server.id) != nil)
+        }
+    }
+
+    /// The popular servers Integrations has instead, by name ("Linear, Notion and Jira and Confluence").
+    private var inIntegrations: [String] {
+        integrationsHere ? MCPCatalog.servers.compactMap { Integrations.service($0.id)?.title } : []
     }
 
     private func popularRow(_ server: MCPCatalog.Server) -> some View {
@@ -105,6 +113,14 @@ struct MCPSettings: View {
                 if !servers.isEmpty {
                     Section {
                         ForEach(servers) { server in popularRow(server) }
+                        if access == .signIn, !inIntegrations.isEmpty {
+                            LabeledContent {
+                                Button("In Integrations…") { app.settingsTabs.show(.integrations, on: box) }
+                            } label: {
+                                Text(inIntegrations.formatted(.list(type: .and)))
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
                     } header: {
                         // Read on from the first: "Popular Servers That Need an Account", then
                         // "No Account Needed", "Run on This Mac".
