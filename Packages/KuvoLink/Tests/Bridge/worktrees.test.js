@@ -258,6 +258,20 @@ test("the machine names a branch after its session's title, once, and only one i
   assert.equal((await ask("POST", "kuvo/worktrees/remove", { path: made.root, forget: true })).status, 200);
 });
 
+test("every session working in a worktree is told its branch's new name, not only the one whose title named it", async () => {
+  const made = (await ask("POST", "kuvo/worktrees", { project, branchPrefix: "kuvo/" })).value;
+  sessions.push({ id: "ses_first", location: { directory: made.folder } }, { id: "ses_second", title: "Speed up search", location: { directory: made.folder } });
+  told.length = 0;
+  await link.nameWorktreeBranch(atEngine, "ses_second");
+  assert.equal(git(made.root, "symbolic-ref", "--short", "HEAD"), "kuvo/speed-up-search");
+  for (const id of ["ses_first", "ses_second"]) {
+    const last = told.filter(each => each.url.includes(`/${id}/`)).at(-1);
+    assert.match(last?.value ?? "", /on the branch kuvo\/speed-up-search,/, id);
+  }
+  sessions.splice(sessions.findIndex(each => each.id === "ses_first"), 2);
+  assert.equal((await ask("POST", "kuvo/worktrees/remove", { path: made.root, forget: true })).status, 200);
+});
+
 test("a subagent's title, working in a session's worktree, doesn't name its branch", async () => {
   const made = (await ask("POST", "kuvo/worktrees", { project, branchPrefix: "kuvo/" })).value;
   sessions.push({ id: "ses_helper", parentID: "ses_lead", title: "Explore the codebase", location: { directory: made.folder } });
@@ -316,12 +330,14 @@ test("a Mac reading the machine's worktrees as their session gets its title find
   assert.equal((await ask("POST", "kuvo/worktrees/remove", { path: made.root, forget: true })).status, 200);
 });
 
-test("a session started in a worktree with its title given (by an agent, a bot) names its branch as the box hears of it, Mac closed, and is told that name", async () => {
+test("a session started in a worktree with its title given (by an agent, a bot) names its branch as the box hears of it, Mac closed, and is told that name", { timeout: 10_000 }, async t => {
   const made = (await ask("POST", "kuvo/worktrees", { project, branchPrefix: "kuvo/" })).value;
   told.length = 0;
   const heard = new Promise(resolve => { onTold = resolve; });
   const caughtUp = new Promise(resolve => { onActive = resolve; });
   const stop = new AbortController();
+  // (Stopped should the test end first, as on the old code.)
+  t.signal.addEventListener("abort", () => stop.abort());
   link.watchEvents(() => atEngine, () => true, stop.signal, () => {}, { notices: false });
   try {
     // Following the engine, it has looked for sessions titled meanwhile: none yet.
@@ -396,6 +412,14 @@ test("a branch already pushed keeps its name: its pull request would lose track 
   assert.equal(git(made.root, "symbolic-ref", "--short", "HEAD"), made.branch);
   sessions.splice(sessions.findIndex(each => each.id === "ses_pushed"), 1);
   assert.equal((await ask("POST", "kuvo/worktrees/remove", { path: made.root, forget: true })).status, 200);
+  // Pushed without tracking it (`git push origin HEAD`, as agents do): pushed all the same.
+  const plain = (await ask("POST", "kuvo/worktrees", { project, branchPrefix: "kuvo/" })).value;
+  git(plain.root, "push", "-q", "origin", "HEAD");
+  sessions.push({ id: "ses_pushed_plain", title: "Fix signup", location: { directory: plain.folder } });
+  await link.nameWorktreeBranch(atEngine, "ses_pushed_plain");
+  assert.equal(git(plain.root, "symbolic-ref", "--short", "HEAD"), plain.branch);
+  sessions.splice(sessions.findIndex(each => each.id === "ses_pushed_plain"), 1);
+  assert.equal((await ask("POST", "kuvo/worktrees/remove", { path: plain.root, forget: true })).status, 200);
   git(project, "remote", "remove", "origin");
 });
 

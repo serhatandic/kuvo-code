@@ -1578,8 +1578,9 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   A Mac's app reaches every box's the same way, its own included, and follows its own as they
   change. Each box names a worktree's branch after its session once that has a title (in Latin
   letters: "Исправить вход" is `ispravit-vhod`), as it hears of the title (one a session was made
-  with too), as it follows its engine again (a title given meanwhile), and when its records are
-  read, and tells the session.
+  with too), as a machine's follows its engine again (a title given meanwhile; a Mac's own box,
+  as its app reads them), and when its records are read, and tells every session working there.
+  A branch a remote has (pushed, tracked or not) keeps its name.
   - `GET kuvo/worktrees` → `{"worktrees": [{path, folder, project, projectName, branch, base?,
     sessions, working, uncommitted?, ahead?, size?}]}`: `path` is the worktree's folder, `folder`
     where its session runs (the project's place in its repository), `project` its project's,

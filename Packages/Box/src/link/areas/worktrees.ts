@@ -97,7 +97,7 @@ async function projectOf(engine: Target, folder: string, signal: AbortSignal | u
 async function sessionsHere(engine: Target | null, signal: AbortSignal | undefined, bridge: Target | null = bridgeTarget()): Promise<SessionsHere | null> {
   if (!engine?.port) return null;
   const here: SessionsHere = { sessions: [], active: new Set() };
-  for (const target of bridge?.port ? [engine, bridge] : [engine]) {
+  for (const target of bridge?.port && bridge.port !== engine.port ? [engine, bridge] : [engine]) {
     const headers = { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}` };
     try {
       const listed = await fetch(`http://127.0.0.1:${target.port}/api/session?parentID=null&limit=200&order=desc`, { headers, signal: AbortSignal.timeout(10_000) });
@@ -119,6 +119,8 @@ const inside = (folder: string | undefined, root: string) => folder === root || 
 /** `tree`'s branch named `to` (or `to-2` and so on), unless it's been pushed: whether it was. */
 function renameWorktree(tree: WorktreeRecord, to: string): boolean {
   if (gitIn(tree.root, ["rev-parse", "--abbrev-ref", `${tree.branch}@{upstream}`]) !== null) return false;
+  // Pushed without tracking it (`git push origin HEAD`): a remote has it all the same.
+  if (gitIn(tree.root, ["for-each-ref", "--count=1", "--format=%(refname)", `refs/remotes/*/${tree.branch}`])) return false;
   const name = freeBranch(tree.root, to);
   if (!name || gitIn(tree.root, ["branch", "-m", tree.branch, name]) === null) {
     // Renamed meanwhile (by this box's other process, named as it was read): kept as git has it.
@@ -144,8 +146,23 @@ export async function nameWorktreeBranch(engine: Target, sessionID: unknown): Pr
   const slug = branchSlug(session.title ?? "");
   if (!tree?.made || tree.branch !== tree.made || !slug) return false;
   if (!renameWorktree(tree, (tree.prefix ?? "") + slug)) return false;
-  await tellWorktree(engine, sessionID);
+  await tellRenamed(engine, tree, sessionID);
   return true;
+}
+
+/** Each session working in `tree` (on its engine, and with the coding agents), told its branch's
+ * new name: the one whose title named it, and any other there, which was told the old one. */
+async function tellRenamed(engine: Target, tree: WorktreeRecord, sessionID: string): Promise<void> {
+  await tellWorktree(engine, sessionID);
+  const told = new Set([sessionID]);
+  const bridge = bridgeTarget();
+  for (const target of bridge?.port && bridge.port !== engine.port ? [engine, bridge] : [engine]) {
+    for (const session of (await sessionsHere(target, undefined, null))?.sessions ?? []) {
+      if (told.has(session.id) || isHiddenRun(session) || !inside(session.location?.directory ?? session.directory, tree.root)) continue;
+      told.add(session.id);
+      await tellWorktree(target, session.id).catch(() => {});
+    }
+  }
 }
 
 /** A session just made, in one of this box's worktrees or not: its branch named after the title it

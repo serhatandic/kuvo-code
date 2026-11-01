@@ -10716,7 +10716,7 @@ async function sessionsHere(engine, signal, bridge = bridgeTarget()) {
   if (!engine?.port)
     return null;
   const here = { sessions: [], active: new Set };
-  for (const target of bridge?.port ? [engine, bridge] : [engine]) {
+  for (const target of bridge?.port && bridge.port !== engine.port ? [engine, bridge] : [engine]) {
     const headers = { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}` };
     try {
       const listed = await fetch(`http://127.0.0.1:${target.port}/api/session?parentID=null&limit=200&order=desc`, { headers, signal: AbortSignal.timeout(1e4) });
@@ -10736,6 +10736,8 @@ async function sessionsHere(engine, signal, bridge = bridgeTarget()) {
 var inside2 = (folder, root) => folder === root || folder?.startsWith(root + "/");
 function renameWorktree(tree, to) {
   if (gitIn(tree.root, ["rev-parse", "--abbrev-ref", `${tree.branch}@{upstream}`]) !== null)
+    return false;
+  if (gitIn(tree.root, ["for-each-ref", "--count=1", "--format=%(refname)", `refs/remotes/*/${tree.branch}`]))
     return false;
   const name = freeBranch(tree.root, to);
   if (!name || gitIn(tree.root, ["branch", "-m", tree.branch, name]) === null) {
@@ -10760,8 +10762,21 @@ async function nameWorktreeBranch(engine, sessionID) {
     return false;
   if (!renameWorktree(tree, (tree.prefix ?? "") + slug))
     return false;
-  await tellWorktree(engine, sessionID);
+  await tellRenamed(engine, tree, sessionID);
   return true;
+}
+async function tellRenamed(engine, tree, sessionID) {
+  await tellWorktree(engine, sessionID);
+  const told = new Set([sessionID]);
+  const bridge = bridgeTarget();
+  for (const target of bridge?.port && bridge.port !== engine.port ? [engine, bridge] : [engine]) {
+    for (const session of (await sessionsHere(target, undefined, null))?.sessions ?? []) {
+      if (told.has(session.id) || isHiddenRun(session) || !inside2(session.location?.directory ?? session.directory, tree.root))
+        continue;
+      told.add(session.id);
+      await tellWorktree(target, session.id).catch(() => {});
+    }
+  }
 }
 async function settleNewSession(engine, sessionID) {
   if (!await nameWorktreeBranch(engine, sessionID))
