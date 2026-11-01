@@ -299,6 +299,11 @@ struct ToolCallView: View {
             let about = string("query").map { " about “\($0)”" } ?? ""
             return (isActive ? "Reading " : "Read ") + of + "’s conversation" + about
         case "show_in_panel", "show_file": return (isActive ? "Showing " : "Showed ") + (relative(string("path")) ?? "a file")
+        case "show_widget":
+            let made = string("title").map { "“\($0)”" } ?? "a widget"
+            guard case .failed(_, let error, _, _) = call.state else { return (isActive ? "Making " : "Made ") + made }
+            // Stopped with the turn, it didn't fail.
+            return (error.isInterruption ? "Stopped making " : "Couldn’t make ") + made
         case "mark_final": return (isActive ? "Marking " : "Marked ") + (string("path").map { ($0 as NSString).lastPathComponent } ?? "a file") + " final"
         case "start_session": return (isActive ? "Starting a session" : "Started a session") + (string("title").map { ": \($0)" } ?? "")
         // Kuvo Code's wake-up tools, worded as the kuvo-wake commands they run are.
@@ -412,6 +417,7 @@ struct ToolCallView: View {
         case "cancel_wake_up": "xmark.circle"
         case "show_in_panel": "sidebar.right"
         case "show_file": "doc.richtext"
+        case "show_widget": "macwindow"
         default: "safari"
         }
     }

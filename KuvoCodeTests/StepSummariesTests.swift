@@ -10,8 +10,10 @@ import Testing
 @Suite struct StepSummariesTests {
     let project = "/Users/me/web"
 
-    private func step(_ name: String, _ input: [String: Any], running: Bool = false, metadata: [String: Any] = [:]) throws -> Message.ToolCall {
-        let state: [String: Any] = running ? ["status": "running", "input": input] : ["status": "completed", "input": input, "content": [], "metadata": metadata]
+    private func step(_ name: String, _ input: [String: Any], running: Bool = false, metadata: [String: Any] = [:], error: String? = nil) throws -> Message.ToolCall {
+        let state: [String: Any] = if let error { ["status": "error", "input": input, "error": ["type": error, "message": "It went wrong"]] }
+            else if running { ["status": "running", "input": input] }
+            else { ["status": "completed", "input": input, "content": [], "metadata": metadata] }
         let message: [String: Any] = ["id": "m", "type": "assistant", "agent": "build", "time": ["created": 1], "model": ["id": "m", "providerID": "p"],
                                       "content": [["type": "tool", "id": "c", "name": name, "executed": true, "state": state]]]
         let decoded = try JSONDecoder().decode(Message.self, from: JSONSerialization.data(withJSONObject: message))
@@ -19,8 +21,8 @@ import Testing
         return call
     }
 
-    private func words(_ name: String, _ input: [String: Any], running: Bool = false, metadata: [String: Any] = [:]) throws -> String {
-        ToolCallView.summary(of: try step(name, input, running: running, metadata: metadata), in: project)
+    private func words(_ name: String, _ input: [String: Any], running: Bool = false, metadata: [String: Any] = [:], error: String? = nil) throws -> String {
+        ToolCallView.summary(of: try step(name, input, running: running, metadata: metadata, error: error), in: project)
     }
 
     @Test func filesByTheirPathInTheProject() throws {
@@ -92,6 +94,17 @@ import Testing
         // A number no element could have (a model's slip) reads as none given.
         #expect(try words("kuvo-browser_browser_click", ["index": 1e20]) == "Clicked an element")
         #expect(try words("kuvo-browser_browser_tabs", ["action": "switch", "tab": -1e300]) == "Switched to tab")
+    }
+
+    /// Something the agent makes to show (a widget) by its title, also when it couldn't make it
+    /// or was stopped: never as the browser.
+    @Test func aWidget() throws {
+        let widget = "kuvo-browser_show_widget"
+        #expect(try words(widget, ["title": "Focus this week"], running: true) == "Making “Focus this week”")
+        #expect(try words(widget, ["title": "Focus this week"]) == "Made “Focus this week”")
+        #expect(try words(widget, ["title": "Focus this week"], error: "tool") == "Couldn’t make “Focus this week”")
+        #expect(try words(widget, [:], error: "tool") == "Couldn’t make a widget")
+        #expect(try words(widget, ["title": "Focus this week"], error: "aborted") == "Stopped making “Focus this week”")
     }
 
     /// A wake-up the agent schedules (through kuvo-wake) reads as one, not as a command.
