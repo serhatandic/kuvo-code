@@ -3008,7 +3008,10 @@ never `/` or a folder holding your home folder).
 The agents bridge takes the same ask as one of the engine's defaults, for when the engine can't
 say its agent's rules. It doesn't take a coding agent off running on its own (`approvesAll`), so
 Codex, Cursor, Grok and Antigravity keep their modes. Where the bridge sees a tool call (Claude
-Code's every one, and what the others ask about), one reaching outside the project asks first. An
+Code's every one, and what the others ask about), one whose files are outside the project asks
+first (a command's line isn't read for them), weighed by their folders as the engine weighs its own
+(`<folder>/*`: a rule for a folder's files holds for the folder itself, and "Always" allows that
+folder, not the one above it). An
 agent's own files are never outside (`ownsPath`), though your rules for what it does with them still
 hold: Claude Code's plans, each project's memory, what it saved of a long output
 (`projects/<project>/<session>/tool-results`), and its background commands' output in /tmp's

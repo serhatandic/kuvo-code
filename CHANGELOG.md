@@ -311,6 +311,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - An agent you install on the first launch that finishes after you've gone on opens its sign-in in Settings › Accounts, instead of being left installed but not signed in.
 - A bot hears that a session it started stopped with an error while its computer was off, also when the session failed before it replied (a model out of reach, a sign-in that ended).
 - Right-clicking the words of a message you sent offers its own menu again (Copy, Undo From Here…, New Session From Here), and so do a command's output (Copy Command, Copy Output) and other rows; on words you selected, you get the text's menu (Copy, Look Up).
+- A coding agent looking through a folder outside the project that your Permissions rules allow (searching it, listing it) no longer asks, as the engine's agents don't; and **Always** on a folder it asks about allows that folder, not the one it's in.
 
 ## 0.7.2
 

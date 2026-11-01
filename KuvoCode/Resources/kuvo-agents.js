@@ -15294,8 +15294,18 @@ function outsidePaths(ask, directory, attached, own = ownPlaces(), owns) {
   const paths = ask.resources.filter((resource) => resource && resource !== "*" && (resource.startsWith("/") || resource.startsWith("~/") || !/[*?[]/.test(resource))).map((resource) => resolve7(directory, resource.startsWith("~/") ? join25(homedir5(), resource.slice(2)) : resource));
   return paths.filter((path) => !within(path, [directory, ...own]) && !attached.has(path) && !owns?.(path));
 }
+function outsideFolders(ask, paths) {
+  const isFolder = (path) => {
+    try {
+      return statSync9(path).isDirectory();
+    } catch {
+      return ask.action === "list" || ask.action === "glob";
+    }
+  };
+  return [...new Set(paths.map((path) => join25(isFolder(path) ? path : dirname13(path), "*")))];
+}
 function outsideAsk(ask, paths) {
-  return { ...ask, action: "external_directory", resources: paths, save: [...new Set(paths.map((path) => join25(dirname13(path), "*")))], unclassified: false };
+  return { ...ask, action: "external_directory", resources: paths, save: outsideFolders(ask, paths), unclassified: false };
 }
 function partsOf2(ask) {
   return isShell(ask.action) ? ask.resources.flatMap(commandParts) : ask.resources;
@@ -16846,12 +16856,13 @@ ${live.agentPrompt}` : ""
       return "deny";
     const away = outsidePaths(ask, session.location.directory, this.attached(session.id), undefined, owns);
     if (away.length) {
-      if (live.blocks && strictest(live.blocks, "external_directory", away) === "deny")
+      const folders = outsideFolders(ask, away);
+      if (live.blocks && strictest(live.blocks, "external_directory", [...away, ...folders]) === "deny")
         return "deny";
-      const outside = strictest(rules, "external_directory", away);
+      const outside = strictest(rules, "external_directory", folders);
       if (outside === "deny")
         return "deny";
-      if (outside === "ask" && !this.allowedBefore(live, outsideAsk(ask, away)))
+      if (outside === "ask" && !this.allowedOutside(live, folders))
         return "ask";
     }
     if (live.blocks === undefined && !looks.has(ask.action))
@@ -16884,6 +16895,9 @@ ${live.agentPrompt}` : ""
   allowedBefore(live, ask) {
     return live.always.some((rule) => rule.action === ask.action && coveredBy(rule.patterns, ask.action, ask.resources));
   }
+  allowedOutside(live, folders) {
+    return live.always.some((rule) => rule.action === "external_directory" && coveredBy(rule.patterns, "external_directory", folders));
+  }
   async askPermission(id, live, turn, ask, plan) {
     const session = this.record(id).session;
     const parts = partsOf2(ask);
@@ -16901,14 +16915,15 @@ ${live.agentPrompt}` : ""
       return "reject";
     const away = ask.weighed ? [] : outsidePaths(ask, session.location.directory, this.attached(id), undefined, this.ownedBy(turn));
     if (away.length) {
-      if (live.blocks && strictest(live.blocks, "external_directory", away) === "deny")
+      const folders = outsideFolders(ask, away);
+      if (live.blocks && strictest(live.blocks, "external_directory", [...away, ...folders]) === "deny")
         return "reject";
       const rules = [...live.agentRules ?? engineDefaults, ...session.permissions ?? []];
-      const outside = strictest(rules, "external_directory", away);
+      const outside = strictest(rules, "external_directory", folders);
       if (outside === "deny")
         return "reject";
       const own = strictest(rules, ask.action, parts) ?? "allow";
-      if (outside === "ask" && own !== "deny" && (own === "allow" || this.allowedBefore(live, ask)) && !this.allowedBefore(live, outsideAsk(ask, away))) {
+      if (outside === "ask" && own !== "deny" && (own === "allow" || this.allowedBefore(live, ask)) && !this.allowedOutside(live, folders)) {
         return this.askPermission(id, live, turn, { ...outsideAsk(ask, away), metadata: ask.metadata, message: ask.message, sandboxed: ask.sandboxed }, plan);
       }
     }
@@ -22729,4 +22744,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 2b56a6fb28f0b98ee5db364bc26bc694b066d6ea3aa8a0964428e3c68e087686
+// Built from Packages/Box/src/agents 14e1d6f188e99db2559b712b5b526ec9418c4a182e5f7321f81c2cece0c09b01

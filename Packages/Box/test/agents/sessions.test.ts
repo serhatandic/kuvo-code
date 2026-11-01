@@ -739,6 +739,39 @@ describe("asks and conversations", () => {
     }
   })
 
+  test("a folder outside the project your rules allow is open itself, as on the engine, and Always on another allows that folder, not the one above it", async () => {
+    // (Outside the temporary folder, which is the bridge's own.)
+    const [notes, other, home] = ["/home/me/notes", "/home/me/other", "/home/me"]
+    const agents = new Map([a, b].map((agent) => [agent.providerID, agent]))
+    sessions.closeAll()
+    sessions = new Sessions(store, { find: (provider: string | undefined) => (provider ? agents.get(provider) : undefined) } as unknown as Roster, auto, undefined, async () => [], async () => ({
+      permissions: [{ action: "*", resource: "*", effect: "allow" }, { action: "external_directory", resource: "*", effect: "ask" }, { action: "external_directory", resource: join(notes, "*"), effect: "allow" }],
+    }))
+    const seen: unknown[] = []
+    a.script = async (_input, turn, hooks) => {
+      // Claude Code's LS and Glob name the folder itself.
+      seen.push(await hooks.permission({ action: "list", resources: [notes] }))
+      seen.push(await hooks.permission({ action: "read", resources: [join(notes, "a.md")] }))
+      seen.push(await hooks.permission({ action: "list", resources: [other] }))
+      seen.push(await hooks.permission({ action: "read", resources: [join(other, "b.md")] }))
+      seen.push(await hooks.permission({ action: "glob", resources: [home] }))
+      turn.startStep()
+      turn.endStep()
+      return { outcome: "succeeded" }
+    }
+    const id = create()
+    send(id, "look around")
+    await until(() => sessions.permissions(id).length === 1)
+    expect(sessions.permissions(id)[0]).toMatchObject({ action: "external_directory", resources: [other], save: [join(other, "*")] })
+    sessions.replyPermission(id, sessions.permissions(id)[0].id, "always")
+    // The folder above it isn't allowed by that.
+    await until(() => sessions.permissions(id).length === 1)
+    expect(sessions.permissions(id)[0]).toMatchObject({ action: "external_directory", resources: [home] })
+    sessions.replyPermission(id, sessions.permissions(id)[0].id, "reject")
+    await settled(id, 1)
+    expect(seen).toEqual(["once", "once", "always", "once", "reject"])
+  })
+
   test("Stop while an agent gets ready stops the turn", async () => {
     timing.stopGrace = 50
     const id = create()
