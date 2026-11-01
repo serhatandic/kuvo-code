@@ -23,6 +23,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - Selecting text in a conversation puts Add to Chat and Copy clear of the lines, and under the last line you selected when there's no room above, instead of over what you selected.
 - A computer that couldn't connect says why under its status, not only on hover, and VoiceOver reads each computer's status.
 - With Find open at the end of a conversation, the arrow to the newest no longer shows with nothing below.
+- The badge over a page an agent is browsing is solid, and Take Over looks like a button.
 - The sidebar's accounts stay while the coding agents restart, instead of briefly showing fewer.
 - The command palette shows the letters you typed in bold in each result, and Run shows a play mark.
 - Settings › Accounts has one Add Account menu for the subscriptions, and Edit Bot › Keys one Add Its Own Key menu, instead of a button on every row, and a coding agent's accounts sit right under its name.

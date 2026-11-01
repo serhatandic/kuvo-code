@@ -9,6 +9,7 @@ struct AgentBadge: View {
     let isHeld: Bool
     let takeOver: (Bool) -> Void
     @Environment(Bots.self) private var bots
+    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         let bot = bots.bot(actingAs: session)
@@ -30,15 +31,18 @@ struct AgentBadge: View {
                     .font(.system(size: 12, weight: .medium))
             }
             Button(isHeld ? "Hand Back" : "Take Over") { takeOver(!isHeld) }
-                .buttonStyle(TextButtonStyle(outset: true))
+                .buttonStyle(ChipButtonStyle(tinted: true))
                 .font(.system(size: 12, weight: .semibold))
                 .help(isHeld
                       ? "Let \(bot?.name ?? "the agent") go on in this page; it’s told what changed"
                       : "Have the page to yourself: \(bot?.name ?? "the agent")’s browser steps wait until you hand it back")
         }
         .padding(.leading, 12)
-        .padding(.trailing, 6)
+        .padding(.trailing, 4)
         .padding(.vertical, 4)
-        .glassEffect(.regular, in: .capsule)
+        // Solid: over a page, glass let its text show through the words.
+        .background(Surface.cardFill(scheme, focused: true), in: .capsule)
+        .overlay(Capsule().strokeBorder(Surface.hairline(scheme), lineWidth: 1))
+        .shadow(color: .black.opacity(scheme == .dark ? 0.4 : 0.12), radius: 8, y: 2)
     }
 }
