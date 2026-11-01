@@ -18,6 +18,7 @@ struct MachineBrowserPane<NewTab: View>: View {
     let onSubmit: (String) -> Void
     @State private var address = ""
     @FocusState private var editing: Bool
+    @Environment(\.isPanelShown) private var isPanelShown
 
     private var isShown: Bool { page != nil && browser.shownPage == page }
     private var isLive: Bool { browser.state == .live && isShown }
@@ -52,9 +53,10 @@ struct MachineBrowserPane<NewTab: View>: View {
         }
         .animation(.ui, value: browser.dialog)
         .animation(.ui, value: browser.downloads)
-        .task(id: page) {
-            // While this tab shows its page, that's the page in use, live.
-            guard let page else { return }
+        .task(id: isPanelShown ? page : nil) {
+            // While this tab shows its page, that's the page in use, live; not while the panel's
+            // hidden.
+            guard isPanelShown, let page else { return }
             browser.show(page)
             while !Task.isCancelled { try? await Task.sleep(for: .seconds(3600)) }
             browser.hide(page)

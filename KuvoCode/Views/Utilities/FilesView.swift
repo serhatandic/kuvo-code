@@ -332,6 +332,9 @@ private struct FileTreeView: View {
     @Bindable var tree: FileTree
     let selected: URL?
     let open: (URL) -> Void
+    @Environment(\.isPanelShown) private var isShown
+    /// The panel was hidden since the tree was last looked at.
+    @State private var wasHidden = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -353,8 +356,17 @@ private struct FileTreeView: View {
             // Filtering, the files are read (again, after Reload).
             .task(id: !tree.filter.isEmpty && tree.allFiles == nil) { if !tree.filter.isEmpty { await tree.loadAllFiles() } }
             // What the agent changes shows while the tree does: looked at again every few seconds,
-            // a machine's less often (each look is a round trip).
-            .task {
+            // a machine's less often (each look is a round trip). Not while the panel's hidden;
+            // looked at as soon as it shows again.
+            .task(id: isShown) {
+                guard isShown else {
+                    wasHidden = true
+                    return
+                }
+                if wasHidden {
+                    wasHidden = false
+                    await tree.refresh()
+                }
                 let pause: Duration = tree.roots.allSatisfy(\.isFileURL) ? .seconds(3) : .seconds(10)
                 while !Task.isCancelled {
                     try? await Task.sleep(for: pause)
@@ -593,6 +605,7 @@ struct FileViewer: View {
     let mention: String
     @Binding var showsTree: Bool
     @Environment(AppModel.self) private var app
+    @Environment(\.isPanelShown) private var isShown
     @State private var content: Content?
     @State private var showsSource = false
 
@@ -662,7 +675,9 @@ struct FileViewer: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .task(id: "\(url.absoluteString)\n\(app.utilities.fileShown)") {
+        .task(id: "\(url.absoluteString)\n\(app.utilities.fileShown)\n\(isShown)") {
+            // The panel hidden, it's read again as it shows.
+            guard isShown else { return }
             content = await Self.load(url, from: RemoteFolder.parse(url).map { app.box($0.machine) })
             // Changed on disk (by the agent, say): shown again as it is. A machine's file is read
             // again when it's shown again, which reading it each time would cost a round trip for.
@@ -919,15 +934,19 @@ private struct QuickLookView: NSViewRepresentable {
     func makeNSView(context: Context) -> QLPreviewView {
         let view = QLPreviewView(frame: .zero, style: .normal)!
         view.autostarts = true
-        view.previewItem = url as NSURL
+        updateNSView(view, context: context)
         return view
     }
 
     func updateNSView(_ view: QLPreviewView, context: Context) {
-        if (view.previewItem as? NSURL) as URL? != url { view.previewItem = url as NSURL }
+        // Hidden with the panel, a film or a sound in it stops, and starts again as it's back.
+        context.coordinator.update(view, in: context) { [url] away in view.previewItem = away ? nil : url as NSURL }
+        if !view.isHidden, (view.previewItem as? NSURL) as URL? != url { view.previewItem = url as NSURL }
     }
 
-    static func dismantleNSView(_ view: QLPreviewView, coordinator: ()) {
+    func makeCoordinator() -> PanelVisibility { PanelVisibility() }
+
+    static func dismantleNSView(_ view: QLPreviewView, coordinator: PanelVisibility) {
         view.close()
     }
 }

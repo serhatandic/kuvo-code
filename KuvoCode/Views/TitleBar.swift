@@ -463,13 +463,13 @@ struct ProjectIdentity: View {
     /// A session's own worktree keeps its branch.
     var isWorktree = false
     var environment: [String: String] = [:]
-    @Binding var showsSidebar: Bool
+    let showsSidebar: PaneSwitch
     /// After switching branches.
     var switched: () -> Void = {}
 
     var body: some View {
         HStack(spacing: 10) {
-            SidebarToggle(showsSidebar: $showsSidebar)
+            SidebarToggle(showsSidebar: showsSidebar)
 
             if let name {
                 CappedWidth(max: 220) {
@@ -616,39 +616,49 @@ private struct BranchSwitcher: View {
     }
 }
 
+/// Whether a side card (the sidebar or the panel) is on screen, and showing or hiding it, for its
+/// button. Read only in the button's own view: a Binding reads its value as it's made, so one made
+/// in the window's view had the whole window worked out again each time a card slid in or out.
+struct PaneSwitch {
+    let isOn: () -> Bool
+    let set: (Bool) -> Void
+}
+
 /// Shows or hides the sessions sidebar: in the title bar, or alone by the window's buttons when
 /// the tab bar is hidden.
 struct SidebarToggle: View {
-    @Binding var showsSidebar: Bool
+    let showsSidebar: PaneSwitch
 
     var body: some View {
+        let shows = showsSidebar.isOn()
         Button {
-            withAnimation(.ui) { showsSidebar.toggle() }
+            withAnimation(.ui) { showsSidebar.set(!shows) }
         } label: {
             Image(systemName: "sidebar.left")
                 .font(.system(size: 14))
         }
         .buttonStyle(IconButtonStyle(width: 28, height: 28, cornerRadius: 7))
-        .accessibilityLabel(showsSidebar ? "Hide Sessions" : "Show Sessions")
-        .help(showsSidebar ? "Hide Sessions (⌘0)" : "Show Sessions (⌘0)")
+        .accessibilityLabel(shows ? "Hide Sessions" : "Show Sessions")
+        .help(shows ? "Hide Sessions (⌘0)" : "Show Sessions (⌘0)")
     }
 }
 
 /// Shows or hides the side panel: mirrors the sessions toggle on the left, and looks the same,
 /// a plain icon, not a highlighted toggle.
 struct PanelToggle: View {
-    @Binding var showsPanel: Bool
+    let showsPanel: PaneSwitch
 
     var body: some View {
+        let shows = showsPanel.isOn()
         Button {
-            withAnimation(.ui) { showsPanel.toggle() }
+            withAnimation(.ui) { showsPanel.set(!shows) }
         } label: {
             Image(systemName: "sidebar.right")
                 .font(.system(size: 14))
         }
         .buttonStyle(IconButtonStyle(width: 28, height: 28, cornerRadius: 7))
-        .accessibilityLabel(showsPanel ? "Hide Panel" : "Show Panel")
-        .help(showsPanel ? "Hide Panel (⌥⌘0)" : "Show Panel: Changes, Files, Terminal, Browser (⌥⌘0)")
+        .accessibilityLabel(shows ? "Hide Panel" : "Show Panel")
+        .help(shows ? "Hide Panel (⌥⌘0)" : "Show Panel: Changes, Files, Terminal, Browser (⌥⌘0)")
     }
 }
 

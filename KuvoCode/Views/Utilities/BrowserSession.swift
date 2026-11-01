@@ -862,6 +862,15 @@ struct ToolbarGroupStyle: ButtonStyle {
 
 private struct WebViewHost: NSViewRepresentable {
     let webView: WKWebView
-    func makeNSView(context: Context) -> WKWebView { webView }
-    func updateNSView(_ view: WKWebView, context: Context) {}
+
+    func makeNSView(context: Context) -> WKWebView {
+        context.coordinator.update(webView, in: context)
+        return webView
+    }
+
+    func updateNSView(_ view: WKWebView, context: Context) {
+        context.coordinator.update(view, in: context)
+    }
+
+    func makeCoordinator() -> PanelVisibility { PanelVisibility() }
 }

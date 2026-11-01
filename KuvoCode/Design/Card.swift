@@ -24,9 +24,25 @@ struct Card<Icon: View, Actions: View, Content: View>: View {
     /// chat's or a bot's editor, say.
     private var titleAction: (() -> Void)?
     private var titleHelp: String?
-    @ViewBuilder var icon: () -> Icon
-    @ViewBuilder var actions: () -> Actions
-    @ViewBuilder var content: () -> Content
+    /// Made once, with the card: the card's own changes (its focus, the room the window's buttons
+    /// take from its header as the panel comes and goes) draw it again without making what's in
+    /// it again, the whole conversation with its composer.
+    private let icon: Icon
+    private let actions: Actions
+    private let content: Content
+
+    init(title: String, detail: String? = nil, isFocused: Bool = true, showsHeader: Bool = true, showsSurface: Bool = true, rename: CardRename? = nil,
+         @ViewBuilder icon: () -> Icon, @ViewBuilder actions: () -> Actions, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.detail = detail
+        self.isFocused = isFocused
+        self.showsHeader = showsHeader
+        self.showsSurface = showsSurface
+        self.rename = rename
+        self.icon = icon()
+        self.actions = actions()
+        self.content = content()
+    }
 
     @Environment(\.colorScheme) private var scheme
     /// Its content's top stays put (`CardTopIsFixed`): the header doesn't fade it.
@@ -67,7 +83,7 @@ struct Card<Icon: View, Actions: View, Content: View>: View {
             // same whether or not the card reaches up into the window's title bar.
             // Exactly the room it's given, whatever its content would like: content wider than
             // that never pushes the cards beside it out of the window.
-            content()
+            content
                 .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
                 .safeAreaPadding(.top, Metrics.cardHeaderHeight)
                 .overlay(alignment: .top) {
@@ -75,7 +91,7 @@ struct Card<Icon: View, Actions: View, Content: View>: View {
                 }
                 .onPreferenceChange(CardTopIsFixed.self) { topIsFixed = $0 }
         } else {
-            content()
+            content
                 .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
         }
     }
@@ -118,7 +134,7 @@ struct Card<Icon: View, Actions: View, Content: View>: View {
             }
             Spacer(minLength: 8)
             HStack(spacing: 2) {
-                actions()
+                actions
             }
             .buttonStyle(CardActionStyle())
         }
@@ -132,7 +148,7 @@ struct Card<Icon: View, Actions: View, Content: View>: View {
     }
 
     private var headerIcon: some View {
-        icon()
+        icon
             .frame(width: 16, height: 16)
             .foregroundStyle(isFocused ? .primary : .secondary)
     }
@@ -174,7 +190,7 @@ struct Card<Icon: View, Actions: View, Content: View>: View {
 }
 
 extension Card where Actions == EmptyView {
-    init(title: String, detail: String? = nil, isFocused: Bool = true, showsHeader: Bool = true, showsSurface: Bool = true, @ViewBuilder icon: @escaping () -> Icon, @ViewBuilder content: @escaping () -> Content) {
+    init(title: String, detail: String? = nil, isFocused: Bool = true, showsHeader: Bool = true, showsSurface: Bool = true, @ViewBuilder icon: () -> Icon, @ViewBuilder content: () -> Content) {
         self.init(title: title, detail: detail, isFocused: isFocused, showsHeader: showsHeader, showsSurface: showsSurface, icon: icon, actions: { EmptyView() }, content: content)
     }
 }
