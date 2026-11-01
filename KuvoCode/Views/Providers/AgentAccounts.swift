@@ -286,28 +286,33 @@ private struct ProductBlock: View {
     private var installFailure: String? { agents.installFailures[main.id] }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: hasActions ? 6 : 0) {
             // The actions beside the name; in a narrow window, under it, lined up with the name
             // and the accounts; and one above the other when they don't fit side by side there
-            // either, where what's still too long is cut short.
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 14) {
-                    heading
-                    Spacer(minLength: 12)
-                    actions(AnyLayout(HStackLayout(spacing: 10)))
+            // either, where what's still too long is cut short. With none, the accounts sit right
+            // under the name, as one item.
+            if !hasActions {
+                heading
+            } else {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 14) {
+                        heading
+                        Spacer(minLength: 12)
+                        actions(AnyLayout(HStackLayout(spacing: 10)))
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        heading
+                        actions(AnyLayout(HStackLayout(spacing: 10)), isUnder: true)
+                            .padding(.leading, Self.indent)
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        heading
+                        actions(AnyLayout(VStackLayout(alignment: .leading, spacing: 4)), isUnder: true, truncates: true)
+                            .padding(.leading, Self.indent)
+                    }
                 }
-                VStack(alignment: .leading, spacing: 4) {
-                    heading
-                    actions(AnyLayout(HStackLayout(spacing: 10)), isUnder: true)
-                        .padding(.leading, Self.indent)
-                }
-                VStack(alignment: .leading, spacing: 4) {
-                    heading
-                    actions(AnyLayout(VStackLayout(alignment: .leading, spacing: 4)), isUnder: true, truncates: true)
-                        .padding(.leading, Self.indent)
-                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
             VStack(alignment: .leading, spacing: 0) {
                 switch product.kind {
                 case .agent(let own, let added):
@@ -365,13 +370,20 @@ private struct ProductBlock: View {
     /// Its mark and name.
     private var heading: some View {
         HStack(spacing: 14) {
+            // As tall as the name, the mark beside it: the accounts under the name read as its
+            // second line, not a row of their own.
             ProviderLogo(id: product.logo, size: 22)
-                .frame(width: 32)
+                .frame(width: 32, height: 16)
             Text(title)
                 .font(.body.weight(.medium))
                 .lineLimit(1)
                 .help(version.map { "Version \($0)" } ?? "")
         }
+    }
+
+    /// Whether `actions` has anything to show.
+    private var hasActions: Bool {
+        isInstalling || (isAgent && !isInstalled && installCommand != nil) || isUpdating || latest != nil
     }
 
     /// What it needs from you, on the product's line: installing again, or an update; and another

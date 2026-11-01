@@ -22,7 +22,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - The composer's attachments fade at their edges when there are more than fit, and a **+3** (or however many) beside them says how many are past the edge and brings the next one in.
 - The sidebar's accounts stay while the coding agents restart, instead of briefly showing fewer.
 - The command palette shows the letters you typed in bold in each result, and Run shows a play mark.
-- Settings › Accounts has one Add Account menu for the subscriptions, and Edit Bot › Keys one Add Its Own Key menu, instead of a button on every row.
+- Settings › Accounts has one Add Account menu for the subscriptions, and Edit Bot › Keys one Add Its Own Key menu, instead of a button on every row, and a coding agent's accounts sit right under its name.
 - Settings › Vault lists only the bots that can use an item, with Let a Bot Use It to add one, and its activity says what you did on this Mac plainly.
 - A wake-up's form has its title and a close button at the top, the reviewer keyword shows a magnifying glass, and Also Allowed's button reads Add Folder.
 - Search results show the words around the match from the message itself, not a tool's steps, and cut at whole words.
