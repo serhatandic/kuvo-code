@@ -194,7 +194,7 @@
       },
       "site" : "https://app.slack.com",
       "summary" : "Channels, messages and search, through an app you add to your workspace",
-      "symbol" : "number",
+      "symbol" : "bubble.left.and.bubble.right",
       "title" : "Slack",
       "variables" : {
         "CLIENT_ID" : "KUVO_KEY_SLACK_CLIENT_ID",
