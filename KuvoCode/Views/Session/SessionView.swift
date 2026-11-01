@@ -484,6 +484,7 @@ private struct BottomStack: View {
                         keywords: model.keywords,
                         focusRequest: model.composerFocus,
                         modelMenuRequest: model.modelMenuRequest,
+                        sideQuestion: model.asksSideThread ? { model.composerAsksSide = false } : nil,
                         isOffline: offlineMachine != nil,
                         blurRequest: model.composerBlur,
                         commentCount: model.reviewComments.count,

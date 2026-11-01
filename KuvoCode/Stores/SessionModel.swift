@@ -1106,6 +1106,19 @@ final class SessionModel {
             failure = unavailable
             return
         }
+        // The side thread's tag on the composer: a follow-up there, answered with the thread so
+        // far, not a message to the agent. A keyword or command still runs as typed; what's
+        // attached stays (a side question takes none).
+        if asksSideThread, !draftText.hasPrefix("/"), Self.shellCommand(in: draftText) == nil {
+            // One at a time: it waits in the composer while the card says it's answering.
+            guard shownSideThread?.latest.state != .answering else { return }
+            let question = Quoting.message(quotes: draftQuotes, text: draftText)
+            guard !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+            draftText = ""
+            draftQuotes = []
+            askFollowUp(question)
+            return
+        }
         // A "!" or "/" command runs as typed; what you were replying to waits for a message.
         let commands = Keyword.commands(commands, keywords: keywords)
         let isCommand = Self.shellCommand(in: draftText) != nil || SlashCommands.parse(draftText, commands: commands) != nil || GoalCommand(draftText) != nil || typedKeyword(draftText) != nil
@@ -1243,8 +1256,16 @@ final class SessionModel {
     /// Those as side threads, in the order they were started.
     var sideThreads: [SideThread] { SideThread.threads(sideQuestions) }
     /// A question of the side thread that shows over the composer: the latest asked here, until
-    /// it's put away.
-    var shownSideQuestion: String?
+    /// it's put away. Another one showing puts the composer on its thread.
+    var shownSideQuestion: String? {
+        didSet { if shownSideQuestion != nil, shownSideQuestion != oldValue { composerAsksSide = true } }
+    }
+
+    /// The composer asks the side thread rather than the conversation: from when a side question
+    /// is asked or shown, until its tag's × puts the composer back on the conversation.
+    var composerAsksSide = false
+    /// Whether what's sent now is a follow-up in the side thread: while it shows, open.
+    var asksSideThread: Bool { composerAsksSide && shownSideThread != nil && !hidesSideQuestion }
 
     /// The side thread that shows over the composer.
     var shownSideThread: SideThread? {
@@ -1253,15 +1274,9 @@ final class SessionModel {
     }
 
     /// A side question: a new side thread, or a follow-up in `thread`. One that can't be asked
-    /// comes back where it was written (`written`; the follow-up field's when nil).
-    private func askSideQuestion(_ question: String, written: String?, thread: String? = nil) {
-        guard let bridge = goalBridge(), let api = bridge.api else {
-            if let written { return keywordUnavailable(written) }
-            // A follow-up: back in its field, saying why.
-            unsentFollowUp = question
-            failure = "This runs in the agents bridge beside the engine on this conversation’s computer, and it isn’t running now. Try again in a moment."
-            return
-        }
+    /// comes back to the composer as it was written.
+    private func askSideQuestion(_ question: String, written: String, thread: String? = nil) {
+        guard let bridge = goalBridge(), let api = bridge.api else { return keywordUnavailable(written) }
         let session = id
         Task {
             do {
@@ -1272,7 +1287,7 @@ final class SessionModel {
                 bridge.took(asked)
                 shownSideQuestion = asked.id
             } catch {
-                if let written { restoreWritten(written) } else { unsentFollowUp = question }
+                restoreWritten(written)
                 fail(error)
             }
         }
@@ -1282,11 +1297,8 @@ final class SessionModel {
     func askFollowUp(_ question: String) {
         let text = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, let thread = shownSideThread else { return }
-        askSideQuestion(text, written: nil, thread: thread.id)
+        askSideQuestion(text, written: question, thread: thread.id)
     }
-
-    /// A follow-up that couldn't be asked, for its field to show again.
-    var unsentFollowUp: String?
 
     /// Takes a side thread away, all of it.
     func removeSideThread(_ thread: SideThread) {
@@ -1308,6 +1320,8 @@ final class SessionModel {
         await bridge.loadSideQuestions(of: self.id)
         shownSideQuestion = id ?? bridge.sideQuestions[self.id]?.last?.id
         hidesSideQuestion = false
+        // Opened again: the composer asks it, also when it was showing.
+        composerAsksSide = true
     }
 
     /// The side thread's New Side Thread: "/btw " in the composer, ready to finish.

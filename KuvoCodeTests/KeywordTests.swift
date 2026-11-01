@@ -129,9 +129,10 @@ import Testing
         #expect(model.failure == nil)
     }
 
-    // A side thread: a follow-up asked in the thread over the composer is answered with the
-    // thread so far, stays in it, and joins nothing to the conversation; another /btw is a new
-    // thread; and a thread goes whole.
+    // A side thread: while it shows, what's sent from the composer is a follow-up, answered with
+    // the thread so far, kept in it, and joining nothing to the conversation; with its tag's ×
+    // the composer messages the conversation again; another /btw is a new thread; and a thread
+    // goes whole.
     @Test func aSideQuestionsFollowUpIsAnsweredWithItsThread() async throws {
         defer { clean() }
         serve(directory: "/tmp", answers: ["In `onBlur`.", "Because blur fires before the tab hides.", "A duration like 25m."])
@@ -142,7 +143,10 @@ import Testing
         model.draftText = "/btw where does it pause?"
         model.submitDraft(for: nil, queue: false, commands: [])
         try await until { model.sideQuestions.first?.state == .answered }
-        model.askFollowUp("why there?")
+        #expect(model.asksSideThread)
+        model.draftText = "why there?"
+        model.submitDraft(for: nil, queue: false, commands: [])
+        #expect(model.draftText.isEmpty)
         try await until { model.shownSideThread?.questions.count == 2 && model.shownSideThread?.latest.state == .answered }
         let thread = try #require(model.shownSideThread)
         #expect(thread.questions.map(\.question) == ["where does it pause?", "why there?"])
@@ -150,6 +154,15 @@ import Testing
         let asked = engine.requests("POST", "/generate").map { "\($0.body)" }
         #expect(asked.last?.contains("In `onBlur`.") == true)
         #expect(told == 0)
+
+        // The tag's ×: the next message is the conversation's.
+        engine.on("POST", "/api/session/\(id)/prompt", json: ["data": [:]])
+        model.composerAsksSide = false
+        #expect(!model.asksSideThread)
+        model.draftText = "Pause it on blur then."
+        model.submitDraft(for: nil, queue: false, commands: [])
+        try await until { told == 1 }
+        #expect(model.shownSideThread?.questions.count == 2)
 
         model.draftText = "/btw what does parseDuration match?"
         model.submitDraft(for: nil, queue: false, commands: [])

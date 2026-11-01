@@ -43,6 +43,9 @@ struct Composer: View {
     var focusRequest = 0
     /// Opens the model picker when it changes.
     var modelMenuRequest = 0
+    /// While a side thread shows over it: what's sent goes there as a follow-up, which its tag
+    /// says; the tag's × puts it back on the conversation.
+    var sideQuestion: (() -> Void)?
     /// The engine it sends to can't be reached now (its machine is reconnecting): you can write,
     /// not send.
     var isOffline = false
@@ -174,6 +177,10 @@ struct Composer: View {
                 MentionList(files: mention.matches, selected: min(mentionIndex, max(mention.matches.count - 1, 0))) { insertMention($0) }
             } else if let named = agents.matches(in: text, excluding: session) {
                 AgentReferenceList(agents: named, selected: min(agents.selected, named.count - 1)) { agents.insert($0, into: $text) }
+            }
+            if let sideQuestion {
+                SideQuestionTag(close: sideQuestion)
+                    .transition(.opacity)
             }
             if commentCount > 0 {
                 Menu {
@@ -555,6 +562,7 @@ struct Composer: View {
 
     private var placeholder: String {
         if let prompt { return prompt }
+        if sideQuestion != nil { return "Ask a follow-up…" }
         // ⌘↩ to queue instead is in the send button's help.
         if isRunning { return "Add to the task…" }
         if let bot { return bot.job.isEmpty ? "Tell \(bot.name) its job…" : "Message \(bot.name)…" }
@@ -1203,4 +1211,36 @@ private struct ShellModeLabel: View {
 extension EnvironmentValues {
     /// Called when the composer, or an answer to a quote in it, takes the keyboard.
     @Entry var composerFocused: (() -> Void)? = nil
+}
+
+/// "Side question ×" over the composer's field while a side thread shows: what's sent goes there.
+private struct SideQuestionTag: View {
+    let close: () -> Void
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: Keyword.btw.symbol)
+                .font(.system(size: 10.5, weight: .semibold))
+                .accessibilityHidden(true)
+            Text("Side question")
+                .font(.system(size: 12, weight: .medium))
+            Button(action: close) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .frame(width: 16, height: 16)
+                    .contentShape(.circle)
+            }
+            .buttonStyle(.plain)
+            .clickablePointer()
+            .hoverHighlight(in: Circle())
+            .help("Message the conversation instead")
+            .accessibilityLabel("Message the Conversation Instead")
+        }
+        .foregroundStyle(.tint)
+        .padding(.leading, 9)
+        .padding(.trailing, 3)
+        .padding(.vertical, 3)
+        .background(.tint.opacity(0.12), in: .capsule)
+        .help("Asks on the side: answered from the conversation, changing nothing")
+    }
 }
