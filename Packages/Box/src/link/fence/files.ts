@@ -406,7 +406,8 @@ export default {
         // worktree.
         const other = input.sessionID !== undefined && input.sessionID !== call.sessionID
         const to = !other && typeof input.directory === "string" ? located(resolved(work, input.directory.trim())) : ""
-        if (!to || (!within(to, folder) && !(git && repository(to) === git))) {
+        // (Its folder as it's named too, whose letters a move's keeps: their case, an accent's form.)
+        if (!to || (!within(to, folder) && !within(to, located(work)) && !(git && repository(to) === git))) {
           throw new Error("This conversation's commands run in Kuvo Code's sandbox, in its own folder, so it can't move itself to another one. Ask the user to move it.")
         }
         // The engine moves it later, by the folder's name: noted where it really is now, so its

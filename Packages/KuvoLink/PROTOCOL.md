@@ -3016,7 +3016,10 @@ secrets (cloud, package and git tokens, browsers' and password managers' data, p
 every file in `~/.ssh` but its config, known hosts and public keys; gh's `hosts.yml` when it holds
 the token). A bot's or a chat's command gets its own folder back, and not its neighbours'. Its
 environment has none of the engine's `OPENCODE_…` (but `OPENCODE_SESSION_ID`), no `KUVO_…` password,
-secret, token or key, and no `SSH_AUTH_SOCK` but its own SSH agent's (below).
+secret, token or key, and no `SSH_AUTH_SOCK` but its own SSH agent's (below); on macOS it can't
+reach your SSH and GPG agents' sockets either (the system's, where launchd keeps it, gpg-agent's,
+1Password's and Secretive's), which sign with the keys it can't read. (Linux can't refuse a socket:
+there it's only not told where yours is.)
 On macOS your Keychain stays readable, as gh and git's Keychain helper read their sign-ins from it in
 their own process (each item keeps its own access list, Kuvo Code's too, though one that trusts
 `security` reads without asking, and the file itself can be copied), but not the system's own

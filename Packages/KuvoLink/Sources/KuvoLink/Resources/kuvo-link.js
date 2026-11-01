@@ -5118,7 +5118,14 @@ function fencePolicy(ports = []) {
       ],
       patternFolders: [`^${escapeRegex(home)}/Library/[^/]+$`, `^/private/var/folders/[^/]+/[^/]+/[^/]+$`],
       writable: ["/private/tmp", "/private/var/tmp", "/dev", ...userTemporary(), ...inHome([...CACHES, ...MAC_CACHES])],
-      sockets: inHome([".codex/ipc", ".grok"]),
+      sockets: inHome([
+        ".codex/ipc",
+        ".grok",
+        ".gnupg",
+        "Library/Group Containers/2BUA8C4S2C.com.1password/t",
+        "Library/Containers/com.maxgoedjen.Secretive.SecretAgent/Data"
+      ]),
+      socketPatterns: ["^/private/(var/run|tmp)/com\\.apple\\.launchd\\.[^/]+/"],
       secrets: [...inHome([...SECRETS, ...MAC_SECRETS]), ...keychainDaemons(home).map(realish), ...sshKeys(home).map(realish), ...ghHosts(home).map(realish)]
     };
   }
@@ -5428,7 +5435,7 @@ function seatbeltProfile(policy, options) {
     allow("network-outbound", `(remote tcp (string-append "localhost:" (param "PORT")))`);
   deny("network-outbound", ...policy.kuvo.map((folder) => `(remote unix-socket ${subpath(folder)})`), ...policy.kuvoPatterns.map((pattern) => `(remote unix-socket ${regex(pattern)})`));
   out.push(";; other apps' sockets that run what they're asked outside it");
-  deny("network-outbound", ...(policy.sockets ?? []).map((folder) => `(remote unix-socket ${subpath(folder)})`));
+  deny("network-outbound", ...(policy.sockets ?? []).map((folder) => `(remote unix-socket ${subpath(folder)})`), ...(policy.socketPatterns ?? []).map((pattern) => `(remote unix-socket ${regex(pattern)})`));
   allow("network-outbound", `(remote unix-socket ${param("TMP")})`);
   allow("network-outbound", `(remote unix-socket (literal (param "SSH")))`);
   out.push(";; what would run outside the sandbox: launchd jobs, apps opened (LaunchServices), Apple Events");
@@ -5750,7 +5757,8 @@ export default {
         // worktree.
         const other = input.sessionID !== undefined && input.sessionID !== call.sessionID
         const to = !other && typeof input.directory === "string" ? located(resolved(work, input.directory.trim())) : ""
-        if (!to || (!within(to, folder) && !(git && repository(to) === git))) {
+        // (Its folder as it's named too, whose letters a move's keeps: their case, an accent's form.)
+        if (!to || (!within(to, folder) && !within(to, located(work)) && !(git && repository(to) === git))) {
           throw new Error("This conversation's commands run in Kuvo Code's sandbox, in its own folder, so it can't move itself to another one. Ask the user to move it.")
         }
         // The engine moves it later, by the folder's name: noted where it really is now, so its

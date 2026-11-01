@@ -140,7 +140,8 @@ export function seatbeltProfile(policy: FencePolicy, options: SeatbeltOptions): 
   deny("network-outbound", ...policy.kuvo.map(folder => `(remote unix-socket ${subpath(folder)})`),
     ...policy.kuvoPatterns.map(pattern => `(remote unix-socket ${regex(pattern)})`));
   out.push(";; other apps' sockets that run what they're asked outside it");
-  deny("network-outbound", ...(policy.sockets ?? []).map(folder => `(remote unix-socket ${subpath(folder)})`));
+  deny("network-outbound", ...(policy.sockets ?? []).map(folder => `(remote unix-socket ${subpath(folder)})`),
+    ...(policy.socketPatterns ?? []).map(pattern => `(remote unix-socket ${regex(pattern)})`));
   // But its own, in its temporary folder (in the app's on this Mac).
   allow("network-outbound", `(remote unix-socket ${param("TMP")})`);
   // And its own SSH agent, Kuvo Code's (vault/ssh.ts), in `/tmp/kuvo-ssh-<uid>` with the app's

@@ -802,15 +802,18 @@ test("a project named in another case or Unicode form than its folder's on disk 
   const box = boxAt("folder-named-otherwise");
   // On disk: "Case Project" and "café" (é one letter); given: "case project" and "café" (e, then its accent).
   const folders = [[path.join(root, "Case Project"), path.join(root, "case project")], [path.join(root, "caf\u00e9"), path.join(root, "cafe\u0301")]];
-  for (const [disk] of folders) fs.mkdirSync(disk);
+  for (const [disk] of folders) fs.mkdirSync(path.join(disk, "sub"), { recursive: true });
   // The engine's plugin as the engine runs it, on Bun: the shell and environment it gives a command.
   const opens = path.join(root, "opens.mjs");
   fs.writeFileSync(opens, `const plugin = (await import(process.argv[2])).default
-let hook
-await plugin.setup({ location: { directory: process.argv[3] }, shell: { hook: async (name, take) => { hook = take } }, tool: { hook: async () => {} } })
+let hook, tools
+await plugin.setup({ location: { directory: process.argv[3] }, shell: { hook: async (name, take) => { hook = take } }, tool: { hook: async (name, take) => { tools = take } } })
 const input = { command: "", cwd: process.argv[3], shell: "/bin/sh", env: {} }
 hook(input)
-console.log(JSON.stringify({ shell: input.shell, env: input.env }))
+// And moving its conversation to a folder in it.
+let moves = "moves"
+try { await tools({ tool: "opencode_session_move", sessionID: "ses_case", input: { directory: "sub" } }) } catch { moves = "refused" }
+console.log(JSON.stringify({ shell: input.shell, env: input.env, moves }))
 `);
   const bun = testBun();
   assert.ok(bun, NO_BUN);
@@ -820,7 +823,8 @@ console.log(JSON.stringify({ shell: input.shell, env: input.env }))
     for (const [disk, given] of folders) {
       const opened = spawnSync(bun, [opens, pathToFileURL(box.plugin).href, given], { encoding: "utf8", env: { ...process.env, BUN_BE_BUN: "1" } });
       assert.equal(opened.status, 0, opened.stderr);
-      const { shell, env } = JSON.parse(opened.stdout);
+      const { shell, env, moves } = JSON.parse(opened.stdout);
+      assert.equal(moves, "moves", given);
       const ran = spawnSync(shell, ["-c", "echo ran > ran.txt"], { cwd: given, env: { PATH: process.env.PATH, HOME: root, ...env }, encoding: "utf8" });
       assert.equal(ran.status, 0, `${given}: ${ran.stdout}${ran.stderr}`);
       assert.equal(fs.readFileSync(path.join(disk, "ran.txt"), "utf8"), "ran\n");

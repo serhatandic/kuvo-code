@@ -46,8 +46,13 @@ export interface FencePolicy {
    * passwords are in files a command can't read. */
   ports: number[];
   /** Other apps' sockets that run what they're asked, outside the sandbox (folders), refused where
-   * the system can (macOS): the ChatGPT app's, and Grok's shared leader's (`~/.grok/leader.sock`). */
+   * the system can (macOS): the ChatGPT app's, Grok's shared leader's (`~/.grok/leader.sock`), and
+   * your SSH and GPG agents', which sign with the keys commands can't read (gpg-agent's, 1Password's,
+   * Secretive's). */
   sockets?: string[];
+  /** On macOS, more of them by name: regular expressions over whole paths (the system's SSH agent's,
+   * where launchd keeps it). */
+  socketPatterns?: string[];
 }
 
 // Tools' caches, written by installs and builds in any project.
@@ -179,7 +184,9 @@ export function fencePolicy(ports: number[] = []): FencePolicy {
       ],
       patternFolders: [`^${escapeRegex(home)}/Library/[^/]+$`, `^/private/var/folders/[^/]+/[^/]+/[^/]+$`],
       writable: ["/private/tmp", "/private/var/tmp", "/dev", ...userTemporary(), ...inHome([...CACHES, ...MAC_CACHES])],
-      sockets: inHome([".codex/ipc", ".grok"]),
+      sockets: inHome([".codex/ipc", ".grok", ".gnupg", "Library/Group Containers/2BUA8C4S2C.com.1password/t",
+        "Library/Containers/com.maxgoedjen.Secretive.SecretAgent/Data"]),
+      socketPatterns: ["^/private/(var/run|tmp)/com\\.apple\\.launchd\\.[^/]+/"],
       secrets: [...inHome([...SECRETS, ...MAC_SECRETS]), ...keychainDaemons(home).map(realish), ...sshKeys(home).map(realish), ...ghHosts(home).map(realish)],
     };
   }
