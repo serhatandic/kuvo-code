@@ -280,7 +280,7 @@ connection.
     back the conversation as `read_conversation` words it (or the parts that mention `query`),
     about 20,000 characters at most, as an answer that also carries `read: {}`. An answer with
     `read` that no tool waits for any more is dropped, never delivered as a message.
-  - **`note`** `{from, words, delivery, line?}` (bridge 0.9.163): the letter is the sending box's
+  - **`note`** `{from, words, delivery, line?}`: the letter is the sending box's
     own word, not an agent's, for one of its conversations that moved away from it in the last two
     days (its sessions' news, an answer you gave late, an answer its tool never took). Only a box
     leaves one; an agent's letter never has it. The receiver checks and counts it as any letter,
