@@ -309,14 +309,15 @@ connection.
     the link as its own (not one a Mac renamed `.mac-<name>` to deliver).
 - **Moves**: `{"move": {op, id, …}}` carries a move between two boxes (`kuvo/moves`), and
   `{"moving": {"moves": [Move]}}` tells every peer what moves on the sending box now, as its own
-  `kuvo/moves` shows it (`Move`, without `place`; 20 moves and 50 conversations each at most): a
-  moment after a move begins, goes a stage on or ends (one mail for a burst; how much of its copy
+  `kuvo/moves` shows it (`Move`, without `place`; 20 moves and 50 conversations each at most), at
+  its look every three seconds: when a move began, went a stage on or ended (how much of its copy
   went isn't news), each minute while any are under way, and at the next look after a peer asks for
-  agents. A box that has nothing moving says nothing, and once its last move ends it says `moves:
-  []` once. Each box keeps the newest word from each peer (`run/moves/elsewhere.json`; mail older
-  than the last from that peer changes nothing), lists it in its `kuvo/moves` as `elsewhere`, and
-  forgets a peer's word three minutes after it last came (that peer went away mid-move). An older
-  box ignores `moving`.
+  agents. One its relay connection didn't take (closing, or not welcomed yet) goes at the next look.
+  A box that has nothing moving says nothing, and once its last move ends it says `moves: []` once.
+  Each box keeps the latest word from each peer, whatever the peer's clock says
+  (`run/moves/elsewhere.json`), lists it in its `kuvo/moves` as `elsewhere`, and forgets a peer's
+  word three minutes after it last came (that peer went away mid-move). An older box ignores
+  `moving`.
 - **Group chats**: a chat lives on one box (its host) and runs there. A member that lives on
   another box (its home, a peer whose `features` say `groups.seats`) takes its turn there, in a
   seat of the home's own, and does its part of the work and remembers the chat in its own
@@ -443,10 +444,10 @@ A client asks the box it lives on once, and watches; the move goes on with no cl
   while its copy is let go of). `away`: conversations this box's engine lists that don't live here (a copy not
   switched to yet or being let go of, an original still going): clients leave them out.
   `elsewhere: [{box, moves: [Move]}]`, left out when there are none: the moves your other
-  computers said they have under way (`box`, its key; "Peers", `moving`), so a client that follows
-  one box sees a move between two others too. A move between this box and a peer is in both
-  `moves` and that peer's `elsewhere`, and one between two peers in each of theirs: a client
-  takes each `id` once, this box's own first.
+  computers said they have under way between them (`box`, its key; "Peers", `moving`), so a client
+  that follows one box sees a move between two others too. One to or from this box isn't in it
+  (it's this box's own, in `moves` once it hears of it); one between two peers is in each of
+  theirs, so a client takes each `id` once.
 - While it moves, nothing reaches it: a prompt to one of its conversations through the link answers
   `409 {message}`, as does a change to its queue (`…/queue/…`; reading it still works, and a Stop
   works while the box it leaves waits for its turn to end), a letter `retry`, its wake-ups and watches are held (`paused` says `moving`), and
