@@ -382,8 +382,9 @@ function withdraw(): void {
 /**
  * Commands' temporary folders on a box that isn't this Mac's (which has the app's own): `t` in its
  * folder, as near its top as it can be, so a socket fits in them under a home folder's path that's
- * long too. Each conversation's is the only one its commands reach (the rest of Kuvo Code's folder
- * is hidden from them).
+ * long too. Commands can't list it, and on Linux each one's namespace has only its own
+ * conversation's in it (fence/landlock.ts's HIDE); on a Mac, the sandbox's rules let each reach only
+ * its own.
  */
 const TEMPORARY = realish(path.join(K, "t"));
 
@@ -405,9 +406,9 @@ function writeTemporary(): void {
   const root = appTemporary() ?? TEMPORARY;
   const [had, key] = (textOf(file) ?? "").split("\n");
   if (had === root && /^[0-9a-f]{64}$/.test(key ?? "")) return;
+  // (Those from before, in the sandbox's own folder, stay for what a command may still have running
+  // in one, as a build or a tmux server, and go a week after their last command: sweepWakeFolders.)
   writePrivate(file, `${root}\n${crypto.randomBytes(32).toString("hex")}\n`);
-  // Those from before in the sandbox's own folder go, once they're kept elsewhere.
-  for (const name of listOf(path.join(FOLDER, "tmp"))) fs.rmSync(path.join(FOLDER, "tmp", name), { recursive: true, force: true });
 }
 
 /**
