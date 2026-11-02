@@ -38,11 +38,9 @@ struct SidebarView: View {
     @State private var renaming: RenameTarget?
     /// The session waiting for the user to confirm its deletion.
     @State private var deleting: Session?
-    /// A session in a worktree being archived, while the user decides about its worktree.
-    @State private var archiving: Session?
     /// The project waiting for the user to confirm its removal.
     @State private var removingProject: Workspace.Project?
-    /// The worktree of the session being archived or deleted has changes that aren't committed.
+    /// The worktree of the session being deleted has changes that aren't committed.
     @State private var worktreeIsDirty = false
 
     private enum Place { case pinned, project, chats, recents }
@@ -281,28 +279,10 @@ struct SidebarView: View {
             deleting.flatMap(\.title).map { "Delete “\($0)”?" } ?? "Delete This Session?",
             isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } })
         ) {
-            if let session = deleting, hasOwnWorktree(session) {
-                Button("Delete and Remove Worktree", role: .destructive) { delete(session, removingWorktree: true) }
-                Button("Delete Session Only") { delete(session, removingWorktree: false) }
-            } else {
-                Button("Delete", role: .destructive) { if let session = deleting { delete(session, removingWorktree: false) } }
-            }
+            Button("Delete", role: .destructive) { if let session = deleting { delete(session) } }
             Button("Cancel", role: .cancel) {}
         } message: {
-            if let session = deleting, hasOwnWorktree(session) {
-                Text("The session and its transcript will be deleted. This can't be undone. " + worktreeNote(session))
-            } else {
-                Text("The session and its transcript will be deleted. This can't be undone.")
-            }
-        }
-        .alert("Remove Its Worktree Too?", isPresented: Binding(get: { archiving != nil }, set: { if !$0 { archiving = nil } })) {
-            if let session = archiving {
-                Button("Archive and Remove Worktree", role: worktreeIsDirty ? .destructive : nil) { archive(session, removingWorktree: true) }
-                Button("Archive Only") { archive(session, removingWorktree: false) }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            if let session = archiving { Text(worktreeNote(session)) }
+            if let session = deleting { Text(deletionNote(session)) }
         }
         .alert(removingProject.map { "Remove “\($0.name)”?" } ?? "Remove This Project?", isPresented: Binding(get: { removingProject != nil }, set: { if !$0 { removingProject = nil } })) {
             Button("Remove") { if let project = removingProject { remove(project) } }
@@ -607,13 +587,15 @@ struct SidebarView: View {
         workspace.worktrees[session.location.directory] != nil && !workspace.worktreeIsShared(session.location.directory, besides: session.id)
     }
 
-    private func worktreeNote(_ session: Session) -> String {
-        let branch = workspace.worktrees[session.location.directory]?.branch ?? "its branch"
-        return "Its worktree is a copy of the project on \(branch). Removing it keeps the branch and its commits (a branch that's merged already goes, its commits kept where it was merged)"
-            + (worktreeIsDirty ? ", but throws away the changes that aren't committed." : ".")
+    /// What else goes: its worktree, once its last session does (the box removes it), and the
+    /// changes in it that weren't committed, unless archived sessions there keep them.
+    private func deletionNote(_ session: Session) -> String {
+        guard hasOwnWorktree(session) else { return "This can’t be undone." }
+        let keepsChanges = workspace.worktreeHasArchivedSessions(session.location.directory, besides: session.id)
+        return worktreeIsDirty && !keepsChanges ? "Its worktree and changes that weren’t committed are deleted too." : "Its worktree is deleted too."
     }
 
-    /// Asks about the worktree first when the session has one of its own.
+    /// Reads whether its worktree has changes that weren't committed first, for what Delete says.
     private func confirm(_ session: Session, then ask: @escaping (Session) -> Void) {
         guard hasOwnWorktree(session) else { return ask(session) }
         let directory = session.location.directory
@@ -623,36 +605,10 @@ struct SidebarView: View {
         }
     }
 
-    private func archive(_ session: Session, removingWorktree: Bool) {
-        let discarding = worktreeIsDirty
-        Task {
-            // A worktree that stays keeps its session in the list too.
-            if removingWorktree, !(await removeWorktree(of: session, discarding: discarding)) { return }
-            await workspace.setArchived(session.id, true)
-        }
-    }
-
-    private func delete(_ session: Session, removingWorktree: Bool) {
+    private func delete(_ session: Session) {
         if selection == session.id { selection = nil }
-        let discarding = worktreeIsDirty
         Task {
-            // Its worktree goes once it has: one its engine refused keeps it, and says why. A
-            // worktree that stays shows in Settings › Worktrees.
-            do { try await workspace.delete(session.id) } catch { return Modal.show(error) }
-            if removingWorktree { await removeWorktree(of: session, discarding: discarding) }
-        }
-    }
-
-    /// Whether it went; why not, if not, in an alert. `discarding`: you were told its changes that
-    /// aren't committed go.
-    @discardableResult
-    private func removeWorktree(of session: Session, discarding: Bool) async -> Bool {
-        do {
-            try await workspace.removeWorktree(session.location.directory, discardingChanges: discarding)
-            return true
-        } catch {
-            Modal.show(error)
-            return false
+            do { try await workspace.delete(session.id) } catch { Modal.show(error) }
         }
     }
 
@@ -1146,7 +1102,7 @@ struct SidebarView: View {
                 .disabled(moving)
         } else {
             Button("Archive") {
-                if hasOwnWorktree(session) { confirm(session) { archiving = $0 } } else { Task { await workspace.setArchived(session.id, true) } }
+                Task { await workspace.setArchived(session.id, true) }
             }
             .disabled(moving)
         }

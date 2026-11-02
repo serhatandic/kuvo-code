@@ -220,6 +220,14 @@ private struct BottomStack: View {
         var value: Value
     }
 
+    /// The worktree its box removed from where it works, once its sessions were archived: shown
+    /// while it's open again (an archived one opened from search would only be removed again).
+    private var removedWorktree: Workspace.RestorableWorktree? {
+        let folder = model.session.location.directory
+        guard workspace.worktrees[folder] == nil, !Workspace.isArchived(model.session) else { return nil }
+        return workspace.restorableWorktrees[folder]
+    }
+
     /// The bars showing in the card, in its order.
     private var bars: [ComposerBar] {
         var bars: [ComposerBar] = []
@@ -399,6 +407,14 @@ private struct BottomStack: View {
                         .modifier(ComposerSurface())
                         .transition(.opacity)
                 }
+                // Its worktree removed once its sessions were archived: brought back, or left for the
+                // project's own folder.
+                if let worktree = removedWorktree {
+                    WorktreeRestoreBar(session: model.session, worktree: worktree) { model.failure = $0 }
+                        .disabled(offlineMachine != nil)
+                        .modifier(ComposerSurface())
+                        .transition(.opacity)
+                }
                 // The bars, what's waiting and the composer: one card.
                 VStack(spacing: 0) {
                     if tucked {
@@ -525,6 +541,9 @@ private struct BottomStack: View {
             .animation(.ui, value: folds)
             .animation(.ui, value: isAsking)
             .animation(.ui, value: tucked)
+            .animation(.ui, value: removedWorktree?.folder)
+            // A machine's box removes and restores worktrees without telling this Mac: read as it shows.
+            .task(id: model.session.location.directory) { await workspace.refreshWorktrees(for: model.session) }
             // A bot's work read from its box as it changes (a session of it started, at work,
             // asking, done), wherever the bot lives.
             .task(id: workChanges) {
