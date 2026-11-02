@@ -167,7 +167,9 @@ export function launcherScript(places: FencePlaces): string {
     ...(places.platform === "darwin" ? [`tmp=$(cd "$tmp" 2>/dev/null && pwd -P) || { echo "This command can't run: its temporary folder isn't there." >&2; exit 126; }`] : []),
     // tmux's server, in it too: one a command starts is there for the conversation's next ones, and
     // never the one your terminals attach to (yours, which types into them, commands can't reach).
+    // Not the one Kuvo Code was started in either, which tmux would take for it.
     `export TMUX_TMPDIR="$tmp"`,
+    "unset TMUX TMUX_PANE",
     // Its conversation's wake-ups and watches (kuvo-wake): its bot's folder, or its own in the
     // box's wakes folder, which this makes with the folder it works in (never the command's: a
     // watch's check runs there). The engine names the conversation; your ! commands have none, and

@@ -18,8 +18,9 @@ public enum CommandEnvironment {
     public static let prefix = "KUVO_OWN_"
 
     /// What commands don't get at all: the settings Kuvo Code gives the engine, with the key to
-    /// the browser tools in them, which the agent's `env` would print.
-    public static let withheld = ["OPENCODE_CONFIG_CONTENT"]
+    /// the browser tools in them, which the agent's `env` would print; and the tmux Kuvo Code was
+    /// started in, where a command's own tmux would open its windows.
+    public static let withheld = ["OPENCODE_CONFIG_CONTENT", "TMUX", "TMUX_PANE"]
 
     /// The plugin's file, in the engine's `plugins` folder beside its settings file, where it
     /// finds plugins by itself.
