@@ -57,7 +57,7 @@ import Testing
         #expect(plan.yours.map(\.text) == ["Add a Cloudflare API token"], "what only you can do comes first, with its button")
         #expect(plan.phases == ["Launch"])
         #expect(GoalPlanWords.spend(plan.spend[0]) == "ads, up to $20 a day")
-        #expect(GoalPlanWords.spoken(plan.steps[0]) == "Build the site, not started")
+        #expect(GoalPlanWords.spokenState(of: plan.steps[0], in: plan) == "not started")
         #expect(app.workspace.needsAttention("ses_pixel"), "the bot waits on you in the sidebar")
 
         let ends = Date.now.addingTimeInterval(7 * 86_400)
@@ -90,7 +90,7 @@ import Testing
         await app.goalPlans.read("lab")
         let (box, plan) = try #require(app.goalPlans.plan(for: "ses_pixel"))
         #expect(plan.underWay.map(\.text) == ["Build the site"])
-        #expect(GoalPlanWords.spoken(plan.steps[0]) == "Build the site, half done")
+        #expect(GoalPlanWords.spokenState(of: plan.steps[0], in: plan) == "About half")
         #expect(GoalPlanWords.progress(plan) == "0 of 2")
         let stopped = try #require(try await app.goalPlans.answer(plan, on: box, .stop))
         #expect(stopped.state == .stopped)
