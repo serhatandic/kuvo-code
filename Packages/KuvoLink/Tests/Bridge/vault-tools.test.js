@@ -10,10 +10,15 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { before, test } from "node:test";
+import { before as nodeBefore, test as nodeTest } from "node:test";
 import { fileURLToPath } from "node:url";
 import { sshAgentsOf } from "./bot-keys-scenarios.js";
 import { atEnd, removeAtEnd } from "./at-end.js";
+import { appears, asked as askedAt } from "./vault-waits.js";
+
+// Each fails at its own time limit when what it waits for never comes, rather than holding up the run.
+const test = (name, run) => nodeTest(name, { timeout: 60_000 }, run);
+const before = run => nodeBefore(run, { timeout: 60_000 });
 
 // (Short: the vault's socket is in it.)
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kvt-")));
@@ -78,7 +83,7 @@ before(async () => {
   let out = "";
   box.stdout.setEncoding("utf8");
   const url = await new Promise(resolve => box.stdout.on("data", chunk => { out += chunk; if (out.includes("\n")) resolve(JSON.parse(out.split("\n")[0]).url); }));
-  for (let tries = 0; tries < 100 && !fs.existsSync(path.join(home, "run", "vault.sock")); tries++) await new Promise(done => setTimeout(done, 20));
+  await appears(path.join(home, "run"), () => fs.existsSync(path.join(home, "run", "vault.sock")));
   client = async (method, route, body) => {
     const response = await fetch(`${url}/${route}`, { method, headers: { authorization: `Basic ${Buffer.from("opencode:box-pw").toString("base64")}`, "content-type": "application/json", "x-kuvo-from": "app" }, body: body ? JSON.stringify(body) : undefined });
     return { status: response.status, value: await response.json().catch(() => ({})) };
@@ -118,24 +123,7 @@ const call = (name, args, session = "ses_ship") => {
   return ask("tools/call", { name, arguments: args, _meta: { "ai.opencode/sessionID": session } });
 };
 /** What the box asks you, once it asks something new (its asks as a client follows them). */
-async function asked(seen = new Set()) {
-  const stop = new AbortController();
-  const response = await fetch(asksURL, { headers: { authorization: `Basic ${Buffer.from("opencode:box-pw").toString("base64")}`, "x-kuvo-from": "app" }, signal: stop.signal });
-  let buffer = "";
-  for await (const chunk of response.body.pipeThrough(new TextDecoderStream())) {
-    buffer += chunk;
-    let end;
-    while ((end = buffer.indexOf("\n")) >= 0) {
-      const { asks } = JSON.parse(buffer.slice(0, end));
-      buffer = buffer.slice(end + 1);
-      if (asks?.some(each => !seen.has(each.id))) {
-        stop.abort();
-        return asks.filter(each => !seen.has(each.id));
-      }
-    }
-  }
-  throw new Error("The box stopped telling its asks.");
-}
+const asked = (seen = new Set()) => askedAt(asksURL, "box-pw", seen);
 /** `asked`, or a failure if `running` ends first (it ran, or gave up, without asking). */
 const askedBefore = (running, seen) => Promise.race([asked(seen), running.then(ran => assert.fail(`It didn't ask: ${ran.content?.[0]?.text ?? JSON.stringify(ran)}`))]);
 

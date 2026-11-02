@@ -13,10 +13,14 @@ import http from "node:http";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { before, test } from "node:test";
+import { before as nodeBefore, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { sshAgentsOf } from "./bot-keys-scenarios.js";
 import { atEnd, removeAtEnd } from "./at-end.js";
+import { appears, asked } from "./vault-waits.js";
+
+// Each fails at its own time limit when what it waits for never comes, rather than holding up the run.
+const before = run => nodeBefore(run, { timeout: 60_000 });
 
 // (Short: the vault's and the browser's sockets are in it.)
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kvf-")));
@@ -136,13 +140,15 @@ const keeper = net.createServer(socket => {
 await new Promise(resolve => keeper.listen(path.join(home, "run", "browser.sock"), resolve));
 atEnd(() => keeper.close());
 
-// The box's own process, which holds the vault.
+// The box's own process, which holds the vault, and where it tells what the vault asks you.
 let box;
+let asksURL;
 before(async () => {
   box = spawn(process.execPath, [script, "serve"], { env: { ...env, OPENCODE_PASSWORD: "box-pw" }, stdio: ["pipe", "pipe", "ignore"] });
   let out = "";
   box.stdout.setEncoding("utf8");
-  await new Promise(resolve => box.stdout.on("data", chunk => { out += chunk; if (out.includes("\n")) resolve(); }));
+  const url = await new Promise(resolve => box.stdout.on("data", chunk => { out += chunk; if (out.includes("\n")) resolve(JSON.parse(out.split("\n")[0]).url); }));
+  asksURL = `${url}/kuvo/vault/asks/events`;
 });
 
 // The Mac over SSH: `box route`, with the vault's key when it has one.
@@ -156,9 +162,8 @@ async function fromMac(method, route, body, key) {
   return { status: answer.status, value: JSON.parse(answer.body || "{}") };
 }
 // What the vault asks you now, once it does.
-async function askedNow(key) {
-  let asks = [];
-  for (let tries = 0; tries < 100 && !asks.length; tries++) asks = (await fromMac("GET", "kuvo/vault/asks", undefined, key)).value.asks;
+async function askedNow() {
+  const asks = await asked(asksURL, "box-pw");
   assert.equal(asks.length, 1, "the vault asks you");
   return asks[0];
 }
@@ -194,9 +199,12 @@ const started = promise => {
 
 let key;
 before(async () => {
-  // (Its socket's file appears a moment before it answers: the key, once it does.)
+  // Once its socket is there; and (its file appears a moment before it answers) asked again, each
+  // time it answers it isn't open yet.
+  const run = path.join(home, "run");
+  await appears(run, () => fs.existsSync(path.join(run, "vault.sock")));
   let made;
-  for (let tries = 0; tries < 100 && (!made || made.status === 503); tries++) made = await fromMac("POST", "kuvo/vault/key", proof());
+  do made = await fromMac("POST", "kuvo/vault/key", proof()); while (made.status === 503);
   assert.equal(made.status, 200, JSON.stringify(made.value));
   key = made.value.key;
   const added = await fromMac("POST", "kuvo/vault/items", { name: "GitHub", kind: "login", sites: ["github.com"], username: "ship-bot", values: { password: SECRET } }, key);
@@ -206,7 +214,7 @@ before(async () => {
 
 test("while the vault asks you about a sign-in, other conversations keep browsing, and the sign-in goes in once you allow it", { timeout: 60_000 }, async () => {
   const signIn = started(call("ses_ship", "browser_sign_in", { username: 1, password: 2, item: "GitHub" }));
-  const asked = await askedNow(key);
+  const asked = await askedNow();
   assert.equal(asked.itemName, "GitHub");
   // Another conversation's step, meanwhile: it isn't held up by the one waiting for you.
   const other = await call("ses_shop", "browser_snapshot", {});
@@ -225,7 +233,7 @@ test("while the vault asks you about a sign-in, other conversations keep browsin
 test("a page that left its site while the vault asked you gets nothing", { timeout: 60_000 }, async () => {
   pages.login.filled = [];
   const signIn = started(call("ses_ship", "browser_sign_in", { username: 1, password: 2, item: "GitHub" }));
-  const asked = await askedNow(key);
+  const asked = await askedNow();
   // Meanwhile the page went elsewhere (a redirect, another step in it).
   pages.login.url = "https://github.com.evil.example/login";
   assert.equal((await fromMac("POST", `kuvo/vault/asks/${asked.id}`, { answer: "once" }, key)).status, 200);
@@ -241,7 +249,7 @@ test("a process without the box's socket key gets nothing from the vault's socke
   pages.login.url = "https://github.com/login";
   pages.login.filled = [];
   const signIn = started(call("ses_ship", "browser_sign_in", { username: 1, password: 2, item: "GitHub" }));
-  const asked = await askedNow(key);
+  const asked = await askedNow();
   const said = await new Promise(resolve => {
     const socket = net.createConnection(path.join(home, "run", "vault.sock"));
     let heard = "";
