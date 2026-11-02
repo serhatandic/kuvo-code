@@ -15602,15 +15602,21 @@ async function switchHere(record) {
       }).catch(() => {});
   }
 }
-async function drop(id) {
+function letGo2(id) {
   const record = readMove(id);
   if (!record || record.role !== "to")
-    return;
+    return null;
   noteEnded(id, "dropped");
   if (!record.dropping)
     changeMove(id, (each) => {
       each.dropping = true;
     });
+  return record;
+}
+async function drop(id) {
+  const record = letGo2(id);
+  if (!record)
+    return;
   await clearCopy(record);
   forgetMove(id);
   loggedStuck.delete(id);
@@ -15695,8 +15701,8 @@ async function moveMail(sender, given, id) {
         forgetMove(id);
         return void tell(sender.key, { op: "switched", id });
       }
-      if (mine?.role === "to" && !await drop(id).then(() => true, () => false))
-        return;
+      if (mine?.role === "to")
+        return letGoOf(sender, id);
       return void tell(sender.key, { op: endedAs(id) === "switched" ? "switched" : "dropped", id });
     }
     case "arrive": {
@@ -15716,8 +15722,8 @@ async function moveMail(sender, given, id) {
         return;
       if (endedAs(id) === "switched")
         return void tell(sender.key, { op: "switched", id });
-      if (mine?.role === "to" && !await drop(id).then(() => true, () => false))
-        return;
+      if (mine?.role === "to")
+        return letGoOf(sender, id);
       return void tell(sender.key, { op: "dropped", id });
     case "ready":
       if (mine?.role !== "from" || mine.step !== "offer")
@@ -15773,6 +15779,15 @@ async function moveMail(sender, given, id) {
     case "working":
       return;
   }
+}
+async function letGoOf(sender, id) {
+  try {
+    letGo2(id);
+  } catch {
+    return;
+  }
+  tell(sender.key, { op: "dropped", id });
+  await drop(id).catch(() => {});
 }
 function keepMoving(now = Date.now()) {
   if (groupsToWake && now - groupsLookedAt > STEP_AGAIN) {

@@ -776,14 +776,22 @@ async function switchHere(record: MoveRecord): Promise<void> {
   }
 }
 
-/** A copy here that won't be switched to: gone, as if it never came. One that can't all go now (its
- * engine or group chats down) is kept, never switched to, and let go of again each minute
- * (`keepMoving`) until it's all gone: its record goes only then, never leaving a second copy live. */
-async function drop(id: string): Promise<void> {
+/** A copy here that won't be switched to from now on (`dropping`, and noted as dropped): what's
+ * here of it stays held until it's gone. */
+function letGo(id: string): MoveRecord | null {
   const record = readMove(id);
-  if (!record || record.role !== "to") return;
+  if (!record || record.role !== "to") return null;
   noteEnded(id, "dropped");
   if (!record.dropping) changeMove(id, each => { each.dropping = true; });
+  return record;
+}
+
+/** A copy here that won't be switched to: gone, as if it never came. One that can't all go now (its
+ * engine or group chats down) is kept, held and never switched to, and let go of again each minute
+ * (`keepMoving`) until it's all gone: its record goes only then, never leaving a second copy live. */
+async function drop(id: string): Promise<void> {
+  const record = letGo(id);
+  if (!record) return;
   await clearCopy(record);
   forgetMove(id);
   loggedStuck.delete(id);
@@ -885,8 +893,7 @@ async function moveMail(sender: MailSender, given: Record<string, unknown>, id: 
         forgetMove(id);
         return void tell(sender.key, { op: "switched", id });
       }
-      // (One that can't all go yet isn't said gone: asked again, it's answered once it is.)
-      if (mine?.role === "to" && !await drop(id).then(() => true, () => false)) return;
+      if (mine?.role === "to") return letGoOf(sender, id);
       return void tell(sender.key, { op: endedAs(id) === "switched" ? "switched" : "dropped", id });
     }
     // Asked again whether its copy arrived (that word may have been lost): as it is here.
@@ -903,7 +910,7 @@ async function moveMail(sender: MailSender, given: Record<string, unknown>, id: 
       if (record && !mine) return;
       // A copy switched to already can't be let go: the box it came from goes on to finish.
       if (endedAs(id) === "switched") return void tell(sender.key, { op: "switched", id });
-      if (mine?.role === "to" && !await drop(id).then(() => true, () => false)) return;
+      if (mine?.role === "to") return letGoOf(sender, id);
       return void tell(sender.key, { op: "dropped", id });
     // To the box it leaves.
     case "ready":
@@ -946,6 +953,19 @@ async function moveMail(sender: MailSender, given: Record<string, unknown>, id: 
     case "working":
       return;
   }
+}
+
+/** The copy here of a move the box it came from takes back: said `dropped` as soon as it's marked
+ * so (it's never switched to after), so that box goes on with its original at once; what's here of
+ * it goes now, or, held meanwhile, once its engine or group chats let it (`keepMoving`). */
+async function letGoOf(sender: MailSender, id: string): Promise<void> {
+  try {
+    letGo(id);
+  } catch {
+    return;
+  }
+  tell(sender.key, { op: "dropped", id });
+  await drop(id).catch(() => {});
 }
 
 // ---- Keeping them going ----

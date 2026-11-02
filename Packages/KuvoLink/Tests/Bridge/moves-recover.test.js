@@ -308,21 +308,23 @@ test("a group chat left held by a move this box no longer has goes on again as t
   }
 });
 
-test("a copy let go of while this box's engine is down isn't left here live: it goes once the engine is back", async () => {
+test("a copy let go of while this box's engine is down: the other computer hears at once that it's gone, and here it's held, never live, until it goes once the engine is back", async () => {
   script = () => {};
   const id = "mov_down1";
   await comesHere(id, { kind: "chat", thing: "ses_down1", name: "“Notes”", wasPaused: false, folder: "ses_down1", exports: [{ info: { id: "ses_down1", title: "Notes" }, messages: [] }] }, "ses_down1");
   engine.down = true;
   const refused = engine.refused;
   try {
-    // Lab takes it back.
+    // Lab takes it back: it hears at once that it's gone, so its original goes on there.
     await say({ op: "drop", id });
+    assert.equal(told.findLast(move => move.id === id)?.op, "dropped");
     assert.ok(engine.refused > refused, "it tried");
-    assert.ok(!told.some(move => move.id === id && move.op === "dropped"), "not said gone while it's here");
     assert.ok(engine.sessions.has("ses_down1"));
     assert.deepEqual((await ask("GET", "kuvo/moves")).json.away, ["ses_down1"], "and not this box's: nothing reaches it");
+    assert.equal(fs.readFileSync(path.join(wakes, "ses_down1", "paused"), "utf8"), "moving", "its wake-ups held");
     // Switched to now (lab's word crossed): never.
     await say({ op: "switch", id });
+    assert.equal(told.findLast(move => move.id === id)?.op, "dropped");
     assert.ok(!told.some(move => move.id === id && move.op === "switched"));
   } finally {
     engine.down = false;
@@ -336,7 +338,7 @@ test("a copy let go of while this box's engine is down isn't left here live: it 
   assert.deepEqual((await ask("GET", "kuvo/moves")).json, { moves: [], away: [] });
 });
 
-test("a group chat let go of while group chats here aren't answering isn't left here held: it goes once they are", async () => {
+test("a group chat let go of while group chats here aren't answering: the other computer hears at once, and here it's held until it goes once they are", async () => {
   script = () => {};
   const id = "mov_gdown1";
   await comesHere(id, { kind: "group", thing: "grp_in1", name: "“Launch”", wasPaused: true, exports: [], group: { group: groupOf("grp_in1"), messages: [] } });
@@ -344,7 +346,8 @@ test("a group chat let go of while group chats here aren't answering isn't left 
   groups.down = true;
   try {
     await say({ op: "drop", id });
-    assert.ok(!told.some(move => move.id === id && move.op === "dropped"));
+    assert.equal(told.findLast(move => move.id === id)?.op, "dropped", "said gone at once");
+    assert.equal(groups.chats.get("grp_in1")?.status, "held", "and held here until it is");
     assert.ok(recordOf("grp_in1"), "kept, to let go of again");
   } finally {
     groups.down = false;
