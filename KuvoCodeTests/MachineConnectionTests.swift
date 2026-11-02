@@ -165,6 +165,43 @@ import Testing
         #expect(app.workspace.model(for: "ses_older") !== model)
     }
 
+    /// A chat moved from this Mac to a machine (asked here or from a phone): once the machine
+    /// lists it, its conversation open here follows it, showing what happens there and sending
+    /// there, not to this Mac's engine, which no longer has it.
+    @Test func aChatMovedToAMachineTakesItsOpenConversationAlong() async throws {
+        defer { done() }
+        let id = Self.name()
+        let engine = add(id, at: machine)
+        await app.connect(engine).value
+        // A chat open here, on this Mac's engine.
+        // (Its stand-in served alongside the machine's, which `done` stops with it.)
+        let here = StubEngine(port: 47944, alongside: true)
+        app.workspace.api = here.api
+        here.list([StubEngine.session("ses_trip", title: "Trip plans", directory: "/tmp/kuvo-tests-moves/Chats")])
+        here.conversation("ses_trip", [])
+        here.on("POST", "/api/session/*", json: [:])
+        await app.workspace.refresh()
+        let open = try #require(app.workspace.model(for: "ses_trip"))
+        await open.load()
+
+        // Moved: the machine lists it, with what its agent said there, and this Mac's engine doesn't.
+        let answer: [String: Any] = ["id": "msg_02", "type": "assistant", "agent": "build", "time": ["created": 2, "completed": 3],
+                                     "model": ["id": "m", "providerID": "p"], "content": [["type": "text", "text": "Booked."]]]
+        machine.list([StubEngine.session("ses_trip", title: "Trip plans", directory: "/home/tests/.kuvo-code/chats")])
+        machine.conversation("ses_trip", [answer])
+        machine.on("POST", "/api/session/*", json: [:])
+        here.list([])
+        _ = await app.workspace.refresh(engine)
+        await app.workspace.refresh()
+        #expect(app.workspace.session("ses_trip").map { RemoteFolder.machine(of: $0.location.directory) == id } == true)
+
+        try await until { open.transcript.messages.map(\.id) == ["msg_02"] }
+        let sentHere = here.asked.count
+        open.send("Book the hotel too", for: nil)
+        try await until { machine.asked.contains { $0.hasPrefix("POST /api/session/ses_trip/") } }
+        #expect(here.asked.dropFirst(sentHere).allSatisfy { !$0.contains("ses_trip") }, "nothing to the engine it left")
+    }
+
     /// This Mac's engine back (after the Mac slept, say) while a machine is slow to answer: this
     /// Mac's conversations are read again and its feed goes on, rather than waiting on the
     /// machine's, which its own connection reads again when it's back.
