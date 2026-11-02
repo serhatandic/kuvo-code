@@ -86,6 +86,8 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - An agent that asks a session it started something and waits for the answer gets it once, not again as that session finishes.
 - A message an agent sends to a conversation on another computer reaches it when that conversation is moved to the agent's own computer just then, instead of never arriving.
 - A move between two of your machines, even one started from your iPhone, shows as moving on your Mac too.
+- The conversation Kuvo Code opens with, and one that moved to another computer, show their paused queue, and Stop, Resume and Send Now work in them, instead of saying the computer didn't answer until Kuvo Code quit.
+- Changes no longer offers Show Worktree in Finder for a worktree on a machine, where it did nothing.
 - A conversation you rename as it moves to another computer takes the new name once it gets there, instead of keeping the old one; Pin, Archive and Rename wait in its menu until it has arrived.
 - Remove Project on a project with many sessions is much quicker: its sessions are archived several at a time.
 - An agent's commands no longer open windows in the tmux session you started Kuvo Code from; in the sandbox, a `tmux` they run starts its own.

@@ -130,6 +130,30 @@ import Testing
         try await until { !model.isQueuePaused }
     }
 
+    /// A conversation opened as last seen while the engine started (the tab Kuvo Code opens with):
+    /// once the engine is up, its queue goes through its box as any other's does. (Resume said its
+    /// computer didn't answer, every time, until Kuvo Code quit.)
+    @Test func aConversationOpenedBeforeTheEngineWasUpResumesThroughItsBox() async throws {
+        let decoder = JSONDecoder()
+        let session = try decoder.decode(Session.self, from: JSONSerialization.data(withJSONObject: StubEngine.session(id, title: "Queue", directory: "/tmp/kuvo-tests-queue")))
+        SessionCopies.save(.init(session: session, messages: try decoder.decode([Message].self, from: JSONSerialization.data(withJSONObject: [first]))))
+        await SessionCopies.written()
+        defer { SessionCopies.remove(id) }
+        workspace.api = nil
+        workspace.add(session)
+        let early = try #require(workspace.model(for: id))
+        workspace.api = engine.api
+
+        let (model, box, _) = try await open(running: false, inbox: [queued("msg_02", "Then update the docs"), queued("msg_03", "Also run the linter")],
+                                             queues: #"{"ses_queue":{"paused":true,"held":["msg_03"]}}"#)
+        defer { box.stop(); engine.stop() }
+        #expect(model === early, "the same conversation, read in place")
+        try await until { model.isQueuePaused }
+        #expect(await model.resumeQueue().value)
+        try await until { !deliveries(of: "msg_03").isEmpty }
+        #expect(deliveries(of: "msg_03") == ["steer"])
+    }
+
     /// Stop while a message waits for the agent's next step: the box moves it to the queue, ahead
     /// of what was queued, pauses it and stops the run; the queue shows that.
     @Test func stopHoldsWhatWasForTheNextStepAheadOfTheQueue() async throws {

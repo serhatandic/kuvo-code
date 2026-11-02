@@ -494,7 +494,7 @@ final class Workspace {
         if let model = models[id] { return model }
         let model = SessionModel(session: session, api: api)
         model.isReachable = reachable(folder)
-        model.box = { [weak self] in self?.boxes?(RemoteFolder.machine(of: session.location.directory) ?? BoxClient.mac) }
+        model.box = box(of: id, else: session.location.directory)
         followGoals(of: model)
         models[id] = model
         return model
@@ -602,7 +602,7 @@ final class Workspace {
             return self.extraFolders(self.session(id)?.location.directory ?? directory)
         }
         model.isReachable = reachable(directory)
-        model.box = { [weak self] in self?.boxes?(RemoteFolder.machine(of: directory) ?? BoxClient.mac) }
+        model.box = box(of: id, else: directory)
         followGoals(of: model)
         models[id] = model
         // This Mac's conversation as last seen, in its first frame, while the engine's is read
@@ -647,6 +647,15 @@ final class Workspace {
         SessionCopies.saveSessions(sessions.filter { RemoteFolder.machine(of: $0.location.directory) == machine }, of: machine)
     }
 
+    /// A session's box (this Mac's, or its machine's), where it lives when asked: one shown as last
+    /// seen goes on with it once its engine is there, and one that moved with its new computer's.
+    private func box(of id: String, else directory: String) -> () -> BoxClient? {
+        { [weak self] in
+            guard let self else { return nil }
+            return self.boxes?(RemoteFolder.machine(of: self.session(id)?.location.directory ?? directory) ?? BoxClient.mac)
+        }
+    }
+
     /// Whether a folder's engine can be reached: a machine's, while it's connected.
     private func reachable(_ folder: String) -> () -> Bool {
         guard let machine = RemoteFolder.machine(of: folder) else { return { true } }
@@ -671,6 +680,7 @@ final class Workspace {
                 return self.extraFolders(self.session(id)?.location.directory ?? directory)
             }
             model.isReachable = { [weak self] in isAgents ? self?.agents?.api != nil : self?.api != nil }
+            model.box = box(of: id, else: directory)
             followGoals(of: model)
             model.show(copy.messages)
             models[id] = model
@@ -686,6 +696,7 @@ final class Workspace {
             return self.extraFolders(self.session(id)?.location.directory ?? directory)
         }
         model.isReachable = reachable(directory)
+        model.box = box(of: id, else: directory)
         followGoals(of: model)
         model.show(copy.messages)
         models[id] = model
