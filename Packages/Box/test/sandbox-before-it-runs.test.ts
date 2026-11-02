@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test"
 import { createHash } from "node:crypto"
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fencePolicy } from "../src/link/fence/policy"
-import { canFence, realFence, removeShortFolder, shortFolder } from "./agents/support/fence"
+import { canFence, realFence } from "./agents/support/fence"
 
 // The launcher sets each command up outside the sandbox before it runs: so it runs only the
 // system's programs, never one a command put on your PATH in a folder it writes (yarn's installer
@@ -122,57 +122,80 @@ test.skipIf(!canFence || !tmux)("a command's tmux starts in a box whose folder's
   }
 })
 
-// The commands' own tmux servers, whatever happened, in their conversations' temporary folders; and
-// the box's short folder in `/tmp`, where it made one.
+// The commands' own tmux servers, whatever happened, in their conversations' temporary folders.
 function stopServers(kuvo: string) {
-  for (const temporary of [join(kuvo, "run", "fence", "tmp"), shortFolder(kuvo)]) {
-    if (temporary && existsSync(temporary)) for (const name of readdirSync(temporary)) Bun.spawnSync([tmux!, "kill-server"], { env: { TMUX_TMPDIR: join(temporary, name) } })
+  for (const temporary of [join(kuvo, "run", "fence", "tmp"), join(kuvo, "t")]) {
+    if (existsSync(temporary)) for (const name of readdirSync(temporary)) Bun.spawnSync([tmux!, "kill-server"], { env: { TMUX_TMPDIR: join(temporary, name) } })
   }
-  removeShortFolder(kuvo)
 }
 
-// Under a home folder's path longer still, the conversation's temporary folder can't be in Kuvo
-// Code's own (`~/.kuvo-code`) and stay short enough: the box keeps them in a short folder of its own
-// in `/tmp`, yours alone, where each command sees only its own conversation's, so it still can't
-// reach another conversation's tmux. (This Mac's box keeps them in the app's temporary folder.)
-test.skipIf(!canFence || !tmux || process.platform !== "linux")("a command's tmux starts on a machine whose home folder's path is long, and reaches no other conversation's", () => {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "kst-")))
-  // Kuvo Code's folder, 100 letters long: a home folder's path of 89.
-  const kuvo = root.length + 2 <= 100 ? `${root}/${"k".repeat(99 - root.length)}` : null
+// The longest Kuvo Code folder whose commands' tmux fits (its socket at `<kuvo>/t/<8>/tmux-<uid>/default`):
+// on a machine, a home folder's path of 67 letters.
+const SOCKET_PATH = process.platform === "darwin" ? 103 : 107
+const longestFitting = SOCKET_PATH - "/t/12345678/tmux-/default".length - String(process.getuid?.() ?? 0).length
+
+/** A box set up in a Kuvo Code folder `length` letters long, in a folder of its own: `run` runs a
+ * command in the sandbox in one of its projects (`one`, `two`), `note` is what its agents are told. */
+function boxOfLength(length: number) {
+  const root = realpathSync(mkdtempSync(join(process.platform === "darwin" ? "/tmp" : tmpdir(), "kst-")))
+  const kuvo = `${root}/${"k".repeat(length - root.length - 1)}`
+  if (kuvo.length !== length) throw new Error(`This test's folder is too deep for its own (${root}): run it with a shorter TMPDIR.`)
+  for (const folder of [kuvo, join(root, "one"), join(root, "two"), join(root, "home")]) mkdirSync(folder, { recursive: true })
+  const box = join(import.meta.dir, "..", "src", "link", "fence", "state.ts")
+  const home = join(import.meta.dir, "..", "src", "link", "home.ts")
+  const env = { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: join(root, "home"), KUVO_HOME: kuvo, BUN_BE_BUN: "1", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" }
+  // (Agents told as once the engine has loaded the sandbox's plugin, which isn't running here.)
+  const setUp = Bun.spawnSync([process.execPath, "-e", `const fs = await import("node:fs"); const fence = await import(${JSON.stringify(box)}); const home = await import(${JSON.stringify(home)}); fence.setUpFence(); fence.tellAgents(true); console.log(JSON.stringify(fs.readFileSync(home.SANDBOX_NOTE, "utf8")))`], { cwd: root, env })
+  expect(setUp.exitCode, setUp.stderr.toString()).toBe(0)
+  const note: string = JSON.parse(setUp.stdout.toString().trim().split("\n").at(-1) ?? '""')
+  const run = (project: "one" | "two", script: string) => {
+    const ran = Bun.spawnSync([join(kuvo, "bin", "kuvo-fence"), "-c", script], { cwd: join(root, project), env: { PATH: `${tmux!.slice(0, -"/tmux".length)}:/usr/bin:/bin`, HOME: join(root, "home"), KUVO_FENCE_WORK: join(root, project) } })
+    return (ran.stdout.toString() + ran.stderr.toString()).trim().split("\n")
+  }
+  return { root, kuvo, note, run }
+}
+
+// On a machine whose home folder's path is long, the conversation's temporary folder stays in Kuvo
+// Code's own (`~/.kuvo-code/t`), as near its top as it can be: a command's tmux starts there under a
+// home folder's path of up to 67 letters, and another conversation's command can't reach it.
+test.skipIf(!canFence || !tmux)("a command's tmux starts in the longest Kuvo Code folder it fits in, kept in it, and reaches no other conversation's", () => {
+  let kuvo: string | undefined
+  let root: string | undefined
   try {
-    if (!kuvo) throw new Error(`This test's folder is too deep for its own (${root}): run it with a shorter TMPDIR.`)
-    const [one, two] = [join(root, "one"), join(root, "two")]
-    for (const folder of [kuvo, one, two, join(root, "home")]) mkdirSync(folder, { recursive: true })
-    const box = join(import.meta.dir, "..", "src", "link", "fence", "state.ts")
-    const env = { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: join(root, "home"), KUVO_HOME: kuvo, BUN_BE_BUN: "1", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" }
-    // (Set up first as where commands can't have a namespace of their own: there theirs stay in
-    // the box's own folder, which it hides, as a command could reach every conversation's in `/tmp`.)
-    const temporary = join(kuvo, "run", "fence", "temporary")
-    const setUp = Bun.spawnSync([process.execPath, "-e", `const fs = await import("node:fs"); const fence = await import(${JSON.stringify(box)}); fence.setUpFence(null); console.log(fs.readFileSync(${JSON.stringify(temporary)}, "utf8").split("\\n")[0]); fence.setUpFence()`], { cwd: root, env })
-    expect(setUp.exitCode, setUp.stderr.toString()).toBe(0)
-    expect(setUp.stdout.toString().trim().split("\n").at(-1)).toBe(join(kuvo, "run", "fence", "tmp"))
-    const short = readFileSync(temporary, "utf8").split("\n")[0]!
-    expect(short).toMatch(new RegExp(`^/tmp/kuvo-code-${process.getuid!()}-[0-9a-f]{6}$`))
-    // (Made only as a command needs it.)
-    expect(existsSync(short)).toBe(false)
-    const run = (project: string, script: string) => {
-      const ran = Bun.spawnSync([join(kuvo, "bin", "kuvo-fence"), "-c", script], { cwd: project, env: { PATH: `${tmux!.slice(0, -"/tmux".length)}:/usr/bin:/bin`, HOME: join(root, "home"), KUVO_FENCE_WORK: project } })
-      return (ran.stdout.toString() + ran.stderr.toString()).trim().split("\n")
-    }
-    expect(run(one, `tmux new-session -d -s own "sleep 600" && echo "started: yes" || echo "started: no"`)).toEqual(["started: yes"])
-    expect({ mode: statSync(short).mode & 0o777, uid: statSync(short).uid }).toEqual({ mode: 0o700, uid: process.getuid!() })
-    expect(run(one, `tmux has-session -t own 2>/dev/null && echo "own: reached" || echo "own: gone"`)).toEqual(["own: reached"])
-    // Another conversation's command: its own folder in it, and nothing of the first's.
-    const theirs = readdirSync(short).filter(name => existsSync(join(short, name, `tmux-${process.getuid!()}`)))
-    expect(theirs.length).toBe(1)
-    // (Where the machine gives commands no namespace of their own, the sandbox's state says what
-    // they can reach: everything in `/tmp`, your own tmux too.)
-    const fenced = readFileSync(join(kuvo, "run", "fence", "namespace"), "utf8").trim() !== "-"
-    const seen = run(two, `basename "$TMPDIR"; ls -A "${short}"; TMUX_TMPDIR="${short}/${theirs[0]}" tmux has-session -t own 2>/dev/null && echo "theirs: reached" || echo "theirs: refused"`)
-    if (fenced) expect(seen).toEqual([seen[0]!, seen[0]!, "theirs: refused"])
-    expect(run(one, "tmux kill-server; echo done")).toEqual(["done"])
+    const box = boxOfLength(longestFitting)
+    ;({ kuvo, root } = box)
+    expect(readFileSync(join(kuvo, "run", "fence", "temporary"), "utf8").split("\n")[0]).toBe(join(kuvo, "t"))
+    expect(box.note).not.toContain("too long")
+    expect(box.run("one", `tmux new-session -d -s own "sleep 600" && echo "started: yes" || echo "started: no"`)).toEqual(["started: yes"])
+    expect(box.run("one", `tmux has-session -t own 2>/dev/null && echo "own: reached" || echo "own: gone"`)).toEqual(["own: reached"])
+    const [first] = readdirSync(join(kuvo, "t")).filter(name => existsSync(join(kuvo!, "t", name, `tmux-${process.getuid!()}`)))
+    expect(first).toBeDefined()
+    // Another conversation's command: nothing of the first's, nor the folder they're in.
+    expect(box.run("two", `ls -A "${kuvo}/t" >/dev/null 2>&1 && echo "folder: read" || echo "folder: refused"; TMUX_TMPDIR="${kuvo}/t/${first}" tmux has-session -t own 2>/dev/null && echo "theirs: reached" || echo "theirs: refused"`))
+      .toEqual(["folder: refused", "theirs: refused"])
+    expect(box.run("one", "tmux kill-server; echo done")).toEqual(["done"])
   } finally {
     if (kuvo) stopServers(kuvo)
-    rmSync(root, { recursive: true, force: true })
+    if (root) rmSync(root, { recursive: true, force: true })
+  }
+})
+
+// One letter longer, tmux's socket can't be made: it says so plainly, commands still run, and agents
+// are told why (nothing goes to `/tmp` instead).
+test.skipIf(!canFence || !tmux)("under a Kuvo Code folder too long for tmux's socket, tmux says why, commands still run, and agents are told", () => {
+  let kuvo: string | undefined
+  let root: string | undefined
+  try {
+    const box = boxOfLength(longestFitting + 1)
+    ;({ kuvo, root } = box)
+    expect(readFileSync(join(kuvo, "run", "fence", "temporary"), "utf8").split("\n")[0]).toBe(join(kuvo, "t"))
+    expect(box.note).toContain("home folder's path is too long for tmux")
+    const said = box.run("one", `tmux new-session -d -s own "sleep 600" && echo "started: yes" || echo "started: no"`)
+    expect(said).toContain("started: no")
+    expect(said.join("\n")).toContain("File name too long")
+    expect(box.run("one", "echo ran")).toEqual(["ran"])
+  } finally {
+    if (kuvo) stopServers(kuvo)
+    if (root) rmSync(root, { recursive: true, force: true })
   }
 })

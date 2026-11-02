@@ -24,7 +24,7 @@ export function landlockPolicy(policy: FencePolicy): string {
 }
 
 /**
- * `sh -c HIDE <unshare> <uid> <gid> <name> <own> <sockets> <t_own> <t_name> <program> [args…]`, run by `unshare -Urm`
+ * `sh -c HIDE <unshare> <uid> <gid> <name> <own> <sockets> <program> [args…]`, run by `unshare -Urm`
  * (as its own root, in a mount namespace of its own), with the system's programs only, never ones a
  * command could have put on your PATH: your session's folder (`/run/user/<uid>`), your tmux's,
  * screen's and shell-started SSH agents' in `/tmp` and `/run/screen`, the X server's, Neovim's,
@@ -39,13 +39,8 @@ export function landlockPolicy(policy: FencePolicy): string {
  * newer than Ubuntu 22.04's and RHEL 9's): this one, still its root, writes its map once it's there,
  * told through <own>, an empty folder of the box's that it first makes its own (and gives up, within
  * seconds, if it never is).
- *
- * Where commands' temporary folders are in a short folder of the box's in `/tmp` (<t_own>, under a
- * long home folder's path: fence/state.ts), the command's own (<t_name> in it) is all it has there:
- * kept aside in <own>, the folder emptied, and it put back alone. The same folder in each of its
- * conversation's commands, so a tmux server one starts is there for the next.
  */
-export const HIDE = String.raw`u=$1 g=$2 n=$3 own=$4 sockets=$5 t_own=$6 t_name=$7; shift 7
+export const HIDE = String.raw`u=$1 g=$2 n=$3 own=$4 sockets=$5; shift 5
 p=$PATH; PATH=/usr/sbin:/usr/bin:/sbin:/bin
 fail() { echo "This command can't run in the sandbox here: $1" >&2; exit 126; }
 over() { ( cd -P "$1" 2>/dev/null || exit 1; [ -z "$3" ] || [ "$(pwd -P)" = "$1" ] || exit 1; [ "$3" != mine ] || [ -O . ] || exit 1; mount -c -t tmpfs -o "size=64k,mode=$2" kuvo-hidden . 2>/dev/null || exit 2 ) || { [ $? = 1 ] || fail "$1 can't be kept from it."; return 1; }; }
@@ -54,10 +49,6 @@ off() { [ -S "$1" ] && { [ -z "$2" ] || [ ! -L "$1" ]; } || return 1; mount -c -
 over "$own" 0700 || fail "it isn't set up."
 while IFS= read -r s; do case $s in /*) over "$s" 0700 || off "$s" ;; esac; done <"$sockets"
 over "/run/user/$u" 0700
-if [ -n "$t_own" ]; then
-  ( cd -P "$t_own/$t_name" 2>/dev/null && [ "$(pwd -P)" = "$t_own/$t_name" ] && [ -O . ] && mkdir "$own/tmp" && mount -c --bind . "$own/tmp" ) 2>/dev/null || fail "its temporary folder isn't its own."
-  over "$t_own" 0700 mine && mkdir "$t_own/$t_name" && mount -c --bind "$own/tmp" "$t_own/$t_name" 2>/dev/null || fail "its temporary folder can't be kept to itself."
-fi
 for d in "/tmp/tmux-$u" /tmp/ssh-* "/run/screen/S-$n" "/tmp/nvim.$n" "/tmp/emacs$u"; do over "$d" 0700 mine; done
 over /tmp/.X11-unix 1777 here
 for s in /tmp/vscode-ipc-*.sock /tmp/vscode-ssh-auth-*.sock /tmp/vscode-git-*.sock; do [ -O "$s" ] && off "$s" here; done
@@ -96,7 +87,7 @@ export function ownNamespaceLater(own: string, unshare = UNSHARE.find(each => fs
 }
 
 const TRY_FOR = 10_000;
-const namespaceTry = (unshare: string, own: string) => ["-Urm", "/bin/sh", "-c", HIDE, unshare, String(process.getuid?.() ?? -1), String(process.getgid?.() ?? -1), "", own, "/dev/null", "", "", "/bin/sh", "-c", "[ \"$(id -u)\" = \"$0\" ]", String(process.getuid?.() ?? -1)];
+const namespaceTry = (unshare: string, own: string) => ["-Urm", "/bin/sh", "-c", HIDE, unshare, String(process.getuid?.() ?? -1), String(process.getgid?.() ?? -1), "", own, "/dev/null", "/bin/sh", "-c", "[ \"$(id -u)\" = \"$0\" ]", String(process.getuid?.() ?? -1)];
 
 /**
  * The script: `kuvo-fence.js <policy.json> <WORK> <GIT> <TMP> <WAKES> <ALLOWED> <shell> [args…]`, ALLOWED

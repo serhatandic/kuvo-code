@@ -1,6 +1,6 @@
 // The box's sandbox, set up for real in a test's own folder, for agents run whole in it.
 
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { agentShellScript, launcherScript, type FencePlaces } from "../../../src/link/fence/files"
 import { LANDLOCK_RUNNER, landlockPolicy, ownNamespace } from "../../../src/link/fence/landlock"
@@ -43,18 +43,3 @@ export function realFence(kuvo: string, sockets: string[] = [], more: Partial<Fe
 
 export const canFence = process.platform === "darwin" ? existsSync("/usr/bin/sandbox-exec") : process.platform === "linux"
 
-
-/** The short folder in `/tmp` the box set up in `kuvo` named for its commands' temporary folders,
- * where its own was too far down for a socket (link/fence/state.ts): null where it named none. */
-export function shortFolder(kuvo: string): string | null {
-  try {
-    const named = readFileSync(join(kuvo, "run", "fence", "temporary"), "utf8").split("\n")[0]!
-    return /^\/tmp\/kuvo-code-\d+-[0-9a-f]{6}$/.test(named) ? named : null
-  } catch { return null }
-}
-
-/** That folder removed, as a test that set a box up is done with it. */
-export function removeShortFolder(kuvo: string) {
-  const short = shortFolder(kuvo)
-  if (short) rmSync(short, { recursive: true, force: true })
-}

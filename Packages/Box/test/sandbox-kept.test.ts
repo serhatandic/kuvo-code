@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { ownNamespace } from "../src/link/fence/landlock"
-import { canFence, removeShortFolder } from "./agents/support/fence"
+import { canFence } from "./agents/support/fence"
 
 // The box keeps the sandbox as it set it up, round by round (every 10 seconds; each minute for what
 // takes longer): the engine's plugin put back once it's gone, commands' temporary folders cleared a
@@ -33,7 +33,6 @@ function inBox(steps: string): Record<string, unknown> {
     expect(ran.exitCode, ran.stderr.toString()).toBe(0)
     return JSON.parse(ran.stdout.toString().trim().split("\n").at(-1) ?? "{}")
   } finally {
-    removeShortFolder(join(root, "kuvo"))
     rmSync(root, { recursive: true, force: true })
   }
 }

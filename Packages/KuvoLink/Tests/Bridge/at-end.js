@@ -19,7 +19,6 @@ import { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
 import net from "node:net";
-import path from "node:path";
 
 const steps = [];
 const folders = [];
@@ -34,7 +33,6 @@ after(async () => {
   const left = await leftOpen();
   for (const folder of folders) {
     try {
-      for (const short of shortFolders(folder)) fs.rmSync(short, { recursive: true, force: true });
       fs.rmSync(folder, { recursive: true, force: true });
     } catch (error) {
       failed.push(error);
@@ -66,26 +64,8 @@ let stopping = false;
 function removeNow() {
   for (const handle of process._getActiveHandles?.() ?? []) if (handle instanceof ChildProcess && !ended(handle)) handle.kill("SIGKILL");
   for (const folder of folders) {
-    try { for (const short of shortFolders(folder)) fs.rmSync(short, { recursive: true, force: true }); } catch {}
     try { fs.rmSync(folder, { recursive: true, force: true, maxRetries: 3 }); } catch {}
   }
-}
-
-// The short folders in `/tmp` that the boxes in a folder made for their commands' temporary folders,
-// where theirs were too far down for a socket (Packages/Box's link/fence/state.ts), which go with it:
-// named in each box's `run/fence/temporary`, a few folders down at most.
-function shortFolders(folder, depth = 4) {
-  const found = [];
-  try {
-    const named = fs.readFileSync(path.join(folder, "run", "fence", "temporary"), "utf8").split("\n")[0];
-    if (/^\/tmp\/kuvo-code-\d+-[0-9a-f]{6}$/.test(named)) found.push(named);
-  } catch {}
-  if (depth > 0) {
-    let entries = [];
-    try { entries = fs.readdirSync(folder, { withFileTypes: true }); } catch {}
-    for (const entry of entries) if (entry.isDirectory() && entry.name !== "node_modules") found.push(...shortFolders(path.join(folder, entry.name), depth - 1));
-  }
-  return found;
 }
 process.once("exit", removeNow);
 for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {

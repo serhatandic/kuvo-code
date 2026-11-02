@@ -8278,7 +8278,7 @@ function landlockPolicy(policy) {
   return JSON.stringify({ hidden: [...policy.kuvo, ...policy.secrets], readable: policy.kuvoReadable, writable: [...policy.writable, ...policy.commandCaches], readOnly: policy.readOnly }) + `
 `;
 }
-var HIDE = String.raw`u=$1 g=$2 n=$3 own=$4 sockets=$5 t_own=$6 t_name=$7; shift 7
+var HIDE = String.raw`u=$1 g=$2 n=$3 own=$4 sockets=$5; shift 5
 p=$PATH; PATH=/usr/sbin:/usr/bin:/sbin:/bin
 fail() { echo "This command can't run in the sandbox here: $1" >&2; exit 126; }
 over() { ( cd -P "$1" 2>/dev/null || exit 1; [ -z "$3" ] || [ "$(pwd -P)" = "$1" ] || exit 1; [ "$3" != mine ] || [ -O . ] || exit 1; mount -c -t tmpfs -o "size=64k,mode=$2" kuvo-hidden . 2>/dev/null || exit 2 ) || { [ $? = 1 ] || fail "$1 can't be kept from it."; return 1; }; }
@@ -8287,10 +8287,6 @@ off() { [ -S "$1" ] && { [ -z "$2" ] || [ ! -L "$1" ]; } || return 1; mount -c -
 over "$own" 0700 || fail "it isn't set up."
 while IFS= read -r s; do case $s in /*) over "$s" 0700 || off "$s" ;; esac; done <"$sockets"
 over "/run/user/$u" 0700
-if [ -n "$t_own" ]; then
-  ( cd -P "$t_own/$t_name" 2>/dev/null && [ "$(pwd -P)" = "$t_own/$t_name" ] && [ -O . ] && mkdir "$own/tmp" && mount -c --bind . "$own/tmp" ) 2>/dev/null || fail "its temporary folder isn't its own."
-  over "$t_own" 0700 mine && mkdir "$t_own/$t_name" && mount -c --bind "$own/tmp" "$t_own/$t_name" 2>/dev/null || fail "its temporary folder can't be kept to itself."
-fi
 for d in "/tmp/tmux-$u" /tmp/ssh-* "/run/screen/S-$n" "/tmp/nvim.$n" "/tmp/emacs$u"; do over "$d" 0700 mine; done
 over /tmp/.X11-unix 1777 here
 for s in /tmp/vscode-ipc-*.sock /tmp/vscode-ssh-auth-*.sock /tmp/vscode-git-*.sock; do [ -O "$s" ] && off "$s" here; done
@@ -8325,7 +8321,7 @@ function ownNamespaceLater(own, unshare = UNSHARE.find((each) => fs36.existsSync
   });
 }
 var TRY_FOR = 1e4;
-var namespaceTry = (unshare, own) => ["-Urm", "/bin/sh", "-c", HIDE, unshare, String(process.getuid?.() ?? -1), String(process.getgid?.() ?? -1), "", own, "/dev/null", "", "", "/bin/sh", "-c", '[ "$(id -u)" = "$0" ]', String(process.getuid?.() ?? -1)];
+var namespaceTry = (unshare, own) => ["-Urm", "/bin/sh", "-c", HIDE, unshare, String(process.getuid?.() ?? -1), String(process.getgid?.() ?? -1), "", own, "/dev/null", "/bin/sh", "-c", '[ "$(id -u)" = "$0" ]', String(process.getuid?.() ?? -1)];
 var LANDLOCK_RUNNER = String.raw`// Kuvo Code writes this each time its box starts: changes here don't last.
 // Runs a command's shell in the sandbox (Landlock), as bin/kuvo-fence asks.
 import { dlopen, FFIType, ptr, read } from "bun:ffi";
@@ -8527,7 +8523,7 @@ function launcherScript(places) {
     `[ -x "$runtime" ] || { echo "This command can't run in the sandbox here: the engine's runtime wasn't given." >&2; exit 126; }`,
     `ns=$(cat "$F/namespace" 2>/dev/null)`,
     `set -- "$runtime" --config=/dev/null --no-env-file ${sh(places.runner)} "$F/policy.json" "$work" "$git" "$tmp" "$own" "$allowed" "$shell" "$@"`,
-    `case $ns in /*) set -- "$ns" -Urm /bin/sh -c ${sh(HIDE)} "$ns" "$(id -u)" "$(id -g)" "$(id -un 2>/dev/null)" "$F/ns" "$F/sockets" "$t_own" "$t_name" "$@" ;; -) ;; *) echo "This command can't run in the sandbox here: it isn't set up." >&2; exit 126 ;; esac`,
+    `case $ns in /*) set -- "$ns" -Urm /bin/sh -c ${sh(HIDE)} "$ns" "$(id -u)" "$(id -g)" "$(id -un 2>/dev/null)" "$F/ns" "$F/sockets" "$@" ;; -) ;; *) echo "This command can't run in the sandbox here: it isn't set up." >&2; exit 126 ;; esac`,
     `PATH=$user_path KUVO_FENCE_OWN="$own_list" KUVO_FENCE_READ="$read_list" KUVO_FENCE_MEMORY="$memory" KUVO_FENCE_BUN="$as_bun" BUN_BE_BUN=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 exec "$@"`
   ];
   return [
@@ -8562,14 +8558,12 @@ function launcherScript(places) {
     `sum=$( (printf '%s' "$work" | sha256sum || printf '%s' "$work" | shasum -a 256) 2>/dev/null | cut -c 1-32)`,
     `case $sum in ????????????????????????????????) ;; *) echo "This command can't run in the sandbox here: it can't name its temporary folder." >&2; exit 126 ;; esac`,
     `tmp=$F/tmp/$sum`,
-    "t_own= t_name=",
     `if [ -f "$F/temporary" ]; then`,
     `  { IFS= read -r t_root; IFS= read -r t_key; } <"$F/temporary"`,
     `  t_name=$( (printf '%s
 %s' "$t_key" "$work" | sha256sum || printf '%s
 %s' "$t_key" "$work" | shasum -a 256) 2>/dev/null | cut -c 1-8)`,
     `  case $t_root:$t_key:$t_name in /*:????????????????????????????????????????????????????????????????:????????) tmp=$t_root/$t_name ;; *) echo "This command can't run in the sandbox here: it can't name its temporary folder." >&2; exit 126 ;; esac`,
-    `  case $t_root in "$F"/*) ;; *) (umask 077; mkdir -p "$t_root") 2>/dev/null; if [ -d "$t_root" ] && [ ! -L "$t_root" ] && [ -O "$t_root" ]; then t_own=$t_root; else tmp=$F/tmp/$t_name; fi ;; esac`,
     `fi`,
     `allowed=$F/allowed/$sum`,
     `if [ -f "$work/.git" ]; then case $git in */.git) p_sum=$( (printf '%s' "\${git%/.git}" | sha256sum || printf '%s' "\${git%/.git}" | shasum -a 256) 2>/dev/null | cut -c 1-32); case $p_sum in ????????????????????????????????) allowed=$F/allowed/$p_sum ;; esac ;; esac; fi`,
@@ -8584,7 +8578,6 @@ function launcherScript(places) {
     ...Array.from({ length: MOST_FOLDERS }, (_, at) => `a${at}=$F/none r${at}=-`),
     `if [ -f "$allowed" ]; then i=0; while IFS= read -r line && [ $i -lt ${MOST_FOLDERS} ]; do case $line in /*) eval "a$i=\\$line"; ${places.platform === "darwin" ? `eval "r$i=\\$(escaped \\"\\$line\\")"; ` : ""}i=$((i + 1)) ;; esac; done <"$allowed"; else allowed=$F/none; fi`,
     `(umask 077; mkdir -p "$tmp") && touch "$tmp" && export TMPDIR="$tmp/"`,
-    `[ -z "$t_own" ] || { [ ! -L "$t_own" ] && [ -O "$t_own" ] && [ ! -L "$tmp" ] && [ -O "$tmp" ]; } || { echo "This command can't run in the sandbox here: its temporary folder isn't yours alone." >&2; exit 126; }`,
     `export PRE_COMMIT_HOME="$TMPDIR"pre-commit`,
     `(umask 077; mkdir -p ${[places.caches.npm, places.caches.pnpm, `${places.caches.uv}/cache`, `${places.caches.uv}/tools`, places.caches.corepack].map(sh).join(" ")})`,
     `export npm_config_cache=${sh(places.caches.npm)} pnpm_config_cache_dir=${sh(places.caches.pnpm)} pnpm_config_enable_global_virtual_store=false UV_CACHE_DIR=${sh(`${places.caches.uv}/cache`)} UV_TOOL_DIR=${sh(`${places.caches.uv}/tools`)} COREPACK_HOME=${sh(places.caches.corepack)}`,
@@ -8854,7 +8847,7 @@ export default {
 }
 `;
 }
-function agentsNote(platform) {
+function agentsNote(platform, tmuxFits = true) {
   const mac = platform === "darwin";
   return [
     "# Commands run in a sandbox here",
@@ -8871,6 +8864,7 @@ function agentsNote(platform) {
     "",
     "`npm`, `pnpm`, `uv` and corepack use caches of Kuvo Code's own here (`$npm_config_cache`, `$pnpm_config_cache_dir`, `$UV_CACHE_DIR`, `$COREPACK_HOME`): leave them as they are, and `npx -y <package>`, `pnpm dlx` and `uvx` fetch what they need (`uvx` with a Python that's installed).",
     "",
+    ...tmuxFits ? [] : ["This computer's home folder's path is too long for tmux in the sandbox: its socket in a command's temporary folder (`$TMPDIR`) would pass the system's limit, so tmux fails with \"File name too long\", as can other programs that make a socket there. Run what needs one with sandbox_ask, or tell the user why it can't run in the sandbox here.", ""],
     "`ssh` and git over SSH use only the keys the user lets this conversation use from Kuvo Code's vault, through `$SSH_AUTH_SOCK`. With none, use HTTPS or ask the user.",
     "",
     `When the sandbox refuses something a task needs ("Operation not permitted" or "Permission denied" outside these folders), don't work around it: ask the user with sandbox_ask, giving the command as you ran it and why the task needs it. They can let it run outside the sandbox once (and let your commands write in the folder it was stopped writing in from now on), or say no; allowed, it runs for you and you get its output.`,
@@ -9141,15 +9135,13 @@ function probe() {
     const used = (run.stdout ?? "").split(`
 `)[0].replace(/\/$/, "");
     try {
-      if ([path37.join(FOLDER, "tmp"), SHORT].includes(path37.dirname(used)))
+      if ([path37.join(FOLDER, "tmp"), TEMPORARY].includes(path37.dirname(used)))
         fs37.rmSync(used, { recursive: true, force: true });
-      if (path37.dirname(used) === SHORT)
-        fs37.rmdirSync(SHORT);
     } catch {}
   }
 }
 function tellAgents(on = fenceState().on) {
-  const note = on ? agentsNote(platform) : "";
+  const note = on ? agentsNote(platform, fitsTmux(appTemporary() ?? TEMPORARY)) : "";
   if (textOf(SANDBOX_NOTE) !== note)
     writePrivate(SANDBOX_NOTE, note);
 }
@@ -9162,31 +9154,12 @@ function withdraw() {
   fs37.rmSync(READY, { force: true });
   fs37.rmSync(NOTE, { force: true });
 }
-var SHORT = `/tmp/kuvo-code-${process.getuid?.() ?? -1}-${crypto17.createHash("sha256").update(FOLDER).digest("hex").slice(0, 6)}`;
-function shortTemporary() {
-  try {
-    const it = fs37.lstatSync(SHORT);
-    return it.isDirectory() && it.uid === process.getuid?.() ? SHORT : null;
-  } catch (error) {
-    return error.code === "ENOENT" ? SHORT : null;
-  }
-}
+var TEMPORARY = realish(path37.join(K, "t"));
 var SOCKET_PATH = platform === "darwin" ? 103 : 107;
-var fitsSockets = (root) => Buffer.byteLength(root) + "/12345678".length + 40 <= SOCKET_PATH;
-var temporaryRoot = () => {
-  const own = path37.join(FOLDER, "tmp");
-  return platform === "linux" && namespace && !fitsSockets(own) ? shortTemporary() ?? own : own;
-};
-function removeShort() {
-  try {
-    const it = fs37.lstatSync(SHORT);
-    if (it.isDirectory() && it.uid === process.getuid?.())
-      fs37.rmSync(SHORT, { recursive: true, force: true });
-  } catch {}
-}
+var fitsTmux = (root) => Buffer.byteLength(realish(root)) + "/12345678".length + `/tmux-${process.getuid?.() ?? 0}/default`.length <= SOCKET_PATH;
 function writeTemporary() {
   const file = path37.join(FOLDER, "temporary");
-  const root = appTemporary() ?? temporaryRoot();
+  const root = appTemporary() ?? TEMPORARY;
   const [had, key] = (textOf(file) ?? "").split(`
 `);
   if (had === root && /^[0-9a-f]{64}$/.test(key ?? ""))
@@ -9194,11 +9167,8 @@ function writeTemporary() {
   writePrivate(file, `${root}
 ${crypto17.randomBytes(32).toString("hex")}
 `);
-  if (root !== path37.join(FOLDER, "tmp"))
-    for (const name of listOf(path37.join(FOLDER, "tmp")))
-      fs37.rmSync(path37.join(FOLDER, "tmp", name), { recursive: true, force: true });
-  if (had === SHORT && root !== SHORT)
-    removeShort();
+  for (const name of listOf(path37.join(FOLDER, "tmp")))
+    fs37.rmSync(path37.join(FOLDER, "tmp", name), { recursive: true, force: true });
 }
 function setUpFence(found) {
   const can = able(found);
@@ -9252,9 +9222,7 @@ function holdsFiles(folder) {
   return fs37.readdirSync(folder, { withFileTypes: true }).some((entry) => !entry.isDirectory() || holdsFiles(path37.join(folder, entry.name)));
 }
 function sweepWakeFolders(now = Date.now()) {
-  const short = (textOf(path37.join(FOLDER, "temporary")) ?? "").split(`
-`)[0] === SHORT;
-  for (const tmp of [path37.join(FOLDER, "tmp"), ...short ? [SHORT] : []]) {
+  for (const tmp of [path37.join(FOLDER, "tmp"), TEMPORARY]) {
     for (const name of listOf(tmp)) {
       const folder = path37.join(tmp, name);
       try {
@@ -9263,10 +9231,6 @@ function sweepWakeFolders(now = Date.now()) {
       } catch {}
     }
   }
-  if (short)
-    try {
-      fs37.rmdirSync(SHORT);
-    } catch {}
   let names = [];
   try {
     names = fs37.readdirSync(SESSION_WAKES);
