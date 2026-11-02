@@ -64,7 +64,13 @@ const engine = http.createServer((request, response) => {
       try { git(project, "worktree", "remove", ...(sent.force ? ["--force"] : []), sent.directory); } catch { return send({ message: "git refused" }, 400); }
       return send({});
     }
-    if (url.pathname === "/api/session") return send({ data: sessions });
+    if (url.pathname === "/api/session") {
+      // A page at a time, the newest first, as the real one answers.
+      const newest = [...sessions].reverse();
+      const limit = Number(url.searchParams.get("limit")) || newest.length;
+      const start = Number(url.searchParams.get("cursor") ?? 0);
+      return send({ data: newest.slice(start, start + limit), cursor: { next: start + limit < newest.length ? String(start + limit) : null } });
+    }
     if (request.method === "PUT" && url.pathname.includes("/instructions/entries/")) {
       told.push({ url: url.pathname, value: JSON.parse(body).value });
       onTold();
@@ -566,9 +572,18 @@ test("archiving a worktree's last session removes it, keeping what wasn't commit
   assert.equal(fs.existsSync(path.join(made.root, "build")), false);
   assert.equal(git(project, "for-each-ref", "refs/kuvo/worktrees"), "", "what was kept for it goes once it's back");
   const now = await records();
-  assert.equal(now.worktrees.find(each => each.root === made.root)?.used, true);
   assert.equal(now.restorable.some(each => each.root === made.root), false);
   assert.ok(told.some(each => each.url.includes("ses_archived")), "its session told where it works again");
+  // Its session still archived, the next sweep leaves it: it waits for the session to be open.
+  await tidy();
+  assert.ok(fs.existsSync(made.root), "not removed again straight away");
+  delete session.metadata;
+  await tidy();
+  assert.equal((await records()).worktrees.find(each => each.root === made.root)?.used, true);
+  session.metadata = { "kuvo.archived": true };
+  await tidy();
+  assert.equal(fs.existsSync(made.root), false, "archived again, it goes again");
+  assert.equal((await ask("POST", "kuvo/worktrees/restore", { folder: made.folder })).status, 200);
 
   without("ses_archived");
   assert.equal((await ask("POST", "kuvo/worktrees/remove", { path: made.root })).status, 200);
@@ -617,7 +632,7 @@ test("a worktree stays while another session in it is open, while an agent works
   assert.equal((await ask("POST", "kuvo/worktrees/remove", { path: fresh.root, forget: true })).status, 200);
 });
 
-test("one removed in Settings comes back on its branch while its session is here, and can't once its branch is gone", async () => {
+test("one removed in Settings comes back on its branch while its session is here, and can't once its work is gone", async () => {
   const made = (await ask("POST", "kuvo/worktrees", { project, branchPrefix: "kuvo/" })).value;
   sessions.push({ id: "ses_settings", title: "Settings", location: { directory: made.folder } });
   fs.writeFileSync(path.join(made.root, "kept.txt"), "kept\n");
@@ -634,6 +649,9 @@ test("one removed in Settings comes back on its branch while its session is here
   assert.equal((await ask("POST", "kuvo/worktrees/remove", { path: made.root })).status, 200, "removed again");
   assert.equal(git(project, "worktree", "list").includes(made.root), false);
   git(project, "branch", "-D", made.branch);
+  // Its commits gone from git too (it cleaned them up): nothing to make it again from.
+  git(project, "reflog", "expire", "--expire=now", "--all");
+  git(project, "gc", "-q", "--prune=now");
   assert.equal((await records()).restorable.find(each => each.root === made.root)?.restorable, false);
   const refused = await ask("POST", "kuvo/worktrees/restore", { folder: made.folder });
   assert.equal(refused.status, 409);
@@ -677,4 +695,78 @@ test("a session archived from anywhere, Mac closed: the box hears it and its wor
   assert.equal(fs.existsSync(made.root), false);
   without("ses_heard");
   await tidy();
+});
+
+test("a session further back than the newest page still keeps its worktree, and what was saved for an archived one", async () => {
+  const open = (await ask("POST", "kuvo/worktrees", { project, branchPrefix: "kuvo/" })).value;
+  const archived = (await ask("POST", "kuvo/worktrees", { project, branchPrefix: "kuvo/" })).value;
+  sessions.push({ id: "ses_old_open", title: "Old, open", location: { directory: open.folder } });
+  const old = { id: "ses_old_archived", title: "Old, archived", location: { directory: archived.folder } };
+  sessions.push(old);
+  fs.writeFileSync(path.join(open.root, "work.txt"), "not committed\n");
+  fs.writeFileSync(path.join(archived.root, "work.txt"), "not committed\n");
+  await tidy();
+  old.metadata = { "kuvo.archived": true };
+  await tidy();
+  assert.equal(fs.existsSync(archived.root), false);
+  // A busy box: bots and wake-ups make hundreds of newer sessions.
+  const newer = Array.from({ length: 450 }, (_, index) => ({ id: `ses_newer_${index}`, title: "Newer", location: { directory: project } }));
+  sessions.push(...newer);
+  try {
+    await tidy();
+    assert.ok(fs.existsSync(path.join(open.root, "work.txt")), "its open session is still here: nothing of it goes");
+    assert.equal((await records()).restorable.find(each => each.root === archived.root)?.saved, true, "what was saved for it stays");
+    assert.notEqual(git(project, "for-each-ref", "refs/kuvo/worktrees"), "");
+  } finally {
+    sessions.splice(sessions.length - newer.length, newer.length);
+  }
+  without("ses_old_open");
+  without("ses_old_archived");
+  await tidy();
+  assert.equal(git(project, "for-each-ref", "refs/kuvo/worktrees"), "");
+});
+
+test("while the coding agents' bridge is down, no worktree goes: its sessions can't be counted", async () => {
+  const made = (await ask("POST", "kuvo/worktrees", { project, branchPrefix: "kuvo/" })).value;
+  const session = { id: "ses_bridge_down", title: "Engine side", location: { directory: made.folder } };
+  sessions.push(session);
+  await tidy();
+  session.metadata = { "kuvo.archived": true };
+  // Its record still there, its process gone (restarting for an update, say).
+  const bridgeFile = path.join(process.env.KUVO_HOME, "run", "bridge.json");
+  fs.mkdirSync(path.dirname(bridgeFile), { recursive: true });
+  fs.writeFileSync(bridgeFile, JSON.stringify({ port: 1, password: "x", pid: 999_999 }));
+  try {
+    await link.tidyWorktrees(undefined, atEngine);
+    assert.ok(fs.existsSync(made.root), "a Claude Code session may still be working there");
+  } finally {
+    fs.rmSync(bridgeFile, { force: true });
+  }
+  await link.tidyWorktrees(undefined, atEngine);
+  assert.equal(fs.existsSync(made.root), false, "no bridge at all: the engine's sessions are all there is");
+  without("ses_bridge_down");
+  await tidy();
+});
+
+test("one whose branch was merged and deleted comes back at the commit it was at", async () => {
+  const made = (await ask("POST", "kuvo/worktrees", { project, branchPrefix: "kuvo/" })).value;
+  const session = { id: "ses_merged", title: "Merged", location: { directory: made.folder } };
+  sessions.push(session);
+  fs.writeFileSync(path.join(made.root, "merged.txt"), "merged\n");
+  git(made.root, "add", "-A");
+  git(made.root, "commit", "-q", "-m", "merged");
+  await tidy();
+  session.metadata = { "kuvo.archived": true };
+  await tidy();
+  assert.equal(fs.existsSync(made.root), false);
+  git(project, "merge", "-q", "--ff-only", made.branch);
+  git(project, "branch", "-d", made.branch);
+  assert.equal((await records()).restorable.find(each => each.root === made.root)?.restorable, true);
+  delete session.metadata;
+  assert.equal((await ask("POST", "kuvo/worktrees/restore", { folder: made.folder })).status, 200);
+  assert.equal(git(made.root, "symbolic-ref", "--short", "HEAD"), made.branch);
+  assert.ok(fs.existsSync(path.join(made.root, "merged.txt")));
+  without("ses_merged");
+  await tidy();
+  assert.equal(fs.existsSync(made.root), false);
 });

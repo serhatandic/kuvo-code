@@ -12828,11 +12828,22 @@ async function sessionsHere(engine, signal, bridge = bridgeTarget()) {
   for (const target of bridge?.port && bridge.port !== engine.port ? [engine, bridge] : [engine]) {
     const headers = { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}` };
     try {
-      const listed = await fetch(`http://127.0.0.1:${target.port}/api/session?parentID=null&limit=200&order=desc`, { headers, signal: AbortSignal.timeout(1e4) });
+      let query = "parentID=null&limit=200&order=desc";
+      for (let pages = 0;query; pages++) {
+        if (pages === 100 || signal?.aborted)
+          return null;
+        const listed = await fetch(`http://127.0.0.1:${target.port}/api/session?${query}`, { headers, signal: AbortSignal.timeout(1e4) });
+        if (!listed.ok)
+          return null;
+        const page = await listed.json();
+        const data = page?.data ?? [];
+        here.sessions.push(...data);
+        const next = page?.cursor?.next;
+        query = data.length === 200 && next ? `parentID=null&limit=200&cursor=${encodeURIComponent(next)}` : null;
+      }
       const busy = await fetch(`http://127.0.0.1:${target.port}/api/session/active`, { headers, signal: AbortSignal.timeout(1e4) });
-      if (!listed.ok || !busy.ok)
+      if (!busy.ok)
         return null;
-      here.sessions.push(...(await listed.json())?.data ?? []);
       const active = (await busy.json())?.data ?? {};
       for (const id of Array.isArray(active) ? active : Object.keys(active))
         here.active.add(id);
@@ -13008,6 +13019,9 @@ async function answerWorktrees(method, requestPath, body, engine, signal, bridge
 }
 var isArchived2 = (session) => Boolean(session.time?.archived || session.metadata?.["kuvo.archived"] === true || session.metadata?.kuvo?.archived === true);
 var folderOf = (session) => session.location?.directory ?? session.directory;
+var BY_KUVO = { GIT_AUTHOR_NAME: "Kuvo Code", GIT_AUTHOR_EMAIL: "kuvo-code@localhost", GIT_COMMITTER_NAME: "Kuvo Code", GIT_COMMITTER_EMAIL: "kuvo-code@localhost" };
+var snapshotRef = (root, commit) => `refs/kuvo/worktrees/${path51.basename(root).replace(/[^A-Za-z0-9_-]+/g, "-")}-${commit.slice(0, 12)}`;
+var dropSnapshot = (project, root, commit) => gitIn(project, ["update-ref", "-d", snapshotRef(root, commit), commit]);
 function snapshot(root, branch) {
   const status = gitIn(root, ["status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none"]);
   if (status === null)
@@ -13019,13 +13033,12 @@ function snapshot(root, branch) {
     return;
   const index = path51.join(gitFolder, "kuvo-snapshot-index");
   const env = { GIT_INDEX_FILE: index };
-  const by = { GIT_AUTHOR_NAME: "Kuvo Code", GIT_AUTHOR_EMAIL: "kuvo-code@localhost", GIT_COMMITTER_NAME: "Kuvo Code", GIT_COMMITTER_EMAIL: "kuvo-code@localhost" };
   try {
     if (gitIn(root, ["read-tree", "HEAD"], env) === null || gitIn(root, ["add", "-A"], env) === null)
       return;
     const tree = gitIn(root, ["write-tree"], env);
-    const commit = tree && gitIn(root, ["commit-tree", tree, "-p", "HEAD", "-m", `What wasn't committed in ${branch} when its worktree was removed`], by);
-    if (!commit || gitIn(root, ["update-ref", `refs/kuvo/worktrees/${path51.basename(root)}`, commit]) === null)
+    const commit = tree && gitIn(root, ["commit-tree", tree, "-p", "HEAD", "-m", `What wasn't committed in ${branch} when its worktree was removed`], BY_KUVO);
+    if (!commit || gitIn(root, ["update-ref", snapshotRef(root, commit), commit]) === null)
       return;
     return commit;
   } finally {
@@ -13035,7 +13048,8 @@ function snapshot(root, branch) {
 function listedRestorable(tree) {
   const branchThere = fs49.existsSync(tree.project) && gitIn(tree.project, ["rev-parse", "--verify", "--quiet", `refs/heads/${tree.branch}`]) !== null;
   const saved = Boolean(tree.snapshot);
-  const entry = { project: tree.project, root: tree.root, folder: tree.folder ?? tree.root, branch: tree.branch, restorable: branchThere || saved, saved };
+  const headThere = !branchThere && fs49.existsSync(tree.project) && gitIn(tree.project, ["cat-file", "-e", `${tree.head}^{commit}`]) !== null;
+  const entry = { project: tree.project, root: tree.root, folder: tree.folder ?? tree.root, branch: tree.branch, restorable: branchThere || saved || headThere, saved };
   if (tree.base) {
     entry.base = tree.base;
     const ahead = branchThere ? gitIn(tree.project, ["rev-list", "--count", `${tree.base}..refs/heads/${tree.branch}`]) : null;
@@ -13087,7 +13101,7 @@ async function removeTree(tree, removal, engine, signal, bridge, known) {
     }
   } catch (error) {
     if (saved)
-      gitIn(tree.project, ["update-ref", "-d", `refs/kuvo/worktrees/${path51.basename(tree.root)}`]);
+      dropSnapshot(tree.project, tree.root, saved);
     return { status: 502, value: message(error?.message ?? String(error)) };
   }
   gitIn(tree.project, ["branch", removal.forget ? "-D" : "-d", tree.branch]);
@@ -13104,32 +13118,39 @@ async function restoreTree(folder, engine, signal, bridge) {
     return { status: 409, value: message("Its project folder is gone.") };
   if (fs49.existsSync(tree.root) && fs49.readdirSync(tree.root).length)
     return { status: 409, value: message("Something else is in its folder now.") };
-  const ref = `refs/kuvo/worktrees/${path51.basename(tree.root)}`;
   const saved = tree.snapshot && gitIn(tree.project, ["cat-file", "-e", `${tree.snapshot}^{commit}`]) !== null ? tree.snapshot : undefined;
   const branchThere = gitIn(tree.project, ["rev-parse", "--verify", "--quiet", `refs/heads/${tree.branch}`]) !== null;
-  if (!branchThere && !saved)
+  const headThere = gitIn(tree.project, ["cat-file", "-e", `${tree.head}^{commit}`]) !== null;
+  if (!branchThere && !saved && !headThere)
     return { status: 409, value: message("Its work is gone, so it can’t come back.") };
   gitIn(tree.project, ["worktree", "prune"]);
   const made = branchThere ? spawnGit(tree.project, ["worktree", "add", tree.root, tree.branch]) : spawnGit(tree.project, ["worktree", "add", "-b", tree.branch, tree.root, tree.head]);
-  if (made !== null)
-    return { status: 409, value: message(made.includes("already") && made.includes("checked out") ? `${tree.branch} is open in another folder.` : `Couldn’t restore it: ${made}`) };
+  if (made !== null) {
+    if (fs49.existsSync(tree.root))
+      gitIn(tree.project, ["worktree", "remove", "--force", tree.root]);
+    if (!branchThere)
+      gitIn(tree.project, ["branch", "-D", tree.branch]);
+    return { status: 409, value: message(made.includes("already") && made.includes("checked out") ? `${tree.branch} is open in another folder.` : "Its folder couldn’t be made again.") };
+  }
   if (saved) {
     const onto = gitIn(tree.root, ["rev-parse", "HEAD"]);
     const parent = gitIn(tree.root, ["rev-parse", `${saved}^`]);
-    const back = onto === parent ? gitIn(tree.root, ["read-tree", "-m", "-u", "HEAD", saved]) !== null : gitIn(tree.root, ["cherry-pick", "--no-commit", saved], { GIT_AUTHOR_NAME: "Kuvo Code", GIT_AUTHOR_EMAIL: "kuvo-code@localhost", GIT_COMMITTER_NAME: "Kuvo Code", GIT_COMMITTER_EMAIL: "kuvo-code@localhost" }) !== null;
+    const back = onto === parent ? gitIn(tree.root, ["read-tree", "-m", "-u", "HEAD", saved]) !== null : gitIn(tree.root, ["cherry-pick", "--no-commit", saved], BY_KUVO) !== null;
     if (!back) {
       gitIn(tree.root, ["cherry-pick", "--abort"]);
       gitIn(tree.root, ["reset", "--quiet", "--hard", "HEAD"]);
       gitIn(tree.project, ["worktree", "remove", "--force", tree.root]);
-      return { status: 409, value: message("Its saved changes don’t fit any more.") };
+      if (!branchThere)
+        gitIn(tree.project, ["branch", "-D", tree.branch]);
+      return { status: 409, value: message(`Its saved changes clash with newer work on ${tree.branch}.`) };
     }
     gitIn(tree.root, ["reset", "--quiet"]);
   }
   const { head: _head, snapshot: _snapshot, made: _made, prefix: _prefix, ...kept } = tree;
-  const record = { ...kept, used: true };
+  const record = { ...kept, used: false };
   updateWorktrees((list) => [...list.filter((each) => each.root !== tree.root), record], undefined, (list) => list.filter((each) => each.root !== tree.root));
   if (saved)
-    gitIn(tree.project, ["update-ref", "-d", ref]);
+    dropSnapshot(tree.project, tree.root, saved);
   const here = await sessionsHere(engine, signal, bridge);
   for (const session of here?.sessions ?? []) {
     if (!inside2(folderOf(session), tree.root) || isHiddenRun(session))
@@ -13146,7 +13167,7 @@ function spawnGit(folder, args) {
 }
 var sweeping = null;
 var sweepAgain = false;
-function tidyWorktrees(signal, engine, bridge = bridgeTarget()) {
+function tidyWorktrees(signal, engine, bridge) {
   if (sweeping) {
     sweepAgain = true;
     return sweeping;
@@ -13161,7 +13182,7 @@ function tidyWorktrees(signal, engine, bridge = bridgeTarget()) {
   });
   return sweeping;
 }
-async function sweep(signal, given, bridge) {
+async function sweep(signal, given, givenBridge) {
   if (!readWorktrees().length && !readRestorableWorktrees().length)
     return;
   let engine = given ?? null;
@@ -13169,25 +13190,42 @@ async function sweep(signal, given, bridge) {
     try {
       engine = readEngineFile();
     } catch {}
+  let bridge = givenBridge ?? null;
+  if (givenBridge === undefined) {
+    let record = null;
+    try {
+      record = readBridgeFile();
+    } catch {}
+    bridge = bridgeTarget();
+    if (record?.port && !bridge)
+      return;
+  }
   const here = await sessionsHere(engine, signal, bridge);
   if (!here)
     return;
-  const ranIn = (root) => here.sessions.filter((session) => !isHiddenRun(session) && !session.parentID && inside2(folderOf(session), root));
-  const used = readWorktrees().filter((tree) => !tree.used && ranIn(tree.root).length).map((tree) => tree.root);
+  const ranIn = (root, seen = here) => seen.sessions.filter((session) => !isHiddenRun(session) && !session.parentID && inside2(folderOf(session), root));
+  const used = readWorktrees().filter((tree) => tree.used === undefined ? ranIn(tree.root).length : !tree.used && ranIn(tree.root).some((session) => !isArchived2(session))).map((tree) => tree.root);
   if (used.length)
     updateWorktrees((list) => list.map((each) => used.includes(each.root) ? { ...each, used: true } : each));
+  const goes = (tree, seen) => {
+    const sessions = ranIn(tree.root, seen);
+    return (tree.used || tree.used === false && !sessions.length) && !sessions.some((session) => !isArchived2(session) || seen.active.has(session.id));
+  };
   for (const tree of readWorktrees()) {
-    const sessions = ranIn(tree.root);
-    if (!tree.used || sessions.some((session) => !isArchived2(session)) || sessions.some((session) => here.active.has(session.id)))
+    if (!goes(tree, here))
       continue;
-    await removeTree(tree, { discard: !sessions.length, keep: sessions.length > 0 }, engine, signal, bridge, here).catch(() => {});
+    const now = await sessionsHere(engine, signal, bridge);
+    if (!now || !goes(tree, now))
+      continue;
+    const left = ranIn(tree.root, now).length;
+    await removeTree(tree, { discard: !left, keep: left > 0 }, engine, signal, bridge, now).catch(() => {});
   }
   const orphans = readRestorableWorktrees().filter((tree) => !ranIn(tree.root).length);
   if (!orphans.length)
     return;
   for (const tree of orphans)
     if (tree.snapshot && fs49.existsSync(tree.project))
-      gitIn(tree.project, ["update-ref", "-d", `refs/kuvo/worktrees/${path51.basename(tree.root)}`]);
+      dropSnapshot(tree.project, tree.root, tree.snapshot);
   updateWorktrees((list) => list, undefined, (list) => list.filter((each) => !orphans.some((gone) => gone.root === each.root)));
 }
 async function worktreesWhere(directory, engine, signal, projects = readProjects().filter((each) => !each.removed).map((each) => each.directory)) {

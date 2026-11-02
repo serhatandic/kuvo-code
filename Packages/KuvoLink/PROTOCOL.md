@@ -1665,20 +1665,25 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     one it doesn't have (removed already): a client takes it as gone.
   - A worktree goes with its last session, as in Codex: once a session has run in it, the box
     removes it when every session there is archived or deleted and no agent works there (as it
-    hears of each, and as it follows its engine again). Archived sessions left: what isn't
-    committed (ignored files aside) is saved first, as a commit under
-    `refs/kuvo/worktrees/<folder name>`, and its branch stays. None left: it goes as Remove… does.
+    hears of each, and as it follows its engine again). It counts every session of its engine and
+    the coding agents' bridge, and tidies nothing while the bridge is down. Archived sessions left:
+    what isn't committed (ignored files aside) is saved first, as a commit under
+    `refs/kuvo/worktrees/<folder name>-<commit>`, and its branch stays. None left: it goes as
+    Remove… does.
     Its lists and the events carry `restorable`: `[{project, root, folder, branch, base?,
     restorable, saved, ahead?}]`, one for each removed this way whose sessions are archived;
-    `saved` whether changes were saved, `restorable` whether it can come back (its branch or its
-    saved changes are still there). An entry and its saved changes go once no session is left
-    there. A client shows one on an archived session working in `folder`.
+    `saved` whether changes were saved, `restorable` whether it can come back (its branch, its
+    saved changes or the commit it was at are still there). An entry and its saved changes go once
+    no session is left there. A client shows one on an open (unarchived) session working in
+    `folder`.
   - `POST kuvo/worktrees/restore {"folder"}` brings one back where it was, on its branch (made
     again from where it was if it's gone), with its saved changes as changes not committed, and
-    tells each session there → `200 {project, root, folder, branch, base?}`, kept again;
+    tells each session there → `200 {project, root, folder, branch, base?}`, kept again, and not
+    removed again until a session there is open;
     `404 {"message"}` for one it can't bring back any more; `409 {"message"}` when its project or
     its branch is gone, something else is in its folder, its branch is open in another folder,
-    or its saved changes don't fit any more (it stays removed).
+    or its saved changes clash with newer work on its branch (it stays removed, nothing left half
+    made).
   - For a new session's worktree, as the composer's Worktree makes one: `POST kuvo/worktrees
     {"project", "branchPrefix"?}` makes one of the project's repository on a branch of its own →
     `{project, root, folder, branch, base?, made, prefix}`; make the session in `folder`. `400`

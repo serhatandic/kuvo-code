@@ -7,7 +7,7 @@ import { bool, type Infer, list, NOTHING, nullable, number, object, oneOf, type 
  * where its session runs (the project's place in it; left out in one an older Mac kept, where
  * it's `root`), its branch and the one it was made from. One made here also has `made`, the branch
  * it was made on, and `prefix`, what its name starts with; `used` once a session has run in it
- * (it goes with its last one). */
+ * (it goes with its last one), false as one restored waits for one of its sessions to be open. */
 export const WORKTREE_RECORD = object({
   project: string,
   root: string,
