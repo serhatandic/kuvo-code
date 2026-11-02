@@ -614,7 +614,7 @@ final class Moves {
                 // while that machine is away (what it said last stands meanwhile). Or for the one it's
                 // going to, quiet, as the box it leaves says (never this Mac: its own box says).
                 let waiting: String? = if let coming = incoming[move.id] {
-                    coming.waiting == true ? placeName(machine) : nil
+                    coming.waiting == true ? coming.place ?? placeName(machine) : nil
                 } else if let machine, isAway(machine) {
                     placeName(machine)
                 } else if move.waiting == true, move.to != app?.phoneLink.macKey {
