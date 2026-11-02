@@ -51,6 +51,8 @@ nonisolated enum Attachments {
         /// As a path, with why (shown on the composer's chip). A warning means the model
         /// would have read it, if it could.
         case path(reason: String, isWarning: Bool)
+        /// Too big to send to a machine: it stays on this Mac, and the message's note says so.
+        case staysHere(reason: String)
     }
 
     /// The composer asks again at every keystroke, and finding a file's kind can read it (one in
@@ -74,6 +76,11 @@ nonisolated enum Attachments {
         let name = model?.name ?? "This model"
         let size = (try? target(of: url).resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
         let tooBig = Route.path(reason: "It's over 20 MB, so the agent gets its path and opens it with its tools.", isWarning: true)
+        // A machine takes a file with the message, up to its limit (`prepareForMachine`); a folder
+        // goes as its listing.
+        if onMachine, size > maxMachineBytes, kind(of: url) != .folder {
+            return .staysHere(reason: "It's over 50 MB, more than a machine takes with a message, so it stays on this Mac and the agent there can't open it.")
+        }
         // The coding agents' bridge puts a text file in the message only up to its limit, and
         // never a folder's listing: those go by path (but a folder for a machine, which goes
         // there as its listing).
@@ -119,7 +126,7 @@ nonisolated enum Attachments {
             case .content:
                 prepared.files.append(.init(uri: file.absoluteString, name: url.lastPathComponent))
                 prepared.included.append(url.path)
-            case .path:
+            case .path, .staysHere:
                 prepared.paths.append(url.path)
             }
         }

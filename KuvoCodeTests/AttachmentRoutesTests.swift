@@ -113,6 +113,23 @@ import Testing
         #expect(prepared.unsent == [huge.path])
     }
 
+    /// In the composer of a session on a machine, one too big to send says, before you send, that
+    /// it stays on this Mac (in orange, why on hover); sending isn't held up. On this Mac the same
+    /// file goes as a path, and a small one goes to the machine as before.
+    @Test func onAMachineAHugeFileSaysItStaysHereBeforeYouSend() throws {
+        let huge = url("huge.png")
+        try Data(count: Attachments.maxMachineBytes + 1).write(to: huge)
+        defer { try? FileManager.default.removeItem(at: huge) }
+        let sees = try model(input: ["text", "image"])
+        guard case .staysHere(let reason) = Attachments.route(huge, for: sees, onMachine: true) else {
+            Issue.record("a file too big for a machine didn't say it stays on this Mac"); return
+        }
+        #expect(reason.contains("stays on this Mac"))
+        #expect(Attachments.prepareForMachine([huge]).unsent == [huge.path], "it's still left out, and the note says so")
+        guard case .content = Attachments.route(huge, for: sees) else { Issue.record("on this Mac, the engine reads it where it is"); return }
+        guard case .content = Attachments.route(url("shot.png"), for: sees, onMachine: true) else { Issue.record("a small picture for a machine said it stays"); return }
+    }
+
     /// A picture only the engine has (a photo from the phone), opened twice: the same copy on
     /// this Mac both times, not a second one.
     @Test func openingAPictureTwiceWritesItOnce() throws {
