@@ -16,7 +16,7 @@ public struct SandboxState: Codable, Equatable, Sendable {
 
     /// Which part of the check failed.
     public enum Check: String, Codable, Sendable {
-        case folder, tempFiles, readsOwn, writesOwn, didntRun, setup
+        case folder, tempFiles, readsOwn, writesOwn, services, didntRun, setup
     }
 
     /// While it's on, what it can't keep commands from on this computer.
