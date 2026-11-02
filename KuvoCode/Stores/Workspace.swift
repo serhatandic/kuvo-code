@@ -1604,9 +1604,10 @@ final class Workspace {
     }
 
     /// Shown at once; put back as it was if the engine doesn't take it (as `setFlag`), unless it
-    /// was renamed again meanwhile.
+    /// was renamed again meanwhile. One a move to another computer has (a rename begun before it,
+    /// or as it ends) is renamed once it's there, on the engine it lives on then.
     func rename(_ id: String, to title: String) async {
-        guard !Moves.isFrozen(id), let index = sessions.firstIndex(where: { $0.id == id }), let api = api(forSession: id) else { return }
+        guard (try? await Deliveries.settled(id)) != nil, let index = sessions.firstIndex(where: { $0.id == id }), let api = api(forSession: id) else { return }
         let before = sessions[index].title
         sessions[index].title = title
         if let machine = RemoteFolder.machine(of: sessions[index].location.directory) { keepList(of: machine) }

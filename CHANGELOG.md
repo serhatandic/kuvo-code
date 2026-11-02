@@ -86,6 +86,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - An agent that asks a session it started something and waits for the answer gets it once, not again as that session finishes.
 - A message an agent sends to a conversation on another computer reaches it when that conversation is moved to the agent's own computer just then, instead of never arriving.
 - A move between two of your machines, even one started from your iPhone, shows as moving on your Mac too.
+- A conversation you rename as it moves to another computer takes the new name once it gets there, instead of keeping the old one; Pin, Archive and Rename wait in its menu until it has arrived.
 - Remove Project on a project with many sessions is much quicker: its sessions are archived several at a time.
 - An agent's commands no longer open windows in the tmux session you started Kuvo Code from; in the sandbox, a `tmux` they run starts its own.
 - Moving a bot or chat to another computer: a wake-up, your late answer to its question, or what its sessions tell it while it moves waits and reaches it there, as it would have here. A bot keeps what you were writing to it, and an open chat carries on with the machine. A move whose connection drops says what its computer says now, not the connection's error, and one still under way on a machine you briefly can't reach keeps showing as moving.

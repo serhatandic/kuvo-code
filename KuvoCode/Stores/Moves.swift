@@ -157,6 +157,9 @@ final class Moves {
 
     func isMoving(_ id: String) -> Bool { underWay[id] != nil }
 
+    /// Moving, or just moved and not yet shown where it lives now: what would change it waits.
+    func isHeld(_ id: String) -> Bool { isMoving(id) || Self.isFrozen(id) }
+
     /// A move of it that its box hasn't finished yet.
     func isPending(_ id: String) -> Bool { told.values.contains { $0.moves.contains { $0.thing == id } } }
 
