@@ -134,6 +134,9 @@ final class Bots {
     @ObservationIgnored var boxes: ((String) -> BoxClient)?
     /// Whether a machine's box can be asked now (connected); a test's stand-in.
     @ObservationIgnored var reachable: ((String) -> Bool)?
+    /// How long a machine's bots wait before they're followed (again), over its connection: as it
+    /// connects they've just been read. A test's follow at once.
+    @ObservationIgnored var machineFollowPause: Duration = .seconds(30)
     /// Reads of each box's bots under way, and the bots made, changed or deleted here meanwhile,
     /// which the read (from before) doesn't take back.
     @ObservationIgnored private var listing: [String: Int] = [:]
@@ -308,21 +311,35 @@ final class Bots {
         show()
     }
 
-    /// This Mac's bots as its box keeps them, from now on (`kuvo/bots/events`): one made, changed or
-    /// deleted, by an agent, a phone or here, shows as it happens.
-    func follow() async {
+    /// A box's bots as it keeps them, from now on (`kuvo/bots/events`): one made, changed or deleted,
+    /// by an agent, a phone or here, shows as it happens. This Mac's always; a machine's while it's
+    /// connected (its connection ends this).
+    func follow(_ box: String = BoxClient.mac) async {
         struct Line: Decodable { var bots: [ListedBot] }
+        let onThisMac = box == BoxClient.mac
+        // (A machine's box from before it had them: asked again only now and then.)
+        var older = false
         while !Task.isCancelled {
+            if !onThisMac {
+                try? await Task.sleep(for: older ? .seconds(300) : machineFollowPause)
+                // Not while it's away or starting over: nothing goes to it then.
+                guard !Task.isCancelled, canReach(box) else { continue }
+            }
+            older = false
             // The app gone (a test's): nothing more to follow for it.
             guard let app else { return }
-            do {
-                    for try await data in (client(BoxClient.mac) ?? app.box(BoxClient.mac)).follow("kuvo/bots/events") {
+            if let client = onThisMac ? client(box) ?? app.box(box) : client(box) {
+                do {
+                    for try await data in client.follow("kuvo/bots/events") {
                         guard let line = try? JSONDecoder().decode(Line.self, from: data) else { continue }
-                        take(line.bots, from: BoxClient.mac)
+                        take(line.bots, from: box)
                     }
-            } catch {}
+                } catch let refusal as BoxRefusal {
+                    older = !onThisMac && (refusal.status == 404 || refusal.status == 403)
+                } catch {}
+            }
             // The box started again, or isn't up yet: followed again in a moment.
-            try? await Task.sleep(for: .seconds(2))
+            if onThisMac { try? await Task.sleep(for: .seconds(2)) }
         }
     }
 

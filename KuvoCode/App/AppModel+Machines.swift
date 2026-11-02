@@ -553,6 +553,8 @@ extension AppModel {
         ])
         // Settings changed here while it connected, after it took the ones it has.
         connection.run("settings") { [weak self] in await self?.keepSettingsCurrent(engine) }
+        // Its bots, followed while it's connected: made, changed or deleted there (from a phone, say).
+        connection.run("bots") { [weak self] in await self?.bots.follow(machine) }
         connection.run("bot-asks") { [weak self] in await self?.botAsks.follow(machine) }
         // What its agents ask to run outside its sandbox, followed while it's connected.
         connection.run("sandbox-asks") { await Sandboxes.shared.follow(machine) }

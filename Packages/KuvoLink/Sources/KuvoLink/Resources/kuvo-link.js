@@ -13657,10 +13657,10 @@ async function startingModelHere(named, readEngine, signal) {
 var REQUEST = /^[A-Za-z0-9_-]{8,64}$/;
 var MADE_FOR = 3600000;
 var madeFor = new Map;
-function makeBot(given, readEngine, readBridge, machine, signal) {
+function makeBot(given, readEngine, readBridge, machine) {
   const request = typeof given?.request === "string" && REQUEST.test(given.request) ? given.request : null;
   if (!request)
-    return makeOnce(given, readEngine, readBridge, machine, signal);
+    return makeOnce(given, readEngine, readBridge, machine);
   const now = Date.now();
   for (const [id, made] of madeFor)
     if (now - made.at > MADE_FOR)
@@ -13668,7 +13668,7 @@ function makeBot(given, readEngine, readBridge, machine, signal) {
   const before = madeFor.get(request);
   if (before)
     return before.answer;
-  const answer = makeOnce(given, readEngine, readBridge, machine, signal).then((made) => {
+  const answer = makeOnce(given, readEngine, readBridge, machine).then((made) => {
     if (made.status === 201)
       madeFor.set(request, { answer, at: Date.now() });
     else
@@ -13678,7 +13678,7 @@ function makeBot(given, readEngine, readBridge, machine, signal) {
   madeFor.set(request, { answer, at: now });
   return answer;
 }
-async function makeOnce(given, readEngine, readBridge, machine, signal) {
+async function makeOnce(given, readEngine, readBridge, machine) {
   const no = (status, message) => ({ status, value: { message } });
   const kit = readKit();
   if (!kit)
@@ -13708,7 +13708,7 @@ async function makeOnce(given, readEngine, readBridge, machine, signal) {
   const looks = kit.looks;
   const pick = (list) => list[crypto22.randomInt(list.length)];
   const look = fitsLook(looks, given.look) ? botLook(given.look) : template?.look ?? { color: pick(looks.colors), shape: pick(looks.shapes), face: pick(looks.faces) };
-  const model = isModel(given.model) ? botModel(given.model) : await startingModelHere(kit.startingModel ?? null, readEngine, signal);
+  const model = isModel(given.model) ? botModel(given.model) : await startingModelHere(kit.startingModel ?? null, readEngine);
   if (!model)
     return no(422, `There’s no model to start it on here: sign in to an account on ${HERE} first.`);
   const agents = runsWithAgents(model);
@@ -13719,7 +13719,7 @@ async function makeOnce(given, readEngine, readBridge, machine, signal) {
   if (!target)
     return no(503, agents ? `The coding agents aren’t running on ${HERE}.` : "The engine isn’t running.");
   if (!agents) {
-    const refused = await signInRefusal(model, target, signal);
+    const refused = await signInRefusal(model, target, AbortSignal.timeout(BOT_STEP));
     if (refused)
       return no(422, refused);
   }
@@ -13733,11 +13733,11 @@ async function makeOnce(given, readEngine, readBridge, machine, signal) {
     fs52.mkdirSync(path53.join(folder, "wakes"), { recursive: true });
     fs52.writeFileSync(path53.join(folder, "MEMORY.md"), kit.memory.replaceAll("⟦name⟧", name));
     const rules = [...withAlwaysAsk(kit.rules ?? []), { action: "external_directory", resource: path53.join(folder, "*"), effect: "allow" }];
-    const made = await call(target, "POST", "/api/session", { title: name, location: { directory }, model, permissions: rules }, signal);
+    const made = await call(target, "POST", "/api/session", { title: name, location: { directory }, model, permissions: rules }, AbortSignal.timeout(BOT_STEP));
     if (typeof made?.id !== "string" || !made.id)
       throw new Error("No conversation was made.");
     session = { id: made.id };
-    await call(target, "PATCH", `/api/session/${encodeURIComponent(session.id)}`, { metadata: { kuvo: { bot: id } } }, AbortSignal.timeout(BOT_STEP)).catch(() => {});
+    await call(target, "PATCH", `/api/session/${encodeURIComponent(session.id)}`, { metadata: { kuvo: { bot: id } } }, AbortSignal.timeout(BOT_STEP));
     const told = botInstructions(kit, name, folder, personality?.instruction, project);
     await call(target, "PUT", `/api/experimental/session/${encodeURIComponent(session.id)}/instructions/entries/kuvo.bot`, { value: told }, AbortSignal.timeout(BOT_STEP));
     fs52.writeFileSync(path53.join(folder, "session"), session.id);
@@ -13976,6 +13976,81 @@ async function forgetLeftKeys() {
     } catch {}
   }
 }
+var LEFT_FILE = path54.join(RUN, "bots-left.json");
+function botsLeft() {
+  try {
+    const listed = JSON.parse(textOf(LEFT_FILE) ?? "");
+    return Array.isArray(listed?.left) ? listed.left.filter((each) => typeof each?.id === "string" && /^bot_[A-Za-z0-9]+$/.test(each.id) && typeof each.session === "string") : [];
+  } catch {
+    return [];
+  }
+}
+function noteLeft(id, left) {
+  const bots = botsLeft().filter((each) => each.id !== id);
+  if (left)
+    bots.push(left);
+  try {
+    fs53.mkdirSync(RUN, { recursive: true });
+    if (!bots.length)
+      return fs53.rmSync(LEFT_FILE, { force: true });
+    fs53.writeFileSync(`${LEFT_FILE}.new`, JSON.stringify({ left: bots }));
+    fs53.renameSync(`${LEFT_FILE}.new`, LEFT_FILE);
+  } catch {}
+}
+async function leaveBehind(left, readEngine, readBridge) {
+  let agents;
+  try {
+    agents = readBridge();
+  } catch {}
+  let groups = left.groups;
+  if (groups && agents) {
+    const listed = await askGroups(agents, "GET", "", undefined, AbortSignal.timeout(BOT_STEP)).catch(() => null);
+    if (listed?.status === 200 && Array.isArray(listed.value?.data)) {
+      groups = false;
+      for (const chat of listed.value.data) {
+        const members = chat?.group?.members;
+        if (!Array.isArray(members) || !members.includes(left.id))
+          continue;
+        const changed = await askGroups(agents, "PATCH", `/${encodeURIComponent(chat.group.id)}`, { members: members.filter((member) => member !== left.id) }, AbortSignal.timeout(BOT_STEP)).catch(() => null);
+        if (changed?.status !== 200 && changed?.status !== 404)
+          groups = true;
+      }
+    }
+  }
+  let conversation = left.conversation;
+  if (conversation) {
+    let target;
+    try {
+      target = left.agents ? agents : readEngine();
+    } catch {}
+    if (target)
+      conversation = !await sessionGone(target, left.session);
+  }
+  return groups || conversation ? { ...left, groups, conversation } : null;
+}
+async function sessionGone(target, session) {
+  try {
+    const response = await fetch(`http://127.0.0.1:${target.port}/api/session/${encodeURIComponent(session)}`, {
+      method: "DELETE",
+      headers: { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}` },
+      signal: AbortSignal.timeout(BOT_STEP)
+    });
+    return response.ok || response.status === 404;
+  } catch {
+    return false;
+  }
+}
+async function finishDeletes(readEngine, readBridge) {
+  for (const left of botsLeft()) {
+    if (botHere(left.id)) {
+      noteLeft(left.id, null);
+      continue;
+    }
+    const still = await leaveBehind(left, readEngine, readBridge);
+    if (JSON.stringify(still) !== JSON.stringify(left))
+      noteLeft(left.id, still);
+  }
+}
 var DELETED_FILE = path54.join(BOTS, "deleted.json");
 function noteDeleted(id) {
   let kept = [];
@@ -14009,6 +14084,8 @@ async function deleteBot(id, readEngine, readBridge) {
   } catch (error) {
     return no(503, `The bot couldn’t be deleted: ${error?.message ?? error}`);
   }
+  const leaving = { id, session: here.session, agents: here.agents, groups: true, conversation: true };
+  noteLeft(id, leaving);
   if (IS_MAC) {
     await hostTrash(trashed).catch(() => {});
     if (!fs53.existsSync(trashed))
@@ -14018,25 +14095,7 @@ async function deleteBot(id, readEngine, readBridge) {
   }
   noteKeysLeft(id, true);
   await forgetLeftKeys();
-  let agents;
-  try {
-    agents = readBridge();
-  } catch {}
-  if (agents) {
-    const listed = await askGroups(agents, "GET", "", undefined, AbortSignal.timeout(BOT_STEP)).catch(() => null);
-    for (const chat of listed?.status === 200 && Array.isArray(listed.value?.data) ? listed.value.data : []) {
-      const members = chat?.group?.members;
-      if (!Array.isArray(members) || !members.includes(id))
-        continue;
-      await askGroups(agents, "PATCH", `/${encodeURIComponent(chat.group.id)}`, { members: members.filter((member) => member !== id) }, AbortSignal.timeout(BOT_STEP)).catch(() => {});
-    }
-  }
-  let target;
-  try {
-    target = here.agents ? agents : readEngine();
-  } catch {}
-  if (target)
-    await call(target, "DELETE", `/api/session/${encodeURIComponent(here.session)}`, undefined, AbortSignal.timeout(BOT_STEP)).catch(() => {});
+  noteLeft(id, await leaveBehind(leaving, readEngine, readBridge));
   noteBotsChanged();
   return { status: 200, value: {} };
 }
@@ -14728,6 +14787,7 @@ async function watchEvents(read, tell, signal, answered = () => {}, { bots = fal
       if (notices && hold)
         settleHeld(source, hold).catch(() => {});
       freshenBots(source).catch(() => {});
+      finishDeletes(readEngineFile, bridgeTarget).catch(() => {});
       lastLearned = 0;
       learn(source);
       if (queues)
@@ -19783,8 +19843,8 @@ async function* botTemplatesRoute(context) {
   return yield* json(200, botTemplates({ ...kit, startingModel }, info.name));
 }
 async function* newBotRoute(context) {
-  const { request, signal, readEngine, bridge, info, json } = context;
-  const { status, value } = await makeBot(parsed(request.body), readEngine, bridge, info.name, signal);
+  const { request, readEngine, bridge, info, json } = context;
+  const { status, value } = await makeBot(parsed(request.body), readEngine, bridge, info.name);
   return yield* json(status, value);
 }
 async function* botRoute(context, oneBot) {
@@ -23764,6 +23824,7 @@ async function serve() {
   }
   refreshBotsKeys().catch(() => {});
   forgetLeftKeys().catch(() => {});
+  finishDeletes(readEngineFile, bridgeTarget).catch(() => {});
   sendWakes();
   if (IS_MAC)
     runMacLink().catch(() => {});
@@ -24068,6 +24129,7 @@ export {
   engineControl,
   engineHandler,
   findProgram,
+  finishDeletes,
   firstMessageOf,
   foldPhones,
   followed,
