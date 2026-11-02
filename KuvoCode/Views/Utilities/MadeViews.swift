@@ -129,7 +129,7 @@ struct MadeButton: View {
     }
 
     private func newest(_ things: MadeThings) -> Double {
-        things.artifacts.filter(place.shows).map(\.updated).max() ?? 0
+        ArtifactWords.newest(things.artifacts.filter(place.shows))
     }
 
     private var seenTimes: [String: Double] {
@@ -161,6 +161,10 @@ struct MadePopover: View {
     let close: () -> Void
     @Environment(AppModel.self) private var app
     @State private var opened: ArtifactHeader?
+    /// What its list takes: all of it as laid out, the part that scrolls, and that part's own rows.
+    @State private var listFrame: CGFloat = 0
+    @State private var contentFrame: CGFloat = 0
+    @State private var rows: CGFloat?
 
     var body: some View {
         ZStack {
@@ -192,10 +196,20 @@ struct MadePopover: View {
         }
     }
 
-    /// As tall as there's room for, and the same whatever it shows, so it never jumps.
+    /// As tall as its list, up to as tall as there's room for; a thing opened from it gets all of that.
     private var height: CGFloat {
         let room = (NSScreen.main?.visibleFrame.height ?? 800) - 160
-        return min(560, max(room, 260))
+        let most = min(560, max(room, 260))
+        // Nothing made yet: room for its few words, not a tall empty box.
+        if opened == nil, isEmpty { return 260 }
+        guard opened == nil, let rows, listFrame > contentFrame else { return most }
+        return min(most, max(220, listFrame - contentFrame + rows))
+    }
+
+    /// Loaded, with nothing to list.
+    private var isEmpty: Bool {
+        guard case .loaded = showsTimeline ? things.timelineState : things.state else { return false }
+        return showsTimeline ? things.entries.isEmpty : shown.isEmpty || (!place.isSession && ArtifactWords.shelf(things.artifacts).isEmpty)
     }
 
     private var showsTimeline: Bool { place.isGroup || (!place.isSession && things.mode == .timeline) }
@@ -212,8 +226,11 @@ struct MadePopover: View {
             header
             if case .bot = place { ModeTabs(selection: $things.mode) }
             content
+                .onGeometryChange(for: CGFloat.self, of: \.size.height) { contentFrame = $0 }
+                .onPreferenceChange(MadeRowsHeight.self) { rows = $0 }
             if place.isSession { changesNote }
         }
+        .onGeometryChange(for: CGFloat.self, of: \.size.height) { listFrame = $0 }
     }
 
     // MARK: Header
@@ -318,7 +335,7 @@ struct MadePopover: View {
                         } else {
                             TimelineList(things: things, colored: place.isGroup, open: open)
                         }
-                    } else if shown.isEmpty {
+                    } else if isEmpty {
                         empty
                     } else if place.isSession {
                         ScrollView {
@@ -329,6 +346,7 @@ struct MadePopover: View {
                             }
                             .padding(.vertical, 4)
                             .padding(.bottom, 8)
+                            .reportsMadeRowsHeight()
                         }
                     } else {
                         ShelfList(things: things, open: open)
@@ -463,6 +481,7 @@ private struct ShelfList: View {
                 }
             }
             .padding(.bottom, 12)
+            .reportsMadeRowsHeight()
         }
     }
 
@@ -679,6 +698,7 @@ private struct TimelineList: View {
                 }
             }
             .padding(.bottom, 12)
+            .reportsMadeRowsHeight()
         }
     }
 }
@@ -1536,5 +1556,17 @@ private struct KeptStar: View {
             .foregroundStyle(.tint)
             .help("Kept")
             .accessibilityLabel("Kept")
+    }
+}
+
+/// How tall the rows a What Was Made list scrolls through are, for its popover to fit them.
+private struct MadeRowsHeight: PreferenceKey {
+    static let defaultValue: CGFloat? = nil
+    static func reduce(value: inout CGFloat?, nextValue: () -> CGFloat?) { value = nextValue() ?? value }
+}
+
+private extension View {
+    func reportsMadeRowsHeight() -> some View {
+        background { GeometryReader { Color.clear.preference(key: MadeRowsHeight.self, value: $0.size.height) } }
     }
 }

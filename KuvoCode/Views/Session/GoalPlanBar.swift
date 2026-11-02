@@ -249,7 +249,8 @@ struct GoalLanes: View {
 
     private func lanes(_ timeline: GoalTimeline, window: DateInterval?, long: Bool, rows: [Row], footer: Bool, lanesHeight: CGFloat, height: CGFloat, total: CGFloat) -> some View {
         let showsWords = total >= Self.wordsFrom
-        let nameWidth: CGFloat = total < 420 ? 84 : 112
+        // A wide card gives the steps' names room to show whole.
+        let nameWidth: CGFloat = total < 420 ? 84 : total < 640 ? 112 : 148
         let room = max(40, total - nameWidth - 12 - (showsWords ? Self.wordsWidth + 12 : 0))
         let width = Self.width(timeline, window: window, room: room)
         let x = AxisX(timeline: timeline, width: width)
@@ -354,7 +355,12 @@ struct GoalLanes: View {
             fold("\(lanes.count) later", shows: $showsLater, ink: AnyShapeStyle(.secondary), what: "steps for later")
         case .lane(let lane):
             HStack(spacing: 5) {
-                if let site = lane.step.site { SiteServiceMark(site: site) }
+                // The mark's slot kept where another lane has one, so the names line up.
+                if let site = lane.step.site {
+                    SiteServiceMark(site: site)
+                } else if hasMarks {
+                    ServiceMark(icon: nil, name: "").hidden()
+                }
                 Text(lane.step.text)
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -400,7 +406,8 @@ struct GoalLanes: View {
                 .foregroundStyle(.tertiary)
                 .lineLimit(1)
         case .lane(let lane):
-            let said = status(lane.step)
+            // Once the goal is met, "Done" is the header's to say: a lane keeps only its note.
+            let said = plan.state == .done && lane.step.state == .done ? (text: lane.step.note ?? "", style: AnyShapeStyle(.secondary)) : status(lane.step)
             Text(said.text)
                 .foregroundStyle(said.style)
                 .lineLimit(1)
@@ -408,6 +415,9 @@ struct GoalLanes: View {
                 .help(said.text)
         }
     }
+
+    /// Whether any lane has a service's mark before its name.
+    private var hasMarks: Bool { plan.steps.contains { $0.site != nil } }
 
     /// What a fold holds, in a few words: its phases, or its steps.
     private func outline(_ lanes: [GoalTimeline.Lane]) -> String {
@@ -498,6 +508,18 @@ struct GoalLanes: View {
         }
     }
 
+    /// The days that get a label of their own: every day across a week or where each has room for
+    /// its date; else one every few days, counted out from Today (or the first day) so the labels
+    /// keep clear of it and of each other, and a week apart once that's most of a week.
+    static func labeledDays(_ days: [Date], dayWidth: CGFloat, week: Bool, now: Date, calendar: Calendar = .current) -> Set<Date> {
+        let fit = dayWidth > 0 ? Int((56 / dayWidth).rounded(.up)) : 7
+        let step = week || dayWidth >= 52 ? 1 : fit >= 5 ? 7 * Int((Double(fit) / 7).rounded(.up)) : max(fit, 1)
+        let origin = calendar.startOfDay(for: days.contains { calendar.isDate($0, inSameDayAs: now) } ? now : days.first ?? now)
+        return Set(days.filter { day in
+            (calendar.dateComponents([.day], from: origin, to: calendar.startOfDay(for: day)).day ?? 1) % step == 0
+        })
+    }
+
     /// The days along a long goal's axis, each at its start.
     private static func days(_ timeline: GoalTimeline) -> [Date] {
         let calendar = Calendar.current
@@ -539,26 +561,33 @@ struct GoalLanes: View {
         .frame(width: width, height: Self.headerHeight, alignment: .topLeading)
     }
 
-    /// The days' labels, each over its day: every day's name across a week ("Tue"), Mondays across
-    /// longer ("Mon 26"), and Today.
+    /// The days' labels, each over its day: every day's name across a week ("Tue"), every day's
+    /// date where the days have room ("Tue 3"), else one every few days ("Mon 26"); and Today,
+    /// with no label running into it.
     private func dayHeader(_ days: [Date], x: AxisX, width: CGFloat, window: DateInterval?, shown: CGRect) -> some View {
         let calendar = Calendar.current
-        let everyDay = (window?.duration ?? 0) <= 7 * 86400
+        let week = (window?.duration ?? 0) <= 7 * 86400
+        let dayWidth = days.first.map { x($0.addingTimeInterval(86400)) - x($0) } ?? 0
+        let labeled = Self.labeledDays(days, dayWidth: dayWidth, week: week, now: now)
+        // Clear of the edges of what shows, where it would be cut.
+        let clears = { (center: CGFloat) in shown.width == 0 || (center > shown.minX + 22 && center < shown.maxX - 22) }
+        // Today, where its label shows: the days beside it make room for it.
+        let todayX = days.first { calendar.isDate($0, inSameDayAs: now) }.map { (x($0) + x($0.addingTimeInterval(86400))) / 2 }.flatMap { clears($0) ? $0 : nil }
         return ZStack(alignment: .topLeading) {
             ForEach(days, id: \.self) { day in
                 let center = (x(day) + x(day.addingTimeInterval(86400))) / 2
-                // Clear of the edges of what shows, where it would be cut.
-                let clear = shown.width == 0 || (center > shown.minX + 22 && center < shown.maxX - 22)
-                if !clear {
+                let clear = clears(center)
+                let isToday = calendar.isDate(day, inSameDayAs: now)
+                if !clear || (!isToday && todayX.map { abs($0 - center) < 46 } == true) {
                     EmptyView()
-                } else if calendar.isDate(day, inSameDayAs: now) {
+                } else if isToday {
                     Text("Today")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(accent)
                         .fixedSize()
                         .position(x: center, y: Self.headerHeight / 2)
-                } else if everyDay || calendar.component(.weekday, from: day) == 2 {
-                    Text(day.formatted(everyDay ? .dateTime.weekday(.abbreviated) : .dateTime.weekday(.abbreviated).day()))
+                } else if labeled.contains(day) {
+                    Text(day.formatted(week ? .dateTime.weekday(.abbreviated) : .dateTime.weekday(.abbreviated).day()))
                         .font(.system(size: 11).monospacedDigit())
                         .foregroundStyle(.tertiary)
                         .fixedSize()

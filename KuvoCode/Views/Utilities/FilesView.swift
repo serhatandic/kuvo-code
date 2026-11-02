@@ -61,6 +61,10 @@ struct FilesView: View {
             }
         }
         .onGeometryChange(for: CGFloat.self, of: \.size.width) { width = $0 }
+        // In a narrow panel the file takes it all: the tree folds away once a file opens, or the
+        // panel narrows, and comes back from the toolbar.
+        .onChange(of: file) { if file != nil, isNarrow { showsTree = false } }
+        .onChange(of: isNarrow) { if isNarrow, file != nil { showsTree = false } }
         .task(id: reveal) {
             guard let reveal else { return }
             // In this project's tree, the tree shows beside the file.
@@ -68,6 +72,9 @@ struct FilesView: View {
             revealed()
         }
     }
+
+    /// Too narrow for the tree beside a file without squeezing its lines.
+    private var isNarrow: Bool { width < 520 }
 
     /// Beside a file, the tree takes up to 260 points, less in a narrow panel, so the file
     /// keeps most of the room.
@@ -226,12 +233,17 @@ final class FileTree {
         loading.remove(directory)
     }
 
+    /// What the tree leaves out: Finder's own file, and version control's folders, which nobody
+    /// works in by hand.
+    nonisolated static let unlisted: Set<String> = [".DS_Store", ".git", ".hg", ".svn"]
+
     /// A folder's entries, folders first, or why it can't be read. A link to a folder is a
     /// folder, as on a machine (a package manager's linked packages).
     nonisolated static func list(_ directory: URL) -> Result<[Entry], FolderFailure> {
         if !directory.isFileURL {
             return RemoteShell.list(directory).map { listed in
                 listed
+                    .filter { !unlisted.contains($0.name) }
                     .map { Entry(url: directory.appending(path: $0.name, directoryHint: $0.isDirectory ? .isDirectory : .notDirectory), isDirectory: $0.isDirectory) }
                     .sorted(by: Entry.inFinderOrder)
             }
@@ -244,7 +256,7 @@ final class FileTree {
             return .failure(FolderFailure(error))
         }
         return .success(names
-            .filter { $0 != ".DS_Store" }
+            .filter { !unlisted.contains($0) }
             .map { directory.appending(path: $0) }
             .map { url in
                 let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
@@ -346,6 +358,8 @@ private struct FileTreeView: View {
                 if !tree.filter.isEmpty {
                     Button { tree.filter = "" } label: { Image(systemName: "xmark.circle.fill") }
                         .buttonStyle(ClearFieldButtonStyle())
+                        .accessibilityLabel("Clear")
+                        .help("Clear")
                 }
             }
             .font(.system(size: 13))
@@ -713,12 +727,37 @@ struct FileViewer: View {
         (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
     }
 
+    /// How much of the file's place the header has room for.
+    private enum HeaderFit { case path, name, nameWithIconOpen, cutName }
+
     private var header: some View {
+        // The whole path where it fits, else the file's name whole, then Open as its app's icon
+        // alone to make room for it; the name is cut in its middle only when nothing else fits.
+        ViewThatFits(in: .horizontal) {
+            headerRow(.path)
+            headerRow(.name)
+            headerRow(.nameWithIconOpen)
+            headerRow(.cutName)
+        }
+        .padding(.leading, 14)
+        .padding(.trailing, 8)
+        .frame(height: 40)
+    }
+
+    private func headerRow(_ fit: HeaderFit) -> some View {
         HStack(spacing: 6) {
-            breadcrumb
-                .lineLimit(1)
-                .truncationMode(.head)
-                .help(url.path)
+            Group {
+                switch fit {
+                case .path:
+                    breadcrumb.lineLimit(1).fixedSize()
+                case .name, .nameWithIconOpen:
+                    fileName.fixedSize()
+                case .cutName:
+                    fileName.truncationMode(.middle)
+                }
+            }
+            .help(url.path)
+            .frame(maxWidth: .infinity, alignment: .leading)
             Spacer(minLength: 8)
             if isMarkdown {
                 Button(showsSource ? "View Rendered" : "View Source") { showsSource.toggle() }
@@ -728,6 +767,7 @@ struct FileViewer: View {
                     .padding(.horizontal, 10)
                     .frame(height: 26)
                     .hoverHighlight(in: Capsule())
+                    .fixedSize()
             }
             Button { withAnimation(.ui) { showsTree.toggle() } } label: {
                 Image(systemName: "sidebar.right")
@@ -735,11 +775,14 @@ struct FileViewer: View {
             .buttonStyle(CardActionStyle())
             .help(showsTree ? "Hide Files" : "Show Files")
             // A machine's files open nowhere on this Mac.
-            if url.isFileURL { OpenMenu(url: url) }
+            if url.isFileURL { OpenMenu(url: url, saysOpen: fit == .path || fit == .name) }
         }
-        .padding(.leading, 14)
-        .padding(.trailing, 8)
-        .frame(height: 40)
+    }
+
+    private var fileName: some View {
+        Text(url.lastPathComponent)
+            .font(.system(size: 13, weight: .semibold))
+            .lineLimit(1)
     }
 
     /// "kuvo-ai › Sources › App.swift".
@@ -800,6 +843,8 @@ struct FileViewer: View {
 /// (A menu behind a long press went unnoticed: a click only ever opened the default.)
 private struct OpenMenu: View {
     let url: URL
+    /// "Open" beside the app's icon; the icon alone where the header is tight.
+    var saysOpen = true
 
     var body: some View {
         let workspace = NSWorkspace.shared
@@ -812,9 +857,10 @@ private struct OpenMenu: View {
                             .resizable()
                             .frame(width: 16, height: 16)
                     }
-                    Text("Open")
+                    if saysOpen || defaultApp == nil { Text("Open") }
                 }
             }
+            .accessibilityLabel(defaultApp.map { "Open in \(OpenWith.name(of: $0))" } ?? "Open")
             .buttonStyle(TextButtonStyle(cornerRadius: 7))
             .help(defaultApp.map { "Open in \(OpenWith.name(of: $0))" } ?? "Open")
             // An AppKit menu: SwiftUI's leaves out the apps' icons.
@@ -831,6 +877,7 @@ private struct OpenMenu: View {
                     .frame(width: 20, height: 24)
                     .hoverHighlight(in: RoundedRectangle(cornerRadius: 7), mutesInk: true)
             }
+            .accessibilityLabel("Open With")
             .help("Open With")
         }
         .font(.system(size: 12, weight: .medium))

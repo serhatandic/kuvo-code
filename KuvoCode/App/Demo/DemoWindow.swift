@@ -8,6 +8,8 @@ struct DemoWindow {
     var showsSidebar: () -> Bool
     var showSidebar: (Bool) -> Void
     var showPalette: () -> Void
+    /// Open Quickly, as ⇧⌘O opens it.
+    var openQuickly: () -> Void
     /// The session in view, renamed in its card's header.
     var renameInView: () -> Void
     /// Runs the project's run command, as ⌘R does.

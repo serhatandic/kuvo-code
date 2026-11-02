@@ -108,6 +108,7 @@ struct FailureBar: View {
             Spacer(minLength: 8)
             Button(action: dismiss) { Image(systemName: "xmark") }
                 .buttonStyle(IconButtonStyle())
+                .accessibilityLabel("Dismiss")
                 .help("Dismiss")
         }
         .padding(.horizontal, 14)

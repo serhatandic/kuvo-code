@@ -25,6 +25,20 @@ struct BotKeysSection: View {
                     row(service)
                 }
             }
+            // Its own key for one, once under them all rather than on each row.
+            let addable = BotKeys.services.filter { !own.contains($0.id) && !removing.contains($0.id) }
+            if status?.own != nil, !addable.isEmpty {
+                Menu {
+                    ForEach(addable, id: \.id) { service in
+                        Button(service.title + "…") { edit(service) }
+                    }
+                } label: {
+                    Label("Add Its Own Key", systemImage: "plus")
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("A key only \(bot.name) uses, in place of your shared one")
+            }
             // Why they can't be seen or changed now, once, under them all.
             if case .unreadable(let why) = status {
                 Text(why)
@@ -67,8 +81,6 @@ struct BotKeysSection: View {
                 Spacer(minLength: 8)
                 if removing.contains(service.id) || status == nil {
                     Spinner(size: 14)
-                } else if status?.own == nil {
-                    EmptyView()
                 } else if own.contains(service.id) {
                     Menu {
                         Button("Change Key…") { edit(service) }
@@ -84,9 +96,6 @@ struct BotKeysSection: View {
                     // Its own chevron, not the system's beside it too.
                     .menuIndicator(.hidden)
                     .fixedSize()
-                } else {
-                    Button("Add Its Own Key…") { edit(service) }
-                        .buttonStyle(.glass)
                 }
             }
         }

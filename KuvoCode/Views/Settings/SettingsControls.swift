@@ -280,6 +280,7 @@ struct ConfigStringList: View {
                         Image(systemName: "minus.circle.fill")
                     }
                     .buttonStyle(RemoveButtonStyle())
+                    .accessibilityLabel("Remove")
                     .help("Remove")
                 }
             }
@@ -393,6 +394,7 @@ private struct KeyValueRow: View {
                 Image(systemName: "minus.circle.fill")
             }
             .buttonStyle(RemoveButtonStyle())
+            .accessibilityLabel("Remove")
             .help("Remove")
         }
     }
@@ -459,6 +461,8 @@ struct ScrollingSettingsForm<Content: View>: View {
         }
         .scrollPosition($position)
         .scrollBounceBehavior(.basedOnSize)
+        // A row scrolled to the page's edge fades there, rather than being sliced in half.
+        .fadingScrollEdges()
         #if DEBUG
         // KUVO_DEMO_SETTINGS_SCROLL=bottom: scrolled to its end once it's filled, for a look at
         // what's below the fold without scrolling the window.
@@ -807,6 +811,7 @@ struct SettingsSearchRow: View {
                     Image(systemName: "xmark.circle.fill")
                 }
                 .buttonStyle(ClearFieldButtonStyle())
+                .accessibilityLabel("Clear")
                 .help("Clear")
             }
         }

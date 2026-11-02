@@ -215,3 +215,26 @@ import ClientText
     }
 }
 
+
+/// The words a search found, in bold in its result: wherever they are, as the box matched them.
+@Suite struct SearchMatchesTests {
+    private func marked(_ query: String, _ text: String) -> [String] {
+        SearchMatches.ranges(of: query, in: text).map { String(text[$0]) }
+    }
+
+    @Test func everyPlaceTheWordsAreInAnyCaseOrAccents() {
+        #expect(marked("cafe", "…the Café opens; the cafe closes…") == ["Café", "cafe"])
+        #expect(marked("RETRY", "a retry, then retrying") == ["retry", "retry"])
+    }
+
+    @Test func thePhraseAsTheBoxSearchedIt() {
+        #expect(marked("  deploy   the   site ", "…we deploy the site tonight") == ["deploy the site"])
+        #expect(marked("**fix** it", "…then fix it now") == ["fix it"])
+        #expect(marked("site deploy", "deploy the site").isEmpty)
+    }
+
+    @Test func nothingToMarkForEmptyWords() {
+        #expect(marked("  ", "anything").isEmpty)
+        #expect(marked("**", "a ** b").isEmpty)
+    }
+}

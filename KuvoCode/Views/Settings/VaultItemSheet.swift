@@ -21,6 +21,8 @@ struct VaultItemSheet: View {
     @State private var editing = false
     @State private var deleting = false
     @State private var trouble: String?
+    /// The bots listed while the sheet is open: one set to No stays until it closes.
+    @State private var listed: Set<String> = []
 
     /// The item as the vault has it now (changed by Edit).
     private var current: VaultItem { Vaults.shared[box].vault?.items.first { $0.id == item.id } ?? item }
@@ -30,7 +32,7 @@ struct VaultItemSheet: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
-                VaultKindTile(kind: current.kind, size: 32)
+                VaultKindTile(kind: current.kind, size: 32, site: current.sites.first)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(current.name).font(.headline)
                     Text([current.kind.title, current.sites.first].compactMap { $0 }.joined(separator: " · ")).foregroundStyle(.secondary)
@@ -43,7 +45,8 @@ struct VaultItemSheet: View {
             ScrollingSettingsForm {
                 Section { fields }
                 Section {
-                    ForEach(bots) { bot in
+                    // The bots that may use it; the others are a menu away, not a "No" each.
+                    ForEach(bots.filter { bot in isListed(bot) }) { bot in
                         whoRow(name: bot.name, who: .init(bot: bot.id)) { BotAvatar(look: bot.look, size: 22, animates: false) }
                     }
                     ForEach(grants.compactMap(\.who.project), id: \.self) { project in
@@ -53,6 +56,19 @@ struct VaultItemSheet: View {
                     }
                     whoRow(name: bots.isEmpty ? "Every agent" : "Other sessions and bots", who: .init(everyone: true)) {
                         Image(systemName: "person.2").frame(width: 22).foregroundStyle(.secondary)
+                    }
+                    let others = bots.filter { bot in !isListed(bot) }
+                    if !others.isEmpty {
+                        Menu("Let a Bot Use It") {
+                            ForEach(others) { bot in
+                                Button(bot.name) {
+                                    listed.insert(bot.id)
+                                    grant(.init(bot: bot.id), .ask)
+                                }
+                            }
+                        }
+                        .menuStyle(.borderlessButton)
+                        .fixedSize()
                     }
                 } header: {
                     Text("Who Can Use It")
@@ -77,6 +93,7 @@ struct VaultItemSheet: View {
         }
         .frame(width: 500, height: 560)
         .task { recent = (try? await Vaults.shared.activity(on: box, item: item.id, limit: 20)) ?? [] }
+        .onChange(of: grants.compactMap(\.who.bot), initial: true) { _, granted in listed.formUnion(granted) }
         // What was shown may have changed: hidden again.
         .sheet(isPresented: $editing, onDismiss: { revealed = [:] }) { VaultItemEditor(kind: current.kind, box: box, item: current) }
         .confirmationDialog("Delete “\(current.name)” from \(computer)’s vault?", isPresented: $deleting) {
@@ -145,15 +162,22 @@ struct VaultItemSheet: View {
         }
     }
 
+    /// Who may use it, and how (nil: no one), once you've confirmed it's you.
+    private func isListed(_ bot: Bot) -> Bool {
+        listed.contains(bot.id) || grants.contains { $0.who == .init(bot: bot.id) }
+    }
+
+    private func grant(_ who: VaultGrant.Who, _ how: VaultGrant.How?) {
+        Task {
+            guard await Passwords.authenticate(reason: "change who can use “\(current.name)”") else { return }
+            do { try await Vaults.shared.grant(current, to: who, how: how, on: box) } catch { trouble = error.localizedDescription }
+        }
+    }
+
     private func whoRow<Icon: View>(name: String, who: VaultGrant.Who, @ViewBuilder icon: () -> Icon) -> some View {
         let how = grants.first { $0.who == who }?.how
         return LabeledContent {
-            Picker(name, selection: Binding(get: { how }, set: { new in
-                Task {
-                    guard await Passwords.authenticate(reason: "change who can use “\(current.name)”") else { return }
-                    do { try await Vaults.shared.grant(current, to: who, how: new, on: box) } catch { trouble = error.localizedDescription }
-                }
-            })) {
+            Picker(name, selection: Binding(get: { how }, set: { grant(who, $0) })) {
                 Text("On Its Own").tag(VaultGrant.How?.some(.own))
                 Text("Asks Each Time").tag(VaultGrant.How?.some(.ask))
                 Text("No").tag(VaultGrant.How?.none)

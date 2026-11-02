@@ -31,10 +31,24 @@ import Testing
             ("thing", "a-kind-from-later", ""),
         ]))
         #expect(shelf.map(\.section) == [.pinned, .memory, .pages, .documents, .images, .other])
-        #expect(shelf[1].artifacts.map(\.name) == ["MEMORY.md", "job.json"])
+        // Its job is the bot, not something it made: off the Shelf.
+        #expect(shelf[1].artifacts.map(\.name) == ["MEMORY.md"])
         #expect(shelf[2].artifacts.map(\.name) == ["daily.md"])
         // Newest first within a section; one of a kind this app doesn't know yet goes last.
         #expect(shelf[5].artifacts.map(\.name) == ["thing", "app.ts"])
+    }
+
+    @Test func aBotWithOnlyItsJobHasNothingOnItsShelf() throws {
+        #expect(ArtifactWords.shelf(try Self.list([("job.json", "memory", "")])).isEmpty)
+    }
+
+    /// The bot rewrites its job as you tell it more: that's not something new it made, so the dot
+    /// that says there's something new doesn't light up for it.
+    @Test func aBotRewritingItsJobIsNothingNew() throws {
+        let things = try Self.list([("report.md", "document", ""), ("job.json", "memory", "")])
+        #expect(things[1].updated > things[0].updated)
+        #expect(ArtifactWords.newest(things) == things[0].updated)
+        #expect(ArtifactWords.newest(try Self.list([("job.json", "memory", "")])) == 0)
     }
 
     /// What's kept at the top reads as one thing: what you keep is "Kept", what its bot marked final

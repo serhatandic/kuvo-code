@@ -268,6 +268,7 @@ struct SearchField: View {
                     Image(systemName: "xmark.circle.fill")
                 }
                 .buttonStyle(ClearFieldButtonStyle())
+                .accessibilityLabel("Clear")
                 .help("Clear")
             }
         }

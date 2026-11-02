@@ -36,7 +36,7 @@ struct OnboardingView: View {
         .task {
             // Once the window's on screen, for its size.
             await DemoWait.pause(.windowSettles)
-            await DemoDirector.run(app: app, window: DemoWindow(showsSidebar: { false }, showSidebar: { _ in }, showPalette: {}, renameInView: {}, runProject: {}, newProject: { _ in }))
+            await DemoDirector.run(app: app, window: DemoWindow(showsSidebar: { false }, showSidebar: { _ in }, showPalette: {}, openQuickly: {}, renameInView: {}, runProject: {}, newProject: { _ in }))
         }
         #endif
         .toolbar(removing: .title)

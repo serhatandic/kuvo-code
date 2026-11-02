@@ -478,6 +478,11 @@ extension AppModel {
             print("KUVO_DEMO_DISCONNECT left \(engine.machine.id) alone")
             return
         }
+        // KUVO_DEMO_MACHINE: a stand-in shows its state, and nothing goes to it (`DemoMachines`).
+        if let standIn = DemoMachines.standIn(engine.machine.id) {
+            engine.showStandIn(standIn.status)
+            return
+        }
         #endif
         // It takes this Mac's accounts and settings, so this Mac's engine comes first.
         for _ in 0..<240 where api == nil { try? await Task.sleep(for: .milliseconds(250)) }

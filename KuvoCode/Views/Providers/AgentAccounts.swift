@@ -26,6 +26,14 @@ struct SubscriptionsSection: View {
     @Environment(\.agentsBridge) private var bridge
     private var agents: OutsideAgents { bridge ?? app.agents }
     @Environment(\.colorScheme) private var scheme
+    /// Another account asked of a product, from the header's Add Account menu.
+    @State private var addRequest: AddRequest?
+
+    struct AddRequest: Equatable {
+        let product: String
+        private let asked = UUID()
+        init(_ product: String) { self.product = product }
+    }
 
     var body: some View {
         let products = self.products
@@ -46,6 +54,21 @@ struct SubscriptionsSection: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 12)
+                // Another account of one you use, once here rather than on each.
+                if !used.isEmpty, shows == .plans || machine.map(isRunning) != false {
+                    Menu {
+                        ForEach(used) { product in
+                            Button(product.title + "…") { addRequest = AddRequest(product.id) }
+                                .disabled(product.isAgent && (agents.api == nil || agents.addingAccount.contains(product.main.metadata?["agent"]?.string ?? "")))
+                        }
+                    } label: {
+                        Label("Add Account", systemImage: "plus")
+                            .font(.callout)
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    .help(shows == .agents ? "Another account, signed in on its own: each shows in the model picker" : "Another account: the engine uses one at a time")
+                }
                 if shows == .agents, !updatable.isEmpty {
                     Button { app.updateAllAgents() } label: {
                         Label("Update All", systemImage: "arrow.down.circle")
@@ -90,7 +113,7 @@ struct SubscriptionsSection: View {
                 if !used.isEmpty {
                     VStack(spacing: 0) {
                         ForEach(used) { product in
-                            ProductBlock(product: product, connect: connect)
+                            ProductBlock(product: product, connect: connect, addRequest: addRequest)
                             if product.id != used.last?.id {
                                 Divider().padding(.leading, 58)
                             }
@@ -236,6 +259,8 @@ extension Integration {
 private struct ProductBlock: View {
     let product: Product
     let connect: (Integration) -> Void
+    /// The header's Add Account menu asked for another account: this product's, when it names it.
+    var addRequest: SubscriptionsSection.AddRequest?
     @Environment(AppModel.self) private var app
     /// The agents shown: this Mac's, or a machine's (`agentsBridge`).
     @Environment(\.agentsBridge) private var bridge
@@ -261,28 +286,33 @@ private struct ProductBlock: View {
     private var installFailure: String? { agents.installFailures[main.id] }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: action == nil ? 0 : 6) {
             // The actions beside the name; in a narrow window, under it, lined up with the name
             // and the accounts; and one above the other when they don't fit side by side there
-            // either, where what's still too long is cut short.
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 14) {
-                    heading
-                    Spacer(minLength: 12)
-                    actions(AnyLayout(HStackLayout(spacing: 10)))
+            // either, where what's still too long is cut short. With none, the accounts sit right
+            // under the name, as one item.
+            if let action {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 14) {
+                        heading
+                        Spacer(minLength: 12)
+                        actions(action, AnyLayout(HStackLayout(spacing: 10)))
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        heading
+                        actions(action, AnyLayout(HStackLayout(spacing: 10)), isUnder: true)
+                            .padding(.leading, Self.indent)
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        heading
+                        actions(action, AnyLayout(VStackLayout(alignment: .leading, spacing: 4)), isUnder: true, truncates: true)
+                            .padding(.leading, Self.indent)
+                    }
                 }
-                VStack(alignment: .leading, spacing: 4) {
-                    heading
-                    actions(AnyLayout(HStackLayout(spacing: 10)), isUnder: true)
-                        .padding(.leading, Self.indent)
-                }
-                VStack(alignment: .leading, spacing: 4) {
-                    heading
-                    actions(AnyLayout(VStackLayout(alignment: .leading, spacing: 4)), isUnder: true, truncates: true)
-                        .padding(.leading, Self.indent)
-                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                heading
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
             VStack(alignment: .leading, spacing: 0) {
                 switch product.kind {
                 case .agent(let own, let added):
@@ -301,6 +331,9 @@ private struct ProductBlock: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 11)
+        .onChange(of: addRequest) { _, request in
+            if request?.product == product.id { addAccount() }
+        }
         .alert("Add Another \(title) Account", isPresented: $naming) {
             TextField("Name, like Work or Personal", text: $name)
             Button("Add") { addNamed() }
@@ -337,8 +370,10 @@ private struct ProductBlock: View {
     /// Its mark and name.
     private var heading: some View {
         HStack(spacing: 14) {
+            // As tall as the name, the mark beside it: the accounts under the name read as its
+            // second line, not a row of their own.
             ProviderLogo(id: product.logo, size: 22)
-                .frame(width: 32)
+                .frame(width: 32, height: 16)
             Text(title)
                 .font(.body.weight(.medium))
                 .lineLimit(1)
@@ -346,12 +381,25 @@ private struct ProductBlock: View {
         }
     }
 
+    /// What it needs from you, if anything: installing again, or an update.
+    private enum Action {
+        case installing, install(command: String), updating, update(to: String)
+    }
+
+    private var action: Action? {
+        if isInstalling { return .installing }
+        if isAgent, !isInstalled, let installCommand { return .install(command: installCommand) }
+        if isUpdating { return .updating }
+        return latest.map { .update(to: $0) }
+    }
+
     /// What it needs from you, on the product's line: installing again, or an update; and another
     /// account. Under the name (`isUnder`), the buttons' words line up with it, as the plain
     /// words do.
-    private func actions(_ layout: AnyLayout, isUnder: Bool = false, truncates: Bool = false) -> some View {
+    private func actions(_ action: Action, _ layout: AnyLayout, isUnder: Bool = false, truncates: Bool = false) -> some View {
         layout {
-            if isInstalling {
+            switch action {
+            case .installing:
                 HStack(spacing: 6) {
                     Spinner(size: 12)
                     Text("Installing…")
@@ -359,7 +407,7 @@ private struct ProductBlock: View {
                         .lineLimit(1)
                         .foregroundStyle(.secondary)
                 }
-            } else if isAgent, !isInstalled, let installCommand {
+            case .install(let installCommand):
                 Button(action: install) {
                     Label("Install", systemImage: "arrow.down.circle")
                         .font(.callout)
@@ -368,7 +416,7 @@ private struct ProductBlock: View {
                 .buttonStyle(TextButtonStyle(outset: isUnder))
                 .disabled(agents.api == nil)
                 .help("It isn't installed. Runs \(installCommand), its maker's installer.")
-            } else if isUpdating {
+            case .updating:
                 HStack(spacing: 6) {
                     Spinner(size: 12)
                     Text("Updating…")
@@ -376,7 +424,7 @@ private struct ProductBlock: View {
                         .lineLimit(1)
                         .foregroundStyle(.secondary)
                 }
-            } else if let latest {
+            case .update(let latest):
                 if updates {
                     Button(action: update) {
                         Label("Update to \(latest)", systemImage: "arrow.down.circle")
@@ -393,14 +441,6 @@ private struct ProductBlock: View {
                         .help("You have \(version ?? "an older version"). Update it the way you installed it.")
                 }
             }
-            Button(action: addAccount) {
-                Label(product.hasAccounts ? "Add Another Account" : "Add Account", systemImage: "plus")
-                    .font(.callout)
-                    .lineLimit(1)
-            }
-            .buttonStyle(TextButtonStyle(outset: isUnder))
-            .disabled(isAgent && (agents.api == nil || agents.addingAccount.contains(main.metadata?["agent"]?.string ?? "")))
-            .help(isAgent ? "Another \(title) account, signed in on its own: each shows in the model picker" : "Another \(title) account: the engine uses one at a time")
         }
         // Each on one line: the row puts them under the name when they don't fit beside it, and
         // cuts them short only when nothing else fits.
@@ -800,6 +840,7 @@ private struct AccountLine<Menu: View>: View {
             .menuIndicator(.hidden)
             .fixedSize()
             .opacity(isHovering ? 1 : 0)
+            .accessibilityLabel("More")
             .help("More")
         }
         .frame(minHeight: 30)

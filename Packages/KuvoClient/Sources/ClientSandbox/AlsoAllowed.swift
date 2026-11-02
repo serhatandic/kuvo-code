@@ -63,8 +63,8 @@ public enum AlsoAllowed {
     /// The list with nothing in it.
     public static let empty = "Nothing else yet. When you choose Always on a stopped command’s card, the folder shows here under its project, bot or Chats."
 
-    /// The button that adds a folder, and its menu's groups.
-    public static let add = "Add Folder for"
+    /// The button that adds a folder, and its menu's groups, which say whose it is.
+    public static let add = "Add Folder"
     public static let projects = "Projects"
     public static let bots = "Bots"
 

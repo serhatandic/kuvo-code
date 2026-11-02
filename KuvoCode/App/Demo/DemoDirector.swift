@@ -15,6 +15,20 @@ enum DemoPalette {
     #endif
 }
 
+/// What Open Quickly, Report a Problem and the Changes panel's commit form open with typed in them:
+/// KUVO_DEMO_OPEN_QUICKLY, KUVO_DEMO_REPORT_PROBLEM and KUVO_DEMO_COMMIT in debug builds, else nothing.
+enum DemoTyped {
+    #if DEBUG
+    static let openQuickly = ProcessInfo.processInfo.environment["KUVO_DEMO_OPEN_QUICKLY"] ?? ""
+    static let problem = ProcessInfo.processInfo.environment["KUVO_DEMO_REPORT_PROBLEM"] ?? ""
+    static let commit = ProcessInfo.processInfo.environment["KUVO_DEMO_COMMIT"] ?? ""
+    #else
+    static let openQuickly = ""
+    static let problem = ""
+    static let commit = ""
+    #endif
+}
+
 #if DEBUG
 
 /// Opens the app in a given state without clicking, for trying a change or taking screenshots,
@@ -216,6 +230,18 @@ enum DemoDirector {
         }
         // KUVO_DEMO_NEW_BOT: the New Bot editor.
         if environment["KUVO_DEMO_NEW_BOT"] != nil { app.tabs.openBotEditor(bot: nil) }
+        // KUVO_DEMO_REPORT_PROBLEM=<text>: Help › Report a Problem…'s sheet, with that typed in it
+        // (`DemoTyped`), without bringing the window forward as the menu does.
+        if environment["KUVO_DEMO_REPORT_PROBLEM"] != nil { app.showsProblemReport = true }
+        // KUVO_DEMO_OPEN_QUICKLY=<text>: Open Quickly, with that typed in it, once the conversation
+        // (and its folder) is in view.
+        if environment["KUVO_DEMO_OPEN_QUICKLY"] != nil {
+            Task {
+                await DemoWait.pause(.conversationShows)
+                window.openQuickly()
+            }
+        }
+        if let wanted = environment["KUVO_DEMO_SUBAGENT"] { Task { await openSubagent(wanted, app: app) } }
         // In tasks of their own: SwiftUI cancels and restarts the window's task while it settles,
         // which would cut the session's creation short.
         Task { await runSession(environment, app: app, window: window) }
@@ -242,20 +268,32 @@ enum DemoDirector {
         for item in list.split(separator: ",").map(String.init) {
             let parts = item.split(separator: "=", maxSplits: 1).map(String.init)
             switch parts.first {
-            case "terminal": utilities.newTerminal(in: app.tabs.focusedDirectory, environment: app.shellEnvironment)
+            case "terminal":
+                // Once the conversation is in view, so the tab is its panel's, in its folder.
+                Task {
+                    await DemoWait.pause(.conversationShows)
+                    utilities.newTerminal(in: app.tabs.focusedDirectory, environment: app.shellEnvironment)
+                    app.tabs.showPanel()
+                }
             case "browser":
                 // Once the conversation is in view, so the tab is its panel's.
                 Task {
                     await DemoWait.pause(.conversationShows)
-                    utilities.newBrowser(parts.count > 1 ? parts[1] : nil)
+                    let browser = utilities.newBrowser(parts.count > 1 ? parts[1] : nil)
                     app.tabs.showPanel()
+                    await showPointer(over: browser, app: app)
                 }
             case "machine" where parts.count > 1:
                 let rest = parts[1].split(separator: "=", maxSplits: 1).map(String.init)
+                // A stand-in (KUVO_DEMO_MACHINE), which has no sessions: a new session's draft in a
+                // folder there, so its panel is the machine's.
+                let standIn = (DemoMachines.standIn(rest[0]) ?? DemoMachines.standIn(rest[0] + ".invalid"))?.id
+                if let standIn { app.tabs.newSession(in: RemoteFolder.folder("/home/demo/sample", on: standIn)) }
+                let machine = standIn ?? rest[0]
                 // Once a session there is in view, so the tab shows.
                 Task {
-                    await DemoWait.until("a session on \(rest[0]) in view (KUVO_DEMO_PANEL)", limit: .seconds(30)) { utilities.place == rest[0] }
-                    utilities.newMachinePage(rest[0], address: rest.count > 1 ? rest[1] : nil)
+                    await DemoWait.until("a session on \(machine) in view (KUVO_DEMO_PANEL)", limit: .seconds(30)) { utilities.place == machine }
+                    utilities.newMachinePage(machine, address: rest.count > 1 ? rest[1] : nil)
                 }
             case "files": utilities.showFiles()
             case "file" where parts.count > 1:
@@ -286,6 +324,47 @@ enum DemoDirector {
             }
             app.tabs.showPanel()
         }
+    }
+
+    /// KUVO_DEMO_POINTER=<x>,<y>[,<action>]: the agent's pointer over the panel's browser at that
+    /// point of the page (its points, from its top left), as if the agent of the session in view
+    /// were about to `click` there (or `type`, `select`, `hover`), with its badge; shown again before
+    /// it would fade, so it stays.
+    private static func showPointer(over browser: BrowserSession, app: AppModel) async {
+        guard let spec = ProcessInfo.processInfo.environment["KUVO_DEMO_POINTER"] else { return }
+        let values = spec.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+        let xy = values.prefix(2).compactMap(Double.init)
+        guard xy.count == 2 else { return }
+        let action = values.count > 2 ? AgentPointer.Action(rawValue: values[2]) ?? .click : .click
+        // Once the page has loaded.
+        await DemoWait.pause(.conversationRead)
+        browser.agentWorks(app.tabs.sessionID)
+        // An element's size around the point, for the ring a field gets.
+        let element = CGRect(x: xy[0] - 90, y: xy[1] - 16, width: 180, height: 32)
+        while !Task.isCancelled {
+            browser.showAgentStep(action, at: element)
+            await DemoWait.pause(.asked(2))
+        }
+    }
+
+    /// KUVO_DEMO_SUBAGENT[=<session ID or title>]: that session (else the one in view), then its
+    /// first subagent's own conversation in its place, as the subagent's Open does, once its agent
+    /// has started one (with KUVO_DEMO_PROMPT, a prompt that asks for one).
+    private static func openSubagent(_ wanted: String, app: AppModel) async {
+        let workspace = app.workspace
+        if !["", "1"].contains(wanted), let session = workspace.sessions.first(where: { $0.id == wanted || $0.title == wanted }) {
+            app.tabs.open(.session(session.id))
+        }
+        // With a prompt, its new session.
+        let before = ProcessInfo.processInfo.environment["KUVO_DEMO_PROMPT"] != nil ? app.tabs.sessionID : nil
+        guard await DemoWait.until("a session in view (KUVO_DEMO_SUBAGENT)", limit: .seconds(60), { app.tabs.sessionID != nil && app.tabs.sessionID != before }),
+              let id = app.tabs.sessionID, let model = workspace.model(for: id) else { return }
+        if !model.isLoaded { await model.load() }
+        guard await DemoWait.until("a subagent of \(id) (KUVO_DEMO_SUBAGENT)", limit: .seconds(300), { !model.subagents.isEmpty }),
+              let subagent = model.subagents.first else { return }
+        // Once its session's known as the conversation's (its tab finds its way back by it).
+        await DemoWait.until("\(subagent.id)'s session (KUVO_DEMO_SUBAGENT)", limit: .seconds(60)) { workspace.parent(of: subagent.id) != nil }
+        app.tabs.openInPlace(subagent.id)
     }
 
     /// KUVO_DEMO_GROUP=<name>|<bot>,<bot>,…[|<message>] makes that group chat of those bots unless

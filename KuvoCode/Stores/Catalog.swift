@@ -28,6 +28,8 @@ final class Catalog {
     @ObservationIgnored private var engineIntegrations: [Integration] = []
     @ObservationIgnored private var engineModels: [Model] = []
     @ObservationIgnored private var agentIntegrations: [Integration] = []
+    /// The coding agents' accounts as the bridge last listed them, kept when it stops.
+    private var lastAgentAccounts: [Integration] = []
     @ObservationIgnored private var agentModels: [Model] = []
     private(set) var defaultModel: Model?
     private(set) var agents: [Agent] = []
@@ -67,6 +69,14 @@ final class Catalog {
 
     var connectedProviders: [Integration] {
         providers.filter(\.isConnected)
+    }
+
+    /// The accounts you're signed in to, for the sidebar's footer: the connected ones, and the
+    /// coding agents' as last read while their bridge is stopped (still signed in, only not
+    /// running; the stopped bridge says so itself).
+    var signedInAccounts: [Integration] {
+        let connected = connectedProviders
+        return connected + lastAgentAccounts.filter { account in account.isConnected && !connected.contains { $0.id == account.id } }
     }
 
     /// The outside agents (Claude Code, Codex, Cursor, Grok, Antigravity), as the bridge lists them.
@@ -417,7 +427,10 @@ final class Catalog {
             return
         }
         agentReadShown = order
-        if let listed { agentIntegrations = listed }
+        if let listed {
+            agentIntegrations = listed
+            lastAgentAccounts = listed
+        }
         if let models { agentModels = models }
         merge()
         if listed != nil { areAgentsLoaded = true }
@@ -431,6 +444,9 @@ final class Catalog {
         agentReadShown = agentReads
         agentIntegrations = []
         agentModels = []
+        // Gone for good, the sidebar stops naming their accounts too; only while they're on their
+        // way back does it keep them.
+        if !untilBack { lastAgentAccounts = [] }
         merge()
         areAgentsLoaded = !untilBack
     }

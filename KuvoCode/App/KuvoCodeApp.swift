@@ -338,9 +338,9 @@ struct AppCommands: Commands {
                 Button("Run") { actions?.run() }
                     .keyboardShortcut("r")
                     .disabled(actions?.hasProject != true)
-                Button("New Terminal") { actions?.newTerminal() }
+                Button("New Terminal in Panel") { actions?.newTerminal() }
                     .keyboardShortcut("`", modifiers: .control)
-                Button("New Terminal Tab") { actions?.newTerminalTab() }
+                Button("New Terminal") { actions?.newTerminalTab() }
                     .keyboardShortcut("`", modifiers: [.control, .shift])
                 Button("New Browser Tab") { actions?.newBrowser() }
                     .keyboardShortcut("b", modifiers: [.command, .option])
