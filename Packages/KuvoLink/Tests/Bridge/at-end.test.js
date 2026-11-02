@@ -6,6 +6,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -15,10 +16,11 @@ const fixture = fileURLToPath(new URL("at-end-fixture.js", import.meta.url));
 
 // The fixture's run, once it has ended: its exit code, what it reported, and whether its process
 // and folder are still there. (`signal`: sent to the file's own process once its test has started.)
-async function run(how, signal) {
+async function run(how, signal, before = () => {}) {
   const outside = fs.mkdtempSync(path.join(os.tmpdir(), "kae-"));
   const folder = path.join(outside, "file");
   fs.mkdirSync(path.join(folder, "run"), { recursive: true });
+  before(folder);
   const env = { ...process.env, AT_END_FIXTURE: how, AT_END_FOLDER: folder, AT_END_STRAY: path.join(outside, "stray") };
   delete env.NODE_TEST_CONTEXT;
   const child = spawn(process.execPath, ["--test", "--test-reporter=tap", fixture], { env, stdio: ["ignore", "pipe", "pipe"] });
@@ -53,6 +55,24 @@ test("a file that stops what it started passes, its folder removed", { timeout: 
   assert.doesNotMatch(said, /Still open/);
   assert.equal(running, false);
   assert.equal(kept, false);
+});
+
+// A box in the file's folder whose own folder's path was too long for its commands' temporary
+// folders kept them in a short folder of its own in `/tmp`: it goes with the file's folder.
+test("a box's short folder in /tmp goes with the file's folder", { timeout: 60_000 }, async () => {
+  const short = `/tmp/kuvo-code-${process.getuid()}-${crypto.randomBytes(3).toString("hex")}`;
+  try {
+    const { code, said, kept } = await run("clean", undefined, folder => {
+      const fence = path.join(folder, "box", ".kuvo-code", "run", "fence");
+      fs.mkdirSync(fence, { recursive: true });
+      fs.writeFileSync(path.join(fence, "temporary"), `${short}\n${"0".repeat(64)}\n`);
+      fs.mkdirSync(path.join(short, "12345678"), { recursive: true, mode: 0o700 });
+    });
+    assert.equal(code, 0, said);
+    assert.deepEqual({ kept, short: fs.existsSync(short) }, { kept: false, short: false });
+  } finally {
+    fs.rmSync(short, { recursive: true, force: true });
+  }
 });
 
 test("a step that fails still lets the others run: the file ends, its process stopped and its folder removed, and says what failed", { timeout: 60_000 }, async () => {
