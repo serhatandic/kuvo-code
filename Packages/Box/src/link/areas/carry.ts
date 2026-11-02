@@ -130,9 +130,12 @@ export async function carryToAgents(id: string, model: unknown, readEngine: () =
     for (const item of waiting) await call(engine, "DELETE", `/${route}/inbox/${encodeURIComponent(item.id)}`).catch(() => {});
     const entries = `/api/experimental/session/${encodeURIComponent(moved.id)}/instructions/entries`;
     await tellWorktree(agents, moved.id).catch(() => {});
+    // Marked as carried on from this one, whose files its words show (they stay while it does:
+    // `letAttachmentsGo`); a bot's as its too.
+    const kuvo = bot ? session.metadata?.kuvo ?? { bot: bot.described.id } : {};
+    await call(agents, "PATCH", `/api/session/${encodeURIComponent(moved.id)}`, { metadata: { kuvo: { ...kuvo, carriedFrom: id } } }).catch(() => {});
     if (bot) {
-      // The bot's conversation is the new one, marked as its, told what it is.
-      await call(agents, "PATCH", `/api/session/${encodeURIComponent(moved.id)}`, { metadata: { kuvo: session.metadata?.kuvo ?? { bot: bot.described.id } } }).catch(() => {});
+      // The bot's conversation is the new one, told what it is.
       const kit = readKit();
       if (kit) await tellBot(agents, bot, moved.id, toldNow(kit, bot));
       fs.writeFileSync(path.join(bot.folder, "session"), moved.id);

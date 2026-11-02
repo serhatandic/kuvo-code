@@ -104,6 +104,7 @@ export { forgetMovesInMemory, keepMoving, sendMovesWith, takeMoveMail, watchMove
 export { movesElsewhere } from "./moves/elsewhere";
 export { COMPATIBILITY_FILE, engineConfigContent, learnCompatibility, readCompatibility } from "./engine/compatibility";
 export { queueOf, queueWatcher, readQueues, scanQueues } from "./engine/queue";
+export { letAttachmentsGo } from "./server/attached";
 export { workWatcher } from "./work/wakes";
 export { goalFollowers, goalHolds, settleGoalHolds, lookAtGoals, periodOf, periodEnd } from "./work/goals";
 export { keptAwake, letGo } from "./work/awake";

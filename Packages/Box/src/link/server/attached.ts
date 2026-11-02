@@ -2,13 +2,17 @@
 // `attachments` folder, so the agent can open each with its tools. The session's model gets as
 // files only what it can read, as the Mac's own messages do (Attachments.swift): words always, a
 // PDF if it reads PDFs, a picture if it sees pictures. Anything else waits on the box for the
-// agent, and the note at the message's end says where each file is.
+// agent, and the note at the message's end says where each file is. They're kept a folder for each
+// session, and go with it (`letAttachmentsGo`).
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { K } from "../home";
+import { conversationOf, everySession } from "../engine/conversations";
+import { engineGet } from "../engine/client";
+import { K, MAC_ATTACHMENTS } from "../home";
 import { withAttachedNote } from "../peers/naming";
 import { AGENTS_TEXT_BYTES } from "../../shared/text";
+import type { Target } from "../../shared/records";
 
 // What the session's model takes as input ("text", "image", "pdf"…), or null when that can't be
 // found out (then it gets every file, as before).
@@ -31,6 +35,7 @@ export async function attachedIn(body: Buffer | undefined, session: string, mode
   const input = await modelInput(session).catch(() => null);
   const attachments = path.join(K, "attachments");
   letOldGo(attachments);
+  const folder = SESSION.test(session) ? path.join(attachments, session) : attachments;
   const sent: PromptFile[] = [], included: string[] = [], paths: string[] = [];
   for (const file of files) {
     const data = inline(file);
@@ -38,7 +43,7 @@ export async function attachedIn(body: Buffer | undefined, session: string, mode
       sent.push(file);
       continue;
     }
-    const saved = save(attachments, data.bytes, typeof file.name === "string" ? file.name : "");
+    const saved = save(folder, data.bytes, typeof file.name === "string" ? file.name : "");
     if (reads(data.mime, data.bytes.length, input, !toAgents, toAgents ? AGENTS_TEXT_BYTES : MODEL_BYTES)) {
       // Text the engine reads as words only when it's `text/plain`; any other type goes to the
       // model as a file it can't open (Markdown, JSON).
@@ -110,13 +115,91 @@ function save(attachments: string, bytes: Buffer, name: string): string | null {
   }
 }
 
-// The kept files sent more than `KEPT_DAYS` ago.
+// The kept files sent more than `KEPT_DAYS` ago: in their session's folder (and that folder, once
+// it's empty), or in `attachments` itself, as they were kept before.
 function letOldGo(attachments: string): void {
   const before = Date.now() - KEPT_DAYS * 24 * 60 * 60 * 1000;
-  let folders: string[];
-  try { folders = fs.readdirSync(attachments); } catch { return; }
-  for (const name of folders) {
+  for (const name of listOf(attachments)) {
     const folder = path.join(attachments, name);
-    try { if (fs.statSync(folder).mtimeMs < before) fs.rmSync(folder, { recursive: true, force: true }); } catch {}
+    if (!SESSION.test(name)) {
+      try { if (fs.statSync(folder).mtimeMs < before) fs.rmSync(folder, { recursive: true, force: true }); } catch {}
+      continue;
+    }
+    for (const sent of listOf(folder)) {
+      try { if (fs.statSync(path.join(folder, sent)).mtimeMs < before) fs.rmSync(path.join(folder, sent), { recursive: true, force: true }); } catch {}
+    }
+    try { fs.rmdirSync(folder); } catch {}
   }
+}
+
+// What's in `folder`, or nothing when it can't be read.
+function listOf(folder: string): string[] {
+  try { return fs.readdirSync(folder); } catch { return []; }
+}
+
+// A session's name, as its files' folder is named (anything else keeps them as before, in
+// `attachments` itself).
+const SESSION = /^ses_[A-Za-z0-9_-]{1,120}$/;
+
+/** Where a box's sessions are: its engine, and its coding agents' bridge (null when it isn't running). */
+export interface SessionPlaces { engine: Target; bridge: Target | null }
+
+// Where sessions' files are kept: this box's, and on this Mac's box, the Mac app's.
+const keptIn = () => [path.join(K, "attachments"), ...(MAC_ATTACHMENTS ? [MAC_ATTACHMENTS] : [])];
+
+// One look at a time: a session deleted while the box looks over the rest waits for it.
+let looking: Promise<void> = Promise.resolve();
+
+/** A deleted session's files (`session`), or with none named, those of every session the box no
+ * longer has (looked over as it finds its engine again, for any deleted while it wasn't
+ * listening): gone, unless a conversation still there shows them. Anything it can't be sure of
+ * stays. */
+export function letAttachmentsGo(places: SessionPlaces, session?: string): Promise<void> {
+  looking = looking.then(() => letGo(places, session)).catch(() => {});
+  return looking;
+}
+
+async function letGo({ engine, bridge }: SessionPlaces, session?: string): Promise<void> {
+  let gone: string[];
+  if (session !== undefined) {
+    if (!SESSION.test(session)) return;
+    gone = [session];
+  } else {
+    // Only what neither place has: with the bridge not running, its sessions can't be told from
+    // deleted ones. And only this box's own folder: the Mac app's keeps machines' sessions' files
+    // too, which this box doesn't have (the app lets those go).
+    if (!bridge) return;
+    gone = [];
+    for (const name of listOf(path.join(K, "attachments")).filter(name => SESSION.test(name))) {
+      if (await isGone(engine, name) && await isGone(bridge, name)) gone.push(name);
+    }
+  }
+  const folders = gone.flatMap(id => keptIn().map(root => path.join(root, id))).filter(folder => fs.existsSync(folder));
+  if (!folders.length) return;
+  const shown = await stillShown([engine, ...(bridge ? [bridge] : [])], gone);
+  for (const folder of folders) {
+    if (!shown.has(path.basename(folder))) fs.rmSync(folder, { recursive: true, force: true });
+  }
+}
+
+// Whether `place` says it has no session `id` (not that it couldn't answer).
+const isGone = (place: Target, id: string) => engineGet(place, `api/session/${encodeURIComponent(id)}`).then(() => false, error => (error as Error)?.message === "404");
+
+// What marks a conversation that started from another's words (a branch, a handoff, one carried on
+// with the coding agents, or one an agent started), which can show the files in them.
+const FROM = ["branchedFrom", "handoffFrom", "carriedFrom", "startedBy"];
+
+// Which of the sessions `ids` a conversation in `places` still shows files of. It throws when
+// they can't all be read: then everything stays.
+async function stillShown(places: Target[], ids: string[]): Promise<Set<string>> {
+  const shown = new Set<string>();
+  for (const place of places) {
+    for (const session of await everySession(place)) {
+      const kuvo = session.metadata?.kuvo as Record<string, unknown> | undefined;
+      if (!FROM.some(key => kuvo?.[key])) continue;
+      const words = JSON.stringify(await conversationOf(place, session.id));
+      for (const id of ids) if (new RegExp(`attachments/${id}/`, "i").test(words)) shown.add(id);
+    }
+  }
+  return shown;
 }

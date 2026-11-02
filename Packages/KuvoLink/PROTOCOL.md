@@ -1386,9 +1386,10 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   503 while the coding agents aren't running there; 502 when the move failed. Nothing opens on
   the Mac. A machine's bridge does the same for its own, with the Mac closed: a phone asks the
   computer the conversation lives on. There the session's wake-ups and watches go
-  with it, the engine's is marked `kuvo.carriedTo` (the new one's id) as it's archived, and once
+  with it, the engine's is marked `kuvo.carriedTo` (the new one's id) as it's archived, the new
+  one `kuvo.carriedFrom` (the old one's id, under `kuvo` in its metadata), and once
   started it goes to its end, whatever becomes of the request. A client that carries one itself
-  marks it `kuvo.carriedTo` too, as it archives it: a session archived so takes its queue on the
+  marks both too, as it archives it: a session archived so takes its queue on the
   box with it, once (paused, stopped by you, it stays so in the new one, with what waited on the
   box). One brought back keeps the mark and its own queue, archived again too (the box keeps the
   carries it made in `run/queues-carried.json`). Changing a machine's bot's model there to
@@ -3082,7 +3083,12 @@ Agents you add in Settings › Agents come from your settings, after the plugin,
 they work outside without asking unless a rule of yours says otherwise.
 
 What Kuvo Code and the engine keep for an agent stays open after that ask, for the agent to open:
-the box's `attachments` (and this Mac's app's `Attachments`), the agent's browser's downloads on a
+the box's `attachments` (and this Mac's app's `Attachments`; both keep a session's files in a folder
+named after it, `attachments/<session>/…`, which goes as the box hears the session's deleted, or for
+one deleted while it wasn't listening, once its engine and bridge both say it's gone, unless a
+conversation marked `kuvo.branchedFrom`, `handoffFrom`, `carriedFrom` or `startedBy` still names its
+files; this Mac's box is told the app's folder in `KUVO_MAC_ATTACHMENTS`, and the app lets a
+machine's session's go itself), the agent's browser's downloads on a
 machine (this Mac's panel browser saves to `~/Downloads`, which asks), the engine's long outputs
 saved whole (`tool-output`), the repositories it reads (`repos`) and Plan's plans (`~/.opencode/plan`),
 and the folders of the skills the engine finds (learned again when they change, `skill.updated`;
