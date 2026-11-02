@@ -515,6 +515,8 @@ struct YoursRow: View {
                     }
                 }
                 .buttonStyle(GoalPillButtonStyle())
+                // Whole, its row's words wrapping before it: "Open Str…" says nothing.
+                .fixedSize()
             }
             if !more.isEmpty {
                 Menu {

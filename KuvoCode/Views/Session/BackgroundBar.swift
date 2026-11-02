@@ -120,6 +120,9 @@ struct BarLine: View {
     var close: (() -> Void)?
     /// What ✕ puts away, under the pointer ("Put the review away").
     var closeHelp = "Close"
+    /// Where the line has no room for the title and how far along it is, both whole, the second
+    /// goes under the first rather than either being cut or dropped (a goal's bar).
+    var stacks = false
 
     var body: some View {
         HStack(spacing: 0) {
@@ -151,36 +154,11 @@ struct BarLine: View {
             HStack(spacing: 10) {
                 mark
                     .frame(width: 18)
-                Text(title)
-                    .font(.system(size: 13, weight: .semibold))
-                    .lineLimit(1)
-                    .layoutPriority(2)
-                // A status ("Paused · Error") is why the bar matters now: always whole, the title
-                // cut short before it.
-                if let status {
-                    status
-                        .font(.system(size: 13))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .fixedSize()
-                        .layoutPriority(3)
-                } else if let progress {
-                    // Whole, or not at all where a narrow card has no room: cut down to a letter
-                    // or two, they said nothing.
-                    ViewThatFits(in: .horizontal) {
-                        Text(progress)
-                            .font(.system(size: 13).monospacedDigit())
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .fixedSize()
-                        Color.clear.frame(width: 0, height: 0)
-                    }
-                    .layoutPriority(1)
-                }
-                if isHidden, let folded {
-                    folded
-                        .fixedSize()
-                        .layoutPriority(1)
+                if stacks {
+                    stacked
+                        .layoutPriority(2)
+                } else {
+                    oneLine
                 }
                 if !opens, let detail {
                     // All it says beyond its title: cut at its end, never dropped.
@@ -208,8 +186,86 @@ struct BarLine: View {
                 Spacer(minLength: 8)
             }
             .padding(.leading, 14)
-            .frame(height: 36)
+            .frame(minHeight: 36)
             .contentShape(.rect)
+    }
+
+    private var titleText: some View {
+        Text(title)
+            .font(.system(size: 13, weight: .semibold))
+            .lineLimit(1)
+    }
+
+    /// How far along it is, or its status, in one line.
+    @ViewBuilder private var says: some View {
+        if let status {
+            status
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        } else if let progress {
+            Text(progress)
+                .font(.system(size: 13).monospacedDigit())
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+    }
+
+    /// The title, how far along and the folded strip on one line where all of them fit whole;
+    /// otherwise the title on its own line (cut in its middle only where even that has no room)
+    /// and the rest under it, the strip left out where it doesn't fit.
+    private var stacked: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 10) {
+                titleText.fixedSize()
+                says.fixedSize()
+                if isHidden, let folded { folded.fixedSize() }
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                titleText.truncationMode(.middle)
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) {
+                        says.fixedSize()
+                        if isHidden, let folded { folded.fixedSize() }
+                    }
+                    says
+                }
+            }
+            .padding(.vertical, 6)
+        }
+    }
+
+    /// The title, then how far along cut out where there's no room, and the folded strip.
+    @ViewBuilder private var oneLine: some View {
+        titleText
+            .layoutPriority(2)
+        // A status ("Paused · Error") is why the bar matters now: always whole, the title
+        // cut short before it.
+        if let status {
+            status
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .fixedSize()
+                .layoutPriority(3)
+        } else if let progress {
+            // Whole, or not at all where a narrow card has no room: cut down to a letter
+            // or two, they said nothing.
+            ViewThatFits(in: .horizontal) {
+                Text(progress)
+                    .font(.system(size: 13).monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .fixedSize()
+                Color.clear.frame(width: 0, height: 0)
+            }
+            .layoutPriority(1)
+        }
+        if isHidden, let folded {
+            folded
+                .fixedSize()
+                .layoutPriority(1)
+        }
     }
 }
 

@@ -40,7 +40,7 @@ struct GoalPlanBar: View {
             VStack(alignment: .leading, spacing: 0) {
                 BarLine(mark: AnyView(mark), title: GoalPlanWords.name(plan), progress: progress(now: now), status: status,
                         accessory: AnyView(actions), folded: AnyView(strip), showHelp: "Show the goal’s steps", hideHelp: "Hide them: this line stays",
-                        isHidden: $isHidden, close: isOver ? putAway : nil, closeHelp: "Put the goal away")
+                        isHidden: $isHidden, close: isOver ? putAway : nil, closeHelp: "Put the goal away", stacks: true)
                 if !isHidden {
                     details(now: now)
                         .padding(.leading, 14)
@@ -294,6 +294,8 @@ struct GoalSteps: View {
                 }
                 .scrollDisabled(rowsHeight <= Self.mostHeight)
                 .scrollIndicators(rowsHeight > Self.mostHeight ? .automatic : .never)
+                // The edge with more past it fades, so a row cut there reads as more to scroll to.
+                .fadingScrollEdges(20)
                 .frame(height: shownHeight)
             }
         }
