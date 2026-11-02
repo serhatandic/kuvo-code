@@ -553,7 +553,7 @@ async function serve(): Promise<void> {
     server.listen(0, "127.0.0.1", resolve);
   });
   // The key to its sockets, and agents' commands in the sandbox (fence/state.ts), which refuses them
-  // this server too, there before it says where it is (holdVault makes the key too, after).
+  // this server too, there before it says where it is (holdVault, below, makes it too).
   try { socketKey(); } catch {}
   fenceOwnPort((server.address() as AddressInfo).port);
   keepFence();

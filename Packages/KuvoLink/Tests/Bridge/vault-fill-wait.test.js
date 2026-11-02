@@ -137,18 +137,9 @@ const keeper = net.createServer(socket => {
 await new Promise(resolve => keeper.listen(path.join(home, "run", "browser.sock"), resolve));
 atEnd(() => keeper.close());
 
-// The box's own process, which holds the vault, and where it tells what the vault asks you. (A
-// file's setups run side by side: the one that needs it waits for it.)
+// The box's own process, which holds the vault, and where it tells what the vault asks you.
 let box;
 let asksURL;
-let boxUp;
-before(() => (boxUp = (async () => {
-  box = spawn(process.execPath, [script, "serve"], { env: { ...env, OPENCODE_PASSWORD: "box-pw" }, stdio: ["pipe", "pipe", "ignore"] });
-  let out = "";
-  box.stdout.setEncoding("utf8");
-  const url = await new Promise(resolve => box.stdout.on("data", chunk => { out += chunk; if (out.includes("\n")) resolve(JSON.parse(out.split("\n")[0]).url); }));
-  asksURL = `${url}/kuvo/vault/asks/events`;
-})()));
 
 // The Mac over SSH: `box route`, with the vault's key when it has one.
 async function fromMac(method, route, body, key) {
@@ -198,8 +189,17 @@ const started = promise => {
 
 let key;
 before(async () => {
+  box = spawn(process.execPath, [script, "serve"], { env: { ...env, OPENCODE_PASSWORD: "box-pw" }, stdio: ["pipe", "pipe", "pipe"] });
+  let out = "", err = "";
+  box.stdout.setEncoding("utf8");
+  box.stderr.setEncoding("utf8");
+  box.stderr.on("data", chunk => { err += chunk; });
+  const url = await new Promise((resolve, reject) => {
+    box.stdout.on("data", chunk => { out += chunk; if (out.includes("\n")) resolve(JSON.parse(out.split("\n")[0]).url); });
+    box.once("exit", code => reject(new Error(`serve exited ${code}: ${err}`)));
+  });
+  asksURL = `${url}/kuvo/vault/asks/events`;
   // (Its vault listens before the box says where it is.)
-  await boxUp;
   const made = await fromMac("POST", "kuvo/vault/key", proof());
   assert.equal(made.status, 200, JSON.stringify(made.value));
   key = made.value.key;

@@ -57,10 +57,9 @@ export function appears(folder, found) {
           // (Gone again since: the folder above it says so.)
         }
       }
-      // On macOS a folder's watch starts a moment after fs.watch returns (Node hands it to FSEvents,
-      // on a thread of its own), and what changes in that moment is never told: closing a watch
-      // waits until that thread watches again with every watch left, so one opened and closed here
-      // leaves these watching before the first look. (On Linux they watch as fs.watch returns.)
+      // On macOS a folder's watch starts a moment after fs.watch returns, and what changes in that
+      // moment is never told; closing one waits until every watch left is watching, so one opened
+      // and closed here has these watching before the first look. (On Linux, as fs.watch returns.)
       try { fs.watch(above).close(); } catch {}
     }
     function changed() {

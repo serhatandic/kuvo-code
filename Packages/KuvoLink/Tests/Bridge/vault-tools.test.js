@@ -75,10 +75,16 @@ let client;
 /** A request from something on this machine (the browser's fill), without a client's key. */
 let local;
 before(async () => {
-  box = spawn(process.execPath, [script, "serve"], { env: { ...env, OPENCODE_PASSWORD: "box-pw" }, stdio: ["pipe", "pipe", "ignore"] });
-  let out = "";
+  box = spawn(process.execPath, [script, "serve"], { env: { ...env, OPENCODE_PASSWORD: "box-pw" }, stdio: ["pipe", "pipe", "pipe"] });
+  let out = "", err = "";
   box.stdout.setEncoding("utf8");
-  const url = await new Promise(resolve => box.stdout.on("data", chunk => { out += chunk; if (out.includes("\n")) resolve(JSON.parse(out.split("\n")[0]).url); }));
+  box.stderr.setEncoding("utf8");
+  box.stderr.on("data", chunk => { err += chunk; });
+  // (Its vault listens before it says where it is.)
+  const url = await new Promise((resolve, reject) => {
+    box.stdout.on("data", chunk => { out += chunk; if (out.includes("\n")) resolve(JSON.parse(out.split("\n")[0]).url); });
+    box.once("exit", code => reject(new Error(`serve exited ${code}: ${err}`)));
+  });
   client = async (method, route, body) => {
     const response = await fetch(`${url}/${route}`, { method, headers: { authorization: `Basic ${Buffer.from("opencode:box-pw").toString("base64")}`, "content-type": "application/json", "x-kuvo-from": "app" }, body: body ? JSON.stringify(body) : undefined });
     return { status: response.status, value: await response.json().catch(() => ({})) };
