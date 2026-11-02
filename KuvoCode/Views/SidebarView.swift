@@ -1099,17 +1099,21 @@ struct SidebarView: View {
     }
 
     @ViewBuilder private func liveMenu(for session: Session, in place: Place?) -> some View {
+        // Moving to another computer (or just moved, not yet shown where it lives now): what
+        // would change it waits until it's there.
+        let moving = app.moves.isHeld(session.id)
         if !Workspace.isArchived(session) {
-            if Workspace.isPinned(session) {
-                Button("Unpin") { Task { await workspace.setPinned(session.id, false) } }
-            } else {
-                Button("Pin") { Task { await workspace.setPinned(session.id, true) } }
+            Group {
+                if Workspace.isPinned(session) {
+                    Button("Unpin") { Task { await workspace.setPinned(session.id, false) } }
+                } else {
+                    Button("Pin") { Task { await workspace.setPinned(session.id, true) } }
+                }
             }
+            .disabled(moving)
         }
         OpenBesideItem(session: session.id)
         sideQuestionsMenu(for: session, in: place)
-        // Moving to another computer: what would change it waits until it's there.
-        let moving = app.moves.isMoving(session.id)
         if let place {
             Button("Rename…") {
                 renaming = RenameTarget(id: session.id, place: place)
@@ -1139,6 +1143,7 @@ struct SidebarView: View {
         Divider()
         if Workspace.isArchived(session) {
             Button("Unarchive") { Task { await workspace.setArchived(session.id, false) } }
+                .disabled(moving)
         } else {
             Button("Archive") {
                 if hasOwnWorktree(session) { confirm(session) { archiving = $0 } } else { Task { await workspace.setArchived(session.id, true) } }

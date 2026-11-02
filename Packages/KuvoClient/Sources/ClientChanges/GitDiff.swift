@@ -20,6 +20,9 @@ public struct PatchFile: Identifiable, Hashable, Sendable {
     /// A new file git doesn't know yet, listed by its name: its lines come from reading it
     /// (`DiffParser.fill`).
     public var unread = false
+    /// What git names its two sides by (its `index` line), or a new file's hash where it was
+    /// listed: it changes as the file does, where its lines may not (a picture's).
+    public var index: String?
 
     public var id: String { path }
     public var additions: Int { lines.count { $0.kind == .added } }
@@ -137,6 +140,7 @@ public enum DiffParser {
                 else if line.hasPrefix("rename from ") { file.oldPath = path(line.dropFirst("rename from ".count)); file.status = .renamed }
                 else if line.hasPrefix("rename to ") { file.path = path(line.dropFirst("rename to ".count)) }
                 else if line.hasPrefix("Binary files ") { file.isBinary = true }
+                else if line.hasPrefix("index ") { file.index = String(line.dropFirst("index ".count).prefix { $0 != " " }) }
                 continue
             }
             // Its marks are the line's first scalars, not its first characters: a line whose words

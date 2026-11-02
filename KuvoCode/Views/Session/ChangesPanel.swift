@@ -558,7 +558,8 @@ private struct BranchMenu: View {
                 }
                 Button("Create Pull Request", systemImage: "arrow.up.forward.square", action: pullRequest)
             }
-            if isWorktree {
+            // (A machine's isn't in the Finder.)
+            if isWorktree, !RemoteFolder.isRemote(directory) {
                 Divider()
                 Button("Show Worktree in Finder") { NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: directory) }
             }

@@ -34,6 +34,8 @@ nonisolated struct ChangedFile: Identifiable, Hashable, Sendable {
     /// A new file's stamp (its size and when it last changed), as listed: its read is kept until
     /// that changes.
     var hash: String?
+    /// What git names its two sides by (`PatchFile.index`): a picture made again reads as changed.
+    var index: String?
 
     var id: String { path }
 
@@ -50,6 +52,7 @@ extension ChangedFile {
     nonisolated init(_ parsed: PatchFile, root: String) {
         self.init(path: parsed.path, oldPath: parsed.oldPath, status: parsed.status, isBinary: parsed.isBinary, isTooBig: parsed.isTooBig,
                   isFolder: parsed.isFolder, lines: parsed.lines, url: RemoteFolder.url(root).appending(path: parsed.path), unread: parsed.unread)
+        index = parsed.index
     }
 }
 

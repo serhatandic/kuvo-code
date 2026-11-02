@@ -77,6 +77,37 @@ import Testing
         #expect(!app.moves.isPending("ses_trip"))
     }
 
+    /// A rename made while a move has the conversation (begun before it, or made as it ends) isn't
+    /// lost: it shows at once, and is made once the conversation is where it lives now; the later
+    /// of two, as you'd expect.
+    @Test func aRenameWhileItMovesIsMadeOnceItsThere() async throws {
+        defer { engine.stop() }
+        let box = try await TestBox(engine: engine.url, environment: ["KUVO_TEST_NO_PEERS": "1"])
+        defer { box.stop() }
+        let app = AppModel()
+        app.moves.app = app
+        app.workspace.api = engine.api
+        app.moves.boxes = { _ in box.client(engine: engine.url) }
+        engine.list([StubEngine.session("ses_renamed", title: "Trip plans", directory: chats)])
+        engine.on("PATCH", "/api/session/ses_renamed", json: [:])
+        await app.workspace.refresh()
+        let following = Task { await app.moves.follow() }
+        defer { following.cancel() }
+
+        try underWay("mov_rename1", thing: "ses_renamed", role: "from", sessions: ["ses_renamed"])
+        try await until { app.moves.held.contains("ses_renamed") }
+        let renaming = Task { await app.workspace.rename("ses_renamed", to: "Trip to Lisbon") }
+        // Shown so meanwhile; and renamed again before it's there, the later name is the one made.
+        try await until { app.workspace.session("ses_renamed")?.title == "Trip to Lisbon" }
+        let again = Task { await app.workspace.rename("ses_renamed", to: "Lisbon in May") }
+        try await until { app.workspace.session("ses_renamed")?.title == "Lisbon in May" }
+        try over("mov_rename1")
+        await renaming.value
+        await again.value
+        #expect(engine.requests("PATCH", "/api/session/ses_renamed").map { $0.body["title"] as? String } == ["Lisbon in May"])
+        #expect(app.workspace.session("ses_renamed")?.title == "Lisbon in May")
+    }
+
     /// Your machine "lab", as this Mac's box knows it among your computers (`run/link.json`).
     private static let lab = String(repeating: "L", count: 43)
     private func labIsAPeer() throws {
