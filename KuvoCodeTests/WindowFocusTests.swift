@@ -125,9 +125,9 @@ import Testing
     /// A session picked in the sidebar: the press on its row isn't working in the sidebar, so the
     /// conversation stays the card you work in, its composer with the keyboard, all through the
     /// click (the user's report: it looked as if you'd clicked the sidebar, for a moment). Then the
-    /// row opens the session (the store call its button makes as the click ends: SwiftUI's buttons
-    /// don't take queued clicks in a window that isn't key), and its composer has the keyboard,
-    /// even from the sidebar's search, and even for the session already in view.
+    /// row's button opens the session (pressed as VoiceOver presses it: SwiftUI's buttons don't
+    /// take queued clicks in a window that isn't key), and its composer has the keyboard, even
+    /// from the sidebar's search, and even for the session already in view.
     @Test func aSessionPickedInTheSidebarLeavesYouInItsConversation() async throws {
         defer { done() }
         _ = try #require(reply)
@@ -137,19 +137,34 @@ import Testing
         #expect(app.tabs.focus == .conversation, "a press on the sidebar leaves the conversation the card you work in")
         #expect(composerHasKeys, "and its composer the keyboard")
 
-        // What the row's button does as the click ends; then the keyboard goes to its composer.
-        app.tabs.choose(.session(harbor))
+        try press(row: "The harbor")
         try await until { app.tabs.selection == .session(harbor) && composerHasKeys }
-        try await drain()
         #expect(app.tabs.focus == .conversation)
 
         // From the sidebar's search, the session in view picked again.
         window.makeFirstResponder(try sidebarSearch())
         try await until { app.tabs.focus == .sessions }
-        app.tabs.choose(.session(harbor))
-        try await drain()
-        #expect(composerHasKeys, "a session picked from the search has the keyboard in its composer")
+        try press(row: "The harbor")
+        try await until { composerHasKeys }
         #expect(app.tabs.focus == .conversation)
+    }
+
+    /// Presses the sidebar's row named `title`, as VoiceOver would.
+    private func press(row title: String) throws {
+        window.contentView?.layoutSubtreeIfNeeded()
+        func find(in element: Any) -> NSAccessibilityElementProtocol? {
+            guard let element = element as? NSObject else { return nil }
+            let label = [element.accessibilityLabel(), element.accessibilityTitle()].compactMap(\.self).joined(separator: " ")
+            if element.accessibilityRole() == .button, label.contains(title), element.accessibilityFrame().midX - window.frame.minX < 300 {
+                return element as? NSAccessibilityElementProtocol
+            }
+            for child in element.accessibilityChildren() ?? [] {
+                if let found = find(in: child) { return found }
+            }
+            return nil
+        }
+        let row = try #require(window.contentView.flatMap { find(in: $0) } as? NSObject, "the sidebar's row \(title)")
+        #expect(row.accessibilityPerformPress())
     }
 
     /// The sidebar's search field.
@@ -168,22 +183,20 @@ import Testing
         _ = try #require(reply)
         let terminal = try await terminalInThePanel()
         withAnimation(.ui) { app.tabs.showSidebar(false) }
-        try await drain()
-        #expect(composerHasKeys, "hiding the sidebar puts the keyboard in the composer")
+        try await until { composerHasKeys }
         #expect(app.tabs.focus == .conversation)
 
         window.makeFirstResponder(terminal.view)
-        try await drain()
+        try await until { app.tabs.focus == .changes }
         withAnimation(.ui) { app.tabs.showSidebar(true) }
-        try await drain()
-        #expect(composerHasKeys, "showing the sidebar puts the keyboard in the composer")
+        try await until { composerHasKeys }
         #expect(app.tabs.focus == .conversation)
 
         window.makeFirstResponder(try sidebarSearch())
         try await until { app.tabs.focus == .sessions }
         withAnimation(.ui) { app.tabs.showSidebar(false) }
+        try await until { composerHasKeys }
         try await drain()
-        #expect(composerHasKeys, "the sidebar's search going gives the keyboard to the composer")
         #expect(app.tabs.focus == .conversation)
 
         // The composer with the keyboard all along, while the sidebar looked like the card you
@@ -193,6 +206,35 @@ import Testing
         try await drain()
         #expect(composerHasKeys)
         #expect(app.tabs.focus == .conversation)
+    }
+
+    /// The panel grown over the conversation: picking the session in view, or the sidebar shown
+    /// or hidden, leaves the keyboard where you type in the panel, rather than in the composer the
+    /// panel covers; and the sidebar's search going leaves the panel the card you work in.
+    @Test func underTheExpandedPanelTheSidebarLeavesTheKeyboardAlone() async throws {
+        defer { done() }
+        _ = try #require(reply)
+        let terminal = try await terminalInThePanel()
+        withAnimation(.ui) { app.tabs.panelExpanded = true }
+        try await drain()
+        window.makeFirstResponder(terminal.view)
+        try await until { app.tabs.focus == .changes }
+
+        try press(row: "The lamp")
+        try await drain()
+        #expect(window.firstResponder === terminal.view, "picking the session in view leaves the terminal the keyboard")
+        withAnimation(.ui) { app.tabs.showSidebar(false) }
+        try await drain()
+        #expect(window.firstResponder === terminal.view, "hiding the sidebar leaves the terminal the keyboard")
+        withAnimation(.ui) { app.tabs.showSidebar(true) }
+        try await drain()
+
+        window.makeFirstResponder(try sidebarSearch())
+        try await until { app.tabs.focus == .sessions }
+        withAnimation(.ui) { app.tabs.showSidebar(false) }
+        try await drain()
+        #expect(app.tabs.focus == .changes, "the expanded panel is the card you work in")
+        withAnimation(.ui) { app.tabs.panelExpanded = false }
     }
 
     /// The card you work in going (the panel closed after a click in it, the keyboard still in

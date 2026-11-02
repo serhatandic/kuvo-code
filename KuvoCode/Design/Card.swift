@@ -300,10 +300,10 @@ enum TitleBarDoubleClick {
 extension View {
     /// A click anywhere in it makes it the card you work in, as the button goes down: on what
     /// AppKit draws in it too (a reply's text, a terminal, a page), which a SwiftUI gesture never
-    /// hears, and before what the click does. So does the keyboard moving into it (Tab, a shortcut, a field that takes it).
-    /// Not while it's out of reach (under Settings or the expanded panel) or `isOn` says something
-    /// is over it (the command palette, a picture looked at closer), nor for the window's own
-    /// buttons over it. `keyboard` hears which view the keyboard moved to.
+    /// hears, and before what the click does. So does the keyboard moving into it (Tab, a
+    /// shortcut, a field that takes it). Not while it's out of reach (under Settings or the
+    /// expanded panel) or `isOn` says something is over it (the command palette, a picture looked
+    /// at closer), nor for the window's own buttons over it. `keyboard` hears which view the keyboard moved to.
     func onCardClick(isOn: Bool = true, keyboard: ((NSView) -> Void)? = nil, _ action: @escaping () -> Void) -> some View {
         background(CardClicks(isOn: isOn, byClicks: true, clicked: action, keyboard: keyboard))
     }

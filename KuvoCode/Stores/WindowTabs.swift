@@ -135,8 +135,8 @@ final class WindowTabs {
     private(set) var givesWay: [PaneLayout.Pane] = [.split, .changes, .sessions]
     /// The side panel is wanted.
     private(set) var showsPanel = false
-    /// The sidebar is wanted (the window keeps it with its scene).
-    var showsSidebar = true
+    /// The sidebar is wanted.
+    private(set) var showsSidebar = true
     /// The panel over the conversation, for room.
     var panelExpanded = false
     var room = Room()
@@ -301,7 +301,7 @@ final class WindowTabs {
     /// in the tab bar.
     func choose(_ key: TabKey) {
         open(key)
-        focusComposer()
+        typeInConversation()
     }
 
     /// A subagent's conversation (or, from one, the conversation above it) in place of the
@@ -628,6 +628,12 @@ final class WindowTabs {
     func showSidebar(_ shows: Bool) {
         showsSidebar = shows
         if shows { keep(.sessions) }
+        typeInConversation()
+    }
+
+    /// The keyboard in the composer of the conversation you work in, unless something covers it
+    /// (Settings, the expanded panel, a bot's or group chat's editor).
+    private func typeInConversation() {
         guard !app.showsSettings, !(showsPanel && panelExpanded), botEditor == nil, groupEditor == nil else { return }
         focusComposer()
     }
@@ -733,7 +739,16 @@ final class WindowTabs {
 
     private func focusComposer(_ key: String) {
         let tab = TabKey(key)
-        if tab.draftFolder != nil { draftFocus += 1 } else if tab.groupID != nil { groupFocus += 1 } else { workspace.model(for: key)?.focusComposer() }
+        if tab.draftFolder != nil {
+            draftFocus += 1
+        } else if tab.groupID != nil {
+            groupFocus += 1
+        } else if let model = workspace.model(for: key) {
+            model.focusComposer()
+        } else {
+            // No composer to type in (a terminal's tab): the keyboard stays, and so does the card.
+            return
+        }
         focus = worksBeside ? .split : .conversation
     }
 
@@ -758,9 +773,11 @@ final class WindowTabs {
         var selection: TabKey?
         var pairs: [Pair] = []
         var showsPanel = false
+        /// Nil: kept before the sidebar was kept here (in scene storage of its own).
+        var showsSidebar: Bool?
 
-        init(tabs: [TabKey] = [], selection: TabKey? = nil, pairs: [Pair] = [], showsPanel: Bool = false) {
-            (self.tabs, self.selection, self.pairs, self.showsPanel) = (tabs, selection, pairs, showsPanel)
+        init(tabs: [TabKey] = [], selection: TabKey? = nil, pairs: [Pair] = [], showsPanel: Bool = false, showsSidebar: Bool? = nil) {
+            (self.tabs, self.selection, self.pairs, self.showsPanel, self.showsSidebar) = (tabs, selection, pairs, showsPanel, showsSidebar)
         }
 
         /// What's missing (kept by a version that had less, or more) is as it starts.
@@ -770,6 +787,7 @@ final class WindowTabs {
             selection = try container.decodeIfPresent(TabKey.self, forKey: .selection)
             pairs = try container.decodeIfPresent([Pair].self, forKey: .pairs) ?? []
             showsPanel = try container.decodeIfPresent(Bool.self, forKey: .showsPanel) ?? false
+            showsSidebar = try container.decodeIfPresent(Bool.self, forKey: .showsSidebar)
         }
 
         var text: String {
@@ -779,19 +797,21 @@ final class WindowTabs {
 
     /// What the window keeps of them.
     var snapshot: Saved {
-        Saved(tabs: keys, selection: selection, pairs: pairs.sorted { $0.key.text < $1.key.text }.map { Saved.Pair(tab: $0.key, beside: $0.value) }, showsPanel: showsPanel)
+        Saved(tabs: keys, selection: selection, pairs: pairs.sorted { $0.key.text < $1.key.text }.map { Saved.Pair(tab: $0.key, beside: $0.value) }, showsPanel: showsPanel, showsSidebar: showsSidebar)
     }
 
     /// The same, as JSON.
     var saved: String { snapshot.text }
 
     /// Before the tabs were kept as JSON: the tabs' keys a line each, the one in view, and the
-    /// pairs a `<tab>=<session>` line each, in scene storage of their own.
+    /// pairs a `<tab>=<session>` line each, in scene storage of their own; and the sidebar, kept
+    /// there until it was kept with them.
     struct Older {
         var tabs = ""
         var selection: String?
         var pairs = ""
         var showsPanel = false
+        var showsSidebar = true
 
         var saved: Saved {
             let pairs = pairs.split(separator: "\n").compactMap { line -> Saved.Pair? in
@@ -823,5 +843,6 @@ final class WindowTabs {
         self.pairs = pairs.merging(self.pairs) { kept, _ in kept }
         if selection == nil { selection = saved.selection.flatMap { keys.contains($0) ? $0 : nil } ?? keys.last }
         if saved.showsPanel { showsPanel = true }
+        showsSidebar = saved.showsSidebar ?? older.showsSidebar
     }
 }

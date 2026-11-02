@@ -23,7 +23,8 @@ struct MainView: View {
     @SceneStorage("selection") private var olderSelection: String?
     @SceneStorage("splitPairs") private var olderPairs = ""
     @SceneStorage("showsPanel") private var olderShowsPanel = false
-    @SceneStorage("showsSidebar") private var savedShowsSidebar = true
+    /// Where the sidebar was kept before it was kept with the tabs.
+    @SceneStorage("showsSidebar") private var olderShowsSidebar = true
     private var showsSidebar: Bool { tabs.showsSidebar }
     /// The row at the top: the project, its branch and the tabs. Hidden, sessions are switched
     /// from the sidebar or ⌘K.
@@ -311,9 +312,12 @@ struct MainView: View {
             tabs.startIfEmpty()
         }
         .onAppear {
-            // The sidebar as the window left it, from the start.
-            withTransaction(Transaction(animation: nil)) { tabs.showsSidebar = savedShowsSidebar }
-            tabs.restore(savedTabs, older: .init(tabs: olderTabs, selection: olderSelection, pairs: olderPairs, showsPanel: olderShowsPanel))
+            // The sidebar as the window left it, from the start, not sliding there.
+            var restoring = Transaction()
+            restoring.disablesAnimations = true
+            withTransaction(restoring) {
+                tabs.restore(savedTabs, older: .init(tabs: olderTabs, selection: olderSelection, pairs: olderPairs, showsPanel: olderShowsPanel, showsSidebar: olderShowsSidebar))
+            }
             (olderTabs, olderSelection, olderPairs, olderShowsPanel) = ("", nil, "", false)
             // Opened again after the window closed: the terminals went with it.
             tabs.dropClosed()
@@ -569,12 +573,6 @@ struct MainView: View {
         .navigationTitle(windowTitle(inView))
         .onChange(of: inView?.id, initial: true) { _, id in if let id { keptSession = id } }
         .onCardClick(isOn: !overlayShown, keyboard: { keyboardReturn.remember($0, in: .conversation) }) { tabs.focus = .conversation }
-        // What you open last keeps its place when the window is short of room (a split, from
-        // Open Beside: coming back to a tab that has one isn't opening it).
-        .onChange(of: showsSidebar) { _, shows in
-            savedShowsSidebar = shows
-            if shows { tabs.keep(.sessions) }
-        }
     }
 
     /// The session kept made under another tab's card, while its tab is open, and not beside the
@@ -788,8 +786,9 @@ struct MainView: View {
     /// SwiftUI's update.
     private func returnKeyboard(leaving: WindowTabs.Pane? = nil) {
         let had = leaving.map(keyboardReturn.isIn) ?? false
-        // The card you work in is one on screen: the one going leaves you in the conversation.
-        if let leaving, tabs.focus == leaving { tabs.focus = tabs.activeHalf }
+        // The card you work in is one on screen: the one going leaves you in the conversation, or
+        // the expanded panel over it.
+        if let leaving, tabs.focus == leaving { tabs.focus = showsPanel && panelExpanded ? .changes : tabs.activeHalf }
         DispatchQueue.main.async {
             guard !app.showsSettings, !(showsPanel && panelExpanded), had || keyboardReturn.isNowhere else { return }
             if !keyboardReturn.handBack(to: tabs.activeHalf) { tabs.focusComposer() }

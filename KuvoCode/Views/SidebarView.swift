@@ -534,7 +534,8 @@ struct SidebarView: View {
             }
             ForEach(inConversations, id: \.found.id) { result in
                 let show = {
-                    selection = result.found.id
+                    // Find has the keyboard, not the composer.
+                    app.tabs.open(TabKey(result.found.id))
                     let words = search.trimmingCharacters(in: .whitespaces)
                     if let subagent = result.subagent {
                         // Said by one of its subagents: that one, in its place, with Find on the words.
