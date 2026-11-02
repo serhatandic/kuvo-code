@@ -60,7 +60,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - A vault item for a site shows that site's mark, like GitHub's or Stripe's, where Kuvo Code has one.
 - A turn that fails says what happened in its headline (the provider is rate limiting you, the sign-in has ended, the usage limit is reached, the provider couldn't be reached) with the details under it, and offers the way out in the same card: Try Again, and Switch Model, Sign In Again or Open Accounts where that's what helps.
 - A failed conversation's mark in the sidebar is a filled red disc, easier to tell from the others.
-- While a side question shows over the composer, what you send asks it a follow-up: a "Side question" tag says so, and its × sends the next message to the conversation again. The card no longer has a second text field of its own.
+- While a side question shows over the composer, what you send asks it a follow-up: a "Side question" tag says so, and its × sends the next message to the conversation again. The card no longer has a second text field of its own. With a picture or file attached, Send there says a side question takes none and what to do, instead of doing nothing or leaving the picture behind.
 - The cards over the composer read as one list: each line has its mark, its name and one action, then its chevron and ×. Stop moved under a goal, with its details, and folding the last open card tucks them into one line, instead of a Hide button over the card.
 - The menu bar panel's spend bar has a menu for its period (Today, Yesterday, Last 30 Days), and shows each provider's share under it only when two or more spent.
 - New Bot shows the templates as faces with their names, and one line for what the picked one does.

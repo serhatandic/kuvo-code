@@ -322,7 +322,10 @@ final class SessionModel {
 
     var draftFiles: [URL] {
         get { Drafts.shared[id].files }
-        set { Drafts.shared[id].files = newValue }
+        set {
+            Drafts.shared[id].files = newValue
+            if newValue.isEmpty, failure == Self.sideTakesNoFiles { failure = nil }
+        }
     }
 
     /// What you're replying to, over the composer, each with your answer to it.
@@ -1121,13 +1124,18 @@ final class SessionModel {
         }
         // A "!" or "/" command runs as typed; what you were replying to waits for a message.
         let commands = Keyword.commands(commands, keywords: keywords)
-        let isCommand = Self.shellCommand(in: draftText) != nil || SlashCommands.parse(draftText, commands: commands) != nil || GoalCommand(draftText) != nil || typedKeyword(draftText) != nil
+        let isCommand = Self.runsAsTyped(draftText, commands: commands, keywords: keywords)
         // The side thread's tag on the composer: a follow-up there, answered with the thread so
         // far, not a message to the agent. A keyword or command still runs as typed; what's
-        // attached stays (a side question takes none).
+        // attached stops it: a side question takes none.
         if asksSideThread, !isCommand {
             // One at a time: it waits in the composer while the last is answered.
             guard !sideThreadAnswering else { return }
+            // Nothing goes with a file attached: a picture's "[Image 1]" would go without it.
+            guard draftFiles.isEmpty else {
+                failure = Self.sideTakesNoFiles
+                return
+            }
             let question = Quoting.message(quotes: draftQuotes, text: draftText)
             guard !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
             draftText = ""
@@ -1191,6 +1199,17 @@ final class SessionModel {
             }
         }
     }
+
+    /// What runs as typed even while the side thread's tag shows: a "!" command, or a keyword or
+    /// command offered here (`commands` with the keywords' names taken). The composer's tag follows
+    /// it too, so a mistyped path goes to the thread with the tag in sight.
+    static func runsAsTyped(_ text: String, commands: [Command], keywords: [Keyword]) -> Bool {
+        if shellCommand(in: text) != nil || SlashCommands.parse(text, commands: commands) != nil || GoalCommand(text) != nil { return true }
+        guard let (keyword, _) = Keyword.parse(text) else { return false }
+        return keyword != .goal && keywords.contains(keyword)
+    }
+
+    static let sideTakesNoFiles = "A side question can’t include pictures or files. Remove them, or close Side question to send it all to the agent."
 
     static func quickReview(in text: String, commands: [Command]) -> String? {
         guard let (name, arguments) = SlashCommands.split(text), name == Keyword.quickReview, commands.contains(where: { $0.name == Keyword.quickReview }) else { return nil }
@@ -1282,7 +1301,9 @@ final class SessionModel {
 
     /// The composer asks the side thread rather than the conversation: from when a side question
     /// is asked or shown, until its tag's × puts the composer back on the conversation.
-    var composerAsksSide = false
+    var composerAsksSide = false {
+        didSet { if !composerAsksSide, failure == Self.sideTakesNoFiles { failure = nil } }
+    }
     /// Whether what's sent now is a follow-up in the side thread: while it shows, folded too
     /// (the tag says so either way).
     var asksSideThread: Bool { composerAsksSide && shownSideThread != nil }
