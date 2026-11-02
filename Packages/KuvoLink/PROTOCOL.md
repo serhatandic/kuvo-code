@@ -316,7 +316,8 @@ connection.
   A box that has nothing moving says nothing, and once its last move ends it says `moves: []` once.
   Each box keeps the latest word from each peer, whatever the peer's clock says
   (`run/moves/elsewhere.json`), lists it in its `kuvo/moves` as `elsewhere`, and forgets a peer's
-  word three minutes after it last came (that peer went away mid-move). A box from before 0.9.169 ignores
+  word three minutes after it last came (that peer went away mid-move), at its next look, with a
+  `kuvo/moves/events` line so a client stops showing it. A box from before 0.9.169 ignores
   `moving`.
 - **Group chats**: a chat lives on one box (its host) and runs there. A member that lives on
   another box (its home, a peer whose `features` say `groups.seats`) takes its turn there, in a

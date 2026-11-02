@@ -15033,6 +15033,18 @@ function takeMoving(sender, given, now = Date.now()) {
   } catch {}
   movesChanged();
 }
+function forgetQuiet(now = Date.now()) {
+  const kept = readSaid();
+  const quiet = Object.keys(kept).filter((key) => !fresh(kept[key], now));
+  if (!quiet.length)
+    return;
+  for (const key of quiet)
+    delete kept[key];
+  try {
+    writePrivate(FILE2, JSON.stringify(kept));
+  } catch {}
+  movesChanged();
+}
 function movesElsewhere(peers = peersOf(readLink()), now = Date.now()) {
   const link = readLink();
   const own = link ? ownKey(link) : null;
@@ -16012,6 +16024,7 @@ async function letGoOf(sender, id) {
 }
 function keepMoving(now = Date.now()) {
   tellMoving(hostOf(), now);
+  forgetQuiet(now);
   if (groupsToWake && now - groupsLookedAt > STEP_AGAIN) {
     groupsLookedAt = now;
     wakeHeldGroups().catch(() => {});

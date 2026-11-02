@@ -32,7 +32,7 @@ import { readLink } from "../state";
 import { goalRuns } from "../work/goals";
 import { CHATS, engineWait, MOST_BUNDLE, NotTaken, TooBig, deleteSession, directoryOf, exportAll, folderOf, groupAction, conversationHash, hashOf, idsOf, importAll, keysOf, ownTree, pack, toTrash, unpack } from "./bundle";
 import type { Contents } from "./bundle";
-import { tellMoving } from "./elsewhere";
+import { forgetQuiet, tellMoving } from "./elsewhere";
 import { MOVES, bundleOf, changeMove, endedAs, forgetMove, forgetMovedAway, moveOf, movesChanged, noteEnded, noteMovedAway, readMove, readMoves, saveMove, shownMove } from "./records";
 import type { MoveRecord } from "./records";
 
@@ -974,9 +974,10 @@ async function letGoOf(sender: MailSender, id: string): Promise<void> {
 
 // Each move's next step, once in a while: a step unanswered sent again; a first offer with no answer
 // taken back (the other computer isn't there); one whose other computer was removed, ended. And your
-// other computers told what moves here (`elsewhere.ts`).
+// other computers told what moves here, and what one quiet a while said forgotten (`elsewhere.ts`).
 export function keepMoving(now = Date.now()): void {
   tellMoving(hostOf(), now);
+  forgetQuiet(now);
   if (groupsToWake && now - groupsLookedAt > STEP_AGAIN) {
     groupsLookedAt = now;
     wakeHeldGroups().catch(() => {});

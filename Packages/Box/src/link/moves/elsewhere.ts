@@ -116,6 +116,17 @@ export function takeMoving(sender: MailSender, given: unknown, now = Date.now())
   movesChanged();
 }
 
+/** What a peer quiet a few minutes said, forgotten at a look (`keepMoving`), and clients told: its
+ * moves no longer show, and a client reading that peer for them stops. */
+export function forgetQuiet(now = Date.now()): void {
+  const kept = readSaid();
+  const quiet = Object.keys(kept).filter(key => !fresh(kept[key], now));
+  if (!quiet.length) return;
+  for (const key of quiet) delete kept[key];
+  try { writePrivate(FILE, JSON.stringify(kept)); } catch {}
+  movesChanged();
+}
+
 /** The moves your other computers said they have under way between them (`peers`: this box's now),
  * by box. One to or from this box is its own to show (`kuvo/moves`' `moves`, as it hears of it), so
  * one that ended here never shows as moving while the other's word that it's over is on its way. */
