@@ -70,7 +70,13 @@ import Testing
         defer { engine.stop() }
         let rows = try await rows()
         let turns = TranscriptView.turns(of: rows)
-        let pieces = rows.filter { if case .more = $0 { true } else { false } }
+        // The long answer's rows: its first piece, then each one after it.
+        let pieces = rows.filter {
+            switch $0 {
+            case .assistant(let message, _), .more(let message, _): message.id.hasPrefix("msg_03#")
+            default: false
+            }
+        }
         #expect(pieces.count >= 2, "a long answer is in pieces")
         let piece = try #require(pieces.last)
         let said = try #require(turns[piece.id]?.text)
