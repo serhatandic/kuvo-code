@@ -114,7 +114,7 @@ extension PhoneLink {
         return entry
     }
 
-    /// A status title as a sentence: "Connected to lokum." but "Connecting to lokum…".
+    /// A status title as a sentence: "Connected to devbox." but "Connecting to devbox…".
     private static func sentence(_ text: String) -> String {
         text.hasSuffix("…") ? text : text + "."
     }

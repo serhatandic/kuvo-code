@@ -17,7 +17,7 @@ public struct ConnectingLink: View {
     @Environment(\.accent) private var accent
     @Environment(\.colorScheme) private var scheme
 
-    /// `words` is what the place says is happening ("Opening Gmail on lokum…"), in the
+    /// `words` is what the place says is happening ("Opening Gmail on devbox…"), in the
     /// surrounding font; with none (a heading says it), the scene stands alone.
     /// `progress`, 0 to 1: how far what's on its way has gone (nil: nothing that can say).
     public init(_ words: String? = nil, isConnected: Bool = false, progress: Double? = nil) {

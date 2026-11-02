@@ -41,7 +41,7 @@ import Testing
           {"id":"sa_1","at":1793200000000,"session":"ses_1","sessionName":"Fix the build","bot":"bot_ship","botName":"Ship",
            "project":"/home/me/app","command":"npm install -g pnpm","why":"The build needs pnpm.",
            "stopped":[{"kind":"write","path":"/home/me/.npm-global"},{"kind":"somethingNew"}],
-           "always":{"kind":"write","path":"/home/me/.npm-global"},"machine":"lokum"},
+           "always":{"kind":"write","path":"/home/me/.npm-global"},"machine":"devbox"},
           {"id":"sa_2","at":1793200001000,"project":"/home/me/app","command":"open -a Simulator","why":"To see the app.","error":"Operation not permitted"}]}
         """.utf8))
         let first = asks.asks[0], second = asks.asks[1]
@@ -102,8 +102,8 @@ import Testing
 
     @Test func aMachinesErrorIsQuotedAndThereIsNoAlways() {
         let onLinux = SandboxAsk(id: "sa_2", project: "/home/me/kuvo-ai", command: "./scripts/install-hooks.sh", why: "Hooks.",
-                                 error: "/home/me/.zshrc: Permission denied", machine: "lokum")
-        #expect(onLinux.subtitle == "On lokum, the sandbox stopped it with this error.")
+                                 error: "/home/me/.zshrc: Permission denied", machine: "devbox")
+        #expect(onLinux.subtitle == "On devbox, the sandbox stopped it with this error.")
         #expect(onLinux.asker == "An agent" && onLinux.alwaysPath == nil)
         #expect(SandboxStop.short("/home/me/.zshrc") == "~/.zshrc" && SandboxStop.short("/root/.npm") == "~/.npm" && SandboxStop.short("/opt/x") == "/opt/x")
     }

@@ -8,7 +8,7 @@ import Testing
 /// machine is told once it does. Nothing is driven but the lists as Kuvo Code keeps them.
 @MainActor
 @Suite(.serialized) struct MachineReadsTests {
-    let machine = "lokum-reads"
+    let machine = "devbox-reads"
     let id = "ses_readaway"
 
     @Test func aMachinesConversationReadWhileItsAwayStaysReadAfterAQuit() async throws {

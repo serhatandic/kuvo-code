@@ -46,9 +46,9 @@ const macSign = publicKey.export({ format: "der", type: "spki" }).subarray(12).t
 const proof = () => {
   const at = Date.now();
   const nonce = crypto.randomBytes(18).toString("base64url");
-  return { mac: macKey, at, nonce, proof: crypto.sign(null, Buffer.from(`kuvo-vault-key\0lokum\0${at}\0${nonce}`), privateKey).toString("base64url") };
+  return { mac: macKey, at, nonce, proof: crypto.sign(null, Buffer.from(`kuvo-vault-key\0devbox\0${at}\0${nonce}`), privateKey).toString("base64url") };
 };
-write(path.join(home, "run", "link.json"), JSON.stringify({ id: "lokum", macs: [macKey], mac: macKey, macSigns: { [macKey]: macSign } }));
+write(path.join(home, "run", "link.json"), JSON.stringify({ id: "devbox", macs: [macKey], mac: macKey, macSigns: { [macKey]: macSign } }));
 
 // The engine: a bot's conversation and another one, in the test's folder, and the tool calls
 // running in each (the box checks a fill comes from one).

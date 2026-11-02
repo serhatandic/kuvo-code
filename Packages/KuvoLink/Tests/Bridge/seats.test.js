@@ -23,11 +23,11 @@ const box = (kind, id) => {
   const address = k(link.addressOf(crypto.randomBytes(32)));
   return { key, pub: k(link.publicOf(key)), address, peer: { key: k(link.publicOf(key)), address, name: id ?? kind, kind, ...(id ? { id } : {}) } };
 };
-const here = box("machine", "lokum"), mac = box("mac"), second = box("machine", "second");
+const here = box("machine", "devbox"), mac = box("mac"), second = box("machine", "second");
 const fresh = () => {
   fs.rmSync(run, { recursive: true, force: true });
   fs.mkdirSync(run, { recursive: true });
-  link.writeLink({ secret: crypto.randomBytes(32).toString("base64url"), key: k(here.key), relay: "wss://relay.test", name: "lokum", id: "lokum", mac: mac.pub, macs: [mac.pub], phones: [], peersFrom: { [mac.pub]: { at: 1, peers: [mac.peer, second.peer] } } });
+  link.writeLink({ secret: crypto.randomBytes(32).toString("base64url"), key: k(here.key), relay: "wss://relay.test", name: "devbox", id: "devbox", mac: mac.pub, macs: [mac.pub], phones: [], peersFrom: { [mac.pub]: { at: 1, peers: [mac.peer, second.peer] } } });
 };
 const opened = (bytes, to) => {
   const body = link.readFrame(bytes.subarray(17)).body;

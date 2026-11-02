@@ -74,9 +74,9 @@ import Testing
         #expect(await found("THEME") == ["ses_dark"])
         #expect(workspace.unsearched.isEmpty)
         // A machine that isn't connected: its conversations aren't searched, and that's said.
-        workspace.machines = ["lokum"]
+        workspace.machines = ["devbox"]
         #expect(await found("email") == ["ses_login", "ses_logs"])
-        #expect(workspace.unsearched == ["lokum": .notConnected])
+        #expect(workspace.unsearched == ["devbox": .notConnected])
         let snippet = try #require(await workspace.searchConversations("forgets").first?.snippet)
         #expect(snippet.contains("forgets the email"), "the words around it: \(snippet)")
     }
@@ -119,7 +119,7 @@ import Testing
             engine.stop()
         }
         await start()
-        let slow = BoxClient(box: "lokum", transport: LocalBox { _ in
+        let slow = BoxClient(box: "devbox", transport: LocalBox { _ in
             AsyncThrowingStream { continuation in
                 Task.detached {
                     gate.wait()
@@ -130,17 +130,17 @@ import Testing
             }
         })
         let mac = box.client(engine: engine.url)
-        workspace.searchedBoxes = { [BoxClient.mac, "lokum"] }
+        workspace.searchedBoxes = { [BoxClient.mac, "devbox"] }
         workspace.boxes = { $0 == BoxClient.mac ? mac : slow }
         final class Answers { var byBox: [String: [String]] = [:] }
         let answers = Answers()
         let search = Task { await workspace.searchConversations("email") { box, finds in answers.byBox[box] = finds.map(\.session.id) } }
         try await until { answers.byBox[BoxClient.mac] != nil }
         #expect(answers.byBox[BoxClient.mac] == ["ses_login", "ses_logs"], "this Mac's, while the machine still searches")
-        #expect(answers.byBox["lokum"] == nil)
+        #expect(answers.byBox["devbox"] == nil)
         gate.open()
         #expect(await search.value.map(\.session.id) == ["ses_login", "ses_logs"])
-        #expect(answers.byBox["lokum"] == [])
+        #expect(answers.byBox["devbox"] == [])
     }
 
     @Test func theAppsOwnLabelsFindNothing() async throws {

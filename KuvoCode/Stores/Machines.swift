@@ -283,7 +283,7 @@ final class MachineEngine {
         /// In a few words, for a row: "Copying the engine", as a phone says it too.
         var words: String { MachineWords.step(name) ?? "Connecting" }
 
-        /// Under a heading that names the machine: "Copying the engine to lokum".
+        /// Under a heading that names the machine: "Copying the engine to devbox".
         func line(_ name: String) -> String {
             switch self {
             case .checking: "Checking \(name)"

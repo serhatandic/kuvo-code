@@ -35,7 +35,7 @@ const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
 const macSign = publicKey.export({ format: "der", type: "spki" }).subarray(12).toString("base64url");
 // (Signed for this machine, by its id on the Mac: a proof for another of the Mac's machines is no proof here.)
 // Each with a nonce of its own, which the machine takes once.
-const proof = (at = Date.now(), machine = "lokum", nonce = crypto.randomBytes(18).toString("base64url")) => ({ mac: macKey, at, nonce, proof: crypto.sign(null, Buffer.from(`kuvo-vault-key\0${machine}\0${at}\0${nonce}`), privateKey).toString("base64url") });
+const proof = (at = Date.now(), machine = "devbox", nonce = crypto.randomBytes(18).toString("base64url")) => ({ mac: macKey, at, nonce, proof: crypto.sign(null, Buffer.from(`kuvo-vault-key\0${machine}\0${at}\0${nonce}`), privateKey).toString("base64url") });
 
 // The engine, as far as the vault asks it: who a session is, and its folder.
 const project = path.join(root, "projects", "shop");
@@ -55,7 +55,7 @@ const running = (session, name, input) => { calling[session] = [{ type: "tool", 
 before(async () => {
   fs.mkdirSync(path.join(home, "run"), { recursive: true });
   fs.mkdirSync(project, { recursive: true });
-  fs.writeFileSync(path.join(home, "run", "link.json"), JSON.stringify({ id: "lokum", macs: [macKey], mac: macKey, macSigns: { [macKey]: macSign } }));
+  fs.writeFileSync(path.join(home, "run", "link.json"), JSON.stringify({ id: "devbox", macs: [macKey], mac: macKey, macSigns: { [macKey]: macSign } }));
   for (const [id, name, session] of [["bot_ship", "Ship", "ses_ship"], ["bot_scout", "Scout", "ses_scout"]]) {
     fs.mkdirSync(path.join(home, "bots", id, "workspace"), { recursive: true });
     fs.writeFileSync(path.join(home, "bots", id, "bot.json"), JSON.stringify({ kuvo: 1, id, name }));
@@ -125,7 +125,7 @@ async function fromMacProved(method, route, body, { proofFor = { method, route, 
   const nonce = crypto.randomBytes(18).toString("base64url");
   const signedText = proofFor.body === undefined ? "" : JSON.stringify(proofFor.body);
   const hash = crypto.createHash("sha256").update(signedText).digest("hex");
-  const proof = crypto.sign(null, Buffer.from(`kuvo-vault-request\0lokum\0${at}\0${nonce}\0${proofFor.method}\0${proofFor.route}\0${hash}`), privateKey).toString("base64url");
+  const proof = crypto.sign(null, Buffer.from(`kuvo-vault-request\0devbox\0${at}\0${nonce}\0${proofFor.method}\0${proofFor.route}\0${hash}`), privateKey).toString("base64url");
   const header = Buffer.from(JSON.stringify({ mac: macKey, at, nonce, proof })).toString("base64url");
   const send = async () => {
     const child = spawn(process.execPath, [script, "box", "route"], { env, stdio: ["pipe", "pipe", "pipe"] });

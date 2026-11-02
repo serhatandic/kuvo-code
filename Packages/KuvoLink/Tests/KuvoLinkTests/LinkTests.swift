@@ -685,7 +685,7 @@ private func collect(_ stream: LinkResponse) async throws -> (status: Int, heade
         let sender = TestHost(relay: relay, handle: echo)
         let key = LinkKey(), secret = RelaySecret()
         let came = AsyncStream<(Data, LinkAddress)>.makeStream()
-        let receiver = LinkServer(key: key, hello: HostHello(kind: .machine, name: "lokum", app: "0.0.1", engine: "2.0.30"),
+        let receiver = LinkServer(key: key, hello: HostHello(kind: .machine, name: "devbox", app: "0.0.1", engine: "2.0.30"),
                                   authorize: { _, _, _ in false }, handle: echo, mailed: { frame, from in came.continuation.yield((frame, from)) })
         let connection = relay.connect(secret)
         Task { await receiver.serve(connection) }
