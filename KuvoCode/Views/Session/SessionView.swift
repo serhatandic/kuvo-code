@@ -254,6 +254,14 @@ private struct BottomStack: View {
     }
 
     /// A bot's goal under way (or over, and not put away), in the goal bar's place.
+    /// The conversation's own goal, which a bot's plan is paused and resumed by.
+    private func shownGoal(_ plan: GoalPlan) -> Goal? {
+        #if DEBUG
+        if model.goal == nil, let demo = GoalPlans.demoGoal(for: plan) { return demo }
+        #endif
+        return model.goal
+    }
+
     private var shownPlan: (box: String, plan: GoalPlan)? {
         guard let found = app.goalPlans.plan(for: model.id), [.running, .done, .stopped].contains(found.plan.state),
               !app.goalPlans.putAway.contains(found.plan.id) else { return nil }
@@ -431,7 +439,7 @@ private struct BottomStack: View {
                                 .modifier(CardRow())
                                 .transition(.fold)
                         } else if let (box, plan) = shownPlan {
-                            GoalPlanBar(plan: plan, box: box, goal: model.goal, isHidden: hidden(.goal, $model.hidesGoal), isChanging: model.isChangingGoal || offlineMachine != nil) {
+                            GoalPlanBar(plan: plan, box: box, goal: shownGoal(plan), isHidden: hidden(.goal, $model.hidesGoal), isChanging: model.isChangingGoal || offlineMachine != nil) {
                                 model.changeGoal(.pause)
                             } resume: {
                                 model.changeGoal(.resume)
