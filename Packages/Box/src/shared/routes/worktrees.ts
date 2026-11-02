@@ -6,7 +6,8 @@ import { bool, type Infer, list, NOTHING, nullable, number, object, oneOf, type 
 /** A worktree as the box keeps it: the project it's of, the repository's checkout it is (`root`),
  * where its session runs (the project's place in it; left out in one an older Mac kept, where
  * it's `root`), its branch and the one it was made from. One made here also has `made`, the branch
- * it was made on, and `prefix`, what its name starts with. */
+ * it was made on, and `prefix`, what its name starts with; `used` once a session has run in it
+ * (it goes with its last one). */
 export const WORKTREE_RECORD = object({
   project: string,
   root: string,
@@ -15,6 +16,22 @@ export const WORKTREE_RECORD = object({
   "base?": string,
   "made?": string,
   "prefix?": string,
+  "used?": bool,
+});
+
+/** A worktree removed (in Settings, or as its last session was archived or deleted) whose sessions
+ * are still here, as the records list it: where its sessions ran, its branch, whether Restore
+ * Worktree can bring it back (its branch is there, or what wasn't committed was kept), whether
+ * that's kept (`saved`), and how many commits its branch is ahead of `base`. */
+export const RESTORABLE_WORKTREE = object({
+  project: string,
+  root: string,
+  folder: string,
+  branch: string,
+  "base?": string,
+  restorable: bool,
+  saved: bool,
+  "ahead?": number,
 });
 
 /** A worktree as Settings › Worktrees lists it: its checkout (`path`), where its session runs, its
@@ -36,10 +53,10 @@ export const WORKTREE = object({
 });
 
 /** The box's worktrees as Settings lists them, or, with `?records=1`, as it keeps them (their
- * branches named after their sessions first). */
+ * branches named after their sessions first), with those removed whose sessions are still here. */
 export const WORKTREES = oneOf(
   object({ worktrees: list(WORKTREE) }),
-  object({ worktrees: list(WORKTREE_RECORD) }),
+  object({ worktrees: list(WORKTREE_RECORD), "restorable?": list(RESTORABLE_WORKTREE) }),
 );
 
 /** Where new worktrees go with `directory` as Settings' Worktrees folder (null for the engine's
@@ -62,6 +79,7 @@ export const WHERE = object({
 });
 
 export type WorktreeRecordShape = Infer<typeof WORKTREE_RECORD>;
+export type ListedRestorable = Infer<typeof RESTORABLE_WORKTREE>;
 export type ListedWorktree = Infer<typeof WORKTREE>;
 export type Worktrees = Infer<typeof WORKTREES>;
 export type WorktreesWhere = Infer<typeof WHERE>;
@@ -71,6 +89,8 @@ export const WORKTREE_ROUTES: RouteShape[] = [
   // A new one, for a session to run in: as the box keeps it.
   { route: "POST kuvo/worktrees", answers: { 200: WORKTREE_RECORD } },
   { route: "POST kuvo/worktrees/remove", answers: { 200: NOTHING } },
+  // A removed one back where it was, for its sessions: as the box keeps it again.
+  { route: "POST kuvo/worktrees/restore", answers: { 200: WORKTREE_RECORD } },
   { route: "POST kuvo/worktrees/record", answers: { 200: NOTHING } },
   { route: "GET kuvo/worktrees/where", answers: { 200: WHERE } },
 ];

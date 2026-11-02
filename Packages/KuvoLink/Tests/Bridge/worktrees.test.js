@@ -114,7 +114,7 @@ test("made for a session on a branch of its own, named after it, listed with wha
   assert.equal(entry.ahead, 1);
   assert.ok(entry.size > 0);
   // What it keeps, as a Mac reads it as it connects.
-  assert.deepEqual((await ask("GET", "kuvo/worktrees?records=1")).value, { worktrees: [{ project, root, folder: root, branch: "kuvo/fix-the-total", base: "main", made: branch, prefix: "kuvo/" }] });
+  assert.deepEqual((await ask("GET", "kuvo/worktrees?records=1")).value.worktrees, [{ project, root, folder: root, branch: "kuvo/fix-the-total", base: "main", made: branch, prefix: "kuvo/" }]);
 
   // Not while its agent works; with changes not committed only when they're to go.
   active.add("ses_tree");
@@ -518,4 +518,163 @@ test("one made and removed at once: a follower is told of both, in order", { tim
     if (seen.length === 3) abort.abort();
   }
   assert.deepEqual(seen, [false, true, false]);
+});
+
+// A worktree goes with its last session (PROTOCOL.md, "Worktrees"), whoever archived or deleted it.
+const tidy = () => link.tidyWorktrees(undefined, atEngine, null);
+const records = async () => (await ask("GET", "kuvo/worktrees?records=1")).value;
+const statusIn = folder => git(folder, "status", "--porcelain", "--untracked-files=all").split("\n").filter(Boolean).sort();
+const without = id => sessions.splice(sessions.findIndex(each => each.id === id), 1);
+
+test("archiving a worktree's last session removes it, keeping what wasn't committed, and Restore Worktree brings it all back as it was", async () => {
+  const made = (await ask("POST", "kuvo/worktrees", { project, branchPrefix: "kuvo/" })).value;
+  const session = { id: "ses_archived", title: "Tidy the cart", location: { directory: made.folder } };
+  sessions.push(session);
+  fs.writeFileSync(path.join(made.root, "cart.js"), "total()\n");
+  git(made.root, "add", "-A");
+  git(made.root, "commit", "-q", "-m", "cart");
+  // Not committed: a change, a staged new file, an untracked one; and one git ignores.
+  fs.writeFileSync(path.join(made.root, "README.md"), "# Shop, tidied\n");
+  fs.writeFileSync(path.join(made.root, "staged.txt"), "staged\n");
+  git(made.root, "add", "staged.txt");
+  fs.mkdirSync(path.join(made.root, "notes"));
+  fs.writeFileSync(path.join(made.root, "notes", "todo.txt"), "todo\n");
+  fs.writeFileSync(path.join(made.root, ".gitignore"), "build/\n");
+  fs.mkdirSync(path.join(made.root, "build"));
+  fs.writeFileSync(path.join(made.root, "build", "out.js"), "built\n");
+  const before = statusIn(made.root);
+
+  // Open, it stays.
+  await tidy();
+  assert.ok(fs.existsSync(made.root));
+  session.metadata = { "kuvo.archived": true };
+  await tidy();
+  assert.equal(fs.existsSync(made.root), false, "gone with its last session");
+  const { worktrees, restorable } = await records();
+  assert.equal(worktrees.some(each => each.root === made.root), false);
+  assert.deepEqual(restorable.find(each => each.root === made.root), { project, root: made.root, folder: made.folder, branch: made.branch, base: "main", restorable: true, saved: true, ahead: 1 });
+  assert.notEqual(git(project, "branch", "--list", made.branch), "", "not merged: its branch stays");
+
+  told.length = 0;
+  const restored = await ask("POST", "kuvo/worktrees/restore", { folder: made.folder });
+  assert.equal(restored.status, 200, restored.value.message);
+  assert.equal(git(made.root, "symbolic-ref", "--short", "HEAD"), made.branch);
+  assert.equal(git(made.root, "log", "-1", "--format=%s"), "cart", "its commits as they were, and nothing committed for it");
+  assert.equal(fs.readFileSync(path.join(made.root, "README.md"), "utf8"), "# Shop, tidied\n");
+  // Back not committed, untracked files untracked; what git ignores wasn't kept.
+  assert.deepEqual(statusIn(made.root), before.map(line => line.replace(/^A /, "??")).sort());
+  assert.equal(fs.existsSync(path.join(made.root, "build")), false);
+  assert.equal(git(project, "for-each-ref", "refs/kuvo/worktrees"), "", "what was kept for it goes once it's back");
+  const now = await records();
+  assert.equal(now.worktrees.find(each => each.root === made.root)?.used, true);
+  assert.equal(now.restorable.some(each => each.root === made.root), false);
+  assert.ok(told.some(each => each.url.includes("ses_archived")), "its session told where it works again");
+
+  without("ses_archived");
+  assert.equal((await ask("POST", "kuvo/worktrees/remove", { path: made.root })).status, 200);
+  await tidy();
+});
+
+test("deleting a worktree's last session removes it with what wasn't committed, and nothing is kept for it", async () => {
+  const made = (await ask("POST", "kuvo/worktrees", { project, branchPrefix: "kuvo/" })).value;
+  sessions.push({ id: "ses_deleted", title: "Try a thing", location: { directory: made.folder } });
+  fs.writeFileSync(path.join(made.root, "thing.txt"), "thing\n");
+  await tidy();
+  without("ses_deleted");
+  await tidy();
+  assert.equal(fs.existsSync(made.root), false);
+  assert.equal((await records()).restorable.some(each => each.root === made.root), false, "no session left to bring it back");
+  assert.equal(git(project, "for-each-ref", "refs/kuvo/worktrees"), "");
+  assert.equal(git(project, "branch", "--list", made.branch), "", "merged (nothing on it): its branch went");
+});
+
+test("a worktree stays while another session in it is open, while an agent works there, and before any session has run in it", async () => {
+  const fresh = (await ask("POST", "kuvo/worktrees", { project })).value;
+  const shared = (await ask("POST", "kuvo/worktrees", { project })).value;
+  const first = { id: "ses_first", title: "First", location: { directory: shared.folder } };
+  const second = { id: "ses_second", title: "Second", location: { directory: shared.folder } };
+  sessions.push(first, second);
+  await tidy();
+  assert.ok(fs.existsSync(fresh.root), "made for a session that's starting: not one a session left");
+
+  first.metadata = { "kuvo.archived": true };
+  await tidy();
+  assert.ok(fs.existsSync(shared.root), "its other session is open");
+  second.metadata = { "kuvo.archived": true };
+  active.add("ses_second");
+  await tidy();
+  assert.ok(fs.existsSync(shared.root), "an agent still works there");
+  active.delete("ses_second");
+  await tidy();
+  assert.equal(fs.existsSync(shared.root), false);
+
+  // Its sessions deleted later: it can't come back, and what was kept for it goes.
+  without("ses_first");
+  without("ses_second");
+  await tidy();
+  assert.equal((await records()).restorable.some(each => each.root === shared.root), false);
+  assert.equal((await ask("POST", "kuvo/worktrees/restore", { folder: shared.folder })).status, 404);
+  assert.equal((await ask("POST", "kuvo/worktrees/remove", { path: fresh.root, forget: true })).status, 200);
+});
+
+test("one removed in Settings comes back on its branch while its session is here, and can't once its branch is gone", async () => {
+  const made = (await ask("POST", "kuvo/worktrees", { project, branchPrefix: "kuvo/" })).value;
+  sessions.push({ id: "ses_settings", title: "Settings", location: { directory: made.folder } });
+  fs.writeFileSync(path.join(made.root, "kept.txt"), "kept\n");
+  git(made.root, "add", "-A");
+  git(made.root, "commit", "-q", "-m", "kept");
+  fs.writeFileSync(path.join(made.root, "thrown.txt"), "thrown\n");
+  assert.equal((await ask("POST", "kuvo/worktrees/remove", { path: made.root })).status, 200);
+  assert.deepEqual((await records()).restorable.find(each => each.root === made.root), { project, root: made.root, folder: made.folder, branch: made.branch, base: "main", restorable: true, saved: false, ahead: 1 });
+  assert.equal((await ask("POST", "kuvo/worktrees/restore", { folder: made.folder })).status, 200);
+  assert.ok(fs.existsSync(path.join(made.root, "kept.txt")));
+  assert.equal(fs.existsSync(path.join(made.root, "thrown.txt")), false, "thrown away, as Remove said");
+
+  // Restored by git, not the engine, it can still be removed.
+  assert.equal((await ask("POST", "kuvo/worktrees/remove", { path: made.root })).status, 200, "removed again");
+  assert.equal(git(project, "worktree", "list").includes(made.root), false);
+  git(project, "branch", "-D", made.branch);
+  assert.equal((await records()).restorable.find(each => each.root === made.root)?.restorable, false);
+  const refused = await ask("POST", "kuvo/worktrees/restore", { folder: made.folder });
+  assert.equal(refused.status, 409);
+  assert.match(refused.value.message, /is gone/);
+  without("ses_settings");
+  await tidy();
+});
+
+test("a session archived from anywhere, Mac closed: the box hears it and its worktree goes, and a follower is told", { timeout: 10_000 }, async t => {
+  const made = (await ask("POST", "kuvo/worktrees", { project, branchPrefix: "kuvo/" })).value;
+  const session = { id: "ses_heard", title: "Heard", location: { directory: made.folder } };
+  sessions.push(session);
+  await tidy();
+  // As this box finds its engine.
+  const engineFile = path.join(process.env.KUVO_HOME, "run", "engine.json");
+  fs.mkdirSync(path.dirname(engineFile), { recursive: true });
+  fs.writeFileSync(engineFile, JSON.stringify(atEngine));
+  const stop = new AbortController();
+  t.signal.addEventListener("abort", () => stop.abort());
+  const handle = link.engineHandler(() => atEngine, { name: "box" }, () => null);
+  const caughtUp = new Promise(resolve => { onActive = resolve; });
+  link.watchEvents(() => atEngine, () => true, stop.signal, () => {}, { notices: false });
+  try {
+    await caughtUp;
+    onActive = () => {};
+    for await (const part of handle({ method: "GET", path: "kuvo/worktrees/events", headers: {}, body: Buffer.alloc(0) }, {}, stop.signal)) {
+      if (!part.body) continue;
+      const line = JSON.parse(part.body.toString());
+      if (line.restorable.some(each => each.root === made.root)) {
+        assert.equal(line.worktrees.some(each => each.root === made.root), false);
+        break;
+      }
+      if (session.metadata) continue;
+      session.metadata = { "kuvo.archived": true };
+      followers.at(-1).write(`data: ${JSON.stringify({ type: "session.metadata.updated", data: { sessionID: "ses_heard", metadata: session.metadata } })}\n\n`);
+    }
+  } finally {
+    stop.abort();
+    fs.rmSync(engineFile, { force: true });
+  }
+  assert.equal(fs.existsSync(made.root), false);
+  without("ses_heard");
+  await tidy();
 });

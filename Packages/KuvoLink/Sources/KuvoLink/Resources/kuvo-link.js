@@ -2092,8 +2092,8 @@ import path12 from "node:path";
 // Packages/Box/src/link/git.ts
 import { execFile, spawnSync as spawnSync2 } from "node:child_process";
 var GIT_ENV = { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" };
-function gitIn(folder, args) {
-  const ran = spawnSync2("git", args, { cwd: folder, encoding: "utf8", env: GIT_ENV, timeout: 60000 });
+function gitIn(folder, args, env = {}) {
+  const ran = spawnSync2("git", args, { cwd: folder, encoding: "utf8", env: { ...GIT_ENV, ...env }, timeout: 60000 });
   return ran.status === 0 ? String(ran.stdout ?? "").trim() : null;
 }
 function gitLater(folder, args) {
@@ -3736,11 +3736,19 @@ function readRemovedWorktrees() {
     return {};
   }
 }
-function updateWorktrees(change, gone) {
+function readRestorableWorktrees() {
+  try {
+    const list = JSON.parse(fs18.readFileSync(WORKTREES_FILE, "utf8")).restorable;
+    return Array.isArray(list) ? list.filter((each) => typeof each?.root === "string" && typeof each?.project === "string" && typeof each?.branch === "string" && typeof each?.head === "string") : [];
+  } catch {
+    return [];
+  }
+}
+function updateWorktrees(change, gone, restorable = (list) => list) {
   let removed = readRemovedWorktrees();
   if (gone)
     removed = Object.fromEntries([...Object.entries(removed).filter(([folder]) => folder !== (gone.folder ?? gone.root)), [gone.folder ?? gone.root, gone.project]].slice(-200));
-  writePrivate(WORKTREES_FILE, JSON.stringify({ worktrees: change(readWorktrees()), removed }, null, 2));
+  writePrivate(WORKTREES_FILE, JSON.stringify({ worktrees: change(readWorktrees()), removed, restorable: restorable(readRestorableWorktrees()) }, null, 2));
   for (const tell of worktreeFollowers)
     tell();
 }
@@ -12775,6 +12783,7 @@ async function conversationOf2(target, id) {
 }
 
 // Packages/Box/src/link/areas/worktrees.ts
+import { spawnSync as spawnSync6 } from "node:child_process";
 import fs49 from "node:fs";
 import path51 from "node:path";
 function freeBranch(folder, name) {
@@ -12917,7 +12926,7 @@ async function answerWorktrees(method, requestPath, body, engine, signal, bridge
   if (route === "kuvo/worktrees" && method === "GET") {
     if (/(^|[?&])records=1(&|$)/.test(requestPath.split("?")[1] ?? "")) {
       await nameDueWorktrees(engine, signal);
-      return { status: 200, value: { worktrees: readWorktrees() } };
+      return { status: 200, value: { worktrees: readWorktrees(), restorable: readRestorableWorktrees().map(listedRestorable) } };
     }
     const { sessions, active } = await sessionsHere(engine, signal, bridge) ?? { sessions: [], active: new Set };
     const worktrees = [];
@@ -12988,49 +12997,198 @@ async function answerWorktrees(method, requestPath, body, engine, signal, bridge
     updateWorktrees((list) => list.some((each) => each.root === given.root) ? list : [...list, given]);
     return { status: 200, value: {} };
   }
+  if (route === "kuvo/worktrees/restore")
+    return restoreTree(body?.folder, engine, signal, bridge);
   const tree = list.find((each) => each.root === body?.path);
   if (!tree)
     return { status: 404, value: message("That worktree isn't on this machine any more.") };
-  if (route === "kuvo/worktrees/remove") {
-    const here = await sessionsHere(engine, signal, bridge);
-    if (!here)
-      return { status: 503, value: message(engine?.port ? `It couldn't be told whether an agent is working in the worktree of ${tree.branch}, so it stays. Try again in a moment.` : `The engine isn't running, so the worktree of ${tree.branch} stays. Try again once it's started.`) };
-    const { sessions, active } = here;
-    if (sessions.some((session) => inside2(session.location?.directory ?? session.directory, tree.root) && active.has(session.id))) {
-      return { status: 409, value: message(`An agent is still working in the worktree of ${tree.branch}, so it stays. Stop it first, then remove the worktree.`) };
-    }
-    if (body?.forget === true && sessions.some((session) => inside2(session.location?.directory ?? session.directory, tree.root))) {
-      return { status: 409, value: message(`A session works in the worktree of ${tree.branch}, so it stays. Remove it with the session, or in Settings › Worktrees.`) };
-    }
-    const discard = body?.discard !== false;
-    if (!discard && fs49.existsSync(tree.root) && gitIn(tree.root, ["status", "--porcelain", "--untracked-files=normal", "--ignore-submodules=none"]) !== "") {
-      return { status: 409, value: message(`The worktree of ${tree.branch} has changes that aren’t committed, so it stays. Commit them, or remove it in Settings › Worktrees, which throws them away.`) };
-    }
-    if (!engine?.port)
-      return { status: 503, value: message("The engine isn't running.") };
-    const gone = !fs49.existsSync(tree.root);
-    const head = gone || gitIn(tree.root, ["symbolic-ref", "--quiet", "HEAD"]) !== null ? null : gitIn(tree.root, ["rev-parse", "--verify", "--quiet", "HEAD"]);
-    if (head && !gitIn(tree.root, ["for-each-ref", "--contains", head, "--format=%(refname)", "refs/heads"])) {
-      const kept = freeBranch(tree.root, `${tree.branch}-kept`);
-      if (!kept || gitIn(tree.root, ["branch", kept, head]) === null)
-        return { status: 409, value: message(`The worktree of ${tree.branch} has commits on no branch, and they couldn’t be kept on one, so it stays.`) };
-    }
-    try {
-      if (gone) {
-        if (fs49.existsSync(tree.project))
-          gitIn(tree.project, ["worktree", "prune"]);
-      } else {
-        const id = await projectOf(engine, tree.project, signal);
-        await call(engine, "DELETE", "/api/worktree", { projectID: id, directory: tree.root, force: discard }, signal, tree.project);
-      }
-    } catch (error) {
-      return { status: 502, value: message(error?.message ?? String(error)) };
-    }
-    gitIn(tree.project, ["branch", body?.forget === true ? "-D" : "-d", tree.branch]);
-    updateWorktrees((list) => list.filter((each) => each.root !== tree.root), tree);
-    return { status: 200, value: {} };
-  }
+  if (route === "kuvo/worktrees/remove")
+    return removeTree(tree, { discard: body?.discard !== false, forget: body?.forget === true }, engine, signal, bridge);
   return { status: 404, value: {} };
+}
+var isArchived2 = (session) => Boolean(session.time?.archived || session.metadata?.["kuvo.archived"] === true || session.metadata?.kuvo?.archived === true);
+var folderOf = (session) => session.location?.directory ?? session.directory;
+function snapshot(root, branch) {
+  const status = gitIn(root, ["status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none"]);
+  if (status === null)
+    return;
+  if (status === "")
+    return null;
+  const gitFolder = gitIn(root, ["rev-parse", "--absolute-git-dir"]);
+  if (!gitFolder)
+    return;
+  const index = path51.join(gitFolder, "kuvo-snapshot-index");
+  const env = { GIT_INDEX_FILE: index };
+  const by = { GIT_AUTHOR_NAME: "Kuvo Code", GIT_AUTHOR_EMAIL: "kuvo-code@localhost", GIT_COMMITTER_NAME: "Kuvo Code", GIT_COMMITTER_EMAIL: "kuvo-code@localhost" };
+  try {
+    if (gitIn(root, ["read-tree", "HEAD"], env) === null || gitIn(root, ["add", "-A"], env) === null)
+      return;
+    const tree = gitIn(root, ["write-tree"], env);
+    const commit = tree && gitIn(root, ["commit-tree", tree, "-p", "HEAD", "-m", `What wasn't committed in ${branch} when its worktree was removed`], by);
+    if (!commit || gitIn(root, ["update-ref", `refs/kuvo/worktrees/${path51.basename(root)}`, commit]) === null)
+      return;
+    return commit;
+  } finally {
+    fs49.rmSync(index, { force: true });
+  }
+}
+function listedRestorable(tree) {
+  const branchThere = fs49.existsSync(tree.project) && gitIn(tree.project, ["rev-parse", "--verify", "--quiet", `refs/heads/${tree.branch}`]) !== null;
+  const saved = Boolean(tree.snapshot);
+  const entry = { project: tree.project, root: tree.root, folder: tree.folder ?? tree.root, branch: tree.branch, restorable: branchThere || saved, saved };
+  if (tree.base) {
+    entry.base = tree.base;
+    const ahead = branchThere ? gitIn(tree.project, ["rev-list", "--count", `${tree.base}..refs/heads/${tree.branch}`]) : null;
+    if (ahead !== null && /^\d+$/.test(ahead))
+      entry.ahead = Number(ahead);
+  }
+  return entry;
+}
+async function removeTree(tree, removal, engine, signal, bridge, known) {
+  const message = (text) => ({ message: text });
+  const here = known ?? await sessionsHere(engine, signal, bridge);
+  if (!here)
+    return { status: 503, value: message(engine?.port ? `It couldn't be told whether an agent is working in the worktree of ${tree.branch}, so it stays. Try again in a moment.` : `The engine isn't running, so the worktree of ${tree.branch} stays. Try again once it's started.`) };
+  const { sessions, active } = here;
+  if (sessions.some((session) => inside2(folderOf(session), tree.root) && active.has(session.id))) {
+    return { status: 409, value: message(`An agent is still working in the worktree of ${tree.branch}, so it stays. Stop it first, then remove the worktree.`) };
+  }
+  if (removal.forget && sessions.some((session) => inside2(folderOf(session), tree.root))) {
+    return { status: 409, value: message(`A session works in the worktree of ${tree.branch}, so it stays. Remove it with the session, or in Settings › Worktrees.`) };
+  }
+  const gone = !fs49.existsSync(tree.root);
+  if (!removal.discard && !removal.keep && !gone && gitIn(tree.root, ["status", "--porcelain", "--untracked-files=normal", "--ignore-submodules=none"]) !== "") {
+    return { status: 409, value: message(`The worktree of ${tree.branch} has changes that aren’t committed, so it stays. Commit them, or remove it in Settings › Worktrees, which throws them away.`) };
+  }
+  if (!engine?.port)
+    return { status: 503, value: message("The engine isn't running.") };
+  const head = gone || gitIn(tree.root, ["symbolic-ref", "--quiet", "HEAD"]) !== null ? null : gitIn(tree.root, ["rev-parse", "--verify", "--quiet", "HEAD"]);
+  let branch = tree.branch;
+  if (head && !gitIn(tree.root, ["for-each-ref", "--contains", head, "--format=%(refname)", "refs/heads"])) {
+    const kept = freeBranch(tree.root, `${tree.branch}-kept`);
+    if (!kept || gitIn(tree.root, ["branch", kept, head]) === null)
+      return { status: 409, value: message(`The worktree of ${tree.branch} has commits on no branch, and they couldn’t be kept on one, so it stays.`) };
+    branch = kept;
+  }
+  const at = gone ? gitIn(tree.project, ["rev-parse", "--verify", "--quiet", `refs/heads/${tree.branch}`]) : gitIn(tree.root, ["rev-parse", "--verify", "--quiet", "HEAD"]);
+  const saved = removal.keep && !gone ? snapshot(tree.root, tree.branch) : null;
+  if (saved === undefined)
+    return { status: 409, value: message(`What isn’t committed in the worktree of ${tree.branch} couldn’t be kept, so it stays.`) };
+  try {
+    if (gone) {
+      if (fs49.existsSync(tree.project))
+        gitIn(tree.project, ["worktree", "prune"]);
+    } else {
+      const id = await projectOf(engine, tree.project, signal);
+      await call(engine, "DELETE", "/api/worktree", { projectID: id, directory: tree.root, force: removal.discard || removal.keep }, signal, tree.project).catch((error) => {
+        if (gitIn(tree.project, ["worktree", "remove", ...removal.discard || removal.keep ? ["--force"] : [], tree.root]) === null)
+          throw error;
+      });
+    }
+  } catch (error) {
+    if (saved)
+      gitIn(tree.project, ["update-ref", "-d", `refs/kuvo/worktrees/${path51.basename(tree.root)}`]);
+    return { status: 502, value: message(error?.message ?? String(error)) };
+  }
+  gitIn(tree.project, ["branch", removal.forget ? "-D" : "-d", tree.branch]);
+  const restorable = removal.forget || !at ? null : { ...tree, branch, head: at, ...saved ? { snapshot: saved } : {} };
+  updateWorktrees((list) => list.filter((each) => each.root !== tree.root), tree, (list) => [...list.filter((each) => each.root !== tree.root), ...restorable ? [restorable] : []]);
+  return { status: 200, value: {} };
+}
+async function restoreTree(folder, engine, signal, bridge) {
+  const message = (text) => ({ message: text });
+  const tree = readRestorableWorktrees().find((each) => (each.folder ?? each.root) === folder || each.root === folder);
+  if (!tree)
+    return { status: 404, value: message("It can’t come back any more.") };
+  if (!fs49.existsSync(tree.project))
+    return { status: 409, value: message("Its project folder is gone.") };
+  if (fs49.existsSync(tree.root) && fs49.readdirSync(tree.root).length)
+    return { status: 409, value: message("Something else is in its folder now.") };
+  const ref = `refs/kuvo/worktrees/${path51.basename(tree.root)}`;
+  const saved = tree.snapshot && gitIn(tree.project, ["cat-file", "-e", `${tree.snapshot}^{commit}`]) !== null ? tree.snapshot : undefined;
+  const branchThere = gitIn(tree.project, ["rev-parse", "--verify", "--quiet", `refs/heads/${tree.branch}`]) !== null;
+  if (!branchThere && !saved)
+    return { status: 409, value: message("Its work is gone, so it can’t come back.") };
+  gitIn(tree.project, ["worktree", "prune"]);
+  const made = branchThere ? spawnGit(tree.project, ["worktree", "add", tree.root, tree.branch]) : spawnGit(tree.project, ["worktree", "add", "-b", tree.branch, tree.root, tree.head]);
+  if (made !== null)
+    return { status: 409, value: message(made.includes("already") && made.includes("checked out") ? `${tree.branch} is open in another folder.` : `Couldn’t restore it: ${made}`) };
+  if (saved) {
+    const onto = gitIn(tree.root, ["rev-parse", "HEAD"]);
+    const parent = gitIn(tree.root, ["rev-parse", `${saved}^`]);
+    const back = onto === parent ? gitIn(tree.root, ["read-tree", "-m", "-u", "HEAD", saved]) !== null : gitIn(tree.root, ["cherry-pick", "--no-commit", saved], { GIT_AUTHOR_NAME: "Kuvo Code", GIT_AUTHOR_EMAIL: "kuvo-code@localhost", GIT_COMMITTER_NAME: "Kuvo Code", GIT_COMMITTER_EMAIL: "kuvo-code@localhost" }) !== null;
+    if (!back) {
+      gitIn(tree.root, ["cherry-pick", "--abort"]);
+      gitIn(tree.root, ["reset", "--quiet", "--hard", "HEAD"]);
+      gitIn(tree.project, ["worktree", "remove", "--force", tree.root]);
+      return { status: 409, value: message("Its saved changes don’t fit any more.") };
+    }
+    gitIn(tree.root, ["reset", "--quiet"]);
+  }
+  const { head: _head, snapshot: _snapshot, made: _made, prefix: _prefix, ...kept } = tree;
+  const record = { ...kept, used: true };
+  updateWorktrees((list) => [...list.filter((each) => each.root !== tree.root), record], undefined, (list) => list.filter((each) => each.root !== tree.root));
+  if (saved)
+    gitIn(tree.project, ["update-ref", "-d", ref]);
+  const here = await sessionsHere(engine, signal, bridge);
+  for (const session of here?.sessions ?? []) {
+    if (!inside2(folderOf(session), tree.root) || isHiddenRun(session))
+      continue;
+    for (const target of [engine, bridge])
+      if (target?.port)
+        await tellWorktree(target, session.id).catch(() => {});
+  }
+  return { status: 200, value: record };
+}
+function spawnGit(folder, args) {
+  const ran = spawnSync6("git", args, { cwd: folder, encoding: "utf8", env: { ...process.env, GIT_TERMINAL_PROMPT: "0" }, timeout: 60000 });
+  return ran.status === 0 ? null : String(ran.stderr || ran.stdout || "").trim().replace(/^fatal: /, "");
+}
+var sweeping = null;
+var sweepAgain = false;
+function tidyWorktrees(signal, engine, bridge = bridgeTarget()) {
+  if (sweeping) {
+    sweepAgain = true;
+    return sweeping;
+  }
+  sweeping = (async () => {
+    do {
+      sweepAgain = false;
+      await sweep(signal, engine, bridge).catch(() => {});
+    } while (sweepAgain && !signal?.aborted);
+  })().finally(() => {
+    sweeping = null;
+  });
+  return sweeping;
+}
+async function sweep(signal, given, bridge) {
+  if (!readWorktrees().length && !readRestorableWorktrees().length)
+    return;
+  let engine = given ?? null;
+  if (given === undefined)
+    try {
+      engine = readEngineFile();
+    } catch {}
+  const here = await sessionsHere(engine, signal, bridge);
+  if (!here)
+    return;
+  const ranIn = (root) => here.sessions.filter((session) => !isHiddenRun(session) && !session.parentID && inside2(folderOf(session), root));
+  const used = readWorktrees().filter((tree) => !tree.used && ranIn(tree.root).length).map((tree) => tree.root);
+  if (used.length)
+    updateWorktrees((list) => list.map((each) => used.includes(each.root) ? { ...each, used: true } : each));
+  for (const tree of readWorktrees()) {
+    const sessions = ranIn(tree.root);
+    if (!tree.used || sessions.some((session) => !isArchived2(session)) || sessions.some((session) => here.active.has(session.id)))
+      continue;
+    await removeTree(tree, { discard: !sessions.length, keep: sessions.length > 0 }, engine, signal, bridge, here).catch(() => {});
+  }
+  const orphans = readRestorableWorktrees().filter((tree) => !ranIn(tree.root).length);
+  if (!orphans.length)
+    return;
+  for (const tree of orphans)
+    if (tree.snapshot && fs49.existsSync(tree.project))
+      gitIn(tree.project, ["update-ref", "-d", `refs/kuvo/worktrees/${path51.basename(tree.root)}`]);
+  updateWorktrees((list) => list, undefined, (list) => list.filter((each) => !orphans.some((gone) => gone.root === each.root)));
 }
 async function worktreesWhere(directory, engine, signal, projects = readProjects().filter((each) => !each.removed).map((each) => each.directory)) {
   const value = typeof directory === "string" && directory !== "" ? directory : null;
@@ -13128,7 +13286,7 @@ async function* worktreeEventsRoute(context) {
   if (request.method.toUpperCase() !== "GET")
     return yield* json(405, {});
   yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
-  return yield* followed(() => ({ worktrees: readWorktrees() }), worktreeFollowers, signal);
+  return yield* followed(() => ({ worktrees: readWorktrees(), restorable: readRestorableWorktrees().map(listedRestorable) }), worktreeFollowers, signal);
 }
 async function* worktreesRoute(context) {
   const { request, signal, route, readEngine, json } = context;
@@ -14620,6 +14778,10 @@ async function* credentialsRoute(context) {
 }
 
 // Packages/Box/src/link/engine/watch.ts
+function isArchiving(event) {
+  const metadata = event.data?.metadata;
+  return !metadata || metadata["kuvo.archived"] === true || metadata.kuvo?.archived === true;
+}
 async function* serverEvents(body) {
   const decoder = new TextDecoder;
   let buffer = "";
@@ -14793,7 +14955,7 @@ async function watchEvents(read, tell, signal, answered = () => {}, { bots = fal
       if (queues)
         scanQueues(source, found).catch(() => {});
       if (!bots)
-        nameDueWorktrees(source, connection.signal).catch(() => {});
+        nameDueWorktrees(source, connection.signal).then(() => tidyWorktrees(connection.signal)).catch(() => {});
       if (goalHeld)
         settleGoalHolds(source, goalHeld).catch(() => {});
       for await (const event of serverEvents(response.body)) {
@@ -14811,6 +14973,8 @@ async function watchEvents(read, tell, signal, answered = () => {}, { bots = fal
             settleNewSession(source, event.data?.sessionID ?? event.data?.info?.id).catch(() => {});
           if (event.type === "session.renamed")
             nameWorktreeBranch(source, event.data?.sessionID).catch(() => {});
+          if (event.type === "session.deleted" || RUN_ENDS.has(event.type) || event.type === "session.metadata.updated" && isArchiving(event))
+            tidyWorktrees(connection.signal).catch(() => {});
         }
         if (!notices)
           continue;
@@ -14851,7 +15015,7 @@ var ENGINE_WAIT = 2 * 60000;
 var EXPORT_WAIT = 10 * 60000;
 var engineWait = (signal, most = ENGINE_WAIT) => signal ? AbortSignal.any([signal, AbortSignal.timeout(most)]) : AbortSignal.timeout(most);
 var CHATS2 = IS_MAC ? path59.join(path59.dirname(K), "Chats") : path59.join(K, "chats");
-var folderOf = (kind, thing) => kind === "bot" ? path59.join(BOTS, thing) : kind === "chat" ? path59.join(SESSION_WAKES, thing) : null;
+var folderOf2 = (kind, thing) => kind === "bot" ? path59.join(BOTS, thing) : kind === "chat" ? path59.join(SESSION_WAKES, thing) : null;
 var directoryOf = (kind, thing) => kind === "bot" ? path59.join(BOTS, thing, "workspace") : CHATS2;
 function run(program, args) {
   return new Promise((resolve, reject) => {
@@ -14963,7 +15127,7 @@ async function pack(id, contents) {
   const folder = bundleOf(id);
   const staging = path59.join(folder, "pack");
   const moveJSON = JSON.stringify(contents);
-  const original = contents.folder ? folderOf(contents.kind, contents.thing) : null;
+  const original = contents.folder ? folderOf2(contents.kind, contents.thing) : null;
   if (Buffer.byteLength(moveJSON) + (original ? bytesIn(original, MOST_BUNDLE) : 0) > MOST_BUNDLE)
     throw new TooBig;
   fs57.rmSync(staging, { recursive: true, force: true });
@@ -15400,7 +15564,7 @@ async function startMove(kind, thing, to, signal) {
   if (what.why)
     return { ok: false, status: 409, message: what.why };
   const id = `mov_${crypto25.randomBytes(12).toString("base64url").replace(/[-_]/g, "")}`;
-  const folder = folderOf(kind, thing);
+  const folder = folderOf2(kind, thing);
   const record = {
     id,
     kind,
@@ -15816,7 +15980,7 @@ async function livesHere(kind, thing) {
     } catch {}
     return bridge ? (await askGroups(bridge, "GET", `/${encodeURIComponent(thing)}`, undefined, engineWait()).catch(() => null))?.status === 200 : false;
   }
-  if (fs59.existsSync(folderOf(kind, thing)))
+  if (fs59.existsSync(folderOf2(kind, thing)))
     return true;
   const root = kind === "bot" ? null : thing;
   if (!root)
@@ -15908,7 +16072,7 @@ async function bringIn(record, signal) {
       throw new Error(typeof answer.value?.message === "string" ? answer.value.message : `Its group chats answered ${answer.status}.`);
     return [];
   }
-  const place = folderOf(record.kind, record.thing);
+  const place = folderOf2(record.kind, record.thing);
   const root = record.kind === "chat" ? record.thing : (() => {
     try {
       return folder ? fs59.readFileSync(path61.join(folder, "session"), "utf8").trim() : "";
@@ -15959,7 +16123,7 @@ async function switchHere(record) {
   if (record.kind === "group") {
     await groupAction(readBridgeFile(), record.thing, "activate");
   } else {
-    unhold(folderOf(record.kind, record.thing) ?? undefined, record.wasPaused, record.pausedAs);
+    unhold(folderOf2(record.kind, record.thing) ?? undefined, record.wasPaused, record.pausedAs);
     forgetMovedAway(record.sessions);
     for (const session of record.queuesGoOn ?? [])
       await resumeQueue(readEngineFile(), session).catch(() => {});
@@ -16005,7 +16169,7 @@ async function clearCopy(record) {
     }
     for (const session of record.sessions)
       forgetQueue(session);
-    const place = folderOf(record.kind, record.thing);
+    const place = folderOf2(record.kind, record.thing);
     if (place && record.placed) {
       if (record.kind === "bot")
         await answerBotKeys("DELETE", `kuvo/bots/${record.thing}/keys`, null, null).catch(() => {});
@@ -16326,7 +16490,7 @@ async function resumeMoves(now = Date.now()) {
   }
   const moving = new Set(readMoves().map((record) => record.thing));
   for (const kind of ["bot", "chat"]) {
-    const parent = path61.dirname(folderOf(kind, "x"));
+    const parent = path61.dirname(folderOf2(kind, "x"));
     let names = [];
     try {
       names = fs59.readdirSync(parent);
@@ -23176,7 +23340,7 @@ var ROUTES = [
   { when: (route) => route === "kuvo/projects/new", answer: newProjectRoute },
   { when: (route) => route === "kuvo/projects" || route === "kuvo/projects/events", answer: ({ request, readEngine, readBridge, signal }) => answerProjects(request, readEngine, readBridge, signal) },
   { when: (route) => route === "kuvo/worktrees/events", answer: worktreeEventsRoute },
-  { when: (route) => /^kuvo\/worktrees(\/(remove|record|where))?$/.test(route), answer: worktreesRoute },
+  { when: (route) => /^kuvo\/worktrees(\/(remove|restore|record|where))?$/.test(route), answer: worktreesRoute },
   { when: (route) => route.match(WORK_ROUTE), answer: workRoute },
   { when: (route) => route.match(WORK_ASKS_ROUTE), answer: workAsksRoute },
   { when: (route) => route.match(GOALS_ROUTE), answer: goalsRoute },
@@ -24302,6 +24466,7 @@ export {
   takeSeat,
   tellSeatPeers,
   tellWorktree,
+  tidyWorktrees,
   toolRun,
   translateSettings,
   update,
