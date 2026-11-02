@@ -12,6 +12,7 @@ import UniformTypeIdentifiers
 struct SidebarView: View {
     @Environment(Workspace.self) private var workspace
     @Environment(AppModel.self) private var app
+    @Environment(\.messageFont) private var messageFont
 
     /// Bots moving in the main card; their rows hold still. The one thing the window hands in
     /// (see `==`, below): the rest comes from the stores, which tell the sidebar when they change.
@@ -310,6 +311,8 @@ struct SidebarView: View {
         } message: {
             if let project = removingProject { Text(removalNote(project)) }
         }
+        // Inks readable on the glass: its quieter words solid, not blended with what's behind.
+        .listInks()
     }
 
     // MARK: Boxes
@@ -374,7 +377,7 @@ struct SidebarView: View {
         SectionHeader(title: "Projects", isFolded: folded("projects")) {
             Button(action: newProject) {
                 Image(systemName: "plus")
-                    .font(.system(size: 12, weight: .semibold))
+                    .sidebarFont(12, weight: .semibold)
             }
             .buttonStyle(IconButtonStyle(width: 22, height: 22))
             .help("New Project… (⇧⌘N)")
@@ -391,7 +394,7 @@ struct SidebarView: View {
                         .foregroundStyle(.secondary)
                 } accessory: {
                     Text("Try Again")
-                        .font(.system(size: 12, weight: .medium))
+                        .sidebarFont(12, weight: .medium)
                         .foregroundStyle(.tint)
                 }
                 .help("What keeps your projects on this Mac stopped. \(failure)")
@@ -399,7 +402,7 @@ struct SidebarView: View {
             }
             if workspace.isLoaded && projects.isEmpty {
                 Text(box.machine == nil ? "Open a folder for the agent to work in." : "Open a folder on \(boxName(box)) for the agent to work in.")
-                    .font(.system(size: 13))
+                    .sidebarFont(13)
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
@@ -435,7 +438,7 @@ struct SidebarView: View {
                     return menu
                 } label: {
                     Image(systemName: "plus")
-                        .font(.system(size: 12, weight: .semibold))
+                        .sidebarFont(12, weight: .semibold)
                         .frame(width: 22, height: 22)
                         .hoverHighlight(in: RoundedRectangle(cornerRadius: 6), mutesInk: true)
                 }
@@ -444,7 +447,7 @@ struct SidebarView: View {
             } else {
                 Button(action: newBot) {
                     Image(systemName: "plus")
-                        .font(.system(size: 12, weight: .semibold))
+                        .sidebarFont(12, weight: .semibold)
                 }
                 .buttonStyle(IconButtonStyle(width: 22, height: 22))
                 .help("New Bot…")
@@ -474,7 +477,7 @@ struct SidebarView: View {
                         .foregroundStyle(.secondary)
                 } accessory: {
                     Text("Restart")
-                        .font(.system(size: 12, weight: .medium))
+                        .sidebarFont(12, weight: .medium)
                         .foregroundStyle(.tint)
                 }
                 .help("What runs your group chats on this Mac stopped. \(failure)")
@@ -508,7 +511,7 @@ struct SidebarView: View {
         }
         if results.isEmpty && inConversations.isEmpty && !isSearchingConversations {
             Text("Nothing matches.")
-                .font(.system(size: 13))
+                .sidebarFont(13)
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
@@ -555,7 +558,7 @@ struct SidebarView: View {
             }
             ForEach(unsearched, id: \.key) { computer, why in
                 Text(why.line(for: computer))
-                    .font(.system(size: 12))
+                    .sidebarFont(12)
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 4)
@@ -779,7 +782,7 @@ struct SidebarView: View {
         SectionHeader(title: "Chats", isFolded: folded("chats")) {
             Button { newChat() } label: {
                 Image(systemName: "plus")
-                    .font(.system(size: 12, weight: .semibold))
+                    .sidebarFont(12, weight: .semibold)
             }
             .buttonStyle(IconButtonStyle(width: 22, height: 22))
             .help("New Chat (⌥⌘N)")
@@ -896,7 +899,7 @@ struct SidebarView: View {
         VStack(alignment: .leading, spacing: 1) {
             sessionOnlyRow(session, in: place, branches: branches[session.id]?.count ?? 0, folded: folded(under: session.id, in: branches))
             if isUnfolded(session.id), !(branches[session.id] ?? []).isEmpty {
-                BranchRows(parent: session.id, branches: branches, titleInset: 10 + (place == .project ? SidebarMetrics.iconWidth + 10 : 0), isUnfolded: { isUnfolded($0) }) { child, inset in
+                BranchRows(parent: session.id, branches: branches, titleInset: 10 + (place == .project ? SidebarMetrics.iconWidth(messageFont) + 10 : 0), isUnfolded: { isUnfolded($0) }) { child, inset in
                     AnyView(sessionOnlyRow(child, in: place, branches: branches[child.id]?.count ?? 0, folded: folded(under: child.id, in: branches), branchInset: inset))
                 }
             }
@@ -1006,19 +1009,19 @@ struct SidebarView: View {
         } accessory: {
             if Workspace.isArchived(session) {
                 Text("Archived")
-                    .font(.system(size: 11))
+                    .sidebarFont(11)
                     .foregroundStyle(.tertiary)
             } else {
                 HStack(spacing: 6) {
                     if look.isSearching, Workspace.isChat(session.location.directory), let machine = RemoteFolder.machine(of: session.location.directory) {
                         Image(systemName: "server.rack")
-                            .font(.system(size: 10))
+                            .sidebarFont(10)
                             .foregroundStyle(.tertiary)
                             .help("On \(machine)")
                     }
                     if let tree = workspace.worktrees[session.location.directory] {
                         Image(systemName: "arrow.triangle.branch")
-                            .font(.system(size: 11))
+                            .sidebarFont(11)
                             .foregroundStyle(.tertiary)
                             .help("Works in a worktree, on \(tree.branch)")
                     }
@@ -1203,9 +1206,9 @@ private struct ConversationResultRow: View {
         Button(action: action) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.system(size: 14))
+                    .sidebarFont(14)
                 Text(snippet)
-                    .font(.system(size: 12))
+                    .sidebarFont(12)
                     .foregroundStyle(.secondary)
             }
             .lineLimit(1)
@@ -1226,16 +1229,17 @@ struct SidebarSearchRow: View {
     @Binding var text: String
     @FocusState private var isFocused: Bool
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.messageFont) private var messageFont
 
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 13))
+                .sidebarFont(13)
                 .foregroundStyle(.secondary)
-                .frame(width: SidebarMetrics.iconWidth)
+                .frame(width: SidebarMetrics.iconWidth(messageFont))
             TextField("Search", text: $text)
                 .textFieldStyle(.plain)
-                .font(.system(size: 14))
+                .sidebarFont(14)
                 .focused($isFocused)
                 .onExitCommand { text = "" }
             if !text.isEmpty {
@@ -1250,7 +1254,7 @@ struct SidebarSearchRow: View {
             }
         }
         .padding(.horizontal, 10)
-        .frame(height: SidebarMetrics.rowHeight)
+        .frame(height: SidebarMetrics.rowHeight(messageFont))
         // Sunken, without a border of its own; the focus rim while you type in it, as every well.
         .background(Surface.well(scheme), in: .rect(cornerRadius: 8))
         .focusRim(.rect(cornerRadius: 8), isOn: isFocused)
@@ -1263,6 +1267,33 @@ struct SidebarSearchRow: View {
 enum SidebarMetrics {
     static let rowHeight: CGFloat = 32
     static let iconWidth: CGFloat = 18
+
+    /// A row's height in the window's sidebar, which follows Settings › Appearance › Text size.
+    static func rowHeight(_ font: MessageFont) -> CGFloat { (rowHeight * font.sidebarScale).rounded() }
+    static func iconWidth(_ font: MessageFont) -> CGFloat { (iconWidth * font.sidebarScale).rounded() }
+}
+
+extension MessageFont {
+    /// The window's sidebar follows Text size: its names are 14 points at Default, as messages are.
+    var sidebarScale: CGFloat { size / 14 }
+}
+
+extension View {
+    /// The system font at `size` points, as at the Default text size: larger or smaller with
+    /// Settings › Appearance › Text size, as the conversation's is.
+    func sidebarFont(_ size: CGFloat, weight: Font.Weight = .regular) -> some View {
+        modifier(SidebarFont(size: size, weight: weight))
+    }
+}
+
+private struct SidebarFont: ViewModifier {
+    let size: CGFloat
+    let weight: Font.Weight
+    @Environment(\.messageFont) private var font
+
+    func body(content: Content) -> some View {
+        content.font(.system(size: size * font.sidebarScale, weight: weight))
+    }
 }
 
 /// A row's highlight, the sidebar's and Settings': what you pick from a list, drawn as everywhere
@@ -1289,6 +1320,7 @@ private struct SidebarRow<Icon: View, Title: View, Accessory: View>: View {
     @ViewBuilder var icon: () -> Icon
     @ViewBuilder var title: () -> Title
     @ViewBuilder var accessory: () -> Accessory
+    @Environment(\.messageFont) private var messageFont
 
     var body: some View {
         #if DEBUG
@@ -1307,16 +1339,16 @@ private struct SidebarRow<Icon: View, Title: View, Accessory: View>: View {
         HStack(spacing: 10) {
             if Icon.self != EmptyView.self {
                 icon()
-                    .font(.system(size: 14))
+                    .sidebarFont(14)
                     .foregroundStyle(.secondary)
-                    .frame(width: SidebarMetrics.iconWidth)
+                    .frame(width: SidebarMetrics.iconWidth(messageFont))
             } else if indented, branchInset == nil {
-                Color.clear.frame(width: SidebarMetrics.iconWidth, height: 1)
+                Color.clear.frame(width: SidebarMetrics.iconWidth(messageFont), height: 1)
             }
             // The title takes the room up to the accessory, one gap from its mark, rather than
             // a spacer with a gap on each side of it.
             title()
-                .font(.system(size: 14))
+                .sidebarFont(14)
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1324,10 +1356,10 @@ private struct SidebarRow<Icon: View, Title: View, Accessory: View>: View {
         }
         .padding(.leading, branchInset ?? 10)
         .padding(.trailing, 10)
-        .frame(height: SidebarMetrics.rowHeight)
+        .frame(height: SidebarMetrics.rowHeight(messageFont))
         // An indented row's fill starts at its title, beside the project's line of sessions; a
         // branch's just before its title, so the line and its elbow stay in view.
-        .modifier(RowHighlight(isSelected: isSelected, leading: branchInset.map { $0 - 5 } ?? (indented && Icon.self == EmptyView.self ? 10 + SidebarMetrics.iconWidth : 0)))
+        .modifier(RowHighlight(isSelected: isSelected, leading: branchInset.map { $0 - 5 } ?? (indented && Icon.self == EmptyView.self ? 10 + SidebarMetrics.iconWidth(messageFont) : 0)))
     }
 }
 
@@ -1340,6 +1372,7 @@ extension SidebarRow where Accessory == EmptyView {
 /// A project: its folder (open or closed) and name. Clicking opens or closes it; the
 /// compose button for a new session in it shows under the pointer, in place.
 private struct ProjectRow: View {
+    @Environment(\.messageFont) private var messageFont
     let project: Workspace.Project
     let isOpen: Bool
     let toggle: () -> Void
@@ -1355,12 +1388,14 @@ private struct ProjectRow: View {
     }
 
     var body: some View {
+        // Worked out here, not by the sidebar, so only this row follows its sessions' states.
+        let mark = isOpen ? nil : foldedMark(of: project.sessions, workspace: app.workspace, app: app)
         Button(action: toggle) {
             HStack(spacing: 10) {
                 Group {
                     // One a bot made: its face, still, on the folder's corner, cut out of it.
                     if let maker = app.workspace.madeBy[project.directory].flatMap({ app.bots.bot($0.bot) }) {
-                        FolderIcon(isOpen: isOpen)
+                        FolderIcon(isOpen: isOpen, size: (16 * messageFont.sidebarScale).rounded())
                             .foregroundStyle(.secondary)
                             .mask {
                                 Rectangle()
@@ -1376,32 +1411,42 @@ private struct ProjectRow: View {
                                     .accessibilityLabel(WorkWords.madeBy(maker.name))
                             }
                     } else {
-                        FolderIcon(isOpen: isOpen)
+                        FolderIcon(isOpen: isOpen, size: (16 * messageFont.sidebarScale).rounded())
                             .foregroundStyle(.secondary)
                     }
                 }
-                .frame(width: SidebarMetrics.iconWidth)
+                .frame(width: SidebarMetrics.iconWidth(messageFont))
                 Text(project.name)
-                    .font(.system(size: 14))
+                    .sidebarFont(14)
                     .lineLimit(1)
                     .layoutPriority(1)
                 if let machine, marksMachines {
                     MachineLabel(engine: machine)
                 }
                 Spacer(minLength: 6)
-                // Room for the compose button, so a long name never runs under it.
-                Color.clear.frame(width: 22, height: 1)
+                // Room for the compose button, so a long name never runs under it; folded, the
+                // mark of what's under it, where a session's sits, the button over it under the
+                // pointer.
+                ZStack(alignment: .trailing) {
+                    Color.clear.frame(width: 22, height: 1)
+                    // Always there, so a state arriving plays its arrival; an empty tip shows none.
+                    StatusMark(showing: mark)
+                        .opacity(isHovering ? 0 : 1)
+                        .help(mark?.wordsFromUnder ?? "")
+                        .accessibilityHidden(true)
+                }
             }
             .padding(.horizontal, 10)
-            .frame(height: SidebarMetrics.rowHeight)
+            .frame(height: SidebarMetrics.rowHeight(messageFont))
             .hoverHighlight(selected: false)
         }
         .buttonStyle(.plain)
         .clickablePointer()
+        .accessibilityValue(mark?.wordsFromUnder ?? "")
         .overlay(alignment: .trailing) {
             Button(action: newSession) {
                 Image(systemName: "square.and.pencil")
-                    .font(.system(size: 13, weight: .medium))
+                    .sidebarFont(13, weight: .medium)
             }
             .buttonStyle(IconButtonStyle(width: 26, height: 24))
             .padding(.trailing, 4)
@@ -1431,7 +1476,7 @@ private struct TerminalRow: View {
         } title: {
             HStack(spacing: 6) {
                 Image(systemName: "apple.terminal")
-                    .font(.system(size: 11))
+                    .sidebarFont(11)
                     .foregroundStyle(.secondary)
                 Text(title)
             }
@@ -1442,7 +1487,7 @@ private struct TerminalRow: View {
         .overlay(alignment: .trailing) {
             Button(action: end) {
                 Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .semibold))
+                    .sidebarFont(10, weight: .semibold)
             }
             .buttonStyle(IconButtonStyle(width: 22, height: 22))
             .padding(.trailing, 4)
@@ -1462,12 +1507,12 @@ private struct MachineLabel: View {
     var body: some View {
         HStack(spacing: 4) {
             Image(systemName: "server.rack")
-                .font(.system(size: 9, weight: .semibold))
+                .sidebarFont(9, weight: .semibold)
             Text(engine.machine.name)
                 .lineLimit(1)
             MachineIndicator(connection: engine.connection, size: 6, quiet: true, progress: engine.installProgress)
         }
-        .font(.system(size: 11, weight: .medium))
+        .sidebarFont(11, weight: .medium)
         .foregroundStyle(.secondary)
         .help(engine.statusDetail)
     }
@@ -1506,7 +1551,7 @@ private struct GroupRow: View {
                 // One that lives on a machine, which talks there while this Mac is off.
                 if let machine, marksMachines {
                     Image(systemName: "server.rack")
-                        .font(.system(size: 10))
+                        .sidebarFont(10)
                         .foregroundStyle(.tertiary)
                         .help("Lives on \(app.machines.engine(machine)?.machine.name ?? machine)")
                 }
@@ -1532,6 +1577,7 @@ private struct GroupRow: View {
 /// A bot's row or a group chat's, in the sidebar: its face, its name over a line of what it's
 /// doing (in bold while there's something you haven't read), and its status at the end.
 private struct FaceRow<Face: View, Subtitle: View, Trailing: View>: View {
+    @Environment(\.messageFont) private var messageFont
     let title: String
     let isUnread: Bool
     let isSelected: Bool
@@ -1546,10 +1592,10 @@ private struct FaceRow<Face: View, Subtitle: View, Trailing: View>: View {
                 face
                 VStack(alignment: .leading, spacing: 1) {
                     Text(title)
-                        .font(.system(size: 14))
+                        .sidebarFont(14)
                         .fontWeight(isUnread ? .semibold : .regular)
                     subtitle
-                        .font(.system(size: 12))
+                        .sidebarFont(12)
                         .foregroundStyle(.secondary)
                 }
                 .lineLimit(1)
@@ -1557,7 +1603,7 @@ private struct FaceRow<Face: View, Subtitle: View, Trailing: View>: View {
                 trailing
             }
             .padding(.horizontal, 10)
-            .frame(height: 46)
+            .frame(height: (46 * messageFont.sidebarScale).rounded())
             .modifier(RowHighlight(isSelected: isSelected))
         }
         .buttonStyle(.plain)
@@ -1661,7 +1707,7 @@ private struct BotState<Content: View>: View {
     var body: some View {
         HStack(spacing: 4) {
             Image(systemName: systemImage)
-                .font(.system(size: 10, weight: .semibold))
+                .sidebarFont(10, weight: .semibold)
             content
         }
         .fontWeight(.medium)
@@ -1688,7 +1734,7 @@ private struct SectionHeader<Trailing: View>: View {
                         label
                         // A chevron under the pointer, and while folded, so it's clear it opens.
                         Image(systemName: "chevron.down")
-                            .font(.system(size: 9, weight: .bold))
+                            .sidebarFont(9, weight: .bold)
                             .foregroundStyle(.tertiary)
                             .rotationEffect(.degrees(isFolded.wrappedValue ? -90 : 0))
                             .opacity(isHovering || isFolded.wrappedValue ? 1 : 0)
@@ -1717,8 +1763,9 @@ private struct SectionHeader<Trailing: View>: View {
 
     private var label: some View {
         Text(title)
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(.secondary)
+            .sidebarFont(12, weight: .semibold)
+            // A heading reads as one: the words under it are quieter.
+            .foregroundStyle(.primary)
     }
 }
 
@@ -1735,7 +1782,7 @@ private struct SearchedComputer: View {
                 .foregroundStyle(.secondary)
             if let found {
                 Image(systemName: "checkmark")
-                    .font(.system(size: 10, weight: .semibold))
+                    .sidebarFont(10, weight: .semibold)
                     .foregroundStyle(.green)
                 Spacer(minLength: 6)
                 Text(found == 0 ? "None" : "\(found) found")
@@ -1746,7 +1793,7 @@ private struct SearchedComputer: View {
                 Spacer(minLength: 6)
             }
         }
-        .font(.system(size: 12))
+        .sidebarFont(12)
         .padding(.horizontal, 10)
         .frame(height: 24)
         .accessibilityElement(children: .ignore)
@@ -1927,6 +1974,13 @@ struct MoveToComputerItems: View {
         watching: app.wakeUps.watches[id]?.isEmpty == false)
 }
 
+/// A folded project's mark, where its sessions' sit (see `ConversationState.folded`).
+@MainActor func foldedMark(of sessions: [Session], workspace: Workspace, app: AppModel) -> StatusMark.Kind? {
+    ConversationState.folded(sessions.lazy.map {
+        statusMark(of: $0, isNew: $0.isUnread || workspace.hasNewSubSessions($0.id), workspace: workspace, app: app)
+    })
+}
+
 /// The machine a session lives on, by name, while that machine isn't connected and isn't on its
 /// way to it.
 @MainActor func awayMachine(of session: Session, app: AppModel) -> String? {
@@ -1996,6 +2050,7 @@ private struct BranchRows: View {
     let row: (Session, CGFloat) -> AnyView
 
     @State private var showsAll = false
+    @Environment(\.messageFont) private var messageFont
     private static let shown = 8
 
     private var all: [Session] { branches[parent] ?? [] }
@@ -2015,17 +2070,17 @@ private struct BranchRows: View {
                 // Its piece of the line: from the gap above it (so the line runs on without a
                 // break) through its row, on to the next one's unless it's the last.
                 .background(alignment: .topLeading) {
-                    BranchLine(x: lineX, elbowY: SidebarMetrics.rowHeight / 2, runsOn: child.id != children.last?.id || all.count > children.count)
+                    BranchLine(x: lineX, elbowY: SidebarMetrics.rowHeight(messageFont) / 2, runsOn: child.id != children.last?.id || all.count > children.count)
                 }
             }
             if all.count > children.count {
                 Button("Show \(all.count - children.count) More") { withAnimation(.ui) { showsAll = true } }
                     .buttonStyle(TextButtonStyle())
-                    .font(.system(size: 12))
+                    .sidebarFont(12)
                     .padding(.leading, childInset - 6)
-                    .frame(height: SidebarMetrics.rowHeight, alignment: .leading)
+                    .frame(height: SidebarMetrics.rowHeight(messageFont), alignment: .leading)
                     .background(alignment: .topLeading) {
-                        BranchLine(x: lineX, elbowY: SidebarMetrics.rowHeight / 2, runsOn: false)
+                        BranchLine(x: lineX, elbowY: SidebarMetrics.rowHeight(messageFont) / 2, runsOn: false)
                     }
             }
         }
@@ -2075,10 +2130,10 @@ private struct BranchesToggle: View {
                 Text("\(count)")
                     .monospacedDigit()
                 Image(systemName: "chevron.down")
-                    .font(.system(size: 9, weight: .semibold))
+                    .sidebarFont(9, weight: .semibold)
                     .rotationEffect(.degrees(isUnfolded ? 0 : -90))
             }
-            .font(.system(size: 12, weight: .medium))
+            .sidebarFont(12, weight: .medium)
         }
         .buttonStyle(TextButtonStyle())
         .help(isUnfolded ? "Hide its branches" : "Show its \(count.counting("branch", "branches"))")
@@ -2119,7 +2174,7 @@ private struct AccountsRow: View {
             HStack(spacing: 10) {
                 if catalog.signedInAccounts.isEmpty {
                     Image(systemName: "person.crop.circle.badge.plus")
-                        .font(.system(size: 15))
+                        .sidebarFont(15)
                         .foregroundStyle(.tint)
                 } else {
                     HStack(spacing: 8) {
@@ -2129,12 +2184,12 @@ private struct AccountsRow: View {
                     }
                 }
                 Text(label)
-                    .font(.system(size: 14))
+                    .sidebarFont(14)
                 Spacer()
                 // One needs you: its sign-in ended, or it's at its usage limit.
                 if !problems.isEmpty {
                     Image(systemName: "exclamationmark.circle.fill")
-                        .font(.system(size: 13))
+                        .sidebarFont(13)
                         .foregroundStyle(.orange)
                         .accessibilityLabel(problemsText)
                 }

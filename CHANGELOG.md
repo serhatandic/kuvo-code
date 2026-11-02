@@ -17,6 +17,9 @@ release, Unreleased is renamed to the version; the release notes come from that 
 ### All Changes
 
 - Replies draw fewer lines: headings no longer have a line under them, and `---` is one thin line with even space around it, as in Claude's and ChatGPT's apps.
+- The sidebar is easier to read: its headings are as bright as the names under them, and the quieter words and buttons are no longer washed out by the window behind it.
+- A folded project shows the mark of what's going on inside it (one waiting on you, at work, failed or new), so folding one hides nothing that needs you.
+- The sidebar follows Settings › Appearance › Text size, as the conversation does.
 - A bot working on a goal no longer keeps your computer busy between its looks at the goal, which could spin the fans while nothing was happening.
 - Moving a chat whose `/goal` is still going says why it can't move yet, instead of moving and losing the goal.
 - A goal whose end you move later after it came carries on to the new end, rather than stopping at once.

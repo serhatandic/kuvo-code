@@ -34,10 +34,14 @@ public struct StatusMark: View {
         case offline
 
         /// What VoiceOver says for it, after the row's title.
-        /// On a folded row, a mark that comes from a conversation under it, in words.
+        /// On a folded row (a session's branches, a project), a mark that comes from a
+        /// conversation under it, in words.
         public var wordsFromUnder: String {
             switch self {
             case .needsYou: "One under it needs you"
+            case .working: "One under it is working"
+            case .subagents: "One under it has subagents at work"
+            case .failed: "One under it failed"
             case .new: "One under it is done"
             default: words
             }
@@ -117,6 +121,20 @@ public enum ConversationState {
         if wakes { return .wake }
         if watching { return .watching }
         return nil
+    }
+
+    /// A folded project's mark, from its conversations': the most pressing of what calls you back
+    /// to them (one waits on you, one is at work, one failed, one finished since you looked), so
+    /// folding it hides none of that. Their other states (a wake-up, a computer away) stay theirs.
+    public static func folded(_ kinds: some Sequence<StatusMark.Kind?>) -> StatusMark.Kind? {
+        let order: [StatusMark.Kind] = [.needsYou, .working, .subagents, .failed, .new]
+        var best: Int?
+        for kind in kinds {
+            guard let kind, let rank = order.firstIndex(of: kind), rank < best ?? order.count else { continue }
+            if rank == 0 { return .needsYou }  // nothing outranks it: the rest needn't be looked at
+            best = rank
+        }
+        return best.map { order[$0] }
     }
 }
 
