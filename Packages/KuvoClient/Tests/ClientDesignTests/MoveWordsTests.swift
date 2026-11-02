@@ -20,6 +20,15 @@ struct MoveWordsTests {
         #expect(MoveWords.progress(sent: nil, size: 0) == nil)
     }
 
+    /// The connection gone before the box answered: whether it moved is said only as its box says
+    /// it now, never "nothing moved" when it may have.
+    @Test func cutOffItSaysOnlyWhatItsBoxSaysNow() {
+        #expect(MoveWords.lost(from: "lab", moving: nil).hasPrefix("Kuvo Code lost touch with lab before it said whether it moved."))
+        #expect(MoveWords.lost(from: "lab", moving: true).hasPrefix("Kuvo Code lost touch with lab while it moved. It goes on there"))
+        let none = MoveWords.lost(from: "lab", moving: false)
+        #expect(none == "Kuvo Code lost touch with lab before it answered, and nothing is moving there now. If it isn’t where you moved it, move it again.")
+    }
+
     @Test func askedFirstItSaysWhatGoesAndWhatsLeftWhere() {
         let chat = MoveWords.question(kind: "chat", name: "“Trip plans”", place: "lab", placeIsMac: false, from: nil, fromMachine: false)
         #expect(chat.title == "Move “Trip plans” to lab?")
