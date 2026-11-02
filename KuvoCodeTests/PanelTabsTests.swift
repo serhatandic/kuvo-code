@@ -171,6 +171,21 @@ import Testing
         #expect(terminals() == 1)
     }
 
+    /// Run's terminal is named for its command until what runs names itself, as a project's own
+    /// terminal is, not for its folder.
+    @Test func runsTerminalIsNamedForItsCommand() throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "KuvoCodeTests-run-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer {
+            panel.closeAll()
+            try? FileManager.default.removeItem(at: folder)
+        }
+        panel.inView = .init(session: "ses_a")
+        panel.run("PORT=3000 sleep 60", in: folder.path, environment: ["SHELL": "/bin/sh"])
+        let run = try #require(panel.visibleTabs.first { $0.kind == .terminal })
+        #expect(panel.terminals[run.id]?.title == "sleep")
+    }
+
     /// A file a bot showed in a group chat, then another opened from the tree beside it, in a
     /// folder there: the tree stays on the first file's folder, so you can go back up.
     @Test func aGroupChatsFileKeepsItsFolderAsYouBrowse() {
