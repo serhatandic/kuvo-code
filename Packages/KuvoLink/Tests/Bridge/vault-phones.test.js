@@ -20,7 +20,9 @@ const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "kvp-"));
 const home = path.join(root, ".kuvo-code");
 removeAtEnd(root);
-const relay = await relayStandIn(link);
+// Each change on the relay (a device on it or gone) wakes whoever waits for one.
+let poke = () => {};
+const relay = await relayStandIn(link, { changed: () => poke() });
 atEnd(() => relay.close());
 
 // The machine's own keys, and two phones paired with it, both named as a phone without the
@@ -43,8 +45,11 @@ before(async () => {
   let said = "";
   bridge.stderr.setEncoding("utf8");
   bridge.stderr.on("data", chunk => { said += chunk; });
-  for (let tries = 0; tries < 250 && !relay.has(machineAddress); tries++) await new Promise(done => setTimeout(done, 20));
-  assert.ok(relay.has(machineAddress), `the machine is on the relay: ${said}`);
+  // On the relay once it's there, or the test hears why the bridge ended.
+  const ended = new Promise((_, reject) => bridge.once("exit", code => reject(new Error(`the bridge ended (${code}): ${said}`))));
+  while (!relay.has(machineAddress)) await Promise.race([new Promise(done => { poke = done; }), ended]);
+  // (Its end at the test's own end isn't a failure.)
+  ended.catch(() => {});
 });
 atEnd(async () => {
   if (!bridge || bridge.exitCode !== null) return;
