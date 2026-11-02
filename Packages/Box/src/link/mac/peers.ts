@@ -5,7 +5,7 @@
 import { isObject } from "../../shared/json";
 import type { Body } from "../../shared/json";
 import { readEngineFile } from "../engine/client";
-import { givenUp, macWaiting, sendOutbox } from "../letters/outbox";
+import { deliverLeftAnswers, givenUp, macWaiting, sendOutbox } from "../letters/outbox";
 import { attentionGiven } from "../notices/hold";
 import { announce, refreshOwn } from "../peers/agents";
 import { mailFor, peersOf } from "../peers/known";
@@ -65,10 +65,12 @@ export function stopMacPeers(): void {
 }
 
 // The outbox, sent now while this Mac's box is on the relay (and its letters kept, not sent, while
-// it isn't).
-export function macSendOutbox(): void {
+// it isn't); and answers its conversations' tools never took, to them as messages, as a machine's
+// link does each round. (What it set going, for a test to wait on.)
+export async function macSendOutbox(): Promise<void> {
   const host = macLink.host;
-  try { sendOutbox(host?.welcomed ? host : { send() {} }, undefined, Date.now(), host?.welcomed ? 0 : 1); } catch {}
+  try { await sendOutbox(host?.welcomed ? host : { send() {} }, undefined, Date.now(), host?.welcomed ? 0 : 1); } catch {}
+  await deliverLeftAnswers().catch(() => {});
 }
 
 // How long one of this Mac's conversations waits for a letter's answer at most.

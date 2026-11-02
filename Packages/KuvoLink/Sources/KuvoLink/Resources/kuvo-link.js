@@ -16818,11 +16818,12 @@ function stopMacPeers() {
   macLink.stopPeers?.();
   macLink.stopPeers = null;
 }
-function macSendOutbox() {
+async function macSendOutbox() {
   const host = macLink.host;
   try {
-    sendOutbox(host?.welcomed ? host : { send() {} }, undefined, Date.now(), host?.welcomed ? 0 : 1);
+    await sendOutbox(host?.welcomed ? host : { send() {} }, undefined, Date.now(), host?.welcomed ? 0 : 1);
   } catch {}
+  await deliverLeftAnswers().catch(() => {});
 }
 var LETTER_WAIT = 660000;
 function macLetterAnswer(id, signal, most = LETTER_WAIT, cut) {
@@ -23780,6 +23781,7 @@ export {
   macFront,
   macLink,
   macNoticeHold,
+  macSendOutbox,
   macTell,
   macsOf,
   mailFor,
