@@ -438,12 +438,17 @@ A client asks the box it lives on once, and watches; the move goes on with no cl
   of your computers. A client that goes doesn't stop it.
 - `GET kuvo/moves` → `200 {moves: [Move], away: [session]}`, and `GET kuvo/moves/events`, the same
   as a line now and each time it changes. `Move = {id, kind, thing, name, from, to, role, stage,
-  sessions, place?, sent?, size?}`: `from` and `to` are boxes' keys; `role`, whether this box is
+  sessions, place?, sent?, size?, waiting?}`: `from` and `to` are boxes' keys; `role`, whether this box is
   where it was (`from`) or where it's going (`to`); `stage`: `holding`, `copying`, `switching`,
   `finishing`; `sessions`, its conversations, root first; `place`, the other computer's name, as
   your computers call it (when this box knows it); `sent` and `size`, bytes, while its copy is on
   its way, for a client to show how far it is (a move taken back isn't listed, on either box,
-  while its copy is let go of). `away`: conversations this box's engine lists that don't live here (a copy not
+  while its copy is let go of). `waiting: true` (bridge 0.9.176) while the other computer has said
+  nothing of the move for a minute and a half (its engine away, or the computer off): on the box it
+  leaves, as it waits on a step; on the box it's going to, while its copy's parts don't come, or,
+  set up, the switch. It
+  carries on where it was once that computer is back, and clients say it waits for it (still taken
+  back after 10 minutes before the switch, as above). `away`: conversations this box's engine lists that don't live here (a copy not
   switched to yet or being let go of, an original still going): clients leave them out.
   `elsewhere: [{box, moves: [Move]}]` (bridge 0.9.169), left out when there are none: the moves your other
   computers said they have under way between them (`box`, its key; "Peers", `moving`), so a client

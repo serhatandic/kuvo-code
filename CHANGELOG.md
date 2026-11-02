@@ -25,6 +25,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - Files you attach are kept with the session you sent them in and deleted with it, on your Mac and on your machines. Before, the ones on your Mac piled up in the Attachments folder for good. On a machine, they still also go once they're two weeks old. A branch, a handoff or a conversation carried on with the coding agents keeps the files it shows.
 - In a session on a machine, a file over 50 MB says **Stays on this Mac** on its chip before you send, with why on hover, instead of only in the note after it's sent. You can still send the message.
 - A bot working on a goal no longer keeps your computer busy between its looks at the goal, which could spin the fans while nothing was happening.
+- A bot, chat or group chat whose move stalls because the other computer went away no longer looks busy: its row says "Waiting for" that computer, and its conversation says what comes next and how far it got.
 - Moving a chat whose `/goal` is still going says why it can't move yet, instead of moving and losing the goal.
 - A goal whose end you move later after it came carries on to the new end, rather than stopping at once.
 - Stop, Keep Going and Start the Work in a group chat that's moving say why nothing happened.

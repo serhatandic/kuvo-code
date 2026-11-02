@@ -27,6 +27,8 @@ public struct ProgressLine: View {
     let done: Int64?
     let total: Int64?
     let layout: Layout
+    /// How far it got, with nothing going on now (it waits): grey, not the accent, and no time left.
+    let isStill: Bool
     /// How far it was lately, to tell its pace by.
     @State private var samples: [Words.Sample] = []
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -41,15 +43,17 @@ public struct ProgressLine: View {
         self.done = nil
         self.total = nil
         self.layout = layout
+        self.isStill = false
     }
 
-    /// Bytes so far, of a total when it's known.
-    public init(_ label: String, bytes done: Int64, of total: Int64?, layout: Layout = .stacked) {
+    /// Bytes so far, of a total when it's known. `still`: nothing's going on now (it waits).
+    public init(_ label: String, bytes done: Int64, of total: Int64?, layout: Layout = .stacked, still: Bool = false) {
         self.label = label
         self.done = done
         self.total = total.flatMap { $0 > 0 ? $0 : nil }
         self.fraction = self.total.map { Double(done) / Double($0) }
         self.layout = layout
+        self.isStill = still
     }
 
     private var share: Double? { fraction.map { min(1, max(0, $0)) } }
@@ -62,7 +66,7 @@ public struct ProgressLine: View {
         return share.map(Words.percent)
     }
 
-    private var timeLeft: String? { Words.secondsLeft(samples).map(Words.timeLeft) }
+    private var timeLeft: String? { isStill ? nil : Words.secondsLeft(samples).map(Words.timeLeft) }
 
     public var body: some View {
         Group {
@@ -101,9 +105,9 @@ public struct ProgressLine: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(bytes.map { "\(label), \(Words.spokenAmount(done: $0, of: total))" } ?? label)
         .accessibilityValue([share.map { "\(Words.percent($0).dropLast()) percent" },
-                             Words.secondsLeft(samples).map { Words.timeLeft($0).lowercased() + " left" }]
+                             timeLeft.map { $0.lowercased() + " left" }]
             .compactMap(\.self).joined(separator: ", "))
-        .accessibilityAddTraits(.updatesFrequently)
+        .accessibilityAddTraits(isStill ? [] : .updatesFrequently)
         .onAppear { note(share) }
         .onChange(of: share) { _, share in note(share) }
         // Stalled: no pace to tell, so no guess at what's left.
@@ -121,7 +125,7 @@ public struct ProgressLine: View {
                 if let share {
                     GeometryReader { proxy in
                         Capsule()
-                            .fill(accent)
+                            .fill(isStill ? AnyShapeStyle(.tertiary) : AnyShapeStyle(accent))
                             .frame(width: max(4, proxy.size.width * share))
                     }
                     .animation(reduceMotion ? nil : .easeOut(duration: 0.3), value: share)

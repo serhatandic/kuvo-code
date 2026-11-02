@@ -1,3 +1,4 @@
+import ClientDesign
 import Foundation
 import KuvoLink
 import OpenCodeKit
@@ -245,6 +246,69 @@ import Testing
         #expect(Moves.isFrozen("ses_labtrip"))
         unreadable.now = false
         app.moves.forget("lab")
+    }
+
+    /// A move whose other end went quiet stops looking busy and says what it waits for: the machine
+    /// it leaves, while that can't be read, or the computer it's going to, as the box it leaves says.
+    /// Once that's back, it shows how far it is again.
+    @Test func aMoveWaitingForAComputerSaysWhichAndCarriesOnOnceItsBack() async throws {
+        let unreadable = Over()
+        let quiet = Over()
+        let app = AppModel()
+        app.moves.app = app
+        app.moves.boxes = { box in
+            Self.box(box) { path in
+                guard path == "kuvo/moves", !unreadable.now else { return nil }
+                let waiting = quiet.now ? #","waiting":true"# : ""
+                return #"{"moves":[{"id":"mv_wait1","kind":"chat","thing":"ses_waittrip","from":"lab-key","to":"pi-key","role":"from","stage":"copying","sessions":["ses_waittrip"],"place":"pi","sent":12400000,"size":30000000\#(waiting)}],"away":[]}"#
+            }
+        }
+        await app.moves.reload("lab")
+        #expect(app.moves.underWay["ses_waittrip"]?.words == "Moving to pi… 12 of 30 MB")
+        // Lab out of reach: it waits for lab, still held.
+        unreadable.now = true
+        await app.moves.reload("lab")
+        #expect(app.moves.underWay["ses_waittrip"]?.words == "Waiting for lab")
+        #expect(app.moves.underWay["ses_waittrip"]?.spoken == "Waiting for lab. It moves to pi once lab is back.")
+        #expect(Moves.isFrozen("ses_waittrip"))
+        // Back, though it says just what it said: moving again.
+        unreadable.now = false
+        await app.moves.reload("lab")
+        #expect(app.moves.underWay["ses_waittrip"]?.waitingFor == nil)
+        // Lab says pi has gone quiet: it waits for pi.
+        quiet.now = true
+        await app.moves.reload("lab")
+        #expect(app.moves.underWay["ses_waittrip"]?.words == "Waiting for pi")
+        quiet.now = false
+        await app.moves.reload("lab")
+        #expect(app.moves.underWay["ses_waittrip"]?.words == "Moving to pi… 12 of 30 MB")
+        app.moves.forget("lab")
+    }
+
+    /// Coming here from a machine that's away, and never read since the app started: this Mac's own
+    /// box has the move, so it shows as waiting for that machine, not as nothing at all.
+    @Test func aMoveComingHereFromAMachineThatsAwaySaysItWaitsForIt() async throws {
+        let lab = "move-\(UUID().uuidString.prefix(8).lowercased()).invalid"
+        let labKey = String(repeating: "J", count: 43)
+        let mac = BoxClient.mac
+        let app = AppModel()
+        app.moves.app = app
+        _ = app.machines.add(lab)
+        defer { app.removeMachine(lab) }
+        app.phoneLink.standIn(machine: lab, key: labKey)
+        app.moves.boxes = { box in
+            Self.box(box) { path in
+                guard path == "kuvo/moves", box == mac else { return nil }
+                return #"{"moves":[{"id":"mv_in3","kind":"chat","thing":"ses_in3","from":"\#(labKey)","to":"mac-key","role":"to","stage":"copying","sessions":["ses_in3"],"place":"devbox","sent":12400000,"size":30000000}],"away":["ses_in3"]}"#
+            }
+        }
+        await app.moves.reload(mac)
+        await app.moves.reload(lab)
+        let going = try #require(app.moves.underWay["ses_in3"])
+        #expect(going.words == "Waiting for devbox")
+        #expect(MoveWords.waitingCard(for: going.waitingFor ?? "", place: going.place).title == "Moving to this Mac")
+        #expect(MoveWords.progress(sent: going.sent, size: going.size) == "12 of 30 MB")
+        app.moves.forget(lab)
     }
 
     /// A move this Mac's box took back while the machine it was going to restarted: what the machine

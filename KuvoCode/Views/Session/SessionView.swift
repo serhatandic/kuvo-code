@@ -410,7 +410,13 @@ private struct BottomStack: View {
                         .modifier(ComposerSurface())
                         .transition(.opacity)
                 }
-                if let engine = offlineMachine {
+                // Its move waiting for a computer that went quiet (its own machine, say): that says it
+                // all, with nothing to connect, since the two computers move it between themselves.
+                if let going = waitingMove {
+                    MoveWaitingCard(going: going)
+                        .modifier(ComposerSurface())
+                        .transition(.opacity)
+                } else if let engine = offlineMachine {
                     MachineOfflineBar(engine: engine)
                         .modifier(ComposerSurface())
                         .transition(.opacity)
@@ -550,6 +556,7 @@ private struct BottomStack: View {
             .animation(.ui, value: isAsking)
             .animation(.ui, value: tucked)
             .animation(.ui, value: removedWorktree?.folder)
+            .animation(.ui, value: waitingMove != nil)
             // A machine's box removes and restores worktrees without telling this Mac: read as it shows.
             .task(id: model.session.location.directory) { await workspace.refreshWorktrees(for: model.session) }
             // A bot's work read from its box as it changes (a session of it started, at work,
@@ -655,6 +662,12 @@ private struct BottomStack: View {
     }
 
     private var offlineMachine: MachineEngine? { SessionView.offlineMachine(of: model, in: app) }
+
+    /// Its move (a bot's, or the chat's own), while it waits for a computer that went quiet.
+    private var waitingMove: Moves.Going? {
+        let going = app.moves.underWay[app.bots.bot(forSession: model.id)?.id ?? model.session.id]
+        return going?.waitingFor == nil ? nil : going
+    }
 
     private var forms: [FormRequest] {
         #if DEBUG
