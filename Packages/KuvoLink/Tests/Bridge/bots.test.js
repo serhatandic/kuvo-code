@@ -454,7 +454,10 @@ test("with the Mac closed, a bot is made here as New Bot makes it: its folder, c
     assert.deepEqual(session.body.permissions, [...withAlways(kit.rules), { action: "external_directory", resource: path.join(folder, "*"), effect: "allow" }]);
     const told = engine.asked.find(each => each.url === "/api/experimental/session/ses_made1/instructions/entries/kuvo.bot").body.value;
     assert.equal(told, `You are Inbox Helper, one of the user's bots.\n\nYour personality: Straight Shooter. Direct.\n\nMemory: the file "${folder}/MEMORY.md" is yours.\n\nYou work in one of the user's projects.\n\nWho sets what.`);
-    assert.deepEqual(engine.asked.find(each => each.method === "PATCH").body, { metadata: { kuvo: { bot: listed.id } } });
+    // Marked as a bot's, and kept with Auto, which asks first here: the sandbox doesn't run.
+    const marked = engine.asked.find(each => each.method === "PATCH").body;
+    assert.deepEqual(marked.metadata, { kuvo: { bot: listed.id, approval: "auto", applied: "askFirst" } });
+    assert.ok(marked.permissions.some(rule => rule.action === "shell" && rule.resource === "*" && rule.effect === "ask"), "it asks before commands");
     assert.equal(engine.asked.find(each => each.url === "/api/session/ses_made1/synthetic").body.text, words.greeting, "it writes first");
     assert.ok((await ask(handle, "GET", "kuvo/bots")).json.bots.some(each => each.id === listed.id), "listed at once");
 

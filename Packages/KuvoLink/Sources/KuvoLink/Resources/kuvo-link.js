@@ -14350,7 +14350,11 @@ async function makeOnce(given, readEngine, readBridge, machine) {
     if (typeof made?.id !== "string" || !made.id)
       throw new Error("No conversation was made.");
     session = { id: made.id };
-    await call(target, "PATCH", `/api/session/${encodeURIComponent(session.id)}`, { metadata: { kuvo: { bot: id } } }, AbortSignal.timeout(BOT_STEP));
+    const kept = approvalOf({ permissions: rules }, { agents, bot: true });
+    await call(target, "PATCH", `/api/session/${encodeURIComponent(session.id)}`, {
+      metadata: { kuvo: { bot: id, approval: kept.approval, applied: kept.effective } },
+      permissions: approvalRules(kept.effective, rules, alwaysFor(rules, true))
+    }, AbortSignal.timeout(BOT_STEP));
     const told = botInstructions(kit, name, folder, personality?.instruction, project);
     await call(target, "PUT", `/api/experimental/session/${encodeURIComponent(session.id)}/instructions/entries/kuvo.bot`, { value: told }, AbortSignal.timeout(BOT_STEP));
     fs52.writeFileSync(path54.join(folder, "session"), session.id);

@@ -588,6 +588,16 @@ nonisolated final class EngineState: @unchecked Sendable {
                 guard let found = lock.withLock({ sessions.first { $0["id"] as? String == parts[2] } }) else { return StubWeb.json(["message": "No such session."], status: 404) }
                 return StubWeb.json(["data": found])
             }
+            // What's changed, kept, as the engine keeps it (each field given in place of its own).
+            if request.method == "PATCH", parts.count == 3, parts[0] == "api", parts[1] == "session" {
+                let changed: [String: Any]? = lock.withLock {
+                    guard let at = sessions.firstIndex(where: { $0["id"] as? String == parts[2] }) else { return nil }
+                    sessions[at].merge(request.body) { _, given in given }
+                    return sessions[at]
+                }
+                guard let changed else { return StubWeb.json(["message": "No such session."], status: 404) }
+                return StubWeb.json(["data": changed])
+            }
             if request.method == "GET", parts.count == 4, parts[1] == "session", ["message", "inbox"].contains(parts[3]) { return StubWeb.json(["data": [Any]()]) }
             // What it doesn't have to read, as an engine without it; what's sent, taken.
             return request.method == "GET" ? StubWeb.json([String: Any](), status: 404) : StubWeb.json([String: Any]())

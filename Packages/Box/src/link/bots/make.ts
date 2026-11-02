@@ -17,6 +17,7 @@ import { botInstructions, NO_KIT, readKit, runsWithAgents } from "./kit";
 import { listBots } from "./list";
 import { noteTold, toldDigest } from "./tell";
 import { withAlwaysAsk } from "../work/always";
+import { alwaysFor, approvalOf, approvalRules } from "../work/approval";
 import { usableModels } from "../work/models";
 import type { Target } from "../../shared/records";
 import type { BotLook, BotModel } from "../../shared/routes/bots";
@@ -166,8 +167,14 @@ async function makeOnce(given: GivenBot | null | undefined, readEngine: () => Ta
     const made = await call(target, "POST", "/api/session", { title: name, location: { directory }, model, permissions: rules }, AbortSignal.timeout(BOT_STEP)) as Fields<"id"> | null;
     if (typeof made?.id !== "string" || !made.id) throw new Error("No conversation was made.");
     session = { id: made.id };
-    // Marked as a bot's (without it, what it does would be news of an ordinary conversation).
-    await call(target, "PATCH", `/api/session/${encodeURIComponent(session.id)}`, { metadata: { kuvo: { bot: id } } }, AbortSignal.timeout(BOT_STEP));
+    // Marked as a bot's (without it, what it does would be news of an ordinary conversation), and
+    // kept with the approval its rules say (Auto, or Ask First), its rules made for what that comes
+    // to here (Auto asks first where the sandbox doesn't run).
+    const kept = approvalOf({ permissions: rules }, { agents, bot: true });
+    await call(target, "PATCH", `/api/session/${encodeURIComponent(session.id)}`, {
+      metadata: { kuvo: { bot: id, approval: kept.approval, applied: kept.effective } },
+      permissions: approvalRules(kept.effective, rules, alwaysFor(rules, true)),
+    }, AbortSignal.timeout(BOT_STEP));
     const told = botInstructions(kit, name, folder, personality?.instruction, project as string | undefined);
     await call(target, "PUT", `/api/experimental/session/${encodeURIComponent(session.id)}/instructions/entries/kuvo.bot`, { value: told }, AbortSignal.timeout(BOT_STEP));
     fs.writeFileSync(path.join(folder, "session"), session.id);
@@ -180,8 +187,8 @@ async function makeOnce(given: GivenBot | null | undefined, readEngine: () => Ta
     const now = stamp();
     const described = { created: now, id, job: "", kuvo: DESCRIPTION, look, model, name, ...(personality ? { personality: personality.id } : {}), ...(project ? { project: project as string } : {}), updated: now } satisfies BotDescription;
     fs.writeFileSync(path.join(folder, "bot.json"), JSON.stringify(described, null, 2));
-    // Kept with the approval its rules say (Auto, or Ask First), and made for what that comes to
-    // here: Auto asks first where the sandbox doesn't run. (The box's round would, in a moment.)
+    // (What it comes to may have changed meanwhile: the sandbox stopped. The box's round would, in a
+    // moment.)
     await settleAgain(target, session.id, agents, AbortSignal.timeout(BOT_STEP)).catch(() => {});
   } catch (error) {
     if (session?.id) await call(target, "DELETE", `/api/session/${encodeURIComponent(session.id)}`, undefined, AbortSignal.timeout(BOT_STEP)).catch(() => {});
