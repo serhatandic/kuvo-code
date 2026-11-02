@@ -18,7 +18,8 @@ export const MOVE_PLACES = object({ places: list(MOVE_PLACE) });
  * (keys), whether this box is where it was (`from`) or where it's going (`to`), how far it is, its
  * conversations (root first), the other computer's name (`place`, when this box knows it), while
  * its copy's on its way, how much of it went (bytes), and `waiting` while the other computer has
- * gone quiet about it (its engine away, or the computer off): it carries on once it's back. */
+ * gone quiet about it (its engine away, or the computer off; on the box it's going to, before all
+ * of its copy came): it carries on once it's back. */
 export const MOVE = object({
   id: string,
   kind: MOVE_KIND,

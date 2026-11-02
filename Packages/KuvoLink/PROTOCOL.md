@@ -443,10 +443,11 @@ A client asks the box it lives on once, and watches; the move goes on with no cl
   `finishing`; `sessions`, its conversations, root first; `place`, the other computer's name, as
   your computers call it (when this box knows it); `sent` and `size`, bytes, while its copy is on
   its way, for a client to show how far it is (a move taken back isn't listed, on either box,
-  while its copy is let go of). `waiting: true` (bridge 0.9.176), on the box it leaves, while the
-  other computer has said nothing of the move for a minute and a half as it waits on a step (its
-  engine away, or the computer off): it carries on where it was once that computer is back, and
-  clients say it waits for it (still taken back after 10 minutes before the switch, as above). `away`: conversations this box's engine lists that don't live here (a copy not
+  while its copy is let go of). `waiting: true` (bridge 0.9.176) while the other computer has said
+  nothing of the move for a minute and a half (its engine away, or the computer off): on the box it
+  leaves, as it waits on a step; on the box it's going to, before all of its copy has come. It
+  carries on where it was once that computer is back, and clients say it waits for it (still taken
+  back after 10 minutes before the switch, as above). `away`: conversations this box's engine lists that don't live here (a copy not
   switched to yet or being let go of, an original still going): clients leave them out.
   `elsewhere: [{box, moves: [Move]}]` (bridge 0.9.169), left out when there are none: the moves your other
   computers said they have under way between them (`box`, its key; "Peers", `moving`), so a client

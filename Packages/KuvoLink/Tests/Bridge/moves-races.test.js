@@ -17,8 +17,13 @@ import path from "node:path";
 import { test as nodeTest } from "node:test";
 import { atEnd, removeAtEnd } from "./at-end.js";
 
-// Each fails, rather than hangs, when what it waits for never comes.
-const test = (name, run) => nodeTest(name, { timeout: 30_000 }, run);
+// Each fails, rather than hangs, when what it waits for never comes: once it's failed or out of
+// time, what it still waits for stops waiting too (its signal, `running`), so the file can end.
+let running;
+const test = (name, run) => nodeTest(name, { timeout: 30_000 }, t => {
+  running = t.signal;
+  return run(t);
+});
 
 const support = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-moves-races-")));
 const home = path.join(support, "mac");
@@ -107,10 +112,12 @@ link.sendMovesWith(toScript);
 const say = move => link.takeMoveMail(lab, move);
 // Its relay connection, which takes what it's given (a test's own, `relay`, for one that doesn't).
 let relay = { send: () => true };
-const stop = new AbortController();
+let stop = new AbortController();
+let done = false;
 link.watchMoves(() => relay, stop.signal);
 removeAtEnd(support);
 atEnd(() => {
+  done = true;
   stop.abort();
   link.sendMovesWith(null);
   server.closeAllConnections();
@@ -128,7 +135,11 @@ async function ask(method, p, given) {
 // Until `found` holds: looked at again as the script hears more, however long that takes (a busy
 // machine is slow, never wrong); a test that never sees it fails at its time limit.
 async function until(found) {
-  while (!found()) await new Promise(resolve => setImmediate(resolve));
+  const signal = running;
+  while (!found()) {
+    signal.throwIfAborted();
+    await new Promise(resolve => setImmediate(resolve));
+  }
 }
 
 // A chat here, with a wake-up, to move.
@@ -795,13 +806,33 @@ test("what's moving says which computer it's going to by name, as your computers
   await asItWas("ses_named1");
 });
 
-test("a move whose other computer went quiet says it's waiting for it, until it speaks again, and is still taken back after a while", async () => {
+// The box's own looks at its moves (each 3 seconds, by the real clock) stopped once a test's move
+// is under way (before, this box wouldn't move it: it's the bridge only while it looks), so one of
+// them can't undo what the test sees as it looks ahead in time itself; started again after.
+async function withoutLooks(run) {
+  let stopped = false;
+  try {
+    await run(() => {
+      stopped = true;
+      stop.abort();
+    });
+  } finally {
+    // (Not once the file's done: nothing would stop them.)
+    if (stopped && !done) {
+      stop = new AbortController();
+      link.watchMoves(() => relay, stop.signal);
+    }
+  }
+}
+
+test("a move whose other computer went quiet says it's waiting for it, until it speaks again, and is still taken back after a while", () => withoutLooks(async stopLooks => {
   chat("ses_waits1");
   // Lab gets ready, and then nothing more.
   script = move => { if (move.op === "offer") say({ op: "ready", id: move.id }); };
   const before = told.length;
   const asked = ask("POST", "kuvo/moves", { kind: "chat", id: "ses_waits1", to: peerKey });
   await until(() => told.slice(before).some(move => move.op === "part"));
+  stopLooks();
   const listed = async () => (await ask("GET", "kuvo/moves")).json.moves.find(move => move.thing === "ses_waits1");
   // A step answered a little late isn't waiting.
   link.keepMoving(Date.now() + 30_000);
@@ -820,4 +851,61 @@ test("a move whose other computer went quiet says it's waiting for it, until it 
   link.keepMoving(Date.now() + 11 * 60_000);
   assert.equal((await asked).status, 503);
   await asItWas("ses_waits1");
-});
+}));
+
+test("a switch the other computer went quiet on says it's waiting for it, also once it's asked to let its copy go instead", () => withoutLooks(async stopLooks => {
+  chat("ses_waits2");
+  // Lab takes it all, and then says nothing more: not to the switch, nor to letting its copy go.
+  labAnswers(null);
+  script = (answer => move => { if (move.op !== "drop") answer(move); })(script);
+  const before = told.length;
+  const asked = ask("POST", "kuvo/moves", { kind: "chat", id: "ses_waits2", to: peerKey });
+  await until(() => told.slice(before).some(move => move.op === "switch"));
+  stopLooks();
+  const listed = async () => (await ask("GET", "kuvo/moves")).json.moves.find(move => move.thing === "ses_waits2");
+  const at = Date.now();
+  link.keepMoving(at + 2 * 60_000);
+  assert.equal((await listed()).waiting, true);
+  // Asked to let its copy go instead (it may have switched): still waiting for lab.
+  link.keepMoving(at + 11 * 60_000);
+  await until(() => told.slice(before).some(move => move.op === "drop"));
+  link.keepMoving(at + 12 * 60_000);
+  const waiting = await listed();
+  assert.equal(waiting.stage, "switching");
+  assert.equal(waiting.waiting, true);
+  // Back, it says it let its copy go: the original goes on here.
+  labAnswers(null);
+  link.keepMoving(at + 14 * 60_000);
+  assert.equal((await asked).status, 409);
+  await asItWas("ses_waits2");
+}));
+
+test("a copy coming here whose other computer went quiet before all of it came says it's waiting for it", () => withoutLooks(async stopLooks => {
+  script = () => {};
+  const thing = "ses_waits3";
+  const { bytes, hash } = bundleFor(thing, [{ info: { id: thing, title: "Notes" }, messages: [] }], { "wakes.json": "[]" });
+  const id = "mov_waits3";
+  await say({ op: "offer", id, kind: "chat", thing, name: "“Notes”", size: bytes.length, hash, wasPaused: false, from: peerKey });
+  await until(() => told.some(move => move.id === id && move.op === "ready"));
+  stopLooks();
+  const listed = async () => (await ask("GET", "kuvo/moves")).json.moves.find(move => move.id === id);
+  link.keepMoving(Date.now() + 30_000);
+  assert.equal((await listed()).waiting, undefined);
+  // None of its parts for a couple of minutes: waiting for lab.
+  link.keepMoving(Date.now() + 2 * 60_000);
+  const waiting = await listed();
+  assert.equal(waiting.role, "to");
+  assert.equal(waiting.waiting, true);
+  // Its part comes: it isn't waiting any more.
+  await say({ op: "part", id, hash, i: 0, of: 1, d: bytes.toString("base64url") });
+  link.keepMoving(Date.now());
+  assert.equal((await listed())?.waiting, undefined);
+  // (Let go of, as lab takes it back.)
+  await until(() => told.some(move => move.id === id && move.op === "arrived"));
+  await say({ op: "drop", id });
+  await until(() => told.some(move => move.id === id && move.op === "dropped"));
+  while (await listed()) {
+    running.throwIfAborted();
+    await new Promise(resolve => setImmediate(resolve));
+  }
+}));

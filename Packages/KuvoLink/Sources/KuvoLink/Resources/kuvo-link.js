@@ -16057,17 +16057,18 @@ async function wakeHeldGroups() {
 async function takeMoveMail(sender, given) {
   if (!isObject(given) || typeof given.op !== "string" || typeof given.id !== "string" || !/^mov_[A-Za-z0-9]{1,40}$/.test(given.id))
     return;
+  const record = readMove(given.id);
+  if (record && record.peer === sender.key) {
+    heard.set(given.id, Date.now());
+    if (waitingFor.delete(given.id))
+      movesChanged();
+  }
   if (given.op === "part" || given.op === "got" || given.op === "working" || given.op === "arrive")
     return moveMail(sender, given, given.id);
   return inTurn(given.id, () => moveMail(sender, given, given.id));
 }
 async function moveMail(sender, given, id) {
   const record = readMove(id);
-  if (record?.role === "from" && record.peer === sender.key) {
-    heard.set(id, Date.now());
-    if (waitingFor.delete(id))
-      movesChanged();
-  }
   const mine = record && record.peer === sender.key ? record : null;
   switch (given.op) {
     case "offer":
@@ -16308,9 +16309,11 @@ function keepMoving(now = Date.now()) {
 }
 function noteWaiting(records, now) {
   const waiting = records.filter((record) => {
-    if (record.role !== "from" || record.failed)
+    if (record.failed)
       return false;
-    const asked = record.step === "switch" ? record.switchSince : record.step === "parts" || record.step === "arrive" || record.step === "offer" && record.tries > 0 ? record.sentAt : undefined;
+    if (record.role === "to")
+      return !record.complete && !record.dropping && now - Math.max(record.started, heard.get(record.id) ?? 0, lookingSince) > WAITING_AFTER;
+    const asked = record.step === "switch" || record.step === "drop" && record.stage === "switching" ? record.switchSince : record.step === "parts" || record.step === "arrive" || record.step === "offer" && record.tries > 0 ? record.sentAt : undefined;
     return asked !== undefined && now - Math.max(asked, heard.get(record.id) ?? 0, lookingSince) > WAITING_AFTER;
   }).map((record) => record.id);
   if (waiting.length === waitingFor.size && waiting.every((id) => waitingFor.has(id)))

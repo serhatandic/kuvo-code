@@ -49,7 +49,8 @@ const NO_ANSWER = 30_000;
 const QUIET_AT_MOST = 10 * 60_000;
 /** A copy there to let go of that it never says it let go of: given up on (it goes there by itself). */
 const DROP_AT_MOST = 24 * 3600_000;
-// When the other computer last said something of each move here (its parts' answers come often).
+// When the other computer last said something of each move here (its parts and their answers come
+// often).
 const heard = new Map<string, number>();
 /** The other computer quiet this long about a move's step: the move shows as waiting for it (longer
  * than a step goes before it's sent again, so one going well never does). */
@@ -900,6 +901,14 @@ async function wakeHeldGroups(): Promise<void> {
 /** A move's mail from another box (`{"move": {op, id, …}}`). */
 export async function takeMoveMail(sender: MailSender, given: unknown): Promise<void> {
   if (!isObject(given) || typeof given.op !== "string" || typeof given.id !== "string" || !/^mov_[A-Za-z0-9]{1,40}$/.test(given.id)) return;
+  // Heard as it comes, not in its turn: one held a while by what this box is doing (settling a
+  // conversation to send) doesn't make the other computer look quiet.
+  const record = readMove(given.id);
+  if (record && record.peer === sender.key) {
+    heard.set(given.id, Date.now());
+    // Back: clients see it carry on at once.
+    if (waitingFor.delete(given.id)) movesChanged();
+  }
   // Parts and their answers come many at once, and need no turn of their own (nor does word that a
   // copy's still being set up).
   if (given.op === "part" || given.op === "got" || given.op === "working" || given.op === "arrive") return moveMail(sender, given, given.id);
@@ -908,11 +917,6 @@ export async function takeMoveMail(sender: MailSender, given: unknown): Promise<
 
 async function moveMail(sender: MailSender, given: Record<string, unknown>, id: string): Promise<void> {
   const record = readMove(id);
-  if (record?.role === "from" && record.peer === sender.key) {
-    heard.set(id, Date.now());
-    // Back: clients see it carry on at once.
-    if (waitingFor.delete(id)) movesChanged();
-  }
   const mine = record && record.peer === sender.key ? record : null;
   switch (given.op) {
     // To the box it goes to.
@@ -985,7 +989,7 @@ async function moveMail(sender: MailSender, given: Record<string, unknown>, id: 
       if (mine?.role === "from" && mine.stage === "switching") return restore(mine, `${mine.name} couldn’t be set up there, so it stayed here. Try again.`);
       if (mine?.role === "from" && mine.step === "drop") return void forgetMove(id);
       return;
-    // Its copy there still being set up (`heard`, above, is all it's for).
+    // Its copy there still being set up (`heard`, as it came, is all it's for).
     case "working":
       return;
   }
@@ -1135,13 +1139,15 @@ export function keepMoving(now = Date.now()): void {
   }
 }
 
-/** The moves from here waiting on their other computer (`waitingFor`): one asked a step (its offer
- * sent again, its parts, word it's all there, or the switch) whose other computer has said nothing of
- * it since, a while. Clients told when that changes. */
+/** The moves here waiting on their other computer (`waitingFor`), whose other computer has said
+ * nothing of them a while: from here, one that asked a step (its offer sent again, its parts, word
+ * it's all there, or the switch, and then to let its copy go instead); coming here, a copy not all
+ * here yet. Clients told when that changes. */
 function noteWaiting(records: MoveRecord[], now: number): void {
   const waiting = records.filter(record => {
-    if (record.role !== "from" || record.failed) return false;
-    const asked = record.step === "switch" ? record.switchSince
+    if (record.failed) return false;
+    if (record.role === "to") return !record.complete && !record.dropping && now - Math.max(record.started, heard.get(record.id) ?? 0, lookingSince) > WAITING_AFTER;
+    const asked = record.step === "switch" || (record.step === "drop" && record.stage === "switching") ? record.switchSince
       : record.step === "parts" || record.step === "arrive" || (record.step === "offer" && record.tries > 0) ? record.sentAt
       : undefined;
     return asked !== undefined && now - Math.max(asked, heard.get(record.id) ?? 0, lookingSince) > WAITING_AFTER;
