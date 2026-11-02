@@ -103,6 +103,9 @@ struct BarLine: View {
     let title: String
     /// How far along it is, after the title ("3 turns · 12 min").
     var progress: String?
+    /// `progress` drawn in its own look ("Paused · You", its why in a word stronger); VoiceOver
+    /// reads `progress`.
+    var status: Text?
     var detail: Text?
     var accessory: AnyView?
     /// What stands for what's under it while that's hidden, after how far along it is (a goal's
@@ -152,9 +155,18 @@ struct BarLine: View {
                     .font(.system(size: 13, weight: .semibold))
                     .lineLimit(1)
                     .layoutPriority(2)
-                // Whole, or not at all where a narrow card has no room: cut down to a letter or
-                // two, they said nothing.
-                if let progress {
+                // A status ("Paused · Error") is why the bar matters now: always whole, the title
+                // cut short before it.
+                if let status {
+                    status
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .fixedSize()
+                        .layoutPriority(3)
+                } else if let progress {
+                    // Whole, or not at all where a narrow card has no room: cut down to a letter
+                    // or two, they said nothing.
                     ViewThatFits(in: .horizontal) {
                         Text(progress)
                             .font(.system(size: 13).monospacedDigit())
