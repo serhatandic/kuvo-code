@@ -82,6 +82,12 @@ extension SandboxState {
             return SandboxNotice(look: .needsYou, title: "\(release.map { "Linux \($0)" } ?? "This Linux") can’t sandbox commands",
                                  detail: "Commands run outside the sandbox here. It needs \(needs ?? "Linux 5.13") or later, with Landlock on.",
                                  buttons: [.init(title: "How to Check…", action: .help)])
+        case .namespaces:
+            // A box that doesn't run without a namespace for each command (none does now: `gaps`).
+            let fix = needs == "util-linux" ? "has util-linux" : "allows user namespaces"
+            return SandboxNotice(look: .needsYou, title: "This machine can’t sandbox commands",
+                                 detail: "Commands run outside the sandbox here until it \(fix), so the sandbox can keep them from services like systemd.",
+                                 buttons: [.init(title: "How to Check…", action: .help)])
         case .macos:
             return SandboxNotice(look: .needsYou, title: "This version of macOS can’t sandbox commands", detail: "Commands run outside the sandbox here.",
                                  buttons: [.init(title: "Software Update…", action: .softwareUpdate)])
