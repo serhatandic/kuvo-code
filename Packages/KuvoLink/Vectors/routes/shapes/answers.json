@@ -3403,7 +3403,8 @@
          },
          "place?": "string",
          "sent?": "number",
-         "size?": "number"
+         "size?": "number",
+         "waiting?": "bool"
         }
        }
       },
@@ -3466,7 +3467,8 @@
             },
             "place?": "string",
             "sent?": "number",
-            "size?": "number"
+            "size?": "number",
+            "waiting?": "bool"
            }
           }
          }
@@ -3563,7 +3565,8 @@
         },
         "place?": "string",
         "sent?": "number",
-        "size?": "number"
+        "size?": "number",
+        "waiting?": "bool"
        }
       }
      }
