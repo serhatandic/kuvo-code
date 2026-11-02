@@ -1011,7 +1011,7 @@ with a mail frame, sealed with the sender's static key for the phone's. Its payl
 | `body` | What the Mac shows: the request, the question, the last words of a reply. |
 | `category` | What it's about, below. |
 | `thread` | What it's grouped under: the session's id, or the group chat's. |
-| `data` | Where it opens: `session` or `group`; `request` for a permission or a form, with `requestSession` when the session asking isn't the one shown (a subagent's), and `answerable: "0"` when its notification mustn't answer it from buttons (it can't show all it covers, or some of its text shows as dots); `ask` for a browser ask; `quiet: "1"` for one that shows without lighting the screen or a sound (what a goal needs of you, its digest), and `wake: "1"` for what a goal needs of you where you asked to be woken. |
+| `data` | Where it opens: `session` or `group`; `request` for a permission or a form, with `requestSession` when the session asking isn't the one shown (a subagent's), and `answerable: "0"` when its notification mustn't answer it from buttons (it can't show all it covers, or some of its text shows as dots), and `always: "0"` for a permission whose Always for This would save a wider rule than it shows (`git push *` for `git push origin main`), which gets Allow Once and Don't Allow only; `ask` for a browser ask; `quiet: "1"` for one that shows without lighting the screen or a sound (what a goal needs of you, its digest), and `wake: "1"` for what a goal needs of you where you asked to be woken. |
 
 | Category | When |
 | --- | --- |
@@ -1942,13 +1942,14 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   and its wake-ups wait, or come back, when the flag changes (it can go with every change to its
   metadata); a Mac sees to it, and a machine's bridge does with the Mac closed too; a session's
   first wake-up or watch made while it's archived, by a client or by its agent's `kuvo-wake` on any
-  box, is held from the start, and any its box finds archived when they're due is held then; a pause of your own stays through both). `POST kuvo/wakes/<session>` with `{"due", "every"?,
+  box, is held from the start, and any its box finds archived when they're due is held then; a pause of your own stays through both). Archived while it waits on you (a permission or a question, its subagents' too), either way or by the box's Remove Project, its box stops its run (and those subagents'), as a bot's Stop and Archive does: the asks go with it. `POST kuvo/wakes/<session>` with `{"due", "every"?,
   "note"}` adds one, as the bar over the Mac's composer does (`due` at least a minute away;
   `every` 30m, 2h, 1d, 1w or weekdays, at least 5m), with the computer's own clock and weekends;
   `400 {"message"}` for what can't be one, `409` with 50 waiting. `POST
   kuvo/wakes/<session>/pause` with `{"paused": true}` holds them (a pause of your own), `false`
   lets them go (not archiving's hold: they still wait until it's back, bridge 0.9.121); with `{"archived": true}` they're held as archiving holds them (a client that
-  archived it on the engine directly says so), `false` lets go of only that hold. Both answer the
+  archived it on the engine directly says so, and its box stops it if it waits on you; with
+  `"stop": false`, only held: a first wake-up made for one archived before), `false` lets go of only that hold. Both answer the
   list as it is then. `POST
   kuvo/wakes/<session>/cancel` with `{"wake": "<id>"}` or `{"watch": "<letters>"}` cancels one;
   `POST kuvo/wakes/<session>/now` with `{"wake": "<id>"}` sends it now (one that repeats still

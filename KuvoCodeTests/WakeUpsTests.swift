@@ -309,6 +309,48 @@ import Testing
         #expect(app.wakeUps.paused.contains(id))
     }
 
+    /// Archived while it waits on you (a permission): its box stops its run, as a bot's Stop and
+    /// Archive has it, rather than leave it waiting out of sight; and the ask goes with the run, off
+    /// the Dock. One brought back stops nothing.
+    @Test func archivingOneThatWaitsOnYouStopsItsRun() async throws {
+        let box = try await start()
+        defer { done(box) }
+        var work: [Task<Void, Never>] = []
+        app.workspace.onArchived = { [app] session, _, _ in work.append(app.archivedChanged(session)) }
+        let permission: [String: Any] = ["id": "per_push", "sessionID": id, "action": "shell", "resources": ["git push"]]
+        let asked = StubWeb.json(["data": [permission]])
+        StubWeb.route(Self.engine + "/api/session/\(id)/permission") { _ in asked }
+        StubWeb.route(Self.engine + "/api/session/\(id)/form") { _ in StubWeb.json(["data": []]) }
+        StubWeb.route(Self.engine + "/api/session/\(id)/interrupt") { _ in StubWeb.json(["data": true]) }
+        func event(_ type: String, _ data: [String: Any]) throws -> ServerEvent {
+            try ServerEvent(json: JSONSerialization.data(withJSONObject: ["id": UUID().uuidString, "type": type, "created": 1, "data": data]))
+        }
+        app.workspace.handle(try event("permission.asked", permission))
+        #expect(app.workspace.waitingCount == 1)
+        let stopped = { StubWeb.asked.filter { $0.hasSuffix("/api/session/\(self.id)/interrupt") }.count }
+
+        await app.workspace.setArchived(id, true)
+        for task in work { await task.value }
+        #expect(stopped() == 1, "archived while it waits on you: its run stops")
+        // The engine lets the run's ask go with it, without a word.
+        app.workspace.handle(try event("session.execution.interrupted", ["sessionID": id]))
+        #expect(app.workspace.waitingCount == 0, "off the Dock")
+
+        // Opened from search and worked in, archived still: a first wake-up its agent makes holds,
+        // and stops nothing (the stand-in still says it waits).
+        let archived = StubWeb.json(["data": Self.session(id, archived: true)])
+        StubWeb.route(Self.engine + "/api/session/\(id)") { _ in archived }
+        let made = await app.wakeUps.call("schedule_wake_up", arguments: ["when": "+2h", "note": "Check again"], caller: id)
+        #expect(!made.isError, "\(made.text)")
+        #expect(app.wakeUps.paused.contains(id))
+        #expect(stopped() == 1, "a wake-up isn't an archive")
+
+        work = []
+        await app.workspace.setArchived(id, false)
+        for task in work { await task.value }
+        #expect(stopped() == 1, "brought back: nothing more stops")
+    }
+
     /// Wake-ups you paused stay paused when the session is archived and brought back; ones paused
     /// only by archiving come back with it.
     @Test func aPauseYouSetOutlastsArchiving() async throws {

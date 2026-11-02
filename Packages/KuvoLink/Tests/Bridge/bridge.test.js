@@ -1118,6 +1118,15 @@ test("a notice shows what it covers up to four, never a secret, and has no answe
   }
 });
 
+test("a permission whose Always would save more than its notice shows says so: its phones offer Allow Once and Don't Allow", async () => {
+  const get = async () => ({ data: { id: "ses_main", title: "Ship it", location: { directory: "/home/me/kuvo-ai" } } });
+  const asked = (resources, save) => link.noticeFor({ type: "permission.asked", data: { id: "per_1", sessionID: "ses_main", action: "shell", resources, ...(save ? { save } : {}) } }, get);
+  assert.equal((await asked(["git push origin main"], ["git push *"])).data.always, "0", "a wider rule than it shows");
+  assert.equal((await asked(["src/app.ts"], ["*"])).data.always, "0", "any file, for one");
+  assert.equal((await asked(["npm test"], ["npm test"])).data.always, undefined);
+  assert.equal((await asked(["src/app.ts", "README.md"])).data.always, undefined, "what it shows, when the engine names no rule");
+});
+
 test("a Mac's phones document, by mail, counts from the Macs that set the machine up alone, a newer one only: a phone removed there loses its way in", async () => {
   const machine = link.newKey(), mac = link.newKey(), other = link.newKey(), stranger = link.newKey();
   const seeds = { mac: link.newSigningSeed(), other: link.newSigningSeed(), stranger: link.newSigningSeed() };

@@ -1,5 +1,6 @@
 import AppKit
 import KuvoLink
+import OpenCodeKit
 import UserNotifications
 
 /// Tells you when a session finishes or needs your answer while you're in another app, and
@@ -101,6 +102,8 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     }
 
     private static let permissionCategory = "permission"
+    /// A permission whose Always would save more than its notification shows: no Always there.
+    private static let permissionOnceCategory = "permission.once"
     private static let replyCategory = "reply"
     nonisolated static let replyAction = "reply"
     nonisolated static let answerAction = "answer"
@@ -122,15 +125,34 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         center.delegate = self
         categories = [
             // Allowing needs the Mac unlocked: from the lock screen it asks for your password first.
-            UNNotificationCategory(identifier: Self.permissionCategory, actions: PermissionAnswer.allCases.map { answer in
-                UNNotificationAction(identifier: answer.rawValue, title: answer.title, options: answer == .reject ? [.destructive] : [.authenticationRequired])
-            }, intentIdentifiers: []),
+            Self.permissionCategory(Self.permissionCategory, answers: Self.buttons(offeringAlways: true)),
+            Self.permissionCategory(Self.permissionOnceCategory, answers: Self.buttons(offeringAlways: false)),
             UNNotificationCategory(identifier: Self.replyCategory, actions: [
                 // Replying gives the agent work: it needs the Mac unlocked too.
                 UNTextInputNotificationAction(identifier: Self.replyAction, title: "Reply", options: [.authenticationRequired], textInputButtonTitle: "Send", textInputPlaceholder: "Message"),
             ], intentIdentifiers: []),
         ]
         center.setNotificationCategories(Set(categories))
+    }
+
+    private static func permissionCategory(_ identifier: String, answers: [PermissionAnswer]) -> UNNotificationCategory {
+        UNNotificationCategory(identifier: identifier, actions: answers.map { answer in
+            UNNotificationAction(identifier: answer.rawValue, title: answer.title, options: answer == .reject ? [.destructive] : [.authenticationRequired])
+        }, intentIdentifiers: [])
+    }
+
+    /// A permission's buttons: Always for This only where it saves what the notification shows.
+    static func buttons(offeringAlways: Bool) -> [PermissionAnswer] {
+        PermissionAnswer.allCases.filter { offeringAlways || $0 != .always }
+    }
+
+    /// Whether Always for This saves only what a permission's notification shows. The engine's rule
+    /// for it can be wider (`git push *` for `git push origin main`, any file for one): then its
+    /// notification offers Allow Once and Don't Allow, and the conversation's card says what
+    /// Always would save.
+    static func offersAlways(_ request: PermissionRequest) -> Bool {
+        let saved = request.save ?? request.resources
+        return !saved.isEmpty && !saved.contains("*") && Set(saved).isSubset(of: Set(request.resources))
     }
 
     /// A question's own category: its choices, and a field to answer in words if it takes one.
@@ -158,7 +180,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     /// (a sandbox's): cleared here as it's answered anywhere.
     /// A `quiet` one shows in Notification Center without lighting the screen or a sound (a
     /// night's blockers and its morning report).
-    func notify(session: String, title: String, subtitle: String? = nil, body: String, permission: (session: String, request: String)? = nil,
+    func notify(session: String, title: String, subtitle: String? = nil, body: String, permission: (session: String, request: String)? = nil, offersAlways: Bool = true,
                 question: Question? = nil, replies: Bool = false, quiet: Bool = false, push: Push? = nil, ask: String? = nil) {
         // What looks like a secret in a command or reply (a token, a key) isn't shown: these stay
         // in Notification Center, and a phone's lock screen.
@@ -182,11 +204,11 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
                 content.sound = .default
             }
             content.threadIdentifier = session
-            content.userInfo = Self.info(session: session, permission: permission, question: question)
+            content.userInfo = Self.info(session: session, permission: permission, question: question, offersAlways: offersAlways)
             // A browser's ask: cleared as it's answered, or goes unanswered.
             if let ask = push?.ask ?? ask { content.userInfo["ask"] = ask }
             if permission != nil {
-                content.categoryIdentifier = Self.permissionCategory
+                content.categoryIdentifier = offersAlways ? Self.permissionCategory : Self.permissionOnceCategory
             } else if let question {
                 content.categoryIdentifier = category(for: question)
             } else if replies, !session.isEmpty {
@@ -322,11 +344,12 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
 
     /// What a notification about `session` carries for its buttons: the permission or question
     /// they answer, and its choices.
-    static func info(session: String, permission: (session: String, request: String)?, question: Question?) -> [AnyHashable: Any] {
+    static func info(session: String, permission: (session: String, request: String)?, question: Question?, offersAlways: Bool = true) -> [AnyHashable: Any] {
         var info: [AnyHashable: Any] = ["session": session]
         if let permission {
             info["requestSession"] = permission.session
             info["request"] = permission.request
+            if !offersAlways { info["always"] = false }
         } else if let question {
             info["requestSession"] = question.session
             info["form"] = question.form
@@ -347,7 +370,9 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
 
     /// What `action` on a notification with `info` (and the words typed in it) does.
     nonisolated static func response(to action: String, info: [AnyHashable: Any], text: String?) -> Response? {
-        if let answer = PermissionAnswer(rawValue: action), let session = info["requestSession"] as? String, let request = info["request"] as? String {
+        // (Always only from one that offered it: one that didn't opens the conversation.)
+        if let answer = PermissionAnswer(rawValue: action), answer != .always || info["always"] as? Bool != false,
+           let session = info["requestSession"] as? String, let request = info["request"] as? String {
             return .permission(session: session, request: request, answer)
         }
         if let form = info["form"] as? String, let session = info["requestSession"] as? String, let key = info["key"] as? String {

@@ -88,6 +88,53 @@ import Testing
         #expect(!workspace.needsAttention("ses_a") && workspace.needsAttention("ses_b"))
     }
 
+    /// Answered on your phone first, its word not here yet: a notification's buttons for them find
+    /// them gone, and they go from the Dock and their open conversation, rather than saying your
+    /// answer didn't go.
+    @Test func aNotificationsAnswerToAnAskAnsweredElsewhereLetsItGo() async throws {
+        defer { engine.stop() }
+        await start(["ses_a"])
+        let model = try #require(workspace.model(for: "ses_a"))
+        workspace.handle(try engine.event("permission.asked", ["id": "per_a", "sessionID": "ses_a", "action": "shell", "resources": ["npm test"]]))
+        workspace.handle(try engine.event("form.created", session: "ses_a", ["form": question]))
+        #expect(workspace.needsAttention("ses_a"))
+        engine.on("POST", "/api/session/ses_a/permission/per_a/reply", json: ["message": "Permission request not found"], status: 404)
+        engine.on("POST", "/api/session/ses_a/form/frm_db/reply", json: ["message": "Form not found"], status: 404)
+        engine.on("GET", "/api/session/ses_a/permission", json: ["data": [Any]()])
+        engine.on("GET", "/api/session/ses_a/form", json: ["data": [Any]()])
+
+        workspace.answer("per_a", in: "ses_a", with: .once)
+        workspace.answerQuestion("frm_db", in: "ses_a", field: "q0", with: "Postgres")
+        try await until { !workspace.needsAttention("ses_a") }
+        #expect(workspace.waitingCount == 0)
+        #expect(model.permissions.isEmpty && model.forms.isEmpty, "no card left to answer")
+    }
+
+    /// A notification's answer that didn't go, for an ask that can't be told gone: it still waits
+    /// on the Dock (and you're told the answer didn't go). Its list can't be read; or its session
+    /// isn't one this Mac knows, and the engine it was answered on at a guess doesn't have it (a
+    /// machine's subagent, before its events say whose it is).
+    @Test func aNotificationsAnswerThatCantTellTheAskIsGoneKeepsIt() async throws {
+        defer { engine.stop() }
+        await start(["ses_a"])
+        engine.on("GET", "/api/session/ses_ghost", json: ["message": "Session not found"], status: 404)
+        workspace.handle(try engine.event("permission.asked", ["id": "per_a", "sessionID": "ses_a", "action": "shell", "resources": ["npm test"]]))
+        workspace.handle(try engine.event("permission.asked", ["id": "per_g", "sessionID": "ses_ghost", "action": "shell", "resources": ["make"]]))
+        #expect(workspace.waitingCount == 2)
+        // Its notification looked for it once.
+        try await until { engine.requests("GET", "/api/session/ses_ghost").count == 1 }
+        engine.on("POST", "/api/session/ses_a/permission/per_a/reply", json: ["message": "The engine is busy"], status: 500)
+        engine.on("GET", "/api/session/ses_a/permission", json: ["message": "The engine is busy"], status: 500)
+        engine.on("POST", "/api/session/ses_ghost/permission/per_g/reply", json: ["message": "Session not found"], status: 404)
+        engine.on("GET", "/api/session/ses_ghost/permission", json: ["data": [Any]()])
+
+        workspace.answer("per_a", in: "ses_a", with: .once)
+        workspace.answer("per_g", in: "ses_ghost", with: .once)
+        try await until { !engine.requests("GET", "/api/session/ses_a/permission").isEmpty && engine.requests("GET", "/api/session/ses_ghost").count == 2 }
+        #expect(engine.requests("GET", "/api/session/ses_ghost/permission").isEmpty, "not read where it isn't")
+        #expect(workspace.waitingCount == 2)
+    }
+
     /// Plan mode's answer, then Build It: the session switches to Build and is told to carry the
     /// plan out.
     @Test func buildItCarriesThePlanOut() async throws {

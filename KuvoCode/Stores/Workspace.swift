@@ -2006,7 +2006,7 @@ final class Workspace {
             }
             for request in permissions {
                 found[request.id] = request.sessionID
-                if tell, asking[request.id] == nil { notifyAsk(request.sessionID, body: Self.describe(request, home: askHome(request.sessionID)), request: request.id, isPermission: true, answerable: Self.showsAll(request)) }
+                if tell, asking[request.id] == nil { notifyAsk(request.sessionID, body: Self.describe(request, home: askHome(request.sessionID)), request: request.id, isPermission: true, answerable: Self.showsAll(request), offersAlways: Notifier.offersAlways(request)) }
             }
             for form in forms where form.sessionID != FormRequest.anySession {
                 found[form.id] = form.sessionID
@@ -2541,7 +2541,7 @@ final class Workspace {
         case "permission.asked":
             guard let request = try? event.payload(as: PermissionRequest.self) else { return }
             asking[request.id] = request.sessionID
-            notifyAsk(request.sessionID, body: Self.describe(request, home: askHome(request.sessionID)), request: request.id, isPermission: true, answerable: Self.showsAll(request))
+            notifyAsk(request.sessionID, body: Self.describe(request, home: askHome(request.sessionID)), request: request.id, isPermission: true, answerable: Self.showsAll(request), offersAlways: Notifier.offersAlways(request))
         case "permission.replied":
             if let reply = try? event.payload(as: EventPayload.PermissionReplied.self) { settled(reply.requestID) }
         case "form.created":
@@ -2574,15 +2574,33 @@ final class Workspace {
     func answerQuestion(_ form: String, in session: String, field: String, with answer: String) {
         Analytics.shared.track("question_answered", ["kind": "question", "from": "notification"])
         Task {
+            guard let api = api(forSession: session) else { return answerDidntGo(in: session) }
             do {
-                guard let api = api(forSession: session) else { throw CancellationError() }
                 try await api.reply(session: session, form: form, answer: [field: .string(answer)])
             } catch {
-                // The agent still waits: say so, rather than lose the answer.
-                Notifier.shared.notify(session: session, title: botName?(session) ?? self.session(session)?.title ?? AppInfo.name,
-                                       body: "Your answer didn’t go. Open the conversation to answer there.")
+                await answerFailed(form, in: session, api: api) { try await $0.forms(session: session).contains { $0.id == form } }
             }
         }
+    }
+
+    /// The agent still waits for an answer from a notification that didn't go: says so, rather
+    /// than lose the answer.
+    private func answerDidntGo(in session: String) {
+        Notifier.shared.notify(session: session, title: botName?(session) ?? self.session(session)?.title ?? AppInfo.name,
+                               body: "Your answer didn’t go. Open the conversation to answer there.")
+    }
+
+    /// A notification's answer that didn't go. An ask gone meanwhile (answered on your phone
+    /// first, its word not here yet) just goes, its card too, as a card's does; one still asked,
+    /// or that can't be told gone, says the answer didn't go.
+    private func answerFailed(_ request: String, in session: String, api: OpenCodeAPI, asked: (OpenCodeAPI) async throws -> Bool) async {
+        // A session not known here was answered on this Mac's engine at a guess: its list counts
+        // only if it has the session (a machine's subagent, before its events say whose it is).
+        var known = self.session(session) != nil || bridgeSessions.contains(session) || sessionMachines[session] != nil
+        if !known { known = (try? await api.session(session)) != nil }
+        guard known, (try? await asked(api)) == false else { return answerDidntGo(in: session) }
+        for id in Set([session, root(of: session)]) { models[id]?.dropAsk(request) }
+        settled(request)
     }
 
     /// Sends a message to a session from outside its conversation (a notification's Reply), with
@@ -2623,7 +2641,7 @@ final class Workspace {
         Notifier.shared.clear(request: request)
     }
 
-    private func notifyAsk(_ id: String, body: String, request: String, isPermission: Bool = false, answerable: Bool = true, question: Notifier.Question? = nil) {
+    private func notifyAsk(_ id: String, body: String, request: String, isPermission: Bool = false, answerable: Bool = true, offersAlways: Bool = true, question: Notifier.Question? = nil) {
         // A seat's requests are answered by its group chat.
         guard !seats.contains(id) else { return }
         notifying.insert(request)
@@ -2658,7 +2676,7 @@ final class Workspace {
             let shown = Notifier.showsAll(body) && (question?.choices.allSatisfy { Notifier.showsAll($0.label) } ?? true)
             Notifier.shared.notify(session: session?.id ?? id, title: session.flatMap { botName?($0.id) } ?? session?.title ?? AppInfo.name,
                                    subtitle: session.flatMap { botName?($0.id) == nil ? projectName($0.location.directory) : nil }, body: body,
-                                   permission: isPermission && answerable && shown ? (session: id, request: request) : nil,
+                                   permission: isPermission && answerable && shown ? (session: id, request: request) : nil, offersAlways: offersAlways,
                                    question: shown ? question : nil,
                                    push: .init(isPermission ? .permission : .question, request: (session: id, id: request),
                                                machine: sessionMachines[id] ?? session.flatMap { RemoteFolder.machine(of: $0.location.directory) }, answerable: answerable && shown))
@@ -2701,13 +2719,11 @@ final class Workspace {
         Analytics.shared.track("permission_answered", ["decision": answer.rawValue, "from": "notification"])
         guard let decision = PermissionRequest.Decision(rawValue: answer.rawValue) else { return }
         Task {
+            guard let api = api(forSession: session) else { return answerDidntGo(in: session) }
             do {
-                guard let api = api(forSession: session) else { throw CancellationError() }
                 try await api.reply(session: session, permission: request, decision: decision)
             } catch {
-                // The agent still waits: say so, as for a question, rather than lose the answer.
-                Notifier.shared.notify(session: session, title: botName?(session) ?? self.session(session)?.title ?? AppInfo.name,
-                                       body: "Your answer didn’t go. Open the conversation to answer there.")
+                await answerFailed(request, in: session, api: api) { try await $0.permissions(session: session).contains { $0.id == request } }
             }
         }
     }

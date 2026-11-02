@@ -24,6 +24,8 @@ export interface PermissionAsked {
   sessionID: string;
   action: string;
   resources?: unknown;
+  /** The rule Always for This saves (the engine's), when it names one. */
+  save?: unknown;
 }
 
 /** One of a form's fields, as this reads it. */
@@ -101,6 +103,15 @@ export function describePermission(request: Pick<PermissionAsked, "action" | "re
   return `Wants to ${what}: ${shown.slice(0, 4).join(" · ")}${more}`;
 }
 
+// Whether Always for This saves only what a permission's notice shows. The engine's rule for it can
+// be wider (`git push *` for `git push origin main`, any file for one): then its notification offers
+// Allow Once and Don't Allow, as the Mac's does (`Notifier.offersAlways`).
+const offersAlways = (request: { resources?: unknown; save?: unknown }): boolean => {
+  const strings = (value: unknown) => (Array.isArray(value) ? value : []).filter((each): each is string => typeof each === "string");
+  const shown = strings(request.resources);
+  const saved = Array.isArray(request.save) ? strings(request.save) : shown;
+  return saved.length > 0 && !saved.includes("*") && saved.every(each => shown.includes(each));
+};
 // Whether a permission's notice shows all it covers: Allow there would allow what it leaves out.
 const showsAllCovered = (request: { resources?: unknown }): boolean => (Array.isArray(request.resources) ? request.resources : []).filter(each => each !== "*").length <= 4;
 
@@ -182,7 +193,7 @@ export async function noticeFor(event: EngineEvent, get: EngineAsk): Promise<Not
       const where = await shown(data.sessionID!);
       if (isHiddenRun(where)) return null;
       const body = describePermission(data as PermissionAsked, os.homedir());
-      return about(where, "permission", body, { request: data.id, ...(where.id !== data.sessionID ? { requestSession: data.sessionID } : {}) },
+      return about(where, "permission", body, { request: data.id, ...(where.id !== data.sessionID ? { requestSession: data.sessionID } : {}), ...(offersAlways(data as PermissionAsked) ? {} : { always: "0" as const }) },
         { answerable: showsAllCovered(data) && showsAll(body), untitled: "Kuvo Code" });
     }
     case "form.created": {
