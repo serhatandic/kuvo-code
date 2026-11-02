@@ -56,7 +56,6 @@ struct ReplyDocument {
         static let secondaryBackground = dynamic(light: (247, 247, 249), dark: (37, 38, 42))
         static let link = dynamic(light: (44, 101, 207), dark: (76, 142, 248))
         static let border = dynamic(light: (228, 228, 232), dark: (66, 68, 78))
-        static let divider = dynamic(light: (208, 208, 211), dark: (51, 52, 56))
 
         static func dynamic(light: (Int, Int, Int), dark: (Int, Int, Int)) -> NSColor {
             NSColor(name: nil) { appearance in
@@ -404,15 +403,12 @@ struct ReplyDocument {
                 fontSize = size * scale
                 weight = .semibold
                 paragraph.lineSpacing = fontSize * 0.125
+                // No line under it, as Claude's and ChatGPT's apps have it: its size says it's a heading.
                 spacing = Spacing(top: 24, bottom: 16)
                 if level == 6 { color = Colors.tertiary }
-                if level <= 2 {
-                    rule = .underline(gap: size * 0.3)
-                    // Room for the line.
-                    spacing.below = size * 0.3 + 1
-                }
             case .thematicBreak:
-                rule = .line(height: size * 0.25)
+                // One thin line, quiet, the same room above and below.
+                rule = .line(height: 1)
                 spacing = Spacing(top: 24, bottom: 24)
             case .tableCell(let column):
                 let row = outward.lazy.compactMap { component -> Int? in
@@ -508,9 +504,8 @@ struct ReplyCodeMark: Equatable {
     var foreground: NSColor?
 }
 
-/// A heading's line under it, or a line on its own (`---`).
+/// A line on its own (`---`).
 nonisolated enum ReplyRule {
-    case underline(gap: CGFloat)
     case line(height: CGFloat)
 }
 
@@ -519,7 +514,7 @@ extension NSAttributedString.Key {
     nonisolated static let replyInlineCode = NSAttributedString.Key("kuvo.reply.inlineCode")
     /// How many quotes it's in, drawn as a bar beside it.
     nonisolated static let replyQuote = NSAttributedString.Key("kuvo.reply.quote")
-    /// A rule under a heading, or one on its own.
+    /// A line on its own (`---`).
     nonisolated static let replyRule = NSAttributedString.Key("kuvo.reply.rule")
     /// What it is as plain text, copied (a list's marker, a picture in the text).
     nonisolated static let replyPlainText = NSAttributedString.Key("kuvo.reply.plainText")

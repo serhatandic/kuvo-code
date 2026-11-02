@@ -16,6 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- Replies draw fewer lines: headings no longer have a line under them, and `---` is one thin line with even space around it, as in Claude's and ChatGPT's apps.
 - A bot working on a goal no longer keeps your computer busy between its looks at the goal, which could spin the fans while nothing was happening.
 - Moving a chat whose `/goal` is still going says why it can't move yet, instead of moving and losing the goal.
 - A goal whose end you move later after it came carries on to the new end, rather than stopping at once.
