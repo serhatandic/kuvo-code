@@ -41,7 +41,8 @@ before(async () => {
     key: machineKey.toString("base64url"),
     phones: phoneKeys.map(key => ({ key: link.publicOf(key).toString("base64url"), name: "iPhone", added: Math.floor(Date.now() / 1000), from: "pair", pairing: crypto.randomBytes(16).toString("base64url") })),
   }), { mode: 0o600 });
-  bridge = spawn(process.execPath, [script, "run"], { env: { PATH: process.env.PATH, HOME: root, KUVO_HOME: home, TMPDIR: process.env.TMPDIR ?? os.tmpdir() }, stdio: ["ignore", "ignore", "pipe"] });
+  // (On this test's runtime: the engine's Bun is one only with BUN_BE_BUN.)
+  bridge = spawn(process.execPath, [script, "run"], { env: { PATH: process.env.PATH, HOME: root, KUVO_HOME: home, TMPDIR: process.env.TMPDIR ?? os.tmpdir(), ...(process.env.BUN_BE_BUN ? { BUN_BE_BUN: "1" } : {}) }, stdio: ["ignore", "ignore", "pipe"] });
   let said = "";
   bridge.stderr.setEncoding("utf8");
   bridge.stderr.on("data", chunk => { said += chunk; });
