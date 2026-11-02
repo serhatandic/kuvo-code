@@ -13977,6 +13977,7 @@ var GONE_FOR = 5 * 60000;
 var missing = new Map;
 var SET_UP_AT_MOST = 30 * 60000;
 var settingUp = new Map;
+var toSetUp = new Set;
 var FINISH_TRIES = 10;
 var say = {
   notConnected: (place) => `${place} isn’t connected. Connect to it, then try again.`,
@@ -14607,8 +14608,10 @@ async function takePart(sender, given) {
   incoming.delete(id);
   changeMove(id, (each) => {
     each.complete = true;
+    each.setUpSince = Date.now();
   });
-  return inTurn(id, () => setUp(sender, id, file));
+  toSetUp.add(id);
+  return inTurn(id, () => setUp(sender, id, file)).finally(() => toSetUp.delete(id));
 }
 async function setUp(sender, id, file) {
   const record = readMove(id);
@@ -14630,7 +14633,7 @@ async function setUp(sender, id, file) {
       each.sessions = sessions;
       each.setUpSince = undefined;
     });
-    tell(sender.key, { op: "arrived", id });
+    tell(sender.key, { op: "arrived", id, hash: record.hash });
   } catch (thrown) {
     const error = stop.signal.aborted ? stop.signal.reason : thrown;
     if (!(error instanceof NotTaken))
@@ -14783,7 +14786,7 @@ async function wakeHeldGroups() {
 async function takeMoveMail(sender, given) {
   if (!isObject(given) || typeof given.op !== "string" || typeof given.id !== "string" || !/^mov_[A-Za-z0-9]{1,40}$/.test(given.id))
     return;
-  if (given.op === "part" || given.op === "got" || given.op === "working")
+  if (given.op === "part" || given.op === "got" || given.op === "working" || given.op === "arrive")
     return moveMail(sender, given, given.id);
   return inTurn(given.id, () => moveMail(sender, given, given.id));
 }
@@ -14809,6 +14812,18 @@ async function moveMail(sender, given, id) {
       if (mine?.role === "to" && !await drop(id).then(() => true, () => false))
         return;
       return void tell(sender.key, { op: endedAs(id) === "switched" ? "switched" : "dropped", id });
+    }
+    case "arrive": {
+      if (record && !mine)
+        return;
+      const failed = () => tell(sender.key, { op: "failed", id, message: `It couldn’t be set up on ${HERE}.` });
+      if (mine?.role !== "to" || mine.dropping || !mine.complete)
+        return void failed();
+      if (mine.setUpSince === undefined)
+        return void tell(sender.key, { op: "arrived", id, hash: mine.hash });
+      if (toSetUp.has(id))
+        return void tell(sender.key, { op: "working", id });
+      return inTurn(id, () => drop(id)).then(() => void failed(), () => void failed());
     }
     case "drop":
       if (record && !mine)
@@ -14851,7 +14866,7 @@ async function moveMail(sender, given, id) {
       return;
     }
     case "arrived":
-      if (mine?.role !== "from" || mine.stage !== "copying" || mine.failed)
+      if (mine?.role !== "from" || mine.stage !== "copying" || mine.failed || typeof given.hash === "string" && given.hash !== mine.hash)
         return;
       return arrived(mine).catch((error) => takeBack(id, String(error?.message ?? error), 409));
     case "refused":
@@ -14927,7 +14942,7 @@ function keepMoving(now = Date.now()) {
       drive(record.id);
       continue;
     }
-    const due = now - (record.sentAt ?? 0) > STEP_AGAIN;
+    const due = now - Math.max(record.sentAt ?? 0, record.againAt ?? 0) > STEP_AGAIN;
     if (record.stage === "finishing") {
       if (due)
         inTurn(record.id, () => finish(record.id)).catch(() => {});
@@ -14956,9 +14971,17 @@ function keepMoving(now = Date.now()) {
           inTurn(record.id, () => takeBack(record.id, say.notConnected(nameOf(record.peer)), 503)).catch(() => {});
         } else if (due) {
           changeMove(record.id, (each) => {
-            each.sentAt = now;
+            each.againAt = now;
           });
           offer(record);
+        }
+        break;
+      case "arrive":
+        if (due) {
+          changeMove(record.id, (each) => {
+            each.againAt = now;
+          });
+          tell(record.peer, { op: "arrive", id: record.id, hash: record.hash });
         }
         break;
       case "parts":
@@ -15001,6 +15024,12 @@ async function endWithout(id) {
 }
 async function resumeMoves(now = Date.now()) {
   for (const record of readMoves()) {
+    if (record.role === "to" && (record.dropping || record.complete && record.setUpSince !== undefined)) {
+      await inTurn(record.id, () => drop(record.id)).catch(() => {});
+      if (!record.dropping)
+        tell(record.peer, { op: "failed", id: record.id, message: `It couldn’t be set up on ${HERE}.` });
+      continue;
+    }
     if (record.role !== "from")
       continue;
     if (record.stage === "finishing")

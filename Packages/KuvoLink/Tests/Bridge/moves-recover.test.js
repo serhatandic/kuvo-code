@@ -348,3 +348,87 @@ test("a group chat let go of while group chats here aren't answering isn't left 
   await say({ op: "drop", id });
   assert.equal(told.findLast(move => move.id === id).op, "dropped");
 });
+
+// A chat here, with a wake-up, to move.
+function chat(id) {
+  engine.sessions.set(id, { id, title: "Trip plans", directory: chats, messages: [{ info: { id: "msg_1", role: "user" }, parts: [{ type: "text", text: "May?" }] }] });
+  fs.mkdirSync(path.join(wakes, id), { recursive: true });
+  fs.writeFileSync(path.join(wakes, id, "wakes.json"), "[]");
+}
+
+test("word that its copy arrived, lost on the way: it's asked again, and the move goes on", async () => {
+  chat("ses_lost1");
+  // Lab takes every part, sets it up, and its `arrived` never comes; asked again, it says so.
+  script = move => {
+    if (move.op === "offer") say({ op: "ready", id: move.id });
+    if (move.op === "part") say({ op: "got", id: move.id, i: move.i });
+    if (move.op === "arrive") say({ op: "arrived", id: move.id, hash: move.hash });
+    if (move.op === "switch") say({ op: "switched", id: move.id });
+  };
+  const before = told.length;
+  const asked = ask("POST", "kuvo/moves", { kind: "chat", id: "ses_lost1", to: peerKey });
+  await until(() => recordOf("ses_lost1")?.step === "arrive");
+  // A minute later.
+  link.keepMoving(Date.now() + 61_000);
+  await until(() => told.slice(before).some(move => move.op === "arrive"));
+  const moved = await asked;
+  assert.equal(moved.status, 200, JSON.stringify(moved.json));
+  assert.ok(!engine.sessions.has("ses_lost1"), "it lives on lab now");
+});
+
+test("asked again whether a copy arrived, this box says as it is: arrived, or failed for one it doesn't have", async () => {
+  script = () => {};
+  const id = "mov_askin1";
+  const hash = await comesHere(id, { kind: "chat", thing: "ses_askin1", name: "“Notes”", wasPaused: false, exports: [{ info: { id: "ses_askin1", title: "Notes" }, messages: [] }] });
+  await say({ op: "arrive", id, hash });
+  assert.deepEqual(told.findLast(move => move.id === id), { op: "arrived", id, hash });
+  await say({ op: "arrive", id: "mov_askin2", hash: "x" });
+  assert.equal(told.findLast(move => move.id === "mov_askin2")?.op, "failed");
+  await say({ op: "drop", id });
+});
+
+test("a copy being set up as this box stopped: as it starts again, what came of it goes, and the other computer hears it failed", async () => {
+  script = () => {};
+  // As a box cut off partway through setting it up left it: its folder placed, its conversation in.
+  const thing = "ses_cut1", id = "mov_cut1";
+  fs.mkdirSync(path.join(wakes, thing), { recursive: true });
+  fs.writeFileSync(path.join(wakes, thing, "paused"), "moving");
+  engine.sessions.set(thing, { id: thing, title: "Notes", directory: chats, messages: [] });
+  writeRecord({ id, kind: "chat", thing, name: "“Notes”", from: peerKey, to: "", role: "to", stage: "copying", sessions: [thing], peer: peerKey, wasPaused: false,
+    hash: "h", size: 10, sent: 10, tries: 0, started: Date.now(), complete: true, placed: true, setUpSince: Date.now() - 60_000 });
+  startAgain();
+  await until(() => told.some(move => move.id === id && move.op === "failed"));
+  assert.ok(!engine.sessions.has(thing) && !fs.existsSync(path.join(wakes, thing)), "nothing of it is left here");
+  assert.equal(recordOf(thing), null);
+  // Asked again whether it arrived: failed.
+  await say({ op: "arrive", id, hash: "h" });
+  assert.equal(told.findLast(move => move.id === id).op, "failed");
+});
+
+test("offered again (it got more as it moved) and never answered: it's taken back after a while, though the offer goes again each minute", async () => {
+  chat("ses_again1");
+  let offers = 0;
+  script = move => {
+    if (move.op === "offer" && ++offers === 1) say({ op: "ready", id: move.id });
+    if (move.op === "part") {
+      say({ op: "got", id: move.id, i: move.i });
+      if (move.i === move.of - 1) {
+        engine.sessions.get("ses_again1").messages.push({ info: { id: "msg_more", role: "user" }, parts: [{ type: "text", text: "And this." }] });
+        say({ op: "arrived", id: move.id, hash: move.hash });
+      }
+    }
+    if (move.op === "drop") say({ op: "dropped", id: move.id });
+  };
+  const asked = ask("POST", "kuvo/moves", { kind: "chat", id: "ses_again1", to: peerKey });
+  await until(() => offers === 2);
+  // Lab went away: the offer goes again each minute, unanswered.
+  const now = Date.now();
+  for (const minutes of [1, 2, 3]) link.keepMoving(now + minutes * 60_000 + 1_000);
+  await until(() => offers >= 3);
+  link.keepMoving(now + 11 * 60_000);
+  await until(() => !recordOf("ses_again1") || recordOf("ses_again1").failed);
+  const moved = await asked;
+  assert.equal(moved.status, 503, JSON.stringify(moved.json));
+  assert.match(moved.json.message, /lab stopped answering/);
+  assert.ok(engine.sessions.has("ses_again1"), "it goes on here");
+});

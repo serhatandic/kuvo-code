@@ -39,6 +39,9 @@ export interface MoveRecord extends Move {
   /** Offered to the other box at least once: a copy may be there, to drop if it's taken back. */
   offered?: boolean;
   sentAt?: number;
+  /** The box it leaves: when an offer or an ask whether it arrived was last sent again (quiet is
+   * counted from `sentAt`, the step's first, and what was last heard). */
+  againAt?: number;
   /** The box it leaves: its conversation kept in its folder as the original goes (a try at that cut
    * short doesn't keep it again, with less of it). */
   kept?: boolean;

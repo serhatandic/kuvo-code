@@ -455,9 +455,13 @@ until it's answered:
    they must be one conversation and its subagents', rooted at the chat or at the conversation a
    bot's folder names, none of them on this box already); their `queues` kept paused in place of
    any there (what waits, whole, in its order; a file only as a `data:` link); a bot's keys given; a group chat put there
-   held (`PUT api/kuvo/groups/<id>`, `status: "held"`). → `arrived`, or `failed {message}`, what it
-   set up gone again; the message says only what's wrong with what came, never what this box found.
-   Setting it up for 30 minutes (its engine stuck) is given up on the same way.
+   held (`PUT api/kuvo/groups/<id>`, `status: "held"`). → `arrived {hash}`, or `failed {message}`,
+   what it set up gone again; the message says only what's wrong with what came, never what this box
+   found. Setting it up for 30 minutes (its engine stuck) is given up on the same way, and so is one
+   it was setting up as it stopped (as it starts again). The box it leaves, every part answered and
+   no word yet, asks `arrive {hash}` each minute, answered at once as it is: `arrived`, `working`
+   while it's being set up, else `failed` (one it doesn't have, never all there, being let go of,
+   or cut short by a restart). An `arrived` for a bundle other than the one sent last is ignored.
 5. The box it leaves settles and reads it again, its queues too. Anything new, and it all goes again
    (from 1, three tries; then 409, `busy`).
 6. It notes the switch, and sends `switch` → `switched`: the box it went to lets its wake-ups go (as
@@ -486,7 +490,7 @@ the bundle beside it), so a move cut short by a restart carries on: one that swi
 that didn't is taken back. Letting the original go after `switched` is tried again each minute
 until it's done (its engine was down); its engine, up, refusing to give its conversation to keep ten
 times, it goes on here as well, said in the move's 409 (two copies, never none). Before the switch, the other computer quiet about it for
-ten minutes takes it back (503); a `drop` never answered is given up after a day (the copy there
+ten minutes (from when a step was first sent, whatever goes again) takes it back (503); a `drop` never answered is given up after a day (the copy there
 goes by itself after a week). A `switch` with no answer either way for ten minutes turns into a
 `drop`, sent until it's answered: `switched` (it did switch) and the original goes, `dropped` and
 it goes on here; the box it leaves never lets its original go without `switched`. A held copy no

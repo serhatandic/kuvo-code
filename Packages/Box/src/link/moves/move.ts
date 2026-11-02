@@ -61,8 +61,9 @@ const GONE_FOR = 5 * 60_000;
 const missing = new Map<string, number>();
 /** A copy being set up here this long (its engine stuck): given up on, and taken back. */
 const SET_UP_AT_MOST = 30 * 60_000;
-// What gives up on each copy being set up here.
+// What gives up on each copy being set up here; and the copies set up here now or next, in their turn.
 const settingUp = new Map<string, AbortController>();
+const toSetUp = new Set<string>();
 /** Letting an original go, refused this many times by its engine while it's up: it goes on here. */
 const FINISH_TRIES = 10;
 
@@ -651,8 +652,10 @@ async function takePart(sender: MailSender, given: Record<string, unknown>): Pro
   incoming.delete(id);
   // All here: put in place once, whatever comes again after; in the move's turn, so a step about it
   // that comes meanwhile (a drop) waits until it's in place, then finds all of it.
-  changeMove(id, each => { each.complete = true; });
-  return inTurn(id, () => setUp(sender, id, file));
+  // (Since now: one cut short by a restart is known for one, `resumeMoves`.)
+  changeMove(id, each => { each.complete = true; each.setUpSince = Date.now(); });
+  toSetUp.add(id);
+  return inTurn(id, () => setUp(sender, id, file)).finally(() => toSetUp.delete(id));
 }
 
 async function setUp(sender: MailSender, id: string, file: string): Promise<void> {
@@ -672,7 +675,7 @@ async function setUp(sender: MailSender, id: string, file: string): Promise<void
     const sessions = await bringIn(record, stop.signal);
     stop.signal.throwIfAborted();
     changeMove(id, each => { each.sessions = sessions; each.setUpSince = undefined; });
-    tell(sender.key, { op: "arrived", id });
+    tell(sender.key, { op: "arrived", id, hash: record.hash });
   } catch (thrown) {
     const error = stop.signal.aborted ? stop.signal.reason : thrown;
     // What was set up of it goes: the box it came from takes it back, and a switch for it is
@@ -827,7 +830,7 @@ export async function takeMoveMail(sender: MailSender, given: unknown): Promise<
   if (!isObject(given) || typeof given.op !== "string" || typeof given.id !== "string" || !/^mov_[A-Za-z0-9]{1,40}$/.test(given.id)) return;
   // Parts and their answers come many at once, and need no turn of their own (nor does word that a
   // copy's still being set up).
-  if (given.op === "part" || given.op === "got" || given.op === "working") return moveMail(sender, given, given.id);
+  if (given.op === "part" || given.op === "got" || given.op === "working" || given.op === "arrive") return moveMail(sender, given, given.id);
   return inTurn(given.id, () => moveMail(sender, given, given.id as string));
 }
 
@@ -853,6 +856,16 @@ async function moveMail(sender: MailSender, given: Record<string, unknown>, id: 
       // (One that can't all go yet isn't said gone: asked again, it's answered once it is.)
       if (mine?.role === "to" && !await drop(id).then(() => true, () => false)) return;
       return void tell(sender.key, { op: endedAs(id) === "switched" ? "switched" : "dropped", id });
+    }
+    // Asked again whether its copy arrived (that word may have been lost): as it is here.
+    case "arrive": {
+      if (record && !mine) return;
+      const failed = () => tell(sender.key, { op: "failed", id, message: `It couldn’t be set up on ${HERE}.` });
+      if (mine?.role !== "to" || mine.dropping || !mine.complete) return void failed();
+      if (mine.setUpSince === undefined) return void tell(sender.key, { op: "arrived", id, hash: mine.hash });
+      if (toSetUp.has(id)) return void tell(sender.key, { op: "working", id });
+      // Cut short by a restart (nothing sets it up now): what came of it goes.
+      return inTurn(id, () => drop(id)).then(() => void failed(), () => void failed());
     }
     case "drop":
       if (record && !mine) return;
@@ -881,7 +894,8 @@ async function moveMail(sender: MailSender, given: Record<string, unknown>, id: 
       return;
     }
     case "arrived":
-      if (mine?.role !== "from" || mine.stage !== "copying" || mine.failed) return;
+      // (Of the bundle it sent last: one before it, sent again, is old news.)
+      if (mine?.role !== "from" || mine.stage !== "copying" || mine.failed || (typeof given.hash === "string" && given.hash !== mine.hash)) return;
       return arrived(mine).catch(error => takeBack(id, String((error as Error | null)?.message ?? error), 409));
     case "refused":
     case "failed":
@@ -934,7 +948,7 @@ export function keepMoving(now = Date.now()): void {
       }
       // Setting it up stuck (its engine not answering): given up on, which lets what came of it go
       // and says it failed, so the box it came from takes it back.
-      // (One cut short by a restart isn't set up still: the box it came from takes it back.)
+      // (One cut short by a restart was let go of as the box started, `resumeMoves`.)
       const stop = settingUp.get(record.id);
       if (stop && now - (record.setUpSince ?? now) > SET_UP_AT_MOST) stop.abort(new NotTaken("It took too long to set up."));
       else if (now - record.started > HELD_AT_MOST) inTurn(record.id, () => drop(record.id)).catch(() => {});
@@ -952,7 +966,7 @@ export function keepMoving(now = Date.now()): void {
       drive(record.id);
       continue;
     }
-    const due = now - (record.sentAt ?? 0) > STEP_AGAIN;
+    const due = now - Math.max(record.sentAt ?? 0, record.againAt ?? 0) > STEP_AGAIN;
     // Switched there, its original not yet gone here (its engine was down): tried again.
     if (record.stage === "finishing") {
       if (due) inTurn(record.id, () => finish(record.id)).catch(() => {});
@@ -982,8 +996,15 @@ export function keepMoving(now = Date.now()): void {
         if (record.tries === 0 && now - (record.sentAt ?? 0) > NO_ANSWER && !outgoing.get(record.id)?.got.size) {
           inTurn(record.id, () => takeBack(record.id, say.notConnected(nameOf(record.peer)), 503)).catch(() => {});
         } else if (due) {
-          changeMove(record.id, each => { each.sentAt = now; });
+          changeMove(record.id, each => { each.againAt = now; });
           offer(record);
+        }
+        break;
+      // Its copy all there, and no word of it set up (that word lost, say): asked again.
+      case "arrive":
+        if (due) {
+          changeMove(record.id, each => { each.againAt = now; });
+          tell(record.peer, { op: "arrive", id: record.id, hash: record.hash });
         }
         break;
       case "parts":
@@ -1023,6 +1044,13 @@ async function endWithout(id: string): Promise<void> {
  * a `moving` hold nothing here moves (one a released Mac's move left as it updated) is lifted. */
 export async function resumeMoves(now = Date.now()): Promise<void> {
   for (const record of readMoves()) {
+    // A copy being set up here as the box stopped: nothing sets it up now, so what came of it goes,
+    // and the box it came from hears it failed (and keeps its original). One being let go of goes on.
+    if (record.role === "to" && (record.dropping || (record.complete && record.setUpSince !== undefined))) {
+      await inTurn(record.id, () => drop(record.id)).catch(() => {});
+      if (!record.dropping) tell(record.peer, { op: "failed", id: record.id, message: `It couldn’t be set up on ${HERE}.` });
+      continue;
+    }
     if (record.role !== "from") continue;
     // Each in its turn, as its mail and `keepMoving` are.
     if (record.stage === "finishing") await inTurn(record.id, () => finish(record.id)).catch(() => {});
