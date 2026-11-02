@@ -75,9 +75,17 @@ final class GroupChats {
         return true
     }
 
-    func stop(_ id: String) { boxes.stop(id) }
-    func keepGoing(_ id: String) { boxes.keepGoing(id) }
-    func startWork(_ wrapUpID: String, in id: String) { boxes.startWork(wrapUpID, in: id) }
+    func stop(_ id: String) { saying { try await $0.stop(id) } }
+    func keepGoing(_ id: String) { saying { try await $0.keepGoing(id) } }
+    func startWork(_ wrapUpID: String, in id: String) { saying { try await $0.startWork(wrapUpID, in: id) } }
+
+    /// Done where the chat lives; why it couldn't be, said.
+    private func saying(_ action: @escaping (BoxGroups) async throws -> Void) {
+        let boxes = boxes
+        Task {
+            do { try await action(boxes) } catch { Modal.show(error) }
+        }
+    }
 
     /// Takes the chat back to before one of your messages; its words, for the composer.
     func undo(from messageID: String, in id: String) async -> String? {

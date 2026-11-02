@@ -622,16 +622,16 @@ final class BoxGroups {
         }
     }
 
-    func stop(_ id: String) {
-        act(id, "stop")
+    func stop(_ id: String) async throws {
+        try await act(id, "stop")
     }
 
-    func keepGoing(_ id: String) {
-        act(id, "keep-going")
+    func keepGoing(_ id: String) async throws {
+        try await act(id, "keep-going")
     }
 
-    func startWork(_ wrapUpID: String, in id: String) {
-        act(id, "start-work", ["wrapUp": .string(wrapUpID)])
+    func startWork(_ wrapUpID: String, in id: String) async throws {
+        try await act(id, "start-work", ["wrapUp": .string(wrapUpID)])
     }
 
     /// Takes the chat back to before one of your messages; its words, for the composer.
@@ -711,9 +711,16 @@ final class BoxGroups {
         }
     }
 
-    private func act(_ id: String, _ action: String, _ body: [String: JSONValue] = [:]) {
-        guard let chat = chat(id), let api = api(chat.machine) else { return }
-        Task { _ = try? await api.boxGroupAction(id, action, body) }
+    /// What you did to a chat, where it lives; why it couldn't, as `send` says it (moving, or its
+    /// computer's agents not answering yet).
+    private func act(_ id: String, _ action: String, _ body: [String: JSONValue] = [:]) async throws {
+        guard let chat = chat(id) else { throw Failure.gone }
+        guard let api = api(chat.machine) else { throw failure(for: chat.machine) }
+        do {
+            _ = try await api.boxGroupAction(id, action, body)
+        } catch let refused as ServerError where refused.status == 409 {
+            throw Moves.Failure.moving
+        }
     }
 
     enum Failure: LocalizedError {

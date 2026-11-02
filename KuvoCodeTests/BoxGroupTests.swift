@@ -92,6 +92,9 @@ import Testing
                     guard chats[id] != nil else { return StubWeb.json(["message": "No such chat."], status: 404) }
                     chats[id] = nil
                     return StubWeb.json([:])
+                case ("POST", let id?, "stop"), ("POST", let id?, "keep-going"), ("POST", let id?, "start-work"):
+                    if chats[id]?.status == "held" { return StubWeb.json(["message": "That chat is moving."], status: 409) }
+                    return StubWeb.json([:])
                 case ("POST", let id?, "send"):
                     if chats[id]?.status == "held" { return StubWeb.json(["message": "That chat is moving."], status: 409) }
                     let message: [String: Any] = ["id": "gm_sent", "text": request.body["text"] as? String ?? "", "time": "2026-10-22T09:00:00Z", "kind": "message"]
@@ -495,6 +498,27 @@ import Testing
         slow.open()
         try await until { there.messages("grp_box0000001").count == 2 }
         #expect(there.messages("grp_box0000001").map { $0["text"] as? String } == ["First", "Second"])
+    }
+
+    /// Stop, Keep Going and Start the Work on a chat that's moving say why nothing happened, as
+    /// sending to it does, rather than nothing at all.
+    @Test func whatYouDoToAChatThatsMovingSaysWhy() async throws {
+        defer { Self.clean(); mac.stop() }
+        try saveBots([("bot_pal", "Pal", "box"), ("bot_lb", "Lokum Builder", "box")])
+        there.add(Self.group("grp_box0000001", members: ["bot_pal", "bot_lb"]), status: "held")
+        let app = app()
+        await app.boxGroups.connected("box")
+
+        for action in [{ try await app.boxGroups.stop("grp_box0000001") },
+                       { try await app.boxGroups.keepGoing("grp_box0000001") },
+                       { try await app.boxGroups.startWork("gm_wrap", in: "grp_box0000001") }] as [() async throws -> Void] {
+            do {
+                try await action()
+                Issue.record("it said nothing")
+            } catch {
+                #expect(error.localizedDescription == Moves.Failure.moving.localizedDescription)
+            }
+        }
     }
 
     /// What this Mac's bridge lets go of goes to the Finder's Trash; nothing outside its own
