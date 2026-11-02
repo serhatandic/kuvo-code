@@ -4261,7 +4261,7 @@ async function* answerWakes(session, action, request, readEngine, bridge, signal
       return yield* json(409, { message: MOVING });
     holdArchived(session, given.archived);
     const where = given.archived && given.stop !== false ? await whereIs(session, readEngine, bridge) : null;
-    if (where)
+    if (where?.found.metadata?.["kuvo.archived"] === true)
       await stopIfWaiting(where.target, session);
     return yield* changed(200, listed());
   }
