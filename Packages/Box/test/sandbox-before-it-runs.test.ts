@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { createHash } from "node:crypto"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fencePolicy } from "../src/link/fence/policy"
@@ -88,6 +88,38 @@ test.skipIf(!canFence || !tmux)("a command can't reach your tmux, and the one it
     Bun.spawnSync([tmux!, "kill-server"], { env: { TMUX_TMPDIR: own } })
     rmSync(server, { force: true })
     if (made) rmSync(yours, { recursive: true, force: true })
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+// A socket's path is short (107 letters on Linux, 103 on macOS), and a command's tmux puts its
+// server's in the conversation's temporary folder: so that folder's path is short too, however long
+// the path of the home folder Kuvo Code's is in (a machine's `/home/<a long name>/.kuvo-code`).
+test.skipIf(!canFence || !tmux)("a command's tmux starts in a box whose folder's path is long", () => {
+  const root = realpathSync(mkdtempSync(join(process.platform === "darwin" ? "/tmp" : tmpdir(), "kst-")))
+  // Kuvo Code's folder, 60 letters long: a home folder's path of 49, as `/home/<name>` is with a long name.
+  const kuvo = root.length + 2 <= 60 ? `${root}/${"k".repeat(59 - root.length)}` : null
+  try {
+    if (!kuvo) throw new Error(`This test's folder is too deep for its own (${root}): run it with a shorter TMPDIR.`)
+    const project = join(root, "project")
+    for (const folder of [kuvo, project, join(root, "home")]) mkdirSync(folder, { recursive: true })
+    // The box sets it up as it starts (here in a process of its own, as it finds its folders as it
+    // loads; the engine isn't running, so the box only checks it later).
+    const box = join(import.meta.dir, "..", "src", "link", "fence", "state.ts")
+    const env = { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: join(root, "home"), KUVO_HOME: kuvo, BUN_BE_BUN: "1", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" }
+    const setUp = Bun.spawnSync([process.execPath, "-e", `const fence = await import(${JSON.stringify(box)}); console.log(JSON.stringify(fence.setUpFence()))`], { cwd: root, env })
+    expect(setUp.exitCode, setUp.stderr.toString()).toBe(0)
+    expect(JSON.parse(setUp.stdout.toString().trim().split("\n").at(-1) ?? "{}").reason).toBe("engineDown")
+    const run = (script: string) => {
+      const ran = Bun.spawnSync([join(kuvo, "bin", "kuvo-fence"), "-c", script], { cwd: project, env: { PATH: `${tmux!.slice(0, -"/tmux".length)}:/usr/bin:/bin`, HOME: join(root, "home"), KUVO_FENCE_WORK: project } })
+      return (ran.stdout.toString() + ran.stderr.toString()).trim().split("\n")
+    }
+    expect(run(`tmux new-session -d -s own "sleep 600" && echo "started: yes" || echo "started: no"`)).toEqual(["started: yes"])
+    expect(run(`tmux has-session -t own 2>/dev/null && echo "own: reached" || echo "own: gone"; tmux kill-server`)).toEqual(["own: reached"])
+  } finally {
+    // (The command's own server, whatever happened: in its conversation's temporary folder.)
+    const temporary = kuvo && join(kuvo, "run", "fence", "tmp")
+    if (temporary && existsSync(temporary)) for (const name of readdirSync(temporary)) Bun.spawnSync([tmux!, "kill-server"], { env: { TMUX_TMPDIR: join(temporary, name) } })
     rmSync(root, { recursive: true, force: true })
   }
 })

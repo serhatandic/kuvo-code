@@ -117,17 +117,16 @@ export function launcherScript(places: FencePlaces): string {
     `sum=$( (printf '%s' "$work" | sha256sum || printf '%s' "$work" | shasum -a 256) 2>/dev/null | cut -c 1-32)`,
     `case $sum in ????????????????????????????????) ;; *) echo "This command can't run in the sandbox here: it can't name its temporary folder." >&2; exit 126 ;; esac`,
     `tmp=$F/tmp/$sum`,
-    // On this Mac, in the app's own temporary folder instead (`temporary`: it, and a key commands
-    // can't read), by a short name: a socket's path is at most 103 letters on macOS, and a server's
-    // tests or Python's multiprocessing make theirs in it. (Named from the key, so a command still
-    // can't pick a folder whose name another conversation's has.)
-    ...(places.platform === "darwin" ? [
-      `if [ -f "$F/temporary" ]; then`,
-      `  { IFS= read -r t_root; IFS= read -r t_key; } <"$F/temporary"`,
-      `  t_name=$( (printf '%s\n%s' "$t_key" "$work" | shasum -a 256) 2>/dev/null | cut -c 1-8)`,
-      `  case $t_root:$t_key:$t_name in /*:????????????????????????????????????????????????????????????????:????????) tmp=$t_root/$t_name ;; *) echo "This command can't run in the sandbox here: it can't name its temporary folder." >&2; exit 126 ;; esac`,
-      `fi`,
-    ] : []),
+    // By a short name, in the folder the box names (`temporary`: on this Mac the app's own
+    // temporary folder, elsewhere this one's `tmp`, and a key commands can't read): a socket's path
+    // is at most 103 letters on macOS and 107 on Linux, and tmux's server, a server's tests or
+    // Python's multiprocessing make theirs in it, under a home folder's path of any length. (Named
+    // from the key, so a command still can't pick a folder whose name another conversation's has.)
+    `if [ -f "$F/temporary" ]; then`,
+    `  { IFS= read -r t_root; IFS= read -r t_key; } <"$F/temporary"`,
+    `  t_name=$( (printf '%s\n%s' "$t_key" "$work" | sha256sum || printf '%s\n%s' "$t_key" "$work" | shasum -a 256) 2>/dev/null | cut -c 1-8)`,
+    `  case $t_root:$t_key:$t_name in /*:????????????????????????????????????????????????????????????????:????????) tmp=$t_root/$t_name ;; *) echo "This command can't run in the sandbox here: it can't name its temporary folder." >&2; exit 126 ;; esac`,
+    `fi`,
     // What Also Allowed gives this project's commands to write (fence/allowed.ts): the box's file
     // for it, by the same sum, one folder a line; each that isn't given stays where nothing is.
     `allowed=$F/allowed/$sum`,

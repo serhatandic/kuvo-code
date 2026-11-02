@@ -370,18 +370,18 @@ function withdraw(): void {
 }
 
 /**
- * On this Mac's box, where commands' temporary folders go (`temporary`, which the launcher and the
- * agents' bridge read): the app's own temporary folder, and the key their names are made from,
- * kept while it's the same folder so a conversation keeps its own. Elsewhere, none: `tmp`.
+ * Where commands' temporary folders go (`temporary`, which the launcher and the agents' bridge
+ * read), and the key their short names are made from, kept while it's the same folder so a
+ * conversation keeps its own: on this Mac's box, the app's own temporary folder; elsewhere, `tmp`
+ * in the sandbox's folder.
  */
 function writeTemporary(): void {
   const file = path.join(FOLDER, "temporary");
-  const root = platform === "darwin" ? appTemporary() : null;
-  if (!root) return fs.rmSync(file, { force: true });
+  const root = appTemporary() ?? path.join(FOLDER, "tmp");
   const [had, key] = (textOf(file) ?? "").split("\n");
   if (had === root && /^[0-9a-f]{64}$/.test(key ?? "")) return;
   writePrivate(file, `${root}\n${crypto.randomBytes(32).toString("hex")}\n`);
-  // Those from before, in the box's own folder, go.
+  // Those from before, in the box's own folder, go (named from another key, or by a whole sum).
   for (const name of listOf(path.join(FOLDER, "tmp"))) fs.rmSync(path.join(FOLDER, "tmp", name), { recursive: true, force: true });
 }
 
