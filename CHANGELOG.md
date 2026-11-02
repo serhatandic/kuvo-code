@@ -17,6 +17,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 ### All Changes
 
 - A bot working on a goal no longer keeps your computer busy between its looks at the goal, which could spin the fans while nothing was happening.
+- A bot, chat or group chat whose move stalls because the other computer went away no longer looks busy: its row says "Waiting for" that computer, and its conversation says what comes next and how far it got.
 - Moving a chat whose `/goal` is still going says why it can't move yet, instead of moving and losing the goal.
 - A goal whose end you move later after it came carries on to the new end, rather than stopping at once.
 - Stop, Keep Going and Start the Work in a group chat that's moving say why nothing happened.

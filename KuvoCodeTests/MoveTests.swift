@@ -247,6 +247,43 @@ import Testing
         app.moves.forget("lab")
     }
 
+    /// A move whose other end went quiet stops looking busy and says what it waits for: the machine
+    /// it leaves, while that can't be read, or the computer it's going to, as the box it leaves says.
+    /// Once that's back, it shows how far it is again.
+    @Test func aMoveWaitingForAComputerSaysWhichAndCarriesOnOnceItsBack() async throws {
+        let unreadable = Over()
+        let quiet = Over()
+        let app = AppModel()
+        app.moves.app = app
+        app.moves.boxes = { box in
+            Self.box(box) { path in
+                guard path == "kuvo/moves", !unreadable.now else { return nil }
+                let waiting = quiet.now ? #","waiting":true"# : ""
+                return #"{"moves":[{"id":"mv_wait1","kind":"chat","thing":"ses_waittrip","from":"lab-key","to":"pi-key","role":"from","stage":"copying","sessions":["ses_waittrip"],"place":"pi","sent":12400000,"size":30000000\#(waiting)}],"away":[]}"#
+            }
+        }
+        await app.moves.reload("lab")
+        #expect(app.moves.underWay["ses_waittrip"]?.words == "Moving to pi… 12 of 30 MB")
+        // Lab out of reach: it waits for lab, still held.
+        unreadable.now = true
+        await app.moves.reload("lab")
+        #expect(app.moves.underWay["ses_waittrip"]?.words == "Waiting for lab")
+        #expect(app.moves.underWay["ses_waittrip"]?.spoken == "Waiting for lab. It moves to pi once lab is back.")
+        #expect(Moves.isFrozen("ses_waittrip"))
+        // Back, though it says just what it said: moving again.
+        unreadable.now = false
+        await app.moves.reload("lab")
+        #expect(app.moves.underWay["ses_waittrip"]?.waitingFor == nil)
+        // Lab says pi has gone quiet: it waits for pi.
+        quiet.now = true
+        await app.moves.reload("lab")
+        #expect(app.moves.underWay["ses_waittrip"]?.words == "Waiting for pi")
+        quiet.now = false
+        await app.moves.reload("lab")
+        #expect(app.moves.underWay["ses_waittrip"]?.words == "Moving to pi… 12 of 30 MB")
+        app.moves.forget("lab")
+    }
+
     /// A move this Mac's box took back while the machine it was going to restarted: what the machine
     /// said last of it, before it went out of reach, doesn't keep the bot from you until it's back.
     /// One end saying a move is over is enough.

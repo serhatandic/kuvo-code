@@ -75,8 +75,14 @@ struct GroupChatView: View {
         }
         .conversationBar {
             VStack(spacing: 10) {
+                // Its move waiting for a computer that went quiet: that says it all.
+                if let going = app.moves.underWay[group.id], going.waitingFor != nil {
+                    MoveWaitingCard(going: going)
+                        .modifier(ComposerSurface())
+                        .transition(.opacity.combined(with: .offset(y: 6)))
+                }
                 // Where it lives can't be reached now: as last seen, and what you write waits.
-                switch groups.reach(group.id) {
+                switch app.moves.underWay[group.id]?.waitingFor == nil ? groups.reach(group.id) : .ready {
                 case .away(let machine):
                     if let engine = app.machines.engine(machine) {
                         MachineOfflineBar(engine: engine)
@@ -112,6 +118,7 @@ struct GroupChatView: View {
             }
             .animation(.ui, value: groups.isPaused(group.id))
             .animation(.ui, value: groups.reach(group.id))
+            .animation(.ui, value: app.moves.underWay[group.id]?.waitingFor)
             .animation(.ui, value: seatAsks)
             .padding(.horizontal, Metrics.gutter)
             .padding(.bottom, 16)

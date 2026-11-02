@@ -52,8 +52,13 @@ final class Moves {
         var stage = "holding"
         var sent: Int?
         var size: Int?
-        /// "Moving to lab… 12 of 30 MB".
-        var words: String { MoveWords.status(stage: stage, place: place, sent: sent, size: size) }
+        /// The computer it waits for, by name, while that one has gone quiet (its box says so, or
+        /// the box holding the move can't be read): nothing of it moves until it's back.
+        var waitingFor: String?
+        /// "Moving to lab… 12 of 30 MB", or "Waiting for lab".
+        var words: String { waitingFor.map { MoveWords.waiting(for: $0) } ?? MoveWords.status(stage: stage, place: place, sent: sent, size: size) }
+        /// The same for VoiceOver, with what comes next while it waits.
+        var spoken: String { waitingFor.map { MoveWords.waitingSpoken(for: $0, place: place) } ?? words }
     }
 
     /// A computer something can go to, as the box it lives on says: its box's key, its name, and
@@ -135,6 +140,8 @@ final class Moves {
             var place: String?
             var sent: Int?
             var size: Int?
+            /// Its other computer has gone quiet about it a while (on the box it leaves).
+            var waiting: Bool?
         }
         var moves: [Move]
         var away: [String]
@@ -404,8 +411,10 @@ final class Moves {
             guard reads[box] == read else { return }
             // Nor a read that failed (its connection dropped, say).
             guard let said else { return outOfReach(box) }
-            unread.remove(box)
+            // Back: what's moving from it no longer waits for it (said the same, `take` shows nothing).
+            let back = unread.remove(box) != nil
             take(said, from: box)
+            if back { show() }
         }
         latest[box] = reading
         var waited = reading
@@ -432,8 +441,9 @@ final class Moves {
     /// A box whose moves can't be read now: what it said stands, but for moves over at their other
     /// end (it may have restarted mid-move, and won't say so until it's back).
     private func outOfReach(_ box: String) {
-        unread.insert(box)
-        if dropEnded() { show() }
+        let newly = unread.insert(box).inserted
+        // (What's moving from it now waits for it.)
+        if dropEnded() || newly { show() }
     }
 
     /// Moves over at one end left out of what boxes out of reach said last. Whether any were.
@@ -592,7 +602,10 @@ final class Moves {
                 guard move.role == "from" else { continue }
                 // Its name as the box says it, else as this Mac knows the machine.
                 let name = move.to == app?.phoneLink.macKey ? "this Mac" : move.place ?? place(move.to).map { $0.map(placeName) ?? "this Mac" } ?? "another computer"
-                moving[move.thing] = Going(place: name, stage: move.stage, sent: move.sent, size: move.size)
+                // Waiting: on the machine it leaves, out of reach (what it said last stands meanwhile),
+                // or on the one it's going to, quiet, as the box it leaves says.
+                let waiting = machine.flatMap { unread.contains($0) ? placeName($0) : nil } ?? (move.waiting == true ? name : nil)
+                moving[move.thing] = Going(place: name, stage: move.stage, sent: move.sent, size: move.size, waitingFor: waiting)
             }
             for session in said.away { away[session] = .some(machine) }
         }

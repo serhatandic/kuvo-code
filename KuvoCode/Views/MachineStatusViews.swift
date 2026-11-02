@@ -273,3 +273,64 @@ struct MachineOfflineBar: View {
     }
 
 }
+
+/// A move waiting for a computer that went quiet, over its conversation's composer: where it's
+/// going, what comes next, and how far its copy got, on a bar that stays still (nothing moves
+/// meanwhile). No buttons: the two computers move it between themselves, so nothing here helps it
+/// along, and it can't be taken back without the one that's away.
+struct MoveWaitingCard: View {
+    let going: Moves.Going
+
+    var body: some View {
+        let words = MoveWords.waitingCard(for: going.waitingFor ?? going.place, place: going.place)
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: "clock.arrow.circlepath")
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(words.title)
+                    .font(.system(size: 13, weight: .medium))
+                Text(words.message)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let amount = MoveWords.progress(sent: going.sent, size: going.size), let size = going.size {
+                    HStack(spacing: 8) {
+                        StillBar(share: Double(min(max(going.sent ?? 0, 0), size)) / Double(size))
+                        Text(amount)
+                            .font(.system(size: 12))
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .fixedSize()
+                    }
+                    .padding(.top, 2)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// How far something got that isn't going on now: grey, where a bar going on is in the accent.
+private struct StillBar: View {
+    let share: Double
+
+    var body: some View {
+        Capsule()
+            .fill(Color.primary.opacity(0.08))
+            .frame(height: 4)
+            .overlay(alignment: .leading) {
+                GeometryReader { proxy in
+                    Capsule()
+                        .fill(.tertiary)
+                        .frame(width: max(4, proxy.size.width * share))
+                }
+            }
+            .clipShape(.capsule)
+    }
+}

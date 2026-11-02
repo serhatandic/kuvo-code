@@ -1493,7 +1493,7 @@ private struct GroupRow: View {
             }, size: 28)
         } subtitle: {
             if let going = app.moves.underWay[group.id] {
-                ShimmerText(text: going.words)
+                MoveStatus(going: going)
             } else if let speaker {
                 ShimmerText(text: "\(speaker.name) is thinking…")
             } else if groups.isDiscussing(group.id) {
@@ -1610,7 +1610,7 @@ private struct BotRow: View {
     /// stand apart from what it said, with their sign.
     @ViewBuilder private var status: some View {
         if let going = app.moves.underWay[bot.id] {
-            ShimmerText(text: going.words)
+            MoveStatus(going: going)
         } else if workspace.needsAttention(bot.sessionID) {
             Text("Needs you")
                 .foregroundStyle(.orange)
@@ -1646,6 +1646,22 @@ private struct BotRow: View {
         } else {
             // No job yet: it asks for one, until your message gives it.
             Text(bot.job.isEmpty ? EmptyConversationView.purposeQuestion : bot.job)
+        }
+    }
+}
+
+/// A bot's or a group chat's move in its row: how far it is, shimmering, or, while it waits for a
+/// computer that has gone quiet, still, with the sign of what waits for a computer.
+private struct MoveStatus: View {
+    let going: Moves.Going
+
+    var body: some View {
+        if going.waitingFor != nil {
+            BotState(systemImage: "clock.arrow.circlepath", isSet: false) { Text(going.words) }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(going.spoken)
+        } else {
+            ShimmerText(text: going.words)
         }
     }
 }
@@ -1914,7 +1930,9 @@ struct MoveToComputerItems: View {
     if DemoStates.shared.isOn { return DemoStates.shared.kind(of: session.id) }
     #endif
     let id = session.id
-    let moving = app.moves.underWay[id] != nil
+    // A move waiting for a computer that went quiet isn't work: it waits, with nothing going on.
+    let going = app.moves.underWay[id]
+    let moving = going != nil && going?.waitingFor == nil
     let working = workspace.isWorking(id) || moving
     return ConversationState.kind(
         needsYou: workspace.needsAttention(id) || folded.contains { workspace.needsAttention($0.id) },
@@ -1922,7 +1940,9 @@ struct MoveToComputerItems: View {
         subagentsOnly: !moving && working && !workspace.running.contains(id) && workspace.helpersAtWork(in: id) > 0,
         failed: session.outcome == .failed,
         isNew: isNew || folded.contains(where: \.isUnread),
-        offline: awayMachine(of: session, app: app) != nil,
+        // (Its machine away while it moves: the move says what it waits for.)
+        offline: going == nil && awayMachine(of: session, app: app) != nil,
+        waitingForComputer: going?.waitingFor != nil,
         wakes: app.wakeUps.wakes[id]?.isEmpty == false,
         watching: app.wakeUps.watches[id]?.isEmpty == false)
 }
@@ -1953,12 +1973,12 @@ private struct SessionStatus: View {
         let fromUnder = !folded.isEmpty && kind != statusMark(of: session, isNew: isUnread ?? session.isUnread, workspace: workspace, app: app)
         StatusMark(showing: kind)
             .help(kind.map { fromUnder ? $0.wordsFromUnder : help($0) } ?? "")
-            .modifier(SpokenFromUnder(words: fromUnder ? kind?.wordsFromUnder : app.moves.underWay[session.id]?.words))
+            .modifier(SpokenFromUnder(words: fromUnder ? kind?.wordsFromUnder : app.moves.underWay[session.id]?.spoken))
     }
 
     private func help(_ kind: StatusMark.Kind) -> String {
         switch kind {
-        case .working:
+        case .working, .waitingForComputer:
             app.moves.underWay[session.id]?.words ?? kind.words
         case .subagents: workspace.helpersAtWork(in: session.id).counting("subagent") + " at work"
         case .failed: "The last run failed"
