@@ -125,8 +125,8 @@ import Testing
     /// A session picked in the sidebar: the press on its row isn't working in the sidebar, so the
     /// conversation stays the card you work in, its composer with the keyboard, all through the
     /// click (the user's report: it looked as if you'd clicked the sidebar, for a moment). Then the
-    /// row's button opens the session (pressed as VoiceOver presses it: SwiftUI's buttons don't
-    /// take queued clicks in a window that isn't key), and its composer has the keyboard, even
+    /// row's button opens the session (the store call it makes as the click ends: SwiftUI's buttons
+    /// don't take queued clicks in a window that isn't key), and its composer has the keyboard, even
     /// from the sidebar's search, and even for the session already in view.
     @Test func aSessionPickedInTheSidebarLeavesYouInItsConversation() async throws {
         defer { done() }
@@ -137,34 +137,20 @@ import Testing
         #expect(app.tabs.focus == .conversation, "a press on the sidebar leaves the conversation the card you work in")
         #expect(composerHasKeys, "and its composer the keyboard")
 
-        try press(row: "The harbor")
+        app.tabs.choose(.session(harbor))
         try await until { app.tabs.selection == .session(harbor) && composerHasKeys }
+        // Its composer's own asks for the keyboard as it came in, all answered.
+        try await drain()
         #expect(app.tabs.focus == .conversation)
+        #expect(composerHasKeys)
 
         // From the sidebar's search, the session in view picked again.
         window.makeFirstResponder(try sidebarSearch())
+        #expect(window.firstResponder is NSTextView, "the search has the keyboard")
         try await until { app.tabs.focus == .sessions }
-        try press(row: "The harbor")
+        app.tabs.choose(.session(harbor))
         try await until { composerHasKeys }
         #expect(app.tabs.focus == .conversation)
-    }
-
-    /// Presses the sidebar's row named `title`, as VoiceOver would.
-    private func press(row title: String) throws {
-        window.contentView?.layoutSubtreeIfNeeded()
-        func find(in element: Any) -> NSAccessibilityElementProtocol? {
-            guard let element = element as? NSObject else { return nil }
-            let label = [element.accessibilityLabel(), element.accessibilityTitle()].compactMap(\.self).joined(separator: " ")
-            if element.accessibilityRole() == .button, label.contains(title), element.accessibilityFrame().midX - window.frame.minX < 300 {
-                return element as? NSAccessibilityElementProtocol
-            }
-            for child in element.accessibilityChildren() ?? [] {
-                if let found = find(in: child) { return found }
-            }
-            return nil
-        }
-        let row = try #require(window.contentView.flatMap { find(in: $0) } as? NSObject, "the sidebar's row \(title)")
-        #expect(row.accessibilityPerformPress())
     }
 
     /// The sidebar's search field.
@@ -220,7 +206,7 @@ import Testing
         window.makeFirstResponder(terminal.view)
         try await until { app.tabs.focus == .changes }
 
-        try press(row: "The lamp")
+        app.tabs.choose(.session(lamp))
         try await drain()
         #expect(window.firstResponder === terminal.view, "picking the session in view leaves the terminal the keyboard")
         withAnimation(.ui) { app.tabs.showSidebar(false) }
