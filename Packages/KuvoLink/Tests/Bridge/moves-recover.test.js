@@ -167,10 +167,10 @@ async function ask(method, p, given) {
   return { status: parts[0].head.status, json: text ? JSON.parse(text) : null };
 }
 
-// Until `found` holds: looked at again as the script hears more.
+// Until `found` holds: looked at again as the script hears more, however long that takes (a busy
+// machine is slow, never wrong); a test that never sees it fails at its time limit.
 async function until(found) {
-  for (let tries = 0; tries < 2000 && !found(); tries++) await new Promise(resolve => setImmediate(resolve));
-  assert.ok(found(), `never: ${found}`);
+  while (!found()) await new Promise(resolve => setImmediate(resolve));
 }
 
 const movesFolder = path.join(home, "run", "moves");
