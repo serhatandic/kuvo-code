@@ -130,6 +130,16 @@ import Testing
         #expect(TerminalSession.folderName("/home/serhat/src/app/", isStart: true) == "app")
     }
 
+    /// A terminal opened to run a command is named by the program that does the work: the last of
+    /// commands run one after another, past what only sets up how it runs.
+    @Test func aCommandsTabIsNamedByItsProgram() {
+        #expect(MainTerminals.program("npm run dev") == "npm")
+        #expect(MainTerminals.program("cd web && npm run dev") == "npm")
+        #expect(MainTerminals.program("cd web; PORT=3000 bun dev") == "bun")
+        #expect(MainTerminals.program("sudo /usr/bin/python3 serve.py") == "python3")
+        #expect(MainTerminals.program("env DEBUG=1 node app.js | tee log") == "node")
+    }
+
     /// A project's own terminal (Terminal Instead of Chat) is named for its command until what
     /// runs names itself; a plain shell, for its folder.
     @Test func aProjectsTerminalIsNamedForItsCommand() {

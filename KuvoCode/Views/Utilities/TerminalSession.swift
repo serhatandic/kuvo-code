@@ -442,10 +442,14 @@ final class MainTerminals {
         return key
     }
 
-    /// The program a command runs, by its name: past any `NAME=value` settings before it, without
-    /// its folder.
+    /// The program a command runs, by its name: the last of commands run one after another, before
+    /// any pipe, past `NAME=value` settings and what only sets up how it runs, without its folder.
     static func program(_ command: String) -> String? {
-        guard let word = command.split(separator: " ").first(where: { !$0.contains("=") }) else { return nil }
+        let last = command.components(separatedBy: "&&").flatMap { $0.components(separatedBy: ";") }
+            .last { !$0.trimmingCharacters(in: .whitespaces).isEmpty } ?? command
+        let run = last.split(separator: "|", maxSplits: 1).first ?? Substring(last)
+        let setup: Set<Substring> = ["sudo", "env", "exec", "nohup", "time", "command"]
+        guard let word = run.split(separator: " ").first(where: { !$0.contains("=") && !setup.contains($0) }) else { return nil }
         return (String(word) as NSString).lastPathComponent
     }
 
