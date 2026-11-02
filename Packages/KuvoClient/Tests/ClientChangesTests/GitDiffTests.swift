@@ -50,6 +50,16 @@ struct GitDiffTests {
 
     """
 
+    /// A picture the agent made again reads as changed, though git says the same of it ("Binary
+    /// files … differ"): what shows it (its two sides on the phone) reads them again.
+    @Test func aPictureMadeAgainReadsAsChanged() throws {
+        let before = try #require(DiffParser.listed(patch: patch, untracked: []).first { $0.path == "public/logo.png" })
+        let again = try #require(DiffParser.listed(patch: patch.replacingOccurrences(of: "6666666..7777777", with: "6666666..8888888"), untracked: [])
+            .first { $0.path == "public/logo.png" })
+        #expect(before.isBinary && again.isBinary)
+        #expect(before != again)
+    }
+
     @Test func eachFileListsWithItsLinesAndTheirNumbersOnEachSide() throws {
         let files = DiffParser.listed(patch: patch, untracked: [])
         #expect(files.map(\.path) == ["café \"menu\".txt", "docs/new name.md", "public/logo.png", "src/theme.ts"])
