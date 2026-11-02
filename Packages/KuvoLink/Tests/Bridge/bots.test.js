@@ -884,6 +884,10 @@ test("a bot being deleted as its box stops (an update, a crash) still loses its 
     assert.ok(engine.asked.slice(before).some(each => each.method === "DELETE" && each.url === "/api/session/ses_bot_quill00001"), "its conversation goes");
     for (const release of engine.held) release();
     assert.equal((await deleted).status, 200);
+    // And nothing's left to do.
+    const asked = engine.asked.length;
+    await link.finishDeletes(readEngine, readBridge);
+    assert.equal(engine.asked.length, asked);
   } finally {
     engine.close();
   }
