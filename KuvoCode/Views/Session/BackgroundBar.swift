@@ -212,7 +212,7 @@ struct BarLine: View {
     }
 
     /// The title, how far along and the folded strip on one line where all of them fit whole;
-    /// otherwise the title on its own line (cut in its middle only where even that has no room)
+    /// then without the strip; otherwise the title on its own line (cut in its middle only where even that has no room)
     /// and the rest under it, the strip left out where it doesn't fit.
     private var stacked: some View {
         ViewThatFits(in: .horizontal) {
@@ -220,6 +220,11 @@ struct BarLine: View {
                 titleText.fixedSize()
                 says.fixedSize()
                 if isHidden, let folded { folded.fixedSize() }
+            }
+            // The strip goes first: folding the bar never moves its words to a second line.
+            HStack(spacing: 10) {
+                titleText.fixedSize()
+                says.fixedSize()
             }
             VStack(alignment: .leading, spacing: 2) {
                 titleText.truncationMode(.middle)
