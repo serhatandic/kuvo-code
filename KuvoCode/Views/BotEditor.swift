@@ -58,15 +58,16 @@ struct BotEditor: View {
 
     private enum Field { case name }
 
-    /// `recipe`: a shared bot that a new one starts from.
-    init(bot: Bot?, recipe: BotRecipe? = nil, close: @escaping () -> Void, created: @escaping (Bot) -> Void = { _ in }) {
+    /// `recipe`: a shared bot that a new one starts from. `machine`: where a new one starts to live
+    /// (nil for this Mac).
+    init(bot: Bot?, recipe: BotRecipe? = nil, machine: String? = nil, close: @escaping () -> Void, created: @escaping (Bot) -> Void = { _ in }) {
         self.bot = bot
         self.close = close
         self.created = created
         _look = State(initialValue: bot?.look ?? recipe?.look ?? .random())
         _name = State(initialValue: bot?.name ?? recipe?.name ?? "")
         _job = State(initialValue: JobDraft(line: bot?.job ?? "", details: bot?.instructions ?? ""))
-        _machine = State(initialValue: bot?.machine)
+        _machine = State(initialValue: bot == nil ? machine : bot?.machine)
         _project = State(initialValue: bot?.project)
         _model = State(initialValue: bot?.model)
         _personality = State(initialValue: bot?.personality)

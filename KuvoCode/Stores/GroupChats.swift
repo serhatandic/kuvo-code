@@ -90,8 +90,8 @@ final class GroupChats {
     }
 
     /// A new chat, on this Mac.
-    func create(name: String, purpose: String?, members: [String], meeting: BoxGroups.MeetingPlan?) async throws -> BotGroup {
-        try await boxes.create(name: name, purpose: purpose, members: members, meeting: meeting)
+    func create(name: String, purpose: String?, members: [String], meeting: BoxGroups.MeetingPlan?, on machine: String? = nil) async throws -> BotGroup {
+        try await boxes.create(name: name, purpose: purpose, members: members, meeting: meeting, on: machine)
     }
 
     /// Its name, purpose, bots or meeting changed, where it lives; what it refuses throws.

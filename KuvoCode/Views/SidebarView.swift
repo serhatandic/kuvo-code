@@ -27,7 +27,7 @@ struct SidebarView: View {
     /// Sections the user folded away: "pinned", "bots", "chats", "projects", "recents" (newline-separated).
     @AppStorage("collapsedSections") private var foldedStorage = ""
     /// The box in view, by id ("mac", or a machine's), each a page of its own.
-    @AppStorage("sidebarBox") private var boxID = "mac"
+    @AppStorage(SidebarBox.inViewKey) private var boxID = "mac"
     /// Projects showing all their sessions instead of the latest few.
     @State private var showsAll: Set<String> = []
     /// Where sessions were picked from. A session shows in its project and in Recents; only

@@ -624,24 +624,28 @@ final class WindowTabs {
         projectEditor = request
     }
 
-    /// Makes a bot (from a shared one's `recipe`, if given), or changes `bot`, in the main card.
+    /// Makes a bot (from a shared one's `recipe`, if given), or changes `bot`, in the main card. A
+    /// new one starts on the box in view in the sidebar.
     func openBotEditor(bot: Bot?, recipe: BotRecipe? = nil) {
+        let machine = bot == nil ? app.boxInView.machine : nil
         withAnimation(.ui) {
             panelExpanded = false
             app.showsSettings = false
             groupEditor = nil
-            botEditor = BotEditorRequest(bot: bot, recipe: recipe)
+            botEditor = BotEditorRequest(bot: bot, recipe: recipe, machine: machine)
         }
         focus = .conversation
     }
 
-    /// Makes a group chat, or changes `group`, in the main card.
+    /// Makes a group chat, or changes `group`, in the main card. A new one starts on the box in
+    /// view in the sidebar.
     func openGroupEditor(group: BotGroup?) {
+        let machine = group == nil ? app.boxInView.machine : nil
         withAnimation(.ui) {
             panelExpanded = false
             app.showsSettings = false
             botEditor = nil
-            groupEditor = GroupEditorRequest(group: group)
+            groupEditor = GroupEditorRequest(group: group, machine: machine)
         }
         focus = .conversation
     }

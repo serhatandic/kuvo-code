@@ -208,6 +208,35 @@ import Testing
         #expect(keys == ["ses_b", "ses_a", "ses_c"], "each in a tab of its own again")
     }
 
+    // MARK: New bots and group chats
+
+    /// New Bot (from the sidebar, the menu or a shared bot's file) and New Group Chat start on the
+    /// computer whose page the sidebar shows, as if picked under Lives On; on This Mac's page, or
+    /// once that page's machine is gone, on this Mac. Editing one keeps it where it is.
+    @Test func newBotsAndGroupChatsStartOnTheComputerInView() {
+        defer {
+            done()
+            UserDefaults.standard.removeObject(forKey: SidebarBox.inViewKey)
+            UserDefaults.standard.removeObject(forKey: "machines")
+        }
+        let machine = app.machines.add("lokum").machine.id
+        UserDefaults.standard.set(machine, forKey: SidebarBox.inViewKey)
+        tabs.openBotEditor(bot: nil)
+        #expect(tabs.botEditor?.machine == machine)
+        let recipe = BotRecipe(name: "Scout", job: "Finds things", instructions: "Finds things.", look: .random(), personality: nil)
+        tabs.openBotEditor(bot: nil, recipe: recipe)
+        #expect(tabs.botEditor?.machine == machine && tabs.botEditor?.recipe == recipe, "a shared bot too")
+        tabs.openGroupEditor(group: nil)
+        #expect(tabs.groupEditor?.machine == machine)
+
+        UserDefaults.standard.set("mac", forKey: SidebarBox.inViewKey)
+        tabs.openBotEditor(bot: nil)
+        #expect(tabs.botEditor != nil && tabs.botEditor?.machine == nil, "This Mac's page")
+        UserDefaults.standard.set("hetzner", forKey: SidebarBox.inViewKey)
+        tabs.openGroupEditor(group: nil)
+        #expect(tabs.groupEditor != nil && tabs.groupEditor?.machine == nil, "a machine that's gone")
+    }
+
     // MARK: The panel
 
     /// You work in the session beside: its panel shows, and stays its while the expanded panel

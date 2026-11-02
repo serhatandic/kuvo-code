@@ -184,6 +184,29 @@ import Testing
 
     /// A machine running a newer Kuvo Code says a kind of message this copy doesn't know: its chats
     /// still show, with that message left out rather than shown as something else.
+    /// New Group Chat from a machine's page: the chat is made by that machine's box and lives
+    /// there, on its page, not on this Mac's; with the machine away, nothing's made and it says so.
+    @Test func aGroupChatStartedOnAMachineLivesThere() async throws {
+        defer { Self.clean(); mac.stop() }
+        try saveBots([("bot_pal", "Pal", "box"), ("bot_lb", "Lokum Builder", "box")])
+        let app = app()
+        await app.boxGroups.connected(nil)
+        await app.boxGroups.connected("box")
+        machineBridge.on("POST", "/api/kuvo/link/groups") { [there] request in
+            there.add(Self.group("grp_box0000002", members: request.body["members"] as? [String] ?? []))
+            return StubWeb.json(["group": ["id": "grp_box0000002"]])
+        }
+
+        let made = try await app.chats.create(name: "Crew", purpose: nil, members: ["bot_pal", "bot_lb"], meeting: nil, on: "box")
+
+        #expect(made.id == "grp_box0000002")
+        #expect(there.has("grp_box0000002") && !here.has("grp_box0000002"), "made by the machine's box")
+        #expect(app.chats.machine(of: "grp_box0000002") == "box", "on the machine's page")
+        await #expect(throws: BoxGroups.Failure.self) {
+            try await app.chats.create(name: "Crew", purpose: nil, members: ["bot_pal", "bot_lb"], meeting: nil, on: "elsewhere")
+        }
+    }
+
     @Test func aMessageOfANewerKindLeavesTheChatsShowing() async throws {
         defer { Self.clean(); mac.stop() }
         try saveBots([("bot_pal", "Pal", "box")])

@@ -41,8 +41,10 @@ struct GroupEditor: View {
     /// The repeats to pick from.
     private static let repeats: [Wakes.Repeat?] = [nil, .days(1), .weekdays, .weeks(1)]
 
-    init(group: BotGroup?, newBot: @escaping () -> Void, close: @escaping () -> Void, created: @escaping (BotGroup) -> Void = { _ in }) {
+    /// `machine`: where a new one lives (nil for this Mac).
+    init(group: BotGroup?, machine: String? = nil, newBot: @escaping () -> Void, close: @escaping () -> Void, created: @escaping (BotGroup) -> Void = { _ in }) {
         self.group = group
+        newMachine = machine
         self.newBot = newBot
         self.close = close
         self.created = created
@@ -77,8 +79,10 @@ struct GroupEditor: View {
     private var isNew: Bool { group == nil }
     private var trimmedName: String { name.trimmingCharacters(in: .whitespacesAndNewlines) }
     private var picked: [Bot] { members.compactMap { bots.bot($0) } }
-    /// The computer it lives on: a new one is this Mac's.
-    private var machine: String? { group.flatMap { groups.machine(of: $0.id) } }
+    /// Where a new one lives.
+    private let newMachine: String?
+    /// The computer it lives on: a new one's, the box in view when it was opened.
+    private var machine: String? { group.map { groups.machine(of: $0.id) } ?? newMachine }
 
     /// The bots it can have: those the computer it lives on says can join (its own, and those of
     /// your other computers that take a chat's turns); until it's said, that computer's own.
@@ -98,8 +102,8 @@ struct GroupEditor: View {
         return "Pick two or more. They answer one at a time, and each remembers the chat in its own conversation."
     }
 
-    /// The computer it lives on (this Mac, for a new one) can't be reached now: saving waits.
-    private var reach: BoxGroups.Reach { group.map { groups.reach($0.id) } ?? groups.macReach }
+    /// The computer it lives on can't be reached now: saving waits.
+    private var reach: BoxGroups.Reach { group.map { groups.reach($0.id) } ?? groups.reach(on: machine) }
     private var canSave: Bool { !trimmedName.isEmpty && picked.count >= 2 && !meetingPassed && !isSaving && reach == .ready }
 
     var body: some View {
@@ -333,7 +337,7 @@ struct GroupEditor: View {
         switch reach {
         case .starting: return isNew ? "Group chats on this Mac are starting. You can start this one in a moment." : "Group chats on this Mac are starting. You can save in a moment."
         case .stopped: return isNew ? "Group chats on this Mac stopped. Restart them from the sidebar, then start this one." : "Group chats on this Mac stopped. Restart them from the sidebar, then save."
-        case .away(let machine): return "\(machine) isn’t connected. Connect to it, then save."
+        case .away(let machine): return isNew ? "\(machine) isn’t connected. Connect to it, then start this one." : "\(machine) isn’t connected. Connect to it, then save."
         case .ready: return nil
         }
     }
@@ -363,7 +367,7 @@ struct GroupEditor: View {
             Task {
                 defer { isSaving = false }
                 do {
-                    created(try await groups.create(name: trimmedName, purpose: purpose.isEmpty ? nil : purpose, members: members, meeting: meeting))
+                    created(try await groups.create(name: trimmedName, purpose: purpose.isEmpty ? nil : purpose, members: members, meeting: meeting, on: machine))
                 } catch {
                     failure = error.localizedDescription
                 }
