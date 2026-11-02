@@ -15,10 +15,12 @@ import { readLink } from "../state";
 const KINDS: MoveKind[] = ["bot", "chat", "group"];
 
 // Each with the other computer's name, as your computers call it, for clients that don't know it.
+// Not a copy here being let go of (the move was taken back, and goes on where it came from): only
+// its conversations are left out (`away`) until it's gone.
 const movesNow = (): Moves => {
   const peers = peersOf(readLink());
   return {
-    moves: liveMoves().map(record => {
+    moves: liveMoves().filter(record => !(record.role === "to" && record.dropping)).map(record => {
       const place = plainName(peers.find(peer => peer.key === record.peer)?.name ?? "");
       return { ...shownMove(record), ...(place ? { place } : {}) };
     }),

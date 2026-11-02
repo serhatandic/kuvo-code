@@ -1631,6 +1631,9 @@ final class Workspace {
             Self.dropLeftScratch(all, api: api)
             keepSubSessions(everything.filter { movedAway[$0.id] != .some(nil) }, box: "mac")
             let local = all.filter { !isHidden($0) && movedAway[$0.id] != .some(nil) }
+            // Moved here from a machine (asked here or from a phone): an open conversation follows it.
+            let arrived = everything.filter { session in movedAway[session.id] != .some(nil) && models[session.id].map { RemoteFolder.isRemote($0.session.location.directory) } == true }
+            if !arrived.isEmpty { moved(arrived, api: api) }
             // (This Mac's: a machine's agents' are its own, with its engine's.)
             let theAgents = sessions.filter { OutsideAgents.isAgentSession($0) && !RemoteFolder.isRemote($0.location.directory) }
             let before = sessions
@@ -1901,6 +1904,9 @@ final class Workspace {
             keepSubSessions(everything, box: machine, machine: machine)
             // Its agents' as they were, when they couldn't be read.
             if let bridgeEverything { keepSubSessions(bridgeEverything, box: machine + "-agents", machine: machine) }
+            // Moved here from elsewhere (this Mac, another machine): an open conversation follows it.
+            let arrived = everything.filter { session in models[session.id].map { RemoteFolder.machine(of: $0.session.location.directory) != machine && !OutsideAgents.isAgentSession($0.session) } == true }
+            if !arrived.isEmpty { moved(arrived, api: api) }
             // Its open conversations take this connection first, so nothing sent from them goes
             // to the old one.
             for model in models.values where RemoteFolder.machine(of: model.session.location.directory) == machine {

@@ -239,7 +239,7 @@ connection.
     takes on over SSH (by mail, before bridge 0.9.63, too).
 - **Personalities**: each box's view is a document ("Documents"); a box meets a peer's with its
   own, and its bots whose personality changed are told what they are now.
-- **Letters**: `{"letter": {id, from, to, text, wait, at, answers?, read?}}` goes to the box that
+- **Letters**: `{"letter": {id, from, to, text, wait, at, answers?, read?, note?}}` goes to the box that
   listed `to`.
   - **Checks**: the receiver drops a letter older than a day. It delivers each `id` once (ids
     remembered two days, noted once delivered), at most 20 in ten minutes from a box (one answered
@@ -280,6 +280,17 @@ connection.
     back the conversation as `read_conversation` words it (or the parts that mention `query`),
     about 20,000 characters at most, as an answer that also carries `read: {}`. An answer with
     `read` that no tool waits for any more is dropped, never delivered as a message.
+  - **`note`** `{from, words, delivery, line?}` (bridge 0.9.166): the letter is the sending box's
+    own word, not an agent's, for one of its conversations that moved away from it in the last two
+    days (its sessions' news, an answer you gave late, an answer its tool never took). Only a box
+    leaves one; an agent's letter never has it. The receiver checks and counts it as any letter,
+    then delivers `text` as the sender would have delivered it there: `delivery` `queue` or
+    `steer`, shown from `from` with `words`, and with `line`, marked as the box's note
+    (`metadata.kuvo.note {from, line}`, "Messages in a session"). It has no `from` conversation and
+    is never answered. One whose `note` isn't whole is a letter as any. A box from before 0.9.166
+    doesn't read `note`: it delivers the letter as any other, steered, from "an agent on <box>"
+    that can't be answered, with `text` after its own heading. Its `words` and `line` are cut to fit
+    as `text` is.
 - **Leaving one**: an agent's `send_message` or `read_conversation` for an agent on another
   computer ("Agents' tools") leaves a letter in `run/outbox/sending/<id>.json`, which the link
   sends. Without the relay, letters wait for it: no box hands them to anyone over SSH (bridge
@@ -400,13 +411,15 @@ A client asks the box it lives on once, and watches; the move goes on with no cl
 - `GET kuvo/moves/places?kind=bot|chat|group&id=…` → `200 {places: [{key, name, kind, ok, why?,
   note?}]}`: each of your other computers (its box's key, its name, `mac` or `machine`), and whether
   it can go there now, with why not in words to show (it works in a project, talks with a coding
-  agent, is in a group chat that lives here with its bots, is moving already; that computer's box is
+  agent, is in a group chat that lives here with its bots, is working on a goal (which stays on this
+  box), is moving already; that computer's box is
   from before moves, as the `features` its agents' mail last gave say; a group chat's bots don't all
   live on that machine, as its agents' mail says, none of them here) and `note`, the same in a few
   words for beside the computer's name in a menu. `404 {message}` when it isn't here. A group chat
   can go to any Mac (its bots stay where they are); the machine it goes to checks again.
 - `POST kuvo/moves {kind, id, to}` (`to`: the box's key, as `places` gives it) answers once the move
   ends: `200 {move}` (it lives there now); `409 {message}` refused or taken back, as it was (working,
+  working on a goal,
   messages still on their way, kept getting messages while it moved, too big, refused there);
   `503 {message}` the other computer didn't answer; `404 {message}` it isn't here, or that isn't one
   of your computers. A client that goes doesn't stop it.
@@ -416,12 +429,14 @@ A client asks the box it lives on once, and watches; the move goes on with no cl
   where it was (`from`) or where it's going (`to`); `stage`: `holding`, `copying`, `switching`,
   `finishing`; `sessions`, its conversations, root first; `place`, the other computer's name, as
   your computers call it (when this box knows it); `sent` and `size`, bytes, while its copy is on
-  its way, for a client to show how far it is. `away`: conversations this box's engine lists that don't live here (a copy not
-  switched to yet, an original still going): clients leave them out.
+  its way, for a client to show how far it is (a move taken back isn't listed, on either box,
+  while its copy is let go of). `away`: conversations this box's engine lists that don't live here (a copy not
+  switched to yet or being let go of, an original still going): clients leave them out.
 - While it moves, nothing reaches it: a prompt to one of its conversations through the link answers
   `409 {message}`, as does a change to its queue (`…/queue/…`; reading it still works, and a Stop
   works while the box it leaves waits for its turn to end), a letter `retry`, its wake-ups and watches are held (`paused` says `moving`), and
-  changing or deleting the bot answers `409`. A client shows it as moving.
+  changing or deleting the bot answers `409`, and what its sessions or an ask's late answer would
+  tell it waits until it's there. A client shows it as moving.
 
 Between the boxes, each `{"move": {op, id, …}}` (`id`: `mov_…`), each step sent again each minute
 until it's answered:
@@ -435,7 +450,10 @@ until it's answered:
    paused, what its engine held, carried as one waiting on the box (anything there but a message,
    and it waits as for a turn); each file a message brings as a `data:` link with what's in it, read
    on this box, or left out, and shown without it) and its folder (a bot's; a chat's wake-ups'),
-   tar, gzip; at most 1 GB.
+   tar, gzip; at most 1 GB, its files counted first (more, and it's refused before any of it is
+   packed). Getting it ready for 30 minutes (its engine or group chats stuck) takes
+   it back (409, as it was). Either box waits for one answer of its engine or group chats two
+   minutes at most (a conversation's export, ten), and takes one that doesn't come for a failure.
 2. `offer {kind, thing, name, size, hash, wasPaused, pausedAs?, from, members?}` → `ready`, or
    `refused {message}`: its engine or group chats aren't running, too big, a group chat's bots
    (`members`) don't all live on that machine, one by that ID lives there already, or a move of it
@@ -453,9 +471,14 @@ until it's answered:
    they must be one conversation and its subagents', rooted at the chat or at the conversation a
    bot's folder names, none of them on this box already); their `queues` kept paused in place of
    any there (what waits, whole, in its order; a file only as a `data:` link); a bot's keys given; a group chat put there
-   held (`PUT api/kuvo/groups/<id>`, `status: "held"`). → `arrived`, or `failed {message}`, what it
-   set up gone again; the message says only what's wrong with what came, never what this box found.
-   Setting it up for 30 minutes (its engine stuck) is given up on the same way.
+   held (`PUT api/kuvo/groups/<id>`, `status: "held"`). → `arrived {hash}`, or `failed {message}`,
+   what it set up gone again; the message says only what's wrong with what came, never what this box
+   found. Setting it up for 30 minutes (its engine stuck) is given up on the same way, and so is one
+   it was setting up as it stopped (as it starts again). The box it leaves, every part answered and
+   no word yet, asks `arrive {hash}` each minute, answered at once as it is: `arrived`, `working`
+   while it's being set up, else `failed` (one it doesn't have, never all there, being let go of,
+   or cut short by a restart), each with the `hash` it was asked about. An `arrived` or `failed`
+   for a bundle other than the one sent last is ignored.
 5. The box it leaves settles and reads it again, its queues too. Anything new, and it all goes again
    (from 1, three tries; then 409, `busy`).
 6. It notes the switch, and sends `switch` → `switched`: the box it went to lets its wake-ups go (as
@@ -476,12 +499,18 @@ only for a copy it has whole or switched to already, and `dropped` for any other
 of, never set up, or doesn't know), and the box it left then goes on with its original, as it was.
 Before the switch, anything that goes wrong takes it back: the box it leaves sends `drop` →
 `dropped` (the copy there goes: its conversations, keys and folder, a group chat released) and
-goes on as it was. After it, only forward. Each box keeps its moves in `run/moves/<id>.json` (and
+goes on as it was. `dropped` comes as soon as the copy there is marked to go, so the box it left
+never waits on it: it's never switched to from then on, and what its engine or group chats can't
+let go of now (down) is kept held there (nothing reaches it), and let go of again each minute (after a week, each
+hour, said once in the log; never forgotten while any of it's here); offered again meanwhile, it's
+`refused`, saying an earlier copy couldn't be let go of yet. A group chat that
+can't go on again as it's taken back (its group chats down) is started each minute until it does,
+and as a box starts, a group chat held there that no move under way holds goes on. After it, only forward. Each box keeps its moves in `run/moves/<id>.json` (and
 the bundle beside it), so a move cut short by a restart carries on: one that switched finishes, one
 that didn't is taken back. Letting the original go after `switched` is tried again each minute
 until it's done (its engine was down); its engine, up, refusing to give its conversation to keep ten
 times, it goes on here as well, said in the move's 409 (two copies, never none). Before the switch, the other computer quiet about it for
-ten minutes takes it back (503); a `drop` never answered is given up after a day (the copy there
+ten minutes (from when a step was first sent, whatever goes again) takes it back (503); a `drop` never answered is given up after a day (the copy there
 goes by itself after a week). A `switch` with no answer either way for ten minutes turns into a
 `drop`, sent until it's answered: `switched` (it did switch) and the original goes, `dropped` and
 it goes on here; the box it leaves never lets its original go without `switched`. A held copy no
@@ -505,7 +534,8 @@ its own, which a `SIGTERM` stops waiting.
   `session` the conversation calling (as the engine names it; null outside one). The answer is the
   tool's own words. One that waits for an answer holds the request up to eleven minutes; the
   request going stops the wait, and an answer that comes later reaches the conversation as a
-  message. 400 for another `name`.
+  message (one moving to or from another computer once it's there; one that moved away lately,
+  there, as a letter with `note`, "Peers"). 400 for another `name`.
   - A subagent, and a coding agent's engine run (`kuvo.engineFor`), act as their conversation: its
     name, folder, model, approval, and where answers go. A group chat's seat may only list and read.
   - Who there is: the box's own agents and its peers' (as `run/agents.json` has them), and any
@@ -646,7 +676,9 @@ client shows it from the same routes.
   message (an ask to be read at its next step), kept in `run/work/wakes.json` until it's sent (for a
   conversation the engine doesn't know while the coding agents' bridge isn't running, a day at most,
   since it may be the bridge's; and so is an answer given late, below; for an archived one, until
-  it's brought back, as its own wake-ups wait, a week at most). Clients mark rows by `kuvo.by`.
+  it's brought back, as its own wake-ups wait, a week at most; for one moving to or from another
+  computer, until it's there; for one that moved away from here in the last two days, it goes to it
+  there as a letter with `note`, "Peers", delivered there as it would have been here). Clients mark rows by `kuvo.by`.
   Its task ends with the session's half of the playbook: review your work with reviewer subagents,
   fix what they find, and end with a short report.
 - **Tools** (`POST kuvo/agent-tools`, any conversation, for the sessions under it):
@@ -748,7 +780,9 @@ folder you pick once per box, after asking you.
   and a projects folder is picked. The ask is kept in `run/work/asks.json` until you answer; the
   tool waits up to ten minutes, then says it stays asked, and the conversation gets
   `[The user answered] …` as a message when you do (for a conversation the engine doesn't know
-  while the coding agents' bridge isn't running, tried again every few minutes, a week at most).
+  while the coding agents' bridge isn't running, or one moving to or from another computer, tried
+  again every few minutes, a week at most; to one that moved away from here lately, as a letter there
+  with `note`, "Peers").
   - An ask goes with its bot (deleted), or after a week unanswered.
   - `GET kuvo/work/asks` and `GET kuvo/work/asks/events` (ndjson, a line now and at each change)
     → `{asks: [{id, action: makeProject|cloneProject, session, name, bot?, project, clone?,
@@ -823,7 +857,10 @@ beside it.
   spent lets what spends go on; the bot is told `[Goal changed] …`) and `{action: clear, waiting:
   <id>}` (what waited, put away). An end written without a zone (`2026-11-30T18:00`) is in yours
   (`KUVO_TZ`, else the computer's). Never a tool, an agent's message or another computer's mail. 400 for one in the
-  wrong state or a card from more than a day ago; 404 for none. Starting tells the bot `[Goal
+  wrong state or a card from more than a day ago; 404 for none; 409 for starting one (or asking
+  for one) while its bot moves to another computer (a goal stays on the box it started on, and a
+  bot working on one doesn't move: `kuvo/moves`), when the bot isn't told anything of its goal
+  either. Starting tells the bot `[Goal
   started] …` (what's switched on and off, what it may spend, the projects it may make, the end) and
   sets the conversation's goal with `long: true` (no brief of its own: this is it); declining tells
   it `[Not now] …`; stopping stops its work as `stop-all` does, and takes the conversation's goal

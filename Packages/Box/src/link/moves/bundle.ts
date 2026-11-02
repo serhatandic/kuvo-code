@@ -20,6 +20,13 @@ import { bundleOf } from "./records";
 /** The most a move carries (1 GB, as clients say sizes): past that it's refused before anything's
  * held for long. */
 export const MOST_BUNDLE = 1_000_000_000;
+/** How long a move waits on its engine or its group chats for one answer, at most: past that it
+ * takes them for not answering (a move never hangs on them). */
+export const ENGINE_WAIT = 2 * 60_000;
+/** And for a conversation's whole export (a big one takes a while). */
+const EXPORT_WAIT = 10 * 60_000;
+/** `signal`, or `most` gone by, whichever comes first. */
+export const engineWait = (signal?: AbortSignal, most = ENGINE_WAIT): AbortSignal => signal ? AbortSignal.any([signal, AbortSignal.timeout(most)]) : AbortSignal.timeout(most);
 
 /** What `move.json` holds. */
 export interface Contents {
@@ -69,12 +76,12 @@ export async function hashOf(file: string): Promise<string> {
 
 /** The conversation and every subagent's under it, root first, as the engine exports them. */
 export async function exportAll(engine: Target, root: string): Promise<unknown[]> {
-  const exports: unknown[] = [await call(engine, "GET", `/api/experimental/session/${encodeURIComponent(root)}/export`)];
+  const exports: unknown[] = [await call(engine, "GET", `/api/experimental/session/${encodeURIComponent(root)}/export`, undefined, engineWait(undefined, EXPORT_WAIT))];
   const next = [root];
   while (next.length) {
     const parent = next.pop()!;
     for (const child of await childrenOf(engine, parent)) {
-      exports.push(await call(engine, "GET", `/api/experimental/session/${encodeURIComponent(child.id)}/export`));
+      exports.push(await call(engine, "GET", `/api/experimental/session/${encodeURIComponent(child.id)}/export`, undefined, engineWait(undefined, EXPORT_WAIT)));
       next.push(child.id);
     }
   }
@@ -140,16 +147,35 @@ export async function keysOf(bot: string): Promise<Record<string, Record<string,
   return keys;
 }
 
-/** The bundle made for move `id`: its file, size and hash. */
+/** What `pack` throws for one more than `MOST_BUNDLE`, before it packs any of it. */
+export class TooBig extends Error {}
+
+/** The bytes in `folder`'s files, counted until there are more than `most` (links not followed). */
+function bytesIn(folder: string, most: number, counted = 0): number {
+  let names: string[] = [];
+  try { names = fs.readdirSync(folder); } catch { return counted; }
+  for (const name of names) {
+    if (counted > most) break;
+    let entry: fs.Stats;
+    try { entry = fs.lstatSync(path.join(folder, name)); } catch { continue; }
+    counted = entry.isDirectory() ? bytesIn(path.join(folder, name), most, counted) : counted + entry.size;
+  }
+  return counted;
+}
+
+/** The bundle made for move `id`: its file, size and hash. One whose files come to more than
+ * `MOST_BUNDLE` isn't packed (`TooBig`). */
 export async function pack(id: string, contents: Contents): Promise<{ file: string; size: number; hash: string }> {
   const folder = bundleOf(id);
   const staging = path.join(folder, "pack");
+  const moveJSON = JSON.stringify(contents);
+  const original = contents.folder ? folderOf(contents.kind, contents.thing) : null;
+  if (Buffer.byteLength(moveJSON) + (original ? bytesIn(original, MOST_BUNDLE) : 0) > MOST_BUNDLE) throw new TooBig();
   fs.rmSync(staging, { recursive: true, force: true });
   fs.mkdirSync(staging, { recursive: true, mode: 0o700 });
-  fs.writeFileSync(path.join(staging, "move.json"), JSON.stringify(contents), { mode: 0o600 });
+  fs.writeFileSync(path.join(staging, "move.json"), moveJSON, { mode: 0o600 });
   const file = path.join(folder, "bundle.tgz");
   const args = [...(process.platform === "darwin" ? ["--no-mac-metadata", "--no-xattrs"] : []), "-czf", file, "-C", staging, "move.json"];
-  const original = contents.folder ? folderOf(contents.kind, contents.thing) : null;
   if (original) args.push("-C", path.dirname(original), path.basename(original));
   await run("tar", args);
   fs.rmSync(staging, { recursive: true, force: true });
@@ -222,7 +248,7 @@ export async function importAll(engine: Target, exports: unknown[], directory: s
 /** Gone from `engine`; one that isn't there is as good as gone. */
 export async function deleteSession(engine: Target, id: string): Promise<void> {
   try {
-    await call(engine, "DELETE", `/api/session/${encodeURIComponent(id)}`);
+    await call(engine, "DELETE", `/api/session/${encodeURIComponent(id)}`, undefined, engineWait());
   } catch (error) {
     if (!/404|not found/i.test(String((error as Error | null)?.message ?? error))) throw error;
   }
@@ -230,8 +256,8 @@ export async function deleteSession(engine: Target, id: string): Promise<void> {
 
 /** A group chat on this box's bridge: `action` (hold, activate, release), its answer's data. */
 export async function groupAction(bridge: Target, group: string, action: "hold" | "activate" | "release"): Promise<unknown> {
-  const answer = await askGroups<{ data?: unknown; message?: unknown }>(bridge, "POST", `/${encodeURIComponent(group)}/${action}`, undefined, undefined);
+  const answer = await askGroups<{ data?: unknown; message?: unknown }>(bridge, "POST", `/${encodeURIComponent(group)}/${action}`, undefined, engineWait());
   if (answer.status === 404 && action === "release") return null;
-  if (answer.status !== 200) throw new Error(typeof answer.value?.message === "string" ? answer.value.message : `Its group chats answered ${answer.status}.`);
+  if (answer.status !== 200) throw Object.assign(new Error(typeof answer.value?.message === "string" ? answer.value.message : `Its group chats answered ${answer.status}.`), { status: answer.status });
   return answer.value?.data ?? null;
 }

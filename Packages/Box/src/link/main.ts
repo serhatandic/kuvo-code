@@ -168,7 +168,7 @@ export { ownRefreshed } from "./server/naming";
 export { FROM_PHONE, fromPhone } from "./server/forward";
 export { stopMacLink } from "./mac/link";
 export { macNoticeHold, macTell } from "./mac/notices";
-export { LETTER_WAIT, runMacPeers, stopMacPeers } from "./mac/peers";
+export { LETTER_WAIT, macSendOutbox, runMacPeers, stopMacPeers } from "./mac/peers";
 export { setMacPeers } from "./mac/routes";
 export { engineHandler } from "./server/router";
 export { connectOnce, fromRelay, nextTry } from "./relay/connection";

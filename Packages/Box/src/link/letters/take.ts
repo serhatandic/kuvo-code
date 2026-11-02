@@ -15,6 +15,7 @@ import { readLink } from "../state";
 import { LETTERS_SEEN, LETTER_ID, LETTER_LIFE, LETTER_MEMORY, composeLetter, cutText, pausedNote, placeOfSession } from "./letter";
 import { READ_BY_MAIL, excerpt, readConversation } from "./conversation";
 import { allowed, takeBack } from "./limits";
+import { deliverNote, noteOf } from "./note";
 import { ANSWER_TEXT, answered } from "./outbox";
 import { awaitingAnswer } from "../work/awaited";
 import type { ListedAgent, Target, ToldAgents } from "../../shared/records";
@@ -160,7 +161,9 @@ function noConversation(id: string, bridge: boolean, now: number): [string, bool
 // another's). It goes to a conversation here that an agent could be (not a subagent's, a group
 // chat's seat, nor one put away); an answer (`answers`) to a letter a tool here waits for goes to
 // that tool. One for a conversation moving to or from another computer now (`moving`), or that
-// lives on another now, comes again, and reaches it where it lives then. `send(peer, payload)`
+// lives on another now, comes again, and reaches it where it lives then. One that's the sending
+// box's own word for a conversation that moved here from it (`note`) is delivered as that box would
+// have delivered it, from whom the note says. `send(peer, payload)`
 // mails the peer; `answer(letter)` sends this box's answer back.
 // (`send` and `targets` are always given: the `{}` is only there as the default.)
 export async function takeLetter(sender: LetterSender, letter: unknown, { send, targets, answer = () => {}, told = readPeerAgents(), peers = peersOf(readLink()), moved = movedOf(readLink()), now = Date.now(), wait, moving = async () => false, bridge = true }: TakeLetterOptions = {} as TakeLetterOptions): Promise<void> {
@@ -188,7 +191,11 @@ export async function takeLetter(sender: LetterSender, letter: unknown, { send, 
     return no(why, again);
   };
   delivering.add(id);
-  let place: SessionPlace | null, prompt: string, fromAgent: ListedAgent | null = null, went: "sent" | "waits";
+  let place: SessionPlace | null, prompt = "", fromAgent: ListedAgent | null = null, went: "sent" | "waits";
+  // The sending box's own word for a conversation that moved here from it (`note`): delivered as
+  // it would have been there, and never answered. Only a box sends one: its agents' letters are
+  // never notes.
+  const note = noteOf(letter.note);
   try {
     const lives = moved.get(letter.to);
     if ((lives && lives !== ownKey(readLink() ?? {})) || (await moving(letter.to))) return notDelivered("It's moving to another computer: it comes again once it's there.", true);
@@ -197,22 +204,26 @@ export async function takeLetter(sender: LetterSender, letter: unknown, { send, 
     bridgeWaits.delete(id);
     const kuvo = place.data?.metadata?.kuvo ?? {};
     if (place.data?.parentID || kuvo.seat || isPutAway(place.data)) return notDelivered("That conversation doesn't take messages.");
-    // Its sender: that box's own agent, as it named it; one of this box's own claimed from there isn't.
-    // (`from` isn't checked: one that's no session finds no agent.)
-    const listed = peerOf(letter.from as string, peers, told, moved)?.key === sender.key ? (told[sender.key]?.list ?? []).find(agent => agent.session === letter.from) : null;
-    if (listed && !(await placeOfSession(letter.from as string, targets).catch(() => ({})))) fromAgent = listed;
-    const name = fromAgent?.name ?? `an agent on ${plainName(sender.name) || "another computer"}`;
-    prompt = messageID();
-    const waits = letter.wait === true && Boolean(fromAgent);
-    const by = fromAgent ? letter.from as string : "unknown";
-    went = await sendInto(place.target, letter.to, { id: prompt, text: composeLetter(name, by, cutText(letter.text), waits), delivery: "steer" },
-      { from: name, words: cutText(letter.text), kept: composeLetter(name, by, cutText(letter.text), false) });
+    if (note) went = await deliverNote(place.target, letter.to, messageID(), cutText(letter.text), note);
+    else {
+      // Its sender: that box's own agent, as it named it; one of this box's own claimed from there isn't.
+      // (`from` isn't checked: one that's no session finds no agent.)
+      const listed = peerOf(letter.from as string, peers, told, moved)?.key === sender.key ? (told[sender.key]?.list ?? []).find(agent => agent.session === letter.from) : null;
+      if (listed && !(await placeOfSession(letter.from as string, targets).catch(() => ({})))) fromAgent = listed;
+      const name = fromAgent?.name ?? `an agent on ${plainName(sender.name) || "another computer"}`;
+      prompt = messageID();
+      const waits = letter.wait === true && Boolean(fromAgent);
+      const by = fromAgent ? letter.from as string : "unknown";
+      went = await sendInto(place.target, letter.to, { id: prompt, text: composeLetter(name, by, cutText(letter.text), waits), delivery: "steer" },
+        { from: name, words: cutText(letter.text), kept: composeLetter(name, by, cutText(letter.text), false) });
+    }
   } catch (error) {
     return notDelivered(`It didn't reach it: ${String((error as Error | null)?.message ?? error)}`, true);
   } finally {
     delivering.delete(id);
   }
   noteSeen(id, now);
+  if (note) return send(sender, { delivered: { id, ok: true } });
   // Waiting for an answer it can't have (its sender couldn't be told): it hears no answer's coming.
   if (letter.wait === true && !fromAgent) return send(sender, { delivered: { id, ok: true, answer: false, why: "Its answer can't come back to you: it doesn't know who you are." } });
   // Stopped by the user here: it waits for them, and its answer comes as a message.

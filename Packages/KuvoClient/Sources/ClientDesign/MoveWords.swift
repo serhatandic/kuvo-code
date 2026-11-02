@@ -36,6 +36,18 @@ public enum MoveWords {
         return ("Move \(name) to \(place)?", "\(what) \(leaves)")
     }
 
+    /// What a move asked of `from` (a computer, by name) says when the connection went before its
+    /// box answered, from its moves read again: `moving` nil while it's out of reach still, true
+    /// when the move is under way there, false when nothing of it is (it never got there, was
+    /// turned down, or is over already).
+    public static func lost(from: String, moving: Bool?) -> String {
+        switch moving {
+        case nil: "Kuvo Code lost touch with \(from) before it said whether it moved. If it started, it goes on there, and shows where it went once it’s there."
+        case true?: "Kuvo Code lost touch with \(from) while it moved. It goes on there, and shows where it went once it’s there."
+        case false?: "Kuvo Code lost touch with \(from) before it answered, and nothing is moving there now. If it isn’t where you moved it, move it again."
+        }
+    }
+
     /// "12 of 30 MB", as other progress is said (`ProgressLine.Words`); nil while its size isn't known.
     public static func progress(sent: Int?, size: Int?) -> String? {
         guard let size, size > 0 else { return nil }

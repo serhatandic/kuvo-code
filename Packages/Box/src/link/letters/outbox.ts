@@ -13,7 +13,7 @@ import { sendInto } from "../engine/queue";
 import { messageID } from "../engine/sessions";
 import { listOf, writePrivate } from "../files";
 import { HERE, IS_MAC, RUN } from "../home";
-import { frozen } from "../moves/records";
+import { frozen, movedAway } from "../moves/records";
 import { announce, toldPeers } from "../peers/agents";
 import { isPutAway, peerOf, readPeerAgents } from "../peers/directory";
 import { mailFor, movedOf, ownKey, ownListed, peersOf } from "../peers/known";
@@ -21,10 +21,12 @@ import { bridgeAsk, giveUpSeat, ONLINE_STEP, SEAT_LETTER_LIFE, seatAge, seatRoun
 import { readLink } from "../state";
 import { excerpt, READ_BY_MAIL, readConversation } from "./conversation";
 import { composeLetter, cutText, LETTER_ID, LETTER_LIFE, LETTER_MEMORY, letterTries, OUTBOX, pausedNote, placeOfSession, SENDING } from "./letter";
+import { deliverNote, noteOf } from "./note";
 import { answerTo } from "./take";
 import type { Target } from "../../shared/records";
 import type { PutAwayable } from "../peers/directory";
 import type { Peer } from "../peers/known";
+import type { LetterNote } from "./note";
 import type { BridgeAsk, SeatLetter } from "../peers/seats";
 import type { LinkHost } from "../relay/host";
 import type { LinkState } from "../state";
@@ -40,6 +42,8 @@ export interface MailedLetter {
   at: number;
   answers?: string;
   read?: LetterRead;
+  /** The box's own word, not an agent's: delivered as that box would have (`LetterNote`). */
+  note?: LetterNote;
 }
 
 /** A letter that asks for a conversation instead of saying something (read_conversation from another
@@ -78,6 +82,7 @@ export interface OutboxLetter {
   peer?: string;
   sentTo?: string;
   read?: LetterRead;
+  note?: LetterNote;
 }
 
 /** What waits in `outbox/sending/<id>.json`, as the outbox reads it: a letter, or with `seat`, a
@@ -146,15 +151,27 @@ export function givenUp(id: string): void {
   } catch {}
 }
 
-// A letter for the outbox, from this box (an answer, say).
-function leaveLetter(letter: OutboxLetter, now = Date.now()): void {
+// A letter for the outbox, from this box (an answer, say); false if it couldn't be left.
+function leaveLetter(letter: OutboxLetter, now = Date.now()): boolean {
   try {
     fs.mkdirSync(SENDING, { recursive: true, mode: 0o700 });
     const id = "ltr_" + crypto.randomBytes(16).toString("base64url");
     writePrivate(path.join(SENDING, `${id}.json`), JSON.stringify({ ...letter, wait: false, at: now }));
-  } catch {}
+    return true;
+  } catch {
+    return false;
+  }
 }
-export const leaveAnswer = (letter: OutboxLetter): void => leaveLetter(letter);
+export const leaveAnswer = (letter: OutboxLetter): void => void leaveLetter(letter);
+
+/** What this box has to tell one of its conversations that moved to another computer lately
+ * (`movedAway`): a letter to it there, which the outbox sends as any other, with `note` saying how
+ * it would have been delivered here, so the box it goes to delivers it the same way. False when it
+ * didn't move away from here, or the letter couldn't be left. */
+export function tellMovedAway(session: string, text: string, note: LetterNote, now = Date.now()): boolean {
+  const away = movedAway(now).find(each => each.session === session);
+  return Boolean(away) && leaveLetter({ from: null, to: session, text, peer: away!.key, note }, now);
+}
 
 // How a letter went, from the box it went to (anyone else's word is dropped): there, so it's not
 // sent again, and with `wait`, its answer awaited (`replies/<id>.wait`, whose box it's from), or
@@ -220,6 +237,12 @@ async function deliverHere(id: string, file: string, letter: OutboxLetter, step:
       const query = typeof letter.read.query === "string" && letter.read.query.trim() ? letter.read.query.trim() : null;
       return done({ text: excerpt(await readConversation(place.target, letter.to, place.data ?? {}, name), query, READ_BY_MAIL), read: true });
     }
+    // The box's own word (`tellMovedAway`): as it would have gone here, never awaited.
+    const note = noteOf(letter.note);
+    if (note) {
+      await deliverNote(place.target, letter.to, messageID(), cutText(letter.text), note);
+      return done();
+    }
     const sender = nameOf(letter.from) ?? (IS_MAC ? "another agent" : `an agent on ${HERE}`);
     const by = letter.from ?? "unknown";
     const words = cutText(letter.text);
@@ -237,11 +260,12 @@ async function deliverHere(id: string, file: string, letter: OutboxLetter, step:
     let alive = 0;
     try { alive = fs.statSync(path.join(REPLIES, `${id}.alive`)).mtimeMs; } catch {}
     if (IS_MAC ? waiter && !waiter.gone() : Date.now() - alive <= 10_000) return reply(id, { text: said, to: letter.from, from: letter.to, name });
-    // Its tool stopped waiting: to the conversation that asked, as a message.
-    const asker = letter.from ? await placeOfSession(letter.from, peerTargets()).catch(() => null) : null;
-    if (!asker || !letter.from) return;
-    await sendInto(asker.target, letter.from, { id: messageID(), text: composeLetter(name, letter.to, said, false), delivery: "steer" },
-      { from: name, words: said, kept: composeLetter(name, letter.to, said, false) });
+    // Its tool stopped waiting: to the conversation that asked, as a message, left as answers its
+    // tool never took are (`deliverLeftAnswers`): tried again until it goes, not while that
+    // conversation moves, and to it on the computer it moved to.
+    if (!letter.from) return;
+    fs.mkdirSync(REPLIES, { recursive: true, mode: 0o700 });
+    writePrivate(path.join(REPLIES, `${id}.json`), JSON.stringify({ text: said, to: letter.from, from: letter.to, name } satisfies AnswerReply));
   } catch {
     // Tried again the next minute.
   } finally {
@@ -286,7 +310,8 @@ export function answered(sender: { key: string; name?: string }, { answers: id, 
 
 // Answers a tool here was given but never took (its turn stopped as one came): to the conversation
 // that asked, as a message, once the tool's gone (it left `<id>.gaveup`, or stopped noting it
-// waits), if it still takes letters (not a subagent's, a group chat's seat, nor one put away). Each
+// waits), if it still takes letters (not a subagent's, a group chat's seat, nor one put away); not
+// while it moves to or from another computer, and to it there once it's moved away. Each
 // once at most: taken out of the tool's way first, put back to try again if it can't go now (or, a
 // day at most, while the coding agents' bridge whose conversation it may be isn't running); one
 // cut off as it's delivered (this bridge stopped) stays `.delivering`, and is dropped.
@@ -307,15 +332,20 @@ export async function deliverLeftAnswers(now = Date.now(), targets: Target[] = p
       continue;
     }
     if (typeof answer?.text !== "string" || typeof answer.to !== "string") continue;
+    // Moving to or from another computer: it waits until it's there.
+    if (frozen().has(answer.to)) continue;
     const taken = `${file}.delivering`;
     try { fs.renameSync(file, taken); } catch { continue; }
     try {
+      const name = String(answer.name ?? "another agent");
+      const text = composeLetter(name, String(answer.from ?? "unknown"), answer.text, false);
       const place = await placeOfSession(answer.to, targets);
-      if (place === null && !bridgeRuns && now - fs.statSync(taken).mtimeMs <= LETTER_LIFE) throw new Error("Its coding agents aren't running here now.");
+      // Moved to another computer since: to it there, as a letter.
+      const there = place === null && tellMovedAway(answer.to, text, { from: name, words: answer.text, delivery: "steer" });
+      if (place === null && !there && !bridgeRuns && now - fs.statSync(taken).mtimeMs <= LETTER_LIFE) throw new Error("Its coding agents aren't running here now.");
       const kuvo = place?.data?.metadata?.kuvo ?? {};
       if (place && !place.data?.parentID && !kuvo.seat && !isPutAway(place.data as PutAwayable)) {
-        const name = String(answer.name ?? "another agent");
-        await sendInto(place.target, answer.to, { id: messageID(), text: composeLetter(name, String(answer.from ?? "unknown"), answer.text, false), delivery: "steer" }, { from: name, words: answer.text });
+        await sendInto(place.target, answer.to, { id: messageID(), text, delivery: "steer" }, { from: name, words: answer.text });
       }
       fs.rmSync(taken, { force: true });
       fs.rmSync(path.join(REPLIES, `${id}.gaveup`), { force: true });
@@ -329,8 +359,11 @@ export async function deliverLeftAnswers(now = Date.now(), targets: Target[] = p
 // JSON, they can be several times as many bytes as characters); null if even a short one won't.
 export function letterMail(peer: Pick<Peer, "key" | "address">, letter: MailedLetter, link: LinkState, now = Date.now()): Buffer | null {
   const words = String(letter.text ?? "");
+  const { note } = letter;
   for (const most of [LETTER_BYTES, LETTER_BYTES / 4, 2000]) {
-    const bytes = mailFor(peer, { letter: { ...letter, text: prefixBytes(words, most) }, at: now }, link);
+    // (A note's words and line too: each is at most what its text is, so it all fits.)
+    const cut = note ? { note: { ...note, words: prefixBytes(note.words, most), ...(note.line !== undefined ? { line: prefixBytes(note.line, most) } : {}) } } : {};
+    const bytes = mailFor(peer, { letter: { ...letter, text: prefixBytes(words, most), ...cut }, at: now }, link);
     if (bytes) return bytes;
   }
   return null;
@@ -438,7 +471,8 @@ export function sendOutbox(host: Pick<LinkHost, "send">, link: LinkState | null 
     }
     letterTries.set(id, now);
     const bytes = letterMail(peer, { id, from: letter.from, to: letter.to, text: cutText(letter.text), wait: letter.wait === true, at: made,
-      ...(letter.answers ? { answers: letter.answers } : {}), ...(isObject(letter.read) ? { read: typeof letter.read.query === "string" ? { query: letter.read.query } : {} } : {}) }, link, now);
+      ...(letter.answers ? { answers: letter.answers } : {}), ...(isObject(letter.read) ? { read: typeof letter.read.query === "string" ? { query: letter.read.query } : {} } : {}),
+      ...(noteOf(letter.note) ? { note: noteOf(letter.note)! } : {}) }, link, now);
     if (!bytes) {
       fs.rmSync(file, { force: true });
       if (letter.wait === true) reply(id, { failed: "It's too long to send." });

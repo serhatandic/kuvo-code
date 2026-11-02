@@ -3,33 +3,6 @@ import KuvoLink
 import OpenCodeKit
 import os
 
-/// The group chats of one of your computers (a box), as a move between them sees it: the same
-/// steps on both ends, wherever each is. Held where it was, brought where it's going and held
-/// there, then started there and let go of where it was; or, cut short, taken back.
-@MainActor
-protocol GroupHome: AnyObject {
-    /// Whether it can be asked now (a machine connected, this Mac's bridge up).
-    var isReachable: Bool { get }
-    /// Its talk stops and nothing more happens to it here; the chat as it is now, as the box keeps
-    /// it (passed on as it is: what the box keeps of it is the box's to read).
-    func hold(_ id: String) async throws -> HeldChat
-    /// A copy brought here, held until it's started.
-    func bring(_ held: HeldChat) async throws
-    /// Started here.
-    func activate(_ id: String) async throws
-    /// Gone from here, moved away: to the trash where it was, its seats left (its bots live there).
-    func letGo(_ id: String) async throws
-    /// A copy brought here that didn't get to start: gone, seats and all left as they are.
-    /// Whether it is (not if it can't be asked now).
-    func takeBack(_ id: String) async -> Bool
-}
-
-/// A chat held for a move, its record and messages as its box keeps them.
-struct HeldChat {
-    var group: JSONValue
-    var messages: JSONValue
-}
-
 /// What a chat says now, for the window: one object a chat, so what one of them says redraws only
 /// what shows that chat.
 @MainActor @Observable
@@ -47,26 +20,6 @@ final class GroupLive {
 /// A bridge event's `data`.
 private struct EventData<Value: Decodable>: Decodable {
     var data: Value
-}
-
-/// One computer's group chats, as a move sees them (`GroupHome`), through `BoxGroups`: a machine's,
-/// or this Mac's (`machine` nil). The same steps either way.
-@MainActor
-final class BoxGroupHome: GroupHome {
-    let machine: String?
-    let groups: BoxGroups
-
-    init(machine: String?, groups: BoxGroups) {
-        self.machine = machine
-        self.groups = groups
-    }
-
-    var isReachable: Bool { groups.reachable(machine) }
-    func hold(_ id: String) async throws -> HeldChat { try await groups.hold(id, on: machine) }
-    func bring(_ held: HeldChat) async throws { try await groups.bring(held, to: machine) }
-    func activate(_ id: String) async throws { try await groups.activate(id, on: machine) }
-    func letGo(_ id: String) async throws { try await groups.release(id, on: machine) }
-    func takeBack(_ id: String) async -> Bool { await groups.takeBack(id, on: machine) }
 }
 
 /// Your group chats, wherever they live. Each computer's coding agents' bridge runs its own
@@ -763,69 +716,6 @@ final class BoxGroups {
         Task { _ = try? await api.boxGroupAction(id, action, body) }
     }
 
-    // MARK: Moving one
-
-    /// A chat brought to a computer, as the box it leaves keeps it (`Moves`): held there until
-    /// `activate`. What's kept here of it is read from that, for the window.
-    func bring(_ held: HeldChat, to machine: String?) async throws {
-        guard let api = api(machine), let id = held.group["id"]?.string else { throw failure(for: machine) }
-        _ = try await api.client.send(try api.client.request("PUT", "api/kuvo/groups/\(id.groupPathEscaped)",
-                                                              body: JSONValue.object(["group": held.group, "messages": held.messages, "status": .string("held")])), as: JSONValue.self)
-        guard let group = try? Self.decode(BotGroup.self, from: held.group) else { return }
-        apply(group, held: true, state: State(discussing: false, paused: false), on: machine)
-        if logs[id]?.isEmpty != false, let messages = try? Self.decode([GroupMessage].self, from: held.messages) {
-            setLog(id, messages)
-            saveLog(id)
-        }
-    }
-
-    func activate(_ id: String, on machine: String?) async throws {
-        guard let api = api(machine) else { throw failure(for: machine) }
-        _ = try await api.boxGroupAction(id, "activate")
-        await reload(id, on: machine)
-    }
-
-    /// Held there for a move away: its talk stops; the chat as it is now, as the box keeps it.
-    func hold(_ id: String, on machine: String?) async throws -> HeldChat {
-        guard let api = api(machine) else { throw failure(for: machine) }
-        guard let held = try await api.boxGroupAction(id, "hold"), let group = held["group"], case .object = group,
-              let messages = held["messages"], case .array = messages else { throw Failure.unreadable }
-        if let index = chats.firstIndex(where: { $0.group.id == id && $0.machine == machine }) {
-            chats[index].held = true
-            chats[index].discussing = false
-            chats[index].speaking = nil
-            save()
-        }
-        return HeldChat(group: group, messages: messages)
-    }
-
-    /// Let go there, its seats left (its bots stay there); gone from here. One gone there already
-    /// (let go before a crash, or by an older version) is as good as let go.
-    func release(_ id: String, on machine: String?) async throws {
-        guard let api = api(machine) else { throw failure(for: machine) }
-        do {
-            _ = try await api.boxGroupAction(id, "release")
-        } catch let error as ServerError where error.status == 404 {
-            // Gone there already.
-        }
-        forget(id, on: machine)
-    }
-
-    /// One brought there that didn't get to start (a move taken back): gone there, seats and all
-    /// left as they are (the chat goes on where it was). Whether it is (not if it wasn't there).
-    func takeBack(_ id: String, on machine: String?) async -> Bool {
-        guard let api = api(machine) else { return false }
-        do {
-            _ = try await api.boxGroupAction(id, "release")
-        } catch let error as ServerError where error.status == 404 {
-            // Never got there.
-        } catch {
-            return false
-        }
-        forget(id, on: machine)
-        return true
-    }
-
     enum Failure: LocalizedError {
         case away(String)
         case macStarting
@@ -1017,14 +907,6 @@ extension OpenCodeAPI {
     func boxGroup(_ id: String) async throws -> BoxGroupRead {
         struct Answer: Decodable { var data: BoxGroupRead }
         return try await groupData(try client.request("GET", "api/kuvo/groups/\(id.groupPathEscaped)"), as: Answer.self).data
-    }
-
-    func putBoxGroup(_ group: BotGroup, messages: [GroupMessage], held: Bool) async throws {
-        struct Body: Encodable { var group: BotGroup; var messages: [GroupMessage]; var status: String }
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        let body = try JSONDecoder().decode(JSONValue.self, from: encoder.encode(Body(group: group, messages: messages, status: held ? "held" : "active")))
-        _ = try await client.send(try client.request("PUT", "api/kuvo/groups/\(group.id.groupPathEscaped)", body: body), as: JSONValue.self)
     }
 
     func editBoxGroup(_ id: String, _ edits: [String: JSONValue]) async throws {

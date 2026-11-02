@@ -39,6 +39,9 @@ export interface MoveRecord extends Move {
   /** Offered to the other box at least once: a copy may be there, to drop if it's taken back. */
   offered?: boolean;
   sentAt?: number;
+  /** The box it leaves: when an offer or an ask whether it arrived was last sent again (quiet is
+   * counted from `sentAt`, the step's first, and what was last heard). */
+  againAt?: number;
   /** The box it leaves: its conversation kept in its folder as the original goes (a try at that cut
    * short doesn't keep it again, with less of it). */
   kept?: boolean;
@@ -47,11 +50,17 @@ export interface MoveRecord extends Move {
   /** The box it goes to: its conversations whose queue the move brought going on where it came
    * from (not paused), to go on here once it's switched to. */
   queuesGoOn?: string[];
+  /** The box it goes to: its copy is being let go of (it won't be switched to), which is tried again
+   * until all of it's gone (its engine or group chats were down). */
+  dropping?: boolean;
+  /** The box it leaves: since when it's been getting it ready to go (held, settled, packed). */
+  holdSince?: number;
   /** The box it goes to: since when it's been setting its copy up. */
   setUpSince?: number;
   /** Since when the box it leaves has asked the other to switch to its copy. */
   switchSince?: number;
-  /** Since when the box it leaves has asked the other to let its copy go (taken back). */
+  /** Since when the box it leaves has asked the other to let its copy go (taken back); on the box it
+   * goes to, since when its copy's been let go of. */
   dropSince?: number;
   started: number;
   /** Taken back, with why (said to whoever asked). */

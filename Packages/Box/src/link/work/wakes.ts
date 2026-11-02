@@ -14,6 +14,8 @@ import { boxNote } from "../../shared/queues";
 import { messageID } from "../engine/sessions";
 import { locked, writePrivate } from "../files";
 import { LETTER_LIFE, placeOfSession } from "../letters/letter";
+import { tellMovedAway } from "../letters/outbox";
+import { frozen } from "../moves/records";
 import { isPutAway, type PutAwayable } from "../peers/directory";
 import { describeForm, describePermission } from "../notices/news";
 import { noteWorkChanged, WORK_FOLDER } from "./changes";
@@ -243,10 +245,14 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
       return one;
     });
     if (!waiting?.lines.length) return;
-    // Gone for sure: nothing to tell. Not to be reached now (the engine starting again, or the coding
-    // agents' bridge not running, whose it may be): kept, a day at most, and tried again a little
-    // later each time.
-    const place = await placeOfSession(starter, targets()).catch(() => undefined);
+    // Gone for sure: nothing to tell. Not to be reached now (the engine starting again, the coding
+    // agents' bridge not running, whose it may be, or moving to or from another computer, when a
+    // turn here would be left behind): kept, a day at most, and tried again a little later each
+    // time. Moved to another computer since: told there, as a letter.
+    const place = frozen().has(starter) ? undefined : await placeOfSession(starter, targets()).catch(() => undefined);
+    const line = wakeLineShown(waiting.lines);
+    const delivery = waiting.asks ? "steer" : "queue";
+    if (place === null && tellMovedAway(starter, wakeText(waiting.lines), { from: "Its sessions", words: line, line, delivery })) return void failures.delete(starter);
     if (place === null && (bridgeRuns() || Date.now() - waiting.since > LETTER_LIFE)) return;
     try {
       if (!place) throw new Error("Not reached.");
@@ -257,8 +263,7 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
         throw new Error("Archived.");
       }
       // Stopped by the user: it waits there with the queue, as theirs does.
-      const line = wakeLineShown(waiting.lines);
-      await sendInto(place.target, starter, { id: messageID(), text: wakeText(waiting.lines), delivery: waiting.asks ? "steer" : "queue", metadata: boxNote("Its sessions", line) }, { from: "Its sessions", words: line });
+      await sendInto(place.target, starter, { id: messageID(), text: wakeText(waiting.lines), delivery, metadata: boxNote("Its sessions", line) }, { from: "Its sessions", words: line });
       failures.delete(starter);
     } catch {
       putBack(starter, waiting);

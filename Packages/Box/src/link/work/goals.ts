@@ -24,6 +24,8 @@ import { changeQueue, queueOf, readQueues, resumeQueue, sendInto, stopSession } 
 import { PAUSED_BY_YOU } from "../../shared/goals";
 import { boxNote } from "../../shared/queues";
 import { messageID } from "../engine/sessions";
+import { MOVING } from "../bots/here";
+import { frozen } from "../moves/records";
 import { locked, textOf, writePrivate } from "../files";
 import { BOTS, HERE } from "../home";
 import { placeOfSession } from "../letters/letter";
@@ -109,6 +111,10 @@ const readKept = (file = GOALS_FILE): KeptGoal[] => {
     return [];
   }
 };
+
+/** Whether `bot` has a goal running here (kept on this box, in `goals.json`: it doesn't move with
+ * the bot). */
+export const goalRuns = (bot: string, file = GOALS_FILE): boolean => readKept(file).some(goal => goal.bot === bot && goal.state === "running");
 
 // The goals as `change` leaves them, under the lock: each bot's latest, while its bot is here.
 function changeKept<T>(change: (goals: KeptGoal[]) => T, file = GOALS_FILE): T {
@@ -323,7 +329,7 @@ export function proposeGoal(bot: { bot: string; name: string; session: string },
 
 /** Why your answer can't be taken: no such goal (404), or one that won't do (400). */
 export interface GoalRefusal {
-  status: 400 | 404;
+  status: 400 | 404 | 409;
   message: string;
 }
 
@@ -336,6 +342,9 @@ export async function answerGoal(id: string, given: Record<string, unknown>, tar
   if (action !== "start" && action !== "decline" && action !== "stop") return { refused: { status: 400, message: "Say start, change, clear, decline or stop (action)." } };
   const before = readKept(file).find(goal => goal.id === id);
   if (!before || !botHere(before.bot)) return { refused: { status: 404, message: "There's no such goal here." } };
+  // Not while its bot moves: a goal stays on the computer it started on, and nothing reaches the bot
+  // meanwhile.
+  if (action === "start" && frozen().has(before.bot)) return { refused: { status: 409, message: MOVING } };
   const switches = isObject(given.public) ? given.public : {};
   const ends = action === "start" ? endGiven(given.ends) : undefined;
   if (ends === null) return { refused: { status: 400, message: "The end (ends) is a date and time to come." } };
@@ -568,8 +577,9 @@ function forgetHold(session: string, file: string): KeptGoal | null {
 const resetLine = (why: string) => `${why.charAt(0).toUpperCase()}${why.slice(1)} reset`;
 
 // `said` to the goal's bot, as a message in its conversation marked as the goal's, which a client
-// shows as `line`.
+// shows as `line`. Not while it moves (nothing reaches it then): false, as for one not reached.
 async function tellBot(goal: Pick<KeptGoal, "session">, said: string, line: string, targets: () => Target[]): Promise<boolean> {
+  if (frozen().has(goal.session)) return false;
   const place = await placeOfSession(goal.session, targets()).catch(() => null);
   if (!place) return false;
   return sendInto(place.target, goal.session, { id: messageID(), text: said, delivery: "queue", metadata: boxNote("Goal", line) }, { from: "Goal", words: line }).then(() => true, () => false);
@@ -584,6 +594,7 @@ const GOAL_ASKED = "The user sent this as a goal, with Kuvo Code's /goal. Plan i
 export async function askGoal(session: string, words: string, targets: () => Target[]): Promise<{ text: string } | { refused: GoalRefusal }> {
   const said = text(words, 2000);
   if (!said) return { refused: { status: 400, message: "Say the goal (goal)." } };
+  if (frozen().has(session)) return { refused: { status: 409, message: MOVING } };
   const place = await placeOfSession(session, targets()).catch(() => null);
   if (!place) return { refused: { status: 404, message: "There's no such conversation here." } };
   // You asked for it now: as a message of yours to go now, the queue goes on.
