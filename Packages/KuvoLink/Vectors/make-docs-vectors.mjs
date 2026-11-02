@@ -22,7 +22,7 @@ const envelope = (seed, bytes) => ({ d: b64(bytes), s: sign(seed, bytes) });
 const peersBody = {
   boxes: [
     { key: b64(crypto.createHash("sha256").update("mac x25519").digest()), sign: publicOf(mac), address: b64(Buffer.alloc(16, 1)), name: "MacBook", kind: "mac" },
-    { key: b64(crypto.createHash("sha256").update("machine x25519").digest()), sign: publicOf(machine), address: b64(Buffer.alloc(16, 2)), name: "lokum", kind: "machine", id: "lokum.invalid" },
+    { key: b64(crypto.createHash("sha256").update("machine x25519").digest()), sign: publicOf(machine), address: b64(Buffer.alloc(16, 2)), name: "devbox", kind: "machine", id: "devbox.invalid" },
   ],
   moved: [],
   left: [],

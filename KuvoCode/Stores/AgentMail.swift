@@ -107,7 +107,7 @@ final class AgentMail {
     }
 
     /// What an agent is, for one `here` (nil: this Mac) to read: "bot, on the Mac",
-    /// "session, on lokum, in api".
+    /// "session, on devbox, in api".
     static func what(_ agent: Agent, here machine: String?) -> String {
         let place = switch agent.machine {
         case machine: machine == nil ? "on the Mac" : "here"

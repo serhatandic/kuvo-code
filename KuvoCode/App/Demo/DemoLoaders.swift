@@ -80,10 +80,10 @@ enum DemoLoaders {
                 Placeholder(.rows(count: 2))
                 HandoffWait("Waiting for you to finish in your browser…", to: .browser)
                 HandoffWait("Waiting for your phone…", to: .phone)
-                ConnectingLink("Connecting to lokum…")
+                ConnectingLink("Connecting to devbox…")
                 ConnectingLink("Connected", isConnected: true)
                 HStack(spacing: 8) {
-                    Text("Searching lokum").font(.system(size: 13))
+                    Text("Searching devbox").font(.system(size: 13))
                     AskingDots()
                 }
                 // The ring in a button takes its label's colour: white on a filled one, grey once

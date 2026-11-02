@@ -80,7 +80,7 @@ describe("who a message to a group chat names with &", () => {
     agents([
       { session: "ses_own_Ada", name: "Ada", kind: "bot", about: "Helps" },
       { session: "ses_fix", name: "Fix login", kind: "session", project: "api" },
-      { session: "ses_scout", name: "Scout", kind: "bot", machine: "lokum", about: "Watches CI" },
+      { session: "ses_scout", name: "Scout", kind: "bot", machine: "devbox", about: "Watches CI" },
     ])
     const { groups, store } = runner()
     engine.lines = { Ada: ["On it.", "PASS"], Ben: ["PASS"] }
@@ -94,7 +94,7 @@ describe("who a message to a group chat names with &", () => {
       [
         "<named-agents>",
         "Agents the user named with & in this message, by their address. Read one's conversation with read_conversation only when what the user asks needs what it knows or did, and write to it with send_message only to ask it something or hand it work; when the user only mentions one, do neither:",
-        "- &Scout (ses_scout): bot, on lokum: Watches CI",
+        "- &Scout (ses_scout): bot, on devbox: Watches CI",
         "- &Fix login (ses_fix): session, on the Mac, in api",
         "</named-agents>",
       ].join("\n"),
@@ -117,9 +117,9 @@ describe("who a message to a group chat names with &", () => {
 
   test("on a machine, what lives there is here, and the Mac's on the Mac", () => {
     const directory = {
-      machine: "lokum",
+      machine: "devbox",
       agents: [
-        { session: "ses_a", name: "Ops", kind: "bot", machine: "lokum" },
+        { session: "ses_a", name: "Ops", kind: "bot", machine: "devbox" },
         { session: "ses_b", name: "Pixel", kind: "bot" },
       ],
     }

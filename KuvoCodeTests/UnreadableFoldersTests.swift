@@ -86,7 +86,7 @@ import Testing
         defer { done() }
         SSHConnection.standIn = { _, script in Self.runHere(script) }
         try lock(folder.path)
-        let tree = FileTree(roots: [RemoteFolder.url(RemoteFolder.folder(folder.path, on: "lokum"))])
+        let tree = FileTree(roots: [RemoteFolder.url(RemoteFolder.folder(folder.path, on: "devbox"))])
         try await until { tree.rootFailure != nil }
 
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
@@ -100,7 +100,7 @@ import Testing
     @Test func onAMachineItsOwnReasonIsKept() async throws {
         defer { done() }
         SSHConnection.standIn = { _, script in Self.runHere(script) }
-        let root = RemoteFolder.url(RemoteFolder.folder(folder.path, on: "lokum"))
+        let root = RemoteFolder.url(RemoteFolder.folder(folder.path, on: "devbox"))
         // Let in: read, with nothing said against it.
         let tree = FileTree(roots: [root])
         #expect(tree.isLoadingRoot)
@@ -110,7 +110,7 @@ import Testing
         try lock(folder.path)
         let locked = FileTree(roots: [root])
         try await until { locked.rootFailure != nil }
-        #expect(locked.rootFailure?.detail(on: "lokum") == "lokum said: Permission denied.")
+        #expect(locked.rootFailure?.detail(on: "devbox") == "devbox said: Permission denied.")
         // One inside it: not let in to look, never said not to be there.
         let inside = FileTree(roots: [root.appending(path: "secrets")])
         try await until { inside.rootFailure != nil }
@@ -125,7 +125,7 @@ import Testing
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
         let gone = FileTree(roots: [root.appending(path: "gone")])
         try await until { gone.rootFailure != nil }
-        #expect(gone.rootFailure?.detail(on: "lokum") == "lokum said: No such folder.")
+        #expect(gone.rootFailure?.detail(on: "devbox") == "devbox said: No such folder.")
         // Its folder gone too (a project moved away): not there, never said to be locked.
         let goneWithIt = FileTree(roots: [root.appending(path: "old/app")])
         try await until { goneWithIt.rootFailure != nil }
@@ -134,7 +134,7 @@ import Testing
         SSHConnection.standIn = { _, _ in nil }
         let away = FileTree(roots: [root])
         try await until { away.rootFailure != nil }
-        #expect(away.rootFailure?.detail(on: "lokum") == "Couldn't reach lokum.")
+        #expect(away.rootFailure?.detail(on: "devbox") == "Couldn't reach devbox.")
     }
 
     /// A machine's script, run by this Mac's `sh` in its place.

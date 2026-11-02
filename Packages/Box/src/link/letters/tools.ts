@@ -98,7 +98,7 @@ export async function rootOf(session: string | null, targets: Target[]): Promise
 }
 
 /** What an agent is, for one here to read: "bot, on the Mac", "session, here, in api", "session, on
- * lokum". */
+ * devbox". */
 export function whatAgent(agent: ListedAgent, here: string | null): string {
   const place = (agent.machine ?? null) === here ? (IS_MAC ? "on the Mac" : "here") : agent.machine ? `on ${agent.machine}` : "on the Mac";
   return `${agent.kind}, ${place}${agent.project ? `, in ${agent.project}` : ""}`;

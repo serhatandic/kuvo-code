@@ -325,7 +325,7 @@ final class BrowserSession: NSObject {
     }
 
     /// An address on this Mac or its network, which a dev server answers over plain http:
-    /// localhost, a computer's own name (`lokum:3000`), `.localhost`, `.test` and `.local`
+    /// localhost, a computer's own name (`devbox:3000`), `.localhost`, `.test` and `.local`
     /// names, and private addresses by number (Tailscale's too).
     static func isLocal(_ host: String) -> Bool {
         let host = host.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]"))

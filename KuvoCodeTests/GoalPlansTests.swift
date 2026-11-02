@@ -120,7 +120,7 @@ import Testing
     /// the box names the reason.
     @Test func theSandboxRowSaysWhyAndItsButtonGoesWhereYouCanFixIt() throws {
         let row = { (reading: GoalSandbox.Reading?, onThisMac: Bool, codingAgent: Bool) in
-            GoalSandbox.row(reading, computer: onThisMac ? "This Mac" : "lokum", onThisMac: onThisMac, bot: "Pixel", codingAgent: codingAgent)
+            GoalSandbox.row(reading, computer: onThisMac ? "This Mac" : "devbox", onThisMac: onThisMac, bot: "Pixel", codingAgent: codingAgent)
         }
         let status = { (reason: String, route: String?) in GoalSandbox.Reading.status(.init(on: false, reason: reason, route: route)) }
 
@@ -129,7 +129,7 @@ import Testing
         #expect(notOn.title == "This Mac can’t work on its own yet")
         #expect(notOn.buttons.isEmpty)
         let unknown = try #require(row(status("somethingNew", "POST kuvo/sandbox/check"), false, false), "a reason from a newer box still says it can't, and checks again")
-        #expect(unknown.title == "lokum can’t work on its own yet")
+        #expect(unknown.title == "devbox can’t work on its own yet")
         #expect(unknown.buttons == [.init(label: "Try Again", action: .route(method: "POST", path: "kuvo/sandbox/check"))])
 
         let kernel = try #require(row(.status(.init(on: false, able: false, reason: "kernel", needs: "Linux 5.13")), false, false))
@@ -137,7 +137,7 @@ import Testing
         #expect(kernel.buttons.map(\.label) == ["How to Check…"])
         // A machine whose commands can't have a namespace of their own, from a box that doesn't run without one.
         let namespaces = try #require(row(.status(.init(on: false, able: false, reason: "namespaces", needs: "user namespaces")), false, false))
-        #expect(namespaces.title == "lokum can’t work on its own")
+        #expect(namespaces.title == "devbox can’t work on its own")
         #expect(namespaces.text.contains("Ask whoever runs it to allow user namespaces"))
         #expect(namespaces.buttons.map(\.label) == ["How to Check…"])
         #expect(row(status("macos", nil), true, false)?.buttons == [.init(label: "Software Update…", action: .open(GoalSandbox.softwareUpdate))])
@@ -153,16 +153,16 @@ import Testing
         for reason in ["engineDown", "waiting"] {
             #expect(row(status(reason, "POST kuvo/engine/restart"), true, false)?.buttons == [.init(label: "Restart Sessions", action: .restartSessions(method: "POST", path: "kuvo/engine/restart"))])
         }
-        #expect(row(status("waiting", "POST kuvo/engine/restart"), false, false)?.text.hasPrefix("Sessions on lokum started before the sandbox was set up") == true)
+        #expect(row(status("waiting", "POST kuvo/engine/restart"), false, false)?.text.hasPrefix("Sessions on devbox started before the sandbox was set up") == true)
         #expect(row(status("checking", "POST kuvo/sandbox/check"), false, false)?.checking == true)
         // Restart Sessions pressed (review of 8eb319e: it was posted and let go): it says they're
         // restarting while the box says they're down or from before it, and nothing to press.
         for reason in ["engineDown", "waiting"] {
-            let back = try #require(GoalSandbox.row(status(reason, "POST kuvo/engine/restart"), computer: "lokum", onThisMac: false, bot: "Pixel", codingAgent: false, restartingSessions: true))
+            let back = try #require(GoalSandbox.row(status(reason, "POST kuvo/engine/restart"), computer: "devbox", onThisMac: false, bot: "Pixel", codingAgent: false, restartingSessions: true))
             #expect(back.title == "Restarting sessions in the sandbox…" && back.checking && back.buttons.isEmpty)
             #expect(back.text == "Pixel works while you’re here until they’re back.")
         }
-        #expect(GoalSandbox.row(status("checking", "POST kuvo/sandbox/check"), computer: "lokum", onThisMac: false, bot: "Pixel", codingAgent: false, restartingSessions: true)?.title == "Checking the sandbox…",
+        #expect(GoalSandbox.row(status("checking", "POST kuvo/sandbox/check"), computer: "devbox", onThisMac: false, bot: "Pixel", codingAgent: false, restartingSessions: true)?.title == "Checking the sandbox…",
                 "back, the box checks its sandbox: it says that")
         // A box that doesn't answer: it says so, and Try Again only reads it again.
         let unreadable = try #require(row(.unreadable, false, false))
@@ -170,7 +170,7 @@ import Testing
         #expect(unreadable.buttons == [.init(label: "Try Again", action: .readAgain)] && !unreadable.checking)
 
         // A box from before the sandbox: the machine is updated from Machines; this Mac, as an app.
-        #expect(row(.old, false, false)?.buttons == [.init(label: "Update lokum…", action: .updateMachine)])
+        #expect(row(.old, false, false)?.buttons == [.init(label: "Update devbox…", action: .updateMachine)])
         #expect(row(.old, true, false)?.buttons == [.init(label: "Check for Updates…", action: .checkForUpdates)])
 
         // A bot on a coding agent: its commands are in the sandbox as the engine's are, so the row
@@ -180,7 +180,7 @@ import Testing
         #expect(row(.status(.init(on: true, agents: true)), true, true) == nil, "all in it: nothing to fix")
         // A machine whose commands can still reach your login's services: on, but no goal alone.
         let services = try #require(row(.status(.init(on: true, agents: true, needs: "user namespaces", gaps: ["services"])), false, false))
-        #expect(services.title == "lokum can’t work on its own")
+        #expect(services.title == "devbox can’t work on its own")
         #expect(services.text.contains("your login’s services") && services.text.contains("Pixel works while you’re here"))
         #expect(services.buttons == [.init(label: "How to Check…", action: .open(GoalSandbox.machinesPage))])
         #expect(row(.status(.init(on: true, agents: true, gaps: ["somethingNew"])), false, false) == nil, "a gap a newer box adds, unknown here, isn't taken for this one")

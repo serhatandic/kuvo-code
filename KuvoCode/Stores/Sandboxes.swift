@@ -60,7 +60,7 @@ final class Sandboxes {
             case "waiting": return SandboxAsk(id: id, at: now - 12 * 60_000, botName: "Scout", project: home + "/kuvo-ai", command: "./scripts/install-hooks.sh",
                                               why: "Installing the repo’s hooks, as the README asks.", stopped: [SandboxStop(kind: .write, path: home + "/.zshrc")])
             case "linux": return SandboxAsk(id: id, at: now, botName: "Scout", project: "/home/me/kuvo-ai", command: "./scripts/install-hooks.sh",
-                                            why: "Installing the repo’s hooks, as the README asks.", error: "/home/me/.zshrc: Permission denied", machine: "lokum")
+                                            why: "Installing the repo’s hooks, as the README asks.", error: "/home/me/.zshrc: Permission denied", machine: "devbox")
             case "long": return SandboxAsk(id: id, at: now, sessionName: "Release the beta", project: home + "/kuvo-ai",
                                            command: "bundle exec fastlane ios beta --env production skip_waiting_for_build_processing:true changelog:\"Fixes the composer, the sidebar and the usage panel\" && ./scripts/notify-team.sh --channel releases",
                                            why: "Fastlane keeps its logs and the build’s metadata in its own folder in your Library, which the sandbox doesn’t let commands write.",

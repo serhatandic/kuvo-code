@@ -173,7 +173,7 @@ import Testing
         try await engine(accounts: [Self.account("anthropic", signedIn: true), Self.account("deepseek", signedIn: false)],
                          models: [Self.model("anthropic", "sonnet-next"), Self.model("deepseek", "chat")],
                          defaultModel: Self.model("anthropic", "sonnet-next"))
-        #expect(catalog.refusal(sonnet, on: "lokum") == "sonnet isn’t available on lokum now: choose another model.")
+        #expect(catalog.refusal(sonnet, on: "devbox") == "sonnet isn’t available on devbox now: choose another model.")
         #expect(catalog.refusal(ModelRef(id: "chat", providerID: "deepseek")) == "chat needs a sign-in: sign in to Deepseek in Settings › Accounts, or choose another model.")
         #expect(catalog.refusal(ModelRef(id: "sonnet-next", providerID: "anthropic")) == nil)
         #expect(catalog.refusal(ModelRef(id: "opus", providerID: "claude-code")) == nil, "its agents still loading")

@@ -12,7 +12,7 @@ Kuvo Code is a small distributed system. Build every feature for that system, ne
 - **So every feature lives on the box**: in the engine and the box's own code, `Packages/Box` (the link in `src/link`, the coding agents' bridge in `src/agents`, what they share in `src/shared`). `scripts/build-box.sh` builds the link into `kuvo-link.js`; never edit that built file (CI fails if it differs). It works on every box, including a machine with the Mac closed, and every client can reach it.
   - Never build a feature only into the Mac app, or only for this Mac's box, or so it works only through the Mac's SSH connection.
   - Where a box can't do something yet, say so plainly in the UI and in your report, rather than quietly making the Mac a hub.
-  - **Box code runs on both macOS and Linux.** This Mac's box and each Linux machine's run the same code, so anything on the box side works on both. Prefer code that's the same on both (Node and Bun APIs that behave alike); where they differ (file watching, processes and `/proc`, paths, the keeper, the shell, the Keychain versus files), handle both explicitly, in one place, and test each. Check a box change on a Linux machine too (a test folder of your own on lokum) before calling it done.
+  - **Box code runs on both macOS and Linux.** This Mac's box and each Linux machine's run the same code, so anything on the box side works on both. Prefer code that's the same on both (Node and Bun APIs that behave alike); where they differ (file watching, processes and `/proc`, paths, the keeper, the shell, the Keychain versus files), handle both explicitly, in one place, and test each. Check a box change on a Linux machine too (a test folder of your own on devbox) before calling it done.
 
 ## UI and UX come first (strict)
 

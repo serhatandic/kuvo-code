@@ -156,8 +156,8 @@ import Testing
         let app = AppModel()
         let mac = await #expect(throws: AppModel.Unreachable.self) { try await app.forgetSignIn("github-copilot") }
         #expect(mac?.localizedDescription == "This Mac’s engine isn’t running. Try again in a moment.")
-        let machine = await #expect(throws: AppModel.Unreachable.self) { try await app.forgetSignIn("github-copilot", on: .machine("lokum")) }
-        #expect(machine?.localizedDescription == "lokum isn’t connected. Try again once it is.")
+        let machine = await #expect(throws: AppModel.Unreachable.self) { try await app.forgetSignIn("github-copilot", on: .machine("devbox")) }
+        #expect(machine?.localizedDescription == "devbox isn’t connected. Try again once it is.")
         let agent = await #expect(throws: OutsideAgents.Failure.self) { try await OutsideAgents().signOut("cursor") }
         #expect(agent?.localizedDescription == "The coding agents are still starting. Try again in a moment.")
     }
@@ -185,10 +185,10 @@ import Testing
 @MainActor
 @Suite struct ConnectWordsTests {
     @Test func itSaysWhatIsntThere() {
-        #expect(ConnectView.unreachable(agent: false, machine: "lokum", engineUp: false, agentsFailure: nil) == "lokum isn’t connected. Try again once it is.")
-        #expect(ConnectView.unreachable(agent: true, machine: "lokum", engineUp: false, agentsFailure: nil) == "lokum isn’t connected. Try again once it is.")
-        #expect(ConnectView.unreachable(agent: true, machine: "lokum", engineUp: true, agentsFailure: nil) == "lokum’s coding agents aren’t running. Try again in a moment.")
-        #expect(ConnectView.unreachable(agent: true, machine: "lokum", engineUp: true, agentsFailure: "Bun crashed") == "lokum’s coding agents couldn’t start: Bun crashed")
+        #expect(ConnectView.unreachable(agent: false, machine: "devbox", engineUp: false, agentsFailure: nil) == "devbox isn’t connected. Try again once it is.")
+        #expect(ConnectView.unreachable(agent: true, machine: "devbox", engineUp: false, agentsFailure: nil) == "devbox isn’t connected. Try again once it is.")
+        #expect(ConnectView.unreachable(agent: true, machine: "devbox", engineUp: true, agentsFailure: nil) == "devbox’s coding agents aren’t running. Try again in a moment.")
+        #expect(ConnectView.unreachable(agent: true, machine: "devbox", engineUp: true, agentsFailure: "Bun crashed") == "devbox’s coding agents couldn’t start: Bun crashed")
         #expect(ConnectView.unreachable(agent: true, machine: nil, engineUp: true, agentsFailure: nil) == "The coding agents are still starting. Try again in a moment.")
         #expect(ConnectView.unreachable(agent: false, machine: nil, engineUp: false, agentsFailure: nil) == "This Mac’s engine isn’t running. Try again in a moment.")
     }

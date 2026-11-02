@@ -30,31 +30,31 @@ import Testing
     @Test(arguments: [false, true])
     func theSameComputerAtTwoAddressesIsOneMachine(laterFirst: Bool) {
         defer { Self.clean() }
-        let machines = machines("lokum-tailscale", "hetzner", "lokum-local")
+        let machines = machines("devbox-tailscale", "hetzner", "devbox-local")
         var folded: [(String, String)] = []
         machines.onFolded = { folded.append(($0, $1)) }
         let identity = "0123456789abcdef0123456789abcdef"
         machines.note("fedcba9876543210fedcba9876543210", of: "hetzner")
         if laterFirst {
-            machines.note(identity, of: "lokum-local")
-            machines.note(identity, of: "lokum-tailscale")
+            machines.note(identity, of: "devbox-local")
+            machines.note(identity, of: "devbox-tailscale")
         } else {
-            machines.note(identity, of: "lokum-tailscale")
-            machines.note(identity, of: "lokum-local")
+            machines.note(identity, of: "devbox-tailscale")
+            machines.note(identity, of: "devbox-local")
         }
-        #expect(machines.list.map(\.id) == ["lokum-tailscale", "hetzner"], "the one added first stays")
-        #expect(machines.list.first?.addresses == ["lokum-tailscale", "lokum-local"])
-        #expect(machines.engine("lokum-local") == nil)
-        #expect(folded.map(\.0) == ["lokum-local"] && folded.map(\.1) == ["lokum-tailscale"])
-        #expect(machines.folded?.address == "lokum-local")
+        #expect(machines.list.map(\.id) == ["devbox-tailscale", "hetzner"], "the one added first stays")
+        #expect(machines.list.first?.addresses == ["devbox-tailscale", "devbox-local"])
+        #expect(machines.engine("devbox-local") == nil)
+        #expect(folded.map(\.0) == ["devbox-local"] && folded.map(\.1) == ["devbox-tailscale"])
+        #expect(machines.folded?.address == "devbox-local")
         // Nothing waits to sign it out or stop it there.
         let waiting = UserDefaults.standard.dictionary(forKey: "machines.waiting") as? [String: [String]] ?? [:]
         #expect(!waiting.values.joined().contains { $0.hasPrefix(Machines.removalMark) })
 
         // Kept as one after a relaunch.
         let again = Machines()
-        #expect(again.list.map(\.id) == ["lokum-tailscale", "hetzner"])
-        #expect(again.list.first?.otherAddresses == ["lokum-local"])
+        #expect(again.list.map(\.id) == ["devbox-tailscale", "hetzner"])
+        #expect(again.list.first?.otherAddresses == ["devbox-local"])
         #expect(again.list.first?.identity == identity)
     }
 
@@ -62,15 +62,15 @@ import Testing
     /// machine; added again, nothing changes; forgotten, the machine stays.
     @Test func anAddressAddedAndForgotten() {
         defer { Self.clean() }
-        let machines = machines("lokum-tailscale")
-        machines.note("0123456789abcdef0123456789abcdef", of: "lokum-tailscale")
-        #expect(machines.machine(calling: "0123456789abcdef0123456789abcdef")?.id == "lokum-tailscale")
-        machines.addAddress("lokum-local", to: "lokum-tailscale")
-        machines.addAddress("lokum-local", to: "lokum-tailscale")
-        #expect(machines.list.map(\.addresses) == [["lokum-tailscale", "lokum-local"]])
-        #expect(machines.engine("lokum-tailscale")?.machine.addresses == ["lokum-tailscale", "lokum-local"])
-        machines.removeAddress("lokum-local", from: "lokum-tailscale")
-        #expect(machines.list.map(\.addresses) == [["lokum-tailscale"]])
+        let machines = machines("devbox-tailscale")
+        machines.note("0123456789abcdef0123456789abcdef", of: "devbox-tailscale")
+        #expect(machines.machine(calling: "0123456789abcdef0123456789abcdef")?.id == "devbox-tailscale")
+        machines.addAddress("devbox-local", to: "devbox-tailscale")
+        machines.addAddress("devbox-local", to: "devbox-tailscale")
+        #expect(machines.list.map(\.addresses) == [["devbox-tailscale", "devbox-local"]])
+        #expect(machines.engine("devbox-tailscale")?.machine.addresses == ["devbox-tailscale", "devbox-local"])
+        machines.removeAddress("devbox-local", from: "devbox-tailscale")
+        #expect(machines.list.map(\.addresses) == [["devbox-tailscale"]])
     }
 
     /// Two different computers stay two machines.
@@ -88,17 +88,17 @@ import Testing
     @Test func whatWasKeptUnderItsNameMovesOver() throws {
         defer { Self.clean() }
         let workspace = Workspace()
-        let web = RemoteFolder.folder("/srv/web", on: "lokum-local")
+        let web = RemoteFolder.folder("/srv/web", on: "devbox-local")
         workspace.addFolder(web)
-        workspace.addFolder(RemoteFolder.folder("/srv/api", on: "lokum-tailscale"))
-        workspace.saveProject(web, settings: Workspace.ProjectSettings(name: "Website", folders: [RemoteFolder.folder("/srv/shared", on: "lokum-local")], run: "npm run dev"))
+        workspace.addFolder(RemoteFolder.folder("/srv/api", on: "devbox-tailscale"))
+        workspace.saveProject(web, settings: Workspace.ProjectSettings(name: "Website", folders: [RemoteFolder.folder("/srv/shared", on: "devbox-local")], run: "npm run dev"))
 
-        workspace.fold("lokum-local", into: "lokum-tailscale")
-        let moved = RemoteFolder.folder("/srv/web", on: "lokum-tailscale")
+        workspace.fold("devbox-local", into: "devbox-tailscale")
+        let moved = RemoteFolder.folder("/srv/web", on: "devbox-tailscale")
         #expect(workspace.folders.contains(moved))
         #expect(!workspace.folders.contains(web))
         #expect(workspace.settings[moved]?.name == "Website")
-        #expect(workspace.settings[moved]?.folders == [RemoteFolder.folder("/srv/shared", on: "lokum-tailscale")])
+        #expect(workspace.settings[moved]?.folders == [RemoteFolder.folder("/srv/shared", on: "devbox-tailscale")])
         #expect(workspace.settings[web] == nil)
     }
 
@@ -108,29 +108,29 @@ import Testing
     @Test func itsSessionsStayListedOnceAtWork() async throws {
         defer {
             Self.clean()
-            SessionCopies.removeSessions(of: "lokum-local")
-            SessionCopies.removeSessions(of: "lokum-tailscale")
+            SessionCopies.removeSessions(of: "devbox-local")
+            SessionCopies.removeSessions(of: "devbox-tailscale")
         }
         func session(on machine: String) throws -> Session {
             let json = StubEngine.session("ses_build", title: "Build", directory: RemoteFolder.folder("/srv/web", on: machine))
             return try JSONDecoder().decode(Session.self, from: JSONSerialization.data(withJSONObject: json))
         }
-        SessionCopies.saveSessions([try session(on: "lokum-local")], of: "lokum-local")
-        SessionCopies.saveSessions([try session(on: "lokum-tailscale")], of: "lokum-tailscale")
+        SessionCopies.saveSessions([try session(on: "devbox-local")], of: "devbox-local")
+        SessionCopies.saveSessions([try session(on: "devbox-tailscale")], of: "devbox-tailscale")
         await SessionCopies.written()
         let workspace = Workspace()
-        workspace.machines = ["lokum-local", "lokum-tailscale"]
+        workspace.machines = ["devbox-local", "devbox-tailscale"]
         #expect(workspace.sessions.filter { $0.id == "ses_build" }.count == 2)
         let started = try ServerEvent(json: JSONSerialization.data(withJSONObject: [
             "id": "evt_1", "type": "session.execution.started", "created": 1, "data": ["sessionID": "ses_build"],
         ]))
         workspace.handle(started)
         #expect(workspace.running.contains("ses_build"))
-        let web = RemoteFolder.folder("/srv/web", on: "lokum-tailscale")
-        workspace.saveProject(RemoteFolder.folder("/srv/web", on: "lokum-local"), settings: Workspace.ProjectSettings(name: "Old name", run: "make"))
+        let web = RemoteFolder.folder("/srv/web", on: "devbox-tailscale")
+        workspace.saveProject(RemoteFolder.folder("/srv/web", on: "devbox-local"), settings: Workspace.ProjectSettings(name: "Old name", run: "make"))
         workspace.saveProject(web, settings: Workspace.ProjectSettings(name: "Website", run: "npm run dev"))
 
-        workspace.fold("lokum-local", into: "lokum-tailscale")
+        workspace.fold("devbox-local", into: "devbox-tailscale")
         #expect(workspace.sessions.filter { $0.id == "ses_build" }.map(\.location.directory) == [web], "listed once, under the other's name")
         #expect(workspace.running.contains("ses_build"), "still at work")
         #expect(workspace.settings[web]?.name == "Website")
@@ -176,14 +176,14 @@ import Testing
     /// machine. Two that have said they're different computers stay two.
     @Test func youSayTheyreTheSameComputer() {
         defer { Self.clean() }
-        let machines = machines("lokum-tailscale", "lokum-local", "vps")
-        machines.note("0123456789abcdef0123456789abcdef", of: "lokum-local")
-        #expect(machines.sameComputer("lokum-local", as: "lokum-tailscale"))
-        #expect(machines.list.map(\.id) == ["lokum-tailscale", "vps"])
-        #expect(machines.list.first?.addresses == ["lokum-tailscale", "lokum-local"])
+        let machines = machines("devbox-tailscale", "devbox-local", "vps")
+        machines.note("0123456789abcdef0123456789abcdef", of: "devbox-local")
+        #expect(machines.sameComputer("devbox-local", as: "devbox-tailscale"))
+        #expect(machines.list.map(\.id) == ["devbox-tailscale", "vps"])
+        #expect(machines.list.first?.addresses == ["devbox-tailscale", "devbox-local"])
         #expect(machines.list.first?.identity == "0123456789abcdef0123456789abcdef")
         machines.note("fedcba9876543210fedcba9876543210", of: "vps")
-        #expect(!machines.sameComputer("vps", as: "lokum-tailscale"))
-        #expect(machines.list.map(\.id) == ["lokum-tailscale", "vps"])
+        #expect(!machines.sameComputer("vps", as: "devbox-tailscale"))
+        #expect(machines.list.map(\.id) == ["devbox-tailscale", "vps"])
     }
 }

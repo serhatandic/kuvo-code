@@ -89,7 +89,7 @@ import Testing
         let (_, sent) = box(answering: 500)
         sandboxes.takeRestart(true, from: BoxClient.mac)
         #expect(sandboxes.asksToRestart(on: BoxClient.mac))
-        #expect(!sandboxes.asksToRestart(on: "lokum"), "only that computer's conversations show it")
+        #expect(!sandboxes.asksToRestart(on: "devbox"), "only that computer's conversations show it")
 
         // It didn't go through: the card stays, saying why, to try again.
         await #expect(throws: BoxRefusal.self) { try await sandboxes.answerRestart(true, on: BoxClient.mac) }
@@ -108,19 +108,19 @@ import Testing
         #expect(sent.all.count == 1)
 
         // Answered on a phone: the box stops asking, and the card goes here too.
-        sandboxes.takeRestart(true, from: "lokum")
-        #expect(sandboxes.asksToRestart(on: "lokum"))
-        sandboxes.takeRestart(false, from: "lokum")
-        #expect(!sandboxes.asksToRestart(on: "lokum"))
+        sandboxes.takeRestart(true, from: "devbox")
+        #expect(sandboxes.asksToRestart(on: "devbox"))
+        sandboxes.takeRestart(false, from: "devbox")
+        #expect(!sandboxes.asksToRestart(on: "devbox"))
     }
 
     @Test func aMachineRemovedTakesItsAsksWithIt() {
-        #expect(sandboxes.stoppedCommands(for: "ses_scout", on: "lokum") == nil, "not heard yet: unknown, not nothing")
-        sandboxes.take([ask], from: "lokum")
+        #expect(sandboxes.stoppedCommands(for: "ses_scout", on: "devbox") == nil, "not heard yet: unknown, not nothing")
+        sandboxes.take([ask], from: "devbox")
         #expect(app.workspace.needsAttention("ses_scout"))
-        sandboxes.forget("lokum")
-        #expect(sandboxes.asks(for: "ses_scout", on: "lokum").isEmpty)
-        #expect(sandboxes.stoppedCommands(for: "ses_scout", on: "lokum") == nil)
+        sandboxes.forget("devbox")
+        #expect(sandboxes.asks(for: "ses_scout", on: "devbox").isEmpty)
+        #expect(sandboxes.stoppedCommands(for: "ses_scout", on: "devbox") == nil)
         #expect(!app.workspace.needsAttention("ses_scout"))
     }
 

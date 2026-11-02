@@ -24,11 +24,11 @@ const box = (kind, id) => {
   const address = k(link.addressOf(crypto.randomBytes(32)));
   return { key, pub: k(link.publicOf(key)), address, peer: { key: k(link.publicOf(key)), address, name: id ?? kind, kind, ...(id ? { id } : {}) } };
 };
-const here = box("machine", "lokum"), mac = box("mac"), second = box("machine", "second"), stranger = box("machine", "stranger");
+const here = box("machine", "devbox"), mac = box("mac"), second = box("machine", "second"), stranger = box("machine", "stranger");
 const fresh = (extra = {}) => {
   fs.rmSync(run, { recursive: true, force: true });
   fs.mkdirSync(run, { recursive: true });
-  link.writeLink({ secret: crypto.randomBytes(32).toString("base64url"), key: k(here.key), relay: "wss://relay.test", name: "lokum", id: "lokum", mac: mac.pub, macs: [mac.pub], phones: [], ...extra });
+  link.writeLink({ secret: crypto.randomBytes(32).toString("base64url"), key: k(here.key), relay: "wss://relay.test", name: "devbox", id: "devbox", mac: mac.pub, macs: [mac.pub], phones: [], ...extra });
 };
 // Mail as the host hands it on (a mail frame's body), from `from` to this box.
 const mailFrom = (from, payload) => link.sealOneWay(Buffer.from(JSON.stringify(payload)), from.key, link.publicOf(here.key)).message;
@@ -107,11 +107,11 @@ test("each box's agents: a newer list kept, and list_agents here names each by w
   assert.equal(link.takeAgents(mac.peer, { at: 1, list: [agent("ses_m1", "Release", { kind: "bot" }), agent("ses_o1", "Old one", { machine: "old" }), agent("ses_b1", "Again")] }, file, lock), true);
   const told = link.readPeerAgents(file);
   assert.deepEqual(told[second.pub].list.map(each => each.session), ["ses_b1"]);
-  const composed = link.composeAgents([agent("ses_h1", "Here")], "lokum", [second.peer, mac.peer], told);
+  const composed = link.composeAgents([agent("ses_h1", "Here")], "devbox", [second.peer, mac.peer], told);
   assert.deepEqual(composed, {
-    machine: "lokum",
+    machine: "devbox",
     agents: [
-      { session: "ses_h1", name: "Here", kind: "session", machine: "lokum" },
+      { session: "ses_h1", name: "Here", kind: "session", machine: "devbox" },
       { session: "ses_m1", name: "Release", kind: "bot" },
       { session: "ses_o1", name: "Old one", kind: "session", machine: "old" },
       // Listed by the Mac and a machine: the Mac's word.
@@ -119,7 +119,7 @@ test("each box's agents: a newer list kept, and list_agents here names each by w
     ],
   });
   assert.equal(link.peerOf("ses_o1", [second.peer, mac.peer], told)?.name, "mac", "one a Mac speaks for goes through it");
-  assert.equal(link.composeAgents([], "lokum", [second.peer], told).agents.find(each => each.session === "ses_b1")?.machine, "second");
+  assert.equal(link.composeAgents([], "devbox", [second.peer], told).agents.find(each => each.session === "ses_b1")?.machine, "second");
   assert.equal(link.peerOf("ses_nobody", [second.peer, mac.peer], told), null);
 
   // One machine claiming another's session: neither's, so letters for it go nowhere, and it isn't listed.
@@ -130,7 +130,7 @@ test("each box's agents: a newer list kept, and list_agents here names each by w
   assert.equal(link.takeAgents(second.peer, { at: 6, list: [agent("ses_b2", "Mine")] }, file, lock), true);
   const both = link.readPeerAgents(file);
   assert.equal(link.peerOf("ses_b2", [second.peer, stranger.peer], both), null);
-  assert.equal(link.composeAgents([], "lokum", [second.peer, stranger.peer], both).agents.some(each => each.session === "ses_b2"), false);
+  assert.equal(link.composeAgents([], "devbox", [second.peer, stranger.peer], both).agents.some(each => each.session === "ses_b2"), false);
 });
 
 // An engine with one session, for letters to reach: its prompts, and an answer once it's done.
@@ -536,7 +536,7 @@ test("a box tells its peers its agents as they change, and every ten minutes", a
   assert.equal(sent.length, 2, "the same, within ten minutes: not again");
   await link.announce(host, readEngine, link.readLink(), now + 601_000);
   assert.equal(sent.length, 4);
-  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(run, "agents.json"), "utf8")), { machine: "lokum", agents: [] });
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(run, "agents.json"), "utf8")), { machine: "devbox", agents: [] });
 
   // A peer that just connected may have missed it (the relay keeps nothing): it asks, and is told
   // again at the next round; this box, just connected itself, tells each and asks them.
@@ -798,7 +798,7 @@ test("a letter for a conversation that moved to this box since it was left is de
   assert.ok(!fs.existsSync(path.join(sending, "ltr_left_before.json")));
   // Once this box lists it as its own (second no longer says where it went), the same; this one
   // waited for: its answer comes to the tool.
-  fs.writeFileSync(path.join(run, "agents.json"), JSON.stringify({ machine: "lokum", agents: [{ session: "ses_here", name: "Docs", kind: "session", machine: "lokum" }, { session: "ses_target", name: "API", kind: "session", machine: "lokum" }] }));
+  fs.writeFileSync(path.join(run, "agents.json"), JSON.stringify({ machine: "devbox", agents: [{ session: "ses_here", name: "Docs", kind: "session", machine: "devbox" }, { session: "ses_target", name: "API", kind: "session", machine: "devbox" }] }));
   fs.writeFileSync(path.join(sending, "ltr_waited.json"), JSON.stringify({ from: "ses_here", to: "ses_target", text: "And the tests?", peer: second.pub, wait: true, at: now }));
   // (Its tool, waiting.)
   fs.mkdirSync(path.join(run, "replies"), { recursive: true });

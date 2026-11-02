@@ -30,7 +30,7 @@ import Testing
         #expect(files.alwaysHelp == "Don't ask again for: ~/notes, /opt/data")
 
         // On a machine, whose home this Mac doesn't know: the folder whole, never this Mac's "~".
-        let away = try card(["/home/me/notes/*", "\(home)/other-project/*"], directory: RemoteFolder.folder("/home/me/shop", on: "lokum"))
+        let away = try card(["/home/me/notes/*", "\(home)/other-project/*"], directory: RemoteFolder.folder("/home/me/shop", on: "devbox"))
         #expect(away.allowed.shown == "/home/me/notes\n\(home)/other-project")
         #expect(away.allowed.spoken == "home, me, notes; " + home.split(separator: "/").joined(separator: ", ") + ", other-project")
     }

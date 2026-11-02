@@ -346,7 +346,7 @@ when you're there to answer.
 | `KUVO_DEMO_OFFSCREEN` | With `KUVO_DEMO_WINDOW`: the window past the screen's right edge, so the pointer can't hover over what you capture (`screencapture -l` still gets all of it) |
 | `KUVO_DEMO_ACTIVE` | The window drawn as the one in front while it's behind (a background copy), for captures |
 | `KUVO_DEMO_BOX` | The sidebar's box in view, `mac` or a machine's name, a few seconds after launch |
-| `KUVO_DEMO_BOXES` | Stand-in machines in the sidebar by name, comma-separated (`lokum,staging,gpu-01`): how the name strip looks with many and with long names; their pages are empty |
+| `KUVO_DEMO_BOXES` | Stand-in machines in the sidebar by name, comma-separated (`devbox,staging,gpu-01`): how the name strip looks with many and with long names; their pages are empty |
 | `KUVO_DEMO_UNFOLD` | Every session's branches (conversations branched or handed off from it) shown under it in the sidebar, for a look at them |
 | `KUVO_DEMO_SHOW_ALL` | Every project's sessions shown, as after Show More, and every unfolded session's branches (with `KUVO_DEMO_UNFOLD`, all of them), for the sidebar with many rows |
 | `KUVO_DEMO_STATES` | Stand-in states for the sidebar's rows and tabs, shared out by session as `kind=percent` (`working=25,needsYou=10,new=15,failed=5`; the kinds are `StatusMark.Kind`'s); `KUVO_DEMO_STATES_CHURN=<seconds>` deals them again that often. For seeing and measuring many marks without as many agents |

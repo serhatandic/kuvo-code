@@ -96,8 +96,8 @@ struct SessionRulesTests {
     }
 
     @Test func eachReasonAComputerWasntSearchedIsSaid() {
-        #expect(UnsearchedReason.notConnected.line(for: "lokum") == "lokum isn’t connected, so its conversations weren’t searched.")
-        #expect(UnsearchedReason.needsUpdate.line(for: "lokum").contains("needs an update"))
+        #expect(UnsearchedReason.notConnected.line(for: "devbox") == "devbox isn’t connected, so its conversations weren’t searched.")
+        #expect(UnsearchedReason.needsUpdate.line(for: "devbox").contains("needs an update"))
     }
 
     /// Conversations branched or handed off from another show under it, newest first, all the way

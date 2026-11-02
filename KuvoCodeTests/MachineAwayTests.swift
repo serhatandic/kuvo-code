@@ -15,23 +15,23 @@ import Testing
         TestEnvironment.prepare()
         // As the app tells it of its bots (see AppModel.startMachines).
         let names = ["ses_beril": "Beril", "ses_finance": "Finance"]
-        let machines = ["ses_beril": "lokum"]
+        let machines = ["ses_beril": "devbox"]
         workspace.botName = { names[$0] }
         workspace.botMachine = { machines[$0] }
     }
 
     @Test func aBotOnAMachineThatIsAwayWaitsForIt() {
-        #expect(workspace.waitingMachine(for: "ses_beril") == "lokum")
+        #expect(workspace.waitingMachine(for: "ses_beril") == "devbox")
         #expect(workspace.remoteTitle("ses_beril") == "Beril", "its card and tab are named after the bot")
     }
 
     /// Its machine removed, nothing waits for it: its tab closes.
     @Test func aBotOnARemovedMachineDoesntWait() {
-        workspace.forget("lokum", forGood: true)
+        workspace.forget("devbox", forGood: true)
         #expect(workspace.waitingMachine(for: "ses_beril") == nil)
         // Added again: it waits for it again.
-        workspace.machines = ["lokum"]
-        #expect(workspace.waitingMachine(for: "ses_beril") == "lokum")
+        workspace.machines = ["devbox"]
+        #expect(workspace.waitingMachine(for: "ses_beril") == "devbox")
     }
 
     @Test func aBotOnThisMacDoesntWait() {

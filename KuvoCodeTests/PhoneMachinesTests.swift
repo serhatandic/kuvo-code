@@ -45,39 +45,39 @@ import Testing
 
     @Test func aPhoneSeesAndTendsThisMacsMachines() async throws {
         defer { Self.clean() }
-        for name in ["lokum", "lokum-local", "vps", "hetzner"] { app.machines.add(name) }
-        app.machines.addAddress("lokum.tail", to: "lokum")
+        for name in ["devbox", "devbox-local", "vps", "hetzner"] { app.machines.add(name) }
+        app.machines.addAddress("devbox.tail", to: "devbox")
 
-        let lokum = try #require(try await listed().first)
-        #expect(lokum["id"] as? String == "lokum")
-        #expect(lokum["otherAddresses"] as? [String] == ["lokum.tail"])
-        #expect(lokum["connection"] as? String == "notConnected")
-        #expect(lokum["status"] as? String == "Not connected")
-        #expect(lokum["action"] as? String == "connect", "Connect, as the page shows")
-        let notOffered = try await ask("kuvo/machines/lokum/disconnect", method: "POST")
+        let devbox = try #require(try await listed().first)
+        #expect(devbox["id"] as? String == "devbox")
+        #expect(devbox["otherAddresses"] as? [String] == ["devbox.tail"])
+        #expect(devbox["connection"] as? String == "notConnected")
+        #expect(devbox["status"] as? String == "Not connected")
+        #expect(devbox["action"] as? String == "connect", "Connect, as the page shows")
+        let notOffered = try await ask("kuvo/machines/devbox/disconnect", method: "POST")
         #expect(notOffered.status == 409)
-        #expect(notOffered.json["message"] as? String == "lokum isn’t connected.")
+        #expect(notOffered.json["message"] as? String == "devbox isn’t connected.")
 
         // Added again, at its name or another address: that one, not a second machine, and
         // nothing checked over SSH.
-        let again = try await ask("kuvo/machines", method: "POST", body: ["destination": " lokum.tail "])
+        let again = try await ask("kuvo/machines", method: "POST", body: ["destination": " devbox.tail "])
         #expect(again.status == 200)
         #expect(again.json["known"] as? Bool == true)
-        #expect((again.json["machine"] as? [String: Any])?["id"] as? String == "lokum")
-        #expect(try await ask("kuvo/machines", method: "POST", body: ["destination": "ssh://lokum:2222"]).status == 400)
+        #expect((again.json["machine"] as? [String: Any])?["id"] as? String == "devbox")
+        #expect(try await ask("kuvo/machines", method: "POST", body: ["destination": "ssh://devbox:2222"]).status == 400)
         #expect(try await ask("kuvo/machines", method: "POST", body: [:]).status == 400)
 
         // Another address, no longer used; its name isn't one to stop using.
-        #expect(try await ask("kuvo/machines/lokum/addresses/lokum.tail", method: "DELETE").status == 200)
-        #expect(app.machines.list.first?.addresses == ["lokum"])
-        #expect(try await ask("kuvo/machines/lokum/addresses/lokum", method: "DELETE").status == 404)
+        #expect(try await ask("kuvo/machines/devbox/addresses/devbox.tail", method: "DELETE").status == 200)
+        #expect(app.machines.list.first?.addresses == ["devbox"])
+        #expect(try await ask("kuvo/machines/devbox/addresses/devbox", method: "DELETE").status == 404)
 
         // Said to be one computer: one of the other's addresses. Two that told Kuvo Code their
         // own names stay two.
-        let same = try await ask("kuvo/machines/lokum-local/same-as", method: "POST", body: ["other": "lokum"])
+        let same = try await ask("kuvo/machines/devbox-local/same-as", method: "POST", body: ["other": "devbox"])
         #expect(same.status == 200)
-        #expect((same.json["machine"] as? [String: Any])?["otherAddresses"] as? [String] == ["lokum-local"])
-        #expect(app.machines.engine("lokum-local") == nil)
+        #expect((same.json["machine"] as? [String: Any])?["otherAddresses"] as? [String] == ["devbox-local"])
+        #expect(app.machines.engine("devbox-local") == nil)
         app.machines.note("0123456789abcdef0123456789abcdef", of: "vps")
         app.machines.note("fedcba9876543210fedcba9876543210", of: "hetzner")
         let two = try await ask("kuvo/machines/vps/same-as", method: "POST", body: ["other": "hetzner"])
@@ -87,14 +87,14 @@ import Testing
 
         // Removed, as Remove… does: off this Mac, left running there (nothing waits to stop it).
         #expect(try await ask("kuvo/machines/hetzner", method: "DELETE").status == 200)
-        #expect(app.machines.list.map(\.id) == ["lokum", "vps"])
+        #expect(app.machines.list.map(\.id) == ["devbox", "vps"])
         #expect(try await ask("kuvo/machines/hetzner/connect", method: "POST").status == 404)
         #expect(Self.waiting("hetzner").isEmpty, "it keeps running there, with its sign-ins and keys")
         // Uninstalled: stopped there and signed out, the next time it answers (a name that never
         // answers: nothing runs on a real computer).
         app.machines.add("gone.invalid")
         #expect(try await ask("kuvo/machines/gone.invalid/uninstall", method: "POST").status == 200)
-        #expect(app.machines.list.map(\.id) == ["lokum", "vps"])
+        #expect(app.machines.list.map(\.id) == ["devbox", "vps"])
         #expect(Self.waiting("gone.invalid").contains { $0.hasPrefix(Machines.removalMark) && $0.contains(Machines.agentsSignOut) })
     }
 
