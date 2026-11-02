@@ -248,11 +248,12 @@ async function deliverHere(id: string, file: string, letter: OutboxLetter, step:
     let alive = 0;
     try { alive = fs.statSync(path.join(REPLIES, `${id}.alive`)).mtimeMs; } catch {}
     if (IS_MAC ? waiter && !waiter.gone() : Date.now() - alive <= 10_000) return reply(id, { text: said, to: letter.from, from: letter.to, name });
-    // Its tool stopped waiting: to the conversation that asked, as a message.
-    const asker = letter.from ? await placeOfSession(letter.from, peerTargets()).catch(() => null) : null;
-    if (!asker || !letter.from) return;
-    await sendInto(asker.target, letter.from, { id: messageID(), text: composeLetter(name, letter.to, said, false), delivery: "steer" },
-      { from: name, words: said, kept: composeLetter(name, letter.to, said, false) });
+    // Its tool stopped waiting: to the conversation that asked, as a message, left as answers its
+    // tool never took are (`deliverLeftAnswers`): tried again until it goes, not while that
+    // conversation moves, and to it on the computer it moved to.
+    if (!letter.from) return;
+    fs.mkdirSync(REPLIES, { recursive: true, mode: 0o700 });
+    writePrivate(path.join(REPLIES, `${id}.json`), JSON.stringify({ text: said, to: letter.from, from: letter.to, name } satisfies AnswerReply));
   } catch {
     // Tried again the next minute.
   } finally {

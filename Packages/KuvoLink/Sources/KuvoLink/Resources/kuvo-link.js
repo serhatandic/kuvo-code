@@ -6927,10 +6927,10 @@ async function deliverHere(id, file, letter, step) {
     } catch {}
     if (IS_MAC ? waiter && !waiter.gone() : Date.now() - alive <= 1e4)
       return reply(id, { text: said, to: letter.from, from: letter.to, name });
-    const asker = letter.from ? await placeOfSession(letter.from, peerTargets()).catch(() => null) : null;
-    if (!asker || !letter.from)
+    if (!letter.from)
       return;
-    await sendInto(asker.target, letter.from, { id: messageID(), text: composeLetter(name, letter.to, said, false), delivery: "steer" }, { from: name, words: said, kept: composeLetter(name, letter.to, said, false) });
+    fs30.mkdirSync(REPLIES, { recursive: true, mode: 448 });
+    writePrivate(path30.join(REPLIES, `${id}.json`), JSON.stringify({ text: said, to: letter.from, from: letter.to, name }));
   } catch {} finally {
     deliveringHere.delete(id);
   }

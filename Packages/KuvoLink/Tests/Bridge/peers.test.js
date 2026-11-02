@@ -785,9 +785,11 @@ test("a letter for a conversation that moved to this box since it was left is de
   assert.match(prompts[1].text, /And the tests\?/);
   const answer = JSON.parse(fs.readFileSync(path.join(run, "replies", "ltr_waited.json"), "utf8"));
   assert.equal(answer.text, "On it.");
-  // One whose tool stopped waiting: its answer comes to the conversation that asked, as a message.
+  // One whose tool stopped waiting: its answer comes to the conversation that asked, as a message,
+  // as the box's next round delivers the answers left for it.
   fs.writeFileSync(path.join(sending, "ltr_given_up.json"), JSON.stringify({ from: "ses_mine", to: "ses_target", text: "And the docs?", peer: second.pub, wait: true, at: now }));
   await link.sendOutbox(host, link.readLink(), now + 6000, 0, undefined, 10);
+  await link.deliverLeftAnswers(now + 9000);
   assert.deepEqual(prompts.map(each => each.session), ["ses_target", "ses_target", "ses_target", "ses_mine"]);
   assert.match(prompts[3].text, /^\[Message from API · ses_target\][^\n]*\n\nOn it\./);
   assert.equal(fs.existsSync(path.join(run, "replies", "ltr_given_up.json")), false);

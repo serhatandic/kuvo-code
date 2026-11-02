@@ -39,8 +39,8 @@ function reading(request) {
 }
 const listening = server => new Promise(resolve => server.listen(0, "127.0.0.1", () => resolve(server.address().port)));
 
-// An engine with its conversations, as its API exports, imports and deletes them, and what it was
-// sent. Its deletes fail while it's `down`; its exports wait for `exportHold` (a promise) when
+// An engine with its conversations, as its API exports, imports and deletes them, what each has
+// written (`replies`, oldest first), and what it was sent. Its deletes fail while it's `down`; its exports wait for `exportHold` (a promise) when
 // there's one (`exporting` says one does).
 const engine = { sessions: new Map(), prompts: [], down: false, refused: 0, exportHold: null, exporting: false };
 const engineServer = http.createServer(async (request, response) => {
@@ -72,7 +72,8 @@ const engineServer = http.createServer(async (request, response) => {
     engine.prompts.push({ session: session.id, text: given.text });
     return send(200, {});
   }
-  if (match[2] === "/inbox" || match[2] === "/message" || match[2] === "/permission" || match[2] === "/question") return send(200, []);
+  if (match[2] === "/message") return send(200, [...(session.replies ?? [])].reverse());
+  if (match[2] === "/inbox" || match[2] === "/permission" || match[2] === "/question") return send(200, []);
   if (match[2]) return send(200, true);
   if (request.method === "DELETE") {
     if (engine.down) {
@@ -665,4 +666,36 @@ test("an answer to a chat's letter that came after it stopped waiting isn't told
   await link.deliverLeftAnswers(Date.now(), [source], true);
   assert.equal(lettersFor("ses_left1").length, 1);
   fs.rmSync(sending, { recursive: true, force: true });
+});
+
+test("an answer a chat waited for that comes once its tool stopped waiting isn't told it while it moves; once it's moved, it reaches it there", async () => {
+  chat("ses_ask1");
+  // Ada, an agent of this box's, answers a letter the chat wrote her; the chat's tool has gone.
+  engine.sessions.set("ses_here1", { id: "ses_here1", title: "Ada", directory: chats, messages: [], replies: [{ id: "msg_zzzzzzzzzzzzzzzzzzzzzzzz", type: "assistant", content: [{ type: "text", text: "The venue is booked." }] }] });
+  const agents = path.join(home, "run", "agents.json");
+  fs.writeFileSync(agents, JSON.stringify({ agents: [{ session: "ses_here1", name: "Ada" }] }));
+  fs.mkdirSync(sending, { recursive: true });
+  fs.writeFileSync(path.join(sending, "ltr_ask1.json"), JSON.stringify({ from: "ses_ask1", to: "ses_here1", text: "Is the venue booked?", wait: true, at: Date.now() }));
+  const id = "mov_ask1";
+  script = () => {};
+  writeRecord({ id, kind: "chat", thing: "ses_ask1", name: "“Trip plans”", from: "", to: peerKey, role: "from", stage: "switching", step: "switch", sessions: ["ses_ask1"],
+    peer: peerKey, wasPaused: false, tries: 0, started: Date.now(), offered: true, sentAt: Date.now(), switchSince: Date.now(), folder: path.join(wakes, "ses_ask1") });
+  const source = { port: enginePort, password: "pw" };
+  try {
+    await link.sendOutbox({ send() {} }, undefined, Date.now(), 0, undefined, 1);
+    assert.equal(engine.prompts.filter(each => each.session === "ses_here1").length, 1, "Ada had the letter");
+    await link.deliverLeftAnswers(Date.now(), [source], true);
+    assert.deepEqual(engine.prompts.filter(each => each.session === "ses_ask1"), [], "nothing reached the chat while it moved");
+    // Lab switched to it: it lives there now.
+    await say({ op: "switched", id });
+    await link.deliverLeftAnswers(Date.now(), [source], true);
+    const letters = lettersFor("ses_ask1");
+    assert.equal(letters.length, 1);
+    assert.match(letters[0].text, /^\[Message from Ada · ses_here1\][^\n]*\n\nThe venue is booked\.$/);
+    await link.deliverLeftAnswers(Date.now(), [source], true);
+    assert.equal(lettersFor("ses_ask1").length, 1, "told once");
+  } finally {
+    fs.rmSync(agents, { force: true });
+    fs.rmSync(sending, { recursive: true, force: true });
+  }
 });
