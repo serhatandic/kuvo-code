@@ -21,6 +21,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - A folded project shows the mark of what's going on inside it (one waiting on you, at work, failed or new), so folding one hides nothing that needs you.
 - The sidebar follows Settings › Appearance › Text size, as the conversation does.
 - A session's worktree now goes when the session does, so worktrees no longer pile up. Archive asks nothing, and saves what wasn't committed; open the session again and **Restore** brings its worktree back, or continue in the project. Delete says what goes with it.
+- Picking a session, bot or group chat in the sidebar leaves you typing in its conversation, without the conversation looking unfocused for a moment, and showing or hiding the sidebar (its button or ⌘0) puts the keyboard back in the conversation's composer.
 - A bot working on a goal no longer keeps your computer busy between its looks at the goal, which could spin the fans while nothing was happening.
 - Moving a chat whose `/goal` is still going says why it can't move yet, instead of moving and losing the goal.
 - A goal whose end you move later after it came carries on to the new end, rather than stopping at once.

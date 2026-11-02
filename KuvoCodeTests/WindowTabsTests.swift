@@ -453,6 +453,23 @@ import Testing
         #expect(next.showsPanel)
     }
 
+    /// The sidebar hidden stays hidden at the next launch, kept with the tabs; one hidden while
+    /// it was kept apart (in scene storage of its own) too.
+    @Test func theHiddenSidebarStaysHiddenAtTheNextLaunch() {
+        let app = AppModel()
+        app.tabs.showSidebar(false)
+        let next = AppModel()
+        next.tabs.restore(app.tabs.saved, older: .init())
+        #expect(!next.tabs.showsSidebar)
+
+        let kept = AppModel()
+        kept.tabs.restore(WindowTabs.Saved(tabs: [.session("ses_a")]).text, older: .init(showsSidebar: false))
+        #expect(!kept.tabs.showsSidebar, "kept the older way")
+        let shown = AppModel()
+        shown.tabs.restore(WindowTabs.Saved(tabs: [.session("ses_a")], showsSidebar: true).text, older: .init(showsSidebar: false))
+        #expect(shown.tabs.showsSidebar)
+    }
+
     /// As versions before kept them: the keys a line each, and the pairs as `<tab>=<session>`.
     @Test func tabsKeptTheOlderWayComeBack() {
         let nextLaunch = AppModel()

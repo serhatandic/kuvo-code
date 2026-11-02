@@ -81,7 +81,7 @@ struct SidebarView: View {
     /// The tab in view, by its tag; picking one opens its tab.
     private var selection: String? {
         get { tabs.selection?.text }
-        nonmutating set { if let newValue { tabs.open(TabKey(newValue)) } }
+        nonmutating set { if let newValue { tabs.choose(TabKey(newValue)) } }
     }
     private func newSession(_ directory: String?) { tabs.newSession(in: directory) }
     /// A conversation in the project, where its new sessions open a terminal instead.
@@ -517,7 +517,8 @@ struct SidebarView: View {
             }
             ForEach(inConversations, id: \.found.id) { result in
                 let show = {
-                    selection = result.found.id
+                    // Find has the keyboard, not the composer.
+                    app.tabs.open(TabKey(result.found.id))
                     let words = search.trimmingCharacters(in: .whitespaces)
                     if let subagent = result.subagent {
                         // Said by one of its subagents: that one, in its place, with Find on the words.
