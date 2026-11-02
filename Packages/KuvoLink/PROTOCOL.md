@@ -287,7 +287,8 @@ connection.
     then delivers `text` as the sender would have delivered it there: `delivery` `queue` or
     `steer`, shown from `from` with `words`, and with `line`, marked as the box's note
     (`metadata.kuvo.note {from, line}`, "Messages in a session"). It has no `from` conversation and
-    is never answered. One whose `note` isn't whole is a letter as any. A box from before 0.9.166
+    is never answered. To one archived there it answers `retry`, as the sender would have kept it
+    until it's brought back. One whose `note` isn't whole is a letter as any. A box from before 0.9.166
     doesn't read `note`: it delivers the letter as any other, steered, from "an agent on <box>"
     that can't be answered, with `text` after its own heading. Its `words` and `line` are cut to fit
     as `text` is.
@@ -316,7 +317,8 @@ connection.
   A box that has nothing moving says nothing, and once its last move ends it says `moves: []` once.
   Each box keeps the latest word from each peer, whatever the peer's clock says
   (`run/moves/elsewhere.json`), lists it in its `kuvo/moves` as `elsewhere`, and forgets a peer's
-  word three minutes after it last came (that peer went away mid-move). A box from before 0.9.169 ignores
+  word three minutes after it last came (that peer went away mid-move), at its next look, with a
+  `kuvo/moves/events` line so a client stops showing it. A box from before 0.9.169 ignores
   `moving`.
 - **Group chats**: a chat lives on one box (its host) and runs there. A member that lives on
   another box (its home, a peer whose `features` say `groups.seats`) takes its turn there, in a

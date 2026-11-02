@@ -36,7 +36,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - A command of several lines shows as its first line and … in a step, never its backticks.
 - The context gauge is its percentage alone until the conversation is half full, then a ring with it, so it no longer looks like it's loading; its details give the tokens without the percentage again.
 - With more computers than fit over the sidebar, a count after their names opens a menu of the rest, with how each is connected and **Add Machine…**; the one you're on always shows.
-- A background command's **Output** shows the end of one long line too, never half a character, and says so when it can't read what was printed.
+- A background command's **Output** shows the end of one long line too, never half a character, and says so when it can't read what was printed. Once the command has ended, it says so and stops reading, rather than saying its computer may be away.
 - Something the agent couldn't make to show you says **Couldn’t make** and its name, in a session or a group chat, rather than "Used the browser".
 - The sidebar's accounts stay while the coding agents restart, instead of briefly showing fewer.
 - The command palette shows the letters you typed in bold in each result, and Run shows a play mark.

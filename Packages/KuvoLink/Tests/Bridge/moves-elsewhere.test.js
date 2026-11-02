@@ -146,6 +146,21 @@ test("what a computer said goes once it's been quiet a few minutes; what isn't a
   assert.equal((await ask("kuvo/moves")).elsewhere, undefined);
 });
 
+test("a computer gone quiet mid-move: a client following this box hears its move go, at the look after the few minutes", async () => {
+  const events = follow();
+  assert.deepEqual(await events.next(), { moves: [], away: [] });
+  const one = move("mov_g1", lab.key, pi.key, "from", "copying");
+  mail(lab, { moving: { moves: [one] } });
+  assert.deepEqual(await events.next(), { moves: [], away: [], elsewhere: [{ box: lab.key, moves: [one] }] });
+  // A look within the few minutes changes nothing; the one after them tells it's gone (a client
+  // reading lab meanwhile reads it until then, and no longer).
+  link.keepMoving(Date.now() + 60_000);
+  link.keepMoving(Date.now() + 4 * 60_000);
+  assert.deepEqual(await events.next(), { moves: [], away: [] });
+  assert.deepEqual(await ask("kuvo/moves"), { moves: [], away: [] });
+  events.stop();
+});
+
 // A move under way here, as this box keeps it: a copy coming from lab (which nothing here touches
 // while the test looks).
 const coming = (stage, extra = {}) => writeRecord({ id: "mov_here1", kind: "chat", thing: "ses_here1", name: "Trip plans", from: lab.key, to: own, role: "to", stage,

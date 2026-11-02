@@ -16,7 +16,7 @@ removeAtEnd(home);
 const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
 
 // The engine: ses_perm1 waits on a permission, ses_form1's subagent on a question, ses_busy1 on
-// nothing. What's stopped is noted.
+// nothing, all of them at work. What's stopped is noted.
 const stopped = [];
 const metadata = {};
 const engine = http.createServer((request, response) => {
@@ -39,7 +39,8 @@ const engine = http.createServer((request, response) => {
     if (url.pathname.endsWith("/permission")) return reply({ data: session === "ses_perm1" ? [{ id: "per_1", sessionID: session, action: "shell", resources: ["git push"] }] : [] });
     if (url.pathname.endsWith("/form")) return reply({ data: session === "ses_formsub" ? [{ id: "frm_1", sessionID: session, fields: [{ key: "db", type: "string", title: "Which database?" }] }] : [] });
     if (url.pathname.endsWith("/inbox")) return reply({ data: [] });
-    if (url.pathname === "/api/session/active") return reply({ data: [] });
+    // At work, as a real engine lists them: each that waits on you (what it asks holds its turn) and the one working.
+    if (url.pathname === "/api/session/active") return reply({ data: Object.fromEntries(["ses_perm1", "ses_form1", "ses_formsub", "ses_busy1"].map(id => [id, { type: "running" }])) });
     if (request.method === "PATCH") metadata[session] = { ...metadata[session], ...JSON.parse(body).metadata };
     reply({ data: { id: session, location: { directory: home }, metadata: metadata[session] ?? {} } });
   });

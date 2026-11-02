@@ -4610,6 +4610,16 @@ function keptProject(directory, given, before = {}) {
   return project;
 }
 var ARCHIVING_AT_ONCE = 8;
+async function atWork(target, signal) {
+  try {
+    const active = await call(target, "GET", "/api/session/active", undefined, signal);
+    if (Array.isArray(active))
+      return new Set(active.filter((id) => typeof id === "string"));
+    return isObject(active) ? new Set(Object.keys(active)) : null;
+  } catch {
+    return null;
+  }
+}
 async function archiveProject(directory, also, readEngine, readBridge, signal) {
   const removed = Object.entries(readRemovedWorktrees()).filter(([, project]) => project === directory).map(([folder]) => folder);
   const folders = [...new Set([directory, ...readWorktrees().filter((tree) => tree.project === directory && typeof tree.folder === "string").map((tree) => tree.folder), ...removed, ...also])];
@@ -4646,6 +4656,7 @@ async function archiveProject(directory, also, readEngine, readBridge, signal) {
         }
         const sessions = Array.isArray(listed?.data) ? listed.data : [];
         const archiving = sessions.filter((session) => session?.location?.directory === folder && !session.time?.archived && session.metadata?.["kuvo.archived"] !== true);
+        const working = await atWork(target, signal);
         let taken = 0;
         await Promise.all(Array.from({ length: Math.min(ARCHIVING_AT_ONCE, archiving.length) }, async () => {
           while (taken < archiving.length) {
@@ -4653,7 +4664,8 @@ async function archiveProject(directory, also, readEngine, readBridge, signal) {
             try {
               await call(target, "PATCH", `/api/session/${encodeURIComponent(session.id)}`, { metadata: { ...session.metadata ?? {}, "kuvo.archived": true } }, signal);
               holdArchived(session.id, true);
-              await stopIfWaiting(target, session.id);
+              if (!working || working.has(session.id))
+                await stopIfWaiting(target, session.id);
               archived += 1;
             } catch {
               kept += 1;
@@ -5797,8 +5809,8 @@ var WORK_ROUTES = [
   { route: "PATCH kuvo/work/settings", answers: { 200: WORK_SETTINGS, 400: REFUSED } },
   { route: "GET kuvo/work/goals", answers: { 200: GOAL_PLANS } },
   { route: "GET kuvo/work/goals/events", answers: { 200: GOAL_PLANS } },
-  { route: "POST kuvo/work/goals/ask", answers: { 200: object({ text: string }), 400: REFUSED, 404: REFUSED } },
-  { route: "POST kuvo/work/goals/:id", answers: { 200: object({ goal: GOAL_PLAN }), 400: REFUSED, 404: REFUSED } },
+  { route: "POST kuvo/work/goals/ask", answers: { 200: object({ text: string }), 400: REFUSED, 404: REFUSED, 409: REFUSED } },
+  { route: "POST kuvo/work/goals/:id", answers: { 200: object({ goal: GOAL_PLAN }), 400: REFUSED, 404: REFUSED, 409: REFUSED } },
   { route: "POST kuvo/projects/new", answers: { 201: object({ project: PROJECT, text: string }), 400: REFUSED, 403: object({ message: string, needs: string }), 409: REFUSED, 502: REFUSED } }
 ];
 
@@ -6755,6 +6767,8 @@ async function takeLetter(sender, letter, { send, targets, answer = () => {}, to
       return notDelivered(...noConversation(id, bridge, now));
     bridgeWaits.delete(id);
     const kuvo = place.data?.metadata?.kuvo ?? {};
+    if (note && isPutAway(place.data) && !place.data?.parentID && !kuvo.seat)
+      return notDelivered("It's archived: it comes again once it's brought back.", true);
     if (place.data?.parentID || kuvo.seat || isPutAway(place.data))
       return notDelivered("That conversation doesn't take messages.");
     if (note)
@@ -15021,6 +15035,18 @@ function takeMoving(sender, given, now = Date.now()) {
   } catch {}
   movesChanged();
 }
+function forgetQuiet(now = Date.now()) {
+  const kept = readSaid();
+  const quiet = Object.keys(kept).filter((key) => !fresh(kept[key], now));
+  if (!quiet.length)
+    return;
+  for (const key of quiet)
+    delete kept[key];
+  try {
+    writePrivate(FILE2, JSON.stringify(kept));
+  } catch {}
+  movesChanged();
+}
 function movesElsewhere(peers = peersOf(readLink()), now = Date.now()) {
   const link = readLink();
   const own = link ? ownKey(link) : null;
@@ -16000,6 +16026,7 @@ async function letGoOf(sender, id) {
 }
 function keepMoving(now = Date.now()) {
   tellMoving(hostOf(), now);
+  forgetQuiet(now);
   if (groupsToWake && now - groupsLookedAt > STEP_AGAIN) {
     groupsLookedAt = now;
     wakeHeldGroups().catch(() => {});
@@ -19853,7 +19880,7 @@ import fs71 from "node:fs";
 import path74 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.169";
+var BRIDGE_VERSION = "0.9.170";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

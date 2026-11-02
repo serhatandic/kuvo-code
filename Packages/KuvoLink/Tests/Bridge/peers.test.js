@@ -202,6 +202,12 @@ test("a letter from a peer: delivered once, said to be there, by its sender's ow
   assert.equal(said[2].delivered.why, "That conversation doesn't take messages.", "a subagent's");
   assert.equal(said[3].delivered.why, "That conversation doesn't take messages.", "one put away");
   assert.equal(prompts.length, 0);
+  // The sending box's own word for a conversation that moved here (its sessions' news, say), to one
+  // put away here: it comes again, as it would have waited there for the conversation to be brought back.
+  said.length = 0;
+  await take(second.peer, letter({ to: "ses_archived", from: null, note: { from: "Its sessions", words: "The build passed.", line: "The build passed.", delivery: "queue" } }));
+  assert.deepEqual([said[0].delivered.ok, said[0].delivered.retry], [false, true], said[0].delivered.why);
+  assert.equal(prompts.length, 0);
 
   // Its sender as that box named it, waiting: delivered, said to be there, answered by a letter back.
   said.length = 0;

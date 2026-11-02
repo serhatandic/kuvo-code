@@ -39,8 +39,8 @@ async function ask(handle, method, p, body) {
 // The engine's sessions, as it keeps them: listed by folder newest first, a page at a time, and
 // their metadata changed (`refusing` ones it won't change). The `waiting` ones wait on a
 // permission; what's stopped is noted, and how many changes it was asked for at once, at most.
-async function engineWith(sessions, refusing = new Set(), waiting = new Set()) {
-  const stopped = [];
+async function engineWith(sessions, refusing = new Set(), waiting = new Set(), active = null) {
+  const stopped = [], looked = new Set();
   let changing = 0, most = 0;
   const server = http.createServer((request, response) => {
     let body = "";
@@ -49,6 +49,9 @@ async function engineWith(sessions, refusing = new Set(), waiting = new Set()) {
       const url = new URL(request.url, "http://x");
       const send = (status, value) => { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value)); };
       const [, asked, what] = /^\/api\/session\/([^/]+)\/(permission|form|inbox|interrupt)$/.exec(url.pathname) ?? [];
+      // At work: those `active` names (its list can't be read without them).
+      if (url.pathname === "/api/session/active" && active) return send(200, { data: Object.fromEntries([...active].map(id => [id, { type: "running" }])) });
+      if (what === "permission") looked.add(asked);
       if (what === "permission") return send(200, { data: waiting.has(asked) ? [{ id: `per_${asked}`, sessionID: asked, action: "shell", resources: ["git push"] }] : [] });
       if (what === "form" || what === "inbox") return send(200, { data: [] });
       if (what === "interrupt") {
@@ -78,7 +81,7 @@ async function engineWith(sessions, refusing = new Set(), waiting = new Set()) {
     });
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-  return { port: server.address().port, password: "p", stopped, most: () => most, close: () => { server.closeAllConnections(); server.close(); } };
+  return { port: server.address().port, password: "p", stopped, looked, most: () => most, close: () => { server.closeAllConnections(); server.close(); } };
 }
 
 const session = (id, directory, metadata = {}) => ({ id, location: { directory }, time: { created: 1, updated: 1 }, metadata });
@@ -137,25 +140,32 @@ test("Remove Project archives every session of it, its worktree's and older ones
   assert.deepEqual(back.json.project, { directory: shop, name: "Shop", folders: [blog] });
 });
 
-test("Remove Project on a project of many sessions archives them all, several at once, and stops those that wait on you", async t => {
-  const sessions = [
-    ...Array.from({ length: 240 }, (_, i) => session(`ses_big${i}`, shop)),
-    ...Array.from({ length: 30 }, (_, i) => session(`ses_bigtree${i}`, tree)),
-  ];
-  const waiting = new Set(["ses_big3", "ses_big150", "ses_bigtree7"]);
-  const engine = await engineWith(sessions, new Set(), waiting);
-  t.after(engine.close);
-  const handle = link.engineHandler(() => engine, { name: "box" }, () => null);
-  await ask(handle, "PUT", `kuvo/projects?directory=${encodeURIComponent(shop)}`, { name: "Shop" });
+// Each of a big project's sessions archived, and those that wait on you stopped: looked at only
+// where they're at work (an ask holds its turn), every one when that can't be read.
+for (const [name, readable] of [["", true], [", its sessions at work unknown", false]]) {
+  test(`Remove Project on a project of many sessions archives them all, several at once, and stops those that wait on you${name}`, async t => {
+    const sessions = [
+      ...Array.from({ length: 240 }, (_, i) => session(`ses_big${i}`, shop)),
+      ...Array.from({ length: 30 }, (_, i) => session(`ses_bigtree${i}`, tree)),
+    ];
+    const waiting = new Set(["ses_big3", "ses_big150", "ses_bigtree7"]);
+    // At work: those that wait on you, and one that's just working.
+    const working = new Set([...waiting, "ses_big9"]);
+    const engine = await engineWith(sessions, new Set(), waiting, readable ? working : null);
+    t.after(engine.close);
+    const handle = link.engineHandler(() => engine, { name: "box" }, () => null);
+    await ask(handle, "PUT", `kuvo/projects?directory=${encodeURIComponent(shop)}`, { name: "Shop" });
 
-  const removed = await ask(handle, "DELETE", `kuvo/projects?directory=${encodeURIComponent(shop)}`);
-  assert.equal(removed.status, 200, JSON.stringify(removed.json));
-  assert.deepEqual(removed.json, { archived: 270 });
-  assert.ok(sessions.every(each => each.metadata["kuvo.archived"] === true));
-  assert.deepEqual([...engine.stopped].sort(), [...waiting].sort(), "only those that wait on you, each once");
-  assert.ok(engine.most() > 1, "not one after another: a big project would take minutes");
-  assert.equal((await ask(handle, "GET", "kuvo/projects")).json.projects[0].removed, true);
-});
+    const removed = await ask(handle, "DELETE", `kuvo/projects?directory=${encodeURIComponent(shop)}`);
+    assert.equal(removed.status, 200, JSON.stringify(removed.json));
+    assert.deepEqual(removed.json, { archived: 270 });
+    assert.ok(sessions.every(each => each.metadata["kuvo.archived"] === true));
+    assert.deepEqual([...engine.stopped].sort(), [...waiting].sort(), "only those that wait on you, each once");
+    assert.deepEqual([...engine.looked].sort(), readable ? [...working].sort() : sessions.map(each => each.id).sort(), "what each asks is read only where it may ask");
+    assert.ok(engine.most() > 1, "not one after another: a big project would take minutes");
+    assert.equal((await ask(handle, "GET", "kuvo/projects")).json.projects[0].removed, true);
+  });
+}
 
 test("a session the engine doesn't archive keeps its project, which says so", async t => {
   const sessions = [session("ses_a", shop), session("ses_b", shop)];
