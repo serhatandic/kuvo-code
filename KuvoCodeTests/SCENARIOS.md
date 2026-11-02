@@ -61,6 +61,7 @@ for Linux's tools).
 | C5, C6 Files in the panel; the agent shows one; agents' tabs tidied; a folder that can't be read says why (this Mac's and a machine's), never looking empty | FileLinksTests, PanelTabsTests, ProjectFilesTests, BrowserHistoryTests, AgentTabsTests, UnreadableFoldersTests; a box's own listing (`kuvo/folders?files=1`, with its reason): the bridge's worktrees-where.test.js; the phone's FilesAndChangesTests | how the lines and the page look (a look in a demo copy) |
 | D3 A reply with a widget shows as one, as the agent made it, given the room its page says it needs | WidgetHeightTests | how a reply's steps become rows is the transcript view's own (no seam outside it); the bridge naming coding agents' show_widget is in Packages/Box/test/agents |
 | Math in a reply: formulas drawn in a line or on their own; prices, the shell's `$$`, code and links kept as written; lists, quotes and tables keep their shape | ReplyMathTests | how a formula looks (a look before and after) |
+| A reply's lines as chat apps draw them: none under its headings, `---` as one thin line (the phone's ReplyRulesTests are the same) | ReplyRulesTests | how the line looks (a look before and after) |
 | D4 A chat moved into a project | SessionLifecycleTests | |
 | E, B15, L36 The agent's browser; a screenshot you ask to see, in the conversation | BrowserToolServerTests | |
 | E2, L31 It fills in a form | BrowserFormTests | |

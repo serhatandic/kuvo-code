@@ -29,8 +29,4 @@ extension DynamicColor {
     light: Color(red: 228 / 255, green: 228 / 255, blue: 232 / 255),
     dark: Color(red: 66 / 255, green: 68 / 255, blue: 78 / 255)
   )
-  static let gitHubDivider = DynamicColor(
-    light: Color(red: 208 / 255, green: 208 / 255, blue: 211 / 255),
-    dark: Color(red: 51 / 255, green: 52 / 255, blue: 56 / 255)
-  )
 }

@@ -45,6 +45,10 @@ frame after it appeared, and the conversation jumped while you scrolled up into 
 
 - **Task lists.** An unordered list item that starts with `[ ] ` or `[x] ` (GitHub's task list)
   shows a checkbox in the bullet's place, without the brackets (`UnorderedList.swift`).
+- **Fewer lines, as chat apps draw them.** GitHub's style rules a line under each `#` and `##`
+  heading and draws `---` as a thick grey bar; replies read like Claude's and ChatGPT's apps
+  instead, with no line under a heading and `---` as one thin line in a table's colour, even room
+  above and below (`GitHubHeadingStyle.swift`, `GitHubThematicBreak.swift`).
 - **Math found as the Markdown is read.** Upstream's `.math` matched `$…$` and `$$…$$` in the
   parsed text, after Markdown had garbled the LaTeX (`\\` read as an escape, `_` and `*` as
   emphasis, `+ x` as a list item), and in prices. Foundation's parser can't be given syntax of its
