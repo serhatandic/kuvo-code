@@ -15194,7 +15194,7 @@ async function carryOn(id) {
     return;
   outgoing.set(id, { got: new Set, flying: new Map, exports: fingerprint(exports, queues) });
   const now = changeMove(id, (each) => {
-    Object.assign(each, { sessions: record.sessions, wasPaused: record.wasPaused, pausedAs: record.pausedAs, members: record.members, hash: bundle.hash, size: bundle.size, sent: 0, stage: "copying", step: "offer", offered: true, sentAt: Date.now() });
+    Object.assign(each, { sessions: record.sessions, wasPaused: record.wasPaused, pausedAs: record.pausedAs, members: record.members, hash: bundle.hash, size: bundle.size, sent: 0, stage: "copying", step: "offer", offered: true, sentAt: Date.now(), holdSince: undefined });
   });
   if (now)
     offer(now);
@@ -15244,6 +15244,7 @@ async function arrived(record) {
         each.tries += 1;
         each.stage = "holding";
         each.step = undefined;
+        each.holdSince = Date.now();
       });
       return drive(record.id);
     }
