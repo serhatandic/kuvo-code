@@ -18,7 +18,7 @@ import { processRuns, sandboxGeneration } from "../../shared/platform";
 import { accountHome, BOTS, BRIDGE_FILE, CHATS, ENGINE_CONFIG, ENGINE_FILE, K, RUN, SANDBOX_NOTE, SESSION_WAKES, SOCKET_KEY_FILE, SSH_AGENTS, SSH_FOR } from "../home";
 import { tellLauncher } from "./allowed";
 import { agentShellScript, agentsNote, launcherScript, pluginScript, type FencePlaces } from "./files";
-import { LANDLOCK_RUNNER, landlockPolicy, ownNamespace, UNSHARE } from "./landlock";
+import { LANDLOCK_RUNNER, landlockPolicy, ownNamespace, ownNamespaceLater, UNSHARE } from "./landlock";
 import { appTemporary, fencePolicy, realish, sandboxCaches } from "./policy";
 import { seatbeltProfile } from "./seatbelt";
 
@@ -284,6 +284,8 @@ function writeExecutable(file: string, text: string): void {
 const WITHOUT_NAMESPACE: "off" | "without" = "without";
 /** The `unshare` each command's namespace comes from, as `able` last found it (Linux). */
 let namespace: string | null = null;
+// Whether it's been looked for yet (a box without its engine at first doesn't).
+let namespaceKnown = false;
 /** Where it runs without one, what the machine needs for it (`FenceState.needs`). */
 let withoutNamespace: string | null = null;
 const namespaceHere = (): string | null => {
@@ -291,14 +293,16 @@ const namespaceHere = (): string | null => {
   return ownNamespace(NAMESPACE_FOLDER);
 };
 
-/** Whether this computer can sandbox commands at all, and why not. */
-function able(): Checked {
+/** Whether this computer can sandbox commands at all, and why not; `found`, whether commands can
+ * have a namespace of their own, where that's just been found (otherwise it's tried now). */
+function able(found?: string | null): Checked {
   if (platform === "darwin") return fs.existsSync("/usr/bin/sandbox-exec") ? { able: true, passed: false } : { able: false, passed: false, why: "macOS's sandbox isn't on this Mac.", reason: "macos" };
   if (!runtime()) return { able: false, passed: false, why: "The engine isn't installed here yet.", reason: "engineMissing" };
   if (!fs.existsSync("/sys/kernel/security/landlock") && !/landlock/.test(textOf("/sys/kernel/security/lsm") ?? "landlock")) {
     return { able: false, passed: false, why: `Linux ${os.release().split("-")[0]} can't sandbox commands: it needs Landlock (Linux 5.13 or later, with it on).`, reason: "kernel", needs: "Linux 5.13" };
   }
-  namespace = namespaceHere();
+  namespace = found === undefined ? namespaceHere() : found;
+  namespaceKnown = true;
   withoutNamespace = namespace ? null : UNSHARE.some(each => fs.existsSync(each)) ? "user namespaces" : "util-linux";
   if (withoutNamespace && WITHOUT_NAMESPACE === "off") {
     const services = "which the sandbox needs to keep commands from the services your login runs: systemd, your keyring, your agents";
@@ -370,29 +374,31 @@ function withdraw(): void {
 }
 
 /**
- * On this Mac's box, where commands' temporary folders go (`temporary`, which the launcher and the
- * agents' bridge read): the app's own temporary folder, and the key their names are made from,
- * kept while it's the same folder so a conversation keeps its own. Elsewhere, none: `tmp`.
+ * Where commands' temporary folders go (`temporary`, which the launcher and the agents' bridge
+ * read), and the key their short names are made from, kept while it's the same folder so a
+ * conversation keeps its own: on this Mac's box, the app's own temporary folder; elsewhere, `tmp`
+ * in the sandbox's folder.
  */
 function writeTemporary(): void {
   const file = path.join(FOLDER, "temporary");
-  const root = platform === "darwin" ? appTemporary() : null;
-  if (!root) return fs.rmSync(file, { force: true });
+  const root = appTemporary() ?? path.join(FOLDER, "tmp");
   const [had, key] = (textOf(file) ?? "").split("\n");
   if (had === root && /^[0-9a-f]{64}$/.test(key ?? "")) return;
   writePrivate(file, `${root}\n${crypto.randomBytes(32).toString("hex")}\n`);
-  // Those from before, in the box's own folder, go.
-  for (const name of listOf(path.join(FOLDER, "tmp"))) fs.rmSync(path.join(FOLDER, "tmp", name), { recursive: true, force: true });
+  // Those from before in the box's own folder go, once they're kept elsewhere; where they're still
+  // kept in it, those named otherwise (from another key, or by a whole sum, which a server a command
+  // left running may still use) go a week after their last command, as any do.
+  if (root !== path.join(FOLDER, "tmp")) for (const name of listOf(path.join(FOLDER, "tmp"))) fs.rmSync(path.join(FOLDER, "tmp", name), { recursive: true, force: true });
 }
 
 /**
  * Sets the sandbox up: its files written and checked, then its plugin given to the engine; where it
  * can't run or the check fails (or with the kill switch), the plugin taken away, so commands run as
- * before rather than not at all.
+ * before rather than not at all. `found`: as `able`'s.
  */
-export function setUpFence(): FenceState {
+export function setUpFence(found?: string | null): FenceState {
   // Whether it can be on here, known while it's off too.
-  const can = able();
+  const can = able(found);
   if (!fenceWanted()) {
     withdraw();
     checked = can;
@@ -488,6 +494,7 @@ export function keepFence(): void {
     try { if (JSON.parse(fs.readFileSync(DECIDED, "utf8")).pid === process.pid) fs.rmSync(DECIDED, { force: true }); } catch {}
   });
   let rounds = 0;
+  let trying = false;
   setInterval(() => {
     const round = rounds++;
     if (round % 60 === 0) sweepWakeFolders();
@@ -496,11 +503,20 @@ export function keepFence(): void {
     if (!fenceWanted()) return;
     try {
       if (checked.passed) writeProfiles();
-      // A failed check, tried again each minute (it holds the box up while it runs); and on Linux,
-      // set up again once commands can have a namespace of their own after all (allowed since), or
-      // no longer can (each would fail at unshare).
-      const namespaces = checked.passed && platform === "linux" && round % 6 === 5 && !namespaceHere() !== !namespace;
-      if (checked.passed ? namespaces || textOf(PLUGIN) !== pluginScript(places, VERSION) : round % 6 === 0) setUpFence();
+      // A failed check, tried again each minute (it holds the box up while it runs), with commands'
+      // namespace as last found.
+      if (checked.passed ? textOf(PLUGIN) !== pluginScript(places, VERSION) : round % 6 === 0) setUpFence(namespaceKnown ? namespace : undefined);
+      // And on Linux, set up again once commands can have a namespace of their own after all
+      // (allowed since), or no longer can (each would fail at unshare): found while the box goes on
+      // answering, one try at a time.
+      if (platform === "linux" && round % 6 === 5 && !trying) {
+        fs.mkdirSync(NAMESPACE_FOLDER, { recursive: true, mode: 0o700 });
+        trying = true;
+        ownNamespaceLater(NAMESPACE_FOLDER)
+          .then(found => { if (fenceWanted() && !found !== !namespace) setUpFence(found); })
+          .catch(() => {})
+          .finally(() => { trying = false; });
+      }
     } catch {}
   }, 10_000).unref?.();
 }
