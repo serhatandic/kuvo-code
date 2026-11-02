@@ -197,11 +197,16 @@ interface Movable {
 }
 
 /** Whether the chat `session` has its own goal (`/goal`) working or paused: the agents bridge keeps
- * it here, and it would end with the conversation as it leaves. */
-async function chatGoalRuns(session: string, signal?: AbortSignal): Promise<boolean> {
+ * it here, and it would end with the conversation as it leaves. Undefined when the bridge didn't
+ * answer, so it can't say. */
+async function chatGoalRuns(session: string, signal?: AbortSignal): Promise<boolean | undefined> {
   let bridge: Target;
   try { bridge = readBridgeFile(); } catch { return false; }
-  const goal = await call(bridge, "GET", `/api/kuvo/goals/${encodeURIComponent(session)}`, undefined, engineWait(signal)).catch(() => null);
+  const goal = await call(bridge, "GET", `/api/kuvo/goals/${encodeURIComponent(session)}`, undefined, engineWait(signal)).then(
+    data => data,
+    (error: { status?: number }) => (error?.status === 404 ? null : undefined),
+  );
+  if (goal === undefined) return undefined;
   return isObject(goal) && (goal.state === "working" || goal.state === "paused");
 }
 
@@ -412,6 +417,14 @@ async function carryOn(id: string): Promise<void> {
     const members = isObject(contents.group?.group) && Array.isArray(contents.group.group.members) ? contents.group.group.members : [];
     record.members = members.filter((member): member is string => typeof member === "string");
   } else {
+    // A goal set as it was asked to move (goals stay where they started): it stays. Asked before
+    // waiting for it to settle, which a goal at work never lets it do; one the bridge can't say
+    // of now isn't taken for none.
+    if (record.kind === "chat") {
+      const goal = await chatGoalRuns(record.thing);
+      if (goal) throw new Refused(say.onGoal(record.name));
+      if (goal === undefined) throw new Refused(`${record.name}’s goal couldn’t be checked on ${HERE}. Try again in a moment.`);
+    }
     const engine = readEngineFile();
     await settle(engine, record.sessions, record.name);
     exports = await exportAll(engine, record.sessions[0]);
@@ -421,9 +434,8 @@ async function carryOn(id: string): Promise<void> {
     queues = await queuesOf(engine, record.sessions, record.name);
     if (Object.keys(queues).length) contents.queues = queues;
     if (record.folder) contents.folder = path.basename(record.folder);
-    // A goal set as it was asked to move (goals stay where they started): it stays.
-    if (record.kind === "chat" && await chatGoalRuns(record.thing)) throw new Refused(say.onGoal(record.name));
     if (record.kind === "bot") {
+      // A goal started as it was asked to move (goals stay where they started): it stays.
       if (goalRuns(record.thing)) throw new Refused(say.onGoal(record.name));
       const keys = await keysOf(record.thing);
       if (!keys) throw new Refused(`${record.name}’s own keys couldn’t be read on ${HERE}. Try again in a moment.`);

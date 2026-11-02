@@ -93,11 +93,13 @@ fs.writeFileSync(path.join(home, "run", "engine.json"), JSON.stringify({ port: e
 // It also keeps conversations' own goals (`/goal`), by their sessions.
 const groups = { chats: new Map(), down: false, refused: 0 };
 const loops = new Map();
+let loopsDown = false;
 const bridgeServer = http.createServer(async (request, response) => {
   const given = await reading(request);
   const url = new URL(request.url, "http://x");
   const send = (status, value) => response.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(value));
   const loop = url.pathname.match(/^\/api\/kuvo\/goals\/([^/]+)$/);
+  if (loop && request.method === "GET" && loopsDown) return send(500, { message: "Busy." });
   if (loop && request.method === "GET") return loops.has(loop[1]) ? send(200, { data: loops.get(loop[1]) }) : send(404, { message: "That conversation has no goal." });
   const route = url.pathname.match(/^\/api\/kuvo\/groups(?:\/([^/]+)(?:\/([a-z]+))?)?$/);
   if (!route) return send(404, {});
@@ -246,7 +248,15 @@ test("a chat working on its /goal can't move (the goal stays on this computer), 
     assert.equal((await ask("GET", "kuvo/moves/places?kind=chat&id=ses_goal3")).json.places[0].ok, false);
     loops.get("ses_goal3").state = "met";
     assert.equal((await ask("GET", "kuvo/moves/places?kind=chat&id=ses_goal3")).json.places[0].ok, true);
+
+    // While the bridge can't say whether it has one, it doesn't go.
+    loopsDown = true;
+    const unsure = await ask("POST", "kuvo/moves", { kind: "chat", id: "ses_goal3", to: peerKey });
+    assert.equal(unsure.status, 409, JSON.stringify(unsure.json));
+    assert.match(unsure.json.message, /couldn’t be checked/);
+    assert.ok(engine.sessions.has("ses_goal3"));
   } finally {
+    loopsDown = false;
     loops.delete("ses_goal3");
     engine.sessions.delete("ses_goal3");
   }

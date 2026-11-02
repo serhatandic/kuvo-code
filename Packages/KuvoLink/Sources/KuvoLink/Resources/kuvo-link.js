@@ -15269,7 +15269,9 @@ async function chatGoalRuns(session, signal) {
   } catch {
     return false;
   }
-  const goal = await call(bridge, "GET", `/api/kuvo/goals/${encodeURIComponent(session)}`, undefined, engineWait(signal)).catch(() => null);
+  const goal = await call(bridge, "GET", `/api/kuvo/goals/${encodeURIComponent(session)}`, undefined, engineWait(signal)).then((data) => data, (error) => error?.status === 404 ? null : undefined);
+  if (goal === undefined)
+    return;
   return isObject(goal) && (goal.state === "working" || goal.state === "paused");
 }
 async function movable(kind, thing, signal) {
@@ -15497,6 +15499,13 @@ async function carryOn(id) {
     const members = isObject(contents.group?.group) && Array.isArray(contents.group.group.members) ? contents.group.group.members : [];
     record.members = members.filter((member) => typeof member === "string");
   } else {
+    if (record.kind === "chat") {
+      const goal = await chatGoalRuns(record.thing);
+      if (goal)
+        throw new Refused(say.onGoal(record.name));
+      if (goal === undefined)
+        throw new Refused(`${record.name}’s goal couldn’t be checked on ${HERE}. Try again in a moment.`);
+    }
     const engine = readEngineFile();
     await settle(engine, record.sessions, record.name);
     exports = await exportAll(engine, record.sessions[0]);
@@ -15507,8 +15516,6 @@ async function carryOn(id) {
       contents.queues = queues;
     if (record.folder)
       contents.folder = path61.basename(record.folder);
-    if (record.kind === "chat" && await chatGoalRuns(record.thing))
-      throw new Refused(say.onGoal(record.name));
     if (record.kind === "bot") {
       if (goalRuns(record.thing))
         throw new Refused(say.onGoal(record.name));
