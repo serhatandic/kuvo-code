@@ -1570,7 +1570,7 @@ function endedAs(id, now = Date.now()) {
     return null;
   }
 }
-function noteEnded(id, as, now = Date.now()) {
+function noteEnded(id, as, now = Date.now(), sessions = []) {
   let kept = {};
   try {
     kept = JSON.parse(fs9.readFileSync(ENDED_FILE, "utf8")) ?? {};
@@ -1578,8 +1578,16 @@ function noteEnded(id, as, now = Date.now()) {
   for (const [other, one] of Object.entries(kept))
     if (!keptFor(one, now))
       delete kept[other];
-  kept[id] = { as, at: now };
+  kept[id] = { as, at: now, ...sessions.length ? { sessions: [...sessions] } : {} };
   writePrivate(ENDED_FILE, JSON.stringify(kept));
+}
+function droppedHere(now = Date.now()) {
+  try {
+    const kept = JSON.parse(fs9.readFileSync(ENDED_FILE, "utf8"));
+    return Object.values(kept ?? {}).filter((one) => keptFor(one, now) && one.as === "dropped" && Array.isArray(one.sessions)).flatMap((one) => one.sessions.filter((each) => typeof each === "string"));
+  } catch {
+    return [];
+  }
 }
 
 // Packages/Box/src/link/peers/agents.ts
@@ -14745,7 +14753,7 @@ function letAttachmentsGo(places, session) {
 async function letGo2({ engine, bridge }, session) {
   if (!bridge)
     return;
-  const moving = new Set([...frozen(), ...movedAway().map((each) => each.session)]);
+  const moving = new Set([...frozen(), ...movedAway().map((each) => each.session), ...droppedHere()]);
   let gone;
   if (session !== undefined) {
     if (!SESSION.test(session) || moving.has(session))
@@ -14758,7 +14766,8 @@ async function letGo2({ engine, bridge }, session) {
         gone.push(name);
     }
   }
-  const folders = gone.flatMap((id) => keptIn().map((root) => path59.join(root, id))).filter((folder) => fs57.existsSync(folder));
+  const roots = session !== undefined ? keptIn() : [path59.join(K, "attachments")];
+  const folders = gone.flatMap((id) => roots.map((root) => path59.join(root, id))).filter((folder) => fs57.existsSync(folder));
   if (!folders.length)
     return;
   const shown = await stillShown([engine, bridge], gone);
@@ -14768,14 +14777,17 @@ async function letGo2({ engine, bridge }, session) {
   }
 }
 var isGone = (place, id) => engineGet(place, `api/session/${encodeURIComponent(id)}`).then(() => false, (error) => error?.message === "404");
-var FROM = ["branchedFrom", "handoffFrom", "carriedFrom", "startedBy"];
+var FROM = ["branchedFrom", "handoffFrom", "carriedFrom", "startedBy", "beside"];
 async function stillShown(places, ids) {
   const gone = new Set(ids);
   const sessions = new Map;
   for (const place of places) {
     for (const session of await everySession(place)) {
       const kuvo = session.metadata?.kuvo;
-      sessions.set(session.id, { place, from: FROM.map((key) => kuvo?.[key]).filter((each) => typeof each === "string") });
+      const seen = sessions.get(session.id) ?? { places: [], from: [] };
+      seen.places.push(place);
+      seen.from.push(...FROM.map((key) => kuvo?.[key]).filter((each) => typeof each === "string"));
+      sessions.set(session.id, seen);
     }
   }
   const leadsBack = (id, seen) => (sessions.get(id)?.from ?? []).some((from) => {
@@ -14787,13 +14799,15 @@ async function stillShown(places, ids) {
     return leadsBack(from, seen);
   });
   const shown = new Set;
-  for (const [id, { place }] of sessions) {
+  for (const [id, { places }] of sessions) {
     if (!leadsBack(id, new Set([id])))
       continue;
-    const words = JSON.stringify(await conversationOf2(place, id));
-    for (const each of ids)
-      if (new RegExp(`attachments/${each}/`, "i").test(words))
-        shown.add(each);
+    for (const place of places) {
+      const words = JSON.stringify(await conversationOf2(place, id));
+      for (const each of ids)
+        if (new RegExp(`attachments/${each}/`, "i").test(words))
+          shown.add(each);
+    }
   }
   return shown;
 }
@@ -16168,7 +16182,7 @@ function letGo3(id) {
   const record = readMove(id);
   if (!record || record.role !== "to")
     return null;
-  noteEnded(id, "dropped");
+  noteEnded(id, "dropped", Date.now(), record.sessions);
   if (!record.dropping)
     changeMove(id, (each) => {
       each.dropping = true;

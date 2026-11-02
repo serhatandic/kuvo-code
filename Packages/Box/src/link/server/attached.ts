@@ -10,7 +10,7 @@ import path from "node:path";
 import { conversationOf, everySession } from "../engine/conversations";
 import { engineGet } from "../engine/client";
 import { K, MAC_ATTACHMENTS } from "../home";
-import { frozen, movedAway } from "../moves/records";
+import { droppedHere, frozen, movedAway } from "../moves/records";
 import { withAttachedNote } from "../peers/naming";
 import { AGENTS_TEXT_BYTES } from "../../shared/text";
 import type { Target } from "../../shared/records";
@@ -164,22 +164,24 @@ async function letGo({ engine, bridge }: SessionPlaces, session?: string): Promi
   // With the bridge not running, its sessions can't be told from deleted ones, nor read for what
   // they show: everything stays.
   if (!bridge) return;
-  // One moving to another computer, or moved there lately, is deleted here as it goes: it lives on
-  // there, and its files stay (for two weeks, as before, here).
-  const moving = new Set([...frozen(), ...movedAway().map(each => each.session)]);
+  // One moving to another computer, moved there lately, or a copy of one let go of here as its move
+  // was taken back, is deleted here as it goes: it lives on there, and the Mac app shows its files.
+  const moving = new Set([...frozen(), ...movedAway().map(each => each.session), ...droppedHere()]);
   let gone: string[];
   if (session !== undefined) {
     if (!SESSION.test(session) || moving.has(session)) return;
     gone = [session];
   } else {
-    // Only what neither place has. And only this box's own folder: the Mac app's keeps machines'
-    // sessions' files too, which this box doesn't have (the app lets those go).
+    // Only what neither place has, and only in this box's own folder: the Mac app's keeps the files
+    // of conversations on other computers too, moved there long ago among them (the app lets those
+    // go as they're deleted there).
     gone = [];
     for (const name of listOf(path.join(K, "attachments")).filter(name => SESSION.test(name) && !moving.has(name))) {
       if (await isGone(engine, name) && await isGone(bridge, name)) gone.push(name);
     }
   }
-  const folders = gone.flatMap(id => keptIn().map(root => path.join(root, id))).filter(folder => fs.existsSync(folder));
+  const roots = session !== undefined ? keptIn() : [path.join(K, "attachments")];
+  const folders = gone.flatMap(id => roots.map(root => path.join(root, id))).filter(folder => fs.existsSync(folder));
   if (!folders.length) return;
   const shown = await stillShown([engine, bridge], gone);
   for (const folder of folders) {
@@ -191,19 +193,24 @@ async function letGo({ engine, bridge }: SessionPlaces, session?: string): Promi
 const isGone = (place: Target, id: string) => engineGet(place, `api/session/${encodeURIComponent(id)}`).then(() => false, error => (error as Error)?.message === "404");
 
 // What marks a conversation that started from another's words (a branch, a handoff, one carried on
-// with the coding agents, or one an agent started), which can show the files in them.
-const FROM = ["branchedFrom", "handoffFrom", "carriedFrom", "startedBy"];
+// with the coding agents, or one an agent started; older ones `beside`), which can show the files
+// in them.
+const FROM = ["branchedFrom", "handoffFrom", "carriedFrom", "startedBy", "beside"];
 
 // Which of the sessions `ids` a conversation in `places` still shows files of: read only where
 // what it came from leads back to one of them, or to a session no longer here (whose own start
 // can't be followed). It throws when they can't all be read: then everything stays.
 async function stillShown(places: Target[], ids: string[]): Promise<Set<string>> {
   const gone = new Set(ids);
-  const sessions = new Map<string, { place: Target; from: string[] }>();
+  // (One both places list is read in each.)
+  const sessions = new Map<string, { places: Target[]; from: string[] }>();
   for (const place of places) {
     for (const session of await everySession(place)) {
       const kuvo = session.metadata?.kuvo as Record<string, unknown> | undefined;
-      sessions.set(session.id, { place, from: FROM.map(key => kuvo?.[key]).filter((each): each is string => typeof each === "string") });
+      const seen = sessions.get(session.id) ?? { places: [], from: [] };
+      seen.places.push(place);
+      seen.from.push(...FROM.map(key => kuvo?.[key]).filter((each): each is string => typeof each === "string"));
+      sessions.set(session.id, seen);
     }
   }
   const leadsBack = (id: string, seen: Set<string>): boolean => (sessions.get(id)?.from ?? []).some(from => {
@@ -213,10 +220,12 @@ async function stillShown(places: Target[], ids: string[]): Promise<Set<string>>
     return leadsBack(from, seen);
   });
   const shown = new Set<string>();
-  for (const [id, { place }] of sessions) {
+  for (const [id, { places }] of sessions) {
     if (!leadsBack(id, new Set([id]))) continue;
-    const words = JSON.stringify(await conversationOf(place, id));
-    for (const each of ids) if (new RegExp(`attachments/${each}/`, "i").test(words)) shown.add(each);
+    for (const place of places) {
+      const words = JSON.stringify(await conversationOf(place, id));
+      for (const each of ids) if (new RegExp(`attachments/${each}/`, "i").test(words)) shown.add(each);
+    }
   }
   return shown;
 }

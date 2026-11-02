@@ -3088,7 +3088,9 @@ named after it, `attachments/<session>/…`, which goes as the box hears the ses
 one deleted while it wasn't listening, once its engine and bridge both say it's gone, unless a
 conversation marked `kuvo.branchedFrom`, `handoffFrom`, `carriedFrom` or `startedBy` (or one of its
 own, back along such marks) still names its files; nothing goes while the bridge isn't running or
-either can't be read, nor a session being moved or moved away; this Mac's box is told the app's folder in `KUVO_MAC_ATTACHMENTS`, and the app lets a
+either can't be read, nor a session being moved, moved away, or a copy here let go of as its move
+was taken back (`run/moves/ended.json` names its conversations for a week); a session deleted while
+the box wasn't listening leaves the Mac app's folder as it is; this Mac's box is told the app's folder in `KUVO_MAC_ATTACHMENTS`, and the app lets a
 machine's session's go itself), the agent's browser's downloads on a
 machine (this Mac's panel browser saves to `~/Downloads`, which asks), the engine's long outputs
 saved whole (`tool-output`), the repositories it reads (`repos`) and Plan's plans (`~/.opencode/plan`),
