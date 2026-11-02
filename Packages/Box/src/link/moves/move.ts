@@ -52,8 +52,12 @@ const DROP_AT_MOST = 24 * 3600_000;
 const heard = new Map<string, number>();
 /** How long the box it leaves waits for its conversations to settle, at most. */
 const SETTLE_FOR = 60;
-/** A copy held here with no word from the box it came from this long goes. */
+/** A copy held here with no word from the box it came from this long goes; one being let go of
+ * that still can't all go after this long is said so in the log, and tried again each hour. */
 const HELD_AT_MOST = 7 * 24 * 3600_000;
+const DROP_AGAIN_LATE = 3600_000;
+// The copies being let go of here whose lasting failure has been logged.
+const loggedStuck = new Set<string>();
 /** The other computer gone from your computers this long (not just left out as a list's read again):
  * a move with it ends. */
 const GONE_FOR = 5 * 60_000;
@@ -87,6 +91,7 @@ export const say = {
   needsUpdate: (place: string) => `${place} needs a newer Kuvo Code before things can move to or from it.`,
   botsNotThere: (chat: string, place: string) => `${chat}’s bots don’t all live on ${place}. Move them there first, then the chat can follow.`,
   slow: (name: string) => `${name} took too long to get ready to move on ${HERE}, so it stayed here. Try again in a moment.`,
+  oldCopy: (name: string, place: string) => `An earlier copy of ${name} on ${place} couldn’t be let go of yet. Try again in a moment.`,
   moving: MOVING,
 };
 
@@ -574,6 +579,7 @@ export function forgetMovesInMemory(): void {
   incoming.clear();
   outgoing.clear();
   heard.clear();
+  loggedStuck.clear();
 }
 
 async function takeOffer(sender: MailSender, given: Record<string, unknown>): Promise<void> {
@@ -604,14 +610,19 @@ async function takeOffer(sender: MailSender, given: Record<string, unknown>): Pr
   const was = readMove(id);
   if (was && (was.role !== "to" || was.peer !== sender.key || was.thing !== thing)) return void answer({ op: "refused", message: say.moving });
   if (was && was.hash === given.hash && !was.dropping) return void answer({ op: "ready" });
-  // Offered again, changed (it got more while it moved): what came of it before goes first.
-  if (was) await clearCopy(was);
-  // A move of it this way from the same computer, cut short: this one takes its place. Any other
-  // under way (from another computer, or away from here) stays.
+  // Offered again, changed (it got more while it moved): what came of it before goes first; and a
+  // move of it this way from the same computer, cut short: this one takes its place (in its own
+  // turn: one still being set up is let go of once it's all there). Any other under way (from
+  // another computer, or away from here) stays. What can't go yet (its engine or group chats
+  // refusing) is said, rather than left unanswered.
   const before = moveOf(thing);
-  // (In its own turn: one still being set up is let go of once it's all there.)
-  if (before && before.id !== id && before.role === "to" && before.peer === sender.key) await inTurn(before.id, () => drop(before.id));
-  else if (before && before.id !== id) return void answer({ op: "refused", message: say.moving });
+  try {
+    if (was) await clearCopy(was);
+    if (before && before.id !== id && before.role === "to" && before.peer === sender.key) await inTurn(before.id, () => drop(before.id));
+  } catch {
+    return void answer({ op: "refused", message: say.oldCopy(name, place) });
+  }
+  if (before && before.id !== id && !(before.role === "to" && before.peer === sender.key)) return void answer({ op: "refused", message: say.moving });
   // Never over one that lives here: a copy only comes where there's none.
   if (!was && await livesHere(kind, thing)) return void answer({ op: "refused", message: `${name} is on ${place} already.` });
   fs.rmSync(bundleOf(id), { recursive: true, force: true });
@@ -775,6 +786,7 @@ async function drop(id: string): Promise<void> {
   if (!record.dropping) changeMove(id, each => { each.dropping = true; });
   await clearCopy(record);
   forgetMove(id);
+  loggedStuck.delete(id);
 }
 
 /** What a move brought here, gone: its conversations, the folder it placed, a bot's keys, a group
@@ -785,8 +797,11 @@ async function clearCopy(record: MoveRecord): Promise<void> {
   if (record.kind === "group") {
     await groupAction(readBridgeFile(), record.thing, "release");
   } else {
-    const engine = readEngineFile();
-    for (const session of [...record.sessions].reverse()) await deleteSession(engine, session);
+    // (None brought in yet: its engine needn't be running.)
+    if (record.sessions.length) {
+      const engine = readEngineFile();
+      for (const session of [...record.sessions].reverse()) await deleteSession(engine, session);
+    }
     for (const session of record.sessions) forgetQueue(session);
     const place = folderOf(record.kind, record.thing);
     // Only a copy this move placed, never one that lives here.
@@ -957,10 +972,17 @@ export function keepMoving(now = Date.now()): void {
     missing.delete(record.id);
     if (record.role === "to") {
       // A copy that couldn't all be let go of (its engine or group chats down): again, each minute.
+      // Still not after a week: said in the log, once, and tried each hour (and as the box starts).
+      // It's never forgotten while any of it's here, so what's left never goes on as a second copy.
       if (record.dropping) {
-        if (now - (record.sentAt ?? 0) > STEP_AGAIN) {
+        const late = now - record.started > HELD_AT_MOST;
+        if (now - (record.sentAt ?? 0) > (late ? DROP_AGAIN_LATE : STEP_AGAIN)) {
           changeMove(record.id, each => { each.sentAt = now; });
-          inTurn(record.id, () => drop(record.id)).catch(() => {});
+          inTurn(record.id, () => drop(record.id)).catch(error => {
+            if (!late || loggedStuck.has(record.id)) return;
+            loggedStuck.add(record.id);
+            console.error(`kuvo-link: a copy of ${record.name} that came here couldn’t be let go of in a week, so it stays held: ${String((error as Error | null)?.message ?? error)}`);
+          });
         }
         continue;
       }

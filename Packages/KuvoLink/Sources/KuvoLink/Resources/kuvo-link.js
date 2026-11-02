@@ -14831,6 +14831,8 @@ var DROP_AT_MOST = 24 * 3600000;
 var heard = new Map;
 var SETTLE_FOR = 60;
 var HELD_AT_MOST = 7 * 24 * 3600000;
+var DROP_AGAIN_LATE = 3600000;
+var loggedStuck = new Set;
 var GONE_FOR = 5 * 60000;
 var missing = new Map;
 var HOLDING_AT_MOST = 30 * 60000;
@@ -14855,6 +14857,7 @@ var say = {
   needsUpdate: (place) => `${place} needs a newer Kuvo Code before things can move to or from it.`,
   botsNotThere: (chat, place) => `${chat}’s bots don’t all live on ${place}. Move them there first, then the chat can follow.`,
   slow: (name) => `${name} took too long to get ready to move on ${HERE}, so it stayed here. Try again in a moment.`,
+  oldCopy: (name, place) => `An earlier copy of ${name} on ${place} couldn’t be let go of yet. Try again in a moment.`,
   moving: MOVING
 };
 var note = {
@@ -15360,6 +15363,7 @@ function forgetMovesInMemory() {
   incoming.clear();
   outgoing.clear();
   heard.clear();
+  loggedStuck.clear();
 }
 async function takeOffer(sender, given) {
   const id = String(given.id);
@@ -15396,12 +15400,16 @@ async function takeOffer(sender, given) {
     return void answer({ op: "refused", message: say.moving });
   if (was && was.hash === given.hash && !was.dropping)
     return void answer({ op: "ready" });
-  if (was)
-    await clearCopy(was);
   const before = moveOf(thing);
-  if (before && before.id !== id && before.role === "to" && before.peer === sender.key)
-    await inTurn(before.id, () => drop(before.id));
-  else if (before && before.id !== id)
+  try {
+    if (was)
+      await clearCopy(was);
+    if (before && before.id !== id && before.role === "to" && before.peer === sender.key)
+      await inTurn(before.id, () => drop(before.id));
+  } catch {
+    return void answer({ op: "refused", message: say.oldCopy(name, place) });
+  }
+  if (before && before.id !== id && !(before.role === "to" && before.peer === sender.key))
     return void answer({ op: "refused", message: say.moving });
   if (!was && await livesHere(kind, thing))
     return void answer({ op: "refused", message: `${name} is on ${place} already.` });
@@ -15605,15 +15613,18 @@ async function drop(id) {
     });
   await clearCopy(record);
   forgetMove(id);
+  loggedStuck.delete(id);
 }
 async function clearCopy(record) {
   incoming.delete(record.id);
   if (record.kind === "group") {
     await groupAction(readBridgeFile(), record.thing, "release");
   } else {
-    const engine = readEngineFile();
-    for (const session of [...record.sessions].reverse())
-      await deleteSession(engine, session);
+    if (record.sessions.length) {
+      const engine = readEngineFile();
+      for (const session of [...record.sessions].reverse())
+        await deleteSession(engine, session);
+    }
     for (const session of record.sessions)
       forgetQueue(session);
     const place = folderOf(record.kind, record.thing);
@@ -15789,11 +15800,17 @@ function keepMoving(now = Date.now()) {
     missing.delete(record.id);
     if (record.role === "to") {
       if (record.dropping) {
-        if (now - (record.sentAt ?? 0) > STEP_AGAIN) {
+        const late = now - record.started > HELD_AT_MOST;
+        if (now - (record.sentAt ?? 0) > (late ? DROP_AGAIN_LATE : STEP_AGAIN)) {
           changeMove(record.id, (each) => {
             each.sentAt = now;
           });
-          inTurn(record.id, () => drop(record.id)).catch(() => {});
+          inTurn(record.id, () => drop(record.id)).catch((error) => {
+            if (!late || loggedStuck.has(record.id))
+              return;
+            loggedStuck.add(record.id);
+            console.error(`kuvo-link: a copy of ${record.name} that came here couldn’t be let go of in a week, so it stays held: ${String(error?.message ?? error)}`);
+          });
         }
         continue;
       }

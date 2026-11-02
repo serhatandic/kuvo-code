@@ -573,3 +573,67 @@ test("what you answered a chat's ask after it stopped waiting isn't told it whil
   assert.equal(lettersFor("ses_reach2").length, 1);
   fs.rmSync(sending, { recursive: true, force: true });
 });
+
+test("a copy that never got set up here is let go of at once, even while this box's engine isn't running", async () => {
+  script = () => {};
+  const id = "mov_bare1";
+  writeRecord({ id, kind: "chat", thing: "ses_bare1", name: "“Notes”", from: peerKey, to: "", role: "to", stage: "copying", sessions: [], peer: peerKey, wasPaused: false,
+    hash: "h", size: 10, sent: 0, tries: 0, started: Date.now() });
+  const engineFile = path.join(home, "run", "engine.json");
+  fs.renameSync(engineFile, `${engineFile}.away`);
+  try {
+    await say({ op: "drop", id });
+    assert.equal(told.findLast(move => move.id === id)?.op, "dropped");
+    assert.deepEqual((await ask("GET", "kuvo/moves")).json, { moves: [], away: [] }, "nothing of it is left");
+  } finally {
+    fs.renameSync(`${engineFile}.away`, engineFile);
+  }
+});
+
+test("a copy this box can't let go of is offered again: refused, saying why, rather than left unanswered", async () => {
+  script = () => {};
+  // Lab took a move of it back a while ago; its copy here couldn't all go (its engine refusing).
+  engine.sessions.set("ses_old1", { id: "ses_old1", title: "Notes", directory: chats, messages: [] });
+  writeRecord({ id: "mov_old1", kind: "chat", thing: "ses_old1", name: "“Notes”", from: peerKey, to: "", role: "to", stage: "copying", sessions: ["ses_old1"], peer: peerKey, wasPaused: false,
+    hash: "h", size: 10, sent: 10, tries: 0, started: Date.now(), complete: true, dropping: true, sentAt: Date.now() });
+  engine.down = true;
+  try {
+    const { bytes, hash } = bundleFor({ kind: "chat", thing: "ses_old1", name: "“Notes”", wasPaused: false, exports: [{ info: { id: "ses_old1", title: "Notes" }, messages: [] }] });
+    await say({ op: "offer", id: "mov_old2", kind: "chat", thing: "ses_old1", name: "“Notes”", size: bytes.length, hash, wasPaused: false, from: peerKey });
+    const answer = told.findLast(move => move.id === "mov_old2");
+    assert.equal(answer?.op, "refused");
+    assert.equal(answer.message, "An earlier copy of “Notes” on this Mac couldn’t be let go of yet. Try again in a moment.");
+  } finally {
+    engine.down = false;
+  }
+  link.keepMoving(Date.now() + 61_000);
+  await until(() => !engine.sessions.has("ses_old1") && !recordOf("ses_old1"));
+});
+
+test("a copy that still can't be let go of after a week says so in the log, once, and stays held", async () => {
+  script = () => {};
+  engine.sessions.set("ses_stuck1", { id: "ses_stuck1", title: "Notes", directory: chats, messages: [] });
+  const started = Date.now();
+  writeRecord({ id: "mov_stuck1", kind: "chat", thing: "ses_stuck1", name: "“Notes”", from: peerKey, to: "", role: "to", stage: "copying", sessions: ["ses_stuck1"], peer: peerKey, wasPaused: false,
+    hash: "h", size: 10, sent: 10, tries: 0, started, complete: true, dropping: true, sentAt: started });
+  const logged = [];
+  const error = console.error;
+  console.error = (...words) => logged.push(words.join(" "));
+  engine.down = true;
+  try {
+    const refused = engine.refused;
+    link.keepMoving(started + 8 * 24 * 3600_000);
+    await until(() => logged.length > 0);
+    assert.ok(engine.refused > refused, "it tried");
+    assert.match(logged[0], /^kuvo-link: a copy of “Notes” that came here couldn’t be let go of in a week/);
+    link.keepMoving(started + 8 * 24 * 3600_000 + 2 * 3600_000);
+    await until(() => engine.refused > refused + 1);
+    assert.equal(logged.length, 1, "said once");
+    assert.deepEqual((await ask("GET", "kuvo/moves")).json.away, ["ses_stuck1"], "held: nothing reaches it");
+  } finally {
+    engine.down = false;
+    console.error = error;
+  }
+  link.keepMoving(started + 8 * 24 * 3600_000 + 4 * 3600_000);
+  await until(() => !engine.sessions.has("ses_stuck1") && !recordOf("ses_stuck1"));
+});

@@ -488,7 +488,9 @@ of, never set up, or doesn't know), and the box it left then goes on with its or
 Before the switch, anything that goes wrong takes it back: the box it leaves sends `drop` →
 `dropped` (the copy there goes: its conversations, keys and folder, a group chat released) and
 goes on as it was. `dropped` comes only once all of it's gone: what its engine or group chats can't
-let go of now (down) is kept, never switched to, and let go of again each minute. A group chat that
+let go of now (down) is kept, never switched to, and let go of again each minute (after a week, each
+hour, said once in the log; never forgotten while any of it's here); offered again meanwhile, it's
+`refused`, saying an earlier copy couldn't be let go of yet. A group chat that
 can't go on again as it's taken back (its group chats down) is started each minute until it does,
 and as a box starts, a group chat held there that no move under way holds goes on. After it, only forward. Each box keeps its moves in `run/moves/<id>.json` (and
 the bundle beside it), so a move cut short by a restart carries on: one that switched finishes, one
