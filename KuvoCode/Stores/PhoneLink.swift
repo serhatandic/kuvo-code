@@ -1001,7 +1001,7 @@ final class PhoneLink {
     /// `engine.start` and `update`), and the Mac's own. `usage` is added while the usage panel is.
     static let features = [
         "accounts.credentials", "accounts.found", "agents", "artifacts", "asks", "attention", "bots", "bots.edit", "bots.events", "bots.job", "bots.keys", "bots.make", "branch", "btw", "btw.threads", "config", "config.apply", "engine.restart",
-        "file", "folders", "folders.files", "git", "git.merge", "git.pull-request", "git.push", "goals", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "handoff", "integrations", "keys", "mcp.catalog", "moves",
+        "file", "folders", "folders.files", "git", "git.merge", "git.pull-request", "git.pull-request.draft", "git.push", "goals", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "handoff", "integrations", "keys", "mcp.catalog", "moves",
         "named", "personalities", "phones", "phones.pair", "plugins.search", "programs", "projects", "providers.models", "reviews", "reviews.parts", "reviews.scopes", "search", "sessions.agents", "shell.stop", "sign-in.return", "skills",
         "personalities.events", "skills.trash", "sandbox", "sandbox.check", "sandbox.asks", "vault", "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events", "worktrees.where",
         "agent-tools", "sessions.start", "letters-read", "queue", "queue.waits", "work", "work.projects", "work.goals",

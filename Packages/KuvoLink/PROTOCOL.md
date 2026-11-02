@@ -1733,6 +1733,16 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     or GitLab page that opens one, with the title and description filled in; `{}` for another
     host (pushed, to open one there). Without a title, `gh` takes the title and description from
     the commits. `422 {"message"}` for a push that didn't go through.
+  - `POST kuvo/git/pull-request/draft {"directory"}` (`git.pull-request.draft`): Create Pull
+    Request's confirmation, which a client shows before it creates one; nothing is pushed →
+    `{"branch", "base"?, "title", "body", "summary", "host", "creates", "gh"?}`. `base` as
+    Create's; `title` and `body` from the commits (one commit's own subject and body, else the
+    branch's name and the commits listed), for the client to show and change; `summary`, the
+    commits, files and diff cut short, for a model to write them from. `host`: `github`, `gitlab`
+    or `other`. `creates` true: Create makes it on the box with `gh`, there and signed in. Else
+    Create opens the host's page (`compareURL`), and on GitHub `gh` says why: `signed-out` or
+    `missing`, for the client to say so; on another host Create only pushes. `409 {"message"}` as
+    Create would refuse.
 - `GET kuvo/folders[?path=<folder>&hidden=1]` (`folders`): the folders in one of this box's folders,
   for a client to choose one (Settings › Worktrees' folder) as a folder panel does → `{"path",
   "home", "parent", "folders": [{name, repository?}]}`, ordered as Finder orders names, without
@@ -2344,6 +2354,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `git` | `kuvo/git/…`: Changes (bridge 0.9.94) |
 | `git.merge` | `POST kuvo/git/merge`: Merge into… (bridge 0.9.143) |
 | `git.pull-request` | `POST kuvo/git/pull-request`: Create Pull Request (bridge 0.9.143) |
+| `git.pull-request.draft` | `POST kuvo/git/pull-request/draft`: Create Pull Request's confirmation |
 | `git.push` | `POST kuvo/git/push`, and a commit's `committed` when only its push failed (bridge 0.9.143) |
 | `goals` | `kuvo/agents/api/kuvo/goals…`: goals ("Goals") |
 | `btw` | `kuvo/agents/api/kuvo/btw…`: side questions ("Side questions, handoffs and reviews") |
