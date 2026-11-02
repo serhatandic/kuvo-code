@@ -121,8 +121,6 @@ import Testing
         workspace.handle(try engine.event("permission.asked", ["id": "per_a", "sessionID": "ses_a", "action": "shell", "resources": ["npm test"]]))
         workspace.handle(try engine.event("permission.asked", ["id": "per_g", "sessionID": "ses_ghost", "action": "shell", "resources": ["make"]]))
         #expect(workspace.waitingCount == 2)
-        // Its notification looked for it once.
-        try await until { engine.requests("GET", "/api/session/ses_ghost").count == 1 }
         engine.on("POST", "/api/session/ses_a/permission/per_a/reply", json: ["message": "The engine is busy"], status: 500)
         engine.on("GET", "/api/session/ses_a/permission", json: ["message": "The engine is busy"], status: 500)
         engine.on("POST", "/api/session/ses_ghost/permission/per_g/reply", json: ["message": "Session not found"], status: 404)
@@ -130,7 +128,13 @@ import Testing
 
         workspace.answer("per_a", in: "ses_a", with: .once)
         workspace.answer("per_g", in: "ses_ghost", with: .once)
-        try await until { !engine.requests("GET", "/api/session/ses_a/permission").isEmpty && engine.requests("GET", "/api/session/ses_ghost").count == 2 }
+        // Both read again, the ghost by looking for its session once its answer didn't go (its
+        // notification, and more, look for it too, before: how often is theirs to say).
+        try await until {
+            let asked = engine.asked
+            guard let answered = asked.lastIndex(of: "POST /api/session/ses_ghost/permission/per_g/reply") else { return false }
+            return asked.contains("GET /api/session/ses_a/permission") && asked[answered...].contains("GET /api/session/ses_ghost")
+        }
         #expect(engine.requests("GET", "/api/session/ses_ghost/permission").isEmpty, "not read where it isn't")
         #expect(workspace.waitingCount == 2)
     }
