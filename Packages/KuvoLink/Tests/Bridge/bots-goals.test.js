@@ -479,6 +479,19 @@ test("an end you set has the bot wrap up and report; if it doesn't, the box ends
   assert.ok(interrupted.includes("ses_site"));
 });
 
+test("an end you move later after it came is a new end: the bot works on, and is told to wrap up once that one comes", async () => {
+  const goal = await startedGoal({ ends: Date.now() + 60_000 });
+  await look(Date.now() + 120_000);
+  assert.match(prompts.at(-1).text, /^\[Goal's end\] The end the user set has come/);
+  const later = Date.now() + 2 * 86_400_000;
+  const changed = await route("POST", `kuvo/work/goals/${goal.id}`, { action: "change", ends: later });
+  assert.equal(changed.status, 200, JSON.stringify(changed.body));
+  const told = prompts.length;
+  await look(later + 60_000);
+  assert.equal((await goals())[0].state, "running", "not ended at once, with no word");
+  assert.ok(prompts.slice(told).some(each => /^\[Goal's end\] The end the user set has come/.test(each.text)), "told to wrap up at the new end");
+});
+
 test("Stop ends the goal: its sessions and the bot's own turn stop", async () => {
   const goal = await startedGoal();
   active.add("ses_site");
@@ -821,6 +834,26 @@ test("with nothing of the goal at work, the bot is told to carry on after a whil
   await look(later + 10 * 3_600_000);
   await look(later + 30 * 3_600_000);
   assert.equal(nudges().length, 2);
+});
+
+test("a look at a running goal that finds nothing new tells no one: the apps following the goals aren't sent them again, and the box's own watch rests until its next look", async () => {
+  await startedGoal();
+  const now = Date.now();
+  await look(now);
+  let toldFollowers = 0;
+  const follower = () => { toldFollowers += 1; };
+  link.goalFollowers.add(follower);
+  try {
+    await look(now + 1000);
+    await look(now + 2000);
+    assert.equal(toldFollowers, 0);
+    // Something new is told.
+    await look(now + 11 * 60_000);
+    assert.equal(nudges().length, 1);
+    assert.ok(toldFollowers > 0);
+  } finally {
+    link.goalFollowers.delete(follower);
+  }
 });
 
 // A wake-up of the bot's, as kuvo-wake keeps it: a file in its folder named for when it's due.

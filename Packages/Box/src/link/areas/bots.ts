@@ -27,8 +27,8 @@ export async function* botTemplatesRoute(context: RouteContext): AsyncGenerator<
 
 // New bots, made here as New Bot makes them on the Mac, which takes them in when it next connects.
 export async function* newBotRoute(context: RouteContext): AsyncGenerator<AnswerPiece> {
-  const { request, signal, readEngine, bridge, info, json } = context;
-  const { status, value } = await makeBot(parsed(request.body) as GivenBot | null | undefined, readEngine, bridge, info.name, signal);
+  const { request, readEngine, bridge, info, json } = context;
+  const { status, value } = await makeBot(parsed(request.body) as GivenBot | null | undefined, readEngine, bridge, info.name);
   return yield* json(status, value);
 }
 

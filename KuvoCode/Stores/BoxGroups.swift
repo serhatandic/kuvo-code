@@ -277,7 +277,11 @@ final class BoxGroups {
     func reach(_ id: String) -> Reach {
         access(keyPath: \.groups)
         guard groupsByID[id] != nil else { return .ready }
-        let machine = machines[id]
+        return reach(on: machines[id])
+    }
+
+    /// Whether a computer's group chats can be reached now: this Mac's (nil), or a machine's.
+    func reach(on machine: String?) -> Reach {
         if api(machine) != nil { return .ready }
         guard let machine else { return macReach }
         return .away(machine)
@@ -583,17 +587,17 @@ final class BoxGroups {
 
     // MARK: Taking part
 
-    /// A new chat on this Mac, as New Group Chat makes it: this Mac's box says what can be (who
-    /// can join, its meeting, on its clock), and makes it.
-    func create(name: String, purpose: String?, members: [String], meeting: MeetingPlan?) async throws -> BotGroup {
-        guard let api = api(nil) else { throw Failure.macStarting }
+    /// A new chat on this Mac, or on `machine`, as New Group Chat makes it: the box it lives on says
+    /// what can be (who can join, its meeting, on its clock), and makes it.
+    func create(name: String, purpose: String?, members: [String], meeting: MeetingPlan?, on machine: String? = nil) async throws -> BotGroup {
+        guard let api = api(machine) else { throw failure(for: machine) }
         var body: [String: JSONValue] = ["name": .string(name), "members": .array(members.map(JSONValue.string))]
         if let purpose { body["purpose"] = .string(purpose) }
         if let meeting { body["meeting"] = meeting.json }
         let answer = try await api.client.send(try api.client.request("POST", "api/kuvo/link/groups", body: JSONValue.object(body)), as: JSONValue.self, patience: .zero)
         guard let id = answer["group"]?["id"]?.string else { throw Failure.unreadable }
-        await reload(id, on: nil)
-        guard let group = chats.first(where: { $0.group.id == id && $0.machine == nil })?.group else { throw Failure.unreadable }
+        await reload(id, on: machine)
+        guard let group = chats.first(where: { $0.group.id == id && $0.machine == machine })?.group else { throw Failure.unreadable }
         Analytics.shared.track("group_created", ["members": members.count])
         return group
     }
@@ -622,16 +626,16 @@ final class BoxGroups {
         }
     }
 
-    func stop(_ id: String) {
-        act(id, "stop")
+    func stop(_ id: String) async throws {
+        try await act(id, "stop")
     }
 
-    func keepGoing(_ id: String) {
-        act(id, "keep-going")
+    func keepGoing(_ id: String) async throws {
+        try await act(id, "keep-going")
     }
 
-    func startWork(_ wrapUpID: String, in id: String) {
-        act(id, "start-work", ["wrapUp": .string(wrapUpID)])
+    func startWork(_ wrapUpID: String, in id: String) async throws {
+        try await act(id, "start-work", ["wrapUp": .string(wrapUpID)])
     }
 
     /// Takes the chat back to before one of your messages; its words, for the composer.
@@ -711,9 +715,16 @@ final class BoxGroups {
         }
     }
 
-    private func act(_ id: String, _ action: String, _ body: [String: JSONValue] = [:]) {
-        guard let chat = chat(id), let api = api(chat.machine) else { return }
-        Task { _ = try? await api.boxGroupAction(id, action, body) }
+    /// What you did to a chat, where it lives; why it couldn't, as `send` says it (moving, or its
+    /// computer's agents not answering yet).
+    private func act(_ id: String, _ action: String, _ body: [String: JSONValue] = [:]) async throws {
+        guard let chat = chat(id) else { throw Failure.gone }
+        guard let api = api(chat.machine) else { throw failure(for: chat.machine) }
+        do {
+            _ = try await api.boxGroupAction(id, action, body)
+        } catch let refused as ServerError where refused.status == 409 {
+            throw Moves.Failure.moving
+        }
     }
 
     enum Failure: LocalizedError {

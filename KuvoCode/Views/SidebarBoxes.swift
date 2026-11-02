@@ -11,6 +11,9 @@ enum SidebarBox: Hashable, Identifiable {
 
     var id: String { machine ?? "mac" }
 
+    /// The box in view in the sidebar, by `id`, as it's kept.
+    static let inViewKey = "sidebarBox"
+
     /// The machine it is; nil for this Mac.
     var machine: String? {
         if case .machine(let id) = self { id } else { nil }

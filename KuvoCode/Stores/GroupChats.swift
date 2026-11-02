@@ -43,6 +43,8 @@ final class GroupChats {
 
     /// Whether you can reach a chat where it lives now (see `BoxGroups.Reach`).
     func reach(_ id: String) -> BoxGroups.Reach { boxes.reach(id) }
+    /// Whether a computer's chats can be reached now: this Mac's (nil), or a machine's.
+    func reach(on machine: String?) -> BoxGroups.Reach { boxes.reach(on: machine) }
     /// The machine a chat lives on while you can't reach it there: what you write waits.
     func unreachable(_ id: String) -> String? { boxes.unreachable(id) }
     /// This Mac's group chats: running, starting, or stopped.
@@ -75,9 +77,17 @@ final class GroupChats {
         return true
     }
 
-    func stop(_ id: String) { boxes.stop(id) }
-    func keepGoing(_ id: String) { boxes.keepGoing(id) }
-    func startWork(_ wrapUpID: String, in id: String) { boxes.startWork(wrapUpID, in: id) }
+    func stop(_ id: String) { saying { try await $0.stop(id) } }
+    func keepGoing(_ id: String) { saying { try await $0.keepGoing(id) } }
+    func startWork(_ wrapUpID: String, in id: String) { saying { try await $0.startWork(wrapUpID, in: id) } }
+
+    /// Done where the chat lives; why it couldn't be, said.
+    private func saying(_ action: @escaping (BoxGroups) async throws -> Void) {
+        let boxes = boxes
+        Task {
+            do { try await action(boxes) } catch { Modal.show(error) }
+        }
+    }
 
     /// Takes the chat back to before one of your messages; its words, for the composer.
     func undo(from messageID: String, in id: String) async -> String? {
@@ -89,9 +99,9 @@ final class GroupChats {
         await boxes.joinable(machine)
     }
 
-    /// A new chat, on this Mac.
-    func create(name: String, purpose: String?, members: [String], meeting: BoxGroups.MeetingPlan?) async throws -> BotGroup {
-        try await boxes.create(name: name, purpose: purpose, members: members, meeting: meeting)
+    /// A new chat, on this Mac or `machine`.
+    func create(name: String, purpose: String?, members: [String], meeting: BoxGroups.MeetingPlan?, on machine: String? = nil) async throws -> BotGroup {
+        try await boxes.create(name: name, purpose: purpose, members: members, meeting: meeting, on: machine)
     }
 
     /// Its name, purpose, bots or meeting changed, where it lives; what it refuses throws.

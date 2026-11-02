@@ -117,8 +117,11 @@ const readKept = (file = GOALS_FILE): KeptGoal[] => {
 export const goalRuns = (bot: string, file = GOALS_FILE): boolean => readKept(file).some(goal => goal.bot === bot && goal.state === "running");
 
 // The goals as `change` leaves them, under the lock: each bot's latest, while its bot is here.
+// Those following them are told only when that changed something (the watch's own look, finding
+// nothing new, would otherwise start the next at once, and every app read them again).
 function changeKept<T>(change: (goals: KeptGoal[]) => T, file = GOALS_FILE): T {
   fs.mkdirSync(WORK_FOLDER, { recursive: true });
+  let changed = false;
   const result = locked(LOCK, () => {
     const goals = readKept(file);
     const value = change(goals);
@@ -126,10 +129,14 @@ function changeKept<T>(change: (goals: KeptGoal[]) => T, file = GOALS_FILE): T {
     for (const goal of goals) if (botHere(goal.bot) && (!latest.has(goal.bot) || latest.get(goal.bot)!.proposed <= goal.proposed)) latest.set(goal.bot, goal);
     // Each bot's latest, and one that ended with a report not told yet.
     const kept = goals.filter(goal => botHere(goal.bot) && (latest.get(goal.bot) === goal || (goal.report && !goal.reportTold && goal.state !== "running")));
-    writePrivate(file, JSON.stringify({ goals: kept }, null, 2));
+    const text = JSON.stringify({ goals: kept }, null, 2);
+    if (text !== textOf(file)) {
+      writePrivate(file, text);
+      changed = true;
+    }
     return value;
   });
-  for (const tell of goalFollowers) tell();
+  if (changed) for (const tell of goalFollowers) tell();
   return result;
 }
 
@@ -423,6 +430,8 @@ async function changeGoal(id: string, action: "change" | "clear", given: Record<
     if (DIGESTS.includes(given.digest as (typeof DIGESTS)[number])) goal.digest = given.digest as (typeof DIGESTS)[number];
     if (ends !== undefined) goal.ends = ends;
     if (given.ends === null) delete goal.ends;
+    // A new end (or none): told of it once it comes, not ended at once for the last one's.
+    if (ends !== undefined || given.ends === null) delete goal.endTold;
     goal.spend = capsGiven(goal.spend, given.spend);
     return goal;
   }, file);

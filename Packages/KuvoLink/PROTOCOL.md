@@ -424,8 +424,8 @@ A client asks the box it lives on once, and watches; the move goes on with no cl
 - `GET kuvo/moves/places?kind=bot|chat|group&id=…` → `200 {places: [{key, name, kind, ok, why?,
   note?}]}`: each of your other computers (its box's key, its name, `mac` or `machine`), and whether
   it can go there now, with why not in words to show (it works in a project, talks with a coding
-  agent, is in a group chat that lives here with its bots, is working on a goal (which stays on this
-  box), is moving already; that computer's box is
+  agent, is in a group chat that lives here with its bots, is working on a goal (a bot's, or a
+  chat's own `/goal` working or paused; it stays on this box), is moving already; that computer's box is
   from before moves, as the `features` its agents' mail last gave say; a group chat's bots don't all
   live on that machine, as its agents' mail says, none of them here) and `note`, the same in a few
   words for beside the computer's name in a menu. `404 {message}` when it isn't here. A group chat

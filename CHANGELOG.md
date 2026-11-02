@@ -16,6 +16,12 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- A bot working on a goal no longer keeps your computer busy between its looks at the goal, which could spin the fans while nothing was happening.
+- Moving a chat whose `/goal` is still going says why it can't move yet, instead of moving and losing the goal.
+- A goal whose end you move later after it came carries on to the new end, rather than stopping at once.
+- Stop, Keep Going and Start the Work in a group chat that's moving say why nothing happened.
+- Going Back while a sign-in is still starting no longer opens its page in your browser afterwards.
+- New Bot and New Group Chat start on the computer whose page the sidebar shows, rather than always on this Mac, and a group chat started from a machine's page lives on that machine.
 - The row under a reply, with when it ended, how long it took, Copy and Reply, shows when you hover over the reply, as your messages' does, and the last reply keeps it in view; what a turn changed, Stopped and Build It stay in view. Right-click a reply to copy or answer it, and hover over a time for the full date.
 - The model menu says "Free" once in a provider's title when all its models are free, instead of on every row, and leaves out a model's mark where it's the provider's own.
 - A goal's plan lines its lanes up when only some have a site, shows only the note of each lane once the plan is met, labels its days without crowding Today, with a date every few days in a long goal, and gives steps' names more room in a wide card.
@@ -244,6 +250,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - Your personalities are kept by your Mac's background service, as a machine keeps them, so a change from your phone or another computer shows in Edit Bot at once and reaches your bots with the window closed. Those you wrote before are brought over as Kuvo Code starts, and a copy stays where they were.
 - A bot keeps its job with a tool of its own now, rather than under a heading in its memory, and Edit Bot shows it in two fields you can change, in a few words and the details; the bot hears a change you make there. Your bots' jobs come along as they were, and their memory is theirs to write as they like.
 - Your Mac's bots are kept the same way as a machine's, in what Kuvo Code keeps running in the background: a bot made, changed or deleted from your phone shows in the window at once, and a bot you delete on your Mac goes to the Trash.
+- A bot on a connected machine that you make, change or delete from your phone shows that way on your Mac at once, not only the next time it connects. A bot deleted while its computer's engine restarts, or while Kuvo Code there does, loses its conversation and its places in group chats once they're back, and a bot made from your phone as its connection drops is made once, with its conversation.
 - Kuvo Code no longer stays on Starting for ever now and then: reading your shell's settings as it starts can no longer wait for ever, and when the engine, the agents bridge or the background service on your Mac doesn't answer as it starts, the one held up no longer holds up the others and is given up on, with a message, when its time is up.
 - Committing, reviewing changes, a machine's files and wake-up checks no longer hang for ever when a command leaves something running in the background (a git hook, say) or says a lot, and the usage panel no longer stops refreshing when your shell's profile does the same. A command that's truly stuck is stopped after a while; a push, an upload or a machine's install still takes as long as it needs.
 - Each computer keeps its own skills through its box, your Mac's too, where they've always been, and a machine downloads a skill you add there from GitHub itself.

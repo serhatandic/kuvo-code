@@ -242,6 +242,96 @@ export async function forgetLeftKeys(): Promise<void> {
   }
 }
 
+// What a bot deleted here still has elsewhere (`run/bots-left.json`): its place in the group chats
+// here, and its conversation, where its coding agents' bridge or its engine wasn't answering as it
+// was deleted. They go the next time they can be, as the box finds its engine or its bridge again.
+interface LeftBehind {
+  id: string;
+  session: string;
+  agents: boolean;
+  groups: boolean;
+  conversation: boolean;
+}
+const LEFT_FILE = path.join(RUN, "bots-left.json");
+function botsLeft(): LeftBehind[] {
+  try {
+    const listed = JSON.parse(textOf(LEFT_FILE) ?? "");
+    return Array.isArray(listed?.left) ? listed.left.filter((each: Partial<LeftBehind> | null) => typeof each?.id === "string" && /^bot_[A-Za-z0-9]+$/.test(each.id) && typeof each.session === "string") : [];
+  } catch {
+    return [];
+  }
+}
+function noteLeft(id: string, left: LeftBehind | null): void {
+  const bots = botsLeft().filter(each => each.id !== id);
+  if (left) bots.push(left);
+  try {
+    fs.mkdirSync(RUN, { recursive: true });
+    if (!bots.length) return fs.rmSync(LEFT_FILE, { force: true });
+    fs.writeFileSync(`${LEFT_FILE}.new`, JSON.stringify({ left: bots }));
+    fs.renameSync(`${LEFT_FILE}.new`, LEFT_FILE);
+  } catch {}
+}
+
+// A deleted bot's group chats go on without it, and its conversation goes, as far as they can now:
+// what's still left (null for nothing).
+async function leaveBehind(left: LeftBehind, readEngine: () => Target, readBridge: () => Target | null): Promise<LeftBehind | null> {
+  let agents: Target | null | undefined;
+  try {
+    agents = readBridge();
+  } catch {}
+  let groups = left.groups;
+  if (groups && agents) {
+    const listed = await askGroups<BridgeGroups>(agents, "GET", "", undefined, AbortSignal.timeout(BOT_STEP)).catch(() => null);
+    if (listed?.status === 200 && Array.isArray(listed.value?.data)) {
+      groups = false;
+      for (const chat of listed.value.data) {
+        const members = chat?.group?.members;
+        if (!Array.isArray(members) || !members.includes(left.id)) continue;
+        const changed = await askGroups(agents, "PATCH", `/${encodeURIComponent(chat.group.id)}`, { members: members.filter(member => member !== left.id) }, AbortSignal.timeout(BOT_STEP)).catch(() => null);
+        // (A chat deleted meanwhile has nothing left of it.)
+        if (changed?.status !== 200 && changed?.status !== 404) groups = true;
+      }
+    }
+  }
+  let conversation = left.conversation;
+  if (conversation) {
+    let target: Target | null | undefined;
+    try {
+      target = left.agents ? agents : readEngine();
+    } catch {}
+    // (One it doesn't have any more is gone.)
+    if (target) conversation = !await sessionGone(target, left.session);
+  }
+  return groups || conversation ? { ...left, groups, conversation } : null;
+}
+
+async function sessionGone(target: Target, session: string): Promise<boolean> {
+  try {
+    const response = await fetch(`http://127.0.0.1:${target.port}/api/session/${encodeURIComponent(session)}`, {
+      method: "DELETE",
+      headers: { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}` },
+      signal: AbortSignal.timeout(BOT_STEP),
+    });
+    return response.ok || response.status === 404;
+  } catch {
+    return false;
+  }
+}
+
+// What deleted bots left behind, gone where it can be now: as the box starts and as it finds its
+// engine or its coding agents' bridge again.
+export async function finishDeletes(readEngine: () => Target, readBridge: () => Target | null): Promise<void> {
+  for (const left of botsLeft()) {
+    // Here again (a move brought it back): its conversation and chats are its own.
+    if (botHere(left.id)) {
+      noteLeft(left.id, null);
+      continue;
+    }
+    const still = await leaveBehind(left, readEngine, readBridge);
+    if (JSON.stringify(still) !== JSON.stringify(left)) noteLeft(left.id, still);
+  }
+}
+
 // COMPAT(beta.1 deleted-bots): `bots/deleted.json`, for a Mac of 0.8.0-beta.1 or earlier. Goes when 0.8.0 ships.
 // The bots deleted here, the latest first (the last 500), for the Mac to let go of as it next
 // connects: `{"deleted": [<bot id>…]}` (Bots.deletedFile).
@@ -283,6 +373,10 @@ export async function deleteBot(id: string, readEngine: () => Target, readBridge
   } catch (error) {
     return no(503, `The bot couldn’t be deleted: ${(error as Error | null)?.message ?? error}`);
   }
+  // All it has elsewhere, noted as left before any of it is tried: a box that stops meanwhile (an
+  // update, a crash) finishes it as it starts again.
+  const leaving: LeftBehind = { id, session: here.session, agents: here.agents, groups: true, conversation: true };
+  noteLeft(id, leaving);
   // On this Mac, on to the Finder's Trash, where you look for what you deleted, and the folder that
   // held it here goes once it's empty.
   if (IS_MAC) {
@@ -293,25 +387,10 @@ export async function deleteBot(id: string, readEngine: () => Target, readBridge
   // answering), the bot is deleted all the same, and its keys go once they can be.
   noteKeysLeft(id, true);
   await forgetLeftKeys();
-  let agents: Target | null | undefined;
-  try {
-    agents = readBridge();
-  } catch {}
-  // Its group chats here go on without it, as the Mac's leave it. (Gone from its folder, it's
-  // deleted whole, whatever becomes of the phone's request.)
-  if (agents) {
-    const listed = await askGroups<BridgeGroups>(agents, "GET", "", undefined, AbortSignal.timeout(BOT_STEP)).catch(() => null);
-    for (const chat of listed?.status === 200 && Array.isArray(listed.value?.data) ? listed.value.data : []) {
-      const members = chat?.group?.members;
-      if (!Array.isArray(members) || !members.includes(id)) continue;
-      await askGroups(agents, "PATCH", `/${encodeURIComponent(chat.group.id)}`, { members: members.filter(member => member !== id) }, AbortSignal.timeout(BOT_STEP)).catch(() => {});
-    }
-  }
-  let target: Target | null | undefined;
-  try {
-    target = here.agents ? agents : readEngine();
-  } catch {}
-  if (target) await call(target, "DELETE", `/api/session/${encodeURIComponent(here.session)}`, undefined, AbortSignal.timeout(BOT_STEP)).catch(() => {});
+  // Its place in the group chats here and its conversation; what can't be reached now (its engine
+  // or its coding agents restarting) goes once it can be. (Gone from its folder, it's deleted whole,
+  // whatever becomes of the phone's request.)
+  noteLeft(id, await leaveBehind(leaving, readEngine, readBridge));
   noteBotsChanged();
   return { status: 200, value: {} };
 }
