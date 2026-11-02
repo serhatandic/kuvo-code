@@ -150,6 +150,8 @@ struct BotEditor: View {
         .onDisappear { if waitsForMachine { creating?.cancel() } }
         .onAppear {
             if isNew { focus = .name }
+            // Starting on a machine that couldn't connect: tried again, as picking it does.
+            if isNew, let engine = machine.flatMap({ app.machines.engine($0) }), case .failed = engine.state { app.connect(engine) }
             #if DEBUG
             // KUVO_DEMO_NEW_BOT_MACHINE=<machine>: a new bot set to live on that machine.
             if isNew, let machine = ProcessInfo.processInfo.environment["KUVO_DEMO_NEW_BOT_MACHINE"] { self.machine = machine }

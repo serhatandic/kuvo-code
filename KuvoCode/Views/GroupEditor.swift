@@ -15,6 +15,7 @@ struct GroupEditor: View {
     /// Called with the new chat, once it's made.
     var created: (BotGroup) -> Void = { _ in }
 
+    @Environment(AppModel.self) private var app
     @Environment(Bots.self) private var bots
     @Environment(GroupChats.self) private var groups
     @State private var name: String
@@ -82,7 +83,9 @@ struct GroupEditor: View {
     /// Where a new one lives.
     private let newMachine: String?
     /// The computer it lives on: a new one's, the box in view when it was opened.
-    private var machine: String? { group.map { groups.machine(of: $0.id) } ?? newMachine }
+    private var machine: String? {
+        if let group { groups.machine(of: group.id) } else { newMachine }
+    }
 
     /// The bots it can have: those the computer it lives on says can join (its own, and those of
     /// your other computers that take a chat's turns); until it's said, that computer's own.
@@ -125,7 +128,12 @@ struct GroupEditor: View {
                 .padding(.bottom, 20)
                 .frame(maxWidth: .infinity)
         }
-        .onAppear { if isNew { focus = .name } }
+        .onAppear {
+            guard isNew else { return }
+            focus = .name
+            // Starting on a machine that couldn't connect: tried again, as New Bot does.
+            if let engine = machine.flatMap({ app.machines.engine($0) }), case .failed = engine.state { app.connect(engine) }
+        }
         .task(id: [group?.id, reach == .ready ? "ready" : "waiting"]) {
             joinable = await groups.joinable(on: machine)
         }
@@ -337,7 +345,12 @@ struct GroupEditor: View {
         switch reach {
         case .starting: return isNew ? "Group chats on this Mac are starting. You can start this one in a moment." : "Group chats on this Mac are starting. You can save in a moment."
         case .stopped: return isNew ? "Group chats on this Mac stopped. Restart them from the sidebar, then start this one." : "Group chats on this Mac stopped. Restart them from the sidebar, then save."
-        case .away(let machine): return isNew ? "\(machine) isn’t connected. Connect to it, then start this one." : "\(machine) isn’t connected. Connect to it, then save."
+        case .away(let machine):
+            // On its way (connecting, installing its engine): saving waits a moment.
+            if let engine = app.machines.engine(machine), engine.connection.isUnderWay {
+                return "\(engine.statusTitle) " + (isNew ? "You can start this one in a moment." : "You can save in a moment.")
+            }
+            return isNew ? "\(machine) isn’t connected. Connect to it, then start this one." : "\(machine) isn’t connected. Connect to it, then save."
         case .ready: return nil
         }
     }

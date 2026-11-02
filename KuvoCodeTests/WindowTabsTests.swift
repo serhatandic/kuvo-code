@@ -213,7 +213,7 @@ import Testing
     /// New Bot (from the sidebar, the menu or a shared bot's file) and New Group Chat start on the
     /// computer whose page the sidebar shows, as if picked under Lives On; on This Mac's page, or
     /// once that page's machine is gone, on this Mac. Editing one keeps it where it is.
-    @Test func newBotsAndGroupChatsStartOnTheComputerInView() {
+    @Test func newBotsAndGroupChatsStartOnTheComputerInView() throws {
         defer {
             done()
             UserDefaults.standard.removeObject(forKey: SidebarBox.inViewKey)
@@ -223,7 +223,7 @@ import Testing
         UserDefaults.standard.set(machine, forKey: SidebarBox.inViewKey)
         tabs.openBotEditor(bot: nil)
         #expect(tabs.botEditor?.machine == machine)
-        let recipe = BotRecipe(name: "Scout", job: "Finds things", instructions: "Finds things.", look: .random(), personality: nil)
+        let recipe = try JSONDecoder().decode(BotRecipe.self, from: Data(#"{"kind":"kuvo-bot","version":1,"name":"Scout","job":"Finds things","instructions":"Finds things.","look":{"color":"mint","shape":"round","face":"calm"}}"#.utf8))
         tabs.openBotEditor(bot: nil, recipe: recipe)
         #expect(tabs.botEditor?.machine == machine && tabs.botEditor?.recipe == recipe, "a shared bot too")
         tabs.openGroupEditor(group: nil)

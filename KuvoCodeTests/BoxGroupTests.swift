@@ -182,8 +182,6 @@ import Testing
         #expect(app.chats.list.map(\.id) == ["grp_mac0000001"])
     }
 
-    /// A machine running a newer Kuvo Code says a kind of message this copy doesn't know: its chats
-    /// still show, with that message left out rather than shown as something else.
     /// New Group Chat from a machine's page: the chat is made by that machine's box and lives
     /// there, on its page, not on this Mac's; with the machine away, nothing's made and it says so.
     @Test func aGroupChatStartedOnAMachineLivesThere() async throws {
@@ -207,6 +205,8 @@ import Testing
         }
     }
 
+    /// A machine running a newer Kuvo Code says a kind of message this copy doesn't know: its chats
+    /// still show, with that message left out rather than shown as something else.
     @Test func aMessageOfANewerKindLeavesTheChatsShowing() async throws {
         defer { Self.clean(); mac.stop() }
         try saveBots([("bot_pal", "Pal", "box")])
