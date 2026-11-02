@@ -1,7 +1,7 @@
 // Built from Packages/Box/src by scripts/build-box.sh: change those, then run it. Never edit this file.
 
 // Packages/Box/src/link/main.ts
-import { spawn as spawn10 } from "node:child_process";
+import { spawn as spawn11 } from "node:child_process";
 import crypto36 from "node:crypto";
 import fs83 from "node:fs";
 import os14 from "node:os";
@@ -8272,7 +8272,7 @@ function writeRuleWouldBe(where) {
 }
 
 // Packages/Box/src/link/fence/landlock.ts
-import { spawnSync as spawnSync3 } from "node:child_process";
+import { spawn as spawn3, spawnSync as spawnSync3 } from "node:child_process";
 import fs36 from "node:fs";
 function landlockPolicy(policy) {
   return JSON.stringify({ hidden: [...policy.kuvo, ...policy.secrets], readable: policy.kuvoReadable, writable: [...policy.writable, ...policy.commandCaches], readOnly: policy.readOnly }) + `
@@ -8300,9 +8300,28 @@ function ownNamespace(own) {
   const unshare = UNSHARE.find((each) => fs36.existsSync(each));
   if (!unshare)
     return null;
-  const tried = spawnSync3(unshare, ["-Urm", "/bin/sh", "-c", HIDE, unshare, String(process.getuid?.() ?? -1), String(process.getgid?.() ?? -1), "", own, "/dev/null", "/bin/sh", "-c", '[ "$(id -u)" = "$0" ]', String(process.getuid?.() ?? -1)], { cwd: "/", stdio: "ignore", timeout: 1e4 });
+  const tried = spawnSync3(unshare, namespaceTry(unshare, own), { cwd: "/", stdio: "ignore", timeout: TRY_FOR });
   return tried.status === 0 ? unshare : null;
 }
+function ownNamespaceLater(own, unshare = UNSHARE.find((each) => fs36.existsSync(each))) {
+  if (!unshare)
+    return Promise.resolve(null);
+  return new Promise((resolve) => {
+    const child = spawn3(unshare, namespaceTry(unshare, own), { cwd: "/", stdio: "ignore" });
+    const late = setTimeout(() => child.kill("SIGKILL"), TRY_FOR);
+    late.unref?.();
+    child.once("error", () => {
+      clearTimeout(late);
+      resolve(null);
+    });
+    child.once("exit", (status) => {
+      clearTimeout(late);
+      resolve(status === 0 ? unshare : null);
+    });
+  });
+}
+var TRY_FOR = 1e4;
+var namespaceTry = (unshare, own) => ["-Urm", "/bin/sh", "-c", HIDE, unshare, String(process.getuid?.() ?? -1), String(process.getgid?.() ?? -1), "", own, "/dev/null", "/bin/sh", "-c", '[ "$(id -u)" = "$0" ]', String(process.getuid?.() ?? -1)];
 var LANDLOCK_RUNNER = String.raw`// Kuvo Code writes this each time its box starts: changes here don't last.
 // Runs a command's shell in the sandbox (Landlock), as bin/kuvo-fence asks.
 import { dlopen, FFIType, ptr, read } from "bun:ffi";
@@ -8539,14 +8558,13 @@ function launcherScript(places) {
     `sum=$( (printf '%s' "$work" | sha256sum || printf '%s' "$work" | shasum -a 256) 2>/dev/null | cut -c 1-32)`,
     `case $sum in ????????????????????????????????) ;; *) echo "This command can't run in the sandbox here: it can't name its temporary folder." >&2; exit 126 ;; esac`,
     `tmp=$F/tmp/$sum`,
-    ...places.platform === "darwin" ? [
-      `if [ -f "$F/temporary" ]; then`,
-      `  { IFS= read -r t_root; IFS= read -r t_key; } <"$F/temporary"`,
-      `  t_name=$( (printf '%s
+    `if [ -f "$F/temporary" ]; then`,
+    `  { IFS= read -r t_root; IFS= read -r t_key; } <"$F/temporary"`,
+    `  t_name=$( (printf '%s
+%s' "$t_key" "$work" | sha256sum || printf '%s
 %s' "$t_key" "$work" | shasum -a 256) 2>/dev/null | cut -c 1-8)`,
-      `  case $t_root:$t_key:$t_name in /*:????????????????????????????????????????????????????????????????:????????) tmp=$t_root/$t_name ;; *) echo "This command can't run in the sandbox here: it can't name its temporary folder." >&2; exit 126 ;; esac`,
-      `fi`
-    ] : [],
+    `  case $t_root:$t_key:$t_name in /*:????????????????????????????????????????????????????????????????:????????) tmp=$t_root/$t_name ;; *) echo "This command can't run in the sandbox here: it can't name its temporary folder." >&2; exit 126 ;; esac`,
+    `fi`,
     `allowed=$F/allowed/$sum`,
     `if [ -f "$work/.git" ]; then case $git in */.git) p_sum=$( (printf '%s' "\${git%/.git}" | sha256sum || printf '%s' "\${git%/.git}" | shasum -a 256) 2>/dev/null | cut -c 1-32); case $p_sum in ????????????????????????????????) allowed=$F/allowed/$p_sum ;; esac ;; esac; fi`,
     ...places.platform === "darwin" ? [
@@ -9045,12 +9063,13 @@ function writeExecutable(file, text) {
 }
 var WITHOUT_NAMESPACE = "without";
 var namespace = null;
+var namespaceKnown = false;
 var withoutNamespace = null;
 var namespaceHere = () => {
   fs37.mkdirSync(NAMESPACE_FOLDER, { recursive: true, mode: 448 });
   return ownNamespace(NAMESPACE_FOLDER);
 };
-function able() {
+function able(found) {
   if (platform === "darwin")
     return fs37.existsSync("/usr/bin/sandbox-exec") ? { able: true, passed: false } : { able: false, passed: false, why: "macOS's sandbox isn't on this Mac.", reason: "macos" };
   if (!runtime())
@@ -9058,7 +9077,8 @@ function able() {
   if (!fs37.existsSync("/sys/kernel/security/landlock") && !/landlock/.test(textOf("/sys/kernel/security/lsm") ?? "landlock")) {
     return { able: false, passed: false, why: `Linux ${os6.release().split("-")[0]} can't sandbox commands: it needs Landlock (Linux 5.13 or later, with it on).`, reason: "kernel", needs: "Linux 5.13" };
   }
-  namespace = namespaceHere();
+  namespace = found === undefined ? namespaceHere() : found;
+  namespaceKnown = true;
   withoutNamespace = namespace ? null : UNSHARE.some((each) => fs37.existsSync(each)) ? "user namespaces" : "util-linux";
   if (withoutNamespace && WITHOUT_NAMESPACE === "off") {
     const services = "which the sandbox needs to keep commands from the services your login runs: systemd, your keyring, your agents";
@@ -9127,9 +9147,7 @@ function withdraw() {
 }
 function writeTemporary() {
   const file = path37.join(FOLDER, "temporary");
-  const root = platform === "darwin" ? appTemporary() : null;
-  if (!root)
-    return fs37.rmSync(file, { force: true });
+  const root = appTemporary() ?? path37.join(FOLDER, "tmp");
   const [had, key] = (textOf(file) ?? "").split(`
 `);
   if (had === root && /^[0-9a-f]{64}$/.test(key ?? ""))
@@ -9137,11 +9155,12 @@ function writeTemporary() {
   writePrivate(file, `${root}
 ${crypto17.randomBytes(32).toString("hex")}
 `);
-  for (const name of listOf(path37.join(FOLDER, "tmp")))
-    fs37.rmSync(path37.join(FOLDER, "tmp", name), { recursive: true, force: true });
+  if (root !== path37.join(FOLDER, "tmp"))
+    for (const name of listOf(path37.join(FOLDER, "tmp")))
+      fs37.rmSync(path37.join(FOLDER, "tmp", name), { recursive: true, force: true });
 }
-function setUpFence() {
-  const can = able();
+function setUpFence(found) {
+  const can = able(found);
   if (!fenceWanted()) {
     withdraw();
     checked = can;
@@ -9243,6 +9262,7 @@ function keepFence() {
     } catch {}
   });
   let rounds = 0;
+  let trying = false;
   setInterval(() => {
     const round = rounds++;
     if (round % 60 === 0)
@@ -9255,9 +9275,18 @@ function keepFence() {
     try {
       if (checked.passed)
         writeProfiles();
-      const namespaces = checked.passed && platform === "linux" && round % 6 === 5 && !namespaceHere() !== !namespace;
-      if (checked.passed ? namespaces || textOf(PLUGIN) !== pluginScript(places, VERSION) : round % 6 === 0)
-        setUpFence();
+      if (checked.passed ? textOf(PLUGIN) !== pluginScript(places, VERSION) : round % 6 === 0)
+        setUpFence(namespaceKnown ? namespace : undefined);
+      if (platform === "linux" && round % 6 === 5 && !trying) {
+        fs37.mkdirSync(NAMESPACE_FOLDER, { recursive: true, mode: 448 });
+        trying = true;
+        ownNamespaceLater(NAMESPACE_FOLDER).then((found) => {
+          if (fenceWanted() && !found !== !namespace)
+            setUpFence(found);
+        }).catch(() => {}).finally(() => {
+          trying = false;
+        });
+      }
     } catch {}
   }, 1e4).unref?.();
 }
@@ -10973,7 +11002,7 @@ async function deleteKey(name) {
 var botVariable = (variable, bot) => `${variable}__${String(bot).toUpperCase().replace(/[^\p{L}\p{N}]/gu, "_")}`;
 
 // Packages/Box/src/link/areas/integrations.ts
-import { spawn as spawn3 } from "node:child_process";
+import { spawn as spawn4 } from "node:child_process";
 import fs42 from "node:fs";
 import path44 from "node:path";
 var INTEGRATIONS_FILE = path44.join(K, "bin", "integrations.json");
@@ -11085,7 +11114,7 @@ function reconnectLater(engine, id, later) {
   if (!engine)
     return;
   if (answersOnce && later === soon) {
-    spawn3(process.execPath, [...OWN_RUNTIME, SCRIPT, "box", "reconnect", id], { detached: true, stdio: "ignore", cwd: K, env: process.env }).unref();
+    spawn4(process.execPath, [...OWN_RUNTIME, SCRIPT, "box", "reconnect", id], { detached: true, stdio: "ignore", cwd: K, env: process.env }).unref();
     return;
   }
   later(() => reconnectEverywhere(engine, id), 2000);
@@ -11494,7 +11523,7 @@ function setBoxKey(name, value) {
 }
 
 // Packages/Box/src/link/areas/engine.ts
-import { spawn as spawn4 } from "node:child_process";
+import { spawn as spawn5 } from "node:child_process";
 import fs47 from "node:fs";
 import path49 from "node:path";
 
@@ -12155,7 +12184,7 @@ async function engineControl(command) {
   const workspace = path49.join(K, "workspace");
   const options = { cwd: fs47.existsSync(workspace) ? workspace : K, env: environment };
   try {
-    const child = spawn4("sh", [start, command], { ...options, detached: true, stdio: "ignore" });
+    const child = spawn5("sh", [start, command], { ...options, detached: true, stdio: "ignore" });
     lastToolRun = { child, ended: new Promise((resolve) => {
       child.on("exit", resolve);
       child.on("error", resolve);
@@ -14726,7 +14755,7 @@ import fs59 from "node:fs";
 import path61 from "node:path";
 
 // Packages/Box/src/link/moves/bundle.ts
-import { spawn as spawn5 } from "node:child_process";
+import { spawn as spawn6 } from "node:child_process";
 import crypto24 from "node:crypto";
 import fs57 from "node:fs";
 import path59 from "node:path";
@@ -14739,7 +14768,7 @@ var folderOf = (kind, thing) => kind === "bot" ? path59.join(BOTS, thing) : kind
 var directoryOf = (kind, thing) => kind === "bot" ? path59.join(BOTS, thing, "workspace") : CHATS2;
 function run(program, args) {
   return new Promise((resolve, reject) => {
-    const child = spawn5(program, args, { stdio: ["ignore", "ignore", "pipe"], env: { ...process.env, COPYFILE_DISABLE: "1" } });
+    const child = spawn6(program, args, { stdio: ["ignore", "ignore", "pipe"], env: { ...process.env, COPYFILE_DISABLE: "1" } });
     let said = "";
     child.stderr.on("data", (chunk) => {
       said += chunk;
@@ -16216,7 +16245,7 @@ function watchMoves(host, signal) {
 }
 
 // Packages/Box/src/link/keeper.ts
-import { spawn as spawn6 } from "node:child_process";
+import { spawn as spawn7 } from "node:child_process";
 import fs61 from "node:fs";
 import path63 from "node:path";
 
@@ -16832,7 +16861,7 @@ function keepKeeper() {
   delete environment.BUN_BE_BUN;
   delete environment.BUN_RUNTIME_TRANSPILER_CACHE_PATH;
   try {
-    spawn6("sh", [start], { cwd: K, env: environment, detached: true, stdio: "ignore" }).unref();
+    spawn7("sh", [start], { cwd: K, env: environment, detached: true, stdio: "ignore" }).unref();
   } catch {}
 }
 function runningBridge() {
@@ -16845,7 +16874,7 @@ function runningBridge() {
 }
 function startBridge() {
   const workspace = path63.join(K, "workspace");
-  const child = spawn6(process.execPath, [...OWN_RUNTIME, SCRIPT, "run"], {
+  const child = spawn7(process.execPath, [...OWN_RUNTIME, SCRIPT, "run"], {
     detached: true,
     stdio: "ignore",
     cwd: fs61.existsSync(workspace) ? workspace : K,
@@ -16868,7 +16897,7 @@ var SHOWN_WITHIN = 1e4;
 var HELD_FILE = path64.join(RUN, "held-notices.json");
 var RESTORED_WAIT = 20000;
 var RETRY_EVERY = 5000;
-var TRY_FOR = 10 * 60000;
+var TRY_FOR2 = 10 * 60000;
 var MOST_ANSWERED = 200;
 var ASKED = new Set(["permission", "question", "ask"]);
 var holdFor = (category) => ASKED.has(category) ? ASK_HOLD : NEWS_HOLD;
@@ -16901,7 +16930,7 @@ class NoticeHold {
     const start = this.now(), today = this.wall();
     const restored = (Array.isArray(held) ? held : []).filter((entry) => isObject(entry?.notice) && typeof entry.at === "number");
     this.held = restored.map((entry) => {
-      const age = Math.min(Math.max(today - entry.at, 0), TRY_FOR);
+      const age = Math.min(Math.max(today - entry.at, 0), TRY_FOR2);
       const due = entry.attended !== false ? start - age + holdFor(entry.notice.category) : start - age;
       return { notice: entry.notice, wall: entry.at, at: start - age, due: Math.max(due, start - age), seen: entry.seen === true };
     });
@@ -16991,7 +17020,7 @@ class NoticeHold {
       }
       if (this.send(entry.notice))
         continue;
-      if (now - entry.at < TRY_FOR)
+      if (now - entry.at < TRY_FOR2)
         kept.push({ ...entry, retry: now + RETRY_EVERY });
     }
     this.held = kept;
@@ -19136,7 +19165,7 @@ function snippet(text, at, length) {
 }
 
 // Packages/Box/src/link/areas/changes.ts
-import { execFile as execFile4, execFileSync as execFileSync3, spawn as spawn7 } from "node:child_process";
+import { execFile as execFile4, execFileSync as execFileSync3, spawn as spawn8 } from "node:child_process";
 import fs69 from "node:fs";
 import os8 from "node:os";
 import path72 from "node:path";
@@ -19220,7 +19249,7 @@ function git(folder, args, changing = false, more = {}, program = "git", timeout
   return new Promise((resolve) => {
     const out = [];
     const said = [];
-    const child = spawn7(program, args, { cwd: folder, env, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn8(program, args, { cwd: folder, env, stdio: ["ignore", "pipe", "pipe"] });
     child.stdout.on("data", (piece) => out.push(piece));
     child.stderr.on("data", (piece) => said.push(piece));
     child.on("error", () => resolve({ ok: false, out: Buffer.alloc(0), said: `${program} isn’t there.` }));
@@ -20180,7 +20209,7 @@ async function* programsRoute(context) {
 }
 
 // Packages/Box/src/link/fence/outside.ts
-import { spawn as spawn9 } from "node:child_process";
+import { spawn as spawn10 } from "node:child_process";
 import crypto29 from "node:crypto";
 import fs74 from "node:fs";
 import os9 from "node:os";
@@ -20277,7 +20306,7 @@ function askBook(prefix, no) {
 }
 
 // Packages/Box/src/link/run-command.ts
-import { spawn as spawn8 } from "node:child_process";
+import { spawn as spawn9 } from "node:child_process";
 import fs73 from "node:fs";
 var PRIVATE = ["BUN_BE_BUN", "BUN_RUNTIME_TRANSPILER_CACHE_PATH"];
 var MOST_KEPT2 = 4 * 1024 * 1024;
@@ -20315,7 +20344,7 @@ process.once("exit", () => {
 function runCommand(command, folder, env, timeout, signal, name = String(Math.random()), ended) {
   return new Promise((resolve) => {
     const shell = env.SHELL && fs73.existsSync(env.SHELL) ? env.SHELL : "/bin/sh";
-    const child = spawn8(shell, ["-lc", command], { cwd: folder, env, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" });
+    const child = spawn9(shell, ["-lc", command], { cwd: folder, env, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" });
     if (child.pid)
       running.set(name, { pid: child.pid, ended });
     let output = Buffer.alloc(0);
@@ -20405,7 +20434,7 @@ async function stopsFor(session, command, minutes = 3, signal) {
     return [];
   const tagged = `kuvo-sandbox ${session} ${commandSum(command)}`;
   const read = await new Promise((resolve) => {
-    const child = spawn9("/usr/bin/log", ["show", "--last", `${minutes}m`, "--style", "ndjson", "--predicate", `sender == "Sandbox" AND eventMessage CONTAINS "${tagged}"`], { stdio: ["ignore", "pipe", "ignore"] });
+    const child = spawn10("/usr/bin/log", ["show", "--last", `${minutes}m`, "--style", "ndjson", "--predicate", `sender == "Sandbox" AND eventMessage CONTAINS "${tagged}"`], { stdio: ["ignore", "pipe", "ignore"] });
     let out = "";
     const timer = setTimeout(() => child.kill("SIGKILL"), 20000);
     signal?.addEventListener("abort", () => child.kill("SIGKILL"), { once: true });
@@ -23543,7 +23572,7 @@ async function box(command) {
         return say({ status: 409, message: blocked });
       if (isUpdating())
         return say({ status: 409, message: "It's updating already." });
-      spawn10(process.execPath, [...OWN_RUNTIME, fileURLToPath3(import.meta.url), "update", "--now"], { detached: true, stdio: "ignore", cwd: K, env: process.env }).unref();
+      spawn11(process.execPath, [...OWN_RUNTIME, fileURLToPath3(import.meta.url), "update", "--now"], { detached: true, stdio: "ignore", cwd: K, env: process.env }).unref();
       return say({ status: 202, ...updateStatus(), updating: "checking" });
     }
     case "route": {

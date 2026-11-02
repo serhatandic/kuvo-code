@@ -120,7 +120,7 @@ export function launcherScript(places: FencePlaces): string {
     // By a short name, in the folder the box names (`temporary`: on this Mac the app's own
     // temporary folder, elsewhere this one's `tmp`, and a key commands can't read): a socket's path
     // is at most 103 letters on macOS and 107 on Linux, and tmux's server, a server's tests or
-    // Python's multiprocessing make theirs in it, under a home folder's path of any length. (Named
+    // Python's multiprocessing make theirs in it, under a home folder's path of over 50 letters too. (Named
     // from the key, so a command still can't pick a folder whose name another conversation's has.)
     `if [ -f "$F/temporary" ]; then`,
     `  { IFS= read -r t_root; IFS= read -r t_key; } <"$F/temporary"`,
