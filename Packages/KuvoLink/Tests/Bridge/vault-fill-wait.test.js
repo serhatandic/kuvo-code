@@ -13,14 +13,11 @@ import http from "node:http";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { before as nodeBefore, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { sshAgentsOf } from "./bot-keys-scenarios.js";
 import { atEnd, removeAtEnd } from "./at-end.js";
-import { appears, asked } from "./vault-waits.js";
-
-// Each fails at its own time limit when what it waits for never comes, rather than holding up the run.
-const before = run => nodeBefore(run, { timeout: 60_000 });
+// (Each test fails at its own time limit when what it waits for never comes, rather than holding up the run.)
+import { appears, asked, before, test } from "./vault-waits.js";
 
 // (Short: the vault's and the browser's sockets are in it.)
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kvf-")));
@@ -212,7 +209,7 @@ before(async () => {
   assert.equal((await fromMac("POST", "kuvo/vault/grants", { item: added.value.item.id, who: { bot: "bot_ship" }, how: "ask" }, key)).status, 200);
 });
 
-test("while the vault asks you about a sign-in, other conversations keep browsing, and the sign-in goes in once you allow it", { timeout: 60_000 }, async () => {
+test("while the vault asks you about a sign-in, other conversations keep browsing, and the sign-in goes in once you allow it", async () => {
   const signIn = started(call("ses_ship", "browser_sign_in", { username: 1, password: 2, item: "GitHub" }));
   const asked = await askedNow();
   assert.equal(asked.itemName, "GitHub");
@@ -230,7 +227,7 @@ test("while the vault asks you about a sign-in, other conversations keep browsin
   assert.deepEqual(pages.login.filled, [{ index: 1, value: "ship-bot" }, { index: 2, value: SECRET }]);
 });
 
-test("a page that left its site while the vault asked you gets nothing", { timeout: 60_000 }, async () => {
+test("a page that left its site while the vault asked you gets nothing", async () => {
   pages.login.filled = [];
   const signIn = started(call("ses_ship", "browser_sign_in", { username: 1, password: 2, item: "GitHub" }));
   const asked = await askedNow();
@@ -245,7 +242,7 @@ test("a page that left its site while the vault asked you gets nothing", { timeo
 // A process of yours that isn't Kuvo Code's own, like an agent's command in the sandbox, can reach
 // the vault's socket (Linux's sandbox doesn't hide a socket from connecting) but not the box's
 // socket key in `run`: while a sign-in is calling, it tries to take the fill for itself.
-test("a process without the box's socket key gets nothing from the vault's socket, even while a sign-in calls", { timeout: 60_000 }, async () => {
+test("a process without the box's socket key gets nothing from the vault's socket, even while a sign-in calls", async () => {
   pages.login.url = "https://github.com/login";
   pages.login.filled = [];
   const signIn = started(call("ses_ship", "browser_sign_in", { username: 1, password: 2, item: "GitHub" }));

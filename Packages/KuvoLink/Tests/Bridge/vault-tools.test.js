@@ -10,15 +10,11 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { before as nodeBefore, test as nodeTest } from "node:test";
 import { fileURLToPath } from "node:url";
 import { sshAgentsOf } from "./bot-keys-scenarios.js";
 import { atEnd, removeAtEnd } from "./at-end.js";
-import { appears, asked as askedAt } from "./vault-waits.js";
-
-// Each fails at its own time limit when what it waits for never comes, rather than holding up the run.
-const test = (name, run) => nodeTest(name, { timeout: 60_000 }, run);
-const before = run => nodeBefore(run, { timeout: 60_000 });
+// (Each test fails at its own time limit when what it waits for never comes, rather than holding up the run.)
+import { appears, asked as askedAt, before, test } from "./vault-waits.js";
 
 // (Short: the vault's socket is in it.)
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kvt-")));
