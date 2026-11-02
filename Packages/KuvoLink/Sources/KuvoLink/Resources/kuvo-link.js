@@ -15260,6 +15260,16 @@ function tell(peer, move) {
     return false;
   }
 }
+async function chatGoalRuns(session, signal) {
+  let bridge;
+  try {
+    bridge = readBridgeFile();
+  } catch {
+    return false;
+  }
+  const goal = await call(bridge, "GET", `/api/kuvo/goals/${encodeURIComponent(session)}`, undefined, engineWait(signal)).catch(() => null);
+  return isObject(goal) && (goal.state === "working" || goal.state === "paused");
+}
 async function movable(kind, thing, signal) {
   if (kind === "bot") {
     const here = botHere(thing);
@@ -15300,6 +15310,8 @@ async function movable(kind, thing, signal) {
     const kuvo = isObject(session.metadata) && isObject(session.metadata.kuvo) ? session.metadata.kuvo : {};
     if (kuvo.agents || kuvo.agent)
       return { name: title, why: say.withAgents(title), note: note.withAgents };
+    if (await chatGoalRuns(thing, signal))
+      return { name: title, why: say.onGoal(title), note: note.onGoal };
     return { name: title, root: thing };
   }
   let bridge;
@@ -15493,6 +15505,8 @@ async function carryOn(id) {
       contents.queues = queues;
     if (record.folder)
       contents.folder = path61.basename(record.folder);
+    if (record.kind === "chat" && await chatGoalRuns(record.thing))
+      throw new Refused(say.onGoal(record.name));
     if (record.kind === "bot") {
       if (goalRuns(record.thing))
         throw new Refused(say.onGoal(record.name));

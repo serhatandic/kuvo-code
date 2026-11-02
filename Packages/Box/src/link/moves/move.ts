@@ -196,6 +196,15 @@ interface Movable {
   members?: string[];
 }
 
+/** Whether the chat `session` has its own goal (`/goal`) working or paused: the agents bridge keeps
+ * it here, and it would end with the conversation as it leaves. */
+async function chatGoalRuns(session: string, signal?: AbortSignal): Promise<boolean> {
+  let bridge: Target;
+  try { bridge = readBridgeFile(); } catch { return false; }
+  const goal = await call(bridge, "GET", `/api/kuvo/goals/${encodeURIComponent(session)}`, undefined, engineWait(signal)).catch(() => null);
+  return isObject(goal) && (goal.state === "working" || goal.state === "paused");
+}
+
 async function movable(kind: MoveKind, thing: string, signal?: AbortSignal): Promise<Movable | null> {
   if (kind === "bot") {
     const here = botHere(thing);
@@ -223,6 +232,7 @@ async function movable(kind: MoveKind, thing: string, signal?: AbortSignal): Pro
     if (directory !== CHATS) return null;
     const kuvo = isObject(session.metadata) && isObject(session.metadata.kuvo) ? session.metadata.kuvo : {};
     if (kuvo.agents || kuvo.agent) return { name: title, why: say.withAgents(title), note: note.withAgents };
+    if (await chatGoalRuns(thing, signal)) return { name: title, why: say.onGoal(title), note: note.onGoal };
     return { name: title, root: thing };
   }
   let bridge: Target;
@@ -411,8 +421,9 @@ async function carryOn(id: string): Promise<void> {
     queues = await queuesOf(engine, record.sessions, record.name);
     if (Object.keys(queues).length) contents.queues = queues;
     if (record.folder) contents.folder = path.basename(record.folder);
+    // A goal set as it was asked to move (goals stay where they started): it stays.
+    if (record.kind === "chat" && await chatGoalRuns(record.thing)) throw new Refused(say.onGoal(record.name));
     if (record.kind === "bot") {
-      // A goal started as it was asked to move (goals stay where they started): it stays.
       if (goalRuns(record.thing)) throw new Refused(say.onGoal(record.name));
       const keys = await keysOf(record.thing);
       if (!keys) throw new Refused(`${record.name}’s own keys couldn’t be read on ${HERE}. Try again in a moment.`);
