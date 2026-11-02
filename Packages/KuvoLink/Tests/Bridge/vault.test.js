@@ -15,6 +15,7 @@ import os from "node:os";
 import path from "node:path";
 import { script, sshAgentsOf } from "./bot-keys-scenarios.js";
 import { atEnd, removeAtEnd } from "./at-end.js";
+import { appears, asked } from "./vault-waits.js";
 
 // (A short folder: the vault's socket lives in it, and a socket's path can't be long.)
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "kv-"));
@@ -89,15 +90,18 @@ async function start(more = {}) {
     });
     exited.then(code => reject(new Error(`serve exited ${code}: ${err}`)));
   });
-  // Its socket, once it listens.
-  for (let tries = 0; tries < 100 && !fs.existsSync(path.join(home, "run", "vault.sock")); tries++) await new Promise(done => setTimeout(done, 20));
+  // Its socket, once it listens (in its own home's run folder).
+  const run = path.join(more.KUVO_HOME ?? home, "run");
+  await appears(run, () => fs.existsSync(path.join(run, "vault.sock")));
   // A request from something on this machine: an agent's command, which has the box's files but no client's key.
   const local = async (method, route, body) => {
     const response = await fetch(`${url}/${route}`, { method, headers: { authorization: `Basic ${Buffer.from("opencode:box-pw").toString("base64")}`, "content-type": "application/json" }, body: body && method !== "GET" ? JSON.stringify(body) : undefined });
     return { status: response.status, value: await response.json().catch(() => ({})) };
   };
   const stop = async () => { child.stdin.end(); child.kill("SIGTERM"); await exited; return out + err; };
-  return { local, stop };
+  // What the vault asks you, once it asks.
+  const asks = () => asked(`${url}/kuvo/vault/asks/events`, "box-pw");
+  return { local, stop, asks };
 }
 
 // The Mac over SSH: `box route`, a process of its own on the machine, with the vault's key when it has one.
@@ -240,8 +244,7 @@ test("vault_run hands values to a command, never to the agent: its output comes 
     const running = tool("ses_ship", "vault_run", { command: "cat \"$ASC_KEY\"; ls -l \"$ASC_KEY\" | cut -c1-10", variables: { ASC_KEY: "App Store Connect key" }, why: "To upload the build." });
     // Its grant asks you each time: you allow it once from your Mac.
     const answer = async () => {
-      const asks = (await fromMac("GET", "kuvo/vault/asks", undefined, key)).value.asks;
-      if (!asks.length) return setTimeout(answer, 20);
+      const asks = await box.asks();
       assert.deepEqual({ kind: asks[0].kind, itemName: asks[0].itemName, botName: asks[0].botName, why: asks[0].why }, { kind: "use", itemName: "App Store Connect key", botName: "Ship", why: "To upload the build." });
       assert.equal((await fromMac("POST", `kuvo/vault/asks/${asks[0].id}`, { answer: "once" }, key)).status, 200);
     };
@@ -255,8 +258,7 @@ test("vault_run hands values to a command, never to the agent: its output comes 
   assert.deepEqual(fs.readdirSync(path.join(home, "run", "vault-run")), [], "and gone once it ended");
   // A bot without a grant: you're asked, and you say no.
   const refusing = tool("ses_scout", "vault_run", { command: "env", variables: { T: "GitHub token" }, why: "Curious." });
-  let asks = [];
-  for (let tries = 0; tries < 100 && !asks.length; tries++) asks = (await fromMac("GET", "kuvo/vault/asks", undefined, key)).value.asks;
+  const asks = await box.asks();
   assert.equal(asks[0].botName, "Scout");
   assert.equal((await fromMac("POST", `kuvo/vault/asks/${asks[0].id}`, { answer: "no" }, key)).status, 200);
   const refused = (await refusing).value;
@@ -266,8 +268,7 @@ test("vault_run hands values to a command, never to the agent: its output comes 
 
 test("an agent that needs something asks you for it, and gets its name, never its value", async () => {
   const asking = tool("ses_shop", "vault_ask", { need: "a GitHub token", why: "To open the pull request.", site: "api.github.com" });
-  let asks = [];
-  for (let tries = 0; tries < 100 && !asks.length; tries++) asks = (await fromMac("GET", "kuvo/vault/asks", undefined, key)).value.asks;
+  const asks = await box.asks();
   assert.deepEqual({ kind: asks[0].kind, need: asks[0].need, sessionName: asks[0].sessionName }, { kind: "item", need: "a GitHub token", sessionName: "Fix checkout" });
   assert.equal((await fromMac("POST", `kuvo/vault/asks/${asks[0].id}`, { answer: "always", item: items["GitHub token"].id }, key)).status, 200);
   const answer = (await asking).value.text;
@@ -281,14 +282,12 @@ test("an agent that needs something asks you for it, and gets its name, never it
 
 test("an item given once is used once without asking again; the next use asks", async () => {
   const asking = tool("ses_scout", "vault_ask", { need: "the App Store Connect key", why: "To upload a build." });
-  let asks = [];
-  for (let tries = 0; tries < 100 && !asks.length; tries++) asks = (await fromMac("GET", "kuvo/vault/asks", undefined, key)).value.asks;
+  const asks = await box.asks();
   assert.equal((await fromMac("POST", `kuvo/vault/asks/${asks[0].id}`, { answer: "once", item: items["App Store Connect key"].id }, key)).status, 200);
   assert.match((await asking).value.text, /for this once/);
   assert.equal((await tool("ses_scout", "vault_run", { command: "true", variables: { K: "App Store Connect key" }, why: "Upload." })).value.isError, false, "its one use");
   const again = tool("ses_scout", "vault_run", { command: "true", variables: { K: "App Store Connect key" }, why: "Upload again." });
-  let next = [];
-  for (let tries = 0; tries < 100 && !next.length; tries++) next = (await fromMac("GET", "kuvo/vault/asks", undefined, key)).value.asks;
+  const next = await box.asks();
   assert.equal(next[0].kind, "use", "asked again");
   await fromMac("POST", `kuvo/vault/asks/${next[0].id}`, { answer: "no" }, key);
   assert.equal((await again).value.isError, true);
@@ -573,18 +572,21 @@ test("after the box starts again the vault is locked, until a client's key unloc
 // conversation, and hands its commands the agent's socket. Here, the notes as the launcher writes them.
 const sshAgents = sshAgentsOf(home);
 removeAtEnd(sshAgents);
-async function sshAgentFor(note, folder) {
+function noteConversation(note, folder) {
   const notes = path.join(home, "run", "ssh-for");
   fs.mkdirSync(notes, { recursive: true });
   fs.writeFileSync(path.join(notes, `.${note}`), folder);
   fs.renameSync(path.join(notes, `.${note}`), path.join(notes, note));
+}
+// Its agent's socket, if it has one now.
+const agentOf = note => {
   const prefix = crypto.createHash("sha256").update(note).digest("hex").slice(0, 16);
-  for (let tries = 0; tries < 100; tries++) {
-    const found = fs.existsSync(sshAgents) && fs.readdirSync(sshAgents).find(name => name.startsWith(prefix) && name.endsWith(".sock"));
-    if (found) return path.join(sshAgents, found);
-    await new Promise(done => setTimeout(done, 20));
-  }
-  return null;
+  const found = fs.existsSync(sshAgents) && fs.readdirSync(sshAgents).find(name => name.startsWith(prefix) && name.endsWith(".sock"));
+  return found ? path.join(sshAgents, found) : null;
+};
+async function sshAgentFor(note, folder) {
+  noteConversation(note, folder);
+  return appears(sshAgents, () => agentOf(note));
 }
 const folderNote = folder => `dir-${crypto.createHash("sha256").update(folder).digest("hex").slice(0, 32)}`;
 // (Never blocking this process, whose stand-in engine the agent asks who a conversation is.)
@@ -644,8 +646,12 @@ test("an SSH key you keep for a project signs through its conversations' own age
       assert.equal((await sshTool("ssh-add", ["-l"], socket)).status, 1, "no keys");
       assert.notEqual((await sshTool("ssh-keygen", ["-Y", "sign", "-n", "git", "-f", `${file}.pub`, `${file}.pub`], socket)).status, 0);
     }
-    // A note by folder that names another folder than its sum's opens nothing.
-    assert.equal(await sshAgentFor(folderNote(elsewhere).replace(/.$/, c => (c === "0" ? "1" : "0")), project), null);
+    // A note by folder that names another folder than its sum's opens nothing: once a note made
+    // after it has its agent, the box has looked at it too (it reads all its notes each time).
+    const wrong = folderNote(elsewhere).replace(/.$/, c => (c === "0" ? "1" : "0"));
+    noteConversation(wrong, project);
+    await sshAgentFor(folderNote(path.join(project, "api")), path.join(project, "api"));
+    assert.equal(agentOf(wrong), null);
     // Paused, the conversation's agent offers nothing either.
     await fromMac("POST", "kuvo/vault/pause", { paused: true, bot: "ses_shop" }, key);
     assert.equal((await sshTool("ssh-add", ["-l"], await sshAgentFor("ses_shop", project))).status, 1, "paused");
@@ -667,11 +673,11 @@ test("an SSH key you keep for a project signs through its conversations' own age
   fs.utimesSync(old, monthAgo, monthAgo);
   box = await start();
   try {
-    let now = [];
-    for (let tries = 0; tries < 100 && now.length < left.length; tries++) {
-      await new Promise(done => setTimeout(done, 20));
-      now = fs.existsSync(sshAgents) ? fs.readdirSync(sshAgents) : [];
-    }
+    // (Each made anew, none of the old ones left.)
+    const now = await appears(sshAgents, () => {
+      const names = fs.existsSync(sshAgents) ? fs.readdirSync(sshAgents) : [];
+      return names.length === left.length && !names.some(name => left.includes(name)) && names;
+    });
     assert.equal(now.length, left.length, "an agent for each conversation again");
     assert.deepEqual(now.filter(name => left.includes(name)), [], "none of the old ones");
     assert.equal(fs.existsSync(old), false, "a month-old note");
