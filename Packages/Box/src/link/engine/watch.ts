@@ -314,7 +314,8 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
           if (event.type === "session.created") settleNewSession(source, event.data?.sessionID ?? event.data?.info?.id).catch(() => {});
           if (event.type === "session.renamed") nameWorktreeBranch(source, event.data?.sessionID).catch(() => {});
           // A worktree's last session archived or deleted, or an agent that kept one done: tidied.
-          if (event.type === "session.deleted" || RUN_ENDS.has(event.type) || (event.type === "session.metadata.updated" && isArchiving(event))) tidyWorktrees(connection.signal).catch(() => {});
+          // One made there marks it as used, so deleting it before anything else happens takes it too.
+          if (event.type === "session.created" || event.type === "session.deleted" || RUN_ENDS.has(event.type) || (event.type === "session.metadata.updated" && isArchiving(event))) tidyWorktrees(connection.signal).catch(() => {});
         }
         if (!notices) continue;
         if (ANSWERED.has(event.type)) answered(event.data?.requestID ?? event.data?.id);

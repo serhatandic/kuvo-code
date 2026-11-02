@@ -14973,7 +14973,7 @@ async function watchEvents(read, tell, signal, answered = () => {}, { bots = fal
             settleNewSession(source, event.data?.sessionID ?? event.data?.info?.id).catch(() => {});
           if (event.type === "session.renamed")
             nameWorktreeBranch(source, event.data?.sessionID).catch(() => {});
-          if (event.type === "session.deleted" || RUN_ENDS.has(event.type) || event.type === "session.metadata.updated" && isArchiving(event))
+          if (event.type === "session.created" || event.type === "session.deleted" || RUN_ENDS.has(event.type) || event.type === "session.metadata.updated" && isArchiving(event))
             tidyWorktrees(connection.signal).catch(() => {});
         }
         if (!notices)
