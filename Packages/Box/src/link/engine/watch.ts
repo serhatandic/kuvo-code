@@ -4,6 +4,7 @@
 
 import { pause } from "../../shared/wait";
 import { noteSignIn } from "../areas/accounts";
+import { letAttachmentsGo } from "../server/attached";
 import { nameDueWorktrees, nameWorktreeBranch, settleNewSession, tidyWorktrees } from "../areas/worktrees";
 import { finishDeletes } from "../bots/edit";
 import { freshenBot, freshenBots } from "../bots/tell";
@@ -78,6 +79,7 @@ export interface WatchBoxOptions {
   signal?: AbortSignal;
   signedIn?: (event: BoxEvent) => void;
   learned?: () => void;
+  attachmentsLooked?: (session: string | null) => void;
 }
 
 /** Which part of the box's work `watchEvents` does as events come (and `steerAfter`, a test's wait
@@ -98,6 +100,9 @@ export interface WatchOptions {
   work?: "engine" | "bridge" | false;
   /** The agents' bridge's, which keeps conversations' goals: one paused or resumed held or let go. */
   goals?: boolean;
+  /** Told each time a deleted session's files were looked at (`session`), or, as the box finds
+   * its engine, those of every session it no longer has (null): a test waits on it. */
+  attachmentsLooked?: (session: string | null) => void;
 }
 
 // The events in a `text/event-stream` body, parsed.
@@ -227,11 +232,20 @@ function backgroundTools(engine: Target, session: string): Promise<Response> {
 // and a box's own work (`serve`) both start it: its bots kept told what they are, its sign-ins that
 // ended noted, and with `notices`, its news for your phones (`tell`, held in `hold`). `bots`: only
 // its bots' part of the box's work (this Mac's box, whose app does the rest).
-// `learned`: told each time it's read its engine's models for what they need (a test waits on it).
-export function watchBox({ tell = () => true, hold = null, bots = false, notices = !bots, signal, signedIn, learned }: WatchBoxOptions = {}): void {
+// `learned`: told each time it's read its engine's models for what they need (a test waits on it),
+// and `attachmentsLooked`, each time it's looked at what deleted sessions left.
+export function watchBox({ tell = () => true, hold = null, bots = false, notices = !bots, signal, signedIn, learned, attachmentsLooked }: WatchBoxOptions = {}): void {
   const answered = (id: string | undefined) => hold?.resolve(id);
-  watchEvents(readEngineFile, tell, signal, answered, { bots, notices, signIns: true, hold, signedIn, steers: true, learns: true, learned, queues: true, work: "engine" });
-  watchEvents(readBridgeFile, tell, signal, answered, { bots, notices, queues: true, work: "bridge", goals: true });
+  watchEvents(readEngineFile, tell, signal, answered, { bots, notices, signIns: true, hold, signedIn, steers: true, learns: true, learned, queues: true, work: "engine", attachmentsLooked });
+  watchEvents(readBridgeFile, tell, signal, answered, { bots, notices, queues: true, work: "bridge", goals: true, attachmentsLooked });
+}
+
+// The files deleted sessions left on this box (`session`'s, or with none, any deleted while it
+// wasn't listening) let go, the box's sessions as they are now: then `looked` told.
+function letSessionFilesGo(looked: (session: string | null) => void, session?: string): void {
+  let places;
+  try { places = { engine: readEngineFile(), bridge: bridgeTarget() }; } catch { return looked(session ?? null); }
+  letAttachmentsGo(places, session).finally(() => looked(session ?? null));
 }
 
 // Follows `source`'s events (the engine's, or the coding agents' bridge's: `read` gives its port
@@ -249,7 +263,9 @@ export function watchBox({ tell = () => true, hold = null, bots = false, notices
 // GitHub Copilot brings new models); `learned` told each time.
 // `queues`: its sessions' queues carried on (engine/queue.ts). `work`: whoever started a session
 // told as it finishes or asks (work/wakes.ts), as the place it is ("engine" or "bridge").
-export async function watchEvents(read: () => Target, tell: (notice: Notice) => void, signal?: AbortSignal, answered: (id: string | undefined) => void = () => {}, { bots = false, notices = !bots, signIns = false, hold = null, signedIn = () => {}, steers = false, steerAfter, learns = false, learned = () => {}, queues = false, work = false, goals = false }: WatchOptions = {}): Promise<void> {
+// Either way, a deleted session's files go with it (`letAttachmentsGo`), and any a session deleted
+// meanwhile left as it's found again.
+export async function watchEvents(read: () => Target, tell: (notice: Notice) => void, signal?: AbortSignal, answered: (id: string | undefined) => void = () => {}, { bots = false, notices = !bots, signIns = false, hold = null, signedIn = () => {}, steers = false, steerAfter, learns = false, learned = () => {}, queues = false, work = false, goals = false, attachmentsLooked = () => {} }: WatchOptions = {}): Promise<void> {
   let attempt = 0;
   let lastLearned = 0;
   let learning = false;
@@ -288,8 +304,9 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
       // Found it (it started, or this did): its bots told what they are now, before their next turn,
       // and a queue it left waiting held for Resume.
       freshenBots(source).catch(() => {});
-      // What bots deleted while it wasn't answering left of it.
+      // What bots deleted while it wasn't answering left of it, and sessions deleted meanwhile.
       finishDeletes(readEngineFile, bridgeTarget).catch(() => {});
+      letSessionFilesGo(attachmentsLooked);
       lastLearned = 0;
       learn(source);
       if (queues) scanQueues(source, found).catch(() => {});
@@ -304,6 +321,7 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
         // one); a bot's job read from its memory as its run ends.
         // A bot's run starting: what it's told brought up to date first (a run's events name its session).
         if (event.type === "session.execution.started") freshenBot(source, event.data?.sessionID!).catch(() => {});
+        if (event.type === "session.deleted" && typeof event.data?.sessionID === "string") letSessionFilesGo(attachmentsLooked, event.data.sessionID);
         learn(source);
         steer?.(event);
         queue?.(event as QueueEvent);

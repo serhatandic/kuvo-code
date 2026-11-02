@@ -147,8 +147,8 @@ nonisolated private extension String {
 // MARK: - In the composer
 
 /// A file waiting to be sent: a preview or its icon, its name and kind, and a remove
-/// button. Files that go as a path say so (in orange when the model can't read them);
-/// the reason shows on hover.
+/// button. Files that go as a path say so (in orange when the model can't read them), and so
+/// does one too big to send to a machine, in orange; the reason shows on hover.
 struct ComposerAttachment: View {
     let url: URL
     var route: Attachments.Route = .content
@@ -165,7 +165,11 @@ struct ComposerAttachment: View {
 
     /// What it is, and a picture's name in the message when its title is the file's.
     private var detail: String {
-        let detail = isPath ? "Sent as a path" : AttachmentItem.local(url).detail
+        let detail = switch route {
+        case .content: AttachmentItem.local(url).detail
+        case .path: "Sent as a path"
+        case .staysHere: "Stays on this Mac"
+        }
         guard let number, !Attachments.isPasted(url) else { return detail }
         return "Image \(number) · " + detail
     }
@@ -215,15 +219,18 @@ struct ComposerAttachment: View {
     }
 
     private var reason: String? {
-        if case .path(let reason, _) = route { return reason }
-        return nil
+        switch route {
+        case .content: nil
+        case .path(let reason, _), .staysHere(let reason): reason
+        }
     }
 
-    private var isPath: Bool { reason != nil }
-
     private var isWarning: Bool {
-        if case .path(_, let isWarning) = route { return isWarning }
-        return false
+        switch route {
+        case .content: false
+        case .path(_, let isWarning): isWarning
+        case .staysHere: true
+        }
     }
 }
 

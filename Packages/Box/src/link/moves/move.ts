@@ -806,7 +806,7 @@ async function switchHere(record: MoveRecord): Promise<void> {
 function letGo(id: string): MoveRecord | null {
   const record = readMove(id);
   if (!record || record.role !== "to") return null;
-  noteEnded(id, "dropped");
+  noteEnded(id, "dropped", Date.now(), record.sessions);
   if (!record.dropping) changeMove(id, each => { each.dropping = true; each.dropSince = Date.now(); });
   return record;
 }

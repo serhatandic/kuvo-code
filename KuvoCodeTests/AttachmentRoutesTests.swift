@@ -102,6 +102,20 @@ import Testing
         #expect(prepared.paths.isEmpty && prepared.unsent.isEmpty && prepared.included.isEmpty)
     }
 
+    /// A picture sent to a machine stays where you picked it, and one turned into a kind the
+    /// engine takes leaves no copy behind on this Mac: the machine keeps its own.
+    @Test func onAMachineAPictureSentLeavesNothingBehind() throws {
+        let tiff = url("scan.tiff")
+        let image = try #require(NSImage(contentsOf: url("shot.png")))
+        try #require(image.tiffRepresentation).write(to: tiff)
+        let before = Set((try? FileManager.default.contentsOfDirectory(atPath: Attachments.directory.path)) ?? [])
+        let prepared = Attachments.prepareForMachine([url("shot.png"), tiff])
+        #expect(prepared.files.map(\.name) == ["shot.png", "scan.tiff"])
+        #expect(FileManager.default.fileExists(atPath: url("shot.png").path))
+        #expect(FileManager.default.fileExists(atPath: tiff.path))
+        #expect(Set((try? FileManager.default.contentsOfDirectory(atPath: Attachments.directory.path)) ?? []) == before)
+    }
+
     /// One bigger than a machine takes stays on this Mac, and the message says so (one a model
     /// can't take whole goes, for the agent to open there).
     @Test func onAMachineAHugeFileStaysHere() throws {
@@ -111,6 +125,23 @@ import Testing
         let prepared = Attachments.prepareForMachine([url("notes.txt"), huge])
         #expect(prepared.files.map(\.name) == ["notes.txt"])
         #expect(prepared.unsent == [huge.path])
+    }
+
+    /// In the composer of a session on a machine, one too big to send says, before you send, that
+    /// it stays on this Mac (in orange, why on hover); sending isn't held up. On this Mac the same
+    /// file goes as a path, and a small one goes to the machine as before.
+    @Test func onAMachineAHugeFileSaysItStaysHereBeforeYouSend() throws {
+        let huge = url("huge.png")
+        try Data(count: Attachments.maxMachineBytes + 1).write(to: huge)
+        defer { try? FileManager.default.removeItem(at: huge) }
+        let sees = try model(input: ["text", "image"])
+        guard case .staysHere(let reason) = Attachments.route(huge, for: sees, onMachine: true) else {
+            Issue.record("a file too big for a machine didn't say it stays on this Mac"); return
+        }
+        #expect(reason.contains("stays on this Mac"))
+        #expect(Attachments.prepareForMachine([huge]).unsent == [huge.path], "it's still left out, and the note says so")
+        guard case .content = Attachments.route(huge, for: sees) else { Issue.record("on this Mac, the engine reads it where it is"); return }
+        guard case .content = Attachments.route(url("shot.png"), for: sees, onMachine: true) else { Issue.record("a small picture for a machine said it stays"); return }
     }
 
     /// A picture only the engine has (a photo from the phone), opened twice: the same copy on

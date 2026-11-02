@@ -1517,7 +1517,7 @@ final class Workspace {
         // Its copy may carry where its source came from: that isn't this one's.
         // Nor is its place in the lists: it starts unpinned and not archived.
         var metadata = (session.metadata?.object ?? [:]).filter { $0.key != Self.pinnedKey && $0.key != Self.archivedKey }
-        var kuvo = (metadata["kuvo"]?.object ?? [:]).filter { !["branchedFrom", "handoffFrom", "handoffTo", "startedBy", "beside"].contains($0.key) }
+        var kuvo = (metadata["kuvo"]?.object ?? [:]).filter { !["branchedFrom", "handoffFrom", "handoffTo", "startedBy", "beside", "carriedFrom"].contains($0.key) }
         kuvo["branchedFrom"] = .string(id)
         metadata["kuvo"] = .object(kuvo)
         session.metadata = .object(metadata)
@@ -1612,6 +1612,12 @@ final class Workspace {
         let moved = try await bridge.importSession(directory: session.location.directory, title: session.title, agent: session.agent, model: model,
                                                    permissions: current.permissions, messages: messages, waiting: carried)
         moving = false
+        // Marked as carried on from this one, whose files its words show: they stay while it does.
+        var metadata = moved.metadata?.object ?? [:]
+        var kuvo = metadata["kuvo"]?.object ?? [:]
+        kuvo["carriedFrom"] = .string(id)
+        metadata["kuvo"] = .object(kuvo)
+        try? await bridge.setMetadata(session: moved.id, .object(metadata))
         for item in waiting { try? await engine.cancelInbox(session: id, item: item.id) }
         // As its bridge knows them: a machine's folders are plain paths there.
         let extra = extraFolders(session.location.directory).map(bridge.enginePath)
@@ -2436,6 +2442,8 @@ final class Workspace {
             if let machine { keepList(of: machine) }
             if remoteSessions.removeValue(forKey: id) != nil { Self.saveRemoteSessions(remoteSessions) }
             SessionCopies.remove(id)
+            // The files you sent in it, this Mac's copies (this Mac's box lets its own sessions' go).
+            if machine != nil { Attachments.forget(session: id) }
             models[id] = nil
             asking = asking.filter { $0.value != id }
             // Deleted while it worked: it isn't working any more (nor keeping the Mac awake).

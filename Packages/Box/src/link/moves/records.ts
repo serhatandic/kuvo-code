@@ -187,7 +187,7 @@ export type { Move, MoveKind, MoveStage };
 // lets its original go) rather than `dropped` (and keeps it, a second copy).
 const ENDED_FILE = path.join(MOVES, "ended.json");
 const ENDED_FOR = { dropped: 7 * 24 * 3600_000, switched: 365 * 24 * 3600_000 };
-const keptFor = (one: { as?: unknown; at?: unknown } | undefined, now: number): boolean =>
+const keptFor = (one: { as?: unknown; at?: unknown; sessions?: unknown } | undefined, now: number): boolean =>
   typeof one?.at === "number" && (one.as === "switched" || one.as === "dropped") && now - one.at < ENDED_FOR[one.as];
 
 export function endedAs(id: string, now = Date.now()): "switched" | "dropped" | null {
@@ -200,10 +200,23 @@ export function endedAs(id: string, now = Date.now()): "switched" | "dropped" | 
   }
 }
 
-export function noteEnded(id: string, as: "switched" | "dropped", now = Date.now()): void {
-  let kept: Record<string, { as: string; at: number }> = {};
+/** `sessions`: those of a copy here let go of, which live on where they came from. */
+export function noteEnded(id: string, as: "switched" | "dropped", now = Date.now(), sessions: readonly string[] = []): void {
+  let kept: Record<string, { as: string; at: number; sessions?: string[] }> = {};
   try { kept = JSON.parse(fs.readFileSync(ENDED_FILE, "utf8")) ?? {}; } catch {}
   for (const [other, one] of Object.entries(kept)) if (!keptFor(one, now)) delete kept[other];
-  kept[id] = { as, at: now };
+  kept[id] = { as, at: now, ...(sessions.length ? { sessions: [...sessions] } : {}) };
   writePrivate(ENDED_FILE, JSON.stringify(kept));
+}
+
+/** The conversations of copies here let go of lately (their moves taken back): deleted here, they
+ * live on on the computer they came from. */
+export function droppedHere(now = Date.now()): string[] {
+  try {
+    const kept = JSON.parse(fs.readFileSync(ENDED_FILE, "utf8")) as Record<string, { as?: unknown; at?: unknown; sessions?: unknown }>;
+    return Object.values(kept ?? {}).filter(one => keptFor(one, now) && one.as === "dropped" && Array.isArray(one.sessions))
+      .flatMap(one => (one.sessions as unknown[]).filter((each): each is string => typeof each === "string"));
+  } catch {
+    return [];
+  }
 }

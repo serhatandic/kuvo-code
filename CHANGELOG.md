@@ -22,6 +22,8 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - The sidebar follows Settings › Appearance › Text size, as the conversation does.
 - A session's worktree now goes when the session does, so worktrees no longer pile up. Archive asks nothing, and saves what wasn't committed; open the session again and **Restore** brings its worktree back, or continue in the project. Delete says what goes with it.
 - Picking a session, bot or group chat in the sidebar leaves you typing in its conversation, without the conversation looking unfocused for a moment, and showing or hiding the sidebar (its button or ⌘0) puts the keyboard back in the conversation's composer.
+- Files you attach are kept with the session you sent them in and deleted with it, on your Mac and on your machines. Before, the ones on your Mac piled up in the Attachments folder for good. On a machine, they still also go once they're two weeks old. A branch, a handoff or a conversation carried on with the coding agents keeps the files it shows.
+- In a session on a machine, a file over 50 MB says **Stays on this Mac** on its chip before you send, with why on hover, instead of only in the note after it's sent. You can still send the message.
 - A bot working on a goal no longer keeps your computer busy between its looks at the goal, which could spin the fans while nothing was happening.
 - Moving a chat whose `/goal` is still going says why it can't move yet, instead of moving and losing the goal.
 - A goal whose end you move later after it came carries on to the new end, rather than stopping at once.

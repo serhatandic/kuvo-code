@@ -1010,6 +1010,8 @@ final class SessionModel {
     /// agent is doing, to wait for Resume; `before`, Undo's, where it was (`requeue`).
     @discardableResult
     private func post(_ text: String, files: [URL], for model: Model?, queue: Bool, holds: Bool = false, before: String? = nil, written: String, comments: [ReviewComment]) -> InboxItem.Delivery {
+        // Kept with this session from now on, so they go with it.
+        let files = Attachments.claim(files, for: self.id)
         let id = Identifier.message()
         if let before { placesBack[id] = before }
         // With nothing running (or about to) and nothing queued, there's nothing to wait for.
@@ -1039,7 +1041,8 @@ final class SessionModel {
                 // Converting a photo takes a moment; keep it off the main thread. A machine's engine
                 // can't read this Mac's files: they go to its box with their contents.
                 let machine = RemoteFolder.machine(of: session.location.directory)
-                let prepared = await Task.detached { machine != nil ? Attachments.prepareForMachine(files) : Attachments.prepare(files, for: model) }.value
+                let folder = Attachments.folder(for: self.id)
+                let prepared = await Task.detached { machine != nil ? Attachments.prepareForMachine(files) : Attachments.prepare(files, for: model, in: folder) }.value
                 let message = Attachments.text(text, for: prepared)
                 await waitForTools()
                 // Removed meanwhile: it doesn't go.
@@ -1644,6 +1647,7 @@ final class SessionModel {
     /// with the files, if the command can't run.
     func runCommand(_ name: String, arguments: String, files: [URL] = [], for model: Model? = nil, queue: Bool = false, written: String? = nil) {
         guard canReach else { return notRun(written, files: files) }
+        let files = Attachments.claim(files, for: id)
         let running = RunningCommand(
             command: arguments.isEmpty ? "/\(name)" : "/\(name) \(arguments)",
             started: Date(),
@@ -1658,7 +1662,8 @@ final class SessionModel {
             await previous?.value
             do {
                 let machine = RemoteFolder.machine(of: session.location.directory)
-                let prepared = await Task.detached { machine != nil ? Attachments.prepareForMachine(files) : Attachments.prepare(files, for: model) }.value
+                let folder = Attachments.folder(for: id)
+                let prepared = await Task.detached { machine != nil ? Attachments.prepareForMachine(files) : Attachments.prepare(files, for: model, in: folder) }.value
                 try Moves.checkNotMoving(id)
                 if let machine, !prepared.files.isEmpty {
                     try await MachineBox.command(session: id, name: name, text: Attachments.text(arguments, for: prepared), files: prepared.files, delivery: delivery,

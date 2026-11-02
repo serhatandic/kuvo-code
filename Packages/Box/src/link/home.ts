@@ -161,6 +161,11 @@ export const BOTS = process.env.KUVO_BOTS || path.join(K, "bots");
 // its folder.
 export const CHATS = process.env.KUVO_CHATS || path.join(K, "chats");
 
+// This Mac's box: the Mac app's own Attachments folder (BoxProcess gives it, KUVO_MAC_ATTACHMENTS),
+// where it keeps the files its sessions sent a folder for each session, as the box keeps its own:
+// they go with their session here too (`letAttachmentsGo`).
+export const MAC_ATTACHMENTS = process.env.KUVO_MAC_ATTACHMENTS || null;
+
 // This Mac's box (BoxProcess says so as it starts it, `KUVO_BOX=mac`): its bots are the Mac's own,
 // made with the kit its app gives it and told they run on this Mac; it names no machine, keeps no
 // notes for a Mac to take in, and goes by the Mac's own clock. Its settings are the app's engine's,
