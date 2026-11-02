@@ -125,9 +125,9 @@ struct ReplyDocument {
         var joined = self
         let gap: CGFloat
         if case .text = first {
-            gap = max(trailing.bottom, next.leadingTop) + trailing.below
+            gap = max(trailing.bottom, next.leadingTop)
         } else {
-            gap = trailing.bottom + trailing.below
+            gap = trailing.bottom
         }
         if case .text(let before) = last, case .text(let after) = first, before.length > 0 {
             // One text: the space goes after the paragraph before, less the line spacing TextKit
@@ -158,8 +158,6 @@ struct ReplyDocument {
     private struct Spacing {
         var top: CGFloat
         var bottom: CGFloat
-        /// Room of its own under it (a heading's line), on top of the space between.
-        var below: CGFloat = 0
     }
 
     /// One block of prose, before it's put in with the others.
@@ -238,7 +236,7 @@ struct ReplyDocument {
             let components = intent?.components ?? []
             // A code block: a view of its own.
             if let language = Self.codeLanguage(components) {
-                let gap = last.map { $0.spacing.bottom + $0.spacing.below } ?? 0
+                let gap = last.map { $0.spacing.bottom } ?? 0
                 flushText()
                 var code = String(content.characters)
                 if code.hasSuffix("\n") { code.removeLast() }
@@ -267,7 +265,7 @@ struct ReplyDocument {
                 // Out of a list: the list's own space below it; into one, none above it.
                 let bottom = last.list != nil ? 16 : last.spacing.bottom
                 let top = block.list != nil ? 0 : block.spacing.top
-                return max(bottom, top) + last.spacing.below
+                return max(bottom, top)
             }()
             if text.length > 0 {
                 // The space goes after the paragraph before (inside a table cell, it'd be inside
@@ -290,7 +288,7 @@ struct ReplyDocument {
         }
         context.sizeTables()
         flushText()
-        if let last { trailing = last.list != nil ? Spacing(top: 0, bottom: 16, below: last.spacing.below) : last.spacing }
+        if let last { trailing = last.list != nil ? Spacing(top: 0, bottom: 16) : last.spacing }
     }
 
     /// Whether a list item's first paragraph is a task's: "[ ] ", "[x] " or "[X] " ahead of its
@@ -409,6 +407,8 @@ struct ReplyDocument {
             case .thematicBreak:
                 // One thin line, quiet, the same room above and below.
                 rule = .line(height: 1)
+                // No line spacing under it, which would put the line off its middle.
+                paragraph.lineSpacing = 0
                 spacing = Spacing(top: 24, bottom: 24)
             case .tableCell(let column):
                 let row = outward.lazy.compactMap { component -> Int? in

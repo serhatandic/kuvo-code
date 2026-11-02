@@ -374,8 +374,7 @@ final class ReplyTextView: PointerAwareTextView, NSTextViewDelegate {
     }
 }
 
-/// Draws what TextKit doesn't: inline code's rounded background, a quote's bar, a heading's line
-/// and a rule.
+/// Draws what TextKit doesn't: inline code's rounded background, a quote's bar and a rule.
 nonisolated final class ReplyLayoutManager: NSLayoutManager {
     override func fillBackgroundRectArray(_ rectArray: UnsafePointer<NSRect>, count rectCount: Int, forCharacterRange charRange: NSRange, color: NSColor) {
         super.fillBackgroundRectArray(rectArray, count: rectCount, forCharacterRange: charRange, color: SelectionColor.shown(color, in: firstTextView, for: charRange))
@@ -436,8 +435,16 @@ nonisolated final class ReplyLayoutManager: NSLayoutManager {
             let line = lineFragmentUsedRect(forGlyphAt: glyphs.location, effectiveRange: nil)
             // The colour a table's lines have, so every line in a reply is the same quiet one.
             ReplyDocument.Colors.border.setFill()
-            CGRect(x: origin.x, y: origin.y + line.midY - height / 2, width: container.size.width, height: height).fill()
+            Self.onPixels(CGRect(x: origin.x, y: origin.y + line.midY - height / 2, width: container.size.width, height: height)).fill()
         }
+    }
+
+    /// A line on whole pixels, so a thin one stays sharp rather than smeared across two.
+    private static func onPixels(_ rect: CGRect) -> CGRect {
+        guard let context = NSGraphicsContext.current?.cgContext else { return rect }
+        let pixels = context.convertToDeviceSpace(rect)
+        let rounded = CGRect(x: pixels.minX, y: pixels.minY.rounded(), width: pixels.width, height: max(1, pixels.height.rounded()))
+        return context.convertToUserSpace(rounded)
     }
 }
 
