@@ -482,3 +482,19 @@ test("one whose files come to more than 1 GB is refused before anything of it is
     fs.rmSync(huge, { force: true });
   }
 });
+
+test("a group chat whose copy there was let go of as it was switched to goes on here, as it was", async () => {
+  groups.chats.set("grp_stay1", { group: groupOf("grp_stay1"), messages: [], status: "active" });
+  script = move => {
+    if (move.op === "offer") say({ op: "ready", id: move.id });
+    if (move.op === "part") {
+      say({ op: "got", id: move.id, i: move.i });
+      if (move.i === move.of - 1) say({ op: "arrived", id: move.id, hash: move.hash });
+    }
+    if (move.op === "switch") say({ op: "dropped", id: move.id });
+  };
+  const moved = await ask("POST", "kuvo/moves", { kind: "group", id: "grp_stay1", to: peerKey });
+  assert.equal(moved.status, 409, JSON.stringify(moved.json));
+  assert.match(moved.json.message, /stayed here/);
+  assert.equal(groups.chats.get("grp_stay1").status, "active");
+});

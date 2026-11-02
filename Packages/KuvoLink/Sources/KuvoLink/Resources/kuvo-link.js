@@ -14503,12 +14503,12 @@ async function takeBack(id, message, status = 409) {
 async function restore(record, message) {
   outgoing.delete(record.id);
   unhold(record.folder, record.wasPaused, record.pausedAs);
-  if (record.kind === "group")
-    await wakeGroup(record.thing);
   forgetMove(record.id);
   try {
     fs54.rmSync(bundleOf(record.id), { recursive: true, force: true });
   } catch {}
+  if (record.kind === "group")
+    await wakeGroup(record.thing);
   ended(record.id, { ok: false, status: 409, message });
 }
 var incoming = new Map;

@@ -546,9 +546,10 @@ async function takeBack(id: string, message: string, status = 409): Promise<void
 async function restore(record: MoveRecord, message: string): Promise<void> {
   outgoing.delete(record.id);
   unhold(record.folder, record.wasPaused, record.pausedAs);
-  if (record.kind === "group") await wakeGroup(record.thing);
   forgetMove(record.id);
   try { fs.rmSync(bundleOf(record.id), { recursive: true, force: true }); } catch {}
+  // (Once no move holds it.)
+  if (record.kind === "group") await wakeGroup(record.thing);
   ended(record.id, { ok: false, status: 409, message });
 }
 
