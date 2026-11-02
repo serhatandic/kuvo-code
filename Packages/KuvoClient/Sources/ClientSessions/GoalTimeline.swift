@@ -4,8 +4,8 @@ import Foundation
 /// for a goal of any length, its axis counting hours for a few hours' work, days for a week or more,
 /// weeks for months. Each step spans from when it began to when it ended (or now), with where it's
 /// likely to end only where the bot measured how far it is; the finish line only where every step
-/// left can say; the deadline where you set one. The phone's day view stacks steps that run at the
-/// same time side by side, in columns.
+/// left can say; the deadline where you set one. Both apps list its steps as rows (`list`), each
+/// with its bar on the axis where there's room (`shown`).
 public struct GoalTimeline: Sendable {
     public enum Unit: Sendable, Equatable {
         case hour, day, week
@@ -19,8 +19,6 @@ public struct GoalTimeline: Sendable {
         public let to: Date?
         /// Where it's likely to end, from how far along it was measured; nil where it wasn't.
         public let likelyEnd: Date?
-        /// Its column among the steps at the same time (the phone's day view), from 0.
-        public let column: Int
         public var id: String { step.id }
     }
 
@@ -56,8 +54,6 @@ public struct GoalTimeline: Sendable {
     /// The end you set, if any.
     public let deadline: Date?
     public let lanes: [Lane]
-    /// How many columns the steps at the same time need at most.
-    public let columns: Int
 
     public init(_ plan: GoalPlan, now: Date = .now) {
         let ms = { (value: Double) in Date(timeIntervalSince1970: value / 1000) }
@@ -80,24 +76,10 @@ public struct GoalTimeline: Sendable {
                 }
                 if let likelyEnd { likely.append(likelyEnd) } else { unmeasured = true }
             }
-            lanes.append(Lane(step: step, from: from, to: to, likelyEnd: likelyEnd, column: 0))
+            lanes.append(Lane(step: step, from: from, to: to, likelyEnd: likelyEnd))
         }
         finish = unmeasured || likely.isEmpty ? nil : likely.max()
-        // Columns: each step that ran takes the first column free at its start.
-        var columnEnds: [Date] = []
-        var placed: [String: Int] = [:]
-        for lane in lanes.filter({ $0.from != nil }).sorted(by: { $0.from! < $1.from! }) {
-            let from = lane.from!, to = max(lane.to ?? now, lane.likelyEnd ?? from)
-            if let free = columnEnds.firstIndex(where: { $0 <= from }) {
-                columnEnds[free] = to
-                placed[lane.id] = free
-            } else {
-                placed[lane.id] = columnEnds.count
-                columnEnds.append(to)
-            }
-        }
-        self.lanes = lanes.map { Lane(step: $0.step, from: $0.from, to: $0.to, likelyEnd: $0.likelyEnd, column: placed[$0.id] ?? 0) }
-        columns = max(1, columnEnds.count)
+        self.lanes = lanes
         // The axis runs from the start to the furthest of now, the finish, the deadline and the
         // likely ends, with a little room after.
         let furthest = ([now, finish, deadline].compactMap { $0 } + likely + lanes.compactMap(\.to)).max() ?? now
@@ -158,17 +140,6 @@ public struct GoalTimeline: Sendable {
         return DateInterval(start: shifted, duration: length)
     }
 
-    /// The rows it shows. A long goal (one with a `window`) folds its steps done to one row and
-    /// those not begun (more than two) to another, opened with `showsDone` and `showsLater`; a
-    /// fold that would leave nothing else to see doesn't fold. Any goal folds its steps done once
-    /// it has more than six steps.
-    public func rows(showsDone: Bool = false, showsLater: Bool = false) -> [Row] {
-        let long = window() != nil
-        let done = lanes.filter { $0.step.state == .done || $0.step.state == .skipped }
-        let later = lanes.filter { $0.step.state == .todo }
-        return rows(foldsDone: (long && !done.isEmpty) || (lanes.count > 6 && done.count >= 2), foldsLater: long && later.count > 2, showsDone: showsDone, showsLater: showsLater)
-    }
-
     /// The rows the goal bar lists, top to bottom, whatever the goal's length: the steps done
     /// folded to one row (opened with `showsDone`), phases heading their steps, and more than five
     /// steps not begun folded to one row at the end (opened with `showsLater`). A fold that would
@@ -218,11 +189,5 @@ public struct GoalTimeline: Sendable {
             if showsLater { rows += later.map(Row.lane) }
         }
         return rows
-    }
-
-    /// Where `date` falls along the axis, 0 at its start and 1 at its end.
-    public func position(of date: Date) -> Double {
-        let span = end.timeIntervalSince(start)
-        return span > 0 ? min(1, max(0, date.timeIntervalSince(start) / span)) : 0
     }
 }

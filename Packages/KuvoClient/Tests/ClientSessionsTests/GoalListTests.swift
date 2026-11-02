@@ -58,6 +58,18 @@ struct GoalListTests {
         #expect(GoalPlanWords.pausedBy(.stalled) == "Stalled")
     }
 
+    @Test func theBarsLineSaysHowFarAlongAndPausedWhyNeverTheSteps() {
+        let now = start.addingTimeInterval(3 * 86400 + 3600)
+        #expect(GoalPlanWords.line(plan(landing), now: now) == "2 of 7 · 3 days")
+        #expect(GoalPlanWords.line(plan(landing), now: start.addingTimeInterval(2 * 3600 + 5 * 60)) == "2 of 7 · 2 h 5 min")
+        #expect(GoalPlanWords.line(plan(landing), pausedBy: .some(.you), now: now) == "Paused · You")
+        #expect(GoalPlanWords.line(plan(landing), pausedBy: .some(.error), now: now) == "Paused · Error")
+        #expect(GoalPlanWords.line(plan(landing), pausedBy: .some(nil), now: now) == "Paused")
+        #expect(GoalPlanWords.line(plan(landing, state: .stopped), now: now) == "Stopped · 2 of 7")
+        // A paused goal that's over says it's over.
+        #expect(GoalPlanWords.line(plan(landing, state: .stopped), pausedBy: .some(.you), now: now) == "Stopped · 2 of 7")
+    }
+
     @Test func theStepsAreRowsWithTheDoneOnesFoldedAndPhasesHeadingTheirs() {
         let timeline = GoalTimeline(plan(landing), now: start.addingTimeInterval(7 * 3600))
         #expect(names(timeline.list()) == ["2 done", "phase Build", "Build the site", "Buy the domain", "phase Launch", "Point DNS at the host", "Deploy", "Add checkout"])
@@ -98,6 +110,44 @@ struct GoalListTests {
         #expect(said["s7"]?.text == nil, "nothing to wait for: nothing to say")
         let paused = GoalPlan.Step(id: "p", text: "Post the ads", state: .paused, resumes: (start.timeIntervalSince1970 + 9 * 3600) * 1000)
         #expect(GoalPlanWords.state(of: paused, in: goal, now: now, timeZone: utc, locale: english).text?.replacingOccurrences(of: "\u{202F}", with: " ") == "Until 5:00 PM")
+    }
+
+    @Test func aStoppedGoalsUnfinishedStepsAreNotDoneNeverStillUnderWay() {
+        let goal = plan(landing, state: .stopped)
+        let now = start.addingTimeInterval(7 * 3600)
+        let site = goal.steps[2], domain = goal.steps[3], theme = goal.steps[0]
+        #expect(GoalPlanWords.shownState(of: site, in: goal) == .skipped)
+        let said = GoalPlanWords.state(of: domain, in: goal, now: now)
+        #expect(said.text == "Not done" && said.tone == .quiet, "no orange Needs you under a goal that’s over")
+        #expect(GoalPlanWords.shownState(of: theme, in: goal) == .done, "what was done stays done")
+        #expect(GoalPlanWords.spokenState(of: site, in: goal, now: now) == "not done")
+        // Running, the same steps say where they are.
+        #expect(GoalPlanWords.shownState(of: site, in: plan(landing)) == .doing)
+    }
+
+    @Test func voiceOverReadsWhereAStepIsOnce() {
+        let goal = plan(landing)
+        let now = start.addingTimeInterval(7 * 3600)
+        #expect(GoalPlanWords.spokenState(of: goal.steps[2], in: goal, now: now) == "5 of 8 pages")
+        #expect(GoalPlanWords.spokenState(of: goal.steps[3], in: goal, now: now) == "waiting for you")
+        #expect(GoalPlanWords.spokenState(of: goal.steps[4], in: goal, now: now) == "not started, after Buy the domain")
+        #expect(GoalPlanWords.spokenState(of: goal.steps[0], in: goal, now: now) == "done")
+    }
+
+    @Test func aStepAfterOneWithALongNameSaysHowManyNotTheName() {
+        let steps: [GoalPlan.Step] = [
+            .init(id: "w1", text: "Summarise the week’s commits, releases and open questions (1 of 9)", state: .doing, began: at(0)),
+            .init(id: "w2", text: "Summarise the week’s commits, releases and open questions (2 of 9)", state: .todo, after: ["w1"]),
+        ]
+        let goal = plan(steps)
+        #expect(GoalPlanWords.state(of: steps[1], in: goal).text == "After 1 step")
+    }
+
+    @Test func aDeadlineThatPassedSaysItWasDueNotAWeekdayToCome() {
+        // Friday 15 January 2027; it was due Tuesday the 12th.
+        let goal = plan([.init(id: "s1", text: "Build the site", state: .doing, began: at(0))], ends: start.addingTimeInterval(-3 * 86400))
+        let timeline = GoalTimeline(goal, now: start.addingTimeInterval(7 * 3600))
+        #expect(GoalPlanWords.finish(timeline, timeZone: utc, locale: english) == "Was due Tue, Jan 12")
     }
 
     @Test func underTheStepsItSaysWhenItsLikelyDoneAndDue() {
