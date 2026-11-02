@@ -16,9 +16,16 @@ final class ScrolledConversation {
     let scroller = ConversationScroller()
     let window = NSWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: 720, height: 520), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
 
+    /// How tall the composer under the conversation is, with `composer`: the rows scroll on under
+    /// it, as in a session, and Scroll to the End sits on its edge.
+    static let composerHeight: CGFloat = 110
+    private let band: CGFloat
+
     /// Six rows of long paragraphs (so their words run under the button at the bottom's middle),
-    /// each starting with a link, drawn by `row`.
-    init(row: @escaping (Item) -> AnyView) async {
+    /// each starting with a link, drawn by `row`; with `composer`, over the composer's card as a
+    /// session's conversation is.
+    init(composer: Bool = false, row: @escaping (Item) -> AnyView) async {
+        band = composer ? 46 + Self.composerHeight : 46
         TestEnvironment.prepare()
         let words = String(repeating: "The keeper climbed the stairs at dusk and lit the great lamp for the ships out at sea. ", count: 14)
         let items = (0..<6).map { Item(id: "\($0)", text: "Read [the harbor log](https://example.com/log) first. " + words) }
@@ -26,7 +33,14 @@ final class ScrolledConversation {
             RowStack(items: items, id: \.id, same: ==, estimate: { _ in 400 }) { item, _ in row(item) }
         }
         window.isReleasedWhenClosed = false
-        window.contentView = NSHostingView(rootView: view.frame(width: 720, height: 520))
+        window.contentView = composer
+            ? NSHostingView(rootView: AnyView(view.conversationBar {
+                PointerOverScrolledTextTests.Composer(editable: true)
+                    .padding(15)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: Self.composerHeight)
+            }.frame(width: 720, height: 520)))
+            : NSHostingView(rootView: AnyView(view.frame(width: 720, height: 520)))
         window.orderBack(nil)
         await settle { !texts.isEmpty }
         // Scrolled up, so Scroll to the End shows, with the middle of a row's text level with the
@@ -41,7 +55,6 @@ final class ScrolledConversation {
         }
     }
 
-    private static let band: CGFloat = 46
     private var linedUpTo: CGFloat?
 
     private func lineUpATextWithTheControl() {
@@ -49,11 +62,11 @@ final class ScrolledConversation {
         guard let top = distanceFromTop, let text = texts
             .filter({ $0.window != nil })
             .map({ $0.convert($0.bounds, to: nil) })
-            .filter({ $0.height > 120 && top - ($0.midY - Self.band) >= 0 })
-            .min(by: { abs($0.midY - Self.band) < abs($1.midY - Self.band) }) else { return }
+            .filter({ $0.height > 120 && top - ($0.midY - band) >= 0 })
+            .min(by: { abs($0.midY - band) < abs($1.midY - band) }) else { return }
         // Up the conversation brings its words down the window, down it brings them up.
-        let target = top - (text.midY - Self.band)
-        guard abs(text.midY - Self.band) > 1, target != linedUpTo else { return }
+        let target = top - (text.midY - band)
+        guard abs(text.midY - band) > 1, target != linedUpTo else { return }
         linedUpTo = target
         scroller.scroll(to: target)
     }
@@ -119,17 +132,21 @@ final class ScrolledConversation {
     /// drawn over the conversation on top: Scroll to the End.
     func pointsUnderAControl() -> [NSPoint] {
         guard let stack else { return [] }
-        return (2...90).map { NSPoint(x: 360, y: CGFloat($0)) }.filter { point in
+        return (2...Int(band + 44)).map { NSPoint(x: 360, y: CGFloat($0)) }.filter { point in
             guard text(under: point) != nil, let hit = hit(point) else { return false }
             return hit !== stack && !hit.isDescendant(of: stack)
         }
     }
 
+    /// Scroll to the End's middle: 15 points under the top of what's over the rows there (under
+    /// it, the bottom's edge or the composer).
+    func controlMiddle() -> NSPoint? {
+        pointsUnderAControl().last.map { NSPoint(x: 360, y: $0.y - 15) }
+    }
+
     /// A point on a row's words beside the button, level with its middle.
     func besideTheControl() -> NSPoint? {
-        let under = pointsUnderAControl()
-        guard !under.isEmpty else { return nil }
-        let middle = under[under.count / 2].y
+        guard let middle = controlMiddle()?.y else { return nil }
         return (40...700).map { NSPoint(x: CGFloat($0), y: middle) }.first { (hit($0) as? PointerAwareTextView)?.pointer(at: $0) == .iBeam }
     }
 
@@ -170,9 +187,7 @@ final class ScrolledConversation {
     /// Across Scroll to the End's whole circle, not only down its middle (where its arrow is): a
     /// click anywhere on it reaches it, and the text under it shows no I-beam there.
     func checkNoIBeamAcrossScrollToTheEnd() throws {
-        let under = pointsUnderAControl()
-        let first = try #require(under.first), last = try #require(under.last)
-        let center = NSPoint(x: 360, y: (first.y + last.y) / 2)
+        let center = try #require(controlMiddle())
         // Inside its 30-point circle, short of the rim.
         let across = stride(from: -12, through: 12, by: 2).flatMap { dx in
             stride(from: -12, through: 12, by: 2).map { dy in NSPoint(x: center.x + CGFloat(dx), y: center.y + CGFloat(dy)) }
@@ -343,5 +358,33 @@ final class ScrolledConversation {
         text.isSelectable = true
         let scroll = try #require(text.enclosingScrollView)
         #expect(scroll.documentCursor == nil)
+    }
+}
+
+/// The same as in a session, where the conversation scrolls on under the composer and Scroll to
+/// the End sits on the composer's edge: no I-beam over the button, nor under the composer.
+@MainActor
+@Suite(.serialized) struct PointerOverTextAboveTheComposerTests {
+    let scene: ScrolledConversation
+
+    init() async throws {
+        scene = await ScrolledConversation(composer: true) { item in
+            AnyView(ReplyView(markdown: item.text, parser: FileLinkingParser(folders: { [] })))
+        }
+    }
+
+    @Test func noIBeamOverScrollToTheEndNorTheComposer() throws {
+        defer { scene.done() }
+        try scene.checkNoIBeamOverScrollToTheEnd()
+    }
+
+    @Test func noIBeamAcrossScrollToTheEnd() throws {
+        defer { scene.done() }
+        try scene.checkNoIBeamAcrossScrollToTheEnd()
+    }
+
+    @Test func movingOntoScrollToTheEndLetsTheIBeamGo() throws {
+        defer { scene.done() }
+        try scene.checkMovingOntoScrollToTheEndLetsTheIBeamGo()
     }
 }
