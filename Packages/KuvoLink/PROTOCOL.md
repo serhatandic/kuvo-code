@@ -3107,7 +3107,7 @@ they work outside without asking unless a rule of yours says otherwise.
 
 What Kuvo Code and the engine keep for an agent stays open after that ask, for the agent to open:
 the box's `attachments` (and this Mac's app's `Attachments`; both keep a session's files in a folder
-named after it, `attachments/<session>/…`, which goes as the box hears the session's deleted, or for
+named after it, `attachments/<session>/…` (bridge 0.9.177), which goes as the box hears the session's deleted, or for
 one deleted while it wasn't listening, once its engine and bridge both say it's gone, unless a
 conversation marked `kuvo.branchedFrom`, `handoffFrom`, `carriedFrom` or `startedBy` (or one of its
 own, back along such marks) still names its files; nothing goes while the bridge isn't running or
