@@ -13093,11 +13093,15 @@ async function removeTree(tree, removal, engine, signal, bridge, known) {
       if (fs49.existsSync(tree.project))
         gitIn(tree.project, ["worktree", "prune"]);
     } else {
-      const id = await projectOf(engine, tree.project, signal);
-      await call(engine, "DELETE", "/api/worktree", { projectID: id, directory: tree.root, force: removal.discard || removal.keep }, signal, tree.project).catch((error) => {
-        if (gitIn(tree.project, ["worktree", "remove", ...removal.discard || removal.keep ? ["--force"] : [], tree.root]) === null)
-          throw error;
-      });
+      const force = removal.discard || removal.keep;
+      if (tree.restored) {
+        const refused = spawnGit(tree.project, ["worktree", "remove", ...force ? ["--force"] : [], tree.root]);
+        if (refused !== null)
+          throw new Error(refused);
+      } else {
+        const id = await projectOf(engine, tree.project, signal);
+        await call(engine, "DELETE", "/api/worktree", { projectID: id, directory: tree.root, force }, signal, tree.project);
+      }
     }
   } catch (error) {
     if (saved)
@@ -13147,7 +13151,7 @@ async function restoreTree(folder, engine, signal, bridge) {
     gitIn(tree.root, ["reset", "--quiet"]);
   }
   const { head: _head, snapshot: _snapshot, made: _made, prefix: _prefix, ...kept } = tree;
-  const record = { ...kept, used: false };
+  const record = { ...kept, used: false, restored: true };
   updateWorktrees((list) => [...list.filter((each) => each.root !== tree.root), record], undefined, (list) => list.filter((each) => each.root !== tree.root));
   if (saved)
     dropSnapshot(tree.project, tree.root, saved);

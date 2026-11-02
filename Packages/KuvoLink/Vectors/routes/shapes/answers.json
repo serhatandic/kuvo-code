@@ -8168,7 +8168,8 @@
            "base?": "string",
            "made?": "string",
            "prefix?": "string",
-           "used?": "bool"
+           "used?": "bool",
+           "restored?": "bool"
           }
          }
         },
@@ -8204,7 +8205,8 @@
       "base?": "string",
       "made?": "string",
       "prefix?": "string",
-      "used?": "bool"
+      "used?": "bool",
+      "restored?": "bool"
      }
     }
    }
@@ -8229,7 +8231,8 @@
       "base?": "string",
       "made?": "string",
       "prefix?": "string",
-      "used?": "bool"
+      "used?": "bool",
+      "restored?": "bool"
      }
     }
    }

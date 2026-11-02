@@ -407,11 +407,15 @@ async function removeTree(tree: WorktreeRecord, removal: Removal, engine: Target
       // Its folder deleted by hand: the engine won't remove what isn't there, so git forgets it.
       if (fs.existsSync(tree.project)) gitIn(tree.project, ["worktree", "prune"]);
     } else {
-      const id = await projectOf(engine, tree.project, signal);
-      // (One restored here was made by git, so the engine doesn't know it: git removes it.)
-      await call(engine, "DELETE", "/api/worktree", { projectID: id, directory: tree.root, force: removal.discard || removal.keep }, signal, tree.project).catch(error => {
-        if (gitIn(tree.project, ["worktree", "remove", ...(removal.discard || removal.keep ? ["--force"] : []), tree.root]) === null) throw error;
-      });
+      const force = removal.discard || removal.keep;
+      if (tree.restored) {
+        // Restored here, git made it, so the engine doesn't know it: git removes it.
+        const refused = spawnGit(tree.project, ["worktree", "remove", ...(force ? ["--force"] : []), tree.root]);
+        if (refused !== null) throw new Error(refused);
+      } else {
+        const id = await projectOf(engine, tree.project, signal);
+        await call(engine, "DELETE", "/api/worktree", { projectID: id, directory: tree.root, force }, signal, tree.project);
+      }
     }
   } catch (error) {
     if (saved) dropSnapshot(tree.project, tree.root, saved);
@@ -468,7 +472,7 @@ async function restoreTree(folder: unknown, engine: Target | null, signal: Abort
   const { head: _head, snapshot: _snapshot, made: _made, prefix: _prefix, ...kept } = tree;
   // Not used again until a session there is open: with them all archived, the next sweep would only
   // remove it again.
-  const record: WorktreeRecord = { ...kept, used: false };
+  const record: WorktreeRecord = { ...kept, used: false, restored: true };
   updateWorktrees(list => [...list.filter(each => each.root !== tree.root), record], undefined, list => list.filter(each => each.root !== tree.root));
   if (saved) dropSnapshot(tree.project, tree.root, saved);
   // Its sessions told where they work again, as they were.

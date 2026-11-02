@@ -1652,7 +1652,7 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     changes not committed, which go when it's removed; `ahead`, commits `base` doesn't have, whose
     branch stays when it's removed. `size` in bytes. Where new ones go is `kuvo/config`'s
     `worktree.directory`. `?records=1` → `{"worktrees": [{project, root, folder, branch, base?,
-    made?, prefix?, used?}], "restorable"?}`, as it keeps them (without asking git), any whose session has a title by
+    made?, prefix?, used?, restored?}], "restorable"?}`, as it keeps them (without asking git), any whose session has a title by
     now named first; `made`, the branch one made there started on, and `prefix`, what its name
     starts with; `used`, a session has run there.
   - `GET kuvo/worktrees/events`: `application/x-ndjson`, `{worktrees}` as `?records=1` has them,
@@ -1678,8 +1678,9 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     `folder`.
   - `POST kuvo/worktrees/restore {"folder"}` brings one back where it was, on its branch (made
     again from where it was if it's gone), with its saved changes as changes not committed, and
-    tells each session there → `200 {project, root, folder, branch, base?}`, kept again, and not
-    removed again until a session there is open;
+    tells each session there → `200 {project, root, folder, branch, base?}`, kept again (marked
+    `restored`: git made it, so git removes it), and not removed again until a session there is
+    open;
     `404 {"message"}` for one it can't bring back any more; `409 {"message"}` when its project or
     its branch is gone, something else is in its folder, its branch is open in another folder,
     or its saved changes clash with newer work on its branch (it stays removed, nothing left half
