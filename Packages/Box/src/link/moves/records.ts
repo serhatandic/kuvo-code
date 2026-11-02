@@ -57,6 +57,8 @@ export interface MoveRecord extends Move {
   holdSince?: number;
   /** The box it goes to: since when it's been setting its copy up. */
   setUpSince?: number;
+  /** The box it goes to: when its copy was set up (and said so), to wait for the switch from. */
+  setUpAt?: number;
   /** Since when the box it leaves has asked the other to switch to its copy. */
   switchSince?: number;
   /** Since when the box it leaves has asked the other to let its copy go (taken back); on the box it
@@ -133,7 +135,7 @@ export function shownMove(record: MoveRecord): Move {
   return { id, kind, thing, name, from, to, role, stage, sessions, ...(sent !== undefined ? { sent } : {}), ...(size !== undefined ? { size } : {}), ...(waitingFor.has(id) ? { waiting: true } : {}) };
 }
 
-/** The moves from here whose other computer has gone quiet about them a while (`keepMoving` keeps
+/** The moves here whose other computer has gone quiet about them a while (`keepMoving` keeps
  * it): shown as waiting for it. In memory only: a box started again waits a while before it says so. */
 export const waitingFor = new Set<string>();
 

@@ -15890,6 +15890,7 @@ async function setUp(sender, id, file) {
     changeMove(id, (each) => {
       each.sessions = sessions;
       each.setUpSince = undefined;
+      each.setUpAt = Date.now();
     });
     tell(sender.key, { op: "arrived", id, hash: record.hash });
   } catch (thrown) {
@@ -16311,8 +16312,11 @@ function noteWaiting(records, now) {
   const waiting = records.filter((record) => {
     if (record.failed)
       return false;
-    if (record.role === "to")
-      return !record.complete && !record.dropping && now - Math.max(record.started, heard.get(record.id) ?? 0, lookingSince) > WAITING_AFTER;
+    if (record.role === "to") {
+      if (record.dropping || record.setUpSince !== undefined)
+        return false;
+      return record.complete ? now - Math.max(record.setUpAt ?? record.started, heard.get(record.id) ?? 0, lookingSince) > WAITING_AFTER + SETTLE_FOR * 1000 : now - Math.max(record.started, heard.get(record.id) ?? 0, lookingSince) > WAITING_AFTER;
+    }
     const asked = record.step === "switch" || record.step === "drop" && record.stage === "switching" ? record.switchSince : record.step === "parts" || record.step === "arrive" || record.step === "offer" && record.tries > 0 ? record.sentAt : undefined;
     return asked !== undefined && now - Math.max(asked, heard.get(record.id) ?? 0, lookingSince) > WAITING_AFTER;
   }).map((record) => record.id);

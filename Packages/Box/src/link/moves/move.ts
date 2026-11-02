@@ -731,7 +731,7 @@ async function setUp(sender: MailSender, id: string, file: string): Promise<void
     if (await hashOf(file) !== record.hash) throw new NotTaken("What came wasn’t what was sent.");
     const sessions = await bringIn(record, stop.signal);
     stop.signal.throwIfAborted();
-    changeMove(id, each => { each.sessions = sessions; each.setUpSince = undefined; });
+    changeMove(id, each => { each.sessions = sessions; each.setUpSince = undefined; each.setUpAt = Date.now(); });
     tell(sender.key, { op: "arrived", id, hash: record.hash });
   } catch (thrown) {
     const error = stop.signal.aborted ? stop.signal.reason : thrown;
@@ -1141,12 +1141,20 @@ export function keepMoving(now = Date.now()): void {
 
 /** The moves here waiting on their other computer (`waitingFor`), whose other computer has said
  * nothing of them a while: from here, one that asked a step (its offer sent again, its parts, word
- * it's all there, or the switch, and then to let its copy go instead); coming here, a copy not all
- * here yet. Clients told when that changes. */
+ * it's all there, or the switch, and then to let its copy go instead); coming here, a copy whose
+ * parts or switch don't come. Clients told when that changes. */
 function noteWaiting(records: MoveRecord[], now: number): void {
   const waiting = records.filter(record => {
     if (record.failed) return false;
-    if (record.role === "to") return !record.complete && !record.dropping && now - Math.max(record.started, heard.get(record.id) ?? 0, lookingSince) > WAITING_AFTER;
+    if (record.role === "to") {
+      // (Being let go of, or set up here now: this box is at it.)
+      if (record.dropping || record.setUpSince !== undefined) return false;
+      // Its parts, since it was offered; set up, the switch, since it said so (the other box gets
+      // the original ready to go first, a minute at most).
+      return record.complete
+        ? now - Math.max(record.setUpAt ?? record.started, heard.get(record.id) ?? 0, lookingSince) > WAITING_AFTER + SETTLE_FOR * 1000
+        : now - Math.max(record.started, heard.get(record.id) ?? 0, lookingSince) > WAITING_AFTER;
+    }
     const asked = record.step === "switch" || (record.step === "drop" && record.stage === "switching") ? record.switchSince
       : record.step === "parts" || record.step === "arrive" || (record.step === "offer" && record.tries > 0) ? record.sentAt
       : undefined;

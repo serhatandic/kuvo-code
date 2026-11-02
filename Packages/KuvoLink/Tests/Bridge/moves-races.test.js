@@ -810,18 +810,24 @@ test("what's moving says which computer it's going to by name, as your computers
 // is under way (before, this box wouldn't move it: it's the bridge only while it looks), so one of
 // them can't undo what the test sees as it looks ahead in time itself; started again after.
 async function withoutLooks(run) {
-  let stopped = false;
+  let stopped = false, started = false;
+  // Once (not once the file's done: nothing would stop them).
+  const start = () => {
+    if (!stopped || started || done) return;
+    started = true;
+    stop = new AbortController();
+    link.watchMoves(() => relay, stop.signal);
+  };
+  // (Also as soon as the test's failed or out of time, though what it waits for still hasn't come:
+  // the tests after it are moved as ever.)
+  running.addEventListener("abort", start, { once: true });
   try {
     await run(() => {
       stopped = true;
       stop.abort();
     });
   } finally {
-    // (Not once the file's done: nothing would stop them.)
-    if (stopped && !done) {
-      stop = new AbortController();
-      link.watchMoves(() => relay, stop.signal);
-    }
+    start();
   }
 }
 
@@ -904,8 +910,33 @@ test("a copy coming here whose other computer went quiet before all of it came s
   await until(() => told.some(move => move.id === id && move.op === "arrived"));
   await say({ op: "drop", id });
   await until(() => told.some(move => move.id === id && move.op === "dropped"));
+  const signal = running;
   while (await listed()) {
-    running.throwIfAborted();
+    signal.throwIfAborted();
     await new Promise(resolve => setImmediate(resolve));
   }
+}));
+
+test("a copy all here and set up, whose other computer went quiet before it switched to it, says it's waiting for it", () => withoutLooks(async stopLooks => {
+  script = () => {};
+  const thing = "ses_waits4";
+  const { bytes, hash } = bundleFor(thing, [{ info: { id: thing, title: "Notes" }, messages: [] }], { "wakes.json": "[]" });
+  const id = "mov_waits4";
+  await say({ op: "offer", id, kind: "chat", thing, name: "“Notes”", size: bytes.length, hash, wasPaused: false, from: peerKey });
+  await until(() => told.some(move => move.id === id && move.op === "ready"));
+  stopLooks();
+  await say({ op: "part", id, hash, i: 0, of: 1, d: bytes.toString("base64url") });
+  await until(() => told.some(move => move.id === id && move.op === "arrived"));
+  const listed = async () => (await ask("GET", "kuvo/moves")).json.moves.find(move => move.id === id);
+  const at = Date.now();
+  // Lab gets the original ready to go a while (a minute at most) before it switches: not waiting.
+  link.keepMoving(at + 2 * 60_000);
+  assert.equal((await listed()).waiting, undefined);
+  // Quiet past that: waiting for lab.
+  link.keepMoving(at + 3 * 60_000);
+  assert.equal((await listed()).waiting, true);
+  // Back, it switches: it lives here now.
+  await say({ op: "switch", id });
+  assert.ok(told.some(move => move.id === id && move.op === "switched"));
+  assert.equal(await listed(), undefined);
 }));
