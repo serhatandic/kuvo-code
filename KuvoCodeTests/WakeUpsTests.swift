@@ -1,6 +1,7 @@
 import Foundation
 import KuvoLink
 import OpenCodeKit
+import os
 import Testing
 @testable import KuvoCode
 
@@ -328,6 +329,17 @@ import Testing
         app.workspace.handle(try event("permission.asked", permission))
         #expect(app.workspace.waitingCount == 1)
         let stopped = { StubWeb.asked.filter { $0.hasSuffix("/api/session/\(self.id)/interrupt") }.count }
+        // The stand-in keeps what Archive writes, as the engine does: the box stops a run only
+        // while its engine has it archived.
+        let archivedThere = OSAllocatedUnfairLock(initialState: false)
+        let (open, archived) = (StubWeb.json(["data": Self.session(id)]), StubWeb.json(["data": Self.session(id, archived: true)]))
+        StubWeb.route(Self.engine + "/api/session/\(id)", sent: { request, body in
+            if request.httpMethod == "PATCH" {
+                let metadata = (try? JSONSerialization.jsonObject(with: body) as? [String: Any])?["metadata"] as? [String: Any]
+                archivedThere.withLock { $0 = metadata?["kuvo.archived"] as? Bool ?? false }
+            }
+            return archivedThere.withLock { $0 } ? archived : open
+        })
 
         await app.workspace.setArchived(id, true)
         for task in work { await task.value }
@@ -338,8 +350,6 @@ import Testing
 
         // Opened from search and worked in, archived still: a first wake-up its agent makes holds,
         // and stops nothing (the stand-in still says it waits).
-        let archived = StubWeb.json(["data": Self.session(id, archived: true)])
-        StubWeb.route(Self.engine + "/api/session/\(id)") { _ in archived }
         let made = await app.wakeUps.call("schedule_wake_up", arguments: ["when": "+2h", "note": "Check again"], caller: id)
         #expect(!made.isError, "\(made.text)")
         #expect(app.wakeUps.paused.contains(id))
