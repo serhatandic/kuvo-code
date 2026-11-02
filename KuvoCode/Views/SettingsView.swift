@@ -382,7 +382,7 @@ private struct SettingsSidebar: View {
 
     private var boxes: [SidebarBox] { app.boxes }
 
-    /// How far a swipe has pulled the computers' pages, which the name strip follows.
+    /// How far a swipe has pulled the computers' pages.
     @State private var boxMotion = BoxPagerMotion()
 
     private var shownBinding: Binding<SidebarBox> {
@@ -397,7 +397,7 @@ private struct SettingsSidebar: View {
                 .frame(height: SidebarMetrics.rowHeight)
             SidebarSearchRow(text: $search)
             if boxes.count > 1, search.isEmpty {
-                BoxNameStrip(boxes: boxes, selected: shownBinding, motion: boxMotion, marksNews: false)
+                BoxNameStrip(boxes: boxes, selected: shownBinding, marksNews: false)
                     .padding(.top, 8)
             }
             if !search.isEmpty {

@@ -55,7 +55,7 @@ struct SidebarView: View {
     @State private var search = ""
     /// Sessions whose sub-sessions show under them: folded until you unfold one, or open one of them.
     @State private var unfolded: Set<String> = []
-    /// How far a swipe has pulled the boxes' pages, which the name strip above them follows.
+    /// How far a swipe has pulled the boxes' pages.
     @State private var boxMotion = BoxPagerMotion()
     /// Sessions whose conversations have the search, with the words around it.
     /// What each box found in its conversations, by the box: one's earlier finds stay until it
@@ -121,7 +121,7 @@ struct SidebarView: View {
                 SidebarSearchRow(text: $search)
 
                 if boxes.count > 1, search.isEmpty {
-                    BoxNameStrip(boxes: boxes, selected: boxBinding, motion: boxMotion)
+                    BoxNameStrip(boxes: boxes, selected: boxBinding)
                         .padding(.top, 8)
                 }
 
@@ -547,9 +547,9 @@ struct SidebarView: View {
                 }
                 switch result.found {
                 case .bot(let bot):
-                    botRow(bot, snippet: SearchSnippet.text(result.snippet, found: findsQuery), action: show)
+                    botRow(bot, snippet: SearchMatches.snippet(result.snippet, found: findsQuery), action: show)
                 case .session(let session):
-                    ConversationResultRow(title: session.title ?? "New Session", snippet: SearchSnippet.text(result.snippet, found: findsQuery), isSelected: selection == session.id, action: show)
+                    ConversationResultRow(title: session.title ?? "New Session", snippet: SearchMatches.snippet(result.snippet, found: findsQuery), isSelected: selection == session.id, action: show)
                         .contextMenu { menu(for: session) }
                 }
             }
@@ -759,7 +759,7 @@ struct SidebarView: View {
     @ViewBuilder private func terminalRows(_ terminals: [(key: String, entry: MainTerminals.Entry)], indented: Bool) -> some View {
         ForEach(terminals, id: \.key) { terminal in
             TerminalRow(
-                title: terminal.entry.session.title == "Terminal" ? terminal.entry.label : terminal.entry.session.title,
+                title: terminal.entry.session.title,
                 isSelected: selection == terminal.key,
                 indented: indented,
                 action: { selection = terminal.key },
@@ -1184,19 +1184,6 @@ private struct OpenInMenu: View {
                 }
             }
         }
-    }
-}
-
-/// The words around what a search found, the found words in bold.
-enum SearchSnippet {
-    static func text(_ snippet: String, found query: String) -> AttributedString {
-        var text = AttributedString(snippet)
-        for range in SearchMatches.ranges(of: query, in: snippet) {
-            guard let lower = AttributedString.Index(range.lowerBound, within: text),
-                  let upper = AttributedString.Index(range.upperBound, within: text) else { continue }
-            text[lower..<upper].inlinePresentationIntent = .stronglyEmphasized
-        }
-        return text
     }
 }
 

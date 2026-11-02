@@ -2,22 +2,34 @@ import ClientDesign
 import SwiftUI
 
 /// A machine's connection, as a dot and a word or two: green when connected, a spinner while
-/// connecting, orange when it couldn't (the reason on hover).
+/// connecting, orange when it couldn't, with the reason under it (all of it on hover).
 struct MachineStatus: View {
     let engine: MachineEngine
     /// Says which other Mac runs it (Settings › Machines), not everywhere the status shows.
     var namesHome = false
 
     var body: some View {
-        HStack(spacing: 5) {
-            MachineIndicator(connection: engine.connection, size: 7, progress: engine.installProgress)
-            // Another Mac runs it: which one, where its start said.
-            Text((namesHome ? MachinesSettings.otherMac(engine) : nil).map { engine.statusText + " · runs from " + ($0.name ?? "another Mac") } ?? engine.statusDetail)
-                .font(.subheadline)
-                .monospacedDigit()
-                .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 1) {
+            HStack(spacing: 5) {
+                MachineIndicator(connection: engine.connection, size: 7, progress: engine.installProgress)
+                    .accessibilityHidden(true)
+                // Another Mac runs it: which one, where its start said.
+                Text((namesHome ? MachinesSettings.otherMac(engine) : nil).map { engine.statusText + " · runs from " + ($0.name ?? "another Mac") } ?? engine.statusDetail)
+                    .monospacedDigit()
+            }
+            if engine.connection == .failed, let failure = engine.failure {
+                // Under the words, past the dot.
+                Text(failure)
+                    .lineLimit(2)
+                    .frame(maxWidth: 360, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 12)
+            }
         }
+        .font(.subheadline)
+        .foregroundStyle(.secondary)
         .help(engine.failure ?? engine.statusText)
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -32,16 +44,34 @@ struct MachineIndicator: View {
     var progress: Double? = nil
 
     var body: some View {
-        switch connection {
-        case .connected: if !quiet { Circle().fill(.green).frame(width: size, height: size) }
-        case .failed: Circle().fill(.orange).frame(width: size, height: size)
-        case .notConnected, .stopped: Circle().fill(.secondary).frame(width: size, height: size)
-        case .connecting, .reconnecting, .installing:
-            if let progress {
-                ProgressRing(progress, size: size + 4)
-            } else {
-                Spinner(size: size + 4)
+        Group {
+            switch connection {
+            case .connected: if !quiet { Circle().fill(.green).frame(width: size, height: size) }
+            case .failed: Circle().fill(.orange).frame(width: size, height: size)
+            case .notConnected, .stopped: Circle().fill(.secondary).frame(width: size, height: size)
+            case .connecting, .reconnecting, .installing:
+                if let progress {
+                    ProgressRing(progress, size: size + 4)
+                } else {
+                    Spinner(size: size + 4)
+                }
             }
+        }
+        // The dot says it by its color: VoiceOver says it in words, and how far an install is.
+        .accessibilityElement()
+        .accessibilityLabel(words)
+        .accessibilityValue(progress.map { "\(Int(($0 * 100).rounded())) percent" } ?? "")
+    }
+
+    private var words: String {
+        switch connection {
+        case .connected: "Connected"
+        case .failed: "Couldn’t connect"
+        case .notConnected: "Not connected"
+        case .stopped: "Stopped"
+        case .connecting: "Connecting"
+        case .reconnecting: "Reconnecting"
+        case .installing: "Installing"
         }
     }
 }
@@ -200,12 +230,19 @@ struct MachineOfflineBar: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(engine.statusTitle(connection))
                     .font(.system(size: 13, weight: .medium))
+                if connection == .failed, let failure = engine.failure {
+                    Text(failure)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
                 Text(kept)
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             .help(engine.failure ?? engine.statusTitle(connection))
+            .accessibilityElement(children: .combine)
             Spacer(minLength: 8)
             // Not while it's trying already.
             if !isAttempting {

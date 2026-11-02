@@ -227,6 +227,13 @@ import ClientText
         #expect(marked("RETRY", "a retry, then retrying") == ["retry", "retry"])
     }
 
+    @Test func aSnippetBoldsOnlyWhatWasFound() {
+        let shown = SearchMatches.snippet("…the Café opens; the cafe closes…", found: "cafe")
+        let bold = shown.runs.filter { $0.inlinePresentationIntent == .stronglyEmphasized }.map { String(shown[$0.range].characters) }
+        #expect(bold == ["Café", "cafe"])
+        #expect(String(shown.characters) == "…the Café opens; the cafe closes…")
+    }
+
     @Test func thePhraseAsTheBoxSearchedIt() {
         #expect(marked("  deploy   the   site ", "…we deploy the site tonight") == ["deploy the site"])
         #expect(marked("**fix** it", "…then fix it now") == ["fix it"])

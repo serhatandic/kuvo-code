@@ -38,50 +38,88 @@ extension EnvironmentValues {
     @Entry var marksMachines = true
 }
 
-/// Above the sidebar's pages, staying put while they slide: your computers by name, in a line that
-/// wraps around, the one in view lit at the start and those after it trailing off (after the
-/// last, the first again). It follows a two-finger swipe as the pages do; a name clicked goes
-/// there. A computer that needs you or has something new is marked, one that isn't connected
-/// says so.
+/// Above the sidebar's pages, staying put while they slide: your computers by name, in order, as
+/// many as fit, and "+3" for the rest, which opens a menu of them with how each is and Add
+/// Machine…. The one in view is lit, and always among the names. A computer that needs you or has
+/// something new is marked, one that isn't connected says so, and so does the count when one of
+/// those it stands for does.
 struct BoxNameStrip: View {
     let boxes: [SidebarBox]
     @Binding var selected: SidebarBox
-    let motion: BoxPagerMotion
     /// Whether names carry their computer's news (the sidebar's), or only how it's connected
     /// (Settings').
     var marksNews = true
     @Environment(AppModel.self) private var app
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Each name's width at rest, measured off screen, so what fits is known before it's shown.
     @State private var widths: [SidebarBox: CGFloat] = [:]
-    /// Where the line stands: which of the names, laid out three times over, is the one in view.
-    /// It moves to the nearest copy of the one picked, so the line only ever slides a step, and is
-    /// brought back to the middle copy (which looks the same) once it rests.
-    @State private var position = 0
+    @State private var moreWidth: CGFloat = 0
+    @State private var room: CGFloat = 0
+
+    private static let spacing: CGFloat = 2
 
     var body: some View {
         let names = boxes.map(name)
-        NameTrack(names: names, widths: widths, position: position, motion: reduceMotion ? nil : motion) { index in
-            pick(boxes[index % boxes.count])
-        } measured: { box, width in
-            widths[box] = width
-        }
-        .onAppear { position = boxes.count + (boxes.firstIndex(of: selected) ?? 0) }
-        .onChange(of: boxes) { position = boxes.count + (boxes.firstIndex(of: selected) ?? 0) }
-        .onChange(of: selected) { _, box in
-            guard let at = boxes.firstIndex(of: box) else { return }
-            let n = boxes.count
-            // The copy of it nearest where the line stands.
-            let nearest = [at, at + n, at + 2 * n].min { abs($0 - position) < abs($1 - position) }!
-            withAnimation(reduceMotion ? nil : .spring(response: 0.38, dampingFraction: 0.9)) {
-                position = nearest
-            } completion: {
-                // Back to the middle copy, which looks the same: there's always a line either side.
-                if position < n || position >= 2 * n { position = n + at }
+        let shown = Self.shown(widths: boxes.map { widths[$0] ?? 0 }, room: room, more: moreWidth, spacing: Self.spacing,
+                               selected: boxes.firstIndex(of: selected) ?? 0)
+        let rest = boxes.indices.filter { !shown.contains($0) }.map { names[$0] }
+        // Until every name is measured, what fits isn't known: nothing rather than a jump.
+        let measured = room > 0 && boxes.allSatisfy { widths[$0] != nil }
+        HStack(spacing: Self.spacing) {
+            ForEach(shown.map { names[$0] }, id: \.box) { name in
+                label(name)
+            }
+            if !rest.isEmpty {
+                more(rest)
             }
         }
-        .padding(.horizontal, 6)
+        .opacity(measured ? 1 : 0)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: 24)
+        .clipped()
+        .onGeometryChange(for: CGFloat.self, of: \.size.width) { room = $0 }
+        .background(alignment: .topLeading) {
+            // Every name as it would show lit (its widest), and the count at its widest, to
+            // measure: never seen.
+            HStack(spacing: Self.spacing) {
+                ForEach(names, id: \.box) { name in
+                    label(name, lit: true)
+                        .onGeometryChange(for: CGFloat.self, of: \.size.width) { widths[name.box] = $0 }
+                }
+                moreLabel(count: boxes.count, mark: .new)
+                    .onGeometryChange(for: CGFloat.self, of: \.size.width) { moreWidth = $0 }
+            }
+            .fixedSize()
+            .hidden()
+            .accessibilityHidden(true)
+        }
+        .padding(.horizontal, 10)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Computers")
+    }
+
+    /// Which of the names show, by their place: from the first, as many as fit in `room` with
+    /// the count after them, and the one in view always, in place of the last that would have
+    /// fit. All of them when they fit without the count, or before the room is known.
+    static func shown(widths: [CGFloat], room: CGFloat, more: CGFloat, spacing: CGFloat, selected: Int) -> [Int] {
+        let all = Array(widths.indices)
+        guard room > 0, widths.reduce(0, +) + spacing * CGFloat(max(widths.count - 1, 0)) > room else { return all }
+        // The first `count` that fit beside `extra` (and the count, after a gap).
+        func fitting(besides extra: CGFloat) -> Int {
+            var used = extra + more
+            var count = 0
+            for width in widths {
+                guard used + width + spacing <= room else { break }
+                used += width + spacing
+                count += 1
+            }
+            return count
+        }
+        let first = fitting(besides: 0)
+        if selected < first { return Array(0..<first) }
+        // In view but past them: it takes the place of the last, or more if it's wider.
+        let before = min(fitting(besides: widths[selected] + spacing), selected)
+        return Array(0..<before) + [selected]
     }
 
     private func pick(_ box: SidebarBox) {
@@ -90,17 +128,14 @@ struct BoxNameStrip: View {
     }
 
     /// A computer's name as the line shows it.
-    private func name(_ box: SidebarBox) -> NameTrack.Name {
+    private func name(_ box: SidebarBox) -> Name {
         let engine = app.machines.engine(box.machine)
         let isAway = engine.map { !$0.isReady } ?? false
-        return NameTrack.Name(box: box, title: app.name(of: box), isOn: box == selected, isAway: isAway, isStopped: engine?.isStopped == true,
-                              connection: isAway ? engine?.connection : nil, progress: engine?.installProgress, news: marksNews ? app.news(on: box) : nil)
+        return Name(box: box, title: app.name(of: box), isOn: box == selected, isAway: isAway, isStopped: engine?.isStopped == true,
+                    connection: isAway ? engine?.connection : nil, status: engine?.statusText, progress: engine?.installProgress,
+                    news: marksNews ? app.news(on: box) : nil)
     }
-}
 
-/// The names themselves, three times over, slid to where the line stands and pulled along with a
-/// swipe. Only this reads the swipe's offset, so a swipe redraws the line and nothing else.
-private struct NameTrack: View {
     struct Name {
         var box: SidebarBox
         var title: String
@@ -108,87 +143,129 @@ private struct NameTrack: View {
         var isAway: Bool
         var isStopped: Bool
         var connection: MachineEngine.Connection?
+        /// How it's connected, in words, for a machine.
+        var status: String?
         /// How far its engine has come to it, while it's being installed there.
         var progress: Double?
         var news: BoxNews?
+
+        /// What the menu and VoiceOver say beside its name: how it's connected while it isn't,
+        /// else what it has for you.
+        var said: String? {
+            isAway ? (isStopped ? "Stopped" : progress.map { "Installing, \(Int(($0 * 100).rounded())) percent" } ?? status ?? "Not connected") : news?.said
+        }
     }
 
-    let names: [Name]
-    let widths: [SidebarBox: CGFloat]
-    let position: Int
-    /// The pages' swipe, to follow; none with Reduce Motion.
-    let motion: BoxPagerMotion?
-    let pick: (Int) -> Void
-    let measured: (SidebarBox, CGFloat) -> Void
-
-    private static let spacing: CGFloat = 2
-    private static let inset: CGFloat = 4
-
-    /// Where the `index`th name starts along the line.
-    private func start(of index: Int) -> CGFloat {
-        guard !names.isEmpty else { return 0 }
-        return (0..<index).reduce(0) { $0 + (widths[names[$1 % names.count].box] ?? 0) + Self.spacing }
-    }
-
-    var body: some View {
-        let n = names.count
-        // Pulled left, the next one comes toward the start; right, the one before.
-        let pulled = motion.map { $0.width > 0 ? max(-1, min(1, $0.offset / $0.width)) : 0 } ?? 0
-        let here = start(of: position)
-        let shift = pulled < 0 ? start(of: position + 1) - here : here - start(of: max(position - 1, 0))
-        // Over a line of the sidebar's width, so however long the names run they never widen it.
-        Color.clear
-            .frame(maxWidth: .infinity)
-            .frame(height: 24)
-            .overlay(alignment: .leading) {
-                HStack(spacing: Self.spacing) {
-                    ForEach(0..<(3 * n), id: \.self) { index in
-                        let name = names[index % n]
-                        label(name, lit: index == position) { pick(index) }
-                            // One copy of each for VoiceOver and the keyboard: the middle one.
-                            .accessibilityHidden(index / n != 1)
-                            .onGeometryChange(for: CGFloat.self, of: \.size.width) { if index < n { measured(name.box, $0) } }
-                    }
-                }
-                .fixedSize()
-                .offset(x: Self.inset - here + pulled * shift)
-            }
-            .clipped()
-            .mask {
-                LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.04),
-                                       .init(color: .black, location: 0.86), .init(color: .clear, location: 1)],
-                               startPoint: .leading, endPoint: .trailing)
-            }
-    }
-
-    private func label(_ name: Name, lit: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+    /// `lit`: drawn in the lit one's weight, whichever it is, to measure.
+    private func label(_ name: Name, lit: Bool = false) -> some View {
+        Button { pick(name.box) } label: {
             HStack(spacing: 5) {
                 Text(name.title)
-                    .font(.system(size: 12.5, weight: lit ? .semibold : .medium))
-                    .foregroundStyle(lit ? AnyShapeStyle(.primary) : name.isAway ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.secondary))
+                    .font(.system(size: 12.5, weight: name.isOn || lit ? .semibold : .medium))
+                    .foregroundStyle(name.isOn ? AnyShapeStyle(.primary) : name.isAway ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.secondary))
                     .lineLimit(1)
                     .truncationMode(.middle)
-                    .frame(maxWidth: 150, alignment: .leading)
+                    .modifier(NameWidth())
                 if let connection = name.connection {
                     MachineIndicator(connection: connection, size: 5, quiet: true, progress: name.progress)
                 } else if let news = name.news {
-                    Circle()
-                        .fill(news == .needsYou ? AnyShapeStyle(.orange) : AnyShapeStyle(.tint))
-                        .frame(width: 6, height: 6)
-                        .accessibilityHidden(true)
+                    NewsDot(news: news)
                 }
             }
             .padding(.horizontal, 8)
             .frame(height: 22)
-            .pickHighlight(RoundedRectangle(cornerRadius: 6), isOn: lit)
+            .pickHighlight(RoundedRectangle(cornerRadius: 6), isOn: name.isOn)
         }
         .buttonStyle(.plain)
         .clickablePointer()
         .help(name.title)
         .accessibilityLabel(name.title)
-        .accessibilityValue(name.isAway ? (name.isStopped ? "Stopped" : name.progress.map { "Installing, \(Int(($0 * 100).rounded())) percent" } ?? "Not connected") : name.news?.said ?? "")
+        .accessibilityValue(name.said ?? "")
         .accessibilityAddTraits(name.isOn ? .isSelected : [])
+    }
+
+    /// A name as wide as it is, never the room it's offered, up to a width it's cut at.
+    struct NameWidth: ViewModifier {
+        func body(content: Content) -> some View {
+            content
+                .frame(maxWidth: 150, alignment: .leading)
+                .fixedSize(horizontal: true, vertical: false)
+        }
+    }
+
+    /// "+3", and the menu of the computers it stands for.
+    private func more(_ rest: [Name]) -> some View {
+        NativeMenuButton(name: "boxes", opensBelow: true) {
+            let menu = NSMenu()
+            for name in rest {
+                menu.addItem(ActionItem(name.title, subtitle: name.said ?? name.status, image: Self.dot(for: name)) { pick(name.box) })
+            }
+            menu.addItem(.separator())
+            menu.addItem(ActionItem("Add Machine…") {
+                app.addsMachine = true
+                app.openSettings(.machines)
+            })
+            return menu
+        } label: {
+            moreLabel(count: rest.count, mark: Self.mark(of: rest))
+        }
+        .help(rest.map(\.title).formatted(.list(type: .and)))
+        .accessibilityLabel("\(rest.count) more")
+        .accessibilityValue(rest.compactMap { name in name.said.map { "\(name.title), \($0)" } }.formatted(.list(type: .and)))
+    }
+
+    /// What the count is marked with: the most pressing of those it stands for.
+    private enum Mark { case failed, needsYou, new }
+
+    private static func mark(of rest: [Name]) -> Mark? {
+        if rest.contains(where: { $0.connection == .failed }) { return .failed }
+        if rest.contains(where: { $0.news == .needsYou }) { return .needsYou }
+        return rest.contains { $0.news == .new } ? .new : nil
+    }
+
+    private func moreLabel(count: Int, mark: Mark?) -> some View {
+        HStack(spacing: 5) {
+            Text("+\(count)")
+                .font(.system(size: 12.5, weight: .semibold).monospacedDigit())
+                .foregroundStyle(.secondary)
+            switch mark {
+            case .failed: MachineIndicator(connection: .failed, size: 5, quiet: true)
+            case .needsYou: NewsDot(news: .needsYou)
+            case .new: NewsDot(news: .new)
+            case nil: EmptyView()
+            }
+        }
+        .padding(.horizontal, 8)
+        .frame(height: 22)
+        .pickHighlight(RoundedRectangle(cornerRadius: 6), isOn: false)
+    }
+
+    /// A computer's dot in the menu, as its name's in the strip, and green while all is well.
+    private static func dot(for name: Name) -> NSImage {
+        let color: NSColor = switch name.connection {
+        case .failed?: .systemOrange
+        case .notConnected?, .stopped?: .secondaryLabelColor
+        case .connecting?, .reconnecting?, .installing?: .tertiaryLabelColor
+        case .connected?, nil: name.news == .needsYou ? .systemOrange : name.news == .new ? .controlAccentColor : .systemGreen
+        }
+        let image = NSImage(size: NSSize(width: 16, height: 16), flipped: false) { _ in
+            color.setFill()
+            NSBezierPath(ovalIn: NSRect(x: 4.5, y: 4.5, width: 7, height: 7)).fill()
+            return true
+        }
+        return image
+    }
+}
+
+/// Something waiting on a computer: orange when it needs you, the accent when it's only new.
+private struct NewsDot: View {
+    let news: BoxNews
+
+    var body: some View {
+        Circle()
+            .fill(news == .needsYou ? AnyShapeStyle(.orange) : AnyShapeStyle(.tint))
+            .frame(width: 6, height: 6)
+            .accessibilityHidden(true)
     }
 }
 
@@ -247,15 +324,14 @@ enum SidebarSwipe {
 @Observable final class BoxPagerMotion {
     /// How far the pages are pulled from where they rest, in points (left is negative).
     var offset: CGFloat = 0
-    /// A page's width, for how far that is in pages (the name strip follows it).
+    /// A page's width, for how far that is in pages.
     var width: CGFloat = 0
 }
 
 /// Pages side by side, one in view, that follow two fingers sideways on the trackpad as Arc's
 /// and Dia's spaces do: the pages slide with them and, as they lift, go on to the next box (or
 /// spring back); past the last comes the first again, and before the first the last. A box
-/// picked otherwise (the name strip, a tab on another box) slides in too. The strip above shares
-/// `motion`, to follow the swipe.
+/// picked otherwise (the name strip, a tab on another box) slides in too.
 struct BoxPager<Page: View>: View {
     let boxes: [SidebarBox]
     @Binding var selected: SidebarBox

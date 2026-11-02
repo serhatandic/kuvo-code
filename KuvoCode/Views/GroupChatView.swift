@@ -30,6 +30,12 @@ struct GroupChatView: View {
     /// What those seats ask of the vault now, to animate its cards by.
     private var seatAsks: [String] { seatBoxes.flatMap { Vaults.shared[$0].asks.filter { $0.group == group.id }.map(\.id) } }
 
+    /// What a bot made, drawn after its words rather than listed among its steps. A widget it
+    /// couldn't make is a step that says so, as in a session.
+    static func isDrawn(_ call: Message.ToolCall) -> Bool {
+        (WidgetCard.isWidget(call) && !call.state.isFailure) || MadePictureRow.isMade(call)
+    }
+
     var body: some View {
         let messages = groups.messages(in: group.id)
         let speaker = groups.speaker(in: group.id).flatMap { bots.bot($0) }
@@ -317,13 +323,13 @@ private struct GroupMessageRow: View, Equatable {
                     .frame(height: 20)
                     // As a session shows them, at the detail you chose for steps; what it made, after
                     // its words.
-                    let steps = (message.steps ?? []).filter { !WidgetCard.isWidget($0) && !MadePictureRow.isMade($0) }
+                    let steps = (message.steps ?? []).filter { !GroupChatView.isDrawn($0) }
                     if !steps.isEmpty {
                         StepsRow(blocks: steps.map(Message.Content.tool), isLive: false, directory: author?.directory ?? "")
                             .padding(.bottom, 2)
                     }
                     MarkdownText(text: message.text, agents: MarkdownText.agents(namedIn: message.text))
-                    ForEach((message.steps ?? []).filter { WidgetCard.isWidget($0) || MadePictureRow.isMade($0) }) { call in
+                    ForEach((message.steps ?? []).filter(GroupChatView.isDrawn)) { call in
                         Group {
                             if MadePictureRow.isMade(call) { MadePictureRow(call: call) } else { WidgetCard(call: call, send: answerAgent) }
                         }

@@ -18,4 +18,16 @@ public enum SearchMatches {
         }
         return found
     }
+
+    /// The words around what a search found, as both apps show a result: the found words in
+    /// bold, the rest as it is.
+    public static func snippet(_ snippet: String, found query: String) -> AttributedString {
+        var text = AttributedString(snippet)
+        for range in ranges(of: query, in: snippet) {
+            guard let lower = AttributedString.Index(range.lowerBound, within: text),
+                  let upper = AttributedString.Index(range.upperBound, within: text) else { continue }
+            text[lower..<upper].inlinePresentationIntent = .stronglyEmphasized
+        }
+        return text
+    }
 }

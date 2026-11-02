@@ -20,6 +20,24 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - A goal's plan lines its lanes up when only some have a site, shows only the note of each lane once the plan is met, labels its days without crowding Today, with a date every few days in a long goal, and gives steps' names more room in a wide card.
 - Find in a conversation no longer covers the first message, and quoting several passages says how many; a quote's answer field opens when you click it, not on every quote at once.
 - The composer's attachments fade at their edges when there are more than fit, and a **+3** (or however many) beside them says how many are past the edge and brings the next one in.
+- Selecting text in a conversation puts Add to Chat and Copy clear of the lines, and under the last line you selected when there's no room above, instead of over what you selected.
+- A computer that couldn't connect says why under its status, not only on hover, and VoiceOver reads each computer's status.
+- With Find open at the end of a conversation, the arrow to the newest no longer shows with nothing below.
+- The badge over a page an agent is browsing is solid, and Take Over looks like a button.
+- A new tab's sites show their icon or mark (a globe when there's neither), never a letter, with names on up to two lines.
+- Setting up the browser on a machine shows one progress bar, its percentage on the line above it.
+- Report a Problem names your Mac's chip, says once what happens on GitHub, and lists what's included with the report.
+- Open Quickly shows the letters you typed in bold, as the command palette does.
+- A terminal tab is named for what runs in it, else the command it opened with or its folder, instead of user@host.
+- A subagent's row has its arrow at the end and its words at one size; **Open Conversation** is under its steps and in its right-click menu.
+- VoiceOver reads the context gauge as the context window, with how full it is and its token counts.
+- A vault item's sharing says **Every agent** until it's shared with a session or bot by name.
+- A goal's card counts what's yours to do only where there's a button for it.
+- A command of several lines shows as its first line and … in a step, never its backticks.
+- The context gauge is its percentage alone until the conversation is half full, then a ring with it, so it no longer looks like it's loading; its details give the tokens without the percentage again.
+- With more computers than fit over the sidebar, a count after their names opens a menu of the rest, with how each is connected and **Add Machine…**; the one you're on always shows.
+- A background command's **Output** shows the end of one long line too, never half a character, and says so when it can't read what was printed.
+- Something the agent couldn't make to show you says **Couldn’t make** and its name, in a session or a group chat, rather than "Used the browser".
 - The sidebar's accounts stay while the coding agents restart, instead of briefly showing fewer.
 - The command palette shows the letters you typed in bold in each result, and Run shows a play mark.
 - Settings › Accounts has one Add Account menu for the subscriptions, and Edit Bot › Keys one Add Its Own Key menu, instead of a button on every row, and a coding agent's accounts sit right under its name.

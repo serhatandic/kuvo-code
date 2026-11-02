@@ -10,7 +10,11 @@ import SwiftUI
 @Observable
 final class TerminalSession: NSObject {
     let view: LocalProcessTerminalView
-    private(set) var title = "Terminal"
+    /// What its tab says: what runs in it, else the command it was opened with, else its folder
+    /// (`tabTitle`).
+    private(set) var title: String
+    /// What the tab says until what runs in it names itself.
+    @ObservationIgnored private let untitled: String
     private(set) var isRunning = true
     /// Add to Message in the right-click menu, with the selected text.
     @ObservationIgnored var addToMessage: ((String) -> Void)?
@@ -21,10 +25,13 @@ final class TerminalSession: NSObject {
     let machine: String?
 
     /// A shell, typing `command` once it starts (so it stays a shell when the command ends).
-    init(directory: String, environment: [String: String], command: String? = nil) {
+    /// `label`: the tab's name until what runs names itself (the command's), else its folder's.
+    init(directory: String, environment: [String: String], command: String? = nil, label: String? = nil) {
         view = LocalProcessTerminalView(frame: NSRect(x: 0, y: 0, width: 640, height: 400))
         self.directory = directory
         machine = RemoteFolder.parse(directory)?.machine
+        untitled = label ?? Self.folderName(RemoteFolder.parse(directory)?.path ?? directory, isStart: true)
+        title = untitled
         var environment = environment
         environment["TERM"] = "xterm-256color"
         environment["COLORTERM"] = "truecolor"
@@ -279,16 +286,36 @@ extension TerminalSession: @preconcurrency LocalProcessTerminalViewDelegate {
     func setTerminalTitle(source: LocalProcessTerminalView, title: String) {
         // Only when it says something new, without the spinner some agents turn at its start: one
         // changing every tenth of a second would draw the tabs and the sidebar again as often.
-        let steady = Self.steady(title)
+        let steady = Self.tabTitle(title, otherwise: untitled)
         if self.title != steady { self.title = steady }
     }
 
-    /// A title without the spinner or mark an agent keeps changing at its start (Braille dots, ✳).
-    static func steady(_ title: String) -> String {
+    /// What a tab says, as Terminal and VS Code name theirs: what runs in it, by the title it
+    /// sets, without the spinner or mark an agent keeps changing at its start (Braille dots, ✳);
+    /// else `untitled`. A shell's own "user@host: ~/src/app" says only the folder ("app"), so two
+    /// shells on one machine don't read alike, cut off at the same place; "npm@10.8.1" is no host.
+    static func tabTitle(_ title: String, otherwise untitled: String) -> String {
         let marks: Set<Character> = ["✳", "✶", "✻", "✽", "✢", "✺", "·", "•", "●", "○", "◐", "◓", "◑", "◒", "⏺"]
         let kept = title.drop { $0.isWhitespace || marks.contains($0) || $0.unicodeScalars.allSatisfy { (0x2800...0x28FF).contains($0.value) } }
-        let named = kept.trimmingCharacters(in: .whitespaces)
-        return named.isEmpty ? "Terminal" : named
+        var named = kept.trimmingCharacters(in: .whitespaces)
+        // A shell's user@host (a container's host may start with a digit, when a folder follows);
+        // a version, like npm@10.8.1, isn't one.
+        if let shell = named.wholeMatch(of: /[\w.-]+@([\w.-]+)(?::\s*(.*))?/), shell.2 != nil || shell.1.first?.isLetter == true {
+            named = shell.2.map { String($0).trimmingCharacters(in: .whitespaces) } ?? ""
+        }
+        if named.isEmpty { return untitled }
+        return named.hasPrefix("/") || named.hasPrefix("~") ? folderName(named) : named
+    }
+
+    /// A folder as a tab names it: its last part, your home folder as ~, and the top as /. Where
+    /// the terminal starts (`isStart`), a machine's home folder too, which its shell would call ~;
+    /// once the shell names its folder, only its own home is ~.
+    static func folderName(_ path: String, isStart: Bool = false) -> String {
+        let path = path.count > 1 && path.hasSuffix("/") ? String(path.dropLast()) : path
+        if path == "/" { return "/" }
+        if path == "~" || path == NSHomeDirectory() { return "~" }
+        if isStart, path == "/root" || (path.wholeMatch(of: /\/(home|Users)\/[^\/]+/) != nil && path != "/Users/Shared") { return "~" }
+        return (path as NSString).lastPathComponent
     }
 
     func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
@@ -395,8 +422,6 @@ final class MainTerminals {
     struct Entry {
         let session: TerminalSession
         let directory: String
-        /// The tab's name until the program in the terminal names itself.
-        let label: String
         let opened = Date()
     }
 
@@ -413,9 +438,19 @@ final class MainTerminals {
     func open(in directory: String, command: String?, environment: [String: String]) -> String {
         let key = TabKey.terminal(UUID().uuidString).text
         let command = command?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
-        let label = command.map { String($0.split(separator: " ").first ?? "Terminal") } ?? "Terminal"
-        entries[key] = Entry(session: TerminalSession(directory: directory, environment: environment, command: command), directory: directory, label: label)
+        entries[key] = Entry(session: TerminalSession(directory: directory, environment: environment, command: command, label: command.flatMap(Self.program)), directory: directory)
         return key
+    }
+
+    /// The program a command runs, by its name: the last of commands run one after another, before
+    /// any pipe, past `NAME=value` settings and what only sets up how it runs, without its folder.
+    static func program(_ command: String) -> String? {
+        let last = command.components(separatedBy: "&&").flatMap { $0.components(separatedBy: ";") }
+            .last { !$0.trimmingCharacters(in: .whitespaces).isEmpty } ?? command
+        let run = last.split(separator: "|", maxSplits: 1).first ?? Substring(last)
+        let setup: Set<Substring> = ["sudo", "env", "exec", "nohup", "time", "command"]
+        guard let word = run.split(separator: " ").first(where: { !$0.contains("=") && !setup.contains($0) }) else { return nil }
+        return (String(word) as NSString).lastPathComponent
     }
 
     /// Ends the terminal's shell and whatever runs in it.

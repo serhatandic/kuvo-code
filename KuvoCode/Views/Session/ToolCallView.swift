@@ -149,6 +149,8 @@ struct ToolCallView: View {
                     Text(error.message)
                         .lineLimit(1)
                         .foregroundStyle(.red)
+                        // The step's words first; the error, in full, when it opens.
+                        .layoutPriority(-1)
                 }
             }
             if hasDetails {
@@ -225,14 +227,14 @@ struct ToolCallView: View {
             return (isActive ? "Editing " : "Edited ") + (files.count == 1 ? files[0] : files.isEmpty ? "files" : "\(files.count) files")
         case "shell":
             if let wake = wake { return Self.summary(of: wake, isActive: isActive, failed: !exitSuffix.isEmpty) + exitSuffix }
-            return (isActive ? "Running " : "Ran ") + (string("command").map(InlineCode.span) ?? "a command") + exitSuffix
+            return (isActive ? "Running " : "Ran ") + (string("command").flatMap(InlineCode.command) ?? "a command") + exitSuffix
         case "grep": return "Searched for “\(string("pattern") ?? "")”" + (path.map { " in \($0)" } ?? "")
         case "glob": return "Found files matching \(string("pattern") ?? "")"
         case "webfetch": return (isActive ? "Fetching " : "Fetched ") + (string("url") ?? "a page")
         case "websearch": return "Searched the web for “\(string("query") ?? "")”"
         case "question": return isActive ? "Asking you a question" : "Asked you a question"
         case _ where isSandboxAsk:
-            let command = string("command").map(InlineCode.span) ?? "a command"
+            let command = string("command").flatMap(InlineCode.command) ?? "a command"
             // Asking until its ask was seen open and then answered; once allowed, the command runs
             // in the same call. (One not listed yet is still asking.)
             if isActive { return (isRunningOutside ? "Running " : "Asking to run ") + command + " outside the sandbox" }
@@ -299,6 +301,11 @@ struct ToolCallView: View {
             let about = string("query").map { " about “\($0)”" } ?? ""
             return (isActive ? "Reading " : "Read ") + of + "’s conversation" + about
         case "show_in_panel", "show_file": return (isActive ? "Showing " : "Showed ") + (relative(string("path")) ?? "a file")
+        case "show_widget":
+            let made = string("title").map { "“\($0)”" } ?? "a widget"
+            guard case .failed(_, let error, _, _) = call.state else { return (isActive ? "Making " : "Made ") + made }
+            // Stopped with the turn, it didn't fail: the row says "Stopped" beside it.
+            return (error.isInterruption ? "Making " : "Couldn’t make ") + made
         case "mark_final": return (isActive ? "Marking " : "Marked ") + (string("path").map { ($0 as NSString).lastPathComponent } ?? "a file") + " final"
         case "start_session": return (isActive ? "Starting a session" : "Started a session") + (string("title").map { ": \($0)" } ?? "")
         // Kuvo Code's wake-up tools, worded as the kuvo-wake commands they run are.
@@ -412,6 +419,7 @@ struct ToolCallView: View {
         case "cancel_wake_up": "xmark.circle"
         case "show_in_panel": "sidebar.right"
         case "show_file": "doc.richtext"
+        case "show_widget": "macwindow"
         default: "safari"
         }
     }

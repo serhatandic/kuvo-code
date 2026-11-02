@@ -174,13 +174,13 @@ struct CommandPalette: View {
         .buttonStyle(ListRowButtonStyle(isSelected: isSelected, cornerRadius: 8))
     }
 
-    /// The title with what the query matched in it in semibold, the rest regular, so a loose
-    /// match ("nt" finding "New Terminal") shows why it's there; every row regular once something's
+    /// The title with what the query matched in it in semibold, the rest `weight`, so a loose
+    /// match ("nt" finding "New Terminal") shows why it's there; every row `weight` once something's
     /// typed, a file found by its folder too. As it is before anything's typed.
-    static func marked(_ title: String, query: String) -> AttributedString {
+    static func marked(_ title: String, query: String, weight: Font.Weight = .regular) -> AttributedString {
         var marked = AttributedString(title)
         guard !query.isEmpty else { return marked }
-        marked.font = .system(size: 13)
+        marked.font = .system(size: 13, weight: weight)
         for range in Fuzzy.ranges(query, title) {
             guard let lower = AttributedString.Index(range.lowerBound, within: marked),
                   let upper = AttributedString.Index(range.upperBound, within: marked) else { continue }

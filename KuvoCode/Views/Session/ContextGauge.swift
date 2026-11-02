@@ -3,8 +3,9 @@ import OpenCodeKit
 import SwiftUI
 import UsageKit
 
-/// How full the model's context window is, as a small ring with its number. Clicking it says
-/// what the number is, with the plan's limits and what the session has cost so far.
+/// How full the model's context window is: its number, and from half full a ring with it (a part
+/// of a ring alone at rest has a spinner's shape). Clicking it says what the number is, with the
+/// plan's limits and what the session has cost so far.
 struct ContextGauge: View {
     let model: SessionModel
     @Environment(Catalog.self) private var catalog
@@ -14,16 +15,18 @@ struct ContextGauge: View {
         if let used, let limit, limit > 0 {
             let fraction = min(Double(used) / Double(limit), 1)
             Button { showsDetails.toggle() } label: {
-                // A ring with its number, so it reads as a gauge and not a spinner.
                 HStack(spacing: 5) {
-                    ZStack {
-                        Circle().stroke(.quaternary, lineWidth: 2.5)
-                        Circle()
-                            .trim(from: 0, to: max(fraction, 0.02))
-                            .stroke(fraction > 0.8 ? Color.orange : Color.secondary, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
-                            .rotationEffect(.degrees(-90))
+                    if fraction >= 0.5 {
+                        ZStack {
+                            Circle().stroke(.quaternary, lineWidth: 2.5)
+                            Circle()
+                                .trim(from: 0, to: fraction)
+                                .stroke(fraction > 0.8 ? AnyShapeStyle(.orange) : AnyShapeStyle(.tint), style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                                .rotationEffect(.degrees(-90))
+                        }
+                        .frame(width: 12, height: 12)
+                        .transition(.scale(scale: 0.6).combined(with: .opacity))
                     }
-                    .frame(width: 12, height: 12)
                     Text(Self.percent(fraction))
                         .font(.system(size: 11, weight: .medium).monospacedDigit())
                         .foregroundStyle(fraction > 0.8 ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
@@ -37,6 +40,10 @@ struct ContextGauge: View {
             .clickablePointer()
             .animation(.ui, value: fraction)
             .help("Context window: \(used.compactTokens) of \(limit.compactTokens) tokens")
+            // What it is, and how full, not "12%, button".
+            .accessibilityLabel("Context window")
+            .accessibilityValue("\(Self.percent(fraction)) full, \(used.compactTokens) of \(limit.compactTokens) tokens")
+            .accessibilityHint("Shows the details")
             .closesWhenKept($showsDetails)
             .popover(isPresented: $showsDetails, arrowEdge: .bottom) {
                 // A coding agent makes room in its own context, as it does in its own app.
@@ -61,7 +68,15 @@ struct ContextGauge: View {
     }
 
     /// What the last step sent and got back is what's in the window now.
-    private var used: Int? { model.contextUsed }
+    private var used: Int? {
+        #if DEBUG
+        // KUVO_DEMO_CONTEXT_FULL=0.72: the window that full, to see the gauge past half.
+        if let full = ProcessInfo.processInfo.environment["KUVO_DEMO_CONTEXT_FULL"].flatMap(Double.init), let limit {
+            return Int(Double(limit) * full)
+        }
+        #endif
+        return model.contextUsed
+    }
 
     private var limit: Int? { Self.window(of: model, in: catalog) }
 
@@ -126,7 +141,8 @@ private struct ContextDetails: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 7) {
-                row("Context window", detail: "\(used.compactTokens) / \(limit.compactTokens)", fraction: Double(used) / Double(limit))
+                // Its percentage is the gauge's own: here, what that is of.
+                row("Context window", detail: "\(used.compactTokens) of \(limit.compactTokens)", fraction: Double(used) / Double(limit), showsPercent: false)
                 Text("What the model sees of this session. When it fills up, the conversation is summarized to make room.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -178,7 +194,7 @@ private struct ContextDetails: View {
     }
 
     /// A label, its detail and percentage, and a bar under them.
-    private func row(_ label: String, detail: String?, fraction: Double) -> some View {
+    private func row(_ label: String, detail: String?, fraction: Double, showsPercent: Bool = true) -> some View {
         let fraction = min(max(fraction, 0), 1)
         let tint = fraction > 0.8 ? AnyShapeStyle(.orange) : AnyShapeStyle(.tint)
         return VStack(alignment: .leading, spacing: 6) {
@@ -189,8 +205,10 @@ private struct ContextDetails: View {
                     Text(detail)
                         .foregroundStyle(.secondary)
                 }
-                Text(ContextGauge.percent(fraction))
-                    .foregroundStyle(fraction > 0.8 ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+                if showsPercent {
+                    Text(ContextGauge.percent(fraction))
+                        .foregroundStyle(fraction > 0.8 ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+                }
             }
             .monospacedDigit()
             Capsule()

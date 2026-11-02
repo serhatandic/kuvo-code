@@ -417,6 +417,7 @@ when you're there to answer.
 | `KUVO_DEMO_OPEN_QUICKLY` | Open Quickly, with this typed in it (empty for none) |
 | `KUVO_DEMO_REPORT_PROBLEM` | Help › Report a Problem…'s sheet, with this typed in it (empty for none) |
 | `KUVO_DEMO_CONTEXT` | `1`: the context gauge's details (in the title bar) open once the conversation shows |
+| `KUVO_DEMO_CONTEXT_FULL` | A fraction, like `0.72`: the context window shows as that full, to see the gauge past half |
 | `KUVO_DEMO_COMMIT` | With `KUVO_DEMO_PANEL=changes`: its Commit… form open, with this typed as the message (empty for none) |
 | `KUVO_DEMO_BRANCH` | With `KUVO_DEMO_PANEL=changes` on a branch or worktree: what Merge or Create Pull Request says, as if it had just run (`merged`, `conflict`, `pushed` or `failed`; nothing is merged or pushed) |
 | `KUVO_DEMO_POINTER` | With `KUVO_DEMO_PANEL=browser=<address>`: the agent's pointer over the page at `<x>,<y>` (its points), about to `click` (or `,type`, `,select`, `,hover`), held in view |

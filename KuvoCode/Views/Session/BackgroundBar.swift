@@ -306,25 +306,32 @@ struct ShellOutputView: View {
     let api: OpenCodeAPI?
     let directory: String
     @State private var text = ""
+    /// Its output couldn't be read, and none has been yet.
+    @State private var isUnread = false
 
     /// How much of the end it shows, in bytes.
     static let tail = 24_000
 
-    /// The end of what command `id` has printed: its last `tail` bytes, from the first whole line
-    /// in them (a progress line that redraws itself ends in a return); all of them when there's no
-    /// line end in them.
+    /// The end of what command `id` has printed (as the phone's Output shows it): its last `tail`
+    /// bytes, from the first whole line in them (a progress line that redraws itself ends in a
+    /// return). With no whole line in them (one long line, or none ended), all of them but the
+    /// character the start cut in two. Nil when it can't be read.
     static func end(of id: String, api: OpenCodeAPI, directory: String) async -> String? {
         guard let size = try? await api.shellOutput(id, limit: 1, directory: directory).size else { return nil }
         let start = max(0, size - tail)
         guard let read = try? await api.shellOutput(id, from: start, limit: tail, directory: directory) else { return nil }
-        let lineEnd = start > 0 ? read.output.firstIndex(where: \.isNewline) : nil
-        let output = lineEnd.map { read.output[read.output.index(after: $0)...] } ?? Substring(read.output)
+        var output = Substring(read.output)
+        if start > 0 {
+            let lines = output.firstIndex(where: \.isNewline).map { output[output.index(after: $0)...] }
+            // The engine reads from a byte, so the first character may be half of one ("�").
+            output = lines.flatMap { $0.allSatisfy(\.isNewline) ? nil : $0 } ?? output.drop { $0 == "\u{FFFD}" }
+        }
         return String(output).trimmingCharacters(in: .newlines)
     }
 
     var body: some View {
         ScrollView {
-            Text(text.isEmpty ? "Nothing printed yet." : text)
+            Text(!text.isEmpty ? text : isUnread ? "Couldn’t read what it printed. Its computer may be away; this tries again on its own." : "Nothing printed yet.")
                 .font(.system(size: 11.5, design: .monospaced))
                 .foregroundStyle(text.isEmpty ? .secondary : .primary)
                 .textSelection(.enabled)
@@ -335,7 +342,12 @@ struct ShellOutputView: View {
         .frame(width: 520, height: 300)
         .task {
             while !Task.isCancelled {
-                if let api, let end = await Self.end(of: job.id, api: api, directory: directory), end != text { text = end }
+                if let api, let end = await Self.end(of: job.id, api: api, directory: directory) {
+                    if end != text { text = end }
+                    isUnread = false
+                } else if text.isEmpty {
+                    isUnread = true
+                }
                 try? await Task.sleep(for: .seconds(1.5))
             }
         }

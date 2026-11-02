@@ -47,38 +47,41 @@ struct SubagentRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 6) {
-                Button {
-                    withAnimation(.ui) { isExpanded.toggle() }
-                } label: {
-                    header
-                }
-                .buttonStyle(TextButtonStyle(outset: true))
-                .disabled(session == nil)
-                .help(isExpanded ? "Hide its steps" : "Show its steps")
+            // The whole row opens to its steps, the chevron at its end saying so; its conversation
+            // opens from under them, or from its menu.
+            Button {
+                withAnimation(.ui) { isExpanded.toggle() }
+            } label: {
+                header
+            }
+            .buttonStyle(TextButtonStyle(outset: true))
+            .disabled(session == nil)
+            .help(isExpanded ? "Hide its steps" : "Show its steps")
+            .contextMenu {
                 if let session {
-                    Button("Open") {
-                        app.tabs.openInPlace(session)
-                    }
-                    .buttonStyle(TextButtonStyle())
-                    .font(.callout)
-                    .help("Open its conversation here: watch it, talk to it, stop it or give it another model")
+                    Button("Open Conversation") { app.tabs.openInPlace(session) }
                 }
             }
 
             if isExpanded, let session {
-                SubagentSteps(id: session, task: input?["prompt"]?.string, directory: directory)
-                    .padding(.leading, Self.iconWidth + Self.iconGap)
-                    .padding(.top, 8)
-                    .overlay(alignment: .topLeading) {
-                        // The line down from the icon, beside its steps.
-                        Capsule()
-                            .fill(.separator)
-                            .frame(width: 1)
-                            .padding(.top, 3)
-                            .padding(.leading, (Self.iconWidth - 1) / 2)
-                    }
-                    .transition(.fold)
+                VStack(alignment: .leading, spacing: 8) {
+                    SubagentSteps(id: session, task: input?["prompt"]?.string, directory: directory)
+                    Button("Open Conversation") { app.tabs.openInPlace(session) }
+                        .buttonStyle(TextButtonStyle(outset: true))
+                        .font(.callout)
+                        .help("Open its conversation here: watch it, talk to it, stop it or give it another model")
+                }
+                .padding(.leading, Self.iconWidth + Self.iconGap)
+                .padding(.top, 8)
+                .overlay(alignment: .topLeading) {
+                    // The line down from the icon, beside its steps.
+                    Capsule()
+                        .fill(.separator)
+                        .frame(width: 1)
+                        .padding(.top, 3)
+                        .padding(.leading, (Self.iconWidth - 1) / 2)
+                }
+                .transition(.fold)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -107,15 +110,17 @@ struct SubagentRow: View {
                 // Counting while it works; once done, how long it took.
                 StepActivity.Elapsed(since: since, running: isWorking, until: call.time?.completed?.date)
             }
-            if session != nil {
-                Image(systemName: "chevron.right")
-                    .font(.caption2.weight(.semibold))
-                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
-            }
             status
                 .lineLimit(1)
                 .layoutPriority(-1)
                 .padding(.leading, 4)
+            // After the words, as a step's, so it stays by them in a wide window.
+            if session != nil {
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.semibold))
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    .accessibilityHidden(true)
+            }
             Spacer(minLength: 0)
         }
         .font(.callout)
@@ -135,19 +140,17 @@ struct SubagentRow: View {
     /// While it works, what it's doing now (its ring says it's at work, so the words stay still);
     /// once done, what it used (under its steps, while it's open), or how it ended.
     @ViewBuilder private var status: some View {
+        // The row's size, as the agent's name and the time beside it.
         if isWorking {
             Text(currentStep)
-                .font(.caption)
                 .foregroundStyle(.secondary)
         } else if let failure {
             Text(failure.isInterruption ? "Stopped" : "Failed")
-                .font(.caption)
                 .foregroundStyle(failure.isInterruption ? AnyShapeStyle(.secondary) : AnyShapeStyle(.red))
                 .help(failure.message)
         } else if !isExpanded, let model, let usage = SubagentSteps.usage(model) {
             Text(usage)
-                .font(.caption)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.secondary)
         }
     }
 

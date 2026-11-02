@@ -35,8 +35,9 @@ final class ScrolledConversation {
         // grows a Show More once it's laid out).
         scroller.scroll(to: 0)
         await settle {
-            lineUpATextWithTheControl()
-            return pointsUnderAControl().count > 10 && besideTheControl() != nil
+            // Scrolled up for real: with the end in view there's no way back to it to show.
+            if scroller.seesEnd { scroller.scroll(to: 0) } else { lineUpATextWithTheControl() }
+            return !scroller.seesEnd && pointsUnderAControl().count > 10 && besideTheControl() != nil
         }
     }
 
@@ -47,9 +48,9 @@ final class ScrolledConversation {
         guard let top = distanceFromTop, let text = texts
             .filter({ $0.window != nil })
             .map({ $0.convert($0.bounds, to: nil) })
-            .filter({ $0.height > 120 && $0.midY >= Self.band - 1 })
-            .min(by: { $0.midY < $1.midY }) else { return }
-        // Up the conversation brings its words down the window.
+            .filter({ $0.height > 120 })
+            .min(by: { abs($0.midY - Self.band) < abs($1.midY - Self.band) }) else { return }
+        // Up the conversation brings its words down the window, down it brings them up.
         let target = top - (text.midY - Self.band)
         guard abs(text.midY - Self.band) > 1, target != linedUpTo else { return }
         linedUpTo = target
