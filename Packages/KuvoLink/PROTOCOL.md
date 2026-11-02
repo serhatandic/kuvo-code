@@ -287,7 +287,8 @@ connection.
     then delivers `text` as the sender would have delivered it there: `delivery` `queue` or
     `steer`, shown from `from` with `words`, and with `line`, marked as the box's note
     (`metadata.kuvo.note {from, line}`, "Messages in a session"). It has no `from` conversation and
-    is never answered. One whose `note` isn't whole is a letter as any. A box from before 0.9.166
+    is never answered. To one archived there it answers `retry`, as the sender would have kept it
+    until it's brought back. One whose `note` isn't whole is a letter as any. A box from before 0.9.166
     doesn't read `note`: it delivers the letter as any other, steered, from "an agent on <box>"
     that can't be answered, with `text` after its own heading. Its `words` and `line` are cut to fit
     as `text` is.

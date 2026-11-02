@@ -7801,6 +7801,11 @@
      "object": {
       "message": "string"
      }
+    },
+    "409": {
+     "object": {
+      "message": "string"
+     }
     }
    }
   },
@@ -8050,6 +8055,11 @@
      }
     },
     "404": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "409": {
      "object": {
       "message": "string"
      }

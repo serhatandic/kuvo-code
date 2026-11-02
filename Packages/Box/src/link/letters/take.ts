@@ -203,6 +203,8 @@ export async function takeLetter(sender: LetterSender, letter: unknown, { send, 
     if (!place) return notDelivered(...noConversation(id, bridge, now));
     bridgeWaits.delete(id);
     const kuvo = place.data?.metadata?.kuvo ?? {};
+    // The sending box's word for one put away here comes again, as it would wait there until it's brought back.
+    if (note && isPutAway(place.data) && !place.data?.parentID && !kuvo.seat) return notDelivered("It's archived: it comes again once it's brought back.", true);
     if (place.data?.parentID || kuvo.seat || isPutAway(place.data)) return notDelivered("That conversation doesn't take messages.");
     if (note) went = await deliverNote(place.target, letter.to, messageID(), cutText(letter.text), note);
     else {
