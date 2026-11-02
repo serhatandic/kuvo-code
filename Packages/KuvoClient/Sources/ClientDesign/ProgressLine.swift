@@ -32,6 +32,8 @@ public struct ProgressLine: View {
     /// How far it was lately, to tell its pace by.
     @State private var samples: [Words.Sample] = []
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// The amount's size: 12 points, larger with larger text (the phone's Dynamic Type).
+    @ScaledMetric(relativeTo: .caption) private var amountSize: CGFloat = 12
     @Environment(\.accent) private var accent
     @Environment(\.colorScheme) private var scheme
 
@@ -80,7 +82,7 @@ public struct ProgressLine: View {
                         Spacer(minLength: 8)
                         if let timeLeft { Text(timeLeft) }
                     }
-                    .font(.system(size: 12))
+                    .font(.system(size: amountSize))
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -93,7 +95,7 @@ public struct ProgressLine: View {
                         .frame(minWidth: 60)
                     if let amount {
                         Text([amount, timeLeft].compactMap(\.self).joined(separator: " · "))
-                            .font(.system(size: 12))
+                            .font(.system(size: amountSize))
                             .monospacedDigit()
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
