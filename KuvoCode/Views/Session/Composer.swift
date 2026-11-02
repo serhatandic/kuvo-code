@@ -156,13 +156,14 @@ struct Composer: View {
         if isShell { return SessionModel.shellCommand(in: text) != nil }
         if asksSide, sideQuestionAnswering { return false }
         let answered = quotes.wrappedValue.contains { !$0.response.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-        return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || answered || !files.isEmpty || commentCount > 0
+        // Review comments wait for a message to the agent: alone, they don't make a side question.
+        return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || answered || !files.isEmpty || (commentCount > 0 && !asksSide)
     }
 
     /// "!" first: the message is a command to run in the project's folder, not words for the agent.
     private var isShell: Bool { text.hasPrefix("!") }
     /// What's sent goes to the side thread: its tag shows (a command runs as typed instead).
-    private var asksSide: Bool { sideQuestion != nil && !isShell && !text.hasPrefix("/") }
+    private var asksSide: Bool { sideQuestion != nil && !SessionModel.runsAsTyped(text, commands: commands, keywords: keywords) }
     private var currentModel: Model? { catalog.model(model) ?? catalog.defaultModel }
 
     var body: some View {

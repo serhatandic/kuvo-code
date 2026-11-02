@@ -210,6 +210,15 @@ import Testing
         #expect(model.draftFiles == [file])
         #expect(model.shownSideThread?.questions.count == 1)
         #expect(told == 0)
+
+        // Done as it says: the file removed, or the tag closed, and it's said no more.
+        model.draftFiles = []
+        #expect(model.failure == nil)
+        model.draftFiles = [file]
+        model.submitDraft(for: nil, queue: false, commands: [])
+        #expect(model.failure == why)
+        model.composerAsksSide = false
+        #expect(model.failure == nil)
     }
 
     /// A conversation's side questions from its row's menu in the sidebar: Open the Latest shows
