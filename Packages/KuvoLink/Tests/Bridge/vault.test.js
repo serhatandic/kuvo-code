@@ -4,7 +4,7 @@
 // ever seeing a value. (This Mac's vault, in its Keychain: vault-host.test.js.)
 //
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/vault.test.js`.
-import { test, before } from "node:test";
+import { test as nodeTest, before as nodeBefore } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
@@ -16,6 +16,10 @@ import path from "node:path";
 import { script, sshAgentsOf } from "./bot-keys-scenarios.js";
 import { atEnd, removeAtEnd } from "./at-end.js";
 import { appears, asked } from "./vault-waits.js";
+
+// Each fails at its own time limit when what it waits for never comes, rather than holding up the run.
+const test = (name, run) => nodeTest(name, { timeout: 60_000 }, run);
+const before = run => nodeBefore(run, { timeout: 60_000 });
 
 // (A short folder: the vault's socket lives in it, and a socket's path can't be long.)
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "kv-"));
@@ -77,6 +81,9 @@ atEnd(() => { engine?.closeAllConnections(); engine?.close(); });
 
 // The box's long-running process, which holds the vault.
 async function start(more = {}) {
+  // (A box stopped before leaves its socket's file: only the new one's counts.)
+  const run = path.join(more.KUVO_HOME ?? home, "run");
+  fs.rmSync(path.join(run, "vault.sock"), { force: true });
   const child = spawn(process.execPath, [script, "serve"], { env: { ...env, OPENCODE_PASSWORD: "box-pw", ...more }, stdio: ["pipe", "pipe", "pipe"] });
   let out = "", err = "";
   child.stdout.setEncoding("utf8");
@@ -91,7 +98,6 @@ async function start(more = {}) {
     exited.then(code => reject(new Error(`serve exited ${code}: ${err}`)));
   });
   // Its socket, once it listens (in its own home's run folder).
-  const run = path.join(more.KUVO_HOME ?? home, "run");
   await appears(run, () => fs.existsSync(path.join(run, "vault.sock")));
   // A request from something on this machine: an agent's command, which has the box's files but no client's key.
   const local = async (method, route, body) => {
@@ -240,17 +246,14 @@ test("vault_run hands values to a command, never to the agent: its output comes 
   const output = ran.value.text;
   for (const form of [TOKEN, Buffer.from(TOKEN).toString("base64"), Buffer.from(TOKEN).toString("hex")]) assert.ok(!output.includes(form), output);
   assert.match(output, /token=\[vault: GitHub token\]/);
-  const p8 = await new Promise(resolve => {
-    const running = tool("ses_ship", "vault_run", { command: "cat \"$ASC_KEY\"; ls -l \"$ASC_KEY\" | cut -c1-10", variables: { ASC_KEY: "App Store Connect key" }, why: "To upload the build." });
-    // Its grant asks you each time: you allow it once from your Mac.
-    const answer = async () => {
-      const asks = await box.asks();
-      assert.deepEqual({ kind: asks[0].kind, itemName: asks[0].itemName, botName: asks[0].botName, why: asks[0].why }, { kind: "use", itemName: "App Store Connect key", botName: "Ship", why: "To upload the build." });
-      assert.equal((await fromMac("POST", `kuvo/vault/asks/${asks[0].id}`, { answer: "once" }, key)).status, 200);
-    };
-    answer();
-    resolve(running);
-  });
+  const running = tool("ses_ship", "vault_run", { command: "cat \"$ASC_KEY\"; ls -l \"$ASC_KEY\" | cut -c1-10", variables: { ASC_KEY: "App Store Connect key" }, why: "To upload the build." });
+  // Its grant asks you each time: you allow it once from your Mac.
+  const answering = (async () => {
+    const asks = await box.asks();
+    assert.deepEqual({ kind: asks[0].kind, itemName: asks[0].itemName, botName: asks[0].botName, why: asks[0].why }, { kind: "use", itemName: "App Store Connect key", botName: "Ship", why: "To upload the build." });
+    assert.equal((await fromMac("POST", `kuvo/vault/asks/${asks[0].id}`, { answer: "once" }, key)).status, 200);
+  })();
+  const [p8] = await Promise.all([running, answering]);
   assert.equal(p8.value.isError, false, p8.value.text);
   assert.ok(!p8.value.text.includes("MIGTAgEAMBMGByqGSM49"), p8.value.text);
   assert.match(p8.value.text, /\[vault: App Store Connect key\]/);

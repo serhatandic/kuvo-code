@@ -4,6 +4,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { atEnd } from "./at-end.js";
 
 /** What `found()` gives, once it gives something: looked at again as anything changes in `folder`
  * (or, while there's no such folder yet, under the nearest one there is). */
@@ -13,6 +14,9 @@ export function appears(folder, found) {
     while (!fs.existsSync(top)) top = path.dirname(top);
     let done = false;
     const watcher = fs.watch(top, { recursive: top !== folder }, () => look());
+    // (Closed once the file's tests are done, if a test failed before this was seen: never what
+    // keeps its process going.)
+    atEnd(() => finish(() => resolve(undefined)));
     watcher.on("error", error => finish(() => reject(error)));
     function finish(then) {
       if (done) return;

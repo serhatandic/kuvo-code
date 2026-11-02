@@ -13,11 +13,14 @@ import http from "node:http";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { before, test } from "node:test";
+import { before as nodeBefore, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { sshAgentsOf } from "./bot-keys-scenarios.js";
 import { atEnd, removeAtEnd } from "./at-end.js";
 import { appears, asked } from "./vault-waits.js";
+
+// Each fails at its own time limit when what it waits for never comes, rather than holding up the run.
+const before = run => nodeBefore(run, { timeout: 60_000 });
 
 // (Short: the vault's and the browser's sockets are in it.)
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kvf-")));
