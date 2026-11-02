@@ -149,6 +149,8 @@ struct ToolCallView: View {
                     Text(error.message)
                         .lineLimit(1)
                         .foregroundStyle(.red)
+                        // The step's words first; the error, in full, when it opens.
+                        .layoutPriority(-1)
                 }
             }
             if hasDetails {
@@ -302,8 +304,8 @@ struct ToolCallView: View {
         case "show_widget":
             let made = string("title").map { "“\($0)”" } ?? "a widget"
             guard case .failed(_, let error, _, _) = call.state else { return (isActive ? "Making " : "Made ") + made }
-            // Stopped with the turn, it didn't fail.
-            return (error.isInterruption ? "Stopped making " : "Couldn’t make ") + made
+            // Stopped with the turn, it didn't fail: the row says "Stopped" beside it.
+            return (error.isInterruption ? "Making " : "Couldn’t make ") + made
         case "mark_final": return (isActive ? "Marking " : "Marked ") + (string("path").map { ($0 as NSString).lastPathComponent } ?? "a file") + " final"
         case "start_session": return (isActive ? "Starting a session" : "Started a session") + (string("title").map { ": \($0)" } ?? "")
         // Kuvo Code's wake-up tools, worded as the kuvo-wake commands they run are.

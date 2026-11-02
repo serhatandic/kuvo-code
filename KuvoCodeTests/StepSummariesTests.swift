@@ -104,7 +104,17 @@ import Testing
         #expect(try words(widget, ["title": "Focus this week"]) == "Made “Focus this week”")
         #expect(try words(widget, ["title": "Focus this week"], error: "tool") == "Couldn’t make “Focus this week”")
         #expect(try words(widget, [:], error: "tool") == "Couldn’t make a widget")
-        #expect(try words(widget, ["title": "Focus this week"], error: "aborted") == "Stopped making “Focus this week”")
+        // Stopped with the turn: the row says "Stopped" beside these words, so they don't again.
+        #expect(try words(widget, ["title": "Focus this week"], error: "aborted") == "Making “Focus this week”")
+    }
+
+    /// In a group chat as in a session: a widget that was made is drawn after the bot's words, and
+    /// one it couldn't make is a step that says so.
+    @Test func aWidgetInAGroupChat() throws {
+        let widget = "kuvo-browser_show_widget"
+        #expect(GroupChatView.isDrawn(try step(widget, ["title": "Focus this week"])))
+        #expect(!GroupChatView.isDrawn(try step(widget, ["title": "Focus this week"], error: "tool")))
+        #expect(!GroupChatView.isDrawn(try step(widget, ["title": "Focus this week"], error: "aborted")))
     }
 
     /// A wake-up the agent schedules (through kuvo-wake) reads as one, not as a command.
