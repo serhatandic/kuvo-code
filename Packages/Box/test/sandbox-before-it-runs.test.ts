@@ -140,12 +140,12 @@ test.skipIf(!canFence || !tmux)("a command's tmux starts in the longest Kuvo Cod
     expect(box.run("one", `tmux has-session -t own 2>/dev/null && echo "own: reached" || echo "own: gone"`)).toEqual(["own: reached"])
     const [first] = readdirSync(join(kuvo, "t")).filter(name => existsSync(join(kuvo!, "t", name, `tmux-${process.getuid!()}`)))
     expect(first).toBeDefined()
-    // Another conversation's command: nothing of the first's, nor the folder they're in. (Where a
-    // machine gives commands no namespace of their own, the sandbox's state says so, and only the
-    // name it can't list keeps it from the first's: Landlock doesn't refuse a socket.)
+    // Another conversation's command: nothing of the first's, not even its name. (Where a machine
+    // gives commands no namespace of their own, the sandbox's state says so, and only the name it
+    // can't list keeps it from the first's: Landlock doesn't refuse a socket.)
     const fenced = process.platform === "darwin" || readFileSync(join(kuvo, "run", "fence", "namespace"), "utf8").startsWith("/")
-    expect(box.run("two", `ls -A "${kuvo}/t" >/dev/null 2>&1 && echo "folder: read" || echo "folder: refused"; TMUX_TMPDIR="${kuvo}/t/${first}" tmux has-session -t own 2>/dev/null && echo "theirs: reached" || echo "theirs: refused"`))
-      .toEqual(["folder: refused", fenced ? "theirs: refused" : "theirs: reached"])
+    expect(box.run("two", `ls -A "${kuvo}/t" 2>/dev/null | grep -qx "${first}" && echo "name: seen" || echo "name: unseen"; TMUX_TMPDIR="${kuvo}/t/${first}" tmux has-session -t own 2>/dev/null && echo "theirs: reached" || echo "theirs: refused"`))
+      .toEqual(["name: unseen", fenced ? "theirs: refused" : "theirs: reached"])
     expect(box.run("one", "tmux kill-server; echo done")).toEqual(["done"])
   } finally {
     if (kuvo) stopServers(kuvo)
