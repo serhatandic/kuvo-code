@@ -9,7 +9,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { parsed } from "../../shared/json";
-import type { GitChanges } from "../../shared/routes/changes";
+import type { GitChanges, PullRequestDraft } from "../../shared/routes/changes";
 import { K } from "../home";
 import type { AnswerPiece, RouteContext } from "../server/context";
 import { FILE_LIMIT } from "./file";
@@ -402,11 +402,9 @@ export function comparePage(remote: string, branch: string, base: string | undef
   return `${at}/compare/${(base ? `${named(base)}...` : "") + named(branch)}?${query}`;
 }
 
-/** Create Pull Request: `directory`'s branch pushed, and a pull request made with `gh` when it's
- * there and signed in, on origin's GitHub repository (`url`, also one already open for the branch),
- * or the host's page to open one (`compareURL`; neither for a host other than GitHub's or
- * GitLab's). Its base is its worktree's, from the box's worktrees; else origin's main branch. */
-export async function pullRequest(directory: string, title?: string, body?: string): Promise<{ status: number; failed: string } | { url?: string; compareURL?: string }> {
+/** Where a pull request for `directory`'s branch goes, and whether it can go yet: its base is its
+ * worktree's, from the box's worktrees, else origin's main branch. */
+async function pullRequestWay(directory: string): Promise<{ status: number; failed: string } | { root: string; branch: string; base?: string; against?: string; remote?: string }> {
   const branch = await branchOf(directory);
   if (!branch) return { status: 409, failed: "This folder isn’t on a branch." };
   const root = (await text(directory, ["rev-parse", "--show-toplevel"]))?.trim() ?? directory;
@@ -421,9 +419,69 @@ export async function pullRequest(directory: string, title?: string, body?: stri
     const why = await unready(directory, branch, against);
     if (why) return { status: 409, failed: why.replace(`origin/${base}`, base!) };
   }
+  const remote = (await text(root, ["remote", "get-url", "origin"]))?.trim() || undefined;
+  return { root, branch, base, against, remote };
+}
+
+/** Whether GitHub's `gh` can make a pull request on `host` from this box: signed in, not signed
+ * in, or not there at all. */
+function ghOn(root: string, host: string): Promise<"signed-in" | "signed-out" | "missing"> {
+  return new Promise(resolve => {
+    execFile("gh", ["auth", "status", "--hostname", host], { cwd: root, env: { ...process.env, GH_PROMPT_DISABLED: "1", NO_COLOR: "1" }, timeout: 30_000 }, error =>
+      resolve(!error ? "signed-in" : (error as NodeJS.ErrnoException).code === "ENOENT" ? "missing" : "signed-out"));
+  });
+}
+
+/** What a pull request for `directory`'s branch would bring, for a model to write it from: its
+ * commits, the files they change, and the diff, cut to a size a model reads quickly. */
+async function pullRequestSummary(root: string, against: string | undefined, limit = 30_000): Promise<string> {
+  const range = against ? `${against}...HEAD` : "HEAD~1...HEAD";
+  const commits = (await text(root, ["log", "--no-color", "--format=- %s%n%b", against ? `${against}..HEAD` : "-1"])) ?? "";
+  const files = (await text(root, ["diff", "--no-color", "--stat", range])) ?? "";
+  let diff = (await text(root, ["diff", "--no-color", "--no-ext-diff", range])) ?? "";
+  if (diff.length > limit) diff = diff.slice(0, limit) + "\n…";
+  return `Commits:\n${commits}\nFiles:\n${files}\nDiff:\n${diff}`;
+}
+
+/** Create Pull Request's confirmation, before anything is pushed: the branch, the base it goes
+ * into, a title and description from the commits (as `gh --fill` writes them: one commit's own
+ * words, else the branch's name and the commits listed), what it brings for a model to write them
+ * from, and what Create does on this box: makes it with `gh` (`creates`), or, on GitHub with `gh`
+ * not signed in or not there (`gh`), on GitLab, opens the host's page; on another host, only
+ * pushes. Refused (409) as Create would be. */
+export async function pullRequestDraft(directory: string): Promise<{ status: number; failed: string } | PullRequestDraft> {
+  const way = await pullRequestWay(directory);
+  if ("failed" in way) return way;
+  const { root, branch, base, against, remote } = way;
+  const subjects = ((await text(root, ["log", "--no-color", "--format=%s", against ? `${against}..HEAD` : "-1"])) ?? "").split("\n").filter(Boolean);
+  let title: string, body: string;
+  if (subjects.length === 1) {
+    title = subjects[0]!;
+    body = ((await text(root, ["log", "-1", "--no-color", "--format=%b"])) ?? "").trim();
+  } else {
+    const named = branch.replace(/[-_]+/g, " ").trim();
+    title = named.charAt(0).toUpperCase() + named.slice(1);
+    body = subjects.reverse().map(subject => `- ${subject}`).join("\n");
+  }
+  const page = remote ? webPage(remote) : null;
+  const host = page?.hostname.includes("github") ? "github" : page?.hostname.includes("gitlab") ? "gitlab" : "other";
+  const gh = host === "github" ? await ghOn(root, page!.hostname) : undefined;
+  return {
+    branch, ...(base ? { base } : {}), title, body, summary: await pullRequestSummary(root, against), host,
+    creates: gh === "signed-in", ...(gh && gh !== "signed-in" ? { gh } : {}),
+  };
+}
+
+/** Create Pull Request: `directory`'s branch pushed, and a pull request made with `gh` when it's
+ * there and signed in, on origin's GitHub repository (`url`, also one already open for the branch),
+ * or the host's page to open one (`compareURL`; neither for a host other than GitHub's or
+ * GitLab's). Its base as `pullRequestWay` finds it. */
+export async function pullRequest(directory: string, title?: string, body?: string): Promise<{ status: number; failed: string } | { url?: string; compareURL?: string }> {
+  const way = await pullRequestWay(directory);
+  if ("failed" in way) return way;
+  const { root, branch, base, remote } = way;
   const pushed = await refusal(root)(["push", "-u", "origin", "HEAD"]);
   if (pushed) return { status: 422, failed: pushed };
-  const remote = (await text(root, ["remote", "get-url", "origin"]))?.trim();
   const page = remote ? webPage(remote) : null;
   if (page?.hostname.includes("github")) {
     // On origin's repository (not a fork's parent), never asking anything, and given up after two
@@ -507,6 +565,12 @@ export async function* changesRoute(context: RouteContext): AsyncGenerator<Answe
     if (!message.trim()) return yield* json(400, { message: "Write a commit message." });
     const done = await commit(directory, message, body.push === true, authorOf(body));
     return yield* done ? json(422, { message: done.failed, ...(done.committed ? { committed: true, pushed: false } : {}) }) : json(200, {});
+  }
+  if (route === "kuvo/git/pull-request/draft") {
+    const directory = folderAt(body.directory);
+    if (!directory) return yield* json(404, { message: "That folder isn’t there." });
+    const draft = await pullRequestDraft(directory);
+    return yield* "failed" in draft ? json(draft.status, { message: draft.failed }) : json(200, draft);
   }
   if (route === "kuvo/git/push" || route === "kuvo/git/merge" || route === "kuvo/git/pull-request") {
     const directory = folderAt(body.directory);
