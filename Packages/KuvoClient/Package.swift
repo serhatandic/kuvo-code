@@ -36,7 +36,7 @@ let package = Package(
         .target(name: "ClientNews"),
         .testTarget(name: "ClientNewsTests", dependencies: ["ClientNews"]),
         .target(name: "ClientSessions", dependencies: [.product(name: "OpenCodeKit", package: "OpenCodeKit")]),
-        .testTarget(name: "ClientSessionsTests", dependencies: ["ClientSessions"]),
+        .testTarget(name: "ClientSessionsTests", dependencies: ["ClientSessions", .product(name: "OpenCodeKit", package: "OpenCodeKit")]),
         .target(name: "ClientChanges"),
         .testTarget(name: "ClientChangesTests", dependencies: ["ClientChanges"]),
         .target(name: "ClientVault"),

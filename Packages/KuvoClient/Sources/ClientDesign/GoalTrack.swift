@@ -80,6 +80,51 @@ public struct GoalTrackStrip: View {
     }
 }
 
+/// A step's state as the mark at the start of its row in a goal's list: a green check once done,
+/// orange while it waits for you, an empty circle before it starts, and while it runs a ring
+/// with a dot, filled as far as the bot measured (nothing filled where it couldn't say).
+public struct GoalStepMark: View {
+    let state: GoalTrack.State
+    let progress: Double?
+    let size: CGFloat
+    @Environment(\.accent) private var accent
+
+    public init(_ state: GoalTrack.State, progress: Double? = nil, size: CGFloat = 14) {
+        self.state = state
+        self.progress = progress.map { min(1, max(0, $0)) }
+        self.size = size
+    }
+
+    public var body: some View {
+        Group {
+            switch state {
+            case .done:
+                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+            case .waiting:
+                Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.orange)
+            case .paused:
+                Image(systemName: "pause.circle").foregroundStyle(.secondary)
+            case .skipped:
+                Image(systemName: "minus.circle").foregroundStyle(.tertiary)
+            case .todo:
+                Image(systemName: "circle").foregroundStyle(.tertiary)
+            case .running:
+                ZStack {
+                    Circle().stroke(Color.primary.opacity(0.14), lineWidth: size * 0.115)
+                    Circle()
+                        .trim(from: 0, to: progress ?? 0)
+                        .stroke(accent, style: StrokeStyle(lineWidth: size * 0.13, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                    Circle().fill(accent).frame(width: size * 0.32, height: size * 0.32)
+                }
+                .frame(width: size * 0.9, height: size * 0.9)
+            }
+        }
+        .font(.system(size: size))
+        .accessibilityHidden(true)
+    }
+}
+
 /// Diagonal stripes, still: "at it, but not measured".
 private struct Stripes: View {
     let color: Color

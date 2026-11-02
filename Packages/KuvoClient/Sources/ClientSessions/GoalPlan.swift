@@ -1,4 +1,5 @@
 import Foundation
+import OpenCodeKit
 
 // A bot's goal and its plan, as both apps show it (PROTOCOL.md, "Work › Goals"): the card a bot puts
 // to you, the goal under way with a track for each step, what waits for you, what's paused at a
@@ -429,11 +430,135 @@ public enum GoalPlanWords {
         }
     }
 
-    /// The plan, in a line: "site → domain → DNS → deploy → checkout".
-    public static func plan(_ goal: GoalPlan) -> String { goal.steps.map(\.text).joined(separator: " → ") }
-
     /// "2 of 5".
     public static func progress(_ goal: GoalPlan) -> String { "\(goal.done) of \(goal.steps.count)" }
+
+    /// The goal's name on its bar, in a few words ("Landing page"): the one the bot gave it, or,
+    /// for a plan kept before bots named theirs, the goal itself where it's that short.
+    public static func name(_ goal: GoalPlan) -> String {
+        if let title = goal.title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty { return title }
+        let words = goal.goal.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !words.isEmpty && words.split(whereSeparator: \.isWhitespace).count <= 4 ? words : "Goal"
+    }
+
+    /// Why a goal is paused, in a word, beside "Paused".
+    public static func pausedBy(_ by: Goal.PausedBy) -> String {
+        switch by {
+        case .you: "You"
+        case .limit: "Limit"
+        case .error: "Error"
+        case .stalled: "Stalled"
+        }
+    }
+
+    /// What the bar's line says after the goal's name: "2 of 7 · 3 days", "2 of 7 · Next: Mon
+    /// 09:00", "Paused · You" (`pausedBy` set while the conversation's goal is paused), "Done · 2 h",
+    /// "Stopped · 2 of 7".
+    public static func line(_ goal: GoalPlan, pausedBy: Goal.PausedBy?? = nil, now: Date = .now, timeZone: TimeZone = .current, locale: Locale = .current) -> String {
+        let steps = progress(goal)
+        if goal.state == .running, let pausedBy { return ["Paused", pausedBy.map(Self.pausedBy)].compactMap { $0 }.joined(separator: " · ") }
+        switch goal.state {
+        case .done: return ["Done", took(goal, now: now)].compactMap { $0 }.joined(separator: " · ")
+        case .stopped, .declined: return "Stopped · \(steps)"
+        default: return [steps, next(goal, now: now, timeZone: timeZone, locale: locale) ?? took(goal, now: now)].compactMap { $0 }.joined(separator: " · ")
+        }
+    }
+
+    /// How long it has been at it, or took: "under a minute", "40 min", "2 h 5 min", "3 days".
+    static func took(_ goal: GoalPlan, now: Date) -> String? {
+        guard let started = goal.started else { return nil }
+        let end = goal.state == .running ? now : goal.ended.map { Date(timeIntervalSince1970: $0 / 1000) } ?? now
+        let seconds = max(0, end.timeIntervalSince(Date(timeIntervalSince1970: started / 1000)))
+        if seconds >= 2 * 86400 { return "\(Int(seconds / 86400)) days" }
+        let minutes = Int(seconds) / 60
+        if minutes < 1 { return "under a minute" }
+        if minutes < 60 { return "\(minutes) min" }
+        return minutes % 60 == 0 ? "\(minutes / 60) h" : "\(minutes / 60) h \(minutes % 60) min"
+    }
+
+    /// Where a step stands, in the few words beside its row.
+    public struct Said: Equatable, Sendable {
+        public enum Tone: Sendable { case plain, needsYou, quiet }
+        /// Nil where its mark says it all (a step done, one with nothing to wait for).
+        public let text: String?
+        public let tone: Tone
+    }
+
+    /// A step's state as its row shows it: once the goal is over, a step it didn't finish is set
+    /// aside, never still under way or waiting for you.
+    public static func shownState(of step: GoalPlan.Step, in goal: GoalPlan) -> GoalPlan.Step.State {
+        let over = goal.state == .done || goal.state == .stopped || goal.state == .declined
+        return over && step.state != .done && step.state != .skipped ? .skipped : step.state
+    }
+
+    /// What a step's row says beside its name: what the bot counted for one under way ("5 of 8
+    /// pages"), "Needs you", until when one's paused, the step one not begun waits for ("After Buy
+    /// the domain", "After 2 steps"), "Not done" once the goal is over without it.
+    public static func state(of step: GoalPlan.Step, in goal: GoalPlan, now: Date = .now, timeZone: TimeZone = .current, locale: Locale = .current) -> Said {
+        if shownState(of: step, in: goal) != step.state { return Said(text: "Not done", tone: .quiet) }
+        switch step.state {
+        case .doing:
+            return Said(text: underWay(step), tone: .plain)
+        case .waiting:
+            return Said(text: "Needs you", tone: .needsYou)
+        case .paused:
+            return Said(text: until(step, in: goal).map { "Until \(when($0, now: now, timeZone: timeZone, locale: locale))" } ?? "Paused", tone: .quiet)
+        case .todo:
+            let after = step.after.compactMap { id in goal.steps.first { $0.id == id && $0.state != .done && $0.state != .skipped } }
+            // A short name, or how many: a few words beside the row, never a sentence.
+            let words = after.count == 1 && after[0].text.count <= 24 ? "After \(after[0].text)" : after.count == 1 ? "After 1 step" : "After \(after.count) steps"
+            return Said(text: after.isEmpty ? nil : words, tone: .quiet)
+        case .done:
+            return Said(text: step.note, tone: .quiet)
+        case .skipped:
+            return Said(text: "Set aside", tone: .quiet)
+        }
+    }
+
+    /// Until when a paused step waits: its own time, or its session's limit's.
+    private static func until(_ step: GoalPlan.Step, in goal: GoalPlan) -> Date? {
+        step.resumesDate ?? goal.paused.first { $0.session.map(step.sessions.contains) ?? false }?.untilDate
+    }
+
+    /// What VoiceOver reads after a step's name, once: "5 of 8 pages", "waiting for you", "paused
+    /// until 17:00", "not started, after Buy the domain", "done, 8 pages", "not done".
+    public static func spokenState(of step: GoalPlan.Step, in goal: GoalPlan, now: Date = .now) -> String {
+        let said = state(of: step, in: goal, now: now).text
+        if shownState(of: step, in: goal) != step.state { return "not done" }
+        switch step.state {
+        case .doing: return said ?? "in progress"
+        case .waiting: return "waiting for you"
+        case .paused: return until(step, in: goal).map { "paused until \($0.formatted(date: .omitted, time: .shortened))" } ?? "paused"
+        case .todo: return ["not started", said.map { $0.prefix(1).lowercased() + $0.dropFirst() }].compactMap { $0 }.joined(separator: ", ")
+        case .done: return ["done", said].compactMap { $0 }.joined(separator: ", ")
+        case .skipped: return "set aside"
+        }
+    }
+
+    /// Under a goal's steps, when it's likely done and when it's due, where either is known:
+    /// "Likely done Sat · due Mon, Nov 10".
+    public static func finish(_ timeline: GoalTimeline, timeZone: TimeZone = .current, locale: Locale = .current) -> String? {
+        let said = [
+            timeline.finish.map { "Likely done \(when($0, now: timeline.now, timeZone: timeZone, locale: locale))" },
+            // Past, it was due: never a weekday that reads as one coming.
+            timeline.deadline.map { "\($0 < timeline.now ? "was due" : "due") \(when($0, now: timeline.now, timeZone: timeZone, locale: locale))" },
+        ].compactMap { $0 }
+        guard let first = said.first else { return nil }
+        return ([first.prefix(1).uppercased() + first.dropFirst()] + said.dropFirst()).joined(separator: " · ")
+    }
+
+    /// A time as a row says it: "15:20" today, "Sat" within the coming week, "Mon, Nov 10" further
+    /// or past.
+    static func when(_ date: Date, now: Date, timeZone: TimeZone, locale: Locale) -> String {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        var style = Date.FormatStyle(timeZone: timeZone)
+        style = calendar.isDate(date, inSameDayAs: now) ? style.hour().minute()
+            : date > now && date.timeIntervalSince(now) < 6 * 86_400 ? style.weekday(.abbreviated)
+            : style.weekday(.abbreviated).month(.abbreviated).day()
+        style.locale = locale
+        return date.formatted(style)
+    }
 
     /// While it waits for a time, when it goes on: "Next: Mon 09:00", with the date beyond a week
     /// ("Next: Mon 23 Nov at 09:00"); nil while it can go on now.
@@ -494,27 +619,6 @@ public enum GoalPlanWords {
         case 0.4...0.6: return "About half"
         case 0.85...: return "Nearly done"
         default: return "About \(Int((progress * 10).rounded()) * 10)%"
-        }
-    }
-
-    /// A track as VoiceOver reads it: "DNS, half done", "Deploy, paused until 15:20", "Build the
-    /// site, in progress".
-    public static func spoken(_ step: GoalPlan.Step, now: Date = .now) -> String {
-        switch step.state {
-        case .done: return "\(step.text), done"
-        case .skipped: return "\(step.text), skipped"
-        case .todo: return "\(step.text), not started"
-        case .waiting: return "\(step.text), waiting for you"
-        case .paused: return step.resumesDate.map { "\(step.text), paused until \($0.formatted(date: .omitted, time: .shortened))" } ?? "\(step.text), paused"
-        case .doing:
-            if let note = step.note { return "\(step.text), \(note)" }
-            guard let progress = step.progress else { return "\(step.text), in progress" }
-            switch progress {
-            case ..<0.15: return "\(step.text), just started"
-            case 0.4...0.6: return "\(step.text), half done"
-            case 0.85...: return "\(step.text), nearly done"
-            default: return "\(step.text), \(Int((progress * 100).rounded())) percent done"
-            }
         }
     }
 }
