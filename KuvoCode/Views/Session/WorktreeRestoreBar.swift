@@ -80,6 +80,8 @@ struct WorktreeRestoreBar: View {
             }
             .buttonStyle(.glass)
             .lineLimit(1)
+            // A long project name keeps its start and end.
+            .truncationMode(.middle)
             .help("Work in \(projectName)’s own folder from now on")
         }
         if worktree.restorable {
