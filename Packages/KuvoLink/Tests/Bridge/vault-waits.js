@@ -2,17 +2,18 @@
 // Never a count of tries or a pause: a busy machine is slow, never wrong, and a wait whose thing
 // never comes fails at the test's own time limit.
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
 import { before as nodeBefore, test as nodeTest } from "node:test";
 import { atEnd } from "./at-end.js";
 
 const LIMIT = 60_000;
-// What ends the test or setup running now (a file's run one at a time): each wait ends with it, so a
-// test that times out still stops its box in its `finally`.
-let ending;
-export const test = (name, run) => nodeTest(name, { timeout: LIMIT }, t => { ending = t.signal; return run(t); });
-export const before = run => nodeBefore(t => { ending = t.signal; return run(t); }, { timeout: LIMIT });
+// What ends the test or setup a wait is part of: each wait ends with it, so a test that times out
+// still stops its box in its `finally` (also when it reaches a wait only after its time ran out).
+const ending = new AsyncLocalStorage();
+export const test = (name, run) => nodeTest(name, { timeout: LIMIT }, t => ending.run(t.signal, () => run(t)));
+export const before = run => nodeBefore(t => ending.run(t.signal, () => run(t)), { timeout: LIMIT });
 
 const inode = where => { try { return fs.statSync(where).ino; } catch { return null; } };
 
@@ -21,13 +22,14 @@ const inode = where => { try { return fs.statSync(where).ino; } catch { return n
  * so a folder the box clears and makes again, or makes only later, is followed to the new one. */
 export function appears(folder, found) {
   return new Promise((resolve, reject) => {
-    const signal = ending;
+    const signal = ending.getStore();
     const watched = new Map();
     let done = false;
     // (Closed once the file's tests are done, if a test failed before this was seen: never what
     // keeps its process going.)
     atEnd(() => finish(() => resolve(undefined)));
     const ended = () => finish(() => reject(new Error(`The test ended before this came, in ${folder}.`)));
+    if (signal?.aborted) return ended();
     signal?.addEventListener("abort", ended, { once: true });
     function finish(then) {
       if (done) return;
@@ -75,7 +77,7 @@ export function appears(folder, found) {
  * `url` (`…/kuvo/vault/asks/events` on the box's own process), as this Mac's app follows them. */
 export async function asked(url, password, seen = new Set()) {
   const stop = new AbortController();
-  const signal = ending ? AbortSignal.any([stop.signal, ending]) : stop.signal;
+  const signal = ending.getStore() ? AbortSignal.any([stop.signal, ending.getStore()]) : stop.signal;
   const response = await fetch(url, { headers: { authorization: `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`, "x-kuvo-from": "app" }, signal });
   let buffer = "";
   for await (const chunk of response.body.pipeThrough(new TextDecoderStream())) {
