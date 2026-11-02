@@ -216,6 +216,95 @@ import Testing
         app.moves.forget("lab")
     }
 
+    /// A move this Mac's box took back while the machine it was going to restarted: what the machine
+    /// said last of it, before it went out of reach, doesn't keep the bot from you until it's back.
+    /// One end saying a move is over is enough.
+    @Test func aMoveOverAtOneEndIsOverThoughTheOtherCantBeRead() async throws {
+        let lab = "move-\(UUID().uuidString.prefix(8).lowercased()).invalid"
+        let mac = BoxClient.mac
+        let over = Over()
+        let unreadable = Over()
+        let app = AppModel()
+        app.moves.app = app
+        app.bots.app = app
+        defer { try? FileManager.default.removeItem(at: Bots.file) }
+        let pixel = #"{"id":"bot_takeback1","session":"ses_takeback","name":"Pixel","look":{"color":"sky","shape":"round","face":"calm"},"folder":"/kuvo-tests-none/bot_takeback1"}"#
+        let move: @Sendable (String) -> String = { role in #"{"moves":[{"id":"mv_back1","kind":"bot","thing":"bot_takeback1","from":"mac-key","to":"lab-key","role":"\#(role)","stage":"copying","sessions":["ses_takeback"]}],"away":[]}"# }
+        let boxes = { (box: String) in
+            Self.box(box) { path in
+                switch path {
+                case "kuvo/bots": box == mac ? #"{"bots":[\#(pixel)]}"# : #"{"bots":[]}"#
+                case "kuvo/moves" where box == lab: unreadable.now ? nil : move("to")
+                case "kuvo/moves": over.now ? #"{"moves":[],"away":[]}"# : move("from")
+                default: nil
+                }
+            }
+        }
+        app.bots.boxes = boxes
+        app.moves.boxes = boxes
+        app.bots.reachable = { $0 == lab }
+        await app.bots.refresh(mac)
+        await app.moves.reload(mac)
+        await app.moves.reload(lab)
+        #expect(Moves.isFrozen("bot_takeback1"))
+
+        // The machine restarts (out of reach), and this Mac's box takes the move back.
+        unreadable.now = true
+        await app.moves.reload(lab)
+        over.now = true
+        await app.moves.reload(mac)
+        try await until { !app.moves.held.contains("bot_takeback1") }
+        #expect(app.bots.bot("bot_takeback1")?.machine == nil)
+        #expect(!app.moves.isMoving("bot_takeback1"))
+        app.moves.forget(lab)
+    }
+
+    /// A bot moved between two machines: once the one it went to says it's there, it shows there,
+    /// though the one it left still lists it until its copy is let go of.
+    @Test func aBotThatMovedShowsWhereItWentNotWhereItWas() async throws {
+        let lab = "move-\(UUID().uuidString.prefix(8).lowercased()).invalid"
+        let pi = "move-\(UUID().uuidString.prefix(8).lowercased()).invalid"
+        let (labKey, piKey) = (String(repeating: "L", count: 43), String(repeating: "P", count: 43))
+        let app = AppModel()
+        app.moves.app = app
+        app.bots.app = app
+        _ = app.machines.add(lab)
+        _ = app.machines.add(pi)
+        defer {
+            app.removeMachine(lab)
+            app.removeMachine(pi)
+            try? FileManager.default.removeItem(at: Bots.file)
+        }
+        app.phoneLink.standIn(machine: lab, key: labKey)
+        app.phoneLink.standIn(machine: pi, key: piKey)
+        let there = Over()
+        let pixel = #"{"id":"bot_twomachines","session":"ses_twomachines","name":"Pixel","look":{"color":"sky","shape":"round","face":"calm"},"folder":"/kuvo-tests-none/bot_twomachines"}"#
+        let move: @Sendable (String) -> String = { role in #"{"moves":[{"id":"mv_two1","kind":"bot","thing":"bot_twomachines","from":"\#(labKey)","to":"\#(piKey)","role":"\#(role)","stage":"switching","sessions":["ses_twomachines"]}],"away":[]}"# }
+        let boxes = { (box: String) in
+            Self.box(box) { path in
+                switch path {
+                // The machine it left lists it all along (its copy not let go of yet).
+                case "kuvo/bots": box == lab || (box == pi && there.now) ? #"{"bots":[\#(pixel)]}"# : #"{"bots":[]}"#
+                case "kuvo/moves" where box == lab || box == pi: there.now ? #"{"moves":[],"away":[]}"# : move(box == lab ? "from" : "to")
+                case "kuvo/moves": #"{"moves":[],"away":[]}"#
+                default: nil
+                }
+            }
+        }
+        app.bots.boxes = boxes
+        app.moves.boxes = boxes
+        app.bots.reachable = { $0 == lab || $0 == pi }
+        await app.bots.refresh(lab)
+        await app.moves.reload(lab)
+        await app.moves.reload(pi)
+        #expect(app.moves.isMoving("bot_twomachines"))
+
+        there.now = true
+        await app.moves.reload(pi)
+        try await until { !app.moves.held.contains("bot_twomachines") }
+        #expect(app.bots.bot("bot_twomachines")?.machine == pi)
+    }
+
     /// The connection to its box gone before it answered, and nothing of it moving there now: it
     /// says so, as the phone does, never the connection's own error (it may be over already).
     @Test func cutOffBeforeItsBoxAnsweredItSaysWhatItsBoxSaysNow() async throws {
@@ -235,7 +324,9 @@ import Testing
         await #expect {
             try await app.moves.move("chat", "ses_cutoff", from: nil, to: lab)
         } throws: { error in
-            error.localizedDescription == "Kuvo Code lost touch with this Mac before it answered, and nothing is moving there now. If it isn’t where you moved it, move it again."
+            let error = error as NSError
+            return error.localizedDescription == "Lost touch with this Mac’s background work"
+                && error.localizedRecoverySuggestion == "Kuvo Code lost touch with this Mac’s background work before it answered, and nothing is moving there now. If it isn’t where you moved it, move it again."
         }
     }
 
