@@ -877,7 +877,7 @@ async function moveMail(sender: MailSender, given: Record<string, unknown>, id: 
     // Asked again whether its copy arrived (that word may have been lost): as it is here.
     case "arrive": {
       if (record && !mine) return;
-      const failed = () => tell(sender.key, { op: "failed", id, message: `It couldn’t be set up on ${HERE}.` });
+      const failed = () => tell(sender.key, { op: "failed", id, message: `It couldn’t be set up on ${HERE}.`, ...(typeof given.hash === "string" ? { hash: given.hash } : {}) });
       if (mine?.role !== "to" || mine.dropping || !mine.complete) return void failed();
       if (mine.setUpSince === undefined) return void tell(sender.key, { op: "arrived", id, hash: mine.hash });
       if (toSetUp.has(id)) return void tell(sender.key, { op: "working", id });
@@ -916,7 +916,8 @@ async function moveMail(sender: MailSender, given: Record<string, unknown>, id: 
       return arrived(mine).catch(error => takeBack(id, String((error as Error | null)?.message ?? error), 409));
     case "refused":
     case "failed":
-      if (mine?.role !== "from" || mine.stage !== "copying" || mine.failed) return;
+      // (One about a bundle before the one sent last, asked again late, is old news.)
+      if (mine?.role !== "from" || mine.stage !== "copying" || mine.failed || (typeof given.hash === "string" && given.hash !== mine.hash)) return;
       return takeBack(id, typeof given.message === "string" ? given.message : "It couldn’t go there.", 409);
     case "switched":
       if (mine?.role !== "from" || (mine.stage !== "switching" && mine.stage !== "finishing")) return;

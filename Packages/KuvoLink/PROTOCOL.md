@@ -464,7 +464,8 @@ until it's answered:
    it was setting up as it stopped (as it starts again). The box it leaves, every part answered and
    no word yet, asks `arrive {hash}` each minute, answered at once as it is: `arrived`, `working`
    while it's being set up, else `failed` (one it doesn't have, never all there, being let go of,
-   or cut short by a restart). An `arrived` for a bundle other than the one sent last is ignored.
+   or cut short by a restart), each with the `hash` it was asked about. An `arrived` or `failed`
+   for a bundle other than the one sent last is ignored.
 5. The box it leaves settles and reads it again, its queues too. Anything new, and it all goes again
    (from 1, three tries; then 409, `busy`).
 6. It notes the switch, and sends `switch` → `switched`: the box it went to lets its wake-ups go (as

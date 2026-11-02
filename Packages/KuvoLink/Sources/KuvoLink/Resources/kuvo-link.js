@@ -14861,7 +14861,7 @@ async function moveMail(sender, given, id) {
     case "arrive": {
       if (record && !mine)
         return;
-      const failed = () => tell(sender.key, { op: "failed", id, message: `It couldn’t be set up on ${HERE}.` });
+      const failed = () => tell(sender.key, { op: "failed", id, message: `It couldn’t be set up on ${HERE}.`, ...typeof given.hash === "string" ? { hash: given.hash } : {} });
       if (mine?.role !== "to" || mine.dropping || !mine.complete)
         return void failed();
       if (mine.setUpSince === undefined)
@@ -14916,7 +14916,7 @@ async function moveMail(sender, given, id) {
       return arrived(mine).catch((error) => takeBack(id, String(error?.message ?? error), 409));
     case "refused":
     case "failed":
-      if (mine?.role !== "from" || mine.stage !== "copying" || mine.failed)
+      if (mine?.role !== "from" || mine.stage !== "copying" || mine.failed || typeof given.hash === "string" && given.hash !== mine.hash)
         return;
       return takeBack(id, typeof given.message === "string" ? given.message : "It couldn’t go there.", 409);
     case "switched":
