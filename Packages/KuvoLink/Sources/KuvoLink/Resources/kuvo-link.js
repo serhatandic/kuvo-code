@@ -14076,6 +14076,8 @@ async function deleteBot(id, readEngine, readBridge) {
   } catch (error) {
     return no(503, `The bot couldn’t be deleted: ${error?.message ?? error}`);
   }
+  const leaving = { id, session: here.session, agents: here.agents, groups: true, conversation: true };
+  noteLeft(id, leaving);
   if (IS_MAC) {
     await hostTrash(trashed).catch(() => {});
     if (!fs53.existsSync(trashed))
@@ -14085,8 +14087,7 @@ async function deleteBot(id, readEngine, readBridge) {
   }
   noteKeysLeft(id, true);
   await forgetLeftKeys();
-  const left = await leaveBehind({ id, session: here.session, agents: here.agents, groups: true, conversation: true }, readEngine, readBridge);
-  noteLeft(id, left);
+  noteLeft(id, await leaveBehind(leaving, readEngine, readBridge));
   noteBotsChanged();
   return { status: 200, value: {} };
 }

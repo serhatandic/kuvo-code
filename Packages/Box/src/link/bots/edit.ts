@@ -373,6 +373,10 @@ export async function deleteBot(id: string, readEngine: () => Target, readBridge
   } catch (error) {
     return no(503, `The bot couldn’t be deleted: ${(error as Error | null)?.message ?? error}`);
   }
+  // All it has elsewhere, noted as left before any of it is tried: a box that stops meanwhile (an
+  // update, a crash) finishes it as it starts again.
+  const leaving: LeftBehind = { id, session: here.session, agents: here.agents, groups: true, conversation: true };
+  noteLeft(id, leaving);
   // On this Mac, on to the Finder's Trash, where you look for what you deleted, and the folder that
   // held it here goes once it's empty.
   if (IS_MAC) {
@@ -386,8 +390,7 @@ export async function deleteBot(id: string, readEngine: () => Target, readBridge
   // Its place in the group chats here and its conversation; what can't be reached now (its engine
   // or its coding agents restarting) goes once it can be. (Gone from its folder, it's deleted whole,
   // whatever becomes of the phone's request.)
-  const left = await leaveBehind({ id, session: here.session, agents: here.agents, groups: true, conversation: true }, readEngine, readBridge);
-  noteLeft(id, left);
+  noteLeft(id, await leaveBehind(leaving, readEngine, readBridge));
   noteBotsChanged();
   return { status: 200, value: {} };
 }

@@ -350,6 +350,7 @@ async function makingEngine(ready = ["opencode"], rules = {}, heard = () => {}, 
       heard(asked.at(-1));
       const reply = (value, status = 200) => { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value)); };
       if (made.refuse(asked.at(-1))) return reply({ message: "Not now." }, 500);
+      if (made.hold(asked.at(-1))) return made.held.push(() => reply({}));
       if (request.method === "GET" && request.url === "/api/provider") return reply({ data: ready.map(id => ({ id })) });
       if (listed && request.method === "GET" && request.url === "/api/model") return reply({ data: listed.models });
       if (listed && request.method === "GET" && request.url === "/api/model/default") return reply({ data: listed.defaultModel });
@@ -372,8 +373,9 @@ async function makingEngine(ready = ["opencode"], rules = {}, heard = () => {}, 
     });
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-  // (`refuse`: which requests it fails, set by a test.)
-  const made = { asked, chats, port: server.address().port, password: "p", refuse: () => false, close: () => { server.closeAllConnections(); server.close(); } };
+  // (`refuse`: which requests it fails, set by a test; `hold`: which it answers only once the test
+  // lets them go, `held`.)
+  const made = { asked, chats, port: server.address().port, password: "p", refuse: () => false, hold: () => false, held: [], close: () => { server.closeAllConnections(); server.close(); } };
   return made;
 }
 
@@ -853,6 +855,35 @@ test("a bot deleted while its engine and coding agents restart is gone at once, 
     const asked = engine.asked.length;
     await link.finishDeletes(readEngine, readBridge);
     assert.equal(engine.asked.length, asked);
+  } finally {
+    engine.close();
+  }
+});
+
+test("a bot being deleted as its box stops (an update, a crash) still loses its conversation once the box starts again", async t => {
+  write(path.join(bots, "kit.json"), JSON.stringify(kit));
+  bot("bot_quill00001", { name: "Quill" });
+  fs.rmSync(path.join(home, "trash"), { recursive: true, force: true });
+  t.after(() => fs.rmSync(path.join(home, "trash"), { recursive: true, force: true }));
+  const engine = await makingEngine();
+  const agents = await runningAs("kuvo-agents", t);
+  try {
+    // Its engine slow to let its conversation go, and the box stops meanwhile.
+    let reached;
+    const deleting = new Promise(resolve => { reached = resolve; });
+    engine.hold = each => each.method === "DELETE" && each.url === "/api/session/ses_bot_quill00001" && (reached(), true);
+    const readEngine = () => ({ port: engine.port, password: "p" });
+    const readBridge = () => ({ port: engine.port, password: "p", pid: agents });
+    const handle = link.engineHandler(readEngine, { name: "my-server" }, readBridge);
+    const deleted = ask(handle, "DELETE", "kuvo/bots/bot_quill00001");
+    await deleting;
+    // As the box starts again, its engine answering: what that delete hadn't done yet goes.
+    engine.hold = () => false;
+    const before = engine.asked.length;
+    await link.finishDeletes(readEngine, readBridge);
+    assert.ok(engine.asked.slice(before).some(each => each.method === "DELETE" && each.url === "/api/session/ses_bot_quill00001"), "its conversation goes");
+    for (const release of engine.held) release();
+    assert.equal((await deleted).status, 200);
   } finally {
     engine.close();
   }
