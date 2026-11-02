@@ -336,7 +336,8 @@ import Testing
         StubWeb.route(Self.engine + "/api/session/\(id)", sent: { request, body in
             if request.httpMethod == "PATCH" {
                 let metadata = (try? JSONSerialization.jsonObject(with: body) as? [String: Any])?["metadata"] as? [String: Any]
-                archivedThere.withLock { $0 = metadata?["kuvo.archived"] as? Bool ?? false }
+                let flag = metadata?["kuvo.archived"] as? Bool ?? false
+                archivedThere.withLock { $0 = flag }
             }
             return archivedThere.withLock { $0 } ? archived : open
         })
