@@ -423,7 +423,8 @@ A client asks the box it lives on once, and watches; the move goes on with no cl
 - While it moves, nothing reaches it: a prompt to one of its conversations through the link answers
   `409 {message}`, as does a change to its queue (`…/queue/…`; reading it still works, and a Stop
   works while the box it leaves waits for its turn to end), a letter `retry`, its wake-ups and watches are held (`paused` says `moving`), and
-  changing or deleting the bot answers `409`. A client shows it as moving.
+  changing or deleting the bot answers `409`, and what its sessions or an ask's late answer would
+  tell it waits until it's there. A client shows it as moving.
 
 Between the boxes, each `{"move": {op, id, …}}` (`id`: `mov_…`), each step sent again each minute
 until it's answered:
@@ -659,7 +660,9 @@ client shows it from the same routes.
   message (an ask to be read at its next step), kept in `run/work/wakes.json` until it's sent (for a
   conversation the engine doesn't know while the coding agents' bridge isn't running, a day at most,
   since it may be the bridge's; and so is an answer given late, below; for an archived one, until
-  it's brought back, as its own wake-ups wait, a week at most). Clients mark rows by `kuvo.by`.
+  it's brought back, as its own wake-ups wait, a week at most; for one moving to or from another
+  computer, until it's there; for one that moved away from here in the last two days, it goes to it
+  there as a letter, from no one it can answer). Clients mark rows by `kuvo.by`.
   Its task ends with the session's half of the playbook: review your work with reviewer subagents,
   fix what they find, and end with a short report.
 - **Tools** (`POST kuvo/agent-tools`, any conversation, for the sessions under it):
@@ -761,7 +764,8 @@ folder you pick once per box, after asking you.
   and a projects folder is picked. The ask is kept in `run/work/asks.json` until you answer; the
   tool waits up to ten minutes, then says it stays asked, and the conversation gets
   `[The user answered] …` as a message when you do (for a conversation the engine doesn't know
-  while the coding agents' bridge isn't running, tried again every few minutes, a week at most).
+  while the coding agents' bridge isn't running, or one moving to or from another computer, tried
+  again every few minutes, a week at most; to one that moved away from here lately, as a letter there).
   - An ask goes with its bot (deleted), or after a week unanswered.
   - `GET kuvo/work/asks` and `GET kuvo/work/asks/events` (ndjson, a line now and at each change)
     → `{asks: [{id, action: makeProject|cloneProject, session, name, bot?, project, clone?,

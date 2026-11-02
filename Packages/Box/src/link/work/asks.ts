@@ -16,6 +16,8 @@ import { messageID } from "../engine/sessions";
 import { locked, textOf, writePrivate } from "../files";
 import { HERE } from "../home";
 import { placeOfSession } from "../letters/letter";
+import { tellMovedAway } from "../letters/outbox";
+import { frozen } from "../moves/records";
 import { noteWorkChanged, WORK_FOLDER } from "./changes";
 import { folderName, madeWords, makeProject, projectPlace, shownPath } from "./projects";
 import { folderGiven, projectsFolder, setProjectsFolder, suggestedFolder } from "./settings";
@@ -240,18 +242,21 @@ export async function answerWork(id: string, given: Record<string, unknown>, tar
   return { answered };
 }
 
-// One answered after its tool stopped waiting, told to its conversation, and noted once it is.
+// One answered after its tool stopped waiting, told to its conversation, and noted once it is. Not
+// while it moves to or from another computer (a turn here would be left behind), nor while it can't
+// be reached: tried again every few minutes (`workWatcher`) and as the box starts.
 async function tellLate(id: string, targets: () => Target[], file: string, bridgeRuns = () => peerPlaces().bridge) {
   const ask = readKept(file).find(each => each.id === id);
-  if (!ask?.answered || !ask.late || ask.toldLate) return;
+  if (!ask?.answered || !ask.late || ask.toldLate || frozen().has(ask.session)) return;
+  const said = `[The user answered] ${ask.answered.text}`;
   const place = await placeOfSession(ask.session, targets()).catch(() => undefined);
-  // Not known while the coding agents' bridge isn't running: it may be the bridge's, told as the box
-  // starts again.
-  if (place === null && !bridgeRuns()) return;
-  // Gone for sure: no one to tell.
-  if (place !== null) {
-    if (!place) return;
-    const sent = await sendInto(place.target, ask.session, { id: messageID(), text: `[The user answered] ${ask.answered.text}`, delivery: "queue", metadata: boxNote("Your answer", `You answered: ${ask.answered.text}`) }, { from: "Your answer", words: ask.answered.text }).then(() => true, () => false);
+  if (place === undefined) return;
+  if (place === null) {
+    // Moved to another computer since: told there, as a letter. Else not known while the coding
+    // agents' bridge isn't running (it may be the bridge's); else gone for sure: no one to tell.
+    if (!tellMovedAway(ask.session, said) && !bridgeRuns()) return;
+  } else {
+    const sent = await sendInto(place.target, ask.session, { id: messageID(), text: said, delivery: "queue", metadata: boxNote("Your answer", `You answered: ${ask.answered.text}`) }, { from: "Your answer", words: ask.answered.text }).then(() => true, () => false);
     if (!sent) return;
   }
   changeKept(asks => {

@@ -47,7 +47,7 @@ const engineServer = http.createServer(async (request, response) => {
   const given = await reading(request);
   const url = new URL(request.url, "http://x");
   const send = (status, data) => response.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify({ data }));
-  const listed = each => ({ id: each.id, title: each.title, directory: each.directory, location: { directory: each.directory } });
+  const listed = each => ({ id: each.id, title: each.title, directory: each.directory, location: { directory: each.directory }, ...(each.metadata ? { metadata: each.metadata } : {}) });
   if (url.pathname === "/api/session" && url.searchParams.get("parentID")) return send(200, [...engine.sessions.values()].filter(each => each.parentID === url.searchParams.get("parentID")).map(listed));
   if (url.pathname === "/api/session/active") return send(200, {});
   if (url.pathname === "/api/experimental/session/import") {
@@ -497,4 +497,79 @@ test("a group chat whose copy there was let go of as it was switched to goes on 
   assert.equal(moved.status, 409, JSON.stringify(moved.json));
   assert.match(moved.json.message, /stayed here/);
   assert.equal(groups.chats.get("grp_stay1").status, "active");
+});
+
+// What a conversation's sessions tell it, as the box keeps it to send (`run/work/wakes.json`), and
+// the box's watcher of them, with its clock in the test's hands: what it would do later, done when
+// the test says.
+const wakesFile = path.join(support, "work-wakes.json");
+function watcher() {
+  const later = [];
+  const source = { port: enginePort, password: "pw" };
+  const watch = link.workWatcher(source, () => [source], { schedule: run => { later.push(run); }, file: wakesFile, toldFile: path.join(support, "work-told.json"), bridgeRuns: () => true });
+  return { watch, caughtUp: watch.caughtUp, runAll: async () => { for (const run of later.splice(0)) await run(); } };
+}
+// The letters this box has left for conversations on other computers, by the one each is for.
+const sending = path.join(home, "run", "outbox", "sending");
+const lettersFor = session => (fs.existsSync(sending) ? fs.readdirSync(sending) : []).filter(name => name.endsWith(".json"))
+  .map(name => JSON.parse(fs.readFileSync(path.join(sending, name), "utf8"))).filter(letter => letter.to === session);
+
+test("what a chat's sessions tell it while it moves never starts a turn there; once it's moved, it reaches it on the computer it lives on now", async () => {
+  chat("ses_reach1");
+  // A session it started, to hear of as it ends.
+  engine.sessions.set("ses_signin1", { id: "ses_signin1", title: "Sign-in", directory: chats, messages: [], metadata: { kuvo: { startedBy: "ses_reach1", depth: 1, wake: ["finished"] } } });
+  const { watch, runAll } = watcher();
+  script = async move => {
+    if (move.op === "offer") say({ op: "ready", id: move.id });
+    if (move.op === "part") {
+      await say({ op: "got", id: move.id, i: move.i });
+      if (move.i !== move.of - 1) return;
+      // The session it started stops with an error as its copy is set up on lab.
+      await watch({ type: "session.execution.failed", data: { sessionID: "ses_signin1" } });
+      await runAll();
+      say({ op: "arrived", id: move.id, hash: move.hash });
+    }
+    if (move.op === "switch") say({ op: "switched", id: move.id });
+  };
+  const moved = await ask("POST", "kuvo/moves", { kind: "chat", id: "ses_reach1", to: peerKey });
+  assert.equal(moved.status, 200, JSON.stringify(moved.json));
+  assert.deepEqual(engine.prompts.filter(each => each.session === "ses_reach1"), [], "nothing reached it while it moved");
+  assert.deepEqual(lettersFor("ses_reach1"), []);
+  // It lives on lab now: what waited goes there, as a letter.
+  await runAll();
+  const [letter, ...more] = lettersFor("ses_reach1");
+  assert.deepEqual(more, []);
+  assert.match(letter.text, /^\[Session failed\] "Sign-in" .*\(address ses_signin1\) stopped with an error\./);
+  const mails = [];
+  await link.sendOutbox({ send: bytes => mails.push(bytes) });
+  assert.equal(mails.length, 1);
+  assert.equal(lettersFor("ses_reach1")[0].sentTo, peerKey, "to lab");
+  assert.deepEqual(JSON.parse(fs.readFileSync(wakesFile, "utf8")), {}, "and nothing's left to send here");
+  fs.rmSync(sending, { recursive: true, force: true });
+});
+
+test("what you answered a chat's ask after it stopped waiting isn't told it while it moves; once it's moved, it reaches it there", async () => {
+  chat("ses_reach2");
+  const asks = path.join(home, "run", "work", "asks.json");
+  fs.mkdirSync(path.dirname(asks), { recursive: true });
+  fs.writeFileSync(asks, JSON.stringify({ asks: [{ id: "wak_reach2", action: "makeProject", session: "ses_reach2", name: "Trip plans", project: "Site", folderName: "Site", folder: null, at: Date.now(), given: { name: "Site" }, late: true }] }));
+  const id = "mov_reach2";
+  script = () => {};
+  writeRecord({ id, kind: "chat", thing: "ses_reach2", name: "“Trip plans”", from: "", to: peerKey, role: "from", stage: "switching", step: "switch", sessions: ["ses_reach2"],
+    peer: peerKey, wasPaused: false, tries: 0, started: Date.now(), offered: true, sentAt: Date.now(), switchSince: Date.now(), folder: path.join(wakes, "ses_reach2") });
+  const answered = await ask("POST", "kuvo/work/asks/wak_reach2", { answer: "deny" });
+  assert.equal(answered.status, 200, JSON.stringify(answered.json));
+  assert.deepEqual(engine.prompts.filter(each => each.session === "ses_reach2"), [], "nothing reached it while it moved");
+  // Lab switched to it: it lives there now.
+  await say({ op: "switched", id });
+  assert.ok(!engine.sessions.has("ses_reach2"));
+  // Tried again, as the box does every few minutes.
+  await watcher().caughtUp;
+  const letters = lettersFor("ses_reach2");
+  assert.equal(letters.length, 1);
+  assert.match(letters[0].text, /^\[The user answered\] The user said no to making Site\./);
+  // Told once.
+  await watcher().caughtUp;
+  assert.equal(lettersFor("ses_reach2").length, 1);
+  fs.rmSync(sending, { recursive: true, force: true });
 });

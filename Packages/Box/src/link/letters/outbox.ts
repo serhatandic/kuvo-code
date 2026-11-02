@@ -13,7 +13,7 @@ import { sendInto } from "../engine/queue";
 import { messageID } from "../engine/sessions";
 import { listOf, writePrivate } from "../files";
 import { HERE, IS_MAC, RUN } from "../home";
-import { frozen } from "../moves/records";
+import { frozen, movedAway } from "../moves/records";
 import { announce, toldPeers } from "../peers/agents";
 import { isPutAway, peerOf, readPeerAgents } from "../peers/directory";
 import { mailFor, movedOf, ownKey, ownListed, peersOf } from "../peers/known";
@@ -146,15 +146,26 @@ export function givenUp(id: string): void {
   } catch {}
 }
 
-// A letter for the outbox, from this box (an answer, say).
-function leaveLetter(letter: OutboxLetter, now = Date.now()): void {
+// A letter for the outbox, from this box (an answer, say); false if it couldn't be left.
+function leaveLetter(letter: OutboxLetter, now = Date.now()): boolean {
   try {
     fs.mkdirSync(SENDING, { recursive: true, mode: 0o700 });
     const id = "ltr_" + crypto.randomBytes(16).toString("base64url");
     writePrivate(path.join(SENDING, `${id}.json`), JSON.stringify({ ...letter, wait: false, at: now }));
-  } catch {}
+    return true;
+  } catch {
+    return false;
+  }
 }
-export const leaveAnswer = (letter: OutboxLetter): void => leaveLetter(letter);
+export const leaveAnswer = (letter: OutboxLetter): void => void leaveLetter(letter);
+
+/** What this box has to tell one of its conversations that moved to another computer lately
+ * (`movedAway`): a letter to it there, which the outbox sends as any other (from no one it can
+ * answer). False when it didn't move away from here, or the letter couldn't be left. */
+export function tellMovedAway(session: string, text: string, now = Date.now()): boolean {
+  const away = movedAway(now).find(each => each.session === session);
+  return Boolean(away) && leaveLetter({ from: null, to: session, text, peer: away!.key }, now);
+}
 
 // How a letter went, from the box it went to (anyone else's word is dropped): there, so it's not
 // sent again, and with `wait`, its answer awaited (`replies/<id>.wait`, whose box it's from), or
