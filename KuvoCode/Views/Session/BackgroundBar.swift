@@ -1,4 +1,5 @@
 import ClientDesign
+import ClientSessions
 import OpenCodeKit
 import SwiftUI
 
@@ -300,55 +301,72 @@ private struct BackgroundJobRow: View {
     }
 }
 
-/// The end of what a command has printed, read again every moment while it shows.
+/// The end of what a command has printed, read again every moment while it shows, until its engine
+/// says it has ended (as the phone's Output does; the rule is ClientSessions' `ShellRead`).
 struct ShellOutputView: View {
     let job: ShellJob
     let api: OpenCodeAPI?
     let directory: String
-    @State private var text = ""
+    /// What it has printed, once read; kept while a read fails.
+    @State private var text: String?
     /// Its output couldn't be read, and none has been yet.
     @State private var isUnread = false
+    /// It ended and its engine let go of what it printed: nothing more to read.
+    @State private var hasEnded = false
 
-    /// How much of the end it shows, in bytes.
-    static let tail = 24_000
-
-    /// The end of what command `id` has printed (as the phone's Output shows it): its last `tail`
-    /// bytes, from the first whole line in them (a progress line that redraws itself ends in a
-    /// return). With no whole line in them (one long line, or none ended), all of them but the
-    /// character the start cut in two. Nil when it can't be read.
-    static func end(of id: String, api: OpenCodeAPI, directory: String) async -> String? {
-        guard let size = try? await api.shellOutput(id, limit: 1, directory: directory).size else { return nil }
-        let start = max(0, size - tail)
-        guard let read = try? await api.shellOutput(id, from: start, limit: tail, directory: directory) else { return nil }
-        var output = Substring(read.output)
-        if start > 0 {
-            let lines = output.firstIndex(where: \.isNewline).map { output[output.index(after: $0)...] }
-            // The engine reads from a byte, so the first character may be half of one ("�").
-            output = lines.flatMap { $0.allSatisfy(\.isNewline) ? nil : $0 } ?? output.drop { $0 == "\u{FFFD}" }
+    /// Reads command `id`'s output every `pause`, showing each read, until its engine says the
+    /// command has ended; a read that fails otherwise (its computer away) is tried again.
+    static func follow(_ id: String, api: OpenCodeAPI, directory: String, every pause: Duration = .seconds(1.5),
+                       show: @MainActor (ShellRead) -> Void) async {
+        while !Task.isCancelled {
+            let read = await api.shellOutputEnd(of: id, directory: directory)
+            show(read)
+            if read == .ended { return }
+            try? await Task.sleep(for: pause)
         }
-        return String(output).trimmingCharacters(in: .newlines)
+    }
+
+    private var shown: String {
+        switch text {
+        case let text? where !text.isEmpty: text
+        case _? where hasEnded: "It printed nothing."
+        case nil where hasEnded: "This command has ended. What it printed is no longer kept."
+        case nil where isUnread: "Couldn’t read what it printed. Its computer may be away; this tries again on its own."
+        default: "Nothing printed yet."
+        }
     }
 
     var body: some View {
         ScrollView {
-            Text(!text.isEmpty ? text : isUnread ? "Couldn’t read what it printed. Its computer may be away; this tries again on its own." : "Nothing printed yet.")
-                .font(.system(size: 11.5, design: .monospaced))
-                .foregroundStyle(text.isEmpty ? .secondary : .primary)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(12)
+            VStack(alignment: .leading, spacing: 10) {
+                Text(shown)
+                    .font(.system(size: 11.5, design: .monospaced))
+                    .foregroundStyle(text?.isEmpty == false ? .primary : .secondary)
+                    .textSelection(.enabled)
+                if hasEnded, text != nil {
+                    Text("This command has ended.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(12)
         }
         .defaultScrollAnchor(.bottom)
         .frame(width: 520, height: 300)
         .task {
-            while !Task.isCancelled {
-                if let api, let end = await Self.end(of: job.id, api: api, directory: directory) {
+            guard let api else { return }
+            await Self.follow(job.id, api: api, directory: directory) { read in
+                switch read {
+                case .printed(let end):
                     if end != text { text = end }
                     isUnread = false
-                } else if text.isEmpty {
-                    isUnread = true
+                case .ended:
+                    // What was read stays; there's nothing more to wait for.
+                    withAnimation(.ui) { hasEnded = true }
+                case .unread:
+                    if text == nil { isUnread = true }
                 }
-                try? await Task.sleep(for: .seconds(1.5))
             }
         }
     }

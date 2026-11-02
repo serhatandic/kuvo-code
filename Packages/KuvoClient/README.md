@@ -39,6 +39,8 @@ What a client shows of a computer's sessions, the same in both apps. Rules only,
 - `UnsearchedReason`: why a computer's conversations weren't searched, in the words both apps show.
 - `ReviewList`: "/review"'s lists over the message field (What to review, a commit or a folder for
   it, Look for), their rows and sizes from what the box measured, and loading those.
+- `ShellRead`: the end of what a background command printed, as Output shows it, and whether it
+  has ended (its engine let go of it) or just can't be read now.
 
 ## ClientVault
 
