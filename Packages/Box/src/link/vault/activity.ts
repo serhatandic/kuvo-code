@@ -10,15 +10,19 @@ import { KEPT_DAYS, VAULT_FOLDER, vaultWork } from "./store";
 const ACTIVITY = path.join(VAULT_FOLDER, "activity.jsonl");
 const DAY = 86_400_000;
 
+/** A line as it's kept: with who did it on a client (`by`: a phone's link key, a Mac's), which
+ * stays here; a client hears only whether it was itself (`mine`). */
+export type KeptActivity = Omit<VaultActivity, "mine"> & { by?: string };
+
 /** What's noted: everything but its id and time. */
-export type Noted = Omit<VaultActivity, "id" | "at">;
+export type Noted = Omit<KeptActivity, "id" | "at">;
 
 // When the old lines were last dropped, by this process.
 let prunedAt = 0;
 
 /** A line of activity, kept. */
-export function note(what: Noted, now = Date.now()): VaultActivity {
-  const entry: VaultActivity = { id: newID("a_"), at: now, ...what };
+export function note(what: Noted, now = Date.now()): KeptActivity {
+  const entry: KeptActivity = { id: newID("a_"), at: now, ...what };
   if (entry.why) entry.why = oneLine(entry.why, 300);
   vaultWork(() => {
     fs.mkdirSync(VAULT_FOLDER, { recursive: true, mode: 0o700 });
@@ -41,10 +45,10 @@ function prune(now: number) {
   fs.renameSync(temporary, ACTIVITY);
 }
 
-function readLines(): VaultActivity[] {
+function readLines(): KeptActivity[] {
   let text = "";
   try { text = fs.readFileSync(ACTIVITY, "utf8"); } catch { return []; }
-  const entries: VaultActivity[] = [];
+  const entries: KeptActivity[] = [];
   for (const line of text.split("\n")) {
     if (!line) continue;
     try { entries.push(JSON.parse(line)); } catch {}
@@ -62,7 +66,7 @@ export interface ActivityFilter {
 }
 
 /** The activity, newest first. */
-export function readActivity({ item, bot, session, before, limit = 100 }: ActivityFilter = {}, now = Date.now()): VaultActivity[] {
+export function readActivity({ item, bot, session, before, limit = 100 }: ActivityFilter = {}, now = Date.now()): KeptActivity[] {
   return readLines()
     .filter(entry => now - entry.at < KEPT_DAYS * DAY)
     .filter(entry => (!item || entry.item === item) && (!bot || entry.bot === bot) && (!session || entry.session === session) && (!before || entry.at < before))

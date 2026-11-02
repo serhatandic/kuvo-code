@@ -43,20 +43,30 @@ function shownGrants(grants: VaultGrant[]): VaultGrant[] {
   return grants.filter(grant => !grant.who.bot || here.has(grant.who.bot));
 }
 
-/** Who's asking, as a client: a phone (by its name), this Mac's app, the Mac over SSH with the
- * unlock key; null for anyone else (an agent's command on this computer). */
-function clientOf({ request, phone }: RouteContext): string | null {
+/** A client: its name, as activity shows it ("Mac", or a phone's name, which phones may share),
+ * and who it is (`by`), which activity keeps to tell each client what it did itself. */
+interface Client {
+  name: string;
+  by: string;
+}
+
+/** Who's asking, as a client: a phone (by its link key), this Mac's app, the Mac over SSH with the
+ * unlock key (one Mac's can't be told from another's) or its own proof (by its key); null for
+ * anyone else (an agent's command on this computer). */
+function clientOf({ request, phone }: RouteContext): Client | null {
   if (phone?.key) {
     const key = phone.key.toString("base64url");
-    return readLink()?.phones?.find(each => each.key === key)?.name || "iPhone";
+    return { name: readLink()?.phones?.find(each => each.key === key)?.name || "iPhone", by: `phone:${key}` };
   }
-  if (request.fromApp) return "Mac";
+  const mac = { name: "Mac", by: "mac" };
+  if (request.fromApp) return mac;
   // Proved over the vault's socket (vault/holder.ts), or with the key itself, which unlocks a locked one.
-  if (request.vaultClient) return "Mac";
+  if (request.vaultClient) return mac;
   // Or the Mac's proof for this request alone.
-  if (provedRequest(request)) return "Mac";
+  const proved = provedRequest(request);
+  if (proved) return { name: "Mac", by: `mac:${proved}` };
   const key = request.headers["x-kuvo-vault-key"];
-  if (typeof key === "string" && unlockWith(key)) return "Mac";
+  if (typeof key === "string" && unlockWith(key)) return mac;
   return null;
 }
 
@@ -64,39 +74,39 @@ function clientOf({ request, phone }: RouteContext): string | null {
 const PROOF_FOR = 300_000;
 const usedProofs = new Map<string, number>();
 
-/** Whether `proof` is a Mac that set this machine up, asking for its vault's key: its signing key's
- * signature of `kuvo-vault-key\0<this machine's id on its Macs>\0<at>\0<nonce>`, made within five
- * minutes, and not used before. */
-function provedMac(given: Record<string, unknown>, tag = "kuvo-vault-key", rest = ""): boolean {
+/** The Mac that set this machine up (its key), when `proof` is its, asking for its vault's key: its
+ * signing key's signature of `kuvo-vault-key\0<this machine's id on its Macs>\0<at>\0<nonce>`, made
+ * within five minutes, and not used before; null when it isn't. */
+function provedMac(given: Record<string, unknown>, tag = "kuvo-vault-key", rest = ""): string | null {
   const link = readLink();
   const mac = typeof given.mac === "string" ? given.mac : "";
   const at = Number(given.at);
   const nonce = typeof given.nonce === "string" && /^[A-Za-z0-9_-]{16,64}$/.test(given.nonce) ? given.nonce : "";
   const sign = mac ? macSign(link, mac) : null;
-  if (!sign || !nonce || !(link?.macs ?? []).includes(mac) || !Number.isFinite(at) || Math.abs(Date.now() - at) > PROOF_FOR || typeof given.proof !== "string") return false;
+  if (!sign || !nonce || !(link?.macs ?? []).includes(mac) || !Number.isFinite(at) || Math.abs(Date.now() - at) > PROOF_FOR || typeof given.proof !== "string") return null;
   const now = Date.now();
   for (const [used, until] of usedProofs) if (until < now) usedProofs.delete(used);
-  if (usedProofs.has(nonce)) return false;
+  if (usedProofs.has(nonce)) return null;
   try {
     const key = crypto.createPublicKey({ key: Buffer.concat([ED_SPKI, Buffer.from(sign, "base64url")]), format: "der", type: "spki" });
     const signature = Buffer.from(given.proof, "base64url");
     const good = signature.length === 64 && typeof link?.id === "string" && crypto.verify(null, Buffer.from(`${tag}\0${link.id}\0${at}\0${nonce}${rest}`), key, signature);
     if (good) usedProofs.set(nonce, now + 2 * PROOF_FOR);
-    return good;
+    return good ? mac : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
-/** Whether a request carries the proof of a Mac that set this machine up, for it alone
+/** The Mac that set this machine up (its key), when a request carries its proof for it alone
  * (`x-kuvo-vault-proof`, base64url JSON `{mac, at, nonce, proof}`): its signing key's signature of
  * `kuvo-vault-request\0<this machine's id>\0<at>\0<nonce>\0<METHOD>\0<path>\0<sha256 of the body, hex>`,
  * within five minutes, each nonce once. The Mac's unlock key never goes with such a request. */
-function provedRequest(request: RouteContext["request"]): boolean {
+function provedRequest(request: RouteContext["request"]): string | null {
   const header = request.headers["x-kuvo-vault-proof"];
-  if (typeof header !== "string") return false;
+  if (typeof header !== "string") return null;
   let given: Record<string, unknown> = {};
-  try { given = JSON.parse(Buffer.from(header, "base64url").toString("utf8")); } catch { return false; }
+  try { given = JSON.parse(Buffer.from(header, "base64url").toString("utf8")); } catch { return null; }
   const hash = crypto.createHash("sha256").update(request.body ?? Buffer.alloc(0)).digest("hex");
   return provedMac(given, `kuvo-vault-request`, `\0${request.method.toUpperCase()}\0${request.path}\0${hash}`);
 }
@@ -204,19 +214,21 @@ async function* answerVault(context: RouteContext): AsyncGenerator<AnswerPiece> 
     const bot = typeof given.bot === "string" && /^[A-Za-z0-9_-]{1,100}$/.test(given.bot) ? given.bot : undefined;
     const paused = given.paused === true;
     setPaused(paused, bot);
-    note({ what: paused ? "paused" : "resumed", client, ...(bot ? { bot } : {}) });
+    note({ what: paused ? "paused" : "resumed", client: client.name, by: client.by, ...(bot ? { bot } : {}) });
     return yield* json(200, vaultState());
   }
   if (route === "kuvo/vault/activity") {
     if (method !== "GET") return yield* json(405, {});
     const query = new URLSearchParams(request.path.split("?")[1] ?? "");
-    return yield* json(200, { entries: readActivity({
+    const entries = readActivity({
       item: query.get("item") ?? undefined,
       bot: query.get("bot") ?? undefined,
       session: query.get("session") ?? undefined,
       before: Number(query.get("before")) || undefined,
       limit: Number(query.get("limit")) || undefined,
-    }) });
+    });
+    // Each line marked when this client did it, by who it is, not its name; who did the rest stays here.
+    return yield* json(200, { entries: entries.map(({ by, ...entry }) => (by === client.by ? { ...entry, mine: true } : entry)) });
   }
   if (route === "kuvo/vault/grants") {
     if (method === "GET") return yield* json(200, { grants: shownGrants(readGrants()) });
@@ -225,7 +237,7 @@ async function* answerVault(context: RouteContext): AsyncGenerator<AnswerPiece> 
     if (typeof given.item !== "string" || !who) return yield* json(400, { message: "Send {\"item\", \"who\": {\"bot\"} or {\"project\"} or {\"everyone\": true}, \"how\": \"own\" | \"ask\" | null}." });
     const grants = setGrant(given.item, who, given.how ?? null);
     const item = itemByID(given.item);
-    note({ what: given.how ? "granted" : "ungranted", client, ...(item ? { item: item.id, itemName: item.name, kind: item.kind } : {}), ...(who.bot ? { bot: who.bot } : {}), ...(typeof given.how === "string" ? { how: given.how } : {}) });
+    note({ what: given.how ? "granted" : "ungranted", client: client.name, by: client.by, ...(item ? { item: item.id, itemName: item.name, kind: item.kind } : {}), ...(who.bot ? { bot: who.bot } : {}), ...(typeof given.how === "string" ? { how: given.how } : {}) });
     return yield* json(200, { grants: shownGrants(grants) });
   }
   if (route === "kuvo/vault/asks" || route === "kuvo/vault/asks/events") {
@@ -253,7 +265,7 @@ async function* answerVault(context: RouteContext): AsyncGenerator<AnswerPiece> 
     if (answer !== "once" && answer !== "always" && answer !== "no") return yield* json(400, { message: "Answer “once”, “always” or “no”." });
     const item = typeof given.item === "string" ? given.item : undefined;
     if (item && !itemByID(item)) return yield* json(404, { message: "That item isn't in this vault." });
-    return yield* json(answerAsk(idOf(parts[3]), { answer, ...(item ? { item } : {}), client }) ? 200 : 404, {});
+    return yield* json(answerAsk(idOf(parts[3]), { answer, ...(item ? { item } : {}), client: client.name, by: client.by }) ? 200 : 404, {});
   }
 
   // Items: a machine's needs its key in memory; one made by a client's first item gives that client the key.
@@ -263,7 +275,7 @@ async function* answerVault(context: RouteContext): AsyncGenerator<AnswerPiece> 
     if (!isMade()) key = makeVault();
     if (isLocked()) return yield* json(423, { message: LOCKED });
     const item = await addItem(given);
-    note({ what: "added", client, item: item.id, itemName: item.name, kind: item.kind });
+    note({ what: "added", client: client.name, by: client.by, item: item.id, itemName: item.name, kind: item.kind });
     return yield* json(200, { item, ...(key ? { key } : {}) });
   }
   if (parts[2] === "items" && parts.length >= 4) {
@@ -274,18 +286,18 @@ async function* answerVault(context: RouteContext): AsyncGenerator<AnswerPiece> 
       const item = itemByID(id);
       if (!item) return yield* json(404, { message: "That item isn't in this vault." });
       const values = await valuesOf(id);
-      note({ what: "shown", client, item: item.id, itemName: item.name, kind: item.kind });
+      note({ what: "shown", client: client.name, by: client.by, item: item.id, itemName: item.name, kind: item.kind });
       return yield* json(200, { values });
     }
     if (parts.length !== 4) return yield* json(404, {});
     if (method === "PATCH") {
       const item = await changeItem(id, given);
-      note({ what: "changed", client, item: item.id, itemName: item.name, kind: item.kind });
+      note({ what: "changed", client: client.name, by: client.by, item: item.id, itemName: item.name, kind: item.kind });
       return yield* json(200, { item });
     }
     if (method === "DELETE") {
       const item = await removeItem(id);
-      note({ what: "removed", client, item: item.id, itemName: item.name, kind: item.kind });
+      note({ what: "removed", client: client.name, by: client.by, item: item.id, itemName: item.name, kind: item.kind });
       return yield* json(200, {});
     }
     return yield* json(405, {});

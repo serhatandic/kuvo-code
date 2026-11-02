@@ -13,8 +13,9 @@ export { PATIENCE };
 export interface AskAnswer {
   answer: "once" | "always" | "no";
   item?: string;
-  /** Who answered: "Mac", or a phone's name. */
+  /** Who answered: "Mac", or a phone's name; and who that is, for activity (areas/vault.ts). */
   client?: string;
+  by?: string;
 }
 
 const book = askBook<VaultAsk, AskAnswer>("q_", { answer: "no" });

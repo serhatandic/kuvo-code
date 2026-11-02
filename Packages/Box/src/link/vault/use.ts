@@ -88,17 +88,17 @@ export async function mayUse(item: VaultItem, caller: Caller, use: Use): Promise
   note({ what: "asked", ...itemOf(item), ...whoOf(caller), ...where });
   const answered = await ask({ kind: "use", ...whoOf(caller), ...(caller.group ? { group: caller.group } : {}), item: item.id, itemName: item.name, ...(use.site ? { site: use.site } : {}), ...(use.why ? { why: use.why } : {}), ...(machineName() ? { machine: machineName() } : {}) }, use.signal);
   if (answered.answer === "no") {
-    note({ what: "declined", ...itemOf(item), ...whoOf(caller), ...where, ...(answered.client ? { client: answered.client } : {}) });
+    note({ what: "declined", ...itemOf(item), ...whoOf(caller), ...where, ...(answered.client ? { client: answered.client, by: answered.by } : {}) });
     return { ok: false, message: `The user didn't let you use “${item.name}”.` };
   }
   const always = answered.answer === "always" ? alwaysFor(caller) : null;
   if (always) {
     setGrant(item.id, always, "own");
-    note({ what: "granted", ...itemOf(item), ...whoOf(caller), how: "own", ...(answered.client ? { client: answered.client } : {}) });
+    note({ what: "granted", ...itemOf(item), ...whoOf(caller), how: "own", ...(answered.client ? { client: answered.client, by: answered.by } : {}) });
   }
   // ("Always" for a conversation with neither a bot nor a project of its own is this once.)
   const allowed = always ? "always" : "once";
-  note({ what: "allowed", ...itemOf(item), ...whoOf(caller), ...where, how: allowed, ...(answered.client ? { client: answered.client } : {}) });
+  note({ what: "allowed", ...itemOf(item), ...whoOf(caller), ...where, how: allowed, ...(answered.client ? { client: answered.client, by: answered.by } : {}) });
   return { ok: true, how: allowed };
 }
 

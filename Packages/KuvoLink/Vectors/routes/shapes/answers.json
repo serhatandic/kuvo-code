@@ -6700,6 +6700,7 @@
          "session?": "string",
          "sessionName?": "string",
          "client?": "string",
+         "mine?": "bool",
          "site?": "string",
          "program?": "string",
          "how?": "string",

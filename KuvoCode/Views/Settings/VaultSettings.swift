@@ -394,7 +394,7 @@ struct VaultActivityRow: View {
                 .font(.caption)
                 .frame(width: 14)
             VStack(alignment: .leading, spacing: 1) {
-                Text(entry.sentence(here: "Mac")).lineLimit(2)
+                Text(entry.sentence).lineLimit(2)
                 Text("\(entry.date, format: .relative(presentation: .named))\(entry.why.map { " · \($0)" } ?? "")")
                     .font(.caption)
                     .foregroundStyle(.secondary)
