@@ -1,0 +1,32 @@
+import { expect, test } from "bun:test"
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+
+// The box sets the sandbox up as it starts, and on Linux checks each minute whether commands can
+// have a namespace of their own. Neither leaves anything outside Kuvo Code's folder on the machine:
+// here the box's temporary folder can't be written at all, and the sandbox still sets up whole.
+
+test.skipIf(process.platform !== "linux")("setting the sandbox up writes nothing outside Kuvo Code's folder", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "kuvo-sandbox-contained-")))
+  const temporary = join(root, "tmp")
+  try {
+    for (const folder of ["kuvo", "home", "tmp"]) mkdirSync(join(root, folder))
+    chmodSync(temporary, 0o500)
+    const box = join(import.meta.dir, "..", "src", "link", "fence", "state.ts")
+    // (A box of its own, in a process of its own: the link finds its folders as it loads.)
+    const script = `const fence = await import(${JSON.stringify(box)}); const state = fence.setUpFence(); console.log(JSON.stringify({ reason: state.reason ?? null, why: state.why ?? null, whole: fence.fenceWhole() }))`
+    const ran = Bun.spawnSync([process.execPath, "-e", script], { cwd: root, env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: join(root, "home"), KUVO_HOME: join(root, "kuvo"), TMPDIR: temporary } })
+    const said = ran.stdout.toString().trim().split("\n").at(-1) ?? ""
+    expect(ran.exitCode, ran.stderr.toString()).toBe(0)
+    const state = JSON.parse(said)
+    // Checked and set up (only the engine isn't running here), as it would be with a temporary
+    // folder to write; and the commands' namespace folder it used, inside Kuvo Code's, left empty.
+    expect({ reason: state.reason, why: state.why }).toEqual({ reason: "engineDown", why: "The engine isn't running." })
+    expect(readdirSync(temporary)).toEqual([])
+    expect(readdirSync(join(root, "kuvo", "run", "fence", "ns"))).toEqual([])
+  } finally {
+    chmodSync(temporary, 0o700)
+    rmSync(root, { recursive: true, force: true })
+  }
+})

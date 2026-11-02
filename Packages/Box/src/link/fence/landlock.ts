@@ -16,8 +16,6 @@
 
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import type { FencePolicy } from "./policy";
 
 /** What the Linux script reads: the policy's parts it needs. */
@@ -64,18 +62,15 @@ exec "$0" --user -- /bin/sh -c 'echo >"$0"; read _ <"$1"; [ "$(id -u)" = "$2" ] 
 export const UNSHARE = ["/usr/bin/unshare", "/bin/unshare"];
 
 /** The `unshare` that gives commands here a namespace of their own, tried as the launcher runs it
- * (each step, its mounts too); null where the machine doesn't let it (no `unshare`, user namespaces
- * off, or AppArmor restricting them, as Ubuntu 24.04 and later do). */
-export function ownNamespace(): string | null {
+ * (each step, its mounts too), with `own` the box's empty folder each command's namespace uses
+ * (`run/fence/ns`, which stays empty: what HIDE makes in it is in the namespace's own memory); null
+ * where the machine doesn't let it (no `unshare`, user namespaces off, or AppArmor restricting them,
+ * as Ubuntu 24.04 and later do). */
+export function ownNamespace(own: string): string | null {
   const unshare = UNSHARE.find(each => fs.existsSync(each));
   if (!unshare) return null;
-  const own = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-namespace-"));
-  try {
-    const tried = spawnSync(unshare, ["-Urm", "/bin/sh", "-c", HIDE, unshare, String(process.getuid?.() ?? -1), String(process.getgid?.() ?? -1), "", own, "/dev/null", "/bin/sh", "-c", "[ \"$(id -u)\" = \"$0\" ]", String(process.getuid?.() ?? -1)], { cwd: "/", stdio: "ignore", timeout: 10_000 });
-    return tried.status === 0 ? unshare : null;
-  } finally {
-    fs.rmSync(own, { recursive: true, force: true });
-  }
+  const tried = spawnSync(unshare, ["-Urm", "/bin/sh", "-c", HIDE, unshare, String(process.getuid?.() ?? -1), String(process.getgid?.() ?? -1), "", own, "/dev/null", "/bin/sh", "-c", "[ \"$(id -u)\" = \"$0\" ]", String(process.getuid?.() ?? -1)], { cwd: "/", stdio: "ignore", timeout: 10_000 });
+  return tried.status === 0 ? unshare : null;
 }
 
 /**

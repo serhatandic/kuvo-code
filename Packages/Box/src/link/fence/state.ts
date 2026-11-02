@@ -65,6 +65,9 @@ const FOLDER = realish(path.join(RUN, "fence"));
 const PLUGIN = path.join(ENGINE_CONFIG || path.join(K, "config"), "opencode", "plugins", "kuvo-sandbox.js");
 const NOTE = path.join(FOLDER, "engine.json");
 const PROBE = path.join(FOLDER, "probe");
+/** Each command's namespace's own folder, empty (fence/landlock.ts, HIDE), which the check uses too:
+ * so it makes nothing outside Kuvo Code's folder, as often as it's tried. */
+const NAMESPACE_FOLDER = path.join(FOLDER, "ns");
 // Tells kuvo-wake its watches' checks run in the sandbox, as commands do: there while the engine has
 // the plugin.
 const ON = path.join(FOLDER, "on");
@@ -259,8 +262,7 @@ function writeProfiles(): void {
     ? [["project.sb", seatbeltProfile(policy, { inside: false })], ["inside.sb", seatbeltProfile(policy, { inside: true })],
         ["project-agent.sb", seatbeltProfile(policy, { inside: false, agent: true })], ["inside-agent.sb", seatbeltProfile(policy, { inside: true, agent: true })], ["policy.json", landlockPolicy(policy)]]
     : [["policy.json", landlockPolicy(policy)], ["runtime", runtime() ?? ""], ["namespace", namespace ?? "-"], ["sockets", (policy.sockets ?? []).map(each => each + "\n").join("")]];
-  // (Each command's namespace's own folder, empty: fence/landlock.ts, HIDE.)
-  if (platform === "linux") fs.mkdirSync(path.join(FOLDER, "ns"), { recursive: true, mode: 0o700 });
+  if (platform === "linux") fs.mkdirSync(NAMESPACE_FOLDER, { recursive: true, mode: 0o700 });
   const text = files.map(([name, body]) => name + body).join("");
   if (text === lastProfiles) return;
   for (const [name, body] of files) writePrivate(path.join(FOLDER, name), body);
@@ -284,6 +286,10 @@ const WITHOUT_NAMESPACE: "off" | "without" = "without";
 let namespace: string | null = null;
 /** Where it runs without one, what the machine needs for it (`FenceState.needs`). */
 let withoutNamespace: string | null = null;
+const namespaceHere = (): string | null => {
+  fs.mkdirSync(NAMESPACE_FOLDER, { recursive: true, mode: 0o700 });
+  return ownNamespace(NAMESPACE_FOLDER);
+};
 
 /** Whether this computer can sandbox commands at all, and why not. */
 function able(): Checked {
@@ -292,7 +298,7 @@ function able(): Checked {
   if (!fs.existsSync("/sys/kernel/security/landlock") && !/landlock/.test(textOf("/sys/kernel/security/lsm") ?? "landlock")) {
     return { able: false, passed: false, why: `Linux ${os.release().split("-")[0]} can't sandbox commands: it needs Landlock (Linux 5.13 or later, with it on).`, reason: "kernel", needs: "Linux 5.13" };
   }
-  namespace = ownNamespace();
+  namespace = namespaceHere();
   withoutNamespace = namespace ? null : UNSHARE.some(each => fs.existsSync(each)) ? "user namespaces" : "util-linux";
   if (withoutNamespace && WITHOUT_NAMESPACE === "off") {
     const services = "which the sandbox needs to keep commands from the services your login runs: systemd, your keyring, your agents";
@@ -493,7 +499,7 @@ export function keepFence(): void {
       // A failed check, tried again each minute (it holds the box up while it runs); and on Linux,
       // set up again once commands can have a namespace of their own after all (allowed since), or
       // no longer can (each would fail at unshare).
-      const namespaces = checked.passed && platform === "linux" && round % 6 === 5 && !ownNamespace() !== !namespace;
+      const namespaces = checked.passed && platform === "linux" && round % 6 === 5 && !namespaceHere() !== !namespace;
       if (checked.passed ? namespaces || textOf(PLUGIN) !== pluginScript(places, VERSION) : round % 6 === 0) setUpFence();
     } catch {}
   }, 10_000).unref?.();
