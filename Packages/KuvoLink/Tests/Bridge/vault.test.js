@@ -4,7 +4,6 @@
 // ever seeing a value. (This Mac's vault, in its Keychain: vault-host.test.js.)
 //
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/vault.test.js`.
-import { test as nodeTest, before as nodeBefore } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
@@ -15,11 +14,8 @@ import os from "node:os";
 import path from "node:path";
 import { script, sshAgentsOf } from "./bot-keys-scenarios.js";
 import { atEnd, removeAtEnd } from "./at-end.js";
-import { appears, asked } from "./vault-waits.js";
-
-// Each fails at its own time limit when what it waits for never comes, rather than holding up the run.
-const test = (name, run) => nodeTest(name, { timeout: 60_000 }, run);
-const before = run => nodeBefore(run, { timeout: 60_000 });
+// (Each test fails at its own time limit when what it waits for never comes, rather than holding up the run.)
+import { appears, asked, before, test } from "./vault-waits.js";
 
 // (A short folder: the vault's socket lives in it, and a socket's path can't be long.)
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "kv-"));
@@ -581,8 +577,19 @@ function noteConversation(note, folder) {
   fs.writeFileSync(path.join(notes, `.${note}`), folder);
   fs.renameSync(path.join(notes, `.${note}`), path.join(notes, note));
 }
-// Its agent's socket, if it has one now.
+// Its agent's socket, if it has one open now. A socket's file is there from the moment it's bound,
+// before it listens; the box makes it yours alone once it does, so only that counts (and a wait
+// for an agent that never becomes yours alone fails).
 const agentOf = note => {
+  const socket = socketOf(note);
+  try {
+    return socket && (fs.statSync(socket).mode & 0o077) === 0 ? socket : null;
+  } catch {
+    return null;
+  }
+};
+// Its agent's socket, open or not yet.
+const socketOf = note => {
   const prefix = crypto.createHash("sha256").update(note).digest("hex").slice(0, 16);
   const found = fs.existsSync(sshAgents) && fs.readdirSync(sshAgents).find(name => name.startsWith(prefix) && name.endsWith(".sock"));
   return found ? path.join(sshAgents, found) : null;
@@ -630,7 +637,6 @@ test("an SSH key you keep for a project signs through its conversations' own age
     for (const [note, folder] of [["ses_shop", project], [folderNote(path.join(project, "web")), path.join(project, "web")]]) {
       const socket = await sshAgentFor(note, folder);
       assert.ok(socket, `an agent for ${note}`);
-      assert.equal((fs.statSync(socket).mode & 0o077), 0, "only you can reach it");
       const listed = await sshTool("ssh-add", ["-l"], socket);
       assert.equal(listed.status, 0, listed.stderr);
       assert.match(listed.stdout, new RegExp(fingerprint.replace(/[+/]/g, "\\$&")));
@@ -654,7 +660,7 @@ test("an SSH key you keep for a project signs through its conversations' own age
     const wrong = folderNote(elsewhere).replace(/.$/, c => (c === "0" ? "1" : "0"));
     noteConversation(wrong, project);
     await sshAgentFor(folderNote(path.join(project, "api")), path.join(project, "api"));
-    assert.equal(agentOf(wrong), null);
+    assert.equal(socketOf(wrong), null);
     // Paused, the conversation's agent offers nothing either.
     await fromMac("POST", "kuvo/vault/pause", { paused: true, bot: "ses_shop" }, key);
     assert.equal((await sshTool("ssh-add", ["-l"], await sshAgentFor("ses_shop", project))).status, 1, "paused");

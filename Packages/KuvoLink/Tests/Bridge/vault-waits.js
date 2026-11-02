@@ -2,27 +2,66 @@
 // Never a count of tries or a pause: a busy machine is slow, never wrong, and a wait whose thing
 // never comes fails at the test's own time limit.
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
+import { before as nodeBefore, test as nodeTest } from "node:test";
 import { atEnd } from "./at-end.js";
 
-/** What `found()` gives, once it gives something: looked at again as anything changes in `folder`
- * (or, while there's no such folder yet, under the nearest one there is). */
+const LIMIT = 60_000;
+// What ends the test or setup a wait is part of: each wait ends with it, so a test that times out
+// still stops its box in its `finally` (also when it reaches a wait only after its time ran out). A
+// setup's own signal never ends at its time limit, so its waits end at that limit themselves.
+const ending = new AsyncLocalStorage();
+export const test = (name, run) => nodeTest(name, { timeout: LIMIT }, t => ending.run(t.signal, () => run(t)));
+export const before = run => nodeBefore(async () => {
+  const limit = new AbortController();
+  const at = setTimeout(() => limit.abort(), LIMIT);
+  try { return await ending.run(limit.signal, run); } finally { clearTimeout(at); }
+}, { timeout: LIMIT });
+
+// Waits still open once the file's tests are done (a test failed before they came): each fails, and
+// none keeps its process going.
+const open = new Set();
+atEnd(() => { for (const end of [...open]) end(); });
+
+/** What `found()` gives, once it gives something: looked at again as anything changes in `folder`.
+ * Watched with the folder above it, each on its own (never recursively, which Linux only imitates),
+ * and watched anew as either changes, so a folder the box clears and makes again (which Linux may
+ * give the same inode), or makes only later, is followed to the new one. */
 export function appears(folder, found) {
   return new Promise((resolve, reject) => {
-    let top = folder;
-    while (!fs.existsSync(top)) top = path.dirname(top);
+    const signal = ending.getStore();
+    const watchers = [];
     let done = false;
-    const watcher = fs.watch(top, { recursive: top !== folder }, () => look());
-    // (Closed once the file's tests are done, if a test failed before this was seen: never what
-    // keeps its process going.)
-    atEnd(() => finish(() => resolve(undefined)));
-    watcher.on("error", error => finish(() => reject(error)));
+    const ended = () => finish(() => reject(new Error(`The test ended before this came, in ${folder}.`)));
+    if (signal?.aborted) return ended();
+    signal?.addEventListener("abort", ended, { once: true });
+    open.add(ended);
     function finish(then) {
       if (done) return;
       done = true;
-      watcher.close();
+      open.delete(ended);
+      signal?.removeEventListener("abort", ended);
+      for (const watcher of watchers.splice(0)) watcher.close();
       then();
+    }
+    function arm() {
+      for (const watcher of watchers.splice(0)) watcher.close();
+      let above = path.dirname(folder);
+      while (!fs.existsSync(above)) above = path.dirname(above);
+      for (const where of fs.existsSync(folder) ? [above, folder] : [above]) {
+        try {
+          watchers.push(fs.watch(where, changed));
+        } catch {
+          // (Gone again since: the folder above it says so.)
+        }
+      }
+    }
+    function changed() {
+      if (done) return;
+      arm();
+      look();
     }
     function look() {
       if (done) return;
@@ -31,7 +70,7 @@ export function appears(folder, found) {
       if (value) finish(() => resolve(value));
     }
     // (Once it watches, so nothing made in between is missed.)
-    look();
+    changed();
   });
 }
 
@@ -39,7 +78,8 @@ export function appears(folder, found) {
  * `url` (`…/kuvo/vault/asks/events` on the box's own process), as this Mac's app follows them. */
 export async function asked(url, password, seen = new Set()) {
   const stop = new AbortController();
-  const response = await fetch(url, { headers: { authorization: `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`, "x-kuvo-from": "app" }, signal: stop.signal });
+  const signal = ending.getStore() ? AbortSignal.any([stop.signal, ending.getStore()]) : stop.signal;
+  const response = await fetch(url, { headers: { authorization: `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`, "x-kuvo-from": "app" }, signal });
   let buffer = "";
   for await (const chunk of response.body.pipeThrough(new TextDecoderStream())) {
     buffer += chunk;
