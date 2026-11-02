@@ -6,6 +6,7 @@ import path from "node:path";
 import { isObject } from "../../shared/json";
 import type { Fields } from "../../shared/json";
 import { newID, plainName, stamp } from "../../shared/text";
+import { settleAgain } from "../areas/approval";
 import { boxProjects } from "../areas/projects";
 import { call } from "../engine/client";
 import { BOTS, HERE, IS_MAC } from "../home";
@@ -179,6 +180,9 @@ async function makeOnce(given: GivenBot | null | undefined, readEngine: () => Ta
     const now = stamp();
     const described = { created: now, id, job: "", kuvo: DESCRIPTION, look, model, name, ...(personality ? { personality: personality.id } : {}), ...(project ? { project: project as string } : {}), updated: now } satisfies BotDescription;
     fs.writeFileSync(path.join(folder, "bot.json"), JSON.stringify(described, null, 2));
+    // Kept with the approval its rules say (Auto, or Ask First), and made for what that comes to
+    // here: Auto asks first where the sandbox doesn't run. (The box's round would, in a moment.)
+    await settleAgain(target, session.id, agents, AbortSignal.timeout(BOT_STEP)).catch(() => {});
   } catch (error) {
     if (session?.id) await call(target, "DELETE", `/api/session/${encodeURIComponent(session.id)}`, undefined, AbortSignal.timeout(BOT_STEP)).catch(() => {});
     discard();

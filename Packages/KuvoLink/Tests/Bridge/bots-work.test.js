@@ -253,7 +253,7 @@ test("a model its provider is retiring isn't offered, but a session on it can st
 test("a session's approval is never above its starter's:a bot that asks first starts sessions that ask first", async () => {
   const said = await tool("start_session", { task: "Tidy the README.", project: "Tidepool", approval: "approveAll" }, "ses_mira");
   assert.equal(said.isError, false, said.text);
-  assert.match(said.text, /asks first, as you do/);
+  assert.match(said.text, /It asks before it edits or runs commands/);
   assert.ok(made[0].permissions.some(rule => rule.action === "shell" && rule.effect === "ask"));
   const careful = await tool("start_session", { task: "Look around.", project: "Tidepool", approval: "ask" }, "ses_pixel");
   assert.equal(careful.isError, false, careful.text);

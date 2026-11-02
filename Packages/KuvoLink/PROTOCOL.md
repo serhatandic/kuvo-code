@@ -564,27 +564,34 @@ its own, which a `SIGTERM` stops waiting.
     `read_conversation` reads one here, or asks a peer with `letters-read` for it by letter.
 - **`POST kuvo/sessions`** `{task, title?, folder? | project? | chat?, worktree?, model?, effort?,
   mode?, approval?, wake?, startedBy?, wait? = false}` →
-  `{session, title, folder, project, answer?}` (`project` null for a chat; `answer` with
-  `wait`, its first answer in ten minutes, else null). `start_session` is this route, from the
+  `{session, title, folder, project, answer?, got?}` (`project` null for a chat; `answer` with
+  `wait`, its first answer in ten minutes, else null; `got`, the approval it runs with now where
+  that's less than asked: Auto that asks first without the sandbox, say). `start_session` is this route, from the
   calling conversation.
   - From a conversation (`startedBy`, its root found as above): in its folder unless `folder` names
     another (a bot's own folder is its chats), on its model and in its mode (Plan stays Plan) unless `model`, `effort` or `mode` names another, on the engine or coding agents' bridge
     it runs on, with its approval made again with this box's Settings › Permissions (Ask First isn't
     got around), its metadata `kuvo: {startedBy}` (it opens nothing by itself: clients list it under that
     conversation), and the task as a message from it.
-  - From a client (no `startedBy`): in `folder`, approved as Approve All with Settings ›
-    Permissions, the task as the user's own first message.
+  - From a client (no `startedBy`): in `folder`, in Auto unless `approval` says (which asks first
+    where the sandbox doesn't run, "Approval"), with Settings › Permissions, the task as the user's
+    own first message.
   - Either way its project's other folders are allowed to it and named in its instructions, one in
     a worktree is told so, and a folder that's no project yet becomes one.
   - 400 `{message}` (no task, not a folder here), 403 (a group chat's seat), 404 (`startedBy`
-    isn't a conversation here), 429 (too many lately), 502 `{message, session?}` (not made, or
+    isn't a conversation here), 409 `{message, reason}` (Full Access from a client where it can't
+    be had: `fullAccessOff`), 429 (too many lately), 502 `{message, session?}` (not made, or
     made but its task didn't reach it), 503 (no engine).
   - Where and how, each optional (bridge 0.9.106, "Work"): `project` (a project's name or folder
     here) or `chat: true` instead of `folder`; `worktree: true`, a worktree of its project on a
     branch of its own; `model` (`"provider/model"` or `{providerID, id}`, one there's an account for
     here, on the engine or the coding agents' bridge as it runs) and `effort` (one of its variants);
-    `mode` `build` or `plan`; `approval` `ask` or `approveAll`, never above the starter's (a starter
-    that asks first starts one that does too); `wake` (`finished`, `asks`, `both`, `none`), what the
+    `mode` `build` or `plan`; `approval` (Approval, below: `askFirst`, `acceptEdits`, `auto` or
+    `fullAccess`; an older client's `ask` is Ask First and `approveAll` Auto), never above the
+    starter's (a starter that asks first starts one that does too, and the tool tells its agent what
+    it got where that's less than asked; one started by a conversation from before, with no
+    approval kept, is made as its starter reads and keeps none either, but a bot's work, which is
+    kept with Auto at most); `wake` (`finished`, `asks`, `both`, `none`), what the
     starter hears of it (a conversation here, once the new session is marked so; the tool says
     which). `computer` other than this one: 400, for now.
   - Unknown fields are ignored, so a newer client can send more to an older box.
@@ -2383,6 +2390,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `sandbox` | `kuvo/sandbox` ("Sandbox", bridge 0.9.118) |
 | `sandbox.check` | `reason`, `action` and the rest in `kuvo/sandbox`, and `POST kuvo/sandbox/check` |
 | `sandbox.asks` | `kuvo/sandbox/asks…`, `kuvo/sandbox/allowed…` and `kuvo/sandbox/tools` ("Sandbox", "Asks", bridge 0.9.118) |
+| `approval` | `kuvo/approval` and `kuvo/sessions/<id>/approval` ("Approval") |
 | `wakes` | `kuvo/wakes`, a session's, and cancelling one or sending it now |
 | `wakes.edit` | adding one (`POST kuvo/wakes/<session>`) and pausing them |
 | `wakes.events` | `kuvo/wakes/events`, and making a watch (`POST kuvo/wakes/<session>/watch`) |
@@ -3099,6 +3107,52 @@ agent's own files are never outside (`ownsPath`), though your rules for what it 
 hold: Claude Code's plans, each project's memory, what it saved of a long output
 (`projects/<project>/<session>/tool-results`), and its background commands' output in /tmp's
 `claude-<uid>` when the sandbox runs it.
+
+### Approval
+
+How much a conversation's agent does on its own is kept on the box, with the conversation
+(`approval` in `features`): every client shows the same one, and none guesses it from the engine's
+rules. Plan mode stays the conversation's agent (`plan`), beside it.
+
+- `askFirst`: edits, commands and the rest wait for your OK. `acceptEdits`: edits in its folders go
+  ahead, commands still wait. `auto`: what runs inside the sandbox's walls goes ahead, what's beyond
+  them asks (the engine's own file tools, which the sandbox doesn't hold, ask outside its folders
+  as Settings › Permissions says); only where the whole sandbox runs (for a conversation on the
+  coding agents, with their programs in it too). `fullAccess`: nothing asks, outside its folders
+  either; only where you switched it on for this computer, and never for a bot or its work, which
+  go on in Auto at most. Its commands still run in the sandbox where it runs, as every
+  conversation's do: Full Access takes away the asks, not the walls.
+- Where one can't be had now, it fails closed: a conversation set to Auto asks first while the
+  sandbox isn't running, and one set to Full Access comes down to Auto once the switch is off. It
+  stays set to what you picked, and comes back to it once it can.
+- What the box writes is the engine's rules for it, made again with Settings › Permissions as they
+  are (a Don't Allow there holds in every one, Accept Edits included) and its own folders kept; a
+  bot's work asks what always comes to you whatever it is. The coding agents' bridge sets each agent
+  from the same rules. Kept in its metadata as `kuvo.approval` (what you picked) and `kuvo.applied`
+  (what its rules were made for); rules a client changed on its own since (asks put back, say) are
+  read as they are, and never made again. A conversation from before has none (`stored` false):
+  asking before commands is Ask First, nothing asking is Auto where the sandbox runs and Full Access
+  elsewhere, as it ran; its rules are left as they are until one is picked. But a bot's and its
+  work's, which the box keeps with the one their rules say (Ask First, or Auto that asks first
+  without the sandbox), as it starts and as a bot is made or comes here.
+- `GET kuvo/sessions/<id>/approval`: `{approval, effective, stored, held?, plan, options}`: what
+  you picked, what it comes to here now (`held` `{reason, why}`, the last step down, when that's
+  less), whether it's in Plan mode, and each one (`options`: `{approval, held?, unavailable?}`):
+  `held` where it can be picked and asks first for now (Auto without the sandbox), `unavailable`
+  where it can't be picked. `reason`: `sandbox` (Auto without the whole sandbox), `fullAccessOff`,
+  `bot`. Only a read: its rules come to what it shows within the box's round. 404 `{message}` for a
+  conversation that isn't here, 503 with no engine or bridge.
+- `PUT kuvo/sessions/<id>/approval` `{approval}`: sets it, on the engine's conversation or the
+  coding agents'; 200 as `GET` answers (Auto without the sandbox is kept, `held`), 400 for one that
+  isn't one of them, 409 `{message, reason}` for Full Access where it can't be picked
+  (`fullAccessOff`, `bot`), 502 where the engine didn't take it.
+- `GET kuvo/approval`: this computer's `{fullAccess, auto: {engine, agents}}`, the switch, and
+  whether Auto runs for each (`{held?}`, as above). `PATCH kuvo/approval` `{fullAccess}` sets the
+  switch (400 without a boolean); either way, what had it or was held from it comes to what it can
+  be at once.
+- The box looks every 2 seconds at what each comes to, and makes the rules of those kept with Auto
+  or Full Access again when the sandbox starts or stops, the switch changes, or the engine or the
+  bridge starts again, each read again just before it's written.
 
 ### Sandbox
 

@@ -3,6 +3,7 @@
 // and so does an answer that isn't its route's shape.
 
 import { object, type RouteShape, string } from "../shape";
+import { APPROVAL_ROUTES } from "./approval";
 import { ARTIFACT_ROUTES } from "./artifacts";
 import { ASK_ROUTES } from "./asks";
 import { BOT_ROUTES } from "./bots";
@@ -34,6 +35,7 @@ export const ERROR = object({ "message?": string, "problem?": string });
 export const PASSED_ON = ["api/", "kuvo/agents/"];
 
 export const ROUTES: RouteShape[] = [
+  ...APPROVAL_ROUTES,
   ...ARTIFACT_ROUTES,
   ...ASK_ROUTES,
   ...BOT_ROUTES,

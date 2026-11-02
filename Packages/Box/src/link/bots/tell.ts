@@ -12,6 +12,7 @@ import { listOf, textOf } from "../files";
 import { BOTS, HERE, IS_MAC, WAKE_COMMAND } from "../home";
 import { botPersonalities } from "../personalities/library";
 import { withAlwaysAsk } from "../work/always";
+import { approvalOf, approvalRules } from "../work/approval";
 import { botHere, isMoving, noteBotsChanged } from "./here";
 import { jobOf } from "./jobs";
 import { botInstructions, NO_KIT, readKit, readMacKit, zoneOf } from "./kit";
@@ -192,9 +193,9 @@ const ASK_FIRST: string[] = ["edit", "write", "patch", "shell", "webfetch", "ext
 const isRule = (rule: unknown): rule is KitRule => isObject(rule) && typeof rule.action === "string" && typeof rule.resource === "string" && typeof rule.effect === "string" && rule.effect !== "";
 // What a rule holds back: Don't Allow, or one a newer engine set that this box doesn't know (the
 // Mac's `holdsBack`), which goes on as it is.
-const holdsBack = (rule: KitRule): boolean => rule.effect !== "allow" && rule.effect !== "ask";
+export const holdsBack = (rule: KitRule): boolean => rule.effect !== "allow" && rule.effect !== "ask";
 // A folder a conversation may work in, of its own (the Mac's ToolApproval.isParticular).
-const isParticular = (rule: KitRule): boolean => rule.action === "external_directory" && rule.effect === "allow" && rule.resource !== "*";
+export const isParticular = (rule: KitRule): boolean => rule.action === "external_directory" && rule.effect === "allow" && rule.resource !== "*";
 
 // This box's Settings › Permissions (its settings' `permissions`), or null where they can't be read,
 // or aren't its own yet (a machine whose Mac hasn't made them so, which runs with what its Mac gave it).
@@ -235,8 +236,11 @@ export function refreshedRules(current: KitRule[], settings: KitRule[]): KitRule
 async function repairRules(target: Target, here: BotHere, sessionID: string): Promise<boolean> {
   const id = here.described.id;
   let rules: unknown;
+  let metadata: unknown;
   try {
-    rules = (await call(target, "GET", `/api/session/${encodeURIComponent(sessionID)}`) as Fields<"permissions"> | null)?.permissions;
+    const data = await call(target, "GET", `/api/session/${encodeURIComponent(sessionID)}`) as Fields<"permissions" | "metadata"> | null;
+    rules = data?.permissions;
+    metadata = data?.metadata;
   } catch {
     return false;
   }
@@ -247,9 +251,12 @@ async function repairRules(target: Target, here: BotHere, sessionID: string): Pr
     || (rule?.action === "external_directory" && String(rule.resource ?? "").endsWith(`/bots/${id}/*`));
   const kept: unknown[] = rules.filter(rule => !old(rule));
   const settings = kept.every(isRule) ? permissionsHere() : null;
-  // Where `settings` is there, every one kept is a rule (checked just above).
+  // Where `settings` is there, every one kept is a rule (checked just above). Made for the approval
+  // kept with it, where there is one (Accept Edits isn't in its rules alone).
+  const approval = settings ? approvalOf({ permissions: kept as KitRule[], metadata: isObject(metadata) ? metadata : null }, { bot: true }) : null;
+  const made = settings ? (approval?.stored ? approvalRules(approval.effective, kept as KitRule[]) : refreshedRules(kept as KitRule[], settings)) : kept as KitRule[];
   // What always comes to you, asked whatever its approval.
-  const repaired = [...withAlwaysAsk(settings ? refreshedRules(kept as KitRule[], settings) : kept as KitRule[]), own];
+  const repaired = [...withAlwaysAsk(made), own];
   if (JSON.stringify(repaired) === JSON.stringify(rules)) return true;
   return call(target, "PATCH", `/api/session/${encodeURIComponent(sessionID)}`, { permissions: repaired }).then(() => true, () => false);
 }

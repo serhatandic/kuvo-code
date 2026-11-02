@@ -27,6 +27,7 @@ import { pairingRoute, phonesRemoveRoute, phonesRoute } from "../areas/phones";
 import { QUEUE_ROUTE, queueRoute } from "../areas/queue";
 import { pluginSearchRoute } from "../areas/plugins";
 import { programsRoute } from "../areas/programs";
+import { approvalRoute, SESSION_APPROVAL_ROUTE } from "../areas/approval";
 import { sandboxRoute } from "../areas/sandbox";
 import { providerModelsRoute } from "../areas/providers";
 import { answerProjects } from "../areas/projects";
@@ -80,6 +81,7 @@ const ROUTES: (Route | Route<RegExpMatchArray>)[] = [
   { when: route => route === "kuvo/named", answer: namedRoute },
   { when: route => route === "kuvo/agent-tools", answer: agentToolsRoute },
   { when: route => route === "kuvo/sessions", answer: startRoute },
+  { when: route => route === "kuvo/approval" || SESSION_APPROVAL_ROUTE.test(route), answer: approvalRoute },
   { when: route => route.match(QUEUE_ROUTE), answer: queueRoute },
   { when: route => route === "kuvo/search", answer: searchRoute },
   { when: route => route.startsWith("kuvo/git/"), answer: changesRoute },
