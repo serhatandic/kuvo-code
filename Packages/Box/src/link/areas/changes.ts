@@ -409,8 +409,15 @@ async function pullRequestWay(directory: string): Promise<{ status: number; fail
   if (!branch) return { status: 409, failed: "This folder isn’t on a branch." };
   const root = (await text(directory, ["rev-parse", "--show-toplevel"]))?.trim() ?? directory;
   const recorded = worktreeOf(directory)?.base;
-  // Origin's main branch, as git last heard of it.
-  const main = recorded ? undefined : (await text(root, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"]))?.trim().replace(/^origin\//, "") || undefined;
+  // Origin's main branch, as git last heard of it; else main or master, here or on origin (a
+  // remote added by hand has no HEAD of origin's until it's fetched with one).
+  let main = recorded ? undefined : (await text(root, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"]))?.trim().replace(/^origin\//, "") || undefined;
+  for (const name of recorded || main ? [] : ["main", "master"]) {
+    if ((await git(root, ["rev-parse", "--verify", "-q", name])).ok || (await git(root, ["rev-parse", "--verify", "-q", `origin/${name}`])).ok) {
+      main = name;
+      break;
+    }
+  }
   const base = recorded ?? main;
   if (base === branch || (!base && ["main", "master"].includes(branch))) return { status: 409, failed: `${branch} is the branch a pull request goes into. Make one from a branch of its own.` };
   // What the branch has that its base doesn't, compared with the base here, or origin's.
@@ -446,10 +453,10 @@ async function pullRequestSummary(root: string, against: string | undefined, lim
 /** Create Pull Request's confirmation, before anything is pushed: the branch, the base it goes
  * into, a title and description from the commits (as `gh --fill` writes them: one commit's own
  * words, else the branch's name and the commits listed), what it brings for a model to write them
- * from, and what Create does on this box: makes it with `gh` (`creates`), or, on GitHub with `gh`
+ * from (`withSummary`), and what Create does on this box: makes it with `gh` (`creates`), or, on GitHub with `gh`
  * not signed in or not there (`gh`), on GitLab, opens the host's page; on another host, only
  * pushes. Refused (409) as Create would be. */
-export async function pullRequestDraft(directory: string): Promise<{ status: number; failed: string } | PullRequestDraft> {
+export async function pullRequestDraft(directory: string, withSummary = false): Promise<{ status: number; failed: string } | PullRequestDraft> {
   const way = await pullRequestWay(directory);
   if ("failed" in way) return way;
   const { root, branch, base, against, remote } = way;
@@ -467,7 +474,7 @@ export async function pullRequestDraft(directory: string): Promise<{ status: num
   const host = page?.hostname.includes("github") ? "github" : page?.hostname.includes("gitlab") ? "gitlab" : "other";
   const gh = host === "github" ? await ghOn(root, page!.hostname) : undefined;
   return {
-    branch, ...(base ? { base } : {}), title, body, summary: await pullRequestSummary(root, against), host,
+    branch, ...(base ? { base } : {}), title, body, ...(withSummary ? { summary: await pullRequestSummary(root, against) } : {}), host,
     creates: gh === "signed-in", ...(gh && gh !== "signed-in" ? { gh } : {}),
   };
 }
@@ -569,7 +576,7 @@ export async function* changesRoute(context: RouteContext): AsyncGenerator<Answe
   if (route === "kuvo/git/pull-request/draft") {
     const directory = folderAt(body.directory);
     if (!directory) return yield* json(404, { message: "That folder isn’t there." });
-    const draft = await pullRequestDraft(directory);
+    const draft = await pullRequestDraft(directory, body.summary === true);
     return yield* "failed" in draft ? json(draft.status, { message: draft.failed }) : json(200, draft);
   }
   if (route === "kuvo/git/push" || route === "kuvo/git/merge" || route === "kuvo/git/pull-request") {

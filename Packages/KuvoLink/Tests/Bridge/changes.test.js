@@ -420,7 +420,7 @@ test("Create Pull Request's confirmation says its base, a title from the commits
   const bare = fs.mkdtempSync(path.join(root, "bin-"));
   fs.symlinkSync(execFileSync("/bin/sh", ["-c", "command -v git"], { encoding: "utf8" }).trim(), path.join(bare, "git"));
   const gh = signedIn => fs.writeFileSync(path.join(bin, "gh"), signedIn ? "#!/bin/sh\nexit 0\n" : "#!/bin/sh\necho 'You are not logged into any GitHub hosts.' >&2\nexit 1\n", { mode: 0o755 });
-  const draft = (PATH = `${bin}${path.delimiter}${process.env.PATH}`) => route("POST", "kuvo/git/pull-request/draft", { directory: tree.folder }, { PATH });
+  const draft = (PATH = `${bin}${path.delimiter}${process.env.PATH}`, asked = {}) => route("POST", "kuvo/git/pull-request/draft", { directory: tree.folder, ...asked }, { PATH });
 
   tree.write("README.md", "Hello\nDark\n");
   let answer = await draft();
@@ -431,9 +431,9 @@ test("Create Pull Request's confirmation says its base, a title from the commits
   gh(true);
   answer = await draft();
   assert.equal(answer.status, 200);
-  const { summary, ...said } = answer.json;
-  assert.deepEqual(said, { branch: "dark-mode_toggle", base: "main", title: "Add a dark mode", body: "Follows the system’s.", host: "github", creates: true });
-  assert.match(summary, /- Add a dark mode[\s\S]*README\.md[\s\S]*\+Dark/);
+  assert.deepEqual(answer.json, { branch: "dark-mode_toggle", base: "main", title: "Add a dark mode", body: "Follows the system’s.", host: "github", creates: true });
+  // What it brings, only for a model to write them from.
+  assert.match((await draft(undefined, { summary: true })).json.summary, /- Add a dark mode[\s\S]*README\.md[\s\S]*\+Dark/);
 
   // Not signed in, or not there: GitHub's page opens instead, and the confirmation says why.
   gh(false);
@@ -483,6 +483,27 @@ test("Create Pull Request outside a worktree goes into origin's main branch, nev
   assert.equal(answer.status, 200);
   assert.equal(answer.json.compareURL, "https://gitlab.com/kuvo-test/app/-/merge_requests/new?merge_request%5Bsource_branch%5D=fix%2Ftypo&merge_request%5Btarget_branch%5D=main&merge_request%5Btitle%5D=Fix");
   assert.equal(execFileSync("git", ["--git-dir", remote, "log", "-1", "--format=%s", "fix/typo"], { encoding: "utf8" }).trim(), "Fix");
+});
+
+test("Create Pull Request where git hasn't heard origin's main branch goes into main all the same, and waits for what isn't committed", async () => {
+  // A remote added by hand and pushed to: no origin/HEAD.
+  const remote = fs.mkdtempSync(path.join(root, "remote-"));
+  execFileSync("git", ["init", "-q", "--bare", remote]);
+  git("remote", "add", "origin", "git@github.com:kuvo-test/app.git");
+  git("config", "remote.origin.pushurl", remote);
+  git("push", "-q", "-u", "origin", "main");
+  git("checkout", "-q", "-b", "fix/typo");
+  write("README.md", "Hello!\n");
+  git("commit", "-q", "-am", "Fix the greeting");
+  write("README.md", "Hello!!\n");
+  const draft = () => route("POST", "kuvo/git/pull-request/draft", { directory: repo });
+  let answer = await draft();
+  assert.equal(answer.status, 409);
+  assert.equal(answer.json.message, "Commit the changes first. Only what’s committed goes.");
+  git("checkout", "--", "README.md");
+  answer = await draft();
+  assert.equal(answer.json.base, "main");
+  assert.equal(answer.json.title, "Fix the greeting");
 });
 
 test("Discard on a submodule with edits of its own says to discard them there, and leaves them", async () => {

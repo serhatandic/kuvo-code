@@ -1726,18 +1726,19 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     another reason (taken back too).
   - `POST kuvo/git/pull-request {"directory", "title"?, "body"?}` (`git.pull-request`, bridge
     0.9.143): Create Pull Request. Its base is the worktree's, from the box's worktrees, else
-    origin's main branch. `409 {"message"}` from the base itself, with changes not committed, or
+    origin's main branch, else `main` or `master`. `409 {"message"}` from the base itself, with changes not committed, or
     with nothing the base doesn't have. The branch is pushed to `origin` (and tracked); on GitHub,
     made a pull request on origin's repository with GitHub's `gh` when it's there and signed in →
     `{"url"}` (also for one already open for the branch); otherwise → `{"compareURL"}`, the GitHub
     or GitLab page that opens one, with the title and description filled in; `{}` for another
     host (pushed, to open one there). Without a title, `gh` takes the title and description from
     the commits. `422 {"message"}` for a push that didn't go through.
-  - `POST kuvo/git/pull-request/draft {"directory"}` (`git.pull-request.draft`): Create Pull
+  - `POST kuvo/git/pull-request/draft {"directory", "summary"?}` (`git.pull-request.draft`): Create Pull
     Request's confirmation, which a client shows before it creates one; nothing is pushed →
-    `{"branch", "base"?, "title", "body", "summary", "host", "creates", "gh"?}`. `base` as
-    Create's; `title` and `body` from the commits (one commit's own subject and body, else the
-    branch's name and the commits listed), for the client to show and change; `summary`, the
+    `{"branch", "base"?, "title", "body", "summary"?, "host", "creates", "gh"?}`. `base` as
+    Create's (the worktree's, else origin's main branch, else `main` or `master`); `title` and
+    `body` from the commits (one commit's own subject and body, else the branch's name and the
+    commits listed), for the client to show and change; `summary` with `"summary": true`, the
     commits, files and diff cut short, for a model to write them from. `host`: `github`, `gitlab`
     or `other`. `creates` true: Create makes it on the box with `gh`, there and signed in. Else
     Create opens the host's page (`compareURL`), and on GitHub `gh` says why: `signed-out` or

@@ -19667,7 +19667,13 @@ async function pullRequestWay(directory) {
     return { status: 409, failed: "This folder isn’t on a branch." };
   const root = (await text2(directory, ["rev-parse", "--show-toplevel"]))?.trim() ?? directory;
   const recorded = worktreeOf(directory)?.base;
-  const main = recorded ? undefined : (await text2(root, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"]))?.trim().replace(/^origin\//, "") || undefined;
+  let main = recorded ? undefined : (await text2(root, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"]))?.trim().replace(/^origin\//, "") || undefined;
+  for (const name of recorded || main ? [] : ["main", "master"]) {
+    if ((await git(root, ["rev-parse", "--verify", "-q", name])).ok || (await git(root, ["rev-parse", "--verify", "-q", `origin/${name}`])).ok) {
+      main = name;
+      break;
+    }
+  }
   const base = recorded ?? main;
   if (base === branch || !base && ["main", "master"].includes(branch))
     return { status: 409, failed: `${branch} is the branch a pull request goes into. Make one from a branch of its own.` };
@@ -19700,7 +19706,7 @@ ${files}
 Diff:
 ${diff}`;
 }
-async function pullRequestDraft(directory) {
+async function pullRequestDraft(directory, withSummary = false) {
   const way = await pullRequestWay(directory);
   if ("failed" in way)
     return way;
@@ -19725,7 +19731,7 @@ async function pullRequestDraft(directory) {
     ...base ? { base } : {},
     title,
     body,
-    summary: await pullRequestSummary(root, against),
+    ...withSummary ? { summary: await pullRequestSummary(root, against) } : {},
     host,
     creates: gh === "signed-in",
     ...gh && gh !== "signed-in" ? { gh } : {}
@@ -19832,7 +19838,7 @@ async function* changesRoute(context) {
     const directory = folderAt(body.directory);
     if (!directory)
       return yield* json(404, { message: "That folder isn’t there." });
-    const draft = await pullRequestDraft(directory);
+    const draft = await pullRequestDraft(directory, body.summary === true);
     return yield* "failed" in draft ? json(draft.status, { message: draft.failed }) : json(200, draft);
   }
   if (route === "kuvo/git/push" || route === "kuvo/git/merge" || route === "kuvo/git/pull-request") {

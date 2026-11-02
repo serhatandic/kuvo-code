@@ -26,11 +26,11 @@ const NOT_MERGED = object({ message: string, "conflicts?": list(string) });
  * box doesn't know, where the branch is pushed. */
 export const PULL_REQUEST = object({ "url?": string, "compareURL?": string });
 /** Create Pull Request's confirmation (`kuvo/git/pull-request/draft`): the branch, its base, a title
- * and description from the commits, what it brings (`summary`, for a model to write them from), its
+ * and description from the commits, what it brings (`summary`, when asked, for a model to write them from), its
  * host, and whether Create makes it on the box (`creates`, with `gh` there and signed in), or why
  * not on GitHub (`gh`: not signed in, or not there), when it opens the host's page instead. */
 export const PULL_REQUEST_DRAFT = object({
-  branch: string, "base?": string, title: string, body: string, summary: string,
+  branch: string, "base?": string, title: string, body: string, "summary?": string,
   host: oneOf(literal("github"), literal("gitlab"), literal("other")), creates: bool, "gh?": oneOf(literal("signed-out"), literal("missing")),
 });
 export type PullRequestDraft = Infer<typeof PULL_REQUEST_DRAFT>;
