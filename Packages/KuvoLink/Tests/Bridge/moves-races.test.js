@@ -87,23 +87,28 @@ fs.writeFileSync(path.join(home, "run", "engine.json"), JSON.stringify({ port: s
 
 // This Mac's box, and its one other computer, "lab": what lab is told goes to `script`, and what
 // lab says comes back as its mail would.
-const peerKey = link.publicOf(link.newKey()).toString("base64url");
+const labSecret = link.newKey();
+const peerKey = link.publicOf(labSecret).toString("base64url");
 const lab = { key: peerKey, address: link.addressOf(crypto.randomBytes(32)).toString("base64url"), kind: "machine", name: "lab", id: "lab", sign: link.signingKeyOf(link.newSigningSeed()) };
 // And another computer, "studio".
 const studio = { key: link.publicOf(link.newKey()).toString("base64url"), address: link.addressOf(crypto.randomBytes(32)).toString("base64url"), kind: "machine", name: "studio", id: "studio" };
 link.writeLink({ macPeers: [lab, studio] });
 // Its keys, as its app gives them (kept in your Keychain, never in its files).
-link.macLink.overlay = { key: link.newKey().toString("base64url"), secret: crypto.randomBytes(32).toString("base64url"), relay: "wss://relay.test", name: "Studio Mac" };
+const macSecret = link.newKey();
+link.macLink.overlay = { key: macSecret.toString("base64url"), secret: crypto.randomBytes(32).toString("base64url"), relay: "wss://relay.test", name: "Studio Mac" };
 const told = [];
 let script = () => {};
-link.sendMovesWith((_peer, move) => {
+const toScript = (_peer, move) => {
   told.push(move);
   setImmediate(() => script(move));
   return true;
-});
+};
+link.sendMovesWith(toScript);
 const say = move => link.takeMoveMail(lab, move);
+// Its relay connection, which takes what it's given (a test's own, `relay`, for one that doesn't).
+let relay = { send: () => true };
 const stop = new AbortController();
-link.watchMoves(() => ({ send() {} }), stop.signal);
+link.watchMoves(() => relay, stop.signal);
 removeAtEnd(support);
 atEnd(() => {
   stop.abort();
@@ -208,6 +213,52 @@ test("parts that come twice set a copy up once; a part after the switch changes 
   // And a switch again (its answer was lost): switched still.
   await say({ op: "switch", id });
   assert.equal(told.filter(move => move.id === id && move.op === "switched").length, 2);
+});
+
+test("a part its relay connection didn't take (closing as it was sent) goes again at the next look, not twenty seconds on", async () => {
+  chat("ses_race9");
+  // This box's mail goes by its relay connection, as lab would get it, which for a while takes no
+  // parts (it answers false, as one that's closing does).
+  let takesParts = true;
+  const refused = [];
+  relay = {
+    send(bytes) {
+      if (!bytes.subarray(1, 17).equals(Buffer.from(lab.address, "base64url"))) return true;
+      const body = link.readFrame(bytes.subarray(17)).body;
+      const move = JSON.parse(link.openOneWay(body, labSecret, link.publicOf(macSecret)).payload.toString()).move;
+      if (!move) return true;
+      if (move.op === "part" && !takesParts) {
+        refused.push(move.i);
+        return false;
+      }
+      return toScript(lab.key, move);
+    },
+  };
+  link.sendMovesWith(null);
+  try {
+    script = move => {
+      if (move.op === "offer") {
+        takesParts = false;
+        say({ op: "ready", id: move.id });
+      }
+      if (move.op === "part") {
+        say({ op: "got", id: move.id, i: move.i });
+        if (move.i === move.of - 1) say({ op: "arrived", id: move.id });
+      }
+      if (move.op === "switch") say({ op: "switched", id: move.id });
+    };
+    const moving = ask("POST", "kuvo/moves", { kind: "chat", id: "ses_race9", to: peerKey });
+    await until(() => refused.length > 0);
+    assert.ok(!told.some(move => move.op === "part" && move.id === told.findLast(each => each.op === "offer").id), "no part went");
+    takesParts = true;
+    link.keepMoving(Date.now() + 1_000);
+    assert.ok(told.some(move => move.op === "part" && move.i === refused[0]), "the part it didn't take goes at the next look");
+    const moved = await moving;
+    assert.equal(moved.status, 200, JSON.stringify(moved.json));
+  } finally {
+    relay = { send: () => true };
+    link.sendMovesWith(toScript);
+  }
 });
 
 test("a step for a move this box doesn't have is answered dropped, never switched", async () => {

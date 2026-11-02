@@ -57,7 +57,7 @@ export function peerMail(sender: MailSender, payload: Record<string, unknown>, h
   // A move between this box and that one (PROTOCOL.md, `kuvo/moves`).
   if (isObject(payload.move)) takeMoveMail(sender, payload.move).catch(() => {});
   // What moves on that box now, between it and any other (PROTOCOL.md, "Peers", `moving`).
-  if (isObject(payload.moving)) takeMoving(sender, payload.moving, payload.at);
+  if (isObject(payload.moving)) takeMoving(sender, payload.moving);
   // Group chats across your computers: to the coding agents' bridge here.
   if (isObject(payload.seat) || isObject(payload.seatPart)) takeSeat(sender, payload, send).catch(() => {});
   if (isObject(payload.delivered) && typeof payload.delivered.id === "string") letterWent(sender, payload.delivered as unknown as Delivered);

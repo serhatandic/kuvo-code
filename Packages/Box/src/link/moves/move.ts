@@ -32,7 +32,7 @@ import { readLink } from "../state";
 import { goalRuns } from "../work/goals";
 import { CHATS, engineWait, MOST_BUNDLE, NotTaken, TooBig, deleteSession, directoryOf, exportAll, folderOf, groupAction, conversationHash, hashOf, idsOf, importAll, keysOf, ownTree, pack, toTrash, unpack } from "./bundle";
 import type { Contents } from "./bundle";
-import { watchMoving } from "./elsewhere";
+import { tellMoving } from "./elsewhere";
 import { MOVES, bundleOf, changeMove, endedAs, forgetMove, forgetMovedAway, moveOf, movesChanged, noteEnded, noteMovedAway, readMove, readMoves, saveMove, shownMove } from "./records";
 import type { MoveRecord } from "./records";
 
@@ -176,9 +176,9 @@ function tell(peer: string, move: Record<string, unknown>): boolean {
   const to: Peer | undefined = peersOf(link).find(each => each.key === peer);
   const bytes = link && to && mailFor(to, { move, at: Date.now() }, link);
   if (!bytes) return false;
+  // Sent only when the connection took it: one closing, or not welcomed yet, takes nothing.
   try {
-    hostOf()?.send(bytes);
-    return Boolean(hostOf());
+    return hostOf()?.send(bytes) === true;
   } catch {
     return false;
   }
@@ -973,8 +973,10 @@ async function letGoOf(sender: MailSender, id: string): Promise<void> {
 // ---- Keeping them going ----
 
 // Each move's next step, once in a while: a step unanswered sent again; a first offer with no answer
-// taken back (the other computer isn't there); one whose other computer was removed, ended.
+// taken back (the other computer isn't there); one whose other computer was removed, ended. And your
+// other computers told what moves here (`elsewhere.ts`).
 export function keepMoving(now = Date.now()): void {
+  tellMoving(hostOf(), now);
   if (groupsToWake && now - groupsLookedAt > STEP_AGAIN) {
     groupsLookedAt = now;
     wakeHeldGroups().catch(() => {});
@@ -1144,12 +1146,10 @@ export async function resumeMoves(now = Date.now()): Promise<void> {
 }
 
 /** Moves go by the relay connection `host` gives (the one that's up), and carry on from where they
- * were as the box starts; each step not answered is sent again. Your other computers are told what
- * moves here (`elsewhere.ts`). */
+ * were as the box starts; each step not answered is sent again. */
 export function watchMoves(host: () => Pick<LinkHost, "send"> | null | undefined, signal?: AbortSignal): void {
   hostOf = host;
   watching = true;
-  watchMoving(host, signal);
   resumeMoves().catch(() => {});
   const timer = setInterval(() => keepMoving(), 3_000);
   signal?.addEventListener("abort", () => {

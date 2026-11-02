@@ -14943,29 +14943,9 @@ var KEPT2 = 3 * 60000;
 var KINDS = new Set(["bot", "chat", "group"]);
 var STAGES = new Set(["holding", "copying", "switching", "finishing"]);
 var sent = (moves) => moves.slice(0, MOST_MOVES).map((move) => ({ ...move, sessions: move.sessions.slice(0, MOST_SESSIONS) }));
-var hostOf = () => null;
 var saidLast = null;
 var saidAt = 0;
-var sendInstead = null;
-function sendMovingWith(send) {
-  sendInstead = send;
-}
-function send(peer, moving, now) {
-  if (sendInstead)
-    return sendInstead(peer.key, moving);
-  const link = readLink();
-  const host = hostOf();
-  const bytes = link && host && mailFor(peer, { moving, at: now }, link);
-  if (!bytes)
-    return false;
-  try {
-    host.send(bytes);
-    return true;
-  } catch {
-    return false;
-  }
-}
-function tellMoving(now = Date.now()) {
+function tellMoving(host, now = Date.now()) {
   const moves = sent(listedMoves().map(shownMove));
   const these = JSON.stringify(moves.map(({ id, stage }) => [id, stage]));
   if (these === saidLast && (!moves.length || now - saidAt < AGAIN))
@@ -14974,10 +14954,16 @@ function tellMoving(now = Date.now()) {
     saidLast = these;
     return;
   }
-  const peers = peersOf(readLink());
+  const link = readLink();
+  const peers = peersOf(link);
   let told = !peers.length;
-  for (const peer of peers)
-    told = send(peer, { moves }, now) || told;
+  for (const peer of peers) {
+    const bytes = link && host && mailFor(peer, { moving: { moves }, at: now }, link);
+    try {
+      if (bytes && host?.send(bytes) === true)
+        told = true;
+    } catch {}
+  }
   if (!told)
     return;
   saidLast = these;
@@ -14985,24 +14971,6 @@ function tellMoving(now = Date.now()) {
 }
 function tellMovingAgain() {
   saidAt = 0;
-}
-function watchMoving(host, signal) {
-  hostOf = host;
-  let soon = null;
-  const changed = () => {
-    soon ??= setTimeout(() => {
-      soon = null;
-      tellMoving();
-    }, 1000);
-  };
-  moveFollowers.add(changed);
-  const timer = setInterval(() => tellMoving(), 5000);
-  signal?.addEventListener("abort", () => {
-    moveFollowers.delete(changed);
-    clearInterval(timer);
-    if (soon)
-      clearTimeout(soon);
-  }, { once: true });
 }
 function readSaid() {
   try {
@@ -15012,7 +14980,7 @@ function readSaid() {
     return {};
   }
 }
-var fresh = (one, now) => isObject(one) && typeof one.at === "number" && typeof one.said === "number" && Array.isArray(one.moves) && now - one.at < KEPT2;
+var fresh = (one, now) => isObject(one) && typeof one.at === "number" && Array.isArray(one.moves) && now - one.at < KEPT2;
 var short = (text, most) => text.slice(0, most);
 function takenMove(given) {
   if (!isObject(given))
@@ -15036,28 +15004,30 @@ function takenMove(given) {
     ...typeof size === "number" && Number.isFinite(size) ? { size } : {}
   };
 }
-function takeMoving(sender, given, at, now = Date.now()) {
-  if (!isObject(given) || !Array.isArray(given.moves) || typeof at !== "number")
+function takeMoving(sender, given, now = Date.now()) {
+  if (!isObject(given) || !Array.isArray(given.moves))
     return;
   if (!peersOf(readLink()).some((peer) => peer.key === sender.key))
     return;
   const kept = readSaid();
-  const before = kept[sender.key];
-  if (fresh(before, now) && at <= before.said)
-    return;
   for (const [key, one] of Object.entries(kept))
     if (!fresh(one, now))
       delete kept[key];
   const moves = given.moves.slice(0, MOST_MOVES).map(takenMove).filter((move) => move !== null);
-  kept[sender.key] = { at: now, said: at, moves };
+  if (moves.length)
+    kept[sender.key] = { at: now, moves };
+  else
+    delete kept[sender.key];
   try {
     writePrivate(FILE2, JSON.stringify(kept));
   } catch {}
   movesChanged();
 }
 function movesElsewhere(peers = peersOf(readLink()), now = Date.now()) {
+  const link = readLink();
+  const own = link ? ownKey(link) : null;
   const keys = new Set(peers.map((peer) => peer.key));
-  return Object.entries(readSaid()).filter((entry) => keys.has(entry[0]) && fresh(entry[1], now) && entry[1].moves.length > 0).sort(([one], [other]) => one.localeCompare(other)).map(([box, one]) => ({ box, moves: one.moves }));
+  return Object.entries(readSaid()).filter((entry) => keys.has(entry[0]) && fresh(entry[1], now)).map(([box, one]) => ({ box, moves: one.moves.filter((move) => move.from !== own && move.to !== own) })).filter((one) => one.moves.length > 0).sort((one, other) => one.box.localeCompare(other.box));
 }
 
 // Packages/Box/src/link/moves/move.ts
@@ -15151,7 +15121,7 @@ function inTurn(id, step) {
   });
   return next;
 }
-var hostOf2 = () => null;
+var hostOf = () => null;
 var watching = false;
 var driving = new Set;
 function drive(id) {
@@ -15161,21 +15131,20 @@ function drive(id) {
   inTurn(id, () => carryOn(id).catch((error) => takeBack2(id, String(error?.message ?? error), error?.status ?? 409))).finally(() => driving.delete(id));
 }
 var nameOf = (key) => plainName(peersOf(readLink()).find((peer) => peer.key === key)?.name ?? "") || "the other computer";
-var sendInstead2 = null;
+var sendInstead = null;
 function sendMovesWith(send) {
-  sendInstead2 = send;
+  sendInstead = send;
 }
 function tell(peer, move) {
-  if (sendInstead2)
-    return sendInstead2(peer, move);
+  if (sendInstead)
+    return sendInstead(peer, move);
   const link = readLink();
   const to = peersOf(link).find((each) => each.key === peer);
   const bytes = link && to && mailFor(to, { move, at: Date.now() }, link);
   if (!bytes)
     return false;
   try {
-    hostOf2()?.send(bytes);
-    return Boolean(hostOf2());
+    return hostOf()?.send(bytes) === true;
   } catch {
     return false;
   }
@@ -16032,6 +16001,7 @@ async function letGoOf(sender, id) {
   await drop(id).catch(() => {});
 }
 function keepMoving(now = Date.now()) {
+  tellMoving(hostOf(), now);
   if (groupsToWake && now - groupsLookedAt > STEP_AGAIN) {
     groupsLookedAt = now;
     wakeHeldGroups().catch(() => {});
@@ -16210,9 +16180,8 @@ async function resumeMoves(now = Date.now()) {
   movesChanged();
 }
 function watchMoves(host, signal) {
-  hostOf2 = host;
+  hostOf = host;
   watching = true;
-  watchMoving(host, signal);
   resumeMoves().catch(() => {});
   const timer = setInterval(() => keepMoving(), 3000);
   signal?.addEventListener("abort", () => {
@@ -17356,7 +17325,7 @@ function peerMail(sender, payload, host, places = () => ({ targets: [], bridge: 
   if (isObject(payload.move))
     takeMoveMail(sender, payload.move).catch(() => {});
   if (isObject(payload.moving))
-    takeMoving(sender, payload.moving, payload.at);
+    takeMoving(sender, payload.moving);
   if (isObject(payload.seat) || isObject(payload.seatPart))
     takeSeat(sender, payload, send).catch(() => {});
   if (isObject(payload.delivered) && typeof payload.delivered.id === "string")
@@ -24126,7 +24095,6 @@ export {
   seatPeers,
   selftest,
   sendMovesWith,
-  sendMovingWith,
   sendOutbox,
   sendWakes,
   serveBox,
@@ -24156,7 +24124,6 @@ export {
   takePersonalities,
   takePersonalitiesDocument,
   takeSeat,
-  tellMoving,
   tellSeatPeers,
   tellWorktree,
   toolRun,
