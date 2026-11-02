@@ -310,6 +310,8 @@ struct SidebarView: View {
         } message: {
             if let project = removingProject { Text(removalNote(project)) }
         }
+        // Inks readable on the glass: its quieter words solid, not blended with what's behind.
+        .listInks()
     }
 
     // MARK: Boxes
@@ -687,7 +689,8 @@ struct SidebarView: View {
 
     @ViewBuilder private func projectSection(_ project: Workspace.Project) -> some View {
         let isOpen = !collapsed.contains(project.directory)
-        ProjectRow(project: project, isOpen: isOpen) {
+        ProjectRow(project: project, isOpen: isOpen,
+                   mark: isOpen ? nil : foldedMark(of: project.sessions, workspace: workspace, app: app)) {
             withAnimation(.ui) { toggle(project.directory) }
         } newSession: {
             newSession(project.directory)
@@ -1342,6 +1345,8 @@ extension SidebarRow where Accessory == EmptyView {
 private struct ProjectRow: View {
     let project: Workspace.Project
     let isOpen: Bool
+    /// Folded: the most pressing mark of its sessions (see `foldedMark`).
+    var mark: StatusMark.Kind?
     let toggle: () -> Void
     let newSession: () -> Void
     @State private var isHovering = false
@@ -1389,8 +1394,16 @@ private struct ProjectRow: View {
                     MachineLabel(engine: machine)
                 }
                 Spacer(minLength: 6)
-                // Room for the compose button, so a long name never runs under it.
-                Color.clear.frame(width: 22, height: 1)
+                // Room for the compose button, so a long name never runs under it; folded, the
+                // mark of what's under it, where a session's sits, the button over it under the
+                // pointer.
+                ZStack(alignment: .trailing) {
+                    Color.clear.frame(width: 22, height: 1)
+                    StatusMark(showing: mark)
+                        .opacity(isHovering ? 0 : 1)
+                        .help(mark?.wordsFromUnder ?? "")
+                        .accessibilityLabel(mark?.wordsFromUnder ?? "")
+                }
             }
             .padding(.horizontal, 10)
             .frame(height: SidebarMetrics.rowHeight)
@@ -1718,7 +1731,8 @@ private struct SectionHeader<Trailing: View>: View {
     private var label: some View {
         Text(title)
             .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(.secondary)
+            // A heading reads as one: the words under it are quieter.
+            .foregroundStyle(.primary)
     }
 }
 
@@ -1925,6 +1939,11 @@ struct MoveToComputerItems: View {
         offline: awayMachine(of: session, app: app) != nil,
         wakes: app.wakeUps.wakes[id]?.isEmpty == false,
         watching: app.wakeUps.watches[id]?.isEmpty == false)
+}
+
+/// A folded project's mark, where its sessions' sit (see `ConversationState.folded`).
+@MainActor func foldedMark(of sessions: [Session], workspace: Workspace, app: AppModel) -> StatusMark.Kind? {
+    ConversationState.folded(sessions.lazy.map { statusMark(of: $0, isNew: $0.isUnread, workspace: workspace, app: app) })
 }
 
 /// The machine a session lives on, by name, while that machine isn't connected and isn't on its

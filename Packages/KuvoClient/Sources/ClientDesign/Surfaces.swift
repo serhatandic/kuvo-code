@@ -85,6 +85,17 @@ public enum Surface {
         }
     }
 
+    /// A list's quieter ink (the sidebar's descriptions, its +), solid: blended with the glass or
+    /// the canvas behind it, as `.secondary` is, it read under 4.5:1. About 6:1 in both schemes.
+    public static func listSecondary(_ scheme: ColorScheme) -> Color {
+        scheme == .dark ? .white.opacity(0.56) : .black.opacity(0.6)
+    }
+
+    /// A list's quietest ink (a fold's chevron), solid too: about 3:1.
+    public static func listTertiary(_ scheme: ColorScheme) -> Color {
+        scheme == .dark ? .white.opacity(0.38) : .black.opacity(0.4)
+    }
+
     /// The accent glass's fill: a soft wash of the accent color.
     public static func accentWash(_ scheme: ColorScheme, accent: Color = .accentColor) -> Color {
         accent.opacity(scheme == .dark ? 0.22 : 0.1)
@@ -123,6 +134,12 @@ extension View {
         modifier(PickHighlight(shape: shape, isOn: isOn, leading: leading))
     }
 
+    /// The sidebar's inks, in both apps: `.secondary` and `.tertiary` inside it are the list's
+    /// solid ones (`Surface.listSecondary`), readable on glass; its headings take `.primary`.
+    public func listInks() -> some View {
+        modifier(ListInks())
+    }
+
     /// A text field drawn into the surface: sunken, with no bezel, like the sidebar's search. For
     /// fields outside a grouped form (a form's own fields stay native). While you type in it, it
     /// has the focus rim.
@@ -140,6 +157,14 @@ extension View {
     /// along its edge. The well's fill doesn't change.
     public func focusRim<S: InsettableShape>(_ shape: S, isOn: Bool) -> some View {
         modifier(FocusRim(shape: shape, isOn: isOn))
+    }
+}
+
+private struct ListInks: ViewModifier {
+    @Environment(\.colorScheme) private var scheme
+
+    func body(content: Content) -> some View {
+        content.foregroundStyle(Color.primary, Surface.listSecondary(scheme), Surface.listTertiary(scheme))
     }
 }
 
