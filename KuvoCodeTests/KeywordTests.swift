@@ -83,6 +83,7 @@ import Testing
 
     private func clean() {
         engine.stop()
+        Drafts.shared.remove(id)
         try? FileManager.default.removeItem(at: folder)
     }
 
@@ -181,6 +182,34 @@ import Testing
         model.removeSideThread(thread)
         try await until { model.sideThreads.count == 1 }
         #expect(try await bridge.api?.sideQuestions(of: id).map(\.question) == ["what does parseDuration match?"])
+    }
+
+    // Something attached while the side thread's tag shows, alone or with words: a side question
+    // takes none, so Send says what to do instead, and the words and the file stay, sent nowhere.
+    @Test func aFileForASideQuestionSaysWhy() async throws {
+        defer { clean() }
+        serve(directory: "/tmp", answers: ["In `onBlur`."])
+        let model = try session()
+        let bridge = try await start(model)
+        defer { bridge.stop() }
+
+        model.draftText = "/btw where does it pause?"
+        model.submitDraft(for: nil, queue: false, commands: [])
+        try await until { model.sideQuestions.first?.state == .answered }
+        #expect(model.asksSideThread)
+        let file = URL(fileURLWithPath: "/tmp/screenshot.png")
+        model.draftFiles = [file]
+        model.submitDraft(for: nil, queue: false, commands: [])
+        let why = "A side question can’t include pictures or files. Remove them, or close Side question to send it all to the agent."
+        #expect(model.failure == why)
+        model.failure = nil
+        model.draftText = "[Image 1] what's this?"
+        model.submitDraft(for: nil, queue: false, commands: [])
+        #expect(model.failure == why)
+        #expect(model.draftText == "[Image 1] what's this?")
+        #expect(model.draftFiles == [file])
+        #expect(model.shownSideThread?.questions.count == 1)
+        #expect(told == 0)
     }
 
     /// A conversation's side questions from its row's menu in the sidebar: Open the Latest shows

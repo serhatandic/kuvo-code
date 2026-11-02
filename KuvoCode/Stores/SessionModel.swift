@@ -1124,10 +1124,15 @@ final class SessionModel {
         let isCommand = Self.shellCommand(in: draftText) != nil || SlashCommands.parse(draftText, commands: commands) != nil || GoalCommand(draftText) != nil || typedKeyword(draftText) != nil
         // The side thread's tag on the composer: a follow-up there, answered with the thread so
         // far, not a message to the agent. A keyword or command still runs as typed; what's
-        // attached stays (a side question takes none).
+        // attached stops it: a side question takes none.
         if asksSideThread, !isCommand {
             // One at a time: it waits in the composer while the last is answered.
             guard !sideThreadAnswering else { return }
+            // Nothing goes with a file attached: a picture's "[Image 1]" would go without it.
+            guard draftFiles.isEmpty else {
+                failure = "A side question can’t include pictures or files. Remove them, or close Side question to send it all to the agent."
+                return
+            }
             let question = Quoting.message(quotes: draftQuotes, text: draftText)
             guard !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
             draftText = ""
