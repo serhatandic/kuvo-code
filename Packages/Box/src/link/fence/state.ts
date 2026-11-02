@@ -527,8 +527,9 @@ export function sweepWakeFolders(now = Date.now()): void {
 
 /** Set up as the box starts, and kept so: Kuvo Code's servers' ports in its rules as they change
  * (macOS), its plugin put back if it went, what agents are told as it's on or not, and the wake
- * folders no one used cleared away. */
-export function keepFence(): void {
+ * folders no one used cleared away. `every`: what runs its round every 10 seconds (a test's runs
+ * each by hand). */
+export function keepFence(every: (round: () => void) => void = round => { setInterval(round, 10_000).unref?.(); }): void {
   try { setUpFence(); } catch {}
   try { tellAgents(); } catch {}
   // Set up, or found it can't run here: the agents bridge starts the coding agents from now, never
@@ -540,7 +541,7 @@ export function keepFence(): void {
   });
   let rounds = 0;
   let trying = false;
-  setInterval(() => {
+  every(() => {
     const round = rounds++;
     if (round % 60 === 0) sweepWakeFolders();
     // Agents told once the engine has loaded the plugin, and no longer once it's gone.
@@ -563,7 +564,7 @@ export function keepFence(): void {
           .finally(() => { trying = false; });
       }
     } catch {}
-  }, 10_000).unref?.();
+  });
 }
 
 export const fenceFiles = { folder: FOLDER, plugin: PLUGIN, launcher: places.launcher, version: VERSION };

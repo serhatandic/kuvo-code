@@ -9285,7 +9285,9 @@ function sweepWakeFolders(now = Date.now()) {
     } catch {}
   }
 }
-function keepFence() {
+function keepFence(every = (round) => {
+  setInterval(round, 1e4).unref?.();
+}) {
   try {
     setUpFence();
   } catch {}
@@ -9303,7 +9305,7 @@ function keepFence() {
   });
   let rounds = 0;
   let trying = false;
-  setInterval(() => {
+  every(() => {
     const round = rounds++;
     if (round % 60 === 0)
       sweepWakeFolders();
@@ -9328,7 +9330,7 @@ function keepFence() {
         });
       }
     } catch {}
-  }, 1e4).unref?.();
+  });
 }
 var fenceFiles = { folder: FOLDER, plugin: PLUGIN, launcher: places.launcher, version: VERSION };
 
