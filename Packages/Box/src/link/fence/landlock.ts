@@ -40,10 +40,11 @@ export function landlockPolicy(policy: FencePolicy): string {
  * told through <own>, an empty folder of the box's that it first makes its own (and gives up, within
  * seconds, if it never is).
  *
- * Where commands' temporary folders are in a short folder of the box's in `/tmp` (<t_own>, under a
- * long home folder's path: fence/state.ts), the command's own (<t_name> in it) is all it has there:
- * kept aside in <own>, the folder emptied, and it put back alone. The same folder in each of its
- * conversation's commands, so a tmux server one starts is there for the next.
+ * Commands' temporary folders are in `t` in Kuvo Code's folder (<t_own>: fence/state.ts), where
+ * Landlock alone would keep a command from listing the others but not from reaching a socket in
+ * one by its path. So the command's own (<t_name> in it) is all it has there: kept aside in <own>,
+ * the folder emptied, and it put back alone. The same folder in each of its conversation's
+ * commands, so a tmux server one starts is there for the next.
  */
 export const HIDE = String.raw`u=$1 g=$2 n=$3 own=$4 sockets=$5 t_own=$6 t_name=$7; shift 7
 p=$PATH; PATH=/usr/sbin:/usr/bin:/sbin:/bin

@@ -33,10 +33,6 @@ test.skipIf(!landlock)("setting the sandbox up writes nothing outside Kuvo Code'
     expect(readdirSync(temporary)).toEqual([])
     expect(readdirSync(join(root, "home"))).toEqual([])
     expect(readdirSync(join(root, "kuvo", "run", "fence", "ns"))).toEqual([])
-    // Nor, where its folder's path is too long for commands' temporary folders in it, the short one
-    // of its own in `/tmp` it names for them: made only as a command needs it.
-    const named = readFileSync(join(root, "kuvo", "run", "fence", "temporary"), "utf8").split("\n")[0]!
-    expect(named.startsWith(join(root, "kuvo")) || !existsSync(named)).toBe(true)
   } finally {
     chmodSync(temporary, 0o700)
     rmSync(root, { recursive: true, force: true })

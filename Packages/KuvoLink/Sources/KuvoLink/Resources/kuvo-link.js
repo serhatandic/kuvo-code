@@ -8568,8 +8568,7 @@ function launcherScript(places) {
     `  t_name=$( (printf '%s
 %s' "$t_key" "$work" | sha256sum || printf '%s
 %s' "$t_key" "$work" | shasum -a 256) 2>/dev/null | cut -c 1-8)`,
-    `  case $t_root:$t_key:$t_name in /*:????????????????????????????????????????????????????????????????:????????) tmp=$t_root/$t_name ;; *) echo "This command can't run in the sandbox here: it can't name its temporary folder." >&2; exit 126 ;; esac`,
-    `  case $t_root in "$F"/*) ;; *) (umask 077; mkdir -p "$t_root") 2>/dev/null; if [ -d "$t_root" ] && [ ! -L "$t_root" ] && [ -O "$t_root" ]; then t_own=$t_root; else tmp=$F/tmp/$t_name; fi ;; esac`,
+    `  case $t_root:$t_key:$t_name in /*:????????????????????????????????????????????????????????????????:????????) tmp=$t_root/$t_name; t_own=$t_root ;; *) echo "This command can't run in the sandbox here: it can't name its temporary folder." >&2; exit 126 ;; esac`,
     `fi`,
     `allowed=$F/allowed/$sum`,
     `if [ -f "$work/.git" ]; then case $git in */.git) p_sum=$( (printf '%s' "\${git%/.git}" | sha256sum || printf '%s' "\${git%/.git}" | shasum -a 256) 2>/dev/null | cut -c 1-32); case $p_sum in ????????????????????????????????) allowed=$F/allowed/$p_sum ;; esac ;; esac; fi`,
@@ -8584,7 +8583,6 @@ function launcherScript(places) {
     ...Array.from({ length: MOST_FOLDERS }, (_, at) => `a${at}=$F/none r${at}=-`),
     `if [ -f "$allowed" ]; then i=0; while IFS= read -r line && [ $i -lt ${MOST_FOLDERS} ]; do case $line in /*) eval "a$i=\\$line"; ${places.platform === "darwin" ? `eval "r$i=\\$(escaped \\"\\$line\\")"; ` : ""}i=$((i + 1)) ;; esac; done <"$allowed"; else allowed=$F/none; fi`,
     `(umask 077; mkdir -p "$tmp") && touch "$tmp" && export TMPDIR="$tmp/"`,
-    `[ -z "$t_own" ] || { [ ! -L "$t_own" ] && [ -O "$t_own" ] && [ ! -L "$tmp" ] && [ -O "$tmp" ]; } || { echo "This command can't run in the sandbox here: its temporary folder isn't yours alone." >&2; exit 126; }`,
     `export PRE_COMMIT_HOME="$TMPDIR"pre-commit`,
     `(umask 077; mkdir -p ${[places.caches.npm, places.caches.pnpm, `${places.caches.uv}/cache`, `${places.caches.uv}/tools`, places.caches.corepack].map(sh).join(" ")})`,
     `export npm_config_cache=${sh(places.caches.npm)} pnpm_config_cache_dir=${sh(places.caches.pnpm)} pnpm_config_enable_global_virtual_store=false UV_CACHE_DIR=${sh(`${places.caches.uv}/cache`)} UV_TOOL_DIR=${sh(`${places.caches.uv}/tools`)} COREPACK_HOME=${sh(places.caches.corepack)}`,
@@ -8854,7 +8852,7 @@ export default {
 }
 `;
 }
-function agentsNote(platform) {
+function agentsNote(platform, tmuxFits = true) {
   const mac = platform === "darwin";
   return [
     "# Commands run in a sandbox here",
@@ -8871,6 +8869,7 @@ function agentsNote(platform) {
     "",
     "`npm`, `pnpm`, `uv` and corepack use caches of Kuvo Code's own here (`$npm_config_cache`, `$pnpm_config_cache_dir`, `$UV_CACHE_DIR`, `$COREPACK_HOME`): leave them as they are, and `npx -y <package>`, `pnpm dlx` and `uvx` fetch what they need (`uvx` with a Python that's installed).",
     "",
+    ...tmuxFits ? [] : ["This computer's home folder's path is too long for tmux in the sandbox: its socket in a command's temporary folder (`$TMPDIR`) would pass the system's limit, so tmux fails with \"File name too long\", as can other programs that make a socket there. Don't start tmux with sandbox_ask instead: outside the sandbox it would be the user's own. For another program that needs a socket, ask with sandbox_ask, or tell the user why it can't run in the sandbox here.", ""],
     "`ssh` and git over SSH use only the keys the user lets this conversation use from Kuvo Code's vault, through `$SSH_AUTH_SOCK`. With none, use HTTPS or ask the user.",
     "",
     `When the sandbox refuses something a task needs ("Operation not permitted" or "Permission denied" outside these folders), don't work around it: ask the user with sandbox_ask, giving the command as you ran it and why the task needs it. They can let it run outside the sandbox once (and let your commands write in the folder it was stopped writing in from now on), or say no; allowed, it runs for you and you get its output.`,
@@ -9141,15 +9140,13 @@ function probe() {
     const used = (run.stdout ?? "").split(`
 `)[0].replace(/\/$/, "");
     try {
-      if ([path37.join(FOLDER, "tmp"), SHORT].includes(path37.dirname(used)))
+      if ([path37.join(FOLDER, "tmp"), TEMPORARY].includes(path37.dirname(used)))
         fs37.rmSync(used, { recursive: true, force: true });
-      if (path37.dirname(used) === SHORT)
-        fs37.rmdirSync(SHORT);
     } catch {}
   }
 }
 function tellAgents(on = fenceState().on) {
-  const note = on ? agentsNote(platform) : "";
+  const note = on ? agentsNote(platform, fitsTmux(appTemporary() ?? TEMPORARY)) : "";
   if (textOf(SANDBOX_NOTE) !== note)
     writePrivate(SANDBOX_NOTE, note);
 }
@@ -9162,31 +9159,12 @@ function withdraw() {
   fs37.rmSync(READY, { force: true });
   fs37.rmSync(NOTE, { force: true });
 }
-var SHORT = `/tmp/kuvo-code-${process.getuid?.() ?? -1}-${crypto17.createHash("sha256").update(FOLDER).digest("hex").slice(0, 6)}`;
-function shortTemporary() {
-  try {
-    const it = fs37.lstatSync(SHORT);
-    return it.isDirectory() && it.uid === process.getuid?.() ? SHORT : null;
-  } catch (error) {
-    return error.code === "ENOENT" ? SHORT : null;
-  }
-}
+var TEMPORARY = realish(path37.join(K, "t"));
 var SOCKET_PATH = platform === "darwin" ? 103 : 107;
-var fitsSockets = (root) => Buffer.byteLength(root) + "/12345678".length + 40 <= SOCKET_PATH;
-var temporaryRoot = () => {
-  const own = path37.join(FOLDER, "tmp");
-  return platform === "linux" && namespace && !fitsSockets(own) ? shortTemporary() ?? own : own;
-};
-function removeShort() {
-  try {
-    const it = fs37.lstatSync(SHORT);
-    if (it.isDirectory() && it.uid === process.getuid?.())
-      fs37.rmSync(SHORT, { recursive: true, force: true });
-  } catch {}
-}
+var fitsTmux = (root) => Buffer.byteLength(realish(root)) + "/12345678".length + `/tmux-${process.getuid?.() ?? 0}/default`.length <= SOCKET_PATH;
 function writeTemporary() {
   const file = path37.join(FOLDER, "temporary");
-  const root = appTemporary() ?? temporaryRoot();
+  const root = appTemporary() ?? TEMPORARY;
   const [had, key] = (textOf(file) ?? "").split(`
 `);
   if (had === root && /^[0-9a-f]{64}$/.test(key ?? ""))
@@ -9194,11 +9172,6 @@ function writeTemporary() {
   writePrivate(file, `${root}
 ${crypto17.randomBytes(32).toString("hex")}
 `);
-  if (root !== path37.join(FOLDER, "tmp"))
-    for (const name of listOf(path37.join(FOLDER, "tmp")))
-      fs37.rmSync(path37.join(FOLDER, "tmp", name), { recursive: true, force: true });
-  if (had === SHORT && root !== SHORT)
-    removeShort();
 }
 function setUpFence(found) {
   const can = able(found);
@@ -9252,9 +9225,7 @@ function holdsFiles(folder) {
   return fs37.readdirSync(folder, { withFileTypes: true }).some((entry) => !entry.isDirectory() || holdsFiles(path37.join(folder, entry.name)));
 }
 function sweepWakeFolders(now = Date.now()) {
-  const short = (textOf(path37.join(FOLDER, "temporary")) ?? "").split(`
-`)[0] === SHORT;
-  for (const tmp of [path37.join(FOLDER, "tmp"), ...short ? [SHORT] : []]) {
+  for (const tmp of [path37.join(FOLDER, "tmp"), TEMPORARY]) {
     for (const name of listOf(tmp)) {
       const folder = path37.join(tmp, name);
       try {
@@ -9263,10 +9234,6 @@ function sweepWakeFolders(now = Date.now()) {
       } catch {}
     }
   }
-  if (short)
-    try {
-      fs37.rmdirSync(SHORT);
-    } catch {}
   let names = [];
   try {
     names = fs37.readdirSync(SESSION_WAKES);

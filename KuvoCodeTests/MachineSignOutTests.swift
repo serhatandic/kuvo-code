@@ -30,16 +30,12 @@ import Testing
     }
 
     /// Removing a machine takes away everything that would start its engine again or sign in there
-    /// (its keeper and both of the keeper's own copies, how it launches, its keys), and the short
-    /// folder in /tmp its box kept commands' temporary folders in, and leaves its sessions. Run on a
-    /// home of its own, with a crontab that answers nothing, so this Mac's isn't touched.
+    /// (its keeper and both of the keeper's own copies, how it launches, its keys), and leaves its
+    /// sessions. Run on a home of its own, with a crontab that answers nothing, so this Mac's
+    /// isn't touched.
     @Test func removingAMachineLeavesNothingThatStartsItAgain() throws {
         let home = AppInfo.testRoot.appending(path: "MachineHome/\(UUID().uuidString)")
-        let short = "/tmp/kuvo-code-\(getuid())-\(UUID().uuidString.lowercased().filter(\.isHexDigit).prefix(6))"
-        defer {
-            try? FileManager.default.removeItem(at: home)
-            try? FileManager.default.removeItem(atPath: short)
-        }
+        defer { try? FileManager.default.removeItem(at: home) }
         let root = home.appending(path: RemoteEngineInstaller.root)
         let gone = ["bin/kuvo-start", "bin/.kuvo-start-keeper", "bin/kuvo-launch", "bin/.kuvo-launch-keeper", "bin/.kuvo-boot",
                     "run/launch.env", "run/launch.notes", "keys/settings.json", "box/keys/KUVO_KEY_LINEAR_TOKEN",
@@ -50,9 +46,6 @@ import Testing
             try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
             try Data("x".utf8).write(to: file)
         }
-        try FileManager.default.createDirectory(at: root.appending(path: "run/fence"), withIntermediateDirectories: true)
-        try Data("\(short)\n\(String(repeating: "0", count: 64))\n".utf8).write(to: root.appending(path: "run/fence/temporary"))
-        try FileManager.default.createDirectory(atPath: "\(short)/12345678", withIntermediateDirectories: true)
         let tools = home.appending(path: "tools")
         try FileManager.default.createDirectory(at: tools, withIntermediateDirectories: true)
         try Data("#!/bin/sh\nexit 1\n".utf8).write(to: tools.appending(path: "crontab"))
@@ -67,7 +60,6 @@ import Testing
         #expect(process.terminationStatus == 0)
         for path in gone { #expect(!FileManager.default.fileExists(atPath: root.appending(path: path).path), "\(path) stayed") }
         for path in kept { #expect(FileManager.default.fileExists(atPath: root.appending(path: path).path), "\(path) went") }
-        #expect(!FileManager.default.fileExists(atPath: short), "the box's short folder stayed")
     }
 
     /// The removal scripts, connected or not, both sign the agents out.

@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { ownNamespace } from "../src/link/fence/landlock"
-import { canFence, removeShortFolder } from "./agents/support/fence"
+import { canFence } from "./agents/support/fence"
 
 // The box keeps the sandbox as it set it up, round by round (every 10 seconds; each minute for what
 // takes longer): the engine's plugin put back once it's gone, commands' temporary folders cleared a
@@ -33,7 +33,6 @@ function inBox(steps: string): Record<string, unknown> {
     expect(ran.exitCode, ran.stderr.toString()).toBe(0)
     return JSON.parse(ran.stdout.toString().trim().split("\n").at(-1) ?? "{}")
   } finally {
-    removeShortFolder(join(root, "kuvo"))
     rmSync(root, { recursive: true, force: true })
   }
 }
@@ -53,6 +52,19 @@ test.skipIf(!canFence)("the engine's plugin, gone, is back on the box's next rou
     said.kept = fs.readdirSync(temporary).sort();
     fs.rmSync(temporary, { recursive: true, force: true });`)
   expect(said).toEqual({ setUp: true, back: true, kept: ["n0wn0wn0"] })
+})
+
+// A box that kept commands' temporary folders in its sandbox's own folder (before `t`), updated while
+// a conversation's command still runs (a build, a tmux server it left running): that folder stays
+// for it, until a week after its last command as any.
+test.skipIf(!canFence)("a box updated to keep commands' temporary folders in `t` leaves those still in use where they were", () => {
+  const said = inBox(`
+    fs.mkdirSync(path.join(folder, "tmp", "n0wn0wn0", "build"), { recursive: true });
+    fs.writeFileSync(path.join(folder, "temporary"), path.join(folder, "tmp") + "\\n" + "0".repeat(64) + "\\n");
+    fence.setUpFence();
+    said.now = path.relative(folder, fs.readFileSync(path.join(folder, "temporary"), "utf8").split("\\n")[0]) !== "tmp";
+    said.kept = fs.readdirSync(path.join(folder, "tmp", "n0wn0wn0"));`)
+  expect(said).toEqual({ now: true, kept: ["build"] })
 })
 
 // (Where the machine lets commands have a namespace of their own: the box found it couldn't when it
