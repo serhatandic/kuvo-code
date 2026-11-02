@@ -7871,6 +7871,224 @@ var SHELL_CACHES = (me) => [
   `p10k-${me}`
 ];
 var MAC_RUNS_LATER = ["Library/Caches/pnpm", "Library/Caches/antidote", ".local/state/mise/trusted-configs"];
+var HOME_RUNS_LATER = [
+  ".profile",
+  ".bashrc",
+  ".bash_profile",
+  ".bash_login",
+  ".bash_logout",
+  ".bash_aliases",
+  ".zshrc",
+  ".zshenv",
+  ".zprofile",
+  ".zlogin",
+  ".zlogout",
+  ".zsh",
+  ".zfunc",
+  ".oh-my-zsh",
+  ".zinit",
+  ".zplug",
+  ".zim",
+  ".zimrc",
+  ".antigen",
+  ".p10k.zsh",
+  ".config/zsh",
+  ".config/fish",
+  ".config/nushell",
+  ".config/powershell",
+  ".config/starship.toml",
+  ".tcshrc",
+  ".cshrc",
+  ".kshrc",
+  ".mkshrc",
+  ".inputrc",
+  ".tmux.conf",
+  ".config/tmux",
+  ".screenrc",
+  ".local/bin",
+  "bin",
+  ".bin",
+  ".npm-global",
+  ".volta",
+  ".asdf",
+  ".nvm",
+  ".fnm",
+  ".local/share/fnm",
+  ".pyenv",
+  ".rbenv",
+  ".jenv",
+  ".nodenv",
+  ".goenv",
+  ".sdkman",
+  ".ghcup/bin",
+  ".local/share/mise",
+  ".config/mise",
+  ".config/direnv",
+  ".local/share/direnv",
+  ".ssh/config",
+  ".ssh/config.d",
+  ".ssh/authorized_keys",
+  ".ssh/authorized_keys2",
+  ".ssh/rc",
+  ".ssh/environment",
+  ".gitconfig",
+  ".config/git",
+  ".git-templates",
+  ".git_template",
+  ".config/husky",
+  ".huskyrc",
+  ".claude",
+  ".claude.json",
+  ".codex",
+  ".cursor",
+  ".gemini",
+  ".grok",
+  ".config/opencode",
+  ".opencode",
+  ".aider.conf.yml",
+  ".continue",
+  ".copilot",
+  ".config/github-copilot",
+  ".factory",
+  ".config/amp",
+  ".vscode",
+  ".vscode-server",
+  ".vscode-oss",
+  ".cursor-server",
+  ".windsurf",
+  ".config/Code",
+  ".config/Cursor",
+  ".config/VSCodium",
+  ".config/JetBrains",
+  ".config/zed",
+  ".config/helix",
+  ".vim",
+  ".vimrc",
+  ".config/nvim",
+  ".local/share/nvim",
+  ".emacs",
+  ".emacs.d",
+  ".config/emacs",
+  ".bunfig.toml",
+  ".config/.bunfig.toml",
+  ".docker/cli-plugins",
+  ".terraformrc",
+  ".config/gh",
+  ".local/share/gh",
+  ".config/pip",
+  ".pip",
+  ".pydistutils.cfg",
+  ".condarc",
+  ".gemrc",
+  ".irbrc",
+  ".pryrc",
+  ".yarnrc",
+  ".gnupg",
+  ".wgetrc",
+  ".curlrc",
+  ".hgrc",
+  ".config/hg"
+];
+var LINUX_RUNS_LATER = [
+  ".local/lib",
+  ".config/systemd",
+  ".local/share/systemd",
+  ".config/autostart",
+  ".config/environment.d",
+  ".pam_environment",
+  ".xprofile",
+  ".xinitrc",
+  ".xsession",
+  ".xsessionrc",
+  ".config/plasma-workspace",
+  ".local/share/applications"
+];
+var MAC_HOME_KEPT = ["Library"];
+var MAC_HOME_OPEN = ["Library/Logs", "Library/Mobile Documents"];
+var MAC_HOME_RUNS_LATER = [
+  ".hammerspoon",
+  ".config/karabiner",
+  ".config/skhd",
+  ".skhdrc",
+  ".yabairc",
+  ".config/yabai",
+  ".aerospace.toml",
+  ".config/aerospace",
+  ".config/sketchybar"
+];
+var HOME_RUNS_LATER_PREFIXES = [".zcompdump"];
+var MAC_PERSONAL = ["Desktop", "Documents", "Downloads", "Pictures", "Movies", "Music", "Library/Mobile Documents"];
+var LINUX_PERSONAL = {
+  DESKTOP: "Desktop",
+  DOCUMENTS: "Documents",
+  DOWNLOAD: "Downloads",
+  MUSIC: "Music",
+  PICTURES: "Pictures",
+  VIDEOS: "Videos",
+  PUBLICSHARE: "Public",
+  TEMPLATES: "Templates"
+};
+function xdgPersonal(home) {
+  const named = {};
+  try {
+    for (const line of fs34.readFileSync(path34.join(home, ".config", "user-dirs.dirs"), "utf8").split(`
+`)) {
+      const found = line.match(/^\s*XDG_([A-Z]+)_DIR\s*=\s*"(.*)"\s*$/);
+      if (found)
+        named[found[1]] = found[2].replace(/^\$HOME(?=\/|$)/, home);
+    }
+  } catch {}
+  return Object.entries(LINUX_PERSONAL).map(([key, name]) => named[key] ?? path34.join(home, name)).filter((folder) => path34.isAbsolute(folder) && path34.resolve(folder) !== path34.resolve(home) && path34.resolve(folder).startsWith(path34.resolve(home) + "/"));
+}
+function startingWith(home, prefixes) {
+  try {
+    return fs34.readdirSync(home).filter((name) => prefixes.some((prefix) => name.startsWith(prefix))).map((name) => path34.join(home, name));
+  } catch {
+    return [];
+  }
+}
+function sshSockets(home) {
+  const paths = new Set;
+  const prefixes = new Set;
+  const files = [path34.join(home, ".ssh", "config")];
+  try {
+    for (const name of fs34.readdirSync(path34.join(home, ".ssh", "config.d")))
+      files.push(path34.join(home, ".ssh", "config.d", name));
+  } catch {}
+  const shared = new Set([home, path34.join(home, ".ssh"), "/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp"].map((each) => path34.resolve(each)));
+  for (const file of files) {
+    let text = "";
+    try {
+      text = fs34.readFileSync(file, "utf8");
+    } catch {
+      continue;
+    }
+    for (const line of text.split(`
+`)) {
+      const found = line.match(/^\s*(ControlPath|IdentityAgent)\s*(?:=\s*|\s+)("[^"]*"|\S+)/i);
+      if (!found)
+        continue;
+      let value = found[2].replace(/^"|"$/g, "");
+      if (!value || /^(none|SSH_AUTH_SOCK)$/i.test(value) || value.startsWith("$"))
+        continue;
+      value = value.replace(/^~(?=\/|$)/, home).replace(/%d/g, home).replace(/%%/g, "\x00");
+      if (!path34.isAbsolute(value))
+        continue;
+      const token = value.indexOf("%");
+      if (token < 0) {
+        paths.add(path34.resolve(value.replace(/\0/g, "%")));
+        continue;
+      }
+      const before = value.slice(0, token).replace(/\0/g, "%");
+      const folder = before.endsWith("/") ? path34.resolve(before) : path34.dirname(before);
+      if (shared.has(folder) || before.endsWith("/") && shared.has(folder))
+        prefixes.add(before.endsWith("/") ? folder + "/" : before);
+      else
+        paths.add(folder);
+    }
+  }
+  return { paths: [...paths], prefixes: [...prefixes] };
+}
 var SECRETS = [
   ".aws",
   ".config/gcloud",
@@ -7976,17 +8194,26 @@ function fencePolicy(ports = []) {
   if (ownCache && path34.isAbsolute(ownCache) && !kuvo.some((folder) => realish(ownCache) === folder || realish(ownCache).startsWith(folder + "/")))
     yourCaches.push(realish(ownCache));
   const runsLater = [...inHomes(RUNS_LATER), ...new Set(yourCaches.flatMap((folder) => [...TOOL_CACHES, ...SHELL_CACHES(accountName())].map((name) => path34.join(folder, name))))];
+  const homeRunsLater = inHomes(HOME_RUNS_LATER);
+  const ssh = homes.map((each) => sshSockets(each));
+  const sshPaths = [...new Set(ssh.flatMap((each) => each.paths).map(realish))];
+  const sshPrefixes = [...new Set(ssh.flatMap((each) => each.prefixes))];
   if (process.platform === "darwin") {
     return {
       home,
       kuvo,
       kuvoReadable,
-      readOnly: [...runsLater, ...inHomes(MAC_RUNS_LATER)],
+      readOnly: [...runsLater, ...inHomes(MAC_RUNS_LATER), ...homeRunsLater, ...inHomes(MAC_HOME_RUNS_LATER)],
       ports,
       commandCaches,
+      homeWrites: homes,
+      homeKept: inHomes(MAC_HOME_KEPT),
+      homeOpen: inHomes(MAC_HOME_OPEN),
+      personal: inHomes(MAC_PERSONAL),
       readOnlyPatterns: [
         ...userTemporary().map((folder) => `^${escapeRegex(folder)}/T/bunx-`),
-        ...yourCaches.map((folder) => `^${escapeRegex(folder)}/p10k-`)
+        ...yourCaches.map((folder) => `^${escapeRegex(folder)}/p10k-`),
+        ...homes.flatMap((each) => HOME_RUNS_LATER_PREFIXES.map((prefix) => `^${escapeRegex(each)}/${escapeRegex(prefix)}`))
       ],
       kuvoPatterns: [
         `^${escapeRegex(home)}/Library/[^/]+/run\\.kuvo\\.code[^/]*(/|$)`,
@@ -8006,6 +8233,19 @@ function fencePolicy(ports = []) {
         ]),
         "/opt/homebrew/var/run/yubikey-agent.sock",
         "/usr/local/var/run/yubikey-agent.sock",
+        ...inHome([
+          ".docker/run",
+          ".orbstack/run",
+          ".colima",
+          ".lima",
+          ".rd",
+          ".local/share/containers/podman/machine",
+          "Library/Containers/com.docker.docker/Data",
+          "Library/Group Containers/HUAQ24HBR6.dev.orbstack"
+        ]),
+        realish("/var/run/docker.sock"),
+        "/private/var/run/docker.sock",
+        ...sshPaths,
         ...process.env.SSH_AUTH_SOCK && path34.isAbsolute(process.env.SSH_AUTH_SOCK) ? [realish(process.env.SSH_AUTH_SOCK)] : []
       ],
       socketPatterns: [
@@ -8013,7 +8253,9 @@ function fencePolicy(ports = []) {
         "^/private/tmp/ssh-[^/]+/agent\\.",
         "^/private/var/folders/[^/]+/[^/]+/T/ssh-[^/]+/agent\\.",
         `^${escapeRegex(home)}/\\.gnupg/S\\.(gpg-agent|scdaemon)`,
-        `^/private/tmp/tmux-${os5.userInfo().uid}/`
+        `^/private/tmp/tmux-${os5.userInfo().uid}/`,
+        "^/private/var/folders/[^/]+/[^/]+/T/podman/",
+        ...sshPrefixes.map((prefix) => `^${escapeRegex(realish(prefix.endsWith("/") ? prefix.slice(0, -1) : prefix))}${prefix.endsWith("/") ? "/" : ""}`)
       ],
       socketFolders: [`^/private/tmp/tmux-${os5.userInfo().uid}$`, "^/private/tmp/com\\.apple\\.launchd\\.[^/]+$", "^/private/tmp/ssh-[^/]+$", "^/private/var/folders/[^/]+/[^/]+/T/ssh-[^/]+$"],
       secrets: [...inHomes([...SECRETS, ...MAC_SECRETS]), ...keychainDaemons(home).map(realish), ...homes.flatMap((each) => [...sshKeys(each), ...ghHosts(each)]).map(realish)]
@@ -8023,9 +8265,16 @@ function fencePolicy(ports = []) {
     home,
     kuvo,
     kuvoReadable,
-    readOnly: runsLater,
+    readOnly: [
+      ...runsLater,
+      ...homeRunsLater,
+      ...inHomes(LINUX_RUNS_LATER),
+      ...homes.flatMap((each) => startingWith(each, HOME_RUNS_LATER_PREFIXES)).map(realish)
+    ],
     ports,
     commandCaches,
+    homeWrites: homes,
+    personal: [...new Set(homes.flatMap(xdgPersonal).map(realish))],
     kuvoPatterns: [],
     writable: ["/tmp", "/var/tmp", "/dev", "/dev/shm", ...inHome([...CACHES, ...LINUX_CACHES])],
     sockets: [
@@ -8038,7 +8287,21 @@ function fencePolicy(ports = []) {
         ".gnupg/S.gpg-agent.ssh",
         ".gnupg/S.scdaemon"
       ]),
-      ...process.env.SSH_AUTH_SOCK && path34.isAbsolute(process.env.SSH_AUTH_SOCK) ? [process.env.SSH_AUTH_SOCK] : []
+      ...process.env.SSH_AUTH_SOCK && path34.isAbsolute(process.env.SSH_AUTH_SOCK) ? [process.env.SSH_AUTH_SOCK] : [],
+      ...[...new Set([
+        "/var/run/docker.sock",
+        "/run/docker.sock",
+        "/run/podman/podman.sock",
+        "/var/snap/lxd/common/lxd/unix.socket",
+        "/var/lib/lxd/unix.socket",
+        "/var/lib/incus/unix.socket",
+        "/run/incus/unix.socket",
+        "/var/run/libvirt/libvirt-sock",
+        "/run/libvirt/libvirt-sock"
+      ].map(realish))],
+      ...inHome([".docker/run"]),
+      ...sshPaths,
+      ...sshPrefixes.map((prefix) => prefix + "*")
     ],
     secrets: [...inHomes([...SECRETS, ...LINUX_SECRETS]), ...homes.flatMap((each) => [...sshKeys(each), ...ghHosts(each)])]
   };
@@ -8275,7 +8538,16 @@ function writeRuleWouldBe(where) {
 import { spawn as spawn3, spawnSync as spawnSync3 } from "node:child_process";
 import fs36 from "node:fs";
 function landlockPolicy(policy) {
-  return JSON.stringify({ hidden: [...policy.kuvo, ...policy.secrets], readable: policy.kuvoReadable, writable: [...policy.writable, ...policy.commandCaches], readOnly: policy.readOnly }) + `
+  return JSON.stringify({
+    hidden: [...policy.kuvo, ...policy.secrets],
+    readable: policy.kuvoReadable,
+    writable: [...policy.writable, ...policy.commandCaches],
+    readOnly: policy.readOnly,
+    homeWrites: policy.homeWrites ?? [],
+    homeKept: policy.homeKept ?? [],
+    homeOpen: policy.homeOpen ?? [],
+    personal: policy.personal ?? []
+  }) + `
 `;
 }
 var HIDE = String.raw`u=$1 g=$2 n=$3 own=$4 sockets=$5 t_own=$6 t_name=$7; shift 7
@@ -8285,7 +8557,7 @@ over() { ( cd -P "$1" 2>/dev/null || exit 1; [ -z "$3" ] || [ "$(pwd -P)" = "$1"
 off() { [ -S "$1" ] && { [ -z "$2" ] || [ ! -L "$1" ]; } || return 1; mount -c --bind /dev/null "$1" 2>/dev/null && [ -c "$1" ] && { [ -z "$2" ] || [ ! -L "$1" ]; } || fail "$1 can't be kept from it."; }
 [ -r "$sockets" ] || fail "it isn't set up."
 over "$own" 0700 || fail "it isn't set up."
-while IFS= read -r s; do case $s in /*) over "$s" 0700 || off "$s" ;; esac; done <"$sockets"
+while IFS= read -r s; do case $s in /*'*') for f in $s; do [ ! -S "$f" ] || off "$f"; done ;; /*) over "$s" 0700 || off "$s" ;; esac; done <"$sockets"
 over "/run/user/$u" 0700
 if [ -n "$t_own" ]; then
   ( cd -P "$t_own/$t_name" 2>/dev/null && [ "$(pwd -P)" = "$t_own/$t_name" ] && [ -O . ] && mkdir "$own/tmp" && mount -c --bind . "$own/tmp" ) 2>/dev/null || fail "its temporary folder isn't its own."
@@ -8392,6 +8664,16 @@ function grantExcept(top, access, out = hidden) {
 }
 grantExcept("/", READS);
 for (const where of policy.readable) grant(where, READS);
+// Your home: files added and changed in what's there, never removed or moved (a move removes it
+// from where it was), nor linked in from elsewhere; but for what runs later, your personal folders
+// (only read: Landlock can't tell a new file from one that's there) and what's kept whole. A new
+// folder or file at the top of one that holds any of those can't be made: what Landlock grants is
+// each thing that's there.
+const HOME = all & ~(16n | 32n | 64n | 2048n | 8192n);
+const personal = (policy.personal || []).map(real);
+const homeOut = new Set([...kept, ...(policy.homeKept || []).map(real), ...personal]);
+for (const where of policy.homeWrites || []) grantExcept(where, HOME, homeOut);
+for (const where of policy.homeOpen || []) grantExcept(where, HOME, new Set([...kept, ...personal]));
 // What you let its project's commands write (Also Allowed).
 let allowed = [];
 // (Each by the real path the box keeps: one that's become a link since, to anywhere, isn't given.)
@@ -8442,6 +8724,8 @@ var regex = (pattern) => `(regex ${quote2(pattern)})`;
 var param = (name) => `(subpath (param ${quote2(name)}))`;
 var GIT_GUARDED = String.raw`(((modules/.+|worktrees/[^/]+)/)?(hooks(/|$)|config(\.worktree)?$|commondir$|gitdir$)|(modules|worktrees)/[^/]+$)`;
 var AGENTS_GUARDED = String.raw`\.claude/settings(\.local)?\.json|\.mcp\.json|\.codex/(config\.toml|hooks\.json|\.env|rules(/.*)?)|\.cursor/(hooks|mcp)\.json|\.(gemini|grok)/settings\.json|\.grok/(config\.toml|sandbox\.toml|lsp\.json|(hooks|plugins|agents|workflows)(/.*)?)|\.(claude|cursor)/hooks(/.*)?|\.(claude|codex|cursor|gemini|grok)`;
+var WRITE = "file-write-acl file-write-create file-write-data file-write-finderinfo file-write-flags file-write-mode file-write-owner file-write-setugid file-write-times file-write-unlink file-write-xattr";
+var HOME_WRITES = "file-write-create file-write-data file-write-flags file-write-mode file-write-times file-write-xattr";
 var GUARDED = String.raw`(.*/)?(\.git$|\.git/(${GIT_GUARDED})|\.opencode(/|$)|opencode\.jsonc?$|(${AGENTS_GUARDED})$)`;
 function seatbeltProfile(policy, options) {
   const mode = options.mode ?? "enforce";
@@ -8460,19 +8744,24 @@ function seatbeltProfile(policy, options) {
       out.push(`(allow ${operations} ${filters.join(" ")})`);
   };
   const under = (base, rest) => `(regex (string-append "^" (param ${quote2(base)}) ${quote2(rest)}))`;
-  out.push(";; writes: its folder, its repository, temporary folders, devices and tools' caches");
-  deny("file-write*", subpath("/"));
-  allow("file-write*", ...policy.writable.map(subpath), param("WORK"), param("GIT"));
-  allow("file-write*", ...Array.from({ length: MOST_FOLDERS }, (_, at) => param(`ALLOW${at}`)));
-  deny("file-write*", ...policy.readOnly.map(subpath), ...(policy.readOnlyPatterns ?? []).map(regex));
+  out.push(";; writes: files added and changed in your home, never deleted or moved there (but in its folder,");
+  out.push(";; its repository, temporary folders, devices and tools' caches); your personal folders only take new files");
+  deny(`file-write* ${WRITE}`, subpath("/"));
+  allow(HOME_WRITES, ...(policy.homeWrites ?? []).map(subpath));
+  deny(WRITE, ...(policy.homeKept ?? []).map(subpath));
+  allow(HOME_WRITES, ...(policy.homeOpen ?? []).map(subpath));
+  deny("file-write-data file-write-unlink file-write-mode file-write-flags", ...(policy.personal ?? []).map(subpath));
+  allow(WRITE, ...policy.writable.map(subpath), param("WORK"), param("GIT"));
+  allow(WRITE, ...Array.from({ length: MOST_FOLDERS }, (_, at) => param(`ALLOW${at}`)));
+  deny(WRITE, ...policy.readOnly.map(subpath), ...(policy.readOnlyPatterns ?? []).map(regex));
   out.push(";; Kuvo Code's own folders: neither read nor written; its helpers run");
-  const HIDDEN = "file-read-data file-write*";
+  const HIDDEN = `file-read-data ${WRITE}`;
   deny(HIDDEN, ...policy.kuvo.map(subpath), ...policy.kuvoPatterns.map(regex));
   allow("file-read-data", ...policy.kuvoReadable.map(subpath));
   const homes = Array.from({ length: AGENT_FOLDERS }, (_, at) => `OWN${at}`);
   allow("file-read-data", ...homes.map(param), ...Array.from({ length: AGENT_FOLDERS }, (_, at) => param(`READ${at}`)));
   const inHome = (home, rest) => `(regex (string-append "^" (param ${quote2(`${home}_RE`)}) ${rest}))`;
-  allow("file-write*", ...homes.flatMap((home) => ["$", "/"].flatMap((after) => ["REGULAR-FILE", "DIRECTORY"].map((type) => `(require-all ${inHome(home, `"/(" (param "STATE") ")${after}"`)} (vnode-type ${type}))`))));
+  allow(WRITE, ...homes.flatMap((home) => ["$", "/"].flatMap((after) => ["REGULAR-FILE", "DIRECTORY"].map((type) => `(require-all ${inHome(home, `"/(" (param "STATE") ")${after}"`)} (vnode-type ${type}))`))));
   allow(HIDDEN, param("TMP"));
   allow(HIDDEN, ...policy.commandCaches.map(subpath));
   if (options.inside)
@@ -8488,12 +8777,13 @@ function seatbeltProfile(policy, options) {
       holders.add(at);
   const held = [...[...holders].map((folder) => `(literal ${quote2(folder)})`), ...(policy.patternFolders ?? []).map(regex)];
   deny("file-write-unlink file-clone", ...held);
+  deny("file-write-mode file-write-flags", ...held);
   deny("file-write-create", ...held.map((folder) => `(require-all ${folder} (vnode-type SYMLINK))`));
   deny("file-write-unlink", ...(policy.socketPatterns ?? []).map(regex), ...(policy.socketFolders ?? []).map((folder) => `(require-all ${regex(folder)} (vnode-type DIRECTORY))`));
-  deny("file-write*", under("WORK_RE", "/" + GUARDED), under("GIT_RE", "/" + GIT_GUARDED), ...Array.from({ length: MOST_FOLDERS }, (_, at) => under(`ALLOW${at}_RE`, "/" + GUARDED)));
-  deny("file-write*", ...homes.map((home) => inHome(home, `"/(.*/)?(" (param "KEPT") ")(/|$)"`)));
+  deny(WRITE, under("WORK_RE", "/" + GUARDED), under("GIT_RE", "/" + GIT_GUARDED), ...Array.from({ length: MOST_FOLDERS }, (_, at) => under(`ALLOW${at}_RE`, "/" + GUARDED)));
+  deny(WRITE, ...homes.map((home) => inHome(home, `"/(.*/)?(" (param "KEPT") ")(/|$)"`)));
   out.push(";; your secrets");
-  deny("file-read* file-write*", ...policy.secrets.map(subpath));
+  deny(`file-read* ${WRITE}`, ...policy.secrets.map(subpath));
   out.push(";; Kuvo Code's own servers and sockets");
   deny("network-outbound", ...policy.ports.map((port) => `(remote tcp ${quote2(`localhost:${port}`)})`));
   if (options.agent)
@@ -8857,7 +9147,7 @@ function agentsNote(platform, tmuxFits = true) {
   return [
     "# Commands run in a sandbox here",
     "",
-    "Each command you run with the shell tool runs in Kuvo Code's sandbox. It writes only in this conversation's folder, its git repository, temporary folders (`$TMPDIR`, `/tmp`) and tools' caches, and it can't read Kuvo Code's own folders or the user's secrets (private SSH keys, cloud and package tokens)." + (mac ? " Nor can it change git's hooks or config, or the settings opencode and the coding agents start with in a project (`.opencode/`, `opencode.json`, `.claude/settings.json`, `.mcp.json`, `.codex/config.toml`, `.cursor/hooks.json` and the like, and their hooks' scripts), nor make, move or remove the folders that hold them (`.git`, `.claude`, `.codex`, `.cursor` and the like): writing in them is fine. If a task needs one changed, ask the user." : ""),
+    "Each command you run with the shell tool runs in Kuvo Code's sandbox. It can't read Kuvo Code's own folders or the user's secrets (private SSH keys, cloud and package tokens). It writes and deletes freely in this conversation's folder, its git repository, temporary folders (`$TMPDIR`, `/tmp`) and tools' caches. Elsewhere in the home folder it can add and change files, but never delete or move them, and it can't write what runs later outside the sandbox: shell start-up files, the folders on PATH, git's, SSH's, editors' and the coding agents' settings" + (mac ? ", or `~/Library` apart from its caches and logs" : "") + ". The user's personal folders (Documents, Desktop, Downloads and the like) " + (mac ? "only take new files: save a new copy beside one rather than changing it." : "are only read.") + " Docker's socket and SSH's shared connections aren't reachable." + (mac ? " Nor can it change git's hooks or config, or the settings opencode and the coding agents start with in a project (`.opencode/`, `opencode.json`, `.claude/settings.json`, `.mcp.json`, `.codex/config.toml`, `.cursor/hooks.json` and the like, and their hooks' scripts), nor make, move or remove the folders that hold them (`.git`, `.claude`, `.codex`, `.cursor` and the like): writing in them is fine. If a task needs one changed, ask the user." : ""),
     ...mac ? [
       "",
       "On this Mac:",
@@ -8872,7 +9162,7 @@ function agentsNote(platform, tmuxFits = true) {
     ...tmuxFits ? [] : ["This computer's home folder's path is too long for tmux in the sandbox: its socket in a command's temporary folder (`$TMPDIR`) would pass the system's limit, so tmux fails with \"File name too long\", as can other programs that make a socket there. Don't start tmux with sandbox_ask instead: outside the sandbox it would be the user's own. For another program that needs a socket, ask with sandbox_ask, or tell the user why it can't run in the sandbox here.", ""],
     "`ssh` and git over SSH use only the keys the user lets this conversation use from Kuvo Code's vault, through `$SSH_AUTH_SOCK`. With none, use HTTPS or ask the user.",
     "",
-    `When the sandbox refuses something a task needs ("Operation not permitted" or "Permission denied" outside these folders), don't work around it: ask the user with sandbox_ask, giving the command as you ran it and why the task needs it. They can let it run outside the sandbox once (and let your commands write in the folder it was stopped writing in from now on), or say no; allowed, it runs for you and you get its output.`,
+    `When the sandbox refuses something a task needs ("Operation not permitted" or "Permission denied"), don't work around it: ask the user with sandbox_ask, giving the command as you ran it and why the task needs it. They can let it run outside the sandbox once (and let your commands write in the folder it was stopped writing in from now on), or say no; allowed, it runs for you and you get its output.`,
     ""
   ].join(`
 `);

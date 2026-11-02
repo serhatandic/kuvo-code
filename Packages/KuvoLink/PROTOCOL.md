@@ -3104,8 +3104,29 @@ hold: Claude Code's plans, each project's memory, what it saved of a long output
 
 Each box runs its agents' commands in a sandbox (`sandbox` in `features` and its asks, `sandbox.asks`, bridge 0.9.118) wherever
 it can, with no switch: the way out is per command (the card that asks you about one it refused).
-On, each command the engine runs (an agent's shell tool, and yours with `!`)
-writes only in its conversation's folder, that folder's git repository (a real one: a `.git` that's
+On, each command the engine runs (an agent's shell tool, and yours with `!`) reads everything but
+what's below, and in your home folder adds and changes files (`homeWrites`) but never deletes or
+moves one there (on macOS, Seatbelt's `file-write-unlink`, which a move takes too, is left out; on
+Linux, Landlock's `REMOVE_FILE`, `REMOVE_DIR` and `REFER`, so nothing's linked in either), and never
+writes what runs later outside the sandbox: your shell's start-up files and plugins (`.zshrc`,
+`.bashrc`, `.profile`, `.config/fish`, `.oh-my-zsh`, zsh's completion dumps…), the folders on your
+PATH and version managers' (`.local/bin`, `bin`, `.nvm`, `.pyenv`, `.asdf`, mise's…), Python's user
+site, what direnv and mise trust, SSH's `config` and `authorized_keys`, git's settings and templates,
+the coding agents' and editors' settings, hooks and extensions (`.claude`, `.claude.json`, `.codex`,
+`.cursor`, `.gemini`, `.grok`, opencode's, `.vscode`, `.config/nvim`…), tools' settings that name
+programs or package sources (`.bunfig.toml`, `.docker/cli-plugins`, `.config/gh`, `.config/pip`,
+`.gemrc`, `.gnupg`…); on Linux systemd's, autostart's and environment.d's folders and the desktop's
+start-up files; on macOS `~/Library` but its `Caches`, `Developer`, `Logs` and iCloud Drive
+(`homeKept`, `homeOpen`), and the window and key tools' settings (Hammerspoon, Karabiner, skhd,
+yabai, AeroSpace, SketchyBar). Your personal folders (`personal`: on macOS Desktop, Documents,
+Downloads, Pictures, Movies, Music and iCloud Drive; on Linux those `~/.config/user-dirs.dirs` names)
+only take new files on macOS (no `file-write-data`, `-unlink`, `-mode` or `-flags`: a file's own
+first open still writes it), and are only read on Linux, where Landlock can't tell a new file from
+one that's there; the conversation's folder and Also Allowed inside one are its own. On macOS no
+folder that holds what's kept (your home, `~/.ssh`) is closed off by its mode or flags either. On
+Linux, a new folder or file at the top of one that holds what's kept (your home, `~/.config`,
+`~/.local`) can't be made: Landlock grants each thing that's there. Besides, each command
+writes and deletes freely in its conversation's folder, that folder's git repository (a real one: a `.git` that's
 a link, or names a folder that isn't a repository or a worktree the repository doesn't name back,
 counts for nothing; on macOS never its hooks or config, its submodules' or its worktrees', nor the
 engine's settings in the folder: `.opencode/`, `opencode.json`, nor the coding agents' settings
@@ -3160,8 +3181,11 @@ temporary folder, whose agents' folders and sockets it can't move to give them a
 remove a folder of its own named as theirs are, `ssh-…`; its own sockets there, like ssh's shared
 connections, it uses and removes), the
 box's own `SSH_AUTH_SOCK`, gpg-agent's, 1Password's, Secretive's, Bitwarden's and yubikey-agent's,
-by their usual places (an `IdentityAgent` your ssh config names elsewhere, or a `GNUPGHOME`, isn't
-known). So `ssh`, and git over SSH, use only the vault's keys there, and signing a commit with
+by their usual places and those your ssh config names (`IdentityAgent`, and `ControlPath`'s shared
+connections: a folder of their own whole, or by the start of their names in one that holds more;
+a `GNUPGHOME` elsewhere isn't known); nor, on both systems, Docker's and the like (Docker Desktop,
+OrbStack, Colima, Lima, Rancher Desktop, Podman, LXD, Incus, libvirt), which run anything as the
+whole computer. So `ssh`, and git over SSH, use only the vault's keys there, and signing a commit with
 your GPG key doesn't work; nor does an X11
 program, whose display (XQuartz's) is in launchd's folder too. Nor can it reach your tmux's server
 (`/private/tmp/tmux-<uid>`), which types into your terminals: its `TMUX_TMPDIR` is its temporary
