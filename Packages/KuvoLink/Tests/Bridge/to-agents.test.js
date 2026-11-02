@@ -92,6 +92,8 @@ test("a conversation goes on with the coding agents whole, with what was waiting
   assert.ok(urls.indexOf("POST /api/session/ses_fix/interrupt") < urls.indexOf("GET /api/session/ses_fix/message?limit=200&order=desc"));
   assert.ok(urls.includes("DELETE /api/session/ses_fix/inbox/inb_1"));
   assert.deepEqual(engine.asked.find(each => each.method === "PATCH").body, { metadata: { pinned: true, "kuvo.archived": true, "kuvo.carriedTo": "ses_theirs" } });
+  // The new one says where it came from, so the files its words show stay as that one's deleted.
+  assert.deepEqual(agents.asked.find(each => each.method === "PATCH" && each.url === "/api/session/ses_theirs").body, { metadata: { kuvo: { carriedFrom: "ses_fix" } } });
   // From a phone, the same.
   assert.equal((await (async () => {
     const parts = [];
@@ -145,7 +147,7 @@ test("a bot's conversation becomes the new one, marked and told as its own, and 
   assert.equal(parts[0].head.status, 200, Buffer.concat(parts.filter(part => part.body).map(part => part.body)).toString());
   assert.equal(fs.readFileSync(path.join(folder, "session"), "utf8"), "ses_theirs");
   assert.equal(fs.readFileSync(path.join(folder, "via"), "utf8"), "bridge");
-  assert.deepEqual(agents.asked.find(each => each.method === "PATCH" && each.url === "/api/session/ses_theirs").body, { metadata: { kuvo: { bot: "bot_scout00001" } } });
+  assert.deepEqual(agents.asked.find(each => each.method === "PATCH" && each.url === "/api/session/ses_theirs").body, { metadata: { kuvo: { bot: "bot_scout00001", carriedFrom: "ses_scout" } } });
   assert.match(agents.asked.find(each => each.url.endsWith("/instructions/entries/kuvo.bot")).body.value, /^You are Scout, one of the user's bots\./);
   assert.ok(engine.asked.some(each => each.method === "DELETE" && each.url === "/api/session/ses_scout"), "the engine's goes");
   assert.equal(engine.asked.some(each => each.method === "PATCH"), false, "not archived: it's gone");
