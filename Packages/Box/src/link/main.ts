@@ -101,6 +101,7 @@ export { BRIDGE_VERSION } from "./version";
 export { FEATURES } from "../shared/features";
 export { messageID } from "./engine/sessions";
 export { forgetMovesInMemory, keepMoving, sendMovesWith, takeMoveMail, watchMoves } from "./moves/move";
+export { movesElsewhere } from "./moves/elsewhere";
 export { COMPATIBILITY_FILE, engineConfigContent, learnCompatibility, readCompatibility } from "./engine/compatibility";
 export { queueOf, queueWatcher, readQueues, scanQueues } from "./engine/queue";
 export { workWatcher } from "./work/wakes";

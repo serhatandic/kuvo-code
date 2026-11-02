@@ -7,6 +7,7 @@ import { receiveDocs } from "../documents/exchange";
 import { readEngineFile } from "../engine/client";
 import { leaveAnswer, letterWent } from "../letters/outbox";
 import { takeLetter } from "../letters/take";
+import { takeMoving, tellMovingAgain } from "../moves/elsewhere";
 import { takeMoveMail } from "../moves/move";
 import { frozen } from "../moves/records";
 import { attentionGiven } from "../notices/hold";
@@ -27,7 +28,8 @@ import type { MailSender } from "./known";
 let answeringAsk: Promise<void> | null = null;
 const asksFrom = new Map<string, number>();
 
-// What peers tell each other: their agents, letters, how letters went, and moves (PROTOCOL.md, "Peers").
+// What peers tell each other: their agents, letters, how letters went, and moves, theirs between
+// them and what moves on each (PROTOCOL.md, "Peers").
 export function peerMail(sender: MailSender, payload: Record<string, unknown>, host: LinkHost | null | undefined, places: () => PeerPlaces = () => ({ targets: [], bridge: true })): void {
   const send = (peer: LetterSender, message: { delivered: Delivered }) => {
     const link = readLink();
@@ -43,6 +45,7 @@ export function peerMail(sender: MailSender, payload: Record<string, unknown>, h
   // told again now.
   if (payload.ask === "agents") {
     toldPeers.delete(sender.key);
+    tellMovingAgain();
     // One answer at a time, and once in a while from each (an ask again soon after is the same).
     const now = Date.now();
     if (host?.welcomed && !answeringAsk && now - (asksFrom.get(sender.key) ?? 0) > 10_000) {
@@ -53,6 +56,8 @@ export function peerMail(sender: MailSender, payload: Record<string, unknown>, h
   if (isObject(payload.letter)) takeLetter(sender, payload.letter, { send, ...places(), answer: leaveAnswer, moving: async session => frozen().has(session) }).catch(() => {});
   // A move between this box and that one (PROTOCOL.md, `kuvo/moves`).
   if (isObject(payload.move)) takeMoveMail(sender, payload.move).catch(() => {});
+  // What moves on that box now, between it and any other (PROTOCOL.md, "Peers", `moving`).
+  if (isObject(payload.moving)) takeMoving(sender, payload.moving);
   // Group chats across your computers: to the coding agents' bridge here.
   if (isObject(payload.seat) || isObject(payload.seatPart)) takeSeat(sender, payload, send).catch(() => {});
   if (isObject(payload.delivered) && typeof payload.delivered.id === "string") letterWent(sender, payload.delivered as unknown as Delivered);

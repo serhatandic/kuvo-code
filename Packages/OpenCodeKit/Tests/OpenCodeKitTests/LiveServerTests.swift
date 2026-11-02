@@ -39,15 +39,17 @@ struct LiveServerTests {
         environment.removeValue(forKey: "XDG_DATA_HOME")
         // The settings Kuvo Code gives the engine, with keys in them: not for commands.
         environment["OPENCODE_CONFIG_CONTENT"] = #"{"mcp":{"servers":{}}}"#
+        // Started in your tmux: a command's tmux would open its windows there.
+        environment["TMUX"] = "/private/tmp/tmux-501/default,1234,0"
         let folders = EngineFolders(root: root.appending(path: "engine"))
         let server = try await ServerProcess.start(executable: binary, folders: folders, environment: environment)
         defer { server.stop() }
         let api = OpenCodeAPI(endpoint: server.endpoint)
         let session = try await api.createSession(directory: project.path)
-        try await api.runShell(session: session.id, command: #"printf '%s|%s|%s|%s' "${XDG_CONFIG_HOME-unset}" "${XDG_DATA_HOME-unset}" "${KUVO_OWN_XDG_CONFIG_HOME-unset}" "${OPENCODE_CONFIG_CONTENT-unset}" >seen"#)
+        try await api.runShell(session: session.id, command: #"printf '%s|%s|%s|%s|%s' "${XDG_CONFIG_HOME-unset}" "${XDG_DATA_HOME-unset}" "${KUVO_OWN_XDG_CONFIG_HOME-unset}" "${OPENCODE_CONFIG_CONTENT-unset}" "${TMUX-unset}" >seen"#)
         let seen = project.appending(path: "seen")
         for _ in 0..<100 where !FileManager.default.fileExists(atPath: seen.path) { try await Task.sleep(for: .milliseconds(100)) }
-        #expect(try String(contentsOf: seen, encoding: .utf8) == "/own/config|unset|unset|unset")
+        #expect(try String(contentsOf: seen, encoding: .utf8) == "/own/config|unset|unset|unset|unset")
         // The engine itself keeps its own.
         #expect(FileManager.default.fileExists(atPath: folders.dataDirectory.path))
     }

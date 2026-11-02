@@ -305,6 +305,70 @@ import Testing
         #expect(app.bots.bot("bot_twomachines")?.machine == pi)
     }
 
+    /// A move between two of your machines, started elsewhere (on your phone, say): this Mac's box
+    /// hears it from the machine (`elsewhere`), and the Mac reads that machine, whose box answers
+    /// it over SSH only when asked, and shows it moving.
+    @Test func aMoveBetweenTwoMachinesStartedElsewhereShowsHere() async throws {
+        let lab = "move-\(UUID().uuidString.prefix(8).lowercased()).invalid"
+        let labKey = String(repeating: "E", count: 43)
+        let mac = BoxClient.mac
+        let started = Over()
+        let app = AppModel()
+        app.moves.app = app
+        _ = app.machines.add(lab)
+        defer { app.removeMachine(lab) }
+        app.phoneLink.standIn(machine: lab, key: labKey)
+        let move = #"{"id":"mv_far1","kind":"chat","thing":"ses_far","from":"\#(labKey)","to":"\#(String(repeating: "F", count: 43))","role":"from","stage":"copying","sessions":["ses_far"],"place":"pi"}"#
+        app.moves.boxes = { box in
+            Self.box(box) { path in
+                guard path == "kuvo/moves" else { return nil }
+                if box == mac { return started.now ? #"{"moves":[],"away":[],"elsewhere":[{"box":"\#(labKey)","moves":[\#(move)]}]}"# : #"{"moves":[],"away":[]}"# }
+                return started.now ? #"{"moves":[\#(move)],"away":[]}"# : #"{"moves":[],"away":[]}"#
+            }
+        }
+        await app.moves.reloadAll()
+        #expect(!app.moves.isMoving("ses_far"))
+
+        // Started on your phone: this Mac's box hears it, and says so (its feed, here read).
+        started.now = true
+        await app.moves.reload(mac)
+        try await until { app.moves.isMoving("ses_far") }
+        #expect(app.moves.underWay["ses_far"]?.place == "pi")
+        started.now = false
+        app.moves.forget(lab)
+    }
+
+    /// The same, with the machine's first read lost (its connection dropped a moment): it's read
+    /// again while this Mac's box says it's moving, not only when its move's stage changes.
+    @Test func aMoveElsewhereWhoseMachineCouldntBeReadShowsOnceItCan() async throws {
+        let lab = "move-\(UUID().uuidString.prefix(8).lowercased()).invalid"
+        let labKey = String(repeating: "G", count: 43)
+        let mac = BoxClient.mac
+        let unreadable = Over()
+        unreadable.now = true
+        let asked = Asked()
+        let app = AppModel()
+        app.moves.app = app
+        _ = app.machines.add(lab)
+        defer { app.removeMachine(lab) }
+        app.phoneLink.standIn(machine: lab, key: labKey)
+        let move = #"{"id":"mv_far2","kind":"chat","thing":"ses_far2","from":"\#(labKey)","to":"\#(String(repeating: "H", count: 43))","role":"from","stage":"copying","sessions":["ses_far2"],"place":"pi"}"#
+        app.moves.boxes = { box in
+            Self.box(box) { path in
+                guard path == "kuvo/moves" else { return nil }
+                if box == mac { return #"{"moves":[],"away":[],"elsewhere":[{"box":"\#(labKey)","moves":[\#(move)]}]}"# }
+                defer { _ = asked.next() }
+                return unreadable.now ? nil : #"{"moves":[\#(move)],"away":[]}"#
+            }
+        }
+        await app.moves.reload(mac)
+        try await until { asked.count == 1 }
+        #expect(!app.moves.isMoving("ses_far2"))
+        unreadable.now = false
+        try await until { app.moves.isMoving("ses_far2") }
+        app.moves.forget(lab)
+    }
+
     /// The connection to its box gone before it answered, and nothing of it moving there now: it
     /// says so, as the phone does, never the connection's own error (it may be over already).
     @Test func cutOffBeforeItsBoxAnsweredItSaysWhatItsBoxSaysNow() async throws {

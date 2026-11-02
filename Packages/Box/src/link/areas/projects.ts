@@ -76,6 +76,9 @@ function keptProject(directory: string, given: Record<string, unknown>, before: 
   return project;
 }
 
+/** How many of a project's sessions Remove Project archives at once. */
+const ARCHIVING_AT_ONCE = 8;
+
 /** Every session of the project, its worktrees' too (those removed since included, whose sessions
  * clients still show under it, and `also`, folders a client shows under it that this box doesn't
  * know: worktrees removed before it kept them), archived, on the engine and the coding agents'
@@ -108,18 +111,24 @@ async function archiveProject(directory: string, also: string[], readEngine: () 
           break;
         }
         const sessions = Array.isArray(listed?.data) ? listed.data : [];
-        for (const session of sessions) {
-          if (session?.location?.directory !== folder || session.time?.archived || session.metadata?.["kuvo.archived"] === true) continue;
-          try {
-            await call(target, "PATCH", `/api/session/${encodeURIComponent(session.id)}`, { metadata: { ...(session.metadata ?? {}), "kuvo.archived": true } }, signal);
-            holdArchived(session.id, true);
-            // One that waits on you stops, as any archived one does.
-            await stopIfWaiting(target, session.id);
-            archived += 1;
-          } catch {
-            kept += 1;
+        const archiving = sessions.filter(session => session?.location?.directory === folder && !session.time?.archived && session.metadata?.["kuvo.archived"] !== true);
+        // A few at a time: each is a few calls to the engine (whether it waits on you, with its
+        // subagents), and a big project has hundreds.
+        let taken = 0;
+        await Promise.all(Array.from({ length: Math.min(ARCHIVING_AT_ONCE, archiving.length) }, async () => {
+          while (taken < archiving.length) {
+            const session = archiving[taken++]!;
+            try {
+              await call(target, "PATCH", `/api/session/${encodeURIComponent(session.id)}`, { metadata: { ...(session.metadata ?? {}), "kuvo.archived": true } }, signal);
+              holdArchived(session.id, true);
+              // One that waits on you stops, as any archived one does.
+              await stopIfWaiting(target, session.id);
+              archived += 1;
+            } catch {
+              kept += 1;
+            }
           }
-        }
+        }));
         const next = listed?.cursor?.next;
         query = sessions.length === 100 && next ? `limit=100&cursor=${encodeURIComponent(next)}` : null;
       }

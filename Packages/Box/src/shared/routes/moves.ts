@@ -33,9 +33,14 @@ export const MOVE = object({
   "size?": number,
 });
 
-/** The moves under way here, and the conversations this box's engine lists that don't live here
- * (a copy not switched to yet, or an original still going), for clients to leave out. */
-export const MOVES = object({ moves: list(MOVE), away: list(string) });
+/** Moves under way on another of your computers, as that computer's box last said them (its key,
+ * `box`): one between two machines is seen on every box. */
+export const MOVES_ELSEWHERE = object({ box: string, moves: list(MOVE) });
+
+/** The moves under way here, the conversations this box's engine lists that don't live here (a
+ * copy not switched to yet, or an original still going), for clients to leave out, and the moves
+ * your other computers said they have under way (left out when none). */
+export const MOVES = object({ moves: list(MOVE), away: list(string), "elsewhere?": list(MOVES_ELSEWHERE) });
 /** A move that ended well: where it went. */
 export const MOVED = object({ move: MOVE });
 
@@ -44,6 +49,7 @@ export type MoveStage = Infer<typeof MOVE_STAGE>;
 export type MovePlace = Infer<typeof MOVE_PLACE>;
 export type MovePlaces = Infer<typeof MOVE_PLACES>;
 export type Move = Infer<typeof MOVE>;
+export type MovesElsewhere = Infer<typeof MOVES_ELSEWHERE>;
 export type Moves = Infer<typeof MOVES>;
 
 export const MOVE_ROUTES: RouteShape[] = [

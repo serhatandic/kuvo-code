@@ -85,6 +85,9 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - An agent that starts a session is promised it'll hear when it finishes only when it will; otherwise it's told to write to it instead.
 - An agent that asks a session it started something and waits for the answer gets it once, not again as that session finishes.
 - A message an agent sends to a conversation on another computer reaches it when that conversation is moved to the agent's own computer just then, instead of never arriving.
+- A move between two of your machines, even one started from your iPhone, shows as moving on your Mac too.
+- Remove Project on a project with many sessions is much quicker: its sessions are archived several at a time.
+- An agent's commands no longer open windows in the tmux session you started Kuvo Code from; in the sandbox, a `tmux` they run starts its own.
 - Moving a bot or chat to another computer: a wake-up, your late answer to its question, or what its sessions tell it while it moves waits and reaches it there, as it would have here. A bot keeps what you were writing to it, and an open chat carries on with the machine. A move whose connection drops says what its computer says now, not the connection's error, and one still under way on a machine you briefly can't reach keeps showing as moving.
 - In a Claude Code or Codex conversation, the next message waiting goes once a run is done, also when saving what the run changed takes a moment, and Resume pressed right after Stop goes on. Both used to leave it waiting until you sent something else.
 - When Kuvo Code or a computer's box starts again after a conversation's run failed or was stopped, the messages waiting there stay paused for you to resume, instead of going on into the same error.

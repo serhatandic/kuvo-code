@@ -61,8 +61,8 @@ test.skipIf(!canFence || !tmux)("a command can't reach your tmux, and the one it
     // (The box's rules for your sockets: on a Mac, your tmux's folder's.)
     const policy = fencePolicy()
     realFence(kuvo, [], { writable: ["/dev", realpathSync("/tmp")], socketPatterns: policy.socketPatterns, socketFolders: policy.socketFolders })
-    const run = (script: string) => {
-      const ran = Bun.spawnSync([join(kuvo, "bin", "kuvo-fence"), "-c", script], { cwd: project, env: { PATH: `${tmux!.slice(0, -"/tmux".length)}:/usr/bin:/bin`, HOME: root, KUVO_FENCE_WORK: project } })
+    const run = (script: string, inherited: Record<string, string> = {}) => {
+      const ran = Bun.spawnSync([join(kuvo, "bin", "kuvo-fence"), "-c", script], { cwd: project, env: { ...inherited, PATH: `${tmux!.slice(0, -"/tmux".length)}:/usr/bin:/bin`, HOME: root, KUVO_FENCE_WORK: project } })
       return (ran.stdout.toString() + ran.stderr.toString()).trim().split("\n").filter(line => /^[a-z]+: /.test(line))
     }
     expect(run([
@@ -70,6 +70,15 @@ test.skipIf(!canFence || !tmux)("a command can't reach your tmux, and the one it
       `tmux new-session -d -s own "sleep 600" && echo "started: yes" || echo "started: no"`,
     ].join("\n"))).toEqual(["yours: refused", "started: yes"])
     expect(run(`tmux has-session -t own 2>/dev/null && echo "own: reached" || echo "own: gone"; tmux kill-server`)).toEqual(["own: reached"])
+    // Kuvo Code started from a terminal in your tmux: what it hands its engine names your server
+    // (and the pane it ran in), which a command's tmux would take over its own.
+    const inYours = { TMUX: `${server},${process.pid},0`, TMUX_PANE: "%0" }
+    expect(run([
+      `tmux new-session -d -s own "sleep 600" && echo "started: yes" || echo "started: no"`,
+      `tmux has-session -t own 2>/dev/null && echo "own: reached" || echo "own: gone"`,
+      `echo "pane: \${TMUX_PANE-none}"`,
+      "tmux kill-server",
+    ].join("\n"), inYours)).toEqual(["started: yes", "own: reached", "pane: none"])
     // (And yours never sees it.)
     expect(Bun.spawnSync([tmux!, "-S", server, "has-session", "-t", "own"]).exitCode).not.toBe(0)
   } finally {
