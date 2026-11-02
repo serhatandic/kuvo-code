@@ -14,7 +14,7 @@
 // process with threads, like Bun, can't make one itself) where those folders are empty, and then its
 // Landlock rules (`HIDE`).
 
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import type { FencePolicy } from "./policy";
 
@@ -69,9 +69,25 @@ export const UNSHARE = ["/usr/bin/unshare", "/bin/unshare"];
 export function ownNamespace(own: string): string | null {
   const unshare = UNSHARE.find(each => fs.existsSync(each));
   if (!unshare) return null;
-  const tried = spawnSync(unshare, ["-Urm", "/bin/sh", "-c", HIDE, unshare, String(process.getuid?.() ?? -1), String(process.getgid?.() ?? -1), "", own, "/dev/null", "/bin/sh", "-c", "[ \"$(id -u)\" = \"$0\" ]", String(process.getuid?.() ?? -1)], { cwd: "/", stdio: "ignore", timeout: 10_000 });
+  const tried = spawnSync(unshare, namespaceTry(unshare, own), { cwd: "/", stdio: "ignore", timeout: TRY_FOR });
   return tried.status === 0 ? unshare : null;
 }
+
+/** The same, while the box goes on answering (it's tried again each minute): `unshare`, the one to
+ * try. */
+export function ownNamespaceLater(own: string, unshare = UNSHARE.find(each => fs.existsSync(each))): Promise<string | null> {
+  if (!unshare) return Promise.resolve(null);
+  return new Promise(resolve => {
+    const child = spawn(unshare, namespaceTry(unshare, own), { cwd: "/", stdio: "ignore" });
+    const late = setTimeout(() => child.kill("SIGKILL"), TRY_FOR);
+    late.unref?.();
+    child.once("error", () => { clearTimeout(late); resolve(null); });
+    child.once("exit", status => { clearTimeout(late); resolve(status === 0 ? unshare : null); });
+  });
+}
+
+const TRY_FOR = 10_000;
+const namespaceTry = (unshare: string, own: string) => ["-Urm", "/bin/sh", "-c", HIDE, unshare, String(process.getuid?.() ?? -1), String(process.getgid?.() ?? -1), "", own, "/dev/null", "/bin/sh", "-c", "[ \"$(id -u)\" = \"$0\" ]", String(process.getuid?.() ?? -1)];
 
 /**
  * The script: `kuvo-fence.js <policy.json> <WORK> <GIT> <TMP> <WAKES> <ALLOWED> <shell> [args…]`, ALLOWED

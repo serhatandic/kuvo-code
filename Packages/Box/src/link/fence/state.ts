@@ -18,7 +18,7 @@ import { processRuns, sandboxGeneration } from "../../shared/platform";
 import { accountHome, BOTS, BRIDGE_FILE, CHATS, ENGINE_CONFIG, ENGINE_FILE, K, RUN, SANDBOX_NOTE, SESSION_WAKES, SOCKET_KEY_FILE, SSH_AGENTS, SSH_FOR } from "../home";
 import { tellLauncher } from "./allowed";
 import { agentShellScript, agentsNote, launcherScript, pluginScript, type FencePlaces } from "./files";
-import { LANDLOCK_RUNNER, landlockPolicy, ownNamespace, UNSHARE } from "./landlock";
+import { LANDLOCK_RUNNER, landlockPolicy, ownNamespace, ownNamespaceLater, UNSHARE } from "./landlock";
 import { appTemporary, fencePolicy, realish, sandboxCaches } from "./policy";
 import { seatbeltProfile } from "./seatbelt";
 
@@ -488,6 +488,7 @@ export function keepFence(): void {
     try { if (JSON.parse(fs.readFileSync(DECIDED, "utf8")).pid === process.pid) fs.rmSync(DECIDED, { force: true }); } catch {}
   });
   let rounds = 0;
+  let trying = false;
   setInterval(() => {
     const round = rounds++;
     if (round % 60 === 0) sweepWakeFolders();
@@ -496,11 +497,19 @@ export function keepFence(): void {
     if (!fenceWanted()) return;
     try {
       if (checked.passed) writeProfiles();
-      // A failed check, tried again each minute (it holds the box up while it runs); and on Linux,
-      // set up again once commands can have a namespace of their own after all (allowed since), or
-      // no longer can (each would fail at unshare).
-      const namespaces = checked.passed && platform === "linux" && round % 6 === 5 && !namespaceHere() !== !namespace;
-      if (checked.passed ? namespaces || textOf(PLUGIN) !== pluginScript(places, VERSION) : round % 6 === 0) setUpFence();
+      // A failed check, tried again each minute (it holds the box up while it runs).
+      if (checked.passed ? textOf(PLUGIN) !== pluginScript(places, VERSION) : round % 6 === 0) setUpFence();
+      // And on Linux, set up again once commands can have a namespace of their own after all
+      // (allowed since), or no longer can (each would fail at unshare): found while the box goes on
+      // answering, one try at a time.
+      if (checked.passed && platform === "linux" && round % 6 === 5 && !trying) {
+        trying = true;
+        fs.mkdirSync(NAMESPACE_FOLDER, { recursive: true, mode: 0o700 });
+        ownNamespaceLater(NAMESPACE_FOLDER)
+          .then(found => { if (checked.passed && fenceWanted() && !found !== !namespace) setUpFence(); })
+          .catch(() => {})
+          .finally(() => { trying = false; });
+      }
     } catch {}
   }, 10_000).unref?.();
 }
