@@ -59,7 +59,8 @@ export interface MoveRecord extends Move {
   setUpSince?: number;
   /** Since when the box it leaves has asked the other to switch to its copy. */
   switchSince?: number;
-  /** Since when the box it leaves has asked the other to let its copy go (taken back). */
+  /** Since when the box it leaves has asked the other to let its copy go (taken back); on the box it
+   * goes to, since when its copy's been let go of. */
   dropSince?: number;
   started: number;
   /** Taken back, with why (said to whoever asked). */

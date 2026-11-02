@@ -15615,6 +15615,7 @@ function letGo2(id) {
   if (!record.dropping)
     changeMove(id, (each) => {
       each.dropping = true;
+      each.dropSince = Date.now();
     });
   return record;
 }
@@ -15820,7 +15821,7 @@ function keepMoving(now = Date.now()) {
     missing.delete(record.id);
     if (record.role === "to") {
       if (record.dropping) {
-        const late = now - record.started > HELD_AT_MOST;
+        const late = now - (record.dropSince ?? record.started) > HELD_AT_MOST;
         if (now - (record.sentAt ?? 0) > (late ? DROP_AGAIN_LATE : STEP_AGAIN)) {
           changeMove(record.id, (each) => {
             each.sentAt = now;

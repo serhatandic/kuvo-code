@@ -711,3 +711,29 @@ test("on this Mac, an answer that came after its conversation's tool stopped wai
   assert.match(prompt.text, /^\[Message from Scout · ses_scout9\][^\n]*\n\nAll done\.$/);
   assert.ok(!fs.existsSync(path.join(replies, "ltr_late1.json")), "once");
 });
+
+test("a copy held here a long while, only now being let go of, isn't said in the log to have been stuck for a week", async () => {
+  script = () => {};
+  engine.sessions.set("ses_long1", { id: "ses_long1", title: "Notes", directory: chats, messages: [] });
+  const id = "mov_long1";
+  writeRecord({ id, kind: "chat", thing: "ses_long1", name: "“Notes”", from: peerKey, to: "", role: "to", stage: "copying", sessions: ["ses_long1"], peer: peerKey, wasPaused: false,
+    hash: "h", size: 10, sent: 10, tries: 0, started: Date.now() - 6 * 24 * 3600_000, complete: true });
+  const logged = [];
+  const error = console.error;
+  console.error = (...words) => logged.push(words.join(" "));
+  engine.down = true;
+  try {
+    // Lab takes it back now, as this box's engine refuses to let it go; a day on, it still does.
+    await say({ op: "drop", id });
+    const refused = engine.refused;
+    link.keepMoving(Date.now() + 24 * 3600_000);
+    await until(() => engine.refused > refused);
+    engine.down = false;
+    link.keepMoving(Date.now() + 24 * 3600_000 + 2 * 3600_000);
+    await until(() => !engine.sessions.has("ses_long1") && !recordOf("ses_long1"));
+    assert.deepEqual(logged, []);
+  } finally {
+    engine.down = false;
+    console.error = error;
+  }
+});

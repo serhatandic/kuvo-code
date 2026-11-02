@@ -783,7 +783,7 @@ function letGo(id: string): MoveRecord | null {
   const record = readMove(id);
   if (!record || record.role !== "to") return null;
   noteEnded(id, "dropped");
-  if (!record.dropping) changeMove(id, each => { each.dropping = true; });
+  if (!record.dropping) changeMove(id, each => { each.dropping = true; each.dropSince = Date.now(); });
   return record;
 }
 
@@ -993,10 +993,11 @@ export function keepMoving(now = Date.now()): void {
     missing.delete(record.id);
     if (record.role === "to") {
       // A copy that couldn't all be let go of (its engine or group chats down): again, each minute.
-      // Still not after a week: said in the log, once, and tried each hour (and as the box starts).
+      // Still not a week after it began: said in the log, once, and tried each hour (and as the box
+      // starts).
       // It's never forgotten while any of it's here, so what's left never goes on as a second copy.
       if (record.dropping) {
-        const late = now - record.started > HELD_AT_MOST;
+        const late = now - (record.dropSince ?? record.started) > HELD_AT_MOST;
         if (now - (record.sentAt ?? 0) > (late ? DROP_AGAIN_LATE : STEP_AGAIN)) {
           changeMove(record.id, each => { each.sentAt = now; });
           inTurn(record.id, () => drop(record.id)).catch(error => {
