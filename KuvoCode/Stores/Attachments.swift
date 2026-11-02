@@ -187,16 +187,20 @@ nonisolated enum Attachments {
         var total = 0
         for url in urls {
             var file = target(of: url)
+            var copy: URL?
             let kind = kind(of: url)
             if kind == .image {
                 let size = (try? file.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
-                if let image = engineImage(from: file, named: url.lastPathComponent, size: size), let converted = URL(string: image.uri) { file = converted }
+                if let image = engineImage(from: file, named: url.lastPathComponent, size: size), let converted = URL(string: image.uri), converted.path != file.path {
+                    copy = converted
+                    file = converted
+                }
             }
             // A folder goes as the list of what's in it, named so.
             let name = kind == .folder ? "\(url.lastPathComponent) (list of its files).txt" : url.lastPathComponent
             let inline = inlined(file)
-            // A converted copy, read now: the machine keeps its own.
-            if file.path != target(of: url).path { try? FileManager.default.removeItem(at: file) }
+            // A converted copy, read now: the machine keeps its own. Only ever one made here.
+            if let copy, copy.standardizedFileURL.path.hasPrefix(directory.standardizedFileURL.path + "/") { try? FileManager.default.removeItem(at: copy) }
             if let inline, total + inline.utf8.count / 4 * 3 <= maxMessageBytes {
                 total += inline.utf8.count / 4 * 3
                 prepared.files.append(.init(uri: inline, name: name))

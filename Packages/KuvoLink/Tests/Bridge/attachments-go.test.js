@@ -7,6 +7,7 @@
 //
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/attachments-go.test.js`.
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -22,6 +23,10 @@ process.env.KUVO_MAC_ATTACHMENTS = mac;
 removeAtEnd(home);
 const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
 const kept = path.join(home, "attachments");
+// A process the box takes for its coding agents' bridge's (by its name), which it looks for
+// running before it judges anything gone.
+const bridgeProcess = spawn(process.execPath, ["-e", "setInterval(() => {}, 1e9)", "kuvo-agents"], { stdio: "ignore" });
+atEnd(() => bridgeProcess.kill());
 
 // A place sessions live (the engine, or the coding agents' bridge): each session's metadata and
 // messages, as it lists and answers them, and its events, to whoever follows them. `down`: it
@@ -93,11 +98,13 @@ function macFile(session, name) {
   return file;
 }
 
-// This box watching its engine (a machine's link and this Mac's box alike), until the test ends;
-// `looked` hears each time it's looked over what a deleted session left (null: all it no longer has).
-async function watching(engine, t, looked) {
+// This box watching its engine and its coding agents' bridge (a machine's link and this Mac's box
+// alike), until the test ends; `looked` hears each time it's looked over what a deleted session
+// left (null: all it no longer has).
+async function watching(engine, bridge, t, looked) {
   fs.mkdirSync(path.join(home, "run"), { recursive: true });
   fs.writeFileSync(path.join(home, "run", "engine.json"), JSON.stringify(engine.target));
+  fs.writeFileSync(path.join(home, "run", "bridge.json"), JSON.stringify({ ...bridge.target, pid: bridgeProcess.pid }));
   const stop = new AbortController();
   t.after(() => stop.abort());
   const following = engine.nextFollower();
@@ -107,6 +114,7 @@ async function watching(engine, t, looked) {
 
 test("a session's files go as it's deleted, the Mac app's own copies with them; another session's, and a file waiting to be sent, stay", async t => {
   const engine = await place({ ses_gone1: {}, ses_stays1: {} });
+  const bridge = await place({});
   const gone = await sent(engine, "ses_gone1", "plan.pdf");
   const stays = await sent(engine, "ses_stays1", "notes.txt");
   assert.equal(path.relative(kept, gone).split(path.sep)[0], "ses_gone1", "kept in a folder of its session's");
@@ -116,7 +124,7 @@ test("a session's files go as it's deleted, the Mac app's own copies with them; 
 
   let heard;
   const lookedAtIt = new Promise(resolve => { heard = resolve; });
-  await watching(engine, t, session => session === "ses_gone1" && heard());
+  await watching(engine, bridge, t, session => session === "ses_gone1" && heard());
   delete engine.sessions.ses_gone1;
   engine.send({ type: "session.deleted", data: { sessionID: "ses_gone1" } });
   await lookedAtIt;
@@ -137,9 +145,10 @@ test("a branch, a handoff or a carried-on conversation keeps the files its words
   // One that isn't from another, naming it in its words: it doesn't hold the source's files.
   engine.sessions.ses_plain1.messages = [{ id: "msg_1", parts: [{ type: "text", text: file }] }];
 
+  const bridge = await place({});
   let heard = {};
   const lookedAt = session => new Promise(resolve => { heard[session] = resolve; });
-  await watching(engine, t, session => heard[session]?.());
+  await watching(engine, bridge, t, session => heard[session]?.());
   let looked = lookedAt("ses_source1");
   delete engine.sessions.ses_source1;
   engine.send({ type: "session.deleted", data: { sessionID: "ses_source1" } });
@@ -153,9 +162,19 @@ test("a branch, a handoff or a carried-on conversation keeps the files its words
   engine.send({ type: "session.deleted", data: { sessionID: "ses_branch1" } });
   await looked;
   assert.equal(fs.existsSync(own), false);
-  const bridge = await place({});
   await link.letAttachmentsGo({ engine: engine.target, bridge: bridge.target });
   assert.equal(fs.existsSync(path.join(kept, "ses_source1")), false);
+
+  // A branch of a branch: its words show the first one's files, and keep them after the one
+  // between is deleted too.
+  engine.sessions.ses_first1 = {};
+  const first = await sent(engine, "ses_first1", "first.png");
+  engine.sessions.ses_middle1 = { metadata: { kuvo: { branchedFrom: "ses_first1" } } };
+  engine.sessions.ses_last1 = { metadata: { kuvo: { branchedFrom: "ses_middle1" } }, messages: [{ id: "msg_1", parts: [{ type: "text", text: first }] }] };
+  delete engine.sessions.ses_middle1;
+  delete engine.sessions.ses_first1;
+  await link.letAttachmentsGo({ engine: engine.target, bridge: bridge.target }, "ses_first1");
+  assert.ok(fs.existsSync(first));
 
   // A handoff, or a conversation carried on with the coding agents, in the bridge: the same.
   for (const mark of ["handoffFrom", "carriedFrom"]) {
@@ -208,23 +227,40 @@ test("what a session left while the box wasn't listening goes as it finds its en
   fs.writeFileSync(again, "x");
   let heard;
   const sweep = new Promise(resolve => { heard = resolve; });
-  // (The bridge as the box finds it: here, a stand-in can't be found running, so its folder's
-  // looked over by hand above; this one's left for the bridge's own watch.)
-  await watching(engine, t, session => session === null && heard());
+  await watching(engine, bridge, t, session => session === null && !fs.existsSync(again) && heard());
   await sweep;
-  assert.ok(fs.existsSync(again), "with no bridge found, nothing goes");
+  for (const file of [here, agents, machines]) assert.ok(fs.existsSync(file), file);
 });
 
-test("a deleted session's files stay while the box can't read its conversations", async t => {
+test("a deleted session's files stay while the box can't read its conversations, or its coding agents aren't running", async () => {
   const engine = await place({ ses_unread1: {}, ses_branch2: { metadata: { kuvo: { branchedFrom: "ses_unread1" } } } });
+  const bridge = await place({});
   const file = await sent(engine, "ses_unread1", "f.txt");
   delete engine.sessions.ses_unread1;
   engine.down = true;
-  await link.letAttachmentsGo({ engine: engine.target, bridge: null }, "ses_unread1");
+  await link.letAttachmentsGo({ engine: engine.target, bridge: bridge.target }, "ses_unread1");
   assert.ok(fs.existsSync(file));
   engine.down = false;
+  // (A conversation carried on there may show them.)
   await link.letAttachmentsGo({ engine: engine.target, bridge: null }, "ses_unread1");
+  assert.ok(fs.existsSync(file));
+  await link.letAttachmentsGo({ engine: engine.target, bridge: bridge.target }, "ses_unread1");
   assert.equal(fs.existsSync(file), false);
+});
+
+test("a conversation moved to another computer, deleted here as it goes, keeps its files here, the Mac app's copies too", async () => {
+  const engine = await place({ ses_moved1: {} });
+  const bridge = await place({});
+  const file = await sent(engine, "ses_moved1", "g.txt");
+  const mac = macFile("ses_moved1", "Pasted Image.png");
+  fs.mkdirSync(path.join(home, "run", "moves"), { recursive: true });
+  fs.writeFileSync(path.join(home, "run", "moves", "moved.json"), JSON.stringify([{ session: "ses_moved1", key: "another-box", at: Date.now() }]));
+  delete engine.sessions.ses_moved1;
+  await link.letAttachmentsGo({ engine: engine.target, bridge: bridge.target }, "ses_moved1");
+  await link.letAttachmentsGo({ engine: engine.target, bridge: bridge.target });
+  assert.ok(fs.existsSync(file));
+  assert.ok(fs.existsSync(mac));
+  fs.rmSync(path.join(home, "run", "moves"), { recursive: true, force: true });
 });
 
 test("files older than two weeks still go, kept a folder for each session or as before", async () => {

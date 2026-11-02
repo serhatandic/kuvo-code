@@ -10,6 +10,7 @@ import path from "node:path";
 import { conversationOf, everySession } from "../engine/conversations";
 import { engineGet } from "../engine/client";
 import { K, MAC_ATTACHMENTS } from "../home";
+import { frozen, movedAway } from "../moves/records";
 import { withAttachedNote } from "../peers/naming";
 import { AGENTS_TEXT_BYTES } from "../../shared/text";
 import type { Target } from "../../shared/records";
@@ -160,23 +161,27 @@ export function letAttachmentsGo(places: SessionPlaces, session?: string): Promi
 }
 
 async function letGo({ engine, bridge }: SessionPlaces, session?: string): Promise<void> {
+  // With the bridge not running, its sessions can't be told from deleted ones, nor read for what
+  // they show: everything stays.
+  if (!bridge) return;
+  // One moving to another computer, or moved there lately, is deleted here as it goes: it lives on
+  // there, and its files stay (for two weeks, as before, here).
+  const moving = new Set([...frozen(), ...movedAway().map(each => each.session)]);
   let gone: string[];
   if (session !== undefined) {
-    if (!SESSION.test(session)) return;
+    if (!SESSION.test(session) || moving.has(session)) return;
     gone = [session];
   } else {
-    // Only what neither place has: with the bridge not running, its sessions can't be told from
-    // deleted ones. And only this box's own folder: the Mac app's keeps machines' sessions' files
-    // too, which this box doesn't have (the app lets those go).
-    if (!bridge) return;
+    // Only what neither place has. And only this box's own folder: the Mac app's keeps machines'
+    // sessions' files too, which this box doesn't have (the app lets those go).
     gone = [];
-    for (const name of listOf(path.join(K, "attachments")).filter(name => SESSION.test(name))) {
+    for (const name of listOf(path.join(K, "attachments")).filter(name => SESSION.test(name) && !moving.has(name))) {
       if (await isGone(engine, name) && await isGone(bridge, name)) gone.push(name);
     }
   }
   const folders = gone.flatMap(id => keptIn().map(root => path.join(root, id))).filter(folder => fs.existsSync(folder));
   if (!folders.length) return;
-  const shown = await stillShown([engine, ...(bridge ? [bridge] : [])], gone);
+  const shown = await stillShown([engine, bridge], gone);
   for (const folder of folders) {
     if (!shown.has(path.basename(folder))) fs.rmSync(folder, { recursive: true, force: true });
   }
@@ -189,17 +194,29 @@ const isGone = (place: Target, id: string) => engineGet(place, `api/session/${en
 // with the coding agents, or one an agent started), which can show the files in them.
 const FROM = ["branchedFrom", "handoffFrom", "carriedFrom", "startedBy"];
 
-// Which of the sessions `ids` a conversation in `places` still shows files of. It throws when
-// they can't all be read: then everything stays.
+// Which of the sessions `ids` a conversation in `places` still shows files of: read only where
+// what it came from leads back to one of them, or to a session no longer here (whose own start
+// can't be followed). It throws when they can't all be read: then everything stays.
 async function stillShown(places: Target[], ids: string[]): Promise<Set<string>> {
-  const shown = new Set<string>();
+  const gone = new Set(ids);
+  const sessions = new Map<string, { place: Target; from: string[] }>();
   for (const place of places) {
     for (const session of await everySession(place)) {
       const kuvo = session.metadata?.kuvo as Record<string, unknown> | undefined;
-      if (!FROM.some(key => kuvo?.[key])) continue;
-      const words = JSON.stringify(await conversationOf(place, session.id));
-      for (const id of ids) if (new RegExp(`attachments/${id}/`, "i").test(words)) shown.add(id);
+      sessions.set(session.id, { place, from: FROM.map(key => kuvo?.[key]).filter((each): each is string => typeof each === "string") });
     }
+  }
+  const leadsBack = (id: string, seen: Set<string>): boolean => (sessions.get(id)?.from ?? []).some(from => {
+    if (gone.has(from) || !sessions.has(from)) return true;
+    if (seen.has(from)) return false;
+    seen.add(from);
+    return leadsBack(from, seen);
+  });
+  const shown = new Set<string>();
+  for (const [id, { place }] of sessions) {
+    if (!leadsBack(id, new Set([id]))) continue;
+    const words = JSON.stringify(await conversationOf(place, id));
+    for (const each of ids) if (new RegExp(`attachments/${each}/`, "i").test(words)) shown.add(each);
   }
   return shown;
 }

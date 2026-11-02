@@ -3086,8 +3086,9 @@ What Kuvo Code and the engine keep for an agent stays open after that ask, for t
 the box's `attachments` (and this Mac's app's `Attachments`; both keep a session's files in a folder
 named after it, `attachments/<session>/…`, which goes as the box hears the session's deleted, or for
 one deleted while it wasn't listening, once its engine and bridge both say it's gone, unless a
-conversation marked `kuvo.branchedFrom`, `handoffFrom`, `carriedFrom` or `startedBy` still names its
-files; this Mac's box is told the app's folder in `KUVO_MAC_ATTACHMENTS`, and the app lets a
+conversation marked `kuvo.branchedFrom`, `handoffFrom`, `carriedFrom` or `startedBy` (or one of its
+own, back along such marks) still names its files; nothing goes while the bridge isn't running or
+either can't be read, nor a session being moved or moved away; this Mac's box is told the app's folder in `KUVO_MAC_ATTACHMENTS`, and the app lets a
 machine's session's go itself), the agent's browser's downloads on a
 machine (this Mac's panel browser saves to `~/Downloads`, which asks), the engine's long outputs
 saved whole (`tool-output`), the repositories it reads (`repos`) and Plan's plans (`~/.opencode/plan`),

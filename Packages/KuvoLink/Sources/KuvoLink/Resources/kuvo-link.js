@@ -14743,16 +14743,17 @@ function letAttachmentsGo(places, session) {
   return looking;
 }
 async function letGo2({ engine, bridge }, session) {
+  if (!bridge)
+    return;
+  const moving = new Set([...frozen(), ...movedAway().map((each) => each.session)]);
   let gone;
   if (session !== undefined) {
-    if (!SESSION.test(session))
+    if (!SESSION.test(session) || moving.has(session))
       return;
     gone = [session];
   } else {
-    if (!bridge)
-      return;
     gone = [];
-    for (const name of listOf2(path59.join(K, "attachments")).filter((name) => SESSION.test(name))) {
+    for (const name of listOf2(path59.join(K, "attachments")).filter((name) => SESSION.test(name) && !moving.has(name))) {
       if (await isGone(engine, name) && await isGone(bridge, name))
         gone.push(name);
     }
@@ -14760,7 +14761,7 @@ async function letGo2({ engine, bridge }, session) {
   const folders = gone.flatMap((id) => keptIn().map((root) => path59.join(root, id))).filter((folder) => fs57.existsSync(folder));
   if (!folders.length)
     return;
-  const shown = await stillShown([engine, ...bridge ? [bridge] : []], gone);
+  const shown = await stillShown([engine, bridge], gone);
   for (const folder of folders) {
     if (!shown.has(path59.basename(folder)))
       fs57.rmSync(folder, { recursive: true, force: true });
@@ -14769,17 +14770,30 @@ async function letGo2({ engine, bridge }, session) {
 var isGone = (place, id) => engineGet(place, `api/session/${encodeURIComponent(id)}`).then(() => false, (error) => error?.message === "404");
 var FROM = ["branchedFrom", "handoffFrom", "carriedFrom", "startedBy"];
 async function stillShown(places, ids) {
-  const shown = new Set;
+  const gone = new Set(ids);
+  const sessions = new Map;
   for (const place of places) {
     for (const session of await everySession(place)) {
       const kuvo = session.metadata?.kuvo;
-      if (!FROM.some((key) => kuvo?.[key]))
-        continue;
-      const words = JSON.stringify(await conversationOf2(place, session.id));
-      for (const id of ids)
-        if (new RegExp(`attachments/${id}/`, "i").test(words))
-          shown.add(id);
+      sessions.set(session.id, { place, from: FROM.map((key) => kuvo?.[key]).filter((each) => typeof each === "string") });
     }
+  }
+  const leadsBack = (id, seen) => (sessions.get(id)?.from ?? []).some((from) => {
+    if (gone.has(from) || !sessions.has(from))
+      return true;
+    if (seen.has(from))
+      return false;
+    seen.add(from);
+    return leadsBack(from, seen);
+  });
+  const shown = new Set;
+  for (const [id, { place }] of sessions) {
+    if (!leadsBack(id, new Set([id])))
+      continue;
+    const words = JSON.stringify(await conversationOf2(place, id));
+    for (const each of ids)
+      if (new RegExp(`attachments/${each}/`, "i").test(words))
+        shown.add(each);
   }
   return shown;
 }

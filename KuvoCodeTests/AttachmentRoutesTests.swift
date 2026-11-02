@@ -102,6 +102,20 @@ import Testing
         #expect(prepared.paths.isEmpty && prepared.unsent.isEmpty && prepared.included.isEmpty)
     }
 
+    /// A picture sent to a machine stays where you picked it, and one turned into a kind the
+    /// engine takes leaves no copy behind on this Mac: the machine keeps its own.
+    @Test func onAMachineAPictureSentLeavesNothingBehind() throws {
+        let tiff = url("scan.tiff")
+        let image = try #require(NSImage(contentsOf: url("shot.png")))
+        try #require(image.tiffRepresentation).write(to: tiff)
+        let before = Set((try? FileManager.default.contentsOfDirectory(atPath: Attachments.directory.path)) ?? [])
+        let prepared = Attachments.prepareForMachine([url("shot.png"), tiff])
+        #expect(prepared.files.map(\.name) == ["shot.png", "scan.tiff"])
+        #expect(FileManager.default.fileExists(atPath: url("shot.png").path))
+        #expect(FileManager.default.fileExists(atPath: tiff.path))
+        #expect(Set((try? FileManager.default.contentsOfDirectory(atPath: Attachments.directory.path)) ?? []) == before)
+    }
+
     /// One bigger than a machine takes stays on this Mac, and the message says so (one a model
     /// can't take whole goes, for the agent to open there).
     @Test func onAMachineAHugeFileStaysHere() throws {
