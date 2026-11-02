@@ -437,7 +437,8 @@ until it's answered:
    paused, what its engine held, carried as one waiting on the box (anything there but a message,
    and it waits as for a turn); each file a message brings as a `data:` link with what's in it, read
    on this box, or left out, and shown without it) and its folder (a bot's; a chat's wake-ups'),
-   tar, gzip; at most 1 GB. Getting it ready for 30 minutes (its engine or group chats stuck) takes
+   tar, gzip; at most 1 GB, its files counted first (more, and it's refused before any of it is
+   packed). Getting it ready for 30 minutes (its engine or group chats stuck) takes
    it back (409, as it was). Either box waits for one answer of its engine or group chats two
    minutes at most (a conversation's export, ten), and takes one that doesn't come for a failure.
 2. `offer {kind, thing, name, size, hash, wasPaused, pausedAs?, from, members?}` → `ready`, or

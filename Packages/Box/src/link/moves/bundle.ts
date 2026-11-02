@@ -147,16 +147,35 @@ export async function keysOf(bot: string): Promise<Record<string, Record<string,
   return keys;
 }
 
-/** The bundle made for move `id`: its file, size and hash. */
+/** What `pack` throws for one more than `MOST_BUNDLE`, before it packs any of it. */
+export class TooBig extends Error {}
+
+/** The bytes in `folder`'s files, counted until there are more than `most` (links not followed). */
+function bytesIn(folder: string, most: number, counted = 0): number {
+  let names: string[] = [];
+  try { names = fs.readdirSync(folder); } catch { return counted; }
+  for (const name of names) {
+    if (counted > most) break;
+    let entry: fs.Stats;
+    try { entry = fs.lstatSync(path.join(folder, name)); } catch { continue; }
+    counted = entry.isDirectory() ? bytesIn(path.join(folder, name), most, counted) : counted + entry.size;
+  }
+  return counted;
+}
+
+/** The bundle made for move `id`: its file, size and hash. One whose files come to more than
+ * `MOST_BUNDLE` isn't packed (`TooBig`). */
 export async function pack(id: string, contents: Contents): Promise<{ file: string; size: number; hash: string }> {
   const folder = bundleOf(id);
   const staging = path.join(folder, "pack");
+  const moveJSON = JSON.stringify(contents);
+  const original = contents.folder ? folderOf(contents.kind, contents.thing) : null;
+  if (Buffer.byteLength(moveJSON) + (original ? bytesIn(original, MOST_BUNDLE) : 0) > MOST_BUNDLE) throw new TooBig();
   fs.rmSync(staging, { recursive: true, force: true });
   fs.mkdirSync(staging, { recursive: true, mode: 0o700 });
-  fs.writeFileSync(path.join(staging, "move.json"), JSON.stringify(contents), { mode: 0o600 });
+  fs.writeFileSync(path.join(staging, "move.json"), moveJSON, { mode: 0o600 });
   const file = path.join(folder, "bundle.tgz");
   const args = [...(process.platform === "darwin" ? ["--no-mac-metadata", "--no-xattrs"] : []), "-czf", file, "-C", staging, "move.json"];
-  const original = contents.folder ? folderOf(contents.kind, contents.thing) : null;
   if (original) args.push("-C", path.dirname(original), path.basename(original));
   await run("tar", args);
   fs.rmSync(staging, { recursive: true, force: true });

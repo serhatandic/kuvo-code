@@ -13866,15 +13866,41 @@ async function keysOf(bot) {
   }
   return keys;
 }
+
+class TooBig extends Error {
+}
+function bytesIn(folder, most, counted = 0) {
+  let names = [];
+  try {
+    names = fs53.readdirSync(folder);
+  } catch {
+    return counted;
+  }
+  for (const name of names) {
+    if (counted > most)
+      break;
+    let entry;
+    try {
+      entry = fs53.lstatSync(path57.join(folder, name));
+    } catch {
+      continue;
+    }
+    counted = entry.isDirectory() ? bytesIn(path57.join(folder, name), most, counted) : counted + entry.size;
+  }
+  return counted;
+}
 async function pack(id, contents) {
   const folder = bundleOf(id);
   const staging = path57.join(folder, "pack");
+  const moveJSON = JSON.stringify(contents);
+  const original = contents.folder ? folderOf(contents.kind, contents.thing) : null;
+  if (Buffer.byteLength(moveJSON) + (original ? bytesIn(original, MOST_BUNDLE) : 0) > MOST_BUNDLE)
+    throw new TooBig;
   fs53.rmSync(staging, { recursive: true, force: true });
   fs53.mkdirSync(staging, { recursive: true, mode: 448 });
-  fs53.writeFileSync(path57.join(staging, "move.json"), JSON.stringify(contents), { mode: 384 });
+  fs53.writeFileSync(path57.join(staging, "move.json"), moveJSON, { mode: 384 });
   const file = path57.join(folder, "bundle.tgz");
   const args = [...process.platform === "darwin" ? ["--no-mac-metadata", "--no-xattrs"] : [], "-czf", file, "-C", staging, "move.json"];
-  const original = contents.folder ? folderOf(contents.kind, contents.thing) : null;
   if (original)
     args.push("-C", path57.dirname(original), path57.basename(original));
   await run("tar", args);
@@ -14285,6 +14311,17 @@ async function carryOn(id) {
   hold2(record);
   record.holdSince = Date.now();
   saveMove(record);
+  const takenBack = () => {
+    const now = readMove(id);
+    if (now && !now.failed && now.stage === "holding")
+      return false;
+    if (record.kind === "group")
+      groupsToWake = true;
+    try {
+      fs54.rmSync(bundleOf(id), { recursive: true, force: true });
+    } catch {}
+    return true;
+  };
   let exports = [];
   let queues = {};
   const contents = { kind: record.kind, thing: record.thing, name: record.name, exports, wasPaused: record.wasPaused };
@@ -14313,18 +14350,15 @@ async function carryOn(id) {
         contents.keys = keys;
     }
   }
-  const bundle = await pack(id, contents);
+  if (takenBack())
+    return;
+  const bundle = await pack(id, contents).catch((error) => {
+    throw error instanceof TooBig ? new Refused(say.tooBig(record.name)) : error;
+  });
   if (bundle.size > MOST_BUNDLE)
     throw new Refused(say.tooBig(record.name));
-  const still = readMove(id);
-  if (!still || still.failed || still.stage !== "holding") {
-    if (record.kind === "group")
-      groupsToWake = true;
-    try {
-      fs54.rmSync(bundleOf(id), { recursive: true, force: true });
-    } catch {}
+  if (takenBack())
     return;
-  }
   outgoing.set(id, { got: new Set, flying: new Map, exports: fingerprint(exports, queues) });
   const now = changeMove(id, (each) => {
     Object.assign(each, { sessions: record.sessions, wasPaused: record.wasPaused, pausedAs: record.pausedAs, members: record.members, hash: bundle.hash, size: bundle.size, sent: 0, stage: "copying", step: "offer", offered: true, sentAt: Date.now() });

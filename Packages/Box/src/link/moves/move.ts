@@ -30,7 +30,7 @@ import type { MailSender, Peer } from "../peers/known";
 import type { LinkHost } from "../relay/host";
 import { readLink } from "../state";
 import { goalRuns } from "../work/goals";
-import { CHATS, engineWait, MOST_BUNDLE, NotTaken, deleteSession, directoryOf, exportAll, folderOf, groupAction, conversationHash, hashOf, idsOf, importAll, keysOf, ownTree, pack, toTrash, unpack } from "./bundle";
+import { CHATS, engineWait, MOST_BUNDLE, NotTaken, TooBig, deleteSession, directoryOf, exportAll, folderOf, groupAction, conversationHash, hashOf, idsOf, importAll, keysOf, ownTree, pack, toTrash, unpack } from "./bundle";
 import type { Contents } from "./bundle";
 import { MOVES, bundleOf, changeMove, endedAs, forgetMove, forgetMovedAway, moveOf, movesChanged, noteEnded, noteMovedAway, readMove, readMoves, saveMove, shownMove } from "./records";
 import type { MoveRecord } from "./records";
@@ -378,6 +378,16 @@ async function carryOn(id: string): Promise<void> {
   hold(record);
   record.holdSince = Date.now();
   saveMove(record);
+  // Taken back meanwhile (as the box started again, or as getting it ready took too long): it stays
+  // taken back, nothing more done or kept of it (a group chat held as it was is looked at again, and
+  // goes on).
+  const takenBack = (): boolean => {
+    const now = readMove(id);
+    if (now && !now.failed && now.stage === "holding") return false;
+    if (record.kind === "group") groupsToWake = true;
+    try { fs.rmSync(bundleOf(id), { recursive: true, force: true }); } catch {}
+    return true;
+  };
   let exports: unknown[] = [];
   let queues: Record<string, unknown> = {};
   const contents: Contents = { kind: record.kind, thing: record.thing, name: record.name, exports, wasPaused: record.wasPaused };
@@ -403,16 +413,12 @@ async function carryOn(id: string): Promise<void> {
       if (Object.keys(keys).length) contents.keys = keys;
     }
   }
-  const bundle = await pack(id, contents);
+  if (takenBack()) return;
+  const bundle = await pack(id, contents).catch(error => {
+    throw error instanceof TooBig ? new Refused(say.tooBig(record.name)) : error;
+  });
   if (bundle.size > MOST_BUNDLE) throw new Refused(say.tooBig(record.name));
-  // Taken back meanwhile (as the box started again): it stays taken back (a group chat held as it
-  // was is looked at again, and goes on).
-  const still = readMove(id);
-  if (!still || still.failed || still.stage !== "holding") {
-    if (record.kind === "group") groupsToWake = true;
-    try { fs.rmSync(bundleOf(id), { recursive: true, force: true }); } catch {}
-    return;
-  }
+  if (takenBack()) return;
   outgoing.set(id, { got: new Set(), flying: new Map(), exports: fingerprint(exports, queues) });
   const now = changeMove(id, each => {
     Object.assign(each, { sessions: record.sessions, wasPaused: record.wasPaused, pausedAs: record.pausedAs, members: record.members, hash: bundle.hash, size: bundle.size, sent: 0, stage: "copying", step: "offer", offered: true, sentAt: Date.now() });

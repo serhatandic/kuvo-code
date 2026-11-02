@@ -463,3 +463,22 @@ test("getting it ready to move stuck (this box's engine not answering): it's tak
   assert.ok(!told.slice(before).some(move => move.op === "offer"), "never offered");
   assert.ok(engine.sessions.has("ses_hang1"));
 });
+
+test("one whose files come to more than 1 GB is refused before anything of it is packed, saying so plainly", async () => {
+  chat("ses_huge1");
+  // A file of 1.1 GB in its folder (sparse: it takes no room on the disk).
+  const huge = path.join(wakes, "ses_huge1", "recording.mov");
+  fs.closeSync(fs.openSync(huge, "w"));
+  fs.truncateSync(huge, 1_100_000_000);
+  script = move => { if (move.op === "offer") say({ op: "refused", id: move.id, message: "Not now." }); };
+  const before = told.length;
+  try {
+    const moved = await ask("POST", "kuvo/moves", { kind: "chat", id: "ses_huge1", to: peerKey });
+    assert.equal(moved.status, 409, JSON.stringify(moved.json));
+    assert.equal(moved.json.message, "“Trip plans” is more than 1 GB, too big to move to another computer, so it stays where it is.");
+    assert.ok(!told.slice(before).some(move => move.op === "offer"), "never offered");
+    assert.ok(!fs.existsSync(path.join(wakes, "ses_huge1", "paused")), "its wake-ups go on");
+  } finally {
+    fs.rmSync(huge, { force: true });
+  }
+});
