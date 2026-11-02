@@ -10,7 +10,7 @@ struct SentTimeTests {
         calendar.timeZone = TimeZone(identifier: "Europe/Istanbul")!
         return calendar
     }()
-    let locale = Locale(identifier: "en_US_POSIX")
+    let locale = Locale(identifier: "en_US")
 
     /// Read with plain spaces: the formatter puts a narrow one before AM and PM.
     private func plain(_ text: String) -> String {

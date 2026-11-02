@@ -1,6 +1,7 @@
 import AppKit
 import ClientDesign
 import SwiftUI
+import Textual
 
 /// A conversation's rows, laid out here rather than by a lazy stack: each row in view is a
 /// SwiftUI view of its own, measured at the width it's shown at, and the rows out of view keep
@@ -26,6 +27,9 @@ struct RowStack<Item, Row: View>: NSViewRepresentable {
     var whole: (Item) -> Bool = { _ in false }
     /// The space a row leaves above itself (inside its view): a selection's tint leaves it out.
     var space: (Item, Int) -> CGFloat = { _, _ in 0 }
+    /// Told the row under the pointer, by its id, as the pointer moves or the rows move under it;
+    /// nil off them.
+    var pointer: ((String?) -> Void)?
     @ViewBuilder let row: (Item, Int) -> Row
 
     final class Coordinator {
@@ -77,6 +81,7 @@ struct RowStack<Item, Row: View>: NSViewRepresentable {
         view.rowText = { index in index < items.count ? text(items[index]) : "" }
         view.rowWhole = { index in index < items.count && whole(items[index]) }
         view.rowSpace = { index in index < items.count ? space(items[index], index) : 0 }
+        view.pointerRow = pointer
         view.scrollAnchor = environment.scrollAnchor
         environment.scrollAnchor?.stack = view
         view.apply(ids: ids, changed: changed, spacing: spacing, animatesNew: animatesNew && !old.isEmpty, estimate: { estimate(items[$0]) }) { index in
@@ -309,6 +314,8 @@ final class RowStackView: NSView, NSUserInterfaceValidations {
         guard !isLayingOut, make != nil, width > 0 else { return }
         isLayingOut = true
         defer { isLayingOut = false }
+        // Rows that came, went or changed height under a still pointer.
+        defer { followPointer() }
         watchScrolling()
         if let anchor = keptThroughWidth {
             keptThroughWidth = nil
@@ -487,7 +494,10 @@ final class RowStackView: NSView, NSUserInterfaceValidations {
         guard let clip else { return }
         clip.postsBoundsChangedNotifications = true
         watch = NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification, object: clip, queue: nil) { [weak self] _ in
-            MainActor.assumeIsolated { self?.layOutIfRowsMissing() }
+            MainActor.assumeIsolated {
+                self?.layOutIfRowsMissing()
+                self?.followPointer()
+            }
         }
     }
 
@@ -496,6 +506,58 @@ final class RowStackView: NSView, NSUserInterfaceValidations {
     private func layOutIfRowsMissing() {
         let range = shownRange()
         if range != laidOut || range.contains(where: { hosts[ids[$0]]?.isShown != true }) { needsLayout = true }
+    }
+
+    // MARK: The pointer
+
+    /// Told the row under the pointer (see `RowStack.pointer`).
+    var pointerRow: ((String?) -> Void)?
+    private var pointerArea: NSTrackingArea?
+    private var rowUnderPointer: String?
+
+    // Tracked here, not by each row: a row's own tracking is told nothing as it's put away or
+    // scrolled from under a still pointer, and the gaps between rows, and what's see-through in
+    // them, would each count as leaving.
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        guard pointerArea == nil else { return }
+        let area = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .mouseMoved, .activeInActiveApp, .inVisibleRect], owner: self)
+        addTrackingArea(area)
+        pointerArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        followPointer(at: event.locationInWindow)
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        followPointer(at: event.locationInWindow)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        tellPointer(nil)
+    }
+
+    /// The pointer held still while the rows moved under it: scrolled, or laid out again.
+    private func followPointer() {
+        guard pointerRow != nil, let window else { return }
+        followPointer(at: window.mouseLocationOutsideOfEventStream)
+    }
+
+    /// The row under the pointer: from one row's top to the next one's, so the space between two
+    /// rows is the upper one's; none where something else is on top (the composer, a menu).
+    private func followPointer(at location: NSPoint) {
+        guard pointerRow != nil else { return }
+        let point = convert(location, from: nil)
+        guard !isHidden, !ids.isEmpty, visibleRect.contains(point), point.y < total, PointerClaim.isTopmost(self, at: location) else { return tellPointer(nil) }
+        let index = min(ids.count - 1, max(0, tops.partitioningIndex { $0 > point.y } - 1))
+        tellPointer(ids[index])
+    }
+
+    private func tellPointer(_ id: String?) {
+        guard id != rowUnderPointer else { return }
+        rowUnderPointer = id
+        pointerRow?(id)
     }
 
     // Each way of coming into view lays out again: in a window, shown, resized. Any could come

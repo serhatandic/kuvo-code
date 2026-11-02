@@ -359,6 +359,19 @@ final class ReplyTextView: PointerAwareTextView, NSTextViewDelegate {
         }
     }
 
+    // A right-click offers what's around the words (a reply's Copy Reply and Reply), as one
+    // beside them does; on words selected or a link, what the text offers for them.
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let point = convert(event.locationInWindow, from: nil)
+        guard link(at: point) == nil, !selectedRanges.contains(where: { NSLocationInRange(character(at: point), $0.rangeValue) }) else { return super.menu(for: event) }
+        var view = superview
+        while let around = view {
+            if let menu = around.menu(for: event), !menu.items.isEmpty { return menu }
+            view = around.superview
+        }
+        return super.menu(for: event)
+    }
+
     // The keyboard goes to the conversation with its selection, never to one of its texts: two
     // holders of one selection would each draw and clear it their own way.
     override var acceptsFirstResponder: Bool {

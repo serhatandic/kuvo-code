@@ -229,7 +229,8 @@ struct TranscriptView: View {
         _ = find.marksState
         return RowStack(items: rows, id: \.id, same: ==, estimate: Self.estimate, animatesNew: !rowCache.isBulk, text: { $0.copiedText(folders: model.folders()) },
                  whole: \.copiesWhole,
-                 space: { row, index in index == 0 ? 0 : row.spacing(after: rows[index - 1]) }) { row, index in
+                 space: { row, index in index == 0 ? 0 : row.spacing(after: rows[index - 1]) },
+                 pointer: { [hover] in hover.point(at: $0) }) { row, index in
             RowView(row: row, directory: model.session.location.directory, folders: model.folders, heard: model.heard, cancel: model.cancelPending, undo: model.undo(from:), redo: model.redo, fork: fork(_:), retry: model.retry(_:), switchModel: switchModel, buildPlan: model.agent == "plan" && !isOffline ? { model.buildPlan() } as () -> Void : nil, reply: model.reply(to:))
                 .equatable()
                 .environment(\.findHighlight, find.highlight(for: row.id))
@@ -305,22 +306,32 @@ struct TranscriptView: View {
         return rows
     }
 
-    /// The turn each row of a reply is part of, by its end: the rows from your message to the
-    /// turn's end, which shows its row from any of them. Your message isn't one: it has its own.
+    /// The turn each row of a reply is part of: the rows from your message to the turn's end,
+    /// which shows its row from any of them (your message has its own), and what the turn said,
+    /// for Copy Reply. A turn under way has no end yet; what it's said so far is its words.
     static func turns(of rows: [Row]) -> [String: TurnHover.Turn] {
         var turns: [String: TurnHover.Turn] = [:]
-        var since: [String] = []
+        var since: [Row] = []
         for row in rows {
             switch row {
-            case .user, .pending, .undone, .working:
+            case .user, .pending, .undone:
                 since = []
-            case .turnEnd(let idle, let stats, _):
-                let turn = TurnHover.Turn(id: idle.id, text: stats.text.joined(separator: "\n\n"))
-                for id in since + [idle.id] { turns[id] = turn }
+            case .working:
+                continue
+            case .turnEnd(let idle, let stats, _, _):
+                let turn = TurnHover.Turn(end: idle.id, said: stats.text)
+                for each in since { turns[each.id] = turn }
+                turns[idle.id] = turn
                 since = []
             default:
-                since.append(row.id)
+                since.append(row)
             }
+        }
+        // Only the turn under way's words are read from its rows: the others' are in their ends.
+        let said = since.compactMap(\.words)
+        if !said.isEmpty {
+            let turn = TurnHover.Turn(end: nil, said: said)
+            for each in since { turns[each.id] = turn }
         }
         return turns
     }
@@ -346,6 +357,7 @@ struct TranscriptView: View {
         }
         // Where the conversation ends for Try Again: a model or mode picked after a failed run
         // leaves it the last, so it goes again with them.
+        let latestEnd = messages.lastIndex { if case .idle = $0 { true } else { false } }
         let last = messages.lastIndex { message in
             switch message {
             case .modelSwitched, .agentSwitched: false
@@ -430,7 +442,7 @@ struct TranscriptView: View {
                     rows.append(.assistant(end, showsError: showsError))
                 }
             case .idle(let idle):
-                rows.append(.turnEnd(idle, turn, isLast: index == last))
+                rows.append(.turnEnd(idle, turn, isLast: index == last, isLatest: index == latestEnd))
                 turn = TurnStats()
             case .modelSwitched(let change):
                 // By its name, as the model menu shows it ("Big Pickle", not big-pickle).
@@ -621,8 +633,10 @@ enum Row: Identifiable, Hashable {
     case sent(Message.ToolCall)
     /// A subagent it handed part of the work to.
     case subagent(Message.ToolCall)
-    /// `isLast`: the conversation ends here, so a failed run can be tried again.
-    case turnEnd(Message.Idle, TurnStats, isLast: Bool)
+    /// `isLast`: the conversation ends here, so a failed run can be tried again. `isLatest`: the
+    /// latest turn's end, whose row (its time, Copy and Reply) stays in view, though notes or a
+    /// command you ran may come after it.
+    case turnEnd(Message.Idle, TurnStats, isLast: Bool, isLatest: Bool)
     case notice(String, String, String)
     /// A command you ran with "!".
     case shell(Message.Shell)
@@ -634,6 +648,17 @@ enum Row: Identifiable, Hashable {
     /// `followsHeard`: quiet since the model last sent anything, which new words move on without
     /// the rows being made again (see `RowView.heard`).
     case working(since: Milliseconds?, quiet: Milliseconds?, followsHeard: Bool, holds: Bool)
+
+    /// A reply's words in it, on a row of them.
+    var words: String? {
+        switch self {
+        case .assistant(let message, _), .more(let message, _):
+            let words = message.content.compactMap { if case .text(let part) = $0 { part.text } else { nil } }.joined(separator: "\n\n")
+            return words.isEmpty ? nil : words
+        default:
+            return nil
+        }
+    }
 
     /// A message in the conversation as its row: yours as your bubble; one the box wrote to the
     /// agent (a goal starting, its sessions' news) as the line of what happened.
@@ -723,7 +748,7 @@ enum Row: Identifiable, Hashable {
         case .picture(let call): call.id
         case .sent(let call): call.id
         case .subagent(let call): call.id
-        case .turnEnd(let m, _, _): m.id
+        case .turnEnd(let m, _, _, _): m.id
         case .notice(let id, _, _): id
         case .shell(let m): m.id
         case .pending(let item): item.id
@@ -832,10 +857,10 @@ private struct RowView: View, Equatable {
             AgentSentRow(call: call)
         case .subagent(let call):
             SubagentRow(call: call, directory: directory)
-        case .turnEnd(let idle, let stats, let isLast):
+        case .turnEnd(let idle, let stats, let isLast, let isLatest):
             TurnEndView(idle: idle, stats: stats, directory: directory, retry: isLast && !isOffline && !takesNoMessages ? stats.message.map { message in { retry(message) } } : nil,
                         switchModel: isLast && !isOffline && !takesNoMessages ? switchModel : nil,
-                        build: isLast && stats.agent == "plan" ? buildPlan : nil, reply: reply, isLast: isLast)
+                        build: isLast && stats.agent == "plan" ? buildPlan : nil, reply: reply, isLatest: isLatest)
         case .shell(let shell):
             ShellRow(shell: shell)
         case .notice(_, _, let text):
@@ -1378,8 +1403,8 @@ private struct TurnEndView: View {
     /// Builds what a plan described; offered under Plan mode's last answer.
     var build: (() -> Void)?
     var reply: ((String) -> Void)?
-    /// The conversation ends here: its row stays in view.
-    var isLast = false
+    /// The latest turn's end: its row stays in view.
+    var isLatest = false
     @Environment(AppModel.self) private var app
     @Environment(TurnHover.self) private var hover: TurnHover?
     /// Its Copy or Reply has the keyboard (Tab, with keyboard navigation on): the row shows.
@@ -1396,7 +1421,7 @@ private struct TurnEndView: View {
         if environment["KUVO_DEMO_SHOW_HOVER"] != nil { return true }
         if let text = environment["KUVO_DEMO_HOVER_TEXT"], stats.text.contains(where: { $0.contains(text) }) { return true }
         #endif
-        return isLast || hover?.turn == idle.id || focused != nil
+        return isLatest || hover?.turn == idle.id || focused != nil
     }
 
     /// When the turn ended.
@@ -1460,14 +1485,12 @@ private struct TurnEndView: View {
                 }
                 .buttonStyle(.glass)
                 .controlSize(.small)
-                // What it changed and said before failing.
-                if !stats.files.isEmpty || !stats.text.isEmpty {
-                    HStack(spacing: 6) {
-                        if !stats.files.isEmpty {
-                            TurnFiles(files: stats.files, directory: directory)
-                        }
-                        helpers
+                // What it changed and said before failing, and when it ended.
+                HStack(spacing: 6) {
+                    if !stats.files.isEmpty {
+                        TurnFiles(files: stats.files, directory: directory)
                     }
+                    helpers
                 }
             }
         // (One a newer engine says that this app doesn't know: it stopped.)
@@ -1508,7 +1531,6 @@ private struct TurnEndView: View {
                 .font(.caption)
                 .foregroundStyle(.tertiary)
                 .help(SentTime.full(ended))
-                .accessibilityLabel(([SentTime.full(ended)] + parts).joined(separator: ", "))
             if !stats.text.isEmpty {
                 CopyButton(text: stats.text.joined(separator: "\n\n"), help: "Copy the Reply")
                     .focused($focused, equals: .copy)
@@ -1522,6 +1544,16 @@ private struct TurnEndView: View {
         }
         .opacity(isShown ? 1 : 0)
         .animation(.easeOut(duration: 0.12), value: isShown)
+        // VoiceOver reads it, and offers its buttons, shown or not: hidden, it would be skipped.
+        .accessibilityRepresentation {
+            HStack {
+                Text(([SentTime.full(ended)] + parts).joined(separator: ", "))
+                if !stats.text.isEmpty {
+                    Button("Copy the Reply") { Clipboard.copy(stats.text.joined(separator: "\n\n")) }
+                    if let reply { Button("Reply") { reply(stats.text.joined(separator: "\n\n")) } }
+                }
+            }
+        }
     }
 
     private var parts: [String] {
@@ -1664,72 +1696,48 @@ enum MessageTime {
 /// steps, what it made, its end), so the row under it (its time, Copy and Reply) shows from any of
 /// them, as a message's does from its bubble.
 @Observable final class TurnHover {
-    /// A turn by its end, with all it said: what its Copy and Reply take.
+    /// A turn: its end, and what it said, which its Copy and Reply take.
     struct Turn: Equatable {
-        let id: String
-        let text: String
+        /// None while it's under way.
+        let end: String?
+        let said: [String]
+
+        var text: String { said.joined(separator: "\n\n") }
     }
 
     /// Each reply row's turn (see `TranscriptView.turns(of:)`), read as the pointer comes.
     @ObservationIgnored var turns: [String: Turn] = [:]
     /// The turn under the pointer, by its end.
     private(set) var turn: String?
-    /// The row under the pointer: leaving one after coming into the next leaves the turn shown.
-    @ObservationIgnored private var row: String?
 
-    func enter(_ row: String) {
-        self.row = row
-        let turn = turns[row]?.id
+    /// The pointer came to `row` (by its id), or off the rows.
+    func point(at row: String?) {
+        let turn = row.flatMap { turns[$0]?.end }
         if self.turn != turn { self.turn = turn }
-    }
-
-    func leave(_ row: String) {
-        guard self.row == row else { return }
-        self.row = nil
-        if turn != nil { turn = nil }
     }
 }
 
-/// A row in the conversation, as part of its turn: under the pointer, the turn's row shows; on a
-/// reply's words, a right-click and VoiceOver offer Copy Reply and Reply, for all the turn said
-/// (its words alone while it's still being written).
+/// A row in the conversation, as part of its turn: on a reply's words, a right-click offers Copy
+/// Reply and Reply, for all the turn said (what it's said so far, while it's under way).
 private struct TurnRow: ViewModifier {
     let row: Row
     let hover: TurnHover
     let reply: ((String) -> Void)?
 
-    /// The row's words, on a reply's words.
-    private var words: String? {
-        switch row {
-        case .assistant(let message, _), .more(let message, _):
-            let words = message.content.compactMap { if case .text(let part) = $0 { part.text } else { nil } }.joined(separator: "\n\n")
-            return words.isEmpty ? nil : words
-        default:
-            return nil
-        }
-    }
-
-    /// All the turn said, once it's ended (read as it's asked for: the row isn't made again when
-    /// its turn ends); its own words before.
+    /// All the turn said, read as it's asked for: the row isn't made again as its turn goes on.
     private func said(_ words: String) -> String {
-        guard let turn = hover.turns[row.id], !turn.text.isEmpty else { return words }
+        guard let turn = hover.turns[row.id], !turn.said.isEmpty else { return words }
         return turn.text
     }
 
     func body(content: Content) -> some View {
-        let tracked = content.onHover { [row = row.id] in $0 ? hover.enter(row) : hover.leave(row) }
-        if let words {
-            tracked
-                .contextMenu {
-                    Button("Copy Reply") { Clipboard.copy(said(words)) }
-                    if let reply { Button("Reply") { reply(said(words)) } }
-                }
-                .accessibilityActions {
-                    Button("Copy Reply") { Clipboard.copy(said(words)) }
-                    if let reply { Button("Reply") { reply(said(words)) } }
-                }
+        if let words = row.words {
+            content.contextMenu {
+                Button("Copy Reply") { Clipboard.copy(said(words)) }
+                if let reply { Button("Reply") { reply(said(words)) } }
+            }
         } else {
-            tracked
+            content
         }
     }
 }
