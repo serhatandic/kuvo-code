@@ -3409,6 +3409,69 @@
       },
       "away": {
        "list": "string"
+      },
+      "elsewhere?": {
+       "list": {
+        "object": {
+         "box": "string",
+         "moves": {
+          "list": {
+           "object": {
+            "id": "string",
+            "kind": {
+             "oneOf": [
+              {
+               "literal": "bot"
+              },
+              {
+               "literal": "chat"
+              },
+              {
+               "literal": "group"
+              }
+             ]
+            },
+            "thing": "string",
+            "name": "string",
+            "from": "string",
+            "to": "string",
+            "role": {
+             "oneOf": [
+              {
+               "literal": "from"
+              },
+              {
+               "literal": "to"
+              }
+             ]
+            },
+            "stage": {
+             "oneOf": [
+              {
+               "literal": "holding"
+              },
+              {
+               "literal": "copying"
+              },
+              {
+               "literal": "switching"
+              },
+              {
+               "literal": "finishing"
+              }
+             ]
+            },
+            "sessions": {
+             "list": "string"
+            },
+            "place?": "string",
+            "sent?": "number",
+            "size?": "number"
+           }
+          }
+         }
+        }
+       }
       }
      }
     }

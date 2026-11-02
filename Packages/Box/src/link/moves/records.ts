@@ -94,6 +94,10 @@ export const readMove = (id: string): MoveRecord | null => readMoves().find(reco
  * what it moved is free here again. */
 export const liveMoves = (records = readMoves()): MoveRecord[] => records.filter(record => !record.failed);
 
+/** The moves under way that clients see: not a copy here being let go of (the move was taken back,
+ * and goes on where it came from), whose conversations alone are left out (`away`) until it's gone. */
+export const listedMoves = (records = liveMoves()): MoveRecord[] => records.filter(record => !(record.role === "to" && record.dropping));
+
 /** The move of `thing` under way here, either way. */
 export const moveOf = (thing: string): MoveRecord | null => liveMoves().find(record => record.thing === thing) ?? null;
 

@@ -1,30 +1,32 @@
 // `kuvo/moves`: Move to Computer, as a client asks this box for it (PROTOCOL.md, `kuvo/moves`):
 // where a bot, a chat or a group chat can go, a move (answered once it's there, or why not), and the
-// moves under way here with the conversations that don't live here.
+// moves under way here with the conversations that don't live here, and on your other computers.
 
 import { isObject } from "../../shared/json";
 import type { MoveKind, MovePlaces, Moves } from "../../shared/routes/moves";
 import { plainName } from "../../shared/text";
 import { followed } from "../follow";
 import { placesFor, startMove } from "../moves/move";
-import { awaySessions, liveMoves, moveFollowers, shownMove } from "../moves/records";
+import { movesElsewhere } from "../moves/elsewhere";
+import { awaySessions, listedMoves, moveFollowers, shownMove } from "../moves/records";
 import { peersOf } from "../peers/known";
 import type { AnswerPiece, RouteContext } from "../server/context";
 import { readLink } from "../state";
 
 const KINDS: MoveKind[] = ["bot", "chat", "group"];
 
-// Each with the other computer's name, as your computers call it, for clients that don't know it.
-// Not a copy here being let go of (the move was taken back, and goes on where it came from): only
-// its conversations are left out (`away`) until it's gone.
+// Each with the other computer's name, as your computers call it, for clients that don't know it;
+// and those your other computers said they have under way.
 const movesNow = (): Moves => {
   const peers = peersOf(readLink());
+  const elsewhere = movesElsewhere(peers);
   return {
-    moves: liveMoves().filter(record => !(record.role === "to" && record.dropping)).map(record => {
+    moves: listedMoves().map(record => {
       const place = plainName(peers.find(peer => peer.key === record.peer)?.name ?? "");
       return { ...shownMove(record), ...(place ? { place } : {}) };
     }),
     away: awaySessions(),
+    ...(elsewhere.length ? { elsewhere } : {}),
   };
 };
 

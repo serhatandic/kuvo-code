@@ -32,6 +32,7 @@ import { readLink } from "../state";
 import { goalRuns } from "../work/goals";
 import { CHATS, engineWait, MOST_BUNDLE, NotTaken, TooBig, deleteSession, directoryOf, exportAll, folderOf, groupAction, conversationHash, hashOf, idsOf, importAll, keysOf, ownTree, pack, toTrash, unpack } from "./bundle";
 import type { Contents } from "./bundle";
+import { watchMoving } from "./elsewhere";
 import { MOVES, bundleOf, changeMove, endedAs, forgetMove, forgetMovedAway, moveOf, movesChanged, noteEnded, noteMovedAway, readMove, readMoves, saveMove, shownMove } from "./records";
 import type { MoveRecord } from "./records";
 
@@ -1143,10 +1144,12 @@ export async function resumeMoves(now = Date.now()): Promise<void> {
 }
 
 /** Moves go by the relay connection `host` gives (the one that's up), and carry on from where they
- * were as the box starts; each step not answered is sent again. */
+ * were as the box starts; each step not answered is sent again. Your other computers are told what
+ * moves here (`elsewhere.ts`). */
 export function watchMoves(host: () => Pick<LinkHost, "send"> | null | undefined, signal?: AbortSignal): void {
   hostOf = host;
   watching = true;
+  watchMoving(host, signal);
   resumeMoves().catch(() => {});
   const timer = setInterval(() => keepMoving(), 3_000);
   signal?.addEventListener("abort", () => {
