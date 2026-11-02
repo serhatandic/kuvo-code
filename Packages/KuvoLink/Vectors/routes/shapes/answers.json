@@ -8139,6 +8139,20 @@
            "size?": "number"
           }
          }
+        },
+        "restorable?": {
+         "list": {
+          "object": {
+           "project": "string",
+           "root": "string",
+           "folder": "string",
+           "branch": "string",
+           "base?": "string",
+           "restorable": "bool",
+           "saved": "bool",
+           "ahead?": "number"
+          }
+         }
         }
        }
       },

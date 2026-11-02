@@ -237,7 +237,7 @@ export async function answerWorktrees(method: string, requestPath: string, body:
       }
       worktrees.push(entry);
     }
-    return { status: 200, value: { worktrees } satisfies Worktrees };
+    return { status: 200, value: { worktrees, restorable: readRestorableWorktrees().map(listedRestorable) } satisfies Worktrees };
   }
   if (method !== "POST") return { status: route.startsWith("kuvo/worktrees") ? 405 : 404, value: {} };
   if (route === "kuvo/worktrees") {

@@ -1668,7 +1668,7 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     hears of each, and as it follows its engine again). Archived sessions left: what isn't
     committed (ignored files aside) is saved first, as a commit under
     `refs/kuvo/worktrees/<folder name>`, and its branch stays. None left: it goes as Remove… does.
-    `?records=1` and the events carry `restorable`: `[{project, root, folder, branch, base?,
+    Its lists and the events carry `restorable`: `[{project, root, folder, branch, base?,
     restorable, saved, ahead?}]`, one for each removed this way whose sessions are archived;
     `saved` whether changes were saved, `restorable` whether it can come back (its branch or its
     saved changes are still there). An entry and its saved changes go once no session is left

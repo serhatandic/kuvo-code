@@ -55,7 +55,7 @@ export const WORKTREE = object({
 /** The box's worktrees as Settings lists them, or, with `?records=1`, as it keeps them (their
  * branches named after their sessions first), with those removed whose sessions are still here. */
 export const WORKTREES = oneOf(
-  object({ worktrees: list(WORKTREE) }),
+  object({ worktrees: list(WORKTREE), "restorable?": list(RESTORABLE_WORKTREE) }),
   object({ worktrees: list(WORKTREE_RECORD), "restorable?": list(RESTORABLE_WORKTREE) }),
 );
 

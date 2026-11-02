@@ -12949,7 +12949,7 @@ async function answerWorktrees(method, requestPath, body, engine, signal, bridge
       }
       worktrees.push(entry);
     }
-    return { status: 200, value: { worktrees } };
+    return { status: 200, value: { worktrees, restorable: readRestorableWorktrees().map(listedRestorable) } };
   }
   if (method !== "POST")
     return { status: route.startsWith("kuvo/worktrees") ? 405 : 404, value: {} };
