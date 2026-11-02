@@ -69,7 +69,7 @@ const engineServer = http.createServer(async (request, response) => {
   const session = match && engine.sessions.get(match[1]);
   if (!session) return send(404, null);
   if (match[2] === "/prompt") {
-    engine.prompts.push({ session: session.id, text: given.text });
+    engine.prompts.push({ session: session.id, text: given.text, delivery: given.delivery, ...(given.metadata ? { metadata: given.metadata } : {}) });
     return send(200, {});
   }
   if (match[2] === "/message") return send(200, [...(session.replies ?? [])].reverse());
@@ -545,6 +545,8 @@ test("what a chat's sessions tell it while it moves never starts a turn there; o
   const [letter, ...more] = lettersFor("ses_reach1");
   assert.deepEqual(more, []);
   assert.match(letter.text, /^\[Session failed\] "Sign-in" .*\(address ses_signin1\) stopped with an error\./);
+  // As the box's own word, the way it would have come here: queued, shown as its sessions' news.
+  assert.deepEqual(letter.note, { from: "Its sessions", words: "“Sign-in” stopped with an error", line: "“Sign-in” stopped with an error", delivery: "queue" });
   const mails = [];
   await link.sendOutbox({ send: bytes => mails.push(bytes) });
   assert.equal(mails.length, 1);
@@ -573,6 +575,9 @@ test("what you answered a chat's ask after it stopped waiting isn't told it whil
   const letters = lettersFor("ses_reach2");
   assert.equal(letters.length, 1);
   assert.match(letters[0].text, /^\[The user answered\] The user said no to making Site\./);
+  // As the box's own word, the way it would have come here: queued, shown as your answer.
+  const words = letters[0].text.slice("[The user answered] ".length);
+  assert.deepEqual(letters[0].note, { from: "Your answer", words, line: `You answered: ${words}`, delivery: "queue" });
   // Told once.
   await watcher().caughtUp;
   assert.equal(lettersFor("ses_reach2").length, 1);
@@ -662,6 +667,8 @@ test("an answer to a chat's letter that came after it stopped waiting isn't told
   const letters = lettersFor("ses_left1");
   assert.equal(letters.length, 1);
   assert.match(letters[0].text, /^\[Message from Scout · ses_scout9\][^\n]*\n\nThe venue is booked\.$/);
+  // Delivered there as Scout's answer, under that one heading (not as a letter from no one).
+  assert.deepEqual(letters[0].note, { from: "Scout", words: "The venue is booked.", delivery: "steer" });
   // Told once.
   await link.macSendOutbox();
   assert.equal(lettersFor("ses_left1").length, 1);
@@ -692,6 +699,7 @@ test("an answer a chat waited for that comes once its tool stopped waiting isn't
     const letters = lettersFor("ses_ask1");
     assert.equal(letters.length, 1);
     assert.match(letters[0].text, /^\[Message from Ada · ses_here1\][^\n]*\n\nThe venue is booked\.$/);
+    assert.deepEqual(letters[0].note, { from: "Ada", words: "The venue is booked.", delivery: "steer" });
     await link.macSendOutbox();
     assert.equal(lettersFor("ses_ask1").length, 1, "told once");
   } finally {
@@ -735,5 +743,44 @@ test("a copy held here a long while, only now being let go of, isn't said in the
   } finally {
     engine.down = false;
     console.error = error;
+  }
+});
+
+test("the box's own word for a conversation that moved here, as it comes from the computer it moved from, is delivered as that box would have here: not as a letter from no one", async () => {
+  chat("ses_note1");
+  const said = [];
+  const take = (id, note) => link.takeLetter(lab, { id, from: null, to: "ses_note1", text: "[The user answered] Yes.", at: Date.now(), wait: false, note },
+    { send: (_peer, message) => said.push(message.delivered), targets: [{ port: enginePort, password: "pw" }], told: {}, peers: [lab], moved: new Map() });
+  await take("ltr_note1aaaa", { from: "Your answer", words: "Yes.", line: "You answered: Yes.", delivery: "queue" });
+  await take("ltr_note1bbbb", { from: "Scout", words: "Booked.", delivery: "steer" });
+  assert.deepEqual(said.map(each => each.ok), [true, true]);
+  assert.deepEqual(engine.prompts.filter(each => each.session === "ses_note1"), [
+    { session: "ses_note1", text: "[The user answered] Yes.", delivery: "queue", metadata: { kuvo: { note: { from: "Your answer", line: "You answered: Yes." } } } },
+    { session: "ses_note1", text: "[The user answered] Yes.", delivery: "steer" },
+  ]);
+  // One that isn't a note, or a bad one, is a letter as ever.
+  await take("ltr_note1cccc", { from: "Your answer", words: "Yes.", delivery: "now" });
+  const [, , plain] = engine.prompts.filter(each => each.session === "ses_note1");
+  assert.match(plain.text, /^\[Message from an agent on lab · unknown\]/);
+  assert.equal(plain.delivery, "steer");
+  assert.equal(plain.metadata, undefined);
+});
+
+test("the box's own word for a conversation that has since moved back here is delivered here as the box's own, not as a letter", async () => {
+  chat("ses_note2");
+  const agents = path.join(home, "run", "agents.json");
+  fs.writeFileSync(agents, JSON.stringify({ agents: [{ session: "ses_note2", name: "Trip plans" }] }));
+  fs.mkdirSync(sending, { recursive: true });
+  fs.writeFileSync(path.join(sending, "ltr_note2aaaa.json"), JSON.stringify({ from: null, to: "ses_note2", text: "[Session finished] \"Sign-in\" is done.", wait: false, at: Date.now(), peer: peerKey,
+    note: { from: "Its sessions", words: "“Sign-in” finished", line: "“Sign-in” finished", delivery: "queue" } }));
+  try {
+    await link.sendOutbox({ send() {} }, undefined, Date.now(), 0, undefined, 1);
+    assert.deepEqual(engine.prompts.filter(each => each.session === "ses_note2"), [
+      { session: "ses_note2", text: "[Session finished] \"Sign-in\" is done.", delivery: "queue", metadata: { kuvo: { note: { from: "Its sessions", line: "“Sign-in” finished" } } } },
+    ]);
+    assert.deepEqual(lettersFor("ses_note2"), []);
+  } finally {
+    fs.rmSync(agents, { force: true });
+    fs.rmSync(sending, { recursive: true, force: true });
   }
 });

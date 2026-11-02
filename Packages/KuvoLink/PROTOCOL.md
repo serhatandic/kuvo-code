@@ -239,7 +239,7 @@ connection.
     takes on over SSH (by mail, before bridge 0.9.63, too).
 - **Personalities**: each box's view is a document ("Documents"); a box meets a peer's with its
   own, and its bots whose personality changed are told what they are now.
-- **Letters**: `{"letter": {id, from, to, text, wait, at, answers?, read?}}` goes to the box that
+- **Letters**: `{"letter": {id, from, to, text, wait, at, answers?, read?, note?}}` goes to the box that
   listed `to`.
   - **Checks**: the receiver drops a letter older than a day. It delivers each `id` once (ids
     remembered two days, noted once delivered), at most 20 in ten minutes from a box (one answered
@@ -280,6 +280,17 @@ connection.
     back the conversation as `read_conversation` words it (or the parts that mention `query`),
     about 20,000 characters at most, as an answer that also carries `read: {}`. An answer with
     `read` that no tool waits for any more is dropped, never delivered as a message.
+  - **`note`** `{from, words, delivery, line?}` (bridge 0.9.163): the letter is the sending box's
+    own word, not an agent's, for one of its conversations that moved away from it in the last two
+    days (its sessions' news, an answer you gave late, an answer its tool never took). Only a box
+    leaves one; an agent's letter never has it. The receiver checks and counts it as any letter,
+    then delivers `text` as the sender would have delivered it there: `delivery` `queue` or
+    `steer`, shown from `from` with `words`, and with `line`, marked as the box's note
+    (`metadata.kuvo.note {from, line}`, "Messages in a session"). It has no `from` conversation and
+    is never answered. One whose `note` isn't whole is a letter as any. A box from before this
+    doesn't read `note`: it delivers the letter as any other, steered, from "an agent on <box>"
+    that can't be answered, with `text` after its own heading. Its `words` and `line` are cut to fit
+    as `text` is.
 - **Leaving one**: an agent's `send_message` or `read_conversation` for an agent on another
   computer ("Agents' tools") leaves a letter in `run/outbox/sending/<id>.json`, which the link
   sends. Without the relay, letters wait for it: no box hands them to anyone over SSH (bridge
@@ -524,7 +535,7 @@ its own, which a `SIGTERM` stops waiting.
   tool's own words. One that waits for an answer holds the request up to eleven minutes; the
   request going stops the wait, and an answer that comes later reaches the conversation as a
   message (one moving to or from another computer once it's there; one that moved away lately,
-  there, as a letter). 400 for another `name`.
+  there, as a letter with `note`, "Peers"). 400 for another `name`.
   - A subagent, and a coding agent's engine run (`kuvo.engineFor`), act as their conversation: its
     name, folder, model, approval, and where answers go. A group chat's seat may only list and read.
   - Who there is: the box's own agents and its peers' (as `run/agents.json` has them), and any
@@ -667,7 +678,7 @@ client shows it from the same routes.
   since it may be the bridge's; and so is an answer given late, below; for an archived one, until
   it's brought back, as its own wake-ups wait, a week at most; for one moving to or from another
   computer, until it's there; for one that moved away from here in the last two days, it goes to it
-  there as a letter, from no one it can answer). Clients mark rows by `kuvo.by`.
+  there as a letter with `note`, "Peers", delivered there as it would have been here). Clients mark rows by `kuvo.by`.
   Its task ends with the session's half of the playbook: review your work with reviewer subagents,
   fix what they find, and end with a short report.
 - **Tools** (`POST kuvo/agent-tools`, any conversation, for the sessions under it):
@@ -770,7 +781,8 @@ folder you pick once per box, after asking you.
   tool waits up to ten minutes, then says it stays asked, and the conversation gets
   `[The user answered] …` as a message when you do (for a conversation the engine doesn't know
   while the coding agents' bridge isn't running, or one moving to or from another computer, tried
-  again every few minutes, a week at most; to one that moved away from here lately, as a letter there).
+  again every few minutes, a week at most; to one that moved away from here lately, as a letter there
+  with `note`, "Peers").
   - An ask goes with its bot (deleted), or after a week unanswered.
   - `GET kuvo/work/asks` and `GET kuvo/work/asks/events` (ndjson, a line now and at each change)
     → `{asks: [{id, action: makeProject|cloneProject, session, name, bot?, project, clone?,

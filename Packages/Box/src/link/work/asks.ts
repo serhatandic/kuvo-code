@@ -249,14 +249,15 @@ async function tellLate(id: string, targets: () => Target[], file: string, bridg
   const ask = readKept(file).find(each => each.id === id);
   if (!ask?.answered || !ask.late || ask.toldLate || frozen().has(ask.session)) return;
   const said = `[The user answered] ${ask.answered.text}`;
+  const note = { from: "Your answer", words: ask.answered.text, line: `You answered: ${ask.answered.text}`, delivery: "queue" } as const;
   const place = await placeOfSession(ask.session, targets()).catch(() => undefined);
   if (place === undefined) return;
   if (place === null) {
     // Moved to another computer since: told there, as a letter. Else not known while the coding
     // agents' bridge isn't running (it may be the bridge's); else gone for sure: no one to tell.
-    if (!tellMovedAway(ask.session, said) && !bridgeRuns()) return;
+    if (!tellMovedAway(ask.session, said, note) && !bridgeRuns()) return;
   } else {
-    const sent = await sendInto(place.target, ask.session, { id: messageID(), text: said, delivery: "queue", metadata: boxNote("Your answer", `You answered: ${ask.answered.text}`) }, { from: "Your answer", words: ask.answered.text }).then(() => true, () => false);
+    const sent = await sendInto(place.target, ask.session, { id: messageID(), text: said, delivery: note.delivery, metadata: boxNote(note.from, note.line) }, { from: note.from, words: note.words }).then(() => true, () => false);
     if (!sent) return;
   }
   changeKept(asks => {

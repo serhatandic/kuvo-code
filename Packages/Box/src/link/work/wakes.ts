@@ -250,7 +250,9 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
     // turn here would be left behind): kept, a day at most, and tried again a little later each
     // time. Moved to another computer since: told there, as a letter.
     const place = frozen().has(starter) ? undefined : await placeOfSession(starter, targets()).catch(() => undefined);
-    if (place === null && tellMovedAway(starter, wakeText(waiting.lines))) return void failures.delete(starter);
+    const line = wakeLineShown(waiting.lines);
+    const delivery = waiting.asks ? "steer" : "queue";
+    if (place === null && tellMovedAway(starter, wakeText(waiting.lines), { from: "Its sessions", words: line, line, delivery })) return void failures.delete(starter);
     if (place === null && (bridgeRuns() || Date.now() - waiting.since > LETTER_LIFE)) return;
     try {
       if (!place) throw new Error("Not reached.");
@@ -261,8 +263,7 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
         throw new Error("Archived.");
       }
       // Stopped by the user: it waits there with the queue, as theirs does.
-      const line = wakeLineShown(waiting.lines);
-      await sendInto(place.target, starter, { id: messageID(), text: wakeText(waiting.lines), delivery: waiting.asks ? "steer" : "queue", metadata: boxNote("Its sessions", line) }, { from: "Its sessions", words: line });
+      await sendInto(place.target, starter, { id: messageID(), text: wakeText(waiting.lines), delivery, metadata: boxNote("Its sessions", line) }, { from: "Its sessions", words: line });
       failures.delete(starter);
     } catch {
       putBack(starter, waiting);

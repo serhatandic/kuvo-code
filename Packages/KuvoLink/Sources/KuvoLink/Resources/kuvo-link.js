@@ -6454,6 +6454,18 @@ async function readConversation(target, session, data, name, signal) {
   return conversationMarkdown(name, messages, name);
 }
 
+// Packages/Box/src/link/letters/note.ts
+function noteOf(value) {
+  if (!isObject(value) || typeof value.from !== "string" || !value.from.trim() || typeof value.words !== "string")
+    return null;
+  if (value.delivery !== "queue" && value.delivery !== "steer")
+    return null;
+  if (value.line !== undefined && (typeof value.line !== "string" || !value.line.trim()))
+    return null;
+  return { from: cutText(value.from, 200), words: cutText(value.words), delivery: value.delivery, ...value.line !== undefined ? { line: cutText(value.line) } : {} };
+}
+var deliverNote = (target, session, id, text, note) => sendInto(target, session, { id, text, delivery: note.delivery, ...note.line !== undefined ? { metadata: boxNote(note.from, note.line) } : {} }, { from: note.from, words: note.words });
+
 // Packages/Box/src/link/letters/take.ts
 import fs29 from "node:fs";
 
@@ -6727,7 +6739,8 @@ async function takeLetter(sender, letter, { send, targets, answer = () => {}, to
     return no(why, again);
   };
   delivering.add(id);
-  let place, prompt, fromAgent = null, went;
+  let place, prompt = "", fromAgent = null, went;
+  const note = noteOf(letter.note);
   try {
     const lives = moved.get(letter.to);
     if (lives && lives !== ownKey(readLink() ?? {}) || await moving(letter.to))
@@ -6739,20 +6752,26 @@ async function takeLetter(sender, letter, { send, targets, answer = () => {}, to
     const kuvo = place.data?.metadata?.kuvo ?? {};
     if (place.data?.parentID || kuvo.seat || isPutAway(place.data))
       return notDelivered("That conversation doesn't take messages.");
-    const listed = peerOf(letter.from, peers, told, moved)?.key === sender.key ? (told[sender.key]?.list ?? []).find((agent) => agent.session === letter.from) : null;
-    if (listed && !await placeOfSession(letter.from, targets).catch(() => ({})))
-      fromAgent = listed;
-    const name = fromAgent?.name ?? `an agent on ${plainName(sender.name) || "another computer"}`;
-    prompt = messageID();
-    const waits = letter.wait === true && Boolean(fromAgent);
-    const by = fromAgent ? letter.from : "unknown";
-    went = await sendInto(place.target, letter.to, { id: prompt, text: composeLetter(name, by, cutText(letter.text), waits), delivery: "steer" }, { from: name, words: cutText(letter.text), kept: composeLetter(name, by, cutText(letter.text), false) });
+    if (note)
+      went = await deliverNote(place.target, letter.to, messageID(), cutText(letter.text), note);
+    else {
+      const listed = peerOf(letter.from, peers, told, moved)?.key === sender.key ? (told[sender.key]?.list ?? []).find((agent) => agent.session === letter.from) : null;
+      if (listed && !await placeOfSession(letter.from, targets).catch(() => ({})))
+        fromAgent = listed;
+      const name = fromAgent?.name ?? `an agent on ${plainName(sender.name) || "another computer"}`;
+      prompt = messageID();
+      const waits = letter.wait === true && Boolean(fromAgent);
+      const by = fromAgent ? letter.from : "unknown";
+      went = await sendInto(place.target, letter.to, { id: prompt, text: composeLetter(name, by, cutText(letter.text), waits), delivery: "steer" }, { from: name, words: cutText(letter.text), kept: composeLetter(name, by, cutText(letter.text), false) });
+    }
   } catch (error) {
     return notDelivered(`It didn't reach it: ${String(error?.message ?? error)}`, true);
   } finally {
     delivering.delete(id);
   }
   noteSeen(id, now);
+  if (note)
+    return send(sender, { delivered: { id, ok: true } });
   if (letter.wait === true && !fromAgent)
     return send(sender, { delivered: { id, ok: true, answer: false, why: "Its answer can't come back to you: it doesn't know who you are." } });
   if (went === "waits")
@@ -6833,9 +6852,9 @@ function leaveLetter(letter, now = Date.now()) {
   }
 }
 var leaveAnswer = (letter) => void leaveLetter(letter);
-function tellMovedAway(session, text, now = Date.now()) {
+function tellMovedAway(session, text, note, now = Date.now()) {
   const away = movedAway(now).find((each) => each.session === session);
-  return Boolean(away) && leaveLetter({ from: null, to: session, text, peer: away.key }, now);
+  return Boolean(away) && leaveLetter({ from: null, to: session, text, peer: away.key, note }, now);
 }
 function letterWent(sender, { id, ok, why, retry, answer }) {
   if (!LETTER_ID.test(id))
@@ -6905,6 +6924,11 @@ async function deliverHere(id, file, letter, step) {
     if (isObject(letter.read)) {
       const query = typeof letter.read.query === "string" && letter.read.query.trim() ? letter.read.query.trim() : null;
       return done({ text: excerpt(await readConversation(place.target, letter.to, place.data ?? {}, name), query, READ_BY_MAIL), read: true });
+    }
+    const note = noteOf(letter.note);
+    if (note) {
+      await deliverNote(place.target, letter.to, messageID(), cutText(letter.text), note);
+      return done();
     }
     const sender = nameOf(letter.from) ?? (IS_MAC ? "another agent" : `an agent on ${HERE}`);
     const by = letter.from ?? "unknown";
@@ -7007,7 +7031,7 @@ async function deliverLeftAnswers(now = Date.now(), targets = peerTargets(), bri
       const name = String(answer.name ?? "another agent");
       const text = composeLetter(name, String(answer.from ?? "unknown"), answer.text, false);
       const place = await placeOfSession(answer.to, targets);
-      const there = place === null && tellMovedAway(answer.to, text);
+      const there = place === null && tellMovedAway(answer.to, text, { from: name, words: answer.text, delivery: "steer" });
       if (place === null && !there && !bridgeRuns && now - fs30.statSync(taken).mtimeMs <= LETTER_LIFE)
         throw new Error("Its coding agents aren't running here now.");
       const kuvo = place?.data?.metadata?.kuvo ?? {};
@@ -7025,8 +7049,10 @@ async function deliverLeftAnswers(now = Date.now(), targets = peerTargets(), bri
 }
 function letterMail(peer, letter, link, now = Date.now()) {
   const words = String(letter.text ?? "");
+  const { note } = letter;
   for (const most of [LETTER_BYTES, LETTER_BYTES / 4, 2000]) {
-    const bytes = mailFor(peer, { letter: { ...letter, text: prefixBytes(words, most) }, at: now }, link);
+    const cut = note ? { note: { ...note, words: prefixBytes(note.words, most), ...note.line !== undefined ? { line: prefixBytes(note.line, most) } : {} } } : {};
+    const bytes = mailFor(peer, { letter: { ...letter, text: prefixBytes(words, most), ...cut }, at: now }, link);
     if (bytes)
       return bytes;
   }
@@ -7142,7 +7168,8 @@ function sendOutbox(host, link = readLink(), now = Date.now(), offline = 0, ask 
       wait: letter.wait === true,
       at: made,
       ...letter.answers ? { answers: letter.answers } : {},
-      ...isObject(letter.read) ? { read: typeof letter.read.query === "string" ? { query: letter.read.query } : {} } : {}
+      ...isObject(letter.read) ? { read: typeof letter.read.query === "string" ? { query: letter.read.query } : {} } : {},
+      ...noteOf(letter.note) ? { note: noteOf(letter.note) } : {}
     }, link, now);
     if (!bytes) {
       fs30.rmSync(file, { force: true });
@@ -7508,16 +7535,17 @@ async function tellLate(id, targets, file, bridgeRuns = () => peerPlaces().bridg
   if (!ask?.answered || !ask.late || ask.toldLate || frozen().has(ask.session))
     return;
   const said = `[The user answered] ${ask.answered.text}`;
+  const note = { from: "Your answer", words: ask.answered.text, line: `You answered: ${ask.answered.text}`, delivery: "queue" };
   const place = await placeOfSession(ask.session, targets()).catch(() => {
     return;
   });
   if (place === undefined)
     return;
   if (place === null) {
-    if (!tellMovedAway(ask.session, said) && !bridgeRuns())
+    if (!tellMovedAway(ask.session, said, note) && !bridgeRuns())
       return;
   } else {
-    const sent = await sendInto(place.target, ask.session, { id: messageID(), text: said, delivery: "queue", metadata: boxNote("Your answer", `You answered: ${ask.answered.text}`) }, { from: "Your answer", words: ask.answered.text }).then(() => true, () => false);
+    const sent = await sendInto(place.target, ask.session, { id: messageID(), text: said, delivery: note.delivery, metadata: boxNote(note.from, note.line) }, { from: note.from, words: note.words }).then(() => true, () => false);
     if (!sent)
       return;
   }
@@ -9418,7 +9446,9 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
     const place = frozen().has(starter) ? undefined : await placeOfSession(starter, targets()).catch(() => {
       return;
     });
-    if (place === null && tellMovedAway(starter, wakeText(waiting.lines)))
+    const line = wakeLineShown(waiting.lines);
+    const delivery = waiting.asks ? "steer" : "queue";
+    if (place === null && tellMovedAway(starter, wakeText(waiting.lines), { from: "Its sessions", words: line, line, delivery }))
       return void failures.delete(starter);
     if (place === null && (bridgeRuns() || Date.now() - waiting.since > LETTER_LIFE))
       return;
@@ -9430,8 +9460,7 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
           return;
         throw new Error("Archived.");
       }
-      const line = wakeLineShown(waiting.lines);
-      await sendInto(place.target, starter, { id: messageID(), text: wakeText(waiting.lines), delivery: waiting.asks ? "steer" : "queue", metadata: boxNote("Its sessions", line) }, { from: "Its sessions", words: line });
+      await sendInto(place.target, starter, { id: messageID(), text: wakeText(waiting.lines), delivery, metadata: boxNote("Its sessions", line) }, { from: "Its sessions", words: line });
       failures.delete(starter);
     } catch {
       putBack(starter, waiting);

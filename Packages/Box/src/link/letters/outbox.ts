@@ -21,10 +21,12 @@ import { bridgeAsk, giveUpSeat, ONLINE_STEP, SEAT_LETTER_LIFE, seatAge, seatRoun
 import { readLink } from "../state";
 import { excerpt, READ_BY_MAIL, readConversation } from "./conversation";
 import { composeLetter, cutText, LETTER_ID, LETTER_LIFE, LETTER_MEMORY, letterTries, OUTBOX, pausedNote, placeOfSession, SENDING } from "./letter";
+import { deliverNote, noteOf } from "./note";
 import { answerTo } from "./take";
 import type { Target } from "../../shared/records";
 import type { PutAwayable } from "../peers/directory";
 import type { Peer } from "../peers/known";
+import type { LetterNote } from "./note";
 import type { BridgeAsk, SeatLetter } from "../peers/seats";
 import type { LinkHost } from "../relay/host";
 import type { LinkState } from "../state";
@@ -40,6 +42,8 @@ export interface MailedLetter {
   at: number;
   answers?: string;
   read?: LetterRead;
+  /** The box's own word, not an agent's: delivered as that box would have (`LetterNote`). */
+  note?: LetterNote;
 }
 
 /** A letter that asks for a conversation instead of saying something (read_conversation from another
@@ -78,6 +82,7 @@ export interface OutboxLetter {
   peer?: string;
   sentTo?: string;
   read?: LetterRead;
+  note?: LetterNote;
 }
 
 /** What waits in `outbox/sending/<id>.json`, as the outbox reads it: a letter, or with `seat`, a
@@ -160,11 +165,12 @@ function leaveLetter(letter: OutboxLetter, now = Date.now()): boolean {
 export const leaveAnswer = (letter: OutboxLetter): void => void leaveLetter(letter);
 
 /** What this box has to tell one of its conversations that moved to another computer lately
- * (`movedAway`): a letter to it there, which the outbox sends as any other (from no one it can
- * answer). False when it didn't move away from here, or the letter couldn't be left. */
-export function tellMovedAway(session: string, text: string, now = Date.now()): boolean {
+ * (`movedAway`): a letter to it there, which the outbox sends as any other, with `note` saying how
+ * it would have been delivered here, so the box it goes to delivers it the same way. False when it
+ * didn't move away from here, or the letter couldn't be left. */
+export function tellMovedAway(session: string, text: string, note: LetterNote, now = Date.now()): boolean {
   const away = movedAway(now).find(each => each.session === session);
-  return Boolean(away) && leaveLetter({ from: null, to: session, text, peer: away!.key }, now);
+  return Boolean(away) && leaveLetter({ from: null, to: session, text, peer: away!.key, note }, now);
 }
 
 // How a letter went, from the box it went to (anyone else's word is dropped): there, so it's not
@@ -230,6 +236,12 @@ async function deliverHere(id: string, file: string, letter: OutboxLetter, step:
     if (isObject(letter.read)) {
       const query = typeof letter.read.query === "string" && letter.read.query.trim() ? letter.read.query.trim() : null;
       return done({ text: excerpt(await readConversation(place.target, letter.to, place.data ?? {}, name), query, READ_BY_MAIL), read: true });
+    }
+    // The box's own word (`tellMovedAway`): as it would have gone here, never awaited.
+    const note = noteOf(letter.note);
+    if (note) {
+      await deliverNote(place.target, letter.to, messageID(), cutText(letter.text), note);
+      return done();
     }
     const sender = nameOf(letter.from) ?? (IS_MAC ? "another agent" : `an agent on ${HERE}`);
     const by = letter.from ?? "unknown";
@@ -329,7 +341,7 @@ export async function deliverLeftAnswers(now = Date.now(), targets: Target[] = p
       const text = composeLetter(name, String(answer.from ?? "unknown"), answer.text, false);
       const place = await placeOfSession(answer.to, targets);
       // Moved to another computer since: to it there, as a letter.
-      const there = place === null && tellMovedAway(answer.to, text);
+      const there = place === null && tellMovedAway(answer.to, text, { from: name, words: answer.text, delivery: "steer" });
       if (place === null && !there && !bridgeRuns && now - fs.statSync(taken).mtimeMs <= LETTER_LIFE) throw new Error("Its coding agents aren't running here now.");
       const kuvo = place?.data?.metadata?.kuvo ?? {};
       if (place && !place.data?.parentID && !kuvo.seat && !isPutAway(place.data as PutAwayable)) {
@@ -347,8 +359,11 @@ export async function deliverLeftAnswers(now = Date.now(), targets: Target[] = p
 // JSON, they can be several times as many bytes as characters); null if even a short one won't.
 export function letterMail(peer: Pick<Peer, "key" | "address">, letter: MailedLetter, link: LinkState, now = Date.now()): Buffer | null {
   const words = String(letter.text ?? "");
+  const { note } = letter;
   for (const most of [LETTER_BYTES, LETTER_BYTES / 4, 2000]) {
-    const bytes = mailFor(peer, { letter: { ...letter, text: prefixBytes(words, most) }, at: now }, link);
+    // (A note's words and line too: each is at most what its text is, so it all fits.)
+    const cut = note ? { note: { ...note, words: prefixBytes(note.words, most), ...(note.line !== undefined ? { line: prefixBytes(note.line, most) } : {}) } } : {};
+    const bytes = mailFor(peer, { letter: { ...letter, text: prefixBytes(words, most), ...cut }, at: now }, link);
     if (bytes) return bytes;
   }
   return null;
@@ -456,7 +471,8 @@ export function sendOutbox(host: Pick<LinkHost, "send">, link: LinkState | null 
     }
     letterTries.set(id, now);
     const bytes = letterMail(peer, { id, from: letter.from, to: letter.to, text: cutText(letter.text), wait: letter.wait === true, at: made,
-      ...(letter.answers ? { answers: letter.answers } : {}), ...(isObject(letter.read) ? { read: typeof letter.read.query === "string" ? { query: letter.read.query } : {} } : {}) }, link, now);
+      ...(letter.answers ? { answers: letter.answers } : {}), ...(isObject(letter.read) ? { read: typeof letter.read.query === "string" ? { query: letter.read.query } : {} } : {}),
+      ...(noteOf(letter.note) ? { note: noteOf(letter.note)! } : {}) }, link, now);
     if (!bytes) {
       fs.rmSync(file, { force: true });
       if (letter.wait === true) reply(id, { failed: "It's too long to send." });
