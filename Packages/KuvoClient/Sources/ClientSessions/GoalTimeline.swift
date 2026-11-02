@@ -166,8 +166,29 @@ public struct GoalTimeline: Sendable {
         let long = window() != nil
         let done = lanes.filter { $0.step.state == .done || $0.step.state == .skipped }
         let later = lanes.filter { $0.step.state == .todo }
-        var foldsDone = (long && !done.isEmpty) || (lanes.count > 6 && done.count >= 2)
-        var foldsLater = long && later.count > 2
+        return rows(foldsDone: (long && !done.isEmpty) || (lanes.count > 6 && done.count >= 2), foldsLater: long && later.count > 2, showsDone: showsDone, showsLater: showsLater)
+    }
+
+    /// The rows the goal bar lists, top to bottom, whatever the goal's length: the steps done
+    /// folded to one row (opened with `showsDone`), phases heading their steps, and more than five
+    /// steps not begun folded to one row at the end (opened with `showsLater`). A fold that would
+    /// leave nothing else to see doesn't fold.
+    public func list(showsDone: Bool = false, showsLater: Bool = false) -> [Row] {
+        let done = lanes.filter { $0.step.state == .done || $0.step.state == .skipped }
+        let later = lanes.filter { $0.step.state == .todo }
+        return rows(foldsDone: !done.isEmpty, foldsLater: later.count > 5, showsDone: showsDone, showsLater: showsLater)
+    }
+
+    /// What of the axis a step's track shows: a long goal's days around now (`window`), else, or
+    /// `whole`, the whole goal.
+    public func shown(whole: Bool = false, calendar: Calendar = .current) -> DateInterval {
+        (whole ? nil : window(calendar: calendar)) ?? DateInterval(start: start, end: max(start, end))
+    }
+
+    private func rows(foldsDone: Bool, foldsLater: Bool, showsDone: Bool, showsLater: Bool) -> [Row] {
+        var foldsDone = foldsDone, foldsLater = foldsLater
+        let done = lanes.filter { $0.step.state == .done || $0.step.state == .skipped }
+        let later = lanes.filter { $0.step.state == .todo }
         let rest = lanes.filter { lane in !(foldsDone && done.contains { $0.id == lane.id }) && !(foldsLater && later.contains { $0.id == lane.id }) }
         if rest.isEmpty {
             // Only folds would show: what's in the bigger stays open.

@@ -1,4 +1,5 @@
 import Foundation
+import OpenCodeKit
 
 // A bot's goal and its plan, as both apps show it (PROTOCOL.md, "Work › Goals"): the card a bot puts
 // to you, the goal under way with a track for each step, what waits for you, what's paused at a
@@ -434,6 +435,77 @@ public enum GoalPlanWords {
 
     /// "2 of 5".
     public static func progress(_ goal: GoalPlan) -> String { "\(goal.done) of \(goal.steps.count)" }
+
+    /// The goal's name on its bar, in a few words ("Landing page"): the one the bot gave it, or,
+    /// for a plan kept before bots named theirs, the goal itself where it's that short.
+    public static func name(_ goal: GoalPlan) -> String {
+        if let title = goal.title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty { return title }
+        let words = goal.goal.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !words.isEmpty && words.split(whereSeparator: \.isWhitespace).count <= 4 ? words : "Goal"
+    }
+
+    /// Why a goal is paused, in a word, beside "Paused".
+    public static func pausedBy(_ by: Goal.PausedBy) -> String {
+        switch by {
+        case .you: "You"
+        case .limit: "Limit"
+        case .error: "Error"
+        case .stalled: "Stalled"
+        }
+    }
+
+    /// Where a step stands, in the few words beside its row.
+    public struct Said: Equatable, Sendable {
+        public enum Tone: Sendable { case plain, needsYou, quiet }
+        /// Nil where its mark says it all (a step done, one with nothing to wait for).
+        public let text: String?
+        public let tone: Tone
+    }
+
+    /// What a step's row says beside its name: what the bot counted for one under way ("5 of 8
+    /// pages"), "Needs you", until when one's paused, the step one not begun waits for ("After Buy
+    /// the domain", "After 2 steps").
+    public static func state(of step: GoalPlan.Step, in goal: GoalPlan, now: Date = .now, timeZone: TimeZone = .current, locale: Locale = .current) -> Said {
+        switch step.state {
+        case .doing:
+            return Said(text: underWay(step), tone: .plain)
+        case .waiting:
+            return Said(text: "Needs you", tone: .needsYou)
+        case .paused:
+            let until = step.resumesDate ?? goal.paused.first { $0.session.map(step.sessions.contains) ?? false }?.untilDate
+            return Said(text: until.map { "Until \(when($0, now: now, timeZone: timeZone, locale: locale))" } ?? "Paused", tone: .quiet)
+        case .todo:
+            let after = step.after.compactMap { id in goal.steps.first { $0.id == id && $0.state != .done && $0.state != .skipped } }
+            return Said(text: after.isEmpty ? nil : after.count == 1 ? "After \(after[0].text)" : "After \(after.count) steps", tone: .quiet)
+        case .done:
+            return Said(text: step.note, tone: .quiet)
+        case .skipped:
+            return Said(text: "Set aside", tone: .quiet)
+        }
+    }
+
+    /// Under a goal's steps, when it's likely done and when it's due, where either is known:
+    /// "Likely done Sat · due Mon, Nov 10".
+    public static func finish(_ timeline: GoalTimeline, timeZone: TimeZone = .current, locale: Locale = .current) -> String? {
+        let said = [
+            timeline.finish.map { "Likely done \(when($0, now: timeline.now, timeZone: timeZone, locale: locale))" },
+            timeline.deadline.map { "due \(when($0, now: timeline.now, timeZone: timeZone, locale: locale))" },
+        ].compactMap { $0 }
+        guard let first = said.first else { return nil }
+        return ([first.prefix(1).uppercased() + first.dropFirst()] + said.dropFirst()).joined(separator: " · ")
+    }
+
+    /// A time as a row says it: "15:20" today, "Sat" within the week, "Mon, Nov 10" further.
+    static func when(_ date: Date, now: Date, timeZone: TimeZone, locale: Locale) -> String {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        var style = Date.FormatStyle(timeZone: timeZone)
+        style = calendar.isDate(date, inSameDayAs: now) ? style.hour().minute()
+            : abs(date.timeIntervalSince(now)) < 6 * 86_400 ? style.weekday(.abbreviated)
+            : style.weekday(.abbreviated).month(.abbreviated).day()
+        style.locale = locale
+        return date.formatted(style)
+    }
 
     /// While it waits for a time, when it goes on: "Next: Mon 09:00", with the date beyond a week
     /// ("Next: Mon 23 Nov at 09:00"); nil while it can go on now.
