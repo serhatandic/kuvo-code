@@ -31,7 +31,7 @@ public enum MoveWords {
     /// next. Before the switch, a computer away a long while leaves it where it was (its box takes it
     /// back), so it doesn't promise it carries on.
     public static func waitingCard(for computer: String, place: String) -> (title: String, message: String) {
-        ("Moving to \(place)", "Waiting for \(computer) to come back. Then it carries on, or, after a long wait, it stays where it was and you can move it again. Write meanwhile, and send once it’s there.")
+        ("Moving to \(place)", "Waiting for \(computer) to come back. It carries on then, or stays where it was if \(computer) is away long. You can write meanwhile, and send once it’s moved.")
     }
 
     /// Move to Computer's question before a move: "Move “Trip plans” to lab?", with what goes and

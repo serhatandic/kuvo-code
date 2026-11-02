@@ -22,7 +22,7 @@ struct MoveWordsTests {
         #expect(card.title == "Moving to this Mac")
         #expect(card.message.hasPrefix("Waiting for devbox to come back."))
         // Never a promise it carries on: away long enough, it's taken back.
-        #expect(card.message.contains("it stays where it was"))
+        #expect(card.message.contains("stays where it was if devbox is away long"))
     }
 
     @Test func howFarItIsIsSaidAsOtherProgressIs() {
