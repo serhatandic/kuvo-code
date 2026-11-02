@@ -1,4 +1,6 @@
+import AppKit
 import CoreGraphics
+import SwiftUI
 import Testing
 @testable import KuvoCode
 
@@ -34,5 +36,25 @@ struct BoxStripTests {
         #expect(shown(room: 150, selected: 1, widths: two) == [0, 1])
         // Before the room is known, all of them, rather than none.
         #expect(shown(room: 0, selected: 0) == Array(0..<8))
+    }
+
+    /// A long name is cut where its width ends, never drawn over the name beside it.
+    @Test func aLongNameIsCutNotSpilled() throws {
+        let name = Text("build-server-in-the-basement-with-a-very-long-name.local")
+            .font(.system(size: 12.5, weight: .semibold))
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .modifier(BoxNameStrip.NameWidth())
+        let renderer = ImageRenderer(content: HStack(spacing: 0) { name; Spacer(minLength: 0) }.frame(width: 400, height: 20))
+        renderer.scale = 1
+        let image = try #require(renderer.cgImage)
+        let width = image.width, height = image.height
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        let context = try #require(CGContext(data: &pixels, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+                                             space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        let inked = (0..<width).filter { x in (0..<height).contains { y in pixels[(y * width + x) * 4 + 3] > 0 } }
+        #expect(!inked.isEmpty)
+        #expect((inked.max() ?? 0) <= 150, "drawn out to \(inked.max() ?? 0) pt")
     }
 }

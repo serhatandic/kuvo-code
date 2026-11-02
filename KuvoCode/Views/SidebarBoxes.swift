@@ -165,9 +165,7 @@ struct BoxNameStrip: View {
                     .foregroundStyle(name.isOn ? AnyShapeStyle(.primary) : name.isAway ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.secondary))
                     .lineLimit(1)
                     .truncationMode(.middle)
-                    .frame(maxWidth: 150, alignment: .leading)
-                    // As wide as the name, never the room it's offered.
-                    .fixedSize(horizontal: true, vertical: false)
+                    .modifier(NameWidth())
                 if let connection = name.connection {
                     MachineIndicator(connection: connection, size: 5, quiet: true, progress: name.progress)
                 } else if let news = name.news {
@@ -184,6 +182,15 @@ struct BoxNameStrip: View {
         .accessibilityLabel(name.title)
         .accessibilityValue(name.said ?? "")
         .accessibilityAddTraits(name.isOn ? .isSelected : [])
+    }
+
+    /// A name as wide as it is, never the room it's offered, up to a width it's cut at.
+    struct NameWidth: ViewModifier {
+        func body(content: Content) -> some View {
+            content
+                .frame(maxWidth: 150, alignment: .leading)
+                .fixedSize(horizontal: true, vertical: false)
+        }
     }
 
     /// "+3", and the menu of the computers it stands for.
