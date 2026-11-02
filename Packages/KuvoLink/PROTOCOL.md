@@ -1663,7 +1663,8 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     never started; `409` when a session has it after all). `200 {}`; `409 {"message"}` while an
     agent works there; `502 {"message"}` when the engine couldn't remove it; `404 {"message"}` for
     one it doesn't have (removed already): a client takes it as gone.
-  - A worktree goes with its last session, as in Codex: once a session has run in it, the box
+  - A worktree goes with its last session, as in Codex (bridge 0.9.176; a box from before
+    keeps every worktree until Remove…, and has no `restorable`): once a session has run in it, the box
     removes it when every session there is archived or deleted and no agent works there (as it
     hears of each, and as it follows its engine again). It counts every session of its engine and
     the coding agents' bridge, and tidies nothing while the bridge is down. Archived sessions left:
@@ -1676,7 +1677,7 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     saved changes or the commit it was at are still there). An entry and its saved changes go once
     no session is left there. A client shows one on an open (unarchived) session working in
     `folder`.
-  - `POST kuvo/worktrees/restore {"folder"}` brings one back where it was, on its branch (made
+  - `POST kuvo/worktrees/restore {"folder"}` (bridge 0.9.176) brings one back where it was, on its branch (made
     again from where it was if it's gone), with its saved changes as changes not committed, and
     tells each session there → `200 {project, root, folder, branch, base?}`, kept again (marked
     `restored`: git made it, so git removes it), and not removed again until a session there is
