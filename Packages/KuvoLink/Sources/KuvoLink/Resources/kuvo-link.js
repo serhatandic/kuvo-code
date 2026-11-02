@@ -15002,6 +15002,7 @@ var VAULT_ACTIVITY = object({
   "session?": string,
   "sessionName?": string,
   "client?": string,
+  "mine?": bool,
   "site?": string,
   "program?": string,
   "how?": string,
@@ -20622,16 +20623,16 @@ async function mayUse(item, caller, use) {
   note2({ what: "asked", ...itemOf(item), ...whoOf(caller), ...where });
   const answered = await ask({ kind: "use", ...whoOf(caller), ...caller.group ? { group: caller.group } : {}, item: item.id, itemName: item.name, ...use.site ? { site: use.site } : {}, ...use.why ? { why: use.why } : {}, ...machineName() ? { machine: machineName() } : {} }, use.signal);
   if (answered.answer === "no") {
-    note2({ what: "declined", ...itemOf(item), ...whoOf(caller), ...where, ...answered.client ? { client: answered.client } : {} });
+    note2({ what: "declined", ...itemOf(item), ...whoOf(caller), ...where, ...answered.client ? { client: answered.client, by: answered.by } : {} });
     return { ok: false, message: `The user didn't let you use “${item.name}”.` };
   }
   const always = answered.answer === "always" ? alwaysFor2(caller) : null;
   if (always) {
     setGrant(item.id, always, "own");
-    note2({ what: "granted", ...itemOf(item), ...whoOf(caller), how: "own", ...answered.client ? { client: answered.client } : {} });
+    note2({ what: "granted", ...itemOf(item), ...whoOf(caller), how: "own", ...answered.client ? { client: answered.client, by: answered.by } : {} });
   }
   const allowed = always ? "always" : "once";
-  note2({ what: "allowed", ...itemOf(item), ...whoOf(caller), ...where, how: allowed, ...answered.client ? { client: answered.client } : {} });
+  note2({ what: "allowed", ...itemOf(item), ...whoOf(caller), ...where, how: allowed, ...answered.client ? { client: answered.client, by: answered.by } : {} });
   return { ok: true, how: allowed };
 }
 function tripwire(item, caller, site) {
@@ -22113,7 +22114,7 @@ async function askForItem(caller, args, signal) {
     setGrant(item.id, always, "own");
   else
     allowOnce(caller, item.id);
-  note2({ what: always ? "granted" : "allowed", item: item.id, itemName: item.name, kind: item.kind, ...caller.bot ? { bot: caller.bot, botName: caller.botName } : {}, ...caller.root ? { session: caller.root, sessionName: caller.sessionName } : {}, how: always ? "own" : "once", ...answered.client ? { client: answered.client } : {} });
+  note2({ what: always ? "granted" : "allowed", item: item.id, itemName: item.name, kind: item.kind, ...caller.bot ? { bot: caller.bot, botName: caller.botName } : {}, ...caller.root ? { session: caller.root, sessionName: caller.sessionName } : {}, how: always ? "own" : "once", ...answered.client ? { client: answered.client, by: answered.by } : {} });
   const once = !always;
   return { text: `The user gave you “${item.name}” (a ${KIND_WORDS[item.kind]}${item.sites.length ? ` for ${item.sites.join(", ")}` : ""})${once ? ", for this once" : ""}. Use it by that name${item.kind === "login" ? " with browser_sign_in" : " with vault_run or browser_fill"}.`, isError: false };
 }
@@ -22255,17 +22256,19 @@ function shownGrants(grants) {
 function clientOf({ request, phone }) {
   if (phone?.key) {
     const key = phone.key.toString("base64url");
-    return readLink()?.phones?.find((each) => each.key === key)?.name || "iPhone";
+    return { name: readLink()?.phones?.find((each) => each.key === key)?.name || "iPhone", by: `phone:${key}` };
   }
+  const mac = { name: "Mac", by: "mac" };
   if (request.fromApp)
-    return "Mac";
+    return mac;
   if (request.vaultClient)
-    return "Mac";
-  if (provedRequest(request))
-    return "Mac";
+    return mac;
+  const proved = provedRequest(request);
+  if (proved)
+    return { name: "Mac", by: `mac:${proved}` };
   const key = request.headers["x-kuvo-vault-key"];
   if (typeof key === "string" && unlockWith(key))
-    return "Mac";
+    return mac;
   return null;
 }
 var PROOF_FOR = 300000;
@@ -22277,33 +22280,33 @@ function provedMac(given, tag = "kuvo-vault-key", rest = "") {
   const nonce = typeof given.nonce === "string" && /^[A-Za-z0-9_-]{16,64}$/.test(given.nonce) ? given.nonce : "";
   const sign = mac ? macSign(link, mac) : null;
   if (!sign || !nonce || !(link?.macs ?? []).includes(mac) || !Number.isFinite(at) || Math.abs(Date.now() - at) > PROOF_FOR || typeof given.proof !== "string")
-    return false;
+    return null;
   const now = Date.now();
   for (const [used, until] of usedProofs)
     if (until < now)
       usedProofs.delete(used);
   if (usedProofs.has(nonce))
-    return false;
+    return null;
   try {
     const key = crypto34.createPublicKey({ key: Buffer.concat([ED_SPKI2, Buffer.from(sign, "base64url")]), format: "der", type: "spki" });
     const signature = Buffer.from(given.proof, "base64url");
     const good = signature.length === 64 && typeof link?.id === "string" && crypto34.verify(null, Buffer.from(`${tag}\x00${link.id}\x00${at}\x00${nonce}${rest}`), key, signature);
     if (good)
       usedProofs.set(nonce, now + 2 * PROOF_FOR);
-    return good;
+    return good ? mac : null;
   } catch {
-    return false;
+    return null;
   }
 }
 function provedRequest(request) {
   const header = request.headers["x-kuvo-vault-proof"];
   if (typeof header !== "string")
-    return false;
+    return null;
   let given = {};
   try {
     given = JSON.parse(Buffer.from(header, "base64url").toString("utf8"));
   } catch {
-    return false;
+    return null;
   }
   const hash = crypto34.createHash("sha256").update(request.body ?? Buffer.alloc(0)).digest("hex");
   return provedMac(given, `kuvo-vault-request`, `\x00${request.method.toUpperCase()}\x00${request.path}\x00${hash}`);
@@ -22418,20 +22421,21 @@ async function* answerVault(context) {
     const bot = typeof given.bot === "string" && /^[A-Za-z0-9_-]{1,100}$/.test(given.bot) ? given.bot : undefined;
     const paused = given.paused === true;
     setPaused(paused, bot);
-    note2({ what: paused ? "paused" : "resumed", client, ...bot ? { bot } : {} });
+    note2({ what: paused ? "paused" : "resumed", client: client.name, by: client.by, ...bot ? { bot } : {} });
     return yield* json(200, vaultState());
   }
   if (route === "kuvo/vault/activity") {
     if (method !== "GET")
       return yield* json(405, {});
     const query = new URLSearchParams(request.path.split("?")[1] ?? "");
-    return yield* json(200, { entries: readActivity({
+    const entries = readActivity({
       item: query.get("item") ?? undefined,
       bot: query.get("bot") ?? undefined,
       session: query.get("session") ?? undefined,
       before: Number(query.get("before")) || undefined,
       limit: Number(query.get("limit")) || undefined
-    }) });
+    });
+    return yield* json(200, { entries: entries.map(({ by, ...entry }) => by === client.by ? { ...entry, mine: true } : entry) });
   }
   if (route === "kuvo/vault/grants") {
     if (method === "GET")
@@ -22443,7 +22447,7 @@ async function* answerVault(context) {
       return yield* json(400, { message: 'Send {"item", "who": {"bot"} or {"project"} or {"everyone": true}, "how": "own" | "ask" | null}.' });
     const grants = setGrant(given.item, who, given.how ?? null);
     const item = itemByID(given.item);
-    note2({ what: given.how ? "granted" : "ungranted", client, ...item ? { item: item.id, itemName: item.name, kind: item.kind } : {}, ...who.bot ? { bot: who.bot } : {}, ...typeof given.how === "string" ? { how: given.how } : {} });
+    note2({ what: given.how ? "granted" : "ungranted", client: client.name, by: client.by, ...item ? { item: item.id, itemName: item.name, kind: item.kind } : {}, ...who.bot ? { bot: who.bot } : {}, ...typeof given.how === "string" ? { how: given.how } : {} });
     return yield* json(200, { grants: shownGrants(grants) });
   }
   if (route === "kuvo/vault/asks" || route === "kuvo/vault/asks/events") {
@@ -22477,7 +22481,7 @@ async function* answerVault(context) {
     const item = typeof given.item === "string" ? given.item : undefined;
     if (item && !itemByID(item))
       return yield* json(404, { message: "That item isn't in this vault." });
-    return yield* json(answer2(idOf2(parts[3]), { answer, ...item ? { item } : {}, client }) ? 200 : 404, {});
+    return yield* json(answer2(idOf2(parts[3]), { answer, ...item ? { item } : {}, client: client.name, by: client.by }) ? 200 : 404, {});
   }
   if (route === "kuvo/vault/items") {
     if (method !== "POST")
@@ -22488,7 +22492,7 @@ async function* answerVault(context) {
     if (isLocked())
       return yield* json(423, { message: LOCKED });
     const item = await addItem(given);
-    note2({ what: "added", client, item: item.id, itemName: item.name, kind: item.kind });
+    note2({ what: "added", client: client.name, by: client.by, item: item.id, itemName: item.name, kind: item.kind });
     return yield* json(200, { item, ...key ? { key } : {} });
   }
   if (parts[2] === "items" && parts.length >= 4) {
@@ -22502,19 +22506,19 @@ async function* answerVault(context) {
       if (!item)
         return yield* json(404, { message: "That item isn't in this vault." });
       const values = await valuesOf(id);
-      note2({ what: "shown", client, item: item.id, itemName: item.name, kind: item.kind });
+      note2({ what: "shown", client: client.name, by: client.by, item: item.id, itemName: item.name, kind: item.kind });
       return yield* json(200, { values });
     }
     if (parts.length !== 4)
       return yield* json(404, {});
     if (method === "PATCH") {
       const item = await changeItem(id, given);
-      note2({ what: "changed", client, item: item.id, itemName: item.name, kind: item.kind });
+      note2({ what: "changed", client: client.name, by: client.by, item: item.id, itemName: item.name, kind: item.kind });
       return yield* json(200, { item });
     }
     if (method === "DELETE") {
       const item = await removeItem(id);
-      note2({ what: "removed", client, item: item.id, itemName: item.name, kind: item.kind });
+      note2({ what: "removed", client: client.name, by: client.by, item: item.id, itemName: item.name, kind: item.kind });
       return yield* json(200, {});
     }
     return yield* json(405, {});

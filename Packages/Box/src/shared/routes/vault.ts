@@ -61,7 +61,8 @@ export const VAULT_GRANTS = object({ grants: list(VAULT_GRANT) });
 
 /** One line of activity: when, what happened, the item (by id and its name then), who (a bot, a
  * session and its name, or you on a client), where it went (a site, a program, a folder), how it
- * was allowed, and why the agent said it needed it. Never a value. */
+ * was allowed, and why the agent said it needed it. Never a value. `mine`: the client reading it
+ * did it (by who it is, not its name, which phones may share). */
 export const VAULT_ACTIVITY = object({
   id: string,
   at: number,
@@ -74,6 +75,7 @@ export const VAULT_ACTIVITY = object({
   "session?": string,
   "sessionName?": string,
   "client?": string,
+  "mine?": bool,
   "site?": string,
   "program?": string,
   "how?": string,

@@ -256,12 +256,15 @@ public struct VaultActivity: Codable, Equatable, Identifiable, Sendable {
     public var session: String?
     public var sessionName: String?
     public var client: String?
+    /// Whether the client reading it did it: the box tells by who it is, not its name, which phones
+    /// may share ("iPhone").
+    public var mine: Bool?
     public var site: String?
     public var program: String?
     public var how: String?
     public var why: String?
 
-    public init(id: String, at: Double, what: String, item: String? = nil, itemName: String? = nil, kind: VaultItem.Kind? = nil, bot: String? = nil, botName: String? = nil, session: String? = nil, sessionName: String? = nil, client: String? = nil, site: String? = nil, program: String? = nil, how: String? = nil, why: String? = nil) {
+    public init(id: String, at: Double, what: String, item: String? = nil, itemName: String? = nil, kind: VaultItem.Kind? = nil, bot: String? = nil, botName: String? = nil, session: String? = nil, sessionName: String? = nil, client: String? = nil, mine: Bool? = nil, site: String? = nil, program: String? = nil, how: String? = nil, why: String? = nil) {
         self.id = id
         self.at = at
         self.what = what
@@ -273,6 +276,7 @@ public struct VaultActivity: Codable, Equatable, Identifiable, Sendable {
         self.session = session
         self.sessionName = sessionName
         self.client = client
+        self.mine = mine
         self.site = site
         self.program = program
         self.how = how
@@ -284,14 +288,11 @@ public struct VaultActivity: Codable, Equatable, Identifiable, Sendable {
     /// Whether it's one you'd want to look at: refused, or a bot paused.
     public var isWarning: Bool { what == "refused" && how != "no grant" }
 
-    /// What happened, in a sentence both apps show.
-    public var sentence: String { sentence(here: nil) }
-
-    /// What happened, in a sentence both apps show. `here`: the client reading it ("Mac" in the
-    /// Mac app, the phone's name on a phone). What you did from there says only what happened
-    /// ("Added “GitHub”"); who and where are said when it was somewhere else.
-    public func sentence(here: String?) -> String {
-        if let here, client == here {
+    /// What happened, in a sentence both apps show. What you did from the client reading it
+    /// (`mine`) says only what happened ("Added “GitHub”"); who and where are said when it was
+    /// somewhere else.
+    public var sentence: String {
+        if mine == true {
             let item = itemName.map { "“\($0)”" } ?? "an item"
             let agent = botName ?? sessionName ?? "an agent"
             switch what {
@@ -331,6 +332,11 @@ public struct VaultActivity: Codable, Equatable, Identifiable, Sendable {
         default: return "\(who): \(what) \(item)"
         }
     }
+
+    /// The sentence; `here` no longer counts, since phones may share a name: the box says which
+    /// lines are the reader's own (`mine`).
+    @available(*, deprecated, message: "Use `sentence`: the box marks the reader's own lines (`mine`).")
+    public func sentence(here _: String?) -> String { sentence }
 }
 
 /// What an item is made or changed with (`POST kuvo/vault/items`, `PATCH kuvo/vault/items/<id>`).

@@ -2941,9 +2941,14 @@ what runs as you on a machine (its `bin/kuvo-link.js`, its engine) could take it
 - `POST kuvo/vault/pause {paused, bot?}` → the state: every agent's use, or one bot's (or, by its
   root session, a conversation's that isn't a bot's).
 - `GET kuvo/vault/activity?item=&bot=&session=&before=&limit=` → `{entries}`, newest first:
-  `{id, at, what, item?, itemName?, kind?, bot?, botName?, session?, sessionName?, client?, site?,
-  program?, how?, why?}`, never a value. `what` is one of `used`, `asked`, `allowed`, `declined`,
+  `{id, at, what, item?, itemName?, kind?, bot?, botName?, session?, sessionName?, client?, mine?,
+  site?, program?, how?, why?}`, never a value. `what` is one of `used`, `asked`, `allowed`, `declined`,
   `refused`, `added`, `changed`, `removed`, `granted`, `ungranted`, `paused`, `resumed`, `shown`.
+  `client` names the client you did it from (`Mac`, or a phone's name, which phones may share);
+  `mine: true` marks what the client asking did itself, by who it is: a phone by the key it paired
+  with, a Mac by its proof's key (this Mac's app, and a Mac with the unlock key, as one Mac). A
+  client says only what happened for its own lines and who and where for the rest. The box keeps
+  who did each; no client hears another's key.
 - `GET kuvo/vault/asks` → `{asks}`, and `GET kuvo/vault/asks/events` (`application/x-ndjson`, the
   list now and on each change): what agents wait on you for, `{id, kind: "use" | "item", at,
   session?, sessionName?, bot?, botName?, item?, itemName?, need?, why?, site?, machine?, group?}`.

@@ -117,7 +117,7 @@ async function askForItem(caller: Caller, args: Record<string, unknown>, signal?
   const always = answered.answer === "always" ? alwaysFor(caller) : null;
   if (always) setGrant(item.id, always, "own");
   else allowOnce(caller, item.id);
-  note({ what: always ? "granted" : "allowed", item: item.id, itemName: item.name, kind: item.kind, ...(caller.bot ? { bot: caller.bot, botName: caller.botName } : {}), ...(caller.root ? { session: caller.root, sessionName: caller.sessionName } : {}), how: always ? "own" : "once", ...(answered.client ? { client: answered.client } : {}) });
+  note({ what: always ? "granted" : "allowed", item: item.id, itemName: item.name, kind: item.kind, ...(caller.bot ? { bot: caller.bot, botName: caller.botName } : {}), ...(caller.root ? { session: caller.root, sessionName: caller.sessionName } : {}), how: always ? "own" : "once", ...(answered.client ? { client: answered.client, by: answered.by } : {}) });
   const once = !always;
   return { text: `The user gave you “${item.name}” (a ${KIND_WORDS[item.kind]}${item.sites.length ? ` for ${item.sites.join(", ")}` : ""})${once ? ", for this once" : ""}. Use it by that name${item.kind === "login" ? " with browser_sign_in" : " with vault_run or browser_fill"}.`, isError: false };
 }
