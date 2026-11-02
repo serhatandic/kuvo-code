@@ -17,7 +17,7 @@ import { fileURLToPath } from "node:url";
 import { sshAgentsOf } from "./bot-keys-scenarios.js";
 import { atEnd, removeAtEnd } from "./at-end.js";
 // (Each test fails at its own time limit when what it waits for never comes, rather than holding up the run.)
-import { appears, asked, before, test } from "./vault-waits.js";
+import { asked, before, test } from "./vault-waits.js";
 
 // (Short: the vault's and the browser's sockets are in it.)
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kvf-")));
@@ -137,16 +137,18 @@ const keeper = net.createServer(socket => {
 await new Promise(resolve => keeper.listen(path.join(home, "run", "browser.sock"), resolve));
 atEnd(() => keeper.close());
 
-// The box's own process, which holds the vault, and where it tells what the vault asks you.
+// The box's own process, which holds the vault, and where it tells what the vault asks you. (A
+// file's setups run side by side: the one that needs it waits for it.)
 let box;
 let asksURL;
-before(async () => {
+let boxUp;
+before(() => (boxUp = (async () => {
   box = spawn(process.execPath, [script, "serve"], { env: { ...env, OPENCODE_PASSWORD: "box-pw" }, stdio: ["pipe", "pipe", "ignore"] });
   let out = "";
   box.stdout.setEncoding("utf8");
   const url = await new Promise(resolve => box.stdout.on("data", chunk => { out += chunk; if (out.includes("\n")) resolve(JSON.parse(out.split("\n")[0]).url); }));
   asksURL = `${url}/kuvo/vault/asks/events`;
-});
+})()));
 
 // The Mac over SSH: `box route`, with the vault's key when it has one.
 async function fromMac(method, route, body, key) {
@@ -196,12 +198,9 @@ const started = promise => {
 
 let key;
 before(async () => {
-  // Once its socket is there; and (its file appears a moment before it answers) asked again, each
-  // time it answers it isn't open yet.
-  const run = path.join(home, "run");
-  await appears(run, () => fs.existsSync(path.join(run, "vault.sock")));
-  let made;
-  do made = await fromMac("POST", "kuvo/vault/key", proof()); while (made.status === 503);
+  // (Its vault listens before the box says where it is.)
+  await boxUp;
+  const made = await fromMac("POST", "kuvo/vault/key", proof());
   assert.equal(made.status, 200, JSON.stringify(made.value));
   key = made.value.key;
   const added = await fromMac("POST", "kuvo/vault/items", { name: "GitHub", kind: "login", sites: ["github.com"], username: "ship-bot", values: { password: SECRET } }, key);

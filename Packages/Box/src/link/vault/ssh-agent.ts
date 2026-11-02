@@ -250,7 +250,13 @@ export function serveAgent(socket: string, source: AgentSource): net.Server {
     return server;
   }
   try { fs.rmSync(socket, { force: true }); } catch {}
-  server.listen(socket, () => { try { fs.chmodSync(socket, 0o600); } catch {} });
+  // Yours alone from the moment its file is there (it's bound as listen is called).
+  const old = process.umask(0o177);
+  try {
+    server.listen(socket);
+  } finally {
+    process.umask(old);
+  }
   server.unref();
   return server;
 }

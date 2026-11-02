@@ -93,8 +93,13 @@ async function start(more = {}) {
     });
     exited.then(code => reject(new Error(`serve exited ${code}: ${err}`)));
   });
-  // Its socket, once it listens (in its own home's run folder).
-  await appears(run, () => fs.existsSync(path.join(run, "vault.sock")));
+  // Its vault listens before it says where it is (in its own home's run folder): what the Mac's
+  // app asks it from then on finds it open.
+  if (!fs.existsSync(path.join(run, "vault.sock"))) {
+    child.kill("SIGTERM");
+    await exited;
+    assert.fail("the vault listens once the box says where it is");
+  }
   // A request from something on this machine: an agent's command, which has the box's files but no client's key.
   const local = async (method, route, body) => {
     const response = await fetch(`${url}/${route}`, { method, headers: { authorization: `Basic ${Buffer.from("opencode:box-pw").toString("base64")}`, "content-type": "application/json" }, body: body && method !== "GET" ? JSON.stringify(body) : undefined });
@@ -577,9 +582,8 @@ function noteConversation(note, folder) {
   fs.writeFileSync(path.join(notes, `.${note}`), folder);
   fs.renameSync(path.join(notes, `.${note}`), path.join(notes, note));
 }
-// Its agent's socket, if it has one open now. A socket's file is there from the moment it's bound,
-// before it listens; the box makes it yours alone once it does, so only that counts (and a wait
-// for an agent that never becomes yours alone fails).
+// Its agent's socket, if it has one open now: yours alone from the moment it's there (a wait for
+// an agent that never is fails).
 const agentOf = note => {
   const socket = socketOf(note);
   try {
