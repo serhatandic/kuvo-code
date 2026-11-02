@@ -16,6 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- The row under a reply, with when it ended, how long it took, Copy and Reply, shows when you hover over the reply, as your messages' does, and the last reply keeps it in view; what a turn changed, Stopped and Build It stay in view. Right-click a reply to copy or answer it, and hover over a time for the full date.
 - The model menu says "Free" once in a provider's title when all its models are free, instead of on every row, and leaves out a model's mark where it's the provider's own.
 - A goal's plan lines its lanes up when only some have a site, shows only the note of each lane once the plan is met, labels its days without crowding Today, with a date every few days in a long goal, and gives steps' names more room in a wide card.
 - Find in a conversation no longer covers the first message, and quoting several passages says how many; a quote's answer field opens when you click it, not on every quote at once.

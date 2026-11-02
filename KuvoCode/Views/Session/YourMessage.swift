@@ -95,6 +95,7 @@ struct YourMessage: View {
                 Text(MessageTime.sentAt(sent) + (fromPhone ? " · from iPhone" : ""))
                     .font(.caption)
                     .foregroundStyle(.tertiary)
+                    .help(SentTime.full(sent))
                     .padding(.trailing, 6)
                 if !text.isEmpty {
                     CopyButton(text: text, help: "Copy")
@@ -135,6 +136,7 @@ struct YourMessage: View {
         // menu as its actions.
         .accessibilityElement(children: .combine)
         .accessibilityLabel(spoken)
+        .accessibilityValue(SentTime.full(sent))
         .accessibilityActions {
             if !text.isEmpty { Button("Copy") { Clipboard.copy(text) } }
             ForEach(openable, id: \.session) { reference in

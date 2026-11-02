@@ -30,6 +30,8 @@ struct TranscriptView: View {
     @AppStorage(StepsDetail.key) private var stepsDetail = StepsDetail.summary
     @State private var scroller = ConversationScroller()
     @State private var rowCache = RowCache()
+    /// The turn the pointer is over, whose row (its time, Copy and Reply) shows.
+    @State private var hover = TurnHover()
     /// Find in the conversation (⌘F).
     @State private var find = ConversationFind()
     @Environment(\.isConversationShown) private var isShown
@@ -84,6 +86,7 @@ struct TranscriptView: View {
         }
         // The reply being written draws its words from it.
         .environment(model.writing)
+        .environment(hover)
         // What a widget writes back goes to this conversation's agent, as yours: as words, never
         // a command or keyword the page could run as you, and without your review comments.
         .environment(\.answerAgent) { text in model.send(text, for: nil, withComments: false) }
@@ -231,6 +234,7 @@ struct TranscriptView: View {
                 .equatable()
                 .environment(\.findHighlight, find.highlight(for: row.id))
                 .padding(.top, index == 0 ? 0 : row.spacing(after: rows[index - 1]))
+                .modifier(TurnRow(row: row, hover: hover, reply: model.reply(to:)))
         }
     }
 
@@ -251,6 +255,7 @@ struct TranscriptView: View {
                 .modifier(RowProbe(id: row.id))
                 #endif
                 .padding(.top, index == 0 ? 0 : row.spacing(after: rows[index - 1]))
+                .modifier(TurnRow(row: row, hover: hover, reply: model.reply(to:)))
                 .transition(Self.rowTransition)
         }
     }
@@ -292,11 +297,32 @@ struct TranscriptView: View {
         let key = RowCache.Key(version: model.transcriptVersion, detail: stepsDetail, revert: model.session.revert?.messageID, waiting: model.waiting.map(\.id))
         if rowCache.key == key { return rowCache.rows }
         let rows = Self.rows(of: model, catalog: catalog, detail: stepsDetail)
+        hover.turns = Self.turns(of: rows)
         // A whole history arriving at once (opening, loading more) comes without its rows fading in.
         rowCache.isBulk = abs(rows.count - rowCache.rows.count) > 3
         rowCache.key = key
         rowCache.rows = rows
         return rows
+    }
+
+    /// The turn each row of a reply is part of, by its end: the rows from your message to the
+    /// turn's end, which shows its row from any of them. Your message isn't one: it has its own.
+    static func turns(of rows: [Row]) -> [String: TurnHover.Turn] {
+        var turns: [String: TurnHover.Turn] = [:]
+        var since: [String] = []
+        for row in rows {
+            switch row {
+            case .user, .pending, .undone, .working:
+                since = []
+            case .turnEnd(let idle, let stats, _):
+                let turn = TurnHover.Turn(id: idle.id, text: stats.text.joined(separator: "\n\n"))
+                for id in since + [idle.id] { turns[id] = turn }
+                since = []
+            default:
+                since.append(row.id)
+            }
+        }
+        return turns
     }
 
     static func rows(of model: SessionModel, catalog: Catalog, detail stepsDetail: StepsDetail) -> [Row] {
@@ -809,7 +835,7 @@ private struct RowView: View, Equatable {
         case .turnEnd(let idle, let stats, let isLast):
             TurnEndView(idle: idle, stats: stats, directory: directory, retry: isLast && !isOffline && !takesNoMessages ? stats.message.map { message in { retry(message) } } : nil,
                         switchModel: isLast && !isOffline && !takesNoMessages ? switchModel : nil,
-                        build: isLast && stats.agent == "plan" ? buildPlan : nil, reply: reply)
+                        build: isLast && stats.agent == "plan" ? buildPlan : nil, reply: reply, isLast: isLast)
         case .shell(let shell):
             ShellRow(shell: shell)
         case .notice(_, _, let text):
@@ -1337,7 +1363,9 @@ struct ReasoningView: View {
     }
 }
 
-/// The end of a turn: how long it took and what it cost, or what went wrong.
+/// The end of a turn: what it did (the files it changed, Stopped, what went wrong) and, under the
+/// pointer, when it ended, how long it took and what it cost, with Copy and Reply. The last turn's
+/// shows all the time.
 private struct TurnEndView: View {
     let idle: Message.Idle
     let stats: TurnStats
@@ -1350,7 +1378,31 @@ private struct TurnEndView: View {
     /// Builds what a plan described; offered under Plan mode's last answer.
     var build: (() -> Void)?
     var reply: ((String) -> Void)?
+    /// The conversation ends here: its row stays in view.
+    var isLast = false
     @Environment(AppModel.self) private var app
+    @Environment(TurnHover.self) private var hover: TurnHover?
+    /// Its Copy or Reply has the keyboard (Tab, with keyboard navigation on): the row shows.
+    @FocusState private var focused: Helper?
+
+    private enum Helper { case copy, reply }
+
+    /// Its time, numbers, Copy and Reply show: the last turn's, one under the pointer, and one whose
+    /// buttons have the keyboard. KUVO_DEMO_SHOW_HOVER shows every turn's, and
+    /// KUVO_DEMO_HOVER_TEXT the one whose reply says that, for screenshots.
+    private var isShown: Bool {
+        #if DEBUG
+        let environment = ProcessInfo.processInfo.environment
+        if environment["KUVO_DEMO_SHOW_HOVER"] != nil { return true }
+        if let text = environment["KUVO_DEMO_HOVER_TEXT"], stats.text.contains(where: { $0.contains(text) }) { return true }
+        #endif
+        return isLast || hover?.turn == idle.id || focused != nil
+    }
+
+    /// When the turn ended.
+    private var ended: Date {
+        Date(timeIntervalSince1970: idle.time.created / 1000)
+    }
 
     /// What kind of failure it was, for the card's headline and its way out.
     private var kind: FailureWords.Kind {
@@ -1414,7 +1466,7 @@ private struct TurnEndView: View {
                         if !stats.files.isEmpty {
                             TurnFiles(files: stats.files, directory: directory)
                         }
-                        replyButtons
+                        helpers
                     }
                 }
             }
@@ -1427,19 +1479,16 @@ private struct TurnEndView: View {
                 if !stats.files.isEmpty {
                     TurnFiles(files: stats.files, directory: directory)
                 }
-                replyButtons
+                helpers
             }
         case .succeeded:
+            // What it did first, in view; what shows under the pointer after it, so nothing in
+            // view sits after a gap.
             HStack(spacing: 6) {
-                if !parts.isEmpty {
-                    Text(parts.joined(separator: " · "))
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                }
                 if !stats.files.isEmpty {
                     TurnFiles(files: stats.files, directory: directory)
                 }
-                replyButtons
+                helpers
                 if let build {
                     Button("Build It", action: build)
                         .buttonStyle(.glass)
@@ -1451,16 +1500,28 @@ private struct TurnEndView: View {
         }
     }
 
-    /// Copy and Reply, for what it said, however the turn ended.
-    @ViewBuilder private var replyButtons: some View {
-        if !stats.text.isEmpty {
-            CopyButton(text: stats.text.joined(separator: "\n\n"), help: "Copy the Reply")
-            if let reply {
-                MessageActionButton(symbol: "arrowshape.turn.up.left", help: "Reply: quotes the whole reply in the composer") {
-                    reply(stats.text.joined(separator: "\n\n"))
+    /// When it ended and its numbers, then Copy and Reply for what it said, however the turn
+    /// ended: always laid out, shown as `isShown` says, so nothing moves when they appear.
+    private var helpers: some View {
+        HStack(spacing: 6) {
+            Text(([MessageTime.sentAt(ended)] + parts).joined(separator: " · "))
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .help(SentTime.full(ended))
+                .accessibilityLabel(([SentTime.full(ended)] + parts).joined(separator: ", "))
+            if !stats.text.isEmpty {
+                CopyButton(text: stats.text.joined(separator: "\n\n"), help: "Copy the Reply")
+                    .focused($focused, equals: .copy)
+                if let reply {
+                    MessageActionButton(symbol: "arrowshape.turn.up.left", help: "Reply: quotes the whole reply in the composer") {
+                        reply(stats.text.joined(separator: "\n\n"))
+                    }
+                    .focused($focused, equals: .reply)
                 }
             }
         }
+        .opacity(isShown ? 1 : 0)
+        .animation(.easeOut(duration: 0.12), value: isShown)
     }
 
     private var parts: [String] {
@@ -1595,9 +1656,81 @@ enum MessageTime {
     }
 
     static func sentAt(_ date: Date) -> String {
-        if Calendar.current.isDateInToday(date) { return date.formatted(date: .omitted, time: .shortened) }
-        if Calendar.current.isDateInYesterday(date) { return "Yesterday " + date.formatted(date: .omitted, time: .shortened) }
-        return date.formatted(.dateTime.month(.abbreviated).day().hour().minute())
+        SentTime.short(date)
+    }
+}
+
+/// Which turn of the conversation the pointer is over. A reply is rows of its own (its words,
+/// steps, what it made, its end), so the row under it (its time, Copy and Reply) shows from any of
+/// them, as a message's does from its bubble.
+@Observable final class TurnHover {
+    /// A turn by its end, with all it said: what its Copy and Reply take.
+    struct Turn: Equatable {
+        let id: String
+        let text: String
+    }
+
+    /// Each reply row's turn (see `TranscriptView.turns(of:)`), read as the pointer comes.
+    @ObservationIgnored var turns: [String: Turn] = [:]
+    /// The turn under the pointer, by its end.
+    private(set) var turn: String?
+    /// The row under the pointer: leaving one after coming into the next leaves the turn shown.
+    @ObservationIgnored private var row: String?
+
+    func enter(_ row: String) {
+        self.row = row
+        let turn = turns[row]?.id
+        if self.turn != turn { self.turn = turn }
+    }
+
+    func leave(_ row: String) {
+        guard self.row == row else { return }
+        self.row = nil
+        if turn != nil { turn = nil }
+    }
+}
+
+/// A row in the conversation, as part of its turn: under the pointer, the turn's row shows; on a
+/// reply's words, a right-click and VoiceOver offer Copy Reply and Reply, for all the turn said
+/// (its words alone while it's still being written).
+private struct TurnRow: ViewModifier {
+    let row: Row
+    let hover: TurnHover
+    let reply: ((String) -> Void)?
+
+    /// The row's words, on a reply's words.
+    private var words: String? {
+        switch row {
+        case .assistant(let message, _), .more(let message, _):
+            let words = message.content.compactMap { if case .text(let part) = $0 { part.text } else { nil } }.joined(separator: "\n\n")
+            return words.isEmpty ? nil : words
+        default:
+            return nil
+        }
+    }
+
+    /// All the turn said, once it's ended (read as it's asked for: the row isn't made again when
+    /// its turn ends); its own words before.
+    private func said(_ words: String) -> String {
+        guard let turn = hover.turns[row.id], !turn.text.isEmpty else { return words }
+        return turn.text
+    }
+
+    func body(content: Content) -> some View {
+        let tracked = content.onHover { [row = row.id] in $0 ? hover.enter(row) : hover.leave(row) }
+        if let words {
+            tracked
+                .contextMenu {
+                    Button("Copy Reply") { Clipboard.copy(said(words)) }
+                    if let reply { Button("Reply") { reply(said(words)) } }
+                }
+                .accessibilityActions {
+                    Button("Copy Reply") { Clipboard.copy(said(words)) }
+                    if let reply { Button("Reply") { reply(said(words)) } }
+                }
+        } else {
+            tracked
+        }
     }
 }
 

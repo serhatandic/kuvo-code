@@ -310,6 +310,7 @@ private struct GroupMessageRow: View, Equatable {
                         Text(message.time, format: .dateTime.hour().minute())
                             .font(.caption)
                             .foregroundStyle(.tertiary)
+                            .help(SentTime.full(message.time))
                         // Shown under the pointer, always laid out.
                         HStack(spacing: 0) {
                             CopyButton(text: message.text, help: "Copy")
