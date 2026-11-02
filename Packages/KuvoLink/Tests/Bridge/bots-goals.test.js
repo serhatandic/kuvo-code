@@ -479,6 +479,19 @@ test("an end you set has the bot wrap up and report; if it doesn't, the box ends
   assert.ok(interrupted.includes("ses_site"));
 });
 
+test("an end you move later after it came is a new end: the bot works on, and is told to wrap up once that one comes", async () => {
+  const goal = await startedGoal({ ends: Date.now() + 60_000 });
+  await look(Date.now() + 120_000);
+  assert.match(prompts.at(-1).text, /^\[Goal's end\] The end the user set has come/);
+  const later = Date.now() + 2 * 86_400_000;
+  const changed = await route("POST", `kuvo/work/goals/${goal.id}`, { action: "change", ends: later });
+  assert.equal(changed.status, 200, JSON.stringify(changed.body));
+  const told = prompts.length;
+  await look(later + 60_000);
+  assert.equal((await goals())[0].state, "running", "not ended at once, with no word");
+  assert.ok(prompts.slice(told).some(each => /^\[Goal's end\] The end the user set has come/.test(each.text)), "told to wrap up at the new end");
+});
+
 test("Stop ends the goal: its sessions and the bot's own turn stop", async () => {
   const goal = await startedGoal();
   active.add("ses_site");

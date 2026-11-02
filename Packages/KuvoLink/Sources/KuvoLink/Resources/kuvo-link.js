@@ -10185,6 +10185,8 @@ async function changeGoal(id, action, given, targets, file) {
       goal.ends = ends;
     if (given.ends === null)
       delete goal.ends;
+    if (ends !== undefined || given.ends === null)
+      delete goal.endTold;
     goal.spend = capsGiven(goal.spend, given.spend);
     return goal;
   }, file);

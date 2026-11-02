@@ -430,6 +430,8 @@ async function changeGoal(id: string, action: "change" | "clear", given: Record<
     if (DIGESTS.includes(given.digest as (typeof DIGESTS)[number])) goal.digest = given.digest as (typeof DIGESTS)[number];
     if (ends !== undefined) goal.ends = ends;
     if (given.ends === null) delete goal.ends;
+    // A new end (or none): told of it once it comes, not ended at once for the last one's.
+    if (ends !== undefined || given.ends === null) delete goal.endTold;
     goal.spend = capsGiven(goal.spend, given.spend);
     return goal;
   }, file);
