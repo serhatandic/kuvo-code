@@ -4610,6 +4610,16 @@ function keptProject(directory, given, before = {}) {
   return project;
 }
 var ARCHIVING_AT_ONCE = 8;
+async function atWork(target, signal) {
+  try {
+    const active = await call(target, "GET", "/api/session/active", undefined, signal);
+    if (Array.isArray(active))
+      return new Set(active.filter((id) => typeof id === "string"));
+    return isObject(active) ? new Set(Object.keys(active)) : null;
+  } catch {
+    return null;
+  }
+}
 async function archiveProject(directory, also, readEngine, readBridge, signal) {
   const removed = Object.entries(readRemovedWorktrees()).filter(([, project]) => project === directory).map(([folder]) => folder);
   const folders = [...new Set([directory, ...readWorktrees().filter((tree) => tree.project === directory && typeof tree.folder === "string").map((tree) => tree.folder), ...removed, ...also])];
@@ -4646,6 +4656,7 @@ async function archiveProject(directory, also, readEngine, readBridge, signal) {
         }
         const sessions = Array.isArray(listed?.data) ? listed.data : [];
         const archiving = sessions.filter((session) => session?.location?.directory === folder && !session.time?.archived && session.metadata?.["kuvo.archived"] !== true);
+        const working = await atWork(target, signal);
         let taken = 0;
         await Promise.all(Array.from({ length: Math.min(ARCHIVING_AT_ONCE, archiving.length) }, async () => {
           while (taken < archiving.length) {
@@ -4653,7 +4664,8 @@ async function archiveProject(directory, also, readEngine, readBridge, signal) {
             try {
               await call(target, "PATCH", `/api/session/${encodeURIComponent(session.id)}`, { metadata: { ...session.metadata ?? {}, "kuvo.archived": true } }, signal);
               holdArchived(session.id, true);
-              await stopIfWaiting(target, session.id);
+              if (!working || working.has(session.id))
+                await stopIfWaiting(target, session.id);
               archived += 1;
             } catch {
               kept += 1;

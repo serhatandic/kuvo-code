@@ -79,6 +79,18 @@ function keptProject(directory: string, given: Record<string, unknown>, before: 
 /** How many of a project's sessions Remove Project archives at once. */
 const ARCHIVING_AT_ONCE = 8;
 
+/** The sessions at work on `target` (the engine's or the bridge's `api/session/active`); null when
+ * that can't be read. */
+async function atWork(target: Target, signal: AbortSignal | undefined): Promise<Set<string> | null> {
+  try {
+    const active: unknown = await call(target, "GET", "/api/session/active", undefined, signal);
+    if (Array.isArray(active)) return new Set(active.filter((id): id is string => typeof id === "string"));
+    return isObject(active) ? new Set(Object.keys(active)) : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Every session of the project, its worktrees' too (those removed since included, whose sessions
  * clients still show under it, and `also`, folders a client shows under it that this box doesn't
  * know: worktrees removed before it kept them), archived, on the engine and the coding agents'
@@ -112,8 +124,11 @@ async function archiveProject(directory: string, also: string[], readEngine: () 
         }
         const sessions = Array.isArray(listed?.data) ? listed.data : [];
         const archiving = sessions.filter(session => session?.location?.directory === folder && !session.time?.archived && session.metadata?.["kuvo.archived"] !== true);
-        // A few at a time: each is a few calls to the engine (whether it waits on you, with its
-        // subagents), and a big project has hundreds.
+        // Only one at work can wait on you (what it asks holds its turn, its subagents' too), so
+        // only those are looked at; every one when that can't be read.
+        const working = await atWork(target, signal);
+        // A few at a time: each is a call to the engine, and a few more for one at work (whether it
+        // waits on you, with its subagents), and a big project has hundreds.
         let taken = 0;
         await Promise.all(Array.from({ length: Math.min(ARCHIVING_AT_ONCE, archiving.length) }, async () => {
           while (taken < archiving.length) {
@@ -122,7 +137,7 @@ async function archiveProject(directory: string, also: string[], readEngine: () 
               await call(target, "PATCH", `/api/session/${encodeURIComponent(session.id)}`, { metadata: { ...(session.metadata ?? {}), "kuvo.archived": true } }, signal);
               holdArchived(session.id, true);
               // One that waits on you stops, as any archived one does.
-              await stopIfWaiting(target, session.id);
+              if (!working || working.has(session.id)) await stopIfWaiting(target, session.id);
               archived += 1;
             } catch {
               kept += 1;
