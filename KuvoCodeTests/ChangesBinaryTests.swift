@@ -40,6 +40,20 @@ import Testing
         #expect(try repo.status().isEmpty)
     }
 
+    /// A picture the agent makes again reads as changed, though git says the same of it: its
+    /// before and after are read again rather than kept from the first time.
+    @Test func aPictureMadeAgainReadsAsChanged() async throws {
+        var changed = logo
+        changed[18] = 0x7F
+        try changed.write(to: repo.url.appending(path: "logo.png"))
+        let first = try await row("logo.png")
+        changed[18] = 0x7E
+        try changed.write(to: repo.url.appending(path: "logo.png"))
+        let again = try await row("logo.png")
+        #expect(first.isBinary && again.isBinary)
+        #expect(first != again)
+    }
+
     @Test func aNewBinaryFileIsListedAndStaged() async throws {
         try FileManager.default.createDirectory(at: repo.url.appending(path: "build"), withIntermediateDirectories: true)
         try Data((0..<2048).map { UInt8($0 % 256) }).write(to: repo.url.appending(path: "build/app.bin"))
