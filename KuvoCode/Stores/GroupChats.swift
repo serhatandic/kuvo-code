@@ -43,6 +43,8 @@ final class GroupChats {
 
     /// Whether you can reach a chat where it lives now (see `BoxGroups.Reach`).
     func reach(_ id: String) -> BoxGroups.Reach { boxes.reach(id) }
+    /// Whether a computer's chats can be reached now: this Mac's (nil), or a machine's.
+    func reach(on machine: String?) -> BoxGroups.Reach { boxes.reach(on: machine) }
     /// The machine a chat lives on while you can't reach it there: what you write waits.
     func unreachable(_ id: String) -> String? { boxes.unreachable(id) }
     /// This Mac's group chats: running, starting, or stopped.

@@ -126,7 +126,7 @@ struct GroupEditor: View {
                 .frame(maxWidth: .infinity)
         }
         .onAppear { if isNew { focus = .name } }
-        .task(id: [group?.id, groups.macReach == .ready ? "ready" : "waiting"]) {
+        .task(id: [group?.id, reach == .ready ? "ready" : "waiting"]) {
             joinable = await groups.joinable(on: machine)
         }
         .alert("Delete \(group?.name ?? "This Group Chat")?", isPresented: $confirmsDelete) {
