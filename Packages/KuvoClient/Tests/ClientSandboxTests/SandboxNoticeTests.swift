@@ -37,6 +37,14 @@ struct SandboxNoticeTests {
         #expect(linux.detail.contains("Linux 5.13 or later"))
         #expect(linux.buttons.map(\.action) == [.help])
         #expect(try state(#"{"on": false, "able": false, "reason": "macos", "action": "softwareUpdate"}"#).notice.buttons.map(\.action) == [.softwareUpdate])
+        // A Linux machine whose commands can't have a namespace of their own, from a box that
+        // doesn't run without one.
+        let namespaces = try state(#"{"on": false, "able": false, "reason": "namespaces", "action": "help", "needs": "user namespaces", "why": "This machine doesn't let commands have a namespace of their own."}"#)
+        #expect(namespaces.reason == .namespaces)
+        #expect(namespaces.notice.title == "This machine can’t sandbox commands")
+        #expect(namespaces.notice.detail.contains("until it allows user namespaces"))
+        #expect(namespaces.notice.buttons.map(\.action) == [.help])
+        #expect(try state(#"{"on": false, "able": false, "reason": "namespaces", "action": "help", "needs": "util-linux"}"#).notice.detail.contains("until it has util-linux"))
     }
 
     @Test func aMachineWhereItCantKeepCommandsFromYourServicesSaysSo() throws {

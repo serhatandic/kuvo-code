@@ -76,6 +76,19 @@ import Testing
         #expect(VaultActivity(id: "a_9", at: 0, what: "used", itemName: "GitHub", botName: "Ship", client: "Mac", mine: true).sentence == "Ship used “GitHub”")
     }
 
+    /// A line an older box kept without who did it comes with no client: it says what happened,
+    /// never that you did it.
+    @Test func activityNoOneClaimsSaysOnlyWhatHappened() throws {
+        let decode = { (json: String) in try JSONDecoder().decode(VaultActivity.self, from: Data(json.utf8)) }
+        #expect(try decode(#"{"id":"a_1","at":0,"what":"shown","itemName":"Bank login"}"#).sentence == "“Bank login” was looked at")
+        #expect(try decode(#"{"id":"a_2","at":0,"what":"added","itemName":"Bank login"}"#).sentence == "“Bank login” was added")
+        #expect(try decode(#"{"id":"a_3","at":0,"what":"changed","itemName":"Bank login"}"#).sentence == "“Bank login” was changed")
+        #expect(try decode(#"{"id":"a_4","at":0,"what":"removed","itemName":"Bank login"}"#).sentence == "“Bank login” was removed")
+        #expect(try decode(#"{"id":"a_5","at":0,"what":"allowed","itemName":"GitHub","botName":"Ship","how":"always"}"#).sentence == "Ship may use “GitHub” from now on")
+        #expect(try decode(#"{"id":"a_6","at":0,"what":"allowed","itemName":"GitHub","botName":"Ship","how":"once"}"#).sentence == "Ship was allowed “GitHub” once")
+        #expect(try decode(#"{"id":"a_7","at":0,"what":"declined","itemName":"GitHub","botName":"Ship"}"#).sentence == "Ship wasn’t allowed “GitHub”")
+    }
+
     @Test func anAsksTitleSaysWhoWantsWhat() {
         #expect(VaultAsk(id: "q_1", kind: .use, botName: "Ship", itemName: "App Store Connect key").title == "Ship wants to use App Store Connect key")
         #expect(VaultAsk(id: "q_2", kind: .item, sessionName: "Fix checkout", need: "a GitHub token").title == "Fix checkout needs a GitHub token")

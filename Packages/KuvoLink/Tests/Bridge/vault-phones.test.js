@@ -110,3 +110,17 @@ test("each phone hears which of the vault's activity it did itself, though both 
   assert.equal(firstSees.shown.client, "iPhone");
   assert.ok(!JSON.stringify(firstSees).includes(link.publicOf(phoneKeys[1]).toString("base64url")), "no phone's key in what another reads");
 });
+
+// A line an older box kept, before it knew whose each was: no client claims it, so none reads it as
+// its own, or as yours on some other client.
+test("a vault activity line from before the box knew who did it is no one's to claim", async () => {
+  const first = await phone(phoneKeys[0]);
+  const added = await first("POST", "kuvo/vault/items", { kind: "login", name: "Old login", sites: ["old.example"], username: "me", values: { password: "battery-staple-old" } });
+  assert.equal(added.status, 200, JSON.stringify(added.value));
+  fs.appendFileSync(path.join(home, "box", "vault", "activity.jsonl"), JSON.stringify({ id: "a_old", at: Date.now(), what: "shown", client: "Mac", item: added.value.item.id, itemName: "Old login", kind: "login" }) + "\n");
+  const old = (await first("GET", "kuvo/vault/activity")).value.entries.find(entry => entry.id === "a_old");
+  assert.ok(old, "the old line is still shown");
+  assert.equal(old.mine, undefined);
+  assert.equal(old.client, undefined, "nor said to be from a client, which every Mac and phone would read as theirs");
+  assert.equal(old.itemName, "Old login");
+});

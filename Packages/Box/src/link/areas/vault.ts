@@ -227,8 +227,18 @@ async function* answerVault(context: RouteContext): AsyncGenerator<AnswerPiece> 
       before: Number(query.get("before")) || undefined,
       limit: Number(query.get("limit")) || undefined,
     });
-    // Each line marked when this client did it, by who it is, not its name; who did the rest stays here.
-    return yield* json(200, { entries: entries.map(({ by, ...entry }) => (by === client.by ? { ...entry, mine: true } : entry)) });
+    // Each line marked when this client did it, by who it is, not its name; who did the rest stays
+    // here. A line an older box kept without who did it names no client, so none reads it as theirs.
+    return yield* json(200, {
+      entries: entries.map(({ by, ...entry }) => {
+        if (by === client.by) return { ...entry, mine: true };
+        if (by === undefined && entry.client !== undefined) {
+          const { client: _, ...unclaimed } = entry;
+          return unclaimed;
+        }
+        return entry;
+      }),
+    });
   }
   if (route === "kuvo/vault/grants") {
     if (method === "GET") return yield* json(200, { grants: shownGrants(readGrants()) });

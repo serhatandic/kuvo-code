@@ -147,6 +147,11 @@ enum GoalSandbox {
             return Row(title: "\(computer) can’t work on its own",
                        text: "\(computer)’s Linux is too old for the sandbox. Ask whoever runs it to update to \(status.needs ?? "Linux 5.13") or later. \(bot) works while you’re here.",
                        buttons: [Button(label: "How to Check…", action: .open(helpPage))])
+        case "namespaces":
+            // From a box that doesn't run without a namespace for each command (none does now: `gaps`).
+            return Row(title: "\(computer) can’t work on its own",
+                       text: "\(computer) can’t keep commands from your login’s services, so the sandbox isn’t on. Ask whoever runs it to \(status.needs == "util-linux" ? "install util-linux" : "allow user namespaces"). \(bot) works while you’re here.",
+                       buttons: [Button(label: "How to Check…", action: .open(machinesPage))])
         case "macos":
             return Row(title: "\(computer) can’t work on its own", text: "This version of macOS can’t run the sandbox. \(bot) works while you’re here.",
                        buttons: [Button(label: "Software Update…", action: .open(softwareUpdate))])

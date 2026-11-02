@@ -17,7 +17,10 @@ const uid = process.getuid?.() ?? -1
 const runtime = `/run/user/${uid}`
 const sessionBus = existsSync(join(runtime, "bus")) && ["/usr/bin/systemd-run", "/bin/systemd-run"].some(existsSync)
 // (Where the machine doesn't let it, the sandbox isn't on: the box says so, and nothing runs in it.)
-const namespaced = canFence && process.platform === "linux" && ownNamespace() !== null
+const namespaced = canFence && process.platform === "linux" && (() => {
+  const own = mkdtempSync(join(tmpdir(), "kuvo-sandbox-ns-"))
+  try { return ownNamespace(own) !== null } finally { rmSync(own, { recursive: true, force: true }) }
+})()
 
 test.skipIf(!namespaced || !sessionBus)("a command can't have your session's services run something outside the sandbox", () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "kuvo-sandbox-services-")))

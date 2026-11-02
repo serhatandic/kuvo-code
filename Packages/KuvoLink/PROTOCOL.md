@@ -2986,7 +2986,8 @@ what runs as you on a machine (its `bin/kuvo-link.js`, its engine) could take it
   `mine: true` marks what the client asking did itself, by who it is: a phone by the key it paired
   with, a Mac by its proof's key (this Mac's app, and a Mac with the unlock key, as one Mac). A
   client says only what happened for its own lines and who and where for the rest. The box keeps
-  who did each; no client hears another's key.
+  who did each; no client hears another's key. A line an older box kept without who did it has no
+  `client`, so no client reads it as its own; a client says what happened without saying who.
 - `GET kuvo/vault/asks` → `{asks}`, and `GET kuvo/vault/asks/events` (`application/x-ndjson`, the
   list now and on each change): what agents wait on you for, `{id, kind: "use" | "item", at,
   session?, sessionName?, bot?, botName?, item?, itemName?, need?, why?, site?, machine?, group?}`.

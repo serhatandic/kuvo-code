@@ -33,9 +33,9 @@ export function realFence(kuvo: string, sockets: string[] = [], more: Partial<Fe
     write(places.runner, LANDLOCK_RUNNER, 0o700)
     write(join(folder, "runtime"), process.execPath)
     // (Each command in a namespace of its own where the machine lets it, as the box sets it up.)
-    write(join(folder, "namespace"), ownNamespace() ?? "-")
-    write(join(folder, "sockets"), sockets.map(each => each + "\n").join(""))
     mkdirSync(join(folder, "ns"), { recursive: true, mode: 0o700 })
+    write(join(folder, "namespace"), ownNamespace(join(folder, "ns")) ?? "-")
+    write(join(folder, "sockets"), sockets.map(each => each + "\n").join(""))
   }
   write(join(folder, "on"), "set up")
   return folder

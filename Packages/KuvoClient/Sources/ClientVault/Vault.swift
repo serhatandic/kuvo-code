@@ -290,7 +290,8 @@ public struct VaultActivity: Codable, Equatable, Identifiable, Sendable {
 
     /// What happened, in a sentence both apps show. What you did from the client reading it
     /// (`mine`) says only what happened ("Added “GitHub”"); who and where are said when it was
-    /// somewhere else.
+    /// somewhere else. A line no client is named on (an older box's, kept before it knew who did
+    /// it) says what happened without saying who.
     public var sentence: String {
         if mine == true {
             let item = itemName.map { "“\($0)”" } ?? "an item"
@@ -302,6 +303,19 @@ public struct VaultActivity: Codable, Equatable, Identifiable, Sendable {
             case "changed": return "Changed \(item)"
             case "removed": return "Removed \(item)"
             case "shown": return "Looked at \(item)"
+            default: break
+            }
+        }
+        if client == nil {
+            let item = itemName.map { "“\($0)”" }
+            let agent = botName ?? sessionName ?? "An agent"
+            switch what {
+            case "allowed": return how == "always" ? "\(agent) may use \(item ?? "an item") from now on" : "\(agent) was allowed \(item ?? "an item") once"
+            case "declined": return "\(agent) wasn’t allowed \(item ?? "an item")"
+            case "added": return "\(item ?? "An item") was added"
+            case "changed": return "\(item ?? "An item") was changed"
+            case "removed": return "\(item ?? "An item") was removed"
+            case "shown": return "\(item ?? "An item") was looked at"
             default: break
             }
         }

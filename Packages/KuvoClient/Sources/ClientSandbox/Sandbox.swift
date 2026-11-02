@@ -6,7 +6,7 @@ import Foundation
 public struct SandboxState: Codable, Equatable, Sendable {
     /// Why it isn't on, as a word a client maps.
     public enum Reason: String, Codable, Sendable {
-        case kernel, macos, engineMissing, checking, checkFailed, plugin, engineDown, waiting
+        case kernel, namespaces, macos, engineMissing, checking, checkFailed, plugin, engineDown, waiting
     }
 
     /// What you can do about it; `route` is the box's route that does it.

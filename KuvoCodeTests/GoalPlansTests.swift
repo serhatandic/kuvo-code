@@ -135,6 +135,11 @@ import Testing
         let kernel = try #require(row(.status(.init(on: false, able: false, reason: "kernel", needs: "Linux 5.13")), false, false))
         #expect(kernel.text.contains("Linux 5.13 or later"))
         #expect(kernel.buttons.map(\.label) == ["How to Check…"])
+        // A machine whose commands can't have a namespace of their own, from a box that doesn't run without one.
+        let namespaces = try #require(row(.status(.init(on: false, able: false, reason: "namespaces", needs: "user namespaces")), false, false))
+        #expect(namespaces.title == "lokum can’t work on its own")
+        #expect(namespaces.text.contains("Ask whoever runs it to allow user namespaces"))
+        #expect(namespaces.buttons.map(\.label) == ["How to Check…"])
         #expect(row(status("macos", nil), true, false)?.buttons == [.init(label: "Software Update…", action: .open(GoalSandbox.softwareUpdate))])
 
         let failedOnce = try #require(row(.status(.init(on: false, reason: "checkFailed", route: "POST kuvo/sandbox/check", check: "readsOwn", failures: 1)), true, false))
