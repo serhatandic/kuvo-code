@@ -326,6 +326,7 @@ function probe(): { passed: boolean; why?: string; check?: FenceCheck } {
   fs.rmSync(escaped, { force: true });
   const script = [
     `cd "$0" || exit 10`,
+    `printf '%s\n' "$TMPDIR"`,
     `echo ok > written && [ "$(cat written)" = ok ] || exit 11`,
     `echo ok > "$TMPDIR/probe" || exit 12`,
     `cat "$1" >/dev/null 2>&1 && exit 13`,
@@ -353,6 +354,13 @@ function probe(): { passed: boolean; why?: string; check?: FenceCheck } {
     fs.rmSync(PROBE, { recursive: true, force: true });
     fs.rmSync(escaped, { force: true });
     fs.rmSync(hidden, { force: true });
+    // And its temporary folder: in a short one of the box's in `/tmp`, that one too once it's
+    // empty, so setting up leaves nothing there.
+    const used = (run.stdout ?? "").split("\n")[0]!.replace(/\/$/, "");
+    try {
+      if ([path.join(FOLDER, "tmp"), SHORT].includes(path.dirname(used))) fs.rmSync(used, { recursive: true, force: true });
+      if (path.dirname(used) === SHORT) fs.rmdirSync(SHORT);
+    } catch {}
   }
 }
 
@@ -374,21 +382,67 @@ function withdraw(): void {
 }
 
 /**
+ * A box's own folder for commands' temporary folders where its `tmp` is too far down for a socket in
+ * one and commands each have a namespace of their own (Linux; this Mac's box has the app's): `/tmp/kuvo-code-<uid>-<its folder's sum>`, yours alone,
+ * a box's each (a test's beside yours), as SSH's on a Mac is. Made by the launcher as a command first
+ * needs it (so setting up leaves nothing there), each command's namespace sees only its own
+ * conversation's in it (fence/landlock.ts, HIDE), and it goes with the box's sweep once it's empty,
+ * and with an uninstall. Null where it's there but isn't yours (another user made it first): the
+ * box's own is used.
+ */
+const SHORT = `/tmp/kuvo-code-${process.getuid?.() ?? -1}-${crypto.createHash("sha256").update(FOLDER).digest("hex").slice(0, 6)}`;
+function shortTemporary(): string | null {
+  try {
+    const it = fs.lstatSync(SHORT);
+    return it.isDirectory() && it.uid === process.getuid?.() ? SHORT : null;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? SHORT : null;
+  }
+}
+
+/** Whether a command's temporary folder in `root` is near enough the top for the sockets made in it:
+ * a socket's path is at most 107 letters on Linux (103 on macOS), and a command's tmux makes
+ * `/tmux-<uid>/default` in it, Python's multiprocessing `/pymp-<8>/listener-<8>`. */
+const SOCKET_PATH = platform === "darwin" ? 103 : 107;
+const fitsSockets = (root: string) => Buffer.byteLength(root) + "/12345678".length + 40 <= SOCKET_PATH;
+
+/** The box's own sandbox folder's `tmp`, or a short one of its own under `/tmp` where that's too
+ * long (`shortTemporary`) and commands each have a namespace of their own, where it shows them only
+ * their own conversation's. (Without one, Landlock would let a command into every conversation's
+ * in it, as it can't keep one folder in `/tmp` from it and still let it write in `/tmp`: theirs stay
+ * in the box's folder, which it hides, and a command's tmux can't start under a long home folder's
+ * path.) */
+const temporaryRoot = (): string => {
+  const own = path.join(FOLDER, "tmp");
+  return platform === "linux" && namespace && !fitsSockets(own) ? shortTemporary() ?? own : own;
+};
+
+/** The box's short folder removed, where it's the box's: never one another user made in its place. */
+function removeShort(): void {
+  try {
+    const it = fs.lstatSync(SHORT);
+    if (it.isDirectory() && it.uid === process.getuid?.()) fs.rmSync(SHORT, { recursive: true, force: true });
+  } catch {}
+}
+
+/**
  * Where commands' temporary folders go (`temporary`, which the launcher and the agents' bridge
  * read), and the key their short names are made from, kept while it's the same folder so a
  * conversation keeps its own: on this Mac's box, the app's own temporary folder; elsewhere, `tmp`
- * in the sandbox's folder.
+ * in the sandbox's folder, or under a home folder whose path is long, a short one in `/tmp`.
  */
 function writeTemporary(): void {
   const file = path.join(FOLDER, "temporary");
-  const root = appTemporary() ?? path.join(FOLDER, "tmp");
+  const root = appTemporary() ?? temporaryRoot();
   const [had, key] = (textOf(file) ?? "").split("\n");
   if (had === root && /^[0-9a-f]{64}$/.test(key ?? "")) return;
   writePrivate(file, `${root}\n${crypto.randomBytes(32).toString("hex")}\n`);
   // Those from before in the box's own folder go, once they're kept elsewhere; where they're still
   // kept in it, those named otherwise (from another key, or by a whole sum, which a server a command
-  // left running may still use) go a week after their last command, as any do.
+  // left running may still use) go a week after their last command, as any do. A short one of its
+  // own in `/tmp` it no longer uses goes whole.
   if (root !== path.join(FOLDER, "tmp")) for (const name of listOf(path.join(FOLDER, "tmp"))) fs.rmSync(path.join(FOLDER, "tmp", name), { recursive: true, force: true });
+  if (had === SHORT && root !== SHORT) removeShort();
 }
 
 /**
@@ -455,12 +509,17 @@ function holdsFiles(folder: string): boolean {
 }
 
 export function sweepWakeFolders(now = Date.now()): void {
-  // And commands' temporary folders, a week after their conversation's last command.
-  const tmp = path.join(FOLDER, "tmp");
-  for (const name of listOf(tmp)) {
-    const folder = path.join(tmp, name);
-    try { if (now - fs.statSync(folder).mtimeMs > 7 * 24 * 60 * 60 * 1000) fs.rmSync(folder, { recursive: true, force: true }); } catch {}
+  // And commands' temporary folders, a week after their conversation's last command (in its short
+  // one in `/tmp` too).
+  const short = (textOf(path.join(FOLDER, "temporary")) ?? "").split("\n")[0] === SHORT;
+  for (const tmp of [path.join(FOLDER, "tmp"), ...(short ? [SHORT] : [])]) {
+    for (const name of listOf(tmp)) {
+      const folder = path.join(tmp, name);
+      try { if (now - fs.statSync(folder).mtimeMs > 7 * 24 * 60 * 60 * 1000) fs.rmSync(folder, { recursive: true, force: true }); } catch {}
+    }
   }
+  // (The short one too, once nothing's left in it: made again as a command needs it.)
+  if (short) try { fs.rmdirSync(SHORT); } catch {}
   let names: string[] = [];
   try { names = fs.readdirSync(SESSION_WAKES); } catch { return; }
   for (const name of names) {
@@ -482,8 +541,9 @@ export function sweepWakeFolders(now = Date.now()): void {
 
 /** Set up as the box starts, and kept so: Kuvo Code's servers' ports in its rules as they change
  * (macOS), its plugin put back if it went, what agents are told as it's on or not, and the wake
- * folders no one used cleared away. */
-export function keepFence(): void {
+ * folders no one used cleared away. `every`: what runs its round every 10 seconds (a test's runs
+ * each by hand, and awaits what it set going: the minute's namespace check). */
+export function keepFence(every: (round: () => Promise<void>) => void = round => { setInterval(round, 10_000).unref?.(); }): void {
   try { setUpFence(); } catch {}
   try { tellAgents(); } catch {}
   // Set up, or found it can't run here: the agents bridge starts the coding agents from now, never
@@ -495,12 +555,13 @@ export function keepFence(): void {
   });
   let rounds = 0;
   let trying = false;
-  setInterval(() => {
+  every(async () => {
     const round = rounds++;
     if (round % 60 === 0) sweepWakeFolders();
     // Agents told once the engine has loaded the plugin, and no longer once it's gone.
     try { tellAgents(); } catch {}
     if (!fenceWanted()) return;
+    let checking: Promise<void> | undefined;
     try {
       if (checked.passed) writeProfiles();
       // A failed check, tried again each minute (it holds the box up while it runs), with commands'
@@ -512,13 +573,14 @@ export function keepFence(): void {
       if (platform === "linux" && round % 6 === 5 && !trying) {
         fs.mkdirSync(NAMESPACE_FOLDER, { recursive: true, mode: 0o700 });
         trying = true;
-        ownNamespaceLater(NAMESPACE_FOLDER)
+        checking = ownNamespaceLater(NAMESPACE_FOLDER)
           .then(found => { if (fenceWanted() && !found !== !namespace) setUpFence(found); })
           .catch(() => {})
           .finally(() => { trying = false; });
       }
     } catch {}
-  }, 10_000).unref?.();
+    await checking;
+  });
 }
 
 export const fenceFiles = { folder: FOLDER, plugin: PLUGIN, launcher: places.launcher, version: VERSION };

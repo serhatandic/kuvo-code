@@ -68,7 +68,7 @@ export function launcherScript(places: FencePlaces): string {
         // the box names the `unshare` that gives it one, or `-` where it runs without, as it was set up.
         `ns=$(cat "$F/namespace" 2>/dev/null)`,
         `set -- "$runtime" --config=/dev/null --no-env-file ${sh(places.runner)} "$F/policy.json" "$work" "$git" "$tmp" "$own" "$allowed" "$shell" "$@"`,
-        `case $ns in /*) set -- "$ns" -Urm /bin/sh -c ${sh(HIDE)} "$ns" "$(id -u)" "$(id -g)" "$(id -un 2>/dev/null)" "$F/ns" "$F/sockets" "$@" ;; -) ;; *) echo "This command can't run in the sandbox here: it isn't set up." >&2; exit 126 ;; esac`,
+        `case $ns in /*) set -- "$ns" -Urm /bin/sh -c ${sh(HIDE)} "$ns" "$(id -u)" "$(id -g)" "$(id -un 2>/dev/null)" "$F/ns" "$F/sockets" "$t_own" "$t_name" "$@" ;; -) ;; *) echo "This command can't run in the sandbox here: it isn't set up." >&2; exit 126 ;; esac`,
         `PATH=$user_path KUVO_FENCE_OWN="$own_list" KUVO_FENCE_READ="$read_list" KUVO_FENCE_MEMORY="$memory" KUVO_FENCE_BUN="$as_bun" BUN_BE_BUN=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 exec "$@"`,
       ];
   return [
@@ -118,14 +118,20 @@ export function launcherScript(places: FencePlaces): string {
     `case $sum in ????????????????????????????????) ;; *) echo "This command can't run in the sandbox here: it can't name its temporary folder." >&2; exit 126 ;; esac`,
     `tmp=$F/tmp/$sum`,
     // By a short name, in the folder the box names (`temporary`: on this Mac the app's own
-    // temporary folder, elsewhere this one's `tmp`, and a key commands can't read): a socket's path
-    // is at most 103 letters on macOS and 107 on Linux, and tmux's server, a server's tests or
-    // Python's multiprocessing make theirs in it, under a home folder's path of over 50 letters too. (Named
-    // from the key, so a command still can't pick a folder whose name another conversation's has.)
+    // temporary folder, elsewhere this one's `tmp`, or under a long home folder's path a short one of
+    // the box's in `/tmp`; and a key commands can't read): a socket's path is at most 103 letters on
+    // macOS and 107 on Linux, and tmux's server, a server's tests or Python's multiprocessing make
+    // theirs in it. (Named from the key, so a command still can't pick a folder whose name another
+    // conversation's has.) One outside this folder is yours alone, made as it's first needed and
+    // again if it went (`/tmp` is cleared); one another user made first isn't used (this folder's own
+    // is). On Linux each command's namespace sees only its own conversation's in it (`t_own`,
+    // fence/landlock.ts's HIDE).
+    "t_own= t_name=",
     `if [ -f "$F/temporary" ]; then`,
     `  { IFS= read -r t_root; IFS= read -r t_key; } <"$F/temporary"`,
     `  t_name=$( (printf '%s\n%s' "$t_key" "$work" | sha256sum || printf '%s\n%s' "$t_key" "$work" | shasum -a 256) 2>/dev/null | cut -c 1-8)`,
     `  case $t_root:$t_key:$t_name in /*:????????????????????????????????????????????????????????????????:????????) tmp=$t_root/$t_name ;; *) echo "This command can't run in the sandbox here: it can't name its temporary folder." >&2; exit 126 ;; esac`,
+    `  case $t_root in "$F"/*) ;; *) (umask 077; mkdir -p "$t_root") 2>/dev/null; if [ -d "$t_root" ] && [ ! -L "$t_root" ] && [ -O "$t_root" ]; then t_own=$t_root; else tmp=$F/tmp/$t_name; fi ;; esac`,
     `fi`,
     // What Also Allowed gives this project's commands to write (fence/allowed.ts): the box's file
     // for it, by the same sum, one folder a line; each that isn't given stays where nothing is.
@@ -144,6 +150,8 @@ export function launcherScript(places: FencePlaces): string {
     ...Array.from({ length: MOST_FOLDERS }, (_, at) => `a${at}=$F/none r${at}=-`),
     `if [ -f "$allowed" ]; then i=0; while IFS= read -r line && [ $i -lt ${MOST_FOLDERS} ]; do case $line in /*) eval "a$i=\\$line"; ${places.platform === "darwin" ? `eval "r$i=\\$(escaped \\"\\$line\\")"; ` : ""}i=$((i + 1)) ;; esac; done <"$allowed"; else allowed=$F/none; fi`,
     `(umask 077; mkdir -p "$tmp") && touch "$tmp" && export TMPDIR="$tmp/"`,
+    // (And still yours once it's made: one another user made in its place meanwhile isn't used.)
+    `[ -z "$t_own" ] || { [ ! -L "$t_own" ] && [ -O "$t_own" ] && [ ! -L "$tmp" ] && [ -O "$tmp" ]; } || { echo "This command can't run in the sandbox here: its temporary folder isn't yours alone." >&2; exit 126; }`,
     // pre-commit's hooks set their tools up in its own folder as they first run, which runs later
     // outside the sandbox, so commands only read it: theirs go in their temporary folder instead.
     `export PRE_COMMIT_HOME="$TMPDIR"pre-commit`,
