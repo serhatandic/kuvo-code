@@ -8139,6 +8139,20 @@
            "size?": "number"
           }
          }
+        },
+        "restorable?": {
+         "list": {
+          "object": {
+           "project": "string",
+           "root": "string",
+           "folder": "string",
+           "branch": "string",
+           "base?": "string",
+           "restorable": "bool",
+           "saved": "bool",
+           "ahead?": "number"
+          }
+         }
         }
        }
       },
@@ -8153,7 +8167,23 @@
            "branch": "string",
            "base?": "string",
            "made?": "string",
-           "prefix?": "string"
+           "prefix?": "string",
+           "used?": "bool",
+           "restored?": "bool"
+          }
+         }
+        },
+        "restorable?": {
+         "list": {
+          "object": {
+           "project": "string",
+           "root": "string",
+           "folder": "string",
+           "branch": "string",
+           "base?": "string",
+           "restorable": "bool",
+           "saved": "bool",
+           "ahead?": "number"
           }
          }
         }
@@ -8174,7 +8204,9 @@
       "branch": "string",
       "base?": "string",
       "made?": "string",
-      "prefix?": "string"
+      "prefix?": "string",
+      "used?": "bool",
+      "restored?": "bool"
      }
     }
    }
@@ -8184,6 +8216,24 @@
    "answers": {
     "200": {
      "object": {}
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/worktrees/restore",
+   "answers": {
+    "200": {
+     "object": {
+      "project": "string",
+      "root": "string",
+      "folder?": "string",
+      "branch": "string",
+      "base?": "string",
+      "made?": "string",
+      "prefix?": "string",
+      "used?": "bool",
+      "restored?": "bool"
+     }
     }
    }
   },

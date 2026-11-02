@@ -4,7 +4,7 @@
 
 import { pause } from "../../shared/wait";
 import { noteSignIn } from "../areas/accounts";
-import { nameDueWorktrees, nameWorktreeBranch, settleNewSession } from "../areas/worktrees";
+import { nameDueWorktrees, nameWorktreeBranch, settleNewSession, tidyWorktrees } from "../areas/worktrees";
 import { finishDeletes } from "../bots/edit";
 import { freshenBot, freshenBots } from "../bots/tell";
 import { ANSWERED, GROUP_NEWS, NEWS, RUN_ENDS, groupNotice, noticeFor, settleHeld } from "../notices/news";
@@ -19,6 +19,7 @@ import type { NoticeHold } from "../notices/hold";
 import type { EngineEvent, GroupEvent } from "../notices/news";
 import type { Notice } from "../notices/notice";
 import type { QueueEvent } from "./queue";
+import type { SessionNotes } from "./sessions";
 
 /** An engine event `steering` follows, for its session: a tool call that started, was called or
  * ended (its `id`, its tool's `name`, and with its `input`, whether it runs in the background); a
@@ -41,6 +42,13 @@ export interface SteeringEvent {
  * each part of its work takes what it knows of it, and a request answered names its `requestID`, a
  * session made its `info`. */
 export type BoxEvent = EngineEvent & SignInEvent & GroupEvent & SteeringEvent & { data?: { requestID?: string; info?: { id?: string } } };
+
+/** A session's notes changed to say it's archived, or without saying what they are now (the coding
+ * agents' bridge names only the session). */
+function isArchiving(event: BoxEvent): boolean {
+  const metadata = (event.data as { metadata?: SessionNotes } | undefined)?.metadata;
+  return !metadata || metadata["kuvo.archived"] === true || metadata.kuvo?.archived === true;
+}
 
 /** How `steering` waits: how long a call runs before a message is read at once (ms), and its clock
  * (a test's own), and `signal`, which stops it. */
@@ -285,8 +293,9 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
       lastLearned = 0;
       learn(source);
       if (queues) scanQueues(source, found).catch(() => {});
-      // Its worktrees' sessions titled while it wasn't listening: their branches named.
-      if (!bots) nameDueWorktrees(source, connection.signal).catch(() => {});
+      // Its worktrees' sessions titled while it wasn't listening: their branches named; and those
+      // whose last session went meanwhile tidied.
+      if (!bots) nameDueWorktrees(source, connection.signal).then(() => tidyWorktrees(connection.signal)).catch(() => {});
       // A goal's change it missed meanwhile: what's held for one let go, or kept, as it is now.
       if (goalHeld) settleGoalHolds(source, goalHeld).catch(() => {});
       for await (const event of serverEvents(response.body)) {
@@ -304,6 +313,9 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
         if (!bots) {
           if (event.type === "session.created") settleNewSession(source, event.data?.sessionID ?? event.data?.info?.id).catch(() => {});
           if (event.type === "session.renamed") nameWorktreeBranch(source, event.data?.sessionID).catch(() => {});
+          // A worktree's last session archived or deleted, or an agent that kept one done: tidied.
+          // One made there marks it as used, so deleting it before anything else happens takes it too.
+          if (event.type === "session.created" || event.type === "session.deleted" || RUN_ENDS.has(event.type) || (event.type === "session.metadata.updated" && isArchiving(event))) tidyWorktrees(connection.signal).catch(() => {});
         }
         if (!notices) continue;
         if (ANSWERED.has(event.type)) answered(event.data?.requestID ?? event.data?.id);
