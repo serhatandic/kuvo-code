@@ -20,6 +20,9 @@ import { bundleOf } from "./records";
 /** The most a move carries (1 GB, as clients say sizes): past that it's refused before anything's
  * held for long. */
 export const MOST_BUNDLE = 1_000_000_000;
+/** How long a move waits on its engine or its group chats for one answer, at most: past that it
+ * takes them for not answering (a move never hangs on them). */
+export const ENGINE_WAIT = 2 * 60_000;
 
 /** What `move.json` holds. */
 export interface Contents {
@@ -232,6 +235,6 @@ export async function deleteSession(engine: Target, id: string): Promise<void> {
 export async function groupAction(bridge: Target, group: string, action: "hold" | "activate" | "release"): Promise<unknown> {
   const answer = await askGroups<{ data?: unknown; message?: unknown }>(bridge, "POST", `/${encodeURIComponent(group)}/${action}`, undefined, undefined);
   if (answer.status === 404 && action === "release") return null;
-  if (answer.status !== 200) throw new Error(typeof answer.value?.message === "string" ? answer.value.message : `Its group chats answered ${answer.status}.`);
+  if (answer.status !== 200) throw Object.assign(new Error(typeof answer.value?.message === "string" ? answer.value.message : `Its group chats answered ${answer.status}.`), { status: answer.status });
   return answer.value?.data ?? null;
 }

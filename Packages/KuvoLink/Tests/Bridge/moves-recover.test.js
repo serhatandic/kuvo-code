@@ -134,8 +134,15 @@ link.sendMovesWith((_peer, move) => {
   return true;
 });
 const say = move => link.takeMoveMail(lab, move);
-const stop = new AbortController();
+let stop = new AbortController();
 link.watchMoves(() => ({ send() {} }), stop.signal);
+// This box starts again: what it kept in memory gone, its moves carried on from their records.
+function startAgain() {
+  stop.abort();
+  link.forgetMovesInMemory();
+  stop = new AbortController();
+  link.watchMoves(() => ({ send() {} }), stop.signal);
+}
 atEnd(() => {
   stop.abort();
   link.sendMovesWith(null);
@@ -229,4 +236,115 @@ test("while a bot moves, its goal can't start, and nothing of a goal is sent to 
   } finally {
     fs.rmSync(path.join(movesFolder, "mov_goal2.json"), { force: true });
   }
+});
+
+// A bundle lab packs for what it moves here: a chat's conversations and wake-ups' folder, or a group
+// chat as its bridge held it.
+function bundleFor(contents, folder) {
+  const packed = fs.mkdtempSync(path.join(support, "pack-"));
+  fs.writeFileSync(path.join(packed, "move.json"), JSON.stringify(contents));
+  const names = ["move.json"];
+  if (folder) {
+    fs.mkdirSync(path.join(packed, folder));
+    fs.writeFileSync(path.join(packed, folder, "wakes.json"), "[]");
+    names.push(folder);
+  }
+  const file = path.join(packed, "bundle.tgz");
+  assert.equal(spawnSync("tar", ["-czf", file, "-C", packed, ...names]).status, 0);
+  const bytes = fs.readFileSync(file);
+  fs.rmSync(packed, { recursive: true, force: true });
+  return { bytes, hash: crypto.createHash("sha256").update(bytes).digest("base64url") };
+}
+// Lab moves `contents` here as move `id`: offered, its one part sent, set up here.
+async function comesHere(id, contents, folder) {
+  const { bytes, hash } = bundleFor(contents, folder);
+  await say({ op: "offer", id, kind: contents.kind, thing: contents.thing, name: contents.name, size: bytes.length, hash, wasPaused: false, from: peerKey, ...(contents.kind === "group" ? { members: [] } : {}) });
+  assert.equal(told.findLast(move => move.id === id)?.op, "ready");
+  await say({ op: "part", id, hash, i: 0, of: 1, d: bytes.toString("base64url") });
+  await until(() => told.some(move => move.id === id && (move.op === "arrived" || move.op === "failed")));
+  assert.equal(told.findLast(move => move.id === id && (move.op === "arrived" || move.op === "failed")).op, "arrived");
+  return hash;
+}
+const groupOf = id => ({ id, name: "Launch", members: [] });
+
+test("a group chat taken back as its group chats here aren't answering goes on again once they are", async () => {
+  groups.chats.set("grp_back1", { group: groupOf("grp_back1"), messages: [], status: "active" });
+  // Lab refuses it, just as this box's group chats go away.
+  script = move => {
+    if (move.op !== "offer") return;
+    groups.down = true;
+    say({ op: "refused", id: move.id, message: "Its disk is full." });
+  };
+  try {
+    const moved = await ask("POST", "kuvo/moves", { kind: "group", id: "grp_back1", to: peerKey });
+    assert.equal(moved.status, 409, JSON.stringify(moved.json));
+    assert.equal(groups.chats.get("grp_back1").status, "held", "it couldn't go on yet");
+  } finally {
+    groups.down = false;
+  }
+  // A minute later, they answer again.
+  link.keepMoving(Date.now() + 61_000);
+  await until(() => groups.chats.get("grp_back1").status === "active");
+});
+
+test("a group chat left held by a move this box no longer has goes on again as the box starts", async () => {
+  groups.chats.set("grp_left1", { group: groupOf("grp_left1"), messages: [], status: "held" });
+  // One held by a move under way stays held.
+  groups.chats.set("grp_left2", { group: groupOf("grp_left2"), messages: [], status: "held" });
+  writeRecord({ id: "mov_left2", kind: "group", thing: "grp_left2", name: "“Launch”", from: "", to: peerKey, role: "from", stage: "switching", step: "switch", sessions: [],
+    peer: peerKey, wasPaused: true, tries: 0, started: Date.now(), offered: true, sentAt: Date.now(), switchSince: Date.now() });
+  try {
+    startAgain();
+    await until(() => groups.chats.get("grp_left1").status === "active");
+    assert.equal(groups.chats.get("grp_left2").status, "held");
+  } finally {
+    fs.rmSync(path.join(movesFolder, "mov_left2.json"), { force: true });
+  }
+});
+
+test("a copy let go of while this box's engine is down isn't left here live: it goes once the engine is back", async () => {
+  script = () => {};
+  const id = "mov_down1";
+  await comesHere(id, { kind: "chat", thing: "ses_down1", name: "“Notes”", wasPaused: false, folder: "ses_down1", exports: [{ info: { id: "ses_down1", title: "Notes" }, messages: [] }] }, "ses_down1");
+  engine.down = true;
+  const refused = engine.refused;
+  try {
+    // Lab takes it back.
+    await say({ op: "drop", id });
+    assert.ok(engine.refused > refused, "it tried");
+    assert.ok(!told.some(move => move.id === id && move.op === "dropped"), "not said gone while it's here");
+    assert.ok(engine.sessions.has("ses_down1"));
+    assert.deepEqual((await ask("GET", "kuvo/moves")).json.away, ["ses_down1"], "and not this box's: nothing reaches it");
+    // Switched to now (lab's word crossed): never.
+    await say({ op: "switch", id });
+    assert.ok(!told.some(move => move.id === id && move.op === "switched"));
+  } finally {
+    engine.down = false;
+  }
+  link.keepMoving(Date.now() + 61_000);
+  await until(() => !engine.sessions.has("ses_down1") && !recordOf("ses_down1"));
+  assert.ok(!fs.existsSync(path.join(wakes, "ses_down1")), "nor its folder");
+  // Lab asks again: gone.
+  await say({ op: "drop", id });
+  assert.equal(told.findLast(move => move.id === id).op, "dropped");
+  assert.deepEqual((await ask("GET", "kuvo/moves")).json, { moves: [], away: [] });
+});
+
+test("a group chat let go of while group chats here aren't answering isn't left here held: it goes once they are", async () => {
+  script = () => {};
+  const id = "mov_gdown1";
+  await comesHere(id, { kind: "group", thing: "grp_in1", name: "“Launch”", wasPaused: true, exports: [], group: { group: groupOf("grp_in1"), messages: [] } });
+  assert.equal(groups.chats.get("grp_in1")?.status, "held");
+  groups.down = true;
+  try {
+    await say({ op: "drop", id });
+    assert.ok(!told.some(move => move.id === id && move.op === "dropped"));
+    assert.ok(recordOf("grp_in1"), "kept, to let go of again");
+  } finally {
+    groups.down = false;
+  }
+  link.keepMoving(Date.now() + 61_000);
+  await until(() => !groups.chats.has("grp_in1") && !recordOf("grp_in1"));
+  await say({ op: "drop", id });
+  assert.equal(told.findLast(move => move.id === id).op, "dropped");
 });

@@ -30,7 +30,7 @@ import type { MailSender, Peer } from "../peers/known";
 import type { LinkHost } from "../relay/host";
 import { readLink } from "../state";
 import { goalRuns } from "../work/goals";
-import { CHATS, MOST_BUNDLE, NotTaken, deleteSession, directoryOf, exportAll, folderOf, groupAction, conversationHash, hashOf, idsOf, importAll, keysOf, ownTree, pack, toTrash, unpack } from "./bundle";
+import { CHATS, ENGINE_WAIT, MOST_BUNDLE, NotTaken, deleteSession, directoryOf, exportAll, folderOf, groupAction, conversationHash, hashOf, idsOf, importAll, keysOf, ownTree, pack, toTrash, unpack } from "./bundle";
 import type { Contents } from "./bundle";
 import { MOVES, bundleOf, changeMove, endedAs, forgetMove, forgetMovedAway, moveOf, movesChanged, noteEnded, noteMovedAway, readMove, readMoves, saveMove, shownMove } from "./records";
 import type { MoveRecord } from "./records";
@@ -400,9 +400,13 @@ async function carryOn(id: string): Promise<void> {
   }
   const bundle = await pack(id, contents);
   if (bundle.size > MOST_BUNDLE) throw new Refused(say.tooBig(record.name));
-  // Taken back meanwhile (as the box started again): it stays taken back.
+  // Taken back meanwhile (as the box started again): it stays taken back (a group chat held as it
+  // was is looked at again, and goes on).
   const still = readMove(id);
-  if (!still || still.failed || still.stage !== "holding") return;
+  if (!still || still.failed || still.stage !== "holding") {
+    if (record.kind === "group") groupsToWake = true;
+    return;
+  }
   outgoing.set(id, { got: new Set(), flying: new Map(), exports: fingerprint(exports, queues) });
   const now = changeMove(id, each => {
     Object.assign(each, { sessions: record.sessions, wasPaused: record.wasPaused, pausedAs: record.pausedAs, members: record.members, hash: bundle.hash, size: bundle.size, sent: 0, stage: "copying", step: "offer", offered: true, sentAt: Date.now() });
@@ -511,7 +515,7 @@ async function takeBack(id: string, message: string, status = 409): Promise<void
   outgoing.delete(id);
   // As it was, before whoever asked hears.
   unhold(record.folder, record.wasPaused, record.pausedAs);
-  if (record.kind === "group") await groupAction(readBridgeFile(), record.thing, "activate").catch(() => {});
+  if (record.kind === "group") await wakeGroup(record.thing);
   // Offered already: its copy there goes too, once that box says so (`dropped`).
   if (record.offered) {
     changeMove(id, each => { each.step = "drop"; each.sentAt = Date.now(); each.dropSince = Date.now(); each.failed = message; each.failedStatus = status; });
@@ -529,7 +533,7 @@ async function takeBack(id: string, message: string, status = 409): Promise<void
 async function restore(record: MoveRecord, message: string): Promise<void> {
   outgoing.delete(record.id);
   unhold(record.folder, record.wasPaused, record.pausedAs);
-  if (record.kind === "group") await groupAction(readBridgeFile(), record.thing, "activate").catch(() => {});
+  if (record.kind === "group") await wakeGroup(record.thing);
   forgetMove(record.id);
   try { fs.rmSync(bundleOf(record.id), { recursive: true, force: true }); } catch {}
   ended(record.id, { ok: false, status: 409, message });
@@ -585,7 +589,7 @@ async function takeOffer(sender: MailSender, given: Record<string, unknown>): Pr
   }
   const was = readMove(id);
   if (was && (was.role !== "to" || was.peer !== sender.key || was.thing !== thing)) return void answer({ op: "refused", message: say.moving });
-  if (was && was.hash === given.hash) return void answer({ op: "ready" });
+  if (was && was.hash === given.hash && !was.dropping) return void answer({ op: "ready" });
   // Offered again, changed (it got more while it moved): what came of it before goes first.
   if (was) await clearCopy(was);
   // A move of it this way from the same computer, cut short: this one takes its place. Any other
@@ -629,7 +633,7 @@ async function takePart(sender: MailSender, given: Record<string, unknown>): Pro
   const record = readMove(id);
   const i = given.i, of = given.of;
   const expected = Math.ceil((record?.size ?? 0) / PART_BYTES);
-  if (!record || record.role !== "to" || record.complete || record.peer !== sender.key || record.hash !== given.hash || !Number.isInteger(i) || of !== expected
+  if (!record || record.role !== "to" || record.complete || record.dropping || record.peer !== sender.key || record.hash !== given.hash || !Number.isInteger(i) || of !== expected
     || (i as number) < 0 || (i as number) >= expected || typeof given.d !== "string" || given.d.length > Math.ceil(PART_BYTES * 4 / 3)) return;
   const parts = partsOf(id);
   const bytes = Buffer.from(given.d, "base64url");
@@ -743,32 +747,76 @@ async function switchHere(record: MoveRecord): Promise<void> {
   }
 }
 
-/** A copy here that won't be switched to: gone, as if it never came. */
+/** A copy here that won't be switched to: gone, as if it never came. One that can't all go now (its
+ * engine or group chats down) is kept, never switched to, and let go of again each minute
+ * (`keepMoving`) until it's all gone: its record goes only then, never leaving a second copy live. */
 async function drop(id: string): Promise<void> {
   const record = readMove(id);
   if (!record || record.role !== "to") return;
   noteEnded(id, "dropped");
+  if (!record.dropping) changeMove(id, each => { each.dropping = true; });
   await clearCopy(record);
   forgetMove(id);
 }
 
 /** What a move brought here, gone: its conversations, the folder it placed, a bot's keys, a group
- * chat held for it. */
+ * chat held for it. It throws while any of it can't go (tried again: what went already is as good
+ * as gone). */
 async function clearCopy(record: MoveRecord): Promise<void> {
   incoming.delete(record.id);
   if (record.kind === "group") {
-    await groupAction(readBridgeFile(), record.thing, "release").catch(() => {});
+    await groupAction(readBridgeFile(), record.thing, "release");
   } else {
-    let engine: Target | null = null;
-    try { engine = readEngineFile(); } catch {}
-    for (const session of [...record.sessions].reverse()) if (engine) await deleteSession(engine, session).catch(() => {});
+    const engine = readEngineFile();
+    for (const session of [...record.sessions].reverse()) await deleteSession(engine, session);
     for (const session of record.sessions) forgetQueue(session);
     const place = folderOf(record.kind, record.thing);
     // Only a copy this move placed, never one that lives here.
     if (place && record.placed) {
       if (record.kind === "bot") await answerBotKeys("DELETE", `kuvo/bots/${record.thing}/keys`, null, null).catch(() => {});
-      await toTrash(place).catch(() => {});
+      await toTrash(place);
     }
+  }
+}
+
+// ---- Group chats held ----
+
+// A group chat a move held, to start again (taken back) as its group chats weren't answering: they're
+// looked at again each minute until it is, and once as the box starts.
+let groupsToWake = false;
+let groupsLookedAt = 0;
+
+/** A group chat a move held here going on again, as it was; tried again later when it can't now. */
+async function wakeGroup(group: string): Promise<void> {
+  try {
+    await groupAction(readBridgeFile(), group, "activate");
+  } catch (error) {
+    // Not there any more: nothing to start.
+    if ((error as { status?: number } | null)?.status !== 404) groupsToWake = true;
+  }
+}
+
+/** Each group chat held here that no move under way holds, going on again. */
+async function wakeHeldGroups(): Promise<void> {
+  groupsToWake = false;
+  let bridge: Target;
+  try {
+    bridge = readBridgeFile();
+  } catch {
+    groupsToWake = true;
+    return;
+  }
+  const listed = await askGroups<{ data?: { group?: { id?: unknown }; status?: unknown }[] }>(bridge, "GET", "", undefined, AbortSignal.timeout(ENGINE_WAIT)).catch(() => null);
+  // (No group chats run here: none held.)
+  if (listed?.status === 404) return;
+  if (listed?.status !== 200 || !Array.isArray(listed.value?.data)) {
+    groupsToWake = true;
+    return;
+  }
+  for (const chat of listed.value.data) {
+    const id = chat?.group?.id;
+    // (Looked at as it's started, so one a move holds meanwhile stays held.)
+    if (chat?.status === "held" && typeof id === "string" && !moveOf(id)) await wakeGroup(id);
   }
 }
 
@@ -796,20 +844,21 @@ async function moveMail(sender: MailSender, given: Record<string, unknown>, id: 
       // Only a copy that's here, whole, is switched to; one switched before (its answer lost) says
       // so again; any other (dropped, never set up, unknown) is `dropped`, and the box it came
       // from keeps its original.
-      if (mine?.role === "to" && mine.complete && mine.sessions.length + (mine.kind === "group" ? 1 : 0) > 0) {
+      if (mine?.role === "to" && mine.complete && !mine.dropping && mine.sessions.length + (mine.kind === "group" ? 1 : 0) > 0) {
         await switchHere(mine);
         noteEnded(id, "switched");
         forgetMove(id);
         return void tell(sender.key, { op: "switched", id });
       }
-      if (mine?.role === "to") await drop(id);
+      // (One that can't all go yet isn't said gone: asked again, it's answered once it is.)
+      if (mine?.role === "to" && !await drop(id).then(() => true, () => false)) return;
       return void tell(sender.key, { op: endedAs(id) === "switched" ? "switched" : "dropped", id });
     }
     case "drop":
       if (record && !mine) return;
       // A copy switched to already can't be let go: the box it came from goes on to finish.
       if (endedAs(id) === "switched") return void tell(sender.key, { op: "switched", id });
-      if (mine?.role === "to") await drop(id);
+      if (mine?.role === "to" && !await drop(id).then(() => true, () => false)) return;
       return void tell(sender.key, { op: "dropped", id });
     // To the box it leaves.
     case "ready":
@@ -857,6 +906,10 @@ async function moveMail(sender: MailSender, given: Record<string, unknown>, id: 
 // Each move's next step, once in a while: a step unanswered sent again; a first offer with no answer
 // taken back (the other computer isn't there); one whose other computer was removed, ended.
 export function keepMoving(now = Date.now()): void {
+  if (groupsToWake && now - groupsLookedAt > STEP_AGAIN) {
+    groupsLookedAt = now;
+    wakeHeldGroups().catch(() => {});
+  }
   const peers = new Set(peersOf(readLink()).map(peer => peer.key));
   let names: string[] = [];
   try { names = fs.readdirSync(MOVES).filter(name => name.endsWith(".outcome.json")); } catch {}
@@ -871,6 +924,14 @@ export function keepMoving(now = Date.now()): void {
     }
     missing.delete(record.id);
     if (record.role === "to") {
+      // A copy that couldn't all be let go of (its engine or group chats down): again, each minute.
+      if (record.dropping) {
+        if (now - (record.sentAt ?? 0) > STEP_AGAIN) {
+          changeMove(record.id, each => { each.sentAt = now; });
+          inTurn(record.id, () => drop(record.id)).catch(() => {});
+        }
+        continue;
+      }
       // Setting it up stuck (its engine not answering): given up on, which lets what came of it go
       // and says it failed, so the box it came from takes it back.
       // (One cut short by a restart isn't set up still: the box it came from takes it back.)
@@ -979,6 +1040,9 @@ export async function resumeMoves(now = Date.now()): Promise<void> {
       if (!moving.has(name) && pausedText(folder) === "moving") unhold(folder, false);
     }
   }
+  // And a group chat held that no move here holds (one taken back as its group chats were down).
+  groupsLookedAt = now;
+  await wakeHeldGroups().catch(() => {});
   movesChanged();
 }
 

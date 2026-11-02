@@ -478,7 +478,10 @@ only for a copy it has whole or switched to already, and `dropped` for any other
 of, never set up, or doesn't know), and the box it left then goes on with its original, as it was.
 Before the switch, anything that goes wrong takes it back: the box it leaves sends `drop` →
 `dropped` (the copy there goes: its conversations, keys and folder, a group chat released) and
-goes on as it was. After it, only forward. Each box keeps its moves in `run/moves/<id>.json` (and
+goes on as it was. `dropped` comes only once all of it's gone: what its engine or group chats can't
+let go of now (down) is kept, never switched to, and let go of again each minute. A group chat that
+can't go on again as it's taken back (its group chats down) is started each minute until it does,
+and as a box starts, a group chat held there that no move under way holds goes on. After it, only forward. Each box keeps its moves in `run/moves/<id>.json` (and
 the bundle beside it), so a move cut short by a restart carries on: one that switched finishes, one
 that didn't is taken back. Letting the original go after `switched` is tried again each minute
 until it's done (its engine was down); its engine, up, refusing to give its conversation to keep ten

@@ -47,6 +47,9 @@ export interface MoveRecord extends Move {
   /** The box it goes to: its conversations whose queue the move brought going on where it came
    * from (not paused), to go on here once it's switched to. */
   queuesGoOn?: string[];
+  /** The box it goes to: its copy is being let go of (it won't be switched to), which is tried again
+   * until all of it's gone (its engine or group chats were down). */
+  dropping?: boolean;
   /** The box it goes to: since when it's been setting its copy up. */
   setUpSince?: number;
   /** Since when the box it leaves has asked the other to switch to its copy. */

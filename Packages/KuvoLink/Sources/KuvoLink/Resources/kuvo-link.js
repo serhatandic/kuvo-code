@@ -13777,6 +13777,7 @@ import crypto23 from "node:crypto";
 import fs53 from "node:fs";
 import path57 from "node:path";
 var MOST_BUNDLE = 1e9;
+var ENGINE_WAIT = 2 * 60000;
 var CHATS2 = IS_MAC ? path57.join(path57.dirname(K), "Chats") : path57.join(K, "chats");
 var folderOf = (kind, thing) => kind === "bot" ? path57.join(BOTS, thing) : kind === "chat" ? path57.join(SESSION_WAKES, thing) : null;
 var directoryOf = (kind, thing) => kind === "bot" ? path57.join(BOTS, thing, "workspace") : CHATS2;
@@ -13957,7 +13958,7 @@ async function groupAction(bridge, group, action) {
   if (answer.status === 404 && action === "release")
     return null;
   if (answer.status !== 200)
-    throw new Error(typeof answer.value?.message === "string" ? answer.value.message : `Its group chats answered ${answer.status}.`);
+    throw Object.assign(new Error(typeof answer.value?.message === "string" ? answer.value.message : `Its group chats answered ${answer.status}.`), { status: answer.status });
   return answer.value?.data ?? null;
 }
 
@@ -14310,8 +14311,11 @@ async function carryOn(id) {
   if (bundle.size > MOST_BUNDLE)
     throw new Refused(say.tooBig(record.name));
   const still = readMove(id);
-  if (!still || still.failed || still.stage !== "holding")
+  if (!still || still.failed || still.stage !== "holding") {
+    if (record.kind === "group")
+      groupsToWake = true;
     return;
+  }
   outgoing.set(id, { got: new Set, flying: new Map, exports: fingerprint(exports, queues) });
   const now = changeMove(id, (each) => {
     Object.assign(each, { sessions: record.sessions, wasPaused: record.wasPaused, pausedAs: record.pausedAs, members: record.members, hash: bundle.hash, size: bundle.size, sent: 0, stage: "copying", step: "offer", offered: true, sentAt: Date.now() });
@@ -14434,7 +14438,7 @@ async function takeBack(id, message, status = 409) {
   outgoing.delete(id);
   unhold(record.folder, record.wasPaused, record.pausedAs);
   if (record.kind === "group")
-    await groupAction(readBridgeFile(), record.thing, "activate").catch(() => {});
+    await wakeGroup(record.thing);
   if (record.offered) {
     changeMove(id, (each) => {
       each.step = "drop";
@@ -14457,7 +14461,7 @@ async function restore(record, message) {
   outgoing.delete(record.id);
   unhold(record.folder, record.wasPaused, record.pausedAs);
   if (record.kind === "group")
-    await groupAction(readBridgeFile(), record.thing, "activate").catch(() => {});
+    await wakeGroup(record.thing);
   forgetMove(record.id);
   try {
     fs54.rmSync(bundleOf(record.id), { recursive: true, force: true });
@@ -14517,7 +14521,7 @@ async function takeOffer(sender, given) {
   const was = readMove(id);
   if (was && (was.role !== "to" || was.peer !== sender.key || was.thing !== thing))
     return void answer({ op: "refused", message: say.moving });
-  if (was && was.hash === given.hash)
+  if (was && was.hash === given.hash && !was.dropping)
     return void answer({ op: "ready" });
   if (was)
     await clearCopy(was);
@@ -14577,7 +14581,7 @@ async function takePart(sender, given) {
   const record = readMove(id);
   const { i, of } = given;
   const expected = Math.ceil((record?.size ?? 0) / PART_BYTES);
-  if (!record || record.role !== "to" || record.complete || record.peer !== sender.key || record.hash !== given.hash || !Number.isInteger(i) || of !== expected || i < 0 || i >= expected || typeof given.d !== "string" || given.d.length > Math.ceil(PART_BYTES * 4 / 3))
+  if (!record || record.role !== "to" || record.complete || record.dropping || record.peer !== sender.key || record.hash !== given.hash || !Number.isInteger(i) || of !== expected || i < 0 || i >= expected || typeof given.d !== "string" || given.d.length > Math.ceil(PART_BYTES * 4 / 3))
     return;
   const parts = partsOf2(id);
   const bytes = Buffer.from(given.d, "base64url");
@@ -14719,29 +14723,61 @@ async function drop(id) {
   if (!record || record.role !== "to")
     return;
   noteEnded(id, "dropped");
+  if (!record.dropping)
+    changeMove(id, (each) => {
+      each.dropping = true;
+    });
   await clearCopy(record);
   forgetMove(id);
 }
 async function clearCopy(record) {
   incoming.delete(record.id);
   if (record.kind === "group") {
-    await groupAction(readBridgeFile(), record.thing, "release").catch(() => {});
+    await groupAction(readBridgeFile(), record.thing, "release");
   } else {
-    let engine = null;
-    try {
-      engine = readEngineFile();
-    } catch {}
+    const engine = readEngineFile();
     for (const session of [...record.sessions].reverse())
-      if (engine)
-        await deleteSession(engine, session).catch(() => {});
+      await deleteSession(engine, session);
     for (const session of record.sessions)
       forgetQueue(session);
     const place = folderOf(record.kind, record.thing);
     if (place && record.placed) {
       if (record.kind === "bot")
         await answerBotKeys("DELETE", `kuvo/bots/${record.thing}/keys`, null, null).catch(() => {});
-      await toTrash(place).catch(() => {});
+      await toTrash(place);
     }
+  }
+}
+var groupsToWake = false;
+var groupsLookedAt = 0;
+async function wakeGroup(group) {
+  try {
+    await groupAction(readBridgeFile(), group, "activate");
+  } catch (error) {
+    if (error?.status !== 404)
+      groupsToWake = true;
+  }
+}
+async function wakeHeldGroups() {
+  groupsToWake = false;
+  let bridge;
+  try {
+    bridge = readBridgeFile();
+  } catch {
+    groupsToWake = true;
+    return;
+  }
+  const listed = await askGroups(bridge, "GET", "", undefined, AbortSignal.timeout(ENGINE_WAIT)).catch(() => null);
+  if (listed?.status === 404)
+    return;
+  if (listed?.status !== 200 || !Array.isArray(listed.value?.data)) {
+    groupsToWake = true;
+    return;
+  }
+  for (const chat of listed.value.data) {
+    const id = chat?.group?.id;
+    if (chat?.status === "held" && typeof id === "string" && !moveOf(id))
+      await wakeGroup(id);
   }
 }
 async function takeMoveMail(sender, given) {
@@ -14764,14 +14800,14 @@ async function moveMail(sender, given, id) {
     case "switch": {
       if (record && !mine)
         return;
-      if (mine?.role === "to" && mine.complete && mine.sessions.length + (mine.kind === "group" ? 1 : 0) > 0) {
+      if (mine?.role === "to" && mine.complete && !mine.dropping && mine.sessions.length + (mine.kind === "group" ? 1 : 0) > 0) {
         await switchHere(mine);
         noteEnded(id, "switched");
         forgetMove(id);
         return void tell(sender.key, { op: "switched", id });
       }
-      if (mine?.role === "to")
-        await drop(id);
+      if (mine?.role === "to" && !await drop(id).then(() => true, () => false))
+        return;
       return void tell(sender.key, { op: endedAs(id) === "switched" ? "switched" : "dropped", id });
     }
     case "drop":
@@ -14779,8 +14815,8 @@ async function moveMail(sender, given, id) {
         return;
       if (endedAs(id) === "switched")
         return void tell(sender.key, { op: "switched", id });
-      if (mine?.role === "to")
-        await drop(id);
+      if (mine?.role === "to" && !await drop(id).then(() => true, () => false))
+        return;
       return void tell(sender.key, { op: "dropped", id });
     case "ready":
       if (mine?.role !== "from" || mine.step !== "offer")
@@ -14838,6 +14874,10 @@ async function moveMail(sender, given, id) {
   }
 }
 function keepMoving(now = Date.now()) {
+  if (groupsToWake && now - groupsLookedAt > STEP_AGAIN) {
+    groupsLookedAt = now;
+    wakeHeldGroups().catch(() => {});
+  }
   const peers = new Set(peersOf(readLink()).map((peer) => peer.key));
   let names = [];
   try {
@@ -14858,6 +14898,15 @@ function keepMoving(now = Date.now()) {
     }
     missing.delete(record.id);
     if (record.role === "to") {
+      if (record.dropping) {
+        if (now - (record.sentAt ?? 0) > STEP_AGAIN) {
+          changeMove(record.id, (each) => {
+            each.sentAt = now;
+          });
+          inTurn(record.id, () => drop(record.id)).catch(() => {});
+        }
+        continue;
+      }
       const stop = settingUp.get(record.id);
       if (stop && now - (record.setUpSince ?? now) > SET_UP_AT_MOST)
         stop.abort(new NotTaken("It took too long to set up."));
@@ -14974,6 +15023,8 @@ async function resumeMoves(now = Date.now()) {
         unhold(folder, false);
     }
   }
+  groupsLookedAt = now;
+  await wakeHeldGroups().catch(() => {});
   movesChanged();
 }
 function watchMoves(host, signal) {
