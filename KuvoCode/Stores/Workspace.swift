@@ -613,6 +613,10 @@ final class Workspace {
         return model
     }
 
+    /// Renames asked of each session, counted: one that waited for a move goes only if none came
+    /// after it.
+    @ObservationIgnored private var renames: [String: Int] = [:]
+
     /// A machine's sessions as they are now, kept for when it's away (see `showLastSeen`): a
     /// moment after they change, as several often change together.
     @ObservationIgnored private var listSaves: [String: Task<Void, Never>] = [:]
@@ -652,7 +656,9 @@ final class Workspace {
     private func box(of id: String, else directory: String) -> () -> BoxClient? {
         { [weak self] in
             guard let self else { return nil }
-            return self.boxes?(RemoteFolder.machine(of: self.session(id)?.location.directory ?? directory) ?? BoxClient.mac)
+            // (A subagent's has no row: as its model has it, which moves with its conversation.)
+            let now = self.session(id)?.location.directory ?? self.models[id]?.session.location.directory ?? directory
+            return self.boxes?(RemoteFolder.machine(of: now) ?? BoxClient.mac)
         }
     }
 
@@ -1618,17 +1624,29 @@ final class Workspace {
     /// was renamed again meanwhile. One a move to another computer has (a rename begun before it,
     /// or as it ends) is renamed once it's there, on the engine it lives on then.
     func rename(_ id: String, to title: String) async {
-        guard (try? await Deliveries.settled(id)) != nil, let index = sessions.firstIndex(where: { $0.id == id }), let api = api(forSession: id) else { return }
+        renames[id, default: 0] += 1
+        let asked = renames[id]
+        guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
         let before = sessions[index].title
-        sessions[index].title = title
-        if let machine = RemoteFolder.machine(of: sessions[index].location.directory) { keepList(of: machine) }
-        do {
-            try await api.renameSession(id, title: title)
-        } catch {
-            guard let index = sessions.firstIndex(where: { $0.id == id }), sessions[index].title == title else { return }
+        // Put back as it was, unless it was renamed again meanwhile.
+        let putBack = { [weak self] in
+            guard let self, let index = sessions.firstIndex(where: { $0.id == id }), sessions[index].title == title else { return }
             sessions[index].title = before
             // A machine's list as it's kept here for while it's away, too.
             if let machine = RemoteFolder.machine(of: sessions[index].location.directory) { keepList(of: machine) }
+        }
+        sessions[index].title = title
+        if let machine = RemoteFolder.machine(of: sessions[index].location.directory) { keepList(of: machine) }
+        // A move has it: once it's there (shown so meanwhile), unless it was renamed again.
+        guard (try? await Deliveries.settled(id)) != nil else { return putBack() }
+        guard renames[id] == asked else { return }
+        guard let index = sessions.firstIndex(where: { $0.id == id }), let api = api(forSession: id) else { return putBack() }
+        // (As its list where it lives now read meanwhile may have had it.)
+        sessions[index].title = title
+        do {
+            try await api.renameSession(id, title: title)
+        } catch {
+            putBack()
         }
     }
 

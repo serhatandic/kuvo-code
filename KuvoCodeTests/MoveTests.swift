@@ -78,7 +78,8 @@ import Testing
     }
 
     /// A rename made while a move has the conversation (begun before it, or made as it ends) isn't
-    /// lost: it's made once the conversation is where it lives now.
+    /// lost: it shows at once, and is made once the conversation is where it lives now; the later
+    /// of two, as you'd expect.
     @Test func aRenameWhileItMovesIsMadeOnceItsThere() async throws {
         defer { engine.stop() }
         let box = try await TestBox(engine: engine.url, environment: ["KUVO_TEST_NO_PEERS": "1"])
@@ -96,10 +97,15 @@ import Testing
         try underWay("mov_rename1", thing: "ses_renamed", role: "from", sessions: ["ses_renamed"])
         try await until { app.moves.held.contains("ses_renamed") }
         let renaming = Task { await app.workspace.rename("ses_renamed", to: "Trip to Lisbon") }
+        // Shown so meanwhile; and renamed again before it's there, the later name is the one made.
+        try await until { app.workspace.session("ses_renamed")?.title == "Trip to Lisbon" }
+        let again = Task { await app.workspace.rename("ses_renamed", to: "Lisbon in May") }
+        try await until { app.workspace.session("ses_renamed")?.title == "Lisbon in May" }
         try over("mov_rename1")
         await renaming.value
-        #expect(engine.requests("PATCH", "/api/session/ses_renamed").count == 1)
-        #expect(app.workspace.session("ses_renamed")?.title == "Trip to Lisbon")
+        await again.value
+        #expect(engine.requests("PATCH", "/api/session/ses_renamed").map { $0.body["title"] as? String } == ["Lisbon in May"])
+        #expect(app.workspace.session("ses_renamed")?.title == "Lisbon in May")
     }
 
     /// Your machine "lab", as this Mac's box knows it among your computers (`run/link.json`).

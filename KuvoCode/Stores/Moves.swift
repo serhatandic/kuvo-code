@@ -16,10 +16,9 @@ final class Moves {
     /// What's moving now, a bot's ID, a chat's session ID or a group chat's ID, where to and how far
     /// it is: its row says so.
     private(set) var underWay: [String: Going] = [:]
-    #if DEBUG
-    /// `frozen`, for a test to wait on (the static one isn't observed).
+    /// `frozen`, observed: what's shown of it (a menu's items off) changes as it does, and a test
+    /// waits on it (the static one isn't observed).
     private(set) var held: Set<String> = []
-    #endif
     @ObservationIgnored weak var app: AppModel?
     /// A box's routes (a test's own), else the app's.
     @ObservationIgnored var boxes: ((String) -> BoxClient)?
@@ -158,7 +157,7 @@ final class Moves {
     func isMoving(_ id: String) -> Bool { underWay[id] != nil }
 
     /// Moving, or just moved and not yet shown where it lives now: what would change it waits.
-    func isHeld(_ id: String) -> Bool { isMoving(id) || Self.isFrozen(id) }
+    func isHeld(_ id: String) -> Bool { isMoving(id) || held.contains(id) }
 
     /// A move of it that its box hasn't finished yet.
     func isPending(_ id: String) -> Bool { told.values.contains { $0.moves.contains { $0.thing == id } } }
@@ -602,9 +601,7 @@ final class Moves {
         for (things, to) in settling.values { if let to { for thing in things { arriving[thing] = to } } }
         if arriving != Self.arriving { Self.arriving = arriving }
         if frozen != Self.frozen { Self.frozen = frozen }
-        #if DEBUG
         if frozen != held { held = frozen }
-        #endif
         if app?.workspace.movedAway != away { app?.workspace.movedAway = away }
     }
 
