@@ -578,6 +578,7 @@ private struct BranchMenu: View {
         .disabled(isWorking)
         .help(isWorktree ? "This session works on its own branch, \(tree.branch). Merge it or create a pull request." : "Create a pull request for \(tree.branch)")
         .accessibilityLabel(isWorktree ? "Merge or Create Pull Request" : "Create Pull Request")
+        .closesWhenKept($confirmsPullRequest)
         .popover(isPresented: $confirmsPullRequest, arrowEdge: .bottom) {
             PullRequestForm(directory: directory, model: model) { pushedOnly in
                 confirmsPullRequest = false
@@ -711,7 +712,7 @@ private struct PullRequestForm: View {
                     .textFieldStyle(.roundedBorder)
                 if model != nil {
                     Button {
-                        suggest(from: draft.summary)
+                        suggest()
                     } label: {
                         Label(isSuggesting ? "Writing…" : "Suggest a Title and Description", systemImage: "pencil.line")
                     }
@@ -742,8 +743,10 @@ private struct PullRequestForm: View {
             HStack {
                 if isWorking { Spinner(size: 12) }
                 Spacer()
+                // Once it's pushing, it goes on to the end: closed then, it'd still open the page.
                 Button("Cancel", role: .cancel) { done(false) }
                     .keyboardShortcut(.cancelAction)
+                    .disabled(isWorking)
                 Button(draft?.action ?? "Create Pull Request") { create() }
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(.borderedProminent)
@@ -752,6 +755,7 @@ private struct PullRequestForm: View {
         }
         .padding(16)
         .frame(width: 340)
+        .interactiveDismissDisabled(isWorking)
         .task { await read() }
     }
 
@@ -772,28 +776,38 @@ private struct PullRequestForm: View {
             title = found.title
             description = found.body
             isFocused = true
+        } catch let refusal as BoxRefusal where refusal.status == 404 && refusal.message.hasPrefix("It said no") {
+            // A machine's box from before it made pull requests itself.
+            failure = "\(place) needs a newer Kuvo Code to create pull requests. It updates by itself overnight, or connect to it from this Mac."
         } catch {
             failure = error.localizedDescription
         }
     }
 
     /// A title and description the session's model writes from what the branch brings.
-    private func suggest(from summary: String) {
+    private func suggest() {
         guard let session = model?.id, let api = workspace.api(forSession: session) else { return }
         let isAgents = model.map { OutsideAgents.isAgentSession($0.session) } ?? false
-        let prompt = GitPreferences.prompt("""
-        Write a pull request for the changes below. The first line is its title: under 72 characters, in the imperative mood. Then a blank line and a short description in Markdown: what changed and why, in a few bullet points, and anything a reviewer should check. Reply with the pull request alone: no preamble, no code fences.
-
-        \(summary)
-        """, instructionsKey: GitPreferences.pullRequestInstructionsKey)
         isSuggesting = true
         Task {
             defer { isSuggesting = false }
+            let summary: String
+            do {
+                summary = try await PullRequests.draft(on: box.client, directory: box.path, withSummary: true).summary ?? ""
+            } catch {
+                failure = error.localizedDescription
+                return
+            }
+            let prompt = GitPreferences.prompt("""
+            Write a pull request for the changes below. The first line is its title: under 72 characters, in the imperative mood. Then a blank line and a short description in Markdown: what changed and why, in a few bullet points, and anything a reviewer should check. Reply with the pull request alone: no preamble, no code fences.
+
+            \(summary)
+            """, instructionsKey: GitPreferences.pullRequestInstructionsKey)
             // A coding agent's session asks its own model; one whose agent can't answer outside
             // the conversation, the engine's default model.
             var written = try? await api.generate(prompt, session: session)
             if written == nil, isAgents { written = try? await app.api?.generate(prompt) }
-            guard let text = written, let pull = Git.parsePullRequest(text) else {
+            guard let text = written, let pull = PullRequestDraft.parse(text) else {
                 failure = "The model didn’t write one. Try again, or write it yourself."
                 return
             }

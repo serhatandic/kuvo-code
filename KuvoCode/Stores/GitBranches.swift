@@ -56,18 +56,6 @@ nonisolated extension Git {
         }
         return conflicted.isEmpty ? .failed(failure) : .conflict(conflicted)
     }
-
-    /// A model's pull request, as a title (its first line) and a description (the rest).
-    static func parsePullRequest(_ text: String) -> (title: String, body: String)? {
-        var lines = text.trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: "\n")
-        lines.removeAll { $0.hasPrefix("```") }
-        guard let first = lines.first?.trimmingCharacters(in: .whitespaces), !first.isEmpty else { return nil }
-        var title = first
-        for prefix in ["# ", "Title: ", "title: "] where title.hasPrefix(prefix) { title = String(title.dropFirst(prefix.count)) }
-        title = title.trimmingCharacters(in: CharacterSet(charactersIn: "*`\" "))
-        let body = lines.dropFirst().joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-        return title.isEmpty ? nil : (String(title.prefix(120)), String(body.prefix(4_000)))
-    }
 }
 
 /// Create Pull Request, on the box the project is on, as a phone asks it: its confirmation first
@@ -83,9 +71,10 @@ nonisolated enum PullRequests {
         case pushed
     }
 
-    static func draft(on box: BoxClient, directory: String) async throws -> PullRequestDraft {
-        struct Asked: Encodable { let directory: String }
-        return try await box.value(PullRequestDraft.self, "POST", "kuvo/git/pull-request/draft", body: Asked(directory: directory))
+    /// `withSummary`: with what the branch brings, for a model to write them from.
+    static func draft(on box: BoxClient, directory: String, withSummary: Bool = false) async throws -> PullRequestDraft {
+        struct Asked: Encodable { let directory: String; let summary: Bool }
+        return try await box.value(PullRequestDraft.self, "POST", "kuvo/git/pull-request/draft", body: Asked(directory: directory, summary: withSummary))
     }
 
     static func create(on box: BoxClient, directory: String, title: String, body: String) async throws -> Made {
