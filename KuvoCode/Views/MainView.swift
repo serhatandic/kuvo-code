@@ -650,7 +650,7 @@ struct MainView: View {
                     Button("Close", systemImage: "xmark") { withAnimation(.ui) { tabs.groupEditor = nil } }
                         .help("Close")
                 } content: {
-                    GroupEditor(group: request.group, newBot: { tabs.openBotEditor(bot: nil) }) {
+                    GroupEditor(group: request.group, machine: request.machine, newBot: { tabs.openBotEditor(bot: nil) }) {
                         withAnimation(.ui) { tabs.groupEditor = nil }
                     } created: { group in
                         tabs.open(.group(group.id))
@@ -664,7 +664,7 @@ struct MainView: View {
                     Button("Close", systemImage: "xmark") { withAnimation(.ui) { tabs.botEditor = nil } }
                         .help("Close")
                 } content: {
-                    BotEditor(bot: request.bot, recipe: request.recipe) {
+                    BotEditor(bot: request.bot, recipe: request.recipe, machine: request.machine) {
                         // This editor's, not one opened since (a delete that took a while).
                         if tabs.botEditor?.id == request.id { withAnimation(.ui) { tabs.botEditor = nil } }
                     } created: { bot in
@@ -1486,11 +1486,15 @@ struct BotEditorRequest: Identifiable {
     let bot: Bot?
     /// A shared bot a new one starts from.
     var recipe: BotRecipe?
+    /// The machine a new one starts on; nil for this Mac.
+    var machine: String?
 }
 
 struct GroupEditorRequest: Identifiable {
     let id = UUID()
     let group: BotGroup?
+    /// The machine a new one starts on; nil for this Mac.
+    var machine: String?
 }
 
 struct ProjectEditorRequest: Identifiable {

@@ -277,7 +277,11 @@ final class BoxGroups {
     func reach(_ id: String) -> Reach {
         access(keyPath: \.groups)
         guard groupsByID[id] != nil else { return .ready }
-        let machine = machines[id]
+        return reach(on: machines[id])
+    }
+
+    /// Whether a computer's group chats can be reached now: this Mac's (nil), or a machine's.
+    func reach(on machine: String?) -> Reach {
         if api(machine) != nil { return .ready }
         guard let machine else { return macReach }
         return .away(machine)
@@ -583,17 +587,17 @@ final class BoxGroups {
 
     // MARK: Taking part
 
-    /// A new chat on this Mac, as New Group Chat makes it: this Mac's box says what can be (who
-    /// can join, its meeting, on its clock), and makes it.
-    func create(name: String, purpose: String?, members: [String], meeting: MeetingPlan?) async throws -> BotGroup {
-        guard let api = api(nil) else { throw Failure.macStarting }
+    /// A new chat on this Mac, or on `machine`, as New Group Chat makes it: the box it lives on says
+    /// what can be (who can join, its meeting, on its clock), and makes it.
+    func create(name: String, purpose: String?, members: [String], meeting: MeetingPlan?, on machine: String? = nil) async throws -> BotGroup {
+        guard let api = api(machine) else { throw failure(for: machine) }
         var body: [String: JSONValue] = ["name": .string(name), "members": .array(members.map(JSONValue.string))]
         if let purpose { body["purpose"] = .string(purpose) }
         if let meeting { body["meeting"] = meeting.json }
         let answer = try await api.client.send(try api.client.request("POST", "api/kuvo/link/groups", body: JSONValue.object(body)), as: JSONValue.self, patience: .zero)
         guard let id = answer["group"]?["id"]?.string else { throw Failure.unreadable }
-        await reload(id, on: nil)
-        guard let group = chats.first(where: { $0.group.id == id && $0.machine == nil })?.group else { throw Failure.unreadable }
+        await reload(id, on: machine)
+        guard let group = chats.first(where: { $0.group.id == id && $0.machine == machine })?.group else { throw Failure.unreadable }
         Analytics.shared.track("group_created", ["members": members.count])
         return group
     }

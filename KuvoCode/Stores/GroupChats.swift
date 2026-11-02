@@ -43,6 +43,8 @@ final class GroupChats {
 
     /// Whether you can reach a chat where it lives now (see `BoxGroups.Reach`).
     func reach(_ id: String) -> BoxGroups.Reach { boxes.reach(id) }
+    /// Whether a computer's chats can be reached now: this Mac's (nil), or a machine's.
+    func reach(on machine: String?) -> BoxGroups.Reach { boxes.reach(on: machine) }
     /// The machine a chat lives on while you can't reach it there: what you write waits.
     func unreachable(_ id: String) -> String? { boxes.unreachable(id) }
     /// This Mac's group chats: running, starting, or stopped.
@@ -97,9 +99,9 @@ final class GroupChats {
         await boxes.joinable(machine)
     }
 
-    /// A new chat, on this Mac.
-    func create(name: String, purpose: String?, members: [String], meeting: BoxGroups.MeetingPlan?) async throws -> BotGroup {
-        try await boxes.create(name: name, purpose: purpose, members: members, meeting: meeting)
+    /// A new chat, on this Mac or `machine`.
+    func create(name: String, purpose: String?, members: [String], meeting: BoxGroups.MeetingPlan?, on machine: String? = nil) async throws -> BotGroup {
+        try await boxes.create(name: name, purpose: purpose, members: members, meeting: meeting, on: machine)
     }
 
     /// Its name, purpose, bots or meeting changed, where it lives; what it refuses throws.

@@ -62,6 +62,13 @@ extension AppModel {
         [.mac] + machines.list.map { .machine($0.id) }
     }
 
+    /// The box whose page the sidebar shows, while it's still there: where New Bot and New Group
+    /// Chat start.
+    var boxInView: SidebarBox {
+        let picked = SidebarBox(id: UserDefaults.standard.string(forKey: SidebarBox.inViewKey) ?? "mac")
+        return boxes.contains(picked) ? picked : .mac
+    }
+
     /// Coding agents with a newer version that their installer can update to, on every computer
     /// whose agents are up (this Mac, and each machine connected now), one per program: what
     /// Update All updates.

@@ -58,15 +58,16 @@ struct BotEditor: View {
 
     private enum Field { case name }
 
-    /// `recipe`: a shared bot that a new one starts from.
-    init(bot: Bot?, recipe: BotRecipe? = nil, close: @escaping () -> Void, created: @escaping (Bot) -> Void = { _ in }) {
+    /// `recipe`: a shared bot that a new one starts from. `machine`: where a new one starts to live
+    /// (nil for this Mac).
+    init(bot: Bot?, recipe: BotRecipe? = nil, machine: String? = nil, close: @escaping () -> Void, created: @escaping (Bot) -> Void = { _ in }) {
         self.bot = bot
         self.close = close
         self.created = created
         _look = State(initialValue: bot?.look ?? recipe?.look ?? .random())
         _name = State(initialValue: bot?.name ?? recipe?.name ?? "")
         _job = State(initialValue: JobDraft(line: bot?.job ?? "", details: bot?.instructions ?? ""))
-        _machine = State(initialValue: bot?.machine)
+        _machine = State(initialValue: bot == nil ? machine : bot?.machine)
         _project = State(initialValue: bot?.project)
         _model = State(initialValue: bot?.model)
         _personality = State(initialValue: bot?.personality)
@@ -149,6 +150,8 @@ struct BotEditor: View {
         .onDisappear { if waitsForMachine { creating?.cancel() } }
         .onAppear {
             if isNew { focus = .name }
+            // Starting on a machine that couldn't connect: tried again, as picking it does.
+            if isNew, let engine = machine.flatMap({ app.machines.engine($0) }), case .failed = engine.state { app.connect(engine) }
             #if DEBUG
             // KUVO_DEMO_NEW_BOT_MACHINE=<machine>: a new bot set to live on that machine.
             if isNew, let machine = ProcessInfo.processInfo.environment["KUVO_DEMO_NEW_BOT_MACHINE"] { self.machine = machine }
