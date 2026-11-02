@@ -19,10 +19,11 @@ test.skipIf(!landlock)("setting the sandbox up writes nothing outside Kuvo Code'
     for (const folder of ["kuvo", "home", "tmp"]) mkdirSync(join(root, folder))
     chmodSync(temporary, 0o500)
     const box = join(import.meta.dir, "..", "src", "link", "fence", "state.ts")
-    // (A box of its own, in a process of its own: the link finds its folders as it loads. Without
-    // Bun's cache of the source it compiles here, which the built box has no need for.)
+    // (A box of its own, in a process of its own: the link finds its folders as it loads. Run as Bun
+    // where the tests run on the engine's own runtime, as a machine does, and without Bun's cache of
+    // the source it compiles here, which the built box has no need for.)
     const script = `const fence = await import(${JSON.stringify(box)}); const state = fence.setUpFence(); console.log(JSON.stringify({ reason: state.reason ?? null, why: state.why ?? null, whole: fence.fenceWhole() }))`
-    const ran = Bun.spawnSync([process.execPath, "-e", script], { cwd: root, env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: join(root, "home"), KUVO_HOME: join(root, "kuvo"), TMPDIR: temporary, BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" } })
+    const ran = Bun.spawnSync([process.execPath, "-e", script], { cwd: root, env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: join(root, "home"), KUVO_HOME: join(root, "kuvo"), TMPDIR: temporary, BUN_BE_BUN: "1", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" } })
     const said = ran.stdout.toString().trim().split("\n").at(-1) ?? ""
     expect(ran.exitCode, ran.stderr.toString()).toBe(0)
     const state = JSON.parse(said)
