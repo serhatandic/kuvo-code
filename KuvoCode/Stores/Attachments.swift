@@ -27,9 +27,52 @@ nonisolated enum Attachments {
         var unsent: [String] = []
     }
 
-    /// Where pasted images and converted copies are kept.
+    /// Where pasted images and converted copies are kept: waiting to be sent at the top, and
+    /// once sent, in a folder of their session's (`claim`).
     static var directory: URL {
         AppInfo.supportDirectory.appending(path: "Attachments")
+    }
+
+    /// Where the files `session` sent are kept, so they go with it: this Mac's box deletes the
+    /// folder as the session's deleted, and the app does a machine's session's.
+    static func folder(for session: String) -> URL {
+        directory.appending(path: session, directoryHint: .isDirectory)
+    }
+
+    /// `files` as `session` sends them: those waiting in the attachments folder (pasted, converted,
+    /// written out to attach again) moved into the session's folder, and those in another
+    /// session's copied there, so each session's go with it and no other's do. Your own files stay
+    /// where they are.
+    static func claim(_ files: [URL], for session: String) -> [URL] {
+        guard isSession(session) else { return files }
+        let root = directory.standardizedFileURL.path
+        let own = folder(for: session)
+        return files.map { url in
+            guard url.isFileURL else { return url }
+            let parent = url.deletingLastPathComponent().standardizedFileURL
+            let waiting = parent.path == root
+            let another = parent.deletingLastPathComponent().path == root && isSession(parent.lastPathComponent) && parent.lastPathComponent != session
+            guard waiting || another else { return url }
+            do {
+                try FileManager.default.createDirectory(at: own, withIntermediateDirectories: true)
+                let to = unique(url.deletingPathExtension().lastPathComponent, extension: url.pathExtension, in: own)
+                if waiting { try FileManager.default.moveItem(at: url, to: to) } else { try FileManager.default.copyItem(at: url, to: to) }
+                return to
+            } catch {
+                return url
+            }
+        }
+    }
+
+    /// A machine's session's files, as it's deleted (its box lets its own copies go).
+    static func forget(session: String) {
+        guard isSession(session) else { return }
+        try? FileManager.default.removeItem(at: folder(for: session))
+    }
+
+    /// A session's ID, as its folder is named (the box names its own the same way).
+    private static func isSession(_ name: String) -> Bool {
+        name.hasPrefix("ses_") && (5...124).contains(name.count) && name.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_" || $0 == "-") }
     }
 
     static func kind(of url: URL) -> Kind {
@@ -110,14 +153,15 @@ nonisolated enum Attachments {
 
     /// Splits `urls` into files the engine gets and paths for the note, for `model`. The note
     /// names each file where it was picked; the engine reads a link's file.
-    static func prepare(_ urls: [URL], for model: Model?) -> Prepared {
+    /// `folder`: where a converted copy goes (its session's).
+    static func prepare(_ urls: [URL], for model: Model?, in folder: URL = directory) -> Prepared {
         var prepared = Prepared()
         for url in urls {
             let file = target(of: url)
             switch route(url, for: model) {
             case .content where kind(of: url) == .image:
                 let size = (try? file.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
-                if let image = engineImage(from: file, named: url.lastPathComponent, size: size) {
+                if let image = engineImage(from: file, named: url.lastPathComponent, size: size, in: folder) {
                     prepared.files.append(image)
                     prepared.included.append(url.path)
                 } else {
@@ -150,7 +194,10 @@ nonisolated enum Attachments {
             }
             // A folder goes as the list of what's in it, named so.
             let name = kind == .folder ? "\(url.lastPathComponent) (list of its files).txt" : url.lastPathComponent
-            if let inline = inlined(file), total + inline.utf8.count / 4 * 3 <= maxMessageBytes {
+            let inline = inlined(file)
+            // A converted copy, read now: the machine keeps its own.
+            if file.path != target(of: url).path { try? FileManager.default.removeItem(at: file) }
+            if let inline, total + inline.utf8.count / 4 * 3 <= maxMessageBytes {
                 total += inline.utf8.count / 4 * 3
                 prepared.files.append(.init(uri: inline, name: name))
             } else {
@@ -187,12 +234,12 @@ nonisolated enum Attachments {
 
     /// The image as a format and size the engine takes, converting it if needed; nil when it
     /// can't be, so it goes as a path.
-    private static func engineImage(from url: URL, named name: String, size: Int) -> OpenCodeAPI.PromptFile? {
+    private static func engineImage(from url: URL, named name: String, size: Int, in folder: URL = directory) -> OpenCodeAPI.PromptFile? {
         let type = UTType(filenameExtension: url.pathExtension)
         if size <= maxBytes, let type, engineImageTypes.contains(where: { type.conforms(to: $0) }) {
             return .init(uri: url.absoluteString, name: name)
         }
-        guard let image = NSImage(contentsOf: url), let copy = save(image, named: url.deletingPathExtension().lastPathComponent) else { return nil }
+        guard let image = NSImage(contentsOf: url), let copy = save(image, named: url.deletingPathExtension().lastPathComponent, in: folder) else { return nil }
         // Still too big (a large picture with transparency stays a PNG): the engine would drop it.
         guard ((try? copy.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0) <= maxBytes else {
             try? FileManager.default.removeItem(at: copy)
@@ -263,19 +310,22 @@ nonisolated enum Attachments {
         return (files + named).filter { seen.insert($0.path).inserted }
     }
 
-    /// Where a file sent to a machine was copied, there: `…/attachments/<folder>/<name>`.
+    /// Where a file sent to a machine was copied, there: `…/attachments/<session>/<folder>/<name>`,
+    /// or before its session had a folder, `…/attachments/<folder>/<name>`.
     private static func isMachineCopy(_ path: String) -> Bool {
         let parts = path.split(separator: "/")
-        guard parts.count >= 3, parts[parts.count - 3] == machineFolder else { return false }
+        guard parts.count >= 3 else { return false }
         let folder = parts[parts.count - 2]
-        return folder.count == 8 && folder.allSatisfy(\.isHexDigit)
+        guard folder.count == 8, folder.allSatisfy(\.isHexDigit) else { return false }
+        return parts[parts.count - 3] == machineFolder
+            || parts.count >= 4 && parts[parts.count - 4] == machineFolder && isSession(String(parts[parts.count - 3]))
     }
 
     // MARK: Files we write
 
     /// Saves a pasted or converted image as PNG (JPEG for opaque photos, which would
     /// otherwise be huge), and returns where.
-    static func save(_ image: NSImage, named name: String) -> URL? {
+    static func save(_ image: NSImage, named name: String, in folder: URL = directory) -> URL? {
         guard let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff) else { return nil }
         let opaque = !bitmap.hasAlpha
         let large = bitmap.pixelsWide * bitmap.pixelsHigh > 4_000_000
@@ -283,27 +333,34 @@ nonisolated enum Attachments {
             ? (bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.9]), "jpg")
             : (bitmap.representation(using: .png, properties: [:]), "png")
         guard let data else { return nil }
-        return write(data, named: name, extension: ext)
+        return write(data, named: name, extension: ext, in: folder)
     }
 
-    /// A unique file in the attachments folder, whatever `name` says: it never lands elsewhere,
-    /// or replaces a file.
-    static func write(_ data: Data, named name: String, extension ext: String) -> URL? {
-        let name = fileName(name)
-        let ext = ext.isEmpty || ext.contains { !$0.isASCII || !($0.isLetter || $0.isNumber || "+-_".contains($0)) } ? "dat" : ext
+    /// A unique file in the attachments folder (or `folder`, a session's in it), whatever `name`
+    /// says: it never lands elsewhere, or replaces a file.
+    static func write(_ data: Data, named name: String, extension ext: String, in folder: URL = directory) -> URL? {
         do {
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            var url = directory.appending(path: "\(name).\(ext)")
-            var counter = 2
-            while FileManager.default.fileExists(atPath: url.path) {
-                url = directory.appending(path: "\(name) \(counter).\(ext)")
-                counter += 1
-            }
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let url = unique(name, extension: ext, in: folder)
             try data.write(to: url, options: .withoutOverwriting)
             return url
         } catch {
             return nil
         }
+    }
+
+    /// A name for a new file in `folder` from `name` and `ext` that no file there has: a counter
+    /// after the name where one does.
+    private static func unique(_ name: String, extension ext: String, in folder: URL) -> URL {
+        let name = fileName(name)
+        let ext = ext.isEmpty || ext.contains { !$0.isASCII || !($0.isLetter || $0.isNumber || "+-_".contains($0)) } ? "dat" : ext
+        var url = folder.appending(path: "\(name).\(ext)")
+        var counter = 2
+        while FileManager.default.fileExists(atPath: url.path) {
+            url = folder.appending(path: "\(name) \(counter).\(ext)")
+            counter += 1
+        }
+        return url
     }
 
     /// Writes out a file that came as data (a picture a tool returned, a file sent from the
@@ -366,7 +423,9 @@ nonisolated enum Attachments {
     /// A picture pasted into a composer (saved here under `pastedImageName`), which has no name of
     /// its own to go by.
     static func isPasted(_ url: URL) -> Bool {
-        url.deletingLastPathComponent().standardizedFileURL.path == directory.standardizedFileURL.path
+        let folder = url.deletingLastPathComponent().standardizedFileURL
+        let root = directory.standardizedFileURL.path
+        return (folder.path == root || folder.deletingLastPathComponent().path == root && isSession(folder.lastPathComponent))
             && url.lastPathComponent.hasPrefix("Pasted Image ")
     }
 
