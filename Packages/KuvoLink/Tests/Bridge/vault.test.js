@@ -581,14 +581,18 @@ function noteConversation(note, folder) {
 // before it listens; the box makes it yours alone once it does, so only that counts (and a wait
 // for an agent that never becomes yours alone fails).
 const agentOf = note => {
-  const prefix = crypto.createHash("sha256").update(note).digest("hex").slice(0, 16);
-  const found = fs.existsSync(sshAgents) && fs.readdirSync(sshAgents).find(name => name.startsWith(prefix) && name.endsWith(".sock"));
-  if (!found) return null;
+  const socket = socketOf(note);
   try {
-    return (fs.statSync(path.join(sshAgents, found)).mode & 0o077) === 0 ? path.join(sshAgents, found) : null;
+    return socket && (fs.statSync(socket).mode & 0o077) === 0 ? socket : null;
   } catch {
     return null;
   }
+};
+// Its agent's socket, open or not yet.
+const socketOf = note => {
+  const prefix = crypto.createHash("sha256").update(note).digest("hex").slice(0, 16);
+  const found = fs.existsSync(sshAgents) && fs.readdirSync(sshAgents).find(name => name.startsWith(prefix) && name.endsWith(".sock"));
+  return found ? path.join(sshAgents, found) : null;
 };
 async function sshAgentFor(note, folder) {
   noteConversation(note, folder);
@@ -656,7 +660,7 @@ test("an SSH key you keep for a project signs through its conversations' own age
     const wrong = folderNote(elsewhere).replace(/.$/, c => (c === "0" ? "1" : "0"));
     noteConversation(wrong, project);
     await sshAgentFor(folderNote(path.join(project, "api")), path.join(project, "api"));
-    assert.equal(agentOf(wrong), null);
+    assert.equal(socketOf(wrong), null);
     // Paused, the conversation's agent offers nothing either.
     await fromMac("POST", "kuvo/vault/pause", { paused: true, bot: "ses_shop" }, key);
     assert.equal((await sshTool("ssh-add", ["-l"], await sshAgentFor("ses_shop", project))).status, 1, "paused");

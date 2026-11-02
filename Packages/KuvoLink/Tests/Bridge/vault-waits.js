@@ -10,48 +10,49 @@ import { atEnd } from "./at-end.js";
 
 const LIMIT = 60_000;
 // What ends the test or setup a wait is part of: each wait ends with it, so a test that times out
-// still stops its box in its `finally` (also when it reaches a wait only after its time ran out).
+// still stops its box in its `finally` (also when it reaches a wait only after its time ran out). A
+// setup's own signal never ends at its time limit, so its waits end at that limit themselves.
 const ending = new AsyncLocalStorage();
 export const test = (name, run) => nodeTest(name, { timeout: LIMIT }, t => ending.run(t.signal, () => run(t)));
-export const before = run => nodeBefore(t => ending.run(t.signal, () => run(t)), { timeout: LIMIT });
+export const before = run => nodeBefore(async () => {
+  const limit = new AbortController();
+  const at = setTimeout(() => limit.abort(), LIMIT);
+  try { return await ending.run(limit.signal, run); } finally { clearTimeout(at); }
+}, { timeout: LIMIT });
 
-const inode = where => { try { return fs.statSync(where).ino; } catch { return null; } };
+// Waits still open once the file's tests are done (a test failed before they came): each fails, and
+// none keeps its process going.
+const open = new Set();
+atEnd(() => { for (const end of [...open]) end(); });
 
 /** What `found()` gives, once it gives something: looked at again as anything changes in `folder`.
  * Watched with the folder above it, each on its own (never recursively, which Linux only imitates),
- * so a folder the box clears and makes again, or makes only later, is followed to the new one. */
+ * and watched anew as either changes, so a folder the box clears and makes again (which Linux may
+ * give the same inode), or makes only later, is followed to the new one. */
 export function appears(folder, found) {
   return new Promise((resolve, reject) => {
     const signal = ending.getStore();
-    const watched = new Map();
+    const watchers = [];
     let done = false;
-    // (Closed once the file's tests are done, if a test failed before this was seen: never what
-    // keeps its process going.)
-    atEnd(() => finish(() => resolve(undefined)));
     const ended = () => finish(() => reject(new Error(`The test ended before this came, in ${folder}.`)));
     if (signal?.aborted) return ended();
     signal?.addEventListener("abort", ended, { once: true });
+    open.add(ended);
     function finish(then) {
       if (done) return;
       done = true;
+      open.delete(ended);
       signal?.removeEventListener("abort", ended);
-      for (const { watcher } of watched.values()) watcher.close();
+      for (const watcher of watchers.splice(0)) watcher.close();
       then();
     }
     function arm() {
+      for (const watcher of watchers.splice(0)) watcher.close();
       let above = path.dirname(folder);
-      while (inode(above) === null) above = path.dirname(above);
-      const wanted = new Map([[above, inode(above)]]);
-      if (inode(folder) !== null) wanted.set(folder, inode(folder));
-      for (const [where, { watcher, ino }] of watched) {
-        if (wanted.get(where) === ino) continue;
-        watcher.close();
-        watched.delete(where);
-      }
-      for (const [where, ino] of wanted) {
-        if (watched.has(where)) continue;
+      while (!fs.existsSync(above)) above = path.dirname(above);
+      for (const where of fs.existsSync(folder) ? [above, folder] : [above]) {
         try {
-          watched.set(where, { watcher: fs.watch(where, changed), ino });
+          watchers.push(fs.watch(where, changed));
         } catch {
           // (Gone again since: the folder above it says so.)
         }
