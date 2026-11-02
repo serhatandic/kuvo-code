@@ -16,6 +16,11 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- A bot working on a goal no longer keeps your computer busy between its looks at the goal, which could spin the fans while nothing was happening.
+- Moving a chat whose `/goal` is still going says why it can't move yet, instead of moving and losing the goal.
+- A goal whose end you move later after it came carries on to the new end, rather than stopping at once.
+- Stop, Keep Going and Start the Work in a group chat that's moving say why nothing happened.
+- Going Back while a sign-in is still starting no longer opens its page in your browser afterwards.
 - The model menu says "Free" once in a provider's title when all its models are free, instead of on every row, and leaves out a model's mark where it's the provider's own.
 - A goal's plan lines its lanes up when only some have a site, shows only the note of each lane once the plan is met, labels its days without crowding Today, with a date every few days in a long goal, and gives steps' names more room in a wide card.
 - Find in a conversation no longer covers the first message, and quoting several passages says how many; a quote's answer field opens when you click it, not on every quote at once.

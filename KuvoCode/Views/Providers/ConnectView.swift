@@ -63,6 +63,8 @@ struct ConnectView: View {
     @State private var progress: String?
     /// The page was closed: a sign-in still starting then is called off, not opened.
     @State private var left = false
+    /// Sign-ins started, and Backs: one still starting when you went Back is called off too.
+    @State private var starts = 0
     /// For one on a machine: the port its page comes back to, forwarded there meanwhile.
     @State private var forward = SignInForward()
     /// The way being started now.
@@ -446,8 +448,11 @@ struct ConnectView: View {
     /// Back to the ways to sign in, when there's more than one.
     @ViewBuilder private var backButton: some View {
         if supportedMethods.count > 1 {
-            Button("Back") { step = .choose }
-                .buttonStyle(TextButtonStyle(outset: true))
+            Button("Back") {
+                starts += 1
+                step = .choose
+            }
+            .buttonStyle(TextButtonStyle(outset: true))
         }
     }
 
@@ -513,13 +518,15 @@ struct ConnectView: View {
         guard let api = catalog.api(forIntegration: integrationID) else { return step = .failed(unreachable) }
         let answer = FormFieldsView.payload(method.form, answers)
         isWorking = true
+        starts += 1
+        let started = starts
         Task {
             defer { isWorking = false }
             do {
                 switch method {
                 case .oauth(let id, _, _):
                     let attempt = try await api.startOAuth(integration: integrationID, method: id, answer: answer.isEmpty ? nil : answer)
-                    guard !left else {
+                    guard !left, starts == started else {
                         try? await api.cancelOAuth(integration: integrationID, attempt: attempt.attemptID)
                         return
                     }
@@ -542,7 +549,8 @@ struct ConnectView: View {
                 }
             } catch {
                 noteFailure(method: Self.kind(of: method), Analytics.trouble(error))
-                step = .failed(error.localizedDescription)
+                // (Not over the ways to sign in, gone Back to meanwhile.)
+                if starts == started { step = .failed(error.localizedDescription) }
             }
         }
     }

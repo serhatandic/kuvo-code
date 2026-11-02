@@ -9854,6 +9854,7 @@ var readKept2 = (file = GOALS_FILE) => {
 var goalRuns = (bot, file = GOALS_FILE) => readKept2(file).some((goal) => goal.bot === bot && goal.state === "running");
 function changeKept2(change, file = GOALS_FILE) {
   fs39.mkdirSync(WORK_FOLDER, { recursive: true });
+  let changed = false;
   const result = locked(LOCK5, () => {
     const goals = readKept2(file);
     const value = change(goals);
@@ -9862,11 +9863,16 @@ function changeKept2(change, file = GOALS_FILE) {
       if (botHere(goal.bot) && (!latest.has(goal.bot) || latest.get(goal.bot).proposed <= goal.proposed))
         latest.set(goal.bot, goal);
     const kept = goals.filter((goal) => botHere(goal.bot) && (latest.get(goal.bot) === goal || goal.report && !goal.reportTold && goal.state !== "running"));
-    writePrivate(file, JSON.stringify({ goals: kept }, null, 2));
+    const text = JSON.stringify({ goals: kept }, null, 2);
+    if (text !== textOf(file)) {
+      writePrivate(file, text);
+      changed = true;
+    }
     return value;
   });
-  for (const tell of goalFollowers)
-    tell();
+  if (changed)
+    for (const tell of goalFollowers)
+      tell();
   return result;
 }
 var Here = `${HERE[0].toUpperCase()}${HERE.slice(1)}`;
@@ -10146,6 +10152,8 @@ async function changeGoal(id, action, given, targets, file) {
       goal.ends = ends;
     if (given.ends === null)
       delete goal.ends;
+    if (ends !== undefined || given.ends === null)
+      delete goal.endTold;
     goal.spend = capsGiven(goal.spend, given.spend);
     return goal;
   }, file);
@@ -15221,6 +15229,18 @@ function tell(peer, move) {
     return false;
   }
 }
+async function chatGoalRuns(session, signal) {
+  let bridge;
+  try {
+    bridge = readBridgeFile();
+  } catch {
+    return false;
+  }
+  const goal = await call(bridge, "GET", `/api/kuvo/goals/${encodeURIComponent(session)}`, undefined, engineWait(signal)).then((data) => data, (error) => error?.status === 404 ? null : undefined);
+  if (goal === undefined)
+    return;
+  return isObject(goal) && (goal.state === "working" || goal.state === "paused");
+}
 async function movable(kind, thing, signal) {
   if (kind === "bot") {
     const here = botHere(thing);
@@ -15261,6 +15281,8 @@ async function movable(kind, thing, signal) {
     const kuvo = isObject(session.metadata) && isObject(session.metadata.kuvo) ? session.metadata.kuvo : {};
     if (kuvo.agents || kuvo.agent)
       return { name: title, why: say.withAgents(title), note: note.withAgents };
+    if (await chatGoalRuns(thing, signal))
+      return { name: title, why: say.onGoal(title), note: note.onGoal };
     return { name: title, root: thing };
   }
   let bridge;
@@ -15444,6 +15466,13 @@ async function carryOn(id) {
     const members = isObject(contents.group?.group) && Array.isArray(contents.group.group.members) ? contents.group.group.members : [];
     record.members = members.filter((member) => typeof member === "string");
   } else {
+    if (record.kind === "chat") {
+      const goal = await chatGoalRuns(record.thing);
+      if (goal)
+        throw new Refused(say.onGoal(record.name));
+      if (goal === undefined)
+        throw new Refused(`${record.name}’s goal couldn’t be checked on ${HERE}. Try again in a moment.`);
+    }
     const engine = readEngineFile();
     await settle(engine, record.sessions, record.name);
     exports = await exportAll(engine, record.sessions[0]);
@@ -24052,6 +24081,7 @@ export {
   freshenBots,
   fromPhone,
   fromRelay,
+  goalFollowers,
   goalHolds,
   greetWork,
   groupNotice,
