@@ -469,13 +469,21 @@ final class Moves {
         if box != BoxClient.mac { keepReading(box) }
         // A machine whose moves started, went on or ended, as it told this Mac's box: read there.
         if box == BoxClient.mac {
+            // (One of this Mac's own is read through its own list: each move once.)
             let stages = { (said: BoxMoves?) in
-                Dictionary((said?.elsewhere ?? []).map { ($0.box, Set($0.moves.map { $0.id + " " + $0.stage })) }) { $1 }
+                let own = Set((said?.moves ?? []).map(\.id))
+                return Dictionary((said?.elsewhere ?? []).map { ($0.box, Set($0.moves.filter { !own.contains($0.id) }.map { $0.id + " " + $0.stage })) }) { $1 }
             }
             let (then, now) = (stages(before), stages(said))
             let changed = Set(then.keys).union(now.keys).filter { then[$0] ?? [] != now[$0] ?? [] }
             if !changed.isEmpty {
-                Task { for machine in machinesOf(keys: changed) { await reload(machine) } }
+                Task {
+                    for machine in machinesOf(keys: changed) {
+                        await reload(machine)
+                        // And again while it's said to be moving, should that read not have come.
+                        keepReading(machine)
+                    }
+                }
             }
         }
         // What changed of its moves (not how far one's copy went): the boxes at their other ends read
@@ -506,7 +514,8 @@ final class Moves {
     }
 
     private func keepReading(_ machine: String) {
-        guard told[machine]?.moves.isEmpty == false else {
+        let heard = app?.phoneLink.key(of: machine).map { key in told[BoxClient.mac]?.elsewhere?.contains { $0.box == key && !$0.moves.isEmpty } == true } ?? false
+        guard told[machine]?.moves.isEmpty == false || heard else {
             rereading.removeValue(forKey: machine)?.cancel()
             return
         }
