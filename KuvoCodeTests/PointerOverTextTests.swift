@@ -45,10 +45,11 @@ final class ScrolledConversation {
     private var linedUpTo: CGFloat?
 
     private func lineUpATextWithTheControl() {
+        // One it can be scrolled to: not one that would have to come down from above the top.
         guard let top = distanceFromTop, let text = texts
             .filter({ $0.window != nil })
             .map({ $0.convert($0.bounds, to: nil) })
-            .filter({ $0.height > 120 })
+            .filter({ $0.height > 120 && top - ($0.midY - Self.band) >= 0 })
             .min(by: { abs($0.midY - Self.band) < abs($1.midY - Self.band) }) else { return }
         // Up the conversation brings its words down the window, down it brings them up.
         let target = top - (text.midY - Self.band)

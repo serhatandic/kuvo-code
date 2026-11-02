@@ -397,6 +397,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - With two asks showing (a permission beside a question, or two permissions), Return and Escape answer only the card on top, not every card at once. A card you've answered waits for the agent instead of sending your answer twice, and one already answered on your phone just goes, without an error.
 - With no GitHub Copilot account, a conversation started without picking a model (one an agent or a bot started, say) no longer fails every message with "missing required Authorization header": the engine's default model had become one of Copilot's. It's one of OpenCode's free models again: on a new install from the start, and on one that had the problem once its engine has started again after its first run with this update.
 - A short message of yours in a narrow window shows all of its lines, instead of being cut at twelve with no Show More.
+- A long message of yours comes into view with room for its Show More already made, so what's under it no longer slides down as the button appears, and a click on the next message's first line reaches that message.
 
 ## 0.7.2
 

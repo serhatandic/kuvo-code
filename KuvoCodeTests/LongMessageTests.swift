@@ -88,6 +88,62 @@ import Testing
         #expect(abs(message.width - Self.lineWidth) <= 1, "as wide as its lines, \(Self.lineWidth), not \(message.width)")
     }
 
+    /// Long messages of yours in a conversation: each comes into view as tall as it is with its Show
+    /// More, so the rows under it stay where they were put as the button shows, never sliding down
+    /// from under it (for that while, the message above took the clicks on their first lines).
+    @Test func aLongMessageComesIntoViewWithItsShowMoresRoom() async throws {
+        TestEnvironment.prepare()
+        let app = AppModel()
+        let words = Array(repeating: Self.line, count: 30).joined(separator: "\n")
+        let items = ["0", "1", "2"]
+        let window = NSWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: 640, height: 900), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView: ScrollView {
+            RowStack(items: items, id: { $0 }, same: ==, estimate: { _ in 400 }) { _, _ in
+                UserBubble(text: words).environment(app)
+            }
+        }.frame(width: 640, height: 900))
+        window.orderBack(nil)
+        defer { window.orderOut(nil); window.close() }
+
+        func all<T: NSView>(_ type: T.Type, in view: NSView?) -> [T] {
+            guard let view else { return [] }
+            return ((view as? T).map { [$0] } ?? []) + view.subviews.flatMap { all(type, in: $0) }
+        }
+        /// The rows as they're placed, top to bottom.
+        func rows() -> [NSRect] {
+            (all(RowStackView.self, in: window.contentView).first?.subviews ?? []).map(\.frame).sorted { $0.minY < $1.minY }
+        }
+        func settle(until ready: () -> Bool) async {
+            var turns = 0
+            while !ready(), turns < 400 {
+                window.contentView?.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
+                await Task.yield()
+                turns += 1
+            }
+        }
+
+        // Laid out: each row in its place.
+        await settle { all(SelectableTextView.self, in: window.contentView).count == items.count && rows().count == items.count }
+        let placed = rows()
+        #expect(placed.count == items.count)
+        // Their words say they're cut a turn or two after they're laid out, and Show More shows:
+        // given far more turns than that, nothing under them moves.
+        await settle { rows() != placed }
+        #expect(rows() == placed, "the rows stayed where they were put: \(placed) then \(rows())")
+        for (above, below) in zip(rows(), rows().dropFirst()) {
+            #expect(below.minY >= above.maxY, "a row under the one above: \(above) over \(below)")
+        }
+        // Under each one's words, more than its bubble's edge: Show More's room.
+        let stack = try #require(all(RowStackView.self, in: window.contentView).first)
+        for text in all(SelectableTextView.self, in: stack) {
+            let words = text.convert(text.bounds, to: stack)
+            let row = try #require(rows().first { $0.minY <= words.minY && words.maxY <= $0.maxY })
+            #expect(row.maxY - words.maxY > 20, "room under the words for Show More: \(row.maxY - words.maxY)")
+        }
+    }
+
     /// A message too short to be called long (a list and a paragraph) in a narrow conversation,
     /// where it runs past the line limit's lines: all of it shows, since there's no Show More for it.
     @Test func aShortMessageInANarrowConversationIsNeverCutWithoutShowMore() async throws {

@@ -18,9 +18,12 @@ struct SelectableText: View {
     var maxHeight: CGFloat?
     /// Told whether `lineLimit` or `maxHeight` cuts anything, as it changes.
     var cut: ((Bool) -> Void)?
+    /// Whether they cut it at each width it's measured at, known as it's measured (`cut` says so
+    /// a turn later, once it's laid out).
+    var cuts: TextCuts?
 
     var body: some View {
-        Host(text: text, faces: faces, lineLimit: lineLimit, maxHeight: maxHeight, cut: cut)
+        Host(text: text, faces: faces, lineLimit: lineLimit, maxHeight: maxHeight, cut: cut, cuts: cuts)
             // Lined up by its first line, as a Text is (an icon beside it).
             .alignmentGuide(.firstTextBaseline) { _ in firstBaseline }
     }
@@ -40,6 +43,7 @@ private struct Host: NSViewRepresentable {
     let lineLimit: Int?
     let maxHeight: CGFloat?
     let cut: ((Bool) -> Void)?
+    let cuts: TextCuts?
 
     func makeNSView(context: Context) -> SelectableTextView {
         SelectableTextView()
@@ -49,11 +53,26 @@ private struct Host: NSViewRepresentable {
         let openURL = context.environment.openURL
         view.openURL = { openURL($0) }
         view.cut = cut
+        view.cuts = cuts
         view.show(text, faces: faces, lineLimit: lineLimit, maxHeight: maxHeight)
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView view: SelectableTextView, context: Context) -> CGSize? {
         view.size(fitting: proposal.width.flatMap { $0.isFinite ? $0 : nil })
+    }
+}
+
+/// Whether a `SelectableText`'s line limit cuts its words at the widths it was measured at, as
+/// they're measured: what goes under them (a long message's Show More) has its room from the
+/// first time they're measured, rather than a turn later, when `cut` says so once they're laid
+/// out, and a conversation would move what's under them. Read by a SwiftUI layout, which isn't
+/// held to the main actor, though it lays out on the main thread as the text is measured there.
+nonisolated final class TextCuts {
+    fileprivate var widths: [CGFloat: Bool] = [:]
+
+    /// At `width`, the width its words were offered; nil if they weren't measured at it.
+    func at(_ width: CGFloat) -> Bool? {
+        widths[width] ?? widths.first { abs($0.key - width) < 0.5 }?.value
     }
 }
 
@@ -167,6 +186,9 @@ struct TextFaces: Equatable {
 final class SelectableTextView: PointerAwareTextView {
     var openURL: (URL) -> Void = { NSWorkspace.shared.open($0) }
     var cut: ((Bool) -> Void)?
+    var cuts: TextCuts? {
+        didSet { if cuts !== oldValue { sizes = [:] } }
+    }
     private var faces = TextFaces()
     private var lineLimit: Int?
     private var maxHeight: CGFloat?
@@ -204,7 +226,10 @@ final class SelectableTextView: PointerAwareTextView {
 
     func show(_ text: NSAttributedString, faces: TextFaces, lineLimit: Int?, maxHeight: CGFloat? = nil) {
         guard let storage = textStorage, let container = textContainer else { return }
-        if lineLimit != self.lineLimit || maxHeight != self.maxHeight || !storage.isEqual(to: text) { sizes = [:] }
+        if lineLimit != self.lineLimit || maxHeight != self.maxHeight || !storage.isEqual(to: text) {
+            sizes = [:]
+            cuts?.widths = [:]
+        }
         self.lineLimit = lineLimit
         self.maxHeight = maxHeight
         if !storage.isEqual(to: text) { storage.setAttributedString(text) }
@@ -236,6 +261,7 @@ final class SelectableTextView: PointerAwareTextView {
         // Never narrower than its lines (so they break where they were measured to).
         let size = CGSize(width: min(ceil(used.width), width), height: ceil(used.height))
         sizes[width] = size
+        cuts?.widths[width] = isCut(in: layout, container)
         return size
     }
 
@@ -270,16 +296,19 @@ final class SelectableTextView: PointerAwareTextView {
         return (layout, container)
     }()
 
+    /// Whether the line limit leaves words out of `container`, as `layout` lays it out.
+    private func isCut(in layout: NSLayoutManager, _ container: NSTextContainer) -> Bool {
+        guard lineLimit != nil || maxHeight != nil, let storage = textStorage, storage.length > 0 else { return false }
+        // Only as far as its lines go: all of a long text's glyphs aren't needed to see it's cut.
+        let laid = layout.glyphRange(for: container)
+        return layout.characterRange(forGlyphRange: laid, actualGlyphRange: nil).upperBound < storage.length
+            || layout.truncatedGlyphRange(inLineFragmentForGlyphAt: max(0, laid.upperBound - 1)).location != NSNotFound
+    }
+
     /// Tells `cut` whether the line limit leaves words out where it's shown, when that changes.
     private func tellCut() {
-        guard let cut, let layout = layoutManager, let container = textContainer, let storage = textStorage else { return }
-        var isCut = false
-        if lineLimit != nil || maxHeight != nil, storage.length > 0 {
-            // Only as far as its lines go: all of a long text's glyphs aren't needed to see it's cut.
-            let laid = layout.glyphRange(for: container)
-            isCut = layout.characterRange(forGlyphRange: laid, actualGlyphRange: nil).upperBound < storage.length
-                || layout.truncatedGlyphRange(inLineFragmentForGlyphAt: max(0, laid.upperBound - 1)).location != NSNotFound
-        }
+        guard let cut, let layout = layoutManager, let container = textContainer else { return }
+        let isCut = isCut(in: layout, container)
         guard isCut != wasCut else { return }
         wasCut = isCut
         // After this layout pass: it sets state.

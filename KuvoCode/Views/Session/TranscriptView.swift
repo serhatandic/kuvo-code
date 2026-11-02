@@ -995,7 +995,12 @@ private struct MessageText: View {
     @State private var isExpanded = false
     /// The line limit leaves words out.
     @State private var isLimited = false
+    /// Whether it does at the widths the words are measured at: Show More's room is in the
+    /// message's height from then on (`ShowMoreLayout`).
+    @State private var cuts = TextCuts()
     private static let lines = 12
+    /// The bubble's room either side of its words.
+    private static let inset: CGFloat = 14
 
     /// Short messages can't reach the limit, so they aren't asked whether it cuts them.
     private var mayBeLong: Bool {
@@ -1010,32 +1015,74 @@ private struct MessageText: View {
     }
 
     var body: some View {
-        VStack(alignment: .trailing, spacing: 4) {
+        ShowMoreLayout(cuts: cuts, inset: Self.inset, shows: isCut) {
             let shown = shown
             // AppKit's text, as the composer's: its pointer shows only where nothing's drawn over it.
             // Asked whether the limit cuts it only while there is one: all of it showing says nothing
             // of what Show Less brings back.
             // A short one has no Show More: never cut, however narrow its bubble.
             SelectableText(text: shown.text, faces: shown.faces, lineLimit: isExpanded || !mayBeLong ? nil : Self.lines,
-                           cut: mayBeLong && !isExpanded ? { isLimited = $0 } : nil)
+                           cut: mayBeLong && !isExpanded ? { isLimited = $0 } : nil, cuts: mayBeLong ? cuts : nil)
                 // Faded at the cut; masked only if it may be long (each mask is drawn off screen
                 // first), and then all along, so the fade comes and goes over the same words.
                 .modifier(CutFade(isOn: isCut && !isExpanded, isMasked: mayBeLong))
-                .padding(.horizontal, 14)
+                .padding(.horizontal, Self.inset)
                 .padding(.vertical, 10)
                 // Your words in accent glass, apart from the agent's on the card.
                 .modifier(BubbleSurface())
-            if mayBeLong, isCut {
+            if mayBeLong {
+                // There, in the room it has once the words are measured cut, from when they say so.
                 Button(isExpanded ? "Show Less" : "Show More") {
                     withAnimation(.ui) { isExpanded.toggle() }
                 }
                 .buttonStyle(TextButtonStyle(outset: true))
                 .font(.system(size: 12, weight: .medium))
                 .padding(.trailing, 6)
+                .opacity(isCut ? 1 : 0)
+                .disabled(!isCut)
+                .accessibilityHidden(!isCut)
             }
         }
         // Find on a place in it: all of it shows, as the place may be past the cut.
         .onChange(of: highlight?.current) { if highlight?.current != nil, mayBeLong { isExpanded = true } }
+    }
+}
+
+/// A long message's words over its Show More (or Show Less), at their trailing edge. The button's
+/// room is part of the message's height as soon as its words are measured cut, so a conversation
+/// measures the message as tall as it shows: it learns they're cut only once they're laid out, a
+/// turn later, and the rows under it would slide down from under it then.
+private struct ShowMoreLayout: Layout {
+    let cuts: TextCuts
+    /// How much narrower than the bubble its words are laid out.
+    let inset: CGFloat
+    /// The button shows: Show Less, or Show More once the words said they're cut.
+    let shows: Bool
+    private let spacing: CGFloat = 4
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let bubble = subviews.first?.sizeThatFits(proposal) else { return .zero }
+        guard let button = button(proposal, subviews) else { return bubble }
+        return CGSize(width: max(bubble.width, button.width), height: bubble.height + spacing + button.height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard let first = subviews.first else { return }
+        let bubble = first.sizeThatFits(proposal)
+        first.place(at: CGPoint(x: bounds.maxX, y: bounds.minY), anchor: .topTrailing, proposal: ProposedViewSize(width: proposal.width, height: bubble.height))
+        // Without its room it doesn't show either: under the rest, out of the way.
+        guard subviews.count > 1 else { return }
+        let button = subviews[1].sizeThatFits(.unspecified)
+        subviews[1].place(at: CGPoint(x: bounds.maxX, y: bounds.minY + bubble.height + spacing), anchor: .topTrailing, proposal: ProposedViewSize(button))
+    }
+
+    /// The button's size, if it has room: it shows, or the words are cut at the width they get.
+    /// While it shows it keeps its room, so it's never drawn over what's under the message (a
+    /// window widened past the cut takes the room back a turn later, as the button goes).
+    private func button(_ proposal: ProposedViewSize, _ subviews: Subviews) -> CGSize? {
+        guard subviews.count > 1 else { return nil }
+        guard shows || proposal.width.flatMap({ cuts.at($0 - 2 * inset) }) == true else { return nil }
+        return subviews[1].sizeThatFits(.unspecified)
     }
 }
 
