@@ -13778,6 +13778,8 @@ import fs53 from "node:fs";
 import path57 from "node:path";
 var MOST_BUNDLE = 1e9;
 var ENGINE_WAIT = 2 * 60000;
+var EXPORT_WAIT = 10 * 60000;
+var engineWait = (signal, most = ENGINE_WAIT) => signal ? AbortSignal.any([signal, AbortSignal.timeout(most)]) : AbortSignal.timeout(most);
 var CHATS2 = IS_MAC ? path57.join(path57.dirname(K), "Chats") : path57.join(K, "chats");
 var folderOf = (kind, thing) => kind === "bot" ? path57.join(BOTS, thing) : kind === "chat" ? path57.join(SESSION_WAKES, thing) : null;
 var directoryOf = (kind, thing) => kind === "bot" ? path57.join(BOTS, thing, "workspace") : CHATS2;
@@ -13799,12 +13801,12 @@ async function hashOf(file) {
   return hash.digest("base64url");
 }
 async function exportAll(engine, root) {
-  const exports = [await call(engine, "GET", `/api/experimental/session/${encodeURIComponent(root)}/export`)];
+  const exports = [await call(engine, "GET", `/api/experimental/session/${encodeURIComponent(root)}/export`, undefined, engineWait(undefined, EXPORT_WAIT))];
   const next = [root];
   while (next.length) {
     const parent = next.pop();
     for (const child of await childrenOf(engine, parent)) {
-      exports.push(await call(engine, "GET", `/api/experimental/session/${encodeURIComponent(child.id)}/export`));
+      exports.push(await call(engine, "GET", `/api/experimental/session/${encodeURIComponent(child.id)}/export`, undefined, engineWait(undefined, EXPORT_WAIT)));
       next.push(child.id);
     }
   }
@@ -13947,14 +13949,14 @@ async function importAll(engine, exports, directory, signal) {
 }
 async function deleteSession(engine, id) {
   try {
-    await call(engine, "DELETE", `/api/session/${encodeURIComponent(id)}`);
+    await call(engine, "DELETE", `/api/session/${encodeURIComponent(id)}`, undefined, engineWait());
   } catch (error) {
     if (!/404|not found/i.test(String(error?.message ?? error)))
       throw error;
   }
 }
 async function groupAction(bridge, group, action) {
-  const answer = await askGroups(bridge, "POST", `/${encodeURIComponent(group)}/${action}`, undefined, undefined);
+  const answer = await askGroups(bridge, "POST", `/${encodeURIComponent(group)}/${action}`, undefined, engineWait());
   if (answer.status === 404 && action === "release")
     return null;
   if (answer.status !== 200)
@@ -13975,6 +13977,7 @@ var SETTLE_FOR = 60;
 var HELD_AT_MOST = 7 * 24 * 3600000;
 var GONE_FOR = 5 * 60000;
 var missing = new Map;
+var HOLDING_AT_MOST = 30 * 60000;
 var SET_UP_AT_MOST = 30 * 60000;
 var settingUp = new Map;
 var toSetUp = new Set;
@@ -13995,6 +13998,7 @@ var say = {
   noEngine: (place) => `The engine on ${place} isn’t running. Try again once it is.`,
   needsUpdate: (place) => `${place} needs a newer Kuvo Code before things can move to or from it.`,
   botsNotThere: (chat, place) => `${chat}’s bots don’t all live on ${place}. Move them there first, then the chat can follow.`,
+  slow: (name) => `${name} took too long to get ready to move on ${HERE}, so it stayed here. Try again in a moment.`,
   moving: MOVING
 };
 var note = {
@@ -14094,7 +14098,7 @@ async function movable(kind, thing, signal) {
       try {
         bridge = readBridgeFile();
       } catch {}
-      const listed = bridge ? await askGroups(bridge, "GET", "", undefined, signal).catch(() => null) : null;
+      const listed = bridge ? await askGroups(bridge, "GET", "", undefined, engineWait(signal)).catch(() => null) : null;
       const chat = (listed?.status === 200 && Array.isArray(listed.value?.data) ? listed.value.data : []).find((each) => Array.isArray(each?.group?.members) && each.group.members.includes(thing));
       if (chat)
         return { name, root: here.session, why: say.inBoxGroup(name, plainName(chat.group?.name ?? "") || "a group chat"), note: note.inBoxGroup };
@@ -14104,7 +14108,7 @@ async function movable(kind, thing, signal) {
   if (kind === "chat") {
     let session;
     try {
-      session = await call(readEngineFile(), "GET", `/api/session/${encodeURIComponent(thing)}`, undefined, signal);
+      session = await call(readEngineFile(), "GET", `/api/session/${encodeURIComponent(thing)}`, undefined, engineWait(signal));
     } catch {
       return null;
     }
@@ -14125,7 +14129,7 @@ async function movable(kind, thing, signal) {
   } catch {
     return null;
   }
-  const listed = await askGroups(bridge, "GET", `/${encodeURIComponent(thing)}`, undefined, signal).catch(() => null);
+  const listed = await askGroups(bridge, "GET", `/${encodeURIComponent(thing)}`, undefined, engineWait(signal)).catch(() => null);
   if (listed?.status !== 200)
     return null;
   const members = listed.value?.data?.group?.members;
@@ -14252,9 +14256,9 @@ function unhold(folder, wasPaused, pausedAs) {
 }
 async function settle(engine, sessions, name) {
   for (let tries = 0;tries < SETTLE_FOR; tries++) {
-    const active = await call(engine, "GET", "/api/session/active").catch(() => ({}));
+    const active = await call(engine, "GET", "/api/session/active", undefined, engineWait()).catch(() => ({}));
     const busy = isObject(active) && sessions.some((session) => (session in active));
-    const inbox = sessions[0] && !queueOf(sessions[0]).paused ? await call(engine, "GET", `/api/session/${encodeURIComponent(sessions[0])}/inbox`).catch(() => []) : [];
+    const inbox = sessions[0] && !queueOf(sessions[0]).paused ? await call(engine, "GET", `/api/session/${encodeURIComponent(sessions[0])}/inbox`, undefined, engineWait()).catch(() => []) : [];
     if (!busy && !(Array.isArray(inbox) && inbox.length))
       return;
     await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -14279,6 +14283,7 @@ async function carryOn(id) {
   if (!record || record.role !== "from" || record.stage !== "holding" || record.failed)
     return;
   hold2(record);
+  record.holdSince = Date.now();
   saveMove(record);
   let exports = [];
   let queues = {};
@@ -14315,6 +14320,9 @@ async function carryOn(id) {
   if (!still || still.failed || still.stage !== "holding") {
     if (record.kind === "group")
       groupsToWake = true;
+    try {
+      fs54.rmSync(bundleOf(id), { recursive: true, force: true });
+    } catch {}
     return;
   }
   outgoing.set(id, { got: new Set, flying: new Map, exports: fingerprint(exports, queues) });
@@ -14405,7 +14413,7 @@ async function finish(id) {
           each.kept = true;
         });
       } catch (error) {
-        const there = await call(engine, "GET", `/api/session/${encodeURIComponent(record.sessions[0])}`).then(() => true, () => false);
+        const there = await call(engine, "GET", `/api/session/${encodeURIComponent(record.sessions[0])}`, undefined, engineWait()).then(() => true, () => false);
         if (there) {
           const tries = (record.finishTries ?? 0) + 1;
           if (tries >= FINISH_TRIES) {
@@ -14438,8 +14446,6 @@ async function takeBack(id, message, status = 409) {
     return;
   outgoing.delete(id);
   unhold(record.folder, record.wasPaused, record.pausedAs);
-  if (record.kind === "group")
-    await wakeGroup(record.thing);
   if (record.offered) {
     changeMove(id, (each) => {
       each.step = "drop";
@@ -14456,6 +14462,8 @@ async function takeBack(id, message, status = 409) {
     forgetMove(id);
   }
   heard.delete(id);
+  if (record.kind === "group")
+    await wakeGroup(record.thing);
   ended(id, { ok: false, status, message });
 }
 async function restore(record, message) {
@@ -14506,7 +14514,7 @@ async function takeOffer(sender, given) {
     try {
       bridge = readBridgeFile();
     } catch {}
-    const running = bridge ? await askGroups(bridge, "GET", "", undefined, undefined).then((answer) => answer.status === 200).catch(() => false) : false;
+    const running = bridge ? await askGroups(bridge, "GET", "", undefined, engineWait()).then((answer) => answer.status === 200).catch(() => false) : false;
     if (!running)
       return void answer({ op: "refused", message: say.noGroups(place) });
     const members = Array.isArray(given.members) ? given.members : [];
@@ -14514,7 +14522,7 @@ async function takeOffer(sender, given) {
       return void answer({ op: "refused", message: say.botsElsewhere(name) });
   } else {
     try {
-      await call(readEngineFile(), "GET", "/api/session/active");
+      await call(readEngineFile(), "GET", "/api/session/active", undefined, engineWait());
     } catch {
       return void answer({ op: "refused", message: say.noEngine(place) });
     }
@@ -14563,7 +14571,7 @@ async function livesHere(kind, thing) {
     try {
       bridge = readBridgeFile();
     } catch {}
-    return bridge ? (await askGroups(bridge, "GET", `/${encodeURIComponent(thing)}`, undefined, undefined).catch(() => null))?.status === 200 : false;
+    return bridge ? (await askGroups(bridge, "GET", `/${encodeURIComponent(thing)}`, undefined, engineWait()).catch(() => null))?.status === 200 : false;
   }
   if (fs54.existsSync(folderOf(kind, thing)))
     return true;
@@ -14571,7 +14579,7 @@ async function livesHere(kind, thing) {
   if (!root)
     return false;
   try {
-    await call(readEngineFile(), "GET", `/api/session/${encodeURIComponent(root)}`);
+    await call(readEngineFile(), "GET", `/api/session/${encodeURIComponent(root)}`, undefined, engineWait());
     return true;
   } catch {
     return false;
@@ -14638,6 +14646,7 @@ async function setUp(sender, id, file) {
     const error = stop.signal.aborted ? stop.signal.reason : thrown;
     if (!(error instanceof NotTaken))
       console.error(`kuvo-link: a move that came couldn't be set up: ${String(error?.message ?? error)}`);
+    clearInterval(beat);
     await drop(id).catch(() => {});
     tell(sender.key, { op: "failed", id, message: error instanceof NotTaken ? `It couldn’t be set up on ${HERE}: ${error.message}` : `It couldn’t be set up on ${HERE}.` });
   } finally {
@@ -14651,7 +14660,7 @@ async function bringIn(record, signal) {
     const held = contents.group;
     if (!held || !isObject(held.group))
       throw new NotTaken("The group chat didn’t come with it.");
-    const answer = await askGroups(readBridgeFile(), "PUT", `/${encodeURIComponent(record.thing)}`, { group: held.group, messages: held.messages, status: "held" }, signal);
+    const answer = await askGroups(readBridgeFile(), "PUT", `/${encodeURIComponent(record.thing)}`, { group: held.group, messages: held.messages, status: "held" }, engineWait(signal));
     if (answer.status !== 200)
       throw new Error(typeof answer.value?.message === "string" ? answer.value.message : `Its group chats answered ${answer.status}.`);
     return [];
@@ -14668,7 +14677,7 @@ async function bringIn(record, signal) {
     throw new NotTaken("Its conversations aren’t its own.");
   const engine = readEngineFile();
   for (const session of idsOf(contents.exports)) {
-    if (await call(engine, "GET", `/api/session/${encodeURIComponent(session)}`, undefined, signal).then(() => true, () => false))
+    if (await call(engine, "GET", `/api/session/${encodeURIComponent(session)}`, undefined, engineWait(signal)).then(() => true, () => false))
       throw new NotTaken(`Its conversations are on ${HERE} already.`);
   }
   signal.throwIfAborted();
@@ -14754,6 +14763,8 @@ async function clearCopy(record) {
 var groupsToWake = false;
 var groupsLookedAt = 0;
 async function wakeGroup(group) {
+  if (moveOf(group))
+    return;
   try {
     await groupAction(readBridgeFile(), group, "activate");
   } catch (error) {
@@ -14770,7 +14781,7 @@ async function wakeHeldGroups() {
     groupsToWake = true;
     return;
   }
-  const listed = await askGroups(bridge, "GET", "", undefined, AbortSignal.timeout(ENGINE_WAIT)).catch(() => null);
+  const listed = await askGroups(bridge, "GET", "", undefined, engineWait()).catch(() => null);
   if (listed?.status === 404)
     return;
   if (listed?.status !== 200 || !Array.isArray(listed.value?.data)) {
@@ -14779,7 +14790,7 @@ async function wakeHeldGroups() {
   }
   for (const chat of listed.value.data) {
     const id = chat?.group?.id;
-    if (chat?.status === "held" && typeof id === "string" && !moveOf(id))
+    if (chat?.status === "held" && typeof id === "string")
       await wakeGroup(id);
   }
 }
@@ -14936,6 +14947,10 @@ function keepMoving(now = Date.now()) {
         each.dropSince = now;
       });
       tell(record.peer, { op: "drop", id: record.id });
+      continue;
+    }
+    if (record.stage === "holding" && record.holdSince !== undefined && now - record.holdSince > HOLDING_AT_MOST) {
+      takeBack(record.id, say.slow(record.name), 409).catch(() => {});
       continue;
     }
     if (record.stage === "holding" && !record.step) {

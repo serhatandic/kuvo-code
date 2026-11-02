@@ -40,8 +40,9 @@ function reading(request) {
 const listening = server => new Promise(resolve => server.listen(0, "127.0.0.1", () => resolve(server.address().port)));
 
 // An engine with its conversations, as its API exports, imports and deletes them, and what it was
-// sent. Its deletes fail while it's `down`.
-const engine = { sessions: new Map(), prompts: [], down: false, refused: 0 };
+// sent. Its deletes fail while it's `down`; its exports wait for `exportHold` (a promise) when
+// there's one (`exporting` says one does).
+const engine = { sessions: new Map(), prompts: [], down: false, refused: 0, exportHold: null, exporting: false };
 const engineServer = http.createServer(async (request, response) => {
   const given = await reading(request);
   const url = new URL(request.url, "http://x");
@@ -56,6 +57,11 @@ const engineServer = http.createServer(async (request, response) => {
   }
   const exported = url.pathname.match(/^\/api\/experimental\/session\/([^/]+)\/export$/);
   if (exported) {
+    if (engine.exportHold) {
+      engine.exporting = true;
+      await engine.exportHold;
+      engine.exporting = false;
+    }
     const session = engine.sessions.get(exported[1]);
     return session ? send(200, { info: { id: session.id, title: session.title, ...(session.parentID ? { parentID: session.parentID } : {}) }, messages: session.messages }) : send(404, null);
   }
@@ -431,4 +437,29 @@ test("offered again (it got more as it moved) and never answered: it's taken bac
   assert.equal(moved.status, 503, JSON.stringify(moved.json));
   assert.match(moved.json.message, /lab stopped answering/);
   assert.ok(engine.sessions.has("ses_again1"), "it goes on here");
+});
+
+test("getting it ready to move stuck (this box's engine not answering): it's taken back after a while, as it was, and whoever asked hears", async () => {
+  chat("ses_hang1");
+  script = () => {};
+  let release;
+  engine.exportHold = new Promise(resolve => { release = resolve; });
+  const before = told.length;
+  try {
+    const asked = ask("POST", "kuvo/moves", { kind: "chat", id: "ses_hang1", to: peerKey });
+    await until(() => engine.exporting);
+    assert.equal(fs.readFileSync(path.join(wakes, "ses_hang1", "paused"), "utf8"), "moving", "held while it's got ready");
+    // Half an hour and more later.
+    link.keepMoving(Date.now() + 31 * 60_000);
+    const moved = await asked;
+    assert.equal(moved.status, 409, JSON.stringify(moved.json));
+    assert.match(moved.json.message, /took too long/);
+    assert.ok(!fs.existsSync(path.join(wakes, "ses_hang1", "paused")), "its wake-ups go on");
+    assert.deepEqual((await ask("GET", "kuvo/moves")).json, { moves: [], away: [] });
+  } finally {
+    engine.exportHold = null;
+    release();
+  }
+  assert.ok(!told.slice(before).some(move => move.op === "offer"), "never offered");
+  assert.ok(engine.sessions.has("ses_hang1"));
 });

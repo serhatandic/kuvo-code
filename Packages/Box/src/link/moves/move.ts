@@ -30,7 +30,7 @@ import type { MailSender, Peer } from "../peers/known";
 import type { LinkHost } from "../relay/host";
 import { readLink } from "../state";
 import { goalRuns } from "../work/goals";
-import { CHATS, ENGINE_WAIT, MOST_BUNDLE, NotTaken, deleteSession, directoryOf, exportAll, folderOf, groupAction, conversationHash, hashOf, idsOf, importAll, keysOf, ownTree, pack, toTrash, unpack } from "./bundle";
+import { CHATS, engineWait, MOST_BUNDLE, NotTaken, deleteSession, directoryOf, exportAll, folderOf, groupAction, conversationHash, hashOf, idsOf, importAll, keysOf, ownTree, pack, toTrash, unpack } from "./bundle";
 import type { Contents } from "./bundle";
 import { MOVES, bundleOf, changeMove, endedAs, forgetMove, forgetMovedAway, moveOf, movesChanged, noteEnded, noteMovedAway, readMove, readMoves, saveMove, shownMove } from "./records";
 import type { MoveRecord } from "./records";
@@ -59,6 +59,8 @@ const HELD_AT_MOST = 7 * 24 * 3600_000;
 const GONE_FOR = 5 * 60_000;
 // Since when each move's other computer has been missing from your computers.
 const missing = new Map<string, number>();
+/** Being got ready to go this long (its engine or group chats stuck): taken back. */
+const HOLDING_AT_MOST = 30 * 60_000;
 /** A copy being set up here this long (its engine stuck): given up on, and taken back. */
 const SET_UP_AT_MOST = 30 * 60_000;
 // What gives up on each copy being set up here; and the copies set up here now or next, in their turn.
@@ -84,6 +86,7 @@ export const say = {
   noEngine: (place: string) => `The engine on ${place} isn’t running. Try again once it is.`,
   needsUpdate: (place: string) => `${place} needs a newer Kuvo Code before things can move to or from it.`,
   botsNotThere: (chat: string, place: string) => `${chat}’s bots don’t all live on ${place}. Move them there first, then the chat can follow.`,
+  slow: (name: string) => `${name} took too long to get ready to move on ${HERE}, so it stayed here. Try again in a moment.`,
   moving: MOVING,
 };
 
@@ -199,7 +202,7 @@ async function movable(kind: MoveKind, thing: string, signal?: AbortSignal): Pro
     if (!IS_MAC) {
       let bridge: Target | null = null;
       try { bridge = readBridgeFile(); } catch {}
-      const listed = bridge ? await askGroups<{ data?: { group?: { id?: string; name?: string; members?: unknown } }[] }>(bridge, "GET", "", undefined, signal).catch(() => null) : null;
+      const listed = bridge ? await askGroups<{ data?: { group?: { id?: string; name?: string; members?: unknown } }[] }>(bridge, "GET", "", undefined, engineWait(signal)).catch(() => null) : null;
       const chat = (listed?.status === 200 && Array.isArray(listed.value?.data) ? listed.value.data : []).find(each => Array.isArray(each?.group?.members) && (each.group.members as unknown[]).includes(thing));
       if (chat) return { name, root: here.session, why: say.inBoxGroup(name, plainName(chat.group?.name ?? "") || "a group chat"), note: note.inBoxGroup };
     }
@@ -207,7 +210,7 @@ async function movable(kind: MoveKind, thing: string, signal?: AbortSignal): Pro
   }
   if (kind === "chat") {
     let session: unknown;
-    try { session = await call(readEngineFile(), "GET", `/api/session/${encodeURIComponent(thing)}`, undefined, signal); } catch { return null; }
+    try { session = await call(readEngineFile(), "GET", `/api/session/${encodeURIComponent(thing)}`, undefined, engineWait(signal)); } catch { return null; }
     if (!isObject(session)) return null;
     const title = typeof session.title === "string" && session.title.trim() ? `“${session.title.trim()}”` : "This chat";
     const directory = isObject(session.location) ? session.location.directory : session.directory;
@@ -218,7 +221,7 @@ async function movable(kind: MoveKind, thing: string, signal?: AbortSignal): Pro
   }
   let bridge: Target;
   try { bridge = readBridgeFile(); } catch { return null; }
-  const listed = await askGroups<{ data?: { group?: { name?: string; members?: unknown } } }>(bridge, "GET", `/${encodeURIComponent(thing)}`, undefined, signal).catch(() => null);
+  const listed = await askGroups<{ data?: { group?: { name?: string; members?: unknown } } }>(bridge, "GET", `/${encodeURIComponent(thing)}`, undefined, engineWait(signal)).catch(() => null);
   if (listed?.status !== 200) return null;
   const members = listed.value?.data?.group?.members;
   return {
@@ -337,9 +340,9 @@ function unhold(folder: string | undefined, wasPaused: boolean, pausedAs?: strin
  * What the engine holds for one you stopped waits for Resume, and goes with it (`packQueues`). */
 async function settle(engine: Target, sessions: readonly string[], name: string): Promise<void> {
   for (let tries = 0; tries < SETTLE_FOR; tries++) {
-    const active = await call(engine, "GET", "/api/session/active").catch(() => ({}));
+    const active = await call(engine, "GET", "/api/session/active", undefined, engineWait()).catch(() => ({}));
     const busy = isObject(active) && sessions.some(session => session in active);
-    const inbox = sessions[0] && !queueOf(sessions[0]).paused ? await call(engine, "GET", `/api/session/${encodeURIComponent(sessions[0])}/inbox`).catch(() => []) : [];
+    const inbox = sessions[0] && !queueOf(sessions[0]).paused ? await call(engine, "GET", `/api/session/${encodeURIComponent(sessions[0])}/inbox`, undefined, engineWait()).catch(() => []) : [];
     if (!busy && !(Array.isArray(inbox) && inbox.length)) return;
     await new Promise(resolve => setTimeout(resolve, 1000));
   }
@@ -373,6 +376,7 @@ async function carryOn(id: string): Promise<void> {
   const record = readMove(id);
   if (!record || record.role !== "from" || record.stage !== "holding" || record.failed) return;
   hold(record);
+  record.holdSince = Date.now();
   saveMove(record);
   let exports: unknown[] = [];
   let queues: Record<string, unknown> = {};
@@ -406,6 +410,7 @@ async function carryOn(id: string): Promise<void> {
   const still = readMove(id);
   if (!still || still.failed || still.stage !== "holding") {
     if (record.kind === "group") groupsToWake = true;
+    try { fs.rmSync(bundleOf(id), { recursive: true, force: true }); } catch {}
     return;
   }
   outgoing.set(id, { got: new Set(), flying: new Map(), exports: fingerprint(exports, queues) });
@@ -485,7 +490,7 @@ async function finish(id: string): Promise<void> {
       } catch (error) {
         // Gone already: on. Still here: not yet; refused that way, again and again, with its engine
         // up, it never will be: it goes on here too, as it's on the other computer.
-        const there = await call(engine, "GET", `/api/session/${encodeURIComponent(record.sessions[0])}`).then(() => true, () => false);
+        const there = await call(engine, "GET", `/api/session/${encodeURIComponent(record.sessions[0])}`, undefined, engineWait()).then(() => true, () => false);
         if (there) {
           const tries = (record.finishTries ?? 0) + 1;
           if (tries >= FINISH_TRIES) {
@@ -514,9 +519,9 @@ async function takeBack(id: string, message: string, status = 409): Promise<void
   const record = readMove(id);
   if (!record || record.role !== "from" || record.failed || record.stage === "switching" || record.stage === "finishing") return;
   outgoing.delete(id);
-  // As it was, before whoever asked hears.
+  // As it was, before whoever asked hears: noted at once (a step still under way, given up on by
+  // `keepMoving`, finds it taken back and goes no further).
   unhold(record.folder, record.wasPaused, record.pausedAs);
-  if (record.kind === "group") await wakeGroup(record.thing);
   // Offered already: its copy there goes too, once that box says so (`dropped`).
   if (record.offered) {
     changeMove(id, each => { each.step = "drop"; each.sentAt = Date.now(); each.dropSince = Date.now(); each.failed = message; each.failedStatus = status; });
@@ -527,6 +532,7 @@ async function takeBack(id: string, message: string, status = 409): Promise<void
     forgetMove(id);
   }
   heard.delete(id);
+  if (record.kind === "group") await wakeGroup(record.thing);
   ended(id, { ok: false, status, message });
 }
 
@@ -576,14 +582,14 @@ async function takeOffer(sender: MailSender, given: Record<string, unknown>): Pr
   if (kind === "group") {
     let bridge: Target | null = null;
     try { bridge = readBridgeFile(); } catch {}
-    const running = bridge ? await askGroups(bridge, "GET", "", undefined, undefined).then(answer => answer.status === 200).catch(() => false) : false;
+    const running = bridge ? await askGroups(bridge, "GET", "", undefined, engineWait()).then(answer => answer.status === 200).catch(() => false) : false;
     if (!running) return void answer({ op: "refused", message: say.noGroups(place) });
     // To a machine, only with its bots: they all live there, and stay there while it does.
     const members = Array.isArray(given.members) ? given.members : [];
     if (!IS_MAC && members.some(member => !botHere(member))) return void answer({ op: "refused", message: say.botsElsewhere(name) });
   } else {
     try {
-      await call(readEngineFile(), "GET", "/api/session/active");
+      await call(readEngineFile(), "GET", "/api/session/active", undefined, engineWait());
     } catch {
       return void answer({ op: "refused", message: say.noEngine(place) });
     }
@@ -616,13 +622,13 @@ async function livesHere(kind: MoveKind, thing: string): Promise<boolean> {
   if (kind === "group") {
     let bridge: Target | null = null;
     try { bridge = readBridgeFile(); } catch {}
-    return bridge ? (await askGroups(bridge, "GET", `/${encodeURIComponent(thing)}`, undefined, undefined).catch(() => null))?.status === 200 : false;
+    return bridge ? (await askGroups(bridge, "GET", `/${encodeURIComponent(thing)}`, undefined, engineWait()).catch(() => null))?.status === 200 : false;
   }
   if (fs.existsSync(folderOf(kind, thing)!)) return true;
   const root = kind === "bot" ? null : thing;
   if (!root) return false;
   try {
-    await call(readEngineFile(), "GET", `/api/session/${encodeURIComponent(root)}`);
+    await call(readEngineFile(), "GET", `/api/session/${encodeURIComponent(root)}`, undefined, engineWait());
     return true;
   } catch {
     return false;
@@ -681,6 +687,8 @@ async function setUp(sender: MailSender, id: string, file: string): Promise<void
     // What was set up of it goes: the box it came from takes it back, and a switch for it is
     // answered `dropped`. Only what it brought is said back, never what this box found.
     if (!(error instanceof NotTaken)) console.error(`kuvo-link: a move that came couldn't be set up: ${String((error as Error | null)?.message ?? error)}`);
+    // No longer at it: no more word that it is while what came goes.
+    clearInterval(beat);
     await drop(id).catch(() => {});
     tell(sender.key, { op: "failed", id, message: error instanceof NotTaken ? `It couldn’t be set up on ${HERE}: ${error.message}` : `It couldn’t be set up on ${HERE}.` });
   } finally {
@@ -695,7 +703,7 @@ async function bringIn(record: MoveRecord, signal: AbortSignal): Promise<string[
   if (record.kind === "group") {
     const held = contents.group;
     if (!held || !isObject(held.group)) throw new NotTaken("The group chat didn’t come with it.");
-    const answer = await askGroups<{ message?: unknown }>(readBridgeFile(), "PUT", `/${encodeURIComponent(record.thing)}`, { group: held.group, messages: held.messages, status: "held" }, signal);
+    const answer = await askGroups<{ message?: unknown }>(readBridgeFile(), "PUT", `/${encodeURIComponent(record.thing)}`, { group: held.group, messages: held.messages, status: "held" }, engineWait(signal));
     if (answer.status !== 200) throw new Error(typeof answer.value?.message === "string" ? answer.value.message : `Its group chats answered ${answer.status}.`);
     return [];
   }
@@ -706,7 +714,7 @@ async function bringIn(record: MoveRecord, signal: AbortSignal): Promise<string[
   if (!ownTree(contents.exports, root)) throw new NotTaken("Its conversations aren’t its own.");
   const engine = readEngineFile();
   for (const session of idsOf(contents.exports)) {
-    if (await call(engine, "GET", `/api/session/${encodeURIComponent(session)}`, undefined, signal).then(() => true, () => false)) throw new NotTaken(`Its conversations are on ${HERE} already.`);
+    if (await call(engine, "GET", `/api/session/${encodeURIComponent(session)}`, undefined, engineWait(signal)).then(() => true, () => false)) throw new NotTaken(`Its conversations are on ${HERE} already.`);
   }
   signal.throwIfAborted();
   if (folder) {
@@ -791,6 +799,8 @@ let groupsLookedAt = 0;
 
 /** A group chat a move held here going on again, as it was; tried again later when it can't now. */
 async function wakeGroup(group: string): Promise<void> {
+  // (Held again meanwhile, by another move of it: it stays held.)
+  if (moveOf(group)) return;
   try {
     await groupAction(readBridgeFile(), group, "activate");
   } catch (error) {
@@ -809,7 +819,7 @@ async function wakeHeldGroups(): Promise<void> {
     groupsToWake = true;
     return;
   }
-  const listed = await askGroups<{ data?: { group?: { id?: unknown }; status?: unknown }[] }>(bridge, "GET", "", undefined, AbortSignal.timeout(ENGINE_WAIT)).catch(() => null);
+  const listed = await askGroups<{ data?: { group?: { id?: unknown }; status?: unknown }[] }>(bridge, "GET", "", undefined, engineWait()).catch(() => null);
   // (No group chats run here: none held.)
   if (listed?.status === 404) return;
   if (listed?.status !== 200 || !Array.isArray(listed.value?.data)) {
@@ -819,7 +829,7 @@ async function wakeHeldGroups(): Promise<void> {
   for (const chat of listed.value.data) {
     const id = chat?.group?.id;
     // (Looked at as it's started, so one a move holds meanwhile stays held.)
-    if (chat?.status === "held" && typeof id === "string" && !moveOf(id)) await wakeGroup(id);
+    if (chat?.status === "held" && typeof id === "string") await wakeGroup(id);
   }
 }
 
@@ -959,6 +969,12 @@ export function keepMoving(now = Date.now()): void {
     if (record.failed && record.step !== "drop") {
       changeMove(record.id, each => { each.step = "drop"; each.sentAt = now; each.dropSince = now; });
       tell(record.peer, { op: "drop", id: record.id });
+      continue;
+    }
+    // Getting it ready stuck (its engine or group chats not answering): taken back now, not in its
+    // turn (which waits on what's stuck), so whoever asked hears.
+    if (record.stage === "holding" && record.holdSince !== undefined && now - record.holdSince > HOLDING_AT_MOST) {
+      takeBack(record.id, say.slow(record.name), 409).catch(() => {});
       continue;
     }
     // One asked for through another process: moved from here.

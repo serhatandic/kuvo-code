@@ -53,6 +53,8 @@ export interface MoveRecord extends Move {
   /** The box it goes to: its copy is being let go of (it won't be switched to), which is tried again
    * until all of it's gone (its engine or group chats were down). */
   dropping?: boolean;
+  /** The box it leaves: since when it's been getting it ready to go (held, settled, packed). */
+  holdSince?: number;
   /** The box it goes to: since when it's been setting its copy up. */
   setUpSince?: number;
   /** Since when the box it leaves has asked the other to switch to its copy. */

@@ -23,6 +23,10 @@ export const MOST_BUNDLE = 1_000_000_000;
 /** How long a move waits on its engine or its group chats for one answer, at most: past that it
  * takes them for not answering (a move never hangs on them). */
 export const ENGINE_WAIT = 2 * 60_000;
+/** And for a conversation's whole export (a big one takes a while). */
+const EXPORT_WAIT = 10 * 60_000;
+/** `signal`, or `most` gone by, whichever comes first. */
+export const engineWait = (signal?: AbortSignal, most = ENGINE_WAIT): AbortSignal => signal ? AbortSignal.any([signal, AbortSignal.timeout(most)]) : AbortSignal.timeout(most);
 
 /** What `move.json` holds. */
 export interface Contents {
@@ -72,12 +76,12 @@ export async function hashOf(file: string): Promise<string> {
 
 /** The conversation and every subagent's under it, root first, as the engine exports them. */
 export async function exportAll(engine: Target, root: string): Promise<unknown[]> {
-  const exports: unknown[] = [await call(engine, "GET", `/api/experimental/session/${encodeURIComponent(root)}/export`)];
+  const exports: unknown[] = [await call(engine, "GET", `/api/experimental/session/${encodeURIComponent(root)}/export`, undefined, engineWait(undefined, EXPORT_WAIT))];
   const next = [root];
   while (next.length) {
     const parent = next.pop()!;
     for (const child of await childrenOf(engine, parent)) {
-      exports.push(await call(engine, "GET", `/api/experimental/session/${encodeURIComponent(child.id)}/export`));
+      exports.push(await call(engine, "GET", `/api/experimental/session/${encodeURIComponent(child.id)}/export`, undefined, engineWait(undefined, EXPORT_WAIT)));
       next.push(child.id);
     }
   }
@@ -225,7 +229,7 @@ export async function importAll(engine: Target, exports: unknown[], directory: s
 /** Gone from `engine`; one that isn't there is as good as gone. */
 export async function deleteSession(engine: Target, id: string): Promise<void> {
   try {
-    await call(engine, "DELETE", `/api/session/${encodeURIComponent(id)}`);
+    await call(engine, "DELETE", `/api/session/${encodeURIComponent(id)}`, undefined, engineWait());
   } catch (error) {
     if (!/404|not found/i.test(String((error as Error | null)?.message ?? error))) throw error;
   }
@@ -233,7 +237,7 @@ export async function deleteSession(engine: Target, id: string): Promise<void> {
 
 /** A group chat on this box's bridge: `action` (hold, activate, release), its answer's data. */
 export async function groupAction(bridge: Target, group: string, action: "hold" | "activate" | "release"): Promise<unknown> {
-  const answer = await askGroups<{ data?: unknown; message?: unknown }>(bridge, "POST", `/${encodeURIComponent(group)}/${action}`, undefined, undefined);
+  const answer = await askGroups<{ data?: unknown; message?: unknown }>(bridge, "POST", `/${encodeURIComponent(group)}/${action}`, undefined, engineWait());
   if (answer.status === 404 && action === "release") return null;
   if (answer.status !== 200) throw Object.assign(new Error(typeof answer.value?.message === "string" ? answer.value.message : `Its group chats answered ${answer.status}.`), { status: answer.status });
   return answer.value?.data ?? null;
