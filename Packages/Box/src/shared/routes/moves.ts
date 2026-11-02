@@ -16,8 +16,9 @@ export const MOVE_PLACES = object({ places: list(MOVE_PLACE) });
 
 /** A move under way, as either box says it: what moves (`thing`, `name`), from which box to which
  * (keys), whether this box is where it was (`from`) or where it's going (`to`), how far it is, its
- * conversations (root first), the other computer's name (`place`, when this box knows it), and while
- * its copy's on its way, how much of it went (bytes). */
+ * conversations (root first), the other computer's name (`place`, when this box knows it), while
+ * its copy's on its way, how much of it went (bytes), and `waiting` while the other computer has
+ * gone quiet about it (its engine away, or the computer off): it carries on once it's back. */
 export const MOVE = object({
   id: string,
   kind: MOVE_KIND,
@@ -31,6 +32,7 @@ export const MOVE = object({
   "place?": string,
   "sent?": number,
   "size?": number,
+  "waiting?": bool,
 });
 
 /** Moves under way on another of your computers, as that computer's box last said them (its key,

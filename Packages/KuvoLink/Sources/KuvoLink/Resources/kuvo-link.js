@@ -1522,8 +1522,9 @@ function changeMove(id, change) {
 }
 function shownMove(record) {
   const { id, kind, thing, name, from, to, role, stage, sessions, sent, size } = record;
-  return { id, kind, thing, name, from, to, role, stage, sessions, ...sent !== undefined ? { sent } : {}, ...size !== undefined ? { size } : {} };
+  return { id, kind, thing, name, from, to, role, stage, sessions, ...sent !== undefined ? { sent } : {}, ...size !== undefined ? { size } : {}, ...waitingFor.has(id) ? { waiting: true } : {} };
 }
+var waitingFor = new Set;
 function awaySessions(records = liveMoves()) {
   const away = new Set;
   for (const record of records) {
@@ -15075,7 +15076,7 @@ var saidLast = null;
 var saidAt = 0;
 function tellMoving(host, now = Date.now()) {
   const moves = sent(listedMoves().map(shownMove));
-  const these = JSON.stringify(moves.map(({ id, stage }) => [id, stage]));
+  const these = JSON.stringify(moves.map(({ id, stage, waiting }) => [id, stage, waiting === true]));
   if (these === saidLast && (!moves.length || now - saidAt < AGAIN))
     return;
   if (saidLast === null && !moves.length) {
@@ -15113,7 +15114,7 @@ var short = (text, most) => text.slice(0, most);
 function takenMove(given) {
   if (!isObject(given))
     return null;
-  const { id, kind, thing, name, from, to, role, stage, sessions, sent, size } = given;
+  const { id, kind, thing, name, from, to, role, stage, sessions, sent, size, waiting } = given;
   if (typeof id !== "string" || typeof thing !== "string" || typeof name !== "string" || typeof from !== "string" || typeof to !== "string")
     return null;
   if (!KINDS.has(kind) || role !== "from" && role !== "to" || !STAGES.has(stage) || !Array.isArray(sessions))
@@ -15129,7 +15130,8 @@ function takenMove(given) {
     stage,
     sessions: sessions.filter((session) => typeof session === "string").slice(0, MOST_SESSIONS).map((session) => short(session, 100)),
     ...typeof sent === "number" && Number.isFinite(sent) ? { sent } : {},
-    ...typeof size === "number" && Number.isFinite(size) ? { size } : {}
+    ...typeof size === "number" && Number.isFinite(size) ? { size } : {},
+    ...waiting === true ? { waiting } : {}
   };
 }
 function takeMoving(sender, given, now = Date.now()) {
@@ -15179,6 +15181,8 @@ var NO_ANSWER = 30000;
 var QUIET_AT_MOST = 10 * 60000;
 var DROP_AT_MOST = 24 * 3600000;
 var heard = new Map;
+var WAITING_AFTER = 90000;
+var lookingSince = Date.now();
 var SETTLE_FOR = 60;
 var HELD_AT_MOST = 7 * 24 * 3600000;
 var DROP_AGAIN_LATE = 3600000;
@@ -15700,6 +15704,8 @@ async function takeBack2(id, message, status = 409) {
     forgetMove(id);
   }
   heard.delete(id);
+  if (waitingFor.delete(id))
+    movesChanged();
   if (record.kind === "group")
     await wakeGroup(record.thing);
   ended(id, { ok: false, status, message });
@@ -15734,6 +15740,7 @@ function forgetMovesInMemory() {
   incoming.clear();
   outgoing.clear();
   heard.clear();
+  waitingFor.clear();
   loggedStuck.clear();
 }
 async function takeOffer(sender, given) {
@@ -16056,8 +16063,11 @@ async function takeMoveMail(sender, given) {
 }
 async function moveMail(sender, given, id) {
   const record = readMove(id);
-  if (record?.role === "from" && record.peer === sender.key)
+  if (record?.role === "from" && record.peer === sender.key) {
     heard.set(id, Date.now());
+    if (waitingFor.delete(id))
+      movesChanged();
+  }
   const mine = record && record.peer === sender.key ? record : null;
   switch (given.op) {
     case "offer":
@@ -16162,6 +16172,8 @@ async function letGoOf(sender, id) {
   await drop(id).catch(() => {});
 }
 function keepMoving(now = Date.now()) {
+  const records = readMoves();
+  noteWaiting(records, now);
   tellMoving(hostOf(), now);
   forgetQuiet(now);
   if (groupsToWake && now - groupsLookedAt > STEP_AGAIN) {
@@ -16178,7 +16190,7 @@ function keepMoving(now = Date.now()) {
       if (now - fs59.statSync(path61.join(MOVES, name)).mtimeMs > OUTCOME_KEPT)
         fs59.rmSync(path61.join(MOVES, name), { force: true });
     } catch {}
-  for (const record of readMoves()) {
+  for (const record of records) {
     if (!peers.has(record.peer)) {
       const since = missing.get(record.id) ?? now;
       missing.set(record.id, since);
@@ -16294,6 +16306,20 @@ function keepMoving(now = Date.now()) {
     }
   }
 }
+function noteWaiting(records, now) {
+  const waiting = records.filter((record) => {
+    if (record.role !== "from" || record.failed)
+      return false;
+    const asked = record.step === "switch" ? record.switchSince : record.step === "parts" || record.step === "arrive" || record.step === "offer" && record.tries > 0 ? record.sentAt : undefined;
+    return asked !== undefined && now - Math.max(asked, heard.get(record.id) ?? 0, lookingSince) > WAITING_AFTER;
+  }).map((record) => record.id);
+  if (waiting.length === waitingFor.size && waiting.every((id) => waitingFor.has(id)))
+    return;
+  waitingFor.clear();
+  for (const id of waiting)
+    waitingFor.add(id);
+  movesChanged();
+}
 async function endWithout(id) {
   missing.delete(id);
   const record = readMove(id);
@@ -16344,6 +16370,7 @@ async function resumeMoves(now = Date.now()) {
 function watchMoves(host, signal) {
   hostOf = host;
   watching = true;
+  lookingSince = Date.now();
   resumeMoves().catch(() => {});
   const timer = setInterval(() => keepMoving(), 3000);
   signal?.addEventListener("abort", () => {

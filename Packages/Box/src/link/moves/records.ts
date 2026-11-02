@@ -130,8 +130,12 @@ export function changeMove(id: string, change: (record: MoveRecord) => void): Mo
 /** What clients see of it. */
 export function shownMove(record: MoveRecord): Move {
   const { id, kind, thing, name, from, to, role, stage, sessions, sent, size } = record;
-  return { id, kind, thing, name, from, to, role, stage, sessions, ...(sent !== undefined ? { sent } : {}), ...(size !== undefined ? { size } : {}) };
+  return { id, kind, thing, name, from, to, role, stage, sessions, ...(sent !== undefined ? { sent } : {}), ...(size !== undefined ? { size } : {}), ...(waitingFor.has(id) ? { waiting: true } : {}) };
 }
+
+/** The moves from here whose other computer has gone quiet about them a while (`keepMoving` keeps
+ * it): shown as waiting for it. In memory only: a box started again waits a while before it says so. */
+export const waitingFor = new Set<string>();
 
 /** The conversations this box's engine has that don't live here: a copy that came, until the box it
  * left switches to it; an original that's switched away, until it's gone. */

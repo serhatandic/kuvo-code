@@ -794,3 +794,30 @@ test("what's moving says which computer it's going to by name, as your computers
   assert.equal((await asked).status, 503);
   await asItWas("ses_named1");
 });
+
+test("a move whose other computer went quiet says it's waiting for it, until it speaks again, and is still taken back after a while", async () => {
+  chat("ses_waits1");
+  // Lab gets ready, and then nothing more.
+  script = move => { if (move.op === "offer") say({ op: "ready", id: move.id }); };
+  const before = told.length;
+  const asked = ask("POST", "kuvo/moves", { kind: "chat", id: "ses_waits1", to: peerKey });
+  await until(() => told.slice(before).some(move => move.op === "part"));
+  const listed = async () => (await ask("GET", "kuvo/moves")).json.moves.find(move => move.thing === "ses_waits1");
+  // A step answered a little late isn't waiting.
+  link.keepMoving(Date.now() + 30_000);
+  assert.equal((await listed()).waiting, undefined);
+  // Quiet a couple of minutes: waiting for lab, still copying, nothing taken back.
+  link.keepMoving(Date.now() + 2 * 60_000);
+  const waiting = await listed();
+  assert.equal(waiting.waiting, true);
+  assert.equal(waiting.stage, "copying");
+  // Lab says something of it: it isn't waiting any more.
+  await say({ op: "working", id: waiting.id });
+  link.keepMoving(Date.now());
+  assert.equal((await listed()).waiting, undefined);
+  // Quiet for long enough: taken back, as before.
+  script = move => { if (move.op === "drop") say({ op: "dropped", id: move.id }); };
+  link.keepMoving(Date.now() + 11 * 60_000);
+  assert.equal((await asked).status, 503);
+  await asItWas("ses_waits1");
+});
