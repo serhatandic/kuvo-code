@@ -167,6 +167,22 @@ final class ScrolledConversation {
         #expect(text.pointer(at: beside) == .iBeam)
     }
 
+    /// Across Scroll to the End's whole circle, not only down its middle (where its arrow is): a
+    /// click anywhere on it reaches it, and the text under it shows no I-beam there.
+    func checkNoIBeamAcrossScrollToTheEnd() throws {
+        let under = pointsUnderAControl()
+        let first = try #require(under.first), last = try #require(under.last)
+        let center = NSPoint(x: 360, y: (first.y + last.y) / 2)
+        // Inside its 30-point circle, short of the rim.
+        let across = stride(from: -12, through: 12, by: 2).flatMap { dx in
+            stride(from: -12, through: 12, by: 2).map { dy in NSPoint(x: center.x + CGFloat(dx), y: center.y + CGFloat(dy)) }
+        }.filter { hypot($0.x - center.x, $0.y - center.y) <= 12 }
+        for point in across {
+            guard let text = text(under: point) else { continue }
+            #expect(text.pointer(at: point) == nil, "the I-beam \(point.x - center.x), \(point.y - center.y) from Scroll to the End's middle")
+        }
+    }
+
     func checkMovingOntoScrollToTheEndLetsTheIBeamGo() throws {
         let beside = try #require(besideTheControl())
         let under = try #require(pointsUnderAControl().first { abs($0.y - beside.y) < 1 })
@@ -204,6 +220,11 @@ final class ScrolledConversation {
         try scene.checkNoIBeamOverScrollToTheEnd()
     }
 
+    @Test func noIBeamAcrossScrollToTheEnd() throws {
+        defer { scene.done() }
+        try scene.checkNoIBeamAcrossScrollToTheEnd()
+    }
+
     @Test func movingOntoScrollToTheEndLetsTheIBeamGo() throws {
         defer { scene.done() }
         try scene.checkMovingOntoScrollToTheEndLetsTheIBeamGo()
@@ -235,6 +256,11 @@ final class ScrolledConversation {
     @Test func noIBeamOverScrollToTheEnd() throws {
         defer { scene.done() }
         try scene.checkNoIBeamOverScrollToTheEnd()
+    }
+
+    @Test func noIBeamAcrossScrollToTheEnd() throws {
+        defer { scene.done() }
+        try scene.checkNoIBeamAcrossScrollToTheEnd()
     }
 
     @Test func movingOntoScrollToTheEndLetsTheIBeamGo() throws {
