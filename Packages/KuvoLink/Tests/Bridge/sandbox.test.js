@@ -5,11 +5,14 @@
 // plugin and runs a command as the engine does, through the shell the plugin gives it, with the
 // environment the plugin set. The sandbox itself is the system's own (macOS's, Linux's Landlock).
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/sandbox.test.js`; on Linux, with Bun (the
-// engine's: `BUN_BE_BUN=1 <engine> test sandbox.test.js`).
+// Run with `node --test Packages/KuvoLink/Tests/Bridge/sandbox.test.js`; on a Linux machine, with
+// `scripts/test-linux.sh <ssh-host> sandbox.test.js`, and with `--engine` on the engine's own runner,
+// which the box runs on there (Bun's: `BUN_BE_BUN=1 <engine> test --timeout 120000 ./sandbox.test.js`,
+// as its 5 seconds a test are too few for some).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
 import net from "node:net";
@@ -26,6 +29,18 @@ fs.mkdirSync(path.join(os.homedir(), ".kuvo-code-test"), { recursive: true });
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.homedir(), ".kuvo-code-test", "sb-")));
 removeAtEnd(root);
 const linux = process.platform === "linux";
+// This file's runtime, for the commands that run it: run on a machine's engine, that's in the
+// machine's own `~/.kuvo-code`, which a test's box hides from its commands as Kuvo Code's own, so
+// they run a link to it in this file's folder.
+const ownRuntime = (() => {
+  let kuvo = path.join(os.homedir(), ".kuvo-code");
+  try { kuvo = fs.realpathSync(kuvo); } catch {}
+  kuvo += "/";
+  if (!fs.realpathSync(process.execPath).startsWith(kuvo)) return process.execPath;
+  const linked = path.join(root, "runtime");
+  try { fs.linkSync(fs.realpathSync(process.execPath), linked); } catch { fs.copyFileSync(process.execPath, linked); fs.chmodSync(linked, 0o755); }
+  return linked;
+})();
 // kuvo-wake, as Wakes.swift has it and BoxFiles puts it in every box's bin.
 const swift = fs.readFileSync(new URL("../../../OpenCodeKit/Sources/OpenCodeKit/Engine/Wakes.swift", import.meta.url), "utf8");
 const opening = 'public static let script = #"""\n';
@@ -242,7 +257,7 @@ test("on, a command writes in its own project, git works there, and Kuvo Code's 
     // with what Kuvo Code's own processes give first (the box's socket key) left to find.
     const keyFile = path.join(box.home, "run", "socket.key");
     assert.ok(fs.existsSync(keyFile), "the box made its sockets' key");
-    const runtime = `BUN_BE_BUN=1 ${JSON.stringify(process.execPath)}`;
+    const runtime = `BUN_BE_BUN=1 ${JSON.stringify(ownRuntime)}`;
     const straight = `const s = require("net").createConnection(${JSON.stringify(path.join(box.home, "run", "vault.sock"))}); let h = ""; s.on("connect", () => s.write(JSON.stringify({ hello: "x" }) + "\\n")); s.on("data", c => { h += c; s.destroy(); }); s.on("error", () => process.exit(1)); s.on("close", () => process.exit(h ? 0 : 1));`;
     const fill = JSON.stringify({ method: "POST", path: "kuvo/vault/fill", body: Buffer.from("{}").toString("base64") });
     const ran = await engineRuns(box, project, tries([
@@ -968,7 +983,7 @@ test("a socket key a command kept from before the sandbox was on opens nothing o
   const running = await start(box);
   try {
     assert.equal((await running.ask("GET", "kuvo/sandbox")).value.able, true);
-    const runtime = `BUN_BE_BUN=1 ${JSON.stringify(process.execPath)}`;
+    const runtime = `BUN_BE_BUN=1 ${JSON.stringify(ownRuntime)}`;
     const withKept = `const key = require("fs").readFileSync("kept.key", "utf8").trim(); const s = require("net").createConnection(${JSON.stringify(path.join(box.home, "run", "vault.sock"))}); let h = ""; s.on("connect", () => s.write(JSON.stringify({ hello: "x", key }) + "\\n")); s.on("data", c => { h += c; s.destroy(); }); s.on("error", () => process.exit(1)); s.on("close", () => process.exit(h ? 0 : 1));`;
     const ran = await engineRuns(box, project, tries([
       ["run its runtime", `${runtime} -e 'process.exit(0)'`],
@@ -1111,6 +1126,27 @@ test("commands get caches of Kuvo Code's own for pnpm, uv and corepack, which th
   }
 });
 
+test("this Mac's box keeps the caches for commands in its app's cache folder, in the home it's given, and none in your account's when that's another", { skip: linux && "this Mac's box only" }, async () => {
+  // (Its app's: the box's temporary folder in the app's, as the app gives it, `…/T/<bundle>/box`;
+  // its cache folder `Library/Caches/<bundle>`. This test's HOME isn't your account's.)
+  const bundle = `caches-mac-${process.pid}`;
+  const box = boxAt(bundle, true);
+  const project = path.join(root, "mac-caches-project");
+  fs.mkdirSync(project);
+  const temporary = path.join(root, "T", bundle, "box");
+  fs.mkdirSync(temporary, { recursive: true });
+  const running = await start(box, { TMPDIR: temporary + "/" });
+  try {
+    assert.equal((await running.ask("GET", "kuvo/sandbox")).value.able, true);
+    const ran = await engineRuns(box, project, `printf '%s\\n' "\${npm_config_cache-unset}"`);
+    assert.equal(ran.out.split("\n")[0], path.join(root, "Library", "Caches", bundle, "sandbox-npm"), ran.out);
+    assert.equal(fs.existsSync(path.join(realHome, "Library", "Caches", bundle)), false, "nothing in your account's own Library");
+  } finally {
+    await running.stop();
+    fs.rmSync(path.join(realHome, "Library", "Caches", bundle), { recursive: true, force: true });
+  }
+});
+
 test("with a cache folder of your own (XDG_CACHE_HOME), the tools' caches in it are only read too", async () => {
   const box = boxAt("own-cache");
   const project = path.join(root, "own-cache-project");
@@ -1170,6 +1206,10 @@ test("pnpm dlx fetches a package and runs it, in the sandbox, from a cache of Ku
     assert.equal(ran.status, 0, ran.out);
     const cache = fs.realpathSync(path.join(box.home, "cache", "sandbox-pnpm"));
     assert.ok(ran.out.includes(`ran from ${cache}/dlx/`), `it ran from Kuvo Code's own cache for commands: ${ran.out}`);
+    // Nor from pnpm's store, which commands write as a cache: pnpm 11 runs what it fetched from the
+    // store's own copies (its `links`), which your pnpm runs too, outside the sandbox.
+    const store = path.join(project, ".store");
+    for (const version of fs.readdirSync(store)) assert.equal(fs.existsSync(path.join(store, version, "links")), false, `${version}/links in pnpm's store`);
     // Not yours (where pnpm finds it with this test's HOME).
     for (const yours of [path.join(root, ".cache", "pnpm"), path.join(root, "Library", "Caches", "pnpm")]) assert.equal(fs.existsSync(yours), false, yours);
   } finally {
@@ -1246,7 +1286,8 @@ test("a commit runs pre-commit's hooks, which set themselves up as they first ru
 test("a command's own socket in its temporary folder works, as a server's tests or Python's multiprocessing make one", { skip: linux && "this Mac's box only (a machine's is in its own short ~/.kuvo-code, where this test's folder is deeper)" }, async () => {
   // This Mac's box as the app starts it, its temporary files in the app's temporary folder (named
   // as long as the app's own), its folder as deep as `~/Library/Application Support/<bundle>`.
-  const bundle = "kuvo.sock.tst";
+  // A name of its own each run, as long as the app's, so two runs at once don't share it.
+  const bundle = `kuvo.sock.${crypto.randomBytes(2).toString("hex").slice(0, 3)}`;
   const box = boxAt(path.join("Library", "Application Support", bundle), true);
   const temporary = path.join(os.tmpdir(), bundle);
   fs.rmSync(temporary, { recursive: true, force: true });

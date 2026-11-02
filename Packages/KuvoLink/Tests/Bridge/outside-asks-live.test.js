@@ -32,6 +32,13 @@ if (!skip) {
 // folder `.kuvo-code`, its settings in `box/opencode.json`), or this Mac's (`KUVO_BOX=mac`, in an
 // app's folder, its engine's settings beside it).
 async function boxStarted(name, mac) {
+  const box = boxFolders(name, mac);
+  await startBox(box);
+  return box;
+}
+
+// Its folders, with your settings and a skill of your own, before it first starts.
+function boxFolders(name, mac) {
   const app = path.join(root, name);
   const home = path.join(app, "home");
   const K = mac ? path.join(app, "box") : path.join(home, ".kuvo-code");
@@ -49,9 +56,14 @@ async function boxStarted(name, mac) {
   const skill = path.join(config, "opencode", "skills", "notes");
   fs.mkdirSync(skill, { recursive: true });
   fs.writeFileSync(path.join(skill, "SKILL.md"), "---\nname: notes\ndescription: Notes, kept as the user likes them.\n---\n\nKeep notes short.\n");
+  return { app, home, K, config, data, settings, skill, mac };
+}
+
+// The box starting (its engine's plugins written), then stopped.
+async function startBox({ app, home, K, config, mac }, more = {}) {
   // (On Linux, run on the engine's own Bun, as a machine's box is: `BUN_BE_BUN=1`.)
   const env = { PATH: process.env.PATH, HOME: home, TMPDIR: path.join(app, "tmp") + "/", KUVO_HOME: K, OPENCODE_PASSWORD: "box-pw", ...(process.env.BUN_BE_BUN ? { BUN_BE_BUN: "1" } : {}),
-    ...(mac ? { KUVO_BOX: "mac", KUVO_ENGINE_CONFIG: config, KUVO_BOTS: path.join(app, "bots"), KUVO_CHATS: path.join(app, "Chats") } : {}) };
+    ...(mac ? { KUVO_BOX: "mac", KUVO_ENGINE_CONFIG: config, KUVO_BOTS: path.join(app, "bots"), KUVO_CHATS: path.join(app, "Chats") } : {}), ...more };
   const box = spawn(process.execPath, [script, "serve"], { env, stdio: ["pipe", "pipe", "pipe"] });
   let out = "", err = "";
   box.stdout.setEncoding("utf8");
@@ -66,7 +78,6 @@ async function boxStarted(name, mac) {
   box.stdin.end();
   box.kill("SIGTERM");
   await exited;
-  return { app, home, K, config, data, settings, skill, mac };
 }
 
 // The box's engine, as its computer starts it: a machine's with its folders in `.kuvo-code` and
@@ -85,6 +96,32 @@ async function engineOf(box) {
     exited.then(code => reject(new Error(`The engine ended (${code}): ${said}`)));
   });
   const auth = { authorization: "Basic " + Buffer.from("opencode:pw").toString("base64"), "content-type": "application/json" };
+  // What it tells its clients, from now: `changed(type)` is the next of that kind (and fails if
+  // the engine stops telling them first).
+  const waiting = [];
+  const stream = new AbortController();
+  atEnd(() => stream.abort());
+  let connected;
+  const ready = new Promise((resolve, reject) => { connected = { resolve, reject }; });
+  const ended = why => { connected.reject(why); for (const each of waiting.splice(0)) each.reject(why); };
+  fetch(`http://127.0.0.1:${port}/api/event`, { headers: auth, signal: stream.signal }).then(async response => {
+    const decoder = new TextDecoder();
+    let buffered = "";
+    for await (const chunk of response.body) {
+      buffered += decoder.decode(chunk, { stream: true });
+      for (let at; (at = buffered.indexOf("\n")) >= 0; buffered = buffered.slice(at + 1)) {
+        const line = buffered.slice(0, at);
+        if (!line.startsWith("data:")) continue;
+        const { type } = JSON.parse(line.slice(5));
+        if (type === "server.connected") connected.resolve();
+        for (const each of waiting.filter(one => one.type === type)) { waiting.splice(waiting.indexOf(each), 1); each.resolve(); }
+      }
+    }
+    ended(new Error("The engine's events ended"));
+  }).catch(ended);
+  // (Listening before anything changes.)
+  await ready;
+  const changed = type => new Promise((resolve, reject) => waiting.push({ type, resolve, reject }));
   const api = async (method, route, body) => {
     const response = await fetch(`http://127.0.0.1:${port}/${route}`, { method, headers: auth, body: body ? JSON.stringify(body) : undefined });
     const text = await response.text();
@@ -97,7 +134,7 @@ async function engineOf(box) {
   // What the engine does when `agent`'s tools reach `folder`: as its read, write and edit tools ask
   // for a file outside the project, its folder's pattern.
   const effect = async (agent, folder) => (await api("POST", `api/session/${session}/permission`, { action: "external_directory", resources: [folder + "/*"], agent })).data.effect;
-  return { agents, effect, api };
+  return { agents, effect, api, changed };
 }
 
 // The engine's own agents a conversation runs (and those that run for it, Explore and General).
@@ -119,6 +156,29 @@ for (const mac of [false, true]) {
       assert.equal(await engine.effect(agent, path.join(box.data, "opencode", "tool-output")), "allow", `${agent} opens long outputs saved whole`);
       assert.equal(await engine.effect(agent, path.join(box.skill, "examples")), "allow", `${agent} opens a skill's files`);
       assert.equal(await engine.effect(agent, path.join(box.home, ".opencode", "plan")), "allow", `${agent} opens Plan's plans`);
+    }
+  });
+}
+
+for (const mac of [false, true]) {
+  test(`${mac ? "This Mac's" : "A machine's"} box: an engine that was already running, a conversation open, when the box first wrote its plugin asks before working outside the project too, as it runs`, { skip, timeout: 180_000 }, async () => {
+    // (As after an update that brings the plugin: the engine kept running, the box started again.)
+    const box = boxFolders(mac ? "mac-running" : "machine-running", mac);
+    const engine = await engineOf(box);
+    assert.equal(fs.existsSync(path.join(box.config, "opencode", "plugins", "kuvo-defaults.js")), false, "the box hasn't written its plugin yet");
+    for (const agent of AGENTS) assert.equal(await engine.effect(agent, path.join(box.home, ".ssh")), "allow", `without the plugin, ${agent} doesn't ask`);
+    const reloaded = engine.changed("plugin.updated");
+    reloaded.catch(() => {});
+    // (With its sandbox off, so its plugin is the only one that changes: after an update the
+    // sandbox's is there already.)
+    await startBox(box, { KUVO_SANDBOX: "off" });
+    // The engine sees its plugins folder change and sets up its plugins and agents again, for the
+    // folders it has open (its agents first).
+    await reloaded;
+    for (const agent of AGENTS) {
+      assert.equal(await engine.effect(agent, path.join(box.home, ".ssh")), "ask", `${agent} asks before reading your SSH keys`);
+      assert.equal(await engine.effect(agent, path.join(box.home, "shared")), "allow", `${agent}: your allow wins`);
+      assert.equal(await engine.effect(agent, path.join(box.K, "attachments", "ses_one")), "allow", `${agent} opens files sent with a message`);
     }
   });
 }

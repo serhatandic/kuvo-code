@@ -391,6 +391,7 @@ struct ReviewBar: View {
                     Color.clear
                         .frame(width: 24, height: 24)
                         .padding(.trailing, 8)
+                        .closesWhenKept($confirmsCancel)
                         .popover(isPresented: $confirmsCancel, arrowEdge: .bottom) {
                             StopReviewConfirmation(inParts: review.progress != nil) {
                                 confirmsCancel = false

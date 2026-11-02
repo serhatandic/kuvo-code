@@ -15,6 +15,7 @@ export interface Usable {
   efforts: string[];
   target: Target;
   agents: boolean;
+  retiring: boolean;
 }
 
 function modelsIn(listed: unknown, target: Target, agents: boolean, ready: Set<string> | null): Usable[] {
@@ -23,7 +24,7 @@ function modelsIn(listed: unknown, target: Target, agents: boolean, ready: Set<s
     if (!isObject(each) || typeof each.id !== "string" || typeof each.providerID !== "string" || each.enabled === false) continue;
     if (ready && !ready.has(each.providerID)) continue;
     const efforts = Array.isArray(each.variants) ? each.variants.map(variant => (isObject(variant) ? variant.id : null)).filter((id): id is string => typeof id === "string") : [];
-    models.push({ providerID: each.providerID, id: each.id, name: typeof each.name === "string" && each.name ? each.name : each.id, efforts, target, agents });
+    models.push({ providerID: each.providerID, id: each.id, name: typeof each.name === "string" && each.name ? each.name : each.id, efforts, target, agents, retiring: each.status === "deprecated" });
   }
   return models;
 }
@@ -41,7 +42,9 @@ export async function usableModels(engine: Target | null, bridge: Target | null,
 }
 
 /** The list, for an agent to read. */
-export function describeModels(models: Usable[]): string {
+export function describeModels(all: Usable[]): string {
+  // Not one its provider is retiring, as the engine's own picker leaves it out.
+  const models = all.filter(model => !model.retiring);
   if (!models.length) return `There's no model with an account on ${HERE}. Ask the user to sign in to one in Settings › Accounts.`;
   const line = (model: Usable) => `- ${model.providerID}/${model.id} (${model.name})${model.efforts.length ? `, efforts: ${model.efforts.join(", ")}` : ""}`;
   return `Models you can start a session on, as provider/model (give it to start_session as model, and an effort as effort):\n${models.map(line).join("\n")}`;

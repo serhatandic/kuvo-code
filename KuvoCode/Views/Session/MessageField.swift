@@ -130,6 +130,7 @@ struct MessageField: NSViewRepresentable {
         view.setAccessibilityLabel(label)
         scroll.documentView = view
         handle?.view = view
+        view.keep(outOfSight: context.environment.isKeptOutOfSight, in: scroll)
         context.coordinator.focus = focus
         context.coordinator.blur = blur
         update(view, coordinator: context.coordinator)
@@ -140,6 +141,7 @@ struct MessageField: NSViewRepresentable {
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         guard let view = scroll.documentView as? MessageTextView else { return }
         handle?.view = view
+        view.keep(outOfSight: context.environment.isKeptOutOfSight, in: scroll)
         if view.isEditable != isEditable { view.isEditable = isEditable }
         update(view, coordinator: context.coordinator)
         if focus != context.coordinator.focus {
@@ -260,6 +262,19 @@ final class MessageTextView: PointerAwareTextView {
     }
     /// Asked for the keyboard before it was in a window.
     private var wantsKeyboard = false
+    /// Kept made under another tab's card: it takes no keyboard, asked for it or tabbed to,
+    /// until it's back in view.
+    private(set) var isOutOfSight = false
+    override var acceptsFirstResponder: Bool { !isOutOfSight && super.acceptsFirstResponder }
+
+    /// Hidden, for VoiceOver too, while its card is kept under another; with the keyboard let go
+    /// of first, which AppKit would otherwise hand to the next field along.
+    func keep(outOfSight: Bool, in scroll: NSScrollView) {
+        guard outOfSight != isOutOfSight else { return }
+        isOutOfSight = outOfSight
+        if outOfSight, let window, window.firstResponder === self { window.makeFirstResponder(nil) }
+        scroll.isHidden = outOfSight
+    }
     /// What's drawn in place of a mark's first character: a bot's face, a conversation's or a
     /// picture's mark.
     private var faces = TextFaces()
@@ -286,6 +301,7 @@ final class MessageTextView: PointerAwareTextView {
         DispatchQueue.main.async { [weak self] in
             guard let self, wantsKeyboard, let window else { return }
             wantsKeyboard = false
+            guard !isOutOfSight else { return }
             if window.firstResponder !== self { window.makeFirstResponder(self) }
             setSelectedRange(NSRange(location: (string as NSString).length, length: 0))
             scrollRangeToVisible(selectedRange())
@@ -323,6 +339,8 @@ final class MessageTextView: PointerAwareTextView {
     }
 
     override func becomeFirstResponder() -> Bool {
+        // Asked by `makeFirstResponder` too, which doesn't ask `acceptsFirstResponder` first.
+        guard !isOutOfSight else { return false }
         let became = super.becomeFirstResponder()
         if became { onFocus(true) }
         return became

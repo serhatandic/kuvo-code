@@ -1253,7 +1253,7 @@ final class PhoneLink {
     private static func refusal(of model: ModelRef, on machine: String?, called place: String?, app: AppModel) -> String? {
         guard ModelScope.on(machine: machine).allows(model.providerID) else { return "That model can’t run on \(place ?? "this Mac"): choose another." }
         let catalog = machine.flatMap { app.machines.engine($0)?.catalog } ?? app.catalog
-        return catalog.needsSignIn(model) ? catalog.unavailable(model, on: place) : nil
+        return catalog.refusal(model, on: place)
     }
 
     /// `POST kuvo/sessions/<id>/agents` with `{model}`: a conversation on the engine (here or on a

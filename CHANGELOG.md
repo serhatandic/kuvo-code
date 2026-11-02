@@ -74,10 +74,12 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - Settings › MCP Servers groups its popular servers by whether they need an account, instead of a tag on every row, and Settings › Agents describes the built-in agents in a line each.
 - Bring your subscriptions shows each kind as one list, and the mode menu in the composer has a chevron like the model menu beside it.
 - A reply's steps show one "Worked for" line again, where some showed two when the engine gave the agent more guidance partway through.
+- A session an agent or a bot starts in a worktree, with a title, gets its branch named after that title, as yours do, also with your Mac closed; so does one titled while Kuvo Code there was restarting. They used to keep a made-up name like `kuvo/brave-otter`. Every session working in that worktree is told the new name, and a branch already pushed keeps its name.
 - Agents ask before working in a folder outside the project, as Settings › Permissions says they do: the engine had let them read and change files anywhere, your SSH keys included. Your own rules there still decide, and files you send with a message, skills and the agent's saved outputs open without asking.
 - The agent's pointer shows over the panel's browser when its steps come quickly too, instead of only the ring around a field and the badge.
 - Kuvo Code no longer quits when a file the panel shows with Quick Look (a PDF, a spreadsheet, a video) is followed by the next one as its window closes.
 - On a busy Mac, the card for a command the sandbox stopped fills in what was stopped, and **Always for** its folder, as soon as macOS has noted it, instead of showing only the command's error.
+- With pnpm 11, `pnpm dlx` in the sandbox runs what it fetches from Kuvo Code's own cache, no longer from copies it left in your own pnpm store, which your pnpm runs outside the sandbox.
 - A bot's goal you pause while its computer is restarting, or briefly out of reach, still stops and stays paused once it's back, rather than carrying on with reminders.
 - A bot still hears that its sessions finished, failed or asked something while its computer was restarting, when Kuvo Code or its coding agents were slow to come back. It used to miss what happened meanwhile.
 - An agent that starts a session is promised it'll hear when it finishes only when it will; otherwise it's told to write to it instead.
@@ -90,6 +92,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - A widget the agent writes as a whole page is laid out as its page asks: it kept losing its doctype, so it was drawn the old way, as a page without one.
 - A widget made to fill its window (a wrapper as tall as the window, a sheet against its bottom) no longer grows a little more each time something on it changes.
 - A widget whose script or comments mention `<head>` or `<html>` keeps its safeguards: it still can't fetch or send anything on its own.
+- Going back to a session from a new session's, a group chat's or a terminal's tab is about twice as quick, and finds it scrolled where you were reading.
 - The side panel slides in sooner, and comes back as you left it: where you'd scrolled, the files you'd folded and a comment you were writing in Changes. While it's hidden it stops checking git and files, and its pages and terminals stop drawing.
 - A coding agent too slow to answer whether it's signed in (on a busy Mac or machine) no longer looks signed out: Claude Code, Codex, Grok and Cursor keep their accounts and models as they last said, so a bot's or a session's model isn't taken away mid-goal. Only the agent saying you're signed out is a sign-out.
 - While this Mac's engine or the coding agents restart, the first launch's subscriptions step keeps showing what you're signed in to, instead of offering every sign-in again.
@@ -103,7 +106,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - The agent's own file tools ask before following a link its commands made out of the project, as for any folder outside it, and an agent can no longer get around the sandbox by moving its conversation to another folder, or by replacing an open conversation's folder with a link.
 - A command in the sandbox on a Mac can no longer move or clone a folder it writes, like `~/.cargo`, to read a secret in it or change what runs from it later.
 - On a Mac, a command in the sandbox can no longer use your SSH or GPG agent (the system's, gpg-agent, 1Password, Secretive, Bitwarden or yubikey-agent) to sign with your keys. So there, git over SSH has only the keys the vault gives it, and GPG-signed commits don't work.
-- A command in the sandbox can no longer change what your shell runs as it starts from the tools' folders it writes (`~/.cargo/env`, `~/.deno/env`, `~/.bun/_bun`).
+- A command in the sandbox can no longer change what your shell runs as it starts from the tools' folders it writes (`~/.cargo/env`, `~/.deno/env`, `~/.bun/_bun`), nor what zsh loads from your cache folder as a terminal opens (p10k's instant prompt, gitstatus, oh-my-zsh's and prezto's completions, antidote's and zsh4humans' plugins, oh-my-posh), and on a Mac the configs mise trusts (so you trust a project in mise yourself).
 - After a launch, an update or a restart, coding agents wait for the computer's sandbox to be set up before they start, so a bot on Claude Code, Codex or another coding agent can take a goal on its own. Where one started before the sandbox still runs outside it, the goal's card says so, with **Restart Agents**, instead of saying the sandbox doesn't cover it yet.
 - "Still loading your accounts and models…", Open Quickly, the command palette and an agent's sign-in, code or step card over the window center on the page you're looking at, not the whole window, and move with it as the sidebar, the panel or Settings open and close.
 - The text pointer no longer shows over buttons and bars on top of a reply, your own messages, the composer or a file, like Scroll to the End or a code block's Copy. Copy and a diagram's Code button show the pointing hand. Text fields, in Settings, sheets and the panel, show it only where nothing is drawn over them. Your messages are drawn as the composer draws them, and you can select across them and the replies in one go.
@@ -378,6 +381,14 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - A /goal (or /loop, /btw, /handoff, /review) that can't be done comes back in front of what you typed while it was being sent without its keyword, so your new words don't become part of the goal.
 - Copying a selection that runs across a command you ran with ! copies its command too, not only what it printed.
 - An ask to work outside the project names the folder as you know it, like ~/other-project, instead of a pattern ending in /*, on its card and in notifications, and VoiceOver reads it as Home, other-project.
+- Models their provider is retiring are no longer offered in the model picker or to agents, and a new conversation doesn't start on one; one already on it carries on.
+- Sending a message on a model that's gone from its account now says so before it's sent (choose another model), rather than failing the same way again on Try Again.
+- New Bot on your phone offers a model the computer can use: no longer one whose account was signed out there, which failed to make the bot.
+- Remove Project while Kuvo Code's engine is starting again says it can't yet, instead of seeming to work and bringing the project back a moment later; it also archives the conversations of a worktree of it you'd removed.
+- A project on a machine renamed or removed from your phone changes in the sidebar right away, as this Mac's own projects do, not only once you come back to the app.
+- A rename that doesn't reach the engine (a machine's connection dropped) goes back to the old name, instead of looking saved until the next launch.
+- Settings › Archived Sessions keeps two projects of the same name apart (on this Mac and on a machine, say), and names the machine a project is on.
+- With two asks showing (a permission beside a question, or two permissions), Return and Escape answer only the card on top, not every card at once. A card you've answered waits for the agent instead of sending your answer twice, and one already answered on your phone just goes, without an error.
 - With no GitHub Copilot account, a conversation started without picking a model (one an agent or a bot started, say) no longer fails every message with "missing required Authorization header": the engine's default model had become one of Copilot's. It's one of OpenCode's free models again: on a new install from the start, and on one that had the problem once its engine has started again after its first run with this update.
 - A short message of yours in a narrow window shows all of its lines, instead of being cut at twelve with no Show More.
 

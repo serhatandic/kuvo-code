@@ -287,6 +287,7 @@ private struct BackgroundJobRow: View {
                 .buttonStyle(TextButtonStyle())
                 .font(.system(size: 13))
                 .help("What it has printed so far")
+                .closesWhenKept($showsOutput)
                 .popover(isPresented: $showsOutput, arrowEdge: .top) {
                     ShellOutputView(job: job, api: api, directory: directory)
                         .popoverContent()

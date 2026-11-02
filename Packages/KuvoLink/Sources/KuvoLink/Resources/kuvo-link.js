@@ -231,25 +231,38 @@ function homeFolder() {
   return process.env.HOME || os.homedir();
 }
 var account;
-function accountHome() {
+function accountEntry() {
   if (account)
     return account;
-  const uid = os.userInfo().uid;
-  const field = (line, at) => line?.trim().split(":")[at] || "";
-  let found = "";
+  const uid = process.getuid?.() ?? -1;
+  let line;
   if (process.platform === "darwin") {
-    found = field(spawnSync("/usr/bin/id", ["-P"], { encoding: "utf8", timeout: 5000 }).stdout, 8);
+    line = spawnSync("/usr/bin/id", ["-P"], { encoding: "utf8", timeout: 5000 }).stdout;
   } else {
-    found = field(spawnSync("getent", ["passwd", String(uid)], { encoding: "utf8", timeout: 5000 }).stdout, 5);
-    if (!found) {
+    line = spawnSync("getent", ["passwd", String(uid)], { encoding: "utf8", timeout: 5000 }).stdout;
+    if (!line?.trim()) {
       try {
-        found = field(fs2.readFileSync("/etc/passwd", "utf8").split(`
-`).find((line) => line.split(":")[2] === String(uid)), 5);
+        line = fs2.readFileSync("/etc/passwd", "utf8").split(`
+`).find((each) => each.split(":")[2] === String(uid));
       } catch {}
     }
   }
-  account = path2.isAbsolute(found) ? found : os.userInfo().homedir;
+  const fields = line?.trim().split(":") ?? [];
+  let home = fields[process.platform === "darwin" ? 8 : 5] || "";
+  if (!path2.isAbsolute(home))
+    try {
+      home = os.userInfo().homedir;
+    } catch {
+      home = homeFolder();
+    }
+  account = { name: fields[0] || "", home };
   return account;
+}
+function accountHome() {
+  return accountEntry().home;
+}
+function accountName() {
+  return accountEntry().name;
 }
 var K = process.env.KUVO_HOME || path2.join(homeFolder(), ".kuvo-code");
 var RUN = path2.join(K, "run");
@@ -323,11 +336,7 @@ function located(folder) {
 }
 var REAL_BOX = (() => {
   const home = located(K);
-  let own = homeFolder();
-  try {
-    own = os.userInfo().homedir;
-  } catch {}
-  return home === located(path2.join(own, ".kuvo-code")) || path2.basename(path2.dirname(home)).toLowerCase().startsWith("run.kuvo.code");
+  return home === located(path2.join(accountHome(), ".kuvo-code")) || path2.basename(path2.dirname(home)).toLowerCase().startsWith("run.kuvo.code");
 })();
 var IN_TEST_FOLDER = !REAL_BOX;
 var CONFIG_LOCK = path2.join(RUN, ".config.lock");
@@ -2040,19 +2049,25 @@ function keptProject(directory, given, before = {}) {
       delete project[key];
   return project;
 }
-async function archiveProject(directory, readEngine, readBridge, signal) {
-  const folders = [directory, ...readWorktrees().filter((tree) => tree.project === directory && typeof tree.folder === "string").map((tree) => tree.folder)];
+async function archiveProject(directory, also, readEngine, readBridge, signal) {
+  const removed = Object.entries(readRemovedWorktrees()).filter(([, project]) => project === directory).map(([folder]) => folder);
+  const folders = [...new Set([directory, ...readWorktrees().filter((tree) => tree.project === directory && typeof tree.folder === "string").map((tree) => tree.folder), ...removed, ...also])];
   const targets = [];
   try {
     targets.push(readEngine());
-  } catch {}
+  } catch {
+    return { archived: 0, kept: null };
+  }
+  try {
+    await call(targets[0], "GET", "/api/session?limit=1", undefined, signal);
+  } catch {
+    return { archived: 0, kept: null };
+  }
   try {
     const bridge = readBridge();
     if (bridge?.port && bridge?.password && processRuns(bridge.pid, "kuvo-agents"))
       targets.push(bridge);
   } catch {}
-  if (!targets.length)
-    return { archived: 0, kept: null };
   let archived = 0, kept = 0;
   for (const target of targets) {
     for (const folder of folders) {
@@ -2118,9 +2133,11 @@ async function* answerProjects(request, readEngine = readEngineFile, readBridge 
     return yield* json(200, { project });
   }
   if (method === "DELETE") {
-    const { archived, kept } = await archiveProject(given, readEngine, readBridge, signal);
+    const body = parsed(request.body);
+    const also = isObject(body) && Array.isArray(body.folders) ? body.folders.filter((folder) => typeof folder === "string" && path12.isAbsolute(folder)) : [];
+    const { archived, kept } = await archiveProject(given, also, readEngine, readBridge, signal);
     if (kept === null)
-      return yield* json(503, { message: "Its sessions can’t be reached: the engine isn’t running." });
+      return yield* json(503, { message: "Its sessions can’t be archived now: the engine isn’t running. Try again in a moment." });
     if (kept > 0)
       return yield* json(409, { message: `${kept === 1 ? "One of its sessions" : `${kept} of its sessions`} couldn’t be archived, so it stays with them. Try again in a moment.`, archived, kept });
     changeProjects((projects) => {
@@ -5084,8 +5101,27 @@ var RUNS_LATER = [
   ".pub-cache/bin",
   "go/bin"
 ];
-var TOOL_CACHES = ["pre-commit", "pnpm", "uv", "node/corepack"];
-var MAC_RUNS_LATER = ["Library/Caches/pnpm"];
+var TOOL_CACHES = [
+  "pre-commit",
+  "pnpm",
+  "uv",
+  "node/corepack",
+  "gitstatus",
+  "oh-my-zsh",
+  "prezto",
+  "zsh",
+  "antidote",
+  "zsh4humans",
+  "oh-my-posh"
+];
+var SHELL_CACHES = (me) => [
+  `p10k-instant-prompt-${me}.zsh`,
+  `p10k-instant-prompt-${me}.zsh.zwc`,
+  `p10k-dump-${me}.zsh`,
+  `p10k-dump-${me}.zsh.zwc`,
+  `p10k-${me}`
+];
+var MAC_RUNS_LATER = ["Library/Caches/pnpm", "Library/Caches/antidote", ".local/state/mise/trusted-configs"];
 var SECRETS = [
   ".aws",
   ".config/gcloud",
@@ -5156,7 +5192,7 @@ function appTemporary() {
 }
 function sandboxCaches() {
   const tmp = appTemporary();
-  const root = realish(tmp ? path25.join(os5.userInfo().homedir, "Library", "Caches", path25.basename(tmp)) : path25.join(K, "cache"));
+  const root = realish(tmp ? path25.join(homeFolder(), "Library", "Caches", path25.basename(tmp)) : path25.join(K, "cache"));
   return { npm: path25.join(root, "sandbox-npm"), pnpm: path25.join(root, "sandbox-pnpm"), uv: path25.join(root, "sandbox-uv"), corepack: path25.join(root, "sandbox-corepack") };
 }
 function macFolders(home) {
@@ -5173,12 +5209,15 @@ function macFolders(home) {
     `/private/tmp/kuvo-ssh-${os5.userInfo().uid}`
   ];
   if (tmp)
-    kuvo.push(tmp);
+    kuvo.push(tmp, path25.dirname(sandboxCaches().npm));
   return { kuvo, readable: [path25.join(app, "bin")] };
 }
 function fencePolicy(ports = []) {
-  const home = realish(os5.userInfo().homedir);
+  const home = realish(accountHome());
   const inHome = (names) => names.map((name) => realish(path25.join(home, name)));
+  const named = realish(process.env.HOME || home);
+  const homes = named === home ? [home] : [home, named];
+  const inHomes = (names) => homes.flatMap((each) => names.map((name) => realish(path25.join(each, name))));
   const own = IS_MAC ? macFolders(home) : { kuvo: [K, path25.join(home, ".kuvo-code")], readable: [path25.join(K, "bin")] };
   const kuvo = [...new Set(own.kuvo.map(realish))];
   const kuvoReadable = own.readable.map(realish);
@@ -5187,16 +5226,19 @@ function fencePolicy(ports = []) {
   const yourCaches = [realish(path25.join(home, ".cache"))];
   if (ownCache && path25.isAbsolute(ownCache) && !kuvo.some((folder) => realish(ownCache) === folder || realish(ownCache).startsWith(folder + "/")))
     yourCaches.push(realish(ownCache));
-  const runsLater = [...inHome(RUNS_LATER), ...new Set(yourCaches.flatMap((folder) => TOOL_CACHES.map((name) => path25.join(folder, name))))];
+  const runsLater = [...inHomes(RUNS_LATER), ...new Set(yourCaches.flatMap((folder) => [...TOOL_CACHES, ...SHELL_CACHES(accountName())].map((name) => path25.join(folder, name))))];
   if (process.platform === "darwin") {
     return {
       home,
       kuvo,
       kuvoReadable,
-      readOnly: [...runsLater, ...inHome(MAC_RUNS_LATER)],
+      readOnly: [...runsLater, ...inHomes(MAC_RUNS_LATER)],
       ports,
       commandCaches,
-      readOnlyPatterns: userTemporary().map((folder) => `^${escapeRegex(folder)}/T/bunx-`),
+      readOnlyPatterns: [
+        ...userTemporary().map((folder) => `^${escapeRegex(folder)}/T/bunx-`),
+        ...yourCaches.map((folder) => `^${escapeRegex(folder)}/p10k-`)
+      ],
       kuvoPatterns: [
         `^${escapeRegex(home)}/Library/[^/]+/run\\.kuvo\\.code[^/]*(/|$)`,
         `^/private/var/folders/[^/]+/[^/]+/[^/]+/run\\.kuvo\\.code[^/]*(/|$)`
@@ -5224,7 +5266,7 @@ function fencePolicy(ports = []) {
         `^${escapeRegex(home)}/\\.gnupg/S\\.(gpg-agent|scdaemon)`
       ],
       socketFolders: ["^/private/tmp/com\\.apple\\.launchd\\.[^/]+$", "^/private/tmp/ssh-[^/]+$", "^/private/var/folders/[^/]+/[^/]+/T/ssh-[^/]+$"],
-      secrets: [...inHome([...SECRETS, ...MAC_SECRETS]), ...keychainDaemons(home).map(realish), ...sshKeys(home).map(realish), ...ghHosts(home).map(realish)]
+      secrets: [...inHomes([...SECRETS, ...MAC_SECRETS]), ...keychainDaemons(home).map(realish), ...homes.flatMap((each) => [...sshKeys(each), ...ghHosts(each)]).map(realish)]
     };
   }
   return {
@@ -5236,7 +5278,7 @@ function fencePolicy(ports = []) {
     commandCaches,
     kuvoPatterns: [],
     writable: ["/tmp", "/var/tmp", "/dev", "/dev/shm", ...inHome([...CACHES, ...LINUX_CACHES])],
-    secrets: [...inHome([...SECRETS, ...LINUX_SECRETS]), ...sshKeys(home), ...ghHosts(home)]
+    secrets: [...inHomes([...SECRETS, ...LINUX_SECRETS]), ...homes.flatMap((each) => [...sshKeys(each), ...ghHosts(each)])]
   };
 }
 function userTemporary() {
@@ -5615,7 +5657,7 @@ function launcherScript(places) {
     `(umask 077; mkdir -p "$tmp") && touch "$tmp" && export TMPDIR="$tmp/"`,
     `export PRE_COMMIT_HOME="$TMPDIR"pre-commit`,
     `(umask 077; mkdir -p ${[places.caches.npm, places.caches.pnpm, `${places.caches.uv}/cache`, `${places.caches.uv}/tools`, places.caches.corepack].map(sh).join(" ")})`,
-    `export npm_config_cache=${sh(places.caches.npm)} pnpm_config_cache_dir=${sh(places.caches.pnpm)} UV_CACHE_DIR=${sh(`${places.caches.uv}/cache`)} UV_TOOL_DIR=${sh(`${places.caches.uv}/tools`)} COREPACK_HOME=${sh(places.caches.corepack)}`,
+    `export npm_config_cache=${sh(places.caches.npm)} pnpm_config_cache_dir=${sh(places.caches.pnpm)} pnpm_config_enable_global_virtual_store=false UV_CACHE_DIR=${sh(`${places.caches.uv}/cache`)} UV_TOOL_DIR=${sh(`${places.caches.uv}/tools`)} COREPACK_HOME=${sh(places.caches.corepack)}`,
     ...places.platform === "linux" ? ["export UV_LINK_MODE=copy"] : [],
     ...places.platform === "darwin" ? [`tmp=$(cd "$tmp" 2>/dev/null && pwd -P) || { echo "This command can't run: its temporary folder isn't there." >&2; exit 126; }`] : [],
     `own=$F/none w_bot=`,
@@ -6223,7 +6265,7 @@ function probe() {
     `exit 0`
   ].join(`
 `);
-  const env = { PATH: process.env.PATH || "/usr/bin:/bin", HOME: os6.userInfo().homedir, KUVO_FENCE_SHELL: "/bin/sh", KUVO_FENCE_WORK: PROBE };
+  const env = { PATH: process.env.PATH || "/usr/bin:/bin", HOME: accountHome(), KUVO_FENCE_SHELL: "/bin/sh", KUVO_FENCE_WORK: PROBE };
   const bun = runtime();
   if (bun)
     env.KUVO_FENCE_RUNTIME = bun;
@@ -10755,11 +10797,12 @@ import path46 from "node:path";
 function freeBranch(folder, name) {
   for (let suffix = 1;suffix <= 20; suffix++) {
     const candidate = suffix === 1 ? name : `${name}-${suffix}`;
-    if (gitIn(folder, ["rev-parse", "--verify", "--quiet", `refs/heads/${candidate}`]) === null)
+    if (gitIn(folder, ["rev-parse", "--verify", "--quiet", `refs/heads/${candidate}`]) === null && !onRemote(folder, candidate))
       return candidate;
   }
   return null;
 }
+var onRemote = (folder, branch) => Boolean(gitIn(folder, ["for-each-ref", "--count=1", "--format=%(refname)", `refs/remotes/*/${branch}`]));
 var LATIN = Object.fromEntries([
   ...[..."абвгдеёжзийклмнопрстуфхцчшщъыьэюяіїєґ"].map((letter, at) => [letter, ["a", "b", "v", "g", "d", "e", "e", "z", "z", "i", "j", "k", "l", "m", "n", "o", "p", "r", "s", "t", "u", "f", "h", "c", "c", "s", "s", "", "y", "", "e", "u", "a", "i", "i", "e", "g"][at]]),
   ...[..."αβγδεζηθικλμνξοπρσςτυφχψω"].map((letter, at) => [letter, ["a", "b", "g", "d", "e", "z", "e", "th", "i", "k", "l", "m", "n", "x", "o", "p", "r", "s", "s", "t", "y", "ph", "ch", "ps", "o"][at]])
@@ -10790,7 +10833,7 @@ async function sessionsHere(engine, signal, bridge = bridgeTarget()) {
   if (!engine?.port)
     return null;
   const here = { sessions: [], active: new Set };
-  for (const target of bridge?.port ? [engine, bridge] : [engine]) {
+  for (const target of bridge?.port && bridge.port !== engine.port ? [engine, bridge] : [engine]) {
     const headers = { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}` };
     try {
       const listed = await fetch(`http://127.0.0.1:${target.port}/api/session?parentID=null&limit=200&order=desc`, { headers, signal: AbortSignal.timeout(1e4) });
@@ -10811,6 +10854,8 @@ var inside2 = (folder, root) => folder === root || folder?.startsWith(root + "/"
 function renameWorktree(tree, to) {
   if (gitIn(tree.root, ["rev-parse", "--abbrev-ref", `${tree.branch}@{upstream}`]) !== null)
     return false;
+  if (onRemote(tree.root, tree.branch))
+    return false;
   const name = freeBranch(tree.root, to);
   if (!name || gitIn(tree.root, ["branch", "-m", tree.branch, name]) === null) {
     const now = gitIn(tree.root, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
@@ -10823,16 +10868,41 @@ function renameWorktree(tree, to) {
 }
 async function nameWorktreeBranch(engine, sessionID) {
   if (typeof sessionID !== "string")
-    return;
+    return false;
   const session = (await engineGet(engine, `api/session/${encodeURIComponent(sessionID)}`))?.data;
   if (!session || session.parentID || isHiddenRun(session))
-    return;
+    return false;
   const folder = session.location?.directory ?? session.directory;
   const tree = readWorktrees().find((each) => (each.folder ?? each.root) === folder);
   const slug = branchSlug(session.title ?? "");
   if (!tree?.made || tree.branch !== tree.made || !slug)
-    return;
-  if (renameWorktree(tree, (tree.prefix ?? "") + slug))
+    return false;
+  if (!renameWorktree(tree, (tree.prefix ?? "") + slug))
+    return false;
+  await tellRenamed(engine, tree, sessionID);
+  return true;
+}
+async function tellRenamed(source, tree, sessionID) {
+  await tellWorktree(source, sessionID);
+  const told = new Set([sessionID]);
+  const places = [source];
+  try {
+    places.push(readEngineFile());
+  } catch {}
+  const bridge = bridgeTarget();
+  if (bridge)
+    places.push(bridge);
+  for (const target of places.filter((each, at) => each.port && places.findIndex((other) => other.port === each.port) === at)) {
+    for (const session of (await sessionsHere(target, undefined, null))?.sessions ?? []) {
+      if (told.has(session.id) || isHiddenRun(session) || !inside2(session.location?.directory ?? session.directory, tree.root))
+        continue;
+      told.add(session.id);
+      await tellWorktree(target, session.id).catch(() => {});
+    }
+  }
+}
+async function settleNewSession(engine, sessionID) {
+  if (!await nameWorktreeBranch(engine, sessionID))
     await tellWorktree(engine, sessionID);
 }
 async function nameDueWorktrees(engine, signal) {
@@ -12445,6 +12515,70 @@ async function* groupsRoute(context) {
 import crypto21 from "node:crypto";
 import fs48 from "node:fs";
 import path51 from "node:path";
+
+// Packages/Box/src/link/work/models.ts
+function modelsIn(listed, target, agents, ready) {
+  const models = [];
+  for (const each of Array.isArray(listed) ? listed : []) {
+    if (!isObject(each) || typeof each.id !== "string" || typeof each.providerID !== "string" || each.enabled === false)
+      continue;
+    if (ready && !ready.has(each.providerID))
+      continue;
+    const efforts = Array.isArray(each.variants) ? each.variants.map((variant) => isObject(variant) ? variant.id : null).filter((id) => typeof id === "string") : [];
+    models.push({ providerID: each.providerID, id: each.id, name: typeof each.name === "string" && each.name ? each.name : each.id, efforts, target, agents, retiring: each.status === "deprecated" });
+  }
+  return models;
+}
+async function usableModels(engine, bridge, signal) {
+  const models = [];
+  if (engine) {
+    const [providers, listed] = await Promise.all([call(engine, "GET", "/api/provider", undefined, signal).catch(() => null), call(engine, "GET", "/api/model", undefined, signal).catch(() => null)]);
+    const ready = new Set((Array.isArray(providers) ? providers : []).map((each) => isObject(each) ? each.id : null).filter((id) => typeof id === "string"));
+    models.push(...modelsIn(listed, engine, false, ready));
+  }
+  if (bridge)
+    models.push(...modelsIn(await call(bridge, "GET", "/api/model", undefined, signal).catch(() => null), bridge, true, null));
+  return models;
+}
+function describeModels(all) {
+  const models = all.filter((model) => !model.retiring);
+  if (!models.length)
+    return `There's no model with an account on ${HERE}. Ask the user to sign in to one in Settings › Accounts.`;
+  const line = (model) => `- ${model.providerID}/${model.id} (${model.name})${model.efforts.length ? `, efforts: ${model.efforts.join(", ")}` : ""}`;
+  return `Models you can start a session on, as provider/model (give it to start_session as model, and an effort as effort):
+${models.map(line).join(`
+`)}`;
+}
+function pickModel(given, effort, models) {
+  let providerID = "", id = "";
+  if (typeof given === "string") {
+    const at = given.trim().indexOf("/");
+    if (at > 0)
+      [providerID, id] = [given.trim().slice(0, at), given.trim().slice(at + 1)];
+    else
+      id = given.trim();
+  } else if (isObject(given) && typeof given.id === "string") {
+    id = given.id;
+    providerID = typeof given.providerID === "string" ? given.providerID : "";
+  }
+  if (!id)
+    return { refused: "Name the model as provider/model, from list_models." };
+  const matches = models.filter((model) => model.id === id && (!providerID || model.providerID === providerID));
+  if (!matches.length) {
+    const known = providerID && models.some((model) => model.providerID === providerID);
+    return { refused: known ? `There's no ${id} among ${providerID}'s models here. Use list_models to see what there is.` : `There's no account for ${providerID || id} on ${HERE}. Use list_models to see the models you can use.` };
+  }
+  const model = matches[0];
+  if (effort === undefined || effort === null || effort === "")
+    return { model, variant: null };
+  if (!model.efforts.length)
+    return { refused: `${model.name} has no efforts to choose from: leave effort out.` };
+  if (typeof effort !== "string" || !model.efforts.includes(effort))
+    return { refused: `${model.name}'s efforts are ${model.efforts.join(", ")}.` };
+  return { model, variant: effort };
+}
+
+// Packages/Box/src/link/bots/make.ts
 var fitsLook = (looks, look) => Boolean(look) && looks.colors.includes(look.color) && looks.shapes.includes(look.shape) && looks.faces.includes(look.face);
 async function signInRefusal(model, engine, signal) {
   const ready = await call(engine, "GET", "/api/provider", undefined, signal).catch(() => {
@@ -12452,6 +12586,27 @@ async function signInRefusal(model, engine, signal) {
   });
   const ids = Array.isArray(ready) ? ready.map((each) => each?.id) : [];
   return ids.length && !ids.includes(model.providerID) ? `${model.id} needs a sign-in on ${HERE}: sign in to it in Settings › Accounts, or choose another model.` : null;
+}
+async function startingModelHere(named, readEngine, signal) {
+  if (named && runsWithAgents(named))
+    return named;
+  let engine = null;
+  try {
+    engine = readEngine();
+  } catch {}
+  if (!engine)
+    return named;
+  const step = signal ? AbortSignal.any([signal, AbortSignal.timeout(BOT_STEP)]) : AbortSignal.timeout(BOT_STEP);
+  const models = (await usableModels(engine, null, step)).filter((model) => !model.retiring);
+  if (!models.length)
+    return named;
+  const usable = (model) => Boolean(model) && models.some((each) => each.id === model?.id && each.providerID === model?.providerID);
+  if (usable(named))
+    return named;
+  const fallback = await call(engine, "GET", "/api/model/default", undefined, step).catch(() => null);
+  if (isObject(fallback) && usable(fallback))
+    return { id: fallback.id, providerID: fallback.providerID };
+  return { id: models[0].id, providerID: models[0].providerID };
 }
 var REQUEST = /^[A-Za-z0-9_-]{8,64}$/;
 var MADE_FOR = 3600000;
@@ -12507,7 +12662,7 @@ async function makeOnce(given, readEngine, readBridge, machine, signal) {
   const looks = kit.looks;
   const pick = (list) => list[crypto21.randomInt(list.length)];
   const look = fitsLook(looks, given.look) ? botLook(given.look) : template?.look ?? { color: pick(looks.colors), shape: pick(looks.shapes), face: pick(looks.faces) };
-  const model = isModel(given.model) ? botModel(given.model) : kit.startingModel;
+  const model = isModel(given.model) ? botModel(given.model) : await startingModelHere(kit.startingModel ?? null, readEngine, signal);
   if (!model)
     return no(422, `There’s no model to start it on here: sign in to an account on ${HERE} first.`);
   const agents = runsWithAgents(model);
@@ -13531,6 +13686,8 @@ async function watchEvents(read, tell, signal, answered = () => {}, { bots = fal
       learn(source);
       if (queues)
         scanQueues(source, found).catch(() => {});
+      if (!bots)
+        nameDueWorktrees(source, connection.signal).catch(() => {});
       if (goalHeld)
         settleGoalHolds(source, goalHeld).catch(() => {});
       for await (const event of serverEvents(response.body)) {
@@ -13545,7 +13702,7 @@ async function watchEvents(read, tell, signal, answered = () => {}, { bots = fal
           noteSignIn(event, source).catch(() => {}).finally(() => signedIn(event));
         if (!bots) {
           if (event.type === "session.created")
-            tellWorktree(source, event.data?.sessionID ?? event.data?.info?.id).catch(() => {});
+            settleNewSession(source, event.data?.sessionID ?? event.data?.info?.id).catch(() => {});
           if (event.type === "session.renamed")
             nameWorktreeBranch(source, event.data?.sessionID).catch(() => {});
         }
@@ -17337,69 +17494,6 @@ async function* engineRoute(context) {
 // Packages/Box/src/link/letters/start.ts
 import fs63 from "node:fs";
 import path66 from "node:path";
-
-// Packages/Box/src/link/work/models.ts
-function modelsIn(listed, target, agents, ready) {
-  const models = [];
-  for (const each of Array.isArray(listed) ? listed : []) {
-    if (!isObject(each) || typeof each.id !== "string" || typeof each.providerID !== "string" || each.enabled === false)
-      continue;
-    if (ready && !ready.has(each.providerID))
-      continue;
-    const efforts = Array.isArray(each.variants) ? each.variants.map((variant) => isObject(variant) ? variant.id : null).filter((id) => typeof id === "string") : [];
-    models.push({ providerID: each.providerID, id: each.id, name: typeof each.name === "string" && each.name ? each.name : each.id, efforts, target, agents });
-  }
-  return models;
-}
-async function usableModels(engine, bridge, signal) {
-  const models = [];
-  if (engine) {
-    const [providers, listed] = await Promise.all([call(engine, "GET", "/api/provider", undefined, signal).catch(() => null), call(engine, "GET", "/api/model", undefined, signal).catch(() => null)]);
-    const ready = new Set((Array.isArray(providers) ? providers : []).map((each) => isObject(each) ? each.id : null).filter((id) => typeof id === "string"));
-    models.push(...modelsIn(listed, engine, false, ready));
-  }
-  if (bridge)
-    models.push(...modelsIn(await call(bridge, "GET", "/api/model", undefined, signal).catch(() => null), bridge, true, null));
-  return models;
-}
-function describeModels(models) {
-  if (!models.length)
-    return `There's no model with an account on ${HERE}. Ask the user to sign in to one in Settings › Accounts.`;
-  const line = (model) => `- ${model.providerID}/${model.id} (${model.name})${model.efforts.length ? `, efforts: ${model.efforts.join(", ")}` : ""}`;
-  return `Models you can start a session on, as provider/model (give it to start_session as model, and an effort as effort):
-${models.map(line).join(`
-`)}`;
-}
-function pickModel(given, effort, models) {
-  let providerID = "", id = "";
-  if (typeof given === "string") {
-    const at = given.trim().indexOf("/");
-    if (at > 0)
-      [providerID, id] = [given.trim().slice(0, at), given.trim().slice(at + 1)];
-    else
-      id = given.trim();
-  } else if (isObject(given) && typeof given.id === "string") {
-    id = given.id;
-    providerID = typeof given.providerID === "string" ? given.providerID : "";
-  }
-  if (!id)
-    return { refused: "Name the model as provider/model, from list_models." };
-  const matches = models.filter((model) => model.id === id && (!providerID || model.providerID === providerID));
-  if (!matches.length) {
-    const known = providerID && models.some((model) => model.providerID === providerID);
-    return { refused: known ? `There's no ${id} among ${providerID}'s models here. Use list_models to see what there is.` : `There's no account for ${providerID || id} on ${HERE}. Use list_models to see the models you can use.` };
-  }
-  const model = matches[0];
-  if (effort === undefined || effort === null || effort === "")
-    return { model, variant: null };
-  if (!model.efforts.length)
-    return { refused: `${model.name} has no efforts to choose from: leave effort out.` };
-  if (typeof effort !== "string" || !model.efforts.includes(effort))
-    return { refused: `${model.name}'s efforts are ${model.efforts.join(", ")}.` };
-  return { model, variant: effort };
-}
-
-// Packages/Box/src/link/letters/start.ts
 var OUTSIDE = { session: "unknown", place: null, name: "another agent" };
 var ASKS_FIRST = [{ action: "shell", resource: "*", effect: "ask" }];
 var goalNote = "This is part of a goal the user may not be watching: what you ask can wait a while, so carry on with what doesn't depend on it. Prepare rather than act on the world: don't publish, deploy, send or pay anything unless your task says it's approved, and report what you couldn't do.";
@@ -17636,7 +17730,7 @@ async function startSession(given, by, place) {
   if (project?.folders.length) {
     await call(target, "PUT", `/api/experimental/session/${address}/instructions/entries/kuvo.project-folders`, { value: projectsNote(folder, project.folders) }).catch(() => {});
   }
-  await tellWorktree(target, session).catch(() => {});
+  await settleNewSession(target, session).catch(() => {});
   let wakes = wakesFrom(given.wake, Boolean(ownBot), given.wait === true);
   let marked = false;
   if (by?.place) {
@@ -19143,13 +19237,14 @@ async function* attentionRoute(context) {
 
 // Packages/Box/src/link/areas/bots.ts
 async function* botTemplatesRoute(context) {
-  const { request, info, json } = context;
+  const { request, signal, readEngine, info, json } = context;
   if (!["GET", "HEAD"].includes(request.method.toUpperCase()))
     return yield* json(405, {});
   const kit = readKit();
   if (!kit)
     return yield* json(409, { message: NO_KIT });
-  return yield* json(200, botTemplates(kit, info.name));
+  const startingModel = await startingModelHere(kit.startingModel ?? null, readEngine, signal);
+  return yield* json(200, botTemplates({ ...kit, startingModel }, info.name));
 }
 async function* newBotRoute(context) {
   const { request, signal, readEngine, bridge, info, json } = context;
@@ -19326,7 +19421,7 @@ import fs69 from "node:fs";
 import path73 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.157";
+var BRIDGE_VERSION = "0.9.162";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

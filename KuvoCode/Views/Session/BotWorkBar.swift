@@ -59,6 +59,7 @@ struct BotWorkBar: View {
                 showsAll = true
             }
             #endif
+            .closesWhenKept($showsAll)
             .popover(isPresented: $showsAll, arrowEdge: .top) {
                 ScrollView {
                     BotWorkList(bot: bot, report: report)

@@ -55,7 +55,6 @@ struct SessionView: View {
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
         // Its machine out of reach: the conversation to read, without what needs the engine.
         .environment(\.isOffline, Self.offlineMachine(of: model, in: app) != nil)
-        .navigationTitle(model.session.title ?? "New Session")
         // A conversation as last seen is read once its machine is back.
         // A copy shown while the engine reads (this Mac's) is read too; one waiting for its
         // machine is read once the machine is back.
@@ -342,16 +341,19 @@ private struct BottomStack: View {
         Group {
             VStack(spacing: 12) {
                 // What asks you something: solid cards over the composer's, apart from it.
+                // Return and Escape answer the card on top only (one answered keeps them: a second
+                // Return answers nothing, rather than sending the composer's draft).
                 ForEach(model.permissions) { request in
                     PermissionCard(request: request, command: model.permissionCommands[request.id], directory: model.session.location.directory) { decision in
                         model.reply(to: request, decision)
                     }
+                    .environment(\.takesCardKeys, takesCardKeys && model.keyedAsk == request.id)
                     .disabled(offlineMachine != nil)
                     .modifier(ComposerSurface())
                 }
-                ForEach(Array(forms.enumerated()), id: \.element.id) { index, form in
+                ForEach(forms) { form in
                     QuestionCard(form: form, progress: Binding(get: { model.questionProgress[form.id] ?? QuestionProgress() }, set: { model.questionProgress[form.id] = $0 }),
-                                 takesKeys: index == 0 && takesCardKeys) { answer in
+                                 takesKeys: takesCardKeys && (model.keyedAsk ?? forms.first?.id) == form.id) { answer in
                         model.answer(form, with: FormFieldsView.payload(form.fields, answer))
                     } dismiss: {
                         model.dismiss(form)
@@ -359,8 +361,9 @@ private struct BottomStack: View {
                     .disabled(offlineMachine != nil)
                     .modifier(ComposerSurface())
                 }
-                ForEach(app.browserAsks.asks(for: model.session.id)) { ask in
+                ForEach(Array(app.browserAsks.asks(for: model.session.id).enumerated()), id: \.element.id) { index, ask in
                     BrowserAskCard(ask: ask)
+                        .environment(\.takesCardKeys, takesCardKeys && index == 0 && model.permissions.isEmpty && forms.isEmpty)
                         .modifier(ComposerSurface())
                 }
                 // What its agent asks of its computer's vault.
@@ -652,7 +655,7 @@ private struct BottomStack: View {
             return
         }
         let machine = RemoteFolder.machine(of: model.session.location.directory).map { id in app.machines.list.first { $0.id == id }?.name ?? id }
-        let unavailable = model.session.model.flatMap { catalog.needsSignIn($0) ? catalog.unavailable($0, on: machine) : nil }
+        let unavailable = model.session.model.flatMap { catalog.refusal($0, on: machine) }
         model.submitDraft(for: catalog.model(model.session.model), queue: queue, commands: catalog.commands(in: model.session.location.directory), unavailable: unavailable)
     }
 }
@@ -744,7 +747,6 @@ struct DraftSessionView: View {
             Spacer()
             Spacer()
         }
-        .navigationTitle("New Session")
         .task(id: directory) { await catalog.loadCommands(in: directory) }
         .onAppear { Analytics.shared.onboardingStep("composer") }
     }

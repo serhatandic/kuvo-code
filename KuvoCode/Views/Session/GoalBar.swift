@@ -45,6 +45,7 @@ struct GoalBar: View {
         .animation(.ui, value: goal.state)
         .animation(.ui, value: goal.checking)
         // Stopping it can't be undone: the turn under way ends, and the goal goes.
+        .closesWhenKept($confirmsStop)
         .confirmationDialog("Stop the goal?", isPresented: $confirmsStop) {
             Button("Stop the Goal", role: .destructive) {
                 // Only a goal still under way: one met meanwhile stays to be read.

@@ -32,9 +32,16 @@ final class Workspace {
     /// A machine's coding agents (the agents bridge beside its engine), by the machine's name.
     @ObservationIgnored var machineAgents: (String) -> OutsideAgents? = { _ in nil }
 
-    /// A conversation's goal, as its computer's agents bridge runs it (where its folder is now).
+    /// A conversation's goal, as its computer's agents bridge runs it (where its folder is now), and
+    /// its asks settled with no event for them.
     private func followGoals(of model: SessionModel) {
         model.goalBridge = { [weak self, weak model] in model.flatMap { self?.agents(forFolder: $0.session.location.directory) } }
+        // An ask found settled without a word of it (answered elsewhere first): off the Dock's
+        // count and the notifications too.
+        model.askSettled = { [weak self] request in
+            self?.sharedForms[request] = nil
+            self?.settled(request)
+        }
     }
 
     /// The agents bridge a folder's sessions with the coding agents run in: its machine's, or
@@ -740,7 +747,10 @@ final class Workspace {
         guard await takeWorktrees(from: box) != nil else {
             throw BoxRefusal(status: 503, message: box == BoxClient.mac ? "Kuvo Code’s background service on this Mac isn’t answering. Try again in a moment." : "\(box) isn’t answering. Try again in a moment.")
         }
-        let (status, data) = try await client.send("DELETE", "kuvo/projects?directory=" + Self.queryValue(Self.onBox(directory)))
+        // Its worktrees removed before its box kept them, whose sessions this Mac still shows under it.
+        let removed = removedWorktrees.filter { $0.value == directory && Self.box(of: $0.key) == box }.keys.map(Self.onBox).sorted()
+        let body = try JSONSerialization.data(withJSONObject: ["folders": removed])
+        let (status, data) = try await client.send("DELETE", "kuvo/projects?directory=" + Self.queryValue(Self.onBox(directory)), body: body)
         switch status {
         case 200:
             // All of them, there: so here too, as the engine has them now, and it's off the list.
@@ -1228,7 +1238,8 @@ final class Workspace {
     /// their own. A box that can't keep them yet, or isn't answering, is left as it was.
     func loadProjects(on box: String) async {
         await inTurn {
-            guard let client = self.boxes?(box), await Self.projects(of: client) != nil else { return }
+            // A machine disconnected or removed while this waited its turn isn't asked.
+            guard !self.isAway(box), let client = self.boxes?(box), await Self.projects(of: client) != nil else { return }
             if !Self.keepsProjects(box) {
                 // Its projects, and those it removed (their settings), as they were kept here.
                 let kept = Set(self.folders.filter { Self.box(of: $0) == box }).union(self.settings.keys.filter { Self.box(of: $0) == box })
@@ -1241,21 +1252,36 @@ final class Workspace {
         }
     }
 
-    /// This Mac's projects as its box has them, from now on: each change, wherever it was made
-    /// (a phone's too), as it's made.
-    func followProjects() async {
-        while !Task.isCancelled {
-            if let client = boxes?(BoxClient.mac) {
-                await loadProjects(on: BoxClient.mac)
+    /// `box`'s projects as it has them, from now on: each change, wherever it was made (a phone's
+    /// too), as it's made. This Mac's for as long as the app runs; a machine's while it's
+    /// connected (its connection ends this, and it ends with the machine removed), from half a
+    /// minute after it connects (they're read as it does, `refreshOnce`), and again that long
+    /// after its stream ends; an older Kuvo Code there, which can't keep them yet, now and then.
+    func followProjects(on box: String = BoxClient.mac) async {
+        let onThisMac = box == BoxClient.mac
+        var older = false
+        while !Task.isCancelled, !isRemoved(box) {
+            if !onThisMac {
+                await MachineClock.wait(older ? 300 : 30)
+                guard !Task.isCancelled, !isRemoved(box) else { return }
+            }
+            older = false
+            if let client = boxes?(box) {
+                // This Mac's are read first.
+                if onThisMac { await loadProjects(on: box) }
                 do {
                     for try await line in client.follow("kuvo/projects/events") {
-                        guard Self.keepsProjects(BoxClient.mac), let listed = try? JSONDecoder().decode(BoxProjects.self, from: line) else { continue }
-                        await inTurn { self.take(listed.projects, from: BoxClient.mac) }
+                        guard let listed = try? JSONDecoder().decode(BoxProjects.self, from: line) else { continue }
+                        // One it couldn't read as it connected: what's kept here goes to it first.
+                        guard Self.keepsProjects(box) else { await loadProjects(on: box); continue }
+                        await inTurn { if !self.isAway(box) { self.take(listed.projects, from: box) } }
                     }
+                } catch let refusal as BoxRefusal {
+                    older = refusal.status == 404
                 } catch {}
             }
-            // The box restarted, or isn't up yet: followed again in a moment.
-            try? await Task.sleep(for: .seconds(2))
+            // This Mac's box restarted, or isn't up yet: followed again in a moment.
+            if onThisMac { try? await Task.sleep(for: .seconds(2)) }
         }
     }
 
@@ -1338,8 +1364,8 @@ final class Workspace {
         await turn.value
     }
 
-    /// Your machines' projects read again (back in the app: a phone may have changed them; a
-    /// machine's aren't followed as this Mac's are).
+    /// Your machines' projects read again (back in the app, in case following one missed a change
+    /// while its connection dropped for a moment).
     func reloadMachinesProjects() {
         for machine in connectedMachines { Task { await loadProjects(on: machine) } }
     }
@@ -1577,11 +1603,21 @@ final class Workspace {
         Drafts.shared.remove(id)
     }
 
+    /// Shown at once; put back as it was if the engine doesn't take it (as `setFlag`), unless it
+    /// was renamed again meanwhile.
     func rename(_ id: String, to title: String) async {
-        guard !Moves.isFrozen(id), let index = sessions.firstIndex(where: { $0.id == id }), api(forSession: id) != nil else { return }
+        guard !Moves.isFrozen(id), let index = sessions.firstIndex(where: { $0.id == id }), let api = api(forSession: id) else { return }
+        let before = sessions[index].title
         sessions[index].title = title
         if let machine = RemoteFolder.machine(of: sessions[index].location.directory) { keepList(of: machine) }
-        try? await api(forSession: id)?.renameSession(id, title: title)
+        do {
+            try await api.renameSession(id, title: title)
+        } catch {
+            guard let index = sessions.firstIndex(where: { $0.id == id }), sessions[index].title == title else { return }
+            sessions[index].title = before
+            // A machine's list as it's kept here for while it's away, too.
+            if let machine = RemoteFolder.machine(of: sessions[index].location.directory) { keepList(of: machine) }
+        }
     }
 
     // MARK: Sync
@@ -2044,6 +2080,13 @@ final class Workspace {
     /// them.
     private var removedMachines: Set<String> = []
 
+    private func isRemoved(_ box: String) -> Bool { box != BoxClient.mac && removedMachines.contains(box) }
+
+    /// A machine you removed, or one of yours that isn't connected now: nothing is asked of it.
+    private func isAway(_ box: String) -> Bool {
+        isRemoved(box) || box != BoxClient.mac && machines.contains(box) && !connectedMachines.contains(box)
+    }
+
     func forget(_ machine: String, forGood: Bool = false) {
         let gone = Set(sessions.filter { RemoteFolder.machine(of: $0.location.directory) == machine }.map(\.id))
         if !forGood, connectedMachines.contains(machine) { saveList(of: machine) }
@@ -2500,28 +2543,19 @@ final class Workspace {
             asking[request.id] = request.sessionID
             notifyAsk(request.sessionID, body: Self.describe(request, home: askHome(request.sessionID)), request: request.id, isPermission: true, answerable: Self.showsAll(request))
         case "permission.replied":
-            if let reply = try? event.payload(as: EventPayload.PermissionReplied.self) {
-                asking[reply.requestID] = nil
-                Notifier.shared.clear(request: reply.requestID)
-            }
+            if let reply = try? event.payload(as: EventPayload.PermissionReplied.self) { settled(reply.requestID) }
         case "form.created":
             guard let form = try? event.payload(as: EventPayload.FormCreated.self).form else { return }
             asking[form.id] = form.sessionID
             let question = Self.question(in: form)
             notifyAsk(form.sessionID, body: question?.text ?? (form.isQuestion ? "Has a question for you." : "Needs your answer."), request: form.id, question: question)
         case "form.replied", "form.cancelled":
-            if let settled = try? event.payload(as: EventPayload.FormSettled.self) {
-                asking[settled.id] = nil
-                Notifier.shared.clear(request: settled.id)
-            }
+            if let form = try? event.payload(as: EventPayload.FormSettled.self) { settled(form.id) }
         case _ where SessionModel.runEnds.contains(event.type):
             // The engine lets what a run asked go with it, without a word (the coding agents'
             // bridge says itself). Its permissions are named `per_…`.
             guard let ended = event.sessionID, !isBridgeSession(ended) else { return }
-            for (request, session) in asking where session == ended && request.hasPrefix("per_") {
-                asking[request] = nil
-                Notifier.shared.clear(request: request)
-            }
+            for (request, session) in asking where session == ended && request.hasPrefix("per_") { settled(request) }
         default:
             break
         }
@@ -2576,10 +2610,28 @@ final class Workspace {
 
     /// `request` is the permission or the form, for a notification whose buttons answer it.
     /// `answerable`: its buttons answer it (not when the notification can't show all it covers).
+    /// Asks whose notification is being made (its session read first), and those of them
+    /// answered or gone meanwhile.
+    @ObservationIgnored private var notifying: Set<String> = []
+    @ObservationIgnored private var settledWhileNotifying: Set<String> = []
+
+    /// An ask answered (here or elsewhere) or gone with its run: off the Dock's count, and its
+    /// notification goes, or isn't posted if it's still being made.
+    private func settled(_ request: String) {
+        asking[request] = nil
+        if notifying.contains(request) { settledWhileNotifying.insert(request) }
+        Notifier.shared.clear(request: request)
+    }
+
     private func notifyAsk(_ id: String, body: String, request: String, isPermission: Bool = false, answerable: Bool = true, question: Notifier.Question? = nil) {
         // A seat's requests are answered by its group chat.
         guard !seats.contains(id) else { return }
+        notifying.insert(request)
         Task {
+            defer {
+                notifying.remove(request)
+                settledWhileNotifying.remove(request)
+            }
             // A subagent's session has no row or tab of its own; its request shows in the
             // session that started it.
             var session = session(id)
@@ -2600,6 +2652,8 @@ final class Workspace {
                 asking[request] = nil
                 return
             }
+            // Answered (or gone) while its session was read: no notification for it.
+            guard settledWhileNotifying.remove(request) == nil else { return }
             // Buttons only when the notification hides none of what they'd answer.
             let shown = Notifier.showsAll(body) && (question?.choices.allSatisfy { Notifier.showsAll($0.label) } ?? true)
             Notifier.shared.notify(session: session?.id ?? id, title: session.flatMap { botName?($0.id) } ?? session?.title ?? AppInfo.name,
@@ -3087,10 +3141,9 @@ final class Workspace {
                 }
             }
         case "form.replied", "form.cancelled":
-            guard let settled = try? event.payload(as: EventPayload.FormSettled.self) else { return }
-            asking[settled.id] = nil
-            sharedForms[settled.id] = nil
-            Notifier.shared.clear(request: settled.id)
+            guard let form = try? event.payload(as: EventPayload.FormSettled.self) else { return }
+            sharedForms[form.id] = nil
+            settled(form.id)
         default:
             break
         }

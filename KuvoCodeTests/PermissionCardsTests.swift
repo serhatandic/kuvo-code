@@ -62,6 +62,66 @@ import Testing
         #expect(!workspace.needsAttention(id))
     }
 
+    /// Two asks at once and a question below them: Return and Escape answer the card on top only
+    /// (not every card at once), each ask is answered once however often it's clicked, and the
+    /// next card is next once the engine has the answer.
+    @Test func eachAskIsAnsweredOnceAndReturnAnswersTheTopOne() async throws {
+        defer { engine.stop() }
+        engine.on("POST", "/api/session/\(id)/permission/*", json: [:])
+        let model = try await open([["id": "msg_you", "type": "user", "time": ["created": 1], "text": "Run the tests"]])
+        workspace.handle(try engine.event("permission.asked", ask))
+        workspace.handle(try engine.event("permission.asked", ["id": "per_2", "sessionID": id, "action": "shell", "resources": ["curl example.com"]]))
+        workspace.handle(try engine.event("form.created", session: id, ["form": ["id": "frm_1", "sessionID": id, "title": "Questions", "metadata": ["kind": "question"],
+                                                                                   "fields": [["key": "q0", "title": "Database", "type": "string"]]]]))
+        #expect(model.keyedAsk == "per_1", "Return answers the first card, not the question or the second")
+
+        let first = try #require(model.permissions.first)
+        model.reply(to: first, .once)
+        model.reply(to: first, .once)
+        try await until { !engine.requests("POST", "/permission/per_1/reply").isEmpty }
+        #expect(engine.requests("POST", "/permission/per_1/reply").count == 1, "answered once")
+        #expect(model.answering == ["per_1"], "its card waits for the engine")
+        workspace.handle(try engine.event("permission.replied", ["sessionID": id, "requestID": "per_1"]))
+        #expect(model.answering.isEmpty)
+        #expect(model.keyedAsk == "per_2")
+        workspace.handle(try engine.event("permission.replied", ["sessionID": id, "requestID": "per_2"]))
+        #expect(model.keyedAsk == "frm_1", "then the question")
+    }
+
+    /// An ask answered from your phone (or gone with its run) just before you answer it here: the
+    /// engine refuses the late answer, and the card goes rather than saying your answer failed.
+    @Test func anAskAnsweredElsewhereFirstJustGoes() async throws {
+        defer { engine.stop() }
+        engine.on("POST", "/api/session/\(id)/permission/per_1/reply", json: ["message": "Permission not found"], status: 404)
+        let model = try await open([["id": "msg_you", "type": "user", "time": ["created": 1], "text": "Run the tests"]])
+        workspace.handle(try engine.event("permission.asked", ask))
+        engine.on("GET", "/api/session/\(id)/permission", json: ["data": []])
+        model.reply(to: try #require(model.permissions.first), .once)
+        try await until { model.permissions.isEmpty || model.failure != nil }
+        #expect(model.permissions.isEmpty)
+        #expect(model.failure == nil, "no error for an ask that's settled")
+        #expect(!workspace.needsAttention(id))
+    }
+
+    /// An answer that didn't go while the agent still waits (its machine's connection dropped):
+    /// it says so, and the card stays to be answered again.
+    @Test func anAnswerThatDidntGoCanBeGivenAgain() async throws {
+        defer { engine.stop() }
+        engine.on("POST", "/api/session/\(id)/permission/per_1/reply", json: ["message": "Couldn’t reach it"], status: 500)
+        let model = try await open([["id": "msg_you", "type": "user", "time": ["created": 1], "text": "Run the tests"]])
+        workspace.handle(try engine.event("permission.asked", ask))
+        engine.on("GET", "/api/session/\(id)/permission", json: ["data": [ask]])
+        let request = try #require(model.permissions.first)
+        model.reply(to: request, .once)
+        try await until { model.failure != nil }
+        #expect(model.permissions.map(\.id) == ["per_1"])
+        #expect(model.answering.isEmpty, "it can be answered again")
+        engine.on("POST", "/api/session/\(id)/permission/per_1/reply", json: [:])
+        model.reply(to: request, .once)
+        try await until { engine.requests("POST", "/permission/per_1/reply").count == 2 }
+        #expect(engine.requests("POST", "/permission/per_1/reply").count == 2)
+    }
+
     /// A coding agent's session, one the list doesn't have yet: its bridge says itself when an ask
     /// goes (a subagent of theirs in the background still asks after the turn), so its turn ending
     /// leaves it waiting on you.

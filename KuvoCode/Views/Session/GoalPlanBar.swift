@@ -70,6 +70,7 @@ struct GoalPlanBar: View {
             }
         }
         .animation(.ui, value: plan.state)
+        .closesWhenKept($confirmsStop)
         .confirmationDialog("Stop the goal?", isPresented: $confirmsStop) {
             Button("Stop the Goal", role: .destructive) {
                 guard plan.state == .running else { return }

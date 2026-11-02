@@ -1309,8 +1309,9 @@ private struct TurnEndView: View {
     private var kind: FailureWords.Kind {
         guard let error = idle.error else { return .other }
         let kind = FailureWords.kind(type: error.type, message: error.message)
-        // A provider that turned the request down for want of a sign-in, whatever the engine calls it.
-        if FailureWords.way(kind) != .signIn, Catalog.isSignInRefusal(error.message) { return .signIn(ended: false) }
+        // A provider that turned the request down for want of a sign-in, whatever the engine calls
+        // it (not its quota, rate limit or content filter).
+        if FailureWords.way(kind) != .signIn, Catalog.isSignInRefusal(type: error.type, message: error.message) { return .signIn(ended: false) }
         return kind
     }
 
@@ -1474,6 +1475,7 @@ private struct TurnFiles: View {
         }
         .buttonStyle(TextButtonStyle(outset: true))
         .help("What this turn changed")
+        .closesWhenKept($isShowing)
         .popover(isPresented: $isShowing, arrowEdge: .bottom) {
             VStack(alignment: .leading, spacing: 2) {
                 ForEach(files) { file in
