@@ -24,7 +24,7 @@ struct GoalDayLabelsTests {
     private func labeled(_ count: Int, todayAt: Int, room: CGFloat = 900) -> (labeled: [Date], dayWidth: CGFloat, now: Date) {
         let (days, now) = days(count, todayAt: todayAt)
         let dayWidth = room / CGFloat(count)
-        let set = GoalLanes.labeledDays(days, dayWidth: dayWidth, week: count <= 7, now: now, calendar: calendar)
+        let set = GoalSteps.labeledDays(days, dayWidth: dayWidth, week: count <= 7, now: now, calendar: calendar)
         return (days.filter(set.contains), dayWidth, now)
     }
 
@@ -66,7 +66,7 @@ struct GoalDayLabelsTests {
 
     @Test func withTodayOutsideTheWindowTheLabelsCountFromItsFirstDay() {
         let (days, _) = days(61, todayAt: 0)
-        let set = GoalLanes.labeledDays(days, dayWidth: 900 / 61, week: false, now: days[0].addingTimeInterval(-90 * 86400), calendar: calendar)
+        let set = GoalSteps.labeledDays(days, dayWidth: 900 / 61, week: false, now: days[0].addingTimeInterval(-90 * 86400), calendar: calendar)
         #expect(set.contains(days[0]))
     }
 }
