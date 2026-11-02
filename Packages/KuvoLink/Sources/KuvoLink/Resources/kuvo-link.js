@@ -19961,7 +19961,7 @@ import fs71 from "node:fs";
 import path74 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.172";
+var BRIDGE_VERSION = "0.9.173";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -20919,11 +20919,12 @@ function serveAgent(socket, source) {
   try {
     fs75.rmSync(socket, { force: true });
   } catch {}
-  server.listen(socket, () => {
-    try {
-      fs75.chmodSync(socket, 384);
-    } catch {}
-  });
+  const old = process.umask(127);
+  try {
+    server.listen(socket);
+  } finally {
+    process.umask(old);
+  }
   server.unref();
   return server;
 }
@@ -23749,8 +23750,8 @@ async function serve() {
   fenceOwnPort(server.address().port);
   keepFence();
   keepEngineDefaults();
-  console.log(JSON.stringify({ url: `http://127.0.0.1:${server.address().port}` }));
   holdVault(engineHandler(readEngineFile, { name: os14.hostname() }, readBridgeFile));
+  console.log(JSON.stringify({ url: `http://127.0.0.1:${server.address().port}` }));
   if (IS_MAC)
     (async () => {
       for (let tries = 0;tries < 120; tries++) {

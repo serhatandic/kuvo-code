@@ -553,15 +553,16 @@ async function serve(): Promise<void> {
     server.listen(0, "127.0.0.1", resolve);
   });
   // The key to its sockets, and agents' commands in the sandbox (fence/state.ts), which refuses them
-  // this server too, there before it says where it is (holdVault makes the key too, after).
+  // this server too, there before it says where it is (holdVault, below, makes it too).
   try { socketKey(); } catch {}
   fenceOwnPort((server.address() as AddressInfo).port);
   keepFence();
   keepEngineDefaults();
-  console.log(JSON.stringify({ url: `http://127.0.0.1:${(server.address() as AddressInfo).port}` }));
   // The vault, held here (on a machine, `run` holds it; a test's box serves alone), its asks told
-  // to your phones through this Mac's link.
+  // to your phones through this Mac's link: listening before it says where it is, so what reaches
+  // the vault from then on finds it open.
   holdVault(engineHandler(readEngineFile, { name: os.hostname() }, readBridgeFile));
+  console.log(JSON.stringify({ url: `http://127.0.0.1:${(server.address() as AddressInfo).port}` }));
   // This Mac's vault's newest generations, from its app, before agents use it (vault/store.ts).
   if (IS_MAC) void (async () => {
     for (let tries = 0; tries < 120; tries++) {

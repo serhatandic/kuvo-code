@@ -153,6 +153,13 @@ test("a command that sends a flood of sign requests is cut off, rather than aski
   }
 });
 
+test("its socket is yours alone from the moment it's there, never for a moment anyone's", async () => {
+  const agent = agentFor(["ed25519"]);
+  expect(fs.statSync(agent.socket).mode & 0o777).toBe(0o600);
+  await agent.ready;
+  await agent.close();
+});
+
 test("a socket the agent can't open is an error on it, never a crash of the box", async () => {
   const server = serveAgent(path.join(root, "x".repeat(200) + ".sock"), { keys: async () => [], allow: async () => false });
   const error = await new Promise<Error>(resolve => server.once("error", resolve));
