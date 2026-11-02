@@ -1,8 +1,9 @@
 // The sandbox's policy in Linux's own terms: Landlock, set up by a small script the engine's own Bun
 // runs (`bin/kuvo-fence.js`, through `bun:ffi`) before it becomes the command's shell, so nothing
 // new ships for each architecture. Landlock only grants: reads everywhere but what's hidden, by
-// granting each neighbour on the way down to it; writes in the conversation's folder, its
-// repository, the temporary folders, devices and tools' caches; signals and abstract sockets only
+// granting each neighbour on the way down to it; in your home, files added and changed but never
+// removed or moved, but for what runs later and your personal folders (only read); everything in
+// the conversation's folder, its repository, the temporary folders, devices and tools' caches; signals and abstract sockets only
 // inside the sandbox (from Linux's Landlock 6). What it can't refuse inside a folder it writes (git's
 // hooks, the engine's and the coding agents' settings there), it doesn't: Landlock grants a folder
 // whole.
@@ -20,7 +21,8 @@ import type { FencePolicy } from "./policy";
 
 /** What the Linux script reads: the policy's parts it needs. */
 export function landlockPolicy(policy: FencePolicy): string {
-  return JSON.stringify({ hidden: [...policy.kuvo, ...policy.secrets], readable: policy.kuvoReadable, writable: [...policy.writable, ...policy.commandCaches], readOnly: policy.readOnly }) + "\n";
+  return JSON.stringify({ hidden: [...policy.kuvo, ...policy.secrets], readable: policy.kuvoReadable, writable: [...policy.writable, ...policy.commandCaches], readOnly: policy.readOnly,
+    homeWrites: policy.homeWrites ?? [], homeKept: policy.homeKept ?? [], homeOpen: policy.homeOpen ?? [], personal: policy.personal ?? [] }) + "\n";
 }
 
 /**
@@ -29,7 +31,8 @@ export function landlockPolicy(policy: FencePolicy): string {
  * command could have put on your PATH: your session's folder (`/run/user/<uid>`), your tmux's,
  * screen's and shell-started SSH agents' in `/tmp` and `/run/screen`, the X server's, Neovim's,
  * Emacs', VS Code's and Cursor's in `/tmp`, and the other apps' sockets the box lists in <sockets> (a
- * folder or a socket a line), each empty or refusing; then the program, as you again, with no rights
+ * folder or a socket a line, or the start of sockets' names, `…*`, for each there now), each empty
+ * or refusing; then the program, as you again, with no rights
  * over the system left, and your PATH. Your groups stay, as they were. A folder that can't be hidden
  * runs nothing.
  *
@@ -53,7 +56,7 @@ over() { ( cd -P "$1" 2>/dev/null || exit 1; [ -z "$3" ] || [ "$(pwd -P)" = "$1"
 off() { [ -S "$1" ] && { [ -z "$2" ] || [ ! -L "$1" ]; } || return 1; mount -c --bind /dev/null "$1" 2>/dev/null && [ -c "$1" ] && { [ -z "$2" ] || [ ! -L "$1" ]; } || fail "$1 can't be kept from it."; }
 [ -r "$sockets" ] || fail "it isn't set up."
 over "$own" 0700 || fail "it isn't set up."
-while IFS= read -r s; do case $s in /*) over "$s" 0700 || off "$s" ;; esac; done <"$sockets"
+while IFS= read -r s; do case $s in /*'*') for f in $s; do [ ! -S "$f" ] || off "$f"; done ;; /*) over "$s" 0700 || off "$s" ;; esac; done <"$sockets"
 over "/run/user/$u" 0700
 if [ -n "$t_own" ]; then
   ( cd -P "$t_own/$t_name" 2>/dev/null && [ "$(pwd -P)" = "$t_own/$t_name" ] && [ -O . ] && mkdir "$own/tmp" && mount -c --bind . "$own/tmp" ) 2>/dev/null || fail "its temporary folder isn't its own."
@@ -170,6 +173,16 @@ function grantExcept(top, access, out = hidden) {
 }
 grantExcept("/", READS);
 for (const where of policy.readable) grant(where, READS);
+// Your home: files added and changed in what's there, never removed or moved (a move removes it
+// from where it was), nor linked in from elsewhere; but for what runs later, your personal folders
+// (only read: Landlock can't tell a new file from one that's there) and what's kept whole. A new
+// folder or file at the top of one that holds any of those can't be made: what Landlock grants is
+// each thing that's there.
+const HOME = all & ~(16n | 32n | 64n | 2048n | 8192n);
+const personal = (policy.personal || []).map(real);
+const homeOut = new Set([...kept, ...(policy.homeKept || []).map(real), ...personal]);
+for (const where of policy.homeWrites || []) grantExcept(where, HOME, homeOut);
+for (const where of policy.homeOpen || []) grantExcept(where, HOME, new Set([...kept, ...personal]));
 // What you let its project's commands write (Also Allowed).
 let allowed = [];
 // (Each by the real path the box keeps: one that's become a link since, to anywhere, isn't given.)

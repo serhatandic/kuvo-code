@@ -51,6 +51,14 @@ const param = (name: string) => `(subpath (param ${quote(name)}))`;
 // or a worktree's repository, the agents' folders) can't be made, moved or removed, only written in.
 const GIT_GUARDED = String.raw`(((modules/.+|worktrees/[^/]+)/)?(hooks(/|$)|config(\.worktree)?$|commondir$|gitdir$)|(modules|worktrees)/[^/]+$)`;
 const AGENTS_GUARDED = String.raw`\.claude/settings(\.local)?\.json|\.mcp\.json|\.codex/(config\.toml|hooks\.json|\.env|rules(/.*)?)|\.cursor/(hooks|mcp)\.json|\.(gemini|grok)/settings\.json|\.grok/(config\.toml|sandbox\.toml|lsp\.json|(hooks|plugins|agents|workflows)(/.*)?)|\.(claude|cursor)/hooks(/.*)?|\.(claude|codex|cursor|gemini|grok)`;
+/** Every kind of write, by name. A rule on a kind by its name is checked before any on `file-write*`,
+ * whatever their order, so the profile names them all wherever it carves one out of another, and
+ * later rules win. (`file-write*` itself only refuses, first, any kind macOS adds later.) */
+const WRITE = "file-write-acl file-write-create file-write-data file-write-finderinfo file-write-flags file-write-mode file-write-owner file-write-setugid file-write-times file-write-unlink file-write-xattr";
+
+/** What's done in your home: everything a write does but unlinking (so neither deleting nor moving). */
+const HOME_WRITES = "file-write-create file-write-data file-write-flags file-write-mode file-write-times file-write-xattr";
+
 const GUARDED = String.raw`(.*/)?(\.git$|\.git/(${GIT_GUARDED})|\.opencode(/|$)|opencode\.jsonc?$|(${AGENTS_GUARDED})$)`;
 
 export function seatbeltProfile(policy: FencePolicy, options: SeatbeltOptions): string {
@@ -74,19 +82,27 @@ export function seatbeltProfile(policy: FencePolicy, options: SeatbeltOptions): 
   // escapes them).
   const under = (base: string, rest: string) => `(regex (string-append "^" (param ${quote(base)}) ${quote(rest)}))`;
 
-  out.push(";; writes: its folder, its repository, temporary folders, devices and tools' caches");
-  deny("file-write*", subpath("/"));
-  allow("file-write*", ...policy.writable.map(subpath), param("WORK"), param("GIT"));
+  out.push(";; writes: files added and changed in your home, never deleted or moved there (but in its folder,");
+  out.push(";; its repository, temporary folders, devices and tools' caches); your personal folders only take new files");
+  deny(`file-write* ${WRITE}`, subpath("/"));
+  // (A move takes unlinking what's moved, so with no unlink, nothing's moved either.)
+  allow(HOME_WRITES, ...(policy.homeWrites ?? []).map(subpath));
+  deny(WRITE, ...(policy.homeKept ?? []).map(subpath));
+  allow(HOME_WRITES, ...(policy.homeOpen ?? []).map(subpath));
+  // A new file is made and written in one go; one that's there isn't written, truncated, replaced,
+  // removed or changed in mode (each a new file's own first open still writes it).
+  deny("file-write-data file-write-unlink file-write-mode file-write-flags", ...(policy.personal ?? []).map(subpath));
+  allow(WRITE, ...policy.writable.map(subpath), param("WORK"), param("GIT"));
   // What you let this project's commands write (Also Allowed), before what follows takes back
   // Kuvo Code's folders, git's hooks and the agents' settings in it.
-  allow("file-write*", ...Array.from({ length: MOST_FOLDERS }, (_, at) => param(`ALLOW${at}`)));
-  deny("file-write*", ...policy.readOnly.map(subpath), ...(policy.readOnlyPatterns ?? []).map(regex));
+  allow(WRITE, ...Array.from({ length: MOST_FOLDERS }, (_, at) => param(`ALLOW${at}`)));
+  deny(WRITE, ...policy.readOnly.map(subpath), ...(policy.readOnlyPatterns ?? []).map(regex));
 
   // What's in them is neither read (nor listed) nor written; a path through them is still looked up,
   // so a command can go to its own folder inside them. (A carve-out overrides a refusal only of
   // the very same operations, so each names them as the refusal does.)
   out.push(";; Kuvo Code's own folders: neither read nor written; its helpers run");
-  const HIDDEN = "file-read-data file-write*";
+  const HIDDEN = `file-read-data ${WRITE}`;
   deny(HIDDEN, ...policy.kuvo.map(subpath), ...policy.kuvoPatterns.map(regex));
   allow("file-read-data", ...policy.kuvoReadable.map(subpath));
   // A coding agent's own homes, run whole in the sandbox: read, and written only where its state is
@@ -96,7 +112,7 @@ export function seatbeltProfile(policy: FencePolicy, options: SeatbeltOptions): 
   const homes = Array.from({ length: AGENT_FOLDERS }, (_, at) => `OWN${at}`);
   allow("file-read-data", ...homes.map(param), ...Array.from({ length: AGENT_FOLDERS }, (_, at) => param(`READ${at}`)));
   const inHome = (home: string, rest: string) => `(regex (string-append "^" (param ${quote(`${home}_RE`)}) ${rest}))`;
-  allow("file-write*", ...homes.flatMap(home => ["$", "/"].flatMap(after => ["REGULAR-FILE", "DIRECTORY"].map(type =>
+  allow(WRITE, ...homes.flatMap(home => ["$", "/"].flatMap(after => ["REGULAR-FILE", "DIRECTORY"].map(type =>
     `(require-all ${inHome(home, `"/(" (param "STATE") ")${after}"`)} (vnode-type ${type}))`))));
   allow(HIDDEN, param("TMP"));
   // Kuvo Code's own caches for commands (npm's, pnpm's, uv's, corepack's), in its folders.
@@ -123,19 +139,21 @@ export function seatbeltProfile(policy: FencePolicy, options: SeatbeltOptions): 
     for (let at = path.dirname(kept); at !== path.dirname(at); at = path.dirname(at)) holders.add(at);
   const held = [...[...holders].map(folder => `(literal ${quote(folder)})`), ...(policy.patternFolders ?? []).map(regex)];
   deny("file-write-unlink file-clone", ...held);
+  // (Nor closed off by its mode or flags: your home, ~/.ssh, a folder of secrets.)
+  deny("file-write-mode file-write-flags", ...held);
   deny("file-write-create", ...held.map(folder => `(require-all ${folder} (vnode-type SYMLINK))`));
   // Nor your agents' sockets or their folders in the temporary folders commands write (moved, one
   // would be reached by a name the rule below doesn't know).
   deny("file-write-unlink", ...(policy.socketPatterns ?? []).map(regex),
     ...(policy.socketFolders ?? []).map(folder => `(require-all ${regex(folder)} (vnode-type DIRECTORY))`));
-  deny("file-write*", under("WORK_RE", "/" + GUARDED), under("GIT_RE", "/" + GIT_GUARDED),
+  deny(WRITE, under("WORK_RE", "/" + GUARDED), under("GIT_RE", "/" + GIT_GUARDED),
     ...Array.from({ length: MOST_FOLDERS }, (_, at) => under(`ALLOW${at}_RE`, "/" + GUARDED)));
-  deny("file-write*", ...homes.map(home => inHome(home, `"/(.*/)?(" (param "KEPT") ")(/|$)"`)));
+  deny(WRITE, ...homes.map(home => inHome(home, `"/(.*/)?(" (param "KEPT") ")(/|$)"`)));
 
   out.push(";; your secrets");
   // Never read, nor moved, named again or replaced: one in a folder commands write (cargo's sign-in
   // in its cache) would be read by another name.
-  deny("file-read* file-write*", ...policy.secrets.map(subpath));
+  deny(`file-read* ${WRITE}`, ...policy.secrets.map(subpath));
 
   out.push(";; Kuvo Code's own servers and sockets");
   deny("network-outbound", ...policy.ports.map(port => `(remote tcp ${quote(`localhost:${port}`)})`));
