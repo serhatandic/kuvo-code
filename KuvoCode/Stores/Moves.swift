@@ -139,6 +139,15 @@ final class Moves {
         }
         var moves: [Move]
         var away: [String]
+        /// Your other computers' moves, as each told this box: a machine's box answers this Mac
+        /// over SSH only when asked, so one that's moving is read from here.
+        var elsewhere: [Elsewhere]?
+
+        struct Elsewhere: Decodable, Equatable {
+            /// The box's key.
+            var box: String
+            var moves: [Move]
+        }
     }
 
     // COMPAT(0.7 mac-moves-under-way): moves an earlier Kuvo Code ran itself, forgotten (its boxes lift what they left held). Goes 3 months after 0.8.0.
@@ -458,6 +467,17 @@ final class Moves {
         }
         show()
         if box != BoxClient.mac { keepReading(box) }
+        // A machine whose moves started, went on or ended, as it told this Mac's box: read there.
+        if box == BoxClient.mac {
+            let stages = { (said: BoxMoves?) in
+                Dictionary((said?.elsewhere ?? []).map { ($0.box, Set($0.moves.map { $0.id + " " + $0.stage })) }) { $1 }
+            }
+            let (then, now) = (stages(before), stages(said))
+            let changed = Set(then.keys).union(now.keys).filter { then[$0] ?? [] != now[$0] ?? [] }
+            if !changed.isEmpty {
+                Task { for machine in machinesOf(keys: changed) { await reload(machine) } }
+            }
+        }
         // What changed of its moves (not how far one's copy went): the boxes at their other ends read
         // too, and one that's over shown where it is now.
         let stages = { (moves: [BoxMoves.Move]) in Set(moves.map { $0.id + " " + $0.stage }) }
