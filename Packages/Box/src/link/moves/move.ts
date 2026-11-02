@@ -29,6 +29,7 @@ import { mailFor, ownKey, peersOf } from "../peers/known";
 import type { MailSender, Peer } from "../peers/known";
 import type { LinkHost } from "../relay/host";
 import { readLink } from "../state";
+import { goalRuns } from "../work/goals";
 import { CHATS, MOST_BUNDLE, NotTaken, deleteSession, directoryOf, exportAll, folderOf, groupAction, conversationHash, hashOf, idsOf, importAll, keysOf, ownTree, pack, toTrash, unpack } from "./bundle";
 import type { Contents } from "./bundle";
 import { MOVES, bundleOf, changeMove, endedAs, forgetMove, forgetMovedAway, moveOf, movesChanged, noteEnded, noteMovedAway, readMove, readMoves, saveMove, shownMove } from "./records";
@@ -72,6 +73,7 @@ export const say = {
   leftBoth: (name: string, place: string) => `${name} is on ${place} now, but couldn’t be let go of here, so it’s on both computers. Delete the one you don’t want.`,
   inProject: (name: string) => `${name} works in one of your projects, which stays where it is. Only a bot with a folder of its own can move.`,
   withAgents: (name: string) => `${name} talks with a coding agent, which keeps its conversation on this computer, so it can’t move yet.`,
+  onGoal: (name: string) => `${name} is working on a goal, which stays on this computer. Move it once the goal is done, or stop the goal first.`,
   waiting: (name: string) => `${name} still has messages on their way. Try again in a moment.`,
   busy: (name: string) => `${name} kept getting messages while it moved, so it stayed where it is. Try again in a moment.`,
   botsElsewhere: (chat: string) => `${chat}’s bots live on different computers, so it can’t go there.`,
@@ -88,6 +90,7 @@ export const say = {
 const note = {
   inProject: "Works in a project",
   withAgents: "Talks with a coding agent",
+  onGoal: "Working on a goal",
   inBoxGroup: "In a group chat that lives here",
   needsUpdate: "Needs a newer Kuvo Code",
   botsNotThere: "Its bots don’t all live there",
@@ -190,6 +193,7 @@ async function movable(kind: MoveKind, thing: string, signal?: AbortSignal): Pro
     const name = here.described.name;
     if (here.described.project) return { name, why: say.inProject(name), note: note.inProject };
     if (here.agents) return { name, why: say.withAgents(name), note: note.withAgents };
+    if (goalRuns(thing)) return { name, why: say.onGoal(name), note: note.onGoal };
     // One in a group chat that lives here with its bots, on a machine, stays with it.
     if (!IS_MAC) {
       let bridge: Target | null = null;
@@ -387,6 +391,8 @@ async function carryOn(id: string): Promise<void> {
     if (Object.keys(queues).length) contents.queues = queues;
     if (record.folder) contents.folder = path.basename(record.folder);
     if (record.kind === "bot") {
+      // A goal started as it was asked to move (goals stay where they started): it stays.
+      if (goalRuns(record.thing)) throw new Refused(say.onGoal(record.name));
       const keys = await keysOf(record.thing);
       if (!keys) throw new Refused(`${record.name}’s own keys couldn’t be read on ${HERE}. Try again in a moment.`);
       if (Object.keys(keys).length) contents.keys = keys;

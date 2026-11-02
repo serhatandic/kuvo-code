@@ -400,13 +400,15 @@ A client asks the box it lives on once, and watches; the move goes on with no cl
 - `GET kuvo/moves/places?kind=bot|chat|group&id=…` → `200 {places: [{key, name, kind, ok, why?,
   note?}]}`: each of your other computers (its box's key, its name, `mac` or `machine`), and whether
   it can go there now, with why not in words to show (it works in a project, talks with a coding
-  agent, is in a group chat that lives here with its bots, is moving already; that computer's box is
+  agent, is in a group chat that lives here with its bots, is working on a goal (which stays on this
+  box), is moving already; that computer's box is
   from before moves, as the `features` its agents' mail last gave say; a group chat's bots don't all
   live on that machine, as its agents' mail says, none of them here) and `note`, the same in a few
   words for beside the computer's name in a menu. `404 {message}` when it isn't here. A group chat
   can go to any Mac (its bots stay where they are); the machine it goes to checks again.
 - `POST kuvo/moves {kind, id, to}` (`to`: the box's key, as `places` gives it) answers once the move
   ends: `200 {move}` (it lives there now); `409 {message}` refused or taken back, as it was (working,
+  working on a goal,
   messages still on their way, kept getting messages while it moved, too big, refused there);
   `503 {message}` the other computer didn't answer; `404 {message}` it isn't here, or that isn't one
   of your computers. A client that goes doesn't stop it.
@@ -823,7 +825,10 @@ beside it.
   spent lets what spends go on; the bot is told `[Goal changed] …`) and `{action: clear, waiting:
   <id>}` (what waited, put away). An end written without a zone (`2026-11-30T18:00`) is in yours
   (`KUVO_TZ`, else the computer's). Never a tool, an agent's message or another computer's mail. 400 for one in the
-  wrong state or a card from more than a day ago; 404 for none. Starting tells the bot `[Goal
+  wrong state or a card from more than a day ago; 404 for none; 409 for starting one (or asking
+  for one) while its bot moves to another computer (a goal stays on the box it started on, and a
+  bot working on one doesn't move: `kuvo/moves`), when the bot isn't told anything of its goal
+  either. Starting tells the bot `[Goal
   started] …` (what's switched on and off, what it may spend, the projects it may make, the end) and
   sets the conversation's goal with `long: true` (no brief of its own: this is it); declining tells
   it `[Not now] …`; stopping stops its work as `stop-all` does, and takes the conversation's goal
