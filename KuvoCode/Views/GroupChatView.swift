@@ -10,6 +10,8 @@ struct GroupChatView: View {
     let group: BotGroup
     /// Goes up to open the find bar (⌘F).
     var findRequest = 0
+    /// Goes up to put the cursor in its composer.
+    var focusRequest = 0
     @Environment(GroupChats.self) private var groups
     @Environment(Bots.self) private var bots
     @Environment(AppModel.self) private var app
@@ -66,6 +68,7 @@ struct GroupChatView: View {
             groups.messages(in: group.id).map { ConversationFind.Row(id: $0.id, parts: Self.findParts($0)) }
         }
         .onChange(of: findRequest) { find.open() }
+        .onChange(of: focusRequest) { composerFocus += 1 }
         // What a bot's widget writes back goes to the group, as yours.
         .environment(\.answerAgent) { text in groups.send(text, to: group.id) }
         .overlay {

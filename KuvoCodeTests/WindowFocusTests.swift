@@ -6,8 +6,9 @@ import Testing
 
 /// The card you work in looks it (crisp, the others a warm ivory): the one you last clicked or
 /// typed in. A click on a reply's words makes the conversation that card, as a click anywhere in
-/// it does; a click on the sidebar makes the sidebar it; with Settings open, clicks there leave
-/// the cards as they were; the keyboard moving into a card makes it the one too. A session picked
+/// it does; a click on the sidebar doesn't make it the one (it picks what you work in elsewhere),
+/// but the keyboard moving into a card does; with Settings open, clicks there leave the cards as
+/// they were. A session picked
 /// in the sidebar is the press, then the store call its row's button makes: SwiftUI's buttons and
 /// gestures don't take queued clicks in a window that isn't key, and this one never is, so it
 /// can't take your keyboard. The window is the app's own (`MainView`), with its
@@ -106,10 +107,6 @@ import Testing
         let line = words.layoutManager!.lineFragmentRect(forGlyphAt: 0, effectiveRange: nil)
         click(at: words.convert(NSPoint(x: 30, y: line.midY), to: nil))
         try await until { app.tabs.focus == .conversation }
-
-        // And back to the sidebar, with a click below its rows.
-        click(at: NSPoint(x: 60, y: 200))
-        try await until { app.tabs.focus == .sessions }
     }
 
     /// The keyboard going into a card (Tab, a shortcut, a field that takes it) makes it the card
@@ -125,25 +122,93 @@ import Testing
         try await until { app.tabs.focus == .sessions }
     }
 
-    /// A session picked in the sidebar: the click is the sidebar's, then its row opens the session
-    /// (the store call its button makes as the click ends), and you work in its conversation.
+    /// A session picked in the sidebar: the press on its row isn't working in the sidebar, so the
+    /// conversation stays the card you work in, its composer with the keyboard, all through the
+    /// click (the user's report: it looked as if you'd clicked the sidebar, for a moment). Then the
+    /// row opens the session (the store call its button makes as the click ends: SwiftUI's buttons
+    /// don't take queued clicks in a window that isn't key), and its composer has the keyboard,
+    /// even from the sidebar's search, and even for the session already in view.
     @Test func aSessionPickedInTheSidebarLeavesYouInItsConversation() async throws {
         defer { done() }
         _ = try #require(reply)
         // The press and its release in the sidebar, as on a row.
         click(at: NSPoint(x: 60, y: 200))
-        let handled = TestClick()
-        NSApp.postEvent(handled.marker(in: window), atStart: false)
-        try await until { handled.isHandled }
-        #expect(app.tabs.focus == .sessions)
+        try await drain()
+        #expect(app.tabs.focus == .conversation, "a press on the sidebar leaves the conversation the card you work in")
+        #expect(composerHasKeys, "and its composer the keyboard")
+
         // What the row's button does as the click ends; then the keyboard goes to its composer.
-        app.tabs.open(.session(harbor))
-        try await until { (window.firstResponder as? MessageTextView)?.accessibilityIdentifier() == "composer" }
-        let settled = TestClick()
-        NSApp.postEvent(settled.marker(in: window), atStart: false)
-        try await until { settled.isHandled }
-        #expect(app.tabs.selection == .session(harbor))
+        app.tabs.choose(.session(harbor))
+        try await until { app.tabs.selection == .session(harbor) && composerHasKeys }
+        try await drain()
         #expect(app.tabs.focus == .conversation)
+
+        // From the sidebar's search, the session in view picked again.
+        window.makeFirstResponder(try sidebarSearch())
+        try await until { app.tabs.focus == .sessions }
+        app.tabs.choose(.session(harbor))
+        try await drain()
+        #expect(composerHasKeys, "a session picked from the search has the keyboard in its composer")
+        #expect(app.tabs.focus == .conversation)
+    }
+
+    /// The sidebar's search field.
+    private func sidebarSearch() throws -> NSTextField {
+        try #require(all(NSTextField.self, in: window.contentView).first { field in
+            field.isEditable && field.convert(field.bounds, to: nil).midX < 300
+        }, "the sidebar's search field")
+    }
+
+    /// The sidebar shown or hidden (its button, or ⌘0) puts the keyboard in the conversation's
+    /// composer, and makes the conversation the card you work in, wherever the keyboard was: the
+    /// panel's terminal, the sidebar's search, or the composer already, with the sidebar looking
+    /// like the card you work in (the user's report: after the sidebar went, nothing looked it).
+    @Test func showingOrHidingTheSidebarPutsTheKeyboardInTheComposer() async throws {
+        defer { done() }
+        _ = try #require(reply)
+        let terminal = try await terminalInThePanel()
+        withAnimation(.ui) { app.tabs.showSidebar(false) }
+        try await drain()
+        #expect(composerHasKeys, "hiding the sidebar puts the keyboard in the composer")
+        #expect(app.tabs.focus == .conversation)
+
+        window.makeFirstResponder(terminal.view)
+        try await drain()
+        withAnimation(.ui) { app.tabs.showSidebar(true) }
+        try await drain()
+        #expect(composerHasKeys, "showing the sidebar puts the keyboard in the composer")
+        #expect(app.tabs.focus == .conversation)
+
+        window.makeFirstResponder(try sidebarSearch())
+        try await until { app.tabs.focus == .sessions }
+        withAnimation(.ui) { app.tabs.showSidebar(false) }
+        try await drain()
+        #expect(composerHasKeys, "the sidebar's search going gives the keyboard to the composer")
+        #expect(app.tabs.focus == .conversation)
+
+        // The composer with the keyboard all along, while the sidebar looked like the card you
+        // work in: the sidebar back, the conversation looks it.
+        app.tabs.focus = .sessions
+        withAnimation(.ui) { app.tabs.showSidebar(true) }
+        try await drain()
+        #expect(composerHasKeys)
+        #expect(app.tabs.focus == .conversation)
+    }
+
+    /// The card you work in going (the panel closed after a click in it, the keyboard still in
+    /// the composer): the conversation is the card you work in again, rather than none on screen.
+    @Test func theCardYouWorkInGoingLeavesYouInTheConversation() async throws {
+        defer { done() }
+        _ = try #require(reply)
+        withAnimation(.ui) { app.tabs.showPanel(true) }
+        try await drain()
+        // As a click in the panel makes it, the keyboard staying in the composer.
+        app.tabs.focus = .changes
+        #expect(composerHasKeys)
+        withAnimation(.ui) { app.tabs.showPanel(false) }
+        try await drain()
+        #expect(app.tabs.focus == .conversation, "the panel gone, the conversation is the card you work in")
+        #expect(composerHasKeys)
     }
 
     /// With Settings open over the cards, a click in Settings, or the keyboard moving there, leaves

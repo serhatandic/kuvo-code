@@ -507,7 +507,9 @@ struct MainView: View {
         .overlay(alignment: .top) {
             if !showsTabBar { WindowDragArea().frame(height: Metrics.windowControlsHeight) }
         }
-        .onCardClick(isOn: !overlayShown) { tabs.focus = .sessions }
+        // Only the keyboard in it (its search, a rename) makes it the card you work in: a click
+        // in it picks what you work in elsewhere.
+        .onCardKeyboard(isOn: !overlayShown) { tabs.focus = .sessions }
         .background(KeyboardPlace(pane: .sessions, places: keyboardReturn))
     }
 
@@ -701,7 +703,7 @@ struct MainView: View {
                     Button("Close Tab", systemImage: "xmark") { tabs.close(.group(id)) }
                         .help("Close Tab")
                 } content: {
-                    GroupChatView(group: group, findRequest: groupFind)
+                    GroupChatView(group: group, findRequest: groupFind, focusRequest: tabs.groupFocus)
                 }
                 .onTitle("Edit Group Chat", app.moves.isMoving(group.id) ? nil : { tabs.openGroupEditor(group: group) })
                 .id(TabKey.group(id))
@@ -786,6 +788,8 @@ struct MainView: View {
     /// SwiftUI's update.
     private func returnKeyboard(leaving: WindowTabs.Pane? = nil) {
         let had = leaving.map(keyboardReturn.isIn) ?? false
+        // The card you work in is one on screen: the one going leaves you in the conversation.
+        if let leaving, tabs.focus == leaving { tabs.focus = tabs.activeHalf }
         DispatchQueue.main.async {
             guard !app.showsSettings, !(showsPanel && panelExpanded), had || keyboardReturn.isNowhere else { return }
             if !keyboardReturn.handBack(to: tabs.activeHalf) { tabs.focusComposer() }

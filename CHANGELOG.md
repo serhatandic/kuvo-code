@@ -16,6 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- Picking a session, bot or group chat in the sidebar leaves you typing in its conversation, without the conversation looking unfocused for a moment, and showing or hiding the sidebar (its button or ⌘0) puts the keyboard back in the conversation's composer.
 - A bot working on a goal no longer keeps your computer busy between its looks at the goal, which could spin the fans while nothing was happening.
 - Moving a chat whose `/goal` is still going says why it can't move yet, instead of moving and losing the goal.
 - A goal whose end you move later after it came carries on to the new end, rather than stopping at once.

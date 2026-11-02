@@ -147,6 +147,8 @@ final class WindowTabs {
     var projectEditor: ProjectEditorRequest?
     /// Goes up to put the cursor in a new session's composer.
     private(set) var draftFocus = 0
+    /// Goes up to put the cursor in the group chat in view's composer.
+    private(set) var groupFocus = 0
     /// The window put back what its scene kept, once this launch.
     @ObservationIgnored private(set) var isRestored = false
 
@@ -294,9 +296,12 @@ final class WindowTabs {
         }
     }
 
-    /// A tab picked in the sidebar (a session, a bot, a group chat, a terminal, a search's find).
+    /// A tab picked in the sidebar (a session, a bot, a group chat, a terminal, a search's find):
+    /// in view, and you work in its conversation, its composer with the keyboard, as a tab picked
+    /// in the tab bar.
     func choose(_ key: TabKey) {
         open(key)
+        focusComposer()
     }
 
     /// A subagent's conversation (or, from one, the conversation above it) in place of the
@@ -618,10 +623,13 @@ final class WindowTabs {
     }
 
     /// Shows or hides the sidebar, by its button or ⌘0; showing it when it's wanted but out of
-    /// room makes room for it, as the one opened last.
+    /// room makes room for it, as the one opened last. Either way you're back typing in the
+    /// conversation you work in, wherever the keyboard was, unless something covers it.
     func showSidebar(_ shows: Bool) {
         showsSidebar = shows
         if shows { keep(.sessions) }
+        guard !app.showsSettings, !(showsPanel && panelExpanded), botEditor == nil, groupEditor == nil else { return }
+        focusComposer()
     }
 
     /// What you open last keeps its place when the window is short of room.
@@ -724,7 +732,8 @@ final class WindowTabs {
     }
 
     private func focusComposer(_ key: String) {
-        if TabKey(key).draftFolder != nil { draftFocus += 1 } else { workspace.model(for: key)?.focusComposer() }
+        let tab = TabKey(key)
+        if tab.draftFolder != nil { draftFocus += 1 } else if tab.groupID != nil { groupFocus += 1 } else { workspace.model(for: key)?.focusComposer() }
         focus = worksBeside ? .split : .conversation
     }
 

@@ -300,18 +300,24 @@ enum TitleBarDoubleClick {
 extension View {
     /// A click anywhere in it makes it the card you work in, as the button goes down: on what
     /// AppKit draws in it too (a reply's text, a terminal, a page), which a SwiftUI gesture never
-    /// hears, and before what the click does, so a session picked in the sidebar leaves you in its
-    /// conversation. So does the keyboard moving into it (Tab, a shortcut, a field that takes it).
+    /// hears, and before what the click does. So does the keyboard moving into it (Tab, a shortcut, a field that takes it).
     /// Not while it's out of reach (under Settings or the expanded panel) or `isOn` says something
     /// is over it (the command palette, a picture looked at closer), nor for the window's own
     /// buttons over it. `keyboard` hears which view the keyboard moved to.
     func onCardClick(isOn: Bool = true, keyboard: ((NSView) -> Void)? = nil, _ action: @escaping () -> Void) -> some View {
-        background(CardClicks(isOn: isOn, clicked: action, keyboard: keyboard))
+        background(CardClicks(isOn: isOn, byClicks: true, clicked: action, keyboard: keyboard))
+    }
+
+    /// The same, for a card that's the one you work in only while the keyboard is in it: a click
+    /// in it leaves you working where you were.
+    func onCardKeyboard(isOn: Bool = true, _ action: @escaping () -> Void) -> some View {
+        background(CardClicks(isOn: isOn, byClicks: false, clicked: action, keyboard: nil))
     }
 }
 
 private struct CardClicks: NSViewRepresentable {
     let isOn: Bool
+    let byClicks: Bool
     let clicked: () -> Void
     let keyboard: ((NSView) -> Void)?
 
@@ -321,6 +327,7 @@ private struct CardClicks: NSViewRepresentable {
         view.clicked = clicked
         view.tookKeyboard = keyboard
         view.isOn = isOn && context.environment.isEnabled
+        view.byClicks = byClicks
     }
 
     static func dismantleNSView(_ view: Watcher, coordinator: ()) {
@@ -331,6 +338,7 @@ private struct CardClicks: NSViewRepresentable {
         var clicked: () -> Void = {}
         var tookKeyboard: ((NSView) -> Void)?
         var isOn = true
+        var byClicks = true
         private var monitor: Any?
         private var keyboard: NSKeyValueObservation?
 
@@ -341,7 +349,7 @@ private struct CardClicks: NSViewRepresentable {
             stop()
             guard window != nil else { return }
             monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] event in
-                guard let self, self.isOn, let window = self.window, event.window === window,
+                guard let self, self.isOn, self.byClicks, let window = self.window, event.window === window,
                       self.bounds.contains(self.convert(event.locationInWindow, from: nil)),
                       !Self.isWindowButton(at: event.locationInWindow, in: window) else { return event }
                 self.clicked()
