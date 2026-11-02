@@ -307,9 +307,10 @@ private struct GroupMessageRow: View, Equatable {
                                 .recessedWell(Capsule())
                                 .help("What \(author?.name ?? "the bot") did on its part, in its own conversation")
                         }
-                        Text(message.time, format: .dateTime.hour().minute())
+                        Text(SentTime.short(message.time))
                             .font(.caption)
                             .foregroundStyle(.tertiary)
+                            .help(SentTime.full(message.time))
                         // Shown under the pointer, always laid out.
                         HStack(spacing: 0) {
                             CopyButton(text: message.text, help: "Copy")

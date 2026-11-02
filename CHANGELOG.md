@@ -23,6 +23,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - Stop, Keep Going and Start the Work in a group chat that's moving say why nothing happened.
 - Going Back while a sign-in is still starting no longer opens its page in your browser afterwards.
 - New Bot and New Group Chat start on the computer whose page the sidebar shows, rather than always on this Mac, and a group chat started from a machine's page lives on that machine.
+- The row under a reply, with when it ended, how long it took, Copy and Reply, shows while you hover over the reply, and the latest reply keeps it in view. Right-click a reply to copy or answer it, and hover over a time for the full date.
 - A bot's goal bar names the goal in a few words, says how far along it is or why it's paused (you, a limit, an error, no progress), and has Pause or Resume right on it. Opened, its steps read as rows top to bottom, each with a few words on where it stands and, where the window has room, its bar on one timeline; a long goal opens on today, and Stop Goal… sits under the steps.
 - The model menu says "Free" once in a provider's title when all its models are free, instead of on every row, and leaves out a model's mark where it's the provider's own.
 - A goal's plan lines its lanes up when only some have a site, shows only the note of each lane once the plan is met, labels its days without crowding Today, with a date every few days in a long goal, and gives steps' names more room in a wide card.
