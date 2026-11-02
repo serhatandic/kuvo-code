@@ -9887,6 +9887,7 @@ var readKept2 = (file = GOALS_FILE) => {
 var goalRuns = (bot, file = GOALS_FILE) => readKept2(file).some((goal) => goal.bot === bot && goal.state === "running");
 function changeKept2(change, file = GOALS_FILE) {
   fs39.mkdirSync(WORK_FOLDER, { recursive: true });
+  let changed = false;
   const result = locked(LOCK5, () => {
     const goals = readKept2(file);
     const value = change(goals);
@@ -9895,11 +9896,16 @@ function changeKept2(change, file = GOALS_FILE) {
       if (botHere(goal.bot) && (!latest.has(goal.bot) || latest.get(goal.bot).proposed <= goal.proposed))
         latest.set(goal.bot, goal);
     const kept = goals.filter((goal) => botHere(goal.bot) && (latest.get(goal.bot) === goal || goal.report && !goal.reportTold && goal.state !== "running"));
-    writePrivate(file, JSON.stringify({ goals: kept }, null, 2));
+    const text = JSON.stringify({ goals: kept }, null, 2);
+    if (text !== textOf(file)) {
+      writePrivate(file, text);
+      changed = true;
+    }
     return value;
   });
-  for (const tell of goalFollowers)
-    tell();
+  if (changed)
+    for (const tell of goalFollowers)
+      tell();
   return result;
 }
 var Here = `${HERE[0].toUpperCase()}${HERE.slice(1)}`;
@@ -24085,6 +24091,7 @@ export {
   freshenBots,
   fromPhone,
   fromRelay,
+  goalFollowers,
   goalHolds,
   greetWork,
   groupNotice,

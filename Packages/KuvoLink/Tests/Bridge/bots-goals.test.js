@@ -823,6 +823,26 @@ test("with nothing of the goal at work, the bot is told to carry on after a whil
   assert.equal(nudges().length, 2);
 });
 
+test("a look at a running goal that finds nothing new tells no one: the apps following the goals aren't sent them again, and the box's own watch rests until its next look", async () => {
+  await startedGoal();
+  const now = Date.now();
+  await look(now);
+  let toldFollowers = 0;
+  const follower = () => { toldFollowers += 1; };
+  link.goalFollowers.add(follower);
+  try {
+    await look(now + 1000);
+    await look(now + 2000);
+    assert.equal(toldFollowers, 0);
+    // Something new is told.
+    await look(now + 11 * 60_000);
+    assert.equal(nudges().length, 1);
+    assert.ok(toldFollowers > 0);
+  } finally {
+    link.goalFollowers.delete(follower);
+  }
+});
+
 // A wake-up of the bot's, as kuvo-wake keeps it: a file in its folder named for when it's due.
 const wakeUp = (due, note = "Write this week's summary.") => write(path.join(pixelFolder, "wakes", `${Math.round(due / 1000)}-wk${String(due).slice(-6)}`), note);
 
