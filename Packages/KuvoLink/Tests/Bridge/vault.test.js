@@ -424,8 +424,9 @@ test("a file's bytes stay hidden however a command prints them: whole, or wrappe
   const bytes = crypto.randomBytes(150);
   const added = await fromMac("POST", "kuvo/vault/items", { name: "Signing cert", kind: "file", fileName: "cert.der", values: { file: bytes.toString("base64") } }, key);
   await fromMac("POST", "kuvo/vault/grants", { item: added.value.item.id, who: { bot: "bot_ship" }, how: "own" }, key);
-  // (This test's own runtime, by its path: a login shell's PATH may have no node.)
-  const ran = await tool("ses_ship", "vault_run", { command: `"${process.execPath}" -e 'const b=require("fs").readFileSync(process.env.C).toString("base64");console.log(b);console.log(b.match(/.{1,76}/g).join("\\n"));console.log(b.match(/.{1,64}/g).join("\\n"))'`, variables: { C: "Signing cert" }, why: "x" });
+  // (This test's own runtime, by its path: a login shell's PATH may have no node. The engine's Bun
+  // is one only with BUN_BE_BUN, which Node leaves alone.)
+  const ran = await tool("ses_ship", "vault_run", { command: `BUN_BE_BUN=1 "${process.execPath}" -e 'const b=require("fs").readFileSync(process.env.C).toString("base64");console.log(b);console.log(b.match(/.{1,76}/g).join("\\n"));console.log(b.match(/.{1,64}/g).join("\\n"))'`, variables: { C: "Signing cert" }, why: "x" });
   const base64 = bytes.toString("base64");
   for (const width of [76, 64]) for (const line of base64.match(new RegExp(`.{1,${width}}`, "g")).filter(each => each.length >= 8)) assert.ok(!ran.value.text.includes(line), `a ${width}-wide line shows: ${ran.value.text}`);
   assert.ok(!ran.value.text.includes(base64));
