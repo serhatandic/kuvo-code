@@ -5,8 +5,8 @@ import Testing
 
 /// A folded project still says what calls you back to it, with the mark its most pressing session
 /// shows: one finished since you looked makes it new, one at work makes it working over that, and
-/// one waiting on you wins over both. A project whose sessions are all quiet shows none. The
-/// engine is stubbed.
+/// one waiting on you wins over both. A project whose sessions are all quiet shows none, and a
+/// subagent's news shows on it as its session's would. The engine is stubbed.
 @MainActor
 @Suite(.serialized, .timeLimit(.minutes(1))) struct FoldedProjectTests {
     let engine = StubEngine(port: 47905)
@@ -18,9 +18,10 @@ import Testing
         app.workspace.api = engine.api
     }
 
-    private func session(_ id: String, created: Double, idle: Double, viewed: Double) -> [String: Any] {
-        StubEngine.session(id, title: id, directory: folder, created: created,
-                           extra: ["time": ["created": created, "updated": idle, "idle": idle, "viewed": viewed]])
+    private func session(_ id: String, parent: String? = nil, created: Double, idle: Double, viewed: Double) -> [String: Any] {
+        var extra: [String: Any] = ["time": ["created": created, "updated": idle, "idle": idle, "viewed": viewed]]
+        if let parent { extra["parentID"] = parent }
+        return StubEngine.session(id, title: id, directory: folder, created: created, extra: extra)
     }
 
     private var mark: StatusMark.Kind? {
@@ -56,5 +57,24 @@ import Testing
         // And one asks you something: it needs you, over both.
         app.workspace.handle(try engine.event("permission.asked", ["id": "per_1", "sessionID": "ses_quiet", "action": "edit", "resources": ["Timer.swift"]]))
         try await until { mark == .needsYou }
+    }
+
+    @Test func aSubagentFinishingUnderAFoldedProjectMakesItNew() async throws {
+        defer { engine.stop() }
+        engine.list([
+            session("ses_timer", created: 1, idle: 5, viewed: 5),
+            session("ses_find", parent: "ses_timer", created: 2, idle: 4, viewed: 4),
+        ])
+        await app.workspace.refresh()
+        #expect(mark == nil, "its subagent finished before you were last in its session")
+
+        // The subagent finishes again, after you looked; its session itself is read.
+        engine.list([
+            session("ses_timer", created: 1, idle: 5, viewed: 5),
+            session("ses_find", parent: "ses_timer", created: 2, idle: 12, viewed: 4),
+        ])
+        await app.workspace.refresh()
+        #expect(app.workspace.hasNewSubSessions("ses_timer"))
+        #expect(mark == .new, "the subagent's news shows on the folded project")
     }
 }

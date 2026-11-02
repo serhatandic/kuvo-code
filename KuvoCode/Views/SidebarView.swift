@@ -690,8 +690,7 @@ struct SidebarView: View {
 
     @ViewBuilder private func projectSection(_ project: Workspace.Project) -> some View {
         let isOpen = !collapsed.contains(project.directory)
-        ProjectRow(project: project, isOpen: isOpen,
-                   mark: isOpen ? nil : foldedMark(of: project.sessions, workspace: workspace, app: app)) {
+        ProjectRow(project: project, isOpen: isOpen) {
             withAnimation(.ui) { toggle(project.directory) }
         } newSession: {
             newSession(project.directory)
@@ -1376,8 +1375,6 @@ private struct ProjectRow: View {
     @Environment(\.messageFont) private var messageFont
     let project: Workspace.Project
     let isOpen: Bool
-    /// Folded: the most pressing mark of its sessions (see `foldedMark`).
-    var mark: StatusMark.Kind?
     let toggle: () -> Void
     let newSession: () -> Void
     @State private var isHovering = false
@@ -1391,12 +1388,14 @@ private struct ProjectRow: View {
     }
 
     var body: some View {
+        // Worked out here, not by the sidebar, so only this row follows its sessions' states.
+        let mark = isOpen ? nil : foldedMark(of: project.sessions, workspace: app.workspace, app: app)
         Button(action: toggle) {
             HStack(spacing: 10) {
                 Group {
                     // One a bot made: its face, still, on the folder's corner, cut out of it.
                     if let maker = app.workspace.madeBy[project.directory].flatMap({ app.bots.bot($0.bot) }) {
-                        FolderIcon(isOpen: isOpen)
+                        FolderIcon(isOpen: isOpen, size: (16 * messageFont.sidebarScale).rounded())
                             .foregroundStyle(.secondary)
                             .mask {
                                 Rectangle()
@@ -1412,7 +1411,7 @@ private struct ProjectRow: View {
                                     .accessibilityLabel(WorkWords.madeBy(maker.name))
                             }
                     } else {
-                        FolderIcon(isOpen: isOpen)
+                        FolderIcon(isOpen: isOpen, size: (16 * messageFont.sidebarScale).rounded())
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -1430,10 +1429,11 @@ private struct ProjectRow: View {
                 // pointer.
                 ZStack(alignment: .trailing) {
                     Color.clear.frame(width: 22, height: 1)
+                    // Always there, so a state arriving plays its arrival; an empty tip shows none.
                     StatusMark(showing: mark)
                         .opacity(isHovering ? 0 : 1)
                         .help(mark?.wordsFromUnder ?? "")
-                        .accessibilityLabel(mark?.wordsFromUnder ?? "")
+                        .accessibilityHidden(true)
                 }
             }
             .padding(.horizontal, 10)
@@ -1442,6 +1442,7 @@ private struct ProjectRow: View {
         }
         .buttonStyle(.plain)
         .clickablePointer()
+        .accessibilityValue(mark?.wordsFromUnder ?? "")
         .overlay(alignment: .trailing) {
             Button(action: newSession) {
                 Image(systemName: "square.and.pencil")
@@ -1576,6 +1577,7 @@ private struct GroupRow: View {
 /// A bot's row or a group chat's, in the sidebar: its face, its name over a line of what it's
 /// doing (in bold while there's something you haven't read), and its status at the end.
 private struct FaceRow<Face: View, Subtitle: View, Trailing: View>: View {
+    @Environment(\.messageFont) private var messageFont
     let title: String
     let isUnread: Bool
     let isSelected: Bool
@@ -1601,7 +1603,7 @@ private struct FaceRow<Face: View, Subtitle: View, Trailing: View>: View {
                 trailing
             }
             .padding(.horizontal, 10)
-            .frame(height: 46)
+            .frame(height: (46 * messageFont.sidebarScale).rounded())
             .modifier(RowHighlight(isSelected: isSelected))
         }
         .buttonStyle(.plain)
@@ -1974,7 +1976,9 @@ struct MoveToComputerItems: View {
 
 /// A folded project's mark, where its sessions' sit (see `ConversationState.folded`).
 @MainActor func foldedMark(of sessions: [Session], workspace: Workspace, app: AppModel) -> StatusMark.Kind? {
-    ConversationState.folded(sessions.lazy.map { statusMark(of: $0, isNew: $0.isUnread, workspace: workspace, app: app) })
+    ConversationState.folded(sessions.lazy.map {
+        statusMark(of: $0, isNew: $0.isUnread || workspace.hasNewSubSessions($0.id), workspace: workspace, app: app)
+    })
 }
 
 /// The machine a session lives on, by name, while that machine isn't connected and isn't on its

@@ -86,14 +86,17 @@ public enum Surface {
     }
 
     /// A list's quieter ink (the sidebar's descriptions, its +), solid: blended with the glass or
-    /// the canvas behind it, as `.secondary` is, it read under 4.5:1. About 6:1 in both schemes.
-    public static func listSecondary(_ scheme: ColorScheme) -> Color {
-        scheme == .dark ? .white.opacity(0.56) : .black.opacity(0.6)
+    /// the canvas behind it, as `.secondary` is, it read under 4.5:1. About 6:1 in both schemes,
+    /// and darker still with Increase Contrast.
+    public static func listSecondary(_ scheme: ColorScheme, contrast: ColorSchemeContrast = .standard) -> Color {
+        let more = contrast == .increased
+        return scheme == .dark ? .white.opacity(more ? 0.72 : 0.56) : .black.opacity(more ? 0.75 : 0.6)
     }
 
     /// A list's quietest ink (a fold's chevron), solid too: about 3:1.
-    public static func listTertiary(_ scheme: ColorScheme) -> Color {
-        scheme == .dark ? .white.opacity(0.38) : .black.opacity(0.4)
+    public static func listTertiary(_ scheme: ColorScheme, contrast: ColorSchemeContrast = .standard) -> Color {
+        let more = contrast == .increased
+        return scheme == .dark ? .white.opacity(more ? 0.56 : 0.38) : .black.opacity(more ? 0.6 : 0.4)
     }
 
     /// The accent glass's fill: a soft wash of the accent color.
@@ -162,9 +165,11 @@ extension View {
 
 private struct ListInks: ViewModifier {
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
 
     func body(content: Content) -> some View {
-        content.foregroundStyle(Color.primary, Surface.listSecondary(scheme), Surface.listTertiary(scheme))
+        content.foregroundStyle(Color.primary, Surface.listSecondary(scheme, contrast: contrast),
+                                Surface.listTertiary(scheme, contrast: contrast))
     }
 }
 

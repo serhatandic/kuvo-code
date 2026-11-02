@@ -54,6 +54,7 @@ struct BoxNameStrip: View {
     var marksNews = true
     @Environment(AppModel.self) private var app
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.messageFont) private var messageFont
     /// Each name's width at rest, measured off screen, so what fits is known before it's shown.
     @State private var widths: [SidebarBox: CGFloat] = [:]
     @State private var moreWidth: CGFloat = 0
@@ -78,7 +79,7 @@ struct BoxNameStrip: View {
         }
         .opacity(measured ? 1 : 0)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .frame(height: 24)
+        .frame(height: (24 * messageFont.sidebarScale).rounded())
         .clipped()
         .onGeometryChange(for: CGFloat.self, of: \.size.width) { room = $0 }
         .background(alignment: .topLeading) {
@@ -164,7 +165,7 @@ struct BoxNameStrip: View {
         Button { pick(name.box) } label: {
             HStack(spacing: 5) {
                 Text(name.title)
-                    .font(.system(size: 12.5, weight: name.isOn || lit ? .semibold : .medium))
+                    .sidebarFont(12.5, weight: name.isOn || lit ? .semibold : .medium)
                     .foregroundStyle(name.isOn ? AnyShapeStyle(.primary) : name.isAway ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.secondary))
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -229,7 +230,8 @@ struct BoxNameStrip: View {
     private func moreLabel(count: Int, mark: Mark?) -> some View {
         HStack(spacing: 5) {
             Text("+\(count)")
-                .font(.system(size: 12.5, weight: .semibold).monospacedDigit())
+                .sidebarFont(12.5, weight: .semibold)
+                .monospacedDigit()
                 .foregroundStyle(.secondary)
             switch mark {
             case .failed: MachineIndicator(connection: .failed, size: 5, quiet: true)
