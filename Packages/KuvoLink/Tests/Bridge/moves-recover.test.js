@@ -321,7 +321,8 @@ test("a copy let go of while this box's engine is down: the other computer hears
     assert.equal(told.findLast(move => move.id === id)?.op, "dropped");
     assert.ok(engine.refused > refused, "it tried");
     assert.ok(engine.sessions.has("ses_down1"));
-    assert.deepEqual((await ask("GET", "kuvo/moves")).json.away, ["ses_down1"], "and not this box's: nothing reaches it");
+    // Not shown as moving here (lab goes on with it), and not this box's: nothing reaches it.
+    assert.deepEqual((await ask("GET", "kuvo/moves")).json, { moves: [], away: ["ses_down1"] });
     assert.equal(fs.readFileSync(path.join(wakes, "ses_down1", "paused"), "utf8"), "moving", "its wake-ups held");
     // Switched to now (lab's word crossed): never.
     await say({ op: "switch", id });

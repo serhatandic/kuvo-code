@@ -21707,7 +21707,7 @@ var KINDS2 = ["bot", "chat", "group"];
 var movesNow = () => {
   const peers = peersOf(readLink());
   return {
-    moves: liveMoves().map((record) => {
+    moves: liveMoves().filter((record) => !(record.role === "to" && record.dropping)).map((record) => {
       const place = plainName(peers.find((peer) => peer.key === record.peer)?.name ?? "");
       return { ...shownMove(record), ...place ? { place } : {} };
     }),

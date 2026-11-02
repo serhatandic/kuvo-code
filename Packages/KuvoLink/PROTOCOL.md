@@ -418,8 +418,9 @@ A client asks the box it lives on once, and watches; the move goes on with no cl
   where it was (`from`) or where it's going (`to`); `stage`: `holding`, `copying`, `switching`,
   `finishing`; `sessions`, its conversations, root first; `place`, the other computer's name, as
   your computers call it (when this box knows it); `sent` and `size`, bytes, while its copy is on
-  its way, for a client to show how far it is. `away`: conversations this box's engine lists that don't live here (a copy not
-  switched to yet, an original still going): clients leave them out.
+  its way, for a client to show how far it is (a move taken back isn't listed, on either box,
+  while its copy is let go of). `away`: conversations this box's engine lists that don't live here (a copy not
+  switched to yet or being let go of, an original still going): clients leave them out.
 - While it moves, nothing reaches it: a prompt to one of its conversations through the link answers
   `409 {message}`, as does a change to its queue (`…/queue/…`; reading it still works, and a Stop
   works while the box it leaves waits for its turn to end), a letter `retry`, its wake-ups and watches are held (`paused` says `moving`), and
