@@ -63,7 +63,7 @@ struct AppearanceSettings: View {
                     .fixedSize()
                 } label: {
                     Text("Text size")
-                    Text("Messages, replies and the composer.")
+                    Text("Messages, replies, the composer and the sidebar.")
                 }
                 Picker(selection: $typeface) {
                     ForEach(Look.Typeface.allCases) { Text($0.title).tag($0) }
