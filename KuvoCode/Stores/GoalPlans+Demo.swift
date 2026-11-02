@@ -1,9 +1,10 @@
 #if DEBUG
 import ClientSessions
 import Foundation
+import OpenCodeKit
 
 extension GoalPlans {
-    /// KUVO_DEMO_GOAL=<bot's name>:<proposed|cant|running|month|done>: the bot's goal, a sample (the
+    /// KUVO_DEMO_GOAL=<bot's name>:<proposed|cant|running|month|weekly|done>: the bot's goal, a sample (the
     /// Driftwood landing page), for a look at its card and its lanes; `cant` is the card of a box
     /// that can't work on it alone, its sandbox check failed (KUVO_DEMO_SANDBOX=<reason> for another reason,
     /// or `old`).
@@ -96,9 +97,37 @@ extension GoalPlans {
             ]
             return base(.running, steps, checks.filter { $0.state == .ok }, ms(-9 * day), nil, [GoalPlan.Waiting(id: "w1", kind: .you, text: "Stripe’s identity check", url: URL(string: "https://dashboard.stripe.com"), site: stripe, at: ms(-0.5 * day))],
                         [.init(why: "Claude’s limit", until: ms(48))], ms(21 * day), nil, true)
+        case "weekly":
+            // Two months of weekly summaries: many steps, long names, the next one at a time.
+            let day = 24.0 * 60
+            let weeks: [GoalPlan.Step] = (0..<9).map { week in
+                let from = Double(week - 2) * 7
+                let state: GoalPlan.Step.State = week < 2 ? .done : .todo
+                return GoalPlan.Step(id: "w\(week)", text: "Summarise the week’s commits, releases and open questions (\(week + 1) of 9)", state: state,
+                                     note: week < 2 ? "Posted in #updates" : nil, after: week == 0 ? [] : ["w\(week - 1)"],
+                                     began: state == .done ? ms(from * day) : nil, ended: state == .done ? ms(from * day + 50) : nil)
+            }
+            return GoalPlan(id: "goal_demo", bot: bot.id, name: bot.name, session: bot.sessionID,
+                            goal: "Every Monday, write a summary of the week’s work on kuvo-ai and kuvo-code-ios for the changelog, and post it in #updates, for the next two months.",
+                            title: "Weekly summaries", state: .running, steps: weeks, ends: ms(49 * day), proposed: ms(-15 * day), started: ms(-14 * day),
+                            next: ms(2 * day), alone: true)
         default:
             return nil
         }
+    }
+
+    /// KUVO_DEMO_GOAL_STATE=<working|paused:<you|limit|error|stalled>>, with KUVO_DEMO_GOAL: the
+    /// conversation's own goal beside the sample, so its bar has Pause, or Resume and why it's paused.
+    static func demoGoal(for plan: GoalPlan) -> Goal? {
+        guard plan.id == "goal_demo", let spec = ProcessInfo.processInfo.environment["KUVO_DEMO_GOAL_STATE"] else { return nil }
+        let parts = spec.split(separator: ":").map(String.init)
+        guard !parts.isEmpty else { return nil }
+        var goal: [String: Any] = ["session": plan.session, "condition": plan.goal, "state": parts[0], "started": plan.started ?? plan.proposed, "turns": 4, "checking": false]
+        if parts.count > 1 {
+            goal["pausedBy"] = parts[1]
+            if parts[1] == "error" { goal["note"] = "The last turn failed: the model’s provider answered 529, overloaded." }
+        }
+        return (try? JSONSerialization.data(withJSONObject: goal)).flatMap { try? JSONDecoder().decode(Goal.self, from: $0) }
     }
 }
 #endif
