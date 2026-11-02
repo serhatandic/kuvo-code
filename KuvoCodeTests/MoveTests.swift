@@ -55,7 +55,7 @@ import Testing
         // This Mac's chat moving to a machine, and a copy of a machine's coming here.
         try underWay("mov_out1", thing: "ses_trip", role: "from", sessions: ["ses_trip"])
         try underWay("mov_in1", thing: "ses_copy", role: "to", sessions: ["ses_copy"])
-        try await until { Moves.isFrozen("ses_trip") && Moves.isFrozen("ses_copy") }
+        try await until { app.moves.held.isSuperset(of: ["ses_trip", "ses_copy"]) }
         #expect(!Moves.isFrozen("ses_other"))
         #expect(app.moves.isPending("ses_trip"))
         #expect(app.workspace.movedAway["ses_copy"] == .some(nil), "the copy coming here isn't this Mac's yet")
@@ -67,7 +67,7 @@ import Testing
         let reply = Task { try await Deliveries.send("Book the train", to: "ses_trip", delivery: .queue, on: app.workspace.api) }
         try over("mov_out1")
         try over("mov_in1")
-        try await until { !Moves.isFrozen("ses_trip") && !Moves.isFrozen("ses_copy") }
+        try await until { app.moves.held.isDisjoint(with: ["ses_trip", "ses_copy"]) }
         #expect(try await reply.value)
         #expect(engine.requests("POST", "/api/session/ses_trip/prompt").count == 1)
         // (Let go of as each move's over is read, just after it unfreezes.)
@@ -129,6 +129,153 @@ import Testing
             defer { TestPulse.beat() }
             return lock.withLock { asked += 1; return asked }
         }
+    }
+
+    /// A box answering each path as the test says (JSON), and 503 to one it says nothing of.
+    private static func box(_ name: String, _ answer: @escaping @Sendable (String) -> String?) -> BoxClient {
+        BoxClient(box: name, transport: LocalBox { request in
+            AsyncThrowingStream { reply in
+                let body = answer(request.path)
+                reply.yield(.head(status: body == nil ? 503 : 200, headers: ["content-type": "application/json"]))
+                reply.yield(.body(Data((body ?? #"{"message":"Not now."}"#).utf8)))
+                reply.finish()
+            }
+        })
+    }
+
+    /// Whether the move a test set up is over yet, from any thread.
+    nonisolated private final class Over: @unchecked Sendable {
+        private let lock = NSLock()
+        private var over = false
+        var now: Bool {
+            get { lock.withLock { over } }
+            set { lock.withLock { over = newValue } }
+        }
+    }
+
+    /// A bot of this Mac's moved to your machine: once it's there it's listed there, with what you
+    /// were writing to it, though this Mac's box said it no longer has it before the machine's
+    /// list was read (as its stream does, at once).
+    @Test func aBotMovedToAMachineKeepsWhatYouWereWritingToIt() async throws {
+        let lab = "move-\(UUID().uuidString.prefix(8).lowercased()).invalid"
+        let labKey = String(repeating: "M", count: 43)
+        let app = AppModel()
+        app.moves.app = app
+        app.bots.app = app
+        _ = app.machines.add(lab)
+        defer {
+            app.removeMachine(lab)
+            try? FileManager.default.removeItem(at: Bots.file)
+        }
+        app.phoneLink.standIn(machine: lab, key: labKey)
+        let over = Over()
+        let pixel = #"{"id":"bot_move00001","session":"ses_movebot","name":"Pixel","look":{"color":"sky","shape":"round","face":"calm"},"folder":"/kuvo-tests-none/bot_move00001"}"#
+        let moving = #"{"moves":[{"id":"mv_bot1","kind":"bot","thing":"bot_move00001","from":"mac-key","to":"\#(labKey)","role":"from","stage":"switching","sessions":["ses_movebot"]}],"away":[]}"#
+        let mac = BoxClient.mac
+        let boxes = { (box: String) in
+            Self.box(box) { path in
+                switch path {
+                case "kuvo/bots": (box == lab) == over.now ? #"{"bots":[\#(pixel)]}"# : #"{"bots":[]}"#
+                case "kuvo/moves": box == mac && !over.now ? moving : #"{"moves":[],"away":[]}"#
+                default: nil
+                }
+            }
+        }
+        app.bots.boxes = boxes
+        app.moves.boxes = boxes
+        app.bots.reachable = { $0 == lab }
+        await app.bots.refresh(BoxClient.mac)
+        await app.moves.reload(BoxClient.mac)
+        #expect(app.moves.isMoving("bot_move00001"))
+        Drafts.shared["ses_movebot"].text = "And the release notes"
+        defer { Drafts.shared.remove("ses_movebot") }
+
+        // There: this Mac's box no longer lists it, and says so before the machine's list is read.
+        over.now = true
+        await app.moves.reload(BoxClient.mac)
+        await app.bots.refresh(BoxClient.mac)
+        try await until { app.bots.bot("bot_move00001")?.machine == lab && !app.moves.held.contains("bot_move00001") }
+        #expect(Drafts.shared["ses_movebot"].text == "And the release notes")
+    }
+
+    /// A machine whose box can't be read for a moment (its connection dropped, say) hasn't ended
+    /// what it said was moving: that still shows as moving, until its box says it's over.
+    @Test func aMachineThatCantBeReadForAMomentIsStillMovingWhatItWas() async throws {
+        let unreadable = Over()
+        let moving = #"{"moves":[{"id":"mv_lab1","kind":"chat","thing":"ses_labtrip","from":"lab-key","to":"mac-key","role":"from","stage":"copying","sessions":["ses_labtrip"]}],"away":[]}"#
+        let app = AppModel()
+        app.moves.app = app
+        app.moves.boxes = { box in Self.box(box) { path in path == "kuvo/moves" && !unreadable.now ? moving : nil } }
+        await app.moves.reload("lab")
+        #expect(app.moves.isMoving("ses_labtrip"))
+        unreadable.now = true
+        await app.moves.reload("lab")
+        #expect(app.moves.isMoving("ses_labtrip"), "a read that failed says nothing of it")
+        #expect(Moves.isFrozen("ses_labtrip"))
+        unreadable.now = false
+        app.moves.forget("lab")
+    }
+
+    /// The connection to its box gone before it answered, and nothing of it moving there now: it
+    /// says so, as the phone does, never the connection's own error (it may be over already).
+    @Test func cutOffBeforeItsBoxAnsweredItSaysWhatItsBoxSaysNow() async throws {
+        let app = AppModel()
+        app.moves.app = app
+        app.moves.boxes = { box in
+            BoxClient(box: box, transport: LocalBox { request in
+                AsyncThrowingStream { reply in
+                    guard request.method != "POST" else { return reply.finish(throwing: URLError(.networkConnectionLost)) }
+                    reply.yield(.head(status: 200, headers: ["content-type": "application/json"]))
+                    reply.yield(.body(Data(#"{"moves":[],"away":[]}"#.utf8)))
+                    reply.finish()
+                }
+            })
+        }
+        let lab = Moves.Place(key: "lab-key", name: "lab", kind: "machine", ok: true)
+        await #expect {
+            try await app.moves.move("chat", "ses_cutoff", from: nil, to: lab)
+        } throws: { error in
+            error.localizedDescription == "Kuvo Code lost touch with this Mac before it answered, and nothing is moving there now. If it isn’t where you moved it, move it again."
+        }
+    }
+
+    /// A move's stage changing asks again where only what it moves can go (a request each, over
+    /// SSH for a machine's), not where every bot and chat can: theirs haven't changed.
+    @Test func aMoveChangingStageAsksAgainOnlyWhereWhatItMovesCanGo() async throws {
+        defer { engine.stop() }
+        let moving = Over()
+        let asked = Asked()
+        let app = AppModel()
+        app.moves.app = app
+        app.workspace.api = engine.api
+        let folder = AppInfo.supportDirectory.appending(path: "Chats").path(percentEncoded: false)
+        engine.list([StubEngine.session("ses_stagea", title: "Trip plans", directory: folder), StubEngine.session("ses_stageb", title: "Groceries", directory: folder)])
+        app.moves.boxes = { box in
+            Self.box(box) { raw in
+                let path = raw.removingPercentEncoding ?? raw
+                let leaving = moving.now
+                if path.hasPrefix("kuvo/moves/places") {
+                    if path.hasSuffix("id=ses_stageb") { _ = asked.next() }
+                    let why = leaving && path.hasSuffix("id=ses_stagea") ? #","why":"It’s moving to another computer.","note":"Moving already""# : ""
+                    return #"{"places":[{"key":"lab-key","name":"lab","kind":"machine","ok":\#(why.isEmpty)\#(why)}]}"#
+                }
+                guard path == "kuvo/moves" else { return nil }
+                return leaving ? #"{"moves":[{"id":"mv_stage1","kind":"chat","thing":"ses_stagea","from":"mac-key","to":"lab-key","role":"from","stage":"holding","sessions":["ses_stagea"]}],"away":[]}"# : #"{"moves":[],"away":[]}"#
+            }
+        }
+        await app.workspace.refresh()
+        await app.moves.reloadAll()
+        try await until { app.moves.places(of: "ses_stagea", from: nil) != nil && app.moves.places(of: "ses_stageb", from: nil) != nil }
+        let before = asked.count
+
+        // One starts moving: its menu says so, and the other's isn't asked again.
+        moving.now = true
+        await app.moves.reload(BoxClient.mac)
+        try await until { app.moves.places(of: "ses_stagea", from: nil)?.first?.ok == false }
+        #expect(asked.count == before, "where the other can go hasn't changed")
+        moving.now = false
+        await app.moves.reload(BoxClient.mac)
+        try await until { !app.moves.held.contains("ses_stagea") }
     }
 
     @Test func itsMenuListsWhereTheBoxSaysItCanGoAndItsRowSaysHowFarItIs() async throws {

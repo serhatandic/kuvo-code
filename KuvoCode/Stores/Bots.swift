@@ -264,8 +264,8 @@ final class Bots {
         let kept = { (bot: Bot) in Moves.isFrozen(bot.id) || (box == BoxClient.mac && bot.machine == nil && FileManager.default.fileExists(atPath: bot.folder)) }
         let gone = known.filter { $0.box == box && !ids.contains($0.id) && !kept($0) }
         // Other computers' as they were, and one moving as it is until its move is done; this box's as
-        // it has them now (one it lists that was elsewhere has moved here).
-        var next = known.filter { ($0.box != box && !ids.contains($0.id)) || (!ids.contains($0.id) && kept($0)) || Moves.isFrozen($0.id) }
+        // it has them now (one it lists that was elsewhere has moved here, its move over).
+        var next = known.filter { ($0.box != box && !ids.contains($0.id)) || (!ids.contains($0.id) && kept($0)) || (Moves.isFrozen($0.id) && !Moves.arriving.contains($0.id)) }
         for bot in made where !next.contains(where: { $0.id == bot.id }) { next.append(bot) }
         next.sort { $0.created < $1.created }
         guard next != known else { return }

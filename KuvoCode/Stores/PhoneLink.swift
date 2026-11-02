@@ -651,6 +651,14 @@ final class PhoneLink {
         talksToPeers(machine) ? machineHosts[machine]?.key : nil
     }
 
+    #if DEBUG
+    /// A test's machine, as if it was set up for your computers: its box's key, and its bridge
+    /// talking to them itself.
+    func standIn(machine: String, key: String) {
+        machineHosts[machine] = MachineHost(name: machine, address: "", key: key, peers: true)
+    }
+    #endif
+
     /// Whether `machine`'s bridge talks to your other computers itself (it makes its own list of
     /// agents, and sends its agents' letters).
     func talksToPeers(_ machine: String) -> Bool {

@@ -16,6 +16,8 @@ final class Moves {
     /// What's moving now, a bot's ID, a chat's session ID or a group chat's ID, where to and how far
     /// it is: its row says so.
     private(set) var underWay: [String: Going] = [:]
+    /// `frozen`, for what follows its changes (the static one is read from anywhere, unobserved).
+    private(set) var held: Set<String> = []
     @ObservationIgnored weak var app: AppModel?
     /// A box's routes (a test's own), else the app's.
     @ObservationIgnored var boxes: ((String) -> BoxClient)?
@@ -73,6 +75,10 @@ final class Moves {
     }
 
     static func isFrozen(_ id: String) -> Bool { frozen.contains(id) }
+
+    /// What moves that are over still hold, until it's shown where it lives now: where its box
+    /// lists it, that's where it is (it's held only so it isn't let go of meanwhile as gone).
+    private(set) static var arriving: Set<String> = []
 
     /// Conversations carrying on with the coding agents now (`Workspace.moveToAgents`): what you
     /// send stays in the composer, and goes to the new session with the rest of what you wrote.
@@ -305,11 +311,12 @@ final class Moves {
             // A box from before moves were the box's.
             if refusal.status == 404, refusal.message.hasPrefix("It said no") { throw Failure.needsUpdate(placeName(from)) }
             throw Failure.refused(refusal.message)
-        } catch {
-            // Lost on the way (the connection went): the boxes see it through all the same.
+        } catch where !(error is CancellationError) {
+            // Lost on the way (the connection went): the boxes see it through all the same, and
+            // whether it's moving is as its box says now.
+            let said = try? await source.value(BoxMoves.self, "GET", "kuvo/moves")
             await reload(box)
-            if isPending(id) { throw Failure.refused("Kuvo Code lost touch with \(placeName(from)) while it moved. It goes on there, and shows where it went once it’s there.") }
-            throw error
+            throw Failure.refused(MoveWords.lost(from: from.map(placeName) ?? "this Mac", moving: said.map { $0.moves.contains { $0.thing == id && $0.role == "from" } }))
         }
         await reload(box)
         await ended(answer.move, on: box)
@@ -352,6 +359,8 @@ final class Moves {
     @ObservationIgnored private var reads: [String: Int] = [:]
     /// Each box's latest read, which one before it waits for.
     @ObservationIgnored private var latest: [String: Task<Void, Never>] = [:]
+    /// What moves just over hold (each move's), until they're shown where they live now.
+    @ObservationIgnored private var settling: [String: [String]] = [:]
     /// Machines read again every few seconds while they say something's moving (a machine's box
     /// answers this Mac once over SSH, not as it changes).
     @ObservationIgnored private var rereading: [String: Task<Void, Never>] = [:]
@@ -360,15 +369,13 @@ final class Moves {
     /// returns once that's taken: what's moving is known then, as its callers expect.
     func reload(_ box: String) async {
         guard let app, let client = client(box) else { return }
-        if box != BoxClient.mac, boxes == nil, app.machines.engine(box)?.isReady != true {
-            take(nil, from: box)
-            return
-        }
+        // A machine out of reach for now: what it said last stands (a move isn't over for that).
+        if box != BoxClient.mac, boxes == nil, app.machines.engine(box)?.isReady != true { return }
         reads[box, default: 0] += 1
         let read = reads[box]
         let reading = Task {
-            let said = try? await client.value(BoxMoves.self, "GET", "kuvo/moves")
-            guard reads[box] == read else { return }
+            // Nor a read that failed (its connection dropped, say).
+            guard let said = try? await client.value(BoxMoves.self, "GET", "kuvo/moves"), reads[box] == read else { return }
             take(said, from: box)
         }
         latest[box] = reading
@@ -397,18 +404,34 @@ final class Moves {
         let before = told[box]
         if before == said { return }
         told[box] = said
+        let over = (before?.moves ?? []).filter { old in !(said?.moves ?? []).contains { $0.id == old.id } }
+        // Held a moment longer, until each is shown where it lives now: what's here of it (a bot's
+        // draft) isn't let go of meanwhile as gone, its box saying it no longer has it.
+        for move in over {
+            settling[move.id] = [move.thing] + move.sessions
+            // (A minute at most, should a computer at its other end not answer: what waits to go
+            // to it isn't held for ever.)
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(60))
+                self?.settled(move)
+            }
+        }
         show()
         if box != BoxClient.mac { keepReading(box) }
         // What changed of its moves (not how far one's copy went): the boxes at their other ends read
         // too, and one that's over shown where it is now.
         let stages = { (moves: [BoxMoves.Move]) in Set(moves.map { $0.id + " " + $0.stage }) }
         guard stages(before?.moves ?? []) != stages(said?.moves ?? []) else { return }
-        let over = (before?.moves ?? []).filter { old in !(said?.moves ?? []).contains { $0.id == old.id } }
         let ends = Set(((said?.moves ?? []) + (before?.moves ?? [])).map(\.peer))
-        // Where things can go changed with them ("moving already", where one lives now): read again,
+        // Where they can go changed with them ("moving already", where one lives now): read again,
         // and the things that moved shown as they are once their boxes say (they may live elsewhere).
-        placesRead = [:]
+        // A bot's move changes where group chats can go too (to a machine only where their bots
+        // live); everything else's is as it was.
         let moved = Set(((said?.moves ?? []) + (before?.moves ?? [])).flatMap { [$0.thing] + $0.sessions })
+        for id in moved { placesRead[id] = nil }
+        if ((said?.moves ?? []) + (before?.moves ?? [])).contains(where: { $0.kind == "bot" }) {
+            for chat in app?.chats.list ?? [] { placesRead[chat.id] = nil }
+        }
         // Reads begun before aren't kept: they'd say where those could go from where they were.
         for id in moved { placesKept[id] = placeReads[id, default: 0] }
         if places.keys.contains(where: moved.contains) { places = places.filter { !moved.contains($0.key) } }
@@ -435,15 +458,19 @@ final class Moves {
     }
 
     /// A move that's over, wherever it was asked (here, a phone): both computers' lists read again,
-    /// so it shows where it lives now, its wake-ups with it.
+    /// so it shows where it lives now, its wake-ups with it. What it held is let go of once the
+    /// lists are read, not after its wake-ups.
     private func ended(_ move: BoxMoves.Move, on box: String) async {
         guard let app else { return }
+        defer { settled(move) }
         let here: String? = box == BoxClient.mac ? nil : box
+        // Where it lives now read first: listed nowhere for a moment, what's here of it would go.
         var ends: [String?] = [here]
-        if let there = place(move.peer) { ends.append(there) }
+        if let there = place(move.peer) { ends.insert(there, at: move.role == "from" ? 0 : 1) }
         switch move.kind {
         case "bot":
             for end in ends { await app.bots.refresh(end ?? BoxClient.mac) }
+            settled(move)
             // Its tabs here go with it, once it doesn't live here.
             if app.bots.bot(move.thing).map({ $0.machine != nil }) ?? true { app.utilities.closeTabs(of: move.thing) }
             app.wakeUps.forget(key: move.thing)
@@ -452,11 +479,18 @@ final class Moves {
             for end in ends {
                 if let end { if let engine = app.machines.engine(end) { _ = await app.workspace.refresh(engine) } } else { await app.workspace.refresh() }
             }
+            settled(move)
             app.wakeUps.forget(key: move.thing)
             if let chat = app.workspace.session(move.thing) { await app.wakeUps.read(WakeUps.owner(of: chat)) }
         default:
             for end in ends { await app.boxGroups.reload(move.thing, on: end) }
         }
+    }
+
+    /// A move's things no longer held for it (once only: the minute's cap may have come first).
+    private func settled(_ move: BoxMoves.Move) {
+        guard settling.removeValue(forKey: move.id) != nil else { return }
+        show()
     }
 
     /// The machines whose boxes have these keys.
@@ -474,7 +508,7 @@ final class Moves {
     /// each computer lists that don't live there.
     private func show() {
         var moving = asked
-        var frozen: Set<String> = []
+        var frozen = Set(settling.values.joined())
         var away: [String: String?] = [:]
         for (box, said) in told {
             let machine: String? = box == BoxClient.mac ? nil : box
@@ -488,7 +522,10 @@ final class Moves {
             for session in said.away { away[session] = .some(machine) }
         }
         if moving != underWay { underWay = moving }
+        let arriving = Set(settling.values.joined())
+        if arriving != Self.arriving { Self.arriving = arriving }
         if frozen != Self.frozen { Self.frozen = frozen }
+        if frozen != held { held = frozen }
         if app?.workspace.movedAway != away { app?.workspace.movedAway = away }
     }
 
