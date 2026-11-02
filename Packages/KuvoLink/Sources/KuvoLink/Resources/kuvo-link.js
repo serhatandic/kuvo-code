@@ -4461,7 +4461,7 @@ async function* answerWakes(session, action, request, readEngine, bridge, signal
       return yield* json(409, { message: MOVING });
     holdArchived(session, given.archived);
     const where = given.archived && given.stop !== false ? await whereIs(session, readEngine, bridge) : null;
-    if (where)
+    if (where?.found.metadata?.["kuvo.archived"] === true)
       await stopIfWaiting(where.target, session);
     return yield* changed(200, listed());
   }
@@ -19748,7 +19748,7 @@ import fs70 from "node:fs";
 import path74 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.166";
+var BRIDGE_VERSION = "0.9.167";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

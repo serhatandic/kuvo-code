@@ -102,6 +102,7 @@ extension SandboxState {
         switch check {
         case .readsOwn: "a command could still read Kuvo Code’s files"
         case .writesOwn: "a command could write in Kuvo Code’s own folder"
+        case .services: "a command could still reach your login’s services"
         case .folder: "a command couldn’t work in its own folder"
         case .tempFiles: "a command couldn’t write its temporary files"
         case .setup: "it couldn’t be set up"

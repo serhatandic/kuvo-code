@@ -254,7 +254,7 @@ final class Utilities {
             return
         }
         let tab = Tab(kind: .terminal, owner: panelKey)
-        let terminal = TerminalSession(directory: directory, environment: environment, command: command)
+        let terminal = TerminalSession(directory: directory, environment: environment, command: command, label: MainTerminals.program(command))
         terminal.addToMessage = { [weak self] text in self?.addToMessage?(text) }
         terminals[tab.id] = terminal
         runs[run] = tab.id

@@ -21,6 +21,8 @@ struct SandboxNoticeTests {
         let again = try state(#"{"on": false, "reason": "checkFailed", "check": "writesOwn", "failures": 3}"#).notice
         #expect(again.title == "The sandbox’s check failed again")
         #expect(again.buttons.map(\.action) == [.check, .report], "Report a Problem joins once it fails again")
+        // A Linux machine's check that found a command could reach your login's services.
+        #expect(try state(#"{"on": false, "reason": "checkFailed", "check": "services", "failures": 1}"#).notice.detail.contains("could still reach your login’s services"))
 
         #expect(try state(#"{"on": false, "reason": "plugin", "action": "fix"}"#).notice.buttons == [.init(title: "Fix It", action: .check)])
         #expect(try state(#"{"on": false, "reason": "waiting", "action": "restartEngine"}"#).notice.buttons == [.init(title: "Restart Engine…", action: .restartEngine(asking: true))])

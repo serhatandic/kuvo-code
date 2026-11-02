@@ -102,6 +102,7 @@ enum GoalSandbox {
         case "tempFiles": "a command couldn’t write its temporary files"
         case "readsOwn": "a command could still read Kuvo Code’s files"
         case "writesOwn": "a command could still write in Kuvo Code’s own folder"
+        case "services": "a command could still reach your login’s services"
         case "didntRun": "the check didn’t run"
         case "setup": "setting it up failed"
         default: "something wasn’t kept apart"

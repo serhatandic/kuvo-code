@@ -377,9 +377,10 @@ export async function* answerWakes(session: string, action: WakeAction | undefin
     if (folder && isMoving(folder)) return yield* json(409, { message: MOVING });
     holdArchived(session, given.archived);
     // Archived while it waits on you: it stops, as a phone's Archive has it. (Not for a hold that
-    // only follows an archive from before, `stop: false`: a first wake-up made for it.)
+    // only follows an archive from before, `stop: false`: a first wake-up made for it.) Only while
+    // its engine still has it archived: a Mac that hasn't heard it was brought back since stops nothing.
     const where = given.archived && given.stop !== false ? await whereIs(session, readEngine, bridge) : null;
-    if (where) await stopIfWaiting(where.target, session);
+    if (where?.found.metadata?.["kuvo.archived"] === true) await stopIfWaiting(where.target, session);
     return yield* changed(200, listed());
   }
   if (action === "pause" && typeof given.paused !== "boolean") return yield* json(400, { message: "Send {\"paused\": true} or false." });

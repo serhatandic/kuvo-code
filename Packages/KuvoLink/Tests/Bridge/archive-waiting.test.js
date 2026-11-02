@@ -69,6 +69,13 @@ test("archived from a phone while it waits on you, its run stops; one that waits
 
 test("archived on a Mac while it waits on you (its wake-ups held by archiving), its run stops too", async () => {
   stopped.length = 0;
+  // Brought back on a phone just now: a Mac that hasn't heard yet says it's archived, and nothing stops.
+  metadata.ses_perm1 = { "kuvo.archived": false };
+  assert.equal(await ask("POST", "kuvo/wakes/ses_perm1/pause", { archived: true }), 200);
+  assert.deepEqual(stopped, [], "brought back since: it isn't stopped");
+  // The Mac's Archive, which its engine took first.
+  metadata.ses_perm1 = { "kuvo.archived": true };
+  metadata.ses_busy1 = { "kuvo.archived": true };
   assert.equal(await ask("POST", "kuvo/wakes/ses_perm1/pause", { archived: true }), 200);
   assert.deepEqual(stopped, ["ses_perm1"]);
   assert.equal(await ask("POST", "kuvo/wakes/ses_busy1/pause", { archived: true }), 200);
