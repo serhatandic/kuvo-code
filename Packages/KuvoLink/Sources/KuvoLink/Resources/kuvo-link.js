@@ -8569,7 +8569,7 @@ function launcherScript(places) {
 %s' "$t_key" "$work" | sha256sum || printf '%s
 %s' "$t_key" "$work" | shasum -a 256) 2>/dev/null | cut -c 1-8)`,
     `  case $t_root:$t_key:$t_name in /*:????????????????????????????????????????????????????????????????:????????) tmp=$t_root/$t_name ;; *) echo "This command can't run in the sandbox here: it can't name its temporary folder." >&2; exit 126 ;; esac`,
-    `  case $t_root in "$F"/*) ;; *) (umask 077; mkdir -p "$t_root") 2>/dev/null; if [ -d "$t_root" ] && [ ! -L "$t_root" ] && [ -O "$t_root" ]; then t_own=$t_root; else tmp=$F/tmp/$sum; fi ;; esac`,
+    `  case $t_root in "$F"/*) ;; *) (umask 077; mkdir -p "$t_root") 2>/dev/null; if [ -d "$t_root" ] && [ ! -L "$t_root" ] && [ -O "$t_root" ]; then t_own=$t_root; else tmp=$F/tmp/$t_name; fi ;; esac`,
     `fi`,
     `allowed=$F/allowed/$sum`,
     `if [ -f "$work/.git" ]; then case $git in */.git) p_sum=$( (printf '%s' "\${git%/.git}" | sha256sum || printf '%s' "\${git%/.git}" | shasum -a 256) 2>/dev/null | cut -c 1-32); case $p_sum in ????????????????????????????????) allowed=$F/allowed/$p_sum ;; esac ;; esac; fi`,
@@ -8584,6 +8584,7 @@ function launcherScript(places) {
     ...Array.from({ length: MOST_FOLDERS }, (_, at) => `a${at}=$F/none r${at}=-`),
     `if [ -f "$allowed" ]; then i=0; while IFS= read -r line && [ $i -lt ${MOST_FOLDERS} ]; do case $line in /*) eval "a$i=\\$line"; ${places.platform === "darwin" ? `eval "r$i=\\$(escaped \\"\\$line\\")"; ` : ""}i=$((i + 1)) ;; esac; done <"$allowed"; else allowed=$F/none; fi`,
     `(umask 077; mkdir -p "$tmp") && touch "$tmp" && export TMPDIR="$tmp/"`,
+    `[ -z "$t_own" ] || { [ ! -L "$t_own" ] && [ -O "$t_own" ] && [ ! -L "$tmp" ] && [ -O "$tmp" ]; } || { echo "This command can't run in the sandbox here: its temporary folder isn't yours alone." >&2; exit 126; }`,
     `export PRE_COMMIT_HOME="$TMPDIR"pre-commit`,
     `(umask 077; mkdir -p ${[places.caches.npm, places.caches.pnpm, `${places.caches.uv}/cache`, `${places.caches.uv}/tools`, places.caches.corepack].map(sh).join(" ")})`,
     `export npm_config_cache=${sh(places.caches.npm)} pnpm_config_cache_dir=${sh(places.caches.pnpm)} pnpm_config_enable_global_virtual_store=false UV_CACHE_DIR=${sh(`${places.caches.uv}/cache`)} UV_TOOL_DIR=${sh(`${places.caches.uv}/tools`)} COREPACK_HOME=${sh(places.caches.corepack)}`,
@@ -9139,12 +9140,12 @@ function probe() {
     fs37.rmSync(hidden, { force: true });
     const used = (run.stdout ?? "").split(`
 `)[0].replace(/\/$/, "");
-    if ([path37.join(FOLDER, "tmp"), SHORT].includes(path37.dirname(used)))
-      fs37.rmSync(used, { recursive: true, force: true });
-    if (path37.dirname(used) === SHORT)
-      try {
+    try {
+      if ([path37.join(FOLDER, "tmp"), SHORT].includes(path37.dirname(used)))
+        fs37.rmSync(used, { recursive: true, force: true });
+      if (path37.dirname(used) === SHORT)
         fs37.rmdirSync(SHORT);
-      } catch {}
+    } catch {}
   }
 }
 function tellAgents(on = fenceState().on) {
@@ -9174,8 +9175,15 @@ var SOCKET_PATH = platform === "darwin" ? 103 : 107;
 var fitsSockets = (root) => Buffer.byteLength(root) + "/12345678".length + 40 <= SOCKET_PATH;
 var temporaryRoot = () => {
   const own = path37.join(FOLDER, "tmp");
-  return platform === "linux" && !fitsSockets(own) ? shortTemporary() ?? own : own;
+  return platform === "linux" && namespace && !fitsSockets(own) ? shortTemporary() ?? own : own;
 };
+function removeShort() {
+  try {
+    const it = fs37.lstatSync(SHORT);
+    if (it.isDirectory() && it.uid === process.getuid?.())
+      fs37.rmSync(SHORT, { recursive: true, force: true });
+  } catch {}
+}
 function writeTemporary() {
   const file = path37.join(FOLDER, "temporary");
   const root = appTemporary() ?? temporaryRoot();
@@ -9190,7 +9198,7 @@ ${crypto17.randomBytes(32).toString("hex")}
     for (const name of listOf(path37.join(FOLDER, "tmp")))
       fs37.rmSync(path37.join(FOLDER, "tmp", name), { recursive: true, force: true });
   if (had === SHORT && root !== SHORT)
-    fs37.rmSync(SHORT, { recursive: true, force: true });
+    removeShort();
 }
 function setUpFence(found) {
   const can = able(found);
@@ -9305,7 +9313,7 @@ function keepFence(every = (round) => {
   });
   let rounds = 0;
   let trying = false;
-  every(() => {
+  every(async () => {
     const round = rounds++;
     if (round % 60 === 0)
       sweepWakeFolders();
@@ -9314,6 +9322,7 @@ function keepFence(every = (round) => {
     } catch {}
     if (!fenceWanted())
       return;
+    let checking;
     try {
       if (checked.passed)
         writeProfiles();
@@ -9322,7 +9331,7 @@ function keepFence(every = (round) => {
       if (platform === "linux" && round % 6 === 5 && !trying) {
         fs37.mkdirSync(NAMESPACE_FOLDER, { recursive: true, mode: 448 });
         trying = true;
-        ownNamespaceLater(NAMESPACE_FOLDER).then((found) => {
+        checking = ownNamespaceLater(NAMESPACE_FOLDER).then((found) => {
           if (fenceWanted() && !found !== !namespace)
             setUpFence(found);
         }).catch(() => {}).finally(() => {
@@ -9330,6 +9339,7 @@ function keepFence(every = (round) => {
         });
       }
     } catch {}
+    await checking;
   });
 }
 var fenceFiles = { folder: FOLDER, plugin: PLUGIN, launcher: places.launcher, version: VERSION };

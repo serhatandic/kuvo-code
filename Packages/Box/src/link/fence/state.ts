@@ -357,8 +357,10 @@ function probe(): { passed: boolean; why?: string; check?: FenceCheck } {
     // And its temporary folder: in a short one of the box's in `/tmp`, that one too once it's
     // empty, so setting up leaves nothing there.
     const used = (run.stdout ?? "").split("\n")[0]!.replace(/\/$/, "");
-    if ([path.join(FOLDER, "tmp"), SHORT].includes(path.dirname(used))) fs.rmSync(used, { recursive: true, force: true });
-    if (path.dirname(used) === SHORT) try { fs.rmdirSync(SHORT); } catch {}
+    try {
+      if ([path.join(FOLDER, "tmp"), SHORT].includes(path.dirname(used))) fs.rmSync(used, { recursive: true, force: true });
+      if (path.dirname(used) === SHORT) fs.rmdirSync(SHORT);
+    } catch {}
   }
 }
 
@@ -381,7 +383,7 @@ function withdraw(): void {
 
 /**
  * A box's own folder for commands' temporary folders where its `tmp` is too far down for a socket in
- * one (Linux; this Mac's box has the app's): `/tmp/kuvo-code-<uid>-<its folder's sum>`, yours alone,
+ * one and commands each have a namespace of their own (Linux; this Mac's box has the app's): `/tmp/kuvo-code-<uid>-<its folder's sum>`, yours alone,
  * a box's each (a test's beside yours), as SSH's on a Mac is. Made by the launcher as a command first
  * needs it (so setting up leaves nothing there), each command's namespace sees only its own
  * conversation's in it (fence/landlock.ts, HIDE), and it goes with the box's sweep once it's empty,
@@ -405,11 +407,23 @@ const SOCKET_PATH = platform === "darwin" ? 103 : 107;
 const fitsSockets = (root: string) => Buffer.byteLength(root) + "/12345678".length + 40 <= SOCKET_PATH;
 
 /** The box's own sandbox folder's `tmp`, or a short one of its own under `/tmp` where that's too
- * long (`shortTemporary`). */
+ * long (`shortTemporary`) and commands each have a namespace of their own, where it shows them only
+ * their own conversation's. (Without one, Landlock would let a command into every conversation's
+ * in it, as it can't keep one folder in `/tmp` from it and still let it write in `/tmp`: theirs stay
+ * in the box's folder, which it hides, and a command's tmux can't start under a long home folder's
+ * path.) */
 const temporaryRoot = (): string => {
   const own = path.join(FOLDER, "tmp");
-  return platform === "linux" && !fitsSockets(own) ? shortTemporary() ?? own : own;
+  return platform === "linux" && namespace && !fitsSockets(own) ? shortTemporary() ?? own : own;
 };
+
+/** The box's short folder removed, where it's the box's: never one another user made in its place. */
+function removeShort(): void {
+  try {
+    const it = fs.lstatSync(SHORT);
+    if (it.isDirectory() && it.uid === process.getuid?.()) fs.rmSync(SHORT, { recursive: true, force: true });
+  } catch {}
+}
 
 /**
  * Where commands' temporary folders go (`temporary`, which the launcher and the agents' bridge
@@ -428,7 +442,7 @@ function writeTemporary(): void {
   // left running may still use) go a week after their last command, as any do. A short one of its
   // own in `/tmp` it no longer uses goes whole.
   if (root !== path.join(FOLDER, "tmp")) for (const name of listOf(path.join(FOLDER, "tmp"))) fs.rmSync(path.join(FOLDER, "tmp", name), { recursive: true, force: true });
-  if (had === SHORT && root !== SHORT) fs.rmSync(SHORT, { recursive: true, force: true });
+  if (had === SHORT && root !== SHORT) removeShort();
 }
 
 /**
@@ -528,8 +542,8 @@ export function sweepWakeFolders(now = Date.now()): void {
 /** Set up as the box starts, and kept so: Kuvo Code's servers' ports in its rules as they change
  * (macOS), its plugin put back if it went, what agents are told as it's on or not, and the wake
  * folders no one used cleared away. `every`: what runs its round every 10 seconds (a test's runs
- * each by hand). */
-export function keepFence(every: (round: () => void) => void = round => { setInterval(round, 10_000).unref?.(); }): void {
+ * each by hand, and awaits what it set going: the minute's namespace check). */
+export function keepFence(every: (round: () => Promise<void>) => void = round => { setInterval(round, 10_000).unref?.(); }): void {
   try { setUpFence(); } catch {}
   try { tellAgents(); } catch {}
   // Set up, or found it can't run here: the agents bridge starts the coding agents from now, never
@@ -541,12 +555,13 @@ export function keepFence(every: (round: () => void) => void = round => { setInt
   });
   let rounds = 0;
   let trying = false;
-  every(() => {
+  every(async () => {
     const round = rounds++;
     if (round % 60 === 0) sweepWakeFolders();
     // Agents told once the engine has loaded the plugin, and no longer once it's gone.
     try { tellAgents(); } catch {}
     if (!fenceWanted()) return;
+    let checking: Promise<void> | undefined;
     try {
       if (checked.passed) writeProfiles();
       // A failed check, tried again each minute (it holds the box up while it runs), with commands'
@@ -558,12 +573,13 @@ export function keepFence(every: (round: () => void) => void = round => { setInt
       if (platform === "linux" && round % 6 === 5 && !trying) {
         fs.mkdirSync(NAMESPACE_FOLDER, { recursive: true, mode: 0o700 });
         trying = true;
-        ownNamespaceLater(NAMESPACE_FOLDER)
+        checking = ownNamespaceLater(NAMESPACE_FOLDER)
           .then(found => { if (fenceWanted() && !found !== !namespace) setUpFence(found); })
           .catch(() => {})
           .finally(() => { trying = false; });
       }
     } catch {}
+    await checking;
   });
 }
 

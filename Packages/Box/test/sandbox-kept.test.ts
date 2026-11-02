@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { ownNamespace } from "../src/link/fence/landlock"
-import { canFence } from "./agents/support/fence"
+import { canFence, removeShortFolder } from "./agents/support/fence"
 
 // The box keeps the sandbox as it set it up, round by round (every 10 seconds; each minute for what
 // takes longer): the engine's plugin put back once it's gone, commands' temporary folders cleared a
@@ -12,8 +12,8 @@ import { canFence } from "./agents/support/fence"
 
 const box = join(import.meta.dir, "..", "src", "link", "fence", "state.ts")
 
-/** Runs `steps` in a box of its own (`fence`: its state.ts; `round()`: its next round; `folder`:
- * its sandbox folder), and gives back what they said. */
+/** Runs `steps` in a box of its own (`fence`: its state.ts; `round()`: its next round, done once
+ * what it set going is; `folder`: its sandbox folder), and gives back what they said. */
 function inBox(steps: string): Record<string, unknown> {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "kuvo-sandbox-kept-")))
   try {
@@ -33,6 +33,7 @@ function inBox(steps: string): Record<string, unknown> {
     expect(ran.exitCode, ran.stderr.toString()).toBe(0)
     return JSON.parse(ran.stdout.toString().trim().split("\n").at(-1) ?? "{}")
   } finally {
+    removeShortFolder(join(root, "kuvo"))
     rmSync(root, { recursive: true, force: true })
   }
 }
@@ -73,12 +74,7 @@ test.skipIf(!canFence || !namespaces)("commands get a namespace of their own on 
     for (let each = 0; each < 5; each++) round();
     said.before = ownNamespace();
     // The sixth round's check runs while the box goes on: its answer, once it's set up again.
-    const namespace = path.join(folder, "namespace");
-    const found = new Promise(resolve => {
-      const watch = fs.watch(folder, () => { if (fs.readFileSync(namespace, "utf8").startsWith("/")) { watch.close(); resolve(); } });
-    });
-    round();
-    await found;
+    await round();
     said.after = ownNamespace();`)
   expect(said).toEqual({ atFirst: false, before: false, after: true })
 })

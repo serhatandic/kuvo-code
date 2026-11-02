@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpath
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fencePolicy } from "../src/link/fence/policy"
-import { canFence, realFence } from "./agents/support/fence"
+import { canFence, realFence, removeShortFolder, shortFolder } from "./agents/support/fence"
 
 // The launcher sets each command up outside the sandbox before it runs: so it runs only the
 // system's programs, never one a command put on your PATH in a folder it writes (yarn's installer
@@ -125,12 +125,10 @@ test.skipIf(!canFence || !tmux)("a command's tmux starts in a box whose folder's
 // The commands' own tmux servers, whatever happened, in their conversations' temporary folders; and
 // the box's short folder in `/tmp`, where it made one.
 function stopServers(kuvo: string) {
-  let short = ""
-  try { short = readFileSync(join(kuvo, "run", "fence", "temporary"), "utf8").split("\n")[0]! } catch {}
-  for (const temporary of [join(kuvo, "run", "fence", "tmp"), short]) {
+  for (const temporary of [join(kuvo, "run", "fence", "tmp"), shortFolder(kuvo)]) {
     if (temporary && existsSync(temporary)) for (const name of readdirSync(temporary)) Bun.spawnSync([tmux!, "kill-server"], { env: { TMUX_TMPDIR: join(temporary, name) } })
   }
-  if (/^\/tmp\/kuvo-code-\d+-[0-9a-f]{6}$/.test(short)) rmSync(short, { recursive: true, force: true })
+  removeShortFolder(kuvo)
 }
 
 // Under a home folder's path longer still, the conversation's temporary folder can't be in Kuvo
@@ -147,9 +145,13 @@ test.skipIf(!canFence || !tmux || process.platform !== "linux")("a command's tmu
     for (const folder of [kuvo, one, two, join(root, "home")]) mkdirSync(folder, { recursive: true })
     const box = join(import.meta.dir, "..", "src", "link", "fence", "state.ts")
     const env = { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: join(root, "home"), KUVO_HOME: kuvo, BUN_BE_BUN: "1", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" }
-    const setUp = Bun.spawnSync([process.execPath, "-e", `const fence = await import(${JSON.stringify(box)}); console.log(JSON.stringify(fence.setUpFence()))`], { cwd: root, env })
+    // (Set up first as where commands can't have a namespace of their own: there theirs stay in
+    // the box's own folder, which it hides, as a command could reach every conversation's in `/tmp`.)
+    const temporary = join(kuvo, "run", "fence", "temporary")
+    const setUp = Bun.spawnSync([process.execPath, "-e", `const fs = await import("node:fs"); const fence = await import(${JSON.stringify(box)}); fence.setUpFence(null); console.log(fs.readFileSync(${JSON.stringify(temporary)}, "utf8").split("\\n")[0]); fence.setUpFence()`], { cwd: root, env })
     expect(setUp.exitCode, setUp.stderr.toString()).toBe(0)
-    const short = readFileSync(join(kuvo, "run", "fence", "temporary"), "utf8").split("\n")[0]!
+    expect(setUp.stdout.toString().trim().split("\n").at(-1)).toBe(join(kuvo, "run", "fence", "tmp"))
+    const short = readFileSync(temporary, "utf8").split("\n")[0]!
     expect(short).toMatch(new RegExp(`^/tmp/kuvo-code-${process.getuid!()}-[0-9a-f]{6}$`))
     // (Made only as a command needs it.)
     expect(existsSync(short)).toBe(false)
