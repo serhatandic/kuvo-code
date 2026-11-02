@@ -584,7 +584,7 @@ export class CodexAgent implements Agent {
     // (Its own default model, when none is given; thinking little either way.)
     // (Run whole in the box's sandbox, in Codex's home: Kuvo Code's folders are hidden there.)
     const cwd = this.isFenced(rpc) ? this.accountFolder() : this.context.temporary
-    const started: any = await rpc.request("thread/start", { ephemeral: true, cwd, ...(model && model.id !== "default" ? { model: model.id } : {}), approvalPolicy: "never", sandbox: "read-only" }, 60_000)
+    const started: any = await rpc.request("thread/start", { ephemeral: true, cwd, ...(model && model.id !== "default" ? { model: model.id } : {}), approvalPolicy: codexApprovals.never, sandbox: "read-only" }, 60_000)
     const threadId: string = started.thread.id
     let text = ""
     let turnId: string | undefined
@@ -860,21 +860,21 @@ class CodexThread implements Thread {
     // answer. Plan asks before all but a look.
     if (this.agent.isFenced(rpc)) {
       const sandboxPolicy = { type: "dangerFullAccess" }
-      if (plan) return { approvalPolicy: "untrusted", sandboxPolicy }
-      return { approvalPolicy: hooks.approvesAll() ? "on-request" : "untrusted", sandboxPolicy }
+      if (plan) return { approvalPolicy: codexApprovals.askFirst, sandboxPolicy }
+      return { approvalPolicy: hooks.approvesAll() ? codexApprovals.approveAll : codexApprovals.askFirst, sandboxPolicy }
     }
-    if (plan) return { approvalPolicy: "untrusted", sandboxPolicy: { type: "readOnly", networkAccess: true } }
+    if (plan) return { approvalPolicy: codexApprovals.askFirst, sandboxPolicy: { type: "readOnly", networkAccess: true } }
     // The box's sandbox just turned on, while this Codex was still at work: its own sandbox until
     // it starts again in the box's, whatever the mode.
-    if (fenceRules()) return { approvalPolicy: hooks.approvesAll() ? "on-request" : "untrusted", sandboxPolicy: { type: "workspaceWrite", writableRoots: [], networkAccess: true } }
+    if (fenceRules()) return { approvalPolicy: hooks.approvesAll() ? codexApprovals.approveAll : codexApprovals.askFirst, sandboxPolicy: { type: "workspaceWrite", writableRoots: [], networkAccess: true } }
     // Approve All: what Codex's own rules ask about (rm -f) is asked too, and your rules let it
     // through without a card; with "never", Codex refuses it itself.
-    if (hooks.approvesAll()) return { approvalPolicy: "on-request", sandboxPolicy: { type: "dangerFullAccess" } }
+    if (hooks.approvesAll()) return { approvalPolicy: codexApprovals.approveAll, sandboxPolicy: { type: "dangerFullAccess" } }
     // Ask First: it asks before any command but a look and before every edit ("untrusted"), and
     // what it runs can write in the project and where Kuvo Code keeps wake-ups (kuvo-wake, whose
     // scheduling your rules allow), as the engine's commands can.
     const writableRoots = [process.env.KUVO_WAKES, process.env.KUVO_BOTS].filter((root): root is string => Boolean(root))
-    return { approvalPolicy: "untrusted", sandboxPolicy: { type: "workspaceWrite", writableRoots, networkAccess: true } }
+    return { approvalPolicy: codexApprovals.askFirst, sandboxPolicy: { type: "workspaceWrite", writableRoots, networkAccess: true } }
   }
 
   private async ensureThread(input: RunInput, hooks: TurnHooks) {
@@ -2049,6 +2049,13 @@ export const codexNotifications = {
     "thread/realtime/sdp", "thread/realtime/error", "thread/realtime/closed", "windows/worldWritableWarning", "windowsSandbox/setupCompleted",
   ],
 }
+
+/**
+ * The approval policies the bridge starts Codex's threads and turns with: Approve All asks so your
+ * rules can answer what Codex's own rules ask about, Ask First and Plan ask before all but a look,
+ * and a one-off answer (`generate`) never asks. Each must be one the installed Codex still takes.
+ */
+export const codexApprovals = { approveAll: "on-request", askFirst: "untrusted", never: "never" } as const
 
 /** Codex's requests of the app: each answered (the last three never come: Kuvo Code doesn't opt in to them). */
 export const codexRequests = new Set([

@@ -7,25 +7,41 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { claudeMessages, claudeSystem } from "../../src/agents/agents/claude"
-import { codexItems, codexNotifications, codexRequests } from "../../src/agents/agents/codex"
+import { codexApprovals, codexItems, codexNotifications, codexRequests } from "../../src/agents/agents/codex"
 
 const codex = Bun.which("codex")
 
-describe("Codex", () => {
+/** The installed Codex's own schema files, read by name, in a folder removed after `check`. */
+function codexSchema(check: (read: (file: string) => any) => void) {
+  const folder = mkdtempSync(join(tmpdir(), "kuvo-codex-schema-"))
+  try {
+    expect(Bun.spawnSync([codex!, "app-server", "generate-json-schema", "--out", folder]).exitCode).toBe(0)
+    check((file) => JSON.parse(readFileSync(join(folder, file), "utf8")))
+  } finally {
+    rmSync(folder, { recursive: true, force: true })
+  }
+}
+
+describe(codex ? "Codex" : "Codex (skipped: no codex on PATH)", () => {
   test.skipIf(!codex)("every item, notification and request of the installed Codex is known", () => {
-    const folder = mkdtempSync(join(tmpdir(), "kuvo-codex-schema-"))
-    try {
-      expect(Bun.spawnSync([codex!, "app-server", "generate-json-schema", "--out", folder]).exitCode).toBe(0)
-      const read = (file: string) => JSON.parse(readFileSync(join(folder, file), "utf8"))
+    codexSchema((read) => {
       const methods = (file: string): string[] => read(file).oneOf.map((variant: any) => variant.properties.method.enum[0])
       const items: string[] = read("codex_app_server_protocol.v2.schemas.json").definitions.ThreadItem.oneOf.map((variant: any) => variant.properties.type.enum[0])
       const known = new Set([...codexNotifications.shown, ...codexNotifications.ignored])
       expect(items.filter((type) => !codexItems.has(type))).toEqual([])
       expect(methods("ServerNotification.json").filter((method) => !known.has(method))).toEqual([])
       expect(methods("ServerRequest.json").filter((method) => !codexRequests.has(method))).toEqual([])
-    } finally {
-      rmSync(folder, { recursive: true, force: true })
-    }
+    })
+  })
+
+  // Codex retires a policy in its settings first (`untrusted` in config.toml); one its app-server
+  // stops taking would leave a mode (Ask First, Plan, Approve All) not starting Codex at all.
+  test.skipIf(!codex)("every approval policy the bridge starts Codex with is one the installed Codex still takes", () => {
+    codexSchema((read) => {
+      const policies: string[] = read("codex_app_server_protocol.v2.schemas.json").definitions.AskForApproval.oneOf.flatMap((variant: any) => variant.enum ?? [])
+      expect(policies.length).toBeGreaterThan(0)
+      expect(Object.values(codexApprovals).filter((policy) => !policies.includes(policy))).toEqual([])
+    })
   })
 })
 

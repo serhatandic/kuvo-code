@@ -11622,7 +11622,7 @@ class CodexAgent {
   async generate(prompt, model) {
     const rpc = await this.rpc();
     const cwd = this.isFenced(rpc) ? this.accountFolder() : this.context.temporary;
-    const started = await rpc.request("thread/start", { ephemeral: true, cwd, ...model && model.id !== "default" ? { model: model.id } : {}, approvalPolicy: "never", sandbox: "read-only" }, 60000);
+    const started = await rpc.request("thread/start", { ephemeral: true, cwd, ...model && model.id !== "default" ? { model: model.id } : {}, approvalPolicy: codexApprovals.never, sandbox: "read-only" }, 60000);
     const threadId = started.thread.id;
     let text = "";
     let turnId;
@@ -11800,17 +11800,17 @@ class CodexThread {
     if (this.agent.isFenced(rpc)) {
       const sandboxPolicy = { type: "dangerFullAccess" };
       if (plan)
-        return { approvalPolicy: "untrusted", sandboxPolicy };
-      return { approvalPolicy: hooks.approvesAll() ? "on-request" : "untrusted", sandboxPolicy };
+        return { approvalPolicy: codexApprovals.askFirst, sandboxPolicy };
+      return { approvalPolicy: hooks.approvesAll() ? codexApprovals.approveAll : codexApprovals.askFirst, sandboxPolicy };
     }
     if (plan)
-      return { approvalPolicy: "untrusted", sandboxPolicy: { type: "readOnly", networkAccess: true } };
+      return { approvalPolicy: codexApprovals.askFirst, sandboxPolicy: { type: "readOnly", networkAccess: true } };
     if (fenceRules())
-      return { approvalPolicy: hooks.approvesAll() ? "on-request" : "untrusted", sandboxPolicy: { type: "workspaceWrite", writableRoots: [], networkAccess: true } };
+      return { approvalPolicy: hooks.approvesAll() ? codexApprovals.approveAll : codexApprovals.askFirst, sandboxPolicy: { type: "workspaceWrite", writableRoots: [], networkAccess: true } };
     if (hooks.approvesAll())
-      return { approvalPolicy: "on-request", sandboxPolicy: { type: "dangerFullAccess" } };
+      return { approvalPolicy: codexApprovals.approveAll, sandboxPolicy: { type: "dangerFullAccess" } };
     const writableRoots = [process.env.KUVO_WAKES, process.env.KUVO_BOTS].filter((root) => Boolean(root));
-    return { approvalPolicy: "untrusted", sandboxPolicy: { type: "workspaceWrite", writableRoots, networkAccess: true } };
+    return { approvalPolicy: codexApprovals.askFirst, sandboxPolicy: { type: "workspaceWrite", writableRoots, networkAccess: true } };
   }
   async ensureThread(input, hooks) {
     const rpc = await this.agent.rpc(this, true);
@@ -12935,6 +12935,7 @@ function collabWords(tool) {
   }
   return `Subagents: ${String(tool ?? "")}`;
 }
+var codexApprovals = { approveAll: "on-request", askFirst: "untrusted", never: "never" };
 var codexRequests = new Set([
   "item/commandExecution/requestApproval",
   "item/fileChange/requestApproval",
@@ -22758,4 +22759,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents e64b511d3818c06c647e68aaef2b7cc568f7ae3c61852a43aca72bf2b5599c35
+// Built from Packages/Box/src/agents 8b8febce949d90a0b586f2f256b111b9be71dfdad5ad61e0108eb3f6de2214fa
