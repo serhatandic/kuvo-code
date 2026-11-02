@@ -34,6 +34,15 @@ struct SentTimeTests {
         #expect(plain(SentTime.short(date(20, 10, 21), now: date(25, 9, 0), calendar: calendar, locale: locale)) == "Oct 20 at 10:21 AM")
     }
 
+    @Test func stackedTheDayGoesAboveTheTime() {
+        let now = date(25, 18, 0)
+        let today = SentTime.split(date(25, 9, 14), now: now, calendar: calendar, locale: locale)
+        #expect(today.day == nil && plain(today.time) == "9:14 AM")
+        #expect(SentTime.split(date(24, 23, 50), now: now, calendar: calendar, locale: locale).day == "Yesterday")
+        let older = SentTime.split(date(20, 10, 21), now: now, calendar: calendar, locale: locale)
+        #expect(older.day == "Oct 20" && plain(older.time) == "10:21 AM")
+    }
+
     @Test func inFullNamesTheDay() {
         #expect(plain(SentTime.full(date(25, 9, 14), calendar: calendar, locale: locale)) == "Sunday, October 25, 2026 at 9:14 AM")
     }
