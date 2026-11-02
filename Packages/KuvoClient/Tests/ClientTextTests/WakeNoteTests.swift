@@ -4,14 +4,14 @@ import Testing
 /// What a wake-up's line shows of its note: what to do, first. The conversation's own folder an
 /// agent put at its start ("In /Users/…/salary-demo, check…") goes; other words and paths stay.
 struct WakeNoteTests {
-    private let folder = "/Users/serhat/Desktop/test project/salary-demo"
+    private let folder = "/Users/alice/Desktop/test project/salary-demo"
 
     @Test func theConversationsFolderAtTheStartGoes() {
-        #expect(WakeNote.shown("In /Users/serhat/Desktop/test project/salary-demo, check whether the salary demo tests still pass.", folder: folder) == "Check whether the salary demo tests still pass.")
-        #expect(WakeNote.shown("In `/Users/serhat/Desktop/test project/salary-demo/`: run the tests", folder: folder) == "Run the tests")
+        #expect(WakeNote.shown("In /Users/alice/Desktop/test project/salary-demo, check whether the salary demo tests still pass.", folder: folder) == "Check whether the salary demo tests still pass.")
+        #expect(WakeNote.shown("In `/Users/alice/Desktop/test project/salary-demo/`: run the tests", folder: folder) == "Run the tests")
         #expect(WakeNote.shown("in ~/Desktop/test project/salary-demo, see if CI passed", folder: folder) == "See if CI passed")
         // Over several lines too; and a command stays as written.
-        #expect(WakeNote.shown("In /Users/serhat/Desktop/test project/salary-demo:\nnpm test, then report", folder: folder) == "npm test, then report")
+        #expect(WakeNote.shown("In /Users/alice/Desktop/test project/salary-demo:\nnpm test, then report", folder: folder) == "npm test, then report")
     }
 
     @Test func otherNotesAndPathsStayAsWritten() {
