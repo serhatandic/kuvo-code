@@ -6995,6 +6995,8 @@ async function deliverLeftAnswers(now = Date.now(), targets = peerTargets(), bri
     }
     if (typeof answer?.text !== "string" || typeof answer.to !== "string")
       continue;
+    if (frozen().has(answer.to))
+      continue;
     const taken = `${file}.delivering`;
     try {
       fs30.renameSync(file, taken);
@@ -7002,13 +7004,15 @@ async function deliverLeftAnswers(now = Date.now(), targets = peerTargets(), bri
       continue;
     }
     try {
+      const name = String(answer.name ?? "another agent");
+      const text = composeLetter(name, String(answer.from ?? "unknown"), answer.text, false);
       const place = await placeOfSession(answer.to, targets);
-      if (place === null && !bridgeRuns && now - fs30.statSync(taken).mtimeMs <= LETTER_LIFE)
+      const there = place === null && tellMovedAway(answer.to, text);
+      if (place === null && !there && !bridgeRuns && now - fs30.statSync(taken).mtimeMs <= LETTER_LIFE)
         throw new Error("Its coding agents aren't running here now.");
       const kuvo = place?.data?.metadata?.kuvo ?? {};
       if (place && !place.data?.parentID && !kuvo.seat && !isPutAway(place.data)) {
-        const name = String(answer.name ?? "another agent");
-        await sendInto(place.target, answer.to, { id: messageID(), text: composeLetter(name, String(answer.from ?? "unknown"), answer.text, false), delivery: "steer" }, { from: name, words: answer.text });
+        await sendInto(place.target, answer.to, { id: messageID(), text, delivery: "steer" }, { from: name, words: answer.text });
       }
       fs30.rmSync(taken, { force: true });
       fs30.rmSync(path30.join(REPLIES, `${id}.gaveup`), { force: true });

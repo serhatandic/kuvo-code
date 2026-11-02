@@ -640,3 +640,29 @@ test("a copy that still can't be let go of after a week says so in the log, once
   link.keepMoving(started + 8 * 24 * 3600_000 + 4 * 3600_000);
   await until(() => !engine.sessions.has("ses_stuck1") && !recordOf("ses_stuck1"));
 });
+
+test("an answer to a chat's letter that came after it stopped waiting isn't told it while it moves; once it's moved, it reaches it there", async () => {
+  chat("ses_left1");
+  // Scout, on another computer, answered; the chat's tool had given up waiting.
+  const replies = path.join(home, "run", "replies");
+  fs.mkdirSync(replies, { recursive: true });
+  fs.writeFileSync(path.join(replies, "ltr_left1.json"), JSON.stringify({ text: "The venue is booked.", to: "ses_left1", from: "ses_scout9", name: "Scout" }));
+  fs.writeFileSync(path.join(replies, "ltr_left1.gaveup"), "");
+  const id = "mov_left9";
+  script = () => {};
+  writeRecord({ id, kind: "chat", thing: "ses_left1", name: "“Trip plans”", from: "", to: peerKey, role: "from", stage: "switching", step: "switch", sessions: ["ses_left1"],
+    peer: peerKey, wasPaused: false, tries: 0, started: Date.now(), offered: true, sentAt: Date.now(), switchSince: Date.now(), folder: path.join(wakes, "ses_left1") });
+  const source = { port: enginePort, password: "pw" };
+  await link.deliverLeftAnswers(Date.now(), [source], true);
+  assert.deepEqual(engine.prompts.filter(each => each.session === "ses_left1"), [], "nothing reached it while it moved");
+  // Lab switched to it: it lives there now.
+  await say({ op: "switched", id });
+  await link.deliverLeftAnswers(Date.now(), [source], true);
+  const letters = lettersFor("ses_left1");
+  assert.equal(letters.length, 1);
+  assert.match(letters[0].text, /^\[Message from Scout · ses_scout9\][^\n]*\n\nThe venue is booked\.$/);
+  // Told once.
+  await link.deliverLeftAnswers(Date.now(), [source], true);
+  assert.equal(lettersFor("ses_left1").length, 1);
+  fs.rmSync(sending, { recursive: true, force: true });
+});

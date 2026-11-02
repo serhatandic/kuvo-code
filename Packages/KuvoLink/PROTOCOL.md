@@ -522,7 +522,8 @@ its own, which a `SIGTERM` stops waiting.
   `session` the conversation calling (as the engine names it; null outside one). The answer is the
   tool's own words. One that waits for an answer holds the request up to eleven minutes; the
   request going stops the wait, and an answer that comes later reaches the conversation as a
-  message. 400 for another `name`.
+  message (one moving to or from another computer once it's there; one that moved away lately,
+  there, as a letter). 400 for another `name`.
   - A subagent, and a coding agent's engine run (`kuvo.engineFor`), act as their conversation: its
     name, folder, model, approval, and where answers go. A group chat's seat may only list and read.
   - Who there is: the box's own agents and its peers' (as `run/agents.json` has them), and any
