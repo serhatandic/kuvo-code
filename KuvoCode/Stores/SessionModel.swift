@@ -2529,6 +2529,11 @@ final class SessionModel {
             answering.remove(ask)
             return fail(error)
         }
+        dropAsk(ask)
+    }
+
+    /// An ask no longer asked (answered elsewhere, or gone): its card goes, and it from the Dock.
+    func dropAsk(_ ask: String) {
         transcript.permissions.removeAll { $0.id == ask }
         transcript.forms.removeAll { $0.id == ask }
         live?.permissions.removeAll { $0.id == ask }

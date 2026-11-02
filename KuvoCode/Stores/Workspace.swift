@@ -2578,9 +2578,7 @@ final class Workspace {
             do {
                 try await api.reply(session: session, form: form, answer: [field: .string(answer)])
             } catch {
-                // Answered elsewhere first, its word not here yet: it goes, rather than say yours didn't.
-                if (try? await api.forms(session: session).contains { $0.id == form }) == false { return settled(form) }
-                answerDidntGo(in: session)
+                await answerFailed(form, in: session, api: api) { try await $0.forms(session: session).contains { $0.id == form } }
             }
         }
     }
@@ -2590,6 +2588,19 @@ final class Workspace {
     private func answerDidntGo(in session: String) {
         Notifier.shared.notify(session: session, title: botName?(session) ?? self.session(session)?.title ?? AppInfo.name,
                                body: "Your answer didn’t go. Open the conversation to answer there.")
+    }
+
+    /// A notification's answer that didn't go. An ask gone meanwhile (answered on your phone
+    /// first, its word not here yet) just goes, its card too, as a card's does; one still asked,
+    /// or that can't be told gone, says the answer didn't go.
+    private func answerFailed(_ request: String, in session: String, api: OpenCodeAPI, asked: (OpenCodeAPI) async throws -> Bool) async {
+        // A session not known here was answered on this Mac's engine at a guess: its list counts
+        // only if it has the session (a machine's subagent, before its events say whose it is).
+        var known = self.session(session) != nil || bridgeSessions.contains(session) || sessionMachines[session] != nil
+        if !known { known = (try? await api.session(session)) != nil }
+        guard known, (try? await asked(api)) == false else { return answerDidntGo(in: session) }
+        for id in Set([session, root(of: session)]) { models[id]?.dropAsk(request) }
+        settled(request)
     }
 
     /// Sends a message to a session from outside its conversation (a notification's Reply), with
@@ -2712,9 +2723,7 @@ final class Workspace {
             do {
                 try await api.reply(session: session, permission: request, decision: decision)
             } catch {
-                // As for a question: one answered elsewhere first goes.
-                if (try? await api.permissions(session: session).contains { $0.id == request }) == false { return settled(request) }
-                answerDidntGo(in: session)
+                await answerFailed(request, in: session, api: api) { try await $0.permissions(session: session).contains { $0.id == request } }
             }
         }
     }
