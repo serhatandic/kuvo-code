@@ -152,6 +152,29 @@ import Testing
         #expect(throughHost == "cut off", "through the app: \(throughHost)")
     }
 
+    /// A streamed answer that ends whole (its last chunk) leaves its connection open for the next
+    /// request, as HTTP/1.1 has it: URLSession and Node's fetch both send their next request on it,
+    /// and one closed under them is lost (a POST isn't sent again), as the box's next call to the
+    /// app would be.
+    @Test func theNextRequestOnAConnectionIsAnsweredAfterAStreamedOne() async throws {
+        let server = LoopbackServer { request in
+            guard request.path == "/streamed" else { return .json(["next": true]) }
+            let (body, sending) = AsyncThrowingStream<Data, Error>.makeStream()
+            sending.yield(Data("{}\n".utf8))
+            sending.finish()
+            return HTTPResponse(status: 200, headers: ["Content-Type": "application/x-ndjson"], stream: body)
+        }
+        let port = try await server.start()
+        defer { server.stop() }
+        let client = try await RawClient.connect(port: port)
+        defer { client.close() }
+        await client.send("POST /streamed HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\n\r\n")
+        #expect(await client.read(through: "\r\n0\r\n\r\n").hasPrefix("HTTP/1.1 200"))
+        await client.send("POST /next HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\n\r\n")
+        let next = await client.read(through: #"{"next":true}"#)
+        #expect(next.hasPrefix("HTTP/1.1 200"), "the connection was closed after the streamed answer: \(next.debugDescription)")
+    }
+
     /// What Node's fetch makes of `request`'s answer: "whole: <text>", or "cut off".
     private nonisolated static func nodeReads(_ node: URL, _ request: URLRequest) async throws -> String {
         let script = """
@@ -176,6 +199,65 @@ import Testing
         }
         return String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
     }
+}
+
+/// One HTTP/1.1 connection, written and read as bytes: what a client that keeps its connection
+/// sends on it, in order.
+@MainActor
+final class RawClient {
+    private let connection: NWConnection
+    /// What came past what was read so far.
+    private var pending = Data()
+
+    private init(connection: NWConnection) {
+        self.connection = connection
+    }
+
+    static func connect(port: UInt16) async throws -> RawClient {
+        let connection = NWConnection(host: .ipv4(.loopback), port: try #require(NWEndpoint.Port(rawValue: port)), using: .tcp)
+        try await withCheckedThrowingContinuation { (done: CheckedContinuation<Void, Error>) in
+            let once = OSAllocatedUnfairLock(initialState: false)
+            connection.stateUpdateHandler = { state in
+                switch state {
+                case .ready: if !once.withLock({ let was = $0; $0 = true; return was }) { done.resume() }
+                case .failed(let error): if !once.withLock({ let was = $0; $0 = true; return was }) { done.resume(throwing: error) }
+                default: break
+                }
+            }
+            connection.start(queue: .main)
+        }
+        return RawClient(connection: connection)
+    }
+
+    func send(_ text: String) async {
+        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+            connection.send(content: Data(text.utf8), completion: .contentProcessed { _ in done.resume() })
+        }
+    }
+
+    /// What comes, up to and including `marker`; or, once the other side has closed, all there was.
+    func read(through marker: String) async -> String {
+        let marker = Data(marker.utf8)
+        while true {
+            if let found = pending.range(of: marker) {
+                let read = pending[..<found.upperBound]
+                pending.removeSubrange(..<found.upperBound)
+                return String(decoding: read, as: UTF8.self)
+            }
+            let (data, ended) = await withCheckedContinuation { (done: CheckedContinuation<(Data?, Bool), Never>) in
+                connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { data, _, complete, error in
+                    done.resume(returning: (data, complete || error != nil))
+                }
+            }
+            if let data { pending.append(data) }
+            if ended, pending.range(of: marker) == nil {
+                defer { pending = Data() }
+                return String(decoding: pending, as: UTF8.self)
+            }
+        }
+    }
+
+    func close() { connection.cancel() }
 }
 
 /// An engine that answers each request with `answer`'s bytes as they are, then closes: one cut off
