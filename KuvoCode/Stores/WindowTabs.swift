@@ -135,6 +135,8 @@ final class WindowTabs {
     private(set) var givesWay: [PaneLayout.Pane] = [.split, .changes, .sessions]
     /// The side panel is wanted.
     private(set) var showsPanel = false
+    /// The sidebar is wanted (the window keeps it with its scene).
+    var showsSidebar = true
     /// The panel over the conversation, for room.
     var panelExpanded = false
     var room = Room()
@@ -290,6 +292,11 @@ final class WindowTabs {
             botEditor = nil
             groupEditor = nil
         }
+    }
+
+    /// A tab picked in the sidebar (a session, a bot, a group chat, a terminal, a search's find).
+    func choose(_ key: TabKey) {
+        open(key)
     }
 
     /// A subagent's conversation (or, from one, the conversation above it) in place of the
@@ -608,6 +615,13 @@ final class WindowTabs {
     func showPanel(_ shows: Bool = true) {
         showsPanel = shows
         if shows { keep(.changes) }
+    }
+
+    /// Shows or hides the sidebar, by its button or ⌘0; showing it when it's wanted but out of
+    /// room makes room for it, as the one opened last.
+    func showSidebar(_ shows: Bool) {
+        showsSidebar = shows
+        if shows { keep(.sessions) }
     }
 
     /// What you open last keeps its place when the window is short of room.

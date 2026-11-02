@@ -82,7 +82,7 @@ struct SidebarView: View {
     /// The tab in view, by its tag; picking one opens its tab.
     private var selection: String? {
         get { tabs.selection?.text }
-        nonmutating set { if let newValue { tabs.open(TabKey(newValue)) } }
+        nonmutating set { if let newValue { tabs.choose(TabKey(newValue)) } }
     }
     private func newSession(_ directory: String?) { tabs.newSession(in: directory) }
     /// A conversation in the project, where its new sessions open a terminal instead.
