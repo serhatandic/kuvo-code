@@ -4608,6 +4608,7 @@ function keptProject(directory, given, before = {}) {
       delete project[key];
   return project;
 }
+var ARCHIVING_AT_ONCE = 8;
 async function archiveProject(directory, also, readEngine, readBridge, signal) {
   const removed = Object.entries(readRemovedWorktrees()).filter(([, project]) => project === directory).map(([folder]) => folder);
   const folders = [...new Set([directory, ...readWorktrees().filter((tree) => tree.project === directory && typeof tree.folder === "string").map((tree) => tree.folder), ...removed, ...also])];
@@ -4643,18 +4644,21 @@ async function archiveProject(directory, also, readEngine, readBridge, signal) {
           break;
         }
         const sessions = Array.isArray(listed?.data) ? listed.data : [];
-        for (const session of sessions) {
-          if (session?.location?.directory !== folder || session.time?.archived || session.metadata?.["kuvo.archived"] === true)
-            continue;
-          try {
-            await call(target, "PATCH", `/api/session/${encodeURIComponent(session.id)}`, { metadata: { ...session.metadata ?? {}, "kuvo.archived": true } }, signal);
-            holdArchived(session.id, true);
-            await stopIfWaiting(target, session.id);
-            archived += 1;
-          } catch {
-            kept += 1;
+        const archiving = sessions.filter((session) => session?.location?.directory === folder && !session.time?.archived && session.metadata?.["kuvo.archived"] !== true);
+        let taken = 0;
+        await Promise.all(Array.from({ length: Math.min(ARCHIVING_AT_ONCE, archiving.length) }, async () => {
+          while (taken < archiving.length) {
+            const session = archiving[taken++];
+            try {
+              await call(target, "PATCH", `/api/session/${encodeURIComponent(session.id)}`, { metadata: { ...session.metadata ?? {}, "kuvo.archived": true } }, signal);
+              holdArchived(session.id, true);
+              await stopIfWaiting(target, session.id);
+              archived += 1;
+            } catch {
+              kept += 1;
+            }
           }
-        }
+        }));
         const next = listed?.cursor?.next;
         query = sessions.length === 100 && next ? `limit=100&cursor=${encodeURIComponent(next)}` : null;
       }
@@ -8554,6 +8558,7 @@ function launcherScript(places) {
     ...places.platform === "linux" ? ["export UV_LINK_MODE=copy"] : [],
     ...places.platform === "darwin" ? [`tmp=$(cd "$tmp" 2>/dev/null && pwd -P) || { echo "This command can't run: its temporary folder isn't there." >&2; exit 126; }`] : [],
     `export TMUX_TMPDIR="$tmp"`,
+    "unset TMUX TMUX_PANE",
     `own=$F/none w_bot=`,
     `case \${OPENCODE_SESSION_ID-} in`,
     `  ses_*[!A-Za-z0-9_]*|ses_) ;;`,
