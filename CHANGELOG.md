@@ -16,7 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
-- A goal's steps about Xcode show Xcode's mark rather than Apple's, steps done on a maker's site for all it makes (like Apple's developer site) show no mark rather than the maker's, and App Store Connect and TestFlight show their own letter rather than Apple's logo.
+- A goal's step shows the icon of the site it's done at, like RevenueCat's or App Store Connect's, and none for work done on your computer: an Xcode step no longer shows Apple's logo.
 - A goal's **Open** buttons, like signing in to RevenueCat or making a key, open the page in the bot's own browser in the panel instead of yours, so a sign-in there is one the bot can use. On a machine, it opens in that machine's browser. Opening it again brings back the same tab.
 - What your phone asks of this Mac no longer fails now and then with a lost connection when it asks for something right after a reply that streamed.
 - Replies draw fewer lines: headings no longer have a line under them, and `---` is one thin line with even space around it, as in Claude's and ChatGPT's apps.

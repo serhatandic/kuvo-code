@@ -865,7 +865,7 @@ sandbox"): there a bot may allow what stays on this computer.
 length, a couple of hours or a month, and it takes it end to end. It's the conversation's own goal
 ("Goals", below: the agents bridge keeps the bot at it turn after turn), with a plan kept here
 beside it.
-- **Tools** (a bot's conversation only): `propose_goal` (`{goal, title?, steps: [text | {text, phase?,
+- **Tools** (a bot's conversation only): `propose_goal` (`{goal, title?, steps: [text | {text, detail?,
   site?, after?: [step number]}],
   checks?: [{text, ok?, detail?, url?, button?}], spend?: [{what, cap, currency?, per?:
   day|week|month|goal}], public?: [text], projects?: [name], ends?, digest?:
@@ -873,7 +873,7 @@ beside it.
   runs; `digest` is a day's for a plan in phases or of more than 12 steps unless it says);
   `goal_progress` (`{steps: [{step, state?: todo|doing|done|waiting|paused|skipped, progress?: 0–1,
   note?, until?}]}`, `until` a time like `2026-11-02T09:00` that a step can only start at (null
-  takes it away; taken up, it goes), `add?: [text | {text, phase?, after?}]`, `waiting?: {kind: you|judgment|outside, text,
+  takes it away; taken up, it goes), `add?: [text | {text, detail?, site?, after?}]`, `waiting?: {kind: you|judgment|outside, text,
   detail?, url?}`, `resolved?: [id or words]` (what waited and is dealt with), `spent?: [{what,
   amount}]` (one on no spend line is kept as waiting, kind `outside`), `watching?: [text]}`; all
   checked before any is kept; it says whether you're here); `may_publish` (`{step}`: yes only for a public step you switched on); `may_spend` (`{what,
@@ -904,7 +904,7 @@ beside it.
   as the plan's (`paused` with `session` the bot's conversation).
 - **`GET kuvo/work/goals`** and **`GET kuvo/work/goals/events`** (ndjson, now and at each change) →
   `{goals: [{id, bot, name, session, goal, title?, state: proposed|running|done|stopped|declined, steps:
-  [{id, text, state, progress?, note?, phase?, site?, after?, sessions?, resumes?, until?,
+  [{id, text, state, progress?, note?, detail?, phase?, site?, after?, sessions?, resumes?, until?,
   began?, ended?}], checks: [{id, text,
   detail?, state: ok|needs|failed, by: bot|box, site?, action?: {kind: open|projectsFolder, label, url?}}], spend:
   [{what, cap, currency, per, spent, until?}], public: [{id, text, on}], projects, wake, digest,
@@ -916,9 +916,13 @@ beside it.
   come first: `alone` (failed where this box can't work on it alone yet), `power` (a Mac on battery),
   `projectsFolder` (needs, when the plan makes a project and none is picked). `progress` is given only
   where the bot counted it, always with what it counted in `note` ("3 of 8 pages"), which is what
-  the apps show; a step without it is in progress, not some share of it. `site` (a step,
-  a check or what waits, tied to a service: `stripe.com`, from its page's address or as the bot
-  names it) is for the service's own icon, which each client loads from the site itself.
+  the apps show; a step without it is in progress, not some share of it. `detail` is a step's one
+  line on what's in it (wrapping words are said as one line, at most 120 characters), which the
+  apps show on the card of the step under way; old goals have none. `site` (a step done at a site
+  in the browser, a check or what waits: `stripe.com`, from its page's address or as the bot names
+  it) is where it's done, and its mark is that site's own icon, which each client loads from the
+  site itself; a step done on the computer has none, so no mark. `phase` is still kept from older
+  bots, and the apps don't show it.
 - **Alone, or with you there**: a goal goes on alone only where the box's commands run in the
   sandbox (`sandboxOn`: `kuvo/sandbox`'s `on`, and for a bot on a coding agent its `agents` too; a
   test box says yes with `KUVO_TEST_SANDBOX_ON=1`, never the real app's, `run.kuvo.code/box`, whose

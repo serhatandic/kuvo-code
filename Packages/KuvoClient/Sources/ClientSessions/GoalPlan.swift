@@ -19,8 +19,12 @@ public struct GoalPlan: Decodable, Sendable, Hashable, Identifiable {
         /// How far along (0 to 1), only where the bot measured it: nil is in progress, not a share.
         public let progress: Double?
         public let note: String?
+        /// One line on what's in it ("SDK, paywall and a StoreKit test config"); older goals have none.
+        public let detail: String?
+        /// Kept from older bots' plans; never shown.
         public let phase: String?
-        /// The service it's done at, by its site ("stripe.com"), for its icon.
+        /// The site it's done at in the browser ("revenuecat.com"), whose icon is its mark; none for
+        /// a step done on the computer.
         public let site: String?
         /// The steps it waits for, by id.
         public let after: [String]
@@ -32,12 +36,13 @@ public struct GoalPlan: Decodable, Sendable, Hashable, Identifiable {
         public let began: Double?
         public let ended: Double?
 
-        public init(id: String, text: String, state: State, progress: Double? = nil, note: String? = nil, phase: String? = nil, site: String? = nil, after: [String] = [], sessions: [String] = [], resumes: Double? = nil, began: Double? = nil, ended: Double? = nil) {
+        public init(id: String, text: String, state: State, progress: Double? = nil, note: String? = nil, detail: String? = nil, phase: String? = nil, site: String? = nil, after: [String] = [], sessions: [String] = [], resumes: Double? = nil, began: Double? = nil, ended: Double? = nil) {
             self.id = id
             self.text = text
             self.state = state
             self.progress = progress
             self.note = note
+            self.detail = detail
             self.phase = phase
             self.site = site
             self.after = after
@@ -55,6 +60,7 @@ public struct GoalPlan: Decodable, Sendable, Hashable, Identifiable {
             state = (try? container.decode(State.self, forKey: .state)) ?? .todo
             progress = (try? container.decodeIfPresent(Double.self, forKey: .progress)).flatMap { $0 }.map { min(1, max(0, $0)) }
             note = try container.decodeIfPresent(String.self, forKey: .note)
+            detail = try? container.decodeIfPresent(String.self, forKey: .detail)
             phase = try container.decodeIfPresent(String.self, forKey: .phase)
             site = try container.decodeIfPresent(String.self, forKey: .site)
             after = (try? container.decodeIfPresent([String].self, forKey: .after)) ?? []
@@ -64,7 +70,7 @@ public struct GoalPlan: Decodable, Sendable, Hashable, Identifiable {
             ended = try container.decodeIfPresent(Double.self, forKey: .ended)
         }
 
-        private enum CodingKeys: String, CodingKey { case id, text, state, progress, note, phase, site, after, sessions, resumes, began, ended }
+        private enum CodingKeys: String, CodingKey { case id, text, state, progress, note, detail, phase, site, after, sessions, resumes, began, ended }
 
         public var resumesDate: Date? { resumes.map { Date(timeIntervalSince1970: $0 / 1000) } }
     }
@@ -593,65 +599,48 @@ public enum GoalPlanWords {
     }
 
     /// A service's name from its site, for its mark's letter and its buttons: "stripe.com" is
-    /// "Stripe", "dash.cloudflare.com" "Cloudflare", "appstoreconnect.apple.com" "App Store Connect".
+    /// "Stripe", "dash.cloudflare.com" "Cloudflare".
     public static func service(_ site: String) -> String {
-        let host = site.lowercased()
-        if let named = services.first(where: { host == $0.key || host.hasSuffix(".\($0.key)") }) { return named.value }
-        let labels = host.split(separator: ".").filter { $0 != "www" }
+        let labels = site.lowercased().split(separator: ".").filter { $0 != "www" }
         let name = labels.count >= 2 ? labels[labels.count - 2] : labels.first ?? Substring(site)
         return name.prefix(1).uppercased() + name.dropFirst()
     }
 
-    /// Services on a maker's domain with a name of their own.
-    static let services = [
-        "appstoreconnect.apple.com": "App Store Connect", "developer.apple.com": "Apple Developer", "testflight.apple.com": "TestFlight",
-    ]
-
-    /// What a step's mark is: a product its words name that has a mark of its own ("Scaffold the
-    /// Xcode project" is Xcode's), else its site's. Never a maker's logo: a step done at one of a
-    /// maker's sites for all it makes (developer.apple.com, support.apple.com) has none, and a
-    /// service of its own on the maker's domain (App Store Connect) shows its own letter, since
-    /// the site's icon is the maker's. Nil for no mark.
-    public static func mark(of step: GoalPlan.Step) -> StepMark? {
-        let words = step.text.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber })
-        if let product = products.first(where: { words.contains(Substring($0.key)) }) { return .product(product.value) }
-        guard let site = step.site else { return nil }
-        let host = host(site)
-        if isMakers(host) { return services[host].flatMap { forAll.contains(host) ? nil : .letter($0) } }
-        return .site(site)
+    /// The service's name as the words about it write it, where they name it: "RevenueCat" from
+    /// "RevenueCat project" at app.revenuecat.com, "App Store Connect" at appstoreconnect.apple.com;
+    /// otherwise its name from its site.
+    public static func service(_ site: String, in words: [String?]) -> String {
+        let labels = site.lowercased().split(separator: ".").filter { $0 != "www" }.map(String.init)
+        // The site's own name first, written as a name (capitalized); then a name before it only
+        // where it's several words run together ("appstoreconnect"), never a plain word like
+        // "billing" or "console", or its ending.
+        let named = labels.count >= 2 ? [(labels[labels.count - 2], 1)] + labels.dropLast(2).map { ($0, 2) } : labels.map { ($0, 1) }
+        for words in words.compactMap({ $0 }) {
+            let tokens = words.split { !$0.isLetter && !$0.isNumber }.map(String.init)
+            for (label, least) in named where label.count >= 4 {
+                for start in tokens.indices where tokens[start].first?.isUppercase == true {
+                    var joined = ""
+                    for end in start..<tokens.count {
+                        joined += tokens[end].lowercased()
+                        if joined == label, end - start + 1 >= least { return tokens[start...end].joined(separator: " ") }
+                        if !label.hasPrefix(joined) { break }
+                    }
+                }
+            }
+        }
+        return service(site)
     }
 
-    /// The mark of a service a check or a wait names, by its site: its icon, or on a maker's domain,
-    /// whose icon is the maker's logo, its own letter ("App Store Connect", "Apple Developer").
-    public static func mark(site: String) -> StepMark {
-        isMakers(host(site)) ? .letter(service(site)) : .site(site)
+    /// A step's mark: the icon of the site the plan says it's done at, or none for a step done on
+    /// the computer. Never guessed from its words or its maker.
+    public static func mark(of step: GoalPlan.Step) -> StepMark? {
+        step.site.map(StepMark.site)
     }
 
     public enum StepMark: Equatable, Sendable {
-        /// A bundled mark, by its id (`BrandMark`).
-        case product(String)
         /// The site's own icon.
         case site(String)
-        /// The service's letter, by its name: its site's icon would be its maker's.
-        case letter(String)
     }
-
-    private static func host(_ site: String) -> String {
-        let host = site.lowercased()
-        return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
-    }
-
-    /// On a maker's domain, whose icon is the maker's logo.
-    private static func isMakers(_ host: String) -> Bool {
-        makers.contains { host == $0 || host.hasSuffix(".\($0)") }
-    }
-
-    /// Products a step names, by the word, with the id of their bundled mark.
-    static let products = ["xcode": "xcode"]
-    /// Makers whose domains hold sites for everything they make: their logo says nothing of a step.
-    static let makers: Set<String> = ["apple.com", "google.com", "microsoft.com"]
-    /// The makers' sites for all they make, which a step done there gets no mark from.
-    static let forAll: Set<String> = ["developer.apple.com"]
 
     /// An amount in its currency, as people write it: "$15", "€9.50".
     public static func money(_ amount: Double, _ currency: String) -> String {

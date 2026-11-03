@@ -8092,6 +8092,7 @@ var GOAL_STEP = object({
   state: words("todo", "doing", "done", "waiting", "paused", "skipped"),
   "progress?": number,
   "note?": string,
+  "detail?": string,
   "phase?": string,
   "site?": string,
   "after?": list(string),
@@ -10773,6 +10774,7 @@ var siteOf = (value) => {
 var newID2 = (prefix) => `${prefix}_${crypto18.randomBytes(9).toString("base64url").replace(/[^A-Za-z0-9]/g, "")}`;
 var PERIODS = ["day", "week", "month", "goal"];
 var DIGESTS = ["day", "week", "milestones", "none"];
+var line = (value, most) => text(typeof value === "string" ? value.replace(/\s+/g, " ") : value, most);
 function stepGiven(each) {
   if (typeof each === "string")
     return text(each, 300) ? { text: text(each, 300) } : null;
@@ -10783,7 +10785,8 @@ function stepGiven(each) {
     return null;
   const after = Array.isArray(each.after) ? each.after.filter((one) => Number.isInteger(one) && one >= 1) : [];
   const site = siteOf(each.site);
-  return { text: said, ...text(each.phase, 80) ? { phase: text(each.phase, 80) } : {}, ...site ? { site } : {}, ...after.length ? { after } : {} };
+  const detail = line(each.detail, 120);
+  return { text: said, ...detail ? { detail } : {}, ...text(each.phase, 80) ? { phase: text(each.phase, 80) } : {}, ...site ? { site } : {}, ...after.length ? { after } : {} };
 }
 var keptSteps = (given, from = 0) => given.filter((each) => Boolean(each)).map((each, at) => {
   const { after, ...rest } = each;
