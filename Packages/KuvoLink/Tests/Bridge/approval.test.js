@@ -386,6 +386,23 @@ test("Auto and Full Access read .env files without asking, a Don't Allow in Sett
   assert.deepEqual(envReads("ses_kept").map(rule => rule.effect), ["allow", "allow"]);
 });
 
+test("in Full Access and Auto, an agent making the same call again and again carries on, as in Claude Code and Codex, and isn't held for you; Ask First still asks; one kept from before gets that too", async () => {
+  const loops = id => rules(id).filter(rule => rule.action === "doom_loop").map(rule => rule.effect);
+  write(settingsFile, JSON.stringify({ permissions: [] }));
+  await route("PATCH", "kuvo/approval", { fullAccess: true });
+  await route("PUT", "kuvo/sessions/ses_careful/approval", { approval: "fullAccess" });
+  assert.deepEqual(loops("ses_careful"), ["allow"]);
+  await route("PUT", "kuvo/sessions/ses_careful/approval", { approval: "auto" }, { sandbox: true });
+  assert.deepEqual(loops("ses_careful"), ["allow"]);
+  await route("PUT", "kuvo/sessions/ses_careful/approval", { approval: "askFirst" });
+  assert.deepEqual(loops("ses_careful"), [], "Ask First leaves the engine's own ask");
+  fs.rmSync(settingsFile, { force: true });
+  // Kept with Full Access by a box before, without it: made again as the box comes round.
+  sessions.set("ses_looping", session("ses_looping", [{ action: "read", resource: "*.env", effect: "allow" }, { action: "read", resource: "*.env.*", effect: "allow" }], { metadata: { kuvo: { approval: "fullAccess", applied: "fullAccess" } } }));
+  await route("PATCH", "kuvo/approval", { fullAccess: true });
+  assert.deepEqual(loops("ses_looping"), ["allow"]);
+});
+
 test("one Auto's reviewer held back is approved from any client: allowed once, the agent told, and a paused conversation goes on", async () => {
   sessions.set("ses_auto", session("ses_auto", [], { metadata: { kuvo: { approval: "auto", applied: "auto" } } }));
   const decisions = [

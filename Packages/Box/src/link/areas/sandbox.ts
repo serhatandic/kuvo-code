@@ -13,6 +13,7 @@ import { answeredRestart, asksToRestart, fenceState, restartSettled, setUpFence,
 import { bridgeTarget, call } from "../engine/client";
 import type { AnswerPiece, RouteContext } from "../server/context";
 import { readLink } from "../state";
+import { listAskReviews, onAskReviewsChanged } from "../work/reviewing";
 import { askHolder, heldHere, holdsVault } from "../vault/holder";
 import { callerOf, isCalling } from "../vault/who";
 
@@ -134,11 +135,13 @@ export async function* sandboxRoute(context: RouteContext): AsyncGenerator<Answe
   if (route === "kuvo/sandbox/asks" || route === "kuvo/sandbox/asks/events") {
     if (method !== "GET") return yield* json(405, {});
     // With the box's one ask to restart the agents started before the sandbox was on, while it asks.
-    const listed = () => ({ asks: listSandboxAsks(), ...(asksToRestart() ? { restart: true } : {}) });
+    // With how Auto's reviewer is taking up what the agents ask to work outside their folders.
+    const listed = () => ({ asks: listSandboxAsks(), ...(asksToRestart() ? { restart: true } : {}), reviews: listAskReviews() });
     if (route === "kuvo/sandbox/asks") return yield* json(200, listed());
     yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
     let wake: () => void = () => {};
-    const stop = onSandboxAsksChanged(() => wake());
+    const stops = [onSandboxAsksChanged(() => wake()), onAskReviewsChanged(() => wake())];
+    const stop = () => { for (const each of stops) each(); };
     let sent = "";
     // Until that's settled here (and said), looked at every few seconds too, as the agents bridge
     // notes it and you answer it (perhaps through another of the box's processes).

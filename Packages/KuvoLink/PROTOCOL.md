@@ -3732,9 +3732,19 @@ while the sandbox is `on`) and pass a call to `POST kuvo/sandbox/tools` `{sessio
 making that call. The asks, the tool and the answers live in the box's long-running process, as the
 vault does (`run/vault.sock`); another passes them on.
 
-- `GET kuvo/sandbox/asks` → `{asks: [ask], restart?}`, oldest first, with `restart: true` while
+- `GET kuvo/sandbox/asks` → `{asks: [ask], restart?, reviews?}`, oldest first, with `restart: true` while
   the box asks you to restart its agents (the state's `restart`); `kuvo/sandbox/asks/events`, NDJSON,
-  the same at once and on every change. An ask: `{id, at, session?, sessionName?, bot?, botName?,
+  the same at once and on every change. `reviews` (bridge 0.9.192): what Auto's reviewer did with
+  the engine's asks to work outside a conversation's folder (`permission.asked`, action
+  `external_directory`), the latest 200, each `{id, session, call?, state, at}`: `id` the
+  permission's, `call` the tool call that asked (its step), `state` `checking`, `allowed`, `heldBack`
+  (refused, the agent told why, listed in Auto's Decisions), `refused`, or `yours` (not the
+  reviewer's: not in Auto, no folder, or it couldn't judge). Its own project, and a bot's (its
+  folder, a project it made, its goal's), go ahead as `allowed` with no review. A client shows no
+  card, notification or "needs you" for such an ask while it's checked or once it's decided, only a
+  quiet mark on its step; a box that lists `reviews` lists each such ask within moments, so a client
+  waits a few seconds for it before taking the ask as yours, and takes it as yours at once from a
+  box without `reviews`. An ask: `{id, at, session?, sessionName?, bot?, botName?,
   project, command, why, stopped?, error?, always?, machine?, owner?, review?}`. `session` is the conversation's root
   (a bot's sub-agent asks as its bot's conversation). `stopped`, on macOS: what the sandbox refused
   that command, from the system's log, each `{kind, path?}` (`kind`: `write`, `read`, `connect`,

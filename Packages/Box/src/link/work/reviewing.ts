@@ -7,10 +7,11 @@
 // which carries on another way; one you approve later is told to the conversation. A pause stops
 // the conversation's run. A review that fails (a full disk, say) is a refusal too: never an ask.
 
+import fs from "node:fs";
 import path from "node:path";
 import { isObject } from "../../shared/json";
 import { oneLine } from "../../shared/text";
-import { bridgeTarget, call, engineGet, readEngineFile } from "../engine/client";
+import { bridgeTarget, call, call as engineCall, engineGet, readEngineFile } from "../engine/client";
 import { homeFolder } from "../home";
 import { sendInto, stopSession, writtenByYou } from "../engine/queue";
 import { boxNote } from "../../shared/queues";
@@ -22,6 +23,7 @@ import { usableModels, type Usable } from "./models";
 import { review, type Decision, type ReviewedAction, type ReviewContext, type SmallModel, type Verdict } from "./reviewer";
 import { botOfConversation, worksFor } from "./tree";
 import { botHere } from "../bots/here";
+import { readProjects } from "../areas/projects";
 import type { EngineAnswer } from "../engine/client";
 import type { EngineSession } from "../engine/sessions";
 import type { Target } from "../../shared/records";
@@ -213,6 +215,41 @@ const READING = new Set(["read", "glob", "grep", "list", "ls", "view", "notebook
 // Asks already taken up in this process (an event can come again as the stream reconnects).
 const reviewing = new Set<string>();
 
+/** How an ask to work outside a conversation's folder was taken up, as every client hears it
+ * (`reviews` on `kuvo/sandbox/asks`): being checked by Auto's reviewer, allowed (by it, or in the
+ * conversation's own project), held back for you to approve, refused, or left for you to answer.
+ * `call`: the tool call it's for, whose step shows it. */
+export interface AskReview {
+  id: string;
+  session: string;
+  call?: string;
+  state: "checking" | "allowed" | "heldBack" | "refused" | "yours";
+  at: number;
+}
+
+// The latest two hundred, as they changed last: an ask's step shows how it went after it's answered.
+// Past that, a decided one goes first, so one still checked or waiting on you stays listed.
+const askReviews = new Map<string, AskReview>();
+const reviewFollowers = new Set<() => void>();
+
+export const listAskReviews = (): AskReview[] => [...askReviews.values()];
+
+/** Tells `changed` each time an ask's review changes, until the function it returns is called. */
+export function onAskReviewsChanged(changed: () => void): () => void {
+  reviewFollowers.add(changed);
+  return () => { reviewFollowers.delete(changed); };
+}
+
+function noteReview(id: string, session: string, state: AskReview["state"], call?: string): void {
+  askReviews.delete(id);
+  askReviews.set(id, { id, session, ...(call ? { call } : {}), state, at: Date.now() });
+  if (askReviews.size > 200) {
+    const decided = [...askReviews.values()].find(each => each.state !== "checking" && each.state !== "yours");
+    askReviews.delete(decided?.id ?? askReviews.keys().next().value!);
+  }
+  for (const changed of reviewFollowers) changed();
+}
+
 /** A permission an engine (or the coding agents' bridge) asks in a conversation in Auto, taken up
  * by its reviewer: the agent's own file tools outside its folder (`external_directory`), by the
  * file the tool call names. Allowed, or refused with why for the agent, which goes on another way:
@@ -223,12 +260,46 @@ export async function reviewPermission(source: Target, event: { type?: string; d
   if (event.type !== "permission.asked" || typeof id !== "string" || typeof sessionID !== "string" || reviewing.has(id)) return null;
   reviewing.add(id);
   if (reviewing.size > 500) reviewing.delete(reviewing.values().next().value!);
-  // (Taken up again as the event comes again, should this one fail.)
+  // Listed as checked at once, before anything is read, so no client shows it meanwhile.
+  if (event.data?.action === "external_directory") noteReview(id, sessionID, "checking");
+  // (Taken up again as the event comes again, should this one fail; meanwhile it's yours.)
   try {
     return await answerPermission(source, id, sessionID, signal, found);
   } catch (error) {
     reviewing.delete(id);
+    if (askReviews.has(id)) noteReview(id, sessionID, "yours", askReviews.get(id)?.call);
     throw error;
+  }
+}
+
+/** The folders a conversation works in as its own: its project's, and for a bot's conversation or
+ * work, the bot's own folder, the projects it made and its running goal's. */
+function ownFolders(at: Conversation): string[] {
+  const folders = [at.data.location?.directory].filter((each): each is string => typeof each === "string");
+  const bot = botOfConversation(at.data.id) ?? worksFor(at.data);
+  if (!bot) return folders;
+  const own = botHere(bot.bot)?.folder;
+  const made = readProjects().filter(project => !project.removed && project.madeBy?.bot === bot.bot).map(project => project.directory);
+  return [...folders, ...(own ? [own] : []), ...made, ...(runningGoal(bot.bot)?.projects ?? [])];
+}
+
+/** Whether `file` is `folder` or in it, as the disk has them: links followed, as far as they exist. */
+function isWithin(file: string, folder: string): boolean {
+  const inside = path.relative(realPath(folder), realPath(file));
+  return inside === "" || (!inside.startsWith("..") && !path.isAbsolute(inside));
+}
+
+function realPath(file: string): string {
+  const rest: string[] = [];
+  for (let at = path.resolve(file); ; ) {
+    try {
+      return path.join(fs.realpathSync(at), ...rest.reverse());
+    } catch {
+      const up = path.dirname(at);
+      if (up === at) return path.resolve(file);
+      rest.push(path.basename(at));
+      at = up;
+    }
   }
 }
 
@@ -240,7 +311,11 @@ async function answerPermission(source: Target, id: string, sessionID: string, s
   const seen = await callOf(source, permission, signal);
   const at = found === undefined ? await conversationOf(sessionID) : found;
   const folder = at?.data.location?.directory;
-  if (!at || !folder) return null;
+  const call = permission.call;
+  if (!at || !folder) {
+    noteReview(id, sessionID, "yours", call);
+    return null;
+  }
   // By the file its tool call names; where none does (Codex asks for room of its own, with no
   // tool call), by the paths the ask names, each judged as a write; where it names none, by
   // what it asked, as the model reads it.
@@ -250,6 +325,20 @@ async function answerPermission(source: Target, id: string, sessionID: string, s
   const actions: ReviewedAction[] = seen && file ? [{ kind: "file", path: file, access: READING.has(seen.tool.toLowerCase()) ? "read" : "write", folder, tool: seen.tool, input: seen.input }]
     : named.length ? named.map(each => ({ kind: "file" as const, path: each, access: "write" as const, folder }))
     : [{ kind: "tool", tool: seen?.tool || "work outside its folder", args: seen?.input ?? { asked: permission.resources }, folder }];
+  // Its own project, and a bot's (one it made, its goal's), are its to work in as its folder is:
+  // nothing there is reviewed, by where each path really is (a link to it, /tmp as /private/tmp).
+  if (!inAuto(at)) {
+    noteReview(id, sessionID, "yours", call);
+    return null;
+  }
+  const reply = (body: Record<string, unknown>) => engineCall(source, "POST", `/api/session/${encodeURIComponent(permission.asker)}/permission/${encodeURIComponent(permission.id)}/reply`, body, signal);
+  const own = ownFolders(at);
+  if (actions.every(action => action.kind === "file" && own.some(folder => isWithin(action.path, folder)))) {
+    await reply({ decision: "once" });
+    noteReview(id, sessionID, "allowed", call);
+    return { decision: "allow", reason: "Its own project.", by: "code" };
+  }
+  noteReview(id, sessionID, "checking", call);
   // (The engine runs a command it asked about itself: a script from the web in it can't be pinned
   // to the copy reviewed, so that one is held back. Of several paths, the first refused decides.)
   let verdict: Awaited<ReturnType<typeof reviewIn>> = null;
@@ -257,8 +346,11 @@ async function answerPermission(source: Target, id: string, sessionID: string, s
     verdict = await reviewIn(sessionID, action, signal, at, false);
     if (!verdict || verdict.decision === "refuse") break;
   }
-  if (!verdict) return null;
-  const reply = verdict.decision === "allow" ? { decision: "once" } : { decision: "reject", message: refusalWords(verdict) };
-  await call(source, "POST", `/api/session/${encodeURIComponent(permission.asker)}/permission/${encodeURIComponent(permission.id)}/reply`, reply, signal);
+  if (!verdict) {
+    noteReview(id, sessionID, "yours", call);
+    return null;
+  }
+  await reply(verdict.decision === "allow" ? { decision: "once" } : { decision: "reject", message: refusalWords(verdict) });
+  noteReview(id, sessionID, verdict.decision === "allow" ? "allowed" : verdict.held ? "heldBack" : "refused", call);
   return verdict;
 }
