@@ -359,7 +359,8 @@ private struct BottomStack: View {
                 // Return and Escape answer the card on top only (one answered keeps them: a second
                 // Return answers nothing, rather than sending the composer's draft).
                 ForEach(model.permissions) { request in
-                    PermissionCard(request: request, command: model.permissionCommands[request.id], directory: model.session.location.directory) { decision in
+                    PermissionCard(request: request, command: model.permissionCommands[request.id], directory: model.session.location.directory,
+                                   forConversation: OutsideAgents.isAgentSession(model.session)) { decision in
                         model.reply(to: request, decision)
                     }
                     .environment(\.takesCardKeys, takesCardKeys && model.keyedAsk == request.id)

@@ -106,7 +106,7 @@ public struct SandboxStop: Codable, Equatable, Sendable {
 
 /// A command an agent wants to run outside the sandbox, waiting for your answer: its conversation and
 /// project, its bot, the command and why, what the sandbox stopped or the error it got, and what
-/// Always for This would allow (`always`, the one folder it was stopped writing in; none, and it's
+/// Always would allow (`always`, the one folder it was stopped writing in; none, and it's
 /// only once or no). `machine`: the computer's name, on a machine.
 public struct SandboxAsk: Codable, Equatable, Identifiable, Sendable {
     /// A place a project's commands may write in the sandbox.
@@ -156,7 +156,7 @@ public struct SandboxAsk: Codable, Equatable, Identifiable, Sendable {
     /// Who's asking, by name.
     public var asker: String { botName ?? sessionName ?? "An agent" }
 
-    /// Always for This can be given: the box named the one place to allow.
+    /// Always can be given: the box named the one place to allow.
     public var canAlways: Bool { always != nil }
 }
 
@@ -196,7 +196,7 @@ public struct SandboxRule: Codable, Equatable, Identifiable, Sendable {
     public var path: String
     /// When it was given, in milliseconds.
     public var at: Double
-    /// Who gave it (an ask's Always for This, or a client).
+    /// Who gave it (an ask's Always, or a client).
     public var by: String?
     /// Whose it is; a box from before it says none, and it's its project's, by its folder's name.
     public var owner: SandboxOwner?
@@ -279,7 +279,7 @@ public enum SandboxRestart {
 // MARK: The card's words
 
 /// How both apps word an ask's card (card A): who wants what, what the sandbox stopped, and what
-/// Always for This keeps.
+/// Always keeps.
 extension SandboxAsk {
     /// "Scout wants to run a command outside the sandbox".
     public var title: String { "\(asker) wants to run a command outside the sandbox" }
@@ -319,27 +319,27 @@ extension SandboxAsk {
         return "The sandbox stopped it."
     }
 
-    /// The place Always for This keeps, short (`~` for a home folder).
+    /// The place Always keeps, short (`~` for a home folder).
     public var alwaysPath: String? { always.map { SandboxStop.short($0.path) } }
 
     /// After Always's place, for the chats: one rule there is every chat's.
     public var alwaysScope: String? { owner?.kind == .chats ? "in every chat" : nil }
 
-    /// Always for This's button in words, for VoiceOver: "Always for ~/x in every chat".
+    /// Always's button in words, naming the place it keeps: "Always Allow ~/x in every chat".
     public var alwaysTitle: String? {
-        alwaysPath.map { "Always for \($0)" + (alwaysScope.map { " " + $0 } ?? "") }
+        alwaysPath.map { "Always Allow \($0)" + (alwaysScope.map { " " + $0 } ?? "") }
     }
 
-    /// What Always does, for VoiceOver only (nothing under the card says it): "Runs it, and from
-    /// now on lets Scout’s commands write there too, in the sandbox."
+    /// What Always does, with its place whole (the button may cut it): its hover text, and for
+    /// VoiceOver. "Runs it, and from now on lets Scout’s commands write in ~/x too, in the sandbox."
     public var alwaysHint: String? {
-        guard alwaysPath != nil else { return nil }
+        guard let path = alwaysPath else { return nil }
         let whose = switch owner?.kind {
         case .bot: "\(owner?.name ?? asker)’s commands"
         case .chats: "every chat’s commands"
         case .project, nil: "\(projectName)’s commands"
         }
-        return "Runs it, and from now on lets \(whose) write there too, in the sandbox."
+        return "Runs it, and from now on lets \(whose) write in \(path) too, in the sandbox."
     }
 
     /// "Scout is waiting for you · 12 min", once it's waited a minute (`now` and `at` in

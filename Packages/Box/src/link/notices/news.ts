@@ -9,7 +9,7 @@ import { readRemovedWorktrees, readWorktrees } from "../areas/worktree-records";
 import { engineGet } from "../engine/client";
 import { isHiddenRun } from "../engine/sessions";
 import { IS_MAC, K } from "../home";
-import { showsAll } from "./mask";
+import { masked, showsAll } from "./mask";
 import type { Fields } from "../../shared/json";
 import type { Target } from "../../shared/records";
 import type { EngineAnswer, UncheckedAnswer } from "../engine/client";
@@ -24,7 +24,7 @@ export interface PermissionAsked {
   sessionID: string;
   action: string;
   resources?: unknown;
-  /** The rule Always for This saves (the engine's), when it names one. */
+  /** The rule Always saves (the engine's), when it names one. */
   save?: unknown;
 }
 
@@ -103,15 +103,45 @@ export function describePermission(request: Pick<PermissionAsked, "action" | "re
   return `Wants to ${what}: ${shown.slice(0, 4).join(" · ")}${more}`;
 }
 
-// Whether Always for This saves only what a permission's notice shows. The engine's rule for it can
-// be wider (`git push *` for `git push origin main`, any file for one): then its notification offers
-// Allow Once and Don't Allow, as the Mac's does (`Notifier.offersAlways`).
+// Whether Always saves only what a permission's notice shows. The engine's rule for it can be wider
+// (`git push *` for `git push origin main`, any file for one): then a phone that can't name what
+// Always saves (one from before `alwaysTitle`) offers Allow Once and Don't Allow only.
 const offersAlways = (request: { resources?: unknown; save?: unknown }): boolean => {
   const strings = (value: unknown) => (Array.isArray(value) ? value : []).filter((each): each is string => typeof each === "string");
   const shown = strings(request.resources);
   const saved = Array.isArray(request.save) ? strings(request.save) : shown;
   return saved.length > 0 && !saved.includes("*") && saved.every(each => shown.includes(each));
 };
+// What a permission's Always saves, as its button says it: "Always Allow Edits", "Always Allow git
+// push", "Always Allow ~/notes" (the Mac's and the phone's `AlwaysWords`, whose cases it matches).
+export function alwaysTitle(request: { action?: string; resources?: unknown; save?: unknown }, home: string | null): string {
+  const strings = (value: unknown) => (Array.isArray(value) ? value : []).filter((each): each is string => typeof each === "string");
+  const asked = strings(request.resources);
+  const saved = Array.isArray(request.save) ? strings(request.save) : asked;
+  // The line asked about, saved beside its kind (`git --no-pager diff` with `git diff *`): the kind
+  // says what it lets through.
+  const kinds = saved.filter(each => !asked.includes(each));
+  const patterns = kinds.length ? kinds : saved;
+  const kind = (pattern: string) => pattern.endsWith(" *") || pattern.endsWith("/*") ? pattern.slice(0, -2) : pattern;
+  // Cut by what people see as characters, as Swift counts them.
+  const characters = (text: string) => [...new Intl.Segmenter().segment(text)].map(each => each.segment);
+  const short = (text: string) => characters(text).length > ALWAYS_LONGEST ? characters(text).slice(0, ALWAYS_LONGEST - 1).join("") + "…" : text;
+  switch (request.action) {
+    case "edit": case "patch": case "write": return "Always Allow Edits";
+    case "shell": case "bash":
+      if (!patterns.length || patterns.length === 1 && patterns[0] === "*") return "Always Allow Commands";
+      return patterns.length === 1 ? `Always Allow ${short(kind(patterns[0]))}` : "Always Allow These Commands";
+    case "external_directory": {
+      if (patterns.length !== 1) return "Always Allow These Folders";
+      const shown = outsideShown(patterns[0], home);
+      return `Always Allow ${short(characters(shown).length > ALWAYS_LONGEST ? `…/${path.basename(shown)}` : shown)}`;
+    }
+    default:
+      return patterns.length === 1 && patterns[0] !== "*" ? `Always Allow ${short(kind(patterns[0]))}` : "Always Allow";
+  }
+}
+const ALWAYS_LONGEST = 24;
+
 // Whether a permission's notice shows all it covers: Allow there would allow what it leaves out.
 const showsAllCovered = (request: { resources?: unknown }): boolean => (Array.isArray(request.resources) ? request.resources : []).filter(each => each !== "*").length <= 4;
 
@@ -193,7 +223,7 @@ export async function noticeFor(event: EngineEvent, get: EngineAsk): Promise<Not
       const where = await shown(data.sessionID!);
       if (isHiddenRun(where)) return null;
       const body = describePermission(data as PermissionAsked, os.homedir());
-      return about(where, "permission", body, { request: data.id, ...(where.id !== data.sessionID ? { requestSession: data.sessionID } : {}), ...(offersAlways(data as PermissionAsked) ? {} : { always: "0" as const }) },
+      return about(where, "permission", body, { request: data.id, ...(where.id !== data.sessionID ? { requestSession: data.sessionID } : {}), ...(offersAlways(data as PermissionAsked) ? {} : { always: "0" as const }), alwaysTitle: masked(alwaysTitle(data, os.homedir())) },
         { answerable: showsAllCovered(data) && showsAll(body), untitled: "Kuvo Code" });
     }
     case "form.created": {

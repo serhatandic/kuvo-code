@@ -5293,6 +5293,36 @@ var offersAlways = (request) => {
   const saved = Array.isArray(request.save) ? strings(request.save) : shown;
   return saved.length > 0 && !saved.includes("*") && saved.every((each) => shown.includes(each));
 };
+function alwaysTitle(request, home) {
+  const strings = (value) => (Array.isArray(value) ? value : []).filter((each) => typeof each === "string");
+  const asked = strings(request.resources);
+  const saved = Array.isArray(request.save) ? strings(request.save) : asked;
+  const kinds = saved.filter((each) => !asked.includes(each));
+  const patterns = kinds.length ? kinds : saved;
+  const kind = (pattern) => pattern.endsWith(" *") || pattern.endsWith("/*") ? pattern.slice(0, -2) : pattern;
+  const characters = (text) => [...new Intl.Segmenter().segment(text)].map((each) => each.segment);
+  const short = (text) => characters(text).length > ALWAYS_LONGEST ? characters(text).slice(0, ALWAYS_LONGEST - 1).join("") + "…" : text;
+  switch (request.action) {
+    case "edit":
+    case "patch":
+    case "write":
+      return "Always Allow Edits";
+    case "shell":
+    case "bash":
+      if (!patterns.length || patterns.length === 1 && patterns[0] === "*")
+        return "Always Allow Commands";
+      return patterns.length === 1 ? `Always Allow ${short(kind(patterns[0]))}` : "Always Allow These Commands";
+    case "external_directory": {
+      if (patterns.length !== 1)
+        return "Always Allow These Folders";
+      const shown = outsideShown(patterns[0], home);
+      return `Always Allow ${short(characters(shown).length > ALWAYS_LONGEST ? `…/${path23.basename(shown)}` : shown)}`;
+    }
+    default:
+      return patterns.length === 1 && patterns[0] !== "*" ? `Always Allow ${short(kind(patterns[0]))}` : "Always Allow";
+  }
+}
+var ALWAYS_LONGEST = 24;
 var showsAllCovered = (request) => (Array.isArray(request.resources) ? request.resources : []).filter((each) => each !== "*").length <= 4;
 var singleQuestion = (form) => {
   if (form.metadata?.kind !== "question")
@@ -5363,7 +5393,7 @@ async function noticeFor(event, get) {
       if (isHiddenRun(where))
         return null;
       const body = describePermission(data, os6.homedir());
-      return about(where, "permission", body, { request: data.id, ...where.id !== data.sessionID ? { requestSession: data.sessionID } : {}, ...offersAlways(data) ? {} : { always: "0" } }, { answerable: showsAllCovered(data) && showsAll(body), untitled: "Kuvo Code" });
+      return about(where, "permission", body, { request: data.id, ...where.id !== data.sessionID ? { requestSession: data.sessionID } : {}, ...offersAlways(data) ? {} : { always: "0" }, alwaysTitle: masked(alwaysTitle(data, os6.homedir())) }, { answerable: showsAllCovered(data) && showsAll(body), untitled: "Kuvo Code" });
     }
     case "form.created": {
       const form = data.form ?? data;
@@ -22714,7 +22744,7 @@ import fs75 from "node:fs";
 import path80 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.190";
+var BRIDGE_VERSION = "0.9.191";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -26918,6 +26948,7 @@ export {
   agentsAllowed,
   allWakes,
   allowed2 as allowed,
+  alwaysTitle,
   announce,
   answerAsk,
   answerBotKeys,

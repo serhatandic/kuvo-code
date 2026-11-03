@@ -145,7 +145,7 @@ export { makeBot } from "./bots/make";
 export { carryToAgents } from "./areas/carry";
 export { changeBot, deleteBot, finishDeletes, forgetLeftKeys } from "./bots/edit";
 export { ASK_HOLD, LONGEST_LEASE, NEWS_HOLD, NoticeHold, RESTORED_WAIT, SHOWN_WITHIN, attentionGiven, holdFor } from "./notices/hold";
-export { describeForm, describePermission, groupNotice, noticeFor, projectNameOf, settleHeld } from "./notices/news";
+export { alwaysTitle, describeForm, describePermission, groupNotice, noticeFor, projectNameOf, settleHeld } from "./notices/news";
 export { STEER_AFTER, steering, watchBox, watchEvents } from "./engine/watch";
 export { answerBotKeys, refreshBotsKeys } from "./areas/bot-keys";
 export { forgetOldMacs, leaveMac, macsOf, mailFor, movedOf, noteOnline, openMail, peersOf, takeLegacyPeers } from "./peers/known";

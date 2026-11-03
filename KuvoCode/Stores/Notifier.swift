@@ -92,17 +92,19 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     enum PermissionAnswer: String, CaseIterable {
         case once, always, reject
 
-        var title: String {
+        /// The button's words; Always's names what it saves (`AlwaysWords`).
+        func title(always: String) -> String {
             switch self {
             case .once: "Allow Once"
-            case .always: "Always for This"
+            case .always: always
             case .reject: "Don’t Allow"
             }
         }
     }
 
-    private static let permissionCategory = "permission"
-    /// A permission whose Always would save more than its notification shows: no Always there.
+    /// A permission's buttons, with its Always naming what it saves: a category for each name.
+    private static let permissionCategory = "permission.always."
+    /// A permission with no Always.
     private static let permissionOnceCategory = "permission.once"
     private static let replyCategory = "reply"
     nonisolated static let replyAction = "reply"
@@ -111,6 +113,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     /// The categories every notification can have, and each waiting question's own.
     private var categories: [UNNotificationCategory] = []
     private var questionCategories: [String: UNNotificationCategory] = [:]
+    private var alwaysCategories: [String: UNNotificationCategory] = [:]
     private var isAuthorized: Bool?
 
     /// `text` with what looks like a secret's value as dots (KuvoLink's `SecretMask`, which a box's
@@ -125,34 +128,49 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         center.delegate = self
         categories = [
             // Allowing needs the Mac unlocked: from the lock screen it asks for your password first.
-            Self.permissionCategory(Self.permissionCategory, answers: Self.buttons(offeringAlways: true)),
-            Self.permissionCategory(Self.permissionOnceCategory, answers: Self.buttons(offeringAlways: false)),
+            Self.permissionCategory(Self.permissionOnceCategory, always: nil),
+            // From a copy before Always said what it saves.
+            Self.permissionCategory("permission", always: "Always Allow"),
             UNNotificationCategory(identifier: Self.replyCategory, actions: [
                 // Replying gives the agent work: it needs the Mac unlocked too.
                 UNTextInputNotificationAction(identifier: Self.replyAction, title: "Reply", options: [.authenticationRequired], textInputButtonTitle: "Send", textInputPlaceholder: "Message"),
             ], intentIdentifiers: []),
         ]
-        center.setNotificationCategories(Set(categories))
+        // Always's words seen before, so notifications from an earlier run keep their buttons.
+        for always in Self.commonAlways + (UserDefaults.standard.stringArray(forKey: Self.alwaysSeenKey) ?? []) {
+            alwaysCategories[always] = Self.permissionCategory(Self.permissionCategory + always, always: always)
+        }
+        center.setNotificationCategories(Set(categories + alwaysCategories.values))
     }
 
-    private static func permissionCategory(_ identifier: String, answers: [PermissionAnswer]) -> UNNotificationCategory {
-        UNNotificationCategory(identifier: identifier, actions: answers.map { answer in
-            UNNotificationAction(identifier: answer.rawValue, title: answer.title, options: answer == .reject ? [.destructive] : [.authenticationRequired])
+    private static let commonAlways = ["Always Allow Edits", "Always Allow Commands", "Always Allow These Commands"]
+    private static let alwaysSeenKey = "notifications.alwaysSeen"
+
+    private static func permissionCategory(_ identifier: String, always: String?) -> UNNotificationCategory {
+        UNNotificationCategory(identifier: identifier, actions: buttons(always: always).map { answer, title in
+            UNNotificationAction(identifier: answer.rawValue, title: title, options: answer == .reject ? [.destructive] : [.authenticationRequired])
         }, intentIdentifiers: [])
     }
 
-    /// A permission's buttons: Always for This only where it saves what the notification shows.
-    static func buttons(offeringAlways: Bool) -> [PermissionAnswer] {
-        PermissionAnswer.allCases.filter { offeringAlways || $0 != .always }
+    /// A permission's buttons and their words: Always, named for what it saves, where it has one.
+    static func buttons(always: String?) -> [(answer: PermissionAnswer, title: String)] {
+        PermissionAnswer.allCases.compactMap { answer in
+            guard answer != .always || always != nil else { return nil }
+            return (answer, answer.title(always: always ?? ""))
+        }
     }
 
-    /// Whether Always for This saves only what a permission's notification shows. The engine's rule
-    /// for it can be wider (`git push *` for `git push origin main`, any file for one): then its
-    /// notification offers Allow Once and Don't Allow, and the conversation's card says what
-    /// Always would save.
-    static func offersAlways(_ request: PermissionRequest) -> Bool {
-        let saved = request.save ?? request.resources
-        return !saved.isEmpty && !saved.contains("*") && Set(saved).isSubset(of: Set(request.resources))
+    /// The category for a permission whose Always says `always`.
+    private func category(always: String?) -> String {
+        guard let always else { return Self.permissionOnceCategory }
+        let identifier = Self.permissionCategory + always
+        if alwaysCategories[always] == nil {
+            alwaysCategories[always] = Self.permissionCategory(identifier, always: always)
+            let seen = UserDefaults.standard.stringArray(forKey: Self.alwaysSeenKey) ?? []
+            UserDefaults.standard.set(Array((seen.filter { $0 != always } + [always]).suffix(20)), forKey: Self.alwaysSeenKey)
+            UNUserNotificationCenter.current().setNotificationCategories(Set(categories + questionCategories.values + alwaysCategories.values))
+        }
+        return identifier
     }
 
     /// A question's own category: its choices, and a field to answer in words if it takes one.
@@ -166,7 +184,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
                                                          textInputButtonTitle: "Send", textInputPlaceholder: "Your answer"))
         }
         questionCategories[question.form] = UNNotificationCategory(identifier: identifier, actions: actions, intentIdentifiers: [])
-        UNUserNotificationCenter.current().setNotificationCategories(Set(categories + questionCategories.values))
+        UNUserNotificationCenter.current().setNotificationCategories(Set(categories + questionCategories.values + alwaysCategories.values))
         return identifier
     }
 
@@ -180,7 +198,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     /// (a sandbox's): cleared here as it's answered anywhere.
     /// A `quiet` one shows in Notification Center without lighting the screen or a sound (a
     /// night's blockers and its morning report).
-    func notify(session: String, title: String, subtitle: String? = nil, body: String, permission: (session: String, request: String)? = nil, offersAlways: Bool = true,
+    func notify(session: String, title: String, subtitle: String? = nil, body: String, permission: (session: String, request: String)? = nil, always: String? = nil,
                 question: Question? = nil, replies: Bool = false, quiet: Bool = false, push: Push? = nil, ask: String? = nil) {
         // What looks like a secret in a command or reply (a token, a key) isn't shown: these stay
         // in Notification Center, and a phone's lock screen.
@@ -204,11 +222,11 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
                 content.sound = .default
             }
             content.threadIdentifier = session
-            content.userInfo = Self.info(session: session, permission: permission, question: question, offersAlways: offersAlways)
+            content.userInfo = Self.info(session: session, permission: permission, question: question, offersAlways: always != nil)
             // A browser's ask: cleared as it's answered, or goes unanswered.
             if let ask = push?.ask ?? ask { content.userInfo["ask"] = ask }
             if permission != nil {
-                content.categoryIdentifier = offersAlways ? Self.permissionCategory : Self.permissionOnceCategory
+                content.categoryIdentifier = category(always: always)
             } else if let question {
                 content.categoryIdentifier = category(for: question)
             } else if replies, !session.isEmpty {
@@ -278,7 +296,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     func clear(request: String) {
         answeredForPhones?(request)
         if questionCategories.removeValue(forKey: request) != nil {
-            UNUserNotificationCenter.current().setNotificationCategories(Set(categories + questionCategories.values))
+            UNUserNotificationCenter.current().setNotificationCategories(Set(categories + questionCategories.values + alwaysCategories.values))
         }
         Task {
             let ids = await delivered().filter { $0.answers.contains(request) }.map(\.id)

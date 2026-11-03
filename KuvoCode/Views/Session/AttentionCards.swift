@@ -11,6 +11,8 @@ struct PermissionCard: View {
     /// For a command: the whole command line, pipes and all, which the request names in parts.
     var command: String?
     let directory: String
+    /// A coding agent's conversation (Claude Code, Codex), where Always lasts for it, not the project.
+    var forConversation = false
     let reply: (PermissionRequest.Decision) -> Void
     @Environment(\.takesCardKeys) private var takesKeys
     /// Files whose changes you asked to see all of.
@@ -69,21 +71,52 @@ struct PermissionCard: View {
                 .recessedWell(RoundedRectangle(cornerRadius: 10))
             }
 
-            HStack(spacing: 8) {
-                // The same words as the sandbox's card, so the two read as one family.
-                Button("Don’t Allow", role: .cancel) { reply(.reject) }
-                    .keyboardShortcut(takesKeys ? .cancelAction : nil)
-                Spacer()
-                Button("Always for This") { reply(.always) }
-                    .help(alwaysHelp)
-                Button("Allow Once") { reply(.once) }
-                    .buttonStyle(.glassProminent)
-                    .keyboardShortcut(takesKeys ? .defaultAction : nil)
+            // The same words and layout as the sandbox's card, so the two read as one family.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    dontAllow
+                    Spacer()
+                    alwaysButton(whole: true)
+                    allowOnce
+                }
+                // A narrow window: Always on a row of its own, its name whole as long as it fits.
+                VStack(alignment: .trailing, spacing: 8) {
+                    HStack(spacing: 8) {
+                        dontAllow
+                        Spacer()
+                        allowOnce
+                    }
+                    alwaysButton(whole: false)
+                }
             }
             .buttonStyle(.glass)
             .controlSize(.large)
         }
         .padding(16)
+    }
+
+    private var dontAllow: some View {
+        Button("Don’t Allow", role: .cancel) { reply(.reject) }
+            .keyboardShortcut(takesKeys ? .cancelAction : nil)
+    }
+
+    private var allowOnce: some View {
+        Button("Allow Once") { reply(.once) }
+            .buttonStyle(.glassProminent)
+            .keyboardShortcut(takesKeys ? .defaultAction : nil)
+    }
+
+    /// Named by what it saves: every edit, a command's kind, a folder; whole in its hover text.
+    private func alwaysButton(whole: Bool) -> some View {
+        let always = always
+        return Button { reply(.always) } label: {
+            Text("\(always.title)\(always.named.map { Text(" ") + Text($0).monospaced() } ?? Text(""))")
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .fixedSize(horizontal: whole, vertical: false)
+        }
+        .help(always.help)
+        .accessibilityLabel(always.spoken)
     }
 
     private var subject: String {
@@ -130,20 +163,9 @@ struct PermissionCard: View {
         RemoteFolder.parse(directory) == nil ? NSHomeDirectory() : nil
     }
 
-    var alwaysHelp: String {
-        let patterns = request.save ?? request.resources
-        guard !patterns.isEmpty, patterns != ["*"] else {
-            // Everything of its kind, which "*" doesn't say.
-            let kind = switch request.action {
-            case "edit", "patch", "write": "changes to any file"
-            case "shell": "any command"
-            case "webfetch": "any address"
-            default: "this"
-            }
-            return "Don't ask again for \(kind) in this project"
-        }
-        let named = request.action == "external_directory" ? patterns.map { OutsideFolders.shown($0, home: home) } : patterns
-        return "Don't ask again for: " + named.joined(separator: ", ")
+    /// What Always for this ask saves, in words.
+    var always: AlwaysWords {
+        AlwaysWords.of(action: request.action, save: request.save, resources: request.resources, home: home, forConversation: forConversation)
     }
 
     private func relative(_ path: String) -> String {

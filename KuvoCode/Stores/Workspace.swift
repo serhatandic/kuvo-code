@@ -2171,7 +2171,7 @@ final class Workspace {
             }
             for request in permissions {
                 found[request.id] = request.sessionID
-                if tell, asking[request.id] == nil { notifyAsk(request.sessionID, body: Self.describe(request, home: askHome(request.sessionID)), request: request.id, isPermission: true, answerable: Self.showsAll(request), offersAlways: Notifier.offersAlways(request)) }
+                if tell, asking[request.id] == nil { notifyAsk(request.sessionID, body: Self.describe(request, home: askHome(request.sessionID)), request: request.id, isPermission: true, answerable: Self.showsAll(request), always: alwaysWords(request)) }
             }
             for form in forms where form.sessionID != FormRequest.anySession {
                 found[form.id] = form.sessionID
@@ -2713,7 +2713,7 @@ final class Workspace {
         case "permission.asked":
             guard let request = try? event.payload(as: PermissionRequest.self) else { return }
             asking[request.id] = request.sessionID
-            notifyAsk(request.sessionID, body: Self.describe(request, home: askHome(request.sessionID)), request: request.id, isPermission: true, answerable: Self.showsAll(request), offersAlways: Notifier.offersAlways(request))
+            notifyAsk(request.sessionID, body: Self.describe(request, home: askHome(request.sessionID)), request: request.id, isPermission: true, answerable: Self.showsAll(request), always: alwaysWords(request))
         case "permission.replied":
             if let reply = try? event.payload(as: EventPayload.PermissionReplied.self) { settled(reply.requestID) }
         case "form.created":
@@ -2813,7 +2813,7 @@ final class Workspace {
         Notifier.shared.clear(request: request)
     }
 
-    private func notifyAsk(_ id: String, body: String, request: String, isPermission: Bool = false, answerable: Bool = true, offersAlways: Bool = true, question: Notifier.Question? = nil) {
+    private func notifyAsk(_ id: String, body: String, request: String, isPermission: Bool = false, answerable: Bool = true, always: String? = nil, question: Notifier.Question? = nil) {
         // A seat's requests are answered by its group chat.
         guard !seats.contains(id) else { return }
         notifying.insert(request)
@@ -2848,7 +2848,7 @@ final class Workspace {
             let shown = Notifier.showsAll(body) && (question?.choices.allSatisfy { Notifier.showsAll($0.label) } ?? true)
             Notifier.shared.notify(session: session?.id ?? id, title: session.flatMap { botName?($0.id) } ?? session?.title ?? AppInfo.name,
                                    subtitle: session.flatMap { botName?($0.id) == nil ? projectName($0.location.directory) : nil }, body: body,
-                                   permission: isPermission && answerable && shown ? (session: id, request: request) : nil, offersAlways: offersAlways,
+                                   permission: isPermission && answerable && shown ? (session: id, request: request) : nil, always: always,
                                    question: shown ? question : nil,
                                    push: .init(isPermission ? .permission : .question, request: (session: id, id: request),
                                                machine: sessionMachines[id] ?? session.flatMap { RemoteFolder.machine(of: $0.location.directory) }, answerable: answerable && shown))
@@ -2859,6 +2859,11 @@ final class Workspace {
     /// leaves out, so then it has no buttons, and you answer in the conversation.
     private static func showsAll(_ request: PermissionRequest) -> Bool {
         request.resources.filter { $0 != "*" }.count <= 4
+    }
+
+    /// What a permission's Always saves, as its notification's button says it.
+    private func alwaysWords(_ request: PermissionRequest) -> String {
+        Notifier.masked(AlwaysWords.of(action: request.action, save: request.save, resources: request.resources, home: askHome(request.sessionID)).plain)
     }
 
     /// The home folder of the computer a session asks on: this Mac's (a machine's isn't known here).

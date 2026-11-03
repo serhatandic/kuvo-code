@@ -18,7 +18,7 @@ struct SandboxAskCards: View {
 
 /// A command the sandbox stopped, which its agent asks to run outside it: who asks, what the
 /// sandbox stopped (on a Mac, what it tried and where; on Linux, the error the command got), the
-/// command, the agent's reason; Don't Allow, Always for This (where the box names the one place
+/// command, the agent's reason; Don't Allow, Always Allow <place> (where the box names the one place
 /// to let the project's, the bot's own or every chat's commands write, still in the sandbox) and
 /// Allow Once.
 struct SandboxAskCard: View {
@@ -126,12 +126,13 @@ struct SandboxAskCard: View {
         if let path = asked.alwaysPath {
             Button { answer(.always) } label: {
                 // A chat's is every chat's: said on the button.
-                Text("Always for \(Text(path).monospaced())\(asked.alwaysScope.map { " " + $0 } ?? "")")
+                Text("Always Allow \(Text(path).monospaced())\(asked.alwaysScope.map { " " + $0 } ?? "")")
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .fixedSize(horizontal: whole, vertical: false)
             }
-            .accessibilityLabel(asked.alwaysTitle ?? "Always for This")
+            .help(asked.alwaysHint ?? "")
+            .accessibilityLabel(asked.alwaysTitle ?? "Always Allow")
             .accessibilityHint(asked.alwaysHint ?? "")
         }
     }

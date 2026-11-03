@@ -66,7 +66,7 @@ import Testing
 }
 
 /// The card's words, the same in both apps: what was stopped first, the error where the sandbox
-/// can't say (a machine's), and Always for This's place with its home folder as ~.
+/// can't say (a machine's), and Always's place with its home folder as ~.
 @Suite struct SandboxCardWordsTests {
     private let ask = SandboxAsk(id: "sa_1", at: 1_000_000, botName: "Scout", project: "/Users/me/kuvo-ai", command: "./scripts/install-hooks.sh",
                                  why: "Installing the repo's hooks, as the README asks.",
@@ -77,7 +77,7 @@ import Testing
         #expect(ask.subtitle == "The sandbox stopped it from changing a file outside kuvo-ai.")
         #expect(ask.stopped?.map { "\($0.label) \($0.detail)" } == ["Write ~/.zshrc"])
         #expect(ask.alwaysPath == "~/.zshrc")
-        #expect(ask.alwaysScope == nil && ask.alwaysTitle == "Always for ~/.zshrc")
+        #expect(ask.alwaysScope == nil && ask.alwaysTitle == "Always Allow ~/.zshrc")
     }
 
     @Test func aBotsOwnFolderOrTheChatsAreNamedAsSuchAndAChatsAlwaysIsEveryChats() {
@@ -85,15 +85,15 @@ import Testing
         fromScout.project = "/Users/me/.kuvo-code/bots/bot_scout/workspace"
         fromScout.owner = SandboxOwner(kind: .bot, id: "bot_scout", name: "Scout")
         #expect(fromScout.subtitle == "The sandbox stopped it from changing a file outside Scout’s folder.")
-        #expect(fromScout.alwaysTitle == "Always for ~/.zshrc")
-        #expect(fromScout.alwaysHint == "Runs it, and from now on lets Scout’s commands write there too, in the sandbox.")
+        #expect(fromScout.alwaysTitle == "Always Allow ~/.zshrc")
+        #expect(fromScout.alwaysHint == "Runs it, and from now on lets Scout’s commands write in ~/.zshrc too, in the sandbox.")
         var fromChat = ask
         fromChat.botName = nil
         fromChat.project = "/home/me/.kuvo-code/chats"
         fromChat.owner = .chats
         #expect(fromChat.subtitle == "The sandbox stopped it from changing a file outside Chats.")
-        #expect(fromChat.alwaysScope == "in every chat" && fromChat.alwaysTitle == "Always for ~/.zshrc in every chat")
-        #expect(fromChat.alwaysHint == "Runs it, and from now on lets every chat’s commands write there too, in the sandbox.")
+        #expect(fromChat.alwaysScope == "in every chat" && fromChat.alwaysTitle == "Always Allow ~/.zshrc in every chat")
+        #expect(fromChat.alwaysHint == "Runs it, and from now on lets every chat’s commands write in ~/.zshrc too, in the sandbox.")
         // A box before owners: by the folder's name, as before.
         var before = fromChat
         before.owner = nil

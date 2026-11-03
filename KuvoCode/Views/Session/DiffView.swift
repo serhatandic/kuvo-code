@@ -24,6 +24,8 @@ struct DiffView: View {
         let file = file
         let shown = Array(file.lines.prefix(maxLines))
         let gutter = DiffLineRow.gutterWidth(for: shown)
+        // A new or emptied file with nothing in it: its name alone, with no line under it.
+        let hasBody = !file.lines.isEmpty || file.isTooBig || file.isBinary
         VStack(alignment: .leading, spacing: 0) {
             if let title {
                 HStack {
@@ -40,26 +42,30 @@ struct DiffView: View {
                 .padding(.vertical, 8)
 
                 // The same line as the well's edge, not a darker rule.
-                Rectangle()
-                    .fill(Surface.wellBorder(scheme))
-                    .frame(height: 1)
-            }
-
-            VStack(alignment: .leading, spacing: 0) {
-                ForEach(Array(shown.enumerated()), id: \.offset) { index, line in
-                    if line.gapBefore, index > 0 {
-                        Image(systemName: "ellipsis")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(.tertiary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.leading, gutter / 2)
-                            .frame(height: 18)
-                    }
-                    DiffLineRow(line: line, runs: highlighting?.runs(for: line, at: index), gutterWidth: gutter)
+                if hasBody {
+                    Rectangle()
+                        .fill(Surface.wellBorder(scheme))
+                        .frame(height: 1)
                 }
             }
-            .padding(.vertical, 4)
-            .textSelection(.enabled)
+
+            if !shown.isEmpty {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(shown.enumerated()), id: \.offset) { index, line in
+                        if line.gapBefore, index > 0 {
+                            Image(systemName: "ellipsis")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(.tertiary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.leading, gutter / 2)
+                                .frame(height: 18)
+                        }
+                        DiffLineRow(line: line, runs: highlighting?.runs(for: line, at: index), gutterWidth: gutter)
+                    }
+                }
+                .padding(.vertical, 4)
+                .textSelection(.enabled)
+            }
 
             // Nothing line by line: said, rather than an empty well.
             if file.lines.isEmpty, file.isTooBig || file.isBinary {
