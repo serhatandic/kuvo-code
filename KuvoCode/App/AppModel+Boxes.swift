@@ -72,9 +72,9 @@ extension AppModel {
     /// Coding agents on `box` (while its agents are up) with a newer version that their installer
     /// can update to, one per program, asked of the agent's own sign-in (where its row or tile in
     /// Settings › Accounts shows how it goes): what that page's Update All updates.
-    func outdatedAgents(on box: SidebarBox) -> [OutdatedAgent] {
+    func outdatedAgents(on box: SidebarBox) -> [Integration] {
         if let machine = box.machine, machines.engine(machine) == nil { return [] }
-        guard agents(for: box).api != nil else { return [] }
+        guard agents(for: box).api != nil, !agents(for: box).isDown else { return [] }
         var seen = Set<String>()
         // An agent's own sign-in ahead of the accounts added to it, which run the same program.
         let integrations = catalog(for: box).codingAgents
@@ -83,7 +83,7 @@ extension AppModel {
             let metadata = integration.metadata
             guard metadata?["outdated"]?.bool == true, metadata?["updates"]?.bool == true,
                   let kind = metadata?["agent"]?.string, seen.insert(kind).inserted else { return nil }
-            return OutdatedAgent(box: box, integration: integration)
+            return integration
         }
     }
 
@@ -91,22 +91,15 @@ extension AppModel {
     /// (Each update under way, for a test to wait for.)
     @discardableResult
     func updateAllAgents(on box: SidebarBox) -> [Task<Void, Never>] {
-        outdatedAgents(on: box).compactMap { outdated in
-            let agents = agents(for: outdated.box)
-            let catalog = catalog(for: outdated.box)
-            if agents.isUpdating(outdated.integration.id) { return nil }
-            return agents.update(outdated.integration.id) { await catalog.refreshAgents(fresh: true) }
+        let agents = agents(for: box), catalog = catalog(for: box)
+        return outdatedAgents(on: box).compactMap { outdated in
+            if agents.isUpdating(outdated.id) { return nil }
+            return agents.update(outdated.id) { await catalog.refreshAgents(fresh: true) }
         }
     }
 
     /// A machine that isn't added any more: nothing there to show or change.
     private static let noSettings = EngineConfig(draft: [:])
-}
-
-/// A coding agent that can be updated, on the computer it's on.
-struct OutdatedAgent {
-    let box: SidebarBox
-    let integration: Integration
 }
 
 extension EnvironmentValues {

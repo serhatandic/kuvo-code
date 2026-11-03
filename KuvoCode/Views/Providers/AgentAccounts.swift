@@ -71,7 +71,8 @@ struct SubscriptionsSection: View {
                     .fixedSize()
                     .help(shows == .agents ? "Another account, signed in on its own: each shows in the model picker" : "Another account: the engine uses one at a time")
                 }
-                if shows == .agents, !updatable.isEmpty {
+                // Only while its agents show: a machine's that aren't running show none.
+                if shows == .agents, !updatable.isEmpty, machine.map(isRunning) != false {
                     Button { app.updateAllAgents(on: box) } label: {
                         Label("Update All", systemImage: "arrow.down.circle")
                             .font(.callout)
@@ -136,15 +137,16 @@ struct SubscriptionsSection: View {
         .task(id: agents.api != nil) {
             if shows == .agents { await catalog.refreshAgents(fresh: true) }
         }
+        // How an update went is news while you're here, not the next time you look.
+        .onDisappear { if shows == .agents { agents.forgetUpdates() } }
     }
-
 
     /// What Update All updates, on this page's computer, not updating already; each shows how it
     /// goes on its row or tile.
     private var updatable: [String] {
         app.outdatedAgents(on: box).compactMap { outdated in
-            guard !agents.isUpdating(outdated.integration.id) else { return nil }
-            return OutsideAgents.name(outdated.integration.id)
+            guard !agents.isUpdating(outdated.id) else { return nil }
+            return OutsideAgents.name(outdated.id)
         }
     }
 
@@ -394,14 +396,14 @@ private struct ProductBlock: View {
     private var action: Action? {
         if isInstalling { return .installing }
         if isAgent, !isInstalled, let installCommand { return .install(command: installCommand) }
-        if isUpdating { return .updating }
-        if let latest { return .update(to: latest) }
         switch agents.updateStatus(main) {
+        case .updating: return .updating
+        case .available(let latest): return .update(to: latest)
         case .updated(let version): return .updated(version)
         case .current: return .current
-        default: return nil
+        // Not updated: its update offered again, if there still is one.
+        case .failed, nil: return latest.map(Action.update)
         }
-        return nil
     }
 
     /// What it needs from you, on the product's line: installing again, or an update; and another

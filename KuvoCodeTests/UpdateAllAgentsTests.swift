@@ -100,8 +100,8 @@ import Testing
         await app.catalog.refreshAgents(fresh: true)
         await box.catalog.refreshAgents(fresh: true)
 
-        #expect(app.outdatedAgents(on: .mac).map(\.integration.id) == ["claude-code"])
-        #expect(app.outdatedAgents(on: .machine(box.machine.id)).map(\.integration.id) == ["codex-cli"])
+        #expect(app.outdatedAgents(on: .mac).map(\.id) == ["claude-code"])
+        #expect(app.outdatedAgents(on: .machine(box.machine.id)).map(\.id) == ["codex-cli"])
 
         // This Mac's page: its own agents only, the machine's on the machine's page.
         for update in app.updateAllAgents(on: .mac) { await update.value }
@@ -136,7 +136,7 @@ import Testing
 
         #expect(status("claude-code") == .updated("2.1.309"))
         #expect(status("grok-cli") == .failed("Grok is still 1.0.60 after `grok update`."))
-        #expect(app.outdatedAgents(on: .mac).map(\.integration.id) == ["grok-cli"], "still out of date, so Update All stays")
+        #expect(app.outdatedAgents(on: .mac).map(\.id) == ["grok-cli"], "still out of date, so Update All stays")
     }
 
     @Test func theAgentsOwnRowSaysHowItWentWhicheverAccountWasUpdated() async throws {

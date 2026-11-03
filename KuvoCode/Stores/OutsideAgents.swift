@@ -633,7 +633,7 @@ final class OutsideAgents {
         let metadata = integration.metadata
         if metadata?["outdated"]?.bool == true, let latest = metadata?["latestVersion"]?.string { return .available(latest) }
         // Only while it's still on that version: once it moves on (its own updater), it's news no more.
-        guard let result = updated[program], metadata?["version"]?.string ?? result.version == result.version else { return nil }
+        guard let result = updated[program], metadata?["version"]?.string.map({ $0 == result.version }) ?? true else { return nil }
         return result.changed ? .updated(result.version) : .current(result.version)
     }
 
@@ -647,23 +647,29 @@ final class OutsideAgents {
         updateFailures[program] = nil
         updated[program] = nil
         return Task {
+            var failure: String?
             do {
                 let result = try await api.updateAgent(providerID)
                 if let message = result.message, !result.updated {
-                    updateFailures[program] = message
+                    failure = message
                 } else if let version = result.version {
                     updated[program] = (version, result.updated)
                 } else {
-                    updateFailures[program] = "The update ended without saying which version it left."
+                    failure = "The update finished without saying which version it left."
                 }
             } catch {
-                updateFailures[program] = error.localizedDescription
+                failure = error.localizedDescription
             }
-            // Its version and models, as they are now, before its button comes back.
+            // Its version and models, as they are now, before its button comes back; and why it
+            // didn't work once it's no longer Updating….
             await refresh()
             updating.remove(program)
+            updateFailures[program] = failure
         }
     }
+
+    /// What updates brought, said once: gone when you leave the page that said it.
+    func forgetUpdates() { updated = [:] }
 
     /// Agents whose program is installing, by the account it was asked for.
     private(set) var installing: Set<String> = []

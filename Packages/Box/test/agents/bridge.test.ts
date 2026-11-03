@@ -9,7 +9,7 @@ import { noTokens, type ServerEvent } from "../../src/agents/wire"
 import { unwrapShell } from "../../src/agents/agents/codex"
 import { fileDiff, fromPatch, unified } from "../../src/agents/diff"
 import { messageID, newID } from "../../src/agents/ids"
-import { compareVersions, homebrewKeg, install, npmGlobalPrefix, versionIn } from "../../src/agents/maintenance"
+import { compareVersions, homebrewKeg, install, npmGlobalPrefix, update, versionIn } from "../../src/agents/maintenance"
 import { evaluate, matches } from "../../src/agents/rules"
 import { handover } from "../../src/agents/handover"
 import { EngineAgent, EngineLink } from "../../src/agents/engine"
@@ -170,6 +170,34 @@ describe("keeping an agent's program current", () => {
       expect(failed.message).toContain("Other isn't installed after")
       expect(failed.message).toContain("Could not resolve host")
     } finally {
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("updating an agent", () => {
+  test("left as it was, it's up to date only when the newest is known to be that version; otherwise it says why not", async () => {
+    const folder = mkdtempSync(join(tmpdir(), "kuvo-update-"))
+    const original = globalThis.fetch
+    // npm's registry: the newest of one package, and an answer that isn't one for the other.
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      const url = String(input instanceof Request ? input.url : input)
+      return url.includes("kuvo-test-known") ? Response.json({ version: "1.0.0" }) : new Response("unavailable", { status: 503 })
+    }) as typeof fetch
+    try {
+      // A program on 1.0.0 whose own updater runs and leaves it there.
+      const program = (name: string) => {
+        const executable = join(folder, name)
+        writeFileSync(executable, `#!/bin/sh\nif [ "$1" = update ]; then echo "nothing new"; else echo "${name} 1.0.0"; fi\n`)
+        chmodSync(executable, 0o755)
+        return { name, executable, npmPackage: `kuvo-test-${name}`, nativeUpdate: { args: ["update"], isNative: () => true } }
+      }
+      expect(await update(program("known"), folder)).toEqual({ updated: false, version: "1.0.0" })
+      const unknown = await update(program("unknown"), folder)
+      expect(unknown.updated).toBe(false)
+      expect(unknown.message).toContain("unknown is still 1.0.0 after `unknown update`")
+    } finally {
+      globalThis.fetch = original
       rmSync(folder, { recursive: true, force: true })
     }
   })
