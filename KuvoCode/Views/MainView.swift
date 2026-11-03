@@ -936,6 +936,7 @@ struct MainView: View {
             newChat: { tabs.newSession(in: Workspace.chatsFolder) },
             stop: { model?.stop() },
             selectAgent: { model?.selectAgent($0) },
+            showDecisions: model?.decisionsToShow,
             togglePanel: { withAnimation(.ui) { tabs.showPanel(!panelOnScreen) } },
             showChanges: { showInPanel { utilities.showChanges() } },
             showFiles: { showInPanel { utilities.showFiles() } },

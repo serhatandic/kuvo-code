@@ -750,7 +750,6 @@ extension Bots {
 
     /// The kit for `machine`'s box, or this Mac's (nil).
     func kit(for machine: String?) -> MachineKit {
-        let approval = UserDefaults.standard.string(forKey: ToolApproval.key).flatMap(ToolApproval.init) ?? .approveAll
         let catalog = machine.flatMap { app?.machines.engine($0)?.catalog } ?? (machine == nil ? app?.catalog : nil)
         return MachineKit(
             machine: machine,
@@ -758,7 +757,7 @@ extension Bots {
             startingModel: catalog?.startingModel(LastModel.current, scope: .on(machine: machine)),
             projects: (app?.workspace.projects ?? []).filter { RemoteFolder.machine(of: $0.directory) == machine }
                 .map { .init(directory: RemoteFolder.parse($0.directory)?.path ?? $0.directory, name: $0.name) },
-            rules: approval.rules(settings: EngineConfig.rules(on: machine)),
+            rules: ToolApproval.lastPicked.provisionalRules(settings: EngineConfig.rules(on: machine)),
             timeZone: TimeZone.current.identifier,
             // (This Mac's bots go by its own clock.)
             zoneinfo: machine == nil ? nil : WakeUps.zoneRules(TimeZone.current.identifier)?.base64EncodedString())

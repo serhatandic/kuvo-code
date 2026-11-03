@@ -58,6 +58,16 @@ struct Composer: View {
     var onDiscardComments: () -> Void = {}
     var onSelectAgent: (String) -> Void
     var onSelectApproval: (ToolApproval) -> Void
+    /// The approval as its box shows it (why it asks first for now, which can't be picked).
+    var approvalShown: ApprovalShown?
+    /// Opens Auto's Decisions here (nil: none to open, as for a new conversation).
+    var onDecisions: (() -> Void)?
+    /// Auto's Decisions, open over the mode chip.
+    var showsDecisions: Binding<Bool> = .constant(false)
+    var decisions: AnyView?
+    /// Full Access was picked where it isn't confirmed yet: the composer asks (`onConfirmFullAccess`).
+    var confirmsFullAccess: Binding<Bool> = .constant(false)
+    var onConfirmFullAccess: () -> Void = {}
     var onSelectModel: (ModelRef) -> Void
     /// A new session in a git repository: whether it gets a worktree of its own (nil hides it).
     var worktree: Bool?
@@ -328,8 +338,10 @@ struct Composer: View {
                             .help("Attach Files… You can also drop files here, or paste them.")
                             // Set on the engine: not while it's out of reach.
                             if showsMode {
-                                ModeChip(agent: agent, approval: approval, onSelectAgent: onSelectAgent, onSelectApproval: onSelectApproval)
+                                ModeChip(agent: agent, approval: approval, shown: approvalShown, onDecisions: onDecisions, onSelectAgent: onSelectAgent, onSelectApproval: onSelectApproval)
                                     .disabled(isOffline)
+                                    .popover(isPresented: showsDecisions, arrowEdge: .top) { decisions }
+                                    .modifier(FullAccessConfirmation(isPresented: confirmsFullAccess, computer: folders.first.flatMap(RemoteFolder.machine(of:)), confirm: onConfirmFullAccess))
                             }
                             if showsModel {
                                 ModelChip(selection: model, onSelect: onSelectModel, scope: modelScope, inUse: modelInUse, openRequest: modelMenuRequest)

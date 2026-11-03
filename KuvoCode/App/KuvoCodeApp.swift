@@ -326,6 +326,9 @@ struct AppCommands: Commands {
             Button("Plan Mode") { actions?.selectAgent("plan") }
                 .keyboardShortcut("2", modifiers: [.command, .option])
                 .disabled(actions?.hasSession != true)
+            Divider()
+            Button("Auto’s Decisions…") { actions?.showDecisions?() }
+                .disabled(actions?.showDecisions == nil)
         }
         CommandMenu("Tools") {
             Group {
@@ -416,6 +419,8 @@ struct SessionActions {
     var newChat: () -> Void
     var stop: () -> Void
     var selectAgent: (String) -> Void
+    /// Auto's Decisions in the focused conversation (nil: none to show there).
+    var showDecisions: (() -> Void)?
     var togglePanel: () -> Void
     var showChanges: () -> Void
     var showFiles: () -> Void

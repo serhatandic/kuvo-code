@@ -2,116 +2,208 @@ import AppKit
 import OpenCodeKit
 import SwiftUI
 
-/// How much the agent may do without asking, for a session.
-enum ToolApproval: String, CaseIterable {
-    /// The engine's defaults: tools run without asking (reading secrets like .env still asks).
-    case approveAll
-    /// Edits, writes, shell commands and web fetches wait for an OK.
+/// How much a conversation's agent does on its own: kept on its box with the conversation
+/// (`metadata.kuvo.approval`), which makes its rules and holds what each can't do here now
+/// (PROTOCOL.md, "Approval"), so every client shows the same one.
+enum ToolApproval: String, CaseIterable, Codable {
+    /// Edits, commands and the rest wait for your OK.
     case askFirst
+    /// Edits in its folders go ahead; commands still wait for your OK.
+    case acceptEdits
+    /// Everything inside the sandbox goes ahead; past it, a reviewer decides, and what it refuses
+    /// is held back for you, never left waiting on you.
+    case auto
+    /// No sandbox, no reviewer, nothing asks. Confirmed once on each computer; never a bot's.
+    case fullAccess
 
+    /// This Mac's last pick, for what isn't a conversation's own (a bot's kit, group chats).
     static let key = "toolApproval"
+
+    /// One kept by name: an older version's Approve All is Auto now.
+    init?(kept: String) {
+        if kept == "approveAll" { self = .auto } else { self.init(rawValue: kept) }
+    }
+
+    /// This Mac's last pick (`key`), Auto where there's none.
+    static var lastPicked: ToolApproval {
+        get { UserDefaults.standard.string(forKey: key).flatMap(ToolApproval.init(kept:)) ?? .auto }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: key) }
+    }
 
     var title: String {
         switch self {
-        case .approveAll: "Approve All"
         case .askFirst: "Ask First"
+        case .acceptEdits: "Accept Edits"
+        case .auto: "Auto"
+        case .fullAccess: "Full Access"
         }
     }
 
     var detail: String {
         switch self {
-        case .approveAll: "Runs tools without asking"
-        case .askFirst: "Asks before editing files or running commands"
+        case .askFirst: "Asks before edits and commands"
+        case .acceptEdits: "Edits on its own, asks before commands"
+        case .auto: "Works on its own; a reviewer holds back real damage"
+        case .fullAccess: "No sandbox, never asks"
         }
     }
 
-    /// The session rules that give this behaviour, on their own.
-    var rules: [PermissionRule] {
+    var symbol: String {
         switch self {
-        case .approveAll: []
-        // A PDF the browser saves is a file written, and an upload sends one of yours to a site. A
-        // watch runs its check, a command, whenever it's due. (A conversation's wake-ups, Kuvo
-        // Code's tools, never ask.)
-        case .askFirst: ["edit", "write", "patch", "shell", "webfetch", "external_directory", "kuvo-browser_browser_save_pdf", "kuvo-browser_browser_upload", "kuvo-browser_watch_for_change"]
-            .map { PermissionRule(action: $0, effect: .ask) }
+        case .askFirst: "hand.raised"
+        case .acceptEdits: "pencil.line"
+        case .auto: "checkmark.shield"
+        case .fullAccess: "bolt"
         }
     }
 
+    /// A conversation's, as it's kept with it; one from before (or a box that doesn't keep them)
+    /// as its rules say: asking before commands is Ask First, nothing asking is Auto, until its
+    /// box says (`SessionModel.approvalShown`).
+    static func of(_ session: Session) -> ToolApproval {
+        session.metadata?["kuvo"]?["approval"]?.string.flatMap(ToolApproval.init(rawValue:))
+            ?? (asksBeforeCommands(session.permissions) ? .askFirst : .auto)
+    }
 
-    /// The session rules that give this behaviour beside Settings › Permissions' rules
-    /// (`settings`). A session's rules come after those, and the last one that matches wins, so
-    /// they're folded in: Approve All runs what Settings asks first about, without asking; Ask
-    /// First still lets through what Settings allows (a command like "npm test *", a bot's
-    /// memory), asking about the rest; and both keep what Settings doesn't allow, which nothing
-    /// overrides (one a newer engine set that this app doesn't know counts as that too, sent as it is).
-    func rules(settings: [PermissionRule]) -> [PermissionRule] {
+    /// What a conversation runs with on its box now (`kuvo.applied`: Auto that asks first without
+    /// the sandbox is Ask First), else as it's kept.
+    static func applied(_ session: Session) -> ToolApproval {
+        session.metadata?["kuvo"]?["applied"]?.string.flatMap(ToolApproval.init(rawValue:)) ?? of(session)
+    }
+
+    /// The rules a conversation is made with until its box makes its own a moment later (from
+    /// this, with its Settings › Permissions): Ask First's asks for Ask First and Accept Edits,
+    /// so nothing runs unasked meanwhile; the rest as Settings says, its asks let through. Both
+    /// keep what Settings doesn't allow.
+    func provisionalRules(settings: [PermissionRule]) -> [PermissionRule] {
         let denied = settings.filter { $0.effect.holdsBack }
         switch self {
-        case .approveAll:
+        case .auto, .fullAccess:
             return settings.filter { $0.effect == .ask }.map { PermissionRule(action: $0.action, resource: $0.resource, effect: .allow) } + denied
-        case .askFirst:
-            // Folders outside the project ask already, unless Settings allows them all: then the
-            // mode asks. Settings' own folders go by its rules as they are, so they aren't made
-            // again here, where they'd be taken for the session's own (`isParticular`).
+        case .askFirst, .acceptEdits:
+            // A PDF the browser saves is a file written, and an upload sends one of yours to a
+            // site. A watch runs its check, a command, whenever it's due. Folders outside the
+            // project ask already, unless Settings allows them all.
             let everywhere = settings.last { $0.action == "external_directory" && $0.resource == "*" }?.effect == .allow
-            let mode = everywhere ? rules : rules.filter { $0.action != "external_directory" }
-            // What Settings says of particular things (an Ask under a broader Allow too), in its order.
-            return mode + settings.filter { !$0.effect.holdsBack && $0.resource != "*" && $0.action != "external_directory" } + denied
+            let asks = ["edit", "write", "patch", "shell", "webfetch", "external_directory", "kuvo-browser_browser_save_pdf", "kuvo-browser_browser_upload", "kuvo-browser_watch_for_change"]
+                .filter { everywhere || $0 != "external_directory" }
+                .map { PermissionRule(action: $0, effect: .ask) }
+            return asks + settings.filter { !$0.effect.holdsBack && $0.resource != "*" && $0.action != "external_directory" } + denied
         }
     }
 
     /// A rule a session has for something of its own, which neither its approval nor Settings
-    /// make: a folder it may work in (the project's others, a bot's). The rest are made again
-    /// from its approval and Settings as they are now, so a rule taken out of Settings goes from
-    /// sessions too, and so do the `kuvo-wake` ones an earlier version allowed (wake-ups are
-    /// tools now; those let a command that also wrote a file through).
+    /// make: a folder it may work in (the project's others, a bot's). Its box keeps them as it
+    /// makes the rest from its approval.
     static func isParticular(_ rule: PermissionRule) -> Bool {
         rule.action == "external_directory" && rule.effect == .allow && rule.resource != "*"
     }
 
-    /// A session's rules made again from its approval and Settings › Permissions as they are now,
-    /// with its own particular ones after.
-    static func refreshed(_ current: [PermissionRule], settings: [PermissionRule]) -> [PermissionRule] {
-        ToolApproval(rules: current).rules(settings: settings) + current.filter(isParticular)
+    /// Whether rules ask before every command (Ask First's and Accept Edits', as their box makes them).
+    static func asksBeforeCommands(_ rules: [PermissionRule]?) -> Bool {
+        (rules ?? []).contains { $0.action == "shell" && $0.resource == "*" && $0.effect == .ask }
     }
 
-    /// Whether a conversation with these rules asks first, but nothing has asked you about a
-    /// watch's check before its tool ran: its rules are from before watches asked, or it runs with
-    /// the coding agents (`agents`), whose bridge doesn't check Kuvo Code's tools against them.
-    /// Then the tool mustn't start it (see `WakeUps.call`).
+    /// Whether a conversation with these rules asks before commands, but nothing has asked you
+    /// about a watch's check before its tool ran: its rules are from before watches asked, or it
+    /// runs with the coding agents (`agents`), whose bridge doesn't check Kuvo Code's tools against
+    /// them. Then the tool mustn't start it (see `WakeUps.call`).
     static func watchWentUnasked(_ rules: [PermissionRule]?, agents: Bool) -> Bool {
-        guard ToolApproval(rules: rules) == .askFirst else { return false }
+        guard asksBeforeCommands(rules) else { return false }
         return agents || !(rules ?? []).contains { $0.action == "kuvo-browser_watch_for_change" && $0.effect == .ask }
     }
 
     /// What the agent hears instead: the same watch, as a command, which asks you with the check
     /// written out.
     static let watchAsCommand = "This conversation asks before running commands, and a watch runs its check by itself, so the user approves it first: start it with the shell command kuvo-wake watch <every> \"<check>\" \"<what to do when it changes>\" instead, which asks them."
+}
 
-    init(rules: [PermissionRule]?) {
-        // Its own rule, for every command: a bot's sessions ask for some commands whatever their
-        // approval (what always comes to you).
-        self = (rules ?? []).contains { $0.action == "shell" && $0.resource == "*" && $0.effect == .ask } ? .askFirst : .approveAll
+/// A conversation's approval as its box shows it (`GET kuvo/sessions/<id>/approval`): the one
+/// picked, what it comes to here now and why that's less, and each one it can be set to.
+struct ApprovalShown: Decodable, Equatable {
+    struct Why: Decodable, Equatable {
+        /// `sandbox` (Auto asks first for now), `fullAccessOff` (not confirmed on this computer
+        /// yet), `bot` (bots never get Full Access).
+        var reason: String
+        var why: String
+    }
+    struct Option: Decodable, Equatable {
+        var approval: ToolApproval
+        var unavailable: Why?
+        var held: Why?
+    }
+    var approval: ToolApproval
+    var effective: ToolApproval
+    var held: Why?
+    var options: [Option]
+
+    /// Why it does less than picked for now, where it does: Auto asking first without the sandbox.
+    var holding: Why? { effective != approval ? held : nil }
+
+    func option(_ approval: ToolApproval) -> Option? { options.first { $0.approval == approval } }
+}
+
+/// A computer's approvals as its box shows them (`GET kuvo/approval`): whether you confirmed Full
+/// Access there, the one a new conversation starts with, and why Auto asks first there for now.
+struct ApprovalHere: Decodable, Equatable {
+    struct Auto: Decodable, Equatable {
+        struct Held: Decodable, Equatable { var held: ApprovalShown.Why? }
+        var engine: Held
+        var agents: Held
+    }
+    var fullAccess: Bool
+    var `default`: ToolApproval
+    var auto: Auto
+
+    /// As a new conversation's composer shows it (no conversation yet to read one of).
+    func shown(_ approval: ToolApproval, agents: Bool) -> ApprovalShown {
+        let held = (agents ? auto.agents : auto.engine).held
+        let fullAccessOff = ApprovalShown.Why(reason: "fullAccessOff", why: "Confirm it once on this computer first.")
+        return ApprovalShown(
+            approval: approval,
+            effective: approval == .auto && held != nil ? .askFirst : approval,
+            held: approval == .auto ? held : nil,
+            options: ToolApproval.allCases.map { each in
+                ApprovalShown.Option(approval: each, unavailable: each == .fullAccess && !fullAccess ? fullAccessOff : nil, held: each == .auto ? held : nil)
+            }
+        )
     }
 }
 
-/// "Build ⌄": the mode (agent) and how much it may do on its own.
+/// The mode chip: how much the agent does on its own ("Auto ⌄"), and in its menu the agent
+/// (Build, Plan). A dot says it does less than picked for now (Auto without the sandbox).
 struct ModeChip: View {
     @Environment(Catalog.self) private var catalog
     let agent: String
     let approval: ToolApproval
+    /// As its box shows it; nil until read (or for a new conversation's: this computer's).
+    var shown: ApprovalShown?
+    /// Opens the conversation's Decisions (nil: none to open, as for a new conversation).
+    var onDecisions: (() -> Void)?
     let onSelectAgent: (String) -> Void
     let onSelectApproval: (ToolApproval) -> Void
 
+    private var holding: ApprovalShown.Why? { shown?.holding }
+
     var body: some View {
         NativeMenuButton(name: "mode", menu: makeMenu) {
-            // The mode in words; the hand says it asks first, which the words don't.
-            HStack(spacing: 6) {
-                Text(agent.capitalized)
-                if approval == .askFirst {
-                    Image(systemName: "hand.raised.fill")
+            HStack(spacing: 5) {
+                if agent == "plan" {
+                    Image(systemName: ModeChip.symbol(agent))
+                        .font(.caption)
+                    Text("Plan")
+                } else {
+                    Image(systemName: approval.symbol)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    // A mode of your own goes before the approval.
+                    Text(agent == "build" ? approval.title : "\(agent.capitalized) · \(approval.title)")
+                }
+                if holding != nil {
+                    Circle()
+                        .fill(.orange)
+                        .frame(width: 6, height: 6)
+                        .accessibilityHidden(true)
                 }
                 // The model chip's chevron: two menus side by side look alike.
                 Image(systemName: "chevron.down")
@@ -120,28 +212,45 @@ struct ModeChip: View {
                     .accessibilityHidden(true)
             }
             .font(.callout)
+            .lineLimit(1)
             .foregroundStyle(agent == "plan" ? AnyShapeStyle(.orange) : AnyShapeStyle(.foreground))
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
             .hoverHighlight(in: Capsule(), mutesInk: true)
         }
-        .help("Mode and tool permissions (⌥⌘1 Build, ⌥⌘2 Plan)")
+        .help(holding.map { "\(approval.title) asks first for now. \($0.why)" } ?? "\(approval.title): \(approval.detail.lowercasedFirst). Build or Plan: ⌥⌘1, ⌥⌘2")
+        .accessibilityLabel("Mode")
+        .accessibilityValue(agent == "plan" ? "Plan, \(approval.title)" : (holding != nil ? "\(approval.title), asks first for now" : approval.title))
     }
 
     private func makeMenu() -> NSMenu {
         let menu = NSMenu()
-        menu.addItem(.sectionHeader(title: "Mode"))
-        for agent in catalog.primaryAgents {
-            menu.addItem(ActionItem(agent.name.capitalized, subtitle: Self.detail(agent), image: NSImage(systemSymbolName: Self.symbol(agent.id), accessibilityDescription: nil), checked: agent.id == self.agent) {
-                onSelectAgent(agent.id)
-            })
+        // (Each pick's check on its trailing side, lined up.)
+        var checked: Set<NSMenuItem> = []
+        for option in ToolApproval.allCases {
+            let shownOption = shown?.option(option)
+            // Bots never get Full Access: shown, with why, but not picked.
+            let refused = shownOption?.unavailable.flatMap { $0.reason == "bot" ? $0 : nil }
+            let note = refused?.why ?? (option == approval ? holding : shownOption?.held).map { "Asks first for now. \($0.why)" }
+            let item = ActionItem(option.title, subtitle: note ?? option.detail, image: NSImage(systemSymbolName: option.symbol, accessibilityDescription: nil)) { onSelectApproval(option) }
+            item.isEnabled = refused == nil
+            menu.addItem(item)
+            if option == approval { checked.insert(item) }
+        }
+        if let onDecisions {
+            menu.addItem(.separator())
+            menu.addItem(ActionItem("Auto's Decisions…", subtitle: "What it allowed and held back here", image: NSImage(systemSymbolName: "list.bullet.rectangle", accessibilityDescription: nil)) { onDecisions() })
         }
         menu.addItem(.separator())
-        let approvals = NSMenu()
-        for option in ToolApproval.allCases {
-            approvals.addItem(ActionItem(option.title, subtitle: option.detail, checked: option == approval) { onSelectApproval(option) })
+        menu.addItem(.sectionHeader(title: "Mode"))
+        for agent in catalog.primaryAgents {
+            let item = ActionItem(agent.name.capitalized, subtitle: Self.detail(agent), image: NSImage(systemSymbolName: Self.symbol(agent.id), accessibilityDescription: nil)) {
+                onSelectAgent(agent.id)
+            }
+            menu.addItem(item)
+            if agent.id == self.agent { checked.insert(item) }
         }
-        menu.addItem(.chained("Tool Permissions", value: approval.title, image: NSImage(systemSymbolName: "checkmark.shield", accessibilityDescription: nil), submenu: approvals))
+        menu.checksOnTrailingSide(checked)
         return menu
     }
 
@@ -161,6 +270,10 @@ struct ModeChip: View {
         default: agent.description.map { String($0.prefix(60)) }
         }
     }
+}
+
+private extension String {
+    var lowercasedFirst: String { prefix(1).lowercased() + dropFirst() }
 }
 
 /// "Local ⌄" or "Worktree ⌄", for a new session: whether it works in the project's folder or

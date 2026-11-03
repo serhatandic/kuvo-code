@@ -875,15 +875,35 @@ final class Workspace {
         return directory
     }
 
-    /// Settings › Permissions changed: open sessions' rules follow (the others' when they open).
+    /// Settings › Permissions changed: each box makes its conversations' rules again with them
+    /// (PROTOCOL.md, "Approval"); open sessions' folders follow here.
     func syncPermissions() {
         for model in models.values {
             Task { await model.syncFolders() }
         }
     }
 
+    /// Each computer's approvals (`GET kuvo/approval`), by box, as last read: what a new
+    /// conversation's composer starts with there.
+    var approvalsHere: [String: ApprovalHere] = [:]
+
+    /// Reads the approvals of the computer `directory` is on.
+    func readApprovalHere(for directory: String) async {
+        let id = Self.box(of: directory)
+        guard let box = boxes?(id), let here = try? await box.value(ApprovalHere.self, "GET", "kuvo/approval") else { return }
+        if approvalsHere[id] != here { approvalsHere[id] = here }
+    }
+
+    /// Confirms Full Access on the computer `directory` is on (asked the first time it's picked there).
+    func allowFullAccess(for directory: String) async throws {
+        let id = Self.box(of: directory)
+        guard let box = boxes?(id) else { throw CancellationError() }
+        approvalsHere[id] = try await box.value(ApprovalHere.self, "PATCH", "kuvo/approval", body: ["fullAccess": true])
+    }
+
     /// A new session in the project at `directory`, or with `worktree`, in a new worktree of it.
-    func createSession(in directory: String, model: ModelRef?, agent: String?, approval: ToolApproval = .approveAll, worktree: Bool = false) async throws -> Session {
+    /// `approval`: what it starts with, kept with it on its box (nil: that computer's default).
+    func createSession(in directory: String, model: ModelRef?, agent: String?, approval: ToolApproval? = nil, worktree: Bool = false) async throws -> Session {
         // A model of an outside agent (Claude Code, Codex…), or Auto: the session is the agents
         // bridge's, here.
         let isAgents = OutsideAgents.runsInBridge(model?.providerID)
@@ -895,10 +915,14 @@ final class Workspace {
         let folder = worktree ? try await makeWorktree(of: directory) : directory
         // As its engine knows them: a machine's folders are plain paths there.
         let extra = (settings[directory]?.folders ?? []).map(api.enginePath)
-        let rules = ProjectFolders.permissions(approval.rules(settings: EngineConfig.rules(on: RemoteFolder.machine(of: directory))), folders: extra)
+        // Its box makes its rules from the approval it's made with a moment later; until then,
+        // these hold nothing back that it would.
+        let starting = approval ?? approvalsHere[Self.box(of: directory)]?.default ?? .askFirst
+        let rules = ProjectFolders.permissions(starting.provisionalRules(settings: EngineConfig.rules(on: RemoteFolder.machine(of: directory))), folders: extra)
+        let metadata: JSONValue? = approval.map { .object(["kuvo": .object(["approval": .string($0.rawValue)])]) }
         let session: Session
         do {
-            session = try await api.createSession(directory: folder, agent: agent, model: model, permissions: rules.isEmpty ? nil : rules)
+            session = try await api.createSession(directory: folder, agent: agent, model: model, permissions: rules.isEmpty ? nil : rules, metadata: metadata)
         } catch {
             // A worktree made for it goes too, with its branch (nothing's on it yet).
             if worktree { await discardWorktree(folder) }
@@ -915,7 +939,7 @@ final class Workspace {
         let used = model ?? session.model
         var props = Analytics.model(provider: used?.providerID, model: used?.id)
         props["mode"] = Analytics.mode(agent)
-        props["approval"] = approval == .approveAll ? "all" : "ask"
+        props["approval"] = starting.rawValue
         props["worktree"] = worktree
         if let since = Analytics.shared.sinceInstall { props["since_install"] = since }
         Analytics.shared.track("session_created", props)

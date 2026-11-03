@@ -31,7 +31,7 @@ extension AppModel {
             guard let self else { return false }
             let root = workspace.root(of: session)
             guard let found = workspace.session(root), !workspace.seats.contains(root) else { return false }
-            return ToolApproval(rules: found.permissions) == .approveAll
+            return [.auto, .fullAccess].contains(ToolApproval.applied(found))
         }
         BrowserTools.isInView = { [weak self] session in self?.utilities.isInView(session) ?? false }
         // Agents writing to each other: this Mac's box answers its conversations' tools, as every
