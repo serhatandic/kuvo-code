@@ -775,8 +775,8 @@ folder you pick once per box, after asking you.
   there, or null; 400 otherwise. The box makes projects only there, and never deletes one.
 - **Tools**: `make_project` (`{name, git?, clone?, folder?}`: a folder named after it, lowercase with
   dashes, a new git repository there unless `git: false`, or a repository cloned from an https or
-  ssh address; `folder`, bridge 0.9.191, is where you said it goes, a full path (`~` is fine) in a
-  folder that's there, which needs no projects folder picked), `list_projects` (each project here:
+  ssh address; `folder`, bridge 0.9.191, is where you said it goes, a full path (`~` is fine; the
+  folders on the way there are made too), which needs no projects folder picked), `list_projects` (each project here:
   its folder, whether it's git, who made it).
   A folder that's there with files in it, a project there already, or an address git can't clone
   is refused without asking.

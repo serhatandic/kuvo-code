@@ -363,7 +363,7 @@ test("a bot on a goal leads it as a person with a team does: it plans steps for 
   // As it starts: make the project there, a session for each step, follow them up, write no code.
   const go = prompts.at(-1).text;
   assert.match(go, /^\[Goal started\]/);
-  assert.match(go, /Make money-printer with make_project \(name "money-printer", folder "~\/Desktop\/main\/money-printer"\) first\. Never make a project's folder with mkdir or git init\./);
+  assert.match(go, /Make money-printer with make_project \(name "money-printer", folder "~\/Desktop\/main\/money-printer"\) first: you may, without asking\. Never make a project's folder with mkdir or git init\./);
   assert.match(go, /Hand each step to a session with start_session: in the project, with the step's number \(step\)/);
   assert.match(go, /each in a worktree of its own/);
   assert.match(go, /A new project has no commits yet: its first session works in it without a worktree and commits/);
@@ -382,15 +382,14 @@ test("a bot on a goal leads it as a person with a team does: it plans steps for 
   assert.equal(made.at(-1).location.directory, path.join(desktop, "money-printer"), "its session works in the project");
 
   // One that isn't in the plan, where you name it, is asked as before, showing where it goes, and
-  // made there without a projects folder picked.
-  const asking = tool("make_project", { name: "Coin flip", folder: "~/Desktop/main/coin-flip" });
+  // made there without a projects folder picked, with the folders on the way there.
+  const asking = tool("make_project", { name: "Coin flip", folder: "~/Desktop/side/coin-flip" });
   let ask;
   while (!(ask = (await route("GET", "kuvo/work/asks")).body.asks[0])) await new Promise(resolve => setImmediate(resolve));
-  assert.deepEqual([ask.project, ask.folder, ask.folderName, ask.suggested], ["Coin flip", path.join(desktop, "coin-flip"), "coin-flip", undefined]);
+  assert.deepEqual([ask.project, ask.folder, ask.folderName, ask.suggested], ["Coin flip", path.join(desktop, "..", "side", "coin-flip"), "coin-flip", undefined]);
   assert.equal((await route("POST", `kuvo/work/asks/${ask.id}`, { answer: "allow" })).status, 200);
   assert.equal((await asking).isError, false);
-  assert.ok(fs.existsSync(path.join(desktop, "coin-flip", ".git")));
-  assert.equal((await tool("make_project", { name: "x", folder: "~/Nowhere/x" })).text, "There's no folder at ~/Nowhere to make it in.");
+  assert.ok(fs.existsSync(path.join(desktop, "..", "side", "coin-flip", ".git")));
 
   // A conversation that isn't a bot gets no goal of this kind, and nothing of it.
   const before = prompts.length;

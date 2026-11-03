@@ -476,10 +476,10 @@ async function setGoalLoop(goal: KeptGoal, condition: string | null, _targets?: 
 // the goal starts, where even a small model reads it, unless the user said to do it all itself.
 const LEAD_WORDS = (projects: { name: string; folder?: string }[]) => [
   "How you work through it: you lead, and sessions you start do the work. Unless the user told you to do it yourself:",
-  `1. ${projects.length ? `Make ${projects.map(each => (each.folder ? `${each.name} with make_project (name "${each.name}", folder "${shownPath(each.folder)}")` : `${each.name} with make_project`)).join(", ")} first.` : "Make a new project with make_project first, if the work needs one."} Never make a project's folder with mkdir or git init.`,
-  "2. Hand each step to a session with start_session: in the project, with the step's number (step), and a task it can do from the message alone (what to do, where, what's there already, when it's done, what to report). Start every step that waits for nothing now, each in a worktree of its own (worktree) when others work in the same project. A new project has no commits yet: its first session works in it without a worktree and commits, and the rest start once it has.",
+  `1. ${projects.length ? `Make ${projects.map(each => (each.folder ? `${each.name} with make_project (name "${each.name}", folder "${shownPath(each.folder)}")` : `${each.name} with make_project`)).join(", ")} first: you may, without asking.` : "Make a new project with make_project first, if the work needs one."} Never make a project's folder with mkdir or git init.`,
+  "2. Hand each step to a session with start_session: in the project, with the step's number (step), and a task it can do from the message alone (what to do, where, what's there already, when it's done, what to report). A new project has no commits yet: its first session works in it without a worktree and commits, and the rest start once it has. After that, start every step that waits for nothing at once, each in a worktree of its own (worktree) when others work in the same project.",
   "3. Follow them up: you're woken when one finishes or asks. Read its report, answer what it asks, start the steps that waited for it, and send it back to fix what isn't done.",
-  "Write no code and make no files of the work yourself, not even the first ones: a session does. Only a plan of one small step you may do yourself.",
+  "Write no code and make no files of the work yourself, not even the first ones: a session does. If the plan is one small step, you may do it yourself.",
 ].join("\n");
 
 // What the bot is told as the goal starts: what's approved, and how it goes.
@@ -491,7 +491,6 @@ function startWords(goal: KeptGoal): string {
     on.length ? `Switched on, so do them when they're ready: ${on.join(", ")}.` : "",
     off.length ? `Switched off, so prepare them as drafts for the user: ${off.join(", ")}.` : "",
     goal.spend.length ? `What you may spend, never more: ${goal.spend.map(each => `${each.what}, up to ${each.cap} ${each.currency}${each.per === "goal" ? "" : ` a ${each.per}`}`).join("; ")}. Ask may_spend before each purchase.` : "Spend nothing.",
-    goal.projects.length ? `You may make these projects without asking: ${goal.projects.join(", ")}.` : "",
     goal.ends ? `It ends at ${resetTime(goal.ends)}: be done by then, or wrap up and report.` : "",
     LEAD_WORDS(goal.projects.map(goalProject)),
     "Mark each step with goal_progress as it starts, moves and ends (with progress where you can measure it), and keep what only the user can fix as waiting (it never stalls the rest: carry on with other steps). End with finish_goal and your report.",

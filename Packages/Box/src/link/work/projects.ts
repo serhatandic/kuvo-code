@@ -75,9 +75,6 @@ export function namedPlace(given: unknown, home = homeFolder()): { folder: strin
   if (!path.isAbsolute(written)) return { refused: `Give the folder as a full path, like ~/${given.trim().replace(/^\.?\//, "")}.` };
   const folder = path.resolve(written);
   if (folder === path.parse(folder).root || folder === home) return { refused: `${shownPath(folder, home)} can't be a project's folder: name one inside it.` };
-  let parent = false;
-  try { parent = fs.statSync(path.dirname(folder)).isDirectory(); } catch {}
-  if (!parent) return { refused: `There's no folder at ${shownPath(path.dirname(folder), home)} to make it in.` };
   return { folder };
 }
 
