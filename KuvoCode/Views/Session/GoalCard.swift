@@ -81,6 +81,16 @@ struct GoalCard: View {
         }
         .padding(16)
         .onAppear(perform: takeIn)
+        #if DEBUG
+        // KUVO_DEMO_GOAL_OPEN=<seconds>: that long after it shows, its first page to open is
+        // opened, as its button does.
+        .task(id: plan.id) {
+            guard let wait = ProcessInfo.processInfo.environment["KUVO_DEMO_GOAL_OPEN"].flatMap(Double.init),
+                  let action = yours.compactMap(\.action).first(where: { $0.kind == .open }) else { return }
+            await DemoWait.pause(.asked(wait))
+            if !Task.isCancelled { open(action) }
+        }
+        #endif
         .onChange(of: plan.id) {
             // What you started on another plan's box isn't this one's.
             restartingAgents = false
