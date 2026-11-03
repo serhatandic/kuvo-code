@@ -1,4 +1,5 @@
 import AppKit
+import ClientText
 import OpenCodeKit
 import Testing
 @testable import KuvoCode
