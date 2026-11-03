@@ -13,6 +13,7 @@ import { conversationOf } from "../engine/conversations";
 import { messageID } from "../engine/sessions";
 import { listOf } from "../files";
 import { BOTS, HERE, SESSION_WAKES } from "../home";
+import { settleAgain } from "./approval";
 import { holdArchived } from "./wakes";
 import { tellWorktree } from "./worktrees";
 import type { Target } from "../../shared/records";
@@ -136,7 +137,10 @@ export async function carryToAgents(id: string, model: unknown, readEngine: () =
     for (const item of waiting) await call(engine, "DELETE", `/${route}/inbox/${encodeURIComponent(item.id)}`).catch(() => {});
     const entries = `/api/experimental/session/${encodeURIComponent(moved.id)}/instructions/entries`;
     await tellWorktree(agents, moved.id).catch(() => {});
+    // (Again, for an engine that drops what an import carries; then its rules made for what its
+    // approval comes to with the coding agents, which may be less than where it was.)
     await call(agents, "PATCH", `/api/session/${encodeURIComponent(moved.id)}`, { metadata: marks }).catch(() => {});
+    await settleAgain(agents, moved.id, true, signal).catch(() => {});
     if (bot) {
       // The bot's conversation is the new one, told what it is.
       const kit = readKit();

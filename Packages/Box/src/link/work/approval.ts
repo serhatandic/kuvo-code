@@ -54,8 +54,10 @@ const keptHere = (file: string): Record<string, unknown> => {
 const keepHere = (change: Record<string, unknown>, file: string) =>
   writePrivate(file, JSON.stringify({ ...keptHere(file), ...change }, null, 2));
 
+/** Full Access switched on or off here; off, a new conversation's default stops being it, and comes
+ * back only when you pick it again. */
 export function allowFullAccess(on: boolean, file = APPROVAL_FILE): void {
-  keepHere({ fullAccess: on }, file);
+  keepHere({ fullAccess: on, ...(!on && keptHere(file).last === "fullAccess" ? { last: "auto" } : {}) }, file);
 }
 
 /** The approval a new conversation here gets where its client didn't say: Auto the first time on
@@ -220,10 +222,11 @@ export function approvalOf(session: WithApproval, where: Where = {}, since = app
   const marks = session.metadata?.kuvo ?? {};
   const boxMade = BOX_MADE.some(mark => mark in marks);
   const before = typeof created === "number" && created < since;
-  // (Approve All as a client makes it: nothing held back as a whole. A group chat's seat, say, which
-  // runs nothing, is never one.)
-  const whole = rules.some(rule => rule.resource === "*" && rule.effect !== "allow");
-  const fresh = !asked && !boxMade && !session.parentID && !before && !whole;
+  // (Approve All as a client makes it: commands and edits not held back as a whole, whatever your
+  // Don't Allows hold back. A group chat's seat, say, which runs nothing, is never one; nor one
+  // ever kept with an approval, whose rules a client changed since.)
+  const whole = rules.some(rule => rule.resource === "*" && rule.effect !== "allow" && /^(shell|edit|\*)$/.test(rule.action));
+  const fresh = kept === undefined && !boxMade && !session.parentID && !before && !whole;
   // (Asking before commands was Ask First, before there was more: its rules are made again as that.
   // One from before runs as it did: what its rules say is what it does, whether or not you
   // confirmed Full Access here. But a bot's, which never has more than Auto, and comes to what Auto

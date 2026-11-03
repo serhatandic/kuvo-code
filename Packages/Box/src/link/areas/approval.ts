@@ -122,6 +122,9 @@ export async function adoptConversation(target: Target, id: unknown, agents: boo
   const now = approvalOf(at.data, { agents, bot: at.bot });
   if (!now.pending) return;
   const asked = at.data.metadata?.kuvo?.approval;
+  // (Read again just before it's written: one a client set meanwhile wins.)
+  const again = (await engineGet(target, `api/session/${encodeURIComponent(id)}`).catch(() => null) as EngineAnswer<EngineSession> | null)?.data;
+  if (!again?.id || again.metadata?.kuvo?.approval !== asked || again.metadata?.kuvo?.applied !== undefined) return;
   if (isApproval(asked)) rememberApproval(asked);
   await settle(at, signal);
   markConversation(at.data.id, approvalOf(at.data, { agents, bot: at.bot }).effective === "fullAccess");
@@ -146,7 +149,10 @@ export async function adoptPending(engine: Target | null, bridge: Target | null,
  * that changes, may have passed it by. */
 export async function settleAgain(target: Target, id: string, agents: boolean, signal?: AbortSignal): Promise<void> {
   const data = (await engineGet(target, `api/session/${encodeURIComponent(id)}`).catch(() => null) as EngineAnswer<EngineSession> | null)?.data;
-  if (data?.id) await settle(found(target, data, agents), signal);
+  if (!data?.id) return;
+  const at = found(target, data, agents);
+  await settle(at, signal);
+  markConversation(at.data.id, approvalOf(at.data, { agents, bot: at.bot }).effective === "fullAccess");
 }
 
 type Refusal = { status: 404 | 409 | 502 | 503; value: { message: string; reason?: string } };

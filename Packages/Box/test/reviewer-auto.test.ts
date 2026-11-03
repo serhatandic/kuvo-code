@@ -300,3 +300,17 @@ test("in Auto, what a bot's work asks of what always comes to you is the reviewe
   expect(await asked("per_b4", "shell", { command: "rm -rf dist" })).toBeNull()
   expect(replies.length).toBe(mine)
 })
+
+test("a run the coding agents have the engine make is reviewed as the conversation it's for, as that one's approval says", async () => {
+  // The coding agents' bridge, with its conversation in Full Access; the engine's run for it.
+  const owner = { id: "ses_bridge_owner", title: "Fix the build", location: { directory: project }, permissions: [], metadata: { kuvo: { approval: "fullAccess", applied: "fullAccess" } }, time: { created: Date.now(), updated: Date.now() } }
+  const bridge = Bun.serve({ port: 0, fetch: request => new URL(request.url).pathname === `/api/session/${owner.id}` ? Response.json({ data: owner }) : Response.json({ message: "Not here." }, { status: 404 }) })
+  try {
+    conversation("ses_engine_run", "auto")
+    sessions.ses_engine_run.metadata = { kuvo: { engineFor: owner.id } }
+    const at = await reviewing.conversationOf("ses_engine_run", undefined, { port: bridge.port!, password: "p" })
+    expect({ id: at?.data.id, agents: at?.agents }).toEqual({ id: owner.id, agents: true })
+  } finally {
+    bridge.stop(true)
+  }
+})

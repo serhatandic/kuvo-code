@@ -308,6 +308,25 @@ test("what the box makes itself, a conversation that runs nothing, and a Full Ac
   assert.equal((await route("GET", "kuvo/approval")).body.default, "auto");
   sessions.set("ses_after", session("ses_after", [], { time: { created: now, updated: now } }));
   assert.equal((await route("GET", "kuvo/sessions/ses_after/approval", undefined, { sandbox: true })).body.approval, "auto");
+  // Switched on again, it's still Auto until you pick Full Access.
+  await route("PATCH", "kuvo/approval", { fullAccess: true }, { sandbox: true });
+  assert.equal((await route("GET", "kuvo/approval")).body.default, "auto");
+});
+
+test("a new conversation with your Don't Allows on whole tools still gets your default; one kept before, whose rules a client changed, never takes it again", async () => {
+  await route("PUT", "kuvo/sessions/ses_careful/approval", { approval: "askFirst" }, { sandbox: true });
+  assert.equal((await route("GET", "kuvo/approval")).body.default, "askFirst");
+  const now = Date.now() + 60_000;
+  sessions.set("ses_denies", session("ses_denies", [{ action: "webfetch", resource: "*", effect: "deny" }, NEVER_RM], { time: { created: now, updated: now } }));
+  const denies = (await route("GET", "kuvo/sessions/ses_denies/approval", undefined, { sandbox: true })).body;
+  assert.deepEqual({ approval: denies.approval, stored: denies.stored }, { approval: "askFirst", stored: false });
+  // An older client's Approve All on one kept as Ask First: what its rules say now, never the default again.
+  const kept = sessions.get("ses_careful");
+  sessions.set("ses_careful", { ...kept, permissions: [NEVER_RM], time: { created: now, updated: now } });
+  const changed = (await route("GET", "kuvo/sessions/ses_careful/approval", undefined, { sandbox: true })).body;
+  assert.deepEqual({ approval: changed.approval, stored: changed.stored }, { approval: "auto", stored: false });
+  await route("PATCH", "kuvo/approval", { fullAccess: false }, { sandbox: true });
+  assert.ok(!asks("ses_careful", "shell"));
 });
 
 test("Auto and Full Access read .env files without asking, a Don't Allow in Settings still winning; one kept from before gets that too", async () => {
