@@ -117,8 +117,8 @@ export async function reviewIn(session: string, action: ReviewedAction, signal?:
   return { ...verdict, conversation: at };
 }
 
-// The agent's own file tools, as their calls read: which only read.
-const READING = new Set(["read", "glob", "grep", "list", "ls", "view"]);
+// The agent's own file tools, as their calls read (Claude Code's capitalised): which only read.
+const READING = new Set(["read", "glob", "grep", "list", "ls", "view", "notebookread"]);
 // Asks already taken up in this process (an event can come again as the stream reconnects).
 const reviewing = new Set<string>();
 
@@ -134,10 +134,10 @@ export async function reviewPermission(source: Target, event: { type?: string; d
   const { permissions } = await asksIn(source, sessionID, signal);
   const permission = permissions.find(each => each.id === id && each.asker === sessionID);
   const seen = permission ? await callOf(source, permission, signal) : null;
-  const file = [seen?.input.filePath, seen?.input.path, seen?.input.file].find((each): each is string => typeof each === "string" && each.startsWith("/"));
+  const file = [seen?.input.filePath, seen?.input.file_path, seen?.input.notebook_path, seen?.input.path, seen?.input.file].find((each): each is string => typeof each === "string" && each.startsWith("/"));
   const at = found === undefined ? await conversationOf(sessionID) : found;
   if (!permission || !seen || !file || !at?.data.location?.directory) return null;
-  const verdict = await reviewIn(sessionID, { kind: "file", path: file, access: READING.has(seen.tool) ? "read" : "write", folder: at.data.location.directory }, signal, at);
+  const verdict = await reviewIn(sessionID, { kind: "file", path: file, access: READING.has(seen.tool.toLowerCase()) ? "read" : "write", folder: at.data.location.directory, tool: seen.tool, input: seen.input }, signal, at);
   if (!verdict || verdict.decision === "ask") return verdict;
   const reply = verdict.decision === "allow" ? { decision: "once" } : { decision: "reject", message: `Auto's reviewer: ${verdict.reason}` };
   await call(source, "POST", `/api/session/${encodeURIComponent(permission.asker)}/permission/${encodeURIComponent(permission.id)}/reply`, reply, signal);

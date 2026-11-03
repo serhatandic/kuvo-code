@@ -177,8 +177,8 @@ test("three refusals in a row pause Auto there: its run is stopped and what foll
 test("in Auto, a file the agent's own tool wants outside its folder is allowed or refused at the engine", async () => {
   conversation("ses_files", "auto", "Update the shared notes")
   reply = () => '{"decision": "allow", "reason": "The notes the user asked for."}'
-  const ask = (id: string, tool: string, filePath: string) => {
-    calling.ses_files = [{ type: "tool", id: `call_${id}`, name: tool, state: { input: { filePath } } }]
+  const ask = (id: string, tool: string, filePath: string, input: Record<string, unknown> = { filePath }) => {
+    calling.ses_files = [{ type: "tool", id: `call_${id}`, name: tool, state: { input } }]
     asking.ses_files = [{ id, action: "external_directory", resources: [join(filePath, "..", "*")], source: { id: `call_${id}`, messageID: "msg_1" } }]
     return reviewing.reviewPermission({ port: engine.port, password: "pw" } as never, { type: "permission.asked", data: { id, sessionID: "ses_files", action: "external_directory" } })
   }
@@ -187,6 +187,9 @@ test("in Auto, a file the agent's own tool wants outside its folder is allowed o
   // What runs later: refused by code, at the engine, with the reason.
   expect((await ask("per_2", "write", join(homedir(), ".zshrc")))?.decision).toBe("refuse")
   expect(replies.at(-1)).toEqual({ path: "/permission/per_2/reply", body: { decision: "reject", message: "Auto's reviewer: It reaches what runs later, which is never allowed." } })
+  // Claude Code's own tools, as its calls name the file.
+  expect((await ask("per_3", "Write", join(homedir(), ".bash_profile"), { file_path: join(homedir(), ".bash_profile"), content: "export PATH=/tmp/x:$PATH" }))?.decision).toBe("refuse")
+  expect(replies.at(-1)?.path).toBe("/permission/per_3/reply")
   // The same ask heard again (the stream reconnected) isn't reviewed twice.
   const decided = reviewer.reviewLog("ses_files").decisions.length
   expect(await ask("per_2", "write", join(homedir(), ".zshrc"))).toBeNull()

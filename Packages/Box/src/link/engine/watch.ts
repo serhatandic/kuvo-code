@@ -14,6 +14,7 @@ import { learnCompatibility } from "./compatibility";
 import { goalHolds, settleGoalHolds } from "../work/goals";
 import { workWatcher } from "../work/wakes";
 import { reviewPermission } from "../work/reviewing";
+import { forgetReviews } from "../work/reviewer";
 import { queueWatcher, scanQueues, type ScanFound } from "./queue";
 import type { Target } from "../../shared/records";
 import type { SignInEvent } from "../areas/accounts";
@@ -322,13 +323,17 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
         // one); a bot's job read from its memory as its run ends.
         // A bot's run starting: what it's told brought up to date first (a run's events name its session).
         if (event.type === "session.execution.started") freshenBot(source, event.data?.sessionID!).catch(() => {});
-        if (event.type === "session.deleted" && typeof event.data?.sessionID === "string") letSessionFilesGo(attachmentsLooked, event.data.sessionID);
+        if (event.type === "session.deleted" && typeof event.data?.sessionID === "string") {
+          letSessionFilesGo(attachmentsLooked, event.data.sessionID);
+          forgetReviews(event.data.sessionID);
+        }
         learn(source);
         steer?.(event);
         queue?.(event as QueueEvent);
         followWork?.(event);
-        // A conversation in Auto: what its agent's file tools ask outside its folder, reviewed.
-        if (work && event.type === "permission.asked") reviewPermission(source, event, connection.signal).catch(() => {});
+        // A conversation in Auto: what its agent's file tools ask outside its folder, reviewed (and
+        // told to your phones below only once it comes to you).
+        const reviewed = work && event.type === "permission.asked" ? reviewPermission(source, event, connection.signal).catch(() => null) : null;
         goalHeld?.(event).catch(() => {});
         if (signIns) noteSignIn(event, source).catch(() => {}).finally(() => signedIn(event));
         if (!bots) {
@@ -349,7 +354,10 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
           if (notice) tell(notice);
           continue;
         }
-        noticeFor(event, route => engineGet(source, route)).then(notice => notice && tell(notice)).catch(() => {});
+        (reviewed ?? Promise.resolve(null))
+          .then(verdict => (verdict && verdict.decision !== "ask" ? null : noticeFor(event, route => engineGet(source, route))))
+          .then(notice => notice && tell(notice))
+          .catch(() => {});
       }
     } catch {}
     stop();

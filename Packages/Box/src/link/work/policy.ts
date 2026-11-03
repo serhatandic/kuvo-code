@@ -15,9 +15,10 @@ import type { KitRule } from "../bots/kit";
 import type { ToolCallSeen } from "./answers";
 
 /** A command line read as a shell would run it: its parts (separated by `;`, `&&`, `||`, `|` or a
- * new line), each one's words and where its output goes, and each part's own text. */
-interface Line {
-  parts: { words: string[]; writes: string[]; text: string }[];
+ * new line), each one's words, where its output goes and its input comes from, and each part's own
+ * text. */
+export interface Line {
+  parts: { words: string[]; writes: string[]; reads: string[]; text: string }[];
 }
 
 /** Why a line can't be read as plain programs (something a shell expands or runs besides), or
@@ -25,13 +26,14 @@ interface Line {
  * which holds what's written), rather than refused. */
 export function readLine(line: string, redirects = false): Line | { unreadable: string } {
   const parts: Line["parts"] = [];
-  let words: string[] = [], writes: string[] = [], word = "", has = false, quote: string | null = null, start = 0;
+  let words: string[] = [], writes: string[] = [], reads: string[] = [], word = "", has = false, quote: string | null = null, start = 0;
   let redirect: "write" | "read" | null = null;
   const no = (what: string) => ({ unreadable: what });
   const endWord = () => {
     if (has) {
       if (redirect === "write") writes.push(word);
-      else if (redirect !== "read") words.push(word);
+      else if (redirect === "read") reads.push(word);
+      else words.push(word);
       redirect = null;
     }
     word = "";
@@ -41,10 +43,11 @@ export function readLine(line: string, redirects = false): Line | { unreadable: 
     endWord();
     if (redirect) return false;
     const text = line.slice(start, at).trim();
-    if (words.length) parts.push({ words, writes, text });
+    if (words.length) parts.push({ words, writes, reads, text });
     else if (text) return false;
     words = [];
     writes = [];
+    reads = [];
     return true;
   };
   for (let i = 0; i < line.length; i++) {

@@ -29,7 +29,7 @@ test("the eval set's code cases are settled by code as it says, and the rest rea
       : each.kind === "file" ? { kind: "file" as const, path: each.path!.replace(/^~(?=\/)/, homedir()), access: each.access ?? "read", folder: project }
       : { kind: "tool" as const, tool: each.tool!, args: each.args ?? {}, folder: project }
     const context = each.bot ? { session: `eval_${each.id}`, said: [], bot: { id: "bot_eval", name: "Eval", goal: each.bot } } : { session: `eval_${each.id}`, said: each.said ?? [] }
-    const verdict = await reviewer.review(action, context, { model: null, tell: "", folder: join(box, "reviews"), fetchText: async () => "" })
+    const verdict = await reviewer.review(action, context, { model: null, tell: "", folder: join(box, "reviews") })
     const byCode = verdict.by === "code" && !(verdict.decision === "ask" && verdict.why === "noModel")
     if (each.by === "code" ? !byCode || verdict.decision !== each.expect : byCode) wrong.push(`${each.id}: ${verdict.decision} by ${verdict.by} (${verdict.reason})`)
   }

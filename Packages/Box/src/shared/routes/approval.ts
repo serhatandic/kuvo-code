@@ -35,7 +35,7 @@ export const APPROVAL_HERE = object({
 export const REVIEW_DECISION = object({
   at: number, action: string, kind: words("command", "file", "tool"),
   decision: words("allowed", "refused", "asked"), reason: string, by: words("code", "model"),
-  "why?": words("always", "reviewer", "unreadable", "noModel", "failed", "paused"),
+  "why?": words("always", "reviewer", "unread", "unreadable", "noModel", "failed", "paused"),
   "always?": words("payment", "delete", "permissions", "account", "message", "credentials", "gitConfig"),
 });
 

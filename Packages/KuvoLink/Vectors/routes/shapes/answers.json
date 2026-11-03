@@ -476,6 +476,9 @@
             "literal": "reviewer"
            },
            {
+            "literal": "unread"
+           },
+           {
             "literal": "unreadable"
            },
            {
@@ -576,6 +579,9 @@
            },
            {
             "literal": "reviewer"
+           },
+           {
+            "literal": "unread"
            },
            {
             "literal": "unreadable"
@@ -5982,6 +5988,9 @@
              },
              {
               "literal": "reviewer"
+             },
+             {
+              "literal": "unread"
              },
              {
               "literal": "unreadable"

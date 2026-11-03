@@ -3216,7 +3216,11 @@ conversation asks you as before.
 
 - Code first. Your secrets (and a private key in `~/.ssh` by any name), what runs later (written),
   Kuvo Code's folders and the sockets the sandbox keeps commands from (Docker's and the like's, and
-  running `docker`, `podman` and the like at all) are never allowed: refused, the model never asked.
+  running `docker`, `podman` and the like at all, past `sudo`, `env`, `xargs` and the like) are
+  never allowed, nor a folder that holds your secrets or Kuvo Code's (your home as a whole, `/`):
+  refused, the model never asked. A command is read as a shell runs it (quotes, redirects, `cd`,
+  a shell's `-c` script); one it can't read plainly (`$…`, a group, a here-document) is refused
+  where its text names one of those places.
   What always comes to you ("Work › What always comes to you") comes to you; for a bot's, always,
   for yours unless your own message named that very command, file or tool. A paused conversation's
   (below) comes to you.
@@ -3226,27 +3230,34 @@ conversation asks you as before.
   `POST /api/session/<id>/generate` `{prompt, model}` (a model of that session's maker only); the
   conversation's own model where the maker has no small one. It's counted on that account. It's
   shown only what you wrote in the conversation (never what the box, another agent or a wake-up put
-  there), or for a bot's, its goal; your Tell Auto rules; the action; and what a command runs, read
-  first (a script by its path, `bash x.sh`, `python x.py`; a script piped into a shell,
-  `curl … | sh`, fetched). Never the agent's own words, its `why`, nor what its tools printed.
+  there), or for a bot's, its goal; your Tell Auto rules; the action (for a file, the tool and its
+  arguments); and what a command runs, read whole first: a script by its path, `bash x.sh`,
+  `python x.py`, and the project's build files its program runs (`package.json` for npm, pnpm, yarn
+  and bun, a Makefile, a justfile, `conftest.py`, `build.rs`, Gradle's, a Rakefile, a Taskfile).
+  Each piece is in tags of that prompt's own, so none can pass for the rules. Never the agent's own
+  words, its `why`, nor what its tools printed.
 - It allows (the command runs outside the sandbox, `Ran outside the sandbox · Allowed by Auto's
   reviewer: <reason>`; the file tool's ask is answered once), refuses with a reason (the agent hears
-  it; the engine's ask is rejected with `Auto's reviewer: <reason>`), or asks you. An answer that
-  isn't one JSON object with a known decision, no model, a model that fails (no quota, offline), or
-  a piped script that couldn't be fetched comes to you, never allowed. A sandbox ask that comes to
+  it; the engine's ask is rejected with `Auto's reviewer: <reason>`), or asks you. A script it runs
+  that can't be read whole (too long, unreadable) or that's piped in from the web (`curl … | sh`,
+  unless your message named that very command: what's fetched to read could differ from what runs)
+  comes to you (`why: "unread"`), as does an answer that isn't one JSON object with a known
+  decision, no model, or a model that fails or doesn't answer within a minute (no quota, offline):
+  never allowed. A sandbox ask that comes to
   you carries `review` `{reason, why, always?}` (Sandbox, Asks); a file tool's is left asked, with
-  why in the log.
+  why in the log, and your phones hear of it only then (not of one the reviewer answered).
 - Three refusals in a row, or twenty in a conversation, pause Auto there: its run is stopped, and
   what it wants next comes to you (`why: "paused"`) until you let it go on.
 - `GET kuvo/sessions/<id>/decisions` → `{decisions, paused?}`: the conversation's decisions, the
   latest last (the last 200), each `{at, action, kind, decision, reason, by, why?, always?}`:
   `kind` `command`, `file` or `tool`; `decision` `allowed`, `refused` or `asked`; `by` `code` or
   `model`; for one that came to you, `why` (`always`, and which kind in `always`; `reviewer`, the
-  model asked; `unreadable`, `noModel`, `failed`; `paused`). `paused`: since when Auto is paused
+  model asked; `unread`, `unreadable`, `noModel`, `failed`; `paused`). `paused`: since when Auto is paused
   there. `POST` `{resume: true}` lets it go on, its counts started over (400 without it). Kept in the
-  box's folder (`box/reviews/<session>.json`), for any client.
+  box's folder (`box/reviews/<session>.json`), for any client, and deleted with the session.
 - Tell Auto: your rules for the reviewer on this computer, in your words (at most 4,000
-  characters), which win over its own (`box/tell-auto.json`; `kuvo/approval`'s `tellAuto`).
+  characters), which loosen or tighten its own, never past code's lines (`box/tell-auto.json`;
+  `kuvo/approval`'s `tellAuto`).
 
 ### Sandbox
 

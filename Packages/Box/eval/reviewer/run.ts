@@ -78,7 +78,7 @@ try {
     const context = each.bot
       ? { session: `eval_${each.id}`, said: [], bot: { id: "bot_eval", name: "Eval", goal: each.bot } }
       : { session: `eval_${each.id}`, said: each.said ?? [] };
-    const verdict = await review(action, context, { model: ask, tell: "", folder: path.join(scratch, "reviews"), fetchText: async () => each.script ?? "" });
+    const verdict = await review(action, context, { model: ask, tell: "", folder: path.join(scratch, "reviews") });
     results.push({ case: each, got: verdict.decision, by: verdict.by, reason: verdict.reason });
     process.stdout.write(verdict.decision === each.expect ? "." : verdict.decision === "allow" ? "!" : "x");
   }

@@ -46,10 +46,11 @@ export const SANDBOX_ALLOWED = object({ allowed: list(SANDBOX_RULE), "owners?": 
 
 /** Why Auto's reviewer brought something to you: in a sentence to show, and as a word a client
  * maps (`always`: it always comes to you, and which kind; `reviewer`: the reviewer asked;
- * `unreadable`, `noModel`, `failed`: it couldn't be reviewed; `paused`: Auto is paused there). */
+ * `unread`: a script it runs couldn't be read whole first; `unreadable`, `noModel`, `failed`: it
+ * couldn't be reviewed; `paused`: Auto is paused there). */
 export const REVIEW_ASKED = object({
   reason: string,
-  why: words("always", "reviewer", "unreadable", "noModel", "failed", "paused"),
+  why: words("always", "reviewer", "unread", "unreadable", "noModel", "failed", "paused"),
   "always?": words("payment", "delete", "permissions", "account", "message", "credentials", "gitConfig"),
 });
 
