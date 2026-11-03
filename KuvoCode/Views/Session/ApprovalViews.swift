@@ -66,43 +66,52 @@ struct ApprovalBar: View {
     }
 }
 
-/// Auto's Decisions: what its reviewer allowed and held back in a conversation, the latest
-/// first. One held back can be approved once; a pause, let go on.
+/// Auto's Decisions: how many its reviewer held back and allowed of each kind in a conversation,
+/// then a line for each, what's yours to approve first and then the latest, a long list folded.
+/// Why, on hover or a click. One held back can be approved once; a pause, let go on.
 struct DecisionsView: View {
     @Bindable var model: SessionModel
+    @State private var showsAll = false
+
+    /// Of what's past what waits on you, how many show before "…N more".
+    private static let folded = 8
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text("Auto’s Decisions")
-                    .font(.system(size: 13, weight: .semibold))
-                if let summary {
-                    Text(summary)
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .padding(.horizontal, 16)
-            .padding(.top, 14)
-            .padding(.bottom, 8)
+            Text("Auto’s Decisions")
+                .font(.system(size: 13, weight: .semibold))
+                .padding(.horizontal, 16)
+                .padding(.top, 14)
+                .padding(.bottom, 8)
             if model.decisions?.paused != nil { paused }
             if let decisions = model.decisions {
                 if decisions.decisions.isEmpty {
-                    Text("Nothing yet. What the agent wants past the sandbox is decided here, as it asks.")
+                    Text("Nothing reviewed yet.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
                         .padding(.horizontal, 16)
                         .padding(.bottom, 16)
                 } else {
+                    DecisionCounts(counts: decisions.counts)
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 8)
+                    let listed = decisions.listed(limit: showsAll ? nil : Self.folded)
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 0) {
-                            ForEach(decisions.latestFirst) { decision in
-                                Divider().padding(.horizontal, 16)
+                            ForEach(listed.rows) { decision in
                                 DecisionRow(decision: decision) { model.approveDecision(decision) }
                             }
+                            if listed.more > 0 {
+                                Button("…\(listed.more) more") { showsAll = true }
+                                    .buttonStyle(TextButtonStyle())
+                                    .font(.system(size: 12))
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 6)
+                                    .accessibilityLabel("Show \(listed.more) more")
+                            }
                         }
-                        .padding(.bottom, 6)
+                        .padding(.horizontal, 6)
+                        .padding(.bottom, 8)
                     }
                     .frame(maxHeight: 440)
                 }
@@ -131,13 +140,6 @@ struct DecisionsView: View {
         .onAppear { model.readDecisions() }
     }
 
-    private var summary: String? {
-        guard let decisions = model.decisions?.decisions, !decisions.isEmpty else { return nil }
-        let allowed = decisions.filter { !$0.refused }.count
-        let held = decisions.count - allowed
-        return [allowed > 0 ? "\(allowed) allowed" : nil, held > 0 ? "\(held) held back" : nil].compactMap { $0 }.joined(separator: " · ")
-    }
-
     private var paused: some View {
         HStack(alignment: .top, spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
@@ -159,49 +161,148 @@ struct DecisionsView: View {
     }
 }
 
-/// One decision: what the agent wanted, why, and where it stands (Approve while it's yours to).
+/// The counts over the list, each kind's number with a thin bar of how they share it.
+private struct DecisionCounts: View {
+    let counts: ReviewDecisions.Counts
+
+    private struct Part: Identifiable {
+        var count: Int, one: String, many: String, color: Color
+        var id: String { one }
+        var isHeldBack: Bool { one == "held back" }
+    }
+
+    private var parts: [Part] {
+        [Part(count: counts.heldBack, one: "held back", many: "held back", color: .orange), Part(count: counts.edits, one: "edit", many: "edits", color: .green),
+         Part(count: counts.commands, one: "command", many: "commands", color: .accentColor), Part(count: counts.reads, one: "read", many: "reads", color: .teal),
+         Part(count: counts.other, one: "other", many: "other", color: .gray)].filter { $0.count > 0 }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 14) {
+                ForEach(parts) { part in
+                    Text("\(Text("\(part.count)").fontWeight(.semibold).foregroundStyle(part.isHeldBack ? AnyShapeStyle(.orange) : AnyShapeStyle(.primary))) \(part.count == 1 ? part.one : part.many)")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                        .lineLimit(1)
+                }
+            }
+            .accessibilityElement(children: .combine)
+            GeometryReader { room in
+                let total = CGFloat(parts.reduce(0) { $0 + $1.count })
+                let gaps = CGFloat(max(parts.count - 1, 0)) * 2
+                HStack(spacing: 2) {
+                    ForEach(parts) { part in
+                        part.color.opacity(part.isHeldBack ? 1 : 0.7)
+                            .frame(width: max(2, (room.size.width - gaps) * CGFloat(part.count) / max(total, 1)))
+                    }
+                }
+            }
+            .frame(height: 4)
+            .clipShape(Capsule())
+            .accessibilityHidden(true)
+        }
+    }
+}
+
+/// One decision on a line: its kind, what (a file's name with its folder dimmed, or the command)
+/// and when, or Approve while it's yours to. Why, on hover, or under it once clicked.
 private struct DecisionRow: View {
     let decision: ReviewDecisions.Decision
     let approve: () -> Void
+    @State private var showsWhy = false
+    @State private var isHovering = false
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(decision.action)
-                    .font(.system(size: 12, design: .monospaced))
-                    .lineLimit(3)
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 8) {
+                Image(systemName: symbol)
+                    .font(.system(size: 11))
+                    .foregroundStyle(decision.refused && decision.approved == nil ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+                    .frame(width: 16)
+                    .accessibilityHidden(true)
+                what
+                    .lineLimit(1)
                     .truncationMode(.middle)
-                    .textSelection(.enabled)
-                Text("\(decision.reason) · \(decision.date.formatted(date: .omitted, time: .shortened))")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if decision.waiting {
+                    Button("Approve", action: approve)
+                        .buttonStyle(TextButtonStyle())
+                        .font(.system(size: 12))
+                        .fixedSize()
+                        .help("Let it run once, the next time the agent does it the same way")
+                        .accessibilityLabel("Approve \(decision.action)")
+                } else {
+                    Text(state ?? decision.date.formatted(date: .omitted, time: .shortened))
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                        .monospacedDigit()
+                        .fixedSize()
+                }
+            }
+            // The line, not the reason under it: that stays selectable.
+            .contentShape(Rectangle())
+            .onTapGesture { showsWhy.toggle() }
+            if showsWhy {
+                Text(decision.reason)
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .accessibilityElement(children: .combine)
-            if decision.waiting {
-                Button("Approve", action: approve)
-                    .buttonStyle(TextButtonStyle())
-                    .font(.system(size: 12))
-                    .fixedSize()
-                    .help("Let it run once, the next time the agent does it the same way")
-                    .accessibilityLabel("Approve \(decision.action)")
-            } else {
-                Text(state)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.tertiary)
-                    .fixedSize()
+                    .textSelection(.enabled)
+                    .padding(.leading, 24)
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(isHovering || showsWhy ? AnyShapeStyle(.quaternary.opacity(0.5)) : AnyShapeStyle(.clear), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .onHover { isHovering = $0 }
+        .help(showsWhy ? "" : decision.reason)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(decision.action)
+        .accessibilityValue("\(spoken). \(decision.reason)")
+        .accessibilityActions {
+            if decision.waiting { Button("Approve", action: approve) }
+        }
     }
 
-    private var state: String {
-        if decision.used != nil { return "Ran" }
+    /// What VoiceOver says of where it stands.
+    private var spoken: String {
+        if decision.waiting { return "Held back, waiting on you" }
+        if let state { return state }
+        return decision.refused ? "Held back" : "Allowed"
+    }
+
+    /// A file's name with its folder dimmed; a command, or what a tool was.
+    @ViewBuilder private var what: some View {
+        if decision.kind == "file", let space = decision.action.firstIndex(of: " ") {
+            let path = String(decision.action[decision.action.index(after: space)...])
+            let file = (path as NSString).lastPathComponent
+            let folder = (path as NSString).deletingLastPathComponent.split(separator: "/").suffix(2).joined(separator: "/")
+            Text("\(Text(file).foregroundStyle(.primary)) \(Text(folder).foregroundStyle(.tertiary))")
+                .font(.system(size: 12))
+        } else {
+            Text(decision.action)
+                .font(.system(size: 12, design: decision.kind == "command" ? .monospaced : .default))
+        }
+    }
+
+    private var symbol: String {
+        if decision.waiting { return "hand.raised" }
+        if decision.approved != nil || decision.used != nil { return "checkmark.circle" }
+        if decision.refused { return "nosign" }
+        switch decision.kind {
+        case "command": return "terminal"
+        case "file": return decision.action.hasPrefix("Read ") ? "doc.text" : "pencil"
+        default: return "wrench.and.screwdriver"
+        }
+    }
+
+    /// Where it stands, where that's more than when: run or approved after it was held back.
+    private var state: String? {
+        if decision.used != nil || decision.by == "you" { return "Ran" }
         if decision.approved != nil { return "Approved" }
-        if decision.by == "you" { return "Ran" }
-        return decision.refused ? "Refused" : "Allowed"
+        return nil
     }
 }
 

@@ -131,6 +131,28 @@ import Testing
         #expect(later.decisions?.waiting.count == 1)
     }
 
+    /// A long night's work reads at a glance: how many it held back and of each kind it allowed,
+    /// what waits on you first however old, then the latest, the rest folded into "…N more".
+    @Test func decisionsListWhatWaitsOnYouFirstAndCountTheRest() throws {
+        var each: [String] = []
+        for minute in 0..<10 {
+            each.append(#"{"id":"e\#(minute)","at":\#(minute),"action":"Change /work/Sweep/Design/File\#(minute).swift","kind":"file","decision":"allowed","reason":"In the project.","by":"code"}"#)
+        }
+        each.insert(#"{"id":"p","at":0.5,"action":"git push --force origin main","kind":"command","decision":"refused","reason":"Rewrites main.","by":"model","held":true,"key":"k"}"#, at: 1)
+        each.append(#"{"id":"b","at":11,"action":"xcodebuild -scheme Sweep test","kind":"command","decision":"allowed","reason":"Its tests.","by":"model"}"#)
+        each.append(#"{"id":"r","at":12,"action":"Read /Users/me/.ssh/config","kind":"file","decision":"allowed","reason":"You asked.","by":"model"}"#)
+        // Held back, then you approved it: it counts as what it was, not as held back still.
+        each.insert(#"{"id":"z","at":5.5,"action":"Change /Users/me/.zshrc","kind":"file","decision":"refused","reason":"Your shell's start-up.","by":"model","held":true,"key":"z","approved":6}"#, at: 7)
+        let decisions = try JSONDecoder().decode(ReviewDecisions.self, from: Data(#"{"decisions":[\#(each.joined(separator: ","))]}"#.utf8))
+
+        #expect(decisions.counts == .init(heldBack: 1, edits: 11, reads: 1, commands: 1))
+        let folded = decisions.listed(limit: 3)
+        #expect(folded.rows.map(\.action) == ["git push --force origin main", "Read /Users/me/.ssh/config", "xcodebuild -scheme Sweep test", "Change /work/Sweep/Design/File9.swift"])
+        #expect(folded.more == 10)
+        let all = decisions.listed(limit: nil)
+        #expect(all.rows.count == 14 && all.more == 0)
+    }
+
     @Test func decisionsSayWhenTheirComputerCantBeReached() async throws {
         let box = Unreachable()
         let model = SessionModel(session: try JSONDecoder().decode(Session.self, from: JSONSerialization.data(withJSONObject: session)), api: engine.api)
@@ -177,6 +199,33 @@ import Testing
         try await until { model.approval != .auto || box.reads == 2 }
         #expect(model.approval == .auto, "the box keeps Auto, and so does the composer")
         #expect(ToolApproval.lastPicked == .auto)
+    }
+
+    /// A bot's conversation on a box from before bots could have Full Access (bridge 0.9.188): the
+    /// option says why and isn't picked, and a pick made before its options were read is turned
+    /// down quietly, the mode as it was, with no failure and no Full Access confirmation.
+    @Test func aBotsFullAccessAnOlderBoxWontGiveIsShownNotPicked() async throws {
+        let box = OlderBotBox()
+        let model = SessionModel(session: try JSONDecoder().decode(Session.self, from: JSONSerialization.data(withJSONObject: session)), api: engine.api)
+        model.box = { box.client }
+        await model.readApproval()
+        #expect(model.approvalShown?.option(.fullAccess)?.unavailable?.reason == "bot")
+        model.setApproval(.fullAccess)
+        model.setApproval(.auto)
+        try await until { model.approvalShown?.effective == .auto }
+        #expect(box.picks == ["auto"], "Full Access isn't sent to a box that said it won't")
+        #expect(!model.confirmsFullAccess)
+
+        // Picked before the box said so: it turns it down, and that's all.
+        box.says = false
+        await model.readApproval()
+        box.says = true
+        model.setApproval(.fullAccess)
+        // Read again, its menu says why (it didn't before).
+        try await until { model.approvalShown?.option(.fullAccess)?.unavailable?.reason == "bot" }
+        #expect(model.approval == .auto)
+        #expect(model.failure == nil)
+        #expect(!model.confirmsFullAccess)
     }
 
     @Test func aPausedAutoShowsUntilYouLetItGoOn() async throws {
@@ -313,6 +362,47 @@ private nonisolated final class SlowPicks: @unchecked Sendable {
                     return Self.shown(approval)
                 }
                 if let now { Self.answer(now, to: continuation) }
+                TestPulse.beat()
+            }
+        })
+    }
+}
+
+/// A bot's conversation's approval on a box from before bridge 0.9.188, which never gives a bot
+/// Full Access: its options say so while `says` (a read made before it did doesn't), and a pick of
+/// it is turned down with `409`, `reason: "bot"`.
+private nonisolated final class OlderBotBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var approval = "askFirst"
+    private var saying = true
+    private var sent: [String] = []
+
+    var says: Bool {
+        get { lock.withLock { saying } }
+        set { lock.withLock { saying = newValue } }
+    }
+    /// The modes it was asked to set, in turn, Full Access included.
+    var picks: [String] { lock.withLock { sent } }
+
+    @MainActor var client: BoxClient {
+        BoxClient(box: BoxClient.mac, transport: LocalBox { [self] request in
+            AsyncThrowingStream { continuation in
+                let picked = (try? JSONSerialization.jsonObject(with: request.body) as? [String: Any])?["approval"] as? String
+                let (status, body) = lock.withLock { () -> (Int, String) in
+                    if request.method == "PUT", let picked {
+                        sent.append(picked)
+                        if picked == "fullAccess" {
+                            return (409, #"{"error":"Not for a bot.","message":"Bots can't use Full Access: Auto is the most they get.","reason":"bot"}"#)
+                        }
+                        approval = picked
+                    }
+                    let full = saying ? #"{"approval":"fullAccess","unavailable":{"reason":"bot","why":"Bots can't use Full Access: Auto is the most they get."}}"# : #"{"approval":"fullAccess"}"#
+                    let options = ["askFirst", "acceptEdits", "auto"].map { #"{"approval":"\#($0)"}"# } + [full]
+                    return (200, #"{"approval":"\#(approval)","effective":"\#(approval)","options":[\#(options.joined(separator: ","))]}"#)
+                }
+                continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
+                continuation.yield(.body(Data(body.utf8)))
+                continuation.finish()
                 TestPulse.beat()
             }
         })
