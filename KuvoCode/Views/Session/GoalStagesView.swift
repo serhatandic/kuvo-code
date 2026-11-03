@@ -7,17 +7,17 @@ import SwiftUI
 /// it, how far along it is and about how long it has left, two under way one card over the other; then what's ahead, the
 /// next a little stronger, and steps that start together side by side on one row. Before it
 /// starts, the first step waits in a grey card. Narrow, the same top to bottom, with what's done
-/// folded into one faint line. Names and lines are whole wherever the pane has room for them; many
-/// rows scroll, cut between rows.
+/// folded into one faint line; once it's over, what's done and what it left, one under the other.
+/// Three cards at most, those waiting for you first, the rest under way named on a line under them.
+/// Names and lines are whole wherever the pane has room for them; past about ten rows they scroll,
+/// the pane ending between rows. All of it is decided as it's laid
+/// out, from the room it's given, never from a size measured a frame later: the first frame is
+/// the one it keeps.
 struct GoalStagesView: View {
     let plan: GoalPlan
     let timeline: GoalTimeline
     /// You have the goal paused: what's under way shows paused.
     var isPaused = false
-    @State private var width: CGFloat = 0
-    @State private var height: CGFloat = 0
-    /// Where each row and card sits, top to bottom, so the pane ends between them.
-    @State private var pieces: [Piece.Span] = []
     @Environment(\.accent) private var accent
     @Environment(\.colorScheme) private var scheme
 
@@ -30,52 +30,39 @@ struct GoalStagesView: View {
     static let cardWidth: CGFloat = 200
     static let cardShare: CGFloat = 0.62
     static let aheadSpacing: CGFloat = 14
-    /// The most it takes before it scrolls: about ten rows, and the cards whole beside or among
-    /// them.
-    static let mostHeight: CGFloat = 10 * 28
+    /// The most rows take before they scroll: ten. Every row is `rowHeight` tall, so a pane this
+    /// high ends between two; the cards are never in it, so they're always whole.
+    static let mostRows: CGFloat = 10 * rowHeight
 
     private var now: Date { timeline.now }
 
     var body: some View {
         let stages = timeline.stages(paused: isPaused)
-        ScrollView(.vertical) {
-            Group {
-                if isNarrow(stages) { narrow(stages) } else { wide(stages) }
+        // The columns side by side where what's done, a card at its least and a step ahead each
+        // have room for a name; else top to bottom. The wide one asks for that much as its ideal,
+        // so the choice is made from the width it's offered.
+        // Once it's over there's nothing under way to put between: one list, top to bottom.
+        ViewThatFits(in: .horizontal) {
+            if !stages.isOver {
+                wide(stages)
+                    .frame(idealWidth: stages.done.isEmpty ? 400 : 640, maxWidth: .infinity, alignment: .topLeading)
             }
-            .frame(maxWidth: .infinity, alignment: .topLeading)
-            .coordinateSpace(.named(Piece.space))
-            .onGeometryChange(for: CGFloat.self, of: \.size.height) { height = $0 }
-            .onPreferenceChange(Piece.self) { pieces = $0 }
+            narrow(stages)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
         }
-        .scrollDisabled(height <= shownHeight(stages))
-        .scrollIndicators(height > shownHeight(stages) ? .automatic : .never)
-        // Short, so the pane's end, between rows, fades only their room.
-        .fadingScrollEdges(8)
-        .frame(height: shownHeight(stages))
-        .onGeometryChange(for: CGFloat.self, of: \.size.width) { width = $0 }
         .accessibilityElement(children: .contain)
     }
 
-    /// All of it, or up to the last row or card that ends within about ten rows and has none cut
-    /// beside it: the pane never ends inside a row.
-    private func shownHeight(_ stages: GoalStages) -> CGFloat {
-        let cards = pieces.filter(\.isCard).map { $0.range.upperBound - $0.range.lowerBound }
-        // Stacked in the narrow layout, the cards come on top of the rows; beside them in the
-        // wide one, the most is at least as tall as they are.
-        let most = isNarrow(stages)
-            ? Self.mostHeight + cards.reduce(0, +)
-            : max(Self.mostHeight, cards.reduce(0, +) + 8 * CGFloat(max(0, cards.count - 1)))
-        guard height > most else { return height }
-        let cuts = pieces.map(\.range.upperBound).filter { cut in
-            cut <= most && !pieces.contains { $0.range.lowerBound < cut - 0.5 && $0.range.upperBound > cut + 0.5 }
+    /// Rows that scroll once they're more than `mostRows` tall. Done ones open on the latest,
+    /// nearest the card.
+    private func scrolls(from anchor: UnitPoint = .top, @ViewBuilder _ rows: () -> some View) -> some View {
+        ScrollView(.vertical) {
+            rows().frame(maxWidth: .infinity, alignment: .leading)
         }
-        return cuts.max() ?? most
-    }
-
-    /// Too narrow for the columns side by side: what's done, a card at its least and a step ahead
-    /// each need room for a name.
-    private func isNarrow(_ stages: GoalStages) -> Bool {
-        width > 0 && width < (stages.done.isEmpty ? 400 : 640)
+        .scrollBounceBehavior(.basedOnSize)
+        .defaultScrollAnchor(anchor)
+        // Short, so the pane's end, between rows, fades only their room.
+        .fadingScrollEdges(8)
     }
 
     // MARK: Wide: done, now, ahead
@@ -83,15 +70,13 @@ struct GoalStagesView: View {
     private func wide(_ stages: GoalStages) -> some View {
         StageColumns(gap: Self.gap) {
             if !stages.done.isEmpty {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(stages.done) { lane in doneRow(lane, number: stages.number(lane.id)) }
-                }
-                .layoutValue(key: StageColumns.Column.self, value: .done)
+                scrolls(from: .bottom) { doneRows(stages) }
+                    .layoutValue(key: StageColumns.Column.self, value: .done)
             }
             if !stages.now.isEmpty {
                 cards(stages).layoutValue(key: StageColumns.Column.self, value: .cards)
             }
-            if !stages.ahead.isEmpty { ahead(stages) }
+            if !stages.ahead.isEmpty { scrolls { ahead(stages) } }
         }
     }
 
@@ -99,16 +84,27 @@ struct GoalStagesView: View {
 
     private func narrow(_ stages: GoalStages) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            // Once it's over there's no card to come before: what's done shows in full.
             if stages.isOver {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(stages.done) { lane in doneRow(lane, number: stages.number(lane.id)) }
+                // Once it's over there's no card to come before: what's done shows in full, then
+                // what it left.
+                scrolls { VStack(alignment: .leading, spacing: 0) { doneRows(stages); ahead(stages) } }
+                    .frame(maxHeight: Self.mostRows)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                if !stages.done.isEmpty { doneFold(stages.done) }
+                if !stages.now.isEmpty { cards(stages) }
+                if !stages.ahead.isEmpty {
+                    scrolls { ahead(stages) }
+                        .frame(maxHeight: Self.mostRows)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-            } else if !stages.done.isEmpty {
-                doneFold(stages.done)
             }
-            if !stages.now.isEmpty { cards(stages) }
-            if !stages.ahead.isEmpty { ahead(stages) }
+        }
+    }
+
+    private func doneRows(_ stages: GoalStages) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(stages.done) { lane in doneRow(lane, number: stages.number(lane.id)) }
         }
     }
 
@@ -116,17 +112,26 @@ struct GoalStagesView: View {
     /// the ones before them a count ("+2 · Photo scan engine · RevenueCat paywall"); where even
     /// the latest has no room whole, it's cut at its end.
     private func doneFold(_ done: [GoalTimeline.Lane]) -> some View {
-        let names = done.map(\.step.text)
-        let line = { (folded: Int) in ((folded == 0 ? [] : ["+\(folded)"]) + names.dropFirst(folded)).joined(separator: " · ") }
+        fold(done.map(\.step.text), mark: .done, countFirst: true)
+            .accessibilityLabel(done.count == 1 ? "1 step done" : "\(done.count) steps done")
+    }
+
+    /// Names on one faint line after a mark, as many whole as fit and a count for the rest: before
+    /// them (`countFirst`, the ones done longest ago) or after them.
+    private func fold(_ names: [String], mark: GoalTrack.State, countFirst: Bool) -> some View {
+        let line = { (folded: Int) -> String in
+            let count: [String] = folded == 0 ? [] : ["+\(folded)"]
+            return (countFirst ? count + Array(names.dropFirst(folded)) : Array(names.dropLast(folded)) + count).joined(separator: " · ")
+        }
         return ViewThatFits(in: .horizontal) {
             ForEach(0..<names.count, id: \.self) { folded in
                 HStack(spacing: 8) {
-                    GoalStepMark(.done).frame(width: 14)
+                    GoalStepMark(mark).frame(width: 14)
                     Text(line(folded)).lineLimit(1).fixedSize()
                 }
             }
             HStack(spacing: 8) {
-                GoalStepMark(.done).frame(width: 14)
+                GoalStepMark(mark).frame(width: 14)
                 Text(line(names.count - 1)).lineLimit(1)
             }
         }
@@ -134,18 +139,21 @@ struct GoalStagesView: View {
         .foregroundStyle(.tertiary)
         .frame(height: 24)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .reportsPiece()
         .help(names.joined(separator: "\n"))
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(done.count == 1 ? "1 step done" : "\(done.count) steps done")
         .accessibilityValue(names.joined(separator: ", "))
     }
 
     // MARK: The cards
 
     private func cards(_ stages: GoalStages) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ForEach(stages.now) { card in self.card(card, number: stages.number(card.id)) }
+        let (shown, rest) = stages.cards
+        return VStack(alignment: .leading, spacing: 8) {
+            ForEach(shown) { card in self.card(card, number: stages.number(card.id)) }
+            if !rest.isEmpty {
+                fold(rest.map(\.step.text), mark: .running, countFirst: false)
+                    .accessibilityLabel(rest.count == 1 ? "1 more under way" : "\(rest.count) more under way")
+            }
         }
     }
 
@@ -155,9 +163,17 @@ struct GoalStagesView: View {
             HStack(spacing: 8) {
                 Text("\(number)")
                     .font(.system(size: 10.5, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(card.look == .doing || card.look == .waiting ? AnyShapeStyle(.white) : AnyShapeStyle(.secondary))
+                    .foregroundStyle(numberInk(card.look))
                     .frame(width: 18, height: 18)
-                    .background(Circle().fill(numberFill(card.look)))
+                    .background {
+                        // Waiting for you, a ring rather than a fill: it reads apart from one under
+                        // way without its colour.
+                        if card.look == .waiting {
+                            Circle().strokeBorder(Color.orange, lineWidth: 1.5)
+                        } else {
+                            Circle().fill(numberFill(card.look))
+                        }
+                    }
                 if GoalPlanWords.mark(of: step) != nil { StepServiceMark(step: step) }
                 Text(step.text)
                     .font(.system(size: 15, weight: .semibold))
@@ -188,7 +204,6 @@ struct GoalStagesView: View {
         .padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(cardFill(card.look)))
-        .reportsPiece(isCard: true)
         .contentShape(.rect)
         .help(help(step))
         .accessibilityElement(children: .ignore)
@@ -217,8 +232,16 @@ struct GoalStagesView: View {
     private func numberFill(_ look: GoalStages.Card.Look) -> Color {
         switch look {
         case .doing: accent
-        case .waiting: .orange
+        case .waiting: .clear
         case .paused, .ready: Color.primary.opacity(scheme == .dark ? 0.14 : 0.09)
+        }
+    }
+
+    private func numberInk(_ look: GoalStages.Card.Look) -> AnyShapeStyle {
+        switch look {
+        case .doing: AnyShapeStyle(.white)
+        case .waiting: AnyShapeStyle(.orange)
+        case .paused, .ready: AnyShapeStyle(.secondary)
         }
     }
 
@@ -280,7 +303,6 @@ struct GoalStagesView: View {
                 .lineLimit(1)
         }
         .frame(height: Self.rowHeight)
-        .reportsPiece()
         .contentShape(.rect)
         .help(help(step))
         .accessibilityElement(children: .ignore)
@@ -304,7 +326,9 @@ struct GoalStagesView: View {
 /// `GoalStagesView.doneWidth`), what's ahead as wide as its steps side by side with their names
 /// whole (that's what says which run together), and the cards as wide as their names and lines
 /// in what's left: they give way first, down to `cardWidth`. Where even that leaves too little for
-/// the steps side by side, those stack and the cards take up to `cardShare` of the rest.
+/// the steps side by side, those stack and the cards take up to `cardShare` of the rest. The rows'
+/// columns are as tall as their rows up to `mostRows`, or the cards' height rounded up to a whole
+/// row, and scroll past it: each ends between two rows.
 private struct StageColumns: Layout {
     enum Role { case done, cards, ahead }
     struct Column: LayoutValueKey { static let defaultValue = Role.ahead }
@@ -335,40 +359,25 @@ private struct StageColumns: Layout {
         return widths
     }
 
+    private func heights(_ widths: [CGFloat], _ subviews: Subviews) -> [CGFloat] {
+        let full = zip(subviews, widths).map { $0.sizeThatFits(ProposedViewSize(width: $1, height: nil)).height }
+        let row = GoalStagesView.rowHeight
+        let cards = zip(subviews, full).first { $0.0[Column.self] == .cards }?.1 ?? 0
+        let most = max(GoalStagesView.mostRows, (cards / row).rounded(.up) * row)
+        return zip(subviews, full).map { $0[Column.self] == .cards ? $1 : min($1, most) }
+    }
+
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         let width = proposal.width ?? subviews.reduce(0) { $0 + $1.sizeThatFits(.unspecified).width } + gap * CGFloat(max(0, subviews.count - 1))
-        let heights = zip(subviews, widths(width, subviews)).map { $0.sizeThatFits(ProposedViewSize(width: $1, height: nil)).height }
-        return CGSize(width: width, height: heights.max() ?? 0)
+        return CGSize(width: width, height: heights(widths(width, subviews), subviews).max() ?? 0)
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         var x = bounds.minX
-        for (subview, width) in zip(subviews, widths(bounds.width, subviews)) {
-            subview.place(at: CGPoint(x: x, y: bounds.minY), anchor: .topLeading, proposal: ProposedViewSize(width: width, height: nil))
+        let widths = widths(bounds.width, subviews)
+        for (subview, (width, height)) in zip(subviews, zip(widths, heights(widths, subviews))) {
+            subview.place(at: CGPoint(x: x, y: bounds.minY), anchor: .topLeading, proposal: ProposedViewSize(width: width, height: height))
             x += width + gap
-        }
-    }
-}
-
-/// Where a row or card of the list sits, top to bottom.
-private struct Piece: PreferenceKey {
-    struct Span: Equatable {
-        let range: ClosedRange<CGFloat>
-        let isCard: Bool
-    }
-
-    static let space = "goal-stages"
-    static let defaultValue: [Span] = []
-    static func reduce(value: inout [Span], nextValue: () -> [Span]) { value += nextValue() }
-}
-
-private extension View {
-    func reportsPiece(isCard: Bool = false) -> some View {
-        background {
-            GeometryReader { proxy in
-                let frame = proxy.frame(in: .named(Piece.space))
-                Color.clear.preference(key: Piece.self, value: [Piece.Span(range: frame.minY...max(frame.minY, frame.maxY), isCard: isCard)])
-            }
         }
     }
 }

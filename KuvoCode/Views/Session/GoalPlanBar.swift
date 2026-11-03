@@ -26,7 +26,6 @@ struct GoalPlanBar: View {
     @State private var confirmsStop = false
     /// The view you picked for this goal, on this Mac; nil until you pick one.
     @State private var picked: GoalPaneView?
-    @State private var width: CGFloat = 0
 
     private var isOver: Bool { plan.state == .done || plan.state == .stopped }
     private var isPaused: Bool { plan.state == .running && goal?.state == .paused }
@@ -36,28 +35,17 @@ struct GoalPlanBar: View {
     private var view: GoalPaneView { picked ?? (GoalPlanWords.opensOnTimeline(plan) ? .timeline : .list) }
     /// Room on the line for the goal's name beside List | Timeline and Pause | Stop…; narrower, the
     /// switch goes over the steps.
-    private var switchOnLine: Bool { width == 0 || width >= 560 }
+    static let switchOnLineWidth: CGFloat = 560
+    /// The room either side of what's under the line.
+    static let detailsInsets: CGFloat = 30
 
     var body: some View {
         // Kept current while it runs: how long it has been at it, and now on the axis. Once
         // it's over, it stays as it ended.
         TimelineView(.periodic(from: .now, by: isOver ? 365 * 86400 : 30)) { context in
             let now = isOver ? plan.ended.map { Date(timeIntervalSince1970: $0 / 1000) } ?? context.date : context.date
-            VStack(alignment: .leading, spacing: 0) {
-                BarLine(mark: AnyView(mark), title: GoalPlanWords.name(plan), progress: progress(now: now), status: status,
-                        accessory: AnyView(actions), folded: AnyView(strip), showHelp: "Show the goal’s steps", hideHelp: "Hide them: this line stays",
-                        isHidden: $isHidden, close: isOver ? putAway : nil, closeHelp: "Put the goal away", stacks: true)
-                if !isHidden {
-                    details(now: now)
-                        .padding(.leading, 14)
-                        .padding(.trailing, 16)
-                        .padding(.top, 2)
-                        .padding(.bottom, 12)
-                        .transition(.fold)
-                }
-            }
+            content(timeline: GoalTimeline(plan, now: now))
         }
-        .onGeometryChange(for: CGFloat.self, of: \.size.width) { width = $0 }
         .animation(.ui, value: plan.state)
         .closesWhenKept($confirmsStop)
         .confirmationDialog("Stop the goal?", isPresented: $confirmsStop) {
@@ -76,7 +64,35 @@ struct GoalPlanBar: View {
         .onChange(of: plan.id, initial: true) { _, id in picked = GoalPaneView.kept(for: id) }
     }
 
+    private func content(timeline: GoalTimeline) -> some View {
+        let progress = progress(timeline)
+        return VStack(alignment: .leading, spacing: 0) {
+            // Where List | Timeline goes is chosen from the width the bar is offered as it's laid
+            // out, so it's in its place from the first frame; only the line is chosen between, so
+            // what's under it (Show More, the timeline's zoom, the list's scroll) stays as it is.
+            ViewThatFits(in: .horizontal) {
+                line(progress: progress, switchOnLine: true)
+                    .frame(idealWidth: Self.switchOnLineWidth, maxWidth: .infinity, alignment: .topLeading)
+                line(progress: progress, switchOnLine: false)
+            }
+            if !isHidden {
+                details(timeline: timeline)
+                    .padding(.leading, 14)
+                    .padding(.trailing, Self.detailsInsets - 14)
+                    .padding(.top, 2)
+                    .padding(.bottom, 12)
+                    .transition(.fold)
+            }
+        }
+    }
+
     // MARK: The line
+
+    private func line(progress: String, switchOnLine: Bool) -> some View {
+        BarLine(mark: AnyView(mark), title: GoalPlanWords.name(plan), progress: progress, status: status(progress), spoken: waitingWords,
+                accessory: AnyView(actions(switchOnLine: switchOnLine)), folded: AnyView(strip), showHelp: "Show the goal’s steps", hideHelp: "Hide them: this line stays",
+                isHidden: $isHidden, close: isOver ? putAway : nil, closeHelp: "Put the goal away", stacks: true)
+    }
 
     @ViewBuilder private var mark: some View {
         switch plan.state {
@@ -98,16 +114,26 @@ struct GoalPlanBar: View {
     /// "2 of 6 · 2 h 22 min", "2 of 6 · Next: Mon 09:00", "Paused · You", "Done · 3 days"; and when
     /// it's due wherever the timeline isn't showing it: in the list, with the steps hidden, or
     /// overdue before the days the timeline opens on.
-    private func progress(now: Date) -> String {
-        let saysDue = view == .timeline && !isHidden && GoalChartView.saysDue(GoalTimeline(plan, now: now).chart())
-        return GoalPlanWords.line(plan, pausedBy: isPaused ? .some(goal?.pausedBy) : nil, due: !saysDue, now: now)
+    private func progress(_ timeline: GoalTimeline) -> String {
+        let saysDue = view == .timeline && !isHidden && GoalChartView.saysDue(timeline.chart())
+        return GoalPlanWords.line(plan, pausedBy: isPaused ? .some(goal?.pausedBy) : nil, due: !saysDue, now: timeline.now)
     }
 
-    /// Paused, why in a word, stronger: orange where it needs you.
-    private var status: Text? {
+    /// Paused, why in a word, stronger: orange where it needs you; then when it's due, as the line
+    /// says it.
+    private func status(_ progress: String) -> Text? {
         guard isPaused else { return nil }
-        guard let by = goal?.pausedBy else { return Text("Paused") }
-        return Text("Paused · ") + Text(GoalPlanWords.pausedBy(by)).fontWeight(.semibold).foregroundStyle(needsYou ? AnyShapeStyle(Color.orange) : AnyShapeStyle(.secondary))
+        let by = goal?.pausedBy
+        let rest = progress.components(separatedBy: " · ").dropFirst(by == nil ? 1 : 2).map { " · " + $0 }.joined()
+        guard let by else { return Text("Paused" + rest) }
+        return Text("Paused · ") + Text(GoalPlanWords.pausedBy(by)).fontWeight(.semibold).foregroundStyle(needsYou ? AnyShapeStyle(Color.orange) : AnyShapeStyle(.secondary)) + Text(rest)
+    }
+
+    /// What waits for you among the steps, for VoiceOver on the line (the strip shows it by its
+    /// hollow tracks).
+    private var waitingWords: String? {
+        let waiting = plan.steps.filter { GoalSteps.track($0.state) == .waiting }.count
+        return waiting == 0 ? nil : waiting == 1 ? "1 step waiting for you" : "\(waiting) steps waiting for you"
     }
 
     /// A short track for each step, while the steps are hidden.
@@ -119,7 +145,7 @@ struct GoalPlanBar: View {
 
     /// The line's controls: which view shows the steps (over them in a narrow card), and while it
     /// runs Pause | Stop… (Resume | Stop… once paused), one pair.
-    @ViewBuilder private var actions: some View {
+    @ViewBuilder private func actions(switchOnLine: Bool) -> some View {
         HStack(spacing: 6) {
             if !plan.steps.isEmpty, switchOnLine { viewSwitch }
             if plan.state == .running {
@@ -143,8 +169,8 @@ struct GoalPlanBar: View {
 
     // MARK: Under the line
 
-    private func details(now: Date) -> some View {
-        let timeline = GoalTimeline(plan, now: now)
+    private func details(timeline: GoalTimeline) -> some View {
+        let now = timeline.now
         return VStack(alignment: .leading, spacing: 10) {
             VStack(alignment: .leading, spacing: 4) {
                 // The goal in its own words: the line has only its name.
@@ -157,13 +183,23 @@ struct GoalPlanBar: View {
                 }
             }
             .padding(.leading, GoalSteps.nameInset)
-            if !plan.steps.isEmpty, !switchOnLine {
-                viewSwitch.padding(.leading, GoalSteps.nameInset)
-            }
-            switch view {
-            case .list where !plan.steps.isEmpty: GoalStagesView(plan: plan, timeline: timeline, isPaused: isPaused).padding(.leading, GoalSteps.nameInset)
-            case .list: EmptyView()
-            case .timeline: GoalChartView(plan: plan, timeline: timeline)
+            VStack(alignment: .leading, spacing: 0) {
+                // List | Timeline over the steps where the line has no room for it: the same width
+                // as the line's choice, less the room around the details and the names' inset.
+                if !plan.steps.isEmpty {
+                    ViewThatFits(in: .horizontal) {
+                        Color.clear
+                            .frame(idealWidth: Self.switchOnLineWidth - Self.detailsInsets - GoalSteps.nameInset, maxWidth: .infinity)
+                            .frame(height: 0)
+                        viewSwitch.padding(.bottom, 10)
+                    }
+                    .padding(.leading, GoalSteps.nameInset)
+                }
+                switch view {
+                case .list where !plan.steps.isEmpty: GoalStagesView(plan: plan, timeline: timeline, isPaused: isPaused).padding(.leading, GoalSteps.nameInset)
+                case .list: EmptyView()
+                case .timeline: GoalChartView(plan: plan, timeline: timeline)
+                }
             }
             if !plan.waiting.isEmpty {
                 VStack(spacing: 4) {
@@ -358,40 +394,73 @@ struct ChipPair: View {
 struct GoalText: View {
     let text: String
     @State private var isOpen = false
-    @State private var shownHeight: CGFloat = 0
-    @State private var wholeHeight: CGFloat = 0
 
     var body: some View {
         let words = Self.markdown(text)
-        VStack(alignment: .leading, spacing: 2) {
-            Text(words)
-                .lineLimit(isOpen ? nil : 2)
-                .fixedSize(horizontal: false, vertical: true)
-                .textSelection(.enabled)
-                .onGeometryChange(for: CGFloat.self, of: \.size.height) { shownHeight = $0 }
-                .background(alignment: .topLeading) {
-                    // The words whole, unseen, to know whether two lines cut them.
-                    Text(words)
+        Group {
+            if isOpen {
+                VStack(alignment: .leading, spacing: 2) {
+                    whole(words)
+                    toggle
+                }
+            } else {
+                // The words whole where two lines hold them, else two lines and Show More: chosen
+                // as it's laid out, against the height of two lines, so Show More is there from
+                // the first frame.
+                TwoLines {
+                    Text(words).lineLimit(2).hidden().accessibilityHidden(true)
+                    ViewThatFits(in: .vertical) {
+                        whole(words)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(words)
+                                .lineLimit(2)
+                                .textSelection(.enabled)
+                            toggle
+                        }
                         .fixedSize(horizontal: false, vertical: true)
-                        .hidden()
-                        .onGeometryChange(for: CGFloat.self, of: \.size.height) { wholeHeight = $0 }
-                        .accessibilityHidden(true)
+                    }
                 }
-            if isOpen || wholeHeight > shownHeight + 1 {
-                Button(isOpen ? "Show Less" : "Show More") {
-                    withAnimation(.ui) { isOpen.toggle() }
-                }
-                .buttonStyle(TextButtonStyle(outset: true, dimsAtRest: false))
-                .foregroundStyle(.tint)
-                .font(.system(size: 12, weight: .medium))
             }
         }
         .font(.system(size: 12.5))
         .foregroundStyle(.secondary)
     }
 
+    private func whole(_ words: AttributedString) -> some View {
+        Text(words)
+            .fixedSize(horizontal: false, vertical: true)
+            .textSelection(.enabled)
+    }
+
+    private var toggle: some View {
+        Button(isOpen ? "Show Less" : "Show More") {
+            withAnimation(.ui) { isOpen.toggle() }
+        }
+        .buttonStyle(TextButtonStyle(outset: true, dimsAtRest: false))
+        .foregroundStyle(.tint)
+        .font(.system(size: 12, weight: .medium))
+    }
+
     /// Its Markdown inline (bold, code, links), its paragraphs kept.
     static func markdown(_ text: String) -> AttributedString {
         (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(text)
+    }
+}
+
+/// Offers its second view the height of its first, the words cut to two lines (with half a point
+/// to spare for rounding), so a ViewThatFits there knows as it's laid out whether two lines hold
+/// the words, whatever is in them (code, emoji, another script).
+private struct TwoLines: Layout {
+    private func lines(_ width: CGFloat?, _ subviews: Subviews) -> CGFloat {
+        subviews[0].sizeThatFits(ProposedViewSize(width: width, height: nil)).height + 0.5
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        subviews[1].sizeThatFits(ProposedViewSize(width: proposal.width, height: lines(proposal.width, subviews)))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews[0].place(at: bounds.origin, proposal: ProposedViewSize(width: bounds.width, height: nil))
+        subviews[1].place(at: bounds.origin, proposal: ProposedViewSize(width: bounds.width, height: lines(bounds.width, subviews)))
     }
 }
