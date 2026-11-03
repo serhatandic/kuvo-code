@@ -224,6 +224,9 @@ export function seatbeltProfile(policy: FencePolicy, options: SeatbeltOptions): 
   deny("mach-lookup", `(global-name "com.apple.coreservices.launchservicesd")`, `(global-name-prefix "com.apple.lsd.")`,
     `(global-name "com.apple.coreservices.quarantine-resolver")`);
   denyAll("appleevent-send");
+  // `top`, which the sandbox can't start (it's setuid), runs as it is: it shows what runs and how
+  // busy it is, never another program's environment, as `ps -E` would (which stays refused).
+  allow("process-exec", `(literal "/usr/bin/top")`, "(with no-sandbox)");
   // Nor apps' and the system's preferences, written through cfprefsd (`defaults write`), outside the
   // files the rules above keep: launchd's and login items' among them. Reading them stays.
   denyAll("user-preference-write");

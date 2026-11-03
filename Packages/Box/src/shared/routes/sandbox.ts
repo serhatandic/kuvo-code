@@ -78,6 +78,11 @@ export const SANDBOX_ASKS = object({ asks: list(SANDBOX_ASK), "restart?": bool }
 /** The agents' sandbox tool (`sandbox_ask`), as a tool server lists it, and what a call answers. */
 export const SANDBOX_TOOL_LIST = object({ tools: list(any) });
 export const SANDBOX_TOOL = object({ text: string, isError: bool });
+/** A command the sandbox stopped, as the engine's plugin tells the box (`POST kuvo/sandbox/stopped`,
+ * `{session, input, output}`): in Auto, what the agent gets instead, its reviewer having run it
+ * again outside the sandbox (`text`, and how it ended: `exit`), or why not, added after what it
+ * printed (`text` alone); `{}` leaves it as it was. */
+export const SANDBOX_STOPPED = object({ "text?": string, "exit?": number });
 
 export type SandboxStop = Infer<typeof SANDBOX_STOP>;
 export type SandboxRule = Infer<typeof SANDBOX_RULE>;
@@ -95,4 +100,5 @@ export const SANDBOX_ROUTES: RouteShape[] = [
   { route: "DELETE kuvo/sandbox/allowed/:id", answers: { 200: SANDBOX_ALLOWED } },
   { route: "GET kuvo/sandbox/tools", answers: { 200: SANDBOX_TOOL_LIST } },
   { route: "POST kuvo/sandbox/tools", answers: { 200: SANDBOX_TOOL } },
+  { route: "POST kuvo/sandbox/stopped", answers: { 200: SANDBOX_STOPPED } },
 ];

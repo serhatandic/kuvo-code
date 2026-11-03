@@ -111,6 +111,9 @@ function botOf(data: EngineSession): ReviewContext["bot"] | undefined {
 export const inFullAccess = (at: Conversation): boolean =>
   approvalOf(at.data, { agents: at.agents, bot: Boolean(botOfConversation(at.data.id) ?? worksFor(at.data)) }).effective === "fullAccess";
 
+/** Whether a conversation is in Auto, where its reviewer decides (as `reviewIn` finds it). */
+export const inAuto = (at: Conversation): boolean => approvalOf(at.data, { agents: at.agents, bot: Boolean(botOf(at.data)) }).effective === "auto";
+
 /** What you wrote in a conversation, oldest first: never what the box, another agent or a
  * wake-up put there. */
 export async function yourMessages(at: Conversation, signal?: AbortSignal): Promise<string[]> {
@@ -164,7 +167,7 @@ export async function reviewIn(session: string, action: ReviewedAction, signal?:
   const at = found === undefined ? await conversationOf(session) : found;
   if (!at) return null;
   const bot = botOf(at.data);
-  if (approvalOf(at.data, { agents: at.agents, bot: Boolean(bot) }).effective !== "auto") return null;
+  if (!inAuto(at)) return null;
   // (In a bot's, what you wrote in its conversation counts beside its goal; in its work, what you
   // wrote to the bot too, which the work is for.)
   const own = bot && !botOfConversation(at.data.id) ? botHere(bot.id)?.session : undefined;

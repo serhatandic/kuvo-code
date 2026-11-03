@@ -8,7 +8,7 @@
 import { isObject, parsed } from "../../shared/json";
 import type { SandboxState } from "../../shared/routes/sandbox";
 import { addableOwners, addRule, allowedFor, folderOfOwner, forgetGoneBots, listed, removeRule, RuleRefusal } from "../fence/allowed";
-import { answerSandboxAsk, callSandboxTool, listSandboxAsks, onSandboxAsksChanged, SANDBOX_TOOLS } from "../fence/outside";
+import { answerSandboxAsk, callSandboxTool, listSandboxAsks, onSandboxAsksChanged, SANDBOX_TOOLS, stoppedInAuto } from "../fence/outside";
 import { answeredRestart, asksToRestart, fenceState, restartSettled, setUpFence, tellAgents } from "../fence/state";
 import { bridgeTarget, call } from "../engine/client";
 import type { AnswerPiece, RouteContext } from "../server/context";
@@ -116,6 +116,20 @@ export async function* sandboxRoute(context: RouteContext): AsyncGenerator<Answe
     }
     const caller = await callerOf(session, readEngine, readBridge);
     return yield* json(200, await callSandboxTool(given.name, args, caller, signal));
+  }
+  // A command the sandbox stopped, as the engine's plugin tells it when the agent's shell call ends:
+  // in Auto, what the agent gets instead (`{text, exit}`), or why not after what it printed
+  // (`{text}`); `{}` leaves it as it was.
+  if (route === "kuvo/sandbox/stopped") {
+    if (method !== "POST") return yield* json(405, {});
+    const input = isObject(given.input) ? given.input : {};
+    const session = typeof given.session === "string" ? given.session : undefined;
+    if (!fenceState().on || typeof given.output !== "string") return yield* json(200, {});
+    // Only a call the conversation it names is making now, with this input (vault/who.ts).
+    if (!await isCalling(session, ["shell", "bash"], input, readEngine, readBridge)) return yield* json(200, {});
+    const caller = await callerOf(session, readEngine, readBridge);
+    const calling = () => isCalling(session, ["shell", "bash"], input, readEngine, readBridge);
+    return yield* json(200, await stoppedInAuto(caller, input, given.output, calling, signal) ?? {});
   }
   if (route === "kuvo/sandbox/asks" || route === "kuvo/sandbox/asks/events") {
     if (method !== "GET") return yield* json(405, {});
