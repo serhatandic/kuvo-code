@@ -3,7 +3,8 @@ import SwiftUI
 /// One step of a bot's goal, as a thin track of its own that fills on its own (PROTOCOL.md, "Work ›
 /// Goals"): bright while it runs, filled only as far as the bot measured it, and striped where it
 /// can't say how far (never a made-up share); a quiet green once done; faint before it starts; grey
-/// and held at its fill while it's paused at a limit; orange while it waits for you. The stripes stand still:
+/// and held at its fill while it's paused at a limit; hollow and orange while it waits for you, so
+/// it reads apart from a done one without its colour. The stripes stand still:
 /// no motion to play or turn off. Tracks side by side show work going on in parallel; a row of short
 /// ones (`GoalTrackStrip`) says the same on a folded line.
 public struct GoalTrack: View {
@@ -28,7 +29,7 @@ public struct GoalTrack: View {
         GeometryReader { geometry in
             let width = geometry.size.width
             ZStack(alignment: .leading) {
-                Capsule().fill(Color.primary.opacity(state == .todo ? 0.06 : 0.09))
+                Capsule().fill(Color.primary.opacity(state == .todo || state == .waiting ? 0.06 : 0.09))
                 switch state {
                 case .todo:
                     EmptyView()
@@ -38,7 +39,8 @@ public struct GoalTrack: View {
                 case .skipped:
                     Capsule().fill(Color.primary.opacity(0.14))
                 case .waiting:
-                    Capsule().fill(Color.orange.opacity(0.85))
+                    // Hollow: nothing moves until you've answered.
+                    Capsule().strokeBorder(Color.orange.opacity(0.9), lineWidth: max(1, height * 0.3))
                 case .running:
                     if let progress {
                         Capsule().fill(accent).frame(width: max(height, width * progress))

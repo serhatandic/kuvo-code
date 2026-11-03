@@ -30,6 +30,17 @@ public struct GoalStages: Sendable {
     /// A step's number in the plan, from 1.
     public func number(_ id: String) -> Int { numbers[id] ?? 0 }
 
+    /// The most cards shown; the rest under way are named on one line under them.
+    public static let mostCards = 3
+
+    /// The cards shown, in the plan's order, those waiting for you kept first; and the rest under
+    /// way.
+    public var cards: (shown: [Card], rest: [Card]) {
+        guard now.count > Self.mostCards else { return (now, []) }
+        let kept = Set((now.filter { $0.look == .waiting } + now.filter { $0.look != .waiting }).prefix(Self.mostCards).map(\.id))
+        return (now.filter { kept.contains($0.id) }, now.filter { !kept.contains($0.id) })
+    }
+
     init(_ timeline: GoalTimeline, chart: GoalChart, paused: Bool) {
         let lanes = timeline.lanes
         numbers = Dictionary(lanes.enumerated().map { ($1.id, $0 + 1) }, uniquingKeysWith: { first, _ in first })

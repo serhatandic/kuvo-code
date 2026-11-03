@@ -39,6 +39,17 @@ struct GoalStagesTests {
         #expect(stages.number("p4") == 4, "steps keep their numbers in the plan")
     }
 
+    @Test func pastThreeUnderWayTheRestAreNamedUnderTheCardsThoseWaitingForYouShownFirst() {
+        let steps = sweep(["p1": .done, "p2": .doing, "p3": .doing, "p4": .doing, "p5": .waiting],
+                          began: ["p1": 0, "p2": 0.6, "p3": 0.7, "p4": 0.8, "p5": 0.9], ended: ["p1": 0.6])
+        let stages = GoalTimeline(plan(steps), now: hours(2)).stages()
+        #expect(stages.now.count == 4)
+        #expect(stages.cards.shown.map(\.id) == ["p2", "p3", "p5"], "three cards, the one waiting for you among them, in the plan's order")
+        #expect(stages.cards.rest.map(\.id) == ["p4"])
+        let two = GoalTimeline(plan(sweep(["p1": .done, "p2": .doing, "p4": .doing], began: ["p1": 0, "p2": 0.6, "p4": 0.6], ended: ["p1": 0.6])), now: hours(1)).stages()
+        #expect(two.cards.shown.count == 2 && two.cards.rest.isEmpty, "up to three, every one a card")
+    }
+
     @Test func twoStepsUnderWayShareTheCardsAndWhatsDoneIsInOrder() {
         let steps = sweep(["p1": .done, "p2": .done, "p4": .done, "p3": .doing, "p5": .doing],
                           began: ["p1": 0, "p2": 0.6, "p4": 0.6, "p3": 1.8, "p5": 1.5],
