@@ -24466,10 +24466,11 @@ var MAC_BOX_ROUTES = [
   "kuvo/work",
   "kuvo/vault",
   "kuvo/sandbox",
+  "kuvo/approval",
   "kuvo/search",
   "kuvo/git"
 ];
-var macAnswersAlso = (route) => /^kuvo\/accounts\/[^/]+\/forget$/.test(route) || /^kuvo\/shell\/[^/]+\/stop$/.test(route) || route === "kuvo/sessions" || QUEUE_ROUTE.test(route);
+var macAnswersAlso = (route) => /^kuvo\/accounts\/[^/]+\/forget$/.test(route) || /^kuvo\/shell\/[^/]+\/stop$/.test(route) || route === "kuvo/sessions" || QUEUE_ROUTE.test(route) || SESSION_APPROVAL_ROUTE.test(route);
 var macAnswers = (route) => MAC_BOX_ROUTES.some((area) => route === area || route.startsWith(`${area}/`)) || macAnswersAlso(route);
 var APP_NOT_ANSWERING = "Kuvo Code on this Mac isn't answering. Try again in a moment.";
 async function* toApp(request, phone, signal) {
