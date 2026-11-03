@@ -84,6 +84,7 @@ import type { AddressInfo } from "node:net";
 import type { SignedDoc } from "../shared/documents";
 import type { EngineRecord } from "../shared/records";
 import { fenceOwnPort, keepFence } from "./fence/state";
+import { keepApprovals } from "./areas/approval";
 import type { KeptNotice } from "./notices/hold";
 import type { Notice } from "./notices/notice";
 import type { GivenLibrary } from "./personalities/library";
@@ -318,6 +319,8 @@ async function run(): Promise<void> {
   // Agents' commands, in the sandbox wherever it can run (fence/state.ts), set up before the vault
   // goes by it.
   keepFence();
+  // Conversations' approval kept to what it comes to as the sandbox starts or stops.
+  keepApprovals();
   // The vault, held here: its key in this process's memory, its asks told to your phones.
   holdVault(engineHandler(readEngineFile, { name: os.hostname() }));
   setVaultTell(tell);
@@ -558,6 +561,7 @@ async function serve(): Promise<void> {
   try { socketKey(); } catch {}
   fenceOwnPort((server.address() as AddressInfo).port);
   keepFence();
+  keepApprovals();
   keepEngineDefaults();
   // The vault, held here (on a machine, `run` holds it; a test's box serves alone), its asks told
   // to your phones through this Mac's link: listening before it says where it is, so what reaches

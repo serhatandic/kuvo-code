@@ -214,6 +214,10 @@ export function withAlwaysAsk(rules: readonly KitRule[], { publishing = false }:
   return [...own.filter(rule => !deniesCommands(rule)), ...ALWAYS_ASK_RULES, ...(publishing ? PUBLISH_ASK_RULES : []), ...denied];
 }
 
+/** Whether `rules` ask before publishing, any of it. */
+export const asksPublishing = (rules: unknown): boolean =>
+  Array.isArray(rules) && PUBLISH_ASK_RULES.some(rule => (rules as KitRule[]).some(each => same(each, rule)));
+
 /** Whether `rules` ask for what always comes to you (and for publishing, with `publishing`). */
 export const asksAlways = (rules: unknown, { publishing = false }: { publishing?: boolean } = {}): boolean =>
   Array.isArray(rules) && [...ALWAYS_ASK_RULES, ...(publishing ? PUBLISH_ASK_RULES : [])].every(rule => (rules as KitRule[]).some(each => same(each, rule)));

@@ -248,7 +248,7 @@ enum BrowserTools {
               "model": ["type": "string", "description": "The model, as provider/model from list_models: yours by default."],
               "effort": ["type": "string", "description": "The model's effort, one of those list_models gives for it."],
               "mode": ["type": "string", "enum": ["build", "plan"], "description": "plan to have it plan first and change nothing until it's told to go on; build by default."],
-              "approval": ["type": "string", "enum": ["ask", "approveAll"], "description": "ask to have it ask before running commands and changing files; yours by default, and never more than yours."],
+              "approval": ["type": "string", "enum": ["askFirst", "acceptEdits", "auto", "fullAccess"], "description": "How much it does on its own: askFirst asks before it edits or runs commands, acceptEdits edits on its own and asks before commands, auto works on its own inside the sandbox, fullAccess asks nothing. Yours by default, and never more than yours."],
               "wake": ["type": "string", "enum": ["finished", "asks", "both", "none"], "description": "What you're woken with: when it finishes, when it asks for something, both (a bot's default), or none (a session's default)."],
               "wait": ["type": "boolean", "description": "Wait for its first answer and get it back here (up to ten minutes)."],
               "step": ["type": "integer", "description": "For your goal: the step it works on, by its number, so that step's track follows it."]], required: ["task"]),
