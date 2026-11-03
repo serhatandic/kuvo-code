@@ -56,6 +56,7 @@ const sandboxOnBefore = process.env.KUVO_TEST_SANDBOX_ON
 beforeAll(async () => {
   box = mkdtempSync(join(tmpdir(), "kuvo-auto-"))
   process.env.KUVO_TEST_SANDBOX_ON = "1"
+  process.env.KUVO_TEST_LOCAL_SCRIPTS = "1"
   project = join(box, "project")
   mkdirSync(project, { recursive: true })
   engineFile = (await import("../src/link/home")).ENGINE_FILE
@@ -99,6 +100,7 @@ afterAll(() => {
   else writeFileSync(engineFile, engineBefore)
   if (sandboxOnBefore === undefined) delete process.env.KUVO_TEST_SANDBOX_ON
   else process.env.KUVO_TEST_SANDBOX_ON = sandboxOnBefore
+  delete process.env.KUVO_TEST_LOCAL_SCRIPTS
   rmSync(box, { recursive: true, force: true })
 })
 

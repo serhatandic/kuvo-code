@@ -39,7 +39,7 @@ export const APPROVAL_HERE = object({
 export const REVIEW_DECISION = object({
   "id?": string, at: number, action: string, kind: words("command", "file", "tool"),
   decision: words("allowed", "refused", "asked"), reason: string, by: words("code", "model", "you"),
-  "why?": words("always", "reviewer", "unread", "unpinned", "unreadable", "noModel", "failed", "paused"),
+  "why?": words("always", "reviewer", "unread", "unpinned", "unasked", "unreadable", "noModel", "failed", "paused"),
   "always?": words("payment", "delete", "permissions", "account", "message", "credentials", "gitConfig", "publish"),
   "held?": bool, "approved?": number, "used?": number,
 });
@@ -63,5 +63,5 @@ export const APPROVAL_ROUTES: RouteShape[] = [
   { route: "GET kuvo/sessions/:id/approval", answers: { 200: SESSION_APPROVAL, 404: REFUSED, 503: REFUSED } },
   { route: "PUT kuvo/sessions/:id/approval", answers: { 200: SESSION_APPROVAL, 400: REFUSED, 404: REFUSED, 409: NOT_THAT, 502: REFUSED, 503: REFUSED } },
   { route: "GET kuvo/sessions/:id/decisions", answers: { 200: REVIEW_DECISIONS } },
-  { route: "POST kuvo/sessions/:id/decisions", answers: { 200: REVIEW_DECISIONS, 400: REFUSED, 404: REFUSED } },
+  { route: "POST kuvo/sessions/:id/decisions", answers: { 200: REVIEW_DECISIONS, 400: REFUSED, 404: REFUSED, 500: REFUSED } },
 ];

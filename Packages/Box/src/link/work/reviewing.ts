@@ -5,9 +5,10 @@
 // Haiku, Codex's Luna) through the agents bridge, so it's counted on that account. One that isn't
 // in Auto isn't reviewed: what it asks goes to you as before. A refusal goes back to the agent,
 // which carries on another way; one you approve later is told to the conversation. A pause stops
-// the conversation's run.
+// the conversation's run. A review that fails (a full disk, say) is a refusal too: never an ask.
 
 import { isObject } from "../../shared/json";
+import { oneLine } from "../../shared/text";
 import { bridgeTarget, call, engineGet, readEngineFile } from "../engine/client";
 import { sendInto, stopSession, writtenByYou } from "../engine/queue";
 import { boxNote } from "../../shared/queues";
@@ -121,12 +122,18 @@ export async function reviewIn(session: string, action: ReviewedAction, signal?:
   if (!at) return null;
   const bot = botOf(at.data);
   if (approvalOf(at.data, { agents: at.agents, bot: Boolean(bot) }).effective !== "auto") return null;
-  const context: ReviewContext = { session: at.data.id, said: bot ? [] : await yourMessages(at, signal), ...(bot ? { bot } : {}) };
-  const verdict = await review(action, context, { model: await reviewModelOf(at, signal), signal, pin });
+  // (In a bot's, what you wrote in its conversation counts beside its goal.)
+  const context: ReviewContext = { session: at.data.id, said: await yourMessages(at, signal), ...(bot ? { bot } : {}) };
+  let verdict: Verdict & { paused?: boolean };
+  try {
+    verdict = await review(action, context, { model: await reviewModelOf(at, signal), signal, pin });
+  } catch (error) {
+    return { decision: "refuse", reason: `Auto's reviewer couldn't review it (${oneLine(String((error as Error)?.message ?? error), 120)}).`, by: "code", held: false, why: "failed", conversation: at };
+  }
   if (verdict.paused) {
     await stopSession(at.target, at.data.id, false).catch(() => {});
     // A bot's: on its goal's card too.
-    if (bot) pauseGoal(bot.id, { why: REVIEW_PAUSE, session: at.data.id });
+    if (bot) try { pauseGoal(bot.id, { why: REVIEW_PAUSE, session: at.data.id }); } catch {}
   }
   return { ...verdict, conversation: at };
 }
@@ -166,6 +173,16 @@ export async function reviewPermission(source: Target, event: { type?: string; d
   if (event.type !== "permission.asked" || typeof id !== "string" || typeof sessionID !== "string" || reviewing.has(id)) return null;
   reviewing.add(id);
   if (reviewing.size > 500) reviewing.delete(reviewing.values().next().value!);
+  // (Taken up again as the event comes again, should this one fail.)
+  try {
+    return await answerPermission(source, id, sessionID, signal, found);
+  } catch (error) {
+    reviewing.delete(id);
+    throw error;
+  }
+}
+
+async function answerPermission(source: Target, id: string, sessionID: string, signal?: AbortSignal, found?: Conversation | null): Promise<Verdict | null> {
   const { permissions } = await asksIn(source, sessionID, signal);
   const permission = permissions.find(each => each.id === id && each.asker === sessionID);
   const seen = permission ? await callOf(source, permission, signal) : null;

@@ -516,6 +516,9 @@
             "literal": "unpinned"
            },
            {
+            "literal": "unasked"
+           },
+           {
             "literal": "unreadable"
            },
            {
@@ -634,6 +637,9 @@
             "literal": "unpinned"
            },
            {
+            "literal": "unasked"
+           },
+           {
             "literal": "unreadable"
            },
            {
@@ -690,6 +696,11 @@
      }
     },
     "404": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "500": {
      "object": {
       "message": "string"
      }

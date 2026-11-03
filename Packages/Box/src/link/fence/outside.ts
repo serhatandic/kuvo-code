@@ -188,7 +188,9 @@ async function askToRun(caller: Caller, args: Record<string, unknown>, signal?: 
   const conversation = caller.root ?? caller.session;
   const at = conversation ? await conversationOf(conversation).catch(() => null) : null;
   const full = Boolean(at && inFullAccess(at));
-  const reviewed = at && !full ? await reviewIn(conversation!, { kind: "command", command, folder: project }, signal, at).catch(() => null) : null;
+  // (A review that fails is a refusal: in Auto nothing waits for you.)
+  const reviewed = at && !full ? await reviewIn(conversation!, { kind: "command", command, folder: project }, signal, at)
+    .catch(error => ({ decision: "refuse" as const, reason: `Auto's reviewer couldn't review it (${String((error as Error)?.message ?? error).slice(0, 120)}).`, by: "code" as const, held: false, paused: false, fetched: undefined })) : null;
   if (reviewed?.decision === "refuse") {
     heard.abort();
     return { text: refusalWords(reviewed), isError: false };
