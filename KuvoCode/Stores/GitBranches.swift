@@ -1,3 +1,4 @@
+import ClientChanges
 import Foundation
 import OpenCodeKit
 
@@ -55,79 +56,34 @@ nonisolated extension Git {
         }
         return conflicted.isEmpty ? .failed(failure) : .conflict(conflicted)
     }
+}
 
-    /// Pushes what `directory` has checked out to `origin`, and returns the page that opens a
-    /// pull request for it on GitHub, or a merge request on GitLab (nil for other hosts).
-    static func pushForPullRequest(branch: String, base: String?, in directory: String, environment: [String: String]) throws -> URL? {
-        if let failure = report(["push", "-u", "origin", "HEAD"], in: directory, environment: environment) {
-            throw GitFailure(message: failure)
-        }
-        guard let remote = run(["remote", "get-url", "origin"], in: directory)?.trimmingCharacters(in: .whitespacesAndNewlines),
-              let page = webPage(of: remote) else { return nil }
-        let allowed = CharacterSet.urlQueryAllowed.subtracting(CharacterSet(charactersIn: "&=+?#"))
-        let source = branch.addingPercentEncoding(withAllowedCharacters: allowed) ?? branch
-        let target = base.map { $0.addingPercentEncoding(withAllowedCharacters: allowed) ?? $0 }
-        // Without a base, the host compares with the repository's main branch.
-        if page.host()?.contains("gitlab") == true {
-            return URL(string: page.absoluteString + "/-/merge_requests/new?merge_request%5Bsource_branch%5D=\(source)" + (target.map { "&merge_request%5Btarget_branch%5D=\($0)" } ?? ""))
-        }
-        if page.host()?.contains("github") == true {
-            return URL(string: page.absoluteString + "/compare/" + (target.map { "\($0)...\(source)" } ?? source) + "?expand=1")
-        }
-        return nil
+/// Create Pull Request, on the box the project is on, as a phone asks it: its confirmation first
+/// (`kuvo/git/pull-request/draft`), then the box pushes the branch and creates it with `gh`, or
+/// gives the host's page when `gh` isn't signed in there.
+nonisolated enum PullRequests {
+    enum Made: Equatable, Sendable {
+        /// Made on the host (or one already open for the branch).
+        case made(URL)
+        /// Pushed; this page creates it, its title and description filled in.
+        case toOpen(URL)
+        /// Pushed, to a host the box can't open one on.
+        case pushed
     }
 
-    /// What a pull request for `directory`'s branch would bring: its commits, the files they
-    /// change, and the diff, cut to a size a model reads quickly.
-    static func pullRequestSummary(against base: String?, in directory: String, limit: Int = 30_000) -> String {
-        let range = base.map { $0 + "...HEAD" } ?? "HEAD~1...HEAD"
-        let commits = run(["log", "--no-color", "--format=- %s%n%b", base.map { $0 + "..HEAD" } ?? "-1"], in: directory) ?? ""
-        let files = run(["diff", "--no-color", "--stat", range], in: directory) ?? ""
-        var diff = run(["diff", "--no-color", "--no-ext-diff", range], in: directory) ?? ""
-        if diff.count > limit { diff = String(diff.prefix(limit)) + "\n…" }
-        return "Commits:\n\(commits)\nFiles:\n\(files)\nDiff:\n\(diff)"
+    /// `withSummary`: with what the branch brings, for a model to write them from.
+    static func draft(on box: BoxClient, directory: String, withSummary: Bool = false) async throws -> PullRequestDraft {
+        struct Asked: Encodable { let directory: String; let summary: Bool }
+        return try await box.value(PullRequestDraft.self, "POST", "kuvo/git/pull-request/draft", body: Asked(directory: directory, summary: withSummary))
     }
 
-    /// The pull request page with its title and description filled in.
-    static func pullRequestPage(_ page: URL, title: String, body: String) -> URL {
-        guard var components = URLComponents(url: page, resolvingAgainstBaseURL: false) else { return page }
-        let items = page.host()?.contains("gitlab") == true
-            ? [URLQueryItem(name: "merge_request[title]", value: title), URLQueryItem(name: "merge_request[description]", value: body)]
-            : [URLQueryItem(name: "title", value: title), URLQueryItem(name: "body", value: body)]
-        components.percentEncodedQueryItems = (components.percentEncodedQueryItems ?? []) + items.map(\.formEscaped)
-        return components.url ?? page
-    }
-
-    /// A model's pull request, as a title (its first line) and a description (the rest).
-    static func parsePullRequest(_ text: String) -> (title: String, body: String)? {
-        var lines = text.trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: "\n")
-        lines.removeAll { $0.hasPrefix("```") }
-        guard let first = lines.first?.trimmingCharacters(in: .whitespaces), !first.isEmpty else { return nil }
-        var title = first
-        for prefix in ["# ", "Title: ", "title: "] where title.hasPrefix(prefix) { title = String(title.dropFirst(prefix.count)) }
-        title = title.trimmingCharacters(in: CharacterSet(charactersIn: "*`\" "))
-        let body = lines.dropFirst().joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-        return title.isEmpty ? nil : (String(title.prefix(120)), String(body.prefix(4_000)))
-    }
-
-    /// A remote's web page: `git@github.com:me/app.git` and `https://github.com/me/app.git`
-    /// are both https://github.com/me/app.
-    static func webPage(of remote: String) -> URL? {
-        var address = remote
-        if address.hasSuffix(".git") { address.removeLast(4) }
-        if address.hasPrefix("ssh://") || address.hasPrefix("git://") {
-            address = "https://" + address.drop { $0 != "/" }.dropFirst(2)
-        } else if !address.contains("://"), let colon = address.firstIndex(of: ":") {
-            // scp-like: git@host:owner/repo
-            address = "https://" + address[..<colon] + "/" + address[address.index(after: colon)...]
-        }
-        guard var components = URLComponents(string: address), components.scheme == "https" || components.scheme == "http",
-              components.host != nil else { return nil }
-        components.scheme = "https"
-        components.user = nil
-        components.password = nil
-        components.port = nil
-        return components.url
+    static func create(on box: BoxClient, directory: String, title: String, body: String) async throws -> Made {
+        struct Asked: Encodable { let directory, title, body: String }
+        struct Answer: Decodable { var url: String?; var compareURL: String? }
+        let made = try await box.value(Answer.self, "POST", "kuvo/git/pull-request", body: Asked(directory: directory, title: title, body: body))
+        if let url = made.url.flatMap(URL.init(string:)) { return .made(url) }
+        if let page = made.compareURL.flatMap(URL.init(string:)) { return .toOpen(page) }
+        return .pushed
     }
 }
 

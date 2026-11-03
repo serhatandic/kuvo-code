@@ -25,6 +25,15 @@ const NOT_MERGED = object({ message: string, "conflicts?": list(string) });
 /** A pull request made (`url`), or the page to make one on (`compareURL`); neither on a host the
  * box doesn't know, where the branch is pushed. */
 export const PULL_REQUEST = object({ "url?": string, "compareURL?": string });
+/** Create Pull Request's confirmation (`kuvo/git/pull-request/draft`): the branch, its base, a title
+ * and description from the commits, what it brings (`summary`, when asked, for a model to write them from), its
+ * host, and whether Create makes it on the box (`creates`, with `gh` there and signed in), or why
+ * not on GitHub (`gh`: not signed in, or not there), when it opens the host's page instead. */
+export const PULL_REQUEST_DRAFT = object({
+  branch: string, "base?": string, title: string, body: string, "summary?": string,
+  host: oneOf(literal("github"), literal("gitlab"), literal("other")), creates: bool, "gh?": oneOf(literal("signed-out"), literal("missing")),
+});
+export type PullRequestDraft = Infer<typeof PULL_REQUEST_DRAFT>;
 
 export const CHANGES_ROUTES: RouteShape[] = [
   { route: "POST kuvo/git/changes", answers: { 200: GIT_CHANGES } },
@@ -36,5 +45,6 @@ export const CHANGES_ROUTES: RouteShape[] = [
   { route: "POST kuvo/git/push", answers: { 200: NOTHING } },
   { route: "POST kuvo/git/merge", answers: { 200: NOTHING, 409: NOT_MERGED } },
   { route: "POST kuvo/git/pull-request", answers: { 200: PULL_REQUEST } },
+  { route: "POST kuvo/git/pull-request/draft", answers: { 200: PULL_REQUEST_DRAFT } },
   { route: "POST kuvo/git/commit-diff", answers: { 200: COMMIT_DIFF } },
 ];
