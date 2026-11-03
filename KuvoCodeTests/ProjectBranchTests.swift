@@ -41,4 +41,21 @@ import Testing
         try await until { workspace.branches[directory] == "dark-mode" }
         #expect(workspace.defaultBranches[directory] == "main")
     }
+
+    /// An engine that just started answers a folder's branch before it has read its git (no
+    /// branch at all), then says the branch changed: the branch shows then, with the one it goes
+    /// into, so Create Pull Request is there.
+    @Test func aBranchTheEngineReadsAfterItAnsweredShowsWhenItSaysSo() async throws {
+        defer { engine.stop() }
+        engine.on("GET", "/api/vcs", json: ["location": ["directory": directory], "data": ["branch": [:]]])
+        workspace.api = engine.api
+        await workspace.loadBranch(for: directory)
+        #expect(workspace.branches[directory] == nil)
+
+        answersBranch()
+        let event = ["id": "evt_branch", "type": "vcs.branch.updated", "location": ["directory": directory], "data": ["branch": "dark-mode"]] as [String: Any]
+        workspace.handle(try ServerEvent(json: JSONSerialization.data(withJSONObject: event)))
+        try await until { workspace.defaultBranches[directory] == "main" }
+        #expect(workspace.branches[directory] == "dark-mode")
+    }
 }

@@ -710,17 +710,24 @@ final class Workspace {
     }
 
     func loadBranch(for directory: String) async {
+        let read = (branchReads[directory] ?? 0) + 1
+        branchReads[directory] = read
         guard let api = api(forFolder: directory), let info = try? await api.vcs(directory: directory) else {
             // Asked before its engine answered (the window's folder as the app starts, a machine
             // still connecting): read again once it does.
             branchesUnread.insert(directory)
             return
         }
+        // A later read's answer is newer (an engine that just started answers no branch, then
+        // says it has read one): an earlier one landing after it doesn't undo it.
+        guard branchReads[directory] == read else { return }
         branchesUnread.remove(directory)
         branches[directory] = info.branch?.current
         defaultBranches[directory] = info.branch?.default
     }
 
+    /// How many times each folder's branch was asked for, so only the latest answer counts.
+    @ObservationIgnored private var branchReads: [String: Int] = [:]
     /// Folders whose branch couldn't be read yet, for `loadBranch` once their engine answers.
     @ObservationIgnored private var branchesUnread: Set<String> = []
 
@@ -2327,6 +2334,9 @@ final class Workspace {
             struct Branch: Decodable { var branch: String? }
             let folder = machine.map { RemoteFolder.folder(directory, on: $0) } ?? directory
             branches[folder] = (try? event.payload(as: Branch.self))?.branch
+            // And the branch it goes into, which an engine that just started didn't know at first
+            // (read again, as opencode's own client does).
+            Task { await loadBranch(for: folder) }
         }
         noteShellJob(event)
         if let id = event.sessionID ?? Self.formSessionID(event), let model = models[id] {
