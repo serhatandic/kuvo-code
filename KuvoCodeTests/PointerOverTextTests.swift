@@ -291,7 +291,6 @@ final class ScrolledConversation {
         try scene.move(to: beside)
         #expect(NSCursor.current == .iBeam)
     }
-
 }
 
 /// The same over your own messages: their words are drawn by AppKit's text as the composer's are,
