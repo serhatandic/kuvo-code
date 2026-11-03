@@ -3279,13 +3279,17 @@ In a conversation that's in Auto here now (`approval.reviewer` in `features`, br
 below since 0.9.185, `approval.held`), what its agent wants beyond the sandbox's walls is judged on
 the box: a command it asks to run outside the sandbox (`sandbox_ask`), a file the agent's own tools
 want to change outside its folder (the engine's or the bridge's `external_directory` ask, by the
-file the tool call names), and in a bot's conversation or its work, what the engine asks of what
+file the tool call names; where no tool call names one, as when Codex asks for room of its own, by
+each path the ask names, judged as a write, and where it names none, by what it asked, which the
+model judges; bridge 0.9.186), and in a bot's conversation or its work, what the engine asks of what
 always comes to you ("Work › What always comes to you"). The flow comes first: it allows what the
 work calls for, refuses only real damage and what you didn't ask for, and **never leaves a call
 waiting on you**: a refusal goes back to the agent with the reason, and it carries on another way.
 A conversation in Full Access is never reviewed (its command just runs, `Ran outside the sandbox ·
 Full Access`); one in Ask First or Accept Edits asks you as before, and so does what your own
-Settings › Permissions ask.
+Settings › Permissions ask. Where the engine (or the bridge) doesn't answer for a moment, a
+conversation is taken as the box last found it; one it never found then has its `sandbox_ask` held
+back (`why: "failed"`, code's lines still refused), never left waiting on you (bridge 0.9.186).
 
 - Code first, only for what's never allowed, refused and the model never asked, and never held back
   for you: Kuvo Code's own folders (read or written, a script run from them), and wrecking your

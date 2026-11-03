@@ -33,6 +33,8 @@ const calling: Record<string, unknown[]> = {}
 const asking: Record<string, unknown[]> = {}
 // What the box wrote into each conversation.
 const written: Record<string, { text?: string }[]> = {}
+// The engine doesn't answer (it's starting again, say).
+let down = false
 
 // (`approveAll`: one from before there were approvals, which never asked: Full Access, as it ran.
 // `approveAllSince`: one a client from before made Approve All since: this computer's default.)
@@ -68,6 +70,7 @@ beforeAll(async () => {
       const url = new URL(request.url)
       const route = url.pathname
       const body = request.method === "POST" ? await request.json().catch(() => ({})) : null
+      if (down) return Response.json({ message: "Busy." }, { status: 503 })
       if (route === "/install.sh") { installs++; return new Response("#!/bin/sh\necho installed the tool\n") }
       if (route === "/api/provider") return Response.json({ data: [{ id: "anthropic" }] })
       if (route === "/api/model") return Response.json({ data: [{ id: "claude-sonnet-5", providerID: "anthropic", name: "Claude Sonnet 5" }, { id: "claude-haiku-5-5", providerID: "anthropic", name: "Claude Haiku 5.5" }] })
@@ -229,6 +232,52 @@ test("in Auto, a file the agent's own tool wants outside its folder is allowed o
   const decided = reviewer.reviewLog("ses_files").decisions.length
   expect(await ask("per_2", "write", join(kuvo, "notes.txt"))).toBeNull()
   expect(reviewer.reviewLog("ses_files").decisions.length).toBe(decided)
+})
+
+test("in Auto, a coding agent's ask to work outside its folder is the reviewer's when no tool call names the file, or no file is named at all: never left for you", async () => {
+  conversation("ses_codex", "auto", "Update the shared notes")
+  reply = () => '{"decision": "allow", "reason": "The notes the user asked for."}'
+  // Codex asks for more room with paths of its own (no tool call of it is in the conversation),
+  // or with none.
+  const ask = (id: string, resources: string[]) => {
+    calling.ses_codex = []
+    asking.ses_codex = [{ id, action: "external_directory", resources }]
+    return reviewing.reviewPermission({ port: engine.port, password: "pw" } as never, { type: "permission.asked", data: { id, sessionID: "ses_codex", action: "external_directory" } })
+  }
+  const before = prompts.length
+  expect((await ask("per_c1", [join(box, "notes", "shared.md")]))?.decision).toBe("allow")
+  expect(replies.at(-1)).toEqual({ path: "/permission/per_c1/reply", body: { decision: "once" } })
+  expect(prompts.length).toBe(before + 1)
+  // Kuvo Code's own folders, among others: refused by code.
+  const kuvo = (await import("../src/link/fence/policy")).fencePolicy().kuvo[0]
+  expect((await ask("per_c2", [join(box, "notes", "shared.md"), join(kuvo, "notes.txt")]))?.decision).toBe("refuse")
+  expect(replies.at(-1)).toMatchObject({ path: "/permission/per_c2/reply", body: { decision: "reject" } })
+  // None named: the model judges what it asked, and what it refuses is held back for you.
+  reply = () => '{"decision": "refuse", "reason": "It did not say what it needs."}'
+  expect((await ask("per_c3", ["*"]))?.decision).toBe("refuse")
+  expect(replies.at(-1)).toMatchObject({ path: "/permission/per_c3/reply", body: { decision: "reject", message: expect.stringContaining("Auto's reviewer held this back") } })
+  expect(reviewer.reviewLog("ses_codex").decisions.at(-1)).toMatchObject({ decision: "refused", held: true })
+})
+
+test("when the engine doesn't answer, a command in Auto is held back, never asked; one in Full Access still runs", async () => {
+  conversation("ses_down", "auto", "Fix the build")
+  conversation("ses_down_full", "approveAll", "Ship it")
+  reply = () => '{"decision": "allow", "reason": "Builds it."}'
+  expect((await sandboxAsk("ses_down", "echo seen")).text).toMatch(/^Ran outside the sandbox · Allowed by Auto's reviewer/)
+  expect((await sandboxAsk("ses_down_full", "echo seen")).text).toMatch(/^Ran outside the sandbox · Full Access/)
+  down = true
+  try {
+    expect((await sandboxAsk("ses_down", "echo again")).text).toMatch(/^Auto's reviewer held this back: /)
+    expect((await sandboxAsk("ses_down_full", "echo again")).text).toMatch(/^Ran outside the sandbox · Full Access\n\nagain/)
+    // One the box hasn't seen yet: held back too, for you to approve, never left waiting.
+    conversation("ses_down_new", "askFirst", "Build it")
+    expect((await sandboxAsk("ses_down_new", "echo new")).text).toMatch(/^Auto's reviewer held this back: /)
+    expect(outside.listSandboxAsks()).toEqual([])
+    expect(reviewer.reviewLog("ses_down").decisions.at(-1)).toMatchObject({ decision: "refused", held: true, why: "failed" })
+    expect(reviewer.reviewLog("ses_down_new").decisions.at(-1)).toMatchObject({ decision: "refused", held: true, why: "failed" })
+  } finally {
+    down = false
+  }
 })
 
 test("in Auto, a maker's install script is fetched once, reviewed, and that copy is what runs, without asking you", async () => {

@@ -21,7 +21,7 @@ import { askBook } from "../notices/asking";
 import type { Notice } from "../notices/notice";
 import { commandEnv, runCommand } from "../run-command";
 import type { Caller } from "../vault/who";
-import { conversationOf, inFullAccess, refusalWords, reviewIn } from "../work/reviewing";
+import { findConversation, heldUnreached, inFullAccess, refusalWords, reviewIn } from "../work/reviewing";
 import { forgetFetched } from "../work/reviewer";
 import { addRule, ownerOf, writeRuleWouldBe } from "./allowed";
 
@@ -185,17 +185,21 @@ async function askToRun(caller: Caller, args: Record<string, unknown>, signal?: 
   })();
   // In Full Access it just runs. In Auto, its reviewer decides, never you: it runs, or the agent
   // hears why not and goes on another way (and you can approve it later, from Decisions).
+  // (Where the engine doesn't answer, as it was last found; one never found is held back, as one
+  // the reviewer couldn't judge.)
   const conversation = caller.root ?? caller.session;
-  const at = conversation ? await conversationOf(conversation).catch(() => null) : null;
+  const { at, unreached } = conversation ? await findConversation(conversation).catch(() => ({ at: null, unreached: true })) : { at: null, unreached: false };
   const full = Boolean(at && inFullAccess(at));
+  const action = { kind: "command" as const, command, folder: project };
   // (A review that fails is a refusal: in Auto nothing waits for you.)
-  const reviewed = at && !full ? await reviewIn(conversation!, { kind: "command", command, folder: project }, signal, at)
-    .catch(error => ({ decision: "refuse" as const, reason: `Auto's reviewer couldn't review it (${String((error as Error)?.message ?? error).slice(0, 120)}).`, by: "code" as const, held: false, why: "failed" as const, paused: false, fetched: undefined })) : null;
-  if (reviewed?.decision === "refuse") {
+  const reviewing = at && !full ? reviewIn(conversation!, action, signal, at) : unreached ? heldUnreached(conversation!, action, signal) : null;
+  const verdict = reviewing && await reviewing
+    .catch(error => ({ decision: "refuse" as const, reason: `Auto's reviewer couldn't review it (${String((error as Error)?.message ?? error).slice(0, 120)}).`, by: "code" as const, held: false, why: "failed" as const, paused: false, fetched: undefined }));
+  if (verdict?.decision === "refuse") {
     heard.abort();
-    return { text: refusalWords(reviewed), isError: false };
+    return { text: refusalWords(verdict), isError: false };
   }
-  const answered: SandboxAnswer = full ? { answer: "once", client: "Full Access" } : reviewed?.decision === "allow" ? { answer: "once", client: "Auto" } : await book.ask({
+  const answered: SandboxAnswer = full ? { answer: "once", client: "Full Access" } : verdict?.decision === "allow" ? { answer: "once", client: "Auto" } : await book.ask({
     ...(caller.root ? { session: caller.root, ...(caller.sessionName ? { sessionName: caller.sessionName } : {}) } : {}),
     ...(caller.bot ? { bot: caller.bot, botName: caller.botName } : {}),
     project,
@@ -209,7 +213,7 @@ async function askToRun(caller: Caller, args: Record<string, unknown>, signal?: 
   }, signal, undefined, id => { asking = id; });
   heard.abort();
   // (A script from the web, fetched once for the review: that copy is what runs, then it's gone.)
-  const fetched = reviewed?.fetched;
+  const fetched = verdict?.fetched;
   if (answered.unanswered) return { text: "Nobody answered in time, so it didn't run. Don't get around the sandbox another way: go on without it, or ask the user when they're back.", isError: false };
   if (answered.answer === "no") return { text: "The user said no: don't run it, nor get around the sandbox another way. Find another way to do the task, or ask them why.", isError: false };
   let how: "once" | "always" = "once";
@@ -222,7 +226,7 @@ async function askToRun(caller: Caller, args: Record<string, unknown>, signal?: 
   let shown = output;
   if (shown.length > MOST_OUTPUT) shown = "…" + shown.slice(-MOST_OUTPUT).replace(/^[^\n]*\n/, "");
   const ended = timedOut ? `It was stopped after ${seconds} seconds.` : `It ended with ${code}.`;
-  const head = how === "always" ? `Ran outside the sandbox · Always for this: from now on your commands can write in ${always!.path} in the sandbox, so run them there.` : reviewed?.decision === "allow" ? (reviewed.by === "you" ? "Ran outside the sandbox · Approved by the user" : `Ran outside the sandbox · Allowed by Auto's reviewer: ${reviewed.reason}`) : full ? "Ran outside the sandbox · Full Access" : "Ran outside the sandbox · Allowed once";
+  const head = how === "always" ? `Ran outside the sandbox · Always for this: from now on your commands can write in ${always!.path} in the sandbox, so run them there.` : verdict?.decision === "allow" ? (verdict.by === "you" ? "Ran outside the sandbox · Approved by the user" : `Ran outside the sandbox · Allowed by Auto's reviewer: ${verdict.reason}`) : full ? "Ran outside the sandbox · Full Access" : "Ran outside the sandbox · Allowed once";
   return { text: `${head}\n\n${shown.trim() ? shown.trimEnd() + "\n\n" : "It printed nothing.\n\n"}${ended}`, isError: timedOut || code !== 0 };
 }
 

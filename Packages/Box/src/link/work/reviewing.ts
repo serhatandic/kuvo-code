@@ -44,19 +44,54 @@ const ownEngine = (): Target | null => {
  * have the engine make, the bridge's conversation it's for), on the engine or the coding agents'
  * bridge; null where it's on neither. */
 export async function conversationOf(session: string, engine = ownEngine(), bridge = bridgeTarget()): Promise<Conversation | null> {
+  return (await findConversation(session, engine, bridge)).at;
+}
+
+// Conversations as last found, so one the engine doesn't answer for a moment (busy, starting
+// again) is still known: in Auto, what it asks meanwhile is held back, never left waiting for you.
+const lastFound = new Map<string, Conversation>();
+
+/** The conversation `session` is in, as `conversationOf` finds it; where the engine (or the bridge)
+ * didn't answer, as it was last found, and `unreached` where it never was. */
+export async function findConversation(session: string, engine = ownEngine(), bridge = bridgeTarget()): Promise<{ at: Conversation | null; unreached: boolean }> {
+  let unreached = !engine;
+  const found = await lookUp(session, engine, bridge, () => { unreached = true; });
+  if (found) {
+    if (lastFound.size >= 500) lastFound.delete(lastFound.keys().next().value!);
+    lastFound.delete(session);
+    lastFound.set(session, found);
+    return { at: found, unreached: false };
+  }
+  const last = unreached ? lastFound.get(session) : undefined;
+  return { at: last ?? null, unreached: unreached && !last };
+}
+
+async function lookUp(session: string, engine: Target | null, bridge: Target | null, unanswered: () => void): Promise<Conversation | null> {
   for (const [target, agents] of [[engine, false], [bridge, true]] as const) {
     if (!target) continue;
-    const get = async (id: string) => (await engineGet(target, `api/session/${encodeURIComponent(id)}`).catch(() => null) as EngineAnswer<EngineSession> | null)?.data ?? null;
+    // (One it doesn't have answers 404; anything else is the engine not answering.)
+    const get = async (id: string) => (await engineGet(target, `api/session/${encodeURIComponent(id)}`).catch(error => {
+      if (String((error as Error)?.message) !== "404") unanswered();
+      return null;
+    }) as EngineAnswer<EngineSession> | null)?.data ?? null;
     let data = await get(session);
     for (let up = 0; data?.parentID && up < 5; up++) data = await get(data.parentID) ?? data;
     const runFor = data?.metadata?.kuvo?.engineFor;
     if (!agents && bridge && typeof runFor === "string" && runFor !== data?.id) {
-      const owner = await conversationOf(runFor, null, bridge);
+      const owner = await lookUp(runFor, null, bridge, unanswered);
       if (owner) return owner;
     }
     if (data?.id) return { target, agents, data };
   }
   return null;
+}
+
+/** What's decided about `action` in a conversation the engine didn't answer for, and the box hasn't
+ * found before: held back for you to approve (code's lines still refused), as one the reviewer
+ * couldn't judge; never left waiting for you, whatever its mode turns out to be. */
+export async function heldUnreached(session: string, action: ReviewedAction, signal?: AbortSignal): Promise<Verdict & { paused?: boolean }> {
+  const unanswered: SmallModel = async () => { throw new Error("the engine didn't answer"); };
+  return review(action, { session, said: [] }, { model: unanswered, signal });
 }
 
 /** The bot whose conversation or work this is, and its goal while it has one running (with the
@@ -195,21 +230,30 @@ async function answerPermission(source: Target, id: string, sessionID: string, s
   const seen = permission ? await callOf(source, permission, signal) : null;
   const at = found === undefined ? await conversationOf(sessionID) : found;
   const folder = at?.data.location?.directory;
-  if (!permission || !seen || !at || !folder) return null;
-  let action: ReviewedAction;
+  if (!permission || !at || !folder) return null;
+  let actions: ReviewedAction[];
   if (permission.action === "external_directory") {
-    const file = [seen.input.filePath, seen.input.file_path, seen.input.notebook_path, seen.input.path, seen.input.file].find((each): each is string => typeof each === "string" && each.startsWith("/"));
-    if (!file) return null;
-    action = { kind: "file", path: file, access: READING.has(seen.tool.toLowerCase()) ? "read" : "write", folder, tool: seen.tool, input: seen.input };
+    // By the file its tool call names; where none does (Codex asks for room of its own, with no
+    // tool call), by the paths the ask names, each judged as a write; where it names none, by
+    // what it asked, as the model reads it.
+    const file = seen && [seen.input.filePath, seen.input.file_path, seen.input.notebook_path, seen.input.path, seen.input.file].find((each): each is string => typeof each === "string" && each.startsWith("/"));
+    const named = permission.resources.map(each => each.replace(/\/\*$/, "")).filter(each => each.startsWith("/"));
+    actions = seen && file ? [{ kind: "file", path: file, access: READING.has(seen.tool.toLowerCase()) ? "read" : "write", folder, tool: seen.tool, input: seen.input }]
+      : named.length ? named.map(each => ({ kind: "file" as const, path: each, access: "write" as const, folder }))
+      : [{ kind: "tool", tool: seen?.tool || "work outside its folder", args: seen?.input ?? { asked: permission.resources }, folder }];
   } else {
     // (Only a bot's asks what it never decides; anything else asked is your own rules'.)
-    if (!botOf(at.data) || !alwaysAsks(permission.action, permission.resources, seen, { publishing: asksPublishing(at.data.permissions) })) return null;
+    if (!seen || !botOf(at.data) || !alwaysAsks(permission.action, permission.resources, seen, { publishing: asksPublishing(at.data.permissions) })) return null;
     const command = typeof seen.input.command === "string" ? seen.input.command : null;
-    action = (permission.action === "shell" || permission.action === "bash") && command ? { kind: "command", command, folder } : { kind: "tool", tool: seen.tool, args: seen.input, folder };
+    actions = [(permission.action === "shell" || permission.action === "bash") && command ? { kind: "command", command, folder } : { kind: "tool", tool: seen.tool, args: seen.input, folder }];
   }
   // (The engine runs a command it asked about itself: a script from the web in it can't be pinned
-  // to the copy reviewed, so that one is held back.)
-  const verdict = await reviewIn(sessionID, action, signal, at, false);
+  // to the copy reviewed, so that one is held back. Of several paths, the first refused decides.)
+  let verdict: Awaited<ReturnType<typeof reviewIn>> = null;
+  for (const action of actions) {
+    verdict = await reviewIn(sessionID, action, signal, at, false);
+    if (!verdict || verdict.decision === "refuse") break;
+  }
   if (!verdict) return null;
   const reply = verdict.decision === "allow" ? { decision: "once" } : { decision: "reject", message: refusalWords(verdict) };
   await call(source, "POST", `/api/session/${encodeURIComponent(permission.asker)}/permission/${encodeURIComponent(permission.id)}/reply`, reply, signal);

@@ -14705,16 +14705,39 @@ var ownEngine = () => {
   }
 };
 async function conversationOf3(session, engine = ownEngine(), bridge = bridgeTarget()) {
+  return (await findConversation(session, engine, bridge)).at;
+}
+var lastFound = new Map;
+async function findConversation(session, engine = ownEngine(), bridge = bridgeTarget()) {
+  let unreached = !engine;
+  const found = await lookUp(session, engine, bridge, () => {
+    unreached = true;
+  });
+  if (found) {
+    if (lastFound.size >= 500)
+      lastFound.delete(lastFound.keys().next().value);
+    lastFound.delete(session);
+    lastFound.set(session, found);
+    return { at: found, unreached: false };
+  }
+  const last = unreached ? lastFound.get(session) : undefined;
+  return { at: last ?? null, unreached: unreached && !last };
+}
+async function lookUp(session, engine, bridge, unanswered) {
   for (const [target, agents] of [[engine, false], [bridge, true]]) {
     if (!target)
       continue;
-    const get = async (id) => (await engineGet(target, `api/session/${encodeURIComponent(id)}`).catch(() => null))?.data ?? null;
+    const get = async (id) => (await engineGet(target, `api/session/${encodeURIComponent(id)}`).catch((error) => {
+      if (String(error?.message) !== "404")
+        unanswered();
+      return null;
+    }))?.data ?? null;
     let data = await get(session);
     for (let up = 0;data?.parentID && up < 5; up++)
       data = await get(data.parentID) ?? data;
     const runFor = data?.metadata?.kuvo?.engineFor;
     if (!agents && bridge && typeof runFor === "string" && runFor !== data?.id) {
-      const owner = await conversationOf3(runFor, null, bridge);
+      const owner = await lookUp(runFor, null, bridge, unanswered);
       if (owner)
         return owner;
     }
@@ -14722,6 +14745,12 @@ async function conversationOf3(session, engine = ownEngine(), bridge = bridgeTar
       return { target, agents, data };
   }
   return null;
+}
+async function heldUnreached(session, action, signal) {
+  const unanswered = async () => {
+    throw new Error("the engine didn't answer");
+  };
+  return review(action, { session, said: [] }, { model: unanswered, signal });
 }
 function botOf(data) {
   const bot = botOfConversation(data.id) ?? worksFor(data);
@@ -14829,21 +14858,25 @@ async function answerPermission(source, id, sessionID, signal, found) {
   const seen = permission ? await callOf(source, permission, signal) : null;
   const at = found === undefined ? await conversationOf3(sessionID) : found;
   const folder = at?.data.location?.directory;
-  if (!permission || !seen || !at || !folder)
+  if (!permission || !at || !folder)
     return null;
-  let action;
+  let actions;
   if (permission.action === "external_directory") {
-    const file = [seen.input.filePath, seen.input.file_path, seen.input.notebook_path, seen.input.path, seen.input.file].find((each) => typeof each === "string" && each.startsWith("/"));
-    if (!file)
-      return null;
-    action = { kind: "file", path: file, access: READING.has(seen.tool.toLowerCase()) ? "read" : "write", folder, tool: seen.tool, input: seen.input };
+    const file = seen && [seen.input.filePath, seen.input.file_path, seen.input.notebook_path, seen.input.path, seen.input.file].find((each) => typeof each === "string" && each.startsWith("/"));
+    const named = permission.resources.map((each) => each.replace(/\/\*$/, "")).filter((each) => each.startsWith("/"));
+    actions = seen && file ? [{ kind: "file", path: file, access: READING.has(seen.tool.toLowerCase()) ? "read" : "write", folder, tool: seen.tool, input: seen.input }] : named.length ? named.map((each) => ({ kind: "file", path: each, access: "write", folder })) : [{ kind: "tool", tool: seen?.tool || "work outside its folder", args: seen?.input ?? { asked: permission.resources }, folder }];
   } else {
-    if (!botOf(at.data) || !alwaysAsks(permission.action, permission.resources, seen, { publishing: asksPublishing(at.data.permissions) }))
+    if (!seen || !botOf(at.data) || !alwaysAsks(permission.action, permission.resources, seen, { publishing: asksPublishing(at.data.permissions) }))
       return null;
     const command = typeof seen.input.command === "string" ? seen.input.command : null;
-    action = (permission.action === "shell" || permission.action === "bash") && command ? { kind: "command", command, folder } : { kind: "tool", tool: seen.tool, args: seen.input, folder };
+    actions = [(permission.action === "shell" || permission.action === "bash") && command ? { kind: "command", command, folder } : { kind: "tool", tool: seen.tool, args: seen.input, folder }];
   }
-  const verdict = await reviewIn(sessionID, action, signal, at, false);
+  let verdict = null;
+  for (const action of actions) {
+    verdict = await reviewIn(sessionID, action, signal, at, false);
+    if (!verdict || verdict.decision === "refuse")
+      break;
+  }
   if (!verdict)
     return null;
   const reply = verdict.decision === "allow" ? { decision: "once" } : { decision: "reject", message: refusalWords(verdict) };
@@ -23204,7 +23237,7 @@ import fs75 from "node:fs";
 import path79 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.185";
+var BRIDGE_VERSION = "0.9.186";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -23886,14 +23919,16 @@ async function askToRun(caller, args, signal) {
       }
     })();
   const conversation = caller.root ?? caller.session;
-  const at = conversation ? await conversationOf3(conversation).catch(() => null) : null;
+  const { at, unreached } = conversation ? await findConversation(conversation).catch(() => ({ at: null, unreached: true })) : { at: null, unreached: false };
   const full = Boolean(at && inFullAccess(at));
-  const reviewed = at && !full ? await reviewIn(conversation, { kind: "command", command, folder: project }, signal, at).catch((error) => ({ decision: "refuse", reason: `Auto's reviewer couldn't review it (${String(error?.message ?? error).slice(0, 120)}).`, by: "code", held: false, why: "failed", paused: false, fetched: undefined })) : null;
-  if (reviewed?.decision === "refuse") {
+  const action = { kind: "command", command, folder: project };
+  const reviewing = at && !full ? reviewIn(conversation, action, signal, at) : unreached ? heldUnreached(conversation, action, signal) : null;
+  const verdict = reviewing && await reviewing.catch((error) => ({ decision: "refuse", reason: `Auto's reviewer couldn't review it (${String(error?.message ?? error).slice(0, 120)}).`, by: "code", held: false, why: "failed", paused: false, fetched: undefined }));
+  if (verdict?.decision === "refuse") {
     heard.abort();
-    return { text: refusalWords(reviewed), isError: false };
+    return { text: refusalWords(verdict), isError: false };
   }
-  const answered = full ? { answer: "once", client: "Full Access" } : reviewed?.decision === "allow" ? { answer: "once", client: "Auto" } : await book.ask({
+  const answered = full ? { answer: "once", client: "Full Access" } : verdict?.decision === "allow" ? { answer: "once", client: "Auto" } : await book.ask({
     ...caller.root ? { session: caller.root, ...caller.sessionName ? { sessionName: caller.sessionName } : {} } : {},
     ...caller.bot ? { bot: caller.bot, botName: caller.botName } : {},
     project,
@@ -23908,7 +23943,7 @@ async function askToRun(caller, args, signal) {
     asking = id;
   });
   heard.abort();
-  const fetched = reviewed?.fetched;
+  const fetched = verdict?.fetched;
   if (answered.unanswered)
     return { text: "Nobody answered in time, so it didn't run. Don't get around the sandbox another way: go on without it, or ask the user when they're back.", isError: false };
   if (answered.answer === "no")
@@ -23927,7 +23962,7 @@ async function askToRun(caller, args, signal) {
   if (shown.length > MOST_OUTPUT2)
     shown = "…" + shown.slice(-MOST_OUTPUT2).replace(/^[^\n]*\n/, "");
   const ended = timedOut ? `It was stopped after ${seconds} seconds.` : `It ended with ${code}.`;
-  const head = how === "always" ? `Ran outside the sandbox · Always for this: from now on your commands can write in ${always.path} in the sandbox, so run them there.` : reviewed?.decision === "allow" ? reviewed.by === "you" ? "Ran outside the sandbox · Approved by the user" : `Ran outside the sandbox · Allowed by Auto's reviewer: ${reviewed.reason}` : full ? "Ran outside the sandbox · Full Access" : "Ran outside the sandbox · Allowed once";
+  const head = how === "always" ? `Ran outside the sandbox · Always for this: from now on your commands can write in ${always.path} in the sandbox, so run them there.` : verdict?.decision === "allow" ? verdict.by === "you" ? "Ran outside the sandbox · Approved by the user" : `Ran outside the sandbox · Allowed by Auto's reviewer: ${verdict.reason}` : full ? "Ran outside the sandbox · Full Access" : "Ran outside the sandbox · Allowed once";
   return { text: `${head}
 
 ${shown.trim() ? shown.trimEnd() + `
