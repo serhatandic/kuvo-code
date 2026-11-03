@@ -84,6 +84,7 @@ import type { AddressInfo } from "node:net";
 import type { SignedDoc } from "../shared/documents";
 import type { EngineRecord } from "../shared/records";
 import { fenceOwnPort, keepFence } from "./fence/state";
+import { keepApprovals } from "./areas/approval";
 import type { KeptNotice } from "./notices/hold";
 import type { Notice } from "./notices/notice";
 import type { GivenLibrary } from "./personalities/library";
@@ -104,8 +105,9 @@ export { forgetMovesInMemory, keepMoving, sendMovesWith, takeMoveMail, watchMove
 export { movesElsewhere } from "./moves/elsewhere";
 export { COMPATIBILITY_FILE, engineConfigContent, learnCompatibility, readCompatibility } from "./engine/compatibility";
 export { queueOf, queueWatcher, readQueues, scanQueues } from "./engine/queue";
+export { letAttachmentsGo } from "./server/attached";
 export { workWatcher } from "./work/wakes";
-export { goalFollowers, goalHolds, settleGoalHolds, lookAtGoals, periodOf, periodEnd } from "./work/goals";
+export { goalFollowers, goalHolds, settleGoalHolds, lookAtGoals, periodOf, periodEnd, pauseGoal, REVIEW_PAUSE } from "./work/goals";
 export { keptAwake, letGo } from "./work/awake";
 export { ALWAYS_ASK_RULES, PUBLISH_ASK_RULES, alwaysAsks, withAlwaysAsk } from "./work/always";
 export { macLink, readLink, updateLink, writeLink } from "./state";
@@ -127,7 +129,7 @@ export { answerIntegrations, reconnectEverywhere } from "./areas/integrations";
 export { allWakes, holdArchived, listWakes, nextWake, readWakes, repeatText, sendWakes, wakeFolder, wakeOf } from "./areas/wakes";
 export { readRemovedWorktrees, readWorktrees } from "./areas/worktree-records";
 export { answerProjects, boxProjects, changeProjects, readProjects } from "./areas/projects";
-export { answerWorktrees, branchSlug, nameWorktreeBranch, tellWorktree, worktreesWhere } from "./areas/worktrees";
+export { answerWorktrees, branchSlug, nameWorktreeBranch, tellWorktree, tidyWorktrees, worktreesWhere } from "./areas/worktrees";
 export { SKILL_REPOSITORIES, answerSkills, keepSkillTrashClear, skillAbout, skillName, skillTrashEntry, skillsIn } from "./areas/skills";
 export { agentsAllowed, allowed, canonicalPath, signInReturn, socketAllowed } from "./server/paths";
 export { KEEP_FOR, SEEN_FILE, forgetPhones, phoneSeenLately } from "./compat/leave-running";
@@ -317,6 +319,8 @@ async function run(): Promise<void> {
   // Agents' commands, in the sandbox wherever it can run (fence/state.ts), set up before the vault
   // goes by it.
   keepFence();
+  // Conversations' approval kept to what it comes to as the sandbox starts or stops.
+  keepApprovals();
   // The vault, held here: its key in this process's memory, its asks told to your phones.
   holdVault(engineHandler(readEngineFile, { name: os.hostname() }));
   setVaultTell(tell);
@@ -557,6 +561,7 @@ async function serve(): Promise<void> {
   try { socketKey(); } catch {}
   fenceOwnPort((server.address() as AddressInfo).port);
   keepFence();
+  keepApprovals();
   keepEngineDefaults();
   // The vault, held here (on a machine, `run` holds it; a test's box serves alone), its asks told
   // to your phones through this Mac's link: listening before it says where it is, so what reaches

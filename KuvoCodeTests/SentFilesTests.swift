@@ -78,4 +78,30 @@ import Testing
         #expect(bubble.files.sorted() == ["Q3 report.md", "logs.zip"], "each file once: \(bubble.files)")
         #expect(model.waiting.isEmpty)
     }
+
+    /// A picture you paste and send goes to the engine from a folder of its session's, which goes
+    /// with the session; it isn't left waiting with the pictures not sent yet.
+    @Test func aPastedPictureSentIsKeptWithItsSession() async throws {
+        defer {
+            engine.stop()
+            try? FileManager.default.removeItem(at: folder)
+            Attachments.forget(session: id)
+        }
+        let pasted = try #require(Attachments.write(Data("p".utf8), named: Attachments.pastedImageName, extension: "txt"))
+        engine.list([StubEngine.session(id, title: "Files", directory: folder.path)])
+        engine.conversation(id, [])
+        engine.on("POST", "/api/session/\(id)/prompt", json: [:])
+        await workspace.refresh()
+        let model = try #require(workspace.model(for: id))
+        await model.load()
+
+        model.send("What's this?", files: [pasted], for: nil)
+        try await until { !engine.requests("POST", "/prompt").isEmpty }
+        let sent = try #require(engine.requests("POST", "/prompt").first)
+        let uri = try #require((sent.body["files"] as? [[String: Any]])?.first?["uri"] as? String)
+        let kept = try #require(URL(string: uri))
+        #expect(kept.deletingLastPathComponent().standardizedFileURL.path == Attachments.folder(for: id).standardizedFileURL.path)
+        #expect(FileManager.default.fileExists(atPath: kept.path))
+        #expect(!FileManager.default.fileExists(atPath: pasted.path))
+    }
 }

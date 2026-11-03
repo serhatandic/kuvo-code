@@ -86,6 +86,13 @@ const server = http.createServer((request, response) => {
       const found = engine.sessions.find(each => each.id === decodeURIComponent(one[1]));
       return found ? send({ data: found }) : send({ message: "No such session." }, 404);
     }
+    // What's changed, kept, as the engine keeps it (each field given in place of its own).
+    if (one && request.method === "PATCH") {
+      const found = engine.sessions.find(each => each.id === decodeURIComponent(one[1]));
+      if (!found) return send({ message: "No such session." }, 404);
+      Object.assign(found, given);
+      return send({ data: found });
+    }
     if (route === "GET /api/credential") return send({ data: engine.credentials });
     // Its tools connected (Kuvo Code's own browser's, no integration's), so nothing waits for them.
     if (route === "GET /api/mcp") return send({ data: [{ name: "kuvo-browser", status: { status: "connected" } }] });

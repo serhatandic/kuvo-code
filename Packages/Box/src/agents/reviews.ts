@@ -13,7 +13,7 @@ import { emit } from "./events"
 import type { GoalPlaces } from "./goals"
 import { newID } from "./ids"
 import { at, freshAnswer, messages, sessionInfo, type SessionInfo } from "./oneoff"
-import { run } from "./proc"
+import { runGit } from "./proc"
 
 export type Severity = "bug" | "risk" | "nit"
 
@@ -385,7 +385,7 @@ export class Reviews {
   private async setUpPartsFolder(): Promise<string> {
     const folder = this.reviewersFolder
     const git = (...args: string[]) =>
-      run("git", ["-C", folder, "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", ...args], {
+      runGit(["-C", folder, ...args], {
         timeout: 30_000,
         env: { GIT_AUTHOR_NAME: "Kuvo Code", GIT_AUTHOR_EMAIL: "reviewers@kuvo.run", GIT_COMMITTER_NAME: "Kuvo Code", GIT_COMMITTER_EMAIL: "reviewers@kuvo.run" },
       }).catch(() => undefined)
@@ -792,7 +792,7 @@ const foldersLimit = 500
 
 function gitIn(directory: string) {
   return async (args: string[]) => {
-    const ran = await run("git", ["-C", directory, ...args], { timeout: 30_000 })
+    const ran = await runGit(["-C", directory, ...args], { timeout: 30_000 })
     if (ran.timedOut) throw new Error("git took too long to read the changes.")
     return ran
   }

@@ -438,12 +438,17 @@ A client asks the box it lives on once, and watches; the move goes on with no cl
   of your computers. A client that goes doesn't stop it.
 - `GET kuvo/moves` → `200 {moves: [Move], away: [session]}`, and `GET kuvo/moves/events`, the same
   as a line now and each time it changes. `Move = {id, kind, thing, name, from, to, role, stage,
-  sessions, place?, sent?, size?}`: `from` and `to` are boxes' keys; `role`, whether this box is
+  sessions, place?, sent?, size?, waiting?}`: `from` and `to` are boxes' keys; `role`, whether this box is
   where it was (`from`) or where it's going (`to`); `stage`: `holding`, `copying`, `switching`,
   `finishing`; `sessions`, its conversations, root first; `place`, the other computer's name, as
   your computers call it (when this box knows it); `sent` and `size`, bytes, while its copy is on
   its way, for a client to show how far it is (a move taken back isn't listed, on either box,
-  while its copy is let go of). `away`: conversations this box's engine lists that don't live here (a copy not
+  while its copy is let go of). `waiting: true` (bridge 0.9.178) while the other computer has said
+  nothing of the move for a minute and a half (its engine away, or the computer off): on the box it
+  leaves, as it waits on a step; on the box it's going to, while its copy's parts don't come, or,
+  set up, the switch. It
+  carries on where it was once that computer is back, and clients say it waits for it (still taken
+  back after 10 minutes before the switch, as above). `away`: conversations this box's engine lists that don't live here (a copy not
   switched to yet or being let go of, an original still going): clients leave them out.
   `elsewhere: [{box, moves: [Move]}]` (bridge 0.9.169), left out when there are none: the moves your other
   computers said they have under way between them (`box`, its key; "Peers", `moving`), so a client
@@ -564,27 +569,34 @@ its own, which a `SIGTERM` stops waiting.
     `read_conversation` reads one here, or asks a peer with `letters-read` for it by letter.
 - **`POST kuvo/sessions`** `{task, title?, folder? | project? | chat?, worktree?, model?, effort?,
   mode?, approval?, wake?, startedBy?, wait? = false}` →
-  `{session, title, folder, project, answer?}` (`project` null for a chat; `answer` with
-  `wait`, its first answer in ten minutes, else null). `start_session` is this route, from the
+  `{session, title, folder, project, answer?, got?}` (`project` null for a chat; `answer` with
+  `wait`, its first answer in ten minutes, else null; `got` (bridge 0.9.180), the approval it runs with now where
+  that's less than asked: Auto that asks first without the sandbox, say). `start_session` is this route, from the
   calling conversation.
   - From a conversation (`startedBy`, its root found as above): in its folder unless `folder` names
     another (a bot's own folder is its chats), on its model and in its mode (Plan stays Plan) unless `model`, `effort` or `mode` names another, on the engine or coding agents' bridge
     it runs on, with its approval made again with this box's Settings › Permissions (Ask First isn't
     got around), its metadata `kuvo: {startedBy}` (it opens nothing by itself: clients list it under that
     conversation), and the task as a message from it.
-  - From a client (no `startedBy`): in `folder`, approved as Approve All with Settings ›
-    Permissions, the task as the user's own first message.
+  - From a client (no `startedBy`): in `folder`, in Auto unless `approval` says (which asks first
+    where the sandbox doesn't run, "Approval"), with Settings › Permissions, the task as the user's
+    own first message.
   - Either way its project's other folders are allowed to it and named in its instructions, one in
     a worktree is told so, and a folder that's no project yet becomes one.
   - 400 `{message}` (no task, not a folder here), 403 (a group chat's seat), 404 (`startedBy`
-    isn't a conversation here), 429 (too many lately), 502 `{message, session?}` (not made, or
+    isn't a conversation here), 409 `{message, reason}` (Full Access from a client where it can't
+    be had: `fullAccessOff`), 429 (too many lately), 502 `{message, session?}` (not made, or
     made but its task didn't reach it), 503 (no engine).
   - Where and how, each optional (bridge 0.9.106, "Work"): `project` (a project's name or folder
     here) or `chat: true` instead of `folder`; `worktree: true`, a worktree of its project on a
     branch of its own; `model` (`"provider/model"` or `{providerID, id}`, one there's an account for
     here, on the engine or the coding agents' bridge as it runs) and `effort` (one of its variants);
-    `mode` `build` or `plan`; `approval` `ask` or `approveAll`, never above the starter's (a starter
-    that asks first starts one that does too); `wake` (`finished`, `asks`, `both`, `none`), what the
+    `mode` `build` or `plan`; `approval` (Approval, below: `askFirst`, `acceptEdits`, `auto` or
+    `fullAccess`; an older client's `ask` is Ask First and `approveAll` Auto), never above the
+    starter's (a starter that asks first starts one that does too, and the tool tells its agent what
+    it got where that's less than asked; one started by a conversation from before, with no
+    approval kept, is made as its starter reads and keeps none either, but a bot's work, which is
+    kept with Auto at most); `wake` (`finished`, `asks`, `both`, `none`), what the
     starter hears of it (a conversation here, once the new session is marked so; the tool says
     which). `computer` other than this one: 400, for now.
   - Unknown fields are ignored, so a newer client can send more to an older box.
@@ -1386,9 +1398,10 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   503 while the coding agents aren't running there; 502 when the move failed. Nothing opens on
   the Mac. A machine's bridge does the same for its own, with the Mac closed: a phone asks the
   computer the conversation lives on. There the session's wake-ups and watches go
-  with it, the engine's is marked `kuvo.carriedTo` (the new one's id) as it's archived, and once
+  with it, the engine's is marked `kuvo.carriedTo` (the new one's id) as it's archived, the new
+  one `kuvo.carriedFrom` (the old one's id, under `kuvo` in its metadata), and once
   started it goes to its end, whatever becomes of the request. A client that carries one itself
-  marks it `kuvo.carriedTo` too, as it archives it: a session archived so takes its queue on the
+  marks both too, as it archives it: a session archived so takes its queue on the
   box with it, once (paused, stopped by you, it stays so in the new one, with what waited on the
   box). One brought back keeps the mark and its own queue, archived again too (the box keeps the
   carries it made in `run/queues-carried.json`). Changing a machine's bot's model there to
@@ -1652,9 +1665,9 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     changes not committed, which go when it's removed; `ahead`, commits `base` doesn't have, whose
     branch stays when it's removed. `size` in bytes. Where new ones go is `kuvo/config`'s
     `worktree.directory`. `?records=1` → `{"worktrees": [{project, root, folder, branch, base?,
-    made?, prefix?}]}`, as it keeps them (without asking git), any whose session has a title by
+    made?, prefix?, used?, restored?}], "restorable"?}`, as it keeps them (without asking git), any whose session has a title by
     now named first; `made`, the branch one made there started on, and `prefix`, what its name
-    starts with.
+    starts with; `used`, a session has run there.
   - `GET kuvo/worktrees/events`: `application/x-ndjson`, `{worktrees}` as `?records=1` has them,
     now and again each time they change (`worktrees.events` in `features`: a box that has it keeps and names its worktrees itself, a Mac's included).
   - `POST kuvo/worktrees/remove {"path", "discard"?}` removes it as Remove… does: its folder and
@@ -1663,6 +1676,29 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     never started; `409` when a session has it after all). `200 {}`; `409 {"message"}` while an
     agent works there; `502 {"message"}` when the engine couldn't remove it; `404 {"message"}` for
     one it doesn't have (removed already): a client takes it as gone.
+  - A worktree goes with its last session, as in Codex (bridge 0.9.176; a box from before
+    keeps every worktree until Remove…, and has no `restorable`): once a session has run in it, the box
+    removes it when every session there is archived or deleted and no agent works there (as it
+    hears of each, and as it follows its engine again). It counts every session of its engine and
+    the coding agents' bridge, and tidies nothing while the bridge is down. Archived sessions left:
+    what isn't committed (ignored files aside) is saved first, as a commit under
+    `refs/kuvo/worktrees/<folder name>-<commit>`, and its branch stays. None left: it goes as
+    Remove… does.
+    Its lists and the events carry `restorable`: `[{project, root, folder, branch, base?,
+    restorable, saved, ahead?}]`, one for each removed this way whose sessions are archived;
+    `saved` whether changes were saved, `restorable` whether it can come back (its branch, its
+    saved changes or the commit it was at are still there). An entry and its saved changes go once
+    no session is left there. A client shows one on an open (unarchived) session working in
+    `folder`.
+  - `POST kuvo/worktrees/restore {"folder"}` (bridge 0.9.176) brings one back where it was, on its branch (made
+    again from where it was if it's gone), with its saved changes as changes not committed, and
+    tells each session there → `200 {project, root, folder, branch, base?}`, kept again (marked
+    `restored`: git made it, so git removes it), and not removed again until a session there is
+    open;
+    `404 {"message"}` for one it can't bring back any more; `409 {"message"}` when its project or
+    its branch is gone, something else is in its folder, its branch is open in another folder,
+    or its saved changes clash with newer work on its branch (it stays removed, nothing left half
+    made).
   - For a new session's worktree, as the composer's Worktree makes one: `POST kuvo/worktrees
     {"project", "branchPrefix"?}` makes one of the project's repository on a branch of its own →
     `{project, root, folder, branch, base?, made, prefix}`; make the session in `folder`. `400`
@@ -1726,13 +1762,51 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     another reason (taken back too).
   - `POST kuvo/git/pull-request {"directory", "title"?, "body"?}` (`git.pull-request`, bridge
     0.9.143): Create Pull Request. Its base is the worktree's, from the box's worktrees, else
-    origin's main branch. `409 {"message"}` from the base itself, with changes not committed, or
+    origin's main branch, else `main` or `master`. `409 {"message"}` from the base itself, with changes not committed, or
     with nothing the base doesn't have. The branch is pushed to `origin` (and tracked); on GitHub,
     made a pull request on origin's repository with GitHub's `gh` when it's there and signed in →
     `{"url"}` (also for one already open for the branch); otherwise → `{"compareURL"}`, the GitHub
     or GitLab page that opens one, with the title and description filled in; `{}` for another
     host (pushed, to open one there). Without a title, `gh` takes the title and description from
     the commits. `422 {"message"}` for a push that didn't go through.
+  - `POST kuvo/git/pull-request/draft {"directory", "summary"?}` (`git.pull-request.draft`, bridge
+    0.9.179): Create Pull
+    Request's confirmation, which a client shows before it creates one; nothing is pushed →
+    `{"branch", "base"?, "title", "body", "summary"?, "host", "creates", "gh"?}`. `base` as
+    Create's (the worktree's, else origin's main branch, else `main` or `master`); `title` and
+    `body` from the commits (one commit's own subject and body, else the branch's name and the
+    commits listed), for the client to show and change; `summary` with `"summary": true`, the
+    commits, files and diff cut short, for a model to write them from. `host`: `github`, `gitlab`
+    or `other`. `creates` true: Create makes it on the box with `gh`, there and signed in. Else
+    Create opens the host's page (`compareURL`), and on GitHub `gh` says why: `signed-out` or
+    `missing`, for the client to say so; on another host Create only pushes. `409 {"message"}` as
+    Create would refuse.
+  - Branch backups (`git.backups`, bridge 0.9.182). As each agent's run starts and ends (the
+    engine's and the coding agents', in any approval), the box keeps the branches and stashes of
+    the repository the conversation works in, where something changed since the last time: what
+    each branch pointed at, the branch checked out, each worktree's checkout on no branch, the
+    stashes (older ones too) and the remotes' addresses (without a sign-in in them), with their
+    commits in a store of its own (`box/branch-backups`), so a hard reset, a deleted branch, a
+    dropped stash or `rm -rf .git` can be taken back. Tags and other refs aren't kept. The newest
+    100 are kept, none older than 30 days but the newest. No setting of the repository's runs a
+    program as it's taken or taken back, and taking one back never goes through git's transports.
+    `GET kuvo/git/backups?folder=<folder>` → `{"repository", "exists", "backups": [{id, at, head,
+    branches, stashes, gone, moved, stashesGone}]}`, newest first: `repository`, the repository's
+    top folder (a linked worktree's are its repository's; null where none was backed up), found
+    from a folder above too once its `.git` is gone (`exists` false); `head`, the branch checked
+    out then ("" for none); `gone` and `moved`, its branches deleted since and those elsewhere now;
+    `stashesGone`, its stashes no longer on the list. `POST kuvo/git/backups/restore {"folder",
+    "id"}` takes one back, never moving a branch you have: one gone comes back under its name, one
+    elsewhere beside it as `<branch>-restored-<yyyymmdd-hhmm>` (the backup's time, UTC; `-2`
+    and on where that's taken, or a branch of yours would clash with it, as `feature` with
+    `feature/x`), a checkout on no branch as `detached-restored-…`, and stashes no longer there
+    on top of the list, in their order; a repository whose `.git` is gone is made again in its
+    top folder (as SHA-256 or shallow as it was), around the files as they are (none changed: the
+    index from the branch checked out then), with its remotes → `{"remade", "branches": [{name,
+    as}], "stashes", "missed"?}` (`name` "" for a checkout on no branch; `missed`, what didn't
+    come back, in words). The branches come back all together or not at all. `400` without a
+    folder that's there or an `id`, `404` for none here, `409` for a `.git` that can't be read,
+    `500 {"message"}` with git's words (a repository made again is taken away again then).
 - `GET kuvo/folders[?path=<folder>&hidden=1]` (`folders`): the folders in one of this box's folders,
   for a client to choose one (Settings › Worktrees' folder) as a folder panel does → `{"path",
   "home", "parent", "folders": [{name, repository?}]}`, ordered as Finder orders names, without
@@ -2344,6 +2418,8 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `git` | `kuvo/git/…`: Changes (bridge 0.9.94) |
 | `git.merge` | `POST kuvo/git/merge`: Merge into… (bridge 0.9.143) |
 | `git.pull-request` | `POST kuvo/git/pull-request`: Create Pull Request (bridge 0.9.143) |
+| `git.pull-request.draft` | `POST kuvo/git/pull-request/draft`: Create Pull Request's confirmation (bridge 0.9.179) |
+| `git.backups` | `kuvo/git/backups…`: branch backups, and taking one back (bridge 0.9.182) |
 | `git.push` | `POST kuvo/git/push`, and a commit's `committed` when only its push failed (bridge 0.9.143) |
 | `goals` | `kuvo/agents/api/kuvo/goals…`: goals ("Goals") |
 | `btw` | `kuvo/agents/api/kuvo/btw…`: side questions ("Side questions, handoffs and reviews") |
@@ -2383,6 +2459,8 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `sandbox` | `kuvo/sandbox` ("Sandbox", bridge 0.9.118) |
 | `sandbox.check` | `reason`, `action` and the rest in `kuvo/sandbox`, and `POST kuvo/sandbox/check` |
 | `sandbox.asks` | `kuvo/sandbox/asks…`, `kuvo/sandbox/allowed…` and `kuvo/sandbox/tools` ("Sandbox", "Asks", bridge 0.9.118) |
+| `approval` | `kuvo/approval` and `kuvo/sessions/<id>/approval` ("Approval", bridge 0.9.180) |
+| `approval.reviewer` | Auto's reviewer: `kuvo/sessions/<id>/decisions`, `tellAuto` in `kuvo/approval`, and a sandbox ask's `review` ("Approval", "Auto's reviewer", bridge 0.9.181) |
 | `wakes` | `kuvo/wakes`, a session's, and cancelling one or sending it now |
 | `wakes.edit` | adding one (`POST kuvo/wakes/<session>`) and pausing them |
 | `wakes.events` | `kuvo/wakes/events`, and making a watch (`POST kuvo/wakes/<session>/watch`) |
@@ -3082,7 +3160,15 @@ Agents you add in Settings › Agents come from your settings, after the plugin,
 they work outside without asking unless a rule of yours says otherwise.
 
 What Kuvo Code and the engine keep for an agent stays open after that ask, for the agent to open:
-the box's `attachments` (and this Mac's app's `Attachments`), the agent's browser's downloads on a
+the box's `attachments` (and this Mac's app's `Attachments`; both keep a session's files in a folder
+named after it, `attachments/<session>/…` (bridge 0.9.177), which goes as the box hears the session's deleted, or for
+one deleted while it wasn't listening, once its engine and bridge both say it's gone, unless a
+conversation marked `kuvo.branchedFrom`, `handoffFrom`, `carriedFrom` or `startedBy` (or one of its
+own, back along such marks) still names its files; nothing goes while the bridge isn't running or
+either can't be read, nor a session being moved, moved away, or a copy here let go of as its move
+was taken back (`run/moves/ended.json` names its conversations for a week); a session deleted while
+the box wasn't listening leaves the Mac app's folder as it is; this Mac's box is told the app's folder in `KUVO_MAC_ATTACHMENTS`, and the app lets a
+machine's session's go itself), the agent's browser's downloads on a
 machine (this Mac's panel browser saves to `~/Downloads`, which asks), the engine's long outputs
 saved whole (`tool-output`), the repositories it reads (`repos`) and Plan's plans (`~/.opencode/plan`),
 and the folders of the skills the engine finds (learned again when they change, `skill.updated`;
@@ -3100,16 +3186,150 @@ hold: Claude Code's plans, each project's memory, what it saved of a long output
 (`projects/<project>/<session>/tool-results`), and its background commands' output in /tmp's
 `claude-<uid>` when the sandbox runs it.
 
+### Approval
+
+How much a conversation's agent does on its own is kept on the box, with the conversation
+(`approval` in `features`, bridge 0.9.180): every client shows the same one, and none guesses it from the engine's
+rules. Plan mode stays the conversation's agent (`plan`), beside it.
+
+- `askFirst`: edits, commands and the rest wait for your OK. `acceptEdits`: edits in its folders go
+  ahead, commands still wait. `auto`: what runs inside the sandbox's walls goes ahead, what's beyond
+  them asks (the engine's own file tools, which the sandbox doesn't hold, ask outside its folders
+  as Settings › Permissions says); only where the whole sandbox runs (for a conversation on the
+  coding agents, with their programs in it too). `fullAccess`: nothing asks, outside its folders
+  either; only where you switched it on for this computer, and never for a bot or its work, which
+  go on in Auto at most. Its commands still run in the sandbox where it runs, as every
+  conversation's do: Full Access takes away the asks, not the walls.
+- Where one can't be had now, it fails closed: a conversation set to Auto asks first while the
+  sandbox isn't running, and one set to Full Access comes down to Auto once the switch is off. It
+  stays set to what you picked, and comes back to it once it can.
+- What the box writes is the engine's rules for it, made again with Settings › Permissions as they
+  are (a Don't Allow there holds in every one, Accept Edits included) and its own folders kept; a
+  bot's work asks what always comes to you whatever it is. The coding agents' bridge sets each agent
+  from the same rules. Kept in its metadata as `kuvo.approval` (what you picked) and `kuvo.applied`
+  (what its rules were made for); rules a client changed on its own since (asks put back, say) are
+  read as they are, and never made again. A conversation from before has none (`stored` false):
+  asking before commands is Ask First, nothing asking is Auto where the sandbox runs and Full Access
+  elsewhere, as it ran; its rules are left as they are until one is picked. But a bot's and its
+  work's, which the box keeps with the one their rules say (Ask First, or Auto that asks first
+  without the sandbox), as it starts and as a bot is made or comes here.
+- `GET kuvo/sessions/<id>/approval`: `{approval, effective, stored, held?, plan, options}`: what
+  you picked, what it comes to here now (`held` `{reason, why}`, the last step down, when that's
+  less), whether it's in Plan mode, and each one (`options`: `{approval, held?, unavailable?}`):
+  `held` where it can be picked and asks first for now (Auto without the sandbox), `unavailable`
+  where it can't be picked. `reason`: `sandbox` (Auto without the whole sandbox), `fullAccessOff`,
+  `bot`. Only a read: its rules come to what it shows within the box's round. 404 `{message}` for a
+  conversation that isn't here, 503 with no engine or bridge.
+- `PUT kuvo/sessions/<id>/approval` `{approval}`: sets it, on the engine's conversation or the
+  coding agents'; 200 as `GET` answers (Auto without the sandbox is kept, `held`), 400 for one that
+  isn't one of them, 409 `{message, reason}` for Full Access where it can't be picked
+  (`fullAccessOff`, `bot`), 502 where the engine didn't take it.
+- `GET kuvo/approval`: this computer's `{fullAccess, tellAuto, auto: {engine, agents}}`, the
+  switch, your rules for Auto's reviewer in your words (`tellAuto`, "" for none; below), and
+  whether Auto runs for each (`{held?}`, as above). `PATCH kuvo/approval` `{fullAccess?, tellAuto?}`
+  sets either (400 for neither, or one of the wrong kind); a change to the switch brings what had it
+  or was held from it to what it can be at once.
+- The box looks every 2 seconds at what each comes to, and makes the rules of those kept with Auto
+  or Full Access again when the sandbox starts or stops, the switch changes, or the engine or the
+  bridge starts again, each read again just before it's written.
+
+#### Auto's reviewer
+
+In a conversation that's in Auto here now (`approval.reviewer` in `features`, bridge 0.9.181), what its agent wants
+beyond the sandbox's walls is judged on the box before it comes to you: a command it asks to run
+outside the sandbox (`sandbox_ask`), and a file the agent's own tools want outside its folder (the
+engine's or the bridge's `external_directory` ask, by the file the tool call names). Any other
+conversation asks you as before.
+
+- Code first. Your secrets (and a private key in `~/.ssh` by any name), what runs later (written),
+  Kuvo Code's folders and the sockets the sandbox keeps commands from (Docker's and the like's, and
+  running `docker`, `podman` and the like at all, past `sudo`, `env`, `xargs` and the like) are
+  never allowed, nor a folder that holds your secrets or Kuvo Code's (your home as a whole, `/`):
+  refused, the model never asked. A command is read as a shell runs it (quotes, redirects, `cd`,
+  a shell's `-c` script); one it can't read plainly (`$…`, a group, a here-document) is refused
+  where its text names one of those places.
+  What always comes to you ("Work › What always comes to you") comes to you; for a bot's, always,
+  for yours unless your own message named that very command, file or tool. A paused conversation's
+  (below) comes to you.
+- Then the small model of the conversation's own maker: the provider's own (Haiku, Flash, mini…)
+  for the engine's conversations, through `/api/experimental/generate`; the agent's for the coding
+  agents' (Claude Code's Haiku, Codex's Luna), through the bridge's
+  `POST /api/session/<id>/generate` `{prompt, model}` (a model of that session's maker only); the
+  conversation's own model where the maker has no small one. It's counted on that account. It's
+  shown only what you wrote in the conversation (never what the box, another agent or a wake-up put
+  there), or for a bot's, its goal; your Tell Auto rules; the action (for a file, the tool and its
+  arguments); and what a command runs, read whole first: a script by its path, `bash x.sh`,
+  `python x.py`, and the project's build files its program runs (`package.json` for npm, pnpm, yarn
+  and bun, a Makefile, a justfile, `conftest.py`, `build.rs`, Gradle's, a Rakefile, a Taskfile).
+  Each piece is in tags of that prompt's own, so none can pass for the rules. Never the agent's own
+  words, its `why`, nor what its tools printed.
+- It allows (the command runs outside the sandbox, `Ran outside the sandbox · Allowed by Auto's
+  reviewer: <reason>`; the file tool's ask is answered once), refuses with a reason (the agent hears
+  it; the engine's ask is rejected with `Auto's reviewer: <reason>`), or asks you. A script it runs
+  that can't be read whole (too long, unreadable) or that's piped in from the web (`curl … | sh`,
+  unless your message named that very command: what's fetched to read could differ from what runs)
+  comes to you (`why: "unread"`), as does an answer that isn't one JSON object with a known
+  decision, no model, or a model that fails or doesn't answer within a minute (no quota, offline):
+  never allowed. A sandbox ask that comes to
+  you carries `review` `{reason, why, always?}` (Sandbox, Asks); a file tool's is left asked, with
+  why in the log, and your phones hear of it only then (not of one the reviewer answered).
+- Three refusals in a row, or twenty in a conversation, pause Auto there: its run is stopped, and
+  what it wants next comes to you (`why: "paused"`) until you let it go on.
+- `GET kuvo/sessions/<id>/decisions` → `{decisions, paused?}`: the conversation's decisions, the
+  latest last (the last 200), each `{at, action, kind, decision, reason, by, why?, always?}`:
+  `kind` `command`, `file` or `tool`; `decision` `allowed`, `refused` or `asked`; `by` `code` or
+  `model`; for one that came to you, `why` (`always`, and which kind in `always`; `reviewer`, the
+  model asked; `unread`, `unreadable`, `noModel`, `failed`; `paused`). `paused`: since when Auto is paused
+  there. `POST` `{resume: true}` lets it go on, its counts started over (400 without it). Kept in the
+  box's folder (`box/reviews/<session>.json`), for any client, and deleted with the session.
+- Tell Auto: your rules for the reviewer on this computer, in your words (at most 4,000
+  characters), which loosen or tighten its own, never past code's lines (`box/tell-auto.json`;
+  `kuvo/approval`'s `tellAuto`).
+
 ### Sandbox
 
 Each box runs its agents' commands in a sandbox (`sandbox` in `features` and its asks, `sandbox.asks`, bridge 0.9.118) wherever
 it can, with no switch: the way out is per command (the card that asks you about one it refused).
-On, each command the engine runs (an agent's shell tool, and yours with `!`)
-writes only in its conversation's folder, that folder's git repository (a real one: a `.git` that's
+On, each command the engine runs (an agent's shell tool, and yours with `!`) reads everything but
+what's below, and in your home folder adds and changes files (`homeWrites`) but never deletes or
+moves one there (on macOS, Seatbelt's `file-write-unlink`, which a move takes too, is left out; on
+Linux, Landlock's `REMOVE_FILE`, `REMOVE_DIR` and `REFER`, so nothing's linked in either), and never
+writes what runs later outside the sandbox: your shell's start-up files and plugins (`.zshrc`,
+`.bashrc`, `.profile`, `.config/fish`, `.oh-my-zsh`, zsh's completion dumps…), the folders on your
+PATH (any in your home, whatever it's named) and version managers' (`.local/bin`, `bin`, `.nvm`, `.pyenv`, `.asdf`, mise's…), Python's user
+site, what direnv and mise trust, SSH's `config` and `authorized_keys`, git's settings and templates,
+the coding agents' and editors' settings, hooks and extensions (`.claude`, `.claude.json`, `.codex`,
+`.cursor`, `.gemini`, `.grok`, opencode's, `.vscode`, `.config/nvim`…), tools' settings that name
+programs or package sources (`.bunfig.toml`, `.docker/cli-plugins`, `.config/gh`, `.config/pip`,
+`.gemrc`, `.gnupg`…); on Linux systemd's, autostart's and environment.d's folders and the desktop's
+start-up files; on macOS `~/Library` but its `Caches`, `Developer`, `Logs`, iCloud Drive and
+provisioning profiles (`homeKept`, `homeOpen`), and the window and key tools' settings (Hammerspoon, Karabiner, skhd,
+yabai, AeroSpace, SketchyBar). Your personal folders (`personal`: on macOS Desktop, Documents,
+Downloads, Pictures, Movies, Music and iCloud Drive; on Linux those `~/.config/user-dirs.dirs` names)
+only take new files on macOS (no `file-write-data`, `-unlink`, `-mode` or `-flags`: a file's own
+first open still writes it), and are only read on Linux, where Landlock can't tell a new file from
+one that's there. The conversation's folder, its repository and Also Allowed are written whole
+where they're inside a personal folder, what runs later or `~/Library` (a project in Documents,
+`~/.config/nvim`), and around them where they hold some (a conversation in your home itself
+writes none of those). Only you start a conversation in such a folder: an agent's
+(`start_session`, or `POST kuvo/sessions` with `startedBy`) in one, in a folder that holds any of
+them (your home, the folders above it, `~/.config`), in a personal folder or one in it but your
+projects there and its own conversation's folder, or in a folder on the box's PATH outside your
+home or one that holds it, is refused (403, bridge 0.9.180); it starts where the folder really is as it's checked.
+Its repository is only ever a folder named as one (`.git`, `….git`), else its folder alone: a
+command could make what looks like one anywhere it adds files, then a folder whose `.git` names it.
+Tools' caches inside what's kept (pnpm's store in its folder on your PATH on macOS) are still
+written, and on macOS clone and remove repositories of their own (Xcode's packages, cargo's). On macOS no command writes preferences through cfprefsd either (`defaults
+write`: Seatbelt's `user-preference-write`), which reach launchd's and login items'. On macOS no
+folder that holds what's kept (your home, `~/.ssh`) is closed off by its mode or flags either. On
+Linux, nothing is made or removed right in a folder that holds what's kept (your home, `~/.config`,
+`~/.local` and the like), only in the folders there: Landlock grants each thing that's there. Besides, each command
+writes and deletes freely in its conversation's folder, that folder's git repository (a real one: a `.git` that's
 a link, or names a folder that isn't a repository or a worktree the repository doesn't name back,
 counts for nothing; on macOS never its hooks or config, its submodules' or its worktrees', nor the
 engine's settings in the folder: `.opencode/`, `opencode.json`, nor the coding agents' settings
-files, whose hooks and servers they run as they start there: `.claude/settings.json` and
+files, whose hooks and servers they run as they start there, nor, on macOS, any other project's in
+your home: `.claude/settings.json` and
 `settings.local.json`, `.mcp.json`, `.codex/config.toml`, `.cursor/hooks.json` and `mcp.json`,
 `.gemini/settings.json`, `.grok/settings.json`, and the scripts in `.claude/hooks` and
 `.cursor/hooks`; a folder moved or linked into place is checked only by its own name, so the folders
@@ -3146,7 +3366,9 @@ leaves it as it is: the agent asks with `sandbox_ask`), and on Linux uv copies w
 store and Bun's cache link theirs into a project's `node_modules` and pnpm's into its `dlx` cache, and
 as your own uv links its cache's into a project's `.venv`; bunx's packages in `/tmp`; and a new
 folder at the top of `~/.cache`, which it can't make (Landlock's right to make one would reach the
-folders it only reads). It can't read
+folders it only reads); other projects' hooks, git settings and agents' settings in your home, which
+it writes as it writes the files beside them; and before Linux 6.2 (Landlock 3), truncating a file it only reads by its
+path (`truncate`), which Landlock checks only from then. It can't read
 Kuvo Code's own folders (on a machine `~/.kuvo-code`; on this Mac the app's folders under `Library`,
 any `run.kuvo.code…` copy's, its temporary folder and `/tmp/kuvo-ssh-<uid>`) but its `bin`, nor your
 secrets (cloud, package and git tokens, browsers' and password managers' data, private SSH keys:
@@ -3160,8 +3382,17 @@ temporary folder, whose agents' folders and sockets it can't move to give them a
 remove a folder of its own named as theirs are, `ssh-…`; its own sockets there, like ssh's shared
 connections, it uses and removes), the
 box's own `SSH_AUTH_SOCK`, gpg-agent's, 1Password's, Secretive's, Bitwarden's and yubikey-agent's,
-by their usual places (an `IdentityAgent` your ssh config names elsewhere, or a `GNUPGHOME`, isn't
-known). So `ssh`, and git over SSH, use only the vault's keys there, and signing a commit with
+by their usual places and those your ssh settings name, in the files they include and the system's
+`/etc/ssh/ssh_config` too, with `~`, `%d` and `${…}` read (`IdentityAgent`, and `ControlPath`'s shared
+connections: a folder of their own whole, or by the names they can have where they share one, each
+`%` token any part of a name, like `~/.cache/ssh-%C` or `/tmp/%r@%h:%p`; on macOS no socket in the
+folders the box lists is removed, nor a folder in them moved, and where they share one only their
+sockets are kept, so the other files there are the command's, written by any means; a `GNUPGHOME`
+elsewhere isn't known); nor, on both systems, Docker's and the like (Docker Desktop, OrbStack,
+Colima, Lima, Rancher Desktop, Podman, LXD, Incus, libvirt), which run anything as the whole
+computer; nor the servers that run what they're sent: terminals' (Rex's, iTerm2's and WezTerm's on
+macOS, WezTerm's on Linux), zellij's, Neovim's and Emacs' (on macOS their folders in your temporary
+folder aren't moved either), watchman's on macOS, and Tailscale's on Linux. So `ssh`, and git over SSH, use only the vault's keys there, and signing a commit with
 your GPG key doesn't work; nor does an X11
 program, whose display (XQuartz's) is in launchd's folder too. Nor can it reach your tmux's server
 (`/private/tmp/tmux-<uid>`), which types into your terminals: its `TMUX_TMPDIR` is its temporary
@@ -3417,7 +3648,7 @@ vault does (`run/vault.sock`); another passes them on.
 - `GET kuvo/sandbox/asks` → `{asks: [ask], restart?}`, oldest first, with `restart: true` while
   the box asks you to restart its agents (the state's `restart`); `kuvo/sandbox/asks/events`, NDJSON,
   the same at once and on every change. An ask: `{id, at, session?, sessionName?, bot?, botName?,
-  project, command, why, stopped?, error?, always?, machine?, owner?}`. `session` is the conversation's root
+  project, command, why, stopped?, error?, always?, machine?, owner?, review?}`. `session` is the conversation's root
   (a bot's sub-agent asks as its bot's conversation). `stopped`, on macOS: what the sandbox refused
   that command, from the system's log, each `{kind, path?}` (`kind`: `write`, `read`, `connect`,
   `job`, `app` or `other`; `path`, the file, folder or address). macOS logs it a while after (on a
@@ -3429,7 +3660,8 @@ vault does (`run/vault.sock`); another passes them on.
   project's settings, `package.json`, a `Makefile`) is what the sandbox writes, so the same command
   asks again each time. `machine`: the machine's name, on a machine. `owner`: whose its folder is,
   which Always gives the place to (Also Allowed, below; bridge 0.9.139): a client names a bot's own
-  folder by the bot ("outside Scout's folder") and the chats as Chats, whose Always is every chat's.
+  folder by the bot ("outside Scout's folder") and the chats as Chats, whose Always is every chat's. `review`: in a conversation in Auto, why its reviewer brought it to you, `{reason, why,
+  always?}` ("Approval", "Auto's reviewer").
 - `POST kuvo/sandbox/asks/<id>` `{answer: "once" | "always" | "no"}` → `200`, `404` for one that
   isn't open, `400` for another answer. `always` without `always` in the ask counts as once.
 - Each open ask is also a notice to your phones (as the vault's are): `<who> wants to run a command
@@ -3486,6 +3718,41 @@ says.
 A box before 0.9.139 sends no `owner`, `gone` or `owners` and answers `?all` as without it: a client
 lists its rules by their projects' folders, adds for projects only, and reads them all again after
 an add.
+
+### Git
+
+A repository's own settings (its `.git/config` and what that includes) never start a program when
+the box runs git there (bridge 0.9.183), since whatever could write in the folder (a download, a command the sandbox
+let out) could have named one. The fence keeps a sandboxed command from writing them on macOS (above);
+this holds on every box, for a repository written by anything.
+
+- Every git the box runs in a repository gets `-c core.fsmonitor=false -c core.pager=cat -c
+  log.showSignature=false`, and its diffs (`diff`, `log`, `show`, `stash show`) `--no-ext-diff`.
+  (An empty `diff.external` would break them, so it isn't set.)
+- What the box does by itself (Changes' reads, Undo's snapshots, branch backups and taking one
+  back, reviews' scopes, voice and artifacts' reads of what a turn changed, naming a worktree's
+  branch) also gets `-c safe.bareRepository=explicit -c core.hooksPath=/dev/null -c
+  commit.gpgSign=false -c tag.gpgSign=false -c credential.helper=`. Unless the command only reads
+  names and objects, the box first reads, with `git config --show-scope --get-regexp`, the hooks
+  any settings name (`hook.<name>.command`, which git 2.54 runs) and the filters and diff
+  converters the repository's own settings name (the `local` and `worktree` scopes and what they
+  include; `~/.gitconfig`'s and the system's are yours), and switches them off: a hook by
+  `hook.<name>.enabled=false`, a filter's `clean`, `smudge` and `process` emptied and `required`
+  false, and `--no-textconv` on a diff, `blame` or `grep` when one names a converter. git-lfs's and
+  git-crypt's stay on when the program they name is the one PATH finds, or Changes would show every
+  file they keep as changed. A command that can't be told not to convert (`cat-file --textconv`,
+  `format-patch`, `range-diff`) isn't run, nor any where a name can't be written after `-c` (an
+  `=` in it), or the read fails; Changes then says the repository names a program it won't run.
+  git before 2.26 can't say the scope, so every filter or converter counts as the repository's
+  there.
+- What you ask git for yourself (Stage, Commit, Push, Pull and the rest in Changes, a worktree made,
+  switched, removed with what wasn't committed in it, or brought back, a project cloned) gets only
+  the first set: the repository's hooks, filters and sign-ins run as in your terminal, so husky,
+  LFS and git-crypt work, and what's kept of a removed worktree is stored as your `git add` would.
+- The engine's own git (its `vcs` routes and the session's diff) has fsmonitor off and no external
+  diff by itself, and keeps its snapshots outside the repository; a filter or converter the repository
+  names still runs in its status and diffs. Submodules' own settings aren't read: the
+  settings above reach their git too, but not their filters' names.
 
 ### Paired phones
 

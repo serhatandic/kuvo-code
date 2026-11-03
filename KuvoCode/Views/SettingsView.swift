@@ -396,6 +396,8 @@ private struct SettingsSidebar: View {
                 .padding(.horizontal, 10)
                 .frame(height: SidebarMetrics.rowHeight)
             SidebarSearchRow(text: $search)
+                // At its fixed size, as Settings' rows are: the window's sidebar follows Text size.
+                .environment(\.messageFont, MessageFont())
             if boxes.count > 1, search.isEmpty {
                 BoxNameStrip(boxes: boxes, selected: shownBinding, marksNews: false)
                     .padding(.top, 8)

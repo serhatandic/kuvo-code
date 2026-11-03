@@ -1,9 +1,10 @@
 import { expect, test } from "bun:test"
 import { execFileSync } from "node:child_process"
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs"
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import net from "node:net"
+import { tmpdir } from "node:os"
 import { basename, dirname, join } from "node:path"
-import { escapeRegex, fencePolicy } from "../src/link/fence/policy"
+import { escapeRegex, fencePolicy, sshSockets } from "../src/link/fence/policy"
 import { canFence, realFence } from "./agents/support/fence"
 
 // Your SSH and GPG agents sign with the keys the sandbox hides from commands: so a command can't
@@ -75,5 +76,31 @@ test.skipIf(!canFence || process.platform !== "darwin")("a command can't use you
     for (const folder of [root, system, started, yours]) rmSync(folder, { recursive: true, force: true })
     rmSync(join(temporary, "moved.sock"), { force: true })
     rmSync(`/private/tmp/ssh-${basename(root)}@example.com:22`, { force: true })
+  }
+})
+
+// SSH's shared connections and agents, wherever your settings put them: in the files they include
+// and the system's too, by `~`, `${HOME}` and other variables. A folder of their own is kept whole;
+// where they share one (your cache folder, /tmp), only the sockets by the start of their names.
+test("your SSH settings' sockets are kept, never the folders they share", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "kuvo-ssh-settings-")))
+  const said = process.env.KUVO_TEST_SOCKETS
+  try {
+    const home = join(root, "home")
+    process.env.KUVO_TEST_SOCKETS = join(root, "elsewhere")
+    const write = (file: string, text: string) => { mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, text) }
+    write(join(home, ".ssh", "config"), [
+      "Host work", "  ControlPath ~/.cache/ssh-%C", "Host *", "  ControlPath=/tmp/%r@%h:%p", "  IdentityAgent \"${HOME}/agents/one.sock\"",
+      "  IdentityAgent ${KUVO_TEST_SOCKETS}/two.sock", "  IdentityAgent ${KUVO_NOT_SET}/three.sock", "Include extra/*.conf", "Include more/*/cfg"].join("\n"))
+    write(join(home, ".ssh", "extra", "a.conf"), "ControlPath ~/.ssh/cm/%C\n")
+    write(join(home, ".ssh", "more", "work", "cfg"), "ControlPath ~/.ssh/deep/%C\n")
+    write(join(root, "ssh_config"), "Host *\n  ControlPath /run/ssh-mux/%h\n")
+    const { paths, globs } = sshSockets(home, join(root, "ssh_config"))
+    expect(paths.sort()).toEqual([join(home, ".ssh", "cm"), join(home, ".ssh", "deep"), join(home, "agents", "one.sock"), join(root, "elsewhere", "two.sock"), "/run/ssh-mux"].sort())
+    expect(globs.sort()).toEqual([join(home, ".cache", "ssh-*"), "/tmp/*@*:*"].sort())
+  } finally {
+    if (said === undefined) delete process.env.KUVO_TEST_SOCKETS
+    else process.env.KUVO_TEST_SOCKETS = said
+    rmSync(root, { recursive: true, force: true })
   }
 })

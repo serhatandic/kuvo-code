@@ -220,6 +220,14 @@ private struct BottomStack: View {
         var value: Value
     }
 
+    /// The worktree its box removed from where it works, once its sessions were archived: shown
+    /// while it's open again (an archived one opened from search would only be removed again).
+    private var removedWorktree: Workspace.RestorableWorktree? {
+        let folder = model.session.location.directory
+        guard workspace.worktrees[folder] == nil, !Workspace.isArchived(model.session) else { return nil }
+        return workspace.restorableWorktrees[folder]
+    }
+
     /// The bars showing in the card, in its order.
     private var bars: [ComposerBar] {
         var bars: [ComposerBar] = []
@@ -246,6 +254,14 @@ private struct BottomStack: View {
     }
 
     /// A bot's goal under way (or over, and not put away), in the goal bar's place.
+    /// The conversation's own goal, which a bot's plan is paused and resumed by.
+    private func shownGoal(_ plan: GoalPlan) -> Goal? {
+        #if DEBUG
+        if model.goal == nil, let demo = GoalPlans.demoGoal(for: plan) { return demo }
+        #endif
+        return model.goal
+    }
+
     private var shownPlan: (box: String, plan: GoalPlan)? {
         guard let found = app.goalPlans.plan(for: model.id), [.running, .done, .stopped].contains(found.plan.state),
               !app.goalPlans.putAway.contains(found.plan.id) else { return nil }
@@ -394,8 +410,22 @@ private struct BottomStack: View {
                         .modifier(ComposerSurface())
                         .transition(.opacity)
                 }
-                if let engine = offlineMachine {
+                // Its move waiting for a computer that went quiet (its own machine, say): that says it
+                // all, with nothing to connect, since the two computers move it between themselves.
+                if let going = waitingMove {
+                    MoveWaitingCard(going: going)
+                        .modifier(ComposerSurface())
+                        .transition(.opacity)
+                } else if let engine = offlineMachine {
                     MachineOfflineBar(engine: engine)
+                        .modifier(ComposerSurface())
+                        .transition(.opacity)
+                }
+                // Its worktree removed once its sessions were archived: brought back, or left for the
+                // project's own folder.
+                if let worktree = removedWorktree {
+                    WorktreeRestoreBar(session: model.session, worktree: worktree) { model.failure = $0 }
+                        .disabled(offlineMachine != nil)
                         .modifier(ComposerSurface())
                         .transition(.opacity)
                 }
@@ -415,7 +445,7 @@ private struct BottomStack: View {
                                 .modifier(CardRow())
                                 .transition(.fold)
                         } else if let (box, plan) = shownPlan {
-                            GoalPlanBar(plan: plan, box: box, goal: model.goal, isHidden: hidden(.goal, $model.hidesGoal), isChanging: model.isChangingGoal || offlineMachine != nil) {
+                            GoalPlanBar(plan: plan, box: box, goal: shownGoal(plan), isHidden: hidden(.goal, $model.hidesGoal), isChanging: model.isChangingGoal || offlineMachine != nil) {
                                 model.changeGoal(.pause)
                             } resume: {
                                 model.changeGoal(.resume)
@@ -525,6 +555,10 @@ private struct BottomStack: View {
             .animation(.ui, value: folds)
             .animation(.ui, value: isAsking)
             .animation(.ui, value: tucked)
+            .animation(.ui, value: removedWorktree?.folder)
+            .animation(.ui, value: waitingMove != nil)
+            // A machine's box removes and restores worktrees without telling this Mac: read as it shows.
+            .task(id: model.session.location.directory) { await workspace.refreshWorktrees(for: model.session) }
             // A bot's work read from its box as it changes (a session of it started, at work,
             // asking, done), wherever the bot lives.
             .task(id: workChanges) {
@@ -628,6 +662,12 @@ private struct BottomStack: View {
     }
 
     private var offlineMachine: MachineEngine? { SessionView.offlineMachine(of: model, in: app) }
+
+    /// Its move (a bot's, or the chat's own), while it waits for a computer that went quiet.
+    private var waitingMove: Moves.Going? {
+        let going = app.moves.underWay[app.bots.bot(forSession: model.id)?.id ?? model.session.id]
+        return going?.waitingFor == nil ? nil : going
+    }
 
     private var forms: [FormRequest] {
         #if DEBUG

@@ -3,8 +3,8 @@ import Testing
 @testable import KuvoCode
 
 /// Worktrees' way back, on real repositories: merging back, a conflict leaving the folder as it
-/// was; and the pull request page for a remote. (Their branches are named by their box:
-/// Packages/KuvoLink/Tests/Bridge/worktrees.test.js.)
+/// was. (Their branches are named by their box, Packages/KuvoLink/Tests/Bridge/worktrees.test.js,
+/// and their pull requests made there, changes.test.js.)
 @MainActor
 @Suite struct GitBranchesTests {
     @Test func mergingBack() throws {
@@ -57,18 +57,5 @@ import Testing
         #expect(Git.merge("other", into: repo.path, environment: [:]) == .failed("The project’s folder is in the middle of a merge. Finish it there first."))
         #expect(repo.exists(".git/MERGE_HEAD"), "your merge still under way")
         #expect(!repo.exists("b.txt"))
-    }
-
-    /// Where a remote's pull requests are made, whichever way the remote is written; without the
-    /// name, password or port it may carry.
-    @Test(arguments: [
-        ("git@github.com:acme/app.git", "https://github.com/acme/app"),
-        ("https://github.com/acme/app.git", "https://github.com/acme/app"),
-        ("https://me:ghp_secret@github.com/acme/app", "https://github.com/acme/app"),
-        ("ssh://git@gitlab.com:22/group/sub/app.git", "https://gitlab.com/group/sub/app"),
-        ("/local/path/repo", nil),
-    ])
-    func aRemotesWebPage(remote: String, page: String?) {
-        #expect(Git.webPage(of: remote)?.absoluteString == page)
     }
 }

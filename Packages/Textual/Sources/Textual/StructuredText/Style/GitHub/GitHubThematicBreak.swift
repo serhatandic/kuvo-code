@@ -7,9 +7,10 @@ extension StructuredText {
     public init() {}
 
     public func makeBody(configuration _: Configuration) -> some View {
-      Divider()
-        .textual.frame(height: .fontScaled(0.25))
-        .overlay(DynamicColor.gitHubBorder)
+      // One thin line in a table's colour, the same room above and below.
+      Rectangle()
+        .fill(DynamicColor.gitHubBorder)
+        .frame(height: 1)
         .textual.blockSpacing(.init(top: 24, bottom: 24))
     }
   }

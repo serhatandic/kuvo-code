@@ -52,8 +52,13 @@ final class Moves {
         var stage = "holding"
         var sent: Int?
         var size: Int?
-        /// "Moving to lab… 12 of 30 MB".
-        var words: String { MoveWords.status(stage: stage, place: place, sent: sent, size: size) }
+        /// The computer it waits for, by name, while that one has gone quiet (its box says so, or
+        /// the box holding the move can't be read): nothing of it moves until it's back.
+        var waitingFor: String?
+        /// "Moving to lab… 12 of 30 MB", or "Waiting for lab".
+        var words: String { waitingFor.map { MoveWords.waiting(for: $0) } ?? MoveWords.status(stage: stage, place: place, sent: sent, size: size) }
+        /// The same for VoiceOver, with what comes next while it waits.
+        var spoken: String { waitingFor.map { MoveWords.waitingSpoken(for: $0, place: place) } ?? words }
     }
 
     /// A computer something can go to, as the box it lives on says: its box's key, its name, and
@@ -135,6 +140,8 @@ final class Moves {
             var place: String?
             var sent: Int?
             var size: Int?
+            /// Its other computer has gone quiet about it a while (on the box it leaves).
+            var waiting: Bool?
         }
         var moves: [Move]
         var away: [String]
@@ -396,7 +403,11 @@ final class Moves {
     func reload(_ box: String) async {
         guard let app, let client = client(box) else { return }
         // A machine out of reach for now: what it said last stands (a move isn't over for that).
-        if box != BoxClient.mac, boxes == nil, app.machines.engine(box)?.isReady != true { return outOfReach(box) }
+        if box != BoxClient.mac, boxes == nil, app.machines.engine(box)?.isReady != true {
+            // (A read begun before isn't taken: it would say it's back.)
+            reads[box, default: 0] += 1
+            return outOfReach(box)
+        }
         reads[box, default: 0] += 1
         let read = reads[box]
         let reading = Task {
@@ -404,8 +415,10 @@ final class Moves {
             guard reads[box] == read else { return }
             // Nor a read that failed (its connection dropped, say).
             guard let said else { return outOfReach(box) }
-            unread.remove(box)
+            // Back: what's moving from it no longer waits for it (said the same, `take` shows nothing).
+            let back = unread.remove(box) != nil
             take(said, from: box)
+            if back { show() }
         }
         latest[box] = reading
         var waited = reading
@@ -426,14 +439,16 @@ final class Moves {
     /// A machine you removed: what it said goes.
     func forget(_ machine: String) {
         rereading.removeValue(forKey: machine)?.cancel()
+        unread.remove(machine)
         take(nil, from: machine)
     }
 
     /// A box whose moves can't be read now: what it said stands, but for moves over at their other
     /// end (it may have restarted mid-move, and won't say so until it's back).
     private func outOfReach(_ box: String) {
-        unread.insert(box)
-        if dropEnded() { show() }
+        let newly = unread.insert(box).inserted
+        // (What's moving from it now waits for it.)
+        if dropEnded() || newly { show() }
     }
 
     /// Moves over at one end left out of what boxes out of reach said last. Whether any were.
@@ -585,16 +600,40 @@ final class Moves {
         var moving = asked
         var frozen = Set(settling.values.flatMap(\.things))
         var away: [String: String?] = [:]
-        for (box, said) in told {
+        // What this Mac's own box has coming here: it says itself whether it hears from where it comes.
+        let incoming = Dictionary((told[BoxClient.mac]?.moves ?? []).filter { $0.role == "to" }.map { ($0.id, $0) }) { $1 }
+        // What a box read now says of a thing wins over what one out of reach said last (it's taken last).
+        for (box, said) in told.sorted(by: { unread.contains($0.key) && !unread.contains($1.key) }) {
             let machine: String? = box == BoxClient.mac ? nil : box
             for move in said.moves {
                 frozen.formUnion([move.thing] + move.sessions)
                 guard move.role == "from" else { continue }
                 // Its name as the box says it, else as this Mac knows the machine.
                 let name = move.to == app?.phoneLink.macKey ? "this Mac" : move.place ?? place(move.to).map { $0.map(placeName) ?? "this Mac" } ?? "another computer"
-                moving[move.thing] = Going(place: name, stage: move.stage, sent: move.sent, size: move.size)
+                // Waiting for the machine it leaves: coming here, as this Mac's box says; going elsewhere,
+                // while that machine is away (what it said last stands meanwhile). Or for the one it's
+                // going to, quiet, as the box it leaves says (never this Mac: its own box says).
+                let waiting: String? = if let coming = incoming[move.id] {
+                    coming.waiting == true ? coming.place ?? placeName(machine) : nil
+                } else if let machine, isAway(machine) {
+                    placeName(machine)
+                } else if move.waiting == true, move.to != app?.phoneLink.macKey {
+                    name
+                } else {
+                    nil
+                }
+                // (How much of it came here, as this Mac's box says, when that's further: the machine's
+                // word may be old.)
+                let sent = incoming[move.id]?.sent.map { max($0, move.sent ?? 0) } ?? move.sent
+                moving[move.thing] = Going(place: name, stage: move.stage, sent: sent, size: move.size, waitingFor: waiting)
             }
             for session in said.away { away[session] = .some(machine) }
+        }
+        // Coming here from a machine that's away and hasn't said what it moves (not since this app
+        // started, say): as this Mac's box has it.
+        for move in incoming.values where moving[move.thing] == nil {
+            guard case let machine?? = place(move.from), move.waiting == true || isAway(machine) else { continue }
+            moving[move.thing] = Going(place: "this Mac", stage: move.stage, sent: move.sent, size: move.size, waitingFor: move.place ?? placeName(machine))
         }
         if moving != underWay { underWay = moving }
         var arriving: [String: String] = [:]
@@ -603,6 +642,11 @@ final class Moves {
         if frozen != Self.frozen { Self.frozen = frozen }
         if frozen != held { held = frozen }
         if app?.workspace.movedAway != away { app?.workspace.movedAway = away }
+    }
+
+    /// A machine out of reach, its moves unread: not a read that failed a moment (its connection up).
+    private func isAway(_ machine: String) -> Bool {
+        unread.contains(machine) && app?.machines.engine(machine)?.isReady != true
     }
 
     private func client(_ box: String) -> BoxClient? {

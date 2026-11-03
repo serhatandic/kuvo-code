@@ -285,6 +285,10 @@ test("every area the app sends to this Mac's box, the box answers a phone itself
   assert.ok(listed.length > 20);
   assert.deepEqual(listed.filter(route => route !== "kuvo/link" && !link.macAnswers(`${route}/x`)), []);
   assert.equal(link.macAnswers("kuvo/link/config"), false);
+  // A session's own routes the app moved there too, not its others.
+  assert.ok(link.macAnswers("kuvo/sessions/ses_1/approval"));
+  assert.ok(link.macAnswers("kuvo/sessions/ses_1/queue"));
+  assert.equal(link.macAnswers("kuvo/sessions/ses_1/agents"), false);
 });
 
 test("a phone asking for a pairing link leaves Settings › Phone's as it is: each lets in once", async () => {

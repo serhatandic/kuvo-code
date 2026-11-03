@@ -13,6 +13,18 @@ struct MoveWordsTests {
         #expect(MoveWords.status(stage: "something-newer", place: "lab") == "Moving to lab…")
     }
 
+    /// One end gone quiet: the row says only what it waits for, the card and VoiceOver what comes next.
+    @Test func waitingForAComputerItSaysWhichAndWhatComesNext() {
+        #expect(MoveWords.waiting(for: "devbox") == "Waiting for devbox")
+        #expect(MoveWords.waitingSpoken(for: "devbox", place: "this Mac") == "Waiting for devbox. It moves to this Mac once devbox is back.")
+        #expect(MoveWords.waitingSpoken(for: "devbox", place: "devbox") == "Waiting for devbox. It moves to devbox once it’s back.")
+        let card = MoveWords.waitingCard(for: "devbox", place: "this Mac")
+        #expect(card.title == "Moving to this Mac")
+        #expect(card.message.hasPrefix("Waiting for devbox to come back."))
+        // Never a promise it carries on: away long enough, it's taken back.
+        #expect(card.message.contains("stays where it was if devbox stays away a long time"))
+    }
+
     @Test func howFarItIsIsSaidAsOtherProgressIs() {
         // The most a move takes, the box's cap, in the unit the cap is said in.
         #expect(MoveWords.progress(sent: 400_000_000, size: 1_000_000_000) == "0.4 of 1.0 GB")

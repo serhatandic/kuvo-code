@@ -20,6 +20,7 @@ import { askBook } from "../notices/asking";
 import type { Notice } from "../notices/notice";
 import { commandEnv, runCommand } from "../run-command";
 import type { Caller } from "../vault/who";
+import { reviewIn } from "../work/reviewing";
 import { addRule, ownerOf, writeRuleWouldBe } from "./allowed";
 
 /** Your answer, and who gave it: "Mac", or a phone's name. */
@@ -180,7 +181,16 @@ async function askToRun(caller: Caller, args: Record<string, unknown>, signal?: 
       return;
     }
   })();
-  const answered = await book.ask({
+  // In Auto, its reviewer first: it runs, is refused, or comes to you with why (never let through
+  // on a review that couldn't be had: that comes to you as before).
+  const conversation = caller.root ?? caller.session;
+  const reviewed = conversation ? await reviewIn(conversation, { kind: "command", command, folder: project }, signal).catch(() => null) : null;
+  if (reviewed?.decision === "refuse") {
+    heard.abort();
+    const paused = reviewed.paused ? " Auto is paused here now: the user decides what's next." : "";
+    return { text: `Auto's reviewer said no: ${reviewed.reason}${paused} Don't run it, nor get around the sandbox another way. Find another way to do the task, or ask the user.`, isError: false };
+  }
+  const answered: SandboxAnswer = reviewed?.decision === "allow" ? { answer: "once", client: "Auto" } : await book.ask({
     ...(caller.root ? { session: caller.root, ...(caller.sessionName ? { sessionName: caller.sessionName } : {}) } : {}),
     ...(caller.bot ? { bot: caller.bot, botName: caller.botName } : {}),
     project,
@@ -191,6 +201,7 @@ async function askToRun(caller: Caller, args: Record<string, unknown>, signal?: 
     ...(always ? { always } : {}),
     ...(IS_MAC ? {} : { machine: os.hostname() }),
     owner: ownerOf(project),
+    ...(reviewed?.decision === "ask" ? { review: { reason: reviewed.reason, why: reviewed.why, ...(reviewed.always ? { always: reviewed.always } : {}) } } : {}),
   }, signal, undefined, id => { asking = id; });
   heard.abort();
   if (answered.unanswered) return { text: "Nobody answered in time, so it didn't run. Don't get around the sandbox another way: go on without it, or ask the user when they're back.", isError: false };
@@ -205,7 +216,7 @@ async function askToRun(caller: Caller, args: Record<string, unknown>, signal?: 
   let shown = output;
   if (shown.length > MOST_OUTPUT) shown = "…" + shown.slice(-MOST_OUTPUT).replace(/^[^\n]*\n/, "");
   const ended = timedOut ? `It was stopped after ${seconds} seconds.` : `It ended with ${code}.`;
-  const head = how === "always" ? `Ran outside the sandbox · Always for this: from now on your commands can write in ${always!.path} in the sandbox, so run them there.` : "Ran outside the sandbox · Allowed once";
+  const head = how === "always" ? `Ran outside the sandbox · Always for this: from now on your commands can write in ${always!.path} in the sandbox, so run them there.` : reviewed?.decision === "allow" ? `Ran outside the sandbox · Allowed by Auto's reviewer: ${reviewed.reason}` : "Ran outside the sandbox · Allowed once";
   return { text: `${head}\n\n${shown.trim() ? shown.trimEnd() + "\n\n" : "It printed nothing.\n\n"}${ended}`, isError: timedOut || code !== 0 };
 }
 

@@ -265,6 +265,7 @@ test("start_session starts one where its conversation works, on its model and ap
   assert.equal(made[0].title, "Review docs");
   assert.deepEqual(made[0].model, { providerID: "openai", id: "gpt-5" });
   assert.ok(made[0].permissions.some(rule => rule.action === "shell" && rule.effect === "ask"), "it asks first, as its conversation does");
+  // (Its conversation is one from before, its approval read from its rules: so is this one.)
   assert.deepEqual(marked.get("ses_new1"), { kuvo: { startedBy: "ses_lead" } });
   assert.equal(prompts[0].to, "ses_new1");
   assert.equal(prompts[0].text, "[Message from Lead · ses_lead] (To answer, use send_message to ses_lead.)\n\nReview the docs.");
@@ -305,9 +306,13 @@ test("a group chat's seat neither writes to agents nor starts sessions", async (
 test("a client starts a session with a task, as the user's own first message", async () => {
   const started = await route("POST", "kuvo/sessions", { task: "Fix the login bug.", folder: other, title: "Login bug" });
   assert.equal(started.status, 200);
-  assert.deepEqual(started.body, { session: "ses_new1", title: "Login bug", folder: other, project: "web" });
+  // (It says it asks first for now.)
+  assert.deepEqual(started.body, { session: "ses_new1", title: "Login bug", folder: other, project: "web", got: "askFirst" });
   assert.equal(prompts[0].text, "Fix the login bug.");
-  assert.equal(marked.has("ses_new1"), false, "started by no conversation");
+  // Started by no conversation: Auto, as you'd start one, which asks first where the sandbox
+  // doesn't run (as here).
+  assert.deepEqual(marked.get("ses_new1"), { kuvo: { approval: "auto", applied: "askFirst" } });
+  assert.ok(made[0].permissions.some(rule => rule.action === "shell" && rule.resource === "*" && rule.effect === "ask"));
 
   const byAgent = await route("POST", "kuvo/sessions", { task: "Check the deploy.", startedBy: "ses_helper" });
   assert.equal(byAgent.status, 200);
@@ -317,6 +322,66 @@ test("a client starts a session with a task, as the user's own first message", a
   assert.deepEqual(await route("POST", "kuvo/sessions", { task: "Hi.", folder: path.join(home, "nowhere") }),
     { status: 400, body: { message: `${path.join(home, "nowhere")} isn't a folder on this machine. Give a full path to one.` } });
   assert.deepEqual(await route("POST", "kuvo/sessions", { task: "Hi.", startedBy: "ses_gone" }), { status: 404, body: { message: "There's no such conversation here." } });
+});
+
+// Its commands would write such a folder whole (what runs later, a personal folder): only you start
+// one there, never an agent.
+test("an agent never starts a session in a folder the sandbox keeps, as you can", async () => {
+  const kept = path.join(home, ".local", "bin");
+  const documents = path.join(home, "Documents");
+  const site = path.join(documents, "site");
+  for (const folder of [kept, site, path.join(documents, "finances"), path.join(home, ".config")]) fs.mkdirSync(folder, { recursive: true });
+  // Inside what runs later, a personal folder or what's in it, or a folder holding walls (your home, ~/.config).
+  for (const folder of [kept, "~/.local/bin", documents, site, path.join(documents, "finances"), home, "~", path.join(home, ".config")]) {
+    const said = await tool("start_session", { task: "Tidy it.", folder }, "ses_helper");
+    assert.deepEqual(said, { text: `${folder} is kept from commands on this machine (what runs later, a personal folder or the like). Ask the user to start it there.`, isError: true });
+  }
+  assert.equal((await route("POST", "kuvo/sessions", { task: "Tidy it.", folder: kept, startedBy: "ses_helper" })).status, 403);
+  // A project of yours in a personal folder is the agent's to start, as it's yours.
+  const projects = path.join(home, "box", "projects.json");
+  const before = fs.existsSync(projects) ? fs.readFileSync(projects) : null;
+  fs.mkdirSync(path.dirname(projects), { recursive: true });
+  fs.writeFileSync(projects, JSON.stringify({ projects: [{ directory: site, folders: [] }] }));
+  try {
+    assert.equal((await tool("start_session", { task: "Tidy it.", folder: site }, "ses_helper")).isError, false);
+    assert.equal((await tool("start_session", { task: "Tidy it.", folder: path.join(documents, "finances") }, "ses_helper")).isError, true);
+  } finally {
+    if (before) fs.writeFileSync(projects, before); else fs.rmSync(projects, { force: true });
+  }
+  assert.equal((await route("POST", "kuvo/sessions", { task: "Tidy it.", folder: kept })).status, 200);
+});
+
+test("a client starts a session with the approval it picks: Accept Edits edits on its own, Full Access only where it's switched on, an older client's words read as the box's", async () => {
+  const edits = await route("POST", "kuvo/sessions", { task: "Tidy the README.", folder: other, approval: "acceptEdits" });
+  assert.equal(edits.status, 200);
+  assert.deepEqual(marked.get(edits.body.session), { kuvo: { approval: "acceptEdits", applied: "acceptEdits" } });
+  const rules = made[0].permissions;
+  const last = action => rules.filter(rule => rule.action === action && rule.resource === "*").pop()?.effect;
+  assert.equal(last("shell"), "ask", "commands still ask");
+  assert.notEqual(last("edit"), "ask", "edits don't");
+
+  fs.rmSync(path.join(home, "box", "approval.json"), { force: true });
+  assert.deepEqual(await route("POST", "kuvo/sessions", { task: "Hi.", folder: other, approval: "fullAccess" }),
+    { status: 409, body: { message: "Full Access is off for this computer. Turn it on in Settings first.", reason: "fullAccessOff" } });
+  assert.equal(made.length, 1, "nothing started with less instead");
+
+  const older = await route("POST", "kuvo/sessions", { task: "Hi.", folder: other, approval: "approveAll" });
+  assert.equal(older.status, 200);
+  assert.equal(marked.get(older.body.session).kuvo.approval, "auto");
+});
+
+test("a session an agent starts never does more on its own than its conversation, and the agent is told what it got", async () => {
+  const lead = sessions.get("ses_lead");
+  lead.metadata = { kuvo: { approval: "auto", applied: "askFirst" } };
+  try {
+    const said = await tool("start_session", { task: "Ship it.", title: "Ship", approval: "fullAccess" }, "ses_helper");
+    assert.equal(said.isError, false, said.text);
+    // (Auto, its conversation's, which asks first here: the sandbox doesn't run.)
+    assert.match(said.text, /It asks before it edits or runs commands\./);
+    assert.deepEqual(marked.get("ses_new1"), { kuvo: { startedBy: "ses_lead", approval: "auto", applied: "askFirst" } });
+  } finally {
+    delete lead.metadata;
+  }
 });
 
 test("a tool call that waits for an answer, stopped by its caller, stops waiting and says so", async () => {

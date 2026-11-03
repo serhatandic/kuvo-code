@@ -397,13 +397,14 @@ when you're there to answer.
 | `KUVO_DEMO_BOT_MODEL` | With `KUVO_DEMO_BOT`: the model a new bot gets, `<provider>/<model>` (a coding agent's, like `claude-code/haiku`, makes it run with the agents) |
 | `KUVO_DEMO_EDIT_BOT` | With `KUVO_DEMO_BOT`: that bot's editor, open (`bottom`: scrolled to its wake-ups and memory) |
 | `KUVO_DEMO_BOT_WORK` | A bot's name: its work, a sample (three sessions at work, one asking, two done, two asks answered), in the bar over its composer, and every session marked as its work counts as at work in the sidebar (`KUVO_DEMO_BOT_WORK_ALL`: its All list open too) |
-| `KUVO_DEMO_GOAL` (for a bot) | `<bot's name>:<kind>`: the bot's goal, a sample (Driftwood's landing page), its card (`proposed`; `cant`, from a box that can't work on it alone, with `KUVO_DEMO_SANDBOX=<reason>` naming why, `checkFailed` unless given, or `old`) or its lanes (`running`, a few hours in; `month`, with phases and a deadline; `done`) |
+| `KUVO_DEMO_GOAL` (for a bot) | `<bot's name>:<kind>`: the bot's goal, a sample (Driftwood's landing page), its card (`proposed`; `cant`, from a box that can't work on it alone, with `KUVO_DEMO_SANDBOX=<reason>` naming why, `checkFailed` unless given, or `old`) or its steps (`running`, a few hours in; `month`, with phases and a deadline; `weekly`, two months of weekly summaries with long names; `done`) |
+| `KUVO_DEMO_GOAL_STATE` | With a bot's `KUVO_DEMO_GOAL`: `working`, or `paused:<you|limit|error|stalled>`, the conversation's own goal beside the sample, so its bar has Pause, or Resume and why it's paused |
 | `KUVO_DEMO_BOT_ASK` | A bot's name: as its conversation opens, it asks to make a project, the first time on its computer (the asking card, with where projects go) |
 | `KUVO_DEMO_MADE_BY` | A bot's name: as its conversation opens, your first project shows as one it made (its face on the folder) |
 | `KUVO_DEMO_EDIT_BOT_SAVE` | With `KUVO_DEMO_EDIT_BOT`: its job in a few words changed to this, and saved, ten seconds on (with `KUVO_DEMO_BOX_FAILED`, to see what Save says while this Mac's box is down) |
 | `KUVO_DEMO_MOVE_BOT` | With `KUVO_DEMO_BOT`: once that bot is done (and its prompt with it), it moves to this machine, or to this Mac when empty, as Move to Computer does |
 | `KUVO_DEMO_MOVE_GROUP` | With `KUVO_DEMO_GROUP`: that group chat moves to this machine, or to this Mac when empty, as Move to Computer does, before its message goes |
-| `KUVO_DEMO_MOVES` | Move to Computer without a second computer: the first bot, group chat and chat shown on their way (copying, getting ready, finishing), and every bot's menu listing lab and a Mac mini that needs a newer Kuvo Code |
+| `KUVO_DEMO_MOVES` | Move to Computer without a second computer: the first bot, group chat and chat shown on their way (copying, getting ready, finishing), and every bot's menu listing lab and a Mac mini that needs a newer Kuvo Code; `waiting`: each coming to this Mac, waiting for devbox |
 | `KUVO_DEMO_MOVE_MENU` | A bot's name: its Move to Computer list built as its menu is, before and after its box says where it can go, with what it shows each time printed |
 | `KUVO_DEMO_ADD_WAKE` | With `KUVO_DEMO_EDIT_BOT`: adding a wake-up, every day, with this note (`KUVO_DEMO_ADD_WAKE_NOW`: and adds it) |
 | `KUVO_DEMO_REPLY` | With `KUVO_DEMO_BOT`: sends this to the bot as a notification's Reply does |

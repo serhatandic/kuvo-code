@@ -27,6 +27,8 @@ import { pairingRoute, phonesRemoveRoute, phonesRoute } from "../areas/phones";
 import { QUEUE_ROUTE, queueRoute } from "../areas/queue";
 import { pluginSearchRoute } from "../areas/plugins";
 import { programsRoute } from "../areas/programs";
+import { backupsRoute } from "../areas/backups";
+import { approvalRoute, SESSION_APPROVAL_ROUTE, SESSION_DECISIONS_ROUTE } from "../areas/approval";
 import { sandboxRoute } from "../areas/sandbox";
 import { providerModelsRoute } from "../areas/providers";
 import { answerProjects } from "../areas/projects";
@@ -80,8 +82,10 @@ const ROUTES: (Route | Route<RegExpMatchArray>)[] = [
   { when: route => route === "kuvo/named", answer: namedRoute },
   { when: route => route === "kuvo/agent-tools", answer: agentToolsRoute },
   { when: route => route === "kuvo/sessions", answer: startRoute },
+  { when: route => route === "kuvo/approval" || SESSION_APPROVAL_ROUTE.test(route) || SESSION_DECISIONS_ROUTE.test(route), answer: approvalRoute },
   { when: route => route.match(QUEUE_ROUTE), answer: queueRoute },
   { when: route => route === "kuvo/search", answer: searchRoute },
+  { when: route => route === "kuvo/git/backups" || route === "kuvo/git/backups/restore", answer: backupsRoute },
   { when: route => route.startsWith("kuvo/git/"), answer: changesRoute },
   { when: route => route === "kuvo/asks" || route === "kuvo/asks/events", answer: asksRoute },
   { when: route => route.match(/^kuvo\/asks\/([^/]+)$/), answer: askAnswerRoute },
@@ -101,7 +105,7 @@ const ROUTES: (Route | Route<RegExpMatchArray>)[] = [
   { when: route => route === "kuvo/projects/new", answer: newProjectRoute },
   { when: route => route === "kuvo/projects" || route === "kuvo/projects/events", answer: ({ request, readEngine, readBridge, signal }: RouteContext) => answerProjects(request, readEngine, readBridge, signal) },
   { when: route => route === "kuvo/worktrees/events", answer: worktreeEventsRoute },
-  { when: route => /^kuvo\/worktrees(\/(remove|record|where))?$/.test(route), answer: worktreesRoute },
+  { when: route => /^kuvo\/worktrees(\/(remove|restore|record|where))?$/.test(route), answer: worktreesRoute },
   // A bot's work (PROTOCOL.md, "Work"), its stop-all before a bot's own route.
   { when: route => route.match(WORK_ROUTE), answer: workRoute },
   { when: route => route.match(WORK_ASKS_ROUTE), answer: workAsksRoute },

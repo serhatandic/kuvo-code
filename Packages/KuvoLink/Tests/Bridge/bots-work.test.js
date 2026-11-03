@@ -208,7 +208,8 @@ test("a bot starts a session in a project, on the model, effort and mode it pick
   assert.equal(said.isError, false, said.text);
   const session = startedAddress(said);
   assert.ok(session, said.text);
-  assert.match(said.text, /^Started "Onboarding" in Tidepool \(address ses_new1\): Claude Sonnet 5\.5 · high · Plan\. It's on it now\. You'll be woken when it finishes or asks for something, so don't check on it\.$/);
+  // (Its work is never more than Auto, which asks first here: the sandbox doesn't run.)
+  assert.match(said.text, /^Started "Onboarding" in Tidepool \(address ses_new1\): Claude Sonnet 5\.5 · high · Plan\. It asks before it edits or runs commands\. It's on it now\. You'll be woken when it finishes or asks for something, so don't check on it\.$/);
   assert.deepEqual(made[0].location, { directory: tidepool });
   assert.deepEqual(made[0].model, { providerID: "anthropic", id: "claude-sonnet-5-5", variant: "high" });
   assert.equal(made[0].agent, "plan");
@@ -253,7 +254,7 @@ test("a model its provider is retiring isn't offered, but a session on it can st
 test("a session's approval is never above its starter's:a bot that asks first starts sessions that ask first", async () => {
   const said = await tool("start_session", { task: "Tidy the README.", project: "Tidepool", approval: "approveAll" }, "ses_mira");
   assert.equal(said.isError, false, said.text);
-  assert.match(said.text, /asks first, as you do/);
+  assert.match(said.text, /It asks before it edits or runs commands/);
   assert.ok(made[0].permissions.some(rule => rule.action === "shell" && rule.effect === "ask"));
   const careful = await tool("start_session", { task: "Look around.", project: "Tidepool", approval: "ask" }, "ses_pixel");
   assert.equal(careful.isError, false, careful.text);
@@ -583,13 +584,11 @@ test("a bot never lets a session change what later commands run, nor reach past 
   assert.equal((await answer("per_new")).isError, false, "a new source file, made");
   assert.equal((await answer("per_doc")).isError, false);
 
-  // A session working in your home folder still can't read your keys.
+  // Nor start one working in your home folder, which holds your keys and what runs later.
   fs.mkdirSync(path.join(home, ".ssh"), { recursive: true });
-  const inHome = startedAddress(await tool("start_session", { task: "Look.", folder: home }, "ses_pixel"));
-  fs.mkdirSync(path.join(home, "Library", "Keychains"), { recursive: true });
-  asked.set(inHome, [{ id: "per_key", sessionID: inHome, action: "shell", resources: ["cat .ssh/id_ed25519"] }, { id: "per_chain", sessionID: inHome, action: "shell", resources: ["cat Library/Keychains/login.keychain-db"] }]);
-  assert.equal((await tool("answer_ask", { session: inHome, ask: "per_key", decision: "allow", reason: "Look." }, "ses_pixel")).isError, true);
-  assert.match((await tool("answer_ask", { session: inHome, ask: "per_chain", decision: "allow", reason: "Look." }, "ses_pixel")).text, /your keys and sign-ins/);
+  const inHome = await tool("start_session", { task: "Look.", folder: home }, "ses_pixel");
+  assert.equal(inHome.isError, true);
+  assert.match(inHome.text, /is kept from commands/);
 });
 
 test("git is a bot's to allow only in the project's own repository, never one above it", async () => {

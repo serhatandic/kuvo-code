@@ -542,6 +542,7 @@ private struct BranchMenu: View {
     @Environment(AppModel.self) private var app
     @State private var isWorking = false
     @State private var outcome: Outcome?
+    @State private var confirmsPullRequest = false
 
     enum Outcome {
         case merged(into: String)
@@ -556,7 +557,7 @@ private struct BranchMenu: View {
                 if isWorktree {
                     Button("Merge into \(tree.base ?? "the Project’s Branch")", systemImage: "arrow.triangle.merge", action: merge)
                 }
-                Button("Create Pull Request", systemImage: "arrow.up.forward.square", action: pullRequest)
+                Button("Create Pull Request…", systemImage: "arrow.up.forward.square") { confirmsPullRequest = true }
             }
             // (A machine's isn't in the Finder.)
             if isWorktree, !RemoteFolder.isRemote(directory) {
@@ -577,9 +578,17 @@ private struct BranchMenu: View {
         .disabled(isWorking)
         .help(isWorktree ? "This session works on its own branch, \(tree.branch). Merge it or create a pull request." : "Create a pull request for \(tree.branch)")
         .accessibilityLabel(isWorktree ? "Merge or Create Pull Request" : "Create Pull Request")
+        .closesWhenKept($confirmsPullRequest)
+        .popover(isPresented: $confirmsPullRequest, arrowEdge: .bottom) {
+            PullRequestForm(directory: directory, model: model) { pushedOnly in
+                confirmsPullRequest = false
+                if pushedOnly { outcome = .pushed }
+            }
+                .popoverContent()
+        }
         #if DEBUG
         // KUVO_DEMO_BRANCH=merged|conflict|pushed|failed: what Merge or Create Pull Request said,
-        // as if it had just run (nothing is merged or pushed).
+        // as if it had just run (nothing is merged or pushed); pull-request: its confirmation open.
         .task {
             guard let shown = ProcessInfo.processInfo.environment["KUVO_DEMO_BRANCH"] else { return }
             await DemoWait.pause(.conversationShows)
@@ -587,6 +596,7 @@ private struct BranchMenu: View {
             case "merged": outcome = .merged(into: tree.base ?? "main")
             case "conflict": outcome = .conflict(["src/timer.js", "test/timer.test.js"], into: tree.base ?? "main")
             case "pushed": outcome = .pushed
+            case "pull-request": confirmsPullRequest = true
             case "failed": outcome = .failed(title: "Couldn’t Push", message: "fatal: could not read Username for 'https://github.com': terminal prompts disabled")
             default: break
             }
@@ -599,14 +609,8 @@ private struct BranchMenu: View {
                 }
                 Button("Cancel", role: .cancel) {}
             } else if case .merged = outcome, let model, !workspace.worktreeIsShared(directory, besides: model.id) {
-                // Its work is in the project now: nothing in the worktree is lost.
-                Button("Archive Session and Remove Worktree") {
-                    Task {
-                        // Only what's committed was merged: changes made since keep the worktree, and the session with it.
-                        do { try await workspace.removeWorktree(directory, discardingChanges: false) } catch { return Modal.show(error) }
-                        await workspace.setArchived(model.id, true)
-                    }
-                }
+                // Its work is in the project now. Its box removes the worktree with it, saving changes made since.
+                Button("Archive Session") { Task { await workspace.setArchived(model.id, true) } }
                 Button("Keep", role: .cancel) {}
             } else {
                 Button("OK") {}
@@ -657,49 +661,175 @@ private struct BranchMenu: View {
             Analytics.shared.track("worktree_merged", ["outcome": result])
         }
     }
+}
 
-    private func pullRequest() {
-        let tree = tree, directory = directory, environment = environment
-        isWorking = true
-        Task {
-            let result = await Task.detached { () -> Result<URL?, GitFailure> in
-                if let base = tree.base, let reason = tree.unready(in: directory, against: base) { return .failure(GitFailure(message: reason)) }
-                do {
-                    return .success(try Git.pushForPullRequest(branch: tree.branch, base: tree.base, in: directory, environment: environment))
-                } catch {
-                    return .failure(error as? GitFailure ?? GitFailure(message: error.localizedDescription))
+/// Create Pull Request's confirmation: the branch, the base it goes into, its title and description
+/// (from the commits, or written by the session's model), and what Create does on the box the
+/// project is on: makes it there with `gh`, or opens the host's page when `gh` isn't signed in
+/// there (said so). The box pushes and creates it, as for a phone.
+private struct PullRequestForm: View {
+    /// Where the session runs: this Mac's folder, or a machine's.
+    let directory: String
+    let model: SessionModel?
+    /// Closed; true when the branch was only pushed (a host the box can't open one on).
+    let done: (_ pushedOnly: Bool) -> Void
+    @Environment(Workspace.self) private var workspace
+    @Environment(AppModel.self) private var app
+    @State private var draft: PullRequestDraft?
+    @State private var title = ""
+    @State private var description = ""
+    @State private var failure: String?
+    @State private var isSuggesting = false
+    @State private var isWorking = false
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Create Pull Request")
+                    .font(.headline)
+                if let draft {
+                    Text(draft.into)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
                 }
-            }.value
-            if case .success(let page) = result {
-                Analytics.shared.track("pull_request_opened", ["host": page?.host()?.contains("gitlab") == true ? "gitlab" : page == nil ? "other" : "github"])
             }
-            switch result {
-            case .success(let page?): NSWorkspace.shared.open(await described(page))
-            case .success(nil): outcome = .pushed
-            case .failure(let failure): outcome = .failed(title: "Couldn’t Push", message: failure.message)
+            if let draft {
+                TextField("Title", text: $title)
+                    .textFieldStyle(.roundedBorder)
+                    .focused($isFocused)
+                TextField("Description", text: $description, prompt: Text("Optional"), axis: .vertical)
+                    .lineLimit(3...10)
+                    .textFieldStyle(.roundedBorder)
+                if model != nil {
+                    Button {
+                        suggest()
+                    } label: {
+                        Label(isSuggesting ? "Writing…" : "Suggest a Title and Description", systemImage: "pencil.line")
+                    }
+                    .buttonStyle(.link)
+                    .font(.callout)
+                    .disabled(isSuggesting)
+                    .help("Have the session's model write them from the branch's commits and changes")
+                }
+                Text(draft.what(on: place))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if failure == nil {
+                HStack(spacing: 8) {
+                    Spinner(size: 12)
+                    Text("Looking at the branch…")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
             }
-            isWorking = false
+            if let failure {
+                Text(failure)
+                    .font(.callout)
+                    .foregroundStyle(.red)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            HStack {
+                if isWorking { Spinner(size: 12) }
+                Spacer()
+                // Once it's pushing, it goes on to the end: closed then, it'd still open the page.
+                Button("Cancel", role: .cancel) { done(false) }
+                    .keyboardShortcut(.cancelAction)
+                    .disabled(isWorking)
+                Button(draft?.action ?? "Create Pull Request") { create() }
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(draft == nil || title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isWorking)
+            }
+        }
+        .padding(16)
+        .frame(width: 340)
+        .interactiveDismissDisabled(isWorking)
+        .task { await read() }
+    }
+
+    /// The box the project is on, and the folder as it names it.
+    private var box: (client: BoxClient, path: String) {
+        if let (machine, path) = RemoteFolder.parse(directory) { return (app.box(machine), path) }
+        return (app.box(BoxClient.mac), directory)
+    }
+
+    private var place: String {
+        RemoteFolder.machine(of: directory).map { app.machines.engine($0)?.machine.name ?? $0 } ?? "this Mac"
+    }
+
+    private func read() async {
+        do {
+            let found = try await PullRequests.draft(on: box.client, directory: box.path)
+            draft = found
+            title = found.title
+            description = found.body
+            isFocused = true
+        } catch let refusal as BoxRefusal where refusal.status == 404 && refusal.message.hasPrefix("It said no") {
+            // A machine's box from before it made pull requests itself.
+            failure = "\(place) needs a newer Kuvo Code to create pull requests. It updates by itself overnight, or connect to it from this Mac."
+        } catch {
+            failure = error.localizedDescription
         }
     }
 
-    /// The pull request page with a title and description the session's model wrote from the
-    /// branch's commits and diff; as it was, without a session or an answer.
-    private func described(_ page: URL) async -> URL {
-        guard let session = model?.id, let api = workspace.api(forSession: session) else { return page }
+    /// A title and description the session's model writes from what the branch brings.
+    private func suggest() {
+        guard let session = model?.id, let api = workspace.api(forSession: session) else { return }
         let isAgents = model.map { OutsideAgents.isAgentSession($0.session) } ?? false
-        let base = tree.base, directory = directory
-        let summary = await Task.detached { Git.pullRequestSummary(against: base, in: directory) }.value
-        let prompt = GitPreferences.prompt("""
-        Write a pull request for the changes below. The first line is its title: under 72 characters, in the imperative mood. Then a blank line and a short description in Markdown: what changed and why, in a few bullet points, and anything a reviewer should check. Reply with the pull request alone: no preamble, no code fences.
+        isSuggesting = true
+        Task {
+            defer { isSuggesting = false }
+            let summary: String
+            do {
+                summary = try await PullRequests.draft(on: box.client, directory: box.path, withSummary: true).summary ?? ""
+            } catch {
+                failure = error.localizedDescription
+                return
+            }
+            let prompt = GitPreferences.prompt("""
+            Write a pull request for the changes below. The first line is its title: under 72 characters, in the imperative mood. Then a blank line and a short description in Markdown: what changed and why, in a few bullet points, and anything a reviewer should check. Reply with the pull request alone: no preamble, no code fences.
 
-        \(summary)
-        """, instructionsKey: GitPreferences.pullRequestInstructionsKey)
-        // A coding agent's session asks its own model; one whose agent can't answer outside the
-        // conversation, the engine's default model.
-        var written = try? await api.generate(prompt, session: session)
-        if written == nil, isAgents { written = try? await app.api?.generate(prompt) }
-        guard let text = written, let pull = Git.parsePullRequest(text) else { return page }
-        return Git.pullRequestPage(page, title: pull.title, body: pull.body)
+            \(summary)
+            """, instructionsKey: GitPreferences.pullRequestInstructionsKey)
+            // A coding agent's session asks its own model; one whose agent can't answer outside
+            // the conversation, the engine's default model.
+            var written = try? await api.generate(prompt, session: session)
+            if written == nil, isAgents { written = try? await app.api?.generate(prompt) }
+            guard let text = written, let pull = PullRequestDraft.parse(text) else {
+                failure = "The model didn’t write one. Try again, or write it yourself."
+                return
+            }
+            failure = nil
+            (title, description) = (pull.title, pull.body)
+        }
+    }
+
+    private func create() {
+        guard let draft else { return }
+        isWorking = true
+        failure = nil
+        let (title, body) = (title.trimmingCharacters(in: .whitespacesAndNewlines), description.trimmingCharacters(in: .whitespacesAndNewlines))
+        Task {
+            defer { isWorking = false }
+            do {
+                let made = try await PullRequests.create(on: box.client, directory: box.path, title: title, body: body)
+                Analytics.shared.track("pull_request_opened", ["host": draft.host, "made": draft.creates ? "yes" : "no"])
+                switch made {
+                case .made(let page), .toOpen(let page):
+                    NSWorkspace.shared.open(page)
+                    done(false)
+                case .pushed: done(true)
+                }
+            } catch {
+                failure = error.localizedDescription
+            }
+        }
     }
 }
 

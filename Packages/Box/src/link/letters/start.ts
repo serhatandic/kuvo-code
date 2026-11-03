@@ -12,17 +12,19 @@ import { asked, call, engineGet } from "../engine/client";
 import { writtenByYou } from "../engine/queue";
 import { messageID } from "../engine/sessions";
 import { BOTS, CHATS, HERE, homeFolder } from "../home";
+import { keptFromWork } from "../fence/policy";
 import { changeProjects, PROJECTS_FILE, readProjects } from "../areas/projects";
 import { readWorktrees } from "../areas/worktree-records";
 import { answerWorktrees, settleNewSession } from "../areas/worktrees";
-import { permissionsHere, refreshedRules } from "../bots/tell";
 import { composeLetter } from "./letter";
 import { allowed, noteStarting, startedAs, startsBefore, takeBack } from "./limits";
 import { answerTo } from "./take";
 import { noteWorkChanged } from "../work/changes";
 import { botLimits, pastLimit } from "../work/limits";
 import { pickModel, usableModels } from "../work/models";
-import { withAlwaysAsk } from "../work/always";
+import { approvalOf, approvalRules, effectiveApproval, isApproval, lowerOf, unavailable } from "../work/approval";
+import { settleAgain } from "../areas/approval";
+import type { Approval } from "../work/approval";
 import { linkSession, pauseGoal, runningGoal } from "../work/goals";
 import { nextMidnight, startOfDay } from "../work/clock";
 import { botOfConversation, depthOf, ofBot, workingNow, workSessions, worksFor } from "../work/tree";
@@ -78,15 +80,18 @@ export interface Started {
   project: string | null;
   answer?: string | null;
   picked?: string;
-  askedFirst?: boolean;
+  /** Its approval, where that's less than it was asked for or would have (said to its agent). */
+  got?: Approval;
   wakes?: string[];
 }
 
 /** Why one wasn't started (a 502 was, but its task didn't reach it: `session`). */
 export interface StartRefusal {
-  status: 400 | 403 | 429 | 502 | 503;
+  status: 400 | 403 | 409 | 429 | 502 | 503;
   message: string;
   session?: string;
+  /** Full Access refused (409): without its switch, or for a bot's. */
+  reason?: "fullAccessOff" | "bot";
 }
 
 /** Where it's started, and how it's waited for: the engine here (and the coding agents' bridge, for
@@ -115,8 +120,14 @@ function wakesFrom(given: unknown, byBot: boolean, waits: boolean): string[] {
   return WAKES.filter(each => named.includes(each));
 }
 
-const askFirstRules = () => refreshedRules(ASKS_FIRST, permissionsHere() ?? []);
-const asksFirst = (rules: unknown) => Array.isArray(rules) && rules.some(rule => rule?.action === "shell" && rule?.resource === "*" && rule?.effect === "ask");
+// The approval a start asks for: one of the box's, or as an older client says it (`ask` Ask First,
+// `approveAll` Auto); none for the starter's own.
+function approvalGiven(given: unknown): Approval | null | undefined {
+  if (given === undefined || given === null) return null;
+  if (given === "ask") return "askFirst";
+  if (given === "approveAll") return "auto";
+  return isApproval(given) ? given : undefined;
+}
 
 const SEAT = "Not from a group chat: talk it through here; the work is handed out after the wrap-up.";
 export const seatRefusal = (): StartRefusal => ({ status: 403, message: SEAT });
@@ -137,16 +148,12 @@ function folderRules(folders: readonly string[]): KitRule[] {
 }
 const isFolderRule = (rule: KitRule) => rule.action === "external_directory" && rule.effect === "allow" && rule.resource.endsWith("/*");
 
-// Its rules: the starting conversation's approval (Approve All from a client), made again with
-// Settings › Permissions as they are now where they're this box's own, else as they are; its own
-// folders' rules for its project's (a bot's own folder stays allowed). None from a client on a box
-// whose settings aren't its own: the engine's own then.
-function rulesFor(parent: Partial<EngineSession> | null, folders: readonly string[]): KitRule[] | undefined {
-  const own = Array.isArray(parent?.permissions) ? parent.permissions.filter(rule => !isFolderRule(rule) || rule.resource.includes("/bots/bot_")) : null;
-  const settings = permissionsHere();
-  const made = settings ? refreshedRules(own ?? [], settings) : own;
-  if (!made && !folders.length) return undefined;
-  return [...(made ?? []), ...folderRules(folders)];
+// Its rules: made for its approval with Settings › Permissions as they are now (where they're this
+// box's own; else the starting conversation's Don't Allows), its project's folders after (a bot's
+// own folder stays allowed); for a bot's work, what always comes to you asked whatever it is.
+function rulesFor(approval: Approval, parent: Partial<EngineSession> | null, folders: readonly string[], always: { publishing: boolean } | null): KitRule[] {
+  const own = Array.isArray(parent?.permissions) ? parent.permissions.filter(rule => !isFolderRule(rule) || rule.resource.includes("/bots/bot_")) : [];
+  return approvalRules(approval, [...own, ...folderRules(folders)], always);
 }
 
 const projectsNote = (primary: string, folders: readonly string[]) =>
@@ -221,11 +228,19 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
     let isFolder = false;
     try { isFolder = fs.statSync(full).isDirectory(); } catch {}
     if (!path.isAbsolute(full) || !isFolder) return no(400, `${written} isn't a folder on ${HERE}. Give a full path to one.`);
-    folder = isBotFolder(full) ? CHATS : full;
+    // (Its commands would write it whole: only you start one there. In a personal folder, an agent
+    // starts one only in your projects there, or its own conversation's folder.)
+    const ours = [...readProjects().filter(each => !each.removed).flatMap(each => [each.directory, ...(each.folders ?? [])]),
+      ...readWorktrees().map(each => each.folder ?? each.root), ...(parentFolder ? [parentFolder] : [])];
+    // (An agent's by where it really is as it's checked: a link swapped in after is never followed.)
+    const at = by ? fs.realpathSync(full) : full;
+    if (by && keptFromWork(at, ours)) return no(403, `${written} is kept from commands on ${HERE} (what runs later, a personal folder or the like). Ask the user to start it there.`);
+    folder = isBotFolder(at) ? CHATS : at;
   }
   if (!folder) return no(400, "Give the folder it works in (folder), as a full path.");
   if (given.mode !== undefined && given.mode !== null && given.mode !== "build" && given.mode !== "plan") return no(400, "mode is build or plan.");
-  if (given.approval !== undefined && given.approval !== null && given.approval !== "ask" && given.approval !== "approveAll") return no(400, "approval is ask or approveAll.");
+  const requested = approvalGiven(given.approval);
+  if (requested === undefined) return no(400, "approval is askFirst, acceptEdits, auto or fullAccess.");
   // A conversation that plans starts sessions that plan: Build would get round it, as Approve All
   // would round Ask First.
   if (given.mode === "build" && parent?.agent === "plan") return no(400, "This conversation is in Plan mode, so the sessions it starts plan too. Start it in plan mode, or ask the user to switch to Build.");
@@ -233,6 +248,9 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   const ownBot = by?.place ? botOfConversation(by.session) : null;
   const bot: WorksFor | null = ownBot ?? (by?.place ? worksFor(by.place.data) : null);
   const depth = ownBot ? 1 : depthOf(by?.place?.data) + 1;
+  // Full Access from a client where it can't be had says why, rather than starting it with less.
+  const notFull = !by && requested === "fullAccess" ? unavailable("fullAccess") : null;
+  if (notFull) return { refused: { status: 409, message: notFull.why, reason: notFull.reason as "fullAccessOff" } };
   // The goal its bot is at, if any. Paused by you, nothing of it goes on until you resume it, so
   // none of its sessions (one woken by a letter, say) starts another meanwhile, nor the bot's own
   // conversation, but for what you ask it for there (its turn answering what you wrote).
@@ -319,20 +337,31 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
     madeTree = typeof (tree as { root?: unknown }).root === "string" ? (tree as { root: string }).root : null;
     if (typeof tree.branch === "string") picked.push(`worktree ${tree.branch}`);
   }
-  // Its approval: the starter's, or asking first if it says so, and never above the starter's.
-  const wantsAsk = given.approval === "ask" || (given.approval === "approveAll" && asksFirst(parent?.permissions));
-  const askedFirst = given.approval === "approveAll" && asksFirst(parent?.permissions);
+  // Its approval: the one asked for, never above the starter's (an agent outside any conversation
+  // here asks first); from a client, Auto unless it says. Kept with it, and its rules made for
+  // what that comes to here now: a bot's work never has Full Access, nor Auto without the sandbox.
+  const agents = Boolean(bridge && target.port === bridge.port);
+  const from = by?.place ? approvalOf(by.place.data, { agents: Boolean(bridge && by.place.target.port === bridge.port), bot: Boolean(bot) }) : null;
+  const starters: Approval | null = by ? from?.approval ?? "askFirst" : null;
+  // (A bot's work is kept with Auto at most, whatever started it.)
+  const chosen: Approval = starters ? lowerOf(requested ?? starters, starters) : requested ?? "auto";
+  const wanted: Approval = bot ? lowerOf(chosen, "auto") : chosen;
+  // Taking the approval of a conversation from before, it runs as that one does, and is one from
+  // before too: nothing kept, so the box never makes its rules again. (Never a bot's: its work
+  // comes to what Auto does here.)
+  const asBefore = Boolean(from && !from.stored && wanted === starters && !bot);
+  const applied = asBefore ? wanted : effectiveApproval(wanted, { agents, bot: Boolean(bot) }).approval;
+  const got = applied !== (requested ?? wanted) && lowerOf(applied, requested ?? wanted) === applied ? applied : undefined;
   const project = projectOf(folder);
   const title = typeof given.title === "string" && given.title.trim() ? given.title.trim() : null;
-  const made = rulesFor(wantsAsk && !asksFirst(parent?.permissions) ? { ...parent, permissions: askFirstRules() as EngineSession["permissions"] } : parent, project?.folders ?? []);
   // A bot's work asks for what always comes to you, whatever its approval (last, so they win).
   // For a goal, publishing too, unless you switched on a public step.
-  const rules = bot ? withAlwaysAsk(made ?? [], { publishing: Boolean(goal && !goal.public.some(step => step.on)) }) : made;
+  const rules = rulesFor(applied, parent, project?.folders ?? [], bot ? { publishing: Boolean(goal && !goal.public.some(step => step.on)) } : null);
   // Its mode: the one asked for, else the conversation's (one that plans starts sessions that plan).
   const agent = given.mode === "plan" || given.mode === "build" ? given.mode : parent?.agent ?? null;
   let session: string;
   try {
-    const made = await call(target, "POST", "/api/session", { location: { directory: folder }, ...(title ? { title } : {}), ...(agent ? { agent } : {}), ...(model ? { model } : {}), ...(rules ? { permissions: rules } : {}) }, place.signal);
+    const made = await call(target, "POST", "/api/session", { location: { directory: folder }, ...(title ? { title } : {}), ...(agent ? { agent } : {}), ...(model ? { model } : {}), permissions: rules }, place.signal);
     if (!isObject(made) || typeof made.id !== "string" || !made.id) throw new Error("No session was made.");
     session = made.id;
     went(session);
@@ -349,13 +378,12 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   let wakes = wakesFrom(given.wake, Boolean(ownBot), given.wait === true);
   // What its starter hears of it, only once it's marked so: none for an agent outside any
   // conversation here, or for a mark the engine didn't take (it's told to write to it instead).
-  let marked = false;
-  if (by?.place) {
-    const kuvo = { startedBy: by.session, ...(bot ? { by: bot, depth } : {}), ...(wakes.length ? { wake: wakes } : {}) };
-    marked = await call(target, "PATCH", `/api/session/${address}`, { metadata: { kuvo } }).then(() => true, () => false);
-    if (bot) noteWorkChanged(bot.bot);
-  }
-  if (!marked) wakes = [];
+  const kuvo = { ...(by?.place ? { startedBy: by.session, ...(bot ? { by: bot, depth } : {}), ...(wakes.length ? { wake: wakes } : {}) } : {}), ...(asBefore ? {} : { approval: wanted, applied }) };
+  const marked = await call(target, "PATCH", `/api/session/${address}`, { metadata: { kuvo } }).then(() => true, () => false);
+  // (What it comes to may have changed while it was made.)
+  if (marked && !asBefore) await settleAgain(target, session, agents, place.signal).catch(() => {});
+  if (by?.place && bot) noteWorkChanged(bot.bot);
+  if (!marked || !by?.place) wakes = [];
   if (bot && goal && given.step !== undefined && given.step !== null) linkSession(bot.bot, given.step, session);
   const waits = given.wait === true;
   const id = messageID();
@@ -367,20 +395,28 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
     return no(502, `Started a session (${session}), but the task didn't reach it: ${String((error as Error | null)?.message ?? error)}`, session);
   }
   went(session, true);
-  const started: Started = { session, title, folder, project: project?.name ?? null, ...(picked.length ? { picked: picked.join(" · ") } : {}), ...(askedFirst ? { askedFirst } : {}), ...(wakes.length ? { wakes } : {}) };
+  const started: Started = { session, title, folder, project: project?.name ?? null, ...(picked.length ? { picked: picked.join(" · ") } : {}), ...(got ? { got } : {}), ...(wakes.length ? { wakes } : {}) };
   if (!waits) return { started };
   // A new session: anything it says is its answer.
   return { started: { ...started, answer: await answerTo(target, session, id, { wait: place.step, signal: place.signal, by: by?.place ? by.session : null }) } };
 }
 
+// What a session started with less than it was asked for does on its own.
+const GOT: Record<Approval, string> = {
+  askFirst: "It asks before it edits or runs commands.",
+  acceptEdits: "It edits on its own, and asks before it runs commands.",
+  auto: "It works on its own inside the sandbox, and asks for anything beyond it.",
+  fullAccess: "",
+};
+
 /** How a start went, in the words the tool gives its agent. */
 export function startedWords(outcome: { started: Started } | { refused: StartRefusal }, waits: boolean): { text: string; isError: boolean } {
   if ("refused" in outcome) return { text: outcome.refused.message, isError: true };
-  const { session, title, project, answer, picked, askedFirst, wakes = [] } = outcome.started;
+  const { session, title, project, answer, picked, got, wakes = [] } = outcome.started;
   const name = title ? `"${title}"` : "a new session";
   const where = project ? ` in ${project}` : "";
   const what = picked ? `: ${picked}.` : ".";
-  const asks = askedFirst ? " It asks first, as you do." : "";
+  const asks = got ? ` ${GOT[got]}` : "";
   const hears = wakes.length ? ` You'll be woken when it ${wakes.length === 2 ? "finishes or asks for something" : wakes[0] === "finished" ? "finishes" : "asks for something"}, so don't check on it.` : "";
   if (!waits) return { text: `Started ${name}${where} (address ${session})${what}${asks} It's on it now.${hears || " Write to it with send_message; it can write back to you the same way."}`, isError: false };
   return { text: `Started ${name}${where} (address ${session})${what}${asks} ` + (answer ? `It answered:\n\n${answer}` : "It hasn't answered yet; it may still write back with send_message."), isError: false };

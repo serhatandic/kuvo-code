@@ -7,7 +7,7 @@ import { createHash } from "node:crypto"
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmdirSync, rmSync, writeFileSync } from "node:fs"
 import { dirname, join, relative, resolve, sep } from "node:path"
 import { fromPatch } from "./diff"
-import { run } from "./proc"
+import { runGit } from "./proc"
 import type { FileDiff } from "./wire"
 
 const quiet = { GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_OPTIONAL_LOCKS: "0", GIT_LITERAL_PATHSPECS: "1" }
@@ -35,7 +35,7 @@ export class Snapshots {
 
   /** The repository a folder is in, or none. */
   private async repository(directory: string): Promise<Repository | undefined> {
-    const top = await run("git", ["-C", directory, "rev-parse", "--show-toplevel"], { timeout: 15_000, env: quiet }).catch(() => undefined)
+    const top = await runGit(["-C", directory, "rev-parse", "--show-toplevel"], { timeout: 15_000, env: quiet }).catch(() => undefined)
     if (top?.code !== 0 || !top.stdout.trim()) return undefined
     let root: string
     let here: string
@@ -45,7 +45,7 @@ export class Snapshots {
     } catch {
       return undefined
     }
-    const exclude = await run("git", ["-C", directory, "rev-parse", "--path-format=absolute", "--git-path", "info/exclude"], { timeout: 15_000, env: quiet }).catch(() => undefined)
+    const exclude = await runGit(["-C", directory, "rev-parse", "--path-format=absolute", "--git-path", "info/exclude"], { timeout: 15_000, env: quiet }).catch(() => undefined)
     let prefix = relative(root, here)
     if (prefix.startsWith("..")) prefix = ""
     return { top: root, prefix, exclude: exclude?.code === 0 ? exclude.stdout.trim() || undefined : undefined }
@@ -60,7 +60,7 @@ export class Snapshots {
     const settings = ["-c", "core.autocrlf=false", "-c", "core.fsmonitor=false", "-c", "core.quotepath=false", "-c", "core.symlinks=true", "-c", "core.longpaths=true", "-c", "gc.pruneExpire=never", "-c", "gc.worktreePruneExpire=never"]
     if (!options.packs) settings.push("-c", "gc.auto=0")
     if (repository.exclude) settings.push("-c", `core.excludesFile=${repository.exclude}`)
-    return run("git", ["--git-dir", this.storeOf(repository), "--work-tree", repository.top, ...settings, ...args], {
+    return runGit(["--git-dir", this.storeOf(repository), "--work-tree", repository.top, ...settings, ...args], {
       cwd: repository.top,
       timeout: options.timeout ?? 120_000,
       // (check-ignore takes no literal paths: its paths aren't patterns anyway.)
@@ -89,7 +89,7 @@ export class Snapshots {
       const store = this.storeOf(repository)
       if (!existsSync(join(store, "HEAD"))) {
         mkdirSync(store, { recursive: true })
-        const made = await run("git", ["init", "--bare", "-q", store], { timeout: 30_000, env: quiet })
+        const made = await runGit(["init", "--bare", "-q", store], { timeout: 30_000, env: quiet })
         if (made.code !== 0) throw new Error("Kuvo Code couldn't make a place to keep this project's files.")
       }
       const added = await this.git(repository, ["add", "-A", "--", repository.prefix || "."])

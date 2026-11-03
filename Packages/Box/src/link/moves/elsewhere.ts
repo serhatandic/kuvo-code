@@ -40,7 +40,8 @@ const sent = (moves: Move[]): Move[] => moves.slice(0, MOST_MOVES).map(move => (
 
 // ---- Telling ----
 
-// What was last said (each move's ID and stage: how much of its copy went isn't news), and when.
+// What was last said (each move's ID, stage and whether it waits for its other computer: how much of
+// its copy went isn't news), and when.
 let saidLast: string | null = null;
 let saidAt = 0;
 
@@ -50,7 +51,7 @@ let saidAt = 0;
  * the connection took for none of them (it's closing, or not welcomed yet): said again next look. */
 export function tellMoving(host: Pick<LinkHost, "send"> | null | undefined, now = Date.now()): void {
   const moves = sent(listedMoves().map(shownMove));
-  const these = JSON.stringify(moves.map(({ id, stage }) => [id, stage]));
+  const these = JSON.stringify(moves.map(({ id, stage, waiting }) => [id, stage, waiting === true]));
   if (these === saidLast && (!moves.length || now - saidAt < AGAIN)) return;
   if (saidLast === null && !moves.length) {
     saidLast = these;
@@ -91,7 +92,7 @@ const short = (text: string, most: number) => text.slice(0, most);
 /** A move as a peer says it, as clients see it; null for what isn't one. */
 function takenMove(given: unknown): Move | null {
   if (!isObject(given)) return null;
-  const { id, kind, thing, name, from, to, role, stage, sessions, sent, size } = given;
+  const { id, kind, thing, name, from, to, role, stage, sessions, sent, size, waiting } = given;
   if (typeof id !== "string" || typeof thing !== "string" || typeof name !== "string" || typeof from !== "string" || typeof to !== "string") return null;
   if (!KINDS.has(kind as string) || (role !== "from" && role !== "to") || !STAGES.has(stage as string) || !Array.isArray(sessions)) return null;
   return {
@@ -99,6 +100,7 @@ function takenMove(given: unknown): Move | null {
     sessions: sessions.filter((session): session is string => typeof session === "string").slice(0, MOST_SESSIONS).map(session => short(session, 100)),
     ...(typeof sent === "number" && Number.isFinite(sent) ? { sent } : {}),
     ...(typeof size === "number" && Number.isFinite(size) ? { size } : {}),
+    ...(waiting === true ? { waiting } : {}),
   };
 }
 

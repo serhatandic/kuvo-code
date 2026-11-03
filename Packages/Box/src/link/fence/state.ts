@@ -179,6 +179,13 @@ function bridgeSays(): "inside" | "outside" | "none" | undefined {
   }
 }
 
+/** Whether every coding agent's process here runs in the sandbox, or none runs, as any of the box's
+ * processes can tell. */
+export const agentsInSandbox = (): boolean => {
+  const said = bridgeSays();
+  return said === "none" || said === "inside";
+};
+
 // Asked once whether to restart them: the first time it's on with some still outside it (or was
 // once the bridge said all were in it, when there was nothing to ask; none running yet, as while
 // the bridge starts, settles nothing).

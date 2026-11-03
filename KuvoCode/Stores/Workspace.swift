@@ -172,6 +172,9 @@ final class Workspace {
     private var removedWorktrees: [String: String] = UserDefaults.standard.dictionary(forKey: "removedWorktrees") as? [String: String] ?? [:] {
         didSet { projectsChanged() }
     }
+    /// Worktrees their box removed once their sessions were archived, which can come back, by the
+    /// folder their sessions ran in: shown on a session there (Restore or Continue).
+    private(set) var restorableWorktrees: [String: RestorableWorktree] = [:]
     /// Being deleted, until its engine answers: out of the sidebar meanwhile (a running one stops
     /// first, a machine's is over SSH), back if it's refused.
     private(set) var deleting: Set<String> = [] {
@@ -710,9 +713,39 @@ final class Workspace {
     }
 
     func loadBranch(for directory: String) async {
-        guard let api = api(forFolder: directory), let info = try? await api.vcs(directory: directory) else { return }
+        let read = nextBranchRead(directory)
+        guard let api = api(forFolder: directory), let info = try? await api.vcs(directory: directory) else {
+            // Asked before its engine answered (the window's folder as the app starts, a machine
+            // still connecting): read again once it does.
+            branchesUnread.insert(directory)
+            return
+        }
+        // Answers can land out of order (an engine that just started answers no branch, then says
+        // it has read one): one older than what's shown doesn't undo it, and one newer that
+        // failed doesn't lose it.
+        guard read > (branchShown[directory] ?? 0) else { return }
+        branchShown[directory] = read
+        branchesUnread.remove(directory)
         branches[directory] = info.branch?.current
         defaultBranches[directory] = info.branch?.default
+    }
+
+    /// Each folder's branch reads, numbered as they're asked, and the newest one shown.
+    @ObservationIgnored private var branchReads: [String: Int] = [:]
+    @ObservationIgnored private var branchShown: [String: Int] = [:]
+    private func nextBranchRead(_ directory: String) -> Int {
+        let read = (branchReads[directory] ?? 0) + 1
+        branchReads[directory] = read
+        return read
+    }
+    /// Folders whose branch couldn't be read yet, for `loadBranch` once their engine answers.
+    @ObservationIgnored private var branchesUnread: Set<String> = []
+
+    /// The branches asked for before `machine`'s engine answered (nil: this Mac's), read now.
+    private func loadUnreadBranches(on machine: String?) {
+        for folder in branchesUnread where RemoteFolder.machine(of: folder) == machine {
+            Task { await loadBranch(for: folder) }
+        }
     }
 
     /// Waiting on you: a permission, a question or a sign-in, in a conversation you have open or
@@ -993,6 +1026,13 @@ final class Workspace {
         return sessions.contains { $0.id != id && !Self.isArchived($0) && worktrees[$0.location.directory]?.root == root }
     }
 
+    /// Whether archived sessions are left in the worktree, besides `id`: its box saves what wasn't
+    /// committed for them when it removes it.
+    func worktreeHasArchivedSessions(_ directory: String, besides id: String) -> Bool {
+        guard let root = worktrees[directory]?.root else { return false }
+        return sessions.contains { $0.id != id && Self.isArchived($0) && worktrees[$0.location.directory]?.root == root }
+    }
+
     /// Removes a worktree's folder, and changes that aren't committed with it when
     /// `discardingChanges` (you were told they go); without, one that has some stays. Its branch
     /// stays with its commits, unless it's merged already. Never while an agent works in it.
@@ -1034,8 +1074,9 @@ final class Workspace {
     /// it no longer has (removed from a phone, say) go here too. Nil when it couldn't be asked:
     /// what this Mac had stays.
     @discardableResult func takeWorktrees(from box: String, details: Bool = false) async -> [String: BoxWorktree]? {
-        struct Listed: Decodable { var worktrees: [BoxWorktree] }
+        struct Listed: Decodable { var worktrees: [BoxWorktree]; var restorable: [RestorableWorktree]? }
         guard let listed: Listed = try? await onBox(box, "GET", details ? "kuvo/worktrees" : "kuvo/worktrees?records=1", nil) else { return nil }
+        if box != BoxClient.mac || !followingWorktrees { takeRestorable(listed.restorable ?? [], from: box) }
         var records = listed.worktrees
         let onIt = { (folder: String) in Self.box(of: folder) == box }
         for (folder, tree) in worktrees where onIt(tree.root) {
@@ -1084,10 +1125,63 @@ final class Workspace {
         }
     }
 
+    /// `box`'s worktrees that can come back, here, in place of what was known of them.
+    private func takeRestorable(_ entries: [RestorableWorktree], from box: String) {
+        var mine = restorableWorktrees.filter { Self.box(of: $0.value.root) != box }
+        for entry in entries {
+            var here = entry
+            (here.project, here.root, here.folder) = (Self.here(entry.project, on: box), Self.here(entry.root, on: box), Self.here(entry.folder, on: box))
+            mine[here.folder] = here
+        }
+        if mine != restorableWorktrees { restorableWorktrees = mine }
+    }
+
+    /// Brings back the worktree its box removed from `folder`, with the changes it saved, where it
+    /// was: its sessions work in it again.
+    func restoreWorktree(_ folder: String) async throws {
+        guard let entry = restorableWorktrees[folder] else { return }
+        let box = Self.box(of: entry.root)
+        let record: BoxWorktree = try await onBox(box, "POST", "kuvo/worktrees/restore", ["folder": Self.onBox(folder)])
+        restorableWorktrees[folder] = nil
+        worktrees[folder] = Worktree(project: Self.here(record.project, on: box), root: Self.here(record.root, on: box), branch: record.branch, base: record.base)
+        saveWorktrees()
+        if removedWorktrees.removeValue(forKey: folder) != nil { UserDefaults.standard.set(removedWorktrees, forKey: "removedWorktrees") }
+    }
+
+    /// A session whose worktree its box removed works on in its project's own folder, told it
+    /// no longer works in a worktree. The changes saved with the worktree go once no session is left there.
+    func continueInProject(_ id: String) async throws {
+        guard let session = session(id), let entry = restorableWorktrees[session.location.directory] else { return }
+        try await move(id, toProject: entry.project)
+        try? await api(forFolder: entry.project)?.removeInstruction(session: id, key: Self.worktreeInstructionKey)
+    }
+
+    /// The worktrees of the box `session` is on, read again when it shows one of them: a
+    /// machine's box removes and restores them without telling this Mac (this Mac's own it follows).
+    func refreshWorktrees(for session: Session) async {
+        let folder = session.location.directory
+        guard RemoteFolder.machine(of: folder) != nil, worktrees[folder] != nil || restorableWorktrees[folder] != nil else { return }
+        await takeWorktrees(from: Self.box(of: folder))
+    }
+
+    /// A worktree its box removed: what a session there shows, and whether it can come back.
+    struct RestorableWorktree: Decodable, Hashable {
+        var project: String
+        var root: String
+        var folder: String
+        var branch: String
+        var base: String?
+        /// Its branch or the changes it saved are still there.
+        var restorable: Bool
+        /// Changes that weren't committed were saved, and come back with it.
+        var saved: Bool
+        var ahead: Int?
+    }
+
     /// This Mac's worktrees as its box keeps them, from now on: one made, renamed or removed for a
     /// phone shows here as it happens.
     func followWorktrees() async {
-        struct Listed: Decodable { var worktrees: [BoxWorktree] }
+        struct Listed: Decodable { var worktrees: [BoxWorktree]; var restorable: [RestorableWorktree]? }
         while !Task.isCancelled {
             if let client = boxes?(BoxClient.mac), await takeWorktrees(from: BoxClient.mac) != nil {
                 do {
@@ -1095,6 +1189,7 @@ final class Workspace {
                         guard let listed = try? JSONDecoder().decode(Listed.self, from: line) else { continue }
                         followingWorktrees = true
                         take(listed.worktrees, from: BoxClient.mac)
+                        takeRestorable(listed.restorable ?? [], from: BoxClient.mac)
                     }
                 } catch {}
                 followingWorktrees = false
@@ -1452,7 +1547,7 @@ final class Workspace {
         // Its copy may carry where its source came from: that isn't this one's.
         // Nor is its place in the lists: it starts unpinned and not archived.
         var metadata = (session.metadata?.object ?? [:]).filter { $0.key != Self.pinnedKey && $0.key != Self.archivedKey }
-        var kuvo = (metadata["kuvo"]?.object ?? [:]).filter { !["branchedFrom", "handoffFrom", "handoffTo", "startedBy", "beside"].contains($0.key) }
+        var kuvo = (metadata["kuvo"]?.object ?? [:]).filter { !["branchedFrom", "handoffFrom", "handoffTo", "startedBy", "beside", "carriedFrom"].contains($0.key) }
         kuvo["branchedFrom"] = .string(id)
         metadata["kuvo"] = .object(kuvo)
         session.metadata = .object(metadata)
@@ -1547,6 +1642,12 @@ final class Workspace {
         let moved = try await bridge.importSession(directory: session.location.directory, title: session.title, agent: session.agent, model: model,
                                                    permissions: current.permissions, messages: messages, waiting: carried)
         moving = false
+        // Marked as carried on from this one, whose files its words show: they stay while it does.
+        var metadata = moved.metadata?.object ?? [:]
+        var kuvo = metadata["kuvo"]?.object ?? [:]
+        kuvo["carriedFrom"] = .string(id)
+        metadata["kuvo"] = .object(kuvo)
+        try? await bridge.setMetadata(session: moved.id, .object(metadata))
         for item in waiting { try? await engine.cancelInbox(session: id, item: item.id) }
         // As its bridge knows them: a machine's folders are plain paths there.
         let extra = extraFolders(session.location.directory).map(bridge.enginePath)
@@ -1690,6 +1791,7 @@ final class Workspace {
                 Task { await model.load() }
             }
             beforeEngine = beforeEngine.filter { models[$0].map { OutsideAgents.isAgentSession($0.session) } ?? false }
+            loadUnreadBranches(on: nil)
         } catch { log.error("sessions: \(String(describing: error), privacy: .public)") }
         do {
             let active = try await api.activeSessions()
@@ -1959,6 +2061,7 @@ final class Workspace {
             connectedMachines.insert(machine)
             // Its projects, as it keeps them.
             Task { await loadProjects(on: machine) }
+            loadUnreadBranches(on: machine)
             // Read while it was away: so here, and told there now.
             for (id, idle) in unsentViews where sessionMachines[id] == machine {
                 // Gone from it since: nothing to tell.
@@ -2308,7 +2411,12 @@ final class Workspace {
         if event.type == "vcs.branch.updated", let directory = event.location?.directory {
             struct Branch: Decodable { var branch: String? }
             let folder = machine.map { RemoteFolder.folder(directory, on: $0) } ?? directory
+            // Newer than any read asked so far, which can't undo it when it lands.
+            branchShown[folder] = nextBranchRead(folder)
             branches[folder] = (try? event.payload(as: Branch.self))?.branch
+            // And the branch it goes into, which an engine that just started didn't know at first
+            // (read again, as opencode's own client does).
+            Task { await loadBranch(for: folder) }
         }
         noteShellJob(event)
         if let id = event.sessionID ?? Self.formSessionID(event), let model = models[id] {
@@ -2371,6 +2479,8 @@ final class Workspace {
             if let machine { keepList(of: machine) }
             if remoteSessions.removeValue(forKey: id) != nil { Self.saveRemoteSessions(remoteSessions) }
             SessionCopies.remove(id)
+            // The files you sent in it, this Mac's copies (this Mac's box lets its own sessions' go).
+            if machine != nil { Attachments.forget(session: id) }
             models[id] = nil
             asking = asking.filter { $0.value != id }
             // Deleted while it worked: it isn't working any more (nor keeping the Mac awake).

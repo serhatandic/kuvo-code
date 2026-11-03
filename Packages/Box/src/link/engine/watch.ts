@@ -4,7 +4,8 @@
 
 import { pause } from "../../shared/wait";
 import { noteSignIn } from "../areas/accounts";
-import { nameDueWorktrees, nameWorktreeBranch, settleNewSession } from "../areas/worktrees";
+import { letAttachmentsGo } from "../server/attached";
+import { nameDueWorktrees, nameWorktreeBranch, settleNewSession, tidyWorktrees } from "../areas/worktrees";
 import { finishDeletes } from "../bots/edit";
 import { freshenBot, freshenBots } from "../bots/tell";
 import { ANSWERED, GROUP_NEWS, NEWS, RUN_ENDS, groupNotice, noticeFor, settleHeld } from "../notices/news";
@@ -12,6 +13,9 @@ import { bridgeTarget, engineGet, peerTargets, readBridgeFile, readEngineFile } 
 import { learnCompatibility } from "./compatibility";
 import { goalHolds, settleGoalHolds } from "../work/goals";
 import { workWatcher } from "../work/wakes";
+import { reviewPermission } from "../work/reviewing";
+import { forgetReviews } from "../work/reviewer";
+import { backUpSession } from "../work/backups";
 import { queueWatcher, scanQueues, type ScanFound } from "./queue";
 import type { Target } from "../../shared/records";
 import type { SignInEvent } from "../areas/accounts";
@@ -19,6 +23,7 @@ import type { NoticeHold } from "../notices/hold";
 import type { EngineEvent, GroupEvent } from "../notices/news";
 import type { Notice } from "../notices/notice";
 import type { QueueEvent } from "./queue";
+import type { SessionNotes } from "./sessions";
 
 /** An engine event `steering` follows, for its session: a tool call that started, was called or
  * ended (its `id`, its tool's `name`, and with its `input`, whether it runs in the background); a
@@ -41,6 +46,13 @@ export interface SteeringEvent {
  * each part of its work takes what it knows of it, and a request answered names its `requestID`, a
  * session made its `info`. */
 export type BoxEvent = EngineEvent & SignInEvent & GroupEvent & SteeringEvent & { data?: { requestID?: string; info?: { id?: string } } };
+
+/** A session's notes changed to say it's archived, or without saying what they are now (the coding
+ * agents' bridge names only the session). */
+function isArchiving(event: BoxEvent): boolean {
+  const metadata = (event.data as { metadata?: SessionNotes } | undefined)?.metadata;
+  return !metadata || metadata["kuvo.archived"] === true || metadata.kuvo?.archived === true;
+}
 
 /** How `steering` waits: how long a call runs before a message is read at once (ms), and its clock
  * (a test's own), and `signal`, which stops it. */
@@ -70,6 +82,7 @@ export interface WatchBoxOptions {
   signal?: AbortSignal;
   signedIn?: (event: BoxEvent) => void;
   learned?: () => void;
+  attachmentsLooked?: (session: string | null) => void;
 }
 
 /** Which part of the box's work `watchEvents` does as events come (and `steerAfter`, a test's wait
@@ -90,6 +103,9 @@ export interface WatchOptions {
   work?: "engine" | "bridge" | false;
   /** The agents' bridge's, which keeps conversations' goals: one paused or resumed held or let go. */
   goals?: boolean;
+  /** Told each time a deleted session's files were looked at (`session`), or, as the box finds
+   * its engine, those of every session it no longer has (null): a test waits on it. */
+  attachmentsLooked?: (session: string | null) => void;
 }
 
 // The events in a `text/event-stream` body, parsed.
@@ -219,11 +235,20 @@ function backgroundTools(engine: Target, session: string): Promise<Response> {
 // and a box's own work (`serve`) both start it: its bots kept told what they are, its sign-ins that
 // ended noted, and with `notices`, its news for your phones (`tell`, held in `hold`). `bots`: only
 // its bots' part of the box's work (this Mac's box, whose app does the rest).
-// `learned`: told each time it's read its engine's models for what they need (a test waits on it).
-export function watchBox({ tell = () => true, hold = null, bots = false, notices = !bots, signal, signedIn, learned }: WatchBoxOptions = {}): void {
+// `learned`: told each time it's read its engine's models for what they need (a test waits on it),
+// and `attachmentsLooked`, each time it's looked at what deleted sessions left.
+export function watchBox({ tell = () => true, hold = null, bots = false, notices = !bots, signal, signedIn, learned, attachmentsLooked }: WatchBoxOptions = {}): void {
   const answered = (id: string | undefined) => hold?.resolve(id);
-  watchEvents(readEngineFile, tell, signal, answered, { bots, notices, signIns: true, hold, signedIn, steers: true, learns: true, learned, queues: true, work: "engine" });
-  watchEvents(readBridgeFile, tell, signal, answered, { bots, notices, queues: true, work: "bridge", goals: true });
+  watchEvents(readEngineFile, tell, signal, answered, { bots, notices, signIns: true, hold, signedIn, steers: true, learns: true, learned, queues: true, work: "engine", attachmentsLooked });
+  watchEvents(readBridgeFile, tell, signal, answered, { bots, notices, queues: true, work: "bridge", goals: true, attachmentsLooked });
+}
+
+// The files deleted sessions left on this box (`session`'s, or with none, any deleted while it
+// wasn't listening) let go, the box's sessions as they are now: then `looked` told.
+function letSessionFilesGo(looked: (session: string | null) => void, session?: string): void {
+  let places;
+  try { places = { engine: readEngineFile(), bridge: bridgeTarget() }; } catch { return looked(session ?? null); }
+  letAttachmentsGo(places, session).finally(() => looked(session ?? null));
 }
 
 // Follows `source`'s events (the engine's, or the coding agents' bridge's: `read` gives its port
@@ -241,7 +266,9 @@ export function watchBox({ tell = () => true, hold = null, bots = false, notices
 // GitHub Copilot brings new models); `learned` told each time.
 // `queues`: its sessions' queues carried on (engine/queue.ts). `work`: whoever started a session
 // told as it finishes or asks (work/wakes.ts), as the place it is ("engine" or "bridge").
-export async function watchEvents(read: () => Target, tell: (notice: Notice) => void, signal?: AbortSignal, answered: (id: string | undefined) => void = () => {}, { bots = false, notices = !bots, signIns = false, hold = null, signedIn = () => {}, steers = false, steerAfter, learns = false, learned = () => {}, queues = false, work = false, goals = false }: WatchOptions = {}): Promise<void> {
+// Either way, a deleted session's files go with it (`letAttachmentsGo`), and any a session deleted
+// meanwhile left as it's found again.
+export async function watchEvents(read: () => Target, tell: (notice: Notice) => void, signal?: AbortSignal, answered: (id: string | undefined) => void = () => {}, { bots = false, notices = !bots, signIns = false, hold = null, signedIn = () => {}, steers = false, steerAfter, learns = false, learned = () => {}, queues = false, work = false, goals = false, attachmentsLooked = () => {} }: WatchOptions = {}): Promise<void> {
   let attempt = 0;
   let lastLearned = 0;
   let learning = false;
@@ -280,13 +307,15 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
       // Found it (it started, or this did): its bots told what they are now, before their next turn,
       // and a queue it left waiting held for Resume.
       freshenBots(source).catch(() => {});
-      // What bots deleted while it wasn't answering left of it.
+      // What bots deleted while it wasn't answering left of it, and sessions deleted meanwhile.
       finishDeletes(readEngineFile, bridgeTarget).catch(() => {});
+      letSessionFilesGo(attachmentsLooked);
       lastLearned = 0;
       learn(source);
       if (queues) scanQueues(source, found).catch(() => {});
-      // Its worktrees' sessions titled while it wasn't listening: their branches named.
-      if (!bots) nameDueWorktrees(source, connection.signal).catch(() => {});
+      // Its worktrees' sessions titled while it wasn't listening: their branches named; and those
+      // whose last session went meanwhile tidied.
+      if (!bots) nameDueWorktrees(source, connection.signal).then(() => tidyWorktrees(connection.signal)).catch(() => {});
       // A goal's change it missed meanwhile: what's held for one let go, or kept, as it is now.
       if (goalHeld) settleGoalHolds(source, goalHeld).catch(() => {});
       for await (const event of serverEvents(response.body)) {
@@ -295,15 +324,28 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
         // one); a bot's job read from its memory as its run ends.
         // A bot's run starting: what it's told brought up to date first (a run's events name its session).
         if (event.type === "session.execution.started") freshenBot(source, event.data?.sessionID!).catch(() => {});
+        // Its repository's branches and stashes kept as each run starts and ends, whatever the agent
+        // and its approval, so what a turn takes from them can be taken back (work/backups.ts).
+        if (work && (event.type === "session.execution.started" || RUN_ENDS.has(event.type)) && typeof event.data?.sessionID === "string") backUpSession(source, event.data.sessionID).catch(() => {});
+        if (event.type === "session.deleted" && typeof event.data?.sessionID === "string") {
+          letSessionFilesGo(attachmentsLooked, event.data.sessionID);
+          forgetReviews(event.data.sessionID);
+        }
         learn(source);
         steer?.(event);
         queue?.(event as QueueEvent);
         followWork?.(event);
+        // A conversation in Auto: what its agent's file tools ask outside its folder, reviewed (and
+        // told to your phones below only once it comes to you).
+        const reviewed = work && event.type === "permission.asked" ? reviewPermission(source, event, connection.signal).catch(() => null) : null;
         goalHeld?.(event).catch(() => {});
         if (signIns) noteSignIn(event, source).catch(() => {}).finally(() => signedIn(event));
         if (!bots) {
           if (event.type === "session.created") settleNewSession(source, event.data?.sessionID ?? event.data?.info?.id).catch(() => {});
           if (event.type === "session.renamed") nameWorktreeBranch(source, event.data?.sessionID).catch(() => {});
+          // A worktree's last session archived or deleted, or an agent that kept one done: tidied.
+          // One made there marks it as used, so deleting it before anything else happens takes it too.
+          if (event.type === "session.created" || event.type === "session.deleted" || RUN_ENDS.has(event.type) || (event.type === "session.metadata.updated" && isArchiving(event))) tidyWorktrees(connection.signal).catch(() => {});
         }
         if (!notices) continue;
         if (ANSWERED.has(event.type)) answered(event.data?.requestID ?? event.data?.id);
@@ -316,7 +358,10 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
           if (notice) tell(notice);
           continue;
         }
-        noticeFor(event, route => engineGet(source, route)).then(notice => notice && tell(notice)).catch(() => {});
+        (reviewed ?? Promise.resolve(null))
+          .then(verdict => (verdict && verdict.decision !== "ask" ? null : noticeFor(event, route => engineGet(source, route))))
+          .then(notice => notice && tell(notice))
+          .catch(() => {});
       }
     } catch {}
     stop();

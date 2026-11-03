@@ -23,7 +23,9 @@ struct MainView: View {
     @SceneStorage("selection") private var olderSelection: String?
     @SceneStorage("splitPairs") private var olderPairs = ""
     @SceneStorage("showsPanel") private var olderShowsPanel = false
-    @SceneStorage("showsSidebar") private var showsSidebar = true
+    /// Where the sidebar was kept before it was kept with the tabs.
+    @SceneStorage("showsSidebar") private var olderShowsSidebar = true
+    private var showsSidebar: Bool { tabs.showsSidebar }
     /// The row at the top: the project, its branch and the tabs. Hidden, sessions are switched
     /// from the sidebar or ⌘K.
     @AppStorage(TabBar.showsKey) private var showsTabBar = TabBar.showsByDefault
@@ -310,7 +312,12 @@ struct MainView: View {
             tabs.startIfEmpty()
         }
         .onAppear {
-            tabs.restore(savedTabs, older: .init(tabs: olderTabs, selection: olderSelection, pairs: olderPairs, showsPanel: olderShowsPanel))
+            // The sidebar as the window left it, from the start, not sliding there.
+            var restoring = Transaction()
+            restoring.disablesAnimations = true
+            withTransaction(restoring) {
+                tabs.restore(savedTabs, older: .init(tabs: olderTabs, selection: olderSelection, pairs: olderPairs, showsPanel: olderShowsPanel, showsSidebar: olderShowsSidebar))
+            }
             (olderTabs, olderSelection, olderPairs, olderShowsPanel) = ("", nil, "", false)
             // Opened again after the window closed: the terminals went with it.
             tabs.dropClosed()
@@ -504,7 +511,9 @@ struct MainView: View {
         .overlay(alignment: .top) {
             if !showsTabBar { WindowDragArea().frame(height: Metrics.windowControlsHeight) }
         }
-        .onCardClick(isOn: !overlayShown) { tabs.focus = .sessions }
+        // Only the keyboard in it (its search, a rename) makes it the card you work in: a click
+        // in it picks what you work in elsewhere.
+        .onCardKeyboard(isOn: !overlayShown) { tabs.focus = .sessions }
         .background(KeyboardPlace(pane: .sessions, places: keyboardReturn))
     }
 
@@ -564,9 +573,6 @@ struct MainView: View {
         .navigationTitle(windowTitle(inView))
         .onChange(of: inView?.id, initial: true) { _, id in if let id { keptSession = id } }
         .onCardClick(isOn: !overlayShown, keyboard: { keyboardReturn.remember($0, in: .conversation) }) { tabs.focus = .conversation }
-        // What you open last keeps its place when the window is short of room (a split, from
-        // Open Beside: coming back to a tab that has one isn't opening it).
-        .onChange(of: showsSidebar) { _, shows in if shows { tabs.keep(.sessions) } }
     }
 
     /// The session kept made under another tab's card, while its tab is open, and not beside the
@@ -695,7 +701,7 @@ struct MainView: View {
                     Button("Close Tab", systemImage: "xmark") { tabs.close(.group(id)) }
                         .help("Close Tab")
                 } content: {
-                    GroupChatView(group: group, findRequest: groupFind)
+                    GroupChatView(group: group, findRequest: groupFind, focusRequest: tabs.groupFocus)
                 }
                 .onTitle("Edit Group Chat", app.moves.isMoving(group.id) ? nil : { tabs.openGroupEditor(group: group) })
                 .id(TabKey.group(id))
@@ -780,16 +786,13 @@ struct MainView: View {
     /// SwiftUI's update.
     private func returnKeyboard(leaving: WindowTabs.Pane? = nil) {
         let had = leaving.map(keyboardReturn.isIn) ?? false
+        // The card you work in is one on screen: the one going leaves you in the conversation, or
+        // the expanded panel over it.
+        if let leaving, tabs.focus == leaving { tabs.focus = showsPanel && panelExpanded ? .changes : tabs.activeHalf }
         DispatchQueue.main.async {
             guard !app.showsSettings, !(showsPanel && panelExpanded), had || keyboardReturn.isNowhere else { return }
             if !keyboardReturn.handBack(to: tabs.activeHalf) { tabs.focusComposer() }
         }
-    }
-
-    /// Showing one that's wanted but out of room makes room for it, as the one opened last.
-    private func showSidebar(_ shows: Bool) {
-        showsSidebar = shows
-        if shows { tabs.keep(.sessions) }
     }
 
     /// The panel's and the sidebar's buttons, which show what's on screen.
@@ -799,7 +802,7 @@ struct MainView: View {
     /// toolbar's overflow and back, again and again.
     private var resizeRoom: CGFloat { window.isResizing ? 72 : 0 }
 
-    private var sidebarToggle: PaneSwitch { PaneSwitch(isOn: { sidebarOnScreen }, set: { showSidebar($0) }) }
+    private var sidebarToggle: PaneSwitch { PaneSwitch(isOn: { sidebarOnScreen }, set: { tabs.showSidebar($0) }) }
 
     private var utilitiesPane: some View {
         // The panel of the session you work in (the one beside, as its panel is then): its changes,
@@ -939,7 +942,7 @@ struct MainView: View {
             newTerminal: { showInPanel { utilities.newTerminal(in: focusedDirectory, environment: app.shellEnvironment) } },
             run: runProject,
             newBrowser: { showInPanel { utilities.newBrowser() } },
-            toggleSidebar: { withAnimation(.ui) { showSidebar(!sidebarOnScreen) } },
+            toggleSidebar: { withAnimation(.ui) { tabs.showSidebar(!sidebarOnScreen) } },
             nextTab: { cycleAnyTabs(by: 1) },
             previousTab: { cycleAnyTabs(by: -1) },
             closeTab: closeAnyTab,
@@ -1068,7 +1071,7 @@ struct MainView: View {
     private var demoWindow: DemoWindow {
         DemoWindow(
             showsSidebar: { showsSidebar },
-            showSidebar: { showSidebar($0) },
+            showSidebar: { tabs.showSidebar($0) },
             showPalette: { showsPalette = true },
             openQuickly: {
                 showsPalette = false

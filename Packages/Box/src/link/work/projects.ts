@@ -7,6 +7,7 @@ import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { changeProjects, readProjects } from "../areas/projects";
+import { askedArgs } from "../../shared/git";
 import { gitIn } from "../git";
 import { homeFolder } from "../home";
 import { projectsFolder } from "./settings";
@@ -83,7 +84,7 @@ function cloneInto(address: string, folder: string): Promise<string | null> {
     // Never asking anything: ssh too, unless you set how git runs it.
     const ownSSH = Boolean(process.env.GIT_SSH_COMMAND || process.env.GIT_SSH) || gitIn(path.dirname(folder), ["config", "--get", "core.sshCommand"]) !== null;
     const env = { ...process.env, GIT_TERMINAL_PROMPT: "0", ...(ownSSH ? {} : { GIT_SSH_COMMAND: "ssh -o BatchMode=yes" }) };
-    execFile("git", ["clone", "--quiet", "--", address, folder], { encoding: "utf8", env, timeout: 600_000 }, (error, _stdout, stderr) => {
+    execFile("git", askedArgs(["clone", "--quiet", "--", address, folder]), { encoding: "utf8", env, timeout: 600_000 }, (error, _stdout, stderr) => {
       resolve(error ? (String(stderr ?? "").trim().split("\n").pop() || String(error.message)) : null);
     });
   });

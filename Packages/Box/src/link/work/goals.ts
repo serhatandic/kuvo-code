@@ -638,18 +638,31 @@ export function addWaiting(bot: string, item: Omit<GoalWaitingShape, "id" | "at"
 }
 
 /** A pause of `bot`'s running goal (or one of its sessions) until a limit resets: kept, its steps
- * marked, and carried on by the box's watch once `until` comes. */
+ * marked, and carried on by the box's watch once `until` comes; or, with no `until`, until it's
+ * let go (Auto's reviewer's, once you resume it). */
 export function pauseGoal(bot: string, pause: { why: string; until?: number; session?: string }, file = GOALS_FILE): boolean {
   const done = changeKept(all => {
     const goal = all.find(each => each.bot === bot && each.state === "running");
     if (!goal) return false;
     const key = pause.session ?? "bot";
+    // (Auto's reviewer's stays until you resume it: a limit there doesn't take its place.)
+    if (pause.why !== REVIEW_PAUSE && goal.paused.some(each => each.session === pause.session && each.why === REVIEW_PAUSE)) return true;
     if (!goal.paused.length) goal.pausedSince = Date.now();
     goal.paused = [...goal.paused.filter(each => (each.session ?? "bot") !== key), pause];
     return true;
   }, file);
   if (done) noteWorkChanged(bot);
   return done;
+}
+
+/** Why a goal's session is paused by Auto's reviewer, as its card says it. */
+export const REVIEW_PAUSE = "Auto's reviewer refused too many times: waiting for you";
+
+/** A session paused by Auto's reviewer let go again (you resumed it): off any running goal's card. */
+export function resumeReviewedSession(session: string, file = GOALS_FILE): void {
+  for (const goal of readKept(file)) {
+    if (goal.state === "running" && goal.paused.some(each => each.session === session && each.why === REVIEW_PAUSE)) unpause(goal.id, session, Date.now(), file);
+  }
 }
 
 /** A session the bot started for one of its goal's steps (by number or id): the step's track
@@ -922,6 +935,8 @@ export async function lookAtGoals(tell: (notice: Notice) => boolean, targets: ()
     // The bot's own turn waits for a model's limit: shown as the goal's pause.
     const atLimit = loop.state === "paused" && loop.pausedBy === "limit" && typeof loop.resumesAt === "number";
     const shownPause = goal.paused.find(each => each.session === goal.session);
+    // (Not one Auto's reviewer put there: that's yours to resume.)
+    if (shownPause?.why === REVIEW_PAUSE) continue;
     if (atLimit && shownPause?.until !== loop.resumesAt) pauseGoal(goal.bot, { why: "the model's limit", until: loop.resumesAt as number, session: goal.session }, file);
     if (!atLimit && shownPause) unpause(goal.id, goal.session, now, file);
   }

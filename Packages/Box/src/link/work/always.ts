@@ -62,7 +62,7 @@ const HOSTS: [RegExp, AlwaysKind][] = [
   [/:\/\/(hooks\.slack\.com|slack\.com\/api\/chat\.|discord(app)?\.com\/api\/webhooks|api\.telegram\.org|api\.twilio\.com|api\.sendgrid\.com|api\.mailgun\.net|api\.postmarkapp\.com|api\.resend\.com|graph\.facebook\.com|api\.twitter\.com|api\.x\.com|gmail\.googleapis\.com)/i, "message"],
 ];
 // Where your keys and sign-ins are kept: any command naming one reaches them.
-const SECRET_PLACES = /(^|[\s"'=/~])(\.ssh(\/|\s|$)|\.aws\/credentials|\.netrc\b|\.npmrc\b|\.pypirc\b|\.docker\/config\.json|\.git-credentials\b|\.kube\/config\b|id_(rsa|ed25519|ecdsa)\b|\.env(\s|$|["'])|\.env\.(?!example\b)[A-Za-z0-9_-]+)/;
+const SECRET_PLACES = /(^|[\s"'=/~@])(\.ssh(\/|\s|$)|\.aws\/credentials|\.netrc\b|\.npmrc\b|\.pypirc\b|\.docker\/config\.json|\.git-credentials\b|\.kube\/config\b|id_(rsa|ed25519|ecdsa)\b|\.env(\s|$|["'])|\.env\.(?!example\b)[A-Za-z0-9_-]+)/;
 // A tool's name (an integration's, say), in words: what sends, pays, deletes, signs up or reads
 // a secret. One that only reads (get, list…) is none of these, unless it reads a secret.
 const TOOL_WORDS: [RegExp, AlwaysKind][] = [
@@ -213,6 +213,10 @@ export function withAlwaysAsk(rules: readonly KitRule[], { publishing = false }:
   for (const rule of own) if (deniesCommands(rule) && !denied.some(each => same(each, rule))) denied.push(rule);
   return [...own.filter(rule => !deniesCommands(rule)), ...ALWAYS_ASK_RULES, ...(publishing ? PUBLISH_ASK_RULES : []), ...denied];
 }
+
+/** Whether `rules` ask before publishing, any of it. */
+export const asksPublishing = (rules: unknown): boolean =>
+  Array.isArray(rules) && PUBLISH_ASK_RULES.some(rule => (rules as KitRule[]).some(each => same(each, rule)));
 
 /** Whether `rules` ask for what always comes to you (and for publishing, with `publishing`). */
 export const asksAlways = (rules: unknown, { publishing = false }: { publishing?: boolean } = {}): boolean =>

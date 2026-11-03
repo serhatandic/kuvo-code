@@ -15,6 +15,25 @@ public enum MoveWords {
         }
     }
 
+    /// A move whose `computer` (by name, either end) has gone quiet: what its row says instead of how
+    /// far it is, "Waiting for devbox". Nothing of it moves until that computer is back.
+    public static func waiting(for computer: String) -> String {
+        "Waiting for \(computer)"
+    }
+
+    /// The same, as VoiceOver says it: "Waiting for devbox. It moves to this Mac once devbox is back."
+    /// `place`: where it's going, by name.
+    public static func waitingSpoken(for computer: String, place: String) -> String {
+        "Waiting for \(computer). It moves to \(place) once " + (computer == place ? "it’s" : "\(computer) is") + " back."
+    }
+
+    /// The card over its conversation's composer while it waits: where it's going, and what happens
+    /// next. Before the switch, a computer away a long while leaves it where it was (its box takes it
+    /// back), so it doesn't promise it carries on.
+    public static func waitingCard(for computer: String, place: String) -> (title: String, message: String) {
+        ("Moving to \(place)", "Waiting for \(computer) to come back. It carries on then, or stays where it was if \(computer) stays away a long time. You can write meanwhile, and send once it’s moved.")
+    }
+
     /// Move to Computer's question before a move: "Move “Trip plans” to lab?", with what goes and
     /// what's left. `kind`: "bot", "chat" or "group"; `name`: as a title says it (quoted, or "this
     /// chat"); `place`: where to, by name, `placeIsMac` whether that's a Mac, `toHere` whether it's

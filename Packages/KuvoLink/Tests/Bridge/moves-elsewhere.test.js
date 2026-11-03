@@ -212,20 +212,22 @@ test("this box tells each of your computers what it moves at its next look: as i
 test("what its relay connection didn't take is said again at the next look, and a computer that just connected hears it at once", () => {
   const start = Date.now() + 400_000;
   told.length = 0;
-  // The connection's closing (or not welcomed yet): nothing goes, and it's tried again.
+  // The connection's closing (or not welcomed yet): nothing goes, and it's tried again. (Lab quiet
+  // all that while, the copy says it's waiting for it.)
   up = false;
   coming("copying");
+  const waiting = { moves: [shown("copying", { waiting: true })] };
   link.keepMoving(start);
   link.keepMoving(start + 3_000);
   assert.deepEqual(told, []);
   up = true;
   link.keepMoving(start + 6_000);
-  assert.deepEqual(told.map(each => each.moving), [{ moves: [shown("copying")] }, { moves: [shown("copying")] }]);
+  assert.deepEqual(told.map(each => each.moving), [waiting, waiting]);
   told.length = 0;
   // Pi connects (it asks for agents): it's told at the next look, not a minute on.
   link.peerMail(pi, { ask: "agents", at: ++clock }, null);
   link.keepMoving(start + 9_000);
-  assert.deepEqual(told.map(each => each.moving), [{ moves: [shown("copying")] }, { moves: [shown("copying")] }]);
+  assert.deepEqual(told.map(each => each.moving), [waiting, waiting]);
   told.length = 0;
   // Its last word lost too (the connection closing): said once it's back.
   fs.rmSync(path.join(movesFolder, "mov_here1.json"));

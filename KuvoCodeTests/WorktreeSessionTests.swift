@@ -396,6 +396,31 @@ import Testing
         #expect(note == "Its folder is deleted, with changes in it that aren’t committed. \(tree.branch) keeps its 1 commit not merged yet. Its sessions stay, without a folder to run in.")
     }
 
+    /// A session's worktree removed while the session stays: the Mac lists it as one that can
+    /// come back (Restore over the session's composer), and Restore brings it back on its branch,
+    /// its commits in it, the session working there again.
+    @Test func aRemovedWorktreeComesBackWithRestore() async throws {
+        defer { done() }
+        let session = try await workspace.createSession(in: repository.path, model: nil, agent: "build", worktree: true)
+        let folder = session.location.directory
+        let tree = try #require(workspace.worktrees[folder])
+        try Data("total = 1\n".utf8).write(to: URL(filePath: folder).appending(path: "a.py"))
+        _ = try git("add", "-A", in: folder)
+        _ = try git("commit", "-q", "-m", "A", in: folder)
+        try await workspace.removeWorktree(folder)
+        #expect(!FileManager.default.fileExists(atPath: tree.root))
+        await workspace.takeWorktrees(from: BoxClient.mac)
+        let entry = try #require(workspace.restorableWorktrees[folder])
+        #expect(entry.restorable && entry.branch == tree.branch && !entry.saved)
+
+        try await workspace.restoreWorktree(folder)
+        #expect(workspace.worktrees[folder]?.branch == tree.branch)
+        #expect(workspace.restorableWorktrees[folder] == nil)
+        #expect(FileManager.default.fileExists(atPath: URL(filePath: folder).appending(path: "a.py").path))
+        #expect(try git("branch", "--show-current", in: folder) == tree.branch)
+        #expect(workspace.projectDirectory(folder) == workspace.folderPath(repository.path))
+    }
+
     /// This Mac's worktree while its engine is down: removing it says why, rather than nothing
     /// happening, and it stays.
     @Test func thisMacsWorktreeWhileItsEngineIsDownSaysSo() async throws {

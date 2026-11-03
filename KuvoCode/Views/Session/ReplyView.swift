@@ -359,6 +359,19 @@ final class ReplyTextView: PointerAwareTextView, NSTextViewDelegate {
         }
     }
 
+    // A right-click offers what's around the words (a reply's Copy Reply and Reply), as one
+    // beside them does; on words selected or a link, what the text offers for them.
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let point = convert(event.locationInWindow, from: nil)
+        guard link(at: point) == nil, !selectedRanges.contains(where: { NSLocationInRange(character(at: point), $0.rangeValue) }) else { return super.menu(for: event) }
+        var view = superview
+        while let around = view {
+            if let menu = around.menu(for: event), !menu.items.isEmpty { return menu }
+            view = around.superview
+        }
+        return super.menu(for: event)
+    }
+
     // The keyboard goes to the conversation with its selection, never to one of its texts: two
     // holders of one selection would each draw and clear it their own way.
     override var acceptsFirstResponder: Bool {
@@ -374,8 +387,7 @@ final class ReplyTextView: PointerAwareTextView, NSTextViewDelegate {
     }
 }
 
-/// Draws what TextKit doesn't: inline code's rounded background, a quote's bar, a heading's line
-/// and a rule.
+/// Draws what TextKit doesn't: inline code's rounded background, a quote's bar and a rule.
 nonisolated final class ReplyLayoutManager: NSLayoutManager {
     override func fillBackgroundRectArray(_ rectArray: UnsafePointer<NSRect>, count rectCount: Int, forCharacterRange charRange: NSRange, color: NSColor) {
         super.fillBackgroundRectArray(rectArray, count: rectCount, forCharacterRange: charRange, color: SelectionColor.shown(color, in: firstTextView, for: charRange))
@@ -431,23 +443,21 @@ nonisolated final class ReplyLayoutManager: NSLayoutManager {
             }
         }
         storage.enumerateAttribute(.replyRule, in: characters) { value, range, _ in
-            guard let rule = value as? ReplyRule else { return }
+            guard case .line(let height)? = value as? ReplyRule else { return }
             let glyphs = glyphRange(forCharacterRange: range, actualCharacterRange: nil)
-            let width = container.size.width
-            switch rule {
-            case .underline(let gap):
-                let last = max(glyphs.location, NSMaxRange(glyphs) - 1)
-                let used = lineFragmentUsedRect(forGlyphAt: last, effectiveRange: nil)
-                // Under the text, not under the line spacing TextKit leaves below it.
-                let spacing = (storage.attribute(.paragraphStyle, at: range.location, effectiveRange: nil) as? NSParagraphStyle)?.lineSpacing ?? 0
-                ReplyDocument.Colors.divider.setFill()
-                CGRect(x: origin.x, y: origin.y + used.maxY - spacing + gap, width: width, height: 1).fill()
-            case .line(let height):
-                let line = lineFragmentUsedRect(forGlyphAt: glyphs.location, effectiveRange: nil)
-                ReplyDocument.Colors.border.setFill()
-                CGRect(x: origin.x, y: origin.y + line.midY - height / 2, width: width, height: height).fill()
-            }
+            let line = lineFragmentUsedRect(forGlyphAt: glyphs.location, effectiveRange: nil)
+            // The colour a table's lines have, so every line in a reply is the same quiet one.
+            ReplyDocument.Colors.border.setFill()
+            Self.onPixels(CGRect(x: origin.x, y: origin.y + line.midY - height / 2, width: container.size.width, height: height)).fill()
         }
+    }
+
+    /// A line on whole pixels, so a thin one stays sharp rather than smeared across two.
+    private static func onPixels(_ rect: CGRect) -> CGRect {
+        guard let context = NSGraphicsContext.current?.cgContext else { return rect }
+        let pixels = context.convertToDeviceSpace(rect)
+        let rounded = CGRect(x: pixels.minX, y: pixels.minY.rounded(), width: pixels.width, height: max(1, pixels.height.rounded()))
+        return context.convertToUserSpace(rounded)
     }
 }
 

@@ -273,3 +273,37 @@ struct MachineOfflineBar: View {
     }
 
 }
+
+/// A move waiting for a computer that went quiet, over its conversation's composer: where it's
+/// going, what comes next, and how far its copy got, on a bar that stays still (nothing moves
+/// meanwhile). No buttons: the two computers move it between themselves, so nothing here helps it
+/// along, and it can't be taken back without the one that's away.
+struct MoveWaitingCard: View {
+    let going: Moves.Going
+
+    var body: some View {
+        let words = MoveWords.waitingCard(for: going.waitingFor ?? going.place, place: going.place)
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: "clock.arrow.circlepath")
+                .font(.system(size: 14))
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(words.title)
+                    .font(.system(size: 13, weight: .medium))
+                Text(words.message)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let size = going.size, size > 0 {
+                    ProgressLine("Copied", bytes: Int64(going.sent ?? 0), of: Int64(size), layout: .inline, still: true)
+                        .padding(.top, 6)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .accessibilityElement(children: .combine)
+    }
+}

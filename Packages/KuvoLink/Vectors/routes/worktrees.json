@@ -90,6 +90,14 @@
         { "send": "POST kuvo/worktrees/record", "body": { "project": "{{shop}}", "root": "{{work}}/gone", "branch": "kuvo/gone" }, "expect": { "status": 404, "json": { "message": "<string>" } } },
         { "send": "POST kuvo/worktrees/record", "body": { "project": "{{shop}}" }, "expect": { "status": 400, "json": { "message": "<string>" } } }
       ]
+    },
+    {
+      "name": "one no session archived away can't be restored",
+      "steps": [
+        { "given": { "repository": { "as": "shop" } } },
+        { "send": "POST kuvo/worktrees/restore", "body": { "folder": "{{shop}}-gone" }, "expect": { "status": 404, "json": { "message": "<string>" } } },
+        { "send": "GET kuvo/worktrees?records=1", "expect": { "status": 200, "json": { "worktrees": [], "restorable": [] } } }
+      ]
     }
   ]
 }
