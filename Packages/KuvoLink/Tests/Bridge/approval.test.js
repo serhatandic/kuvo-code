@@ -109,7 +109,7 @@ test("a conversation from before reads as its rules say, and can be set to any o
     const free = (await route("GET", "kuvo/sessions/ses_free/approval", undefined, { sandbox })).body;
     assert.deepEqual({ approval: free.approval, effective: free.effective, stored: free.stored }, { approval: "fullAccess", effective: "fullAccess", stored: false });
   }
-  // A bot's never reads as Full Access, and its Auto asks first where the sandbox doesn't run.
+  // A bot's from before starts with Auto, which asks first where the sandbox doesn't run.
   const scout = (await route("GET", "kuvo/sessions/ses_scout/approval")).body;
   assert.deepEqual({ approval: scout.approval, effective: scout.effective, reason: scout.held?.reason }, { approval: "auto", effective: "askFirst", reason: "sandbox" });
   // Full Access can't be picked without its switch; Auto can, and would ask first without the sandbox.
@@ -209,10 +209,11 @@ test("a bot's work changed to any approval still asks for what always comes to y
     }
     assert.deepEqual(sessions.get("ses_work").metadata.kuvo.by, { bot: "bot_scout00001", name: "Scout" }, "its other notes kept");
   }
-  // A bot's work is never Full Access, even switched on.
+  // Full Access too, once it's switched on here, as any conversation's.
   await route("PATCH", "kuvo/approval", { fullAccess: true });
-  const refused = await route("PUT", "kuvo/sessions/ses_work/approval", { approval: "fullAccess" });
-  assert.deepEqual({ status: refused.status, reason: refused.body.reason }, { status: 409, reason: "bot" });
+  const full = await route("PUT", "kuvo/sessions/ses_work/approval", { approval: "fullAccess" });
+  assert.deepEqual({ status: full.status, effective: full.body.effective }, { status: 200, effective: "fullAccess" });
+  assert.equal(asks("ses_work", "shell"), false, "its commands go ahead");
 });
 
 test("a change to Settings › Permissions reaches every conversation kept with an approval at once, whichever client made it", async () => {
@@ -262,7 +263,7 @@ test("rules a client changed on its own are never made again behind its back", a
   assert.equal(asks("ses_careful", "shell"), true, "still asks first, as the client set it");
 });
 
-test("Full Access only once it's switched on for this computer, and never for a bot", async () => {
+test("Full Access only once it's switched on for this computer, for a bot's conversation too", async () => {
   assert.equal((await route("GET", "kuvo/approval")).body.fullAccess, false);
   const off = await route("PUT", "kuvo/sessions/ses_careful/approval", { approval: "fullAccess" });
   assert.equal(off.status, 409);
@@ -278,8 +279,9 @@ test("Full Access only once it's switched on for this computer, and never for a 
   assert.equal(asks("ses_careful", "shell"), false);
 
   const forBot = await route("PUT", "kuvo/sessions/ses_scout/approval", { approval: "fullAccess" });
-  assert.equal(forBot.status, 409);
-  assert.equal(forBot.body.reason, "bot");
+  assert.equal(forBot.status, 200);
+  assert.equal(forBot.body.effective, "fullAccess");
+  assert.equal(asks("ses_scout", "shell"), false);
 
   // Switched off: what had it comes down to what it can be (Auto where the sandbox runs, saying the
   // switch holds it there; Ask First where it doesn't, saying the sandbox does).

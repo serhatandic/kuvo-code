@@ -8,8 +8,8 @@
 //   closed, and says why).
 // - Full Access: nothing asks, and nothing stands in the way: its commands (and a coding agent's
 //   own program) run outside the sandbox, no reviewer, its file tools go anywhere. Picked once you
-//   confirmed it on this computer (`box/approval.json`: a client asks you the first time), and
-//   never for a bot's work, whatever started it.
+//   confirmed it on this computer (`box/approval.json`: a client asks you the first time), for a
+//   bot's conversation and its work as for any other.
 // Plan stays the conversation's agent, beside this. What the box writes is the engine's rules for
 // it (the coding agents' bridge reads the same ones and sets each agent from them), made again
 // with Settings › Permissions as they are, so a Don't Allow there still holds in every one.
@@ -86,7 +86,7 @@ export function approvalsSince(file = APPROVAL_FILE): number {
 
 /** Why one can't be had here now, as a word a client maps and in words; none where it can. */
 export interface Unavailable {
-  reason: "sandbox" | "fullAccessOff" | "bot";
+  reason: "sandbox" | "fullAccessOff";
   why: string;
 }
 
@@ -103,13 +103,10 @@ const SANDBOX_WHY = {
   agents: "Auto needs the coding agents' own programs in the sandbox, and some here started before it and still run outside it.",
 } as const;
 
-/** Whether `approval` can be had here now: Full Access refused without its switch or for a bot's
- * (it can't be picked), Auto held without the sandbox (it can, and asks first until then). */
-export function unavailable(approval: Approval, { agents = false, bot = false }: Where = {}): Unavailable | null {
-  if (approval === "fullAccess") {
-    if (bot) return { reason: "bot", why: "Bots can't use Full Access: Auto is the most they get." };
-    if (!fullAccessAllowed()) return { reason: "fullAccessOff", why: "Full Access isn't confirmed on this computer yet: confirm it first." };
-  }
+/** Whether `approval` can be had here now: Full Access refused without its switch (it can't be
+ * picked), Auto held without the sandbox (it can, and asks first until then). */
+export function unavailable(approval: Approval, { agents = false }: Where = {}): Unavailable | null {
+  if (approval === "fullAccess" && !fullAccessAllowed()) return { reason: "fullAccessOff", why: "Full Access isn't confirmed on this computer yet: confirm it first." };
   if (approval === "auto") {
     const gap = sandboxGap(agents);
     if (gap) return { reason: "sandbox", why: SANDBOX_WHY[gap] };
@@ -118,13 +115,13 @@ export function unavailable(approval: Approval, { agents = false, bot = false }:
 }
 
 /** What `wanted` comes to here now: itself where it can be had, else the most it can be (Full
- * Access without its switch or for a bot, Auto; Auto without the sandbox, Ask First), and why: the
- * last step down, what holds it where it is. */
+ * Access without its switch, Auto; Auto without the sandbox, Ask First), and why: the last step
+ * down, what holds it where it is. */
 export function effectiveApproval(wanted: Approval, where: Where = {}): { approval: Approval; held?: Unavailable } {
   let approval = wanted;
   let held: Unavailable | undefined;
   if (approval === "fullAccess") {
-    const not = unavailable("fullAccess", { bot: where.bot });
+    const not = unavailable("fullAccess");
     if (not) { held = not; approval = "auto"; }
   }
   if (approval === "auto") {
@@ -204,7 +201,7 @@ const madeFor = (rules: readonly KitRule[], applied: Approval) =>
  * before commands is Ask First; nothing asking is, for one from before this box kept approvals
  * (`approvalsSince`), Full Access, as it ran, and for one a client made since with no tool held
  * back as a whole (Approve All), this computer's default (`defaultApproval`, or `byDefault`), `pending`
- * too. A bot's is never more than Auto; one the box made itself (`BOX_MADE`), a subagent's, or one
+ * too. A bot's, unkept, starts with Auto; one the box made itself (`BOX_MADE`), a subagent's, or one
  * with other rules, never Full Access unkept: Auto (a subagent's Ask First, where its conversation
  * can't be found). `stored`: whether it's the one kept;
  * `applied`: what its rules are made for now (null for one from before); `effective`: what it comes
@@ -229,8 +226,8 @@ export function approvalOf(session: WithApproval, where: Where = {}, since = app
   const fresh = kept === undefined && !boxMade && !session.parentID && !before && !whole;
   // (Asking before commands was Ask First, before there was more: its rules are made again as that.
   // One from before runs as it did: what its rules say is what it does, whether or not you
-  // confirmed Full Access here. But a bot's, which never has more than Auto, and comes to what Auto
-  // does here: the box makes its rules so (`adoptBots`).)
+  // confirmed Full Access here. But a bot's starts with Auto, as the box keeps it (`adoptBots`),
+  // until you pick another, Full Access too.)
   const guessed: Approval = asked ?? (asksFor(rules, "shell") ? "askFirst" : where.bot ? "auto" : session.parentID ? "askFirst"
     : fresh ? byDefault ?? defaultApproval() : before && !boxMade ? "fullAccess" : "auto");
   const pending = Boolean((asked || fresh) && !session.parentID && !where.bot);

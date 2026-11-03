@@ -4,11 +4,11 @@ import { bool, type Infer, list, number, object, type RouteShape, string, words 
 
 const APPROVAL = words("askFirst", "acceptEdits", "auto", "fullAccess");
 
-const REASON = words("sandbox", "fullAccessOff", "bot");
+const REASON = words("sandbox", "fullAccessOff");
 
-/** Why one can't be had here now: the sandbox isn't running (Auto), Full Access isn't confirmed
- * on this computer yet (`fullAccessOff`: ask, then `PATCH kuvo/approval {fullAccess: true}`), or
- * it's a bot's (never Full Access); in words to show (`why`). */
+/** Why one can't be had here now: the sandbox isn't running (Auto), or Full Access isn't
+ * confirmed on this computer yet (`fullAccessOff`: ask, then `PATCH kuvo/approval {fullAccess:
+ * true}`); in words to show (`why`). */
 export const UNAVAILABLE = object({ reason: REASON, why: string });
 
 /** A conversation's approval: the one picked (`approval`; as its rules say, for one from before:
@@ -55,7 +55,7 @@ export type ReviewDecisions = Infer<typeof REVIEW_DECISIONS>;
 export type ApprovalHere = Infer<typeof APPROVAL_HERE>;
 
 const REFUSED = object({ message: string });
-/** Full Access refused: not confirmed on this computer yet, or for a bot's. */
+/** Full Access refused: not confirmed on this computer yet. */
 const NOT_THAT = object({ message: string, reason: REASON });
 
 export const APPROVAL_ROUTES: RouteShape[] = [

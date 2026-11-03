@@ -46,9 +46,6 @@
               },
               {
                "literal": "fullAccessOff"
-              },
-              {
-               "literal": "bot"
               }
              ]
             },
@@ -68,9 +65,6 @@
               },
               {
                "literal": "fullAccessOff"
-              },
-              {
-               "literal": "bot"
               }
              ]
             },
@@ -120,9 +114,6 @@
               },
               {
                "literal": "fullAccessOff"
-              },
-              {
-               "literal": "bot"
               }
              ]
             },
@@ -142,9 +133,6 @@
               },
               {
                "literal": "fullAccessOff"
-              },
-              {
-               "literal": "bot"
               }
              ]
             },
@@ -211,9 +199,6 @@
           },
           {
            "literal": "fullAccessOff"
-          },
-          {
-           "literal": "bot"
           }
          ]
         },
@@ -249,9 +234,6 @@
              },
              {
               "literal": "fullAccessOff"
-             },
-             {
-              "literal": "bot"
              }
             ]
            },
@@ -267,9 +249,6 @@
              },
              {
               "literal": "fullAccessOff"
-             },
-             {
-              "literal": "bot"
              }
             ]
            },
@@ -340,9 +319,6 @@
           },
           {
            "literal": "fullAccessOff"
-          },
-          {
-           "literal": "bot"
           }
          ]
         },
@@ -378,9 +354,6 @@
              },
              {
               "literal": "fullAccessOff"
-             },
-             {
-              "literal": "bot"
              }
             ]
            },
@@ -396,9 +369,6 @@
              },
              {
               "literal": "fullAccessOff"
-             },
-             {
-              "literal": "bot"
              }
             ]
            },
@@ -430,9 +400,6 @@
         },
         {
          "literal": "fullAccessOff"
-        },
-        {
-         "literal": "bot"
         }
        ]
       }

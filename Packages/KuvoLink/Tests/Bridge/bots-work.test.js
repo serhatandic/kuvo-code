@@ -261,6 +261,19 @@ test("a session's approval is never above its starter's:a bot that asks first st
   assert.ok(made[1].permissions.some(rule => rule.action === "shell" && rule.effect === "ask"), "an Approve All bot can start a careful one");
 });
 
+test("a bot you gave Full Access starts its work in Full Access, as any conversation would", async () => {
+  write(path.join(home, "box", "approval.json"), JSON.stringify({ fullAccess: true }));
+  try {
+    sessions.set("ses_pixel", { ...sessions.get("ses_pixel"), metadata: { kuvo: { bot: "bot_pixel00001", approval: "fullAccess", applied: "fullAccess" } } });
+    const said = await tool("start_session", { task: "Set up the release script.", project: "Tidepool" }, "ses_pixel");
+    assert.equal(said.isError, false, said.text);
+    assert.deepEqual({ approval: made[0].metadata.kuvo.approval, applied: made[0].metadata.kuvo.applied }, { approval: "fullAccess", applied: "fullAccess" });
+    assert.ok(!made[0].permissions.some(rule => rule.action === "shell" && rule.resource === "*" && rule.effect === "ask"), "its commands go ahead");
+  } finally {
+    fs.rmSync(path.join(home, "box", "approval.json"), { force: true });
+  }
+});
+
 test("a bot has no limits until you set them", async () => {
   for (let count = 0; count < 10; count++) assert.equal((await tool("start_session", { task: `Task ${count}`, project: "Tidepool" }, "ses_pixel")).isError, false);
   assert.equal(made.length, 10);

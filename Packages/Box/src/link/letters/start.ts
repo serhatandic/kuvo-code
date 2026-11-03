@@ -92,8 +92,8 @@ export interface StartRefusal {
   status: 400 | 403 | 409 | 429 | 502 | 503;
   message: string;
   session?: string;
-  /** Full Access refused (409): without its switch, or for a bot's. */
-  reason?: "fullAccessOff" | "bot";
+  /** Full Access refused (409): without its switch. */
+  reason?: "fullAccessOff";
 }
 
 /** Where it's started, and how it's waited for: the engine here (and the coding agents' bridge, for
@@ -347,16 +347,14 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   // Its approval: the one asked for, never above the starter's (an agent outside any conversation
   // here asks first); from a client, this computer's default unless it says (and what it says is
   // the last one picked here). Kept with it, and its rules made for
-  // what that comes to here now: a bot's work never has Full Access, nor Auto without the sandbox.
+  // what that comes to here now: never Full Access without its switch, nor Auto without the sandbox.
   const agents = Boolean(bridge && target.port === bridge.port);
   const from = by?.place ? approvalOf(by.place.data, { agents: Boolean(bridge && by.place.target.port === bridge.port), bot: Boolean(bot) }) : null;
   const starters: Approval | null = by ? from?.approval ?? "askFirst" : null;
-  // (A bot's work is kept with Auto at most, whatever started it.)
-  const chosen: Approval = starters ? lowerOf(requested ?? starters, starters) : requested ?? defaultApproval();
-  const wanted: Approval = bot ? lowerOf(chosen, "auto") : chosen;
+  const wanted: Approval = starters ? lowerOf(requested ?? starters, starters) : requested ?? defaultApproval();
   // Taking the approval of a conversation from before, it runs as that one does, and is one from
-  // before too: nothing kept, so the box never makes its rules again. (Never a bot's: its work
-  // comes to what Auto does here.)
+  // before too: nothing kept, so the box never makes its rules again. (Never a bot's: its work is
+  // kept with its own.)
   const asBefore = Boolean(from && !from.stored && wanted === starters && !bot);
   const applied = asBefore ? wanted : effectiveApproval(wanted, { agents, bot: Boolean(bot) }).approval;
   const got = applied !== (requested ?? wanted) && lowerOf(applied, requested ?? wanted) === applied ? applied : undefined;

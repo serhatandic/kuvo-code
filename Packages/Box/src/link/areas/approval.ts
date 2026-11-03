@@ -3,7 +3,7 @@
 // conversation's (what it is, what it comes to here now, and which it can pick) and sets it; and
 // this computer's Full Access switch. The box keeps each conversation's rules to what it comes to
 // as the sandbox starts or stops and the switch changes (`keepApprovals`), and a bot's conversation
-// from before there were approvals to Auto's (`adoptBots`).
+// from before there were approvals starts with Auto's (`adoptBots`).
 
 import fs from "node:fs";
 import path from "node:path";
@@ -168,13 +168,13 @@ export async function settleAgain(target: Target, id: string, agents: boolean, s
 type Refusal = { status: 404 | 409 | 502 | 503; value: { message: string; reason?: string } };
 
 /** Sets a conversation's approval, here: 200 with it as clients read it, 404 for none here, 409
- * for one it can't be set to (Full Access without its switch, or for a bot's: and why), 502 where
+ * for one it can't be set to (Full Access without its switch: and why), 502 where
  * the engine didn't take it. Auto without the sandbox is kept, and asks first until it runs. */
 export async function setApproval(id: string, wanted: Approval, engine: Target | null, bridge: Target | null, signal?: AbortSignal): Promise<{ status: 200; value: SessionApproval } | Refusal> {
   if (!engine && !bridge) return { status: 503, value: { message: "The engine isn't running." } };
   const at = await find(id, engine, bridge);
   if (!at) return { status: 404, value: { message: "That conversation isn't here." } };
-  const not = unavailable(wanted, { agents: at.agents, bot: at.bot });
+  const not = unavailable(wanted, { agents: at.agents });
   if (not && not.reason !== "sandbox") return { status: 409, value: { message: not.why, reason: not.reason } };
   const change = changeFor(at, wanted);
   if (change && !await write(at, change, signal)) return { status: 502, value: { message: "It couldn't be changed: the engine didn't take it. Try again." } };

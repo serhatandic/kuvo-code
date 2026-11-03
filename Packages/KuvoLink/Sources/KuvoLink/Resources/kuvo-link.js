@@ -5368,13 +5368,9 @@ var SANDBOX_WHY = {
   partial: "Auto needs the whole sandbox, and on this computer it can't keep commands from the services your login runs.",
   agents: "Auto needs the coding agents' own programs in the sandbox, and some here started before it and still run outside it."
 };
-function unavailable(approval, { agents = false, bot = false } = {}) {
-  if (approval === "fullAccess") {
-    if (bot)
-      return { reason: "bot", why: "Bots can't use Full Access: Auto is the most they get." };
-    if (!fullAccessAllowed())
-      return { reason: "fullAccessOff", why: "Full Access isn't confirmed on this computer yet: confirm it first." };
-  }
+function unavailable(approval, { agents = false } = {}) {
+  if (approval === "fullAccess" && !fullAccessAllowed())
+    return { reason: "fullAccessOff", why: "Full Access isn't confirmed on this computer yet: confirm it first." };
   if (approval === "auto") {
     const gap = sandboxGap(agents);
     if (gap)
@@ -5386,7 +5382,7 @@ function effectiveApproval(wanted, where = {}) {
   let approval = wanted;
   let held;
   if (approval === "fullAccess") {
-    const not = unavailable("fullAccess", { bot: where.bot });
+    const not = unavailable("fullAccess");
     if (not) {
       held = not;
       approval = "auto";
@@ -15061,7 +15057,7 @@ async function setApproval(id, wanted, engine, bridge, signal) {
   const at = await find(id, engine, bridge);
   if (!at)
     return { status: 404, value: { message: "That conversation isn't here." } };
-  const not = unavailable(wanted, { agents: at.agents, bot: at.bot });
+  const not = unavailable(wanted, { agents: at.agents });
   if (not && not.reason !== "sandbox")
     return { status: 409, value: { message: not.why, reason: not.reason } };
   const change = changeFor(at, wanted);
@@ -21485,8 +21481,7 @@ async function startSession(given, by, place) {
   const agents = Boolean(bridge && target.port === bridge.port);
   const from = by?.place ? approvalOf(by.place.data, { agents: Boolean(bridge && by.place.target.port === bridge.port), bot: Boolean(bot) }) : null;
   const starters = by ? from?.approval ?? "askFirst" : null;
-  const chosen = starters ? lowerOf(requested ?? starters, starters) : requested ?? defaultApproval();
-  const wanted = bot ? lowerOf(chosen, "auto") : chosen;
+  const wanted = starters ? lowerOf(requested ?? starters, starters) : requested ?? defaultApproval();
   const asBefore = Boolean(from && !from.stored && wanted === starters && !bot);
   const applied = asBefore ? wanted : effectiveApproval(wanted, { agents, bot: Boolean(bot) }).approval;
   const got = applied !== (requested ?? wanted) && lowerOf(applied, requested ?? wanted) === applied ? applied : undefined;
@@ -23287,7 +23282,7 @@ import fs75 from "node:fs";
 import path80 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.187";
+var BRIDGE_VERSION = "0.9.188";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

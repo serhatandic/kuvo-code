@@ -598,7 +598,7 @@ its own, which a `SIGTERM` stops waiting.
     starter's (a starter that asks first starts one that does too, and the tool tells its agent what
     it got where that's less than asked; one started by a conversation from before, with no
     approval kept, is made as its starter reads and keeps none either, but a bot's work, which is
-    kept with Auto at most); `wake` (`finished`, `asks`, `both`, `none`), what the
+    kept with its own); `wake` (`finished`, `asks`, `both`, `none`), what the
     starter hears of it (a conversation here, once the new session is marked so; the tool says
     which). `computer` other than this one: 400, for now.
   - Unknown fields are ignored, so a newer client can send more to an older box.
@@ -3209,8 +3209,8 @@ rules. Plan mode stays the conversation's agent (`plan`), beside it.
   nothing asks, so an agent keeps working while you're away. Its commands (and a coding agent's
   own program in it) run as yours, outside the sandbox, with your SSH agent; no reviewer, no hard
   lines; its file tools go outside its folders too. Only once you confirmed it on this computer (a
-  client asks you the first time you pick it), and never for a bot or its work, which go on in
-  Auto at most.
+  client asks you the first time you pick it), for a bot's conversation and its work as for any
+  other (before bridge 0.9.188 bots had Auto at most).
 - Where one can't be had now, it fails closed: a conversation set to Auto asks first while the
   sandbox isn't running, and one set to Full Access comes down to Auto while it isn't confirmed on
   this computer. It stays set to what you picked, and comes back to it once it can.
@@ -3252,18 +3252,19 @@ rules. Plan mode stays the conversation's agent (`plan`), beside it.
   as the coding agent's conversation it's for, reviewed and in Full Access as that one is). The coding agents'
   bridge keeps the metadata a conversation is made with, too. But a bot's and its
   work's, which the box keeps with the one their rules say (Ask First, or Auto that asks first
-  without the sandbox), as it starts and as a bot is made or comes here.
+  without the sandbox), as it starts and as a bot is made or comes here, until you pick another
+  (Full Access too).
 - `GET kuvo/sessions/<id>/approval`: `{approval, effective, stored, held?, plan, options}`: what
   you picked, what it comes to here now (`held` `{reason, why}`, the last step down, when that's
   less), whether it's in Plan mode, and each one (`options`: `{approval, held?, unavailable?}`):
   `held` where it can be picked and asks first for now (Auto without the sandbox), `unavailable`
-  where it can't be picked. `reason`: `sandbox` (Auto without the whole sandbox), `fullAccessOff`,
-  `bot`. Only a read: its rules come to what it shows within the box's round. 404 `{message}` for a
+  where it can't be picked. `reason`: `sandbox` (Auto without the whole sandbox), `fullAccessOff`
+  (and `bot` from a box before 0.9.188). Only a read: its rules come to what it shows within the box's round. 404 `{message}` for a
   conversation that isn't here, 503 with no engine or bridge.
 - `PUT kuvo/sessions/<id>/approval` `{approval}`: sets it, on the engine's conversation or the
   coding agents'; 200 as `GET` answers (Auto without the sandbox is kept, `held`), 400 for one that
   isn't one of them, 409 `{message, reason}` for Full Access where it can't be picked
-  (`fullAccessOff`, `bot`), 502 where the engine didn't take it.
+  (`fullAccessOff`), 502 where the engine didn't take it.
 - `GET kuvo/approval`: this computer's `{fullAccess, default, auto: {engine, agents}}`: whether you
   confirmed Full Access here (`box/approval.json`), the one a new conversation starts with
   (`default`: what a client's composer shows), and whether Auto runs for each (`{held?}`, as

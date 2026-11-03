@@ -79,9 +79,7 @@ extension SessionModel {
     /// answered it's read again, as the box may have taken them in another order.
     func setApproval(_ approval: ToolApproval) {
         guard canReach, let box = box() else { return }
-        let option = approvalShown?.option(approval)
-        if option?.unavailable?.reason == "bot" { return }
-        if option?.unavailable?.reason == "fullAccessOff" {
+        if approvalShown?.option(approval)?.unavailable?.reason == "fullAccessOff" {
             confirmsFullAccess = true
             return
         }
