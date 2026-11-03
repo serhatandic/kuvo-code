@@ -2469,6 +2469,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `approval.fullAccess` | Full Access as it is since bridge 0.9.184: its commands run outside the sandbox, nothing asks or is reviewed, `kuvo/approval`'s `fullAccess` is whether you confirmed it on this computer (asked the first time it's picked), and Tell Auto is gone ("Approval") |
 | `approval.held` | Auto never leaves a call waiting on you (bridge 0.9.185): what its reviewer refuses or can't judge is held back, and `POST kuvo/sessions/<id>/decisions` `{approve: id}` approves one once; a sandbox ask in Auto never comes to you, so it has no `review` ("Auto's reviewer") |
 | `approval.default` | A new conversation's approval where its client doesn't say: Auto the first time on a computer, then the last one picked there (`kuvo/approval`'s `default`, bridge 0.9.185); one a client made with `kuvo.approval` alone gets that ("Approval") |
+| `approval.seen` | `seen` in `kuvo/sessions/<id>/decisions`, and `POST` `{seen: true}` as you open them: what's held back since is news on every client ("Auto's reviewer", bridge 0.9.187) |
 | `wakes` | `kuvo/wakes`, a session's, and cancelling one or sending it now |
 | `wakes.edit` | adding one (`POST kuvo/wakes/<session>`) and pausing them |
 | `wakes.events` | `kuvo/wakes/events`, and making a watch (`POST kuvo/wakes/<session>/watch`) |
@@ -3366,14 +3367,15 @@ one the box marked as in Full Access, which runs (bridge 0.9.187).
   what it wants next is held back (`why: "paused"`) until you let it go on or approve one. Those for
   want of a model (`noModel`, `failed`, `unreadable`) don't count. A review that can't be had at all
   (a full disk) is refused with why (`failed`), never asked.
-- `GET kuvo/sessions/<id>/decisions` → `{decisions, paused?}`: the conversation's decisions, the
+- `GET kuvo/sessions/<id>/decisions` → `{decisions, paused?, seen?}`: the conversation's decisions, the
   latest last (the last 200), each `{id, at, action, kind, decision, reason, by, why?, held?,
   approved?, used?}`: `kind` `command`, `file` or `tool`; `decision` `allowed` or `refused`; `by`
   `code`, `model` or `you` (one you approved, run again); for a refusal, `why` (above), and `held`
   where you can approve it (then `approved`, when you did, and `used`, when it ran again). Code's
   own allows (a read outside its folder) aren't kept. Decisions from before bridge 0.9.185 may say
   `asked`, or `why: "always"` with which kind in `always`. `paused`: since when Auto is paused
-  there.
+  there. `seen`: when you last looked at them on any client; one held back with an `at` after it
+  is news, which a client shows over its composer (bridge 0.9.187).
 - `POST kuvo/sessions/<id>/decisions` `{approve: <id>}` approves one held back, from any client:
   allowed once, the next time the agent does it the same way (a command in the same folder running
   the same scripts as read then: one changed since is judged again; the same file with the same
@@ -3381,7 +3383,9 @@ one the box marked as in Full Access, which runs (bridge 0.9.187).
   steered message: `[The user approved what Auto's reviewer held back] <action>`, shown as "You
   approved: …"), and a paused conversation goes on, its counts started over. 404 for one that isn't
   held back (approved already, a code line, gone). `{resume: true}` lets a paused conversation go
-  on, its counts started over. 400 without either, 500 where it couldn't be kept. Kept in the box's folder
+  on, its counts started over. `{seen: true}`, as you open them on a client, marks what's held back
+  by now as seen there and on every other client (`approval.seen`). 400 without any of these, 500
+  where it couldn't be kept. Kept in the box's folder
   (`box/reviews/<session>.json`), for any client, and deleted with the session.
 
 ### Sandbox

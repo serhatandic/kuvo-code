@@ -44,10 +44,11 @@ export const REVIEW_DECISION = object({
   "held?": bool, "approved?": number, "used?": number,
 });
 
-/** A conversation's decisions (the latest last), and since when Auto is paused there after too
- * many refusals (`paused`). `POST` with `{approve: id}` approves one held back, once (and lets a
- * paused one go on); `{resume: true}` lets a paused one go on. */
-export const REVIEW_DECISIONS = object({ decisions: list(REVIEW_DECISION), "paused?": number });
+/** A conversation's decisions (the latest last), since when Auto is paused there after too many
+ * refusals (`paused`), and when you last looked (`seen`: what's held back from before is not
+ * news). `POST` with `{approve: id}` approves one held back, once (and lets a paused one go on);
+ * `{resume: true}` lets a paused one go on; `{seen: true}` marks what's held back by now as seen. */
+export const REVIEW_DECISIONS = object({ decisions: list(REVIEW_DECISION), "paused?": number, "seen?": number });
 
 export type SessionApproval = Infer<typeof SESSION_APPROVAL>;
 export type ReviewDecisions = Infer<typeof REVIEW_DECISIONS>;

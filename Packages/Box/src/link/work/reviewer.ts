@@ -725,13 +725,14 @@ export interface Decision {
   key?: string;
 }
 
-/** A conversation's log: its decisions (the latest last), refusals in a row and in all, and since
- * when it's paused. */
+/** A conversation's log: its decisions (the latest last), refusals in a row and in all, since
+ * when it's paused, and when you last looked at what's held back (`seen`, from any client). */
 export interface ReviewLog {
   decisions: Decision[];
   refusedInRow: number;
   refused: number;
   paused?: number;
+  seen?: number;
 }
 
 const logFile = (session: string, folder: string) => path.join(folder, `${session.replace(/[^A-Za-z0-9_-]/g, "_")}.json`);
@@ -740,15 +741,18 @@ export function reviewLog(session: string, folder = REVIEWS_FOLDER): ReviewLog {
   try {
     const kept = JSON.parse(textOf(logFile(session, folder)) ?? "");
     if (isObject(kept) && Array.isArray(kept.decisions)) {
-      return { decisions: kept.decisions as Decision[], refusedInRow: Number(kept.refusedInRow) || 0, refused: Number(kept.refused) || 0, ...(typeof kept.paused === "number" ? { paused: kept.paused } : {}) };
+      return {
+        decisions: kept.decisions as Decision[], refusedInRow: Number(kept.refusedInRow) || 0, refused: Number(kept.refused) || 0,
+        ...(typeof kept.paused === "number" ? { paused: kept.paused } : {}), ...(typeof kept.seen === "number" ? { seen: kept.seen } : {}),
+      };
     }
   } catch {}
   return { decisions: [], refusedInRow: 0, refused: 0 };
 }
 
 /** The log as clients read it: without the keys it matches actions by. */
-export function shownReviews(log: ReviewLog): { decisions: Omit<Decision, "key">[]; paused?: number } {
-  return { decisions: log.decisions.map(({ key: _, ...shown }) => shown), ...(log.paused ? { paused: log.paused } : {}) };
+export function shownReviews(log: ReviewLog): { decisions: Omit<Decision, "key">[]; paused?: number; seen?: number } {
+  return { decisions: log.decisions.map(({ key: _, ...shown }) => shown), ...(log.paused ? { paused: log.paused } : {}), ...(log.seen ? { seen: log.seen } : {}) };
 }
 
 // A log changed under its lock, written back.
@@ -776,6 +780,14 @@ export function keepDecision(session: string, decision: Decision, folder = REVIE
     const pausing = !log.paused && (log.refusedInRow >= BREAKER.inRow || log.refused >= BREAKER.inAll);
     if (pausing) log.paused = decision.at;
     return pausing;
+  });
+}
+
+/** You looked at what's held back (Decisions, on any client): what was held back by now is seen. */
+export function seeHeld(session: string, now = Date.now(), folder = REVIEWS_FOLDER): ReviewLog {
+  return changeLog(session, folder, log => {
+    log.seen = Math.max(log.seen ?? 0, now, ...log.decisions.map(each => each.at));
+    return { ...log };
   });
 }
 

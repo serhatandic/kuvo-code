@@ -13,7 +13,7 @@ import { bridgeTarget, call, engineGet, readEngineFile } from "../engine/client"
 import { allowFullAccess, alwaysFor, APPROVALS, approvalOf, approvalRules, approvalsSince, defaultApproval, effectiveApproval, fullAccessAllowed, isApproval, madeBefore, rememberApproval, unavailable } from "../work/approval";
 import { resumeReviewedSession, runningGoal } from "../work/goals";
 import { sandboxOn } from "../work/sandbox";
-import { approveHeld, clearFetched, resumeReviews, reviewLog, shownReviews } from "../work/reviewer";
+import { approveHeld, clearFetched, resumeReviews, reviewLog, seeHeld, shownReviews } from "../work/reviewer";
 import { tellApproved } from "../work/reviewing";
 import { markConversation } from "../work/full";
 import { botOfConversation, worksFor } from "../work/tree";
@@ -338,6 +338,11 @@ export async function* approvalRoute(context: RouteContext): AsyncGenerator<Answ
   if (decisions) {
     if (method === "GET") return yield* json(200, shownReviews(reviewLog(decisions)));
     if (method !== "POST") return yield* json(405, { message: "Read them with GET, or approve one held back (or let a paused conversation go on) with POST." });
+    if (given.seen === true) {
+      // Looked at on a client: what's held back by now isn't news on any of them.
+      try { return yield* json(200, shownReviews(seeHeld(decisions))); }
+      catch (error) { return yield* json(500, { message: `It couldn't be kept: ${String((error as Error)?.message ?? error).slice(0, 120)}` }); }
+    }
     if (typeof given.approve === "string" && given.approve) {
       // Allowed once, the next time the agent does it the same way: it's told so, and goes on.
       let approved: ReturnType<typeof approveHeld>;
@@ -348,7 +353,7 @@ export async function* approvalRoute(context: RouteContext): AsyncGenerator<Answ
       await tellApproved(decisions, approved).catch(() => false);
       return yield* json(200, shownReviews(reviewLog(decisions)));
     }
-    if (given.resume !== true) return yield* json(400, { message: "Say approve: <id> to approve one held back, or resume: true to let Auto go on here." });
+    if (given.resume !== true) return yield* json(400, { message: "Say approve: <id> to approve one held back, resume: true to let Auto go on here, or seen: true once you've looked." });
     try { resumeReviews(decisions); }
     catch (error) { return yield* json(500, { message: `It couldn't be kept: ${String((error as Error)?.message ?? error).slice(0, 120)}` }); }
     resumeReviewedSession(decisions);

@@ -1280,6 +1280,7 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     // (Held back, approved from a client; a new conversation's mode, the last picked: kuvo/approval's `default`.)
     "approval.held": ["POST", "kuvo/sessions/ses_none/decisions"],
     "approval.default": ["GET", "kuvo/approval"],
+    "approval.seen": ["POST", "kuvo/sessions/ses_none/decisions"],
     "git.backups": ["GET", "kuvo/git/backups?folder=/"],
   };
   const named = (await answer(handle, "GET", "kuvo/info")).json.features;

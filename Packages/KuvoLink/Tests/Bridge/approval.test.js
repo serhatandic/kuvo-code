@@ -408,3 +408,19 @@ test("one Auto's reviewer held back is approved from any client: allowed once, t
   assert.equal((await route("POST", "kuvo/sessions/ses_auto/decisions", { approve: "rd_bbbbbb" })).status, 404);
   assert.equal((await route("POST", "kuvo/sessions/ses_auto/decisions", {})).status, 400);
 });
+
+test("what Auto held back, looked at on one client, isn't news on another, but what it holds back after is", async () => {
+  sessions.set("ses_seen", session("ses_seen", [], { metadata: { kuvo: { approval: "auto", applied: "auto" } } }));
+  const held = (id, at) => ({ id, at, action: `make ${id}`, kind: "command", decision: "refused", reason: "Not what you asked.", by: "model", why: "reviewer", held: true, key: `command make ${id}` });
+  const file = path.join(home, "box", "reviews", "ses_seen.json");
+  write(file, JSON.stringify({ decisions: [held("rd_first", 1)], refusedInRow: 1, refused: 1 }));
+  assert.equal((await route("GET", "kuvo/sessions/ses_seen/decisions")).body.seen, undefined, "never looked: all of it is news");
+  const looked = await route("POST", "kuvo/sessions/ses_seen/decisions", { seen: true });
+  assert.equal(looked.status, 200);
+  assert.ok(looked.body.seen >= 1);
+  // Held back later (as the box keeps one): after what was seen.
+  const kept = JSON.parse(fs.readFileSync(file, "utf8"));
+  write(file, JSON.stringify({ ...kept, decisions: [...kept.decisions, held("rd_later", looked.body.seen + 1)] }));
+  const read = await route("GET", "kuvo/sessions/ses_seen/decisions");
+  assert.deepEqual(read.body.decisions.filter(each => each.at > read.body.seen).map(each => each.id), ["rd_later"]);
+});

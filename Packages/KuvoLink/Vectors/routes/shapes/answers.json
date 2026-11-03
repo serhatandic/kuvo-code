@@ -566,7 +566,8 @@
         }
        }
       },
-      "paused?": "number"
+      "paused?": "number",
+      "seen?": "number"
      }
     }
    }
@@ -687,7 +688,8 @@
         }
        }
       },
-      "paused?": "number"
+      "paused?": "number",
+      "seen?": "number"
      }
     },
     "400": {
@@ -3098,6 +3100,9 @@
             "literal": "approval.default"
            },
            {
+            "literal": "approval.seen"
+           },
+           {
             "literal": "accounts.ended"
            },
            {
@@ -3395,6 +3400,9 @@
            },
            {
             "literal": "approval.default"
+           },
+           {
+            "literal": "approval.seen"
            }
           ]
          }

@@ -1679,7 +1679,8 @@ var FEATURES = [
   "git.backups",
   "approval.fullAccess",
   "approval.held",
-  "approval.default"
+  "approval.default",
+  "approval.seen"
 ];
 
 // Packages/Box/src/link/areas/projects.ts
@@ -14318,13 +14319,19 @@ function reviewLog(session, folder = REVIEWS_FOLDER) {
   try {
     const kept = JSON.parse(textOf(logFile(session, folder)) ?? "");
     if (isObject(kept) && Array.isArray(kept.decisions)) {
-      return { decisions: kept.decisions, refusedInRow: Number(kept.refusedInRow) || 0, refused: Number(kept.refused) || 0, ...typeof kept.paused === "number" ? { paused: kept.paused } : {} };
+      return {
+        decisions: kept.decisions,
+        refusedInRow: Number(kept.refusedInRow) || 0,
+        refused: Number(kept.refused) || 0,
+        ...typeof kept.paused === "number" ? { paused: kept.paused } : {},
+        ...typeof kept.seen === "number" ? { seen: kept.seen } : {}
+      };
     }
   } catch {}
   return { decisions: [], refusedInRow: 0, refused: 0 };
 }
 function shownReviews(log) {
-  return { decisions: log.decisions.map(({ key: _, ...shown }) => shown), ...log.paused ? { paused: log.paused } : {} };
+  return { decisions: log.decisions.map(({ key: _, ...shown }) => shown), ...log.paused ? { paused: log.paused } : {}, ...log.seen ? { seen: log.seen } : {} };
 }
 function changeLog(session, folder, change) {
   fs49.mkdirSync(folder, { recursive: true, mode: 448 });
@@ -14349,6 +14356,12 @@ function keepDecision(session, decision, folder = REVIEWS_FOLDER) {
     if (pausing)
       log.paused = decision.at;
     return pausing;
+  });
+}
+function seeHeld(session, now = Date.now(), folder = REVIEWS_FOLDER) {
+  return changeLog(session, folder, (log) => {
+    log.seen = Math.max(log.seen ?? 0, now, ...log.decisions.map((each) => each.at));
+    return { ...log };
   });
 }
 function resumeReviews(session, folder = REVIEWS_FOLDER) {
@@ -15203,6 +15216,13 @@ async function* approvalRoute(context) {
       return yield* json(200, shownReviews(reviewLog(decisions)));
     if (method !== "POST")
       return yield* json(405, { message: "Read them with GET, or approve one held back (or let a paused conversation go on) with POST." });
+    if (given.seen === true) {
+      try {
+        return yield* json(200, shownReviews(seeHeld(decisions)));
+      } catch (error) {
+        return yield* json(500, { message: `It couldn't be kept: ${String(error?.message ?? error).slice(0, 120)}` });
+      }
+    }
     if (typeof given.approve === "string" && given.approve) {
       let approved;
       try {
@@ -15217,7 +15237,7 @@ async function* approvalRoute(context) {
       return yield* json(200, shownReviews(reviewLog(decisions)));
     }
     if (given.resume !== true)
-      return yield* json(400, { message: "Say approve: <id> to approve one held back, or resume: true to let Auto go on here." });
+      return yield* json(400, { message: "Say approve: <id> to approve one held back, resume: true to let Auto go on here, or seen: true once you've looked." });
     try {
       resumeReviews(decisions);
     } catch (error) {
