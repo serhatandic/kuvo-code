@@ -42,6 +42,7 @@ The user isn't always available, and work goes on without them. Never stop and w
 
 - Keep a running note of every decision that needs the user: design choices (with the options mocked), brand, wording, pushes to kuvo-web, anything that needs a permission prompt or the user at the Mac. Say for each what you recommend and why.
 - Meanwhile build everything that doesn't depend on the answer, and pick the work order so the user's choices come last.
+- **Never build a waiting decision's "recommended side" when it costs the user anything**: an ask, a refusal, an extra step, a limit, or a change to how something they already use behaves. Those wait for the answer. Build around them, and say plainly in the list that they aren't built.
 - Hand the whole list over at once, in your report to the user or to the session coordinating yours, with the paths to the mocks, so nothing is lost when the user comes back.
 
 ## Subagents: two at a time
@@ -53,6 +54,8 @@ Each session runs at most 2 subagents at once: workers, reviewers, and any that 
 - **Test scenarios, not the code's insides.** A test answers this: if someone refactors this or changes something nearby, will it catch a break a user would notice? Assert what the app shows, keeps or does, never which functions ran.
 - **Use the real components.** Stub only what's outside the app or unpredictable: the engine's HTTP API, SSH, the network. Never write a test that only proves a stub returns what it was given.
 - **A bug fix starts with a test** that fails on the old code for the right reason. Then fix the cause, not the symptom. Never loosen a test to make it pass.
+- **A test must go the way the real thing goes.** Send events through the window, as AppKit routes them, not straight to our own handler. A test that skips the system's part can pass while the bug is still there.
+- **Never call a user's bug fixed, or maybe fixed,** until you've reproduced it the way they saw it and seen it gone there: in a demo copy, or with their logger or steps. A fix to a nearby test is not a fix to their bug.
 - **Keep tests deterministic.** No sleeps, timeouts or retries, and no device clocks. A flaky test gets fixed, not retried. Each test runs alone, in folders of its own.
 - **Skip low-value tests**: trivial getters, wiring, and edge cases no one would hit. A visual nitpick gets a look before and after, not a UI test.
 - **Running them:**
@@ -70,6 +73,9 @@ Quality slips as a session goes on. The context fills up, hours pass, a task loo
 - Give the last task of a long session the same care as the first. Read the code before you change it, test what you changed, look at the UI, run the reviews, and check the docs and the changelog.
 - No task is too small for the rules in this file. A one-line fix still gets its test, its docs check and a look in the app.
 - When you notice yourself skimming, guessing, or about to report something done that you haven't checked, stop and do it properly. If the context is too full to work well, say so and suggest a fresh session. Never lower the bar.
+- **Where the leading products already settled a behavior, match them.** This covers what a mode does, what asks and what's refused, and how a common control works, as in Codex, Claude Code and Cursor. Before building, show it side by side: ours, theirs, what we'll do. Doing it differently is a question for the user, never a default. (The sandbox's Full Access kept walls and exceptions that neither has, and the user had to catch it.)
+- **Fresh context at each phase.** When a phase ends, or your context passes about half, write a handover note (what's done, what's open, the decisions) and ask the coordinating session or the user for a fresh session to carry on. Days-long sessions are where care slips.
+- **Check against the user's goal, not only the spec.** Before reporting a list of decisions or a finished piece, ask of each item whether it gets in the way of what the user said they want (for agents: working on their own while the user is away). Anything that does goes to the top of the report.
 
 ## Keep what Kuvo Code leaves on people's computers contained (strict)
 
