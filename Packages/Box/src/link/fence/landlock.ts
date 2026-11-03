@@ -31,10 +31,9 @@ export function landlockPolicy(policy: FencePolicy): string {
  * command could have put on your PATH: your session's folder (`/run/user/<uid>`), your tmux's,
  * screen's and shell-started SSH agents' in `/tmp` and `/run/screen`, the X server's, Neovim's,
  * Emacs', VS Code's and Cursor's in `/tmp`, and the other apps' sockets the box lists in <sockets> (a
- * folder or a socket a line, or the start of sockets' names, `…*`, for each there now), each empty
- * or refusing; then the program, as you again, with no rights
- * over the system left, and your PATH. Your groups stay, as they were. A folder that can't be hidden
- * runs nothing.
+ * folder or a socket a line, or the names sockets can have, with `*` in them, for each there now),
+ * each empty or refusing; then the program, as you again, with no rights over the system left, and
+ * your PATH. Your groups stay, as they were. A folder that can't be hidden runs nothing.
  *
  * Each in `/tmp` is hidden from inside it (`.`), or checked once hidden, never through a link: one
  * another conversation's command puts in its place isn't followed, nor hides the box's list. Being
@@ -56,7 +55,7 @@ over() { ( cd -P "$1" 2>/dev/null || exit 1; [ -z "$3" ] || [ "$(pwd -P)" = "$1"
 off() { [ -S "$1" ] && { [ -z "$2" ] || [ ! -L "$1" ]; } || return 1; mount -c --bind /dev/null "$1" 2>/dev/null && [ -c "$1" ] && { [ -z "$2" ] || [ ! -L "$1" ]; } || fail "$1 can't be kept from it."; }
 [ -r "$sockets" ] || fail "it isn't set up."
 over "$own" 0700 || fail "it isn't set up."
-while IFS= read -r s; do case $s in /*'*') for f in $s; do [ ! -S "$f" ] || off "$f"; done ;; /*) over "$s" 0700 || off "$s" ;; esac; done <"$sockets"
+while IFS= read -r s; do case $s in /*'*'*) for f in $s; do [ ! -S "$f" ] || off "$f"; done ;; /*) over "$s" 0700 || off "$s" ;; esac; done <"$sockets"
 over "/run/user/$u" 0700
 if [ -n "$t_own" ]; then
   ( cd -P "$t_own/$t_name" 2>/dev/null && [ "$(pwd -P)" = "$t_own/$t_name" ] && [ -O . ] && mkdir "$own/tmp" && mount -c --bind . "$own/tmp" ) 2>/dev/null || fail "its temporary folder isn't its own."
@@ -187,7 +186,11 @@ for (const where of policy.homeOpen || []) grantExcept(where, HOME, new Set([...
 let allowed = [];
 // (Each by the real path the box keeps: one that's become a link since, to anywhere, isn't given.)
 try { allowed = fs.readFileSync(allowedFile, "utf8").split("\n").filter((line) => line.startsWith("/") && real(line) === line); } catch {}
-for (const where of [...policy.writable, work, git, ...allowed]) if (where) grantExcept(where, all, kept);
+// Each leaves out the walls but one it's inside: a conversation's folder in one (a project in your
+// Documents, ~/.config/nvim) writes its own, and one that holds them (your home) doesn't write them.
+const walls = [...(policy.readOnly || []), ...(policy.homeKept || []), ...personal].map(real);
+const outside = (where) => new Set([...hidden, ...walls.filter((wall) => !inside(real(where), wall))]);
+for (const where of [...policy.writable, work, git, ...allowed]) if (where) grantExcept(where, all, outside(where));
 // A coding agent run whole in it: its homes (its sign-in and state), whole, and the folders it only
 // reads (the skills it's given). What macOS keeps from it in its homes (its settings, its other
 // folders) Landlock can't: what it grants a folder it grants all inside, and the agent makes its

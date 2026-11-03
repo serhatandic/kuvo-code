@@ -110,6 +110,9 @@ export function launcherScript(places: FencePlaces): string {
     // isn't worked in there.
     `case $work_at in ''|"$work") ;; *) echo "This command can't run: its conversation's folder now leads somewhere else than when it was opened (it was replaced by a link). Ask the user." >&2; exit 126 ;; esac`,
     `case $git in /*) git=$(cd "$git" 2>/dev/null && pwd -P) || git=$work ;; *) git=$work ;; esac`,
+    // Never a home or what holds one, nor a personal folder or what's in one, but by a repository's
+    // own name (a command can make what looks like a repository there, then a folder that names it).
+    `case $git in *.git) ;; *) while IFS= read -r p; do case $git in $p) git=$work; break ;; esac; done <"$F/not-repositories" ;; esac`,
     "profile=project",
     `case $work in ${insideCases}) profile=inside ;; esac`,
     // Temporary files of its own: each conversation's folder has its own (by a sum no folder's
@@ -459,8 +462,17 @@ export function agentsNote(platform: "darwin" | "linux", tmuxFits = true): strin
   return [
     "# Commands run in a sandbox here",
     "",
-    "Each command you run with the shell tool runs in Kuvo Code's sandbox. It can't read Kuvo Code's own folders or the user's secrets (private SSH keys, cloud and package tokens). It writes and deletes freely in this conversation's folder, its git repository, temporary folders (`$TMPDIR`, `/tmp`) and tools' caches. Elsewhere in the home folder it can add and change files, but never delete or move them, and it can't write what runs later outside the sandbox: shell start-up files, the folders on PATH, git's, SSH's, editors' and the coding agents' settings" + (mac ? ", or `~/Library` apart from its caches and logs" : "") + ". The user's personal folders (Documents, Desktop, Downloads and the like) " + (mac ? "only take new files: save a new copy beside one rather than changing it." : "are only read.") + " Docker's socket and SSH's shared connections aren't reachable." +
-      (mac ? " Nor can it change git's hooks or config, or the settings opencode and the coding agents start with in a project (`.opencode/`, `opencode.json`, `.claude/settings.json`, `.mcp.json`, `.codex/config.toml`, `.cursor/hooks.json` and the like, and their hooks' scripts), nor make, move or remove the folders that hold them (`.git`, `.claude`, `.codex`, `.cursor` and the like): writing in them is fine. If a task needs one changed, ask the user." : ""),
+    "Each command you run with the shell tool runs in Kuvo Code's sandbox:",
+    "",
+    "- It can't read Kuvo Code's own folders or the user's secrets (private SSH keys, cloud and package tokens).",
+    "- It writes and deletes freely in this conversation's folder, its git repository, temporary folders (`$TMPDIR`, `/tmp`) and tools' caches.",
+    "- Elsewhere in the home folder it adds and changes files, but never deletes or moves them." + (mac ? "" : " Nor can it make or remove anything right in a folder that holds what's kept (the home folder itself, `~/.config`, `~/.local`): only inside the folders there."),
+    "- It never writes what runs later outside the sandbox: shell start-up files, the folders on PATH, git's, SSH's, editors' and the coding agents' settings" + (mac ? ", or `~/Library` apart from its caches, logs and `Developer`" : "") + ".",
+    "- The user's personal folders (Documents, Desktop, Downloads and the like) " + (mac ? "only take new files: save a new copy beside one rather than changing it." : "are only read."),
+    "- A conversation the user started in one of those folders (a project in Documents, `~/.config/nvim`) writes its own folder freely. A session you start can't be in what runs later" + (mac ? ", `~/Library`" : "") + " or a personal folder itself: ask the user to start it there.",
+    "- A tool that replaces a file by moving a new copy over it (`sed -i`, some installers) can't change one outside the folders it writes freely: make the new copy in the project or `$TMPDIR`, then copy it over with plain `cp`.",
+    "- Docker's socket, SSH's shared connections and terminals' and editors' servers aren't reachable.",
+    ...(mac ? ["- It can't change git's hooks or config, or the settings opencode and the coding agents start with (`.opencode/`, `opencode.json`, `.claude/settings.json`, `.mcp.json`, `.codex/config.toml`, `.cursor/hooks.json` and the like, and their hooks' scripts), in this project or any other, nor make, move or remove the folders that hold them (`.git`, `.claude`, `.codex`, `.cursor` and the like): writing in them is fine. If a task needs one changed, ask the user."] : []),
     ...(mac
       ? [
           "",

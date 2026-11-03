@@ -1,8 +1,9 @@
 import { expect, test } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs"
-import { tmpdir } from "node:os"
+import { createServer, type Server } from "node:net"
+import { tmpdir, userInfo } from "node:os"
 import { dirname, join } from "node:path"
-import type { FencePolicy } from "../src/link/fence/policy"
+import { type FencePolicy, xdgPersonal } from "../src/link/fence/policy"
 import { canFence, realFence } from "./agents/support/fence"
 
 // Walls only for catastrophes: a command adds and changes files anywhere in your home, but never
@@ -14,23 +15,27 @@ const mac = process.platform === "darwin"
 
 /** The box's policy as it'd be for a home folder of the test's own, its own folder in it, run as the
  * box runs it (in a process of its own, with HOME there). */
-function policyIn(home: string): FencePolicy {
+function policyIn(home: string, path = process.env.PATH ?? ""): FencePolicy {
   const asStarted = Bun.spawnSync([process.execPath, "-e", `import { fencePolicy } from ${JSON.stringify(join(import.meta.dir, "..", "src", "link", "fence", "policy"))}; console.log(JSON.stringify(fencePolicy()))`],
-    { env: { ...process.env as Record<string, string>, HOME: home, BUN_BE_BUN: "1", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0", XDG_CACHE_HOME: "", KUVO_OWN_XDG_CACHE_HOME: "" } })
+    { env: { ...process.env as Record<string, string>, HOME: home, PATH: path, BUN_BE_BUN: "1", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0", XDG_CACHE_HOME: "", KUVO_OWN_XDG_CACHE_HOME: "" } })
   expect(asStarted.exitCode, asStarted.stderr.toString()).toBe(0)
   return JSON.parse(asStarted.stdout.toString())
 }
 
-function walled(root: string) {
+/** `onPath`: folders in the home, made and put on PATH as the box starts. */
+function walled(root: string, more: Partial<FencePolicy> = {}, onPath: string[] = []) {
   const kuvo = join(root, "kuvo")
   const home = join(root, "home")
   mkdirSync(kuvo, { recursive: true })
   mkdirSync(home, { recursive: true })
-  const policy = policyIn(home)
+  for (const folder of onPath) mkdirSync(join(home, folder), { recursive: true })
+  const policy = policyIn(home, [...onPath.map(folder => join(home, folder)), process.env.PATH ?? ""].join(":"))
   expect(policy.homeWrites).toContain(home)
   // (The box's rules for your account's home, and the one HOME names: here, as the test's own.)
   const escape = (text: string) => text.replace(/[.^$*+?()[\]{}|\\]/g, "\\$&")
-  const mine = (paths: string[] | undefined) => [...new Set((paths ?? []).map(each => each === policy.home || each.startsWith(policy.home + "/") ? home + each.slice(policy.home.length) : each)
+  // (The test's own home may be inside your account's, as on a machine whose temporary folder is.)
+  const within = (each: string, top: string) => each === top || each.startsWith(top + "/")
+  const mine = (paths: string[] | undefined) => [...new Set((paths ?? []).map(each => !within(each, home) && within(each, policy.home) ? home + each.slice(policy.home.length) : each)
     .filter(each => each === home || each.startsWith(home + "/")))]
   const patterns = [...new Set((policy.readOnlyPatterns ?? []).map(each => each.replace(`^${escape(policy.home)}/`, `^${escape(home)}/`)).filter(each => each.startsWith(`^${escape(home)}/`)))]
   // (Only what's in the test's home: the rest of this computer's temporary folders, which the test's
@@ -38,12 +43,20 @@ function walled(root: string) {
   realFence(kuvo, [], {
     writable: ["/dev", ...mine(policy.writable)], readOnly: mine(policy.readOnly), readOnlyPatterns: patterns,
     homeWrites: mine(policy.homeWrites), homeKept: mine(policy.homeKept), homeOpen: mine(policy.homeOpen), personal: mine(policy.personal), secrets: mine(policy.secrets),
+    ...more,
   })
-  const run = (project: string, script: string) => {
-    const ran = Bun.spawnSync([join(kuvo, "bin", "kuvo-fence"), "-c", script], { cwd: project, env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: home, KUVO_FENCE_WORK: project } })
+  const run = (project: string, script: string, env: Record<string, string> = {}) => {
+    const ran = Bun.spawnSync([join(kuvo, "bin", "kuvo-fence"), "-c", script], { cwd: project, env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: home, KUVO_FENCE_WORK: project, ...env } })
     return ran.stdout.toString() + ran.stderr.toString()
   }
-  return { kuvo, home, run }
+  return { kuvo, home, policy, run }
+}
+
+/** A server listening on a socket at `where`, as another app's would. */
+async function listening(where: string): Promise<Server> {
+  const server = createServer()
+  await new Promise<void>((done, failed) => { server.once("error", failed); server.listen(where, done) })
+  return server
 }
 
 const tries = (label: string, command: string) => `if ( ${command} ) >/dev/null 2>&1; then echo "${label}: allowed"; else echo "${label}: refused"; fi`
@@ -170,6 +183,211 @@ test.skipIf(!canFence)("your personal folders only take new files on a Mac, and 
     ].join("\n"))
     expect(outcomes(inProject)).toEqual({ "changes its project": "allowed", "deletes in its project": "allowed" })
     expect(readFileSync(join(project, "index.html"), "utf8")).toBe("new\n")
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test.skipIf(!canFence)("a command sets files' times and unpacks archives in its project, its temporary folder and your home", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "kuvo-sandbox-walls-times-")))
+  try {
+    const { home, run } = walled(root)
+    const project = join(home, "app")
+    mkdirSync(project, { recursive: true })
+    files(home, { "app/src/a.txt": "a\n", "notes.txt": "mine\n" })
+    const out = run(project, [
+      tries("touches in its project", `touch src/a.txt`),
+      tries("unpacks in its project", `tar -cf pack.tar src && mkdir out && tar -xpf pack.tar -C out && rm -r out pack.tar`),
+      tries("unpacks in its temporary folder", `t="\${TMPDIR:-/tmp/}unpack" && mkdir -p "$t" && tar -cf "$t/pack.tar" src && tar -xpf "$t/pack.tar" -C "$t" && rm -r "$t"`),
+      tries("touches a file in your home", `touch ${home}/notes.txt`),
+    ].join("\n"))
+    expect(outcomes(out)).toEqual({ "touches in its project": "allowed", "unpacks in its project": "allowed", "unpacks in its temporary folder": "allowed", "touches a file in your home": "allowed" })
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test.skipIf(!canFence)("a conversation in your home itself still keeps the walls", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "kuvo-sandbox-walls-home-")))
+  try {
+    const { home, run } = walled(root)
+    files(home, { ".zshrc": "kept\n", "Documents/budget.txt": "1000\n", "notes/scratch.txt": "x\n", ...(mac ? { "Library/LaunchAgents/old.plist": "kept\n" } : {}) })
+    const out = run(home, [
+      tries("deletes in its folder", `rm notes/scratch.txt`),
+      tries("a shell's start-up file", `echo planted >> .zshrc`),
+      tries("overwrites a document", `echo 0 > Documents/budget.txt`),
+      tries("deletes a document", `rm Documents/budget.txt`),
+      ...(mac ? [tries("a launch agent", `echo x > Library/LaunchAgents/evil.plist`)] : []),
+    ].join("\n"))
+    expect(outcomes(out)).toEqual({ "deletes in its folder": "allowed", "a shell's start-up file": "refused", "overwrites a document": "refused", "deletes a document": "refused",
+      ...(mac ? { "a launch agent": "refused" } : {}) })
+    expect(readFileSync(join(home, ".zshrc"), "utf8")).toBe("kept\n")
+    expect(readFileSync(join(home, "Documents/budget.txt"), "utf8")).toBe("1000\n")
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test.skipIf(!canFence)("a conversation whose folder is inside a wall writes its own folder, and nothing else there", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "kuvo-sandbox-walls-inside-")))
+  try {
+    const { home, run } = walled(root)
+    files(home, { ".config/nvim/init.lua": "old\n", ".config/nvim/lua/old.lua": "x\n", ".zshrc": "kept\n", ".config/fish/config.fish": "kept\n" })
+    const out = run(join(home, ".config", "nvim"), [
+      tries("changes its folder", `echo new > init.lua`),
+      tries("deletes in its folder", `rm lua/old.lua`),
+      tries("a shell's start-up file", `echo planted >> ${home}/.zshrc`),
+      tries("another tool's settings", `echo planted >> ${home}/.config/fish/config.fish`),
+    ].join("\n"))
+    expect(outcomes(out)).toEqual({ "changes its folder": "allowed", "deletes in its folder": "allowed", "a shell's start-up file": "refused", "another tool's settings": "refused" })
+    expect(readFileSync(join(home, ".config/nvim/init.lua"), "utf8")).toBe("new\n")
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+// Other apps' sockets in folders commands write (SSH's shared connections named by host in /tmp, an
+// editor's server in your temporary folder, an app's own folder of them) are never removed, nor the
+// folders that hold them moved, so a command never makes one its own or reaches one by a name the
+// rules don't know; the other files there are the command's to change, by any means.
+test.skipIf(!canFence || !mac)("on a Mac, other apps' sockets and the folders holding them stay, and the files beside them don't", async () => {
+  // (A short folder: a socket's whole path fits in 104 characters.)
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "kuvo-sock-")))
+  const servers: Server[] = []
+  try {
+    const project = join(root, "home", "a")
+    const named = join(project, "s")
+    const app = join(project, "app")
+    const editors = join(project, "t")
+    for (const folder of [named, join(app, "run"), join(editors, "nvim.me")]) mkdirSync(folder, { recursive: true })
+    const escape = (text: string) => text.replace(/[.^$*+?()[\]{}|\\]/g, "\\$&")
+    const { run, policy } = walled(root, { sockets: [app], socketPatterns: [`^${escape(named)}/`, `^${escape(editors)}/nvim\\.`], socketFolders: [`^${escape(editors)}/nvim\\.[^/]+$`] })
+    // (The box's own: editors' and zellij's folders in your temporary folder are held.)
+    const temporary = `/private/var/folders/ab/cd/T`
+    for (const folder of ["nvim.me", "zellij-501", "emacs501"]) expect(policy.socketFolders?.some(pattern => new RegExp(pattern).test(`${temporary}/${folder}`))).toBe(true)
+    for (const socket of [join(named, "cm"), join(app, "run", "s.sock"), join(editors, "nvim.me", "0")]) servers.push(await listening(socket))
+    writeFileSync(join(named, "build.log"), "x\n")
+    writeFileSync(join(app, "settings.json"), "{}\n")
+    const out = run(project, [
+      tries("removes a file beside sockets", `rm s/build.log`),
+      tries("removes a socket named by a pattern", `rm s/cm`),
+      tries("saves an app's settings by a new name and moves it into place", `echo '{"a":1}' > app/settings.json.new && mv app/settings.json.new app/settings.json`),
+      tries("removes a socket in an app's folder", `rm app/run/s.sock`),
+      tries("moves the folder holding it", `mv app/run app/elsewhere`),
+      tries("moves an editor's server folder", `mv t/nvim.me t/other`),
+    ].join("\n"))
+    expect(outcomes(out)).toEqual({ "removes a file beside sockets": "allowed", "removes a socket named by a pattern": "refused",
+      "saves an app's settings by a new name and moves it into place": "allowed", "removes a socket in an app's folder": "refused",
+      "moves the folder holding it": "refused", "moves an editor's server folder": "refused" })
+    for (const socket of [join(named, "cm"), join(app, "run", "s.sock"), join(editors, "nvim.me", "0")]) expect(existsSync(socket)).toBe(true)
+  } finally {
+    for (const server of servers) server.close()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+// Preferences go through cfprefsd, outside the files the walls keep: launchd's and login items'
+// among them.
+test.skipIf(!canFence || !mac)("on a Mac, a command reads preferences but never writes them", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "kuvo-sandbox-walls-defaults-")))
+  const domain = `run.kuvo.sandbox-test-${process.pid}`
+  try {
+    const { home, run } = walled(root)
+    const project = join(home, "app")
+    mkdirSync(project, { recursive: true })
+    const out = run(project, [tries("reads them", `defaults read -g AppleLocale || defaults read -g`), tries("writes them", `defaults write ${domain} planted -bool true`)].join("\n"))
+    expect(outcomes(out)).toEqual({ "reads them": "allowed", "writes them": "refused" })
+  } finally {
+    // (cfprefsd keeps them in your own Library, whatever HOME says, where the old code wrote them.)
+    rmSync(join(userInfo().homedir, "Library", "Preferences", `${domain}.plist`), { force: true })
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+// On Linux, your personal folders are where `~/.config/user-dirs.dirs` says (renamed, translated),
+// and one set to the home itself means none: the home is never taken for one.
+// What runs from your PATH runs outside the sandbox later, whatever its folder's called; the caches
+// tools keep inside one (pnpm's store in its folder on a Mac) are still written.
+test.skipIf(!canFence)("a folder on your PATH is kept, whatever its name, but for tools' caches in it", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "kuvo-sandbox-walls-path-")))
+  try {
+    const { home, run } = walled(root, {}, ["tools/bin", ...(mac ? ["Library/pnpm"] : [])])
+    const project = join(home, "app")
+    mkdirSync(project, { recursive: true })
+    const out = run(project, [
+      tries("a tool on your PATH", `echo planted > ${home}/tools/bin/git`),
+      ...(mac ? [tries("pnpm's store", `mkdir -p ${home}/Library/pnpm/store/v10/b && echo x > ${home}/Library/pnpm/store/v10/b/f && rm -r ${home}/Library/pnpm/store/v10/b`)] : []),
+      tries("a new file at the top of your home", `echo x > ${home}/new.txt`),
+    ].join("\n"))
+    // (Linux can't make a new file right in a folder that holds a wall: only in the folders there.)
+    expect(outcomes(out)).toEqual({ "a tool on your PATH": "refused", ...(mac ? { "pnpm's store": "allowed" } : {}), "a new file at the top of your home": mac ? "allowed" : "refused" })
+    expect(existsSync(join(home, "tools/bin/git"))).toBe(false)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+// A command can make what looks like a git repository anywhere it adds files, then a folder whose
+// .git names it: its conversation's repository is never your home, nor a personal folder by any name
+// but a repository's own.
+test.skipIf(!canFence)("a conversation's repository is never your home or a personal folder", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "kuvo-sandbox-walls-git-")))
+  try {
+    const { home, run } = walled(root)
+    const project = join(home, "Documents", "proj")
+    files(home, { "notes.txt": "mine\n", "Documents/budget.txt": "1000\n", "Documents/proj/.git/HEAD": "ref: refs/heads/main\n", "Documents/proj/sub/a.txt": "a\n" })
+    mkdirSync(join(project, ".git", "objects"), { recursive: true })
+    const at = (git: string, label: string, command: string) => run(join(project, "sub"), tries(label, command), { KUVO_FENCE_GIT: git })
+    const out = [
+      at(home, "deletes in your home", `rm ${home}/notes.txt`),
+      at(join(home, "Documents"), "deletes a document", `rm ${home}/Documents/budget.txt`),
+      at(join(project, ".git"), "writes its own repository", `echo x > ${project}/.git/objects/new && rm ${project}/.git/objects/new`),
+    ].join("")
+    expect(outcomes(out)).toEqual({ "deletes in your home": "refused", "deletes a document": "refused", "writes its own repository": "allowed" })
+    expect(readFileSync(join(home, "notes.txt"), "utf8")).toBe("mine\n")
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+// Another project's git hooks and settings, and its coding agents', run outside the sandbox when you
+// work there. (Linux's sandbox can't keep these: only the conversation's own.)
+test.skipIf(!canFence || !mac)("on a Mac, a command never writes another project's hooks or agents' settings", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "kuvo-sandbox-walls-others-")))
+  try {
+    const { home, run } = walled(root)
+    files(home, { "other/.git/hooks/pre-commit.sample": "x\n", "other/.git/config": "[core]\n", "other/.claude/settings.json": "{}\n", "other/README.md": "x\n" })
+    const project = join(home, "app")
+    mkdirSync(project, { recursive: true })
+    const out = run(project, [
+      tries("another project's hook", `echo planted > ${home}/other/.git/hooks/pre-commit`),
+      tries("another project's git settings", `echo planted >> ${home}/other/.git/config`),
+      tries("another project's agent settings", `echo planted > ${home}/other/.claude/settings.json`),
+      tries("another project's files", `echo more >> ${home}/other/README.md`),
+    ].join("\n"))
+    expect(outcomes(out)).toEqual({ "another project's hook": "refused", "another project's git settings": "refused", "another project's agent settings": "refused", "another project's files": "allowed" })
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+// HOME names where tools look for what runs later, but never a folder that isn't a home.
+test("HOME set to / or a folder above yours adds no home to keep", () => {
+  const account = realpathSync(userInfo().homedir)
+  for (const given of ["/", dirname(account)]) expect(policyIn(given).homeWrites).toEqual([account])
+})
+
+test("Linux's personal folders are the ones your desktop names, never your home", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "kuvo-sandbox-walls-xdg-")))
+  try {
+    const home = join(root, "home")
+    files(home, { ".config/user-dirs.dirs": ['XDG_DOCUMENTS_DIR="$HOME/Belgeler"', 'XDG_DESKTOP_DIR="$HOME/"', 'XDG_DOWNLOAD_DIR="/srv/downloads"', "# a note"].join("\n") + "\n" })
+    const personal = xdgPersonal(home)
+    expect(personal).toContain(join(home, "Belgeler"))
+    expect(personal).toContain(join(home, "Music"))
+    expect(personal).not.toContain(join(home, "Documents"))
+    expect(personal.some(folder => folder === home || folder === home + "/")).toBe(false)
+    expect(personal).not.toContain("/srv/downloads")
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

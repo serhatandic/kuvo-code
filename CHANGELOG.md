@@ -16,6 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- Agents' commands can now add and change files across your home folder, so installs and tools that keep settings there work in the sandbox. They still never delete or move files there, never touch what runs later (shell start-up files, the folders on your PATH, `~/Library`, git's and the agents' settings, other projects' included), and your Documents, Desktop and other personal folders only take new files. A session you start inside one of those folders, like a project in Documents, works there freely; an agent can't start one there.
 - A bot working on a goal no longer keeps your computer busy between its looks at the goal, which could spin the fans while nothing was happening.
 - Moving a chat whose `/goal` is still going says why it can't move yet, instead of moving and losing the goal.
 - A goal whose end you move later after it came carries on to the new end, rather than stopping at once.

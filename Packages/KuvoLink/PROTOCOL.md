@@ -3164,27 +3164,38 @@ moves one there (on macOS, Seatbelt's `file-write-unlink`, which a move takes to
 Linux, Landlock's `REMOVE_FILE`, `REMOVE_DIR` and `REFER`, so nothing's linked in either), and never
 writes what runs later outside the sandbox: your shell's start-up files and plugins (`.zshrc`,
 `.bashrc`, `.profile`, `.config/fish`, `.oh-my-zsh`, zsh's completion dumps…), the folders on your
-PATH and version managers' (`.local/bin`, `bin`, `.nvm`, `.pyenv`, `.asdf`, mise's…), Python's user
+PATH (any in your home, whatever it's named) and version managers' (`.local/bin`, `bin`, `.nvm`, `.pyenv`, `.asdf`, mise's…), Python's user
 site, what direnv and mise trust, SSH's `config` and `authorized_keys`, git's settings and templates,
 the coding agents' and editors' settings, hooks and extensions (`.claude`, `.claude.json`, `.codex`,
 `.cursor`, `.gemini`, `.grok`, opencode's, `.vscode`, `.config/nvim`…), tools' settings that name
 programs or package sources (`.bunfig.toml`, `.docker/cli-plugins`, `.config/gh`, `.config/pip`,
 `.gemrc`, `.gnupg`…); on Linux systemd's, autostart's and environment.d's folders and the desktop's
-start-up files; on macOS `~/Library` but its `Caches`, `Developer`, `Logs` and iCloud Drive
-(`homeKept`, `homeOpen`), and the window and key tools' settings (Hammerspoon, Karabiner, skhd,
+start-up files; on macOS `~/Library` but its `Caches`, `Developer`, `Logs`, iCloud Drive and
+provisioning profiles (`homeKept`, `homeOpen`), and the window and key tools' settings (Hammerspoon, Karabiner, skhd,
 yabai, AeroSpace, SketchyBar). Your personal folders (`personal`: on macOS Desktop, Documents,
 Downloads, Pictures, Movies, Music and iCloud Drive; on Linux those `~/.config/user-dirs.dirs` names)
 only take new files on macOS (no `file-write-data`, `-unlink`, `-mode` or `-flags`: a file's own
 first open still writes it), and are only read on Linux, where Landlock can't tell a new file from
-one that's there; the conversation's folder and Also Allowed inside one are its own. On macOS no
+one that's there. The conversation's folder, its repository and Also Allowed are written whole
+where they're inside a personal folder, what runs later or `~/Library` (a project in Documents,
+`~/.config/nvim`), and around them where they hold some (a conversation in your home itself
+writes none of those). Only you start a conversation in such a folder: an agent's
+(`start_session`, or `POST kuvo/sessions` with `startedBy`) in one, in a personal folder itself, or
+in a folder on the box's PATH outside your home or one that holds it, is refused (403). Its
+repository is never your home or a folder above it, nor a personal folder or one in it but by a
+repository's own name (`.git`, `….git`): elsewhere a command could make what looks like one, then a
+folder whose `.git` names it. Tools' caches inside what's kept (pnpm's store in its folder on your
+PATH on macOS) are still written. On macOS no command writes preferences through cfprefsd either (`defaults
+write`: Seatbelt's `user-preference-write`), which reach launchd's and login items'. On macOS no
 folder that holds what's kept (your home, `~/.ssh`) is closed off by its mode or flags either. On
-Linux, a new folder or file at the top of one that holds what's kept (your home, `~/.config`,
-`~/.local`) can't be made: Landlock grants each thing that's there. Besides, each command
+Linux, nothing is made or removed right in a folder that holds what's kept (your home, `~/.config`,
+`~/.local` and the like), only in the folders there: Landlock grants each thing that's there. Besides, each command
 writes and deletes freely in its conversation's folder, that folder's git repository (a real one: a `.git` that's
 a link, or names a folder that isn't a repository or a worktree the repository doesn't name back,
 counts for nothing; on macOS never its hooks or config, its submodules' or its worktrees', nor the
 engine's settings in the folder: `.opencode/`, `opencode.json`, nor the coding agents' settings
-files, whose hooks and servers they run as they start there: `.claude/settings.json` and
+files, whose hooks and servers they run as they start there, nor, on macOS, any other project's in
+your home: `.claude/settings.json` and
 `settings.local.json`, `.mcp.json`, `.codex/config.toml`, `.cursor/hooks.json` and `mcp.json`,
 `.gemini/settings.json`, `.grok/settings.json`, and the scripts in `.claude/hooks` and
 `.cursor/hooks`; a folder moved or linked into place is checked only by its own name, so the folders
@@ -3221,7 +3232,9 @@ leaves it as it is: the agent asks with `sandbox_ask`), and on Linux uv copies w
 store and Bun's cache link theirs into a project's `node_modules` and pnpm's into its `dlx` cache, and
 as your own uv links its cache's into a project's `.venv`; bunx's packages in `/tmp`; and a new
 folder at the top of `~/.cache`, which it can't make (Landlock's right to make one would reach the
-folders it only reads). It can't read
+folders it only reads); other projects' hooks, git settings and agents' settings in your home, which
+it writes as it writes the files beside them; and before Linux 6.2 (Landlock 3), truncating a file it only reads by its
+path (`truncate`), which Landlock checks only from then. It can't read
 Kuvo Code's own folders (on a machine `~/.kuvo-code`; on this Mac the app's folders under `Library`,
 any `run.kuvo.code…` copy's, its temporary folder and `/tmp/kuvo-ssh-<uid>`) but its `bin`, nor your
 secrets (cloud, package and git tokens, browsers' and password managers' data, private SSH keys:
@@ -3235,11 +3248,17 @@ temporary folder, whose agents' folders and sockets it can't move to give them a
 remove a folder of its own named as theirs are, `ssh-…`; its own sockets there, like ssh's shared
 connections, it uses and removes), the
 box's own `SSH_AUTH_SOCK`, gpg-agent's, 1Password's, Secretive's, Bitwarden's and yubikey-agent's,
-by their usual places and those your ssh config names (`IdentityAgent`, and `ControlPath`'s shared
-connections: a folder of their own whole, or by the start of their names in one that holds more;
-a `GNUPGHOME` elsewhere isn't known); nor, on both systems, Docker's and the like (Docker Desktop,
-OrbStack, Colima, Lima, Rancher Desktop, Podman, LXD, Incus, libvirt), which run anything as the
-whole computer. So `ssh`, and git over SSH, use only the vault's keys there, and signing a commit with
+by their usual places and those your ssh settings name, in the files they include and the system's
+`/etc/ssh/ssh_config` too, with `~`, `%d` and `${…}` read (`IdentityAgent`, and `ControlPath`'s shared
+connections: a folder of their own whole, or by the names they can have where they share one, each
+`%` token any part of a name, like `~/.cache/ssh-%C` or `/tmp/%r@%h:%p`; on macOS no socket in the
+folders the box lists is removed, nor a folder in them moved, and where they share one only their
+sockets are kept, so the other files there are the command's, written by any means; a `GNUPGHOME`
+elsewhere isn't known); nor, on both systems, Docker's and the like (Docker Desktop, OrbStack,
+Colima, Lima, Rancher Desktop, Podman, LXD, Incus, libvirt), which run anything as the whole
+computer; nor the servers that run what they're sent: terminals' (Rex's, iTerm2's and WezTerm's on
+macOS, WezTerm's on Linux), zellij's, Neovim's and Emacs' (on macOS their folders in your temporary
+folder aren't moved either), watchman's on macOS, and Tailscale's on Linux. So `ssh`, and git over SSH, use only the vault's keys there, and signing a commit with
 your GPG key doesn't work; nor does an X11
 program, whose display (XQuartz's) is in launchd's folder too. Nor can it reach your tmux's server
 (`/private/tmp/tmux-<uid>`), which types into your terminals: its `TMUX_TMPDIR` is its temporary

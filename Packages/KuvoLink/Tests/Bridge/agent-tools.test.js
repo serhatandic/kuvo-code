@@ -324,6 +324,23 @@ test("a client starts a session with a task, as the user's own first message", a
   assert.deepEqual(await route("POST", "kuvo/sessions", { task: "Hi.", startedBy: "ses_gone" }), { status: 404, body: { message: "There's no such conversation here." } });
 });
 
+// Its commands would write such a folder whole (what runs later, a personal folder): only you start
+// one there, never an agent.
+test("an agent never starts a session in a folder the sandbox keeps, as you can", async () => {
+  const kept = path.join(home, ".local", "bin");
+  const documents = path.join(home, "Documents");
+  fs.mkdirSync(kept, { recursive: true });
+  fs.mkdirSync(path.join(documents, "site"), { recursive: true });
+  for (const folder of [kept, "~/.local/bin", documents]) {
+    const said = await tool("start_session", { task: "Tidy it.", folder }, "ses_helper");
+    assert.deepEqual(said, { text: `${folder} is kept from commands on this machine (what runs later, a personal folder or the like). Ask the user to start it there.`, isError: true });
+  }
+  assert.equal((await route("POST", "kuvo/sessions", { task: "Tidy it.", folder: kept, startedBy: "ses_helper" })).status, 403);
+  // A project in a personal folder is the agent's to start, as one there is yours.
+  assert.equal((await tool("start_session", { task: "Tidy it.", folder: path.join(documents, "site") }, "ses_helper")).isError, false);
+  assert.equal((await route("POST", "kuvo/sessions", { task: "Tidy it.", folder: kept })).status, 200);
+});
+
 test("a client starts a session with the approval it picks: Accept Edits edits on its own, Full Access only where it's switched on, an older client's words read as the box's", async () => {
   const edits = await route("POST", "kuvo/sessions", { task: "Tidy the README.", folder: other, approval: "acceptEdits" });
   assert.equal(edits.status, 200);

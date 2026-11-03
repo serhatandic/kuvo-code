@@ -22,7 +22,7 @@
 
 import path from "node:path";
 import { MOST_FOLDERS } from "./allowed";
-import type { FencePolicy } from "./policy";
+import { escapeRegex, type FencePolicy } from "./policy";
 
 /** How many homes of its own, and folders it only reads, an agent run whole in the sandbox has (each). */
 export const AGENT_FOLDERS = 4;
@@ -51,13 +51,29 @@ const param = (name: string) => `(subpath (param ${quote(name)}))`;
 // or a worktree's repository, the agents' folders) can't be made, moved or removed, only written in.
 const GIT_GUARDED = String.raw`(((modules/.+|worktrees/[^/]+)/)?(hooks(/|$)|config(\.worktree)?$|commondir$|gitdir$)|(modules|worktrees)/[^/]+$)`;
 const AGENTS_GUARDED = String.raw`\.claude/settings(\.local)?\.json|\.mcp\.json|\.codex/(config\.toml|hooks\.json|\.env|rules(/.*)?)|\.cursor/(hooks|mcp)\.json|\.(gemini|grok)/settings\.json|\.grok/(config\.toml|sandbox\.toml|lsp\.json|(hooks|plugins|agents|workflows)(/.*)?)|\.(claude|cursor)/hooks(/.*)?|\.(claude|codex|cursor|gemini|grok)`;
-/** Every kind of write, by name. A rule on a kind by its name is checked before any on `file-write*`,
- * whatever their order, so the profile names them all wherever it carves one out of another, and
- * later rules win. (`file-write*` itself only refuses, first, any kind macOS adds later.) */
-const WRITE = "file-write-acl file-write-create file-write-data file-write-finderinfo file-write-flags file-write-mode file-write-owner file-write-setugid file-write-times file-write-unlink file-write-xattr";
+/** Every kind of write, by name, and `file-write*`. A rule on a kind by its name is checked before any
+ * on `file-write*`, whatever their order, so the profile names them all wherever it carves one out of
+ * another, and later rules win; and some writes are checked only as `file-write*` (a file's times,
+ * set by `utimes`, on macOS 27), so it's named with them. */
+const WRITE = "file-write* file-write-acl file-write-create file-write-data file-write-finderinfo file-write-flags file-write-mode file-write-owner file-write-setugid file-write-times file-write-unlink file-write-xattr";
 
 /** What's done in your home: everything a write does but unlinking (so neither deleting nor moving). */
-const HOME_WRITES = "file-write-create file-write-data file-write-flags file-write-mode file-write-times file-write-xattr";
+const HOME_WRITES = "file-write* file-write-create file-write-data file-write-flags file-write-mode file-write-times file-write-xattr";
+
+/** Folders as few regular expressions as fit the system's limit on a profile's strings (about 1 KB:
+ * longer, it can't read the profile), each a folder and all in it. */
+function chunked(folders: string[], most = 700): string[] {
+  const out: string[] = [];
+  let names: string[] = [];
+  const close = () => { if (names.length) out.push(`^(${names.join("|")})(/|$)`); names = []; };
+  for (const folder of folders) {
+    const name = escapeRegex(folder);
+    if (names.length && names.join("|").length + name.length + 1 > most) close();
+    names.push(name);
+  }
+  close();
+  return out;
+}
 
 const GUARDED = String.raw`(.*/)?(\.git$|\.git/(${GIT_GUARDED})|\.opencode(/|$)|opencode\.jsonc?$|(${AGENTS_GUARDED})$)`;
 
@@ -84,19 +100,40 @@ export function seatbeltProfile(policy: FencePolicy, options: SeatbeltOptions): 
 
   out.push(";; writes: files added and changed in your home, never deleted or moved there (but in its folder,");
   out.push(";; its repository, temporary folders, devices and tools' caches); your personal folders only take new files");
-  deny(`file-write* ${WRITE}`, subpath("/"));
+  // The walls: ~/Library, your personal folders and what runs later. The conversation's folder, its
+  // repository and what Also Allowed gives its project (the launcher's parameters) are written
+  // whole where they're inside one (a project in your Documents, `~/.config/nvim`), and around them
+  // where they hold some (your home): which, the profile works out as it's read.
+  const walls = [...(policy.homeKept ?? []), ...(policy.personal ?? []), ...policy.readOnly];
+  out.push(`(define kuvo-walls '(${walls.map(quote).join(" ")}))`);
+  out.push(`(define (kuvo-within? p k) (or (string=? p k) (and (> (string-length p) (string-length k)) (string=? (substring p 0 (+ (string-length k) 1)) (string-append k "/")))))`);
+  out.push(`(define (kuvo-in-wall? p) (define (look ws) (cond ((null? ws) #f) ((kuvo-within? p (car ws)) #t) (else (look (cdr ws))))) (look kuvo-walls))`);
+  const given = ["WORK", "GIT", ...Array.from({ length: MOST_FOLDERS }, (_, at) => `ALLOW${at}`)];
+  const allowGiven = (inWall: boolean) => {
+    for (const name of given) out.push(`(if ${inWall ? "" : "(not "}(kuvo-in-wall? (param ${quote(name)}))${inWall ? "" : ")"} (allow ${WRITE} ${param(name)}))`);
+  };
+  deny(WRITE, subpath("/"));
   // (A move takes unlinking what's moved, so with no unlink, nothing's moved either.)
   allow(HOME_WRITES, ...(policy.homeWrites ?? []).map(subpath));
+  allow(WRITE, ...policy.writable.map(subpath));
+  // What you let this project's commands write (Also Allowed) with its folder, before what follows
+  // takes back the walls, Kuvo Code's folders, git's hooks and the agents' settings in them.
+  allowGiven(false);
   deny(WRITE, ...(policy.homeKept ?? []).map(subpath));
   allow(HOME_WRITES, ...(policy.homeOpen ?? []).map(subpath));
   // A new file is made and written in one go; one that's there isn't written, truncated, replaced,
   // removed or changed in mode (each a new file's own first open still writes it).
   deny("file-write-data file-write-unlink file-write-mode file-write-flags", ...(policy.personal ?? []).map(subpath));
-  allow(WRITE, ...policy.writable.map(subpath), param("WORK"), param("GIT"));
-  // What you let this project's commands write (Also Allowed), before what follows takes back
-  // Kuvo Code's folders, git's hooks and the agents' settings in it.
-  allow(WRITE, ...Array.from({ length: MOST_FOLDERS }, (_, at) => param(`ALLOW${at}`)));
-  deny(WRITE, ...policy.readOnly.map(subpath), ...(policy.readOnlyPatterns ?? []).map(regex));
+  // (Tools' caches in ~/Library again.)
+  allow(WRITE, ...policy.writable.filter(folder => (policy.homeKept ?? []).some(kept => folder.startsWith(kept + "/"))).map(subpath));
+  // What runs later, in as few rules as the system can read (each a pattern well under its limit):
+  // and every other project's in your home too, its git hooks and settings and its agents'.
+  deny(WRITE, ...chunked(policy.readOnly).map(regex), ...(policy.readOnlyPatterns ?? []).map(regex),
+    ...(policy.homeWrites ?? []).map(home => regex(`^${escapeRegex(home)}/${GUARDED}`)));
+  // (But tools' caches inside one again, as Linux's sandbox has them: pnpm's store in its folder on
+  // your PATH.)
+  allow(WRITE, ...policy.writable.filter(folder => policy.readOnly.some(wall => folder.startsWith(wall + "/"))).map(subpath));
+  allowGiven(true);
 
   // What's in them is neither read (nor listed) nor written; a path through them is still looked up,
   // so a command can go to its own folder inside them. (A carve-out overrides a refusal only of
@@ -137,14 +174,21 @@ export function seatbeltProfile(policy: FencePolicy, options: SeatbeltOptions): 
   const holders = new Set<string>();
   for (const kept of [...policy.secrets, ...policy.readOnly, ...policy.kuvo])
     for (let at = path.dirname(kept); at !== path.dirname(at); at = path.dirname(at)) holders.add(at);
+  // (And the folders above other apps' sockets, so one isn't moved and reached by another name.)
+  for (const socket of policy.sockets ?? [])
+    for (let at = path.dirname(socket); at !== path.dirname(at); at = path.dirname(at)) holders.add(at);
   const held = [...[...holders].map(folder => `(literal ${quote(folder)})`), ...(policy.patternFolders ?? []).map(regex)];
   deny("file-write-unlink file-clone", ...held);
   // (Nor closed off by its mode or flags: your home, ~/.ssh, a folder of secrets.)
   deny("file-write-mode file-write-flags", ...held);
   deny("file-write-create", ...held.map(folder => `(require-all ${folder} (vnode-type SYMLINK))`));
-  // Nor your agents' sockets or their folders in the temporary folders commands write (moved, one
-  // would be reached by a name the rule below doesn't know).
-  deny("file-write-unlink", ...(policy.socketPatterns ?? []).map(regex),
+  // Nor other apps' sockets, the folders that hold them, or your agents' sockets and their folders
+  // in the temporary folders commands write: moved, one would be reached by a name the rules below
+  // don't know. (The other files in those folders, an app's settings saved by a new name and
+  // renamed into place, and a command's own files by such a name, are still theirs to change.)
+  deny("file-write-unlink", ...(policy.sockets ?? []).flatMap(socket => [`(literal ${quote(socket)})`,
+    `(require-all ${subpath(socket)} (require-any (vnode-type SOCKET) (vnode-type DIRECTORY)))`]),
+    ...(policy.socketPatterns ?? []).map(pattern => `(require-all ${regex(pattern)} (vnode-type SOCKET))`),
     ...(policy.socketFolders ?? []).map(folder => `(require-all ${regex(folder)} (vnode-type DIRECTORY))`));
   deny(WRITE, under("WORK_RE", "/" + GUARDED), under("GIT_RE", "/" + GIT_GUARDED),
     ...Array.from({ length: MOST_FOLDERS }, (_, at) => under(`ALLOW${at}_RE`, "/" + GUARDED)));
@@ -178,5 +222,8 @@ export function seatbeltProfile(policy: FencePolicy, options: SeatbeltOptions): 
   deny("mach-lookup", `(global-name "com.apple.coreservices.launchservicesd")`, `(global-name-prefix "com.apple.lsd.")`,
     `(global-name "com.apple.coreservices.quarantine-resolver")`);
   denyAll("appleevent-send");
+  // Nor apps' and the system's preferences, written through cfprefsd (`defaults write`), outside the
+  // files the rules above keep: launchd's and login items' among them. Reading them stays.
+  denyAll("user-preference-write");
   return out.join("\n") + "\n";
 }

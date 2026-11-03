@@ -19,7 +19,7 @@ import { accountHome, BOTS, BRIDGE_FILE, CHATS, ENGINE_CONFIG, ENGINE_FILE, K, R
 import { tellLauncher } from "./allowed";
 import { agentShellScript, agentsNote, launcherScript, pluginScript, type FencePlaces } from "./files";
 import { LANDLOCK_RUNNER, landlockPolicy, ownNamespace, ownNamespaceLater, UNSHARE } from "./landlock";
-import { appTemporary, fencePolicy, realish, sandboxCaches } from "./policy";
+import { appTemporary, fencePolicy, notRepositories, realish, sandboxCaches } from "./policy";
 import { seatbeltProfile } from "./seatbelt";
 
 export interface FenceState {
@@ -267,8 +267,8 @@ function writeProfiles(): void {
   // the same rules in its own terms.)
   const files: [string, string][] = platform === "darwin"
     ? [["project.sb", seatbeltProfile(policy, { inside: false })], ["inside.sb", seatbeltProfile(policy, { inside: true })],
-        ["project-agent.sb", seatbeltProfile(policy, { inside: false, agent: true })], ["inside-agent.sb", seatbeltProfile(policy, { inside: true, agent: true })], ["policy.json", landlockPolicy(policy)]]
-    : [["policy.json", landlockPolicy(policy)], ["runtime", runtime() ?? ""], ["namespace", namespace ?? "-"], ["sockets", (policy.sockets ?? []).map(each => each + "\n").join("")]];
+        ["project-agent.sb", seatbeltProfile(policy, { inside: false, agent: true })], ["inside-agent.sb", seatbeltProfile(policy, { inside: true, agent: true })], ["policy.json", landlockPolicy(policy)], ["not-repositories", notRepositories(policy)]]
+    : [["policy.json", landlockPolicy(policy)], ["not-repositories", notRepositories(policy)], ["runtime", runtime() ?? ""], ["namespace", namespace ?? "-"], ["sockets", (policy.sockets ?? []).map(each => each + "\n").join("")]];
   if (platform === "linux") fs.mkdirSync(NAMESPACE_FOLDER, { recursive: true, mode: 0o700 });
   const text = files.map(([name, body]) => name + body).join("");
   if (text === lastProfiles) return;

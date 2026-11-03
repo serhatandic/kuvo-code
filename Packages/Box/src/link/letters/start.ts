@@ -12,6 +12,7 @@ import { asked, call, engineGet } from "../engine/client";
 import { writtenByYou } from "../engine/queue";
 import { messageID } from "../engine/sessions";
 import { BOTS, CHATS, HERE, homeFolder } from "../home";
+import { keptFromWork } from "../fence/policy";
 import { changeProjects, PROJECTS_FILE, readProjects } from "../areas/projects";
 import { readWorktrees } from "../areas/worktree-records";
 import { answerWorktrees, settleNewSession } from "../areas/worktrees";
@@ -227,6 +228,8 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
     let isFolder = false;
     try { isFolder = fs.statSync(full).isDirectory(); } catch {}
     if (!path.isAbsolute(full) || !isFolder) return no(400, `${written} isn't a folder on ${HERE}. Give a full path to one.`);
+    // (Its commands would write it whole: only you start one there.)
+    if (by && keptFromWork(full)) return no(403, `${written} is kept from commands on ${HERE} (what runs later, a personal folder or the like). Ask the user to start it there.`);
     folder = isBotFolder(full) ? CHATS : full;
   }
   if (!folder) return no(400, "Give the folder it works in (folder), as a full path.");

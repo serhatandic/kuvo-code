@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { agentShellScript, launcherScript, type FencePlaces } from "../../../src/link/fence/files"
 import { LANDLOCK_RUNNER, landlockPolicy, ownNamespace } from "../../../src/link/fence/landlock"
-import type { FencePolicy } from "../../../src/link/fence/policy"
+import { type FencePolicy, notRepositories } from "../../../src/link/fence/policy"
 import { seatbeltProfile } from "../../../src/link/fence/seatbelt"
 
 /**
@@ -28,6 +28,7 @@ export function realFence(kuvo: string, sockets: string[] = [], more: Partial<Fe
   write(places.launcher, launcherScript(places), 0o700)
   write(join(folder, "shell", "run"), agentShellScript(places), 0o700)
   write(join(folder, "policy.json"), landlockPolicy(policy))
+  write(join(folder, "not-repositories"), notRepositories(policy))
   if (platform === "darwin") for (const inside of [false, true]) for (const agent of [false, true]) write(join(folder, `${inside ? "inside" : "project"}${agent ? "-agent" : ""}.sb`), seatbeltProfile(policy, { inside, agent }))
   else {
     write(places.runner, LANDLOCK_RUNNER, 0o700)

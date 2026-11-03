@@ -8,9 +8,12 @@
 // folder (and that folder's git repository, but never what git runs on its own: hooks, its
 // config), its own temporary folder, the system's, devices and tools' caches. It never writes what
 // runs later by itself, outside the sandbox (your shell's start-up files, the folders on your PATH,
-// git's and the coding agents' settings, ~/Library on a Mac but its caches), and your personal
+// git's and the coding agents' settings, ~/Library on a Mac but its caches, logs, Xcode's
+// `Developer` and iCloud Drive, nor, on a Mac, preferences), and your personal
 // folders (Documents, Desktop…) only take new files on a Mac, and are only read on Linux, where
-// Landlock can't tell a new file from an old one. The conversation's folder, its repository and its
+// Landlock can't tell a new file from an old one. A conversation whose folder is inside one of
+// those (a project in Documents, `~/.config/nvim`) writes its own folder all the same; one whose
+// folder holds them (your home) doesn't write them. The conversation's folder, its repository and its
 // temporary folder aren't known until a command runs, so each sandbox takes them then (WORK, GIT
 // and TMP): from the engine's own record of the conversation's folder, never from the command.
 
@@ -76,8 +79,10 @@ export interface FencePolicy {
 
 // Tools' caches, written by installs and builds in any project.
 const CACHES = [".npm", ".bun", ".cache", ".cargo", ".rustup", ".swiftpm", ".gradle", ".m2", "go/pkg", ".pnpm-store",
-  ".yarn", ".node-gyp", ".local/state", ".deno", ".pub-cache", ".nuget/packages", ".dotnet"];
-const MAC_CACHES = ["Library/pnpm/store", "Library/Caches", "Library/Developer"];
+  ".yarn", ".node-gyp", ".local/state", ".deno", ".pub-cache", ".nuget/packages", ".dotnet", ".cocoapods", ".expo", ".sbt",
+  ".ivy2", ".android"];
+// (Jupyter's kernels' connection files, which it makes and removes as each starts and stops.)
+const MAC_CACHES = ["Library/pnpm/store", "Library/Caches", "Library/Developer", "Library/Jupyter/runtime"];
 const LINUX_CACHES = [".local/share/pnpm/store"];
 // In them, what you run later, outside the sandbox: installed programs (on your PATH), tools'
 // settings that name programs, scripts they run as they start, packages npx runs as they are, and
@@ -85,7 +90,7 @@ const LINUX_CACHES = [".local/share/pnpm/store"];
 const RUNS_LATER = [".cargo/bin", ".cargo/config", ".cargo/config.toml", ".cargo/env", ".cargo/env.fish", ".cargo/env.nu",
   ".bun/bin", ".bun/install/global", ".bun/_bun", ".deno/bin", ".deno/env", ".deno/env.fish",
   ".dotnet/tools", ".gradle/init.d", ".gradle/init.gradle", ".gradle/init.gradle.kts", ".gradle/gradle.properties",
-  ".m2/settings.xml", ".npm/_npx", ".rustup/settings.toml", ".rustup/toolchains", ".pub-cache/bin", "go/bin"];
+  ".m2/settings.xml", ".npm/_npx", ".rustup/settings.toml", ".rustup/toolchains", ".pub-cache/bin", "go/bin", ".yarn/bin"];
 // In your cache folder (`~/.cache`, and your own `XDG_CACHE_HOME`), tools' caches whole: pre-commit's
 // hooks, what `pnpm dlx` and uvx fetched, and the pnpm and yarn corepack fetched run from them, and
 // what's installed from them is linked to their files. (pnpm's own on a Mac is in `Library/Caches`.)
@@ -121,20 +126,40 @@ const HOME_RUNS_LATER = [".profile", ".bashrc", ".bash_profile", ".bash_login", 
   ".config/JetBrains", ".config/zed", ".config/helix", ".vim", ".vimrc", ".config/nvim", ".local/share/nvim", ".emacs", ".emacs.d", ".config/emacs",
   ".bunfig.toml", ".config/.bunfig.toml", ".docker/cli-plugins", ".terraformrc", ".config/gh", ".local/share/gh",
   ".config/pip", ".pip", ".pydistutils.cfg", ".condarc", ".gemrc", ".irbrc", ".pryrc", ".yarnrc", ".gnupg", ".wgetrc", ".curlrc",
-  ".hgrc", ".config/hg"];
+  ".hgrc", ".config/hg",
+  // Terminals' settings, which name what they run; debuggers' and REPLs' start-up files.
+  ".wezterm.lua", ".config/wezterm", ".config/kitty", ".config/alacritty", ".alacritty.toml", ".alacritty.yml", ".config/ghostty",
+  ".config/zellij", ".tmux", ".lldbinit", ".gdbinit", ".config/gdb", ".psqlrc", ".Rprofile", ".ipython", ".jupyter",
+  ".local/share/jupyter/kernels", ".julia/config",
+  // More shells' plugin managers and dotfile managers, which write the files above.
+  ".zprezto", ".local/share/zinit", ".local/share/chezmoi", ".config/chezmoi",
+  // Programs on your PATH by a link, where their files are (Claude Code's, Cursor's agent, uv's and
+  // pipx's tools and Pythons), installed apps, and version managers'.
+  ".local/share/claude", ".local/share/cursor-agent", ".local/share/uv", ".local/share/pipx", ".local/pipx", "Applications",
+  ".rvm", ".conda", ".homebrew", ".config/homebrew",
+  // Tools' settings that name programs or where packages come from.
+  ".config/go", ".config/uv", ".config/pnpm", ".config/containers",
+  // Other editors and agents.
+  ".kiro", ".qwen", ".codeium", ".config/raycast",
+  // Docker-like VMs' own settings and disks.
+  ".orbstack", ".colima", ".lima", ".rd"];
 // (On Linux, Python's user site is in `.local/lib`, and the desktop and systemd start what's in
 // theirs as you log in.)
 const LINUX_RUNS_LATER = [".local/lib", ".config/systemd", ".local/share/systemd", ".config/autostart", ".config/environment.d",
-  ".pam_environment", ".xprofile", ".xinitrc", ".xsession", ".xsessionrc", ".config/plasma-workspace", ".local/share/applications"];
+  ".pam_environment", ".xprofile", ".xinitrc", ".xsession", ".xsessionrc", ".config/plasma-workspace", ".local/share/applications",
+  ".config/user-dirs.dirs"];
 // (On a Mac, ~/Library is kept whole, but for its caches, logs and iCloud Drive: launchd's agents,
 // login items, Python's user site, frameworks dyld falls back to, apps' plugins and preferences are
 // in it. And the tools that run what their settings name as you use your Mac.)
 const MAC_HOME_KEPT = ["Library"];
-const MAC_HOME_OPEN = ["Library/Logs", "Library/Mobile Documents"];
+// (Xcode's provisioning profiles too, which it adds as it signs a build.)
+const MAC_HOME_OPEN = ["Library/Logs", "Library/Mobile Documents", "Library/MobileDevice/Provisioning Profiles"];
 const MAC_HOME_RUNS_LATER = [".hammerspoon", ".config/karabiner", ".config/skhd", ".skhdrc", ".yabairc", ".config/yabai",
   ".aerospace.toml", ".config/aerospace", ".config/sketchybar"];
-// zsh's completion dumps, which `compinit` sources (named for the host and version).
-const HOME_RUNS_LATER_PREFIXES = [".zcompdump"];
+// zsh's completion dumps, which `compinit` sources (named for the host and version), and every
+// shell's, git's, Emacs', iTerm2's and fzf's start-up files by any name (`.zshrc.local`,
+// `.gitconfig-work`, `.iterm2_shell_integration.zsh`, `.fzf.zsh`).
+const HOME_RUNS_LATER_PREFIXES = [".zcompdump", ".zsh", ".bash", ".gitconfig", ".emacs", ".iterm2", ".fzf"];
 
 // Your personal folders on a Mac (Linux's are where `~/.config/user-dirs.dirs` says).
 const MAC_PERSONAL = ["Desktop", "Documents", "Downloads", "Pictures", "Movies", "Music", "Library/Mobile Documents"];
@@ -164,42 +189,95 @@ function startingWith(home: string, prefixes: string[]): string[] {
 /**
  * The sockets SSH's settings name (`ControlPath`'s shared connections, `IdentityAgent`'s agents),
  * which sign in to your servers and run what they're asked there: a folder of their own (to hide
- * whole), a socket (by its path), or, where they're named by their host in a folder that holds
- * more (`~/.ssh/cm-%C`), the start of their names (`prefixes`).
+ * whole), a socket (by its path), or, where they're named by their host (`%C`, `%h`…) in a folder
+ * that holds more (`~/.cache/ssh-%C`, `/tmp/%r@%h:%p`), the names they can have, each token any
+ * name's part (`globs`: `~/.cache/ssh-*`, `/tmp/*@*:*`). Your settings, the files they include, and
+ * the system's (`/etc/ssh/ssh_config`).
  */
-export function sshSockets(home: string): { paths: string[]; prefixes: string[] } {
+export function sshSockets(home: string, system = "/etc/ssh/ssh_config"): { paths: string[]; globs: string[] } {
   const paths = new Set<string>();
-  const prefixes = new Set<string>();
-  const files = [path.join(home, ".ssh", "config")];
-  try { for (const name of fs.readdirSync(path.join(home, ".ssh", "config.d"))) files.push(path.join(home, ".ssh", "config.d", name)); } catch {}
-  const shared = new Set([home, path.join(home, ".ssh"), "/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp"].map(each => path.resolve(each)));
-  for (const file of files) {
+  const globs = new Set<string>();
+  // Folders that hold more than SSH's sockets, never hidden whole: your home and those above it,
+  // `~/.ssh`, the temporary folders, and the folders tools keep theirs in.
+  const shared = new Set([home, ...[".ssh", ".cache", ".config", ".local", ".local/share", ".local/state", "Library", "Library/Caches"].map(name => path.join(home, name)),
+    "/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp", os.tmpdir(), `/run/user/${os.userInfo().uid}`].map(each => path.resolve(each)));
+  const holdsMore = (folder: string) => shared.has(folder) || folder === "/" || home.startsWith(folder + "/");
+  const expand = (value: string): string | null => {
+    let unknown = false;
+    const out = value.replace(/^~(?=\/|$)/, home).replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_, name: string) => {
+      const set = name === "HOME" ? home : process.env[name];
+      if (!set) unknown = true;
+      return set ?? "";
+    });
+    return unknown ? null : out;
+  };
+  const seen = new Set<string>();
+  const read = (file: string, relative: string, depth: number) => {
+    if (depth > 8 || seen.has(file)) return;
+    seen.add(file);
     let text = "";
-    try { text = fs.readFileSync(file, "utf8"); } catch { continue; }
+    try { text = fs.readFileSync(file, "utf8"); } catch { return; }
     for (const line of text.split("\n")) {
+      const included = line.match(/^\s*Include\s*(?:=\s*|\s+)(.+)$/i);
+      if (included) {
+        for (const word of included[1].trim().split(/\s+/)) {
+          const named = expand(word.replace(/^"|"$/g, ""));
+          if (named) for (const each of matching(path.isAbsolute(named) ? named : path.join(relative, named))) read(each, relative, depth + 1);
+        }
+        continue;
+      }
       const found = line.match(/^\s*(ControlPath|IdentityAgent)\s*(?:=\s*|\s+)("[^"]*"|\S+)/i);
       if (!found) continue;
-      let value = found[2].replace(/^"|"$/g, "");
-      if (!value || /^(none|SSH_AUTH_SOCK)$/i.test(value) || value.startsWith("$")) continue;
-      value = value.replace(/^~(?=\/|$)/, home).replace(/%d/g, home).replace(/%%/g, "\0");
+      const raw = found[2].replace(/^"|"$/g, "");
+      if (!raw || /^(none|SSH_AUTH_SOCK|\$SSH_AUTH_SOCK)$/i.test(raw)) continue;
+      const expanded = expand(raw);
+      if (expanded === null) continue;
+      const value = expanded.replace(/%d/g, home).replace(/%%/g, "\0");
       if (!path.isAbsolute(value)) continue;
-      const token = value.indexOf("%");
-      if (token < 0) { paths.add(path.resolve(value.replace(/\0/g, "%"))); continue; }
-      const before = value.slice(0, token).replace(/\0/g, "%");
-      const folder = before.endsWith("/") ? path.resolve(before) : path.dirname(before);
-      // A folder that holds only them is hidden whole; in one that holds more, the names they start with.
-      if (shared.has(folder) || before.endsWith("/") && shared.has(folder)) prefixes.add(before.endsWith("/") ? folder + "/" : before);
-      else paths.add(folder);
+      if (!value.includes("%")) { paths.add(path.resolve(value.replace(/\0/g, "%"))); continue; }
+      // (A `*` or `?` of its own can't be told from the tokens': none is made of it.)
+      if (/[*?[\]]/.test(value)) continue;
+      const glob = path.resolve(value.replace(/%./g, "*").replace(/\*+/g, "*").replace(/\0/g, "%"));
+      // Named by a token straight away in a folder that holds only them: the folder, whole. Anywhere
+      // else, the names they can have.
+      const folder = path.dirname(glob);
+      if (!folder.includes("*") && path.basename(glob).startsWith("*") && !holdsMore(folder)) paths.add(folder);
+      else globs.add(glob);
     }
+  };
+  read(path.join(home, ".ssh", "config"), path.join(home, ".ssh"), 0);
+  try { for (const name of fs.readdirSync(path.join(home, ".ssh", "config.d"))) read(path.join(home, ".ssh", "config.d", name), path.join(home, ".ssh"), 1); } catch {}
+  read(system, path.dirname(system), 0);
+  return { paths: [...paths], globs: [...globs] };
+}
+
+/** A name with `*` in it (`sshSockets`' globs) as a regular expression over whole paths, the folders
+ * it's in as the system has them. */
+function globPattern(glob: string): string {
+  const folder = path.dirname(glob);
+  const where = folder.includes("*") ? escapeRegex(folder).replace(/\\\*/g, "[^/]*") : escapeRegex(realish(folder));
+  return `^${where}/${escapeRegex(path.basename(glob)).replace(/\\\*/g, "[^/]*")}$`;
+}
+
+/** The files a path with `*` and `?` in its last name names (as SSH's `Include` reads it). */
+function matching(pattern: string): string[] {
+  if (!/[*?]/.test(pattern)) return [pattern];
+  // A name at a time, in each folder the ones before it lead to.
+  let found = ["/"];
+  for (const name of pattern.split("/").filter(Boolean)) {
+    if (!/[*?]/.test(name)) { found = found.map(at => path.join(at, name)); continue; }
+    const like = new RegExp(`^${name.split("").map(char => (char === "*" ? ".*" : char === "?" ? "." : escapeRegex(char))).join("")}$`);
+    found = found.flatMap(at => { try { return fs.readdirSync(at).filter(each => like.test(each) && (name.startsWith(".") || !each.startsWith("."))).sort().map(each => path.join(at, each)); } catch { return []; } });
   }
-  return { paths: [...paths], prefixes: [...prefixes] };
+  return found;
 }
 
 // Your secrets (each a folder or a file in your home folder).
 const SECRETS = [".aws", ".config/gcloud", ".azure", ".kube", ".docker/config.json", ".oci", ".config/doctl",
   ".terraform.d/credentials.tfrc.json", ".netrc", ".npmrc", ".yarnrc.yml", ".pypirc", ".cargo/credentials.toml",
   ".cargo/credentials", ".gem/credentials", ".git-credentials", ".gnupg/private-keys-v1.d", ".gnupg/secring.gpg",
-  ".password-store", ".config/op", ".config/hub"];
+  ".password-store", ".config/op", ".config/hub", ".pgpass", ".my.cnf", ".android/adbkey", ".composer/auth.json",
+  ".config/composer/auth.json", ".local/share/opencode/auth.json", ".config/stripe", ".wakatime.cfg"];
 const MAC_SECRETS = ["Library/Application Support/Google/Chrome", "Library/Application Support/BraveSoftware",
   "Library/Application Support/Arc", "Library/Application Support/Firefox", "Library/Application Support/Microsoft Edge",
   "Library/Safari", "Library/Cookies", "Library/Application Support/1Password", "Library/Group Containers/2BUA8C4S2C.com.1password",
@@ -286,7 +364,9 @@ export function fencePolicy(ports: number[] = []): FencePolicy {
   const inHome = (names: string[]) => names.map(name => realish(path.join(home, name)));
   // And what's kept from commands in the home HOME names, where that isn't your account's, as tools
   // run from it look there.
-  const named = realish(process.env.HOME || home);
+  // (Never one that isn't a home: not a relative path, nor `/` or a folder above yours.)
+  const given = process.env.HOME && path.isAbsolute(process.env.HOME) ? realish(process.env.HOME) : home;
+  const named = given === "/" || home.startsWith(given + "/") ? home : given;
   const homes = named === home ? [home] : [home, named];
   const inHomes = (names: string[]) => homes.flatMap(each => names.map(name => realish(path.join(each, name))));
   // A machine's folder, and the real one if this is a test's own.
@@ -300,13 +380,20 @@ export function fencePolicy(ports: number[] = []): FencePolicy {
   const yourCaches = [realish(path.join(home, ".cache"))];
   if (ownCache && path.isAbsolute(ownCache) && !kuvo.some(folder => realish(ownCache) === folder || realish(ownCache).startsWith(folder + "/"))) yourCaches.push(realish(ownCache));
   const runsLater = [...inHomes(RUNS_LATER), ...new Set(yourCaches.flatMap(folder => [...TOOL_CACHES, ...SHELL_CACHES(accountName())].map(name => path.join(folder, name))))];
-  const homeRunsLater = inHomes(HOME_RUNS_LATER);
+  // And the folders on your PATH in a home, whatever they're named (but a home itself, or Kuvo
+  // Code's own folders), each that's there.
+  const onPath = [...new Set((process.env.PATH ?? "").split(":").filter(each => path.isAbsolute(each)).map(realish))]
+    .filter(folder => homes.some(each => folder.startsWith(each + "/")) && !kuvo.some(each => folder === each || folder.startsWith(each + "/")))
+    .filter(folder => { try { return fs.statSync(folder).isDirectory(); } catch { return false; } });
+  const homeRunsLater = [...new Set([...inHomes(HOME_RUNS_LATER), ...onPath])];
   const ssh = homes.map(each => sshSockets(each));
   const sshPaths = [...new Set(ssh.flatMap(each => each.paths).map(realish))];
-  const sshPrefixes = [...new Set(ssh.flatMap(each => each.prefixes))];
+  const sshGlobs = [...new Set(ssh.flatMap(each => each.globs))];
   if (process.platform === "darwin") {
     return {
-      home, kuvo, kuvoReadable, readOnly: [...runsLater, ...inHomes(MAC_RUNS_LATER), ...homeRunsLater, ...inHomes(MAC_HOME_RUNS_LATER)], ports, commandCaches,
+      // (Those there now by the names below too, so a conversation in one still writes in it.)
+      home, kuvo, kuvoReadable, readOnly: [...runsLater, ...inHomes(MAC_RUNS_LATER), ...homeRunsLater, ...inHomes(MAC_HOME_RUNS_LATER),
+        ...homes.flatMap(each => startingWith(each, HOME_RUNS_LATER_PREFIXES))], ports, commandCaches,
       homeWrites: homes, homeKept: inHomes(MAC_HOME_KEPT), homeOpen: inHomes(MAC_HOME_OPEN), personal: inHomes(MAC_PERSONAL),
       // bunx's packages, in your temporary folder (`T/bunx-<uid>-<package>`), which it runs again
       // as they are (a command's own bunx is in its own temporary folder); and p10k's files in your
@@ -323,8 +410,12 @@ export function fencePolicy(ports: number[] = []): FencePolicy {
       writable: ["/private/tmp", "/private/var/tmp", "/dev", ...userTemporary(), ...inHome([...CACHES, ...MAC_CACHES])],
       sockets: [...inHome([".codex/ipc", ".grok", ".ssh/agent", "Library/Group Containers/2BUA8C4S2C.com.1password/t",
         "Library/Containers/com.maxgoedjen.Secretive.SecretAgent/Data", ".bitwarden-ssh-agent.sock",
-        "Library/Containers/com.bitwarden.desktop/Data"]),
+        "Library/Containers/com.bitwarden.desktop/Data",
+        // Terminals' own, which open tabs and type into them (Rex's, iTerm2's, WezTerm's).
+        "Library/Application Support/rex", "Library/Application Support/iTerm2/private", ".local/share/wezterm"]),
         "/opt/homebrew/var/run/yubikey-agent.sock", "/usr/local/var/run/yubikey-agent.sock",
+        // watchman's, which runs the triggers it's given.
+        "/opt/homebrew/var/run/watchman", "/usr/local/var/run/watchman",
         // Docker's and the like, which run anything as the whole computer (a container that mounts
         // your home writes in it), wherever their apps keep them.
         ...inHome([".docker/run", ".orbstack/run", ".colima", ".lima", ".rd", ".local/share/containers/podman/machine",
@@ -346,9 +437,12 @@ export function fencePolicy(ports: number[] = []): FencePolicy {
         `^/private/tmp/tmux-${os.userInfo().uid}/`,
         // Podman's machine's, in your temporary folder; and SSH's shared connections named by host.
         "^/private/var/folders/[^/]+/[^/]+/T/podman/",
-        ...sshPrefixes.map(prefix => `^${escapeRegex(realish(prefix.endsWith("/") ? prefix.slice(0, -1) : prefix))}${prefix.endsWith("/") ? "/" : ""}`),
+        // Your editors' and zellij's servers, which run what they're sent, in your temporary folder.
+        "^/private/var/folders/[^/]+/[^/]+/T/(zellij-|emacs[0-9]+/|nvim\\.)",
+        ...sshGlobs.map(globPattern),
       ],
-      socketFolders: [`^/private/tmp/tmux-${os.userInfo().uid}$`, "^/private/tmp/com\\.apple\\.launchd\\.[^/]+$", "^/private/tmp/ssh-[^/]+$", "^/private/var/folders/[^/]+/[^/]+/T/ssh-[^/]+$"],
+      socketFolders: [`^/private/tmp/tmux-${os.userInfo().uid}$`, "^/private/tmp/com\\.apple\\.launchd\\.[^/]+$", "^/private/tmp/ssh-[^/]+$",
+        "^/private/var/folders/[^/]+/[^/]+/T/(ssh-[^/]+|zellij-[^/]+|emacs[0-9]+|nvim\\.[^/]+|podman)$"],
       secrets: [...inHomes([...SECRETS, ...MAC_SECRETS]), ...keychainDaemons(home).map(realish), ...homes.flatMap(each => [...sshKeys(each), ...ghHosts(each)]).map(realish)],
     };
   }
@@ -360,16 +454,18 @@ export function fencePolicy(ports: number[] = []): FencePolicy {
     writable: ["/tmp", "/var/tmp", "/dev", "/dev/shm", ...inHome([...CACHES, ...LINUX_CACHES])],
     // (Hidden in each command's namespace, beside your session's own: fence/landlock.ts, HIDE.)
     sockets: [...inHome([".grok/leader.sock", ".ssh/agent", ".1password/agent.sock", ".bitwarden-ssh-agent.sock",
-      ".gnupg/S.gpg-agent", ".gnupg/S.gpg-agent.ssh", ".gnupg/S.scdaemon"]),
+      ".gnupg/S.gpg-agent", ".gnupg/S.gpg-agent.ssh", ".gnupg/S.scdaemon", ".local/share/wezterm"]),
+      // zellij's server, and Tailscale's, which changes this computer's network and SSH.
+      `/tmp/zellij-${os.userInfo().uid}`, ...[...new Set(["/var/run/tailscale/tailscaled.sock", "/run/tailscale/tailscaled.sock"].map(realish))],
       ...(process.env.SSH_AUTH_SOCK && path.isAbsolute(process.env.SSH_AUTH_SOCK) ? [process.env.SSH_AUTH_SOCK] : []),
       // Docker's and the like, which run anything as the whole computer (rootless ones are in your
       // session's folder, hidden whole).
       ...[...new Set(["/var/run/docker.sock", "/run/docker.sock", "/run/podman/podman.sock", "/var/snap/lxd/common/lxd/unix.socket",
         "/var/lib/lxd/unix.socket", "/var/lib/incus/unix.socket", "/run/incus/unix.socket", "/var/run/libvirt/libvirt-sock",
-        "/run/libvirt/libvirt-sock"].map(realish))], ...inHome([".docker/run"]),
-      // SSH's shared connections and agents your settings name; those named by host, by the start of
-      // their names (each that's there as a command starts).
-      ...sshPaths, ...sshPrefixes.map(prefix => prefix + "*")],
+        "/run/libvirt/libvirt-sock"].map(realish))], ...inHome([".docker/run", ".colima", ".lima"]),
+      // SSH's shared connections and agents your settings name; those named by host, by the names
+      // they can have (each that's there as a command starts).
+      ...sshPaths, ...sshGlobs],
     secrets: [...inHomes([...SECRETS, ...LINUX_SECRETS]), ...homes.flatMap(each => [...sshKeys(each), ...ghHosts(each)])],
   };
 }
@@ -385,6 +481,31 @@ function userTemporary(): string[] {
 
 /** A path as the system has it, through symlinks (`/tmp` is `/private/tmp` on macOS), as the
  * sandbox compares them: its deepest folder that's there resolved, the rest as it's named. */
+/** Where a conversation's git repository is never taken to be, as `case` patterns a line: your
+ * homes and the folders above them, your personal folders and what's in them. */
+export function notRepositories(policy: FencePolicy): string {
+  const lines = new Set<string>();
+  for (const home of policy.homeWrites ?? [policy.home])
+    for (let at = home; ; at = path.dirname(at)) { lines.add(at); if (at === path.dirname(at)) break; }
+  for (const folder of policy.personal ?? []) { lines.add(folder); lines.add(folder + "/*"); }
+  // (A name with a pattern's own characters in it is matched as it's written, or not at all.)
+  return [...lines].filter(line => !/[\[?\\]|\*(?!$)/.test(line)).map(line => line + "\n").join("");
+}
+
+/** Whether a folder is one the walls keep from commands, as a conversation's own folder would write
+ * it whole: inside what runs later or `~/Library`, a personal folder itself, or a folder on PATH
+ * outside your home (or one holding it). Only you start a conversation there, never an agent. */
+export function keptFromWork(folder: string, policy: FencePolicy = fencePolicy()): boolean {
+  const at = realish(folder);
+  const inside = (wall: string) => at === wall || at.startsWith(wall + "/");
+  if ([...policy.readOnly, ...(policy.homeKept ?? [])].some(inside)) return true;
+  if ((policy.personal ?? []).includes(at)) return true;
+  const homes = (policy.homeWrites ?? [policy.home]);
+  const onPath = (process.env.PATH ?? "").split(":").filter(each => path.isAbsolute(each)).map(realish)
+    .filter(each => !homes.some(home => each === home || each.startsWith(home + "/")));
+  return onPath.some(each => inside(each) || each.startsWith(at === "/" ? "/" : at + "/"));
+}
+
 export function realish(where: string): string {
   const full = path.resolve(where);
   for (let at = full, rest = ""; ; rest = path.join(path.basename(at), rest), at = path.dirname(at)) {
