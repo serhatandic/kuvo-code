@@ -10,20 +10,13 @@ struct ApprovalBar: View {
     private var held: [ReviewDecisions.Decision] { model.unseenHeld }
 
     var body: some View {
-        // In a narrow window the buttons go under the words rather than squeezing them.
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 10) {
-                words
-                Spacer(minLength: 8)
-                buttons
-            }
-            VStack(alignment: .leading, spacing: 8) {
-                words
-                HStack(spacing: 8) {
-                    Spacer(minLength: 0)
-                    buttons
-                }
-            }
+        // The buttons keep their size; in a narrow window the command shortens in the middle
+        // and the pause's words wrap.
+        HStack(spacing: 10) {
+            words
+            Spacer(minLength: 8)
+            HStack(spacing: 8) { buttons }
+                .fixedSize()
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -113,6 +106,17 @@ struct DecisionsView: View {
                     }
                     .frame(maxHeight: 440)
                 }
+            } else if model.decisionsUnread {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Couldn’t reach this conversation’s computer to read them.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Try Again") { model.readDecisions() }
+                        .controlSize(.small)
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 16)
             } else {
                 Spinner(size: 13)
                     .frame(maxWidth: .infinity)

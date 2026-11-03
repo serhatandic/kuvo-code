@@ -27,6 +27,8 @@ struct ReviewDecisions: Decodable, Equatable {
     }
     var decisions: [Decision]
     var paused: Double?
+    /// When you last looked at them, on any client: what's held back after it is news.
+    var seen: Double?
 
     /// The latest first, as Decisions lists them.
     var latestFirst: [Decision] { decisions.reversed() }
@@ -38,13 +40,13 @@ extension SessionModel {
     private var decisionsRoute: String { "kuvo/sessions/\(id)/decisions" }
 
     /// Reads its approval as its box shows it now. Quietly keeps what it had where its box can't
-    /// say (an older box: what its rules say stands).
+    /// say (an older box: what its rules say stands). Not while a pick is on its way: what it
+    /// brings may be from before the box took it.
     func readApproval() async {
-        guard let box = box() else { return }
+        guard approvalsPending == 0, let box = box() else { return }
         let asked = approvalChanges
         guard let shown = try? await box.value(ApprovalShown.self, "GET", approvalRoute) else { return }
-        // One picked while this was on its way is newer.
-        guard asked == approvalChanges else { return }
+        guard asked == approvalChanges, approvalsPending == 0 else { return }
         approvalShown = shown
     }
 
@@ -52,7 +54,12 @@ extension SessionModel {
     /// changed meanwhile, it reads once more: what it brought may be older than what's there.
     func readDecisions() {
         decisionsAsked += 1
-        guard decisionsRead == nil, let box = box() else { return }
+        guard decisionsRead == nil else { return }
+        guard let box = box() else {
+            decisionsUnread = decisions == nil
+            return
+        }
+        decisionsUnread = false
         decisionsRead = Task { [weak self] in
             while let self {
                 let asked = decisionsAsked
@@ -60,6 +67,7 @@ extension SessionModel {
                 if asked != decisionsAsked { continue }
                 decisionsRead = nil
                 if let read, decisions != read { decisions = read }
+                decisionsUnread = decisions == nil
                 return
             }
         }
@@ -67,34 +75,61 @@ extension SessionModel {
 
     /// Sets how much its agent does on its own, on its box. Full Access not confirmed on its
     /// computer yet: the composer asks (`confirmsFullAccess`), and `confirmFullAccess` sets it.
+    /// Picks quickly one after another: the last one's answer is what shows, and once they're all
+    /// answered it's read again, as the box may have taken them in another order.
     func setApproval(_ approval: ToolApproval) {
         guard canReach, let box = box() else { return }
+        let option = approvalShown?.option(approval)
+        if option?.unavailable?.reason == "bot" { return }
+        if option?.unavailable?.reason == "fullAccessOff" {
+            confirmsFullAccess = true
+            return
+        }
         approvalChanges += 1
+        approvalsPending += 1
+        let pick = approvalChanges
         let before = approvalShown
         if var shown = approvalShown { shown.approval = approval; approvalShown = shown }
-        ToolApproval.lastPicked = approval
         Task {
+            var latest: Bool { pick == approvalChanges }
             do {
-                approvalShown = try await box.value(ApprovalShown.self, "PUT", approvalRoute, body: ["approval": approval.rawValue])
-                if approval == .auto { readDecisions() }
+                let shown = try await box.value(ApprovalShown.self, "PUT", approvalRoute, body: ["approval": approval.rawValue])
+                if latest {
+                    approvalShown = shown
+                    ToolApproval.lastPicked = approval
+                    if approval == .auto { readDecisions() }
+                }
             } catch let refusal as BoxRefusal where refusal.status == 409 && refusal.reason == "fullAccessOff" {
-                approvalShown = before
-                confirmsFullAccess = true
+                if latest {
+                    approvalShown = before
+                    confirmsFullAccess = true
+                }
             } catch {
-                approvalShown = before
-                failApproval(error)
+                if latest {
+                    approvalShown = before
+                    failApproval(error)
+                }
             }
+            approvalsPending -= 1
+            guard approvalsPending == 0 else { return }
+            let overlapped = approvalBurst > 1
+            approvalBurst = 0
+            if overlapped { await readApproval() }
         }
+        approvalBurst += 1
     }
 
-    /// You confirmed Full Access on its computer: switch it on there, then set it here.
-    func confirmFullAccess() {
+    /// You confirmed Full Access on its computer: switch it on there (for every conversation and
+    /// new one there to see), then set it here.
+    func confirmFullAccess(in workspace: Workspace) {
         confirmsFullAccess = false
-        guard let box = box() else { return }
         Task {
             do {
-                let (status, data) = try await box.send("PATCH", "kuvo/approval", body: try JSONEncoder().encode(["fullAccess": true]))
-                guard (200..<300).contains(status) else { throw BoxRefusal(status: status, data: data) }
+                try await workspace.allowFullAccess(for: session.location.directory)
+                if var shown = approvalShown, let index = shown.options.firstIndex(where: { $0.approval == .fullAccess }) {
+                    shown.options[index].unavailable = nil
+                    approvalShown = shown
+                }
                 setApproval(.fullAccess)
             } catch {
                 failApproval(error)
@@ -127,9 +162,10 @@ extension SessionModel {
         }
     }
 
-    /// The decisions held back since you last looked: the bar over the composer names these.
+    /// The decisions held back since you last looked, here or on another client: the bar over the
+    /// composer names these.
     var unseenHeld: [ReviewDecisions.Decision] {
-        (decisions?.waiting ?? []).filter { !decisionsSeen.contains($0.id) }
+        (decisions?.waiting ?? []).filter { $0.at > decisions?.seen ?? 0 && !decisionsSeen.contains($0.id) }
     }
 
     /// Opens Auto's Decisions, where there are any to show: in Auto, or decided before.
@@ -139,11 +175,20 @@ extension SessionModel {
         return { [weak self] in self?.openDecisions() }
     }
 
-    /// Opening Decisions counts what's held back as seen.
+    /// Opening Decisions counts what's held back as seen, here and, through its box, on every client.
     func openDecisions() {
         decisionsSeen.formUnion((decisions?.waiting ?? []).map(\.id))
         showsDecisions = true
-        readDecisions()
+        guard let box = box() else { return readDecisions() }
+        Task {
+            // (A box from before `approval.seen` keeps none: seen here, until the app quits.)
+            if let changed = try? await box.value(ReviewDecisions.self, "POST", decisionsRoute, body: ["seen": true]) {
+                decisionsAsked += 1
+                decisions = changed
+            } else {
+                readDecisions()
+            }
+        }
     }
 }
 

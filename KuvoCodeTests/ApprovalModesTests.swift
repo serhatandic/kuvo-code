@@ -66,7 +66,9 @@ import Testing
         #expect(model.approval == .askFirst)
         #expect(engine.requests("PATCH", "/api/session/ses_one").isEmpty)
 
-        model.confirmFullAccess()
+        let workspace = Workspace()
+        workspace.boxes = { _ in machine.client }
+        model.confirmFullAccess(in: workspace)
         try await until { model.approvalShown?.effective == .fullAccess }
         #expect(model.approval == .fullAccess)
         #expect(!model.confirmsFullAccess)
@@ -119,6 +121,29 @@ import Testing
         #expect(model.showsDecisions)
         #expect(model.unseenHeld.isEmpty)
         #expect(model.decisions?.waiting.map(\.action) == ["rm -rf ~/Projects/old"], "still there to approve in Decisions")
+
+        // Looked at here, so not news after the app opens again, or on another client.
+        try await until { model.decisions?.seen != nil }
+        let later = try conversation(on: machine)
+        later.readDecisions()
+        try await until { later.decisions != nil }
+        #expect(later.unseenHeld.isEmpty)
+        #expect(later.decisions?.waiting.count == 1)
+    }
+
+    @Test func decisionsSayWhenTheirComputerCantBeReached() async throws {
+        let box = Unreachable()
+        let model = SessionModel(session: try JSONDecoder().decode(Session.self, from: JSONSerialization.data(withJSONObject: session)), api: engine.api)
+        model.box = { box.client }
+        model.openDecisions()
+        try await until { model.decisionsUnread }
+        #expect(model.decisions == nil)
+
+        // Back: Try Again reads them.
+        box.reachable = true
+        model.readDecisions()
+        try await until { model.decisions != nil }
+        #expect(!model.decisionsUnread)
     }
 
     @Test func oneHeldBackWhileTheListWasOnItsWayStillShows() async throws {
@@ -132,6 +157,26 @@ import Testing
         model.readDecisions()
         box.release()
         try await until { model.unseenHeld.map(\.action) == ["git push --force origin main"] }
+    }
+
+    @Test func picksAnsweredOutOfOrderShowWhatTheBoxKept() async throws {
+        let box = SlowPicks()
+        let model = SessionModel(session: try JSONDecoder().decode(Session.self, from: JSONSerialization.data(withJSONObject: session)), api: engine.api)
+        model.box = { box.client }
+        await model.readApproval()
+        #expect(model.approval == .askFirst)
+
+        // Accept Edits, then Auto at once: the box takes both in turn, but Accept Edits' answer
+        // comes back last.
+        model.setApproval(.acceptEdits)
+        try await until { box.holding }
+        model.setApproval(.auto)
+        try await until { model.approvalShown?.effective == .auto }
+        box.release()
+        // Read again once both are answered (a late answer shown instead would be the wrong one).
+        try await until { model.approval != .auto || box.reads == 2 }
+        #expect(model.approval == .auto, "the box keeps Auto, and so does the composer")
+        #expect(ToolApproval.lastPicked == .auto)
     }
 
     @Test func aPausedAutoShowsUntilYouLetItGoOn() async throws {
@@ -168,6 +213,12 @@ import Testing
         // None picked: its box gives it that computer's default.
         _ = try await workspace.createSession(in: RemoteFolder.folder("/srv/app", on: machine), model: nil, agent: "build")
         #expect(engine.requests("POST", "/api/session").last?.body["metadata"] == nil)
+
+        // Auto, where it asks first for now (no sandbox there): it asks before commands from the start too.
+        workspace.approvalsHere[machine] = ApprovalHere(fullAccess: false, default: .auto, auto: .init(engine: .init(held: .init(reason: "sandbox", why: "No sandbox here.")), agents: .init(held: nil)))
+        _ = try await workspace.createSession(in: RemoteFolder.folder("/srv/app", on: machine), model: nil, agent: "build", approval: .auto)
+        let auto = try #require(engine.requests("POST", "/api/session").last?.body)
+        #expect((auto["permissions"] as? [[String: Any]])?.contains { $0["action"] as? String == "shell" && $0["effect"] as? String == "ask" } == true)
     }
 }
 
@@ -210,6 +261,83 @@ private nonisolated final class SlowDecisions: @unchecked Sendable {
                     return reads == 1
                 }
                 if !isFirst { Self.answer(later, to: continuation) }
+                TestPulse.beat()
+            }
+        })
+    }
+}
+
+/// A box keeping one conversation's approval: it takes each pick as it comes, but the first one's
+/// answer is held on its way until `release()`.
+private nonisolated final class SlowPicks: @unchecked Sendable {
+    private let lock = NSLock()
+    private var approval = "askFirst"
+    private var puts = 0
+    private var gets = 0
+    private var held: (AsyncThrowingStream<LinkResponsePart, Error>.Continuation, String)?
+
+    var holding: Bool { lock.withLock { held != nil } }
+    /// Reads of the conversation's approval.
+    var reads: Int { lock.withLock { gets } }
+
+    func release() {
+        guard let (continuation, body) = lock.withLock({ () -> (AsyncThrowingStream<LinkResponsePart, Error>.Continuation, String)? in
+            defer { held = nil }
+            return held
+        }) else { return }
+        Self.answer(body, to: continuation)
+        TestPulse.beat()
+    }
+
+    private static func shown(_ approval: String) -> String {
+        let options = ["askFirst", "acceptEdits", "auto", "fullAccess"].map { #"{"approval":"\#($0)"}"# }.joined(separator: ",")
+        return #"{"approval":"\#(approval)","effective":"\#(approval)","options":[\#(options)]}"#
+    }
+
+    private static func answer(_ body: String, to continuation: AsyncThrowingStream<LinkResponsePart, Error>.Continuation) {
+        continuation.yield(.head(status: 200, headers: ["content-type": "application/json"]))
+        continuation.yield(.body(Data(body.utf8)))
+        continuation.finish()
+    }
+
+    @MainActor var client: BoxClient {
+        BoxClient(box: BoxClient.mac, transport: LocalBox { [self] request in
+            AsyncThrowingStream { continuation in
+                let picked = (try? JSONSerialization.jsonObject(with: request.body) as? [String: Any])?["approval"] as? String
+                let now = lock.withLock { () -> String? in
+                    if request.method == "PUT", let picked { approval = picked; puts += 1 } else if request.path.hasSuffix("/approval") { gets += 1 }
+                    if request.method == "PUT" && puts == 1 {
+                        held = (continuation, Self.shown(approval))
+                        return nil
+                    }
+                    return Self.shown(approval)
+                }
+                if let now { Self.answer(now, to: continuation) }
+                TestPulse.beat()
+            }
+        })
+    }
+}
+
+/// A box that can't be reached until `reachable`, then has no decisions to show.
+private nonisolated final class Unreachable: @unchecked Sendable {
+    private let lock = NSLock()
+    private var isReachable = false
+    var reachable: Bool {
+        get { lock.withLock { isReachable } }
+        set { lock.withLock { isReachable = newValue } }
+    }
+
+    @MainActor var client: BoxClient {
+        BoxClient(box: BoxClient.mac, transport: LocalBox { [self] _ in
+            AsyncThrowingStream { continuation in
+                if reachable {
+                    continuation.yield(.head(status: 200, headers: ["content-type": "application/json"]))
+                    continuation.yield(.body(Data(#"{"decisions":[]}"#.utf8)))
+                    continuation.finish()
+                } else {
+                    continuation.finish(throwing: URLError(.cannotConnectToHost))
+                }
                 TestPulse.beat()
             }
         })

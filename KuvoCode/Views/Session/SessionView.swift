@@ -492,7 +492,7 @@ private struct BottomStack: View {
                         }
                     }
                     // Auto held something back, or paused: never tucked, as it waits on you.
-                    if model.decisions?.paused != nil || !model.unseenHeld.isEmpty {
+                    if model.approval == .auto, model.decisions?.paused != nil || !model.unseenHeld.isEmpty {
                         ApprovalBar(model: model)
                             .disabled(offlineMachine != nil)
                             .modifier(CardRow())
@@ -535,7 +535,7 @@ private struct BottomStack: View {
                         showsDecisions: $model.showsDecisions,
                         decisions: AnyView(DecisionsView(model: model)),
                         confirmsFullAccess: $model.confirmsFullAccess,
-                        onConfirmFullAccess: model.confirmFullAccess,
+                        onConfirmFullAccess: { model.confirmFullAccess(in: workspace) },
                         onSelectModel: { ref in
                             // A coding agent's model (or Auto) in a session on the engine: it carries on with them.
                             if !OutsideAgents.isAgentSession(model.session), OutsideAgents.runsInBridge(ref.providerID) {
@@ -783,7 +783,7 @@ struct DraftSessionView: View {
                 onSelectAgent: { pickedAgent = $0 },
                 onSelectApproval: { picked in
                     // Full Access the first time on its computer: asked first.
-                    if picked == .fullAccess, here?.fullAccess != true { confirmsFullAccess = true } else { pickedApproval = picked }
+                    if picked == .fullAccess, here?.fullAccess != true { confirmsFullAccess = true } else { pickedApproval = picked; ToolApproval.lastPicked = picked }
                 },
                 approvalShown: here?.shown(approval, agents: OutsideAgents.runsInBridge(startingModel?.providerID)),
                 confirmsFullAccess: $confirmsFullAccess,
@@ -792,6 +792,7 @@ struct DraftSessionView: View {
                         do {
                             try await workspace.allowFullAccess(for: directory)
                             pickedApproval = .fullAccess
+                            ToolApproval.lastPicked = .fullAccess
                         } catch {
                             failure = error.localizedDescription
                         }

@@ -225,6 +225,8 @@ struct ModeChip: View {
 
     private func makeMenu() -> NSMenu {
         let menu = NSMenu()
+        // (A bot's Full Access stays off: the menu doesn't turn items on by itself.)
+        menu.autoenablesItems = false
         // (Each pick's check on its trailing side, lined up.)
         var checked: Set<NSMenuItem> = []
         for option in ToolApproval.allCases {

@@ -916,8 +916,10 @@ final class Workspace {
         // As its engine knows them: a machine's folders are plain paths there.
         let extra = (settings[directory]?.folders ?? []).map(api.enginePath)
         // Its box makes its rules from the approval it's made with a moment later; until then,
-        // these hold nothing back that it would.
-        let starting = approval ?? approvalsHere[Self.box(of: directory)]?.default ?? .askFirst
+        // these hold nothing back that it would, and ask where it would (Auto asking first for
+        // now; Ask First where this computer's approvals aren't read yet).
+        let here = approvalsHere[Self.box(of: directory)]
+        let starting = here.map { $0.shown(approval ?? $0.default, agents: isAgents).effective } ?? .askFirst
         let rules = ProjectFolders.permissions(starting.provisionalRules(settings: EngineConfig.rules(on: RemoteFolder.machine(of: directory))), folders: extra)
         let metadata: JSONValue? = approval.map { .object(["kuvo": .object(["approval": .string($0.rawValue)])]) }
         let session: Session

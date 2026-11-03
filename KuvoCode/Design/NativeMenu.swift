@@ -134,6 +134,8 @@ extension NSMenu {
         for item in rows {
             // (No color of its own: a highlighted row draws it as it draws the title.)
             item.attributedTitle = NSAttributedString(string: item.title + "\t" + (checked.contains(item) ? "✓" : ""), attributes: [.font: font, .paragraphStyle: paragraph])
+            // (Its state too, which VoiceOver reads as selected; the column that would draw it is gone.)
+            item.state = checked.contains(item) ? .on : .off
         }
     }
 }

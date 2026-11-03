@@ -434,6 +434,8 @@ final class SessionModel {
     var approvalShown: ApprovalShown?
     /// Auto's reviewer's decisions here, as its box keeps them (`readDecisions`); nil until read.
     var decisions: ReviewDecisions?
+    /// Its box couldn't be asked for them, with none read yet: Decisions says so, not a loader.
+    var decisionsUnread = false
     /// Auto's Decisions are open over the composer.
     var showsDecisions = false
     /// Full Access was picked on a computer where it isn't confirmed yet: the composer asks.
@@ -444,6 +446,9 @@ final class SessionModel {
     /// Reads and changes of Auto's decisions asked for so far (`readDecisions`).
     @ObservationIgnored var decisionsAsked = 0
     @ObservationIgnored var approvalChanges = 0
+    /// Picks of its approval still on their way to its box, and how many were made since none was.
+    @ObservationIgnored var approvalsPending = 0
+    @ObservationIgnored var approvalBurst = 0
     @ObservationIgnored private var queueRead: Task<Void, Never>?
     /// Changes asked of the box's queue so far (`queueRoute`).
     @ObservationIgnored private var queueChanges = 0
