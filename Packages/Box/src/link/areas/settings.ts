@@ -5,11 +5,21 @@ import { parsed } from "../../shared/json";
 import type { Body } from "../../shared/json";
 import type { Config } from "../../shared/routes/settings";
 import type { AnswerPiece, RouteContext } from "../server/context";
+import type { Target } from "../../shared/records";
 import { applySettings } from "./apply";
+import { reapplyApprovals } from "./approval";
 import { answerKeys } from "./box-keys";
 import { changeSettings, ownsSettings, readSettings } from "./config";
 import type { Settings } from "./config";
 import { addFromCatalog, mcpCatalog } from "./mcp-catalog";
+
+// Conversations kept with an approval follow Settings › Permissions as they are now at once, rather
+// than at the box's next round (`keepApprovals`).
+async function followSettings({ readEngine, bridge }: RouteContext): Promise<void> {
+  let engine: Target | null = null;
+  try { engine = readEngine(); } catch {}
+  await reapplyApprovals(engine?.port ? engine : null, bridge(), true).catch(() => false);
+}
 
 // Its own settings, and its integrations' keys (PROTOCOL.md, "Settings per box").
 export async function* settingsRoute(context: RouteContext): AsyncGenerator<AnswerPiece> {
@@ -26,12 +36,18 @@ export async function* settingsRoute(context: RouteContext): AsyncGenerator<Answ
       const { settings, problem } = readSettings();
       return yield* (problem ? json(409, { message: `The engine's settings file can't be changed from here: ${problem}`, problem }) : json(200, settings! satisfies Config));
     }
-    if (method === "PATCH") return yield* answered(changeSettings((parsed(request.body) as Body<"changes">)?.changes));
+    if (method === "PATCH") {
+      const changed = changeSettings((parsed(request.body) as Body<"changes">)?.changes);
+      if (changed.status === 200) await followSettings(context);
+      return yield* answered(changed);
+    }
     return yield* json(405, {});
   }
   if (route === "kuvo/config/apply") {
     if (method !== "POST") return yield* json(405, {});
-    const { status, ...answer } = applySettings(parsed(request.body) as Body<"changes" | "dry">);
+    const body = parsed(request.body) as Body<"changes" | "dry">;
+    const { status, ...answer } = applySettings(body);
+    if (status === 200 && body?.dry !== true) await followSettings(context);
     return yield* json(status, answer);
   }
   if (route === "kuvo/mcp/catalog") {

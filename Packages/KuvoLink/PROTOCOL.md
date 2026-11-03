@@ -3271,7 +3271,10 @@ rules. Plan mode stays the conversation's agent (`plan`), beside it.
   from it to what it can be at once.
 - The box looks every 2 seconds at what each comes to, and makes the rules of those kept with Auto
   or Full Access again when the sandbox starts or stops, the switch changes, or the engine or the
-  bridge starts again, each read again just before it's written.
+  bridge starts again, each read again just before it's written. As Settings › Permissions change
+  (bridge 0.9.187: `PATCH kuvo/config`, `POST kuvo/config/apply`, or the file by hand, within a
+  round), every conversation kept with an approval gets its rules made again with them, so no
+  client has to.
 
 #### Auto's reviewer
 

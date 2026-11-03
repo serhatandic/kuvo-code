@@ -14988,6 +14988,13 @@ async function settle(at, signal) {
   const change = changeFor(at, now.approval);
   return !change || await write(at, change, signal);
 }
+async function remake(at, signal) {
+  const now = approvalOf(at.data, { agents: at.agents, bot: at.bot });
+  if (!now.stored)
+    return true;
+  const change = changeFor(at, now.approval);
+  return !change || await write(at, change, signal);
+}
 async function adoptConversation(target, id, agents, signal) {
   if (typeof id !== "string" || !id)
     return;
@@ -15053,7 +15060,7 @@ function approvalHere() {
   };
   return { fullAccess: fullAccessAllowed(), default: defaultApproval(), auto: { engine: auto(false), agents: auto(true) } };
 }
-async function reapplyApprovals(engine, bridge) {
+async function reapplyApprovals(engine, bridge, settings = false) {
   let done = true;
   const since = approvalsSince();
   const byDefault = defaultApproval();
@@ -15073,16 +15080,17 @@ async function reapplyApprovals(engine, bridge) {
         const bot = found2(target, data, agents).bot;
         const now = approvalOf(data, { agents, bot }, since, byDefault);
         markConversation(data.id, now.effective === "fullAccess");
-        if (kept !== "auto" && kept !== "fullAccess" && !(bot && kept === undefined) && !now.pending)
+        const remade = settings && now.stored && changeFor(found2(target, data, agents), now.approval) !== null;
+        if (!remade && kept !== "auto" && kept !== "fullAccess" && !(bot && kept === undefined) && !now.pending)
           continue;
-        if (now.stored ? now.applied === now.effective && !madeBefore(data.permissions ?? [], now.effective) : !(bot || now.pending))
+        if (!remade && (now.stored ? now.applied === now.effective && !madeBefore(data.permissions ?? [], now.effective) : !(bot || now.pending)))
           continue;
         const fresh = (await engineGet(target, `api/session/${encodeURIComponent(data.id)}`).catch(() => null))?.data;
         if (!fresh?.id) {
           done = false;
           continue;
         }
-        if (!await settle(found2(target, fresh, agents)))
+        if (!await (remade ? remake(found2(target, fresh, agents)) : settle(found2(target, fresh, agents))))
           done = false;
       }
       const next = page.cursor?.next;
@@ -15120,6 +15128,7 @@ function keepApprovals(engine = ownEngine2, bridge = bridgeTarget, every = (roun
   } catch {}
   clearFetched();
   let last = null;
+  let lastSettings = null;
   let going = false;
   const adopted = new Set;
   every(async () => {
@@ -15129,8 +15138,9 @@ function keepApprovals(engine = ownEngine2, bridge = bridgeTarget, every = (roun
       return;
     going = true;
     try {
-      if (now !== last && await reapplyApprovals(here, agents))
-        last = now;
+      const settings = JSON.stringify(permissionsHere());
+      if ((now !== last || settings !== lastSettings) && await reapplyApprovals(here, agents, lastSettings !== null && settings !== lastSettings))
+        [last, lastSettings] = [now, settings];
       await adoptPending(here, agents);
       await adoptBots(here, agents, adopted);
     } catch {} finally {
@@ -23237,7 +23247,7 @@ import fs75 from "node:fs";
 import path79 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.186";
+var BRIDGE_VERSION = "0.9.187";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -23899,11 +23909,20 @@ async function askToRun(caller, args, signal) {
   const project = caller.folder && fs79.existsSync(caller.folder) ? caller.folder : null;
   if (!project)
     return failed("This conversation's folder isn't there, so nothing can run for it.");
-  const stopped = caller.session ? await stopsFor(caller.session, String(args.command)) : [];
+  const conversation = caller.root ?? caller.session;
+  const { at, unreached } = conversation ? await findConversation(conversation).catch(() => ({ at: null, unreached: true })) : { at: null, unreached: false };
+  const full = Boolean(at && inFullAccess(at));
+  const action = { kind: "command", command, folder: project };
+  const reviewing = at && !full ? reviewIn(conversation, action, signal, at) : unreached ? heldUnreached(conversation, action, signal) : null;
+  const verdict = reviewing && await reviewing.catch((error) => ({ decision: "refuse", reason: `Auto's reviewer couldn't review it (${String(error?.message ?? error).slice(0, 120)}).`, by: "code", held: false, why: "failed", paused: false, fetched: undefined }));
+  if (verdict?.decision === "refuse")
+    return { text: refusalWords(verdict), isError: false };
+  const asks = !full && verdict?.decision !== "allow";
+  const stopped = asks && caller.session ? await stopsFor(caller.session, String(args.command)) : [];
   let always = alwaysFor2(stopped, project);
   let asking;
   const heard = new AbortController;
-  if (!stopped.length && caller.session && process.platform === "darwin")
+  if (asks && !stopped.length && caller.session && process.platform === "darwin")
     (async () => {
       for (const wait of LOG_LATER) {
         await new Promise((resolve) => setTimeout(resolve, wait).unref?.());
@@ -23918,16 +23937,6 @@ async function askToRun(caller, args, signal) {
         return;
       }
     })();
-  const conversation = caller.root ?? caller.session;
-  const { at, unreached } = conversation ? await findConversation(conversation).catch(() => ({ at: null, unreached: true })) : { at: null, unreached: false };
-  const full = Boolean(at && inFullAccess(at));
-  const action = { kind: "command", command, folder: project };
-  const reviewing = at && !full ? reviewIn(conversation, action, signal, at) : unreached ? heldUnreached(conversation, action, signal) : null;
-  const verdict = reviewing && await reviewing.catch((error) => ({ decision: "refuse", reason: `Auto's reviewer couldn't review it (${String(error?.message ?? error).slice(0, 120)}).`, by: "code", held: false, why: "failed", paused: false, fetched: undefined }));
-  if (verdict?.decision === "refuse") {
-    heard.abort();
-    return { text: refusalWords(verdict), isError: false };
-  }
   const answered = full ? { answer: "once", client: "Full Access" } : verdict?.decision === "allow" ? { answer: "once", client: "Auto" } : await book.ask({
     ...caller.root ? { session: caller.root, ...caller.sessionName ? { sessionName: caller.sessionName } : {} } : {},
     ...caller.bot ? { bot: caller.bot, botName: caller.botName } : {},
@@ -25312,6 +25321,13 @@ function applySettings(body, file = CONFIG_FILE, lock = CONFIG_LOCK, options = {
 }
 
 // Packages/Box/src/link/areas/settings.ts
+async function followSettings({ readEngine, bridge }) {
+  let engine = null;
+  try {
+    engine = readEngine();
+  } catch {}
+  await reapplyApprovals(engine?.port ? engine : null, bridge(), true).catch(() => false);
+}
 async function* settingsRoute(context) {
   const { request, route, json } = context;
   if (!ownsSettings())
@@ -25323,14 +25339,21 @@ async function* settingsRoute(context) {
       const { settings, problem } = readSettings();
       return yield* problem ? json(409, { message: `The engine's settings file can't be changed from here: ${problem}`, problem }) : json(200, settings);
     }
-    if (method === "PATCH")
-      return yield* answered(changeSettings(parsed(request.body)?.changes));
+    if (method === "PATCH") {
+      const changed = changeSettings(parsed(request.body)?.changes);
+      if (changed.status === 200)
+        await followSettings(context);
+      return yield* answered(changed);
+    }
     return yield* json(405, {});
   }
   if (route === "kuvo/config/apply") {
     if (method !== "POST")
       return yield* json(405, {});
-    const { status, ...answer } = applySettings(parsed(request.body));
+    const body = parsed(request.body);
+    const { status, ...answer } = applySettings(body);
+    if (status === 200 && body?.dry !== true)
+      await followSettings(context);
     return yield* json(status, answer);
   }
   if (route === "kuvo/mcp/catalog") {

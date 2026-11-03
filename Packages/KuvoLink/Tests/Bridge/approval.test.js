@@ -215,6 +215,27 @@ test("a bot's work changed to any approval still asks for what always comes to y
   assert.deepEqual({ status: refused.status, reason: refused.body.reason }, { status: 409, reason: "bot" });
 });
 
+test("a change to Settings › Permissions reaches every conversation kept with an approval at once, whichever client made it", async () => {
+  write(settingsFile, JSON.stringify({ permissions: [NEVER_RM] }));
+  await route("PUT", "kuvo/sessions/ses_careful/approval", { approval: "acceptEdits" });
+  await route("PUT", "kuvo/sessions/ses_free/approval", { approval: "auto" }, { sandbox: true });
+  const NEVER_PUSH = { action: "shell", resource: "git push*", effect: "deny" };
+  const changed = await route("PATCH", "kuvo/config", { changes: [{ path: ["permissions"], value: [NEVER_RM, NEVER_PUSH] }] }, { sandbox: true });
+  assert.equal(changed.status, 200);
+  const denies = id => rules(id).some(rule => rule.action === "shell" && rule.resource === NEVER_PUSH.resource && rule.effect === "deny");
+  assert.equal(denies("ses_careful"), true, "Accept Edits");
+  assert.equal(denies("ses_free"), true, "Auto");
+  // Each still what it was, its own folders its own.
+  assert.equal(asks("ses_careful", "shell"), true);
+  assert.equal(asks("ses_careful", "edit"), false);
+  assert.equal(asks("ses_free", "shell"), false);
+  assert.ok(rules("ses_careful").some(rule => rule.resource === OTHER_FOLDER.resource && rule.effect === "allow"));
+  // Taken out again: it goes from them too.
+  await route("PATCH", "kuvo/config", { changes: [{ path: ["permissions"], value: [NEVER_RM] }] }, { sandbox: true });
+  assert.equal(denies("ses_careful"), false);
+  assert.equal(denies("ses_free"), false);
+});
+
 test("rules a client changed on its own are never made again behind its back", async () => {
   await route("PUT", "kuvo/sessions/ses_careful/approval", { approval: "auto" }, { sandbox: true });
   // A client from before sets Ask First by its rules alone.

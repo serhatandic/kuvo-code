@@ -961,9 +961,9 @@ test("a bot on a machine is told, in Kuvo Code's own words, that it runs on that
   }
 });
 
-// How the Mac makes a conversation's rules again from its approval and Settings › Permissions
-// (ToolApproval.refreshed, written by RouteContractTests: scripts/route-vectors.sh), which a box does
-// the same way for a bot that moves to it.
+// How a conversation's rules are made again from its approval and Settings › Permissions, as the Mac
+// made them before its box did (written by an earlier Mac's RouteContractTests, kept as they were),
+// which a box does the same way for a bot that moves to it.
 const approval = JSON.parse(fs.readFileSync(new URL("../../Vectors/routes/box/approval.json", import.meta.url), "utf8"));
 // What Ask First asks about, before Settings' own rules, as the Mac has it.
 const askFirst = approval.find(each => each.name === "asks first; no settings").current.filter(rule => rule.action !== "external_directory");
