@@ -938,7 +938,8 @@ struct MainView: View {
             newGroup: { tabs.openGroupEditor(group: nil) },
             newChat: { tabs.newSession(in: Workspace.chatsFolder) },
             stop: { model?.stop() },
-            selectAgent: { model?.selectAgent($0) },
+            isPlanning: model?.session.agent == "plan",
+            togglePlan: { model?.togglePlan() },
             showDecisions: model?.decisionsToShow,
             branchBackups: { if let model { backupsFolder = model.session.location.directory } },
             togglePanel: { withAnimation(.ui) { tabs.showPanel(!panelOnScreen) } },
@@ -1017,8 +1018,7 @@ struct MainView: View {
             }
         }
         if let model = focusedModel {
-            add("Build Mode", "hammer", "⌥⌘1") { actions.selectAgent("build") }
-            add("Plan Mode", "list.bullet.clipboard", "⌥⌘2") { actions.selectAgent("plan") }
+            add(model.session.agent == "plan" ? "Leave Plan Mode" : "Plan Mode", "list.bullet.clipboard", "⌥⌘2", actions.togglePlan)
             add("Find in Conversation…", "magnifyingglass", "⌘F", actions.find)
             // A bot is renamed in Edit Bot.
             if bots.bot(forSession: model.id) == nil {

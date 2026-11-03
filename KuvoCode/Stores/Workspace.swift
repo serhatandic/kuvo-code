@@ -55,6 +55,8 @@ final class Workspace {
     @ObservationIgnored var machineAPI: (String) -> OpenCodeAPI? = { _ in nil }
     /// The machine each session's events came from, for sessions without a row (a subagent's).
     @ObservationIgnored private var sessionMachines: [String: String] = [:]
+    /// Permissions kept until their box says whether its reviewer takes them up.
+    @ObservationIgnored private var awaitingReview: [String: PermissionRequest] = [:]
     /// Machines' sessions as last seen, kept across launches so their tabs wait for the machine
     /// to connect instead of closing.
     @ObservationIgnored private var remoteSessions: [String: RemoteSession] = {
@@ -753,7 +755,8 @@ final class Workspace {
     func needsAttention(_ id: String) -> Bool {
         if askingInBrowser.contains(id) || askingForWork.contains(id) || askingOutsideSandbox.contains(id) || goalCards.contains(id) || asking.values.contains(where: { $0 == id || root(of: $0) == id }) { return true }
         guard let model = models[id] else { return false }
-        return !model.permissions.isEmpty || !model.forms.isEmpty
+        let box = Self.box(of: model.session.location.directory)
+        return model.permissions.contains { Sandboxes.shared.isYours($0, on: box) } || !model.forms.isEmpty
     }
 
     // MARK: Changes
@@ -2170,6 +2173,8 @@ final class Workspace {
                 continue
             }
             for request in permissions {
+                // (One its box's reviewer takes up isn't yours: not listed, nor told.)
+                guard tellsOnceYours(request) else { continue }
                 found[request.id] = request.sessionID
                 if tell, asking[request.id] == nil { notifyAsk(request.sessionID, body: Self.describe(request, home: askHome(request.sessionID)), request: request.id, isPermission: true, answerable: Self.showsAll(request), always: alwaysWords(request)) }
             }
@@ -2711,9 +2716,8 @@ final class Workspace {
     private func noteQuestions(_ event: ServerEvent) {
         switch event.type {
         case "permission.asked":
-            guard let request = try? event.payload(as: PermissionRequest.self) else { return }
-            asking[request.id] = request.sessionID
-            notifyAsk(request.sessionID, body: Self.describe(request, home: askHome(request.sessionID)), request: request.id, isPermission: true, answerable: Self.showsAll(request), always: alwaysWords(request))
+            guard let request = try? event.payload(as: PermissionRequest.self), tellsOnceYours(request) else { return }
+            tellYours(request)
         case "permission.replied":
             if let reply = try? event.payload(as: EventPayload.PermissionReplied.self) { settled(reply.requestID) }
         case "form.created":
@@ -2809,8 +2813,32 @@ final class Workspace {
     /// notification goes, or isn't posted if it's still being made.
     private func settled(_ request: String) {
         asking[request] = nil
+        awaitingReview[request] = nil
+        Sandboxes.shared.settled(request)
         if notifying.contains(request) { settledWhileNotifying.insert(request) }
         Notifier.shared.clear(request: request)
+    }
+
+    /// Whether a permission is yours now; one its box's reviewer may take up is kept until its
+    /// box says (`Sandboxes.awaitReview`), and told then, if it's yours.
+    private func tellsOnceYours(_ request: PermissionRequest) -> Bool {
+        let box = sessionMachines[request.sessionID] ?? session(request.sessionID).map { Self.box(of: $0.location.directory) } ?? BoxClient.mac
+        guard !Sandboxes.shared.isYours(request, on: box) else { return true }
+        awaitingReview[request.id] = request
+        Sandboxes.shared.awaitReview(request, on: box)
+        return false
+    }
+
+    /// A permission that's yours: waiting on you, and told.
+    private func tellYours(_ request: PermissionRequest) {
+        asking[request.id] = request.sessionID
+        notifyAsk(request.sessionID, body: Self.describe(request, home: askHome(request.sessionID)), request: request.id, isPermission: true, answerable: Self.showsAll(request), always: alwaysWords(request))
+    }
+
+    /// One kept for its box's word turned out to be yours.
+    func reviewLeftForYou(_ id: String) {
+        guard let request = awaitingReview.removeValue(forKey: id) else { return }
+        tellYours(request)
     }
 
     private func notifyAsk(_ id: String, body: String, request: String, isPermission: Bool = false, answerable: Bool = true, always: String? = nil, question: Notifier.Question? = nil) {

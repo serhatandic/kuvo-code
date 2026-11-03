@@ -1,6 +1,7 @@
 import ClientDesign
 import ClientSessions
 import ClientText
+import ClientVault
 import OpenCodeKit
 import SwiftUI
 
@@ -126,9 +127,9 @@ extension EnvironmentValues {
     @Entry var picksModel = true
 }
 
-/// What's over the conversation's end: questions and permission requests as solid cards, then
-/// one card holding the bars (a goal, a review, a side question, work out of sight), the messages
-/// waiting, and the composer.
+/// What's over the conversation's end: one card holding the bars (a goal, a review, a side question,
+/// work out of sight), the messages waiting, and the composer, or in its place what asks you
+/// something, one at a time; over it, what went wrong and what can't go on yet.
 private struct BottomStack: View {
     @Bindable var model: SessionModel
     @Binding var lastModel: ModelRef?
@@ -143,6 +144,10 @@ private struct BottomStack: View {
         var folds = BarFolds<ComposerBar>()
         var bars: [ComposerBar]?
         var news: [ComposerBar: Bool]?
+        /// The ask you went to, while it waits.
+        var pickedAsk: String?
+        /// An ask had the composer's place: the composer back takes only a keyboard that's free.
+        var askHadPlace = false
     }
     @State private var cards: [String: Card] = [:]
     /// The waiting messages, open under their line once there are more than two.
@@ -241,10 +246,72 @@ private struct BottomStack: View {
         return bars
     }
 
-    /// A card over the composer asks you something: it's what needs you, and the bars fold.
-    private var isAsking: Bool {
-        !model.permissions.isEmpty || !forms.isEmpty || !app.browserAsks.asks(for: model.session.id).isEmpty || !app.botAsks.asks(for: model.session.id).isEmpty
-            || proposedPlan != nil
+    /// Something asks you in the composer's place: it's what needs you, and the bars fold.
+    private var isAsking: Bool { !waitingAsks.isEmpty }
+
+    /// What waits on you here, by kind, oldest first in each: the agent's permissions and
+    /// questions, a browser's sign-ins and codes, the vault, the sandbox, a bot's work and its
+    /// goal's plan.
+    private var waitingAsks: [WaitingAsk] {
+        let box = Workspace.box(of: model.session.location.directory)
+        // (Not what Auto's reviewer takes up: its step says how that goes.)
+        var asks: [WaitingAsk] = model.permissions.filter { Sandboxes.shared.isYours($0, on: box) }.map { .permission($0) } + forms.map { .form($0) }
+        asks += app.browserAsks.asks(for: model.session.id).map { .browser($0) }
+        asks += Vaults.shared[box].asks.filter { $0.session == model.session.id && $0.group == nil }.map { .vault($0, box: box) }
+        asks += Sandboxes.shared.asks(for: model.session.id, on: box).map { .sandbox($0, box: box) }
+        asks += app.botAsks.asks(for: model.session.id).map { .work($0.ask, box: $0.box) }
+        if let (box, plan) = proposedPlan { asks.append(.plan(plan, box: box)) }
+        return asks
+    }
+
+    /// Which of them shows: the one you went to while it waits, else the first; none, the composer.
+    private var askPosition: WaitingAskPosition? {
+        WaitingAskPosition(ids: waitingAsks.map(\.id), picked: cards[model.id]?.pickedAsk)
+    }
+
+    /// One ask in the composer's place, its keys its own.
+    @ViewBuilder private func ask(_ ask: WaitingAsk) -> some View {
+        switch ask {
+        case .permission(let request):
+            PermissionCard(request: request, command: model.permissionCommands[request.id], directory: model.session.location.directory,
+                           forConversation: OutsideAgents.isAgentSession(model.session)) { decision, instead in
+                model.reply(to: request, decision, message: instead)
+            }
+            .disabled(offlineMachine != nil)
+        case .form(let form):
+            QuestionCard(form: form, progress: Binding(get: { model.questionProgress[form.id] ?? QuestionProgress() }, set: { model.questionProgress[form.id] = $0 }),
+                         takesKeys: takesCardKeys) { answer in
+                model.answer(form, with: FormFieldsView.payload(form.fields, answer))
+            } dismiss: {
+                model.dismiss(form)
+            }
+            .disabled(offlineMachine != nil)
+        case .browser(let ask):
+            BrowserAskCard(ask: ask)
+        case .vault(let asked, let box):
+            VaultAskCard(asked: asked, box: box)
+        case .sandbox(let asked, let box):
+            SandboxAskCard(asked: asked, box: box, takesKeys: takesCardKeys, drawsSurface: false)
+                .disabled(offlineMachine != nil)
+        case .work(let ask, let box):
+            WorkAskCard(ask: ask, box: box) { model.failure = $0 }
+        case .plan(let plan, let box):
+            GoalCard(plan: plan, box: box)
+                .disabled(offlineMachine != nil && box != BoxClient.mac)
+        }
+    }
+
+    /// What VoiceOver says as an ask comes.
+    private static func spoken(_ ask: WaitingAsk) -> String {
+        switch ask {
+        case .permission: "The agent asks for permission"
+        case .form(let form): form.isQuestion ? "The agent has a question" : "\(form.title) needs an answer"
+        case .browser: "The agent needs you in the browser"
+        case .vault: "The agent asks for the vault"
+        case .sandbox: "The agent asks to run a command outside the sandbox"
+        case .work: "The bot asks before it goes on"
+        case .plan: "The bot’s plan waits for you"
+        }
     }
 
     /// A bot's goal whose plan waits for you, for its card.
@@ -355,55 +422,9 @@ private struct BottomStack: View {
     var body: some View {
         Group {
             VStack(spacing: 12) {
-                // What asks you something: solid cards over the composer's, apart from it.
-                // Return and Escape answer the card on top only (one answered keeps them: a second
-                // Return answers nothing, rather than sending the composer's draft).
-                ForEach(model.permissions) { request in
-                    PermissionCard(request: request, command: model.permissionCommands[request.id], directory: model.session.location.directory,
-                                   forConversation: OutsideAgents.isAgentSession(model.session)) { decision in
-                        model.reply(to: request, decision)
-                    }
-                    .environment(\.takesCardKeys, takesCardKeys && model.keyedAsk == request.id)
-                    .disabled(offlineMachine != nil)
-                    .modifier(ComposerSurface())
-                }
-                ForEach(forms) { form in
-                    QuestionCard(form: form, progress: Binding(get: { model.questionProgress[form.id] ?? QuestionProgress() }, set: { model.questionProgress[form.id] = $0 }),
-                                 takesKeys: takesCardKeys && (model.keyedAsk ?? forms.first?.id) == form.id) { answer in
-                        model.answer(form, with: FormFieldsView.payload(form.fields, answer))
-                    } dismiss: {
-                        model.dismiss(form)
-                    }
-                    .disabled(offlineMachine != nil)
-                    .modifier(ComposerSurface())
-                }
-                ForEach(Array(app.browserAsks.asks(for: model.session.id).enumerated()), id: \.element.id) { index, ask in
-                    BrowserAskCard(ask: ask)
-                        .environment(\.takesCardKeys, takesCardKeys && index == 0 && model.permissions.isEmpty && forms.isEmpty)
-                        .modifier(ComposerSurface())
-                }
-                // What its agent asks of its computer's vault.
-                VaultAskCards(session: model.session.id, box: Workspace.box(of: model.session.location.directory))
-                // What its agent asks to run outside its computer's sandbox.
-                SandboxAskCards(session: model.session.id, box: Workspace.box(of: model.session.location.directory))
-                    .environment(\.takesCardKeys, takesCardKeys && model.permissions.isEmpty && forms.isEmpty)
-                    .disabled(offlineMachine != nil)
                 // Its computer asking, once, to restart the agents started before its sandbox was on.
                 SandboxRestartCard(box: Workspace.box(of: model.session.location.directory))
                     .disabled(offlineMachine != nil)
-                ForEach(Array(app.botAsks.asks(for: model.session.id).enumerated()), id: \.element.ask.id) { index, item in
-                    WorkAskCard(ask: item.ask, box: item.box) { model.failure = $0 }
-                        // Return and Escape answer the first card only.
-                        .environment(\.takesCardKeys, takesCardKeys && index == 0 && model.permissions.isEmpty && forms.isEmpty
-                                     && Sandboxes.shared.asks(for: model.session.id, on: Workspace.box(of: model.session.location.directory)).isEmpty)
-                        .modifier(ComposerSurface())
-                }
-                if let (box, plan) = proposedPlan {
-                    GoalCard(plan: plan, box: box)
-                        .environment(\.takesCardKeys, takesCardKeys && model.permissions.isEmpty && forms.isEmpty && app.botAsks.asks(for: model.session.id).isEmpty)
-                        .disabled(offlineMachine != nil && box != BoxClient.mac)
-                        .modifier(ComposerSurface())
-                }
                 // What went wrong, over the composer rather than in an alert you must click away.
                 if let failure = model.failure, offlineMachine == nil {
                     FailureBar(text: failure) { model.failure = nil }
@@ -505,6 +526,21 @@ private struct BottomStack: View {
                             .modifier(CardRow())
                             .transition(.fold)
                     }
+                    // (One over the other as they cross-fade, never one under the other.)
+                    ZStack(alignment: .bottom) {
+                    if let position = askPosition, !app.dictation.isListening(for: model.id) {
+                        let asks = waitingAsks
+                        AskInComposer(position: position) { cards[model.id, default: Card()].pickedAsk = asks[$0].id } content: {
+                            ask(asks[position.index])
+                        }
+                        .id(asks[position.index].id)
+                        .transition(.opacity)
+                        .onAppear { cards[model.id, default: Card()].askHadPlace = true }
+                        // What the composer opens, opened while an ask has its place (the bar's
+                        // Decisions, Full Access to confirm), opens over the ask instead.
+                        .popover(isPresented: $model.showsDecisions, attachmentAnchor: .point(UnitPoint(x: 0.12, y: 0)), arrowEdge: .top) { DecisionsView(model: model) }
+                        .modifier(FullAccessConfirmation(isPresented: $model.confirmsFullAccess, computer: RemoteFolder.machine(of: model.session.location.directory), confirm: { model.confirmFullAccess(in: workspace) }))
+                    } else {
                     Composer(
                         session: model.id,
                         text: $model.draftText,
@@ -526,7 +562,6 @@ private struct BottomStack: View {
                         sideQuestion: model.asksSideThread ? { model.composerAsksSide = false } : nil,
                         sideQuestionAnswering: model.sideThreadAnswering,
                         isOffline: offlineMachine != nil,
-                        blurRequest: model.composerBlur,
                         commentCount: model.reviewComments.count,
                         onDiscardComments: { model.reviewComments = [] },
                         onSelectAgent: model.selectAgent,
@@ -553,14 +588,17 @@ private struct BottomStack: View {
                         onQueue: { send(queue: true) },
                         onEditLast: model.editLast,
                         onStop: model.stop,
+                    yieldsKeyboard: cards[model.id]?.askHadPlace ?? false,
                     drawsSurface: false
                     )
+                    .transition(.opacity)
+                    }
+                    }
                 }
                 .modifier(ComposerSurface())
 
             }
-            .animation(.ui, value: model.permissions.map(\.id))
-            .animation(.ui, value: model.forms.map(\.id))
+            .animation(.ui, value: waitingAsks.map(\.id))
             .animation(.ui, value: bars)
             .animation(.ui, value: folds)
             .animation(.ui, value: isAsking)
@@ -628,14 +666,15 @@ private struct BottomStack: View {
             .onChange(of: model.waiting.count > 2) { _, folds in
                 if !folds { queueOpen = false }
             }
-            // A question came: the keyboard goes to it, after the composer takes it as it shows,
-            // unless you're speaking into the composer (Return and Escape are voice's till you're done).
-            .onChange(of: forms.first?.id, initial: true) { _, id in
-                guard id != nil else { return }
-                Task {
-                    try? await Task.sleep(for: .milliseconds(150))
-                    if !app.dictation.isListening(for: model.id) { model.yieldComposer() }
+            .onChange(of: waitingAsks.map(\.id)) { before, now in
+                // The one in view stays while others come, rather than one swapping in under the
+                // pointer: they only add to the count.
+                if let shown = WaitingAskPosition(ids: before, picked: cards[model.id]?.pickedAsk).map({ before[$0.index] }), now.contains(shown) {
+                    cards[model.id, default: Card()].pickedAsk = shown
                 }
+                // One came: VoiceOver says so (the first, as it takes the composer's place).
+                guard let came = now.first(where: { !before.contains($0) }), let ask = waitingAsks.first(where: { $0.id == came }) else { return }
+                AccessibilityNotification.Announcement(before.isEmpty ? Self.spoken(ask) : "\(Self.spoken(ask)), \(now.count) waiting").post()
             }
             .animation(.ui, value: model.waiting.isEmpty)
             .animation(.ui, value: backgroundJobs.map(\.id))
@@ -646,7 +685,6 @@ private struct BottomStack: View {
             .animation(.ui, value: model.review == nil)
             .animation(.ui, value: model.shownSideQuestion)
             .animation(.ui, value: model.handoff == nil || model.handoff == model.putAwayHandoff)
-            .animation(.ui, value: app.browserAsks.asks(for: model.session.id).map(\.id))
             // Its side questions, for the bar's menu and the sidebar's.
             .task(id: model.id) {
                 await workspace.agents(forFolder: model.session.location.directory)?.loadSideQuestions(of: model.id)

@@ -132,13 +132,23 @@ struct VaultAskCards: View {
     var body: some View {
         let shown = Vaults.shared[box]
         ForEach(shown.asks.filter { group != nil ? $0.group == group : $0.session == session && $0.group == nil }) { asked in
-            HStack(alignment: .top, spacing: 10) {
-                Image(systemName: "lock.shield.fill").foregroundStyle(.tint).font(.title3)
-                VaultAskRow(asked: asked, box: box, items: shown.vault?.items ?? [])
-            }
-            .padding(14)
-            .modifier(ComposerSurface())
-            .transition(.opacity.combined(with: .offset(y: 6)))
+            VaultAskCard(asked: asked, box: box)
+                .modifier(ComposerSurface())
+                .transition(.opacity.combined(with: .offset(y: 6)))
         }
+    }
+}
+
+/// One of them: what it asks of the vault, and the answers.
+struct VaultAskCard: View {
+    let asked: VaultAsk
+    let box: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "lock.shield.fill").foregroundStyle(.tint).font(.title3)
+            VaultAskRow(asked: asked, box: box, items: Vaults.shared[box].vault?.items ?? [])
+        }
+        .padding(14)
     }
 }

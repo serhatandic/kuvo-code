@@ -2,20 +2,6 @@ import ClientDesign
 import ClientSandbox
 import SwiftUI
 
-/// What a conversation's agents ask to run outside its computer's sandbox, over its composer: one
-/// card each, oldest first, as the app follows each box's asks (`Sandboxes.follow`).
-struct SandboxAskCards: View {
-    let session: String
-    let box: String
-    @Environment(\.takesCardKeys) private var takesKeys
-
-    var body: some View {
-        ForEach(Array(Sandboxes.shared.asks(for: session, on: box).enumerated()), id: \.element.id) { index, asked in
-            SandboxAskCard(asked: asked, box: box, takesKeys: takesKeys && index == 0)
-        }
-    }
-}
-
 /// A command the sandbox stopped, which its agent asks to run outside it: who asks, what the
 /// sandbox stopped (on a Mac, what it tried and where; on Linux, the error the command got), the
 /// command, the agent's reason; Don't Allow, Always Allow <place> (where the box names the one place
@@ -25,6 +11,8 @@ struct SandboxAskCard: View {
     let asked: SandboxAsk
     let box: String
     var takesKeys = false
+    /// Off in the composer's place, whose card it's in.
+    var drawsSurface = true
 
     var body: some View {
         // A bot's run with you away: how long it's been waiting, over the card once it's a minute.
@@ -36,7 +24,7 @@ struct SandboxAskCard: View {
                         .foregroundStyle(.secondary)
                         .padding(.leading, 4)
                 }
-                card.modifier(ComposerSurface())
+                card.modifier(ComposerSurface(isOn: drawsSurface))
             }
         }
     }

@@ -225,9 +225,59 @@ public struct SandboxAsks: Codable, Equatable, Sendable {
     public var asks: [SandboxAsk]
     /// The box asks you, once, to restart the agents started before its sandbox was on (`SandboxState.restart`).
     public var restart: Bool?
-    public init(asks: [SandboxAsk], restart: Bool? = nil) {
+    /// How Auto's reviewer takes up asks to work outside a conversation's folder (none from a box
+    /// before bridge 0.9.192, whose asks are all yours).
+    public var reviews: [AskReview]?
+    public init(asks: [SandboxAsk], restart: Bool? = nil, reviews: [AskReview]? = nil) {
         self.asks = asks
         self.restart = restart
+        self.reviews = reviews
+    }
+}
+
+/// How an ask to work outside a conversation's folder (`external_directory`) was taken up on its
+/// box (PROTOCOL.md, "Sandbox"): in Auto, its reviewer checks it and answers it, and only one left
+/// for you is yours to answer; the rest show as a quiet mark on the step that asked (`call`).
+public struct AskReview: Codable, Equatable, Sendable {
+    public enum State: String, Codable, Sendable {
+        case checking, allowed, heldBack, refused, yours
+    }
+
+    public var id: String
+    public var session: String
+    public var call: String?
+    public var state: State
+    public var at: Double
+
+    public init(id: String, session: String, call: String? = nil, state: State, at: Double) {
+        self.id = id
+        self.session = session
+        self.call = call
+        self.state = state
+        self.at = at
+    }
+
+    /// How long an ask its box would review waits for word of it before it's yours anyway (a box
+    /// that started again as it asked has no word of it).
+    public static let wait: Duration = .seconds(5)
+
+    /// Whether an ask is yours to answer: one the box left for you, or one it doesn't take up
+    /// (only asks to work outside the folder are, by a box that tells it); one it may take up but
+    /// hasn't said of yet, only once it's waited `wait` (`overdue`).
+    public static func isYours(action: String, review: AskReview?, boxTells: Bool, overdue: Bool) -> Bool {
+        if let review { return review.state == .yours }
+        return !boxTells || action != "external_directory" || overdue
+    }
+
+    /// The step's mark: what Auto did with what it asked.
+    public var mark: String? {
+        switch state {
+        case .checking: "Auto is checking…"
+        case .allowed: "Auto allowed"
+        case .heldBack: "Held back"
+        case .refused: "Auto refused"
+        case .yours: nil
+        }
     }
 }
 

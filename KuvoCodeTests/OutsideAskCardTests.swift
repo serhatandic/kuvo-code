@@ -15,7 +15,7 @@ import Testing
         var ask: [String: Any] = ["id": "per_outside", "sessionID": "ses_outside", "action": action, "resources": resources]
         if let save { ask["save"] = save }
         let request = try JSONDecoder().decode(PermissionRequest.self, from: JSONSerialization.data(withJSONObject: ask))
-        return PermissionCard(request: request, directory: directory, forConversation: forConversation, reply: { _ in })
+        return PermissionCard(request: request, directory: directory, forConversation: forConversation, reply: { _, _ in })
     }
 
     /// Always says what it saves (the user's report: "Always for This" on an edit saved one file,

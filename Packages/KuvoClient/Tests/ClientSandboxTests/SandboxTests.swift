@@ -6,6 +6,28 @@ import Testing
 /// words a newer box adds read as none rather than failing the page; an agent's ask and what Always
 /// for This would keep; and a project's Also Allowed, asked for by its folder.
 @Suite struct SandboxTests {
+    /// In Auto, an ask to work outside the folder is its reviewer's: no card while it checks, nor
+    /// once it allowed or held it back, only a mark on its step; one it leaves for you is yours. A
+    /// box from before says nothing of reviews, and every ask of it is yours.
+    @Test func anAskAutosReviewerTakesUpIsntYours() throws {
+        let line = #"{"asks":[],"reviews":[{"id":"per_1","session":"ses_a","call":"call_1","state":"checking","at":1},{"id":"per_2","session":"ses_a","state":"yours","at":2}]}"#
+        let list = try JSONDecoder().decode(SandboxAsks.self, from: Data(line.utf8))
+        let reviews = try #require(list.reviews)
+        let outside = "external_directory"
+        #expect(!AskReview.isYours(action: outside, review: reviews[0], boxTells: true, overdue: true), "being checked")
+        #expect(reviews[0].mark == "Auto is checking…")
+        #expect(AskReview.isYours(action: outside, review: reviews[1], boxTells: true, overdue: false), "left for you")
+        #expect(reviews[1].mark == nil)
+        // Not heard of yet: it waits for the box's word, a moment at most.
+        #expect(!AskReview.isYours(action: outside, review: nil, boxTells: true, overdue: false))
+        #expect(AskReview.isYours(action: outside, review: nil, boxTells: true, overdue: true))
+        // What the reviewer never takes up, and every ask of a box from before.
+        #expect(AskReview.isYours(action: "shell", review: nil, boxTells: true, overdue: false))
+        let before = try JSONDecoder().decode(SandboxAsks.self, from: Data(#"{"asks":[]}"#.utf8))
+        #expect(before.reviews == nil)
+        #expect(AskReview.isYours(action: outside, review: nil, boxTells: false, overdue: false))
+    }
+
     @Test func aStateThatIsntOnSaysWhyAndWhatToDo() throws {
         let state = try JSONDecoder().decode(SandboxState.self, from: Data("""
         {"on":false,"why":"Its check failed: a command could write outside its folder.","able":true,"agents":false,
