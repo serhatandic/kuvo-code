@@ -125,7 +125,7 @@ struct HTTPResponse {
     var body = Data()
     /// A body that comes as it's made (a route that follows something), sent as it comes, in chunks:
     /// one that ends with an error is cut off without its last chunk, so the client knows it isn't
-    /// whole. The connection closes after it.
+    /// whole (the connection closes then; one that ends whole leaves it for the next request).
     var stream: AsyncThrowingStream<Data, Error>?
 
     static func json(_ object: Any) -> HTTPResponse {
@@ -246,8 +246,8 @@ final class HTTPConnection {
         })
     }
 
-    /// A body that comes as it's made: each piece as a chunk as it comes, then the last chunk and
-    /// the connection closed; one that fails closes with no last chunk. One the client leaves stops
+    /// A body that comes as it's made: each piece as a chunk as it comes, then the last chunk, and
+    /// the connection kept for the next request; one that fails closes with no last chunk. One the client leaves stops
     /// (`close`, cancelling `answering`). Sent off the main actor, so a phone following something
     /// (the engine's events) never waits on the window, nor adds to its work.
     private func send(head: Data, stream: AsyncThrowingStream<Data, Error>) {
@@ -268,13 +268,24 @@ final class HTTPConnection {
                 whole = true
             } catch {}
             guard !gone.value else { return }
-            gone.set()
             // Cut off: closed with no last chunk, so it's never read as if it had ended.
-            guard whole else { return connection.cancel() }
-            connection.send(content: Data("0\r\n\r\n".utf8), contentContext: .finalMessage, isComplete: true, completion: .contentProcessed { _ in
-                connection.cancel()
+            guard whole else {
+                gone.set()
+                return connection.cancel()
+            }
+            // Whole: its last chunk ends it, and the connection stays for the client's next request,
+            // which URLSession and Node's fetch send on it at once (a POST lost if it were closed).
+            connection.send(content: Data("0\r\n\r\n".utf8), completion: .contentProcessed { [weak self] _ in
+                MainActor.assumeIsolated { self?.answered() }
             })
         }
+    }
+
+    /// The answer's all sent: the next request on this connection, if one came in meanwhile.
+    private func answered() {
+        guard !closing else { return }
+        answering = nil
+        process()
     }
 
     /// `piece` as a chunk of a chunked body.
@@ -310,12 +321,7 @@ final class HTTPConnection {
         guard !closing else { return }
         if let stream = response.stream { return send(head: Data(head.utf8), stream: stream) }
         connection.send(content: Data(head.utf8) + response.body, completion: .contentProcessed { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self, !self.closing else { return }
-                self.answering = nil
-                // The next request on this connection, if one came in meanwhile.
-                self.process()
-            }
+            MainActor.assumeIsolated { self?.answered() }
         })
     }
 }

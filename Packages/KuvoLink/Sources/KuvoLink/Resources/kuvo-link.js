@@ -1621,6 +1621,7 @@ var FEATURES = [
   "git",
   "git.merge",
   "git.pull-request",
+  "git.pull-request.draft",
   "git.push",
   "goals",
   "groups",
@@ -20866,13 +20867,19 @@ function comparePage(remote, branch, base, title, body) {
   const named = (branch) => encodeURIComponent(branch).replace(/%2F/g, "/");
   return `${at}/compare/${(base ? `${named(base)}...` : "") + named(branch)}?${query}`;
 }
-async function pullRequest(directory, title, body) {
+async function pullRequestWay(directory) {
   const branch = await branchOf(directory);
   if (!branch)
     return { status: 409, failed: "This folder isn’t on a branch." };
   const root = (await text2(directory, ["rev-parse", "--show-toplevel"]))?.trim() ?? directory;
   const recorded = worktreeOf(directory)?.base;
-  const main = recorded ? undefined : (await text2(root, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"]))?.trim().replace(/^origin\//, "") || undefined;
+  let main = recorded ? undefined : (await text2(root, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"]))?.trim().replace(/^origin\//, "") || undefined;
+  for (const name of recorded || main ? [] : ["main", "master"]) {
+    if ((await git(root, ["rev-parse", "--verify", "-q", name])).ok || (await git(root, ["rev-parse", "--verify", "-q", `origin/${name}`])).ok) {
+      main = name;
+      break;
+    }
+  }
   const base = recorded ?? main;
   if (base === branch || !base && ["main", "master"].includes(branch))
     return { status: 409, failed: `${branch} is the branch a pull request goes into. Make one from a branch of its own.` };
@@ -20882,10 +20889,68 @@ async function pullRequest(directory, title, body) {
     if (why)
       return { status: 409, failed: why.replace(`origin/${base}`, base) };
   }
+  const remote = (await text2(root, ["remote", "get-url", "origin"]))?.trim() || undefined;
+  return { root, branch, base, against, remote };
+}
+function ghOn(root, host) {
+  return new Promise((resolve) => {
+    execFile4("gh", ["auth", "status", "--hostname", host], { cwd: root, env: { ...process.env, GH_PROMPT_DISABLED: "1", NO_COLOR: "1" }, timeout: 30000 }, (error) => resolve(!error ? "signed-in" : error.code === "ENOENT" ? "missing" : "signed-out"));
+  });
+}
+async function pullRequestSummary(root, against, limit = 30000) {
+  const range = against ? `${against}...HEAD` : "HEAD~1...HEAD";
+  const commits = await text2(root, ["log", "--no-color", "--format=- %s%n%b", against ? `${against}..HEAD` : "-1"]) ?? "";
+  const files = await text2(root, ["diff", "--no-color", "--stat", range]) ?? "";
+  let diff = await text2(root, ["diff", "--no-color", "--no-ext-diff", range]) ?? "";
+  if (diff.length > limit)
+    diff = diff.slice(0, limit) + `
+…`;
+  return `Commits:
+${commits}
+Files:
+${files}
+Diff:
+${diff}`;
+}
+async function pullRequestDraft(directory, withSummary = false) {
+  const way = await pullRequestWay(directory);
+  if ("failed" in way)
+    return way;
+  const { root, branch, base, against, remote } = way;
+  const subjects = (await text2(root, ["log", "--no-color", "--format=%s", against ? `${against}..HEAD` : "-1"]) ?? "").split(`
+`).filter(Boolean);
+  let title, body;
+  if (subjects.length === 1) {
+    title = subjects[0];
+    body = (await text2(root, ["log", "-1", "--no-color", "--format=%b"]) ?? "").trim();
+  } else {
+    const named = branch.replace(/[-_]+/g, " ").trim();
+    title = named.charAt(0).toUpperCase() + named.slice(1);
+    body = subjects.reverse().map((subject) => `- ${subject}`).join(`
+`);
+  }
+  const page = remote ? webPage(remote) : null;
+  const host = page?.hostname.includes("github") ? "github" : page?.hostname.includes("gitlab") ? "gitlab" : "other";
+  const gh = host === "github" ? await ghOn(root, page.hostname) : undefined;
+  return {
+    branch,
+    ...base ? { base } : {},
+    title,
+    body,
+    ...withSummary ? { summary: await pullRequestSummary(root, against) } : {},
+    host,
+    creates: gh === "signed-in",
+    ...gh && gh !== "signed-in" ? { gh } : {}
+  };
+}
+async function pullRequest(directory, title, body) {
+  const way = await pullRequestWay(directory);
+  if ("failed" in way)
+    return way;
+  const { root, branch, base, remote } = way;
   const pushed = await refusal(root)(["push", "-u", "origin", "HEAD"]);
   if (pushed)
     return { status: 422, failed: pushed };
-  const remote = (await text2(root, ["remote", "get-url", "origin"]))?.trim();
   const page = remote ? webPage(remote) : null;
   if (page?.hostname.includes("github")) {
     const repository = page.hostname + page.pathname.replace(/\/$/, "");
@@ -20974,6 +21039,13 @@ async function* changesRoute(context) {
       return yield* json(400, { message: "Write a commit message." });
     const done = await commit(directory, message, body.push === true, authorOf(body));
     return yield* done ? json(422, { message: done.failed, ...done.committed ? { committed: true, pushed: false } : {} }) : json(200, {});
+  }
+  if (route === "kuvo/git/pull-request/draft") {
+    const directory = folderAt(body.directory);
+    if (!directory)
+      return yield* json(404, { message: "That folder isn’t there." });
+    const draft = await pullRequestDraft(directory, body.summary === true);
+    return yield* "failed" in draft ? json(draft.status, { message: draft.failed }) : json(200, draft);
   }
   if (route === "kuvo/git/push" || route === "kuvo/git/merge" || route === "kuvo/git/pull-request") {
     const directory = folderAt(body.directory);
@@ -21223,7 +21295,7 @@ import fs71 from "node:fs";
 import path75 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.178";
+var BRIDGE_VERSION = "0.9.179";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

@@ -2632,6 +2632,9 @@
             "literal": "git.pull-request"
            },
            {
+            "literal": "git.pull-request.draft"
+           },
+           {
             "literal": "git.push"
            },
            {
@@ -2911,6 +2914,9 @@
            },
            {
             "literal": "git.pull-request"
+           },
+           {
+            "literal": "git.pull-request.draft"
            },
            {
             "literal": "git.push"
@@ -3697,6 +3703,44 @@
      "object": {
       "url?": "string",
       "compareURL?": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/git/pull-request/draft",
+   "answers": {
+    "200": {
+     "object": {
+      "branch": "string",
+      "base?": "string",
+      "title": "string",
+      "body": "string",
+      "summary?": "string",
+      "host": {
+       "oneOf": [
+        {
+         "literal": "github"
+        },
+        {
+         "literal": "gitlab"
+        },
+        {
+         "literal": "other"
+        }
+       ]
+      },
+      "creates": "bool",
+      "gh?": {
+       "oneOf": [
+        {
+         "literal": "signed-out"
+        },
+        {
+         "literal": "missing"
+        }
+       ]
+      }
      }
     }
    }

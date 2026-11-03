@@ -16,6 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- What your phone asks of this Mac no longer fails now and then with a lost connection when it asks for something right after a reply that streamed.
 - Replies draw fewer lines: headings no longer have a line under them, and `---` is one thin line with even space around it, as in Claude's and ChatGPT's apps.
 - The sidebar is easier to read: its headings are as bright as the names under them, and the quieter words and buttons are no longer washed out by the window behind it.
 - A folded project shows the mark of what's going on inside it (one waiting on you, at work, failed or new), so folding one hides nothing that needs you.
@@ -24,6 +25,8 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - Picking a session, bot or group chat in the sidebar leaves you typing in its conversation, without the conversation looking unfocused for a moment, and showing or hiding the sidebar (its button or ⌘0) puts the keyboard back in the conversation's composer.
 - Files you attach are kept with the session you sent them in and deleted with it, on your Mac and on your machines. Before, the ones on your Mac piled up in the Attachments folder for good. On a machine, they still also go once they're two weeks old. A branch, a handoff or a conversation carried on with the coding agents keeps the files it shows.
 - In a session on a machine, a file over 50 MB says **Stays on this Mac** on its chip before you send, with why on hover, instead of only in the note after it's sent. You can still send the message.
+- Create Pull Request… asks first: it shows the branch it goes into and a title and description from the commits, which you can change or have the model write. Then it creates the pull request on GitHub from the project's computer, a machine's too, with GitHub's `gh` signed in there, or says `gh` isn't and opens GitHub's page instead.
+- A project on a branch of its own shows the branch in the title bar, with Merge and Create Pull Request in the Changes panel, as soon as Kuvo Code opens, also on a machine that was still connecting; before, they came only after you switched tabs.
 - Agents' commands can now add and change files across your home folder, so installs and tools that keep settings there work in the sandbox. They still never delete or move files there, never touch what runs later (shell start-up files, the folders on your PATH, `~/Library`, git's and the agents' settings, other projects' included), and your Documents, Desktop and other personal folders only take new files. A session you start inside one of those folders works there freely; an agent starts one there only in your projects, like one in Documents.
 - A bot working on a goal no longer keeps your computer busy between its looks at the goal, which could spin the fans while nothing was happening.
 - A bot, chat or group chat whose move stalls because the other computer went away no longer looks busy: its row says "Waiting for" that computer, and its conversation says what comes next and how far it got.
