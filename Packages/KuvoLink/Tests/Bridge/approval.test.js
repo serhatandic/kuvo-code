@@ -285,6 +285,31 @@ test("a new conversation a client made without saying gets this computer's defau
   assert.equal((await route("GET", "kuvo/approval")).body.default, "askFirst");
 });
 
+test("what the box makes itself, a conversation that runs nothing, and a Full Access switched off since are never a new conversation's Full Access", async () => {
+  await route("PATCH", "kuvo/approval", { fullAccess: true });
+  await route("PUT", "kuvo/sessions/ses_careful/approval", { approval: "fullAccess" });
+  assert.equal((await route("GET", "kuvo/approval")).body.default, "fullAccess");
+  const now = Date.now() + 60_000;
+  // A group chat's seat, read before its mark lands: it holds back whole tools, so it's no client's Approve All.
+  sessions.set("ses_seat", session("ses_seat", ["shell", "edit", "external_directory"].map(action => ({ action, resource: "*", effect: "deny" })), { time: { created: now, updated: now } }));
+  // Ones the box made and marked, made since and from before.
+  for (const [id, mark, created] of [["ses_part", { reviewPart: "x" }, now], ["ses_old_seat", { seat: { group: "grp_a", bot: "bot_scout00001" } }, 1], ["ses_engine_for", { engineFor: "ses_x" }, 1]]) {
+    sessions.set(id, session(id, [], { time: { created, updated: created }, metadata: { kuvo: mark } }));
+  }
+  for (const id of ["ses_seat", "ses_part", "ses_old_seat", "ses_engine_for"]) {
+    const read = (await route("GET", `kuvo/sessions/${id}/approval`, undefined, { sandbox: true })).body;
+    assert.notEqual(read.effective, "fullAccess", id);
+  }
+  // The box's round leaves them as they are.
+  await route("PATCH", "kuvo/approval", { fullAccess: true }, { sandbox: true });
+  for (const id of ["ses_seat", "ses_part", "ses_old_seat", "ses_engine_for"]) assert.equal(sessions.get(id).metadata?.kuvo?.applied, undefined, id);
+  // Switched off here since: the next new one is Auto, and comes back to Full Access only once you pick it again.
+  await route("PATCH", "kuvo/approval", { fullAccess: false }, { sandbox: true });
+  assert.equal((await route("GET", "kuvo/approval")).body.default, "auto");
+  sessions.set("ses_after", session("ses_after", [], { time: { created: now, updated: now } }));
+  assert.equal((await route("GET", "kuvo/sessions/ses_after/approval", undefined, { sandbox: true })).body.approval, "auto");
+});
+
 test("Auto and Full Access read .env files without asking, a Don't Allow in Settings still winning; one kept from before gets that too", async () => {
   const envReads = id => rules(id).filter(rule => rule.action === "read" && /\.env/.test(rule.resource));
   await route("PUT", "kuvo/sessions/ses_careful/approval", { approval: "auto" }, { sandbox: true });

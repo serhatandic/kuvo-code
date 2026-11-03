@@ -2930,3 +2930,11 @@ describe("a command you type with !", () => {
     }
   })
 })
+
+test("a conversation is made with what the box marks it as, there when the event that it was made goes out; the bridge's own note stays", () => {
+  const made = sessions.create({ model: { providerID: "alpha", id: "one" }, location: { directory: "/tmp/project" }, metadata: { kuvo: { approval: "auto", applied: "auto", seat: { group: "grp_a" } }, kuvoAgent: "someone else" } })
+  const created = events.find((event) => event.type === "session.created" && (event.data as { sessionID?: string }).sessionID === made.id)
+  expect((created?.data as { session?: { metadata?: unknown } }).session?.metadata).toEqual({ kuvo: { approval: "auto", applied: "auto", seat: { group: "grp_a" } }, kuvoAgent: made.metadata?.kuvoAgent })
+  expect(sessions.get(made.id).metadata?.kuvo).toEqual({ approval: "auto", applied: "auto", seat: { group: "grp_a" } })
+  expect(made.metadata?.kuvoAgent).not.toBe("someone else")
+})

@@ -59,10 +59,11 @@ export function allowFullAccess(on: boolean, file = APPROVAL_FILE): void {
 }
 
 /** The approval a new conversation here gets where its client didn't say: Auto the first time on
- * this computer, then the last one you picked here (never a bot's). */
+ * this computer, then the last one you picked here (never a bot's); Auto while Full Access, picked
+ * last, is switched off here since. */
 export function defaultApproval(file = APPROVAL_FILE): Approval {
-  const last = keptHere(file).last;
-  return isApproval(last) ? last : "auto";
+  const kept = keptHere(file);
+  return isApproval(kept.last) && (kept.last !== "fullAccess" || kept.fullAccess === true) ? kept.last : "auto";
 }
 
 /** Keeps `approval` as the last one you picked on this computer. */
@@ -199,12 +200,14 @@ const madeFor = (rules: readonly KitRule[], applied: Approval) =>
  * changed them on its own leaves what they say. One a client made with `kuvo.approval` alone is
  * that, and `pending` until the box makes its rules (`settle`). Else as its rules say: asking
  * before commands is Ask First; nothing asking is, for one from before this box kept approvals
- * (`approvalsSince`), Full Access, as it ran, and for one made since, this computer's default
- * (`defaultApproval`: a client from before that made it Approve All never gets Full Access
- * unasked), `pending` too; a bot's never more than Auto. `stored`: whether it's the one kept;
+ * (`approvalsSince`), Full Access, as it ran, and for one a client made since with no tool held
+ * back as a whole (Approve All), this computer's default (`defaultApproval`, or `byDefault`), `pending`
+ * too. A bot's is never more than Auto; one the box made itself (`BOX_MADE`), a subagent's, or one
+ * with other rules, never Full Access unkept: Auto (a subagent's Ask First, where its conversation
+ * can't be found). `stored`: whether it's the one kept;
  * `applied`: what its rules are made for now (null for one from before); `effective`: what it comes
  * to here now, and `held`, why that's less. */
-export function approvalOf(session: WithApproval, where: Where = {}, since = approvalsSince()): { approval: Approval; stored: boolean; applied: Approval | null; effective: Approval; held?: Unavailable; pending?: boolean } {
+export function approvalOf(session: WithApproval, where: Where = {}, since = approvalsSince(), byDefault?: Approval): { approval: Approval; stored: boolean; applied: Approval | null; effective: Approval; held?: Unavailable; pending?: boolean } {
   const rules = Array.isArray(session.permissions) ? session.permissions : [];
   const kept = session.metadata?.kuvo?.approval;
   const applied = session.metadata?.kuvo?.applied;
@@ -215,14 +218,21 @@ export function approvalOf(session: WithApproval, where: Where = {}, since = app
   const asked = isApproval(kept) && applied === undefined ? kept : null;
   const created = session.time?.created;
   const marks = session.metadata?.kuvo ?? {};
-  const fresh = !asked && (typeof created !== "number" || created >= since) && !BOX_MADE.some(mark => mark in marks);
+  const boxMade = BOX_MADE.some(mark => mark in marks);
+  const before = typeof created === "number" && created < since;
+  // (Approve All as a client makes it: nothing held back as a whole. A group chat's seat, say, which
+  // runs nothing, is never one.)
+  const whole = rules.some(rule => rule.resource === "*" && rule.effect !== "allow");
+  const fresh = !asked && !boxMade && !session.parentID && !before && !whole;
   // (Asking before commands was Ask First, before there was more: its rules are made again as that.
   // One from before runs as it did: what its rules say is what it does, whether or not you
   // confirmed Full Access here. But a bot's, which never has more than Auto, and comes to what Auto
   // does here: the box makes its rules so (`adoptBots`).)
-  const guessed: Approval = asked ?? (asksFor(rules, "shell") ? "askFirst" : where.bot ? "auto" : fresh ? defaultApproval() : "fullAccess");
+  const guessed: Approval = asked ?? (asksFor(rules, "shell") ? "askFirst" : where.bot ? "auto" : session.parentID ? "askFirst"
+    : fresh ? byDefault ?? defaultApproval() : before && !boxMade ? "fullAccess" : "auto");
   const pending = Boolean((asked || fresh) && !session.parentID && !where.bot);
-  if (!where.bot && !pending && !fresh) return { approval: guessed, stored: false, applied: null, effective: guessed };
+  // (One from before runs as it ran, whatever's switched on here now.)
+  if (!where.bot && !pending && before && !boxMade && guessed !== "auto") return { approval: guessed, stored: false, applied: null, effective: guessed };
   const { approval, held } = effectiveApproval(guessed, where);
   return { approval: guessed, stored: false, applied: null, effective: approval, ...(held ? { held } : {}), ...(pending ? { pending } : {}) };
 }

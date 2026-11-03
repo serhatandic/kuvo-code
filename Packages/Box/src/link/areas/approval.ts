@@ -127,6 +127,20 @@ export async function adoptConversation(target: Target, id: unknown, agents: boo
   markConversation(at.data.id, approvalOf(at.data, { agents, bot: at.bot }).effective === "fullAccess");
 }
 
+/** The newest conversations a client made that are still waiting for their approval (one whose
+ * event the box missed, or couldn't settle then), each adopted (`adoptConversation`). */
+export async function adoptPending(engine: Target | null, bridge: Target | null, signal?: AbortSignal): Promise<void> {
+  const since = approvalsSince();
+  const byDefault = defaultApproval();
+  for (const [target, agents] of [[engine, false], [bridge, true]] as const) {
+    if (!target) continue;
+    const page = await engineGet(target, "api/session?limit=20&order=desc&parentID=null").catch(() => null) as { data?: unknown } | null;
+    for (const data of Array.isArray(page?.data) ? page.data as EngineSession[] : []) {
+      if (data?.id && approvalOf(data, { agents, bot: found(target, data, agents).bot }, since, byDefault).pending) await adoptConversation(target, data.id, agents, signal).catch(() => {});
+    }
+  }
+}
+
 /** The same for a conversation the box just made or changed, read again: what it comes to may have
  * changed while it was written (the sandbox stopped), and the box's round, which looks only when
  * that changes, may have passed it by. */
@@ -174,6 +188,9 @@ export function approvalHere(): ApprovalHere {
  * on the next round). */
 export async function reapplyApprovals(engine: Target | null, bridge: Target | null): Promise<boolean> {
   let done = true;
+  // (This computer's, read once for the round: thousands of conversations may be looked at.)
+  const since = approvalsSince();
+  const byDefault = defaultApproval();
   for (const [target, agents] of [[engine, false], [bridge, true]] as const) {
     if (!target) continue;
     let query: string | null = "limit=200&order=desc&parentID=null";
@@ -185,10 +202,10 @@ export async function reapplyApprovals(engine: Target | null, bridge: Target | n
         if (!data?.id) continue;
         const kept = data.metadata?.kuvo?.approval;
         const bot = found(target, data, agents).bot;
+        const now = approvalOf(data, { agents, bot }, since, byDefault);
         // (Full Access's list for the sandbox's launcher, as each is now: one from before too.)
-        markConversation(data.id, approvalOf(data, { agents, bot }).effective === "fullAccess");
+        markConversation(data.id, now.effective === "fullAccess");
         // (Ask First and Accept Edits come to themselves anywhere; a bot's from before, to its own.)
-        const now = approvalOf(data, { agents, bot });
         if (kept !== "auto" && kept !== "fullAccess" && !(bot && kept === undefined) && !now.pending) continue;
         if (now.stored ? now.applied === now.effective && !madeBefore(data.permissions ?? [], now.effective) : !(bot || now.pending)) continue;
         // (As it is now: what a client set since the list was read stays.)
@@ -244,6 +261,7 @@ export function keepApprovals(engine: () => Target | null = ownEngine, bridge: (
     going = true;
     try {
       if (now !== last && await reapplyApprovals(here, agents)) last = now;
+      await adoptPending(here, agents);
       await adoptBots(here, agents, adopted);
     } catch {} finally {
       going = false;
@@ -279,14 +297,17 @@ export async function* approvalRoute(context: RouteContext): AsyncGenerator<Answ
     if (method !== "POST") return yield* json(405, { message: "Read them with GET, or approve one held back (or let a paused conversation go on) with POST." });
     if (typeof given.approve === "string" && given.approve) {
       // Allowed once, the next time the agent does it the same way: it's told so, and goes on.
-      const approved = approveHeld(decisions, given.approve);
+      let approved: ReturnType<typeof approveHeld>;
+      try { approved = approveHeld(decisions, given.approve); }
+      catch (error) { return yield* json(500, { message: `It couldn't be kept: ${String((error as Error)?.message ?? error).slice(0, 120)}` }); }
       if (!approved) return yield* json(404, { message: "That isn't held back here: it was approved already, or it's gone." });
       resumeReviewedSession(decisions);
       await tellApproved(decisions, approved).catch(() => false);
       return yield* json(200, shownReviews(reviewLog(decisions)));
     }
     if (given.resume !== true) return yield* json(400, { message: "Say approve: <id> to approve one held back, or resume: true to let Auto go on here." });
-    resumeReviews(decisions);
+    try { resumeReviews(decisions); }
+    catch (error) { return yield* json(500, { message: `It couldn't be kept: ${String((error as Error)?.message ?? error).slice(0, 120)}` }); }
     resumeReviewedSession(decisions);
     return yield* json(200, shownReviews(reviewLog(decisions)));
   }

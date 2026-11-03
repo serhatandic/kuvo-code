@@ -4502,7 +4502,8 @@ class Handoffs {
         location: { directory: info.directory },
         model: info.model,
         ...info.agent ? { agent: info.agent } : {},
-        ...info.permissions ? { permissions: info.permissions } : {}
+        ...info.permissions ? { permissions: info.permissions } : {},
+        ...info.metadata?.kuvo?.approval ? { metadata: { kuvo: { approval: info.metadata.kuvo.approval, ...info.metadata.kuvo.applied ? { applied: info.metadata.kuvo.applied } : {} } } } : {}
       });
       to = made?.data?.id;
       if (!to)
@@ -15722,7 +15723,7 @@ class Sessions {
       title: body.title,
       location: { directory },
       permissions: body.permissions,
-      metadata: { kuvoAgent: this.kind(body.model.providerID) }
+      metadata: { ...body.metadata && typeof body.metadata === "object" && !Array.isArray(body.metadata) ? body.metadata : {}, kuvoAgent: this.kind(body.model.providerID) }
     };
     this.store.add(session);
     emit("session.created", { sessionID: session.id, session }, directory);
@@ -19133,8 +19134,8 @@ class SeatAPI {
     const provider = listed.find((each) => each?.id === model.providerID);
     return { name: String(provider?.name ?? model.providerID), signedOut: provider !== undefined && !ready.includes(model.providerID) };
   }
-  async create(directory, title, agent, model, permissions) {
-    const body = { title, location: { directory }, permissions };
+  async create(directory, title, agent, model, permissions, metadata) {
+    const body = { title, location: { directory }, permissions, ...metadata ? { metadata } : {} };
     if (agent)
       body.agent = agent;
     if (model)
@@ -19451,9 +19452,10 @@ class Seats {
       throw new Error("the coding agents aren\u2019t running");
     const agent = onAgents && model?.providerID.split("@")[0] === "cursor" ? "plan" : undefined;
     const text = this.seatText(bot, chat);
-    const session = await api.create(bot.directory, title, agent, model, this.rules(bot));
+    const metadata = { kuvo: { seat: { group: chat.id, bot: bot.id, ...scratch ? { scratch: true } : {} } } };
+    const session = await api.create(bot.directory, title, agent, model, this.rules(bot), metadata);
     try {
-      await api.setMetadata(session.id, { kuvo: { seat: { group: chat.id, bot: bot.id, ...scratch ? { scratch: true } : {} } } });
+      await api.setMetadata(session.id, metadata);
       await api.setInstruction(session.id, seatKey, text);
     } catch (error) {
       await api.delete(session.id).catch(() => {});
@@ -22930,4 +22932,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 364b94f6c3cb30b8f49066c2eaab87f5ffc27f5b978311691bfb763126a5e0be
+// Built from Packages/Box/src/agents 989f1421d031df022c144db36bcdca95ccade26e2a46979cec93f5ec9b991bbc

@@ -107,6 +107,8 @@ export class Handoffs {
         model: info.model,
         ...(info.agent ? { agent: info.agent } : {}),
         ...(info.permissions ? { permissions: info.permissions } : {}),
+        // (In the mode the one it carries on was in: its rules come along made for it.)
+        ...(info.metadata?.kuvo?.approval ? { metadata: { kuvo: { approval: info.metadata.kuvo.approval, ...(info.metadata.kuvo.applied ? { applied: info.metadata.kuvo.applied } : {}) } } } : {}),
       })
       to = made?.data?.id
       if (!to) throw new Error("The new conversation couldn't be started.")
