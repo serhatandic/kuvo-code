@@ -556,10 +556,11 @@ test("agents are told how commands run in the sandbox while it's on, and nothing
     if (linux) assert.doesNotMatch(told, /--disable-sandbox|pgrep/);
     else {
       assert.match(told, /swift test --disable-sandbox/);
-      assert.match(told, /use `pgrep -fl` or `lsof`/);
-      // What it tells them holds: ps is refused, pgrep works.
-      const ran = await engineRuns(box, project, tries([["ps", "ps -ax"], ["pgrep", "pgrep -fl sh"]]));
-      assert.deepEqual(outcome(ran.out), { ps: "refused", pgrep: "allowed" }, ran.out);
+      assert.match(told, /use `pgrep -fl`, `lsof` or `top -l 1`/);
+      // What it tells them holds: ps is refused (it would show other programs' environments),
+      // pgrep and top work.
+      const ran = await engineRuns(box, project, tries([["ps", "ps -ax"], ["pgrep", "pgrep -fl sh"], ["top", "top -l 1 -n 1"]]));
+      assert.deepEqual(outcome(ran.out), { ps: "refused", pgrep: "allowed", top: "allowed" }, ran.out);
     }
   } finally {
     await running.stop();

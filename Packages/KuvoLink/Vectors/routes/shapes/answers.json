@@ -3070,6 +3070,9 @@
             "literal": "approval.seen"
            },
            {
+            "literal": "approval.stopped"
+           },
+           {
             "literal": "accounts.ended"
            },
            {
@@ -3370,6 +3373,9 @@
            },
            {
             "literal": "approval.seen"
+           },
+           {
+            "literal": "approval.stopped"
            }
           ]
          }
@@ -6424,6 +6430,17 @@
      "object": {
       "text": "string",
       "isError": "bool"
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/sandbox/stopped",
+   "answers": {
+    "200": {
+     "object": {
+      "text?": "string",
+      "exit?": "number"
      }
     }
    }

@@ -2424,6 +2424,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `approval.held` | Auto never leaves a call waiting on you (bridge 0.9.185): what its reviewer refuses or can't judge is held back, and `POST kuvo/sessions/<id>/decisions` `{approve: id}` approves one once; a sandbox ask in Auto never comes to you, so it has no `review` ("Auto's reviewer") |
 | `approval.default` | A new conversation's approval where its client doesn't say: Auto the first time on a computer, then the last one picked there (`kuvo/approval`'s `default`, bridge 0.9.185); one a client made with `kuvo.approval` alone gets that ("Approval") |
 | `approval.seen` | `seen` in `kuvo/sessions/<id>/decisions`, and `POST` `{seen: true}` as you open them: what's held back since is news on every client ("Auto's reviewer", bridge 0.9.187) |
+| `approval.stopped` | In Auto, a command the sandbox stops goes to Auto's reviewer by itself, with no `sandbox_ask`: allowed, it runs outside the sandbox and the agent gets that output; each lands in Decisions ("Asks", "Stopped commands", bridge 0.9.190) |
 | `wakes` | `kuvo/wakes`, a session's, and cancelling one or sending it now |
 | `wakes.edit` | adding one (`POST kuvo/wakes/<session>`) and pausing them |
 | `wakes.events` | `kuvo/wakes/events`, and making a watch (`POST kuvo/wakes/<session>/watch`) |
@@ -3699,6 +3700,30 @@ never lets a command out itself, and no tool answers an ask (a bot neither): onl
 reviewer or Full Access. A bot's
 seat in a group chat runs no commands, so it has nothing to ask: its rules deny the tool, and the box
 refuses one from a seat, asking nobody.
+
+**Stopped commands** (`approval.stopped`, bridge 0.9.190). In Auto the agent needn't ask: the box's
+plugin in the engine looks at what each call of the shell tool printed as it ends, and where it
+failed with what the sandbox prints (`Operation not permitted`, `Permission denied` but SSH's own,
+`Read-only file system`, `EPERM`, `EACCES`; on Linux also `No such file or directory`, for the
+secrets hidden from commands), tells the box's long-running process over `run/vault.sock`:
+`POST kuvo/sandbox/stopped` `{session, input, output}` (the call's own arguments, and the last 4 KB
+it printed). Only while that conversation is making that very call, only in Auto, and only where
+the sandbox stopped it (on macOS `Operation not permitted`, which a file's own permissions or a
+database don't answer; on Linux, Landlock's answers, or a hidden secret named as missing), Auto's
+reviewer judges the command as it judges a `sandbox_ask` (by what you said, a bot's goal), also
+seeing what it printed and, on macOS, what its log says the sandbox refused it (read for a few
+seconds), as running it again outside does that too (a write to where things run at login counts as setting one up; one to Kuvo Code's folders is
+never allowed). It lands in Decisions either way. Allowed, the box runs it again outside the
+sandbox, as an Allow Once, in the folder the agent ran it in, within what the call has left of its
+16 minutes, and stops it if the call is stopped meanwhile; the agent gets `{text, exit}` instead of
+what the sandbox let it print: `The sandbox stopped it · Ran again outside the sandbox · Allowed by
+Auto's reviewer: <reason>` and its output. Refused, `{text}`: the refusal's words, added after what
+it printed, and the call ends as it did. Anywhere else the answer is `{}`, and the call is left as
+it was. Nobody is asked.
+
+On macOS `top` runs outside the sandbox as it is (it's setuid, which the sandbox can't start, and
+shows no program's environment); `ps` stays refused in it, as it would show every program's
+environment: in Auto it goes to the reviewer as any stopped command.
 
 The tool is the box's, so an agent has it on every box (`sandbox.asks`): this Mac's tool server and a
 machine's (`kuvo-browser.js mcp`, through `box route`) list what `GET kuvo/sandbox/tools` gives (only

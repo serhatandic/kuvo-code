@@ -87,6 +87,37 @@ test("what would run at login or on a schedule is told to the model as that, on 
   expect(await reviewer.review(command("crontab jobs.txt"), yours("Fix the build"), given(model(refuses)))).toMatchObject({ decision: "refuse", by: "model", held: true, why: "reviewer" })
 })
 
+test("a command the sandbox stopped is judged by what it was stopped doing too: a write to where things run at login is told as that, and one to Kuvo Code's folders is refused", async () => {
+  const ask = model(allows)
+  const persists = "It sets up something that runs at login or on a schedule"
+  const stopped = (path: string) => ({ ...command("npm install"), stopped: { printed: "npm error EPERM: operation not permitted, open '" + path + "'", stops: [{ kind: "write", path }] } })
+  // An install whose script writes your authorized_keys looks like any install, but for that.
+  await reviewer.review(stopped(join(homedir(), ".ssh", "authorized_keys")), yours("Install the dependencies"), given(ask))
+  expect(ask.shown.at(-1)).toContain(persists)
+  expect(ask.shown.at(-1)).toContain("It already ran in the sandbox")
+  expect(ask.shown.at(-1)).toMatch(/<refused_[0-9a-f]+>\n- write .*authorized_keys/)
+  expect(ask.shown.at(-1)).toMatch(/<printed_[0-9a-f]+>\nnpm error EPERM/)
+  // One the sandbox stopped writing in the project's caches isn't.
+  await reviewer.review(stopped(join(homedir(), ".npm", "_cacache", "index")), yours("Install the dependencies"), given(ask))
+  expect(ask.shown.at(-1)).not.toContain(persists)
+  const asked = ask.shown.length
+  expect(await reviewer.review(stopped(join(fencePolicy().kuvo[0], "box", "approval.json")), yours("Install the dependencies"), given(ask))).toMatchObject({ decision: "refuse", by: "code", held: false })
+  expect(ask.shown).toHaveLength(asked)
+})
+
+test("a command that prints other programs' environments is told to the model as that; listing processes isn't", async () => {
+  const ask = model(allows)
+  const environments = "It prints other running programs' environments"
+  for (const line of ["ps eww -ax | grep node", "ps -Eww -ax", "ps auxe", "cat /proc/*/environ", "tr '\\0' '\\n' < /proc/1234/environ"]) {
+    await reviewer.review(command(line), yours("Which node processes are running?"), given(ask))
+    expect({ line, told: ask.shown.at(-1)!.includes(environments) }).toEqual({ line, told: true })
+  }
+  for (const line of ["ps aux | grep node", "ps -ef", "ps -A -o pid,comm", "pgrep -fl node", "top -l 1", "echo $PS1"]) {
+    await reviewer.review(command(line), yours("Which node processes are running?"), given(ask))
+    expect({ line, told: ask.shown.at(-1)!.includes(environments) }).toEqual({ line, told: false })
+  }
+})
+
 test("Docker and the like are the model's to judge: it's told what a container may never be given", async () => {
   const ask = model(allows)
   for (const line of ["docker compose up -d db", "docker logs api --tail 100", "sudo docker ps", "ls | xargs docker rm"]) {

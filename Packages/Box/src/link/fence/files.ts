@@ -266,6 +266,7 @@ export function pluginScript(places: FencePlaces, version: string): string {
 import { execFileSync } from "node:child_process"
 import crypto from "node:crypto"
 import fs from "node:fs"
+import net from "node:net"
 import os from "node:os"
 import path from "node:path"
 
@@ -373,6 +374,46 @@ const PATHS = { read: "path", write: "path", edit: "path", glob: "path", grep: "
 // the spaces around it trimmed.
 const PATCHED = ["*** Add File: ", "*** Update File: ", "*** Delete File: ", "*** Move to: "]
 
+// What a command prints when the sandbox stopped it (and not when SSH's server turned it away); on
+// Linux also a secret hidden from commands, said not to be there. (The box tells which it was.)
+const STOPPED = process.platform === "linux"
+  ? /operation not permitted|permission denied|read-only file system|no such file or directory|\\bE(PERM|ACCES|ROFS|NOENT)\\b/i
+  : /operation not permitted|permission denied|read-only file system|\\bE(PERM|ACCES)\\b/i
+const NOT_THE_SANDBOX = /permission denied \\((publickey|password|keyboard-interactive)[^)]*\\)|permission denied, please try again/gi
+// The box's long-running process, which takes what the sandbox stopped (kuvo/sandbox/stopped): one
+// request on its socket, after a hello with the box's sockets' key. Its answer, or null for none.
+function askBox(route, body) {
+  return new Promise((resolve) => {
+    let key
+    try { key = fs.readFileSync(KEY, "utf8").trim() } catch { return resolve(null) }
+    const socket = net.createConnection(path.join(path.dirname(KEY), "vault.sock"))
+    let heard = "", hello = false
+    const done = (value) => { socket.destroy(); resolve(value) }
+    // (A command allowed outside runs for ten minutes at most.)
+    const late = setTimeout(() => done(null), 16 * 60_000)
+    const greeted = setTimeout(() => { if (!hello) done(null) }, 10_000)
+    socket.on("connect", () => socket.write(JSON.stringify({ hello: crypto.randomBytes(18).toString("base64url"), key }) + "\\n"))
+    socket.on("error", () => done(null))
+    socket.on("close", () => { clearTimeout(late); clearTimeout(greeted); done(null) })
+    socket.setEncoding("utf8")
+    socket.on("data", (chunk) => {
+      heard += chunk
+      for (let end; (end = heard.indexOf("\\n")) >= 0; heard = heard.slice(end + 1)) {
+        if (!hello) {
+          hello = true
+          socket.write(JSON.stringify({ method: "POST", path: route, headers: { "content-type": "application/json" }, body: Buffer.from(JSON.stringify(body)).toString("base64") }) + "\\n")
+          continue
+        }
+        clearTimeout(late)
+        try {
+          const answer = JSON.parse(heard.slice(0, end))
+          return done(answer.status === 200 ? JSON.parse(Buffer.from(answer.body, "base64").toString("utf8")) : null)
+        } catch { return done(null) }
+      }
+    })
+  })
+}
+
 export default {
   id: "kuvo-code.sandbox",
   setup: async (ctx) => {
@@ -465,6 +506,27 @@ export default {
         noteMoves(moves)
       }
     })
+    // A command the sandbox stopped, told to the box as the agent's call ends: in Auto, its reviewer
+    // decides whether it runs outside the sandbox, and the agent gets what that printed, or why not.
+    // (Elsewhere the box leaves it as it is: the agent can ask you with sandbox_ask.)
+    await ctx.tool?.hook("execute.after", async (call) => {
+      if ((call.tool !== "shell" && call.tool !== "bash") || call.status !== "completed" || !call.result) return
+      const exit = call.result.metadata?.exit
+      if (typeof exit !== "number" || exit === 0) return
+      // (What it printed is its result's output, which the agent reads as its content's first text,
+      // and then "Exited with code N".)
+      const output = call.result.output
+      const parts = Array.isArray(call.result.content) ? call.result.content : []
+      const printed = typeof output?.output === "string" ? output.output : parts.filter(part => part?.type === "text").map(part => part.text).join("\\n")
+      if (!STOPPED.test(printed.replace(NOT_THE_SANDBOX, ""))) return
+      const answer = await askBox("kuvo/sandbox/stopped", { session: call.sessionID, input: call.input, output: printed.slice(-4000) })
+      if (typeof answer?.text !== "string") return
+      // Not let out: why not, after what it printed, and it ended as it did.
+      if (typeof answer.exit !== "number") return void (call.result.content = [...parts, { type: "text", text: answer.text }])
+      call.result.content = [...parts.filter(part => part?.type !== "text"), { type: "text", text: answer.text }, ...(answer.exit ? [{ type: "text", text: "Exited with code " + answer.exit }] : [])]
+      if (output && typeof output === "object") call.result.output = { ...output, output: answer.text, exit: answer.exit, truncated: false }
+      call.result.metadata = { ...call.result.metadata, exit: answer.exit, truncated: false }
+    })
   },
 }
 `;
@@ -496,7 +558,7 @@ export function agentsNote(platform: "darwin" | "linux", tmuxFits = true): strin
           "On this Mac:",
           "- `swift build`, `swift test` and `swift run` need `--disable-sandbox`: SwiftPM's own sandbox can't start inside this one.",
           "- `xcodebuild` on a project with Swift packages needs `-IDEPackageSupportDisableManifestSandbox=YES -IDEPackageSupportDisablePluginExecutionSandbox=YES`. It can't open a Swift package that has no Xcode project: use `swift build --disable-sandbox` or `swift test --disable-sandbox` there.",
-          "- `ps` and `top` are refused: use `pgrep -fl` or `lsof`.",
+          "- `ps` is refused (it would show other programs' environments): use `pgrep -fl`, `lsof` or `top -l 1`.",
           "- Commands can't open apps (`open`) or start launchd jobs.",
         ]
       : []),
