@@ -99,6 +99,10 @@ public struct GoalTimeline: Sendable {
 
     /// Where the grid's lines go: on whole hours, days or weeks (Mondays), about 6 to 10 of them.
     public func ticks(calendar: Calendar = .current) -> [Date] {
+        Self.ticks(start: start, end: end, unit: unit, calendar: calendar)
+    }
+
+    static func ticks(start: Date, end: Date, unit: Unit, calendar: Calendar) -> [Date] {
         let span = end.timeIntervalSince(start)
         let (component, size): (Calendar.Component, TimeInterval) = switch unit {
         case .hour: (.hour, 3600)
@@ -128,6 +132,10 @@ public struct GoalTimeline: Sendable {
     /// goal that fits whole (a few hours, a couple of days), which shows whole; zoomed out, a long
     /// one shows whole too.
     public func window(calendar: Calendar = .current) -> DateInterval? {
+        Self.window(start: start, end: end, now: now, unit: unit, isOver: isOver, calendar: calendar)
+    }
+
+    static func window(start: Date, end: Date, now: Date, unit: Unit, isOver: Bool, calendar: Calendar) -> DateInterval? {
         let span = end.timeIntervalSince(start)
         guard unit != .hour, !isOver else { return nil }
         let long = span > 14 * 86400

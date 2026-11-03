@@ -459,14 +459,22 @@ public enum GoalPlanWords {
 
     /// What the bar's line says after the goal's name: "2 of 7 · 3 days", "2 of 7 · Next: Mon
     /// 09:00", "Paused · You" (`pausedBy` set while the conversation's goal is paused), "Done · 2 h",
-    /// "Stopped · 2 of 7".
-    public static func line(_ goal: GoalPlan, pausedBy: Goal.PausedBy?? = nil, now: Date = .now, timeZone: TimeZone = .current, locale: Locale = .current) -> String {
+    /// "Stopped · 2 of 7". With `due`, for the list, which has no axis to show it on: a goal under
+    /// way with an end says when, "2 of 7 · 3 days · due Fri 6 Nov".
+    public static func line(_ goal: GoalPlan, pausedBy: Goal.PausedBy?? = nil, due: Bool = false, now: Date = .now, timeZone: TimeZone = .current, locale: Locale = .current) -> String {
         let steps = progress(goal)
-        if goal.state == .running, let pausedBy { return ["Paused", pausedBy.map(Self.pausedBy)].compactMap { $0 }.joined(separator: " · ") }
+        var dueWords: String?
+        if due, goal.state == .running, let ends = goal.ends {
+            let date = Date(timeIntervalSince1970: ends / 1000)
+            var style = Date.FormatStyle(timeZone: timeZone).weekday(.abbreviated).day().month(.abbreviated)
+            style.locale = locale
+            dueWords = "\(date < now ? "was due" : "due") \(date.formatted(style))"
+        }
+        if goal.state == .running, let pausedBy { return ["Paused", pausedBy.map(Self.pausedBy), dueWords].compactMap { $0 }.joined(separator: " · ") }
         switch goal.state {
         case .done: return ["Done", took(goal, now: now)].compactMap { $0 }.joined(separator: " · ")
         case .stopped, .declined: return "Stopped · \(steps)"
-        default: return [steps, next(goal, now: now, timeZone: timeZone, locale: locale) ?? took(goal, now: now)].compactMap { $0 }.joined(separator: " · ")
+        default: return [steps, next(goal, now: now, timeZone: timeZone, locale: locale) ?? took(goal, now: now), dueWords].compactMap { $0 }.joined(separator: " · ")
         }
     }
 
