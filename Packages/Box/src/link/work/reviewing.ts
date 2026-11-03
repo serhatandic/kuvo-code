@@ -40,14 +40,20 @@ const ownEngine = (): Target | null => {
   }
 };
 
-/** The conversation `session` is in (a subagent's, its own conversation's), on the engine or the
- * coding agents' bridge; null where it's on neither. */
+/** The conversation `session` is in (a subagent's, its own conversation's; a run the coding agents
+ * have the engine make, the bridge's conversation it's for), on the engine or the coding agents'
+ * bridge; null where it's on neither. */
 export async function conversationOf(session: string, engine = ownEngine(), bridge = bridgeTarget()): Promise<Conversation | null> {
   for (const [target, agents] of [[engine, false], [bridge, true]] as const) {
     if (!target) continue;
     const get = async (id: string) => (await engineGet(target, `api/session/${encodeURIComponent(id)}`).catch(() => null) as EngineAnswer<EngineSession> | null)?.data ?? null;
     let data = await get(session);
     for (let up = 0; data?.parentID && up < 5; up++) data = await get(data.parentID) ?? data;
+    const runFor = data?.metadata?.kuvo?.engineFor;
+    if (!agents && bridge && typeof runFor === "string" && runFor !== data?.id) {
+      const owner = await conversationOf(runFor, null, bridge);
+      if (owner) return owner;
+    }
     if (data?.id) return { target, agents, data };
   }
   return null;
@@ -128,6 +134,7 @@ export async function reviewIn(session: string, action: ReviewedAction, signal?:
   try {
     verdict = await review(action, context, { model: await reviewModelOf(at, signal), signal, pin });
   } catch (error) {
+    // (Only when its log can't be kept, so there's nothing on it to approve.)
     return { decision: "refuse", reason: `Auto's reviewer couldn't review it (${oneLine(String((error as Error)?.message ?? error), 120)}).`, by: "code", held: false, why: "failed", conversation: at };
   }
   if (verdict.paused) {

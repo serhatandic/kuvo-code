@@ -17,6 +17,7 @@
 // client to show.
 
 import { createHash, randomBytes } from "node:crypto";
+import dns from "node:dns/promises";
 import fs from "node:fs";
 import path from "node:path";
 import { isObject } from "../../shared/json";
@@ -81,7 +82,10 @@ export const ANSWER_WITHIN = 60_000;
 const WRITERS = new Set(["tee", "cp", "mv", "ln", "install", "rsync", "sed", "perl", "touch", "mkdir", "rm", "rmdir", "truncate", "dd", "chmod", "chown", "unlink", "ditto", "patch"]);
 // Programs that run the program after them (past their own options), and those that run one
 // among their arguments.
-const WRAPPERS = new Set(["sudo", "doas", "env", "command", "builtin", "exec", "nohup", "time", "nice", "ionice", "timeout", "stdbuf", "xargs", "caffeinate", "setsid", "unbuffer", "chronic"]);
+const WRAPPERS = new Set(["sudo", "doas", "env", "command", "builtin", "exec", "nohup", "time", "nice", "ionice", "timeout", "stdbuf", "xargs", "caffeinate", "setsid", "unbuffer", "chronic", "npx", "bunx", "pnpx"]);
+// Their options that take the next word as a value (`sudo -u me`), so it isn't taken for the program.
+const VALUED: Record<string, RegExp> = { sudo: /^-[ugCDhprtTU]$/, doas: /^-[uC]$/, env: /^-[uCS]$/, timeout: /^-[sk]$/, nice: /^-n$/, ionice: /^-[cnp]$/,
+  xargs: /^-[IiLlnPsdaE]$/, npx: /^(-p|--package)$/, bunx: /^(-p|--package)$/, pnpx: /^(-p|--package)$/ };
 const RUNS_ANOTHER = new Set([...WRAPPERS, "find", "watch", "parallel", "-exec", "-execdir", "-ok"]);
 // Programs that delete the paths they're given (find, with -delete or -exec rm).
 const DELETERS = new Set(["rm", "rmdir", "unlink", "shred", "srm", "trash"]);
@@ -167,12 +171,15 @@ const WRECKS_HOME = "It deletes your home folder, moves it away or locks you out
 /** Where the program of a part is among its words, past what runs it (sudo, env, timeout…) and
  * their options; -1 for none. */
 function programAt(words: readonly string[]): number {
-  let wrapped = false;
+  let wrapper = "";
   for (let at = 0; at < words.length; at++) {
     const word = words[at];
     if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(word)) continue;
-    if (WRAPPERS.has(nameOf(word))) { wrapped = true; continue; }
-    if (wrapped && (word.startsWith("-") || /^[0-9.]+[smhd]?$/.test(word))) continue;
+    if (WRAPPERS.has(nameOf(word))) { wrapper = nameOf(word); continue; }
+    if (wrapper && (word.startsWith("-") || /^[0-9.]+[smhd]?$/.test(word))) {
+      if (VALUED[wrapper]?.test(word)) at++;
+      continue;
+    }
     return at;
   }
   return -1;
@@ -295,7 +302,7 @@ function commandPersists(command: string, start: string, policy: FencePolicy, de
     if (program === "systemd-run" && args.some(word => /^--(on-|timer-property)/.test(word))) return true;
     if (program === "pm2" && /^(startup|save)$/.test(args.find(word => !word.startsWith("-")) ?? "")) return true;
     if (program === "loginctl" && args.includes("enable-linger")) return true;
-    if ((program === "docker" || program === "podman") && /^(run|create|update)$/.test(args.find(word => !word.startsWith("-")) ?? "") && args.some((word, index) => /^--restart=(always|unless-stopped)$/.test(word) || word === "--restart" && /^(always|unless-stopped)$/.test(args[index + 1] ?? ""))) return true;
+    if ((program === "docker" || program === "podman") && /^(run|create|update)$/.test(args.filter(word => !word.startsWith("-") && word !== "container")[0] ?? "") && args.some((word, index) => /^--restart=(always|unless-stopped)$/.test(word) || word === "--restart" && /^(always|unless-stopped)$/.test(args[index + 1] ?? ""))) return true;
     if (program === "launchctl" && /^(load|bootstrap|enable|submit)$/.test(args.find(word => !word.startsWith("-")) ?? "")) return true;
     if (program === "systemctl" && args.some(word => /^(enable|link|reenable|preset|edit)$/.test(word))) return true;
     if (program === "brew" && args[0] === "services" && /^(start|restart)$/.test(args[1] ?? "")) return true;
@@ -339,9 +346,9 @@ function unreadPersists(command: string, policy: FencePolicy): boolean {
  * your SSH keys, your sign-ins' credential files, your global git settings. Each in the words a
  * refusal says it, what in your words names it, and how the agent goes on without it. */
 export const OWN = {
-  keys: { words: "your SSH keys (~/.ssh)", named: /\bssh\b|\b(deploy|signing|private|public|new) keys?\b|\bkey ?pair\b/i, instead: "Keep a key the task needs in the project's own folder, or carry on without it." },
-  credentials: { words: "your sign-ins' credential files", named: /credential|\.netrc|npmrc|pypirc|\baws\b|docker login|kube ?config|keychain|\btokens?\b|\blog ?in\b|sign ?in/i, instead: "Use the sign-ins as they are, or carry on without it." },
-  git: { words: "your global git settings", named: /git ?config|\bglobal(ly)?\b|git (identity|user|name|email|author)|author (name|email)|commit(ter)? (name|email|identity)/i, instead: "Set it for this repository only (git config without --global), or for the one command (git -c user.email=… commit)." },
+  keys: { words: "your SSH keys (~/.ssh)", named: /\bssh[- ]?(keys?|keygen|config|access|identity|setup)\b|\bset ?up ssh\b|\b(deploy|signing) keys?\b|\bkey ?pair\b|authorized_keys|~\/\.ssh/i, instead: "Keep a key the task needs in the project's own folder, or carry on without it." },
+  credentials: { words: "your sign-ins' credential files", named: /credential|\.netrc|npmrc|pypirc|aws (configure|profile|keys?|credentials|sign ?in|log ?in)|(docker|npm|registry|gh|github) (log ?in|auth|token)|\b(log|sign) ?in to\b|kube ?config|keychain|\b(auth|access|api|npm|registry|publish) tokens?\b/i, instead: "Use the sign-ins as they are, or carry on without it." },
+  git: { words: "your global git settings", named: /git ?config|global(ly)? git|git (settings|identity|user|name|email|author|credentials?|globally)|(author|committer|commit) (name|email|identity)/i, instead: "Set it for this repository only (git config without --global), or for the one command (git -c user.email=… commit)." },
 } as const;
 export type OwnKind = keyof typeof OWN;
 
@@ -350,16 +357,20 @@ const CREDENTIALS = [".aws/credentials", ".aws/config", ".netrc", ".git-credenti
   ".config/gcloud", ".azure", ".gnupg", ".password-store", ".local/share/keyrings", "Library/Keychains", ".cargo/credentials", ".cargo/credentials.toml", ".gem/credentials", ".terraform.d/credentials.tfrc.json"];
 const GIT_GLOBAL = [".gitconfig", ".config/git/config"];
 
-/** Which of yours `where` is, if it's one: in ~/.ssh (but what runs at login, which is
- * persistence's), your credential files, your global git settings. */
+/** Which of yours `where` is, if it's one: in ~/.ssh (its keys, its config and who may log in with
+ * a key, not the hosts you trust), your credential files, your global git settings. */
 function ownAt(where: string, home: string): OwnKind | null {
   if (where === "/etc/gitconfig" || where === "/private/etc/gitconfig") return "git";
   if (!where.startsWith(home + "/")) return null;
   const rest = where.slice(home.length + 1);
   if (GIT_GLOBAL.some(each => inside(rest, each))) return "git";
   if (CREDENTIALS.some(each => inside(rest, each))) return "credentials";
-  if (inside(rest, ".ssh") && !atLogin(where, home)) return "keys";
-  return null;
+  if (!inside(rest, ".ssh")) return null;
+  // (The folder itself, and the hosts you trust, aren't keys; who may log in with a key is.)
+  const name = rest.slice(".ssh/".length);
+  if (/^authorized_keys2?$/.test(name)) return "keys";
+  if (!name || name.startsWith("known_hosts") || atLogin(where, home)) return null;
+  return "keys";
 }
 
 /** Which of yours `action` changes for every project (`OWN`), if it does: a write there, or a
@@ -371,20 +382,52 @@ export function ownOf(action: ReviewedAction, policy: FencePolicy = fencePolicy(
 }
 
 // git's words past its own options (`-C repo`, `-c a=b`), and whether they change its global or
-// system settings (not only read them).
-function gitGlobal(args: readonly string[]): boolean {
+// system settings (`--global`, `--system`, or `--file ~/.gitconfig`), not only read them: a key alone
+// is read, a key and a value written.
+function gitGlobal(args: readonly string[], folder: string, home: string): boolean {
   let at = 0;
   while (at < args.length && args[at].startsWith("-")) at += /^(-C|-c|--git-dir|--work-tree|--namespace|--config-env)$/.test(args[at]) ? 2 : 1;
   if (args[at] !== "config") return false;
   const rest = args.slice(at + 1);
-  if (!rest.some(word => word === "--global" || word === "--system")) return false;
-  return !rest.some(word => /^(--get|--get-all|--get-regexp|--get-urlmatch|--list|-l|--show-origin|--show-scope|get|list)$/.test(word));
+  let global = false, writes = false, reads = false;
+  const named: string[] = [];
+  for (let index = 0; index < rest.length; index++) {
+    const word = rest[index];
+    if (word === "--global" || word === "--system") global = true;
+    else if (/^(--file|-f)$/.test(word) || word.startsWith("--file=")) {
+      const file = word.startsWith("--file=") ? word.slice("--file=".length) : rest[++index] ?? "";
+      const where = pathOf(file.includes("/") ? file : `./${file}`, folder);
+      if (where && ownAt(where, home) === "git") global = true;
+    } else if (/^(--unset|--unset-all|--add|--replace-all|--edit|-e|--rename-section|--remove-section)$/.test(word)) writes = true;
+    else if (/^(--get|--get-all|--get-regexp|--get-urlmatch|--get-color|--get-colorbool|--list|-l)$/.test(word)) reads = true;
+    else if (/^(--type|--default|--comment|--value|--url|--blob)$/.test(word)) index++;
+    else if (!word.startsWith("-")) named.push(word);
+  }
+  if (!global) return false;
+  if (/^(set|unset|edit|rename-section|remove-section)$/.test(named[0] ?? "")) return true;
+  if (/^(get|list)$/.test(named[0] ?? "")) return false;
+  return writes || (!reads && named.length >= 2);
+}
+
+/** Programs that write your own settings themselves: `npm config set` (into ~/.npmrc, unless it's the
+ * project's), `aws configure`, `gh auth setup-git` and `gh auth login`, `docker login`. */
+function toolOwn(program: string, args: readonly string[]): OwnKind | null {
+  const [first, second] = args.filter(word => !word.startsWith("-"));
+  if ((program === "npm" || program === "pnpm") && (first === "set" || (first === "config" && second === "set"))) {
+    const project = args.some((word, index) => /^--location=project$/.test(word) || ((word === "--location" || word === "-L") && args[index + 1] === "project"));
+    return project ? null : "credentials";
+  }
+  if (program === "aws" && first === "configure" && !/^(get|list|list-profiles|export-credentials)$/.test(second ?? "")) return "credentials";
+  if (program === "gh" && first === "auth") return second === "setup-git" ? "git" : second === "login" ? "credentials" : null;
+  if ((program === "docker" || program === "podman") && first === "login") return "credentials";
+  return null;
 }
 
 // Whether ssh-keygen makes (or changes) a key in ~/.ssh: by `-f`, or where it puts one by default.
 function keygenWrites(args: readonly string[], folder: string, home: string): boolean {
   // (Listing, printing a public key, finding or removing a host: it only reads, or tidies known_hosts.)
-  if (args.some(word => /^-[a-zA-Z]*[lyFBQR]/.test(word))) return false;
+  // (Signing with a key, or making the computer's own host keys in /etc/ssh, isn't changing yours.)
+  if (args.some(word => /^-[a-zA-Z]*[lyFBQRYA]/.test(word))) return false;
   const flag = args.findIndex(word => /^-[a-zA-Z]*f/.test(word));
   const given = flag < 0 ? undefined : /^-[a-zA-Z]*f(.+)$/.exec(args[flag])?.[1] ?? args[flag + 1];
   if (!given) return true;
@@ -392,16 +435,19 @@ function keygenWrites(args: readonly string[], folder: string, home: string): bo
   return Boolean(where && inside(where, home + "/.ssh"));
 }
 
+// A line read by its words (one with `$…` too, where what the shell fills in stays as written).
 function commandOwn(command: string, start: string, policy: FencePolicy, depth: number): OwnKind | null {
+  if (depth > 3) return null;
   const line = readLine(command, true);
-  if ("unreadable" in line || depth > 3) return unreadOwn(command, policy);
   let folder = start;
-  for (const part of line.parts) {
+  for (const part of "unreadable" in line ? roughParts(command) : line.parts) {
     const at = programAt(part.words);
     const program = at < 0 ? "" : nameOf(part.words[at]);
     const args = part.words.slice(at + 1);
-    if (program === "git" && gitGlobal(args)) return "git";
+    if (program === "git" && gitGlobal(args, folder, policy.home)) return "git";
     if (program === "ssh-keygen" && keygenWrites(args, folder, policy.home)) return "keys";
+    const tool = toolOwn(program, args);
+    if (tool) return tool;
     const inner = innerScript(program, part.words, at);
     const found = inner ? commandOwn(inner, folder, policy, depth + 1) : null;
     if (found) return found;
@@ -411,17 +457,21 @@ function commandOwn(command: string, start: string, policy: FencePolicy, depth: 
       continue;
     }
     if (WRITERS.has(program)) {
-      // (What it copies from isn't written: only its last word for cp, mv and the like.)
+      // (What it copies from isn't written: only its last word for cp, mv and the like, and into a
+      // folder, what lands in it.)
       const named = args.filter(word => !word.startsWith("-"));
-      const written = /^(cp|mv|ln|install|rsync|ditto)$/.test(program) ? named.slice(-1) : named;
+      const copies = /^(cp|mv|ln|install|rsync|ditto)$/.test(program);
+      const written = copies ? named.slice(-1) : named;
       for (const word of written) {
         const where = pathOf(word, folder);
-        const kind = where ? ownAt(where, policy.home) : null;
+        const landed = where && copies && (word.endsWith("/") || fs.statSync(where, { throwIfNoEntry: false })?.isDirectory())
+          ? named.slice(0, -1).map(source => path.join(where, path.basename(source))) : [where];
+        const kind = landed.map(each => each ? ownAt(each, policy.home) : null).find(Boolean);
         if (kind) return kind;
       }
     }
     for (const word of part.writes) {
-      const where = pathOf(word.startsWith("/") || word.startsWith("~") || word.startsWith(".") ? word : `./${word}`, folder);
+      const where = pathOf(/^[/~.$]/.test(word) ? word : `./${word}`, folder);
       const kind = where ? ownAt(where, policy.home) : null;
       if (kind) return kind;
     }
@@ -429,17 +479,48 @@ function commandOwn(command: string, start: string, policy: FencePolicy, depth: 
   return null;
 }
 
-/** The same for a line that can't be read plainly, by its text. */
-function unreadOwn(command: string, policy: FencePolicy): OwnKind | null {
-  if (/\bgit\b[^;&|\n]*\bconfig\b[^;&|\n]*--(global|system)\b/.test(command) && !/\bconfig\b[^;&|\n]*\s(--get\S*|--list|-l|get|list)\b/.test(command)) return "git";
-  if (/\bssh-keygen\b/.test(command) && !/\bssh-keygen\b[^;&|\n]*\s-[a-zA-Z]*[lyFBQR]\b/.test(command)) return "keys";
-  if (!(/[^<]>|^>/.test(command) || command.split(/[^A-Za-z0-9_.-]+/).some(word => WRITERS.has(word)))) return null;
-  const home = String.raw`(~|\$HOME|\$\{HOME\}|${policy.home.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})/`;
-  const at = (places: readonly string[]) => new RegExp(`${home}(${places.map(each => each.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})(?=$|[\\s'"/;|&)])`).test(command);
-  if (at(GIT_GLOBAL)) return "git";
-  if (at(CREDENTIALS)) return "credentials";
-  if (at([".ssh"])) return "keys";
-  return null;
+/** A line that can't be read plainly, split as the shell would split its words, quotes taken off
+ * and `$…` left as written (homeWord reads `$HOME` and `${HOME}`): its parts by `;`, `|` and `&`,
+ * each with the files it redirects into. */
+function roughParts(command: string): { words: string[]; writes: string[] }[] {
+  const parts = [{ words: [] as string[], writes: [] as string[] }];
+  let word: string | null = null, quote = "", into: "write" | "read" | null = null;
+  const end = () => {
+    if (word === null) return;
+    if (into === "write") parts.at(-1)!.writes.push(word);
+    else if (!into) parts.at(-1)!.words.push(word);
+    word = null;
+    into = null;
+  };
+  for (let at = 0; at < command.length; at++) {
+    const char = command[at];
+    if (quote) {
+      if (char === quote) quote = "";
+      else if (quote === '"' && char === "\\" && at + 1 < command.length) word += command[++at];
+      else word += char;
+    } else if (char === "'" || char === '"') {
+      quote = char;
+      word ??= "";
+    } else if (char === "\\" && at + 1 < command.length) word = (word ?? "") + command[++at];
+    else if (/\s/.test(char)) end();
+    else if (/[;|&]/.test(char)) {
+      end();
+      if (parts.at(-1)!.words.length || parts.at(-1)!.writes.length) parts.push({ words: [], writes: [] });
+    } else if (char === ">" || char === "<") {
+      // (A descriptor before it, `2>`, isn't a word; `>&2` duplicates one, writing no file.)
+      if (word !== null && /^\d+$/.test(word)) word = null;
+      else end();
+      if (command[at + 1] === char) at++;
+      if (command[at + 1] === "&") {
+        at++;
+        while (/[\d-]/.test(command[at + 1] ?? "")) at++;
+        continue;
+      }
+      into = char === ">" ? "write" : "read";
+    } else word = (word ?? "") + char;
+  }
+  end();
+  return parts.filter(part => part.words.length || part.writes.length);
 }
 
 const squeeze = (text: string) => text.replace(/\s+/g, " ").trim();
@@ -788,7 +869,9 @@ function answerWithin(model: NonNullable<SmallModel>, prompt: string, within: nu
 export async function review(action: ReviewedAction, context: ReviewContext, given: ReviewWith): Promise<Verdict & { paused?: boolean }> {
   const now = given.now ?? Date.now;
   const folder = given.folder ?? REVIEWS_FOLDER;
-  const { verdict, key } = await judge(action, context, given, now(), folder);
+  // (One it fails to judge is held back like any it can't, on the log for you to approve.)
+  const { verdict, key } = await judge(action, context, given, now(), folder)
+    .catch(error => ({ verdict: heldBack(`Auto's reviewer couldn't review it (${oneLine(String((error as Error)?.message ?? error), 120)}).`, "failed"), key: actionKey(action) }));
   if (verdict.decision === "allow" && verdict.by === "code") return verdict;
   let paused: boolean;
   try {
@@ -817,6 +900,9 @@ async function judge(action: ReviewedAction, context: ReviewContext, given: Revi
   if (action.kind === "file" && action.access === "read" && !isSecret(realish(action.path), policy)) return { verdict: { decision: "allow", reason: "Reading outside its folder goes ahead.", by: "code" }, key: actionKey(action) };
   // What it runs, read first, whole: a script it can't read, it can't judge (`problem`, held back).
   const scripts: { name: string; text: string }[] = [];
+  // (And what an approval is tied to: those, and one too long to read, or what can be told of one
+  // that can't be read, so a script changed after you approved it is judged again.)
+  const seen: { text: string }[] = [];
   let fetched: Fetched | undefined;
   let problem: Verdict | undefined;
   if (action.kind === "command") {
@@ -827,7 +913,13 @@ async function judge(action: ReviewedAction, context: ReviewContext, given: Revi
       if (problem) continue;
       let text: string;
       try { text = fs.readFileSync(file, "utf8"); }
-      catch { problem = heldBack(`It runs ${path.basename(file)}, which couldn't be read first.`, "unread"); continue; }
+      catch {
+        const stat = fs.statSync(file, { throwIfNoEntry: false });
+        seen.push({ text: `${file}\0${stat ? `${stat.size}\0${stat.mtimeMs}` : "none"}` });
+        problem = heldBack(`It runs ${path.basename(file)}, which couldn't be read first.`, "unread");
+        continue;
+      }
+      seen.push({ text });
       if (text.length > MOST_SCRIPT) { problem = heldBack(`It runs ${path.basename(file)}, too long to be read whole first.`, "unread"); continue; }
       scripts.push({ name: file, text });
     }
@@ -837,12 +929,12 @@ async function judge(action: ReviewedAction, context: ReviewContext, given: Revi
       if (given.pin === false) problem = heldBack(`It runs a script straight from ${oneLine(urls[0], 120)}, which can't be pinned to the copy read here.`, "unpinned");
       else {
         const got = await fetchScripts(action.command, action.folder, urls, given);
-        if ("fetched" in got) { fetched = got.fetched; scripts.push(...got.scripts); }
+        if ("fetched" in got) { fetched = got.fetched; scripts.push(...got.scripts); seen.push(...got.scripts); }
         else problem = heldBack(got.why, got.kind);
       }
     }
   }
-  const key = actionKey(action, scripts);
+  const key = actionKey(action, seen);
   const done = (verdict: Verdict) => {
     if (fetched && verdict.decision === "allow") return { verdict: { ...verdict, fetched }, key };
     forgetFetched(fetched);
@@ -897,16 +989,33 @@ export function privateHost(url: string): boolean {
   let host: string;
   try { host = new URL(url).hostname.toLowerCase().replace(/^\[|\]$/g, ""); } catch { return true; }
   if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal") || !host.includes(".") && !host.includes(":")) return true;
-  if (host.includes(":")) return host === "::" || host === "::1" || /^(fc|fd|fe80)/.test(host) || host.startsWith("::ffff:");
+  if (host.includes(":")) return host === "::" || host === "::1" || /^(fc|fd|fe[89ab])/.test(host) || host.startsWith("::ffff:");
   const parts = host.split(".").map(Number);
   if (parts.length !== 4 || parts.some(part => !Number.isInteger(part))) return false;
   const [a, b] = parts;
   return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127);
 }
 
-/** What `url` answers, read up to `MOST_FETCHED` bytes whatever it says its length is. */
+/** Whether `url`'s name leads to one of this computer's or its network's own addresses. */
+async function leadsInside(url: string): Promise<boolean> {
+  if (privateHost(url)) return true;
+  const host = new URL(url).hostname.replace(/^\[|\]$/g, "");
+  const found = await dns.lookup(host, { all: true }).catch(() => []);
+  return found.some(each => privateHost(each.family === 6 ? `http://[${each.address}]/` : `http://${each.address}/`));
+}
+
+/** What `url` answers, read up to `MOST_FETCHED` bytes whatever it says its length is; never from
+ * this computer's or its network's own addresses, by name or on the way. */
 export async function fetchText(url: string, signal: AbortSignal): Promise<string> {
-  const answer = await fetch(url, { redirect: "follow", signal });
+  let answer: Response;
+  for (let hops = 0; ; hops++) {
+    if (!localScripts() && await leadsInside(url)) throw new Error("it leads to a local or private address");
+    answer = await fetch(url, { redirect: "manual", signal });
+    const next = answer.status >= 300 && answer.status < 400 ? answer.headers.get("location") : null;
+    if (!next) break;
+    if (hops >= 5) throw new Error("it sends you on too many times");
+    url = new URL(next, url).href;
+  }
   if (!answer.ok) throw new Error(`it answered ${answer.status}`);
   if (Number(answer.headers.get("content-length") ?? 0) > MOST_FETCHED) throw new Error("too long");
   const reader = answer.body?.getReader();
