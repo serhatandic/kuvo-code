@@ -187,9 +187,7 @@ private final class ClaimedRects: NSResponder {
         DispatchQueue.main.async { [weak self, claim] in
             guard let self else { return claim.show(nil) }
             isChecking = false
-            guard NSApp.isActive, let window = view?.window, window.isKeyWindow,
-                  NSWindow.windowNumber(at: NSEvent.mouseLocation, belowWindowWithWindowNumber: 0) == window.windowNumber
-            else { return claim.show(nil) }
+            guard NSApp.isActive, let window = view?.window, window.isKeyWindow else { return claim.show(nil) }
             claim.show(cursor(at: window.mouseLocationOutsideOfEventStream))
         }
     }
