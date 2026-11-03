@@ -4,9 +4,10 @@ import Foundation
 import OpenCodeKit
 
 extension GoalPlans {
-    /// KUVO_DEMO_GOAL=<bot's name>:<proposed|cant|running|month|weekly|done|sweep|sweepcard|sweepnew|sweeprun>: the bot's goal, a sample (the
-    /// Driftwood landing page), for a look at its card and its lanes; `sweepnew` and `sweeprun` are Sweep with
-    /// short step names, before a step begins and three steps in, due in three days; `cant` is the card of a box
+    /// KUVO_DEMO_GOAL=<bot's name>:<proposed|cant|running|month|weekly|done|sweep|sweepcard|sweepnew|sweeprun|sweeptwo>: the bot's goal, a sample (the
+    /// Driftwood landing page), for a look at its card and its lanes; `sweepnew`, `sweeprun` and `sweeptwo` are Sweep
+    /// with short step names, before a step begins, three steps in, and three done with two under way
+    /// together, due in three days; `cant` is the card of a box
     /// that can't work on it alone, its sandbox check failed (KUVO_DEMO_SANDBOX=<reason> for another reason,
     /// or `old`).
     func demo(for bot: Bot) {
@@ -123,10 +124,10 @@ extension GoalPlans {
                 """
             let steps: [GoalPlan.Step] = [
                 .init(id: "i1", text: "Plan the screens, data model and navigation", state: .todo),
-                .init(id: "i2", text: "Scaffold the Sweep Xcode project (SwiftUI, SwiftData, navigation, app + test targets)", state: .todo, site: apple, after: ["i1"]),
+                .init(id: "i2", text: "Scaffold the Sweep Xcode project (SwiftUI, SwiftData, navigation, app + test targets)", state: .todo, after: ["i1"]),
                 .init(id: "i3", text: "Routines, streaks and reminders", state: .todo, after: ["i2"]),
                 .init(id: "i4", text: "Monetization: RevenueCat SDK, paywall, monthly and yearly products, StoreKit test configuration", state: .todo, site: revenuecat, after: ["i2"]),
-                .init(id: "i5", text: "Build and test on the simulator and a device", state: .todo, site: apple, after: ["i3", "i4"]),
+                .init(id: "i5", text: "Build and test on the simulator and a device", state: .todo, after: ["i3", "i4"]),
                 .init(id: "i6", text: "App Store listing, screenshots and privacy details", state: .todo, site: connect, after: ["i5"]),
                 .init(id: "i7", text: "TestFlight, then submit for review", state: .todo, site: connect, after: ["i6"]),
             ]
@@ -144,22 +145,24 @@ extension GoalPlans {
             return GoalPlan(id: "goal_demo", bot: bot.id, name: bot.name, session: bot.sessionID, goal: goal, title: "Sweep iOS app",
                             state: running ? .running : .proposed, steps: steps, checks: running ? checks.filter { $0.state == .ok } : checks,
                             proposed: ms(-20), started: running ? ms(-15) : nil, waiting: running ? waiting : [], alone: true)
-        case "sweepnew", "sweeprun":
-            // Sweep as round 4 drew it: short names, Build and Ship, due in three days.
-            let apple = "developer.apple.com", revenuecat = "revenuecat.com"
-            let run = kind == "sweeprun"
+        case "sweepnew", "sweeprun", "sweeptwo":
+            // Sweep with short names, due in three days: before a step begins, three steps in with
+            // the paywall under way, or three done with the dashboard and the polish under way together.
+            let revenuecat = "revenuecat.com", appStoreConnect = "appstoreconnect.apple.com"
+            let run = kind != "sweepnew", two = kind == "sweeptwo"
             let goal = "Build an iOS app that prints money: a shippable product, no backend, **RevenueCat** for users and payments, project at `~/Desktop/main/money-printer`. No budget needed: everything runs locally, no paid APIs or services. Concept I'd ship: **Sweep**, an on-device photo and storage cleaner that finds duplicates, blurry shots and old screenshots, with a yearly subscription."
             let steps: [GoalPlan.Step] = [
-                .init(id: "p1", text: "Set up the Xcode project", state: run ? .done : .todo, began: run ? ms(-130) : nil, ended: run ? ms(-94) : nil),
-                .init(id: "p2", text: "Photo scan engine", state: run ? .done : .todo, after: ["p1"], began: run ? ms(-94) : nil, ended: run ? ms(-22) : nil),
-                .init(id: "p3", text: "Storage dashboard", state: .todo, after: ["p2"]),
-                .init(id: "p4", text: "RevenueCat paywall", state: run ? .doing : .todo, progress: run ? 0.5 : nil, note: run ? "2 of 4 screens" : nil, site: revenuecat, after: ["p1"], began: run ? ms(-88) : nil),
-                .init(id: "p5", text: "Icon and polish", state: .todo, after: ["p3", "p4"]),
-                .init(id: "p6", text: "Test on a device", state: .todo, after: ["p5"]),
-                .init(id: "p7", text: "App Store kit", state: .todo, site: apple, after: ["p6"]),
-                .init(id: "p8", text: "Submit for review", state: .todo, site: "appstoreconnect.apple.com", after: ["p7"]),
+                .init(id: "p1", text: "Set up the Xcode project", state: run ? .done : .todo, detail: "SwiftUI app and test targets", began: run ? ms(-130) : nil, ended: run ? ms(-94) : nil),
+                .init(id: "p2", text: "Photo scan engine", state: run ? .done : .todo, detail: "Duplicates and blurry shots", after: ["p1"], began: run ? ms(-94) : nil, ended: run ? ms(-22) : nil),
+                .init(id: "p3", text: "Storage dashboard", state: two ? .doing : .todo, progress: two ? 0.4 : nil, detail: "Space used, by kind", after: ["p2"], began: two ? ms(-21) : nil),
+                .init(id: "p4", text: "RevenueCat paywall", state: two ? .done : run ? .doing : .todo, progress: run && !two ? 0.5 : nil, note: run && !two ? "2 of 4 screens" : nil,
+                      detail: "SDK, paywall, test config", site: revenuecat, after: ["p1"], began: run ? ms(-88) : nil, ended: two ? ms(-40) : nil),
+                .init(id: "p5", text: "Icon and polish", state: two ? .doing : .todo, detail: "Icon, launch, empty states", after: ["p4"], began: two ? ms(-38) : nil),
+                .init(id: "p6", text: "Test on a device", state: .todo, detail: "Device runs and screenshots", after: ["p3", "p5"]),
+                .init(id: "p7", text: "App Store kit", state: .todo, detail: "Privacy, listing, screenshots", site: appStoreConnect, after: ["p6"]),
+                .init(id: "p8", text: "Submit for review", state: .todo, detail: "Upload and send for review", site: appStoreConnect, after: ["p7"]),
             ]
-            let waiting = [GoalPlan.Waiting(id: "w1", kind: .you, text: "RevenueCat project", detail: "with an API key for the app", url: URL(string: "https://app.revenuecat.com"), site: revenuecat, at: ms(-12))]
+            let waiting = two ? [] : [GoalPlan.Waiting(id: "w1", kind: .you, text: "RevenueCat project", detail: "with an API key for the app", url: URL(string: "https://app.revenuecat.com"), site: revenuecat, at: ms(-12))]
             return GoalPlan(id: "goal_demo_\(kind)", bot: bot.id, name: bot.name, session: bot.sessionID, goal: goal, title: "Sweep iOS app",
                             state: .running, steps: steps, ends: ms(3 * 24 * 60), proposed: ms(-140), started: ms(run ? -131 : -1), waiting: waiting, alone: true)
         default:
