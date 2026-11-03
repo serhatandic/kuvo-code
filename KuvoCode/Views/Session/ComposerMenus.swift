@@ -13,7 +13,7 @@ enum ToolApproval: String, CaseIterable, Codable {
     /// Everything inside the sandbox goes ahead; past it, a reviewer decides, and what it refuses
     /// is held back for you, never left waiting on you.
     case auto
-    /// No sandbox, no reviewer, nothing asks. Confirmed once on each computer; never a bot's.
+    /// No sandbox, no reviewer, nothing asks. Confirmed once on each computer.
     case fullAccess
 
     /// This Mac's last pick, for what isn't a conversation's own (a bot's kit, group chats).

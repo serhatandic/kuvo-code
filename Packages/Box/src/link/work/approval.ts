@@ -8,8 +8,9 @@
 //   closed, and says why).
 // - Full Access: nothing asks, and nothing stands in the way: its commands (and a coding agent's
 //   own program) run outside the sandbox, no reviewer, its file tools go anywhere. Picked once you
-//   confirmed it on this computer (`box/approval.json`: a client asks you the first time), for a
-//   bot's conversation and its work as for any other.
+//   confirmed it on this computer (`box/approval.json`: a client asks you the first time).
+// A bot's conversation and its work are as any other's: only what you set in Edit Bot holds a bot
+// back.
 // Plan stays the conversation's agent, beside this. What the box writes is the engine's rules for
 // it (the coding agents' bridge reads the same ones and sets each agent from them), made again
 // with Settings › Permissions as they are, so a Don't Allow there still holds in every one.
@@ -19,7 +20,7 @@ import { isObject } from "../../shared/json";
 import { textOf, writePrivate } from "../files";
 import { BOX } from "../home";
 import { holdsBack, isParticular, permissionsHere, refreshedRules } from "../bots/tell";
-import { asksPublishing, withAlwaysAsk } from "./always";
+import { hasFormerAsks } from "./former-asks";
 import { sandboxGap } from "./sandbox";
 import type { KitRule } from "../bots/kit";
 
@@ -61,7 +62,7 @@ export function allowFullAccess(on: boolean, file = APPROVAL_FILE): void {
 }
 
 /** The approval a new conversation here gets where its client didn't say: Auto the first time on
- * this computer, then the last one you picked here (never a bot's); Auto while Full Access, picked
+ * this computer, then the last one you picked here; Auto while Full Access, picked
  * last, is switched off here since. */
 export function defaultApproval(file = APPROVAL_FILE): Approval {
   const kept = keptHere(file);
@@ -91,7 +92,8 @@ export interface Unavailable {
 }
 
 /** Where a conversation is, as its approval goes: on the coding agents (`agents`, whose own
- * programs run its commands), a bot's or its work (`bot`). */
+ * programs run its commands), a bot's or its work (`bot`): one from before there were approvals
+ * gets this computer's default, as a new one does. */
 export interface Where {
   agents?: boolean;
   bot?: boolean;
@@ -139,11 +141,11 @@ const asksFor = (rules: readonly KitRule[], action: string) => rules.some(rule =
 export const asksBeforeCommands = (approval: Approval) => approval === "askFirst" || approval === "acceptEdits";
 
 /** The rules a conversation runs with for `approval`: made with this box's Settings › Permissions
- * as they are (or, where they aren't its own, the Don't Allows it has), its own folders kept; for
- * a bot's, what always comes to you asked whatever it is (`always`). Accept Edits allows edits in
+ * as they are (or, where they aren't its own, the Don't Allows it has), its own folders kept
+ * (only those of its own rules: never the asks a box before put in a bot's). Accept Edits allows edits in
  * place of Ask First's asks for them, so an Ask in Settings doesn't hold them back, and a Don't
  * Allow there, after, still does. */
-export function approvalRules(approval: Approval, current: readonly KitRule[], always: { publishing: boolean } | null = null): KitRule[] {
+export function approvalRules(approval: Approval, current: readonly KitRule[]): KitRule[] {
   const settings = permissionsHere() ?? current.filter(holdsBack);
   let made = refreshedRules([...(asksBeforeCommands(approval) ? [SHELL_ASK] : []), ...current.filter(isParticular)], settings);
   if (approval === "acceptEdits") made = made.map(rule => (EDITS.has(rule.action) && rule.resource === "*" && rule.effect === "ask" ? { ...rule, effect: "allow" } : rule));
@@ -156,24 +158,18 @@ export function approvalRules(approval: Approval, current: readonly KitRule[], a
   // hold the agent for you, it reads them as any file in its folder (first, so a Don't Allow in
   // Settings, after, still holds).
   if (approval === "auto" || approval === "fullAccess") made = [...ENV_READS, ...made];
-  return always ? withAlwaysAsk(made, always) : made;
+  return made;
 }
 
 const ENV_READS: KitRule[] = [{ action: "read", resource: "*.env", effect: "allow" }, { action: "read", resource: "*.env.*", effect: "allow" }];
 
 /** Whether rules made for `applied` lack what a box before 0.9.185 didn't give it (`.env` reads in
- * Auto and Full Access): then they're made again. */
-export const madeBefore = (rules: readonly KitRule[], applied: Approval) =>
+ * Auto and Full Access), or keep the asks one before 0.9.189 put in a bot's: then they're made
+ * again. */
+export const madeBefore = (rules: readonly KitRule[], applied: Approval) => hasFormerAsks(rules, permissionsHere() ?? []) ||
   (applied === "auto" || applied === "fullAccess") && !ENV_READS.every(env => rules.some(rule => rule.action === env.action && rule.resource === env.resource && rule.effect === env.effect));
 
 const isOutside = (rule: KitRule) => rule.action === "external_directory" && rule.resource === "*";
-
-/** What always comes to you, asked in a bot's conversation and its work whatever its approval: and
- * publishing, where its rules asked before it already or its bot's goal does (`publishes`). Null
- * for any other conversation. */
-export function alwaysFor(rules: unknown, bot: boolean, publishes = false): { publishing: boolean } | null {
-  return bot ? { publishing: publishes || asksPublishing(rules) } : null;
-}
 
 /** A conversation as far as its approval reads it: its rules, Kuvo Code's notes on it, and when it
  * was made. */
@@ -201,7 +197,8 @@ const madeFor = (rules: readonly KitRule[], applied: Approval) =>
  * before commands is Ask First; nothing asking is, for one from before this box kept approvals
  * (`approvalsSince`), Full Access, as it ran, and for one a client made since with no tool held
  * back as a whole (Approve All), this computer's default (`defaultApproval`, or `byDefault`), `pending`
- * too. A bot's, unkept, starts with Auto; one the box made itself (`BOX_MADE`), a subagent's, or one
+ * too. A bot's, unkept, gets this computer's default as the box keeps it (`adoptBots`); one the
+ * box made itself (`BOX_MADE`), a subagent's, or one
  * with other rules, never Full Access unkept: Auto (a subagent's Ask First, where its conversation
  * can't be found). `stored`: whether it's the one kept;
  * `applied`: what its rules are made for now (null for one from before); `effective`: what it comes
@@ -226,9 +223,8 @@ export function approvalOf(session: WithApproval, where: Where = {}, since = app
   const fresh = kept === undefined && !boxMade && !session.parentID && !before && !whole;
   // (Asking before commands was Ask First, before there was more: its rules are made again as that.
   // One from before runs as it did: what its rules say is what it does, whether or not you
-  // confirmed Full Access here. But a bot's starts with Auto, as the box keeps it (`adoptBots`),
-  // until you pick another, Full Access too.)
-  const guessed: Approval = asked ?? (asksFor(rules, "shell") ? "askFirst" : where.bot ? "auto" : session.parentID ? "askFirst"
+  // confirmed Full Access here.)
+  const guessed: Approval = asked ?? (asksFor(rules, "shell") ? "askFirst" : where.bot ? byDefault ?? defaultApproval() : session.parentID ? "askFirst"
     : fresh ? byDefault ?? defaultApproval() : before && !boxMade ? "fullAccess" : "auto");
   const pending = Boolean((asked || fresh) && !session.parentID && !where.bot);
   // (One from before runs as it ran, whatever's switched on here now.)

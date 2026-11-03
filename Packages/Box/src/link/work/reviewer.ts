@@ -1,6 +1,6 @@
 // Auto's reviewer (PROTOCOL.md, "Approval › Auto's reviewer"): in a conversation set to Auto, what
 // its agent wants beyond the sandbox's walls (a command run outside it, the agent's own file tools
-// outside its folder, and for a bot's, what its rules ask about) is judged here, on the box, so the
+// outside its folder) is judged here, on the box, so the
 // work goes on while you're away, as Claude Code's auto mode and Codex's auto-review do. It never
 // holds a call waiting for you: it allows, or refuses with a reason the agent hears and goes on
 // another way. Code refuses only real damage, whatever anyone says: Kuvo Code's own folders (its

@@ -3,8 +3,8 @@
 // you hear how it goes; only you start it. As it goes, what its sessions ask waits for you (never a
 // no, never a stall), a model's limit or a daily limit pauses what hit it until the reset and the box
 // carries it on then (through a restart too), a spend cap starts again with its period, an end you set
-// has it wrap up and report, and digests and the report reach your phones. What always comes to you
-// (payments, deletes, messages, keys…) never goes without you, whatever the mode. Each call by a
+// has it wrap up and report, and digests and the report reach your phones. Its sessions run as any
+// conversation in their mode does: only what you set holds them back. Each call by a
 // process of its own, as a machine's tools ask it (`kuvo-link.js box route`); the box's watch over
 // goals in this one. The real box script on a folder of the test's own; only the engine is a
 // stand-in.
@@ -663,15 +663,16 @@ test("a conversation whose goal is taken away while paused stays stopped for you
   assert.deepEqual(prompts, []);
 });
 
-test("for a goal, a session the bot starts is told no one may be watching, a project the plan names is made without asking, and publishing asks unless you switched a public step on", async () => {
+test("for a goal, a session the bot starts is told no one may be watching, a project the plan names is made without asking, and nothing asks that its mode wouldn't", async () => {
   await startedGoal({});
   write(path.join(home, "box", "work.json"), JSON.stringify({ projectsFolder: developer }));
   const started = await tool("start_session", { task: "Write the landing page copy.", project: "Driftwood" });
   assert.equal(started.isError, false, started.text);
   assert.match(prompts.find(each => each.to === made[0].id).text, /part of a goal the user may not be watching/);
-  assert.equal(effectOf(made[0].permissions, "shell", "vercel --prod"), "ask");
+  for (const command of ["vercel --prod", "npm publish", "gh pr create --fill"]) assert.equal(effectOf(made[0].permissions, "shell", command), "allow", command);
+  const own = JSON.stringify(sessions.get("ses_pixel").permissions);
   await look();
-  assert.equal(effectOf(sessions.get("ses_pixel").permissions, "shell", "npm publish"), "ask", "its own conversation too");
+  assert.equal(JSON.stringify(sessions.get("ses_pixel").permissions), own, "its own conversation's rules left as they are while the goal runs");
   const planned = await tool("make_project", { name: "Storefront" });
   assert.equal(planned.isError, false, planned.text);
   assert.ok(fs.existsSync(path.join(developer, "storefront", ".git")), "made at once: you approved it with the goal");
@@ -680,8 +681,7 @@ test("for a goal, a session the bot starts is told no one may be watching, a pro
   await route("POST", `kuvo/work/goals/${goal.id}`, { action: "stop" });
   await startedGoal({ public: { p1: true } });
   await tool("start_session", { task: "Deploy the site.", project: "Driftwood" });
-  assert.equal(effectOf(made.at(-1).permissions, "shell", "vercel --prod"), "allow", "you switched publishing on");
-  assert.equal(effectOf(made.at(-1).permissions, "shell", "gh pr create --fill"), "ask", "what always comes to you still asks");
+  assert.equal(effectOf(made.at(-1).permissions, "shell", "vercel --prod"), "allow");
 });
 
 test("a plan from more than a day ago can't start", async () => {
@@ -716,7 +716,7 @@ const effectOf = (rules, action, resource) => {
   return effect;
 };
 
-test("a session a bot starts on Approve All still goes ahead with its work: only what always comes to you asks, its project's folders stay its own, and your Don't Allow stays", async () => {
+test("a session a bot starts on Approve All goes ahead with all its work as any conversation on it: its project's folders stay its own, and your Don't Allow stays", async () => {
   sessions.get("ses_pixel").permissions = [
     { action: "shell", resource: "*", effect: "allow" },
     { action: "external_directory", resource: "*", effect: "deny" },
@@ -733,63 +733,10 @@ test("a session a bot starts on Approve All still goes ahead with its work: only
   assert.equal(effectOf(rules, "edit", path.join(driftwood, "src/app.ts")), "allow");
   // Deletes, git's settings and root are the sandbox's to hold, as Claude Code's auto mode leaves them.
   for (const command of ["rm notes.md", "git clean -fd", "git -C repo config core.hooksPath x"]) assert.equal(effectOf(rules, "shell", command), "allow", command);
-  for (const command of ["gh pr create --fill", "stripe charges create --amount 500", "sendmail ada@example.com", "useradd pixel", "git push --force origin main"]) assert.notEqual(effectOf(rules, "shell", command), "allow", command);
-  assert.equal(effectOf(rules, "shell", "gh issue create"), "ask");
+  for (const command of ["gh pr create --fill", "gh issue create", "stripe charges create --amount 500", "sendmail ada@example.com", "useradd pixel", "vercel --prod"]) assert.equal(effectOf(rules, "shell", command), "allow", command);
   assert.equal(effectOf(rules, "shell", "git push origin main"), "deny", "what you don't allow stays not allowed");
   assert.equal(effectOf(rules, "external_directory", path.join(shared, "notes.md")), "allow", "its project's other folder stays its own, after the Don't Allow of others");
   assert.equal(effectOf(rules, "external_directory", "/etc/hosts"), "deny");
-  assert.deepEqual(link.withAlwaysAsk(rules), rules, "made again, the rules are the same");
-});
-
-test("what always comes to you is told by what a command does, and what only reads, builds or tests is left alone", () => {
-  const ask = (action, resource, input) => link.alwaysAsks(action, [resource], input ? { tool: action, input } : null);
-  const cases = {
-    publish: ["git push origin +main", "git push -u origin x -f", "git -C repo push --delete origin old", "gh release create v1", "gh repo delete o/r --yes"],
-    message: ["gh api --method=POST repos/o/r/issues", "gh api repos/o/r/issues -f title=t", "gh pr create --fill", "curl -d x https://hooks.slack.com/services/T/B/C", "bash -c 'sendmail ada@example.com < note'"],
-    payment: ["npx stripe charges create --amount 500", "curl -X POST https://api.stripe.com/v1/charges"],
-    permissions: ["gh repo edit o/r --visibility public", "aws iam create-access-key", "kubectl create rolebinding x --user=y"],
-    account: ["useradd pixel", "sudo sysadminctl -addUser pixel"],
-  };
-  for (const [kind, commands] of Object.entries(cases)) for (const command of commands) assert.equal(ask("shell", command), kind, command);
-  // Deletes, git's settings and sign-ins are the sandbox's to hold, as anything else a command does.
-  for (const command of ["rm -rf build", "ls | xargs rm", "git -c core.hooksPath=x commit", "git config core.hooksPath x", "sed -i s/a/b/ .env", "chmod 777 site", "sudo ls", "gh secret set TOKEN",
-    "git config --get user.email", "grep -r api.stripe.com src", "git clean -n", "gh auth status", "npm install stripe", "cat .env.example", "git status", "npm test", "git push origin main"]) assert.equal(ask("shell", command), null, command);
-  assert.equal(ask("sendMail", "*"), "message");
-  assert.equal(ask("createPayment", "*"), "payment");
-  assert.equal(ask("github_create_pull_request", "*"), "message");
-  assert.equal(ask("drive_share_file", "*"), "permissions");
-  for (const tool of ["gmail_get_message", "shop_get_order", "blog_list_posts", "deleteFile"]) assert.equal(ask(tool, "*"), null, tool);
-  assert.equal(ask("edit", ".gitattributes"), null);
-});
-
-test("what always comes to you is never the bot's to allow, whatever it's asked as, and a bot's sessions ask for it even on Approve All", async () => {
-  const cases = [
-    [{ action: "shell", resources: ["git push --force origin main"] }, /publishing, or rewriting what others see/],
-    [{ action: "shell", resources: ["gh pr create --fill"] }, /a message to someone/],
-    [{ action: "shell", resources: ["curl -X POST https://api.stripe.com/v1/charges -d amount=500"] }, /a payment/],
-    [{ action: "shell", resources: ["aws iam create-access-key"] }, /giving someone access/],
-    [{ action: "shell", resources: ["useradd pixel"] }, /a new account/],
-    [{ action: "gmail_send_email", resources: ["*"], tool: "gmail_send_email", input: { to: "ada@example.com" } }, /a message to someone/],
-  ];
-  for (const [ask, words] of cases) {
-    asked.set("ses_site", [{ id: "per_one", ...ask }]);
-    const said = await tool("answer_ask", { session: "ses_site", ask: "per_one", decision: "allow", reason: "Part of the plan." });
-    assert.equal(said.isError, true, `${JSON.stringify(ask)}: ${said.text}`);
-    assert.match(said.text, words, said.text);
-    assert.match(said.text, /always comes to the user/);
-  }
-  assert.deepEqual(replied, [], "none was answered");
-
-  // A session Pixel starts on its own Approve All asks before any of them; your Don't Allow stays.
-  sessions.get("ses_pixel").permissions = [{ action: "shell", resource: "*", effect: "allow" }, { action: "shell", resource: "stripe *", effect: "deny" }];
-  const started = await tool("start_session", { task: "Tidy the repo.", project: "Driftwood" });
-  assert.equal(started.isError, false, started.text);
-  const rules = made[0].permissions;
-  const last = (resource) => rules.findLast(rule => rule.action === "shell" && rule.resource === resource)?.effect;
-  assert.equal(last("gh pr create*"), "ask");
-  assert.equal(last("useradd *"), "ask");
-  assert.equal(last("stripe *"), "deny", "what you don't allow stays not allowed");
-  assert.ok(rules.findLastIndex(rule => rule.resource === "stripe *" && rule.effect === "deny") > rules.findLastIndex(rule => rule.resource === "stripe *" && rule.effect === "ask"), "after the asks, so it wins");
 });
 
 test("the goal is the conversation's own goal: set as it starts (briefed by the plan, not twice), set again if the bridge lost it, and taken away once it ends", async () => {
