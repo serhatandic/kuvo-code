@@ -13,7 +13,7 @@ enum ToolApproval: String, CaseIterable, Codable {
     /// Everything inside the sandbox goes ahead; past it, a reviewer decides, and what it refuses
     /// is held back for you, never left waiting on you.
     case auto
-    /// No sandbox, no reviewer, nothing asks. Confirmed once on each computer; never a bot's.
+    /// No sandbox, no reviewer, nothing asks. Confirmed once on each computer.
     case fullAccess
 
     /// This Mac's last pick, for what isn't a conversation's own (a bot's kit, group chats).
@@ -123,7 +123,7 @@ enum ToolApproval: String, CaseIterable, Codable {
 struct ApprovalShown: Decodable, Equatable {
     struct Why: Decodable, Equatable {
         /// `sandbox` (Auto asks first for now), `fullAccessOff` (not confirmed on this computer
-        /// yet), `bot` (bots never get Full Access).
+        /// yet).
         var reason: String
         var why: String
     }
@@ -225,17 +225,11 @@ struct ModeChip: View {
 
     private func makeMenu() -> NSMenu {
         let menu = NSMenu()
-        // (A bot's Full Access stays off: the menu doesn't turn items on by itself.)
-        menu.autoenablesItems = false
         // (Each pick's check on its trailing side, lined up.)
         var checked: Set<NSMenuItem> = []
         for option in ToolApproval.allCases {
-            let shownOption = shown?.option(option)
-            // Bots never get Full Access: shown, with why, but not picked.
-            let refused = shownOption?.unavailable.flatMap { $0.reason == "bot" ? $0 : nil }
-            let note = refused?.why ?? (option == approval ? holding : shownOption?.held).map { "Asks first for now. \($0.why)" }
+            let note = (option == approval ? holding : shown?.option(option)?.held).map { "Asks first for now. \($0.why)" }
             let item = ActionItem(option.title, subtitle: note ?? option.detail, image: NSImage(systemSymbolName: option.symbol, accessibilityDescription: nil)) { onSelectApproval(option) }
-            item.isEnabled = refused == nil
             menu.addItem(item)
             if option == approval { checked.insert(item) }
         }

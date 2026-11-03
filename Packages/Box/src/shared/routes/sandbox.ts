@@ -45,7 +45,7 @@ export const SANDBOX_RULE = object({
 export const SANDBOX_ALLOWED = object({ allowed: list(SANDBOX_RULE), "owners?": list(SANDBOX_OWNER) });
 
 /** Why Auto's reviewer brought something to you: in a sentence to show, and as a word a client
- * maps (`always`: it always comes to you, and which kind; `reviewer`: the reviewer asked;
+ * maps (`always`: it always came to you, on a bot's, before bridge 0.9.189, and which kind; `reviewer`: the reviewer asked;
  * `unread`: a script it runs couldn't be read whole first; `unreadable`, `noModel`, `failed`: it
  * couldn't be reviewed; `paused`: Auto is paused there). */
 export const REVIEW_ASKED = object({
@@ -62,8 +62,8 @@ export const REVIEW_ASKED = object({
  * it's only once or no, for anything else). `machine`: the
  * computer's name, on a machine. `owner`: whose its folder is, which Always would give it to.
  * `review`: in Auto, why its reviewer brought it to you (`reason`, a sentence to show; `why`: it
- * always comes to you, the reviewer asked, or it couldn't be reviewed, and what kind for one that
- * always comes to you).
+ * came to you on a bot's before bridge 0.9.189, the reviewer asked, or it couldn't be reviewed,
+ * and what kind for the first).
  */
 export const SANDBOX_ASK = object({
   id: string, at: number,

@@ -162,7 +162,8 @@ extension NSMenuItem {
 
 extension NSMenu {
     /// Draws the check of each item in `checked` on its trailing side, lined up, in place of the
-    /// leading column, which the menu then leaves out.
+    /// leading column, which the menu then leaves out. The items stay off: AppKit draws a leading
+    /// check for one that's on, column or not.
     func checksOnTrailingSide(_ checked: Set<NSMenuItem>) {
         showsStateColumn = false
         let font = NSFont.menuFont(ofSize: 0)
@@ -177,8 +178,10 @@ extension NSMenu {
         for item in rows {
             // (No color of its own: a highlighted row draws it as it draws the title.)
             item.attributedTitle = NSAttributedString(string: item.title + "\t" + (checked.contains(item) ? "✓" : ""), attributes: [.font: font, .paragraphStyle: paragraph])
-            // (Its state too, which VoiceOver reads as selected; the column that would draw it is gone.)
-            item.state = checked.contains(item) ? .on : .off
+            // (VoiceOver hears the name and whether it's the one picked, not the check's glyph.)
+            item.state = .off
+            item.setAccessibilityLabel(item.title)
+            item.setAccessibilityValue(checked.contains(item) ? "selected" : nil)
         }
     }
 }

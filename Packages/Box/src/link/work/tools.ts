@@ -11,7 +11,7 @@ import { holdArchived } from "../areas/wakes";
 import { noteWorkChanged } from "./changes";
 import { callOf, keepAnswer, noteSession, pendingAsk, permissionWords, ruleFor, rulesOf, type PendingPermission } from "./answers";
 import { allowRefusal } from "./policy";
-import { ALWAYS, alwaysAsks } from "./always";
+import { approvalOf } from "./approval";
 import { finishGoal, goalProgress, mayPublish, maySpend, proposeGoal, runningGoal } from "./goals";
 import fs from "node:fs";
 import path from "node:path";
@@ -121,7 +121,7 @@ function commandsInSandbox(target: Target, permission: PendingPermission): boole
 const projectFolders = (folder: string): readonly string[] => readProjects().find(each => each.directory === folder)?.folders ?? [];
 
 /** answer_ask: what one of the caller's sessions asks, answered. A permission it may allow only
- * where it could go ahead itself and never what always comes to the user; it may always say no. A
+ * where it could go ahead itself, as its own rules and mode say; it may always say no. A
  * question it answers in words. Kept on the session, with why. */
 export async function answerAskTool(caller: Caller, args: Record<string, unknown>, targets: Target[], signal?: AbortSignal): Promise<ToolAnswer> {
   const found = await oneOfMine(caller, args.session, targets, "answer", signal);
@@ -156,22 +156,13 @@ export async function answerAskTool(caller: Caller, args: Record<string, unknown
     const folder = data.location?.directory ?? data.directory ?? "";
     const rules = rulesOf((caller.place.data.permissions ?? []) as KitRule[]);
     const seen = await callOf(target, permission, signal);
-    // What always comes to the user, whatever the mode, the plan or the goal's switches, then the
-    // policy. A command that runs in the sandbox is the sandbox's rule's alone (`allowRefusal`):
-    // anything but what acts beyond this computer, which it reads as plainly as the line allows.
+    // What its own conversation could do without asking, as its own rules and mode say
+    // (`allowRefusal`): a command in the sandbox where its own run there, anywhere in Full Access.
     const sandboxed = commandsInSandbox(target, permission);
-    const user = `The user sees the ask on "${title}" and answers it there. Tell them in a line why it's needed, and carry on with the rest.`;
-    const always = () => {
-      const kind = alwaysAsks(permission.action, permission.resources, seen);
-      return kind ? refused(`That's ${ALWAYS[kind]}, which always comes to the user: you can't allow it. ${user}`) : null;
-    };
-    const policy = () => {
-      const why = allowRefusal(permission.action, permission.resources, folder ? [folder, ...projectFolders(folder)] : [], rules, ruleFor, seen, sandboxed);
-      if (why === "above") return refused(`You can't allow that: you'd have to ask the user about it yourself. ${user}`);
-      return why ? refused(`That's ${why}, which always comes to the user: you can't allow it. ${user}`) : null;
-    };
-    const refusal = sandboxed && (permission.action === "shell" || permission.action === "bash") ? policy() : always() ?? policy();
-    if (refusal) return refusal;
+    const bridge = (() => { try { return readEngineFile().port !== caller.place.target.port; } catch { return false; } })();
+    const free = approvalOf(caller.place.data, { agents: bridge, bot: Boolean(bot) }).effective === "fullAccess" || !commandsInSandbox(caller.place.target, { sandboxed: true } as PendingPermission);
+    const why = allowRefusal(permission.action, permission.resources, folder ? [folder, ...projectFolders(folder)] : [], rules, ruleFor, seen, { sandboxed, free });
+    if (why) return refused(`You can't allow that: you'd have to ask the user about it yourself. The user sees the ask on "${title}" and answers it there. Tell them in a line why it's needed, and carry on with the rest.`);
   }
   try {
     await call(target, "POST", `/api/session/${encodeURIComponent(permission.asker)}/permission/${encodeURIComponent(permission.id)}/reply`, args.decision === "allow" ? { decision: "once" } : { decision: "reject", message: `${by.name}: ${reason}` }, signal);
