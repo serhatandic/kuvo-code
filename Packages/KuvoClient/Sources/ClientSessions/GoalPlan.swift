@@ -608,13 +608,23 @@ public enum GoalPlanWords {
     ]
 
     /// What a step's mark is: a product its words name that has a mark of its own ("Scaffold the
-    /// Xcode project" is Xcode's), else its site's, but never a maker's site for many of its
-    /// products (a step done "at" developer.apple.com isn't Apple's). Nil for no mark.
+    /// Xcode project" is Xcode's), else its site's. Never a maker's logo: a step done at one of a
+    /// maker's sites for all it makes (developer.apple.com, support.apple.com) has none, and a
+    /// service of its own on the maker's domain (App Store Connect) shows its own letter, since
+    /// the site's icon is the maker's. Nil for no mark.
     public static func mark(of step: GoalPlan.Step) -> StepMark? {
         let words = step.text.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber })
         if let product = products.first(where: { words.contains(Substring($0.key)) }) { return .product(product.value) }
-        guard let site = step.site?.lowercased(), !makers.contains(site.hasPrefix("www.") ? String(site.dropFirst(4)) : site) else { return nil }
+        guard let site = step.site else { return nil }
+        let host = host(site)
+        if isMakers(host) { return services[host].flatMap { forAll.contains(host) ? nil : .letter($0) } }
         return .site(site)
+    }
+
+    /// The mark of a service a check or a wait names, by its site: its icon, or on a maker's domain,
+    /// whose icon is the maker's logo, its own letter ("App Store Connect", "Apple Developer").
+    public static func mark(site: String) -> StepMark {
+        isMakers(host(site)) ? .letter(service(site)) : .site(site)
     }
 
     public enum StepMark: Equatable, Sendable {
@@ -622,12 +632,26 @@ public enum GoalPlanWords {
         case product(String)
         /// The site's own icon.
         case site(String)
+        /// The service's letter, by its name: its site's icon would be its maker's.
+        case letter(String)
+    }
+
+    private static func host(_ site: String) -> String {
+        let host = site.lowercased()
+        return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
+    }
+
+    /// On a maker's domain, whose icon is the maker's logo.
+    private static func isMakers(_ host: String) -> Bool {
+        makers.contains { host == $0 || host.hasSuffix(".\($0)") }
     }
 
     /// Products a step names, by the word, with the id of their bundled mark.
     static let products = ["xcode": "xcode"]
-    /// Makers' sites for all they make: their mark says nothing of the step.
-    static let makers: Set<String> = ["apple.com", "developer.apple.com", "google.com", "developers.google.com", "microsoft.com", "learn.microsoft.com"]
+    /// Makers whose domains hold sites for everything they make: their logo says nothing of a step.
+    static let makers: Set<String> = ["apple.com", "google.com", "microsoft.com"]
+    /// The makers' sites for all they make, which a step done there gets no mark from.
+    static let forAll: Set<String> = ["developer.apple.com"]
 
     /// An amount in its currency, as people write it: "$15", "€9.50".
     public static func money(_ amount: Double, _ currency: String) -> String {

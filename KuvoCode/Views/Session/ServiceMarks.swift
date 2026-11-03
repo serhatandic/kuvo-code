@@ -34,9 +34,10 @@ final class ServiceIcons {
         return nil
     }
 
-    /// The mark as a picture, to sit in a line of text: its icon, or its letter.
+    /// The mark as a picture, to sit in a line of text: its icon, or its letter (always, on a
+    /// maker's domain, whose icon is the maker's logo).
     func inlineMark(_ site: String, scheme: ColorScheme) -> NSImage? {
-        let icon = icon(site)
+        let icon = GoalPlanWords.mark(site: site) == .site(site) ? icon(site) : nil
         let key = "\(site)|\(icon != nil)|\(scheme)"
         if let made = inline[key] { return made }
         let renderer = ImageRenderer(content: ServiceMark(icon: icon.map { Image(nsImage: $0) }, name: GoalPlanWords.service(site)).environment(\.colorScheme, scheme))
@@ -47,12 +48,16 @@ final class ServiceIcons {
     }
 }
 
-/// A service's mark, by its site: its icon once it's here, else its letter.
+/// A service's mark, by its site: its icon once it's here, else its letter; only its letter on a
+/// maker's domain, whose icon is the maker's logo (`GoalPlanWords.mark(site:)`).
 struct SiteServiceMark: View {
     let site: String
 
     var body: some View {
-        ServiceMark(icon: ServiceIcons.shared.icon(site).map { Image(nsImage: $0) }, name: GoalPlanWords.service(site))
+        switch GoalPlanWords.mark(site: site) {
+        case .letter(let name): ServiceMark(icon: nil, name: name)
+        default: ServiceMark(icon: ServiceIcons.shared.icon(site).map { Image(nsImage: $0) }, name: GoalPlanWords.service(site))
+        }
     }
 }
 
@@ -64,6 +69,7 @@ struct StepServiceMark: View {
         switch GoalPlanWords.mark(of: step) {
         case .product(let id): ServiceMark(icon: BrandMark.image(id), name: id).foregroundStyle(.secondary)
         case .site(let site): SiteServiceMark(site: site)
+        case .letter(let name): ServiceMark(icon: nil, name: name)
         case nil: EmptyView()
         }
     }
