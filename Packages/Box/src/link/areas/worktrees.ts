@@ -336,7 +336,9 @@ function snapshot(root: string, branch: string): string | null | undefined {
   const index = path.join(gitFolder, "kuvo-snapshot-index");
   const env = { GIT_INDEX_FILE: index };
   try {
-    if (gitIn(root, ["read-tree", "HEAD"], env) === null || gitIn(root, ["add", "-A"], env) === null) return undefined;
+    // As your own `git add` keeps them, through the repository's filters: what git-crypt keeps
+    // encrypted stays so, and what LFS keeps stays out of the repository.
+    if (gitAsked(root, ["read-tree", "HEAD"], env) === null || gitAsked(root, ["add", "-A"], env) === null) return undefined;
     const tree = gitIn(root, ["write-tree"], env);
     const commit = tree && gitIn(root, ["commit-tree", tree, "-p", "HEAD", "-m", `What wasn't committed in ${branch} when its worktree was removed`], BY_KUVO);
     if (!commit || gitIn(root, ["update-ref", snapshotRef(root, commit), commit]) === null) return undefined;

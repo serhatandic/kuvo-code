@@ -2108,13 +2108,18 @@ import { execFile as execFile2, spawnSync as spawnSync3 } from "node:child_proce
 
 // Packages/Box/src/shared/git.ts
 import { execFile, spawnSync as spawnSync2 } from "node:child_process";
-var EVERY = ["-c", "core.fsmonitor=false", "-c", "core.pager=cat", "-c", "log.showSignature=false", "-c", "safe.bareRepository=explicit"];
-var OWN = [...EVERY, "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgSign=false", "-c", "tag.gpgSign=false", "-c", "credential.helper="];
+import { accessSync, constants, realpathSync } from "node:fs";
+import { basename, join } from "node:path";
+var EVERY = ["-c", "core.fsmonitor=false", "-c", "core.pager=cat", "-c", "log.showSignature=false"];
+var OWN = [...EVERY, "-c", "safe.bareRepository=explicit", "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgSign=false", "-c", "tag.gpgSign=false", "-c", "credential.helper="];
 var GIT_QUIET = { GIT_TERMINAL_PROMPT: "0" };
-var DRIVERS = String.raw`^(filter\..+\.(clean|smudge|process)|diff\..+\.textconv)$`;
+var DRIVERS = String.raw`^(filter\..+\.(clean|smudge|process)|diff\..+\.textconv|hook\..+\.command)$`;
+var KNOWN = /^"?([^"\s]+)"? (?:filter-process|clean|smudge|diff)(?: --skip| --key-name=[\w-]+| -- %f)*$/;
+var TOOLS = new Set(["git-lfs", "git-crypt"]);
 var VALUED = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env", "--exec-path"]);
-var PLAIN = new Set(["rev-parse", "symbolic-ref", "for-each-ref", "rev-list", "update-ref", "config", "merge-base", "show-ref", "branch", "check-ignore", "ls-tree", "ls-files", "commit-tree", "write-tree", "init", "pack-objects", "index-pack", "count-objects", "remote", "repack", "gc", "fetch", "reflog", "var"]);
-var CONVERTING = new Set(["blame", "annotate", "grep", "cat-file", "format-patch", "range-diff"]);
+var PLAIN = new Set(["rev-parse", "for-each-ref", "rev-list", "config", "merge-base", "show-ref", "check-ignore", "ls-tree", "ls-files", "commit-tree", "write-tree", "pack-objects", "index-pack", "count-objects", "var"]);
+var CONVERTS = new Set(["blame", "annotate", "grep"]);
+var CONVERTING = new Set(["cat-file", "format-patch", "range-diff"]);
 function split(args) {
   let at = 0;
   while (at < args.length && args[at].startsWith("-"))
@@ -2125,10 +2130,14 @@ function plain(rest) {
   const [command, sub] = rest;
   if (command === "cat-file")
     return !rest.some((each) => /^--(filters|textconv|path)/.test(each));
+  if (command === "ls-files")
+    return !rest.some((each) => /^(-[a-zA-Z]*m|--modified)/.test(each));
+  if (command === "symbolic-ref")
+    return rest.slice(1).filter((each) => !each.startsWith("-")).length < 2 && !rest.some((each) => each === "-d" || each === "--delete");
   if (command === "worktree")
     return sub === "list" || sub === "prune";
   if (command === "stash")
-    return sub === "list" || sub === "store";
+    return sub === "list";
   return PLAIN.has(command ?? "");
 }
 function showing(rest) {
@@ -2138,34 +2147,78 @@ function showing(rest) {
 }
 function withOptions(rest, converters) {
   const at = showing(rest);
-  if (at < 0)
-    return converters && CONVERTING.has(rest[0] ?? "") ? undefined : rest;
-  return [...rest.slice(0, at), "--no-ext-diff", ...converters ? ["--no-textconv"] : [], ...rest.slice(at)];
+  if (at >= 0)
+    return [...rest.slice(0, at), "--no-ext-diff", ...converters ? ["--no-textconv"] : [], ...rest.slice(at)];
+  if (!converters)
+    return rest;
+  if (CONVERTS.has(rest[0] ?? ""))
+    return [rest[0], "--no-textconv", ...rest.slice(1)];
+  return CONVERTING.has(rest[0] ?? "") ? undefined : rest;
 }
-var reading = (lead, scoped) => [...lead, "config", ...scoped ? ["--show-scope"] : [], "--name-only", "-z", "--get-regexp", DRIVERS];
-function switchedOff(found, scoped) {
-  const parts = found.split("\x00").filter(Boolean);
+var installed = new Map;
+function found(tool) {
+  const key = `${process.env.PATH}\x00${tool}`;
+  if (!installed.has(key)) {
+    let place = null;
+    for (const folder of (process.env.PATH ?? "").split(":").filter(Boolean)) {
+      try {
+        accessSync(join(folder, tool), constants.X_OK);
+        place = realpathSync(join(folder, tool));
+        break;
+      } catch {}
+    }
+    installed.set(key, place);
+  }
+  return installed.get(key) ?? null;
+}
+function known(value) {
+  const program = value?.match(KNOWN)?.[1];
+  if (!program || !TOOLS.has(basename(program)))
+    return false;
+  const place = found(basename(program));
+  if (!place)
+    return false;
+  if (!program.includes("/"))
+    return true;
+  try {
+    return realpathSync(program) === place;
+  } catch {
+    return false;
+  }
+}
+var reading = (lead, scoped) => [...lead, "config", ...scoped ? ["--show-scope"] : [], "-z", "--get-regexp", DRIVERS];
+function switchedOff(read, scoped) {
+  const parts = read.split("\x00").filter(Boolean);
   const settings = [];
   let converters = false;
   for (let at = 0;at < parts.length; at += scoped ? 2 : 1) {
     const scope = scoped ? parts[at] : "local";
-    const name = scoped ? parts[at + 1] : parts[at];
-    if (!name || scope === "system" || scope === "global" || scope === "command")
+    const [name, value] = (scoped ? parts[at + 1] : parts[at])?.split(/\n(.*)/s) ?? [];
+    if (!name)
+      continue;
+    const where = name.slice(0, name.lastIndexOf("."));
+    if (name.startsWith("hook.")) {
+      if (where.includes("="))
+        return;
+      settings.push("-c", `${where}.enabled=false`);
+      continue;
+    }
+    if (scope === "system" || scope === "global" || scope === "command" || known(value))
       continue;
     if (name.startsWith("diff.")) {
       converters = true;
       continue;
     }
-    if (/[=\n]/.test(name))
+    if (name.includes("="))
       return;
-    settings.push("-c", `${name}=`, "-c", `${name.slice(0, name.lastIndexOf("."))}.required=false`);
+    settings.push("-c", `${name}=`, "-c", `${where}.required=false`);
   }
   return { settings, converters };
 }
 function answer(code, out, scoped) {
   if (code === 0)
     return switchedOff(out, scoped);
-  if (code === 1)
+  if (code === 1 || code === "ENOENT")
     return { settings: [], converters: false };
   if (code === 129 && scoped)
     return "retry";
@@ -2184,7 +2237,7 @@ function ownArgs(args, cwd) {
   if (!plain(rest)) {
     for (const scoped of [true, false]) {
       const ran = spawnSync2("git", reading(lead, scoped), { cwd, encoding: "utf8", env: { ...process.env, ...GIT_QUIET }, timeout: 30000 });
-      found = answer(ran.status, String(ran.stdout ?? ""), scoped);
+      found = answer(ran.error?.code ?? ran.status, String(ran.stdout ?? ""), scoped);
       if (found !== "retry")
         break;
     }
@@ -2196,7 +2249,7 @@ async function ownArgsLater(args, cwd) {
   let found = NOTHING;
   if (!plain(rest)) {
     for (const scoped of [true, false]) {
-      found = await new Promise((resolve) => execFile("git", reading(lead, scoped), { cwd, encoding: "utf8", env: { ...process.env, ...GIT_QUIET }, timeout: 30000 }, (error, out) => resolve(answer(error ? typeof error.code === "number" ? error.code : 128 : 0, String(out ?? ""), scoped))));
+      found = await new Promise((resolve) => execFile("git", reading(lead, scoped), { cwd, encoding: "utf8", env: { ...process.env, ...GIT_QUIET }, timeout: 30000 }, (error, out) => resolve(answer(error ? error.code ?? 128 : 0, String(out ?? ""), scoped))));
       if (found !== "retry")
         break;
     }
@@ -13801,7 +13854,7 @@ function snapshot(root, branch) {
   const index = path52.join(gitFolder, "kuvo-snapshot-index");
   const env = { GIT_INDEX_FILE: index };
   try {
-    if (gitIn(root, ["read-tree", "HEAD"], env) === null || gitIn(root, ["add", "-A"], env) === null)
+    if (gitAsked(root, ["read-tree", "HEAD"], env) === null || gitAsked(root, ["add", "-A"], env) === null)
       return;
     const tree = gitIn(root, ["write-tree"], env);
     const commit = tree && gitIn(root, ["commit-tree", tree, "-p", "HEAD", "-m", `What wasn't committed in ${branch} when its worktree was removed`], BY_KUVO);
@@ -14934,7 +14987,7 @@ async function judge(action, context, given) {
 var SESSION_APPROVAL_ROUTE = /^kuvo\/sessions\/([^/]+)\/approval$/;
 var SESSION_DECISIONS_ROUTE = /^kuvo\/sessions\/([^/]+)\/decisions$/;
 var WAIT = 30000;
-var found = (target, data, agents) => ({ target, data, agents, bot: Boolean(botOfConversation(data.id) || worksFor(data)) });
+var found2 = (target, data, agents) => ({ target, data, agents, bot: Boolean(botOfConversation(data.id) || worksFor(data)) });
 async function find(id, engine, bridge) {
   const route = `api/session/${encodeURIComponent(id)}`;
   for (const [target, agents] of [[engine, false], [bridge, true]]) {
@@ -14942,7 +14995,7 @@ async function find(id, engine, bridge) {
       continue;
     const data = (await engineGet(target, route).catch(() => null))?.data;
     if (data?.id)
-      return found(target, data, agents);
+      return found2(target, data, agents);
   }
   return null;
 }
@@ -14992,7 +15045,7 @@ async function settle(at, signal) {
 async function settleAgain(target, id, agents, signal) {
   const data = (await engineGet(target, `api/session/${encodeURIComponent(id)}`).catch(() => null))?.data;
   if (data?.id)
-    await settle(found(target, data, agents), signal);
+    await settle(found2(target, data, agents), signal);
 }
 async function setApproval(id, wanted, engine, bridge, signal) {
   if (!engine && !bridge)
@@ -15031,7 +15084,7 @@ async function reapplyApprovals(engine, bridge) {
         if (!data?.id)
           continue;
         const kept = data.metadata?.kuvo?.approval;
-        const bot = found(target, data, agents).bot;
+        const bot = found2(target, data, agents).bot;
         if (kept !== "auto" && kept !== "fullAccess" && !(bot && kept === undefined))
           continue;
         const now = approvalOf(data, { agents, bot });
@@ -15042,7 +15095,7 @@ async function reapplyApprovals(engine, bridge) {
           done = false;
           continue;
         }
-        if (!await settle(found(target, fresh, agents)))
+        if (!await settle(found2(target, fresh, agents)))
           done = false;
       }
       const next = page.cursor?.next;
@@ -15065,7 +15118,7 @@ async function adoptBots(engine, bridge, done) {
     if (!target || done.has(bot.session))
       continue;
     const data = (await engineGet(target, `api/session/${encodeURIComponent(bot.session)}`).catch(() => null))?.data;
-    if (data?.id && await settle(found(target, data, bot.agents)))
+    if (data?.id && await settle(found2(target, data, bot.agents)))
       done.add(bot.session);
   }
 }
@@ -21200,7 +21253,7 @@ async function integrations(target, signal, fresh = false) {
     connections: Array.isArray(each.connections) ? each.connections.filter(isObject) : []
   }));
 }
-async function found2({ engine, bridge, authFile = readFrom() }, signal) {
+async function found3({ engine, bridge, authFile = readFrom() }, signal) {
   const [engineRead, agentsRead] = await Promise.all([integrations(engine, signal), integrations(bridge, signal, true)]);
   const unread = [...engineRead ? [] : ["engine"], ...agentsRead ? [] : ["agents"]];
   const engineList = engineRead ?? [];
@@ -21251,7 +21304,7 @@ async function* foundRoute(context) {
   if (route === "kuvo/accounts/found") {
     if (!["GET", "HEAD"].includes(method))
       return yield* json(405, {});
-    return yield* json(200, await found2({ engine, bridge: bridge() }, signal));
+    return yield* json(200, await found3({ engine, bridge: bridge() }, signal));
   }
   if (method !== "POST")
     return yield* json(405, {});

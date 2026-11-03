@@ -770,3 +770,31 @@ test("one whose branch was merged and deleted comes back at the commit it was at
   await tidy();
   assert.equal(fs.existsSync(made.root), false);
 });
+
+test("what's kept of a removed worktree goes through the repository's own filters, as your git add would: what git-crypt keeps encrypted stays so", async () => {
+  // A filter of the repository's own, as git-crypt sets one up: what's committed is what it makes of the file.
+  git(project, "config", "filter.secret.clean", "tr a-z A-Z");
+  git(project, "config", "filter.secret.smudge", "cat");
+  try {
+    const made = (await ask("POST", "kuvo/worktrees", { project, branchPrefix: "kuvo/" })).value;
+    const session = { id: "ses_secret", title: "Keep a secret", location: { directory: made.folder } };
+    sessions.push(session);
+    fs.writeFileSync(path.join(made.root, ".gitattributes"), "secret.txt filter=secret\n");
+    fs.writeFileSync(path.join(made.root, "secret.txt"), "plain words\n");
+    await tidy();
+    session.metadata = { "kuvo.archived": true };
+    await tidy();
+    assert.equal(fs.existsSync(made.root), false);
+    const kept = git(project, "for-each-ref", "--format=%(refname)", "refs/kuvo/worktrees").split("\n").find(each => each.includes(path.basename(made.root)));
+    assert.ok(kept, "what wasn't committed is kept");
+    assert.equal(git(project, "cat-file", "blob", `${kept}:secret.txt`), "PLAIN WORDS");
+    delete session.metadata;
+    assert.equal((await ask("POST", "kuvo/worktrees/restore", { folder: made.folder })).status, 200);
+    assert.equal(fs.readFileSync(path.join(made.root, "secret.txt"), "utf8"), "PLAIN WORDS\n", "back through its smudge filter");
+    without("ses_secret");
+    await tidy();
+    assert.equal(fs.existsSync(made.root), false);
+  } finally {
+    git(project, "config", "--remove-section", "filter.secret");
+  }
+});
