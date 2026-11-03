@@ -69,7 +69,8 @@ public struct GoalChart: Sendable {
             return to.timeIntervalSince(from)
         }.sorted()
         let depth = Self.depths(lanes)
-        let left = lanes.filter { $0.from == nil }
+        let finished = { (lane: GoalTimeline.Lane) in lane.step.state == .done || lane.step.state == .skipped }
+        let left = lanes.filter { $0.from == nil && !finished($0) }
         let unfinished = lanes.filter { $0.step.state != .done && $0.step.state != .skipped && ($0.from == nil || $0.likelyEnd == nil) }
         let levels = Set(unfinished.map { depth[$0.id] ?? 0 }).count
         let pace: TimeInterval
@@ -86,9 +87,9 @@ public struct GoalChart: Sendable {
         // the pace from when it began.
         var ends: [String: Date] = [:]
         var placed: [String: (Date, Date)] = [:]
-        for lane in lanes where lane.from != nil {
+        for lane in lanes where lane.from != nil || finished(lane) {
             let from = lane.from ?? now
-            ends[lane.id] = lane.step.state == .done || lane.step.state == .skipped
+            ends[lane.id] = finished(lane)
                 ? lane.to ?? now
                 : max(lane.likelyEnd ?? from.addingTimeInterval(pace), lane.step.resumesDate ?? now, now)
         }

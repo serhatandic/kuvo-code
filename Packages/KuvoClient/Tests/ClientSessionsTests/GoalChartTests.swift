@@ -139,4 +139,13 @@ struct GoalChartTests {
         let late = GoalPlanWords.line(goal, due: true, now: Date(timeIntervalSince1970: 1_800_400_000), timeZone: utc, locale: locale)
         #expect(late.hasSuffix("was due Tue 19 Jan"), "past it, it says so")
     }
+
+    @Test func aStepAfterOneSetAsideStartsWhenItCanNotAStepLater() throws {
+        let steps: [GoalPlan.Step] = [
+            .init(id: "s1", text: "Logo", state: .skipped),
+            .init(id: "s2", text: "Site", state: .todo, after: ["s1"])]
+        let chart = GoalTimeline(plan(steps), now: hours(1)).chart()
+        #expect(try #require(chart.bars.first { $0.id == "s2" }).from == hours(1), "nothing to wait for: it can start now")
+        #expect(chart.bars.first { $0.id == "s1" }?.kind == .skipped, "set aside, never drawn as planned")
+    }
 }

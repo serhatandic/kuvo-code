@@ -8,7 +8,7 @@ import SwiftUI
 /// few words, how many steps are done and for how long (paused, why, in a word), and in the list
 /// when it's due; then the List | Timeline switch and Pause | Stop… (Resume once paused; Stop asks
 /// first); folded, a short track for each step. Open, the goal's own words, two lines until Show
-/// More, and its steps as a list (`GoalSteps`) or on a timeline (`GoalChartView`): the list until a
+/// More, and its steps as a list (`GoalStagesView`) or on a timeline (`GoalChartView`): the list until a
 /// step begins, then the timeline, unless you picked one for this goal. Then what waits for you,
 /// each with its button. Once it's over, ✕ puts it away.
 struct GoalPlanBar: View {
@@ -24,10 +24,9 @@ struct GoalPlanBar: View {
     let failed: (String) -> Void
     @Environment(AppModel.self) private var app
     @State private var confirmsStop = false
-    @State private var showsDone = false
-    @State private var showsLater = false
     /// The view you picked for this goal, on this Mac; nil until you pick one.
     @State private var picked: GoalPaneView?
+    @State private var width: CGFloat = 0
 
     private var isOver: Bool { plan.state == .done || plan.state == .stopped }
     private var isPaused: Bool { plan.state == .running && goal?.state == .paused }
@@ -35,6 +34,9 @@ struct GoalPlanBar: View {
     private var needsYou: Bool { isPaused && (goal?.pausedBy == .error || goal?.pausedBy == .stalled) }
     private var isBusy: Bool { isChanging || app.goalPlans.answering.contains(plan.id) }
     private var view: GoalPaneView { picked ?? (GoalPlanWords.opensOnTimeline(plan) ? .timeline : .list) }
+    /// Room on the line for the goal's name beside List | Timeline and Pause | Stop…; narrower, the
+    /// switch goes over the steps.
+    private var switchOnLine: Bool { width == 0 || width >= 560 }
 
     var body: some View {
         // Kept current while it runs: how long it has been at it, and now on the axis. Once
@@ -55,6 +57,7 @@ struct GoalPlanBar: View {
                 }
             }
         }
+        .onGeometryChange(for: CGFloat.self, of: \.size.width) { width = $0 }
         .animation(.ui, value: plan.state)
         .closesWhenKept($confirmsStop)
         .confirmationDialog("Stop the goal?", isPresented: $confirmsStop) {
@@ -114,18 +117,20 @@ struct GoalPlanBar: View {
             .padding(.horizontal, 2)
     }
 
-    /// The line's controls: which view shows the steps, and while it runs Pause | Stop… (Resume |
-    /// Stop… once paused), one pair.
+    /// The line's controls: which view shows the steps (over them in a narrow card), and while it
+    /// runs Pause | Stop… (Resume | Stop… once paused), one pair.
     @ViewBuilder private var actions: some View {
         HStack(spacing: 6) {
-            if !plan.steps.isEmpty {
-                GoalViewSwitch(selection: Binding(get: { view }, set: { picked = $0; GoalPaneView.keep($0, for: plan.id) }))
-            }
+            if !plan.steps.isEmpty, switchOnLine { viewSwitch }
             if plan.state == .running {
                 ChipPair(first: firstAction, second: .init(title: "Stop…", help: "End the goal: \(plan.name) stops working on it", isRed: true) { confirmsStop = true })
                     .disabled(isBusy)
             }
         }
+    }
+
+    private var viewSwitch: some View {
+        GoalViewSwitch(selection: Binding(get: { view }, set: { picked = $0; GoalPaneView.keep($0, for: plan.id) }))
     }
 
     private var firstAction: ChipPair.Half? {
@@ -152,8 +157,12 @@ struct GoalPlanBar: View {
                 }
             }
             .padding(.leading, GoalSteps.nameInset)
+            if !plan.steps.isEmpty, !switchOnLine {
+                viewSwitch.padding(.leading, GoalSteps.nameInset)
+            }
             switch view {
-            case .list: GoalSteps(plan: plan, timeline: timeline, showsDone: $showsDone, showsLater: $showsLater)
+            case .list where !plan.steps.isEmpty: GoalStagesView(plan: plan, timeline: timeline, isPaused: isPaused).padding(.leading, GoalSteps.nameInset)
+            case .list: EmptyView()
             case .timeline: GoalChartView(plan: plan, timeline: timeline)
             }
             if !plan.waiting.isEmpty {
@@ -180,7 +189,7 @@ struct GoalPlanBar: View {
         var help: String?
         if let url = item.url {
             // In the bot's browser, not yours: a sign-in there is one it can use.
-            button = (item.site.map { "Open \(GoalPlanWords.service($0))" } ?? "Open", {
+            button = (item.site.map { "Open \(GoalPlanWords.service($0, in: [item.text, item.detail]))" } ?? "Open", {
                 app.utilities.openForAgent(url, bot: plan.bot, machine: onThisMac ? nil : box)
             })
             help = GoalPlanWords.opensIn(bot: plan.name, computer: onThisMac ? nil : app.machines.engine(box)?.machine.name ?? box)
@@ -198,142 +207,12 @@ struct GoalPlanBar: View {
     }
 }
 
-/// A goal's steps as a list you read top to bottom (`GoalTimeline.list`): each step's state, its
-/// name with the service's mark and where it stands in a few words; the steps done, and many for
-/// later, folded to a row each. Many rows scroll.
-struct GoalSteps: View {
-    let plan: GoalPlan
-    let timeline: GoalTimeline
-    @Binding var showsDone: Bool
-    @Binding var showsLater: Bool
-
-    typealias Row = GoalTimeline.Row
-
-    static let rowHeight: CGFloat = 28
+/// What the goal bar's views share: where a step's name lines up, the mark for a step's state,
+/// and a time as it reads beside a step.
+enum GoalSteps {
     /// The state's mark, and the gap after it: names line up with the goal's words.
     static let markWidth: CGFloat = 18
     static let nameInset: CGFloat = markWidth + 10
-    /// The most the rows take before they scroll: about ten.
-    static let mostHeight: CGFloat = 10 * rowHeight
-
-    private var now: Date { timeline.now }
-
-    var body: some View {
-        let rows = timeline.list(showsDone: showsDone, showsLater: showsLater)
-        let rowsHeight = CGFloat(rows.count) * Self.rowHeight
-        // Many rows (a fold opened on a long goal) scroll, so the card doesn't take over the
-        // conversation.
-        ScrollView(.vertical) {
-            VStack(alignment: .leading, spacing: 0) {
-                ForEach(rows) { row in
-                    name(row).frame(height: Self.rowHeight)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .scrollDisabled(rowsHeight <= Self.mostHeight)
-        .scrollIndicators(rowsHeight > Self.mostHeight ? .automatic : .never)
-        // The edge with more past it fades, so a row cut there reads as more to scroll to.
-        .fadingScrollEdges(20)
-        .frame(height: min(rowsHeight, Self.mostHeight))
-        .font(.system(size: 13))
-        .accessibilityElement(children: .contain)
-    }
-
-    // MARK: The rows
-
-    @ViewBuilder private func name(_ row: Row) -> some View {
-        switch row {
-        case .done(let lanes):
-            fold("\(lanes.count) done", shows: $showsDone, mark: AnyView(GoalStepMark(.done)), what: "steps that are done", spoken: lanes.count == 1 ? "1 step done" : "\(lanes.count) steps done")
-        case .later(let lanes):
-            fold("\(lanes.count) later", shows: $showsLater, mark: AnyView(GoalStepMark(.todo)), what: "steps for later", spoken: lanes.count == 1 ? "1 step for later" : "\(lanes.count) steps for later")
-        case .lane(let lane):
-            let step = lane.step
-            let state = GoalPlanWords.shownState(of: step, in: plan)
-            let said = GoalPlanWords.state(of: step, in: plan, now: now)
-            HStack(spacing: 10) {
-                GoalStepMark(GoalSteps.track(state), progress: step.progress)
-                    .frame(width: Self.markWidth)
-                HStack(spacing: 5) {
-                    if GoalPlanWords.mark(of: step) != nil { StepServiceMark(step: step) }
-                    // Cut in the middle: steps named alike ("…(3 of 9)") still differ.
-                    Text(step.text)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .foregroundStyle(ink(state))
-                }
-                .layoutPriority(1)
-                Spacer(minLength: 6)
-                if let words = said.text {
-                    // A few words, always whole: the name gives way to them.
-                    Text(words)
-                        .font(.system(size: 12, weight: said.tone == .needsYou ? .semibold : .regular).monospacedDigit())
-                        .foregroundStyle(tone(said.tone))
-                        .lineLimit(1)
-                        .fixedSize()
-                        .layoutPriority(2)
-                }
-            }
-            .contentShape(.rect)
-            .help(help(step, said: said.text))
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(step.text)
-            .accessibilityValue(GoalPlanWords.spokenState(of: step, in: plan, now: now))
-        }
-    }
-
-    /// Under the pointer: the step's name in full, where it stands, and when it ran.
-    private func help(_ step: GoalPlan.Step, said: String?) -> String {
-        var lines = [step.text]
-        if let said { lines.append(said) }
-        if let began = step.began.map({ Date(timeIntervalSince1970: $0 / 1000) }) {
-            lines.append(step.ended.map { "\(Self.time(began, now: now)) – \(Self.time(Date(timeIntervalSince1970: $0 / 1000), now: now))" } ?? "Since \(Self.time(began, now: now))")
-        }
-        return lines.joined(separator: "\n")
-    }
-
-    /// A fold's row, which opens its steps and folds them again.
-    private func fold(_ title: String, shows: Binding<Bool>, mark: AnyView, what: String, spoken: String) -> some View {
-        Button {
-            withAnimation(.ui) { shows.wrappedValue.toggle() }
-        } label: {
-            HStack(spacing: 10) {
-                mark.frame(width: Self.markWidth)
-                HStack(spacing: 4) {
-                    Text(title)
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 9, weight: .semibold))
-                        .rotationEffect(.degrees(shows.wrappedValue ? 90 : 0))
-                }
-                .foregroundStyle(.secondary)
-                Spacer(minLength: 0)
-            }
-            .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
-        .clickablePointer()
-        .help(shows.wrappedValue ? "Fold the \(what)" : "Show the \(what)")
-        .accessibilityLabel(spoken)
-        .accessibilityValue(shows.wrappedValue ? "Shown" : "Hidden")
-    }
-
-    private func ink(_ state: GoalPlan.Step.State) -> AnyShapeStyle {
-        switch state {
-        case .done, .skipped, .todo: AnyShapeStyle(.secondary)
-        default: AnyShapeStyle(.primary)
-        }
-    }
-
-    private func tone(_ tone: GoalPlanWords.Said.Tone) -> AnyShapeStyle {
-        switch tone {
-        case .needsYou: AnyShapeStyle(Color.orange)
-        case .plain: AnyShapeStyle(.secondary)
-        case .quiet: AnyShapeStyle(.tertiary)
-        }
-    }
-
-    // MARK: Words
 
     static func track(_ state: GoalPlan.Step.State) -> GoalTrack.State {
         switch state {

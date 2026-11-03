@@ -4,8 +4,8 @@ import Foundation
 /// for a goal of any length, its axis counting hours for a few hours' work, days for a week or more,
 /// weeks for months. Each step spans from when it began to when it ended (or now), with where it's
 /// likely to end only where the bot measured how far it is; the finish line only where every step
-/// left can say; the deadline where you set one. Both apps list its steps as rows (`list`), each
-/// with its bar on the axis where there's room (`shown`).
+/// left can say; the deadline where you set one. Both apps lay its steps out as a list (`stages`) or
+/// on the axis (`chart`).
 public struct GoalTimeline: Sendable {
     public enum Unit: Sendable, Equatable {
         case hour, day, week
@@ -20,23 +20,6 @@ public struct GoalTimeline: Sendable {
         /// Where it's likely to end, from how far along it was measured; nil where it wasn't.
         public let likelyEnd: Date?
         public var id: String { step.id }
-    }
-
-    /// What shows of a goal, top to bottom in the plan's order: on a long goal the steps done and
-    /// those for later folded to a row each, unless nothing else would show. Never phases, even an
-    /// old goal's: steps are just steps.
-    public enum Row: Sendable, Identifiable {
-        case done([Lane])
-        case later([Lane])
-        case lane(Lane)
-
-        public var id: String {
-            switch self {
-            case .done: "done"
-            case .later: "later"
-            case .lane(let lane): lane.id
-            }
-        }
     }
 
     public let start: Date
@@ -144,44 +127,9 @@ public struct GoalTimeline: Sendable {
         return DateInterval(start: shifted, duration: length)
     }
 
-    /// The rows the goal bar lists, top to bottom, whatever the goal's length: the steps done
-    /// folded to one row (opened with `showsDone`), and more than five
-    /// steps not begun folded to one row at the end (opened with `showsLater`). A fold that would
-    /// leave nothing else to see doesn't fold.
-    public func list(showsDone: Bool = false, showsLater: Bool = false) -> [Row] {
-        let done = lanes.filter { $0.step.state == .done || $0.step.state == .skipped }
-        let later = lanes.filter { $0.step.state == .todo }
-        return rows(foldsDone: !done.isEmpty, foldsLater: later.count > 5, showsDone: showsDone, showsLater: showsLater)
-    }
-
     /// What of the axis a step's track shows: a long goal's days around now (`window`), else, or
     /// `whole`, the whole goal.
     public func shown(whole: Bool = false, calendar: Calendar = .current) -> DateInterval {
         (whole ? nil : window(calendar: calendar)) ?? DateInterval(start: start, end: max(start, end))
-    }
-
-    private func rows(foldsDone: Bool, foldsLater: Bool, showsDone: Bool, showsLater: Bool) -> [Row] {
-        var foldsDone = foldsDone, foldsLater = foldsLater
-        let done = lanes.filter { $0.step.state == .done || $0.step.state == .skipped }
-        let later = lanes.filter { $0.step.state == .todo }
-        let rest = lanes.filter { lane in !(foldsDone && done.contains { $0.id == lane.id }) && !(foldsLater && later.contains { $0.id == lane.id }) }
-        if rest.isEmpty {
-            // Only folds would show: what's in the bigger stays open.
-            if done.count >= later.count { foldsDone = false } else { foldsLater = false }
-        }
-        var rows: [Row] = []
-        var left = lanes
-        if foldsDone {
-            rows.append(.done(done))
-            if showsDone { rows += done.map(Row.lane) }
-            left.removeAll { lane in done.contains { $0.id == lane.id } }
-        }
-        if foldsLater { left.removeAll { lane in later.contains { $0.id == lane.id } } }
-        rows += left.map(Row.lane)
-        if foldsLater {
-            rows.append(.later(later))
-            if showsLater { rows += later.map(Row.lane) }
-        }
-        return rows
     }
 }

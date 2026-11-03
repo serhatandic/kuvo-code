@@ -233,6 +233,19 @@ struct BarLine: View {
                         says.fixedSize()
                         if isHidden, let folded { folded.fixedSize() }
                     }
+                    says.fixedSize()
+                    // Whole pieces off its end ("· due Fri, Nov 6", then the time), never one
+                    // cut inside.
+                    if status == nil, let progress {
+                        let pieces = progress.components(separatedBy: " · ")
+                        ForEach((1..<max(1, pieces.count)).reversed(), id: \.self) { count in
+                            Text(pieces.prefix(count).joined(separator: " · "))
+                                .font(.system(size: 13).monospacedDigit())
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .fixedSize()
+                        }
+                    }
                     says
                 }
             }
