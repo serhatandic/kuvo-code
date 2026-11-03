@@ -226,7 +226,10 @@ export function refreshedRules(current: KitRule[], settings: KitRule[]): KitRule
   } else {
     made = [...settings.filter(rule => rule.effect === "ask").map(rule => ({ action: rule.action, resource: rule.resource, effect: "allow" as const })), ...denied];
   }
-  return [...made, ...current.filter(isParticular)];
+  // (Its own folders are those Settings says nothing of: one it does is Settings' to say, and an
+  // allow made from Settings' ask, kept from before, isn't its own.)
+  const own = current.filter(rule => isParticular(rule) && !settings.some(set => set.action === "external_directory" && set.resource === rule.resource));
+  return [...made, ...own];
 }
 
 // A bot's own rules as they're made now: its approval with this box's Settings › Permissions, then

@@ -236,6 +236,23 @@ test("a change to Settings › Permissions reaches every conversation kept with 
   assert.equal(denies("ses_free"), false);
 });
 
+test("a folder Settings › Permissions asks about, then doesn't allow, stays out of a conversation in Auto, however often its rules are made", async () => {
+  const SHARED = "/srv/shared/*";
+  write(settingsFile, JSON.stringify({ permissions: [NEVER_RM] }));
+  await route("PUT", "kuvo/sessions/ses_free/approval", { approval: "auto" }, { sandbox: true });
+  const set = effect => route("PATCH", "kuvo/config", { changes: [{ path: ["permissions"], value: [NEVER_RM, { action: "external_directory", resource: SHARED, effect }] }] }, { sandbox: true });
+  const shared = () => rules("ses_free").filter(rule => rule.action === "external_directory" && rule.resource === SHARED);
+  assert.equal((await set("ask")).status, 200);
+  await set("ask");
+  const once = shared().length;
+  await set("ask");
+  assert.equal(shared().length, once, "made again, the same rules");
+  await set("deny");
+  assert.equal(shared().at(-1)?.effect, "deny", "the last rule for it wins, and it's Settings' Don't Allow");
+  await route("PATCH", "kuvo/config", { changes: [{ path: ["permissions"], value: [NEVER_RM] }] }, { sandbox: true });
+  assert.deepEqual(shared(), [], "taken out of Settings, it's gone from the conversation too");
+});
+
 test("rules a client changed on its own are never made again behind its back", async () => {
   await route("PUT", "kuvo/sessions/ses_careful/approval", { approval: "auto" }, { sandbox: true });
   // A client from before sets Ask First by its rules alone.
