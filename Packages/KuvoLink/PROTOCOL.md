@@ -3230,16 +3230,22 @@ rules. Plan mode stays the conversation's agent (`plan`), beside it.
   read as they are, and never made again. A conversation with none (`stored` false): asking before
   commands is Ask First. Nothing asking (Approve All) is, for one made before this box first kept
   approvals for new conversations (`since` in `box/approval.json`), Full Access, as it ran, whether
-  or not you confirmed it here, its rules left as they are until one is picked; for one made since
-  (a client from before, whose default was Approve All), this computer's default, never Full Access
-  unless that's the last one you picked (bridge 0.9.185).
+  or not you confirmed it here, its rules left as they are until one is picked; for one a client made
+  since (a client from before, whose default was Approve All) with no tool held back as a whole,
+  this computer's default, never Full Access unless that's the last one you picked (bridge
+  0.9.185). One the box made itself (below), a subagent's, or one holding a whole tool back (a group
+  chat's seat), never comes to Full Access unkept: Auto (a subagent's, read without its
+  conversation, Ask First).
 - A new conversation a client makes (feature `approval.default`): with `kuvo.approval` alone in the
   metadata it's made with, that one; with none, this computer's default: Auto the first time, then
   the last one you picked here (a conversation's `PUT`, or a start that says; never a bot's or a
-  subagent's). The box keeps it with the conversation and makes its rules for it as it hears the
-  conversation was made (and on its round). One the box makes itself (a bot's, one an agent
-  started, a subagent, a reviewer's part, an engine's copy of a coding agent's conversation) keeps
-  its own. But a bot's and its
+  subagent's), or Auto while Full Access, picked last, is switched off here since. The box keeps it
+  with the conversation and makes its rules for it as it hears the conversation was made, and looks
+  again at the newest each round for one it missed. One the box makes itself (a bot's, one an agent
+  started, a group chat's seat, a handoff's, one moved to the coding agents, a reviewer's part, an
+  engine's copy of a coding agent's conversation) is marked in the metadata it's made with, and
+  keeps its own (a handoff's and a moved one's, the one they carry on from). The coding agents'
+  bridge keeps the metadata a conversation is made with, too. But a bot's and its
   work's, which the box keeps with the one their rules say (Ask First, or Auto that asks first
   without the sandbox), as it starts and as a bot is made or comes here.
 - `GET kuvo/sessions/<id>/approval`: `{approval, effective, stored, held?, plan, options}`: what
@@ -3287,6 +3293,12 @@ Settings › Permissions ask.
   refused where its text names one of those. The agent's own tools reading a file outside its
   folder go ahead with no review, but your secrets (a private key in `~/.ssh` by any name, what the
   sandbox keeps as secrets), which the model judges.
+- Code holds back, too, what changes your own settings for every project, unless what you said
+  (or the bot's goal) names it (`why: "unasked"`, with what the agent does instead): your global git
+  settings (`git config --global` or `--system`, `~/.gitconfig`, `~/.config/git/config`), your SSH
+  keys (anything written in `~/.ssh`, `ssh-keygen` making a key there), and your sign-ins' files
+  (`~/.aws/credentials`, `~/.netrc`, `~/.npmrc`, `~/.docker/config.json`, `~/.kube/config`, gh's,
+  gcloud's, keychains and the like). Named, the model judges it, told what it changes.
 - Everything else is the model's: your secrets (routine use allowed, printing, archiving or sending
   them off refused), Docker and its like (bringing a container up to test, reading its logs:
   allowed; one given `/`, your home, your secrets or the runtime's socket: refused), what writes
@@ -3294,8 +3306,9 @@ Settings › Permissions ask.
   access, force pushing or deleting remote branches, publishing publicly and production deploys are
   refused unless what you said (or the bot's goal) plainly asks for that very thing. What would run
   at login or on a schedule (writing your shells' start-up files, `LaunchAgents`, systemd's and
-  autostart's folders; `crontab`, `launchctl load`/`bootstrap`, `systemctl enable`, `brew services
-  start`, login items by `defaults` or `osascript`) is found by code, on macOS and Linux, and the
+  autostart's folders; `crontab` (from a pipe too), `at`, `launchctl load`/`bootstrap`, `systemctl
+  enable`, timers by `systemd-run`, `brew services start`, `pm2 startup`, a container that restarts
+  always, login items by `defaults` or `osascript`) is found by code, on macOS and Linux, and the
   model is told so: allowed only where what you said plainly asks for that kind of thing.
 - The model is the conversation's own maker's small one: the provider's (Haiku, Flash, mini…) for
   the engine's conversations, through `/api/experimental/generate`; the agent's for the coding
@@ -3303,20 +3316,24 @@ Settings › Permissions ask.
   `POST /api/session/<id>/generate` `{prompt, model}` (a model of that session's maker only); the
   conversation's own model where the maker has no small one. It's counted on that account. It's
   shown only what you wrote in the conversation (never what the box, another agent or a wake-up put
-  there), or for a bot's, its goal (and which public steps you switched on); the action (for a
+  there), and for a bot's, its goal too (and which public steps you switched on); the action (for a
   file, the tool and its arguments); and what a command runs, read whole first: a script by its
   path, `bash x.sh`, `python x.py`, and the project's build files its program runs (`package.json`
   for npm, pnpm, yarn and bun, a Makefile, a justfile, `conftest.py`, `build.rs`, Gradle's, a
   Rakefile, a Taskfile). Each piece is in tags of that prompt's own, so none can pass for the
   rules. Never the agent's own words, its `why`, nor what its tools printed.
-- A script from the web (`curl … | sh`, `bash -c "$(curl …)"`, `wget -qO- … | sh`, `<(curl …)`) is
+- A script from the web (`curl … | sh`, `bash -c "$(curl …)"`, `eval "$(curl …)"`, `wget -qO- … |
+  sh`, `<(curl …)`) is
   fetched once, as the review starts, into Kuvo Code's folder (`run/fetched/`, emptied as the box
   starts), read whole (up to a limit, whatever length the server says), and judged by the model;
   every fetch of it in the command is rewritten to read that copy (`cat '<copy>'`), so what runs is
   exactly what was reviewed, never a second fetch. The copy is deleted once the command ran, or
-  won't. A line it can't pin so (one that downloads a script and runs it by name, or fills the
-  address in itself) is held back with how to do it instead (fetch it into the project first), and
-  so is an ask the engine runs itself (in a bot's work), which can't be pinned.
+  won't. A line it can't pin so (one that downloads a script, by `-o`, `>` or `tee`, or fetches and
+  unpacks or clones, then runs a script by name; one that fetches inside another shell's `-c` line;
+  or fills the address in itself) is held back with how to do it instead, and so is an ask the
+  engine runs itself (in a bot's work), which can't be pinned. Never fetched from this computer's or
+  its network's own addresses (`localhost`, private, link-local and loopback ones, `.local`
+  names): held back (`unread`).
 - It allows (the command runs outside the sandbox, `Ran outside the sandbox · Allowed by Auto's
   reviewer: <reason>`; the engine's ask is answered once), or refuses with a reason the agent
   hears (the engine's ask is rejected with it): `Auto's reviewer refused: …` for a code line,
@@ -3327,7 +3344,9 @@ Settings › Permissions ask.
   model that fails or doesn't answer within a minute (`failed`: no quota, offline). A model that
   answers `ask` refuses (`reviewer`).
 - Three refusals in a row, or twenty in a conversation, pause Auto there: its run is stopped, and
-  what it wants next is held back (`why: "paused"`) until you let it go on or approve one.
+  what it wants next is held back (`why: "paused"`) until you let it go on or approve one. Those for
+  want of a model (`noModel`, `failed`, `unreadable`) don't count. A review that can't be had at all
+  (a full disk) is refused with why (`failed`), never asked.
 - `GET kuvo/sessions/<id>/decisions` → `{decisions, paused?}`: the conversation's decisions, the
   latest last (the last 200), each `{id, at, action, kind, decision, reason, by, why?, held?,
   approved?, used?}`: `kind` `command`, `file` or `tool`; `decision` `allowed` or `refused`; `by`
@@ -3337,12 +3356,13 @@ Settings › Permissions ask.
   `asked`, or `why: "always"` with which kind in `always`. `paused`: since when Auto is paused
   there.
 - `POST kuvo/sessions/<id>/decisions` `{approve: <id>}` approves one held back, from any client:
-  allowed once, the next time the agent does it the same way (a command in the same folder, the
-  same file, the same tool and arguments), without the model; the conversation is told at once (a
+  allowed once, the next time the agent does it the same way (a command in the same folder running
+  the same scripts as read then: one changed since is judged again; the same file with the same
+  tool arguments; the same tool and arguments), without the model; the conversation is told at once (a
   steered message: `[The user approved what Auto's reviewer held back] <action>`, shown as "You
   approved: …"), and a paused conversation goes on, its counts started over. 404 for one that isn't
   held back (approved already, a code line, gone). `{resume: true}` lets a paused conversation go
-  on, its counts started over. 400 without either. Kept in the box's folder
+  on, its counts started over. 400 without either, 500 where it couldn't be kept. Kept in the box's folder
   (`box/reviews/<session>.json`), for any client, and deleted with the session.
 
 ### Sandbox
