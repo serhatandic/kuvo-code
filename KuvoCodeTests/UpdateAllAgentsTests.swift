@@ -3,10 +3,11 @@ import OpenCodeKit
 import Testing
 @testable import KuvoCode
 
-/// Update All, in Settings › Accounts: every coding agent with a newer version that its installer
-/// can update to, on this Mac and on each machine, updated on its own computer, once per program
+/// Update All, in Settings › Accounts: every coding agent on that page's computer (this Mac's
+/// page, or a machine's) with a newer version that its installer can update to, once per program
 /// (an account you added runs the same one). One you update yourself is left out, and nothing is
-/// asked of an agent that's up to date. The agents' bridges are stubbed.
+/// asked of an agent that's up to date. Each says how its update went, signed in or not: updating,
+/// updated to its new version, or why it couldn't be. The agents' bridges are stubbed.
 @MainActor
 @Suite(.serialized) struct UpdateAllAgentsTests {
     /// A bridge's coding agents: the version of each program, and the updates it was asked for.
@@ -15,13 +16,16 @@ import Testing
         private var versions: [String: String]
         private var asked: [String] = []
         private let manual: Set<String>
+        /// Programs whose installer runs but leaves them as they were.
+        private let stuck: Set<String>
         let url: String
         static let newest = ["claude-code": "2.1.309", "codex-cli": "0.164.0", "grok-cli": "1.0.67"]
 
-        init(port: Int, versions: [String: String], manual: Set<String> = [], added: [String] = []) {
+        init(port: Int, versions: [String: String], manual: Set<String> = [], stuck: Set<String> = [], added: [String] = []) {
             url = "http://127.0.0.1:\(port)"
             self.versions = versions
             self.manual = manual
+            self.stuck = stuck
             StubWeb.handle(url + "/api/model") { _, _ in StubWeb.json(["data": []]) }
             StubWeb.handle(url + "/api/integration") { [weak self] request, _ in
                 guard let self else { return StubWeb.Answer(status: 503) }
@@ -30,6 +34,9 @@ import Testing
                     if request.httpMethod == "POST", parts.last == "update", parts.count == 4 {
                         let id = parts[2]
                         self.asked.append(id)
+                        if self.stuck.contains(id) {
+                            return StubWeb.json(["data": ["updated": false, "version": self.versions[id] ?? "", "message": "Grok is still \(self.versions[id] ?? "") after `grok update`."]])
+                        }
                         self.versions[id] = Self.newest[id]
                         return StubWeb.json(["data": ["updated": true, "version": Self.newest[id] ?? ""]])
                     }
@@ -77,12 +84,42 @@ import Testing
         await app.catalog.refreshAgents(fresh: true)
         await box.catalog.refreshAgents(fresh: true)
 
-        let outdated = app.outdatedAgents.map { "\($0.integration.id) on \($0.box.id)" }
-        #expect(outdated == ["claude-code on mac", "codex-cli on \(box.machine.id)"])
+        #expect(app.outdatedAgents(on: .mac).map(\.integration.id) == ["claude-code"])
+        #expect(app.outdatedAgents(on: .machine(box.machine.id)).map(\.integration.id) == ["codex-cli"])
 
-        for update in app.updateAllAgents() { await update.value }
+        // This Mac's page: its own agents only, the machine's on the machine's page.
+        for update in app.updateAllAgents(on: .mac) { await update.value }
         #expect(macBridge.updates == ["claude-code"], "once for Claude Code, not again for the account you added; never Grok")
+        #expect(boxBridge.updates.isEmpty)
+        for update in app.updateAllAgents(on: .machine(box.machine.id)) { await update.value }
         #expect(boxBridge.updates == ["codex-cli"], "the machine's own Codex, on the machine")
-        #expect(app.outdatedAgents.isEmpty, "each lists its new version, so there's nothing left to update")
+        #expect(app.outdatedAgents(on: .mac).isEmpty && app.outdatedAgents(on: .machine(box.machine.id)).isEmpty, "each lists its new version, so there's nothing left to update")
+    }
+
+    @Test func eachSaysHowItsUpdateWentSignedInOrNot() async throws {
+        TestEnvironment.prepare()
+        StubWeb.start(hosts: ["127.0.0.1"])
+        defer { StubWeb.stop() }
+        // Claude Code, never signed in here (a tile on the page, not a row), and a Grok whose
+        // installer leaves it as it was.
+        let bridge = Bridge(port: 47973, versions: ["claude-code": "2.1.305", "grok-cli": "1.0.60"], stuck: ["grok-cli"])
+        let app = AppModel()
+        app.catalog.outsideAgents = app.agents
+        app.agents.connect(bridge.endpoint, folderPrefix: "")
+        defer { app.agents.disconnect() }
+        await app.catalog.refreshAgents(fresh: true)
+        func status(_ id: String) -> OutsideAgents.UpdateStatus? {
+            app.catalog.codingAgents.first { $0.id == id }.flatMap(app.agents.updateStatus)
+        }
+        #expect(status("claude-code") == .available("2.1.309"))
+
+        let updates = app.updateAllAgents(on: .mac)
+        #expect(status("claude-code") == .updating)
+        #expect(status("grok-cli") == .updating)
+        for update in updates { await update.value }
+
+        #expect(status("claude-code") == .updated("2.1.309"))
+        #expect(status("grok-cli") == .failed("Grok is still 1.0.60 after `grok update`."))
+        #expect(app.outdatedAgents(on: .mac).map(\.integration.id) == ["grok-cli"], "still out of date, so Update All stays")
     }
 }

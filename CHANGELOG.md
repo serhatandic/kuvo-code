@@ -16,6 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- **Update All** in Settings › Accounts updates the coding agents on the page's own computer (each machine's page has its own), and every agent it updates says how it went where you see it, signed in or not: Updating…, Updated to its new version, or why it couldn't be updated.
 - What your phone asks of this Mac no longer fails now and then with a lost connection when it asks for something right after a reply that streamed.
 - Replies draw fewer lines: headings no longer have a line under them, and `---` is one thin line with even space around it, as in Claude's and ChatGPT's apps.
 - The sidebar is easier to read: its headings are as bright as the names under them, and the quieter words and buttons are no longer washed out by the window behind it.

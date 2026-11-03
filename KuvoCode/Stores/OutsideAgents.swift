@@ -606,6 +606,27 @@ final class OutsideAgents {
     private(set) var updating: Set<String> = []
     /// Why an update didn't work, until you've seen it (where you look next, when you'd gone).
     var updateFailures: [String: String] = [:]
+    /// The version an update brought, by the account it was asked for, until another starts.
+    private(set) var updated: [String: String] = [:]
+
+    /// How an agent's program stands, as its row or tile in Settings › Accounts says it.
+    enum UpdateStatus: Equatable {
+        /// A newer version is out.
+        case available(String)
+        case updating
+        /// Updated just now, to this version.
+        case updated(String)
+        /// Why it couldn't be updated.
+        case failed(String)
+    }
+
+    func updateStatus(_ integration: Integration) -> UpdateStatus? {
+        let id = integration.id
+        if updating.contains(id) { return .updating }
+        if let failure = updateFailures[id] { return .failed(failure) }
+        if integration.metadata?["outdated"]?.bool == true, let latest = integration.metadata?["latestVersion"]?.string { return .available(latest) }
+        return updated[id].map(UpdateStatus.updated)
+    }
 
     /// Updates an agent's program (Claude Code, Codex, Grok's CLI) through the installer that owns
     /// it, then `refresh`es what the app shows of it; it's updating until then.
@@ -614,9 +635,11 @@ final class OutsideAgents {
         guard let api, !updating.contains(providerID) else { return nil }
         updating.insert(providerID)
         updateFailures[providerID] = nil
+        updated[providerID] = nil
         return Task {
             do {
                 let result = try await api.updateAgent(providerID)
+                if result.updated, let version = result.version { updated[providerID] = version }
                 if !result.updated, let message = result.message { updateFailures[providerID] = message }
             } catch {
                 updateFailures[providerID] = error.localizedDescription
