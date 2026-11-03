@@ -5,7 +5,7 @@
 
 import { existsSync, statfsSync } from "node:fs"
 import { basename, dirname, relative, sep } from "node:path"
-import { run } from "../proc"
+import { runGit } from "../proc"
 
 /** Why a version has no copy. */
 export type NoCopy = "secret" | "ignored" | "git" | "too-big" | "low-disk" | "cleared"
@@ -101,7 +101,7 @@ export class CopyPolicy {
   private async checkIgnore(top: string, paths: string[]): Promise<Set<string> | undefined> {
     let ran
     try {
-      ran = await run("git", ["-C", top, "check-ignore", "-z", "--stdin"], {
+      ran = await runGit(["-C", top, "check-ignore", "-z", "--stdin"], {
         // As `./…`: a name like `:x` isn't read as pathspec magic, and git says each back as sent.
         input: paths.map((path) => "./" + relative(top, path)).join("\0") + "\0",
         timeout: 5000,

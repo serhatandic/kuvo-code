@@ -4,6 +4,7 @@
 import { spawn } from "node:child_process"
 import { accessSync, constants } from "node:fs"
 import { delimiter, join } from "node:path"
+import { GIT_QUIET, ownArgsLater } from "../shared/git"
 import { joinPath, loginPath, saveLoginPath, savedLoginPath } from "../shared/platform"
 import { machineHome, onMachine } from "./machine"
 
@@ -62,6 +63,14 @@ export async function run(command: string, args: string[], options: { cwd?: stri
   // what came by a moment after it ended is all.
   await Promise.race([reads, Bun.sleep(2_000)])
   return { code, stdout, stderr, ...(timedOut ? { timedOut } : {}) }
+}
+
+/** git as the box runs it by itself (`../shared/git`): never starting a program the repository's
+ * own settings name. One that names a program it can't switch off isn't run (code 128). */
+export async function runGit(args: string[], options: { cwd?: string; env?: Record<string, string | undefined>; timeout?: number; input?: string } = {}): Promise<Ran> {
+  const own = await ownArgsLater(args, options.cwd)
+  if (!own) return { code: 128, stdout: "", stderr: "This repository's own settings name a program Kuvo Code won't run for it." }
+  return run("git", own, { ...options, env: { ...GIT_QUIET, ...options.env } })
 }
 
 /** Runs a program as a process group of its own (an installer piping `curl` into `bash`): on `timeout`, all of it stops. */

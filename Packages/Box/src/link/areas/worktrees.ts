@@ -5,6 +5,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { askedArgs } from "../../shared/git";
 import { parsed } from "../../shared/json";
 import type { Fields } from "../../shared/json";
 import type { EngineRecord, Target } from "../../shared/records";
@@ -15,7 +16,7 @@ import { isHiddenRun } from "../engine/sessions";
 import type { EngineSession } from "../engine/sessions";
 import { writePrivate } from "../files";
 import { followed } from "../follow";
-import { gitIn, gitLater, sizeLater } from "../git";
+import { gitAsked, gitIn, gitLater, sizeLater } from "../git";
 import { ENGINE_DATA, homeFolder } from "../home";
 import type { AnswerPiece, JSONAnswer, RouteContext } from "../server/context";
 import { readProjects } from "./projects";
@@ -276,7 +277,7 @@ export async function answerWorktrees(method: string, requestPath: string, body:
     if (typeof root !== "string") return { status: 502, value: message("The engine didn't make it.") };
     // The engine leaves it on no branch; one of its own makes the work easy to commit, push and merge.
     const branch = freeBranch(root, prefix + path.basename(root));
-    if (!branch || gitIn(root, ["switch", "--quiet", "-c", branch]) === null && gitIn(root, ["symbolic-ref", "--quiet", "--short", "HEAD"]) !== branch) {
+    if (!branch || gitAsked(root, ["switch", "--quiet", "-c", branch]) === null && gitIn(root, ["symbolic-ref", "--quiet", "--short", "HEAD"]) !== branch) {
       await call(engine, "DELETE", "/api/worktree", { projectID: id, directory: root, force: true }, signal, project).catch(() => {});
       // (Most often a prefix git can't use there: `me/` beside a branch named `me`.)
       return { status: 502, value: message(prefix ? `A branch starting with “${prefix}” couldn’t be made in this repository. Change the branch prefix in Settings › Git, then try again.` : "Its branch couldn't be made.") };
@@ -457,17 +458,17 @@ async function restoreTree(folder: unknown, engine: Target | null, signal: Abort
     const onto = gitIn(tree.root, ["rev-parse", "HEAD"]);
     const parent = gitIn(tree.root, ["rev-parse", `${saved}^`]);
     const back = onto === parent
-      ? gitIn(tree.root, ["read-tree", "-m", "-u", "HEAD", saved]) !== null
-      : gitIn(tree.root, ["cherry-pick", "--no-commit", saved], BY_KUVO) !== null;
+      ? gitAsked(tree.root, ["read-tree", "-m", "-u", "HEAD", saved]) !== null
+      : gitAsked(tree.root, ["cherry-pick", "--no-commit", saved], BY_KUVO) !== null;
     if (!back) {
-      gitIn(tree.root, ["cherry-pick", "--abort"]);
-      gitIn(tree.root, ["reset", "--quiet", "--hard", "HEAD"]);
+      gitAsked(tree.root, ["cherry-pick", "--abort"]);
+      gitAsked(tree.root, ["reset", "--quiet", "--hard", "HEAD"]);
       gitIn(tree.project, ["worktree", "remove", "--force", tree.root]);
       if (!branchThere) gitIn(tree.project, ["branch", "-D", tree.branch]);
       return { status: 409, value: message(`Its saved changes clash with newer work on ${tree.branch}.`) };
     }
     // What was staged comes back as changes not staged: the snapshot keeps one tree for both.
-    gitIn(tree.root, ["reset", "--quiet"]);
+    gitAsked(tree.root, ["reset", "--quiet"]);
   }
   const { head: _head, snapshot: _snapshot, made: _made, prefix: _prefix, ...kept } = tree;
   // Not used again until a session there is open: with them all archived, the next sweep would only
@@ -485,9 +486,10 @@ async function restoreTree(folder: unknown, engine: Target | null, signal: Abort
   return { status: 200, value: record };
 }
 
-/** git in `folder`: null when it did it, or what it said when it didn't. */
+/** git in `folder` doing what you asked for (making or removing a worktree, with the repository's
+ * hooks and filters): null when it did it, or what it said when it didn't. */
 function spawnGit(folder: string, args: string[]): string | null {
-  const ran = spawnSync("git", args, { cwd: folder, encoding: "utf8", env: { ...process.env, GIT_TERMINAL_PROMPT: "0" }, timeout: 60_000 });
+  const ran = spawnSync("git", askedArgs(args), { cwd: folder, encoding: "utf8", env: { ...process.env, GIT_TERMINAL_PROMPT: "0" }, timeout: 60_000 });
   return ran.status === 0 ? null : String(ran.stderr || ran.stdout || "").trim().replace(/^fatal: /, "");
 }
 

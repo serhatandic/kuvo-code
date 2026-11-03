@@ -461,6 +461,104 @@ import { spawn as spawn2 } from "child_process";
 import { accessSync, constants } from "fs";
 import { delimiter, join as join3 } from "path";
 
+// Packages/Box/src/shared/git.ts
+import { execFile, spawnSync } from "child_process";
+var EVERY = ["-c", "core.fsmonitor=false", "-c", "core.pager=cat", "-c", "log.showSignature=false", "-c", "safe.bareRepository=explicit"];
+var OWN = [...EVERY, "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgSign=false", "-c", "tag.gpgSign=false", "-c", "credential.helper="];
+var GIT_QUIET = { GIT_TERMINAL_PROMPT: "0" };
+var DRIVERS = String.raw`^(filter\..+\.(clean|smudge|process)|diff\..+\.textconv)$`;
+var VALUED = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env", "--exec-path"]);
+var PLAIN = new Set(["rev-parse", "symbolic-ref", "for-each-ref", "rev-list", "update-ref", "config", "merge-base", "show-ref", "branch", "check-ignore", "ls-tree", "ls-files", "commit-tree", "write-tree", "init", "pack-objects", "index-pack", "count-objects", "remote", "repack", "gc", "fetch", "reflog", "var"]);
+var CONVERTING = new Set(["blame", "annotate", "grep", "cat-file", "format-patch", "range-diff"]);
+function split(args) {
+  let at = 0;
+  while (at < args.length && args[at].startsWith("-"))
+    at += VALUED.has(args[at]) ? 2 : 1;
+  return { lead: args.slice(0, at), rest: args.slice(at) };
+}
+function plain(rest) {
+  const [command, sub] = rest;
+  if (command === "cat-file")
+    return !rest.some((each) => /^--(filters|textconv|path)/.test(each));
+  if (command === "worktree")
+    return sub === "list" || sub === "prune";
+  if (command === "stash")
+    return sub === "list" || sub === "store";
+  return PLAIN.has(command ?? "");
+}
+function showing(rest) {
+  if (["diff", "log", "show", "whatchanged"].includes(rest[0] ?? ""))
+    return 1;
+  return rest[0] === "stash" && rest[1] === "show" ? 2 : -1;
+}
+function withOptions(rest, converters) {
+  const at = showing(rest);
+  if (at < 0)
+    return converters && CONVERTING.has(rest[0] ?? "") ? undefined : rest;
+  return [...rest.slice(0, at), "--no-ext-diff", ...converters ? ["--no-textconv"] : [], ...rest.slice(at)];
+}
+var reading = (lead, scoped) => [...lead, "config", ...scoped ? ["--show-scope"] : [], "--name-only", "-z", "--get-regexp", DRIVERS];
+function switchedOff(found, scoped) {
+  const parts = found.split("\x00").filter(Boolean);
+  const settings = [];
+  let converters = false;
+  for (let at = 0;at < parts.length; at += scoped ? 2 : 1) {
+    const scope = scoped ? parts[at] : "local";
+    const name = scoped ? parts[at + 1] : parts[at];
+    if (!name || scope === "system" || scope === "global" || scope === "command")
+      continue;
+    if (name.startsWith("diff.")) {
+      converters = true;
+      continue;
+    }
+    if (/[=\n]/.test(name))
+      return;
+    settings.push("-c", `${name}=`, "-c", `${name.slice(0, name.lastIndexOf("."))}.required=false`);
+  }
+  return { settings, converters };
+}
+function answer(code, out, scoped) {
+  if (code === 0)
+    return switchedOff(out, scoped);
+  if (code === 1)
+    return { settings: [], converters: false };
+  if (code === 129 && scoped)
+    return "retry";
+  return;
+}
+function built(lead, rest, found) {
+  if (!found || found === "retry")
+    return;
+  const shown = withOptions(rest, found.converters);
+  return shown && [...lead, ...OWN, ...found.settings, ...shown];
+}
+var NOTHING = { settings: [], converters: false };
+function ownArgs(args, cwd) {
+  const { lead, rest } = split(args);
+  let found = NOTHING;
+  if (!plain(rest)) {
+    for (const scoped of [true, false]) {
+      const ran = spawnSync("git", reading(lead, scoped), { cwd, encoding: "utf8", env: { ...process.env, ...GIT_QUIET }, timeout: 30000 });
+      found = answer(ran.status, String(ran.stdout ?? ""), scoped);
+      if (found !== "retry")
+        break;
+    }
+  }
+  return built(lead, rest, found);
+}
+async function ownArgsLater(args, cwd) {
+  const { lead, rest } = split(args);
+  let found = NOTHING;
+  if (!plain(rest)) {
+    for (const scoped of [true, false]) {
+      found = await new Promise((resolve) => execFile("git", reading(lead, scoped), { cwd, encoding: "utf8", env: { ...process.env, ...GIT_QUIET }, timeout: 30000 }, (error, out) => resolve(answer(error ? typeof error.code === "number" ? error.code : 128 : 0, String(out ?? ""), scoped))));
+      if (found !== "retry")
+        break;
+    }
+  }
+  return built(lead, rest, found);
+}
+
 // Packages/Box/src/shared/platform.ts
 import { execFileSync, spawn } from "child_process";
 import fs from "fs";
@@ -634,6 +732,12 @@ async function run(command, args, options = {}) {
   await Promise.race([reads, Bun.sleep(2000)]);
   return { code, stdout, stderr, ...timedOut ? { timedOut } : {} };
 }
+async function runGit(args, options = {}) {
+  const own = await ownArgsLater(args, options.cwd);
+  if (!own)
+    return { code: 128, stdout: "", stderr: "This repository's own settings name a program Kuvo Code won't run for it." };
+  return run("git", own, { ...options, env: { ...GIT_QUIET, ...options.env } });
+}
 function runGroup(command, args, options = {}) {
   const env = { ...process.env, ...options.env };
   for (const name of Object.keys(env))
@@ -669,7 +773,7 @@ function runGroup(command, args, options = {}) {
 }
 var startPath = process.env.PATH ?? "";
 var pathRead = 0;
-var reading;
+var reading2;
 function useSavedLoginPath() {
   const saved = machineHome ? savedLoginPath(machineHome) : undefined;
   if (saved)
@@ -678,15 +782,15 @@ function useSavedLoginPath() {
 async function refreshLoginPath(now = false) {
   if (onMachine && !now)
     return;
-  if (reading) {
+  if (reading2) {
     if (!now)
-      return answerSoon(reading);
-    await reading;
+      return answerSoon(reading2);
+    await reading2;
   } else if (!now && Date.now() - pathRead < 5000)
     return;
-  const read = reading = readLoginPath().finally(() => {
+  const read = reading2 = readLoginPath().finally(() => {
     pathRead = Date.now();
-    reading = undefined;
+    reading2 = undefined;
   });
   await (now ? read : answerSoon(read));
 }
@@ -706,7 +810,7 @@ async function readLoginPath() {
 function firstURL(text) {
   return text.match(/https?:\/\/[^\s"'<>]+/)?.[0];
 }
-function plain(text) {
+function plain2(text) {
   return text.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "").replace(/\x1b\][^\x07]*\x07/g, "");
 }
 
@@ -787,7 +891,7 @@ class CopyPolicy {
   async checkIgnore(top, paths) {
     let ran;
     try {
-      ran = await run("git", ["-C", top, "check-ignore", "-z", "--stdin"], {
+      ran = await runGit(["-C", top, "check-ignore", "-z", "--stdin"], {
         input: paths.map((path) => "./" + relative(top, path)).join("\x00") + "\x00",
         timeout: 5000,
         env: { GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0", LC_ALL: "C" }
@@ -815,7 +919,7 @@ function freeSpace(folder) {
 }
 
 // Packages/Box/src/agents/artifacts/turnfiles.ts
-import { spawnSync } from "child_process";
+import { spawnSync as spawnSync2 } from "child_process";
 import { existsSync as existsSync2, readdirSync as readdirSync2, statSync as statSync2 } from "fs";
 import { dirname as dirname2, join as join4, sep as sep3 } from "path";
 var skipped = new Set([".git", "node_modules", ".venv", "venv", "__pycache__", ".cache", ".pytest_cache", ".mypy_cache", ".next", ".turbo", ".gradle", "target", "DerivedData"]);
@@ -866,7 +970,10 @@ function changedSince(folder, since, keep = () => true) {
   return found;
 }
 function fromGit(top, folder) {
-  const result = spawnSync("git", ["-C", folder, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--", "."], {
+  const args = ownArgs(["-C", folder, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--", "."]);
+  if (!args)
+    return walk(folder);
+  const result = spawnSync2("git", args, {
     timeout: 15000,
     maxBuffer: 16 * 1024 * 1024,
     env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" }
@@ -4657,7 +4764,7 @@ class Reviews {
   settingUp;
   async setUpPartsFolder() {
     const folder = this.reviewersFolder;
-    const git = (...args) => run("git", ["-C", folder, "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", ...args], {
+    const git = (...args) => runGit(["-C", folder, ...args], {
       timeout: 30000,
       env: { GIT_AUTHOR_NAME: "Kuvo Code", GIT_AUTHOR_EMAIL: "reviewers@kuvo.run", GIT_COMMITTER_NAME: "Kuvo Code", GIT_COMMITTER_EMAIL: "reviewers@kuvo.run" }
     }).catch(() => {
@@ -5048,7 +5155,7 @@ function foldersOf(files) {
 var foldersLimit = 500;
 function gitIn(directory) {
   return async (args) => {
-    const ran = await run("git", ["-C", directory, ...args], { timeout: 30000 });
+    const ran = await runGit(["-C", directory, ...args], { timeout: 30000 });
     if (ran.timedOut)
       throw new Error("git took too long to read the changes.");
     return ran;
@@ -5598,7 +5705,7 @@ class VoiceWords {
   }
 }
 async function git(directory, args) {
-  const ran = await run("git", ["-C", directory, ...args], { timeout: 5000 }).catch(() => {
+  const ran = await runGit(["-C", directory, ...args], { timeout: 5000 }).catch(() => {
     return;
   });
   return ran && ran.code === 0 && !ran.timedOut ? ran.stdout : undefined;
@@ -5972,7 +6079,7 @@ class Snapshots {
     this.root = root;
   }
   async repository(directory) {
-    const top = await run("git", ["-C", directory, "rev-parse", "--show-toplevel"], { timeout: 15000, env: quiet }).catch(() => {
+    const top = await runGit(["-C", directory, "rev-parse", "--show-toplevel"], { timeout: 15000, env: quiet }).catch(() => {
       return;
     });
     if (top?.code !== 0 || !top.stdout.trim())
@@ -5985,7 +6092,7 @@ class Snapshots {
     } catch {
       return;
     }
-    const exclude = await run("git", ["-C", directory, "rev-parse", "--path-format=absolute", "--git-path", "info/exclude"], { timeout: 15000, env: quiet }).catch(() => {
+    const exclude = await runGit(["-C", directory, "rev-parse", "--path-format=absolute", "--git-path", "info/exclude"], { timeout: 15000, env: quiet }).catch(() => {
       return;
     });
     let prefix = relative4(root, here);
@@ -6002,7 +6109,7 @@ class Snapshots {
       settings.push("-c", "gc.auto=0");
     if (repository.exclude)
       settings.push("-c", `core.excludesFile=${repository.exclude}`);
-    return run("git", ["--git-dir", this.storeOf(repository), "--work-tree", repository.top, ...settings, ...args], {
+    return runGit(["--git-dir", this.storeOf(repository), "--work-tree", repository.top, ...settings, ...args], {
       cwd: repository.top,
       timeout: options.timeout ?? 120000,
       env: options.patterns ? { ...quiet, GIT_LITERAL_PATHSPECS: "0" } : quiet,
@@ -6024,7 +6131,7 @@ class Snapshots {
       const store = this.storeOf(repository);
       if (!existsSync6(join13(store, "HEAD"))) {
         mkdirSync7(store, { recursive: true });
-        const made = await run("git", ["init", "--bare", "-q", store], { timeout: 30000, env: quiet });
+        const made = await runGit(["init", "--bare", "-q", store], { timeout: 30000, env: quiet });
         if (made.code !== 0)
           throw new Error("Kuvo Code couldn't make a place to keep this project's files.");
       }
@@ -6763,7 +6870,7 @@ function relayedServers(sessionID, holder, directory, found) {
   served.set(sessionID, { directory, servers: new Map(found.servers.map((each) => [each.name, each])) });
   return found.servers.map((each) => ({ name: each.name, url: `http://127.0.0.1:${relayPort()}/mcp/${encodeURIComponent(each.name)}`, headers: { Authorization: `Bearer ${key}` }, timeout: each.timeout }));
 }
-var relayPort = () => (server2 ??= Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, fetch: answer })).port;
+var relayPort = () => (server2 ??= Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, fetch: answer2 })).port;
 function dropRelayed(sessionID, holder) {
   const held = holders.get(sessionID);
   held?.delete(holder);
@@ -6782,7 +6889,7 @@ function dropRelayed(sessionID, holder) {
 `))
       program.stop();
 }
-async function answer(request) {
+async function answer2(request) {
   const key = /^Bearer (\S+)$/.exec(request.headers.get("authorization") ?? "")?.[1];
   const sessionID = key ? sessionsByKey.get(key) : undefined;
   if (!sessionID)
@@ -8140,7 +8247,7 @@ async function commandSignIn(options) {
   const read = async (stream) => {
     const decoder = new TextDecoder;
     for await (const chunk of stream)
-      output += plain(decoder.decode(chunk));
+      output += plain2(decoder.decode(chunk));
   };
   read(child.stdout);
   read(child.stderr);
@@ -9171,7 +9278,7 @@ function update(definition, temporary) {
     const changed = Boolean(after.installed && after.installed !== before.installed);
     if (changed || after.installed && !isOutdated(after))
       return { updated: changed, version: after.installed };
-    const output = plain(ran.stderr + `
+    const output = plain2(ran.stderr + `
 ` + ran.stdout).trim().split(`
 `).slice(-6).join(`
 `).trim();
@@ -9195,7 +9302,7 @@ function install(name, command, temporary, found, readPath = refreshLoginPath) {
     const executable = found();
     if (executable)
       return { installed: true, version: await installedVersion2(executable) };
-    const output = plain(ran.stderr + `
+    const output = plain2(ran.stderr + `
 ` + ran.stdout).trim().split(`
 `).slice(-6).join(`
 `).trim();
@@ -9208,7 +9315,7 @@ async function installedVersion2(executable) {
   const ran = await run(executable, ["--version"], { timeout: 15000 }).catch(() => {
     return;
   });
-  return ran ? versionIn(plain(ran.stdout + " " + ran.stderr)) : undefined;
+  return ran ? versionIn(plain2(ran.stdout + " " + ran.stderr)) : undefined;
 }
 function versionIn(text) {
   return text.match(/\b(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)\b/)?.[1];
@@ -14061,7 +14168,7 @@ class GrokAgent {
       return this.status;
     const executable = this.executable();
     const result = await run(executable, ["models"], { env: this.env(), timeout: 20000, cwd: this.context.temporary });
-    const text = plain(result.stdout + `
+    const text = plain2(result.stdout + `
 ` + result.stderr);
     const signedOut = /not authenticated|not logged in|grok login|log ?in first|sign in first/i.test(text);
     if (result.timedOut)
@@ -14833,7 +14940,7 @@ function runCommand(command, directory, started = () => {}) {
         return;
       done = true;
       clearTimeout(timer);
-      const text = plain(output).trimEnd();
+      const text = plain2(output).trimEnd();
       resolve({ code, output: text.length > shellOutputLimit ? text.slice(-shellOutputLimit) : text, truncated: truncated || text.length > shellOutputLimit, timedOut });
     };
     let child;
@@ -22766,4 +22873,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents c1e5119631ad16da07522737845f500d384e170a7169002292e4d38cf9ea58ab
+// Built from Packages/Box/src/agents c0f4b0484f6f18e24b5b2cc40e108c2fcdc1349127e5c9080648305942c20c0a

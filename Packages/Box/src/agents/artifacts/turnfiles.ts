@@ -6,6 +6,7 @@
 import { spawnSync } from "node:child_process"
 import { existsSync, readdirSync, statSync } from "node:fs"
 import { dirname, join, sep } from "node:path"
+import { ownArgs } from "../../shared/git"
 
 /** Folders whose files are never what an agent made for you (tools' own, caches). */
 export const skipped = new Set([".git", "node_modules", ".venv", "venv", "__pycache__", ".cache", ".pytest_cache", ".mypy_cache", ".next", ".turbo", ".gradle", "target", "DerivedData"])
@@ -82,7 +83,9 @@ export function changedSince(folder: string, since: number, keep: (relative: str
 
 /** What git status lists under `folder`: changed and new files, each by its whole path. */
 function fromGit(top: string, folder: string): string[] {
-  const result = spawnSync("git", ["-C", folder, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--", "."], {
+  const args = ownArgs(["-C", folder, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--", "."])
+  if (!args) return walk(folder)
+  const result = spawnSync("git", args, {
     timeout: 15_000,
     maxBuffer: 16 * 1024 * 1024,
     env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" },

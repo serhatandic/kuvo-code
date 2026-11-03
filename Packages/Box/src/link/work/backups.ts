@@ -24,6 +24,7 @@ import path from "node:path";
 import { engineGet } from "../engine/client";
 import { BOX } from "../home";
 import { textOf, writePrivate } from "../../shared/files";
+import { ownArgsLater } from "../../shared/git";
 import type { EngineAnswer } from "../engine/client";
 import type { EngineSession } from "../engine/sessions";
 import type { Target } from "../../shared/records";
@@ -52,28 +53,34 @@ interface Index {
   backups: Backup[];
 }
 
-// git with nothing of the repository's own run: no hooks, filters, pager, fsmonitor, signature
-// checks or credentials, never asking anything. (What's taken back never goes through git's
-// transports, which the repository's settings could point elsewhere: it's packed from the store
-// and indexed into the repository.)
-const SAFE = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "core.pager=cat", "-c", "credential.helper=", "-c", "diff.external=", "-c", "log.showSignature=false", "-c", "protocol.file.allow=always", "-c", "gc.autoDetach=false"];
+// git as the box runs it by itself (`../../shared/git`): nothing of the repository's own run (no
+// hooks, filters, pager, fsmonitor, signature checks or credentials), never asking anything. (What's
+// taken back never goes through git's transports, which the repository's settings could point
+// elsewhere: it's packed from the store and indexed into the repository.)
+const MORE = ["-c", "protocol.file.allow=always", "-c", "gc.autoDetach=false"];
 const ENV = { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_ASKPASS: "", SSH_ASKPASS: "" };
+const REFUSED: Ran = { ok: false, out: "", error: "This repository's own settings name a program Kuvo Code won't run for it." };
 
 interface Ran { ok: boolean; out: string; error: string }
-function git(args: string[], options: { cwd?: string; input?: string } = {}): Promise<Ran> {
+async function git(given: string[], options: { cwd?: string; input?: string } = {}): Promise<Ran> {
+  const args = await ownArgsLater([...MORE, ...given], options.cwd);
+  if (!args) return REFUSED;
   return new Promise(resolve => {
-    const child = execFile("git", [...SAFE, ...args], { cwd: options.cwd, env: ENV, encoding: "utf8", timeout: 300_000, maxBuffer: 64 * 1024 * 1024 }, (error, out, err) =>
+    const child = execFile("git", args, { cwd: options.cwd, env: ENV, encoding: "utf8", timeout: 300_000, maxBuffer: 64 * 1024 * 1024 }, (error, out, err) =>
       resolve({ ok: !error, out: String(out ?? ""), error: String(err ?? "").trim() || (error ? String(error.message) : "") }));
     if (options.input !== undefined) child.stdin?.end(options.input);
   });
 }
 
 /** `from`'s output into `to`, both git as above: whether both went through, and what failed. */
-function gitPipe(from: string[], input: string, to: string[]): Promise<Ran> {
+async function gitPipe(given: string[], input: string, receiving: string[]): Promise<Ran> {
+  const from = await ownArgsLater([...MORE, ...given]);
+  const to = await ownArgsLater([...MORE, ...receiving]);
+  if (!from || !to) return REFUSED;
   return new Promise(resolve => {
     const options = { env: ENV, stdio: ["pipe", "pipe", "pipe"] as ("pipe")[] };
-    const sender = spawn("git", [...SAFE, ...from], options);
-    const taker = spawn("git", [...SAFE, ...to], options);
+    const sender = spawn("git", from, options);
+    const taker = spawn("git", to, options);
     let error = "";
     sender.stderr.on("data", chunk => { error += chunk; });
     taker.stderr.on("data", chunk => { error += chunk; });

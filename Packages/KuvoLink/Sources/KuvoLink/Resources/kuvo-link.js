@@ -1753,7 +1753,7 @@ async function* followed(read, followers, signal, { folders = [], recursive = tr
 var WATCH_SETTLES = [250, 1000, 5000];
 
 // Packages/Box/src/link/areas/wakes.ts
-import { execFile as execFile2 } from "node:child_process";
+import { execFile as execFile3 } from "node:child_process";
 import fs24 from "node:fs";
 import path27 from "node:path";
 
@@ -2104,20 +2104,135 @@ import fs13 from "node:fs";
 import path12 from "node:path";
 
 // Packages/Box/src/link/git.ts
+import { execFile as execFile2, spawnSync as spawnSync3 } from "node:child_process";
+
+// Packages/Box/src/shared/git.ts
 import { execFile, spawnSync as spawnSync2 } from "node:child_process";
+var EVERY = ["-c", "core.fsmonitor=false", "-c", "core.pager=cat", "-c", "log.showSignature=false", "-c", "safe.bareRepository=explicit"];
+var OWN = [...EVERY, "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgSign=false", "-c", "tag.gpgSign=false", "-c", "credential.helper="];
+var GIT_QUIET = { GIT_TERMINAL_PROMPT: "0" };
+var DRIVERS = String.raw`^(filter\..+\.(clean|smudge|process)|diff\..+\.textconv)$`;
+var VALUED = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env", "--exec-path"]);
+var PLAIN = new Set(["rev-parse", "symbolic-ref", "for-each-ref", "rev-list", "update-ref", "config", "merge-base", "show-ref", "branch", "check-ignore", "ls-tree", "ls-files", "commit-tree", "write-tree", "init", "pack-objects", "index-pack", "count-objects", "remote", "repack", "gc", "fetch", "reflog", "var"]);
+var CONVERTING = new Set(["blame", "annotate", "grep", "cat-file", "format-patch", "range-diff"]);
+function split(args) {
+  let at = 0;
+  while (at < args.length && args[at].startsWith("-"))
+    at += VALUED.has(args[at]) ? 2 : 1;
+  return { lead: args.slice(0, at), rest: args.slice(at) };
+}
+function plain(rest) {
+  const [command, sub] = rest;
+  if (command === "cat-file")
+    return !rest.some((each) => /^--(filters|textconv|path)/.test(each));
+  if (command === "worktree")
+    return sub === "list" || sub === "prune";
+  if (command === "stash")
+    return sub === "list" || sub === "store";
+  return PLAIN.has(command ?? "");
+}
+function showing(rest) {
+  if (["diff", "log", "show", "whatchanged"].includes(rest[0] ?? ""))
+    return 1;
+  return rest[0] === "stash" && rest[1] === "show" ? 2 : -1;
+}
+function withOptions(rest, converters) {
+  const at = showing(rest);
+  if (at < 0)
+    return converters && CONVERTING.has(rest[0] ?? "") ? undefined : rest;
+  return [...rest.slice(0, at), "--no-ext-diff", ...converters ? ["--no-textconv"] : [], ...rest.slice(at)];
+}
+var reading = (lead, scoped) => [...lead, "config", ...scoped ? ["--show-scope"] : [], "--name-only", "-z", "--get-regexp", DRIVERS];
+function switchedOff(found, scoped) {
+  const parts = found.split("\x00").filter(Boolean);
+  const settings = [];
+  let converters = false;
+  for (let at = 0;at < parts.length; at += scoped ? 2 : 1) {
+    const scope = scoped ? parts[at] : "local";
+    const name = scoped ? parts[at + 1] : parts[at];
+    if (!name || scope === "system" || scope === "global" || scope === "command")
+      continue;
+    if (name.startsWith("diff.")) {
+      converters = true;
+      continue;
+    }
+    if (/[=\n]/.test(name))
+      return;
+    settings.push("-c", `${name}=`, "-c", `${name.slice(0, name.lastIndexOf("."))}.required=false`);
+  }
+  return { settings, converters };
+}
+function answer(code, out, scoped) {
+  if (code === 0)
+    return switchedOff(out, scoped);
+  if (code === 1)
+    return { settings: [], converters: false };
+  if (code === 129 && scoped)
+    return "retry";
+  return;
+}
+function built(lead, rest, found) {
+  if (!found || found === "retry")
+    return;
+  const shown = withOptions(rest, found.converters);
+  return shown && [...lead, ...OWN, ...found.settings, ...shown];
+}
+var NOTHING = { settings: [], converters: false };
+function ownArgs(args, cwd) {
+  const { lead, rest } = split(args);
+  let found = NOTHING;
+  if (!plain(rest)) {
+    for (const scoped of [true, false]) {
+      const ran = spawnSync2("git", reading(lead, scoped), { cwd, encoding: "utf8", env: { ...process.env, ...GIT_QUIET }, timeout: 30000 });
+      found = answer(ran.status, String(ran.stdout ?? ""), scoped);
+      if (found !== "retry")
+        break;
+    }
+  }
+  return built(lead, rest, found);
+}
+async function ownArgsLater(args, cwd) {
+  const { lead, rest } = split(args);
+  let found = NOTHING;
+  if (!plain(rest)) {
+    for (const scoped of [true, false]) {
+      found = await new Promise((resolve) => execFile("git", reading(lead, scoped), { cwd, encoding: "utf8", env: { ...process.env, ...GIT_QUIET }, timeout: 30000 }, (error, out) => resolve(answer(error ? typeof error.code === "number" ? error.code : 128 : 0, String(out ?? ""), scoped))));
+      if (found !== "retry")
+        break;
+    }
+  }
+  return built(lead, rest, found);
+}
+function askedArgs(args) {
+  const { lead, rest } = split(args);
+  return [...lead, ...EVERY, ...withOptions(rest, false) ?? rest];
+}
+
+// Packages/Box/src/link/git.ts
 var GIT_ENV = { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" };
-function gitIn(folder, args, env = {}) {
-  const ran = spawnSync2("git", args, { cwd: folder, encoding: "utf8", env: { ...GIT_ENV, ...env }, timeout: 60000 });
+function ranIn(folder, args, env) {
+  if (!args)
+    return null;
+  const ran = spawnSync3("git", args, { cwd: folder, encoding: "utf8", env: { ...GIT_ENV, ...env }, timeout: 60000 });
   return ran.status === 0 ? String(ran.stdout ?? "").trim() : null;
 }
-function gitLater(folder, args) {
+function gitIn(folder, args, env = {}) {
+  return ranIn(folder, ownArgs(args, folder), env);
+}
+function gitAsked(folder, args, env = {}) {
+  return ranIn(folder, askedArgs(args), env);
+}
+async function gitLater(folder, args) {
+  const own = await ownArgsLater(args, folder);
+  if (!own)
+    return null;
   return new Promise((resolve) => {
-    execFile("git", args, { cwd: folder, encoding: "utf8", env: GIT_ENV, timeout: 60000, maxBuffer: 64 * 1024 * 1024 }, (error, stdout) => resolve(error ? null : String(stdout ?? "").trim()));
+    execFile2("git", own, { cwd: folder, encoding: "utf8", env: GIT_ENV, timeout: 60000, maxBuffer: 64 * 1024 * 1024 }, (error, stdout) => resolve(error ? null : String(stdout ?? "").trim()));
   });
 }
 function sizeLater(folder) {
   return new Promise((resolve) => {
-    execFile("du", ["-sk", folder], { encoding: "utf8", timeout: 60000 }, (error, stdout) => {
+    execFile2("du", ["-sk", folder], { encoding: "utf8", timeout: 60000 }, (error, stdout) => {
       const kilobytes = Number(String(stdout ?? "").split(/\s/)[0]);
       resolve(!error && Number.isFinite(kilobytes) ? kilobytes * 1024 : undefined);
     });
@@ -3135,7 +3250,7 @@ import path18 from "node:path";
 import path17 from "node:path";
 
 // Packages/Box/src/link/fence/state.ts
-import { spawnSync as spawnSync4 } from "node:child_process";
+import { spawnSync as spawnSync5 } from "node:child_process";
 import crypto7 from "node:crypto";
 import fs17 from "node:fs";
 import os4 from "node:os";
@@ -4048,7 +4163,7 @@ function writeRuleWouldBe(where) {
 }
 
 // Packages/Box/src/link/fence/landlock.ts
-import { spawn as spawn2, spawnSync as spawnSync3 } from "node:child_process";
+import { spawn as spawn2, spawnSync as spawnSync4 } from "node:child_process";
 import fs16 from "node:fs";
 function landlockPolicy(policy) {
   return JSON.stringify({
@@ -4089,7 +4204,7 @@ function ownNamespace(own) {
   const unshare = UNSHARE.find((each) => fs16.existsSync(each));
   if (!unshare)
     return null;
-  const tried = spawnSync3(unshare, namespaceTry(unshare, own), { cwd: "/", stdio: "ignore", timeout: TRY_FOR });
+  const tried = spawnSync4(unshare, namespaceTry(unshare, own), { cwd: "/", stdio: "ignore", timeout: TRY_FOR });
   return tried.status === 0 ? unshare : null;
 }
 function ownNamespaceLater(own, unshare = UNSHARE.find((each) => fs16.existsSync(each))) {
@@ -4975,7 +5090,7 @@ function probe() {
   const bun = runtime();
   if (bun)
     env.KUVO_FENCE_RUNTIME = bun;
-  const run = spawnSync4(places.launcher, ["-c", script, PROBE, hidden, escaped], { env, encoding: "utf8", timeout: 20000 });
+  const run = spawnSync5(places.launcher, ["-c", script, PROBE, hidden, escaped], { env, encoding: "utf8", timeout: 20000 });
   const reasons = {
     10: ["folder", "a command couldn't go to its own folder"],
     11: ["folder", "a command couldn't write in its own folder"],
@@ -6048,7 +6163,7 @@ function masked(text) {
 var showsAll = (text) => [...text].length <= SHOWN_LENGTH && masked(text) === text;
 
 // Packages/Box/src/link/notices/news.ts
-var plain = (text) => String(text ?? "").replace(/^[ \t]{0,3}(#{1,6}|>+)[ \t]+/gm, "").replace(/!?\[([^\]]*)\]\([^)\s]*\)/g, "$1").replace(/(?<![\w*_])[*_]{1,3}(?=\S)|(?<=\S)[*_]{1,3}(?![\w*_])/g, "").replace(/`/g, "").replace(/\s+/g, " ").trim();
+var plain2 = (text) => String(text ?? "").replace(/^[ \t]{0,3}(#{1,6}|>+)[ \t]+/gm, "").replace(/!?\[([^\]]*)\]\([^)\s]*\)/g, "$1").replace(/(?<![\w*_])[*_]{1,3}(?=\S)|(?<=\S)[*_]{1,3}(?![\w*_])/g, "").replace(/`/g, "").replace(/\s+/g, " ").trim();
 function describePermission(request, home) {
   const what = { edit: "edit files", write: "edit files", patch: "edit files", shell: "run a command", bash: "run a command", read: "read a file", external_directory: "work outside the project", webfetch: "open a web page" }[request.action] ?? request.action;
   const shown = (Array.isArray(request.resources) ? request.resources : []).filter((each) => each !== "*").map((each) => home !== undefined && request.action === "external_directory" ? outsideShown(String(each), home) : each);
@@ -6161,7 +6276,7 @@ async function noticeFor(event, get) {
         for (const message of page.data ?? []) {
           if (message.type !== "assistant")
             continue;
-          reply = plain((message.content ?? []).filter((part) => part.type === "text").map((part) => part.text).join(" "));
+          reply = plain2((message.content ?? []).filter((part) => part.type === "text").map((part) => part.text).join(" "));
           if (reply)
             break;
         }
@@ -6198,10 +6313,10 @@ function groupNotice(event) {
     if (!data.last)
       return { ...about, body: "The meeting came, but no one could take part." };
     const who = data.who ? data.last.kind === "wrapUp" ? `${data.who}’s wrap-up` : String(data.who) : undefined;
-    return { ...about, subtitle: who, body: cut(plain(data.last.text), 220) };
+    return { ...about, subtitle: who, body: cut(plain2(data.last.text), 220) };
   }
   if (event.type === "kuvo.group.done")
-    return { ...about, subtitle: `${data.who} finished its part`, body: cut(plain(data.text), 220) };
+    return { ...about, subtitle: `${data.who} finished its part`, body: cut(plain2(data.text), 220) };
   return null;
 }
 
@@ -6469,7 +6584,7 @@ function sendWakes() {
     running = true;
     started = Date.now() / 1000;
     const env = { ...process.env, KUVO_LINK_RUNTIME: process.execPath, KUVO_LINK_FLAGS: OWN_RUNTIME.join(" "), KUVO_LINK_SCRIPT: SCRIPT };
-    execFile2(WAKE_COMMAND, ["fire", BOTS, path27.join(RUN, "engine.json")], { env }, (error) => {
+    execFile3(WAKE_COMMAND, ["fire", BOTS, path27.join(RUN, "engine.json")], { env }, (error) => {
       running = false;
       if (error?.code === "ENOENT" && !said) {
         said = true;
@@ -6596,7 +6711,7 @@ async function* answerWakes(session, action, request, readEngine, bridge, signal
   try {
     given = JSON.parse(Buffer.from(request.body ?? []).toString("utf8") || "{}") ?? {};
   } catch {}
-  const kuvoWake = (args) => new Promise((resolve) => execFile2(WAKE_COMMAND, [folder, ...args], { encoding: "utf8", timeout: 30000 }, (error, _out, said) => resolve(error ? { missing: error.code === "ENOENT", refused: error.code === 2, said: String(said ?? "").trim() } : null)));
+  const kuvoWake = (args) => new Promise((resolve) => execFile3(WAKE_COMMAND, [folder, ...args], { encoding: "utf8", timeout: 30000 }, (error, _out, said) => resolve(error ? { missing: error.code === "ENOENT", refused: error.code === 2, said: String(said ?? "").trim() } : null)));
   const unavailable = (failed, what) => failed.missing ? json(503, { message: "Wake-ups aren’t set up on this computer." }) : json(failed.refused && failed.said ? 400 : 503, { message: failed.refused && failed.said ? failed.said : `${what} couldn’t be saved. Try again.` });
   if (action === "watch") {
     const every = typeof given.every === "string" ? given.every.trim() : "";
@@ -7843,7 +7958,7 @@ var object = (fields) => ({ object: fields });
 var oneOf = (...of) => ({ oneOf: of });
 var words = (...each) => ({ oneOf: each.map((word) => ({ literal: word })) });
 var nullable = (shape) => oneOf(shape, "null");
-var NOTHING = object({});
+var NOTHING2 = object({});
 
 // Packages/Box/src/shared/routes/projects.ts
 var PROJECT = object({
@@ -9407,7 +9522,7 @@ function sendOutbox(host, link = readLink(), now = Date.now(), offline = 0, ask 
 }
 
 // Packages/Box/src/link/work/projects.ts
-import { execFile as execFile3 } from "node:child_process";
+import { execFile as execFile4 } from "node:child_process";
 import fs36 from "node:fs";
 import path38 from "node:path";
 
@@ -9499,7 +9614,7 @@ function cloneInto(address, folder) {
   return new Promise((resolve) => {
     const ownSSH = Boolean(process.env.GIT_SSH_COMMAND || process.env.GIT_SSH) || gitIn(path38.dirname(folder), ["config", "--get", "core.sshCommand"]) !== null;
     const env = { ...process.env, GIT_TERMINAL_PROMPT: "0", ...ownSSH ? {} : { GIT_SSH_COMMAND: "ssh -o BatchMode=yes" } };
-    execFile3("git", ["clone", "--quiet", "--", address, folder], { encoding: "utf8", env, timeout: 600000 }, (error, _stdout, stderr) => {
+    execFile4("git", askedArgs(["clone", "--quiet", "--", address, folder]), { encoding: "utf8", env, timeout: 600000 }, (error, _stdout, stderr) => {
       resolve(error ? String(stderr ?? "").trim().split(`
 `).pop() || String(error.message) : null);
     });
@@ -12303,7 +12418,7 @@ function phoneSeenLately(file = SEEN_FILE, now = Date.now()) {
 }
 
 // Packages/Box/src/link/updates/update.ts
-import { spawnSync as spawnSync5 } from "node:child_process";
+import { spawnSync as spawnSync6 } from "node:child_process";
 import crypto20 from "node:crypto";
 import fs46 from "node:fs";
 import os7 from "node:os";
@@ -12427,7 +12542,7 @@ async function boxBusy(readEngine = readEngineFile, readBridge = readBridgeFile)
 }
 var hexSHA256 = (data) => crypto20.createHash("sha256").update(data).digest("hex");
 function ran(command, args, env = {}, timeout = 120000) {
-  const result = spawnSync5(command, args, { cwd: K, env: { ...process.env, ...env }, encoding: "utf8", timeout });
+  const result = spawnSync6(command, args, { cwd: K, env: { ...process.env, ...env }, encoding: "utf8", timeout });
   return { status: result.status, output: `${result.stdout ?? ""}${result.stderr ?? ""}`.trim() };
 }
 function isUpdating() {
@@ -13435,7 +13550,7 @@ async function conversationOf2(target, id) {
 }
 
 // Packages/Box/src/link/areas/worktrees.ts
-import { spawnSync as spawnSync6 } from "node:child_process";
+import { spawnSync as spawnSync7 } from "node:child_process";
 import fs49 from "node:fs";
 import path52 from "node:path";
 function freeBranch(folder, name) {
@@ -13640,7 +13755,7 @@ async function answerWorktrees(method, requestPath, body, engine, signal, bridge
     if (typeof root !== "string")
       return { status: 502, value: message("The engine didn't make it.") };
     const branch = freeBranch(root, prefix + path52.basename(root));
-    if (!branch || gitIn(root, ["switch", "--quiet", "-c", branch]) === null && gitIn(root, ["symbolic-ref", "--quiet", "--short", "HEAD"]) !== branch) {
+    if (!branch || gitAsked(root, ["switch", "--quiet", "-c", branch]) === null && gitIn(root, ["symbolic-ref", "--quiet", "--short", "HEAD"]) !== branch) {
       await call(engine, "DELETE", "/api/worktree", { projectID: id, directory: root, force: true }, signal, project).catch(() => {});
       return { status: 502, value: message(prefix ? `A branch starting with “${prefix}” couldn’t be made in this repository. Change the branch prefix in Settings › Git, then try again.` : "Its branch couldn't be made.") };
     }
@@ -13791,16 +13906,16 @@ async function restoreTree(folder, engine, signal, bridge) {
   if (saved) {
     const onto = gitIn(tree.root, ["rev-parse", "HEAD"]);
     const parent = gitIn(tree.root, ["rev-parse", `${saved}^`]);
-    const back = onto === parent ? gitIn(tree.root, ["read-tree", "-m", "-u", "HEAD", saved]) !== null : gitIn(tree.root, ["cherry-pick", "--no-commit", saved], BY_KUVO) !== null;
+    const back = onto === parent ? gitAsked(tree.root, ["read-tree", "-m", "-u", "HEAD", saved]) !== null : gitAsked(tree.root, ["cherry-pick", "--no-commit", saved], BY_KUVO) !== null;
     if (!back) {
-      gitIn(tree.root, ["cherry-pick", "--abort"]);
-      gitIn(tree.root, ["reset", "--quiet", "--hard", "HEAD"]);
+      gitAsked(tree.root, ["cherry-pick", "--abort"]);
+      gitAsked(tree.root, ["reset", "--quiet", "--hard", "HEAD"]);
       gitIn(tree.project, ["worktree", "remove", "--force", tree.root]);
       if (!branchThere)
         gitIn(tree.project, ["branch", "-D", tree.branch]);
       return { status: 409, value: message(`Its saved changes clash with newer work on ${tree.branch}.`) };
     }
-    gitIn(tree.root, ["reset", "--quiet"]);
+    gitAsked(tree.root, ["reset", "--quiet"]);
   }
   const { head: _head, snapshot: _snapshot, made: _made, prefix: _prefix, ...kept } = tree;
   const record = { ...kept, used: false, restored: true };
@@ -13818,7 +13933,7 @@ async function restoreTree(folder, engine, signal, bridge) {
   return { status: 200, value: record };
 }
 function spawnGit(folder, args) {
-  const ran = spawnSync6("git", args, { cwd: folder, encoding: "utf8", env: { ...process.env, GIT_TERMINAL_PROMPT: "0" }, timeout: 60000 });
+  const ran = spawnSync7("git", askedArgs(args), { cwd: folder, encoding: "utf8", env: { ...process.env, GIT_TERMINAL_PROMPT: "0" }, timeout: 60000 });
   return ran.status === 0 ? null : String(ran.stderr || ran.stdout || "").trim().replace(/^fatal: /, "");
 }
 var sweeping = null;
@@ -16396,27 +16511,35 @@ async function reviewPermission(source, event, signal, found) {
 }
 
 // Packages/Box/src/link/work/backups.ts
-import { execFile as execFile4, spawn as spawn6 } from "node:child_process";
+import { execFile as execFile5, spawn as spawn6 } from "node:child_process";
 import crypto25 from "node:crypto";
 import fs59 from "node:fs";
 import path62 from "node:path";
 var BACKUPS_FOLDER = path62.join(BOX, "branch-backups");
 var KEEP = 100;
 var KEEP_FOR2 = 30 * 24 * 60 * 60 * 1000;
-var SAFE = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "core.pager=cat", "-c", "credential.helper=", "-c", "diff.external=", "-c", "log.showSignature=false", "-c", "protocol.file.allow=always", "-c", "gc.autoDetach=false"];
+var MORE = ["-c", "protocol.file.allow=always", "-c", "gc.autoDetach=false"];
 var ENV = { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_ASKPASS: "", SSH_ASKPASS: "" };
-function git(args, options = {}) {
+var REFUSED2 = { ok: false, out: "", error: "This repository's own settings name a program Kuvo Code won't run for it." };
+async function git(given, options = {}) {
+  const args = await ownArgsLater([...MORE, ...given], options.cwd);
+  if (!args)
+    return REFUSED2;
   return new Promise((resolve) => {
-    const child = execFile4("git", [...SAFE, ...args], { cwd: options.cwd, env: ENV, encoding: "utf8", timeout: 300000, maxBuffer: 64 * 1024 * 1024 }, (error, out, err) => resolve({ ok: !error, out: String(out ?? ""), error: String(err ?? "").trim() || (error ? String(error.message) : "") }));
+    const child = execFile5("git", args, { cwd: options.cwd, env: ENV, encoding: "utf8", timeout: 300000, maxBuffer: 64 * 1024 * 1024 }, (error, out, err) => resolve({ ok: !error, out: String(out ?? ""), error: String(err ?? "").trim() || (error ? String(error.message) : "") }));
     if (options.input !== undefined)
       child.stdin?.end(options.input);
   });
 }
-function gitPipe(from, input, to) {
+async function gitPipe(given, input, receiving) {
+  const from = await ownArgsLater([...MORE, ...given]);
+  const to = await ownArgsLater([...MORE, ...receiving]);
+  if (!from || !to)
+    return REFUSED2;
   return new Promise((resolve) => {
     const options = { env: ENV, stdio: ["pipe", "pipe", "pipe"] };
-    const sender = spawn6("git", [...SAFE, ...from], options);
-    const taker = spawn6("git", [...SAFE, ...to], options);
+    const sender = spawn6("git", from, options);
+    const taker = spawn6("git", to, options);
     let error = "";
     sender.stderr.on("data", (chunk) => {
       error += chunk;
@@ -21147,7 +21270,7 @@ var MOST_TEXT = 400000;
 var MOST_OUTPUT = 2000;
 var TEXT_VERSION = 2;
 var texts = new Map;
-var reading = new Map;
+var reading2 = new Map;
 async function* searchRoute(context) {
   const { request, readEngine, bridge, json } = context;
   if (request.method.toUpperCase() !== "GET")
@@ -21239,7 +21362,7 @@ function textOf2(place, target, session) {
   const known = texts.get(name) ?? fromDisk(name);
   if (known?.updated === updated)
     return Promise.resolve(known);
-  const already = reading.get(name);
+  const already = reading2.get(name);
   if (already)
     return already;
   const read = conversationOf2(target, session.id).then((messages) => {
@@ -21249,8 +21372,8 @@ function textOf2(place, target, session) {
     texts.set(name, { updated, folded: kept.folded });
     toDisk(name, kept);
     return kept;
-  }, () => null).finally(() => reading.delete(name));
-  reading.set(name, read);
+  }, () => null).finally(() => reading2.delete(name));
+  reading2.set(name, read);
   return read;
 }
 function fromDisk(name) {
@@ -21406,7 +21529,7 @@ function snippet(text, at, length) {
 }
 
 // Packages/Box/src/link/areas/changes.ts
-import { execFile as execFile5, execFileSync as execFileSync3, spawn as spawn9 } from "node:child_process";
+import { execFile as execFile6, execFileSync as execFileSync3, spawn as spawn9 } from "node:child_process";
 import fs71 from "node:fs";
 import os8 from "node:os";
 import path75 from "node:path";
@@ -21480,11 +21603,14 @@ var EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 var AUTHOR = ["GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"];
 var SCOPES = ["uncommitted", "unstaged", "staged", "branch"];
 var STATUSES = ["added", "deleted", "modified", "renamed"];
-function git2(folder, args, changing = false, more = {}, program = "git", timeout = 600000) {
+async function git2(folder, given, changing = false, more = {}, program = "git", timeout = 600000) {
+  const args = program !== "git" ? given : changing ? askedArgs(given) : await ownArgsLater(given, folder);
+  if (!args)
+    return { ok: false, out: Buffer.alloc(0), said: "This repository’s own settings name a program Kuvo Code won’t run for it." };
   const env = { ...process.env, GIT_TERMINAL_PROMPT: "0", ...changing ? {} : { GIT_OPTIONAL_LOCKS: "0" }, ...more };
   if (!changing) {
     return new Promise((resolve) => {
-      execFile5(program, args, { cwd: folder, env, encoding: "buffer", maxBuffer: 1024 * 1024 * 1024, timeout }, (error, stdout, stderr) => resolve({ ok: !error, out: stdout ?? Buffer.alloc(0), said: String(stderr ?? "").trim() }));
+      execFile6(program, args, { cwd: folder, env, encoding: "buffer", maxBuffer: 1024 * 1024 * 1024, timeout }, (error, stdout, stderr) => resolve({ ok: !error, out: stdout ?? Buffer.alloc(0), said: String(stderr ?? "").trim() }));
     });
   }
   return new Promise((resolve) => {
@@ -21820,7 +21946,7 @@ async function pullRequestWay(directory) {
 }
 function ghOn(root, host) {
   return new Promise((resolve) => {
-    execFile5("gh", ["auth", "status", "--hostname", host], { cwd: root, env: { ...process.env, GH_PROMPT_DISABLED: "1", NO_COLOR: "1" }, timeout: 30000 }, (error) => resolve(!error ? "signed-in" : error.code === "ENOENT" ? "missing" : "signed-out"));
+    execFile6("gh", ["auth", "status", "--hostname", host], { cwd: root, env: { ...process.env, GH_PROMPT_DISABLED: "1", NO_COLOR: "1" }, timeout: 30000 }, (error) => resolve(!error ? "signed-in" : error.code === "ENOENT" ? "missing" : "signed-out"));
   });
 }
 async function pullRequestSummary(root, against, limit = 30000) {
@@ -23153,7 +23279,7 @@ var message = (type, ...parts) => {
   const body = Buffer.concat([Buffer.from([type]), ...parts]);
   return Buffer.concat([u32(body.length), body]);
 };
-async function answer(request, source, signal) {
+async function answer2(request, source, signal) {
   const type = request[0];
   const body = new Reader(request.subarray(1));
   try {
@@ -23200,7 +23326,7 @@ function serveAgent(socket, source) {
         held = held.subarray(4 + length);
         waiting++;
         working = working.then(async () => {
-          const reply = await answer(request, source, gone.signal);
+          const reply = await answer2(request, source, gone.signal);
           if (!connection.destroyed)
             connection.write(reply);
         }).catch(() => {
@@ -23304,7 +23430,7 @@ function ask(what, signal, patience = PATIENCE) {
     asked.need = oneLine(asked.need, 300);
   return book2.ask(asked, signal, patience);
 }
-var answer2 = book2.answer;
+var answer3 = book2.answer;
 function vaultAskNotice(asked) {
   const who = asked.botName ?? asked.sessionName ?? "An agent";
   const title = asked.kind === "use" ? `${who} wants to use ${asked.itemName ?? "an item"}` : `${who} needs ${asked.need ?? "something from your vault"}`;
@@ -25340,7 +25466,7 @@ async function* answerVault(context) {
     const item = typeof given.item === "string" ? given.item : undefined;
     if (item && !itemByID(item))
       return yield* json(404, { message: "That item isn't in this vault." });
-    return yield* json(answer2(idOf3(parts[3]), { answer, ...item ? { item } : {}, client: client.name, by: client.by }) ? 200 : 404, {});
+    return yield* json(answer3(idOf3(parts[3]), { answer, ...item ? { item } : {}, client: client.name, by: client.by }) ? 200 : 404, {});
   }
   if (route === "kuvo/vault/items") {
     if (method !== "POST")
