@@ -3722,7 +3722,7 @@ an add.
 ### Git
 
 A repository's own settings (its `.git/config` and what that includes) never start a program when
-the box runs git there, since whatever could write in the folder (a download, a command the sandbox
+the box runs git there (bridge 0.9.183), since whatever could write in the folder (a download, a command the sandbox
 let out) could have named one. The fence keeps a sandboxed command from writing them on macOS (above);
 this holds on every box, for a repository written by anything.
 
