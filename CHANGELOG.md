@@ -16,6 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- A bot on a goal works like a lead with a team: once you start the goal, it makes the project (where you said it goes, if you did) and hands each step to a session of its own, following them as they report, rather than writing the code itself. Tell it if you'd rather it did the work alone.
 - In Edit Bot › Work, a limit's menu opens at the value you click, with the current choice over it, instead of at the row's left edge.
 - What your phone asks of this Mac no longer fails now and then with a lost connection when it asks for something right after a reply that streamed.
 - Replies draw fewer lines: headings no longer have a line under them, and `---` is one thin line with even space around it, as in Claude's and ChatGPT's apps.

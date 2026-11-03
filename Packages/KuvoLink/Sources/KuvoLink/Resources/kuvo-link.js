@@ -8902,6 +8902,23 @@ function projectPlace(name, root = projectsFolder()) {
   const folder = folderName(name);
   return root && folder ? path37.join(root, folder) : null;
 }
+function namedPlace(given, home = homeFolder()) {
+  if (typeof given !== "string" || !given.trim())
+    return { refused: "Give the folder as a full path." };
+  const written = given.trim().replace(/^~(?=$|\/)/, home);
+  if (!path37.isAbsolute(written))
+    return { refused: `Give the folder as a full path, like ~/${given.trim().replace(/^\.?\//, "")}.` };
+  const folder = path37.resolve(written);
+  if (folder === path37.parse(folder).root || folder === home)
+    return { refused: `${shownPath(folder, home)} can't be a project's folder: name one inside it.` };
+  let parent = false;
+  try {
+    parent = fs35.statSync(path37.dirname(folder)).isDirectory();
+  } catch {}
+  if (!parent)
+    return { refused: `There's no folder at ${shownPath(path37.dirname(folder), home)} to make it in.` };
+  return { folder };
+}
 function shownPath(folder, home = homeFolder()) {
   return folder === home || folder.startsWith(home + "/") ? "~" + folder.slice(home.length) : folder;
 }
@@ -8927,9 +8944,12 @@ async function makeProject(given, madeBy, root = projectsFolder()) {
   const name = typeof given.name === "string" ? given.name.trim() : "";
   if (!name)
     return no(400, "Say what it's called (name).");
-  if (!root)
+  const named = given.folder === undefined || given.folder === null ? null : namedPlace(given.folder);
+  if (named && "refused" in named)
+    return no(400, named.refused);
+  if (!named && !root)
     return no(403, "There's no projects folder here yet: the user picks one.", "projectsFolder");
-  const folder = projectPlace(name, root);
+  const folder = named ? named.folder : projectPlace(name, root);
   if (!folder)
     return no(400, `${name} can't be a folder's name: use letters or numbers.`);
   const clone = typeof given.clone === "string" && given.clone.trim() ? given.clone.trim() : null;
@@ -8940,7 +8960,7 @@ async function makeProject(given, madeBy, root = projectsFolder()) {
     return no(409, `There's a project at ${shownPath(folder)} already: ${listed.name ?? path37.basename(folder)}.`);
   const there = fs35.existsSync(folder);
   if (there && !isEmptyFolder(folder))
-    return no(409, `There's a folder at ${shownPath(folder)} already, with files in it. Pick another name.`);
+    return no(409, `There's a folder at ${shownPath(folder)} already, with files in it. ${named ? `To work on what's there, start sessions in it with start_session (folder: "${shownPath(folder)}").` : "Pick another name."}`);
   let kind = "plain";
   if (clone) {
     if (there) {
@@ -9001,10 +9021,12 @@ function changeKept(change, file = WORK_ASKS2) {
   return result;
 }
 function workAsks(file = WORK_ASKS2) {
-  return readKept(file).filter((each) => !each.answered && (!each.bot || botHere(each.bot))).map(({ given: _, late: __, answering: ____, answered: ___, toldLate: _____, ...listed }) => {
+  return readKept(file).filter((each) => !each.answered && (!each.bot || botHere(each.bot))).map((kept) => {
+    const { given: _, late: __, answering: ____, answered: ___, toldLate: _____, ...listed } = kept;
     const root = projectsFolder();
-    const folder = projectPlace(listed.project, root);
-    const suggested = root ? null : suggestedFolder();
+    const named = kept.given?.folder;
+    const folder = named ?? projectPlace(listed.project, root);
+    const suggested = root || named ? null : suggestedFolder();
     const shown = { ...listed, folder: folder ?? null };
     delete shown.suggested;
     if (suggested)
@@ -9050,8 +9072,8 @@ function askWork(asker, action, given, file = WORK_ASKS2) {
       ...asker.bot ? { bot: asker.bot } : {},
       project: given.name,
       ...given.clone ? { clone: given.clone } : {},
-      folderName: folderName(given.name) ?? given.name,
-      folder: projectPlace(given.name),
+      folderName: given.folder ? path38.basename(given.folder) : folderName(given.name) ?? given.name,
+      folder: given.folder ?? projectPlace(given.name),
       at: Date.now(),
       given
     };
@@ -9085,7 +9107,7 @@ async function answerOf(id, { wait = 10 * 60000, every = 1000, signal, file = WO
 }
 async function doWork(action, given, asker) {
   const madeBy = asker.bot ? { bot: asker.bot, name: asker.name, at: Date.now() } : null;
-  const outcome = await makeProject({ name: given.name, git: given.git, clone: action === "cloneProject" ? given.clone : undefined }, madeBy);
+  const outcome = await makeProject({ name: given.name, git: given.git, clone: action === "cloneProject" ? given.clone : undefined, folder: given.folder }, madeBy);
   if ("refused" in outcome)
     return { text: outcome.refused.message, isError: true };
   if (asker.bot)
@@ -9100,7 +9122,7 @@ async function answerWork(id, given, targets, file = WORK_ASKS2) {
   if (answer !== "allow" && answer !== "always" && answer !== "deny")
     return { refused: { status: 400, message: "Answer allow, always or deny." } };
   let picked = null;
-  if (answer !== "deny" && !projectsFolder()) {
+  if (answer !== "deny" && !projectsFolder() && !ask.given.folder) {
     if (given.folder === undefined || given.folder === null)
       return { refused: { status: 400, message: "Pick the folder new projects go in." } };
     const checked = folderGiven(given.folder);
@@ -9943,14 +9965,21 @@ function changeKept2(change, file = GOALS_FILE) {
 }
 var Here = `${HERE[0].toUpperCase()}${HERE.slice(1)}`;
 var alone = (goal) => sandboxOn(botHere(goal.bot)?.agents ?? false);
+function goalProject(entry) {
+  if (!/^(~\/|\/)/.test(entry))
+    return { name: entry };
+  const named = namedPlace(entry);
+  return "folder" in named ? { name: path41.basename(named.folder), folder: named.folder } : { name: path41.basename(entry) };
+}
 function boxChecks(goal) {
   const checks = [];
   if (!alone(goal))
     checks.push({ id: "alone", text: `${Here} can't work on its own yet`, detail: `${goal.name} works on it with you here: what it asks waits for you`, state: "failed", by: "box" });
   if (keepsAwake() && onPower() === false)
     checks.push({ id: "power", text: "Your Mac is on battery", detail: "If it sleeps, the goal carries on once it wakes", state: "needs", by: "box" });
-  if (goal.projects.length && !projectsFolder()) {
-    checks.push({ id: "projectsFolder", text: "Pick where new projects go", detail: `for ${goal.projects.join(", ")}`, state: "needs", by: "box", action: { kind: "projectsFolder", label: "Pick" } });
+  const placeless = goal.projects.filter((each) => !/^(~\/|\/)/.test(each));
+  if (placeless.length && !projectsFolder()) {
+    checks.push({ id: "projectsFolder", text: "Pick where new projects go", detail: `for ${placeless.join(", ")}`, state: "needs", by: "box", action: { kind: "projectsFolder", label: "Pick" } });
   }
   return checks;
 }
@@ -10073,7 +10102,7 @@ function proposeGoal(bot, given, file = GOALS_FILE) {
     spend.push({ what: text(each.what, 200), cap: each.cap, currency: (text(each.currency, 3) ?? "USD").toUpperCase(), per, spent: 0 });
   }
   const publics = (Array.isArray(given.public) ? given.public.slice(0, 8) : []).map((each) => text(each, 200)).filter((each) => Boolean(each)).map((each, at) => ({ id: `p${at + 1}`, text: each, on: false }));
-  const projects = (Array.isArray(given.projects) ? given.projects.slice(0, 5) : []).map((each) => text(each, 80)).filter((each) => Boolean(each));
+  const projects = (Array.isArray(given.projects) ? given.projects.slice(0, 5) : []).map((each) => text(each, 200)).filter((each) => Boolean(each));
   const ends = endGiven(given.ends);
   if (ends === null)
     return { refused: "An end (ends) is a date and time to come, like 2026-11-30T18:00." };
@@ -10248,6 +10277,14 @@ async function setGoalLoop(goal, condition, _targets, file = GOALS_FILE) {
   }
   return done;
 }
+var LEAD_WORDS = (projects) => [
+  "How you work through it: you lead, and sessions you start do the work. Unless the user told you to do it yourself:",
+  `1. ${projects.length ? `Make ${projects.map((each) => each.folder ? `${each.name} with make_project (name "${each.name}", folder "${shownPath(each.folder)}")` : `${each.name} with make_project`).join(", ")} first.` : "Make a new project with make_project first, if the work needs one."} Never make a project's folder with mkdir or git init.`,
+  "2. Hand each step to a session with start_session: in the project, with the step's number (step), and a task it can do from the message alone (what to do, where, what's there already, when it's done, what to report). Start every step that waits for nothing now, each in a worktree of its own (worktree) when others work in the same project. A new project has no commits yet: its first session works in it without a worktree and commits, and the rest start once it has.",
+  "3. Follow them up: you're woken when one finishes or asks. Read its report, answer what it asks, start the steps that waited for it, and send it back to fix what isn't done.",
+  "Write no code and make no files of the work yourself, not even the first ones: a session does. Only a plan of one small step you may do yourself."
+].join(`
+`);
 function startWords(goal) {
   const on = goal.public.filter((each) => each.on).map((each) => `"${each.text}"`);
   const off = goal.public.filter((each) => !each.on).map((each) => `"${each.text}"`);
@@ -10258,6 +10295,7 @@ function startWords(goal) {
     goal.spend.length ? `What you may spend, never more: ${goal.spend.map((each) => `${each.what}, up to ${each.cap} ${each.currency}${each.per === "goal" ? "" : ` a ${each.per}`}`).join("; ")}. Ask may_spend before each purchase.` : "Spend nothing.",
     goal.projects.length ? `You may make these projects without asking: ${goal.projects.join(", ")}.` : "",
     goal.ends ? `It ends at ${resetTime(goal.ends)}: be done by then, or wrap up and report.` : "",
+    LEAD_WORDS(goal.projects.map(goalProject)),
     "Mark each step with goal_progress as it starts, moves and ends (with progress where you can measure it), and keep what only the user can fix as waiting (it never stalls the rest: carry on with other steps). End with finish_goal and your report."
   ];
   return lines.filter(Boolean).join(`
@@ -10351,6 +10389,11 @@ async function tellBot2(goal, said, line, targets) {
   return sendInto(place.target, goal.session, { id: messageID(), text: said, delivery: "queue", metadata: boxNote("Goal", line) }, { from: "Goal", words: line }).then(() => true, () => false);
 }
 var GOAL_ASKED = "The user sent this as a goal, with Kuvo Code's /goal. Plan it, check what it needs, and put it to them with propose_goal before doing any of the work:";
+var GOAL_PLANNING = [
+  `Plan it as a lead whose sessions do the work: make each step one session's whole task ("Build the app's screens", "Write the tests"), not a command.`,
+  "Put each project it needs in projects: by name, or, where the user named a folder for it, that folder as a full path (~/… or /…). You make it with make_project once the goal starts.",
+  "Make nothing before [Goal started]: no folders, files or code."
+];
 async function askGoal(session, words, targets) {
   const said = text(words, 2000);
   if (!said)
@@ -10363,7 +10406,7 @@ async function askGoal(session, words, targets) {
   changeQueue2(session, (state) => ({ ...state, paused: false }));
   const sent = await asked(place.target, "POST", `api/session/${encodeURIComponent(session)}/prompt`, {
     id: messageID(),
-    text: [said, "", "<sent-with>", GOAL_ASKED, "/goal", "</sent-with>"].join(`
+    text: [said, "", "<sent-with>", GOAL_ASKED, "/goal", ...GOAL_PLANNING, "</sent-with>"].join(`
 `),
     delivery: "queue"
   }).then(() => true, () => false);
@@ -21154,18 +21197,28 @@ async function makeProjectTool(caller, args, { signal, wait, every } = {}) {
   const clone = typeof args.clone === "string" && args.clone.trim() ? args.clone.trim() : undefined;
   if (clone && !cloneable(clone))
     return refused(`${clone} isn't a repository address git can clone: give an https or ssh one.`);
-  const place = projectPlace(name);
+  const bot = botOfConversation(caller.session);
+  const inPlan = bot ? (runningGoal(bot.bot)?.projects ?? []).map(goalProject) : [];
+  let named;
+  if (typeof args.folder === "string" && args.folder.trim()) {
+    const checked = namedPlace(args.folder);
+    if ("refused" in checked)
+      return refused(checked.refused);
+    named = checked.folder;
+  } else {
+    named = inPlan.find((each) => each.folder && folderName(each.name) === folderName(name))?.folder;
+  }
+  const planned = inPlan.some((each) => each.folder ? each.folder === named : !named && each.name.toLowerCase() === name.toLowerCase());
+  const place = named ?? projectPlace(name);
   const listed = place ? readProjects().find((each) => each.directory === place && !each.removed) : null;
   if (listed)
     return refused(`There's a project at ${shownPath(place)} already: ${listed.name ?? path74.basename(place)}. Start sessions in it with start_session.`);
   if (place && fs70.existsSync(place) && !isEmptyFolder(place))
-    return refused(`There's a folder at ${shownPath(place)} already, with files in it. Pick another name.`);
-  const bot = botOfConversation(caller.session);
+    return refused(`There's a folder at ${shownPath(place)} already, with files in it. ${named ? `To work on what's there, start sessions in it with start_session (folder: "${shownPath(place)}").` : "Pick another name."}`);
   const asker = { session: caller.session, name: bot?.name ?? caller.name, ...bot ? { bot: bot.bot } : {} };
   const action = clone ? "cloneProject" : "makeProject";
-  const given = { name, ...args.git === false ? { git: false } : {}, ...clone ? { clone } : {} };
-  const planned = Boolean(bot && runningGoal(bot.bot)?.projects.some((each) => each.toLowerCase() === name.toLowerCase()));
-  if (bot && (planned || botAllows(bot.bot, action)) && projectsFolder()) {
+  const given = { name, ...args.git === false ? { git: false } : {}, ...clone ? { clone } : {}, ...named ? { folder: named } : {} };
+  if (bot && (planned || botAllows(bot.bot, action)) && (named || projectsFolder())) {
     try {
       const done = await doWork(action, given, asker);
       return done.isError ? refused(done.text) : said(done.text);
@@ -22714,7 +22767,7 @@ import fs75 from "node:fs";
 import path80 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.190";
+var BRIDGE_VERSION = "0.9.191";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
