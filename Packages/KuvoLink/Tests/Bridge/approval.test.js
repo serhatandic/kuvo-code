@@ -109,7 +109,8 @@ test("a conversation from before reads as its rules say, and can be set to any o
     const free = (await route("GET", "kuvo/sessions/ses_free/approval", undefined, { sandbox })).body;
     assert.deepEqual({ approval: free.approval, effective: free.effective, stored: free.stored }, { approval: "fullAccess", effective: "fullAccess", stored: false });
   }
-  // A bot's never reads as Full Access, and its Auto asks first where the sandbox doesn't run.
+  // A bot's from before starts with this computer's default (Auto, the first time), which asks first
+  // where the sandbox doesn't run.
   const scout = (await route("GET", "kuvo/sessions/ses_scout/approval")).body;
   assert.deepEqual({ approval: scout.approval, effective: scout.effective, reason: scout.held?.reason }, { approval: "auto", effective: "askFirst", reason: "sandbox" });
   // Full Access can't be picked without its switch; Auto can, and would ask first without the sandbox.
@@ -173,15 +174,18 @@ test("Auto's file tools still ask outside its folders where Settings says so (th
   assert.ok(rules("ses_careful").some(rule => rule.resource === NEVER_RM.resource && rule.effect === "deny"), "what Settings never allows still holds");
 });
 
-test("a bot's conversation from before is kept with Auto, and asks first where the sandbox doesn't run", async () => {
+test("a bot's conversation from before is kept with Auto, asks first where the sandbox doesn't run, and loses the asks a box before put in a bot's", async () => {
   assert.equal(asks("ses_scout", "shell"), false, "as it was made");
+  // What a box before 0.9.189 asked of a bot whatever its mode.
+  const former = [{ action: "shell", resource: "stripe *", effect: "ask" }, { action: "shell", resource: "gh pr create*", effect: "ask" }, { action: "shell", resource: "vercel*", effect: "ask" }];
+  sessions.set("ses_scout", { ...sessions.get("ses_scout"), permissions: [...sessions.get("ses_scout").permissions, ...former] });
   // The box's round, as it starts (here, as the switch is set).
   await route("PATCH", "kuvo/approval", { fullAccess: false });
   assert.deepEqual(sessions.get("ses_scout").metadata, { kuvo: { approval: "auto", applied: "askFirst" } });
   assert.equal(asks("ses_scout", "shell"), true);
   await route("PATCH", "kuvo/approval", { fullAccess: false }, { sandbox: true });
   assert.equal(asks("ses_scout", "shell"), false);
-  assert.ok(rules("ses_scout").some(rule => rule.action === "shell" && rule.resource === "stripe *" && rule.effect === "ask"), "what always comes to you still asks");
+  for (const rule of former) assert.ok(!rules("ses_scout").some(each => each.resource === rule.resource), `${rule.resource} no longer asks: a bot in Auto runs as any conversation in Auto`);
 });
 
 test("Accept Edits lets edits go ahead even where Settings asks for them, and reads as Ask First once a client asks for edits again", async () => {
@@ -197,22 +201,19 @@ test("Accept Edits lets edits go ahead even where Settings asks for them, and re
   assert.deepEqual({ approval: read.approval, stored: read.stored }, { approval: "askFirst", stored: false });
 });
 
-test("a bot's work changed to any approval still asks for what always comes to you, and no longer for what the sandbox holds", async () => {
+test("a bot's work changed to any approval asks as any conversation in that approval does, nothing more", async () => {
   for (const approval of ["acceptEdits", "auto"]) {
     assert.equal((await route("PUT", "kuvo/sessions/ses_work/approval", { approval }, { sandbox: true })).status, 200);
-    for (const resource of ["stripe *", "gh pr create*", "git push *--force*", "sendmail *"]) {
-      assert.ok(rules("ses_work").some(rule => rule.action === "shell" && rule.resource === resource && rule.effect === "ask"), `${approval}: ${resource} asks`);
-    }
-    // Deletes, root and your sign-ins are the sandbox's to hold now: what a box before asked is gone.
-    for (const resource of ["rm *", "sudo *", "chmod *", "ssh-add *"]) {
+    for (const resource of ["stripe *", "gh pr create*", "git push *--force*", "sendmail *", "rm *", "sudo *", "chmod *", "ssh-add *"]) {
       assert.ok(!rules("ses_work").some(rule => rule.action === "shell" && rule.resource === resource && rule.effect === "ask"), `${approval}: ${resource} no longer asks`);
     }
     assert.deepEqual(sessions.get("ses_work").metadata.kuvo.by, { bot: "bot_scout00001", name: "Scout" }, "its other notes kept");
   }
-  // A bot's work is never Full Access, even switched on.
+  // Full Access too, once it's switched on here, as any conversation's.
   await route("PATCH", "kuvo/approval", { fullAccess: true });
-  const refused = await route("PUT", "kuvo/sessions/ses_work/approval", { approval: "fullAccess" });
-  assert.deepEqual({ status: refused.status, reason: refused.body.reason }, { status: 409, reason: "bot" });
+  const full = await route("PUT", "kuvo/sessions/ses_work/approval", { approval: "fullAccess" });
+  assert.deepEqual({ status: full.status, effective: full.body.effective }, { status: 200, effective: "fullAccess" });
+  assert.equal(asks("ses_work", "shell"), false, "its commands go ahead");
 });
 
 test("a change to Settings › Permissions reaches every conversation kept with an approval at once, whichever client made it", async () => {
@@ -262,7 +263,7 @@ test("rules a client changed on its own are never made again behind its back", a
   assert.equal(asks("ses_careful", "shell"), true, "still asks first, as the client set it");
 });
 
-test("Full Access only once it's switched on for this computer, and never for a bot", async () => {
+test("Full Access only once it's switched on for this computer, for a bot's conversation too", async () => {
   assert.equal((await route("GET", "kuvo/approval")).body.fullAccess, false);
   const off = await route("PUT", "kuvo/sessions/ses_careful/approval", { approval: "fullAccess" });
   assert.equal(off.status, 409);
@@ -278,8 +279,9 @@ test("Full Access only once it's switched on for this computer, and never for a 
   assert.equal(asks("ses_careful", "shell"), false);
 
   const forBot = await route("PUT", "kuvo/sessions/ses_scout/approval", { approval: "fullAccess" });
-  assert.equal(forBot.status, 409);
-  assert.equal(forBot.body.reason, "bot");
+  assert.equal(forBot.status, 200);
+  assert.equal(forBot.body.effective, "fullAccess");
+  assert.equal(asks("ses_scout", "shell"), false);
 
   // Switched off: what had it comes down to what it can be (Auto where the sandbox runs, saying the
   // switch holds it there; Ask First where it doesn't, saying the sandbox does).
@@ -318,9 +320,9 @@ test("a new conversation a client made without saying gets this computer's defau
   assert.equal((await route("GET", "kuvo/sessions/ses_next/approval")).body.approval, "fullAccess");
   await route("PUT", "kuvo/sessions/ses_careful/approval", { approval: "askFirst" });
   assert.equal((await route("GET", "kuvo/approval")).body.default, "askFirst");
-  // Never a bot's.
+  // A bot's too, as any conversation's.
   await route("PUT", "kuvo/sessions/ses_work/approval", { approval: "auto" }, { sandbox: true });
-  assert.equal((await route("GET", "kuvo/approval")).body.default, "askFirst");
+  assert.equal((await route("GET", "kuvo/approval")).body.default, "auto");
 });
 
 test("what the box makes itself, a conversation that runs nothing, and a Full Access switched off since are never a new conversation's Full Access", async () => {

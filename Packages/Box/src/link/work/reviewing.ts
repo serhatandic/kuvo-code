@@ -15,13 +15,13 @@ import { homeFolder } from "../home";
 import { sendInto, stopSession, writtenByYou } from "../engine/queue";
 import { boxNote } from "../../shared/queues";
 import { messageID } from "../engine/sessions";
-import { alwaysAsks, asksPublishing } from "./always";
 import { approvalOf } from "./approval";
 import { asksIn, callOf } from "./answers";
 import { pauseGoal, REVIEW_PAUSE, runningGoal } from "./goals";
 import { usableModels, type Usable } from "./models";
 import { review, type Decision, type ReviewedAction, type ReviewContext, type SmallModel, type Verdict } from "./reviewer";
 import { botOfConversation, worksFor } from "./tree";
+import { botHere } from "../bots/here";
 import type { EngineAnswer } from "../engine/client";
 import type { EngineSession } from "../engine/sessions";
 import type { Target } from "../../shared/records";
@@ -103,13 +103,16 @@ function botOf(data: EngineSession): ReviewContext["bot"] | undefined {
   if (!bot) return undefined;
   const running = runningGoal(bot.bot);
   const on = running?.public.filter(step => step.on).map(step => `"${step.text}"`) ?? [];
-  const goal = running ? `${running.goal}${running.public.length ? `\n(Public steps the user switched on: ${on.join(", ") || "none, so nothing public goes out"}.)` : ""}` : undefined;
+  const goal = running ? `${running.goal}${on.length ? `\n(Public steps the user switched on: ${on.join(", ")}.)` : ""}` : undefined;
   return { id: bot.bot, name: bot.name, ...(goal ? { goal } : {}) };
 }
 
 /** Whether a conversation, where it is, is in Full Access here now: nothing is reviewed or asked. */
 export const inFullAccess = (at: Conversation): boolean =>
   approvalOf(at.data, { agents: at.agents, bot: Boolean(botOfConversation(at.data.id) ?? worksFor(at.data)) }).effective === "fullAccess";
+
+/** Whether a conversation is in Auto, where its reviewer decides (as `reviewIn` finds it). */
+export const inAuto = (at: Conversation): boolean => approvalOf(at.data, { agents: at.agents, bot: Boolean(botOf(at.data)) }).effective === "auto";
 
 /** What you wrote in a conversation, oldest first: never what the box, another agent or a
  * wake-up put there. */
@@ -164,9 +167,13 @@ export async function reviewIn(session: string, action: ReviewedAction, signal?:
   const at = found === undefined ? await conversationOf(session) : found;
   if (!at) return null;
   const bot = botOf(at.data);
-  if (approvalOf(at.data, { agents: at.agents, bot: Boolean(bot) }).effective !== "auto") return null;
-  // (In a bot's, what you wrote in its conversation counts beside its goal.)
-  const context: ReviewContext = { session: at.data.id, said: await yourMessages(at, signal), ...(bot ? { bot } : {}) };
+  if (!inAuto(at)) return null;
+  // (In a bot's, what you wrote in its conversation counts beside its goal; in its work, what you
+  // wrote to the bot too, which the work is for.)
+  const own = bot && !botOfConversation(at.data.id) ? botHere(bot.id)?.session : undefined;
+  const ownAt = own && own !== at.data.id ? await conversationOf(own).catch(() => null) : null;
+  const said = [...(ownAt ? await yourMessages(ownAt, signal) : []), ...await yourMessages(at, signal)];
+  const context: ReviewContext = { session: at.data.id, said, ...(bot ? { bot } : {}) };
   let verdict: Verdict & { paused?: boolean };
   try {
     verdict = await review(action, context, { model: await reviewModelOf(at, signal), signal, pin });
@@ -208,10 +215,9 @@ const reviewing = new Set<string>();
 
 /** A permission an engine (or the coding agents' bridge) asks in a conversation in Auto, taken up
  * by its reviewer: the agent's own file tools outside its folder (`external_directory`), by the
- * file the tool call names; and in a bot's, what a bot never decides (`always.ts`: the engine asks
- * for it in every mode), by the call itself. Allowed, or refused with why for the agent, which goes
- * on another way: never left waiting for you. Anything that can't be read is left for you, and so
- * is what your own Settings › Permissions ask. */
+ * file the tool call names. Allowed, or refused with why for the agent, which goes on another way:
+ * never left waiting for you. Anything that can't be read is left for you, and so is what your own
+ * Settings › Permissions ask. */
 export async function reviewPermission(source: Target, event: { type?: string; data?: { id?: unknown; sessionID?: unknown; action?: unknown } }, signal?: AbortSignal, found?: Conversation | null): Promise<Verdict | null> {
   const { id, sessionID } = event.data ?? {};
   if (event.type !== "permission.asked" || typeof id !== "string" || typeof sessionID !== "string" || reviewing.has(id)) return null;
@@ -229,27 +235,21 @@ export async function reviewPermission(source: Target, event: { type?: string; d
 async function answerPermission(source: Target, id: string, sessionID: string, signal?: AbortSignal, found?: Conversation | null): Promise<Verdict | null> {
   const { permissions } = await asksIn(source, sessionID, signal);
   const permission = permissions.find(each => each.id === id && each.asker === sessionID);
-  const seen = permission ? await callOf(source, permission, signal) : null;
+  // (Anything else asked is your own rules'.)
+  if (permission?.action !== "external_directory") return null;
+  const seen = await callOf(source, permission, signal);
   const at = found === undefined ? await conversationOf(sessionID) : found;
   const folder = at?.data.location?.directory;
-  if (!permission || !at || !folder) return null;
-  let actions: ReviewedAction[];
-  if (permission.action === "external_directory") {
-    // By the file its tool call names; where none does (Codex asks for room of its own, with no
-    // tool call), by the paths the ask names, each judged as a write; where it names none, by
-    // what it asked, as the model reads it.
-    const file = seen && [seen.input.filePath, seen.input.file_path, seen.input.notebook_path, seen.input.path, seen.input.file].find((each): each is string => typeof each === "string" && each.startsWith("/"));
-    // (Each as a command's path reads: \`~\` as your home, one not from \`/\` from its folder.)
-    const named = permission.resources.filter(each => each !== "*").map(each => path.resolve(folder, each.replace(/^~(?=\/|$)/, homeFolder()).replace(/\/\*$/, "") || "/"));
-    actions = seen && file ? [{ kind: "file", path: file, access: READING.has(seen.tool.toLowerCase()) ? "read" : "write", folder, tool: seen.tool, input: seen.input }]
-      : named.length ? named.map(each => ({ kind: "file" as const, path: each, access: "write" as const, folder }))
-      : [{ kind: "tool", tool: seen?.tool || "work outside its folder", args: seen?.input ?? { asked: permission.resources }, folder }];
-  } else {
-    // (Only a bot's asks what it never decides; anything else asked is your own rules'.)
-    if (!seen || !botOf(at.data) || !alwaysAsks(permission.action, permission.resources, seen, { publishing: asksPublishing(at.data.permissions) })) return null;
-    const command = typeof seen.input.command === "string" ? seen.input.command : null;
-    actions = [(permission.action === "shell" || permission.action === "bash") && command ? { kind: "command", command, folder } : { kind: "tool", tool: seen.tool, args: seen.input, folder }];
-  }
+  if (!at || !folder) return null;
+  // By the file its tool call names; where none does (Codex asks for room of its own, with no
+  // tool call), by the paths the ask names, each judged as a write; where it names none, by
+  // what it asked, as the model reads it.
+  const file = seen && [seen.input.filePath, seen.input.file_path, seen.input.notebook_path, seen.input.path, seen.input.file].find((each): each is string => typeof each === "string" && each.startsWith("/"));
+  // (Each as a command's path reads: \`~\` as your home, one not from \`/\` from its folder.)
+  const named = permission.resources.filter(each => each !== "*").map(each => path.resolve(folder, each.replace(/^~(?=\/|$)/, homeFolder()).replace(/\/\*$/, "") || "/"));
+  const actions: ReviewedAction[] = seen && file ? [{ kind: "file", path: file, access: READING.has(seen.tool.toLowerCase()) ? "read" : "write", folder, tool: seen.tool, input: seen.input }]
+    : named.length ? named.map(each => ({ kind: "file" as const, path: each, access: "write" as const, folder }))
+    : [{ kind: "tool", tool: seen?.tool || "work outside its folder", args: seen?.input ?? { asked: permission.resources }, folder }];
   // (The engine runs a command it asked about itself: a script from the web in it can't be pinned
   // to the copy reviewed, so that one is held back. Of several paths, the first refused decides.)
   let verdict: Awaited<ReturnType<typeof reviewIn>> = null;

@@ -57,12 +57,20 @@ const sessions = {
   ses_chat: { id: "ses_chat", title: "Quick question", location: { directory: path.join(home, "chats") }, permissions: ASK_FIRST },
   // A bot's seat in a group chat.
   ses_seat: { id: "ses_seat", title: "Standup", location: { directory: shop }, metadata: { kuvo: { seat: "seat_1" } } },
+  // Conversations in Auto, whose reviewer decides what goes beyond the sandbox, never you.
+  ses_auto: { id: "ses_auto", title: "Check my SSH", location: { directory: blog }, model: { providerID: "anthropic", id: "claude-sonnet-5" }, permissions: [], metadata: { kuvo: { approval: "auto", applied: "auto" } }, time: { created: Date.now(), updated: Date.now() } },
 };
+// What you wrote in each conversation, and what Auto's reviewer (the small model) answers next.
+const said = { ses_auto: ["Read my SSH key ~/.ssh/id_ed25519 and tell me what kind of key it is."] };
+const reviews = [];
+let verdict = { decision: "allow", reason: "Reading the key is what the user asked." };
 const calling = {};
 let calls = 0;
 let engine;
 before(async () => {
-  for (const folder of [shop, blog, outside, path.join(home, "run")]) fs.mkdirSync(folder, { recursive: true });
+  for (const folder of [shop, blog, outside, path.join(home, "run"), path.join(root, ".ssh")]) fs.mkdirSync(folder, { recursive: true });
+  // (Your SSH key, which commands in the sandbox can't read.)
+  fs.writeFileSync(path.join(root, ".ssh", "id_ed25519"), "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\n", { mode: 0o600 });
   if (linux) {
     const bun = testBun();
     assert.ok(bun, NO_BUN);
@@ -71,8 +79,17 @@ before(async () => {
   }
   engine = http.createServer((request, response) => {
     const id = decodeURIComponent((request.url.match(/^\/api\/session\/([^/?]+)/) ?? [])[1] ?? "");
+    const json = (value, status = 200) => { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value)); };
+    if (request.url === "/api/provider") return json({ data: [{ id: "anthropic" }] });
+    if (request.url === "/api/model") return json({ data: [{ id: "claude-sonnet-5", providerID: "anthropic", name: "Claude Sonnet 5" }, { id: "claude-haiku-5-5", providerID: "anthropic", name: "Claude Haiku 5.5" }] });
+    if (request.url === "/api/experimental/generate") {
+      let body = "";
+      request.on("data", chunk => { body += chunk; });
+      request.on("end", () => { reviews.push(JSON.parse(body).prompt); json({ data: { text: JSON.stringify(verdict) } }); });
+      return;
+    }
     response.writeHead(sessions[id] ? 200 : 404, { "content-type": "application/json" });
-    if (/^\/api\/session\/[^/?]+\/message/.test(request.url)) return response.end(JSON.stringify({ data: [{ type: "assistant", content: calling[id] ?? [] }] }));
+    if (/^\/api\/session\/[^/?]+\/message/.test(request.url)) return response.end(JSON.stringify({ data: [{ type: "assistant", content: calling[id] ?? [] }, ...(said[id] ?? []).map(text => ({ type: "user", text }))] }));
     response.end(JSON.stringify(sessions[id] ? { data: sessions[id] } : { message: "No such session." }));
   });
   await new Promise(resolve => engine.listen(0, "127.0.0.1", resolve));
@@ -130,6 +147,34 @@ async function engineRuns(folder, command, session) {
   if (session) input.env.OPENCODE_SESSION_ID = session;
   const run = spawnSync(input.shell, ["-c", input.command], { cwd: input.cwd, env: input.env, encoding: "utf8" });
   return { status: run.status, out: run.stdout + run.stderr };
+}
+
+// The engine's shell tool running `command` for `session`, as an agent calls it: through the shell
+// the box's plugin gives it, and then the plugin's look at what it printed, while the call is
+// still running in the conversation. What the agent gets back.
+// (`stopOnce`: a file whose being there means the agent's call is stopped then, as Stop does.)
+async function agentRuns(folder, command, session, stopOnce) {
+  const input = { command, description: "Runs it" };
+  const loaded = (await import(`${pathToFileURL(plugin)}?${Math.random()}`)).default;
+  const hooks = {};
+  await loaded.setup({ location: { directory: folder }, shell: { hook: async (name, take) => { hooks[name] = take; } }, tool: { hook: async (name, take) => { hooks[name] = take; } } });
+  const shell = { command, cwd: folder, timeout: 0, shell: "/bin/sh", env: { PATH: process.env.PATH, HOME: root } };
+  hooks["create.before"](shell);
+  if (linux && !process.versions.bun) shell.env.KUVO_FENCE_RUNTIME = path.join(home, "engine", "test", "opencode");
+  shell.env.OPENCODE_SESSION_ID = session;
+  const run = spawnSync(shell.shell, ["-c", shell.command], { cwd: shell.cwd, env: shell.env, encoding: "utf8" });
+  calling[session] = [{ type: "tool", id: `call_${++calls}`, name: "shell", state: { status: "running", input } }];
+  // (As engine 2.2.0's shell tool answers: what it printed, and how it ended.)
+  const printed = run.stdout + run.stderr;
+  const call = { tool: "shell", sessionID: session, agent: "build", messageID: "msg_1", id: `call_${calls}`, input, status: "completed",
+    result: { output: { exit: run.status, truncated: false, output: printed, status: "completed" },
+      content: [{ type: "text", text: printed }, ...(run.status ? [{ type: "text", text: `Exited with code ${run.status}` }] : [])],
+      metadata: { status: "completed", truncated: false, exit: run.status } } };
+  const stopping = stopOnce && setInterval(() => { if (fs.existsSync(stopOnce)) delete calling[session]; }, 50);
+  try { await hooks["execute.after"]?.(call); } finally { delete calling[session]; clearInterval(stopping); }
+  assert.equal(call.result.output.exit, call.result.metadata.exit);
+  const texts = call.result.content.filter(part => part.type === "text").map(part => part.text);
+  return { text: texts[0], refusal: texts.at(-1), exit: call.result.metadata.exit, sandboxExit: run.status, inSandbox: printed };
 }
 
 // An agent's sandbox_ask, as its tool server passes it on while the conversation makes that call.
@@ -270,6 +315,58 @@ test("a command the sandbox stopped runs outside it once you allow it once; the 
   const refused = (await again).value;
   assert.match(refused.text, /The user said no/);
   assert.equal(fs.readFileSync(target, "utf8"), "next release\n", "nothing ran");
+});
+
+test("in Auto, a command the sandbox stopped goes to Auto's reviewer by itself: allowed, it runs outside the sandbox and the agent gets its output; refused, the agent hears why; nobody's asked", async () => {
+  // The user's case: asked to read their SSH key, the agent cats it, and the sandbox stops it.
+  const command = `cat ${JSON.stringify(path.join(root, ".ssh", "id_ed25519"))}`;
+  const first = reviews.length;
+  const ran = await agentRuns(blog, command, "ses_auto");
+  assert.match(ran.inSandbox, /Operation not permitted|Permission denied/, "the sandbox stops it");
+  assert.equal(reviews.length, first + 1, "Auto's reviewer judged it");
+  assert.match(reviews.at(-1), /Read my SSH key/);
+  assert.match(reviews.at(-1), /cat .*\.ssh\/id_ed25519/);
+  // It sees what the sandbox let it print, and that it would run again from the start.
+  assert.match(reviews.at(-1), /It already ran in the sandbox/);
+  assert.match(reviews.at(-1), /<printed_[0-9a-f]+>\n[^\n]*(Operation not permitted|Permission denied)/);
+  assert.match(ran.text, /BEGIN OPENSSH PRIVATE KEY/, ran.text);
+  assert.match(ran.text, /^The sandbox stopped it · Ran again outside the sandbox · Allowed by Auto's reviewer: Reading the key is what the user asked\./);
+  assert.equal(ran.exit, 0);
+  assert.deepEqual((await box.ask("GET", "kuvo/sandbox/asks")).value.asks, [], "nobody's asked");
+
+  // Refused: what the sandbox printed stays, with why, and nothing ran outside it.
+  verdict = { decision: "refuse", reason: "Deleting files in another project wasn't asked for." };
+  const target = path.join(outside, "auto.txt");
+  fs.writeFileSync(target, "keep me\n");
+  const refused = await agentRuns(blog, `rm ${JSON.stringify(target)}`, "ses_auto");
+  assert.match(refused.text, /Operation not permitted|Permission denied/);
+  assert.match(refused.refusal, /Auto's reviewer (held this back|refused): Deleting files in another project wasn't asked for\./);
+  assert.equal(refused.exit, refused.sandboxExit, "it ended as it did");
+  assert.equal(fs.readFileSync(target, "utf8"), "keep me\n");
+  verdict = { decision: "allow", reason: "Reading the key is what the user asked." };
+
+  // Stopped while it runs outside (the user pressed Stop): it's stopped there too.
+  const started = path.join(blog, "started.txt"), finished = path.join(blog, "finished.txt");
+  const stopped = await agentRuns(blog, `${command} >/dev/null && touch started.txt && sleep 30 && touch finished.txt`, "ses_auto", started);
+  assert.equal(fs.existsSync(started), true, stopped.text);
+  assert.equal(fs.existsSync(finished), false);
+  assert.notEqual(stopped.exit, 0);
+
+  // A command that failed on its own isn't reviewed, and one in Ask First is left for sandbox_ask.
+  const before = reviews.length;
+  const failed = await agentRuns(blog, "echo nothing here >&2; exit 3", "ses_auto");
+  assert.deepEqual([failed.text, failed.exit], ["nothing here\n", 3]);
+  // On a Mac, a refusal that isn't the sandbox's (a database's) isn't either: its sandbox answers
+  // "Operation not permitted".
+  if (!linux) {
+    const database = await agentRuns(blog, "echo 'ERROR: permission denied for table users' >&2; exit 1", "ses_auto");
+    assert.equal(database.exit, 1);
+    assert.doesNotMatch(database.text, /Ran again outside/);
+  }
+  const asking = await agentRuns(shop, command, "ses_shop");
+  assert.match(asking.text, /Operation not permitted|Permission denied/);
+  assert.doesNotMatch(asking.text, /Ran outside/);
+  assert.equal(reviews.length, before, "neither was reviewed");
 });
 
 test("a command is never let out of the sandbox for good: Always is only the folder it was stopped writing in, and a script it runs asks again each time", async () => {

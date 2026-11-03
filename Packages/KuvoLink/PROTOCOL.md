@@ -598,7 +598,7 @@ its own, which a `SIGTERM` stops waiting.
     starter's (a starter that asks first starts one that does too, and the tool tells its agent what
     it got where that's less than asked; one started by a conversation from before, with no
     approval kept, is made as its starter reads and keeps none either, but a bot's work, which is
-    kept with Auto at most); `wake` (`finished`, `asks`, `both`, `none`), what the
+    kept with its own); `wake` (`finished`, `asks`, `both`, `none`), what the
     starter hears of it (a conversation here, once the new session is marked so; the tool says
     which). `computer` other than this one: 400, for now.
   - Unknown fields are ignored, so a newer client can send more to an older box.
@@ -719,55 +719,25 @@ client shows it from the same routes.
   (`{session, archive?}`; only one of its own), `answer_ask` (`{session, ask, decision: allow|deny,
   reason}`, or `{session, ask, answer, reason}` for a question), `list_models` (the models there's
   an account for here, `provider/model`, with their efforts; none its provider is retiring).
-- **Answering asks, until the sandbox** (`work/policy.ts`): reading a command can't be made
-  airtight, so until sessions run in the sandbox a bot answers only two kinds of ask, judged by
-  the tool call itself (its whole input, found by the ask's `source`: never only what the ask
-  lists, which leaves out a command's `cd` and the folder it runs in), and only where it could go
-  ahead itself, part by part (the engine's rules for its own conversation allow each: the engine's
-  defaults, Settings › Permissions, then the conversation's own):
-  - Making or changing a source or text file inside the session's folder (its project's other
-    folders too), by a tool that edits (never another tool asked as an edit), never a folder:
-    only by its extension from a known list (code, styles, Markdown, data), its path
-    written plainly (letters, digits, `.`, `_`, `-`, `/`), no part hidden (starting with `.`), no
-    `..`, nothing reached through a link, never a name a later command runs or reads as settings
-    (`package.json`, `tsconfig.json`, `opencode.json`, `*.config.*`, `build.rs`, `Package.swift`…,
-    compared without case, as macOS does), never your keys and sign-ins.
-  - A few commands that read: `ls`, `cat`, `head`, `tail`, `wc`, and `git status`, `diff` and `log`
-    (only where the folder is its repository's own top level), each with a few options, run in the
-    session's folder (a `workdir` elsewhere goes to the user); the line printable ASCII, every part
-    one of those, paths written plainly as above. No redirects, patterns of files, settings before
-    it, `cd`, `pushd` or `popd`, nor anything a shell expands or runs besides.
-  - Everything else goes to the user: reading through the engine, building, testing, installing,
-    changing files from the shell, git that changes anything, fetching, integrations' tools. It may
-    always deny, with its reason passed on.
-  - What it can't close, until the sandbox:
-    - An edit it allowed, then a run the user allows later, runs what was edited: source reaches
-      `cargo build` and `swift build`, macros, and test runs. Each ask is judged alone, so the user
-      allowing a build or a test run allows the project's code as it is then.
-    - A file can change between the check and the run, and a hard link looks like any file.
-    - git follows the diff, textconv and LFS settings the user already has.
-- **Answering asks in the sandbox** (`work/policy.ts`): where the session's commands run in the
-  sandbox ("Sandbox": the engine's, while it's `on`; a coding agent's, when the agents bridge marks
-  its ask `sandboxed`, its program having started in it, and while it's still set up), which holds what they write and read, a bot may allow any of its commands, wherever it
-  runs, within the engine's rules as above; but never one that acts beyond this computer with your
-  accounts, and whatever it can't be sure isn't (any part, past `sudo`, `env`, `npx` and the like,
-  with no option but a bare flag before the program, and the program a package runner runs, `npm
-  exec`, `pnpm dlx`, `bun x`, or `find -exec` does; `xargs`, a runner's `-c`, git's settings on the
-  line, `-c` and `GIT_…=`, setting them (`git config` but its reads, in either syntax, a clone's `--config`, a
-  `--template`; git's own programs, `git-config`, count as git), and naming or writing git's own files, `.git/…`, aren't): a `push`,
-  `send-pack`, `send-email`, `dcommit` or `upload` anywhere among a program's words but the ones
-  that only read or print them (`grep`, `echo`…; `git stash push` stays here), `docker push`,
-  `--push`, a registry output, publishing (`npm publish`,
-  `cargo publish`…), deploying or releasing (`vercel`, `netlify`, `firebase`, `fastlane`, `xcrun
-  altool`, a program or script named for it, a package script so named: `npm run deploy`), sending
-  with `curl` or `wget` anywhere but this computer, reaching another computer (`ssh`, `scp`,
-  `rsync`, `sftp`), `gh` and `glab`, and `security`; nor code it can't read (`sh -c`, `eval`,
-  `node -e`, `python -c`…), nor a line it can't read plainly (`$…`, a here-document). This reads
-  the line, not what a script it runs does: the sandbox can't hold the network. Those, and every
-  edit (which the engine
-  makes itself, outside the sandbox: as above), go to the user. A command a bot allows still can't
-  get out of the sandbox: only you can let one out (`sandbox_ask`, "Asks"), and no tool answers
-  that.
+- **Answering asks** (`work/policy.ts`, bridge 0.9.189): a bot answers its sessions' asks as far
+  as its own conversation could go ahead without asking, as any conversation in its mode would.
+  It's judged by the tool call itself (its whole input, found by the ask's `source`, which has a
+  command's `cd` and the folder it runs in; what the ask lists where the call can't be found), and
+  by what the ask lists, part by part,
+  by the engine's rules for the bot's own conversation (the engine's defaults, Settings ›
+  Permissions, what you set in Edit Bot, then the conversation's own): each part of a command line,
+  and a file the call names outside the session's folders (where it really is, a link in it
+  followed, a path not from `/` from the session's folder) as working outside the project
+  (`external_directory`).
+  - Where its own conversation's commands run in the sandbox ("Sandbox"), it allows a command only
+    where the session's run there too: the engine's while it's `on`; a coding agent's when the
+    agents bridge marks its ask `sandboxed`, its program having started in it, and while it's still
+    set up. In Full Access, or with no sandbox here, anywhere its rules allow.
+  - Everything else goes to the user. It may always deny, with its reason passed on. A command a
+    bot allows still can't get out of the sandbox: only you can let one out (`sandbox_ask`,
+    "Asks"), and no tool answers that.
+  - Before bridge 0.9.189 a bot allowed much less than its own conversation could: a few reads and
+    plain edits until the sandbox, and in it nothing that acted beyond this computer.
   Each answer is kept on the session, `kuvo.answers: [{ask, call?, what, decision, reason, by:
   {bot?, name}, at}]` (the latest 40), where clients show it on the ask's tool call ("Allowed by
   Pixel") and in the bot's work.
@@ -836,30 +806,15 @@ folder you pick once per box, after asking you.
   the same way (no `madeBy`): 403 `{needs: "projectsFolder"}` with none picked, 409 for one there,
   400 for a name or address that won't do, 502 when git fails.
 
-**What always comes to you** (bridge 0.9.122, `work/always.ts`; since bridge 0.9.185, the list
-below): payments, changes to who may do what, new accounts, messages to people, and publishing or
-rewriting what others see (`git push --force`, `--delete`, `--mirror`, `gh release create`, `gh repo
-delete`…), in a bot's conversation and its work. No Always, plan or goal's switch turns this off.
-In Auto, Auto's reviewer answers them, never you: it refuses them unless the bot's goal names that
-very thing, and what it refuses is held back for you ("Auto's reviewer"). Deletes, git's settings,
-`sudo` and your sign-ins are the sandbox's to hold, as anything else a command does (a box before
-0.9.185 asked for them too, and takes those rules out of its conversations as it makes them
-again). A command that runs in the sandbox is the sandbox's rule's alone ("Answering asks in the
-sandbox"): there a bot may allow what stays on this computer.
-- `answer_ask` checks it first, before the policy above, by the tool call's whole input: a
-  command's programs and subcommands, past `sudo` and git's own options (`git push --force` or
-  `+ref`, `gh pr create`, `gh api` that writes, `stripe`, `aws iam`, `mail`…), a request to a
-  payment's or a message's service (an address like `https://api.stripe.com`), and another tool by
-  its name's words, in any case (`gmail_send_email`, `sendMail`, `create_pull_request`), unless its
-  first verb only reads (`get_order`). It refuses with the kind in words: "That's a payment, which
-  always comes to the user".
-- Every session a bot starts, and the bot's own conversation, carries engine rules that ask for
-  them whatever its approval: `shell` for those programs, subcommands and services, after its own
-  rules so they win over Approve All, then its own Don't Allows of commands again, so those stay
-  Don't Allow. Overnight, while no goal's public step is switched on, publishing and deploys ask
-  too. Nothing else of its rules moves, and its approval reads as it was (Ask First is its own
-  `shell *` rule). Another tool (an integration's) can't be named ahead in the engine's rules: on
-  Approve All, only the bot's answers and words hold it back.
+**No built-in limits on a bot** (bridge 0.9.189): a bot's conversation and its work run as any
+conversation in their mode does, and only what you set in Edit Bot (its rules, its limits, what
+you said Always to) holds them back. In Auto, Auto's reviewer judges them as it judges any
+conversation's ("Auto's reviewer"), by what you asked and the bot's goal. A box before 0.9.189 put
+ask rules in a bot's conversation and its work whatever their mode (payments, messages, force
+pushes and remote deletes, new accounts, publishing and deploying overnight; before 0.9.185 also
+deletes, git's settings, `sudo` and sign-ins), and refused them in `answer_ask`. It takes those
+rules out of a conversation as it makes its rules again (`work/former-asks.ts`), keeping one
+Settings › Permissions has itself.
 
 **Goals** (bridge 0.9.122, feature `work.goals`, `work/goals.ts`): you give a bot a goal of any
 length, a couple of hours or a month, and it takes it end to end. It's the conversation's own goal
@@ -917,7 +872,7 @@ beside it.
   `projectsFolder` (needs, when the plan makes a project and none is picked). `progress` is given only
   where the bot counted it, always with what it counted in `note` ("3 of 8 pages"), which is what
   the apps show; a step without it is in progress, not some share of it. `detail` is a step's one
-  line on what's in it (wrapping words are said as one line, at most 120 characters), which the
+  line on what's in it (wrapping words are said as one line, at most 120 characters; bridge 0.9.191), which the
   apps show on the card of the step under way; old goals have none. `site` (a step done at a site
   in the browser, a check or what waits: `stripe.com`, from its page's address or as the bot names
   it) is where it's done, and its mark is that site's own icon, which each client loads from the
@@ -946,11 +901,10 @@ beside it.
   - what its sessions ask that the bot hasn't answered in a couple of minutes, and what the bot
     asks itself, is listed as `waiting` (kind `ask`) and waits for you, however long: it never
     stalls the rest and is never said no to; it leaves the list once it's answered;
-  - a session the bot starts for a goal is told you may not be watching: prepare, don't publish,
-    deploy, send or pay unless its task says so;
-  - while no public step is switched on, publishing and deploying (`git push`, `npm publish`,
-    `vercel`, `wrangler deploy`, `docker push`, `gh release`…) ask too, in the bot's conversation
-    and every session of its work, whatever their approval;
+  - a session the bot starts for a goal is told you may not be watching: what it asks can wait,
+    so it carries on with what doesn't depend on it (before bridge 0.9.189 it was also told not to
+    publish, deploy, send or pay, and publishing and deploying asked in the bot's conversation and
+    its work while no public step was switched on);
   - a project the plan names is made without asking.
 - **Limits pause; they never end it**:
   - a session of its work whose turn failed at a model's limit (its words: a 429, a plan's window,
@@ -2474,6 +2428,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `approval.held` | Auto never leaves a call waiting on you (bridge 0.9.185): what its reviewer refuses or can't judge is held back, and `POST kuvo/sessions/<id>/decisions` `{approve: id}` approves one once; a sandbox ask in Auto never comes to you, so it has no `review` ("Auto's reviewer") |
 | `approval.default` | A new conversation's approval where its client doesn't say: Auto the first time on a computer, then the last one picked there (`kuvo/approval`'s `default`, bridge 0.9.185); one a client made with `kuvo.approval` alone gets that ("Approval") |
 | `approval.seen` | `seen` in `kuvo/sessions/<id>/decisions`, and `POST` `{seen: true}` as you open them: what's held back since is news on every client ("Auto's reviewer", bridge 0.9.187) |
+| `approval.stopped` | In Auto, a command the sandbox stops goes to Auto's reviewer by itself, with no `sandbox_ask`: allowed, it runs outside the sandbox and the agent gets that output; each lands in Decisions ("Asks", "Stopped commands", bridge 0.9.190) |
 | `wakes` | `kuvo/wakes`, a session's, and cancelling one or sending it now |
 | `wakes.edit` | adding one (`POST kuvo/wakes/<session>`) and pausing them |
 | `wakes.events` | `kuvo/wakes/events`, and making a watch (`POST kuvo/wakes/<session>/watch`) |
@@ -3213,8 +3168,9 @@ rules. Plan mode stays the conversation's agent (`plan`), beside it.
   nothing asks, so an agent keeps working while you're away. Its commands (and a coding agent's
   own program in it) run as yours, outside the sandbox, with your SSH agent; no reviewer, no hard
   lines; its file tools go outside its folders too. Only once you confirmed it on this computer (a
-  client asks you the first time you pick it), and never for a bot or its work, which go on in
-  Auto at most.
+  client asks you the first time you pick it), for a bot's conversation and its work as for any
+  other (before bridge 0.9.188 bots had Auto at most). A bot's conversation from before there were
+  approvals starts with this computer's default, as a new one (before bridge 0.9.189, Auto).
 - Where one can't be had now, it fails closed: a conversation set to Auto asks first while the
   sandbox isn't running, and one set to Full Access comes down to Auto while it isn't confirmed on
   this computer. It stays set to what you picked, and comes back to it once it can.
@@ -3229,8 +3185,8 @@ rules. Plan mode stays the conversation's agent (`plan`), beside it.
   (the engine's own defaults ask first), before Settings' rules, so a Don't Allow there still holds.
 - What the box writes is the engine's rules for it, made again with Settings › Permissions as they
   are (a Don't Allow there holds in every one, Accept Edits included) and its own folders kept (a
-  folder Settings has a rule for is Settings' to say, bridge 0.9.187); a
-  bot's work asks what always comes to you whatever it is. The coding agents' bridge sets each agent
+  folder Settings has a rule for is Settings' to say, bridge 0.9.187), a
+  bot's as any other's (bridge 0.9.189, "Work › No built-in limits on a bot"). The coding agents' bridge sets each agent
   from the same rules. Kept in its metadata as `kuvo.approval` (what you picked) and `kuvo.applied`
   (what its rules were made for); rules a client changed on its own since (asks put back, say) are
   read as they are, and never made again. A conversation with none (`stored` false): asking before
@@ -3244,8 +3200,8 @@ rules. Plan mode stays the conversation's agent (`plan`), beside it.
   conversation, Ask First).
 - A new conversation a client makes (feature `approval.default`): with `kuvo.approval` alone in the
   metadata it's made with, that one; with none, this computer's default: Auto the first time, then
-  the last one you picked here (a conversation's `PUT`, or a start that says; never a bot's or a
-  subagent's), or Auto once Full Access, picked last, is switched off here (until you pick it again).
+  the last one you picked here (a conversation's `PUT`, or a start that says, a bot's too since
+  bridge 0.9.189; never a subagent's), or Auto once Full Access, picked last, is switched off here (until you pick it again).
   Your Don't Allows on whole tools don't change that; one kept with an approval before, whose rules
   an older client changed since, is what its rules say, never the default again. The box keeps it
   with the conversation and makes its rules for it as it hears the conversation was made, and looks
@@ -3256,18 +3212,19 @@ rules. Plan mode stays the conversation's agent (`plan`), beside it.
   as the coding agent's conversation it's for, reviewed and in Full Access as that one is). The coding agents'
   bridge keeps the metadata a conversation is made with, too. But a bot's and its
   work's, which the box keeps with the one their rules say (Ask First, or Auto that asks first
-  without the sandbox), as it starts and as a bot is made or comes here.
+  without the sandbox), as it starts and as a bot is made or comes here, until you pick another
+  (Full Access too).
 - `GET kuvo/sessions/<id>/approval`: `{approval, effective, stored, held?, plan, options}`: what
   you picked, what it comes to here now (`held` `{reason, why}`, the last step down, when that's
   less), whether it's in Plan mode, and each one (`options`: `{approval, held?, unavailable?}`):
   `held` where it can be picked and asks first for now (Auto without the sandbox), `unavailable`
-  where it can't be picked. `reason`: `sandbox` (Auto without the whole sandbox), `fullAccessOff`,
-  `bot`. Only a read: its rules come to what it shows within the box's round. 404 `{message}` for a
+  where it can't be picked. `reason`: `sandbox` (Auto without the whole sandbox), `fullAccessOff`
+  (and `bot` from a box before 0.9.188). Only a read: its rules come to what it shows within the box's round. 404 `{message}` for a
   conversation that isn't here, 503 with no engine or bridge.
 - `PUT kuvo/sessions/<id>/approval` `{approval}`: sets it, on the engine's conversation or the
   coding agents'; 200 as `GET` answers (Auto without the sandbox is kept, `held`), 400 for one that
   isn't one of them, 409 `{message, reason}` for Full Access where it can't be picked
-  (`fullAccessOff`, `bot`), 502 where the engine didn't take it.
+  (`fullAccessOff`), 502 where the engine didn't take it.
 - `GET kuvo/approval`: this computer's `{fullAccess, default, auto: {engine, agents}}`: whether you
   confirmed Full Access here (`box/approval.json`), the one a new conversation starts with
   (`default`: what a client's composer shows), and whether Auto runs for each (`{held?}`, as
@@ -3292,8 +3249,7 @@ want to change outside its folder (the engine's or the bridge's `external_direct
 file the tool call names; where no tool call names one, as when Codex asks for room of its own, by
 each path the ask names, judged as a write (`~` as your home, one not from `/` from its folder; a
 folder that holds Kuvo Code's own is refused by code, bridge 0.9.187), and where it names none, by
-what it asked, which the model judges; bridge 0.9.186), and in a bot's conversation or its work, what the engine asks of what
-always comes to you ("Work › What always comes to you"). The flow comes first: it allows what the
+what it asked, which the model judges; bridge 0.9.186). The flow comes first: it allows what the
 work calls for, refuses only real damage and what you didn't ask for, and **never leaves a call
 waiting on you**: a refusal goes back to the agent with the reason, and it carries on another way.
 A conversation in Full Access is never reviewed (its command just runs, `Ran outside the sandbox ·
@@ -3748,6 +3704,30 @@ never lets a command out itself, and no tool answers an ask (a bot neither): onl
 reviewer or Full Access. A bot's
 seat in a group chat runs no commands, so it has nothing to ask: its rules deny the tool, and the box
 refuses one from a seat, asking nobody.
+
+**Stopped commands** (`approval.stopped`, bridge 0.9.190). In Auto the agent needn't ask: the box's
+plugin in the engine looks at what each call of the shell tool printed as it ends, and where it
+failed with what the sandbox prints (`Operation not permitted`, `Permission denied` but SSH's own,
+`Read-only file system`, `EPERM`, `EACCES`; on Linux also `No such file or directory`, for the
+secrets hidden from commands), tells the box's long-running process over `run/vault.sock`:
+`POST kuvo/sandbox/stopped` `{session, input, output}` (the call's own arguments, and the last 4 KB
+it printed). Only while that conversation is making that very call, only in Auto, and only where
+the sandbox stopped it (on macOS `Operation not permitted`, which a file's own permissions or a
+database don't answer; on Linux, Landlock's answers, or a hidden secret named as missing), Auto's
+reviewer judges the command as it judges a `sandbox_ask` (by what you said, a bot's goal), also
+seeing what it printed and, on macOS, what its log says the sandbox refused it (read for a few
+seconds), as running it again outside does that too (a write to where things run at login counts as setting one up; one to Kuvo Code's folders is
+never allowed). It lands in Decisions either way. Allowed, the box runs it again outside the
+sandbox, as an Allow Once, in the folder the agent ran it in, within what the call has left of its
+16 minutes, and stops it if the call is stopped meanwhile; the agent gets `{text, exit}` instead of
+what the sandbox let it print: `The sandbox stopped it · Ran again outside the sandbox · Allowed by
+Auto's reviewer: <reason>` and its output. Refused, `{text}`: the refusal's words, added after what
+it printed, and the call ends as it did. Anywhere else the answer is `{}`, and the call is left as
+it was. Nobody is asked.
+
+On macOS `top` runs outside the sandbox as it is (it's setuid, which the sandbox can't start, and
+shows no program's environment); `ps` stays refused in it, as it would show every program's
+environment: in Auto it goes to the reviewer as any stopped command.
 
 The tool is the box's, so an agent has it on every box (`sandbox.asks`): this Mac's tool server and a
 machine's (`kuvo-browser.js mcp`, through `box route`) list what `GET kuvo/sandbox/tools` gives (only

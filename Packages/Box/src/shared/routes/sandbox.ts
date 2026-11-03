@@ -45,7 +45,7 @@ export const SANDBOX_RULE = object({
 export const SANDBOX_ALLOWED = object({ allowed: list(SANDBOX_RULE), "owners?": list(SANDBOX_OWNER) });
 
 /** Why Auto's reviewer brought something to you: in a sentence to show, and as a word a client
- * maps (`always`: it always comes to you, and which kind; `reviewer`: the reviewer asked;
+ * maps (`always`: it always came to you, on a bot's, before bridge 0.9.189, and which kind; `reviewer`: the reviewer asked;
  * `unread`: a script it runs couldn't be read whole first; `unreadable`, `noModel`, `failed`: it
  * couldn't be reviewed; `paused`: Auto is paused there). */
 export const REVIEW_ASKED = object({
@@ -62,8 +62,8 @@ export const REVIEW_ASKED = object({
  * it's only once or no, for anything else). `machine`: the
  * computer's name, on a machine. `owner`: whose its folder is, which Always would give it to.
  * `review`: in Auto, why its reviewer brought it to you (`reason`, a sentence to show; `why`: it
- * always comes to you, the reviewer asked, or it couldn't be reviewed, and what kind for one that
- * always comes to you).
+ * came to you on a bot's before bridge 0.9.189, the reviewer asked, or it couldn't be reviewed,
+ * and what kind for the first).
  */
 export const SANDBOX_ASK = object({
   id: string, at: number,
@@ -78,6 +78,11 @@ export const SANDBOX_ASKS = object({ asks: list(SANDBOX_ASK), "restart?": bool }
 /** The agents' sandbox tool (`sandbox_ask`), as a tool server lists it, and what a call answers. */
 export const SANDBOX_TOOL_LIST = object({ tools: list(any) });
 export const SANDBOX_TOOL = object({ text: string, isError: bool });
+/** A command the sandbox stopped, as the engine's plugin tells the box (`POST kuvo/sandbox/stopped`,
+ * `{session, input, output}`): in Auto, what the agent gets instead, its reviewer having run it
+ * again outside the sandbox (`text`, and how it ended: `exit`), or why not, added after what it
+ * printed (`text` alone); `{}` leaves it as it was. */
+export const SANDBOX_STOPPED = object({ "text?": string, "exit?": number });
 
 export type SandboxStop = Infer<typeof SANDBOX_STOP>;
 export type SandboxRule = Infer<typeof SANDBOX_RULE>;
@@ -95,4 +100,5 @@ export const SANDBOX_ROUTES: RouteShape[] = [
   { route: "DELETE kuvo/sandbox/allowed/:id", answers: { 200: SANDBOX_ALLOWED } },
   { route: "GET kuvo/sandbox/tools", answers: { 200: SANDBOX_TOOL_LIST } },
   { route: "POST kuvo/sandbox/tools", answers: { 200: SANDBOX_TOOL } },
+  { route: "POST kuvo/sandbox/stopped", answers: { 200: SANDBOX_STOPPED } },
 ];

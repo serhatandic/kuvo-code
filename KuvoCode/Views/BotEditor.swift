@@ -1155,7 +1155,7 @@ struct BotWorkLimits: View {
     }
 
     private func row(_ title: String, symbol: String, value: Int?, choices: [Int], words: @escaping (Int) -> String, set: @escaping (inout WorkLimits, Int?) -> Void) -> some View {
-        NativeMenuButton(opensBelow: true) {
+        NativeMenuButton(name: title.lowercased(), opensBelow: true) {
             let menu = NSMenu()
             menu.addItem(ActionItem("No Limit", checked: value == nil) { change { set(&$0, nil) } })
             menu.addItem(.separator())
@@ -1170,9 +1170,12 @@ struct BotWorkLimits: View {
                 HStack(spacing: 8) {
                     Text(title)
                     Spacer(minLength: 8)
-                    Text(value.map(words) ?? "No limit")
-                        .foregroundStyle(.secondary)
-                    MenuChevron()
+                    HStack(spacing: 8) {
+                        Text(value.map(words) ?? "No limit")
+                            .foregroundStyle(.secondary)
+                        MenuChevron()
+                    }
+                    .nativeMenuValue()
                 }
             }
             .contentShape(.rect)

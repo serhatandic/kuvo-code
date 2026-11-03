@@ -16,8 +16,7 @@ import { firstMessageOf } from "./jobs";
 import { botInstructions, NO_KIT, readKit, runsWithAgents } from "./kit";
 import { listBots } from "./list";
 import { noteTold, toldDigest } from "./tell";
-import { withAlwaysAsk } from "../work/always";
-import { alwaysFor, approvalOf, approvalRules } from "../work/approval";
+import { approvalOf, approvalRules } from "../work/approval";
 import { usableModels } from "../work/models";
 import type { Target } from "../../shared/records";
 import type { BotLook, BotModel } from "../../shared/routes/bots";
@@ -161,19 +160,19 @@ async function makeOnce(given: GivenBot | null | undefined, readEngine: () => Ta
     fs.mkdirSync(path.join(folder, "workspace"), { recursive: true });
     fs.mkdirSync(path.join(folder, "wakes"), { recursive: true });
     fs.writeFileSync(path.join(folder, "MEMORY.md"), kit.memory.replaceAll("⟦name⟧", name));
-    // What always comes to you, asked whatever its approval.
-    const rules = [...withAlwaysAsk(kit.rules ?? []), { action: "external_directory", resource: path.join(folder, "*"), effect: "allow" }];
+    const rules = [...(kit.rules ?? []), { action: "external_directory", resource: path.join(folder, "*"), effect: "allow" }];
     // The session it made, as far as its id.
     const made = await call(target, "POST", "/api/session", { title: name, location: { directory }, model, permissions: rules, metadata: { kuvo: { bot: id } } }, AbortSignal.timeout(BOT_STEP)) as Fields<"id"> | null;
     if (typeof made?.id !== "string" || !made.id) throw new Error("No conversation was made.");
     session = { id: made.id };
     // Marked as a bot's (without it, what it does would be news of an ordinary conversation), and
-    // kept with the approval its rules say (Auto, or Ask First), its rules made for what that comes
-    // to here (Auto asks first where the sandbox doesn't run).
+    // kept with the approval its rules say (Ask First where they ask before commands, else this
+    // computer's default, as any new conversation's), its rules made for what that comes to here
+    // (Auto asks first where the sandbox doesn't run).
     const kept = approvalOf({ permissions: rules }, { agents, bot: true });
     await call(target, "PATCH", `/api/session/${encodeURIComponent(session.id)}`, {
       metadata: { kuvo: { bot: id, approval: kept.approval, applied: kept.effective } },
-      permissions: approvalRules(kept.effective, rules, alwaysFor(rules, true)),
+      permissions: approvalRules(kept.effective, rules),
     }, AbortSignal.timeout(BOT_STEP));
     const told = botInstructions(kit, name, folder, personality?.instruction, project as string | undefined);
     await call(target, "PUT", `/api/experimental/session/${encodeURIComponent(session.id)}/instructions/entries/kuvo.bot`, { value: told }, AbortSignal.timeout(BOT_STEP));

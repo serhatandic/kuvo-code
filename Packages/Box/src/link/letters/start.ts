@@ -92,8 +92,8 @@ export interface StartRefusal {
   status: 400 | 403 | 409 | 429 | 502 | 503;
   message: string;
   session?: string;
-  /** Full Access refused (409): without its switch, or for a bot's. */
-  reason?: "fullAccessOff" | "bot";
+  /** Full Access refused (409): without its switch. */
+  reason?: "fullAccessOff";
 }
 
 /** Where it's started, and how it's waited for: the engine here (and the coding agents' bridge, for
@@ -108,7 +108,7 @@ export interface StartPlace {
 /** What a session a bot started is told with its task: its half of the playbook (PROTOCOL.md,
  * "Work"), in the task's text, so it works with any agent. */
 /** What a session a bot starts for its goal is told: no one may be there to answer. */
-export const goalNote = "This is part of a goal the user may not be watching: what you ask can wait a while, so carry on with what doesn't depend on it. Prepare rather than act on the world: don't publish, deploy, send or pay anything unless your task says it's approved, and report what you couldn't do.";
+export const goalNote = "This is part of a goal the user may not be watching: what you ask can wait a while, so carry on with what doesn't depend on it, and report what you couldn't do.";
 export const sessionNote = (bot: string) => `You were started by ${bot}, a bot coordinating this work. When you're done, review your work with reviewer subagents, fix what they find, and end with a short report as your last reply: what you did, what the reviewers found and how you fixed it, and anything left. ${bot} reads that report.`;
 
 // What a start's wake names: what its starter hears of it.
@@ -153,10 +153,10 @@ const isFolderRule = (rule: KitRule) => rule.action === "external_directory" && 
 
 // Its rules: made for its approval with Settings › Permissions as they are now (where they're this
 // box's own; else the starting conversation's Don't Allows), its project's folders after (a bot's
-// own folder stays allowed); for a bot's work, what always comes to you asked whatever it is.
-function rulesFor(approval: Approval, parent: Partial<EngineSession> | null, folders: readonly string[], always: { publishing: boolean } | null): KitRule[] {
+// own folder stays allowed).
+function rulesFor(approval: Approval, parent: Partial<EngineSession> | null, folders: readonly string[]): KitRule[] {
   const own = Array.isArray(parent?.permissions) ? parent.permissions.filter(rule => !isFolderRule(rule) || rule.resource.includes("/bots/bot_")) : [];
-  return approvalRules(approval, [...own, ...folderRules(folders)], always);
+  return approvalRules(approval, [...own, ...folderRules(folders)]);
 }
 
 const projectsNote = (primary: string, folders: readonly string[]) =>
@@ -347,24 +347,20 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   // Its approval: the one asked for, never above the starter's (an agent outside any conversation
   // here asks first); from a client, this computer's default unless it says (and what it says is
   // the last one picked here). Kept with it, and its rules made for
-  // what that comes to here now: a bot's work never has Full Access, nor Auto without the sandbox.
+  // what that comes to here now: never Full Access without its switch, nor Auto without the sandbox.
   const agents = Boolean(bridge && target.port === bridge.port);
   const from = by?.place ? approvalOf(by.place.data, { agents: Boolean(bridge && by.place.target.port === bridge.port), bot: Boolean(bot) }) : null;
   const starters: Approval | null = by ? from?.approval ?? "askFirst" : null;
-  // (A bot's work is kept with Auto at most, whatever started it.)
-  const chosen: Approval = starters ? lowerOf(requested ?? starters, starters) : requested ?? defaultApproval();
-  const wanted: Approval = bot ? lowerOf(chosen, "auto") : chosen;
+  const wanted: Approval = starters ? lowerOf(requested ?? starters, starters) : requested ?? defaultApproval();
   // Taking the approval of a conversation from before, it runs as that one does, and is one from
-  // before too: nothing kept, so the box never makes its rules again. (Never a bot's: its work
-  // comes to what Auto does here.)
+  // before too: nothing kept, so the box never makes its rules again. (Never a bot's: its work is
+  // kept with its own.)
   const asBefore = Boolean(from && !from.stored && wanted === starters && !bot);
-  const applied = asBefore ? wanted : effectiveApproval(wanted, { agents, bot: Boolean(bot) }).approval;
+  const applied = asBefore ? wanted : effectiveApproval(wanted, { agents }).approval;
   const got = applied !== (requested ?? wanted) && lowerOf(applied, requested ?? wanted) === applied ? applied : undefined;
   const project = projectOf(folder);
   const title = typeof given.title === "string" && given.title.trim() ? given.title.trim() : null;
-  // A bot's work asks for what always comes to you, whatever its approval (last, so they win).
-  // For a goal, publishing too, unless you switched on a public step.
-  const rules = rulesFor(applied, parent, project?.folders ?? [], bot ? { publishing: Boolean(goal && !goal.public.some(step => step.on)) } : null);
+  const rules = rulesFor(applied, parent, project?.folders ?? []);
   // Its mode: the one asked for, else the conversation's (one that plans starts sessions that plan).
   const agent = given.mode === "plan" || given.mode === "build" ? given.mode : parent?.agent ?? null;
   // (Kept with it as it's made, so the box never takes it for one a client made without saying.)
@@ -376,7 +372,7 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
     session = made.id;
     went(session);
     // (What a client picked is the next one's here.)
-    if (!by && !bot && requested) rememberApproval(requested);
+    if (!by && requested) rememberApproval(requested);
   } catch (error) {
     giveBack();
     if (madeTree) await answerWorktrees("POST", "kuvo/worktrees/remove", { path: madeTree, discard: true }, engine, place.signal).catch(() => {});

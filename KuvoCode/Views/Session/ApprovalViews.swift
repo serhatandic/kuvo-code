@@ -217,7 +217,7 @@ struct FullAccessConfirmation: ViewModifier {
             Button("Allow Full Access", role: .destructive, action: confirm)
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("A conversation in Full Access runs every command without the sandbox and never asks you, so a mistake can reach anything you can: your keys, other projects, your accounts. Bots never get it.")
+            Text("A conversation in Full Access runs every command without the sandbox and never asks you, so a mistake can reach anything you can: your keys, other projects, your accounts.")
         }
     }
 }

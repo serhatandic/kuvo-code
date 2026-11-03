@@ -3,15 +3,15 @@
 // conversation's (what it is, what it comes to here now, and which it can pick) and sets it; and
 // this computer's Full Access switch. The box keeps each conversation's rules to what it comes to
 // as the sandbox starts or stops and the switch changes (`keepApprovals`), and a bot's conversation
-// from before there were approvals to Auto's (`adoptBots`).
+// from before there were approvals starts with this computer's default, as a new one (`adoptBots`).
 
 import fs from "node:fs";
 import path from "node:path";
 import { isObject, parsed } from "../../shared/json";
 import { BOX } from "../home";
 import { bridgeTarget, call, engineGet, readEngineFile } from "../engine/client";
-import { allowFullAccess, alwaysFor, APPROVALS, approvalOf, approvalRules, approvalsSince, defaultApproval, effectiveApproval, fullAccessAllowed, isApproval, madeBefore, rememberApproval, unavailable } from "../work/approval";
-import { resumeReviewedSession, runningGoal } from "../work/goals";
+import { allowFullAccess, APPROVALS, approvalOf, approvalRules, approvalsSince, defaultApproval, effectiveApproval, fullAccessAllowed, isApproval, madeBefore, rememberApproval, unavailable } from "../work/approval";
+import { resumeReviewedSession } from "../work/goals";
 import { sandboxOn } from "../work/sandbox";
 import { approveHeld, clearFetched, resumeReviews, reviewLog, seeHeld, shownReviews } from "../work/reviewer";
 import { tellApproved } from "../work/reviewing";
@@ -75,13 +75,11 @@ function shown(at: Found): SessionApproval {
 
 /** The rules and notes a conversation gets for `wanted`: what it comes to here now, its rules made
  * for that, and both kept with it (with the rest of its notes as they are). Null where they're
- * already so. A bot's keep what always comes to you, and publishing where its goal or its rules
- * asked it. */
+ * already so. */
 function changeFor(at: Found, wanted: Approval): { permissions: KitRule[]; metadata: Record<string, unknown> } | null {
   const current = (at.data.permissions ?? []) as KitRule[];
-  const { approval } = effectiveApproval(wanted, { agents: at.agents, bot: at.bot });
-  const goal = runningGoal(worksFor(at.data)?.bot);
-  const permissions = approvalRules(approval, current, alwaysFor(current, at.bot, Boolean(goal && !goal.public.some(step => step.on))));
+  const { approval } = effectiveApproval(wanted, { agents: at.agents });
+  const permissions = approvalRules(approval, current);
   const metadata = at.data.metadata ?? {};
   const kuvo = isObject(metadata.kuvo) ? metadata.kuvo : {};
   if (JSON.stringify(permissions) === JSON.stringify(current) && kuvo.approval === wanted && kuvo.applied === approval) return null;
@@ -103,7 +101,7 @@ async function write(at: Found, change: NonNullable<ReturnType<typeof changeFor>
 /** A conversation kept with an approval whose rules are made for something else than it comes to
  * now (the sandbox started or stopped, the switch changed, and the box hasn't come round to it):
  * its rules made for what it comes to. A bot's from before there were approvals is kept with the
- * one its rules say (Auto, or Ask First), so it comes to what that does here, and stays so. True
+ * one its rules say (Ask First, or this computer's default), so it comes to what that does here, and stays so. True
  * where nothing's left to do. */
 async function settle(at: Found, signal?: AbortSignal): Promise<boolean> {
   const now = approvalOf(at.data, { agents: at.agents, bot: at.bot });
@@ -168,18 +166,18 @@ export async function settleAgain(target: Target, id: string, agents: boolean, s
 type Refusal = { status: 404 | 409 | 502 | 503; value: { message: string; reason?: string } };
 
 /** Sets a conversation's approval, here: 200 with it as clients read it, 404 for none here, 409
- * for one it can't be set to (Full Access without its switch, or for a bot's: and why), 502 where
+ * for one it can't be set to (Full Access without its switch: and why), 502 where
  * the engine didn't take it. Auto without the sandbox is kept, and asks first until it runs. */
 export async function setApproval(id: string, wanted: Approval, engine: Target | null, bridge: Target | null, signal?: AbortSignal): Promise<{ status: 200; value: SessionApproval } | Refusal> {
   if (!engine && !bridge) return { status: 503, value: { message: "The engine isn't running." } };
   const at = await find(id, engine, bridge);
   if (!at) return { status: 404, value: { message: "That conversation isn't here." } };
-  const not = unavailable(wanted, { agents: at.agents, bot: at.bot });
+  const not = unavailable(wanted, { agents: at.agents });
   if (not && not.reason !== "sandbox") return { status: 409, value: { message: not.why, reason: not.reason } };
   const change = changeFor(at, wanted);
   if (change && !await write(at, change, signal)) return { status: 502, value: { message: "It couldn't be changed: the engine didn't take it. Try again." } };
-  // (The next new conversation here starts with it: never with a bot's or a subagent's.)
-  if (!at.bot && !at.data.parentID) rememberApproval(wanted);
+  // (The next new conversation here starts with it, a bot's pick too: never a subagent's.)
+  if (!at.data.parentID) rememberApproval(wanted);
   // (What it comes to may have changed while it was written.)
   await settle(at, signal);
   // Its commands from now on in the sandbox or outside it, at once (and its next run's subagents).

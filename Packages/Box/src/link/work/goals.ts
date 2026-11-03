@@ -30,7 +30,6 @@ import { locked, textOf, writePrivate } from "../files";
 import { BOTS, HERE } from "../home";
 import { placeOfSession } from "../letters/letter";
 import { readWakes } from "../areas/wakes";
-import { asksAlways, withAlwaysAsk } from "./always";
 import { periodEnd, periodOf, startOfDay, timeGiven } from "./clock";
 import { asksIn, permissionWords } from "./answers";
 import { keepAwake, keepsAwake, onPower } from "./awake";
@@ -42,7 +41,6 @@ import { ofBot, workingNow, workSessions } from "./tree";
 import type { Listed } from "./tree";
 import type { Target } from "../../shared/records";
 import type { GoalCheckShape, GoalPlanShape, GoalStepShape, GoalWaitingShape } from "../../shared/routes/work";
-import type { KitRule } from "../bots/kit";
 import type { Notice } from "../notices/notice";
 
 export const GOALS_FILE = path.join(WORK_FOLDER, "goals.json");
@@ -685,7 +683,7 @@ export function linkSession(bot: string, step: unknown, session: string, file = 
 }
 
 // Where you are, in a line, for what the bot does next.
-const presence = () => (isHere() ? "The user is here now." : "The user is away now: prepare anything public or sent as a draft, unless its switch is on, and carry on with what doesn't need them.");
+const presence = () => (isHere() ? "The user is here now." : "The user is away now: carry on with what doesn't need them.");
 
 // A time a step waits for, as goal_progress takes it (ISO words, or ms; seconds, as wake-ups give
 // it, read as such): null for one it can't read.
@@ -881,8 +879,6 @@ const NUDGE_AFTER = [10, 30, 60, 120, 240, 480, 720].map(minutes => minutes * 60
  * - the conversation's goal (its loop) kept as the plan is: set while it runs, taken away once it
  *   ends; its pause at a model's limit shown as the plan's;
  * - the Mac kept awake only while some goal's work is at it (on power);
- * - its sessions' rules (only those started for it) asking for what always comes to you, and for
- *   publishing unless a public step is on;
  * - a session that failed at a model's limit paused until the reset (from when it failed), and told
  *   to carry on then; a paused session that's gone let go;
  * - what its sessions (and the bot itself) ask that the bot hasn't answered, listed as waiting for
@@ -953,13 +949,6 @@ export async function lookAtGoals(tell: (notice: Notice) => boolean, targets: ()
   for (const goal of running) {
     const work = workOf(goal);
     const own = await placeOfSession(goal.session, targets()).catch(() => null);
-    // Its rules, and its sessions', ask for what always comes to you, and for publishing unless a
-    // public step is switched on.
-    const publishing = !goal.public.some(step => step.on);
-    for (const place of [...(own ? [{ target: own.target, id: goal.session, rules: own.data.permissions }] : []), ...work.map(each => ({ target: each.target, id: each.data.id, rules: each.data.permissions }))]) {
-      if (asksAlways(place.rules, { publishing })) continue;
-      await call(place.target, "PATCH", `/api/session/${encodeURIComponent(place.id)}`, { permissions: withAlwaysAsk((place.rules ?? []) as KitRule[], { publishing }) }, signal).catch(() => {});
-    }
     // A session whose turn failed at a model's limit: paused until it resets.
     const limitsSeen = { ...(goal.limitsSeen ?? {}) };
     for (const each of work) {
