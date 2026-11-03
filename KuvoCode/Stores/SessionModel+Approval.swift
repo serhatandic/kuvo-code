@@ -175,6 +175,39 @@ extension SessionModel {
         return { [weak self] in self?.openDecisions() }
     }
 
+    #if DEBUG
+    /// KUVO_DEMO_AUTO: in Auto with sample decisions and no box behind it (`held`, `paused`,
+    /// `decisions`, `fullAccess`, or `unread`: Decisions with its computer out of reach).
+    func showAutoSample(_ state: String) {
+        box = { nil }
+        let now = Date.now.timeIntervalSince1970 * 1000
+        func option(_ approval: ToolApproval) -> ApprovalShown.Option {
+            ApprovalShown.Option(approval: approval, unavailable: approval == .fullAccess ? .init(reason: "fullAccessOff", why: "Confirm it once on this computer first.") : nil)
+        }
+        approvalShown = ApprovalShown(approval: .auto, effective: .auto, options: ToolApproval.allCases.map(option))
+        typealias Decision = ReviewDecisions.Decision
+        var sample = [
+            Decision(key: "rd_1", at: now - 600_000, action: "npm install", kind: "command", decision: "allowed", reason: "Installs the project's own dependencies, which the task needs.", by: "model"),
+            Decision(key: "rd_2", at: now - 420_000, action: "brew install jq", kind: "command", decision: "allowed", reason: "A tool the build script calls.", by: "model"),
+            Decision(key: "rd_3", at: now - 300_000, action: "~/.zshrc", kind: "file", decision: "refused", reason: "Changes your shell's start-up for every project, which you didn't ask for.", by: "model", why: "reviewer", held: true, approved: now - 200_000),
+            Decision(key: "rd_4", at: now - 60_000, action: "git push --force origin main", kind: "command", decision: "refused", reason: "It rewrites main on GitHub, which you didn't ask for.", by: "model", why: "reviewer", held: true),
+        ]
+        switch state {
+        case "unread":
+            decisions = nil
+            openDecisions()
+            return
+        case "paused":
+            sample.append(Decision(key: "rd_5", at: now - 30_000, action: "cat ~/.ssh/id_ed25519", kind: "command", decision: "refused", reason: "Reads your SSH key.", by: "model", why: "paused", held: true))
+            decisions = ReviewDecisions(decisions: sample, paused: now - 30_000)
+        default:
+            decisions = ReviewDecisions(decisions: sample)
+        }
+        if state == "decisions" { openDecisions() }
+        if state == "fullAccess" { confirmsFullAccess = true }
+    }
+    #endif
+
     /// Opening Decisions counts what's held back as seen, here and, through its box, on every client.
     func openDecisions() {
         decisionsSeen.formUnion((decisions?.waiting ?? []).map(\.id))

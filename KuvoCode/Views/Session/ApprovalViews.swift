@@ -125,7 +125,7 @@ struct DecisionsView: View {
                     .accessibilityLabel("Reading Auto’s decisions")
             }
         }
-        .frame(width: 420)
+        .frame(width: 420, alignment: .leading)
         .fixedSize(horizontal: false, vertical: true)
         .popoverContent()
         .onAppear { model.readDecisions() }

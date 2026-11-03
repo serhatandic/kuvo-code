@@ -547,6 +547,16 @@ enum DemoDirector {
                     })
                 }
             }
+            // KUVO_DEMO_AUTO=held|paused|decisions|fullAccess|unread: it in Auto, with sample
+            // decisions and no box behind it: one held back over the composer, Auto paused, its
+            // Decisions open, Full Access asked for, or Decisions with its computer out of reach.
+            if let state = environment["KUVO_DEMO_AUTO"] {
+                Task {
+                    guard await DemoWait.until("\(id) to load (KUVO_DEMO_AUTO)", limit: .seconds(30), { workspace.model(for: id)?.isLoaded == true }), let model = workspace.model(for: id) else { return }
+                    await DemoWait.pause(.beat)
+                    model.showAutoSample(state)
+                }
+            }
             // KUVO_DEMO_DRAFT=<text>: typed, not sent, in its composer.
             if let draft = environment["KUVO_DEMO_DRAFT"] { Drafts.shared[id].text = draft }
             // KUVO_DEMO_QUOTES=<n>: that many quotes to answer in its composer.
