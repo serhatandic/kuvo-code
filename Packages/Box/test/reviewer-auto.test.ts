@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
-import { dirname, join } from "node:path"
+import { dirname, join, relative } from "node:path"
 
 // A conversation set to Auto, as its agent meets the reviewer: a command it asks to run outside
 // the sandbox runs on the reviewer's allow without asking you, or is refused with its reason and
@@ -252,6 +252,12 @@ test("in Auto, a coding agent's ask to work outside its folder is the reviewer's
   const kuvo = (await import("../src/link/fence/policy")).fencePolicy().kuvo[0]
   expect((await ask("per_c2", [join(box, "notes", "shared.md"), join(kuvo, "notes.txt")]))?.decision).toBe("refuse")
   expect(replies.at(-1)).toMatchObject({ path: "/permission/per_c2/reply", body: { decision: "reject" } })
+  // A folder that holds them, everything, or a path named from the project: each refused by code
+  // too, whatever the model says.
+  expect((await ask("per_c4", [dirname(kuvo) + "/*"]))?.decision).toBe("refuse")
+  expect((await ask("per_c5", ["/*"]))?.decision).toBe("refuse")
+  expect((await ask("per_c6", [join(box, "notes", "shared.md"), relative(project, join(kuvo, "notes.txt"))]))?.decision).toBe("refuse")
+  expect(replies.at(-1)).toMatchObject({ path: "/permission/per_c6/reply", body: { decision: "reject" } })
   // None named: the model judges what it asked, and what it refuses is held back for you.
   reply = () => '{"decision": "refuse", "reason": "It did not say what it needs."}'
   expect((await ask("per_c3", ["*"]))?.decision).toBe("refuse")
@@ -273,6 +279,10 @@ test("when the engine doesn't answer, a command in Auto is held back, never aske
     conversation("ses_down_new", "askFirst", "Build it")
     expect((await sandboxAsk("ses_down_new", "echo new")).text).toMatch(/^Auto's reviewer held this back: /)
     expect(outside.listSandboxAsks()).toEqual([])
+    // One in Full Access the box hasn't seen since it started again: marked so, it still runs.
+    conversation("ses_down_full_unseen", "approveAll", "Ship it")
+    ;(await import("../src/link/work/full")).markConversation("ses_down_full_unseen", true)
+    expect((await sandboxAsk("ses_down_full_unseen", "echo unseen")).text).toMatch(/^Ran outside the sandbox · Full Access\n\nunseen/)
     expect(reviewer.reviewLog("ses_down").decisions.at(-1)).toMatchObject({ decision: "refused", held: true, why: "failed" })
     expect(reviewer.reviewLog("ses_down_new").decisions.at(-1)).toMatchObject({ decision: "refused", held: true, why: "failed" })
   } finally {

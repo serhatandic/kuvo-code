@@ -207,7 +207,11 @@ function takenAway(program: string, args: readonly string[], words: readonly str
  * secrets, what runs at login and the rest are the model's (`persistenceOf` tells it which run at
  * login). */
 export function hardLine(action: ReviewedAction, policy: FencePolicy = fencePolicy()): string | null {
-  if (action.kind === "file") return inKuvo(realish(action.path), policy) ? KUVO : null;
+  // (Room to write a folder that holds them, as a coding agent asks for, reaches them too.)
+  if (action.kind === "file") {
+    const where = realish(action.path);
+    return inKuvo(where, policy) || (action.access === "write" && policy.kuvo.some(wall => holds(where, wall))) ? KUVO : null;
+  }
   if (action.kind === "tool") return null;
   return commandLine(action.command, action.folder, policy, 0);
 }

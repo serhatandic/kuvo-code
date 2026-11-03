@@ -21,6 +21,7 @@ import { askBook } from "../notices/asking";
 import type { Notice } from "../notices/notice";
 import { commandEnv, runCommand } from "../run-command";
 import type { Caller } from "../vault/who";
+import { markedFullAccess } from "../work/full";
 import { findConversation, heldUnreached, inFullAccess, refusalWords, reviewIn } from "../work/reviewing";
 import { forgetFetched } from "../work/reviewer";
 import { addRule, ownerOf, writeRuleWouldBe } from "./allowed";
@@ -171,10 +172,11 @@ async function askToRun(caller: Caller, args: Record<string, unknown>, signal?: 
   // the reviewer couldn't judge.)
   const conversation = caller.root ?? caller.session;
   const { at, unreached } = conversation ? await findConversation(conversation).catch(() => ({ at: null, unreached: true })) : { at: null, unreached: false };
-  const full = Boolean(at && inFullAccess(at));
+  // (One the box hasn't found since it started again goes as it's marked: Full Access has no asks.)
+  const full = at ? inFullAccess(at) : Boolean(unreached && conversation && markedFullAccess(conversation));
   const action = { kind: "command" as const, command, folder: project };
   // (A review that fails is a refusal: in Auto nothing waits for you.)
-  const reviewing = at && !full ? reviewIn(conversation!, action, signal, at) : unreached ? heldUnreached(conversation!, action, signal) : null;
+  const reviewing = full ? null : at ? reviewIn(conversation!, action, signal, at) : unreached ? heldUnreached(conversation!, action, signal) : null;
   const verdict = reviewing && await reviewing
     .catch(error => ({ decision: "refuse" as const, reason: `Auto's reviewer couldn't review it (${String((error as Error)?.message ?? error).slice(0, 120)}).`, by: "code" as const, held: false, why: "failed" as const, paused: false, fetched: undefined }));
   if (verdict?.decision === "refuse") return { text: refusalWords(verdict), isError: false };
@@ -210,8 +212,7 @@ async function askToRun(caller: Caller, args: Record<string, unknown>, signal?: 
     ...(always ? { always } : {}),
     ...(IS_MAC ? {} : { machine: os.hostname() }),
     owner: ownerOf(project),
-  }, signal, undefined, id => { asking = id; });
-  heard.abort();
+  }, signal, undefined, id => { asking = id; }).finally(() => heard.abort());
   // (A script from the web, fetched once for the review: that copy is what runs, then it's gone.)
   const fetched = verdict?.fetched;
   if (answered.unanswered) return { text: "Nobody answered in time, so it didn't run. Don't get around the sandbox another way: go on without it, or ask the user when they're back.", isError: false };

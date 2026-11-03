@@ -7,9 +7,11 @@
 // which carries on another way; one you approve later is told to the conversation. A pause stops
 // the conversation's run. A review that fails (a full disk, say) is a refusal too: never an ask.
 
+import path from "node:path";
 import { isObject } from "../../shared/json";
 import { oneLine } from "../../shared/text";
 import { bridgeTarget, call, engineGet, readEngineFile } from "../engine/client";
+import { homeFolder } from "../home";
 import { sendInto, stopSession, writtenByYou } from "../engine/queue";
 import { boxNote } from "../../shared/queues";
 import { messageID } from "../engine/sessions";
@@ -237,7 +239,8 @@ async function answerPermission(source: Target, id: string, sessionID: string, s
     // tool call), by the paths the ask names, each judged as a write; where it names none, by
     // what it asked, as the model reads it.
     const file = seen && [seen.input.filePath, seen.input.file_path, seen.input.notebook_path, seen.input.path, seen.input.file].find((each): each is string => typeof each === "string" && each.startsWith("/"));
-    const named = permission.resources.map(each => each.replace(/\/\*$/, "")).filter(each => each.startsWith("/"));
+    // (Each as a command's path reads: \`~\` as your home, one not from \`/\` from its folder.)
+    const named = permission.resources.filter(each => each !== "*").map(each => path.resolve(folder, each.replace(/^~(?=\/|$)/, homeFolder()).replace(/\/\*$/, "") || "/"));
     actions = seen && file ? [{ kind: "file", path: file, access: READING.has(seen.tool.toLowerCase()) ? "read" : "write", folder, tool: seen.tool, input: seen.input }]
       : named.length ? named.map(each => ({ kind: "file" as const, path: each, access: "write" as const, folder }))
       : [{ kind: "tool", tool: seen?.tool || "work outside its folder", args: seen?.input ?? { asked: permission.resources }, folder }];

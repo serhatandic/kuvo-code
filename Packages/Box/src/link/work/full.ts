@@ -28,6 +28,10 @@ export function markFullAccess(session: string, on: boolean, root = session, fol
   } catch {}
 }
 
+/** Whether `session` is marked as in Full Access here: what the box last knew of it, also after it
+ * started again while its engine doesn't answer. */
+export const markedFullAccess = (session: string, folder = FULL_ACCESS_FOLDER): boolean => named(session) && fs.existsSync(path.join(folder, session));
+
 /** A conversation's approval changed: its mark, and its subagents' (those marked with it), as it is
  * now. A subagent gets its mark again as its next run starts, where it's on. */
 export function markConversation(root: string, on: boolean, folder = FULL_ACCESS_FOLDER): void {
