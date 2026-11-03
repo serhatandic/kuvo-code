@@ -4,7 +4,7 @@ import Foundation
 import OpenCodeKit
 
 extension GoalPlans {
-    /// KUVO_DEMO_GOAL=<bot's name>:<proposed|cant|running|month|weekly|done>: the bot's goal, a sample (the
+    /// KUVO_DEMO_GOAL=<bot's name>:<proposed|cant|running|month|weekly|done|sweep|sweepcard>: the bot's goal, a sample (the
     /// Driftwood landing page), for a look at its card and its lanes; `cant` is the card of a box
     /// that can't work on it alone, its sandbox check failed (KUVO_DEMO_SANDBOX=<reason> for another reason,
     /// or `old`).
@@ -111,6 +111,38 @@ extension GoalPlans {
                             goal: "Every Monday, write a summary of the week’s work on kuvo-ai and kuvo-code-ios for the changelog, and post it in #updates, for the next two months.",
                             title: "Weekly summaries", state: .running, steps: weeks, ends: ms(49 * day), proposed: ms(-15 * day), started: ms(-14 * day),
                             next: ms(2 * day), alone: true)
+        case "sweep", "sweepcard":
+            // An iOS app from nothing, as a bot writes it: two paragraphs with Markdown, long step
+            // names, Apple's sites, and no times yet (nothing has started).
+            let apple = "developer.apple.com", connect = "appstoreconnect.apple.com", revenuecat = "revenuecat.com"
+            let goal = """
+                Build **Sweep**, a native iOS app that helps people keep their homes tidy with short daily routines, streaks and gentle reminders, with a monthly and a yearly subscription through RevenueCat, and ship it to the App Store.
+
+                I'll plan the screens, scaffold the Xcode project, build the routines, streaks and reminders, wire up RevenueCat with a StoreKit test configuration, write the App Store listing and screenshots, and get it through TestFlight to review. You only need to set up the accounts I can't make myself.
+                """
+            let steps: [GoalPlan.Step] = [
+                .init(id: "i1", text: "Plan the screens, data model and navigation", state: .todo),
+                .init(id: "i2", text: "Scaffold the Sweep Xcode project (SwiftUI, SwiftData, navigation, app + test targets)", state: .todo, site: apple, after: ["i1"]),
+                .init(id: "i3", text: "Routines, streaks and reminders", state: .todo, after: ["i2"]),
+                .init(id: "i4", text: "Monetization: RevenueCat SDK, paywall, monthly and yearly products, StoreKit test configuration", state: .todo, site: revenuecat, after: ["i2"]),
+                .init(id: "i5", text: "Build and test on the simulator and a device", state: .todo, site: apple, after: ["i3", "i4"]),
+                .init(id: "i6", text: "App Store listing, screenshots and privacy details", state: .todo, site: connect, after: ["i5"]),
+                .init(id: "i7", text: "TestFlight, then submit for review", state: .todo, site: connect, after: ["i6"]),
+            ]
+            let checks: [GoalPlan.Check] = [
+                .init(id: "k1", text: "Apple Developer account", detail: "to sign and ship the app", state: .needs, by: .bot, site: apple,
+                      action: .init(kind: .open, label: "Open", url: URL(string: "https://developer.apple.com/account"))),
+                .init(id: "k2", text: "RevenueCat project", detail: "with an API key for the app", state: .needs, by: .bot, site: revenuecat,
+                      action: .init(kind: .open, label: "Open", url: URL(string: "https://app.revenuecat.com"))),
+                .init(id: "k3", text: "Subscription products", detail: "monthly and yearly, in App Store Connect", state: .needs, by: .bot, site: connect,
+                      action: .init(kind: .open, label: "Open", url: URL(string: "https://appstoreconnect.apple.com/apps"))),
+                .init(id: "k4", text: "Xcode 27 is installed", state: .ok, by: .bot),
+            ]
+            let running = kind == "sweep"
+            let waiting = [GoalPlan.Waiting(id: "w1", kind: .you, text: "RevenueCat project", detail: "with an API key for the app", url: URL(string: "https://app.revenuecat.com"), site: revenuecat, at: ms(-12))]
+            return GoalPlan(id: "goal_demo", bot: bot.id, name: bot.name, session: bot.sessionID, goal: goal, title: "Sweep iOS app",
+                            state: running ? .running : .proposed, steps: steps, checks: running ? checks.filter { $0.state == .ok } : checks,
+                            proposed: ms(-20), started: running ? ms(-15) : nil, waiting: running ? waiting : [], alone: true)
         default:
             return nil
         }
