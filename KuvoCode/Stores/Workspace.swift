@@ -713,24 +713,31 @@ final class Workspace {
     }
 
     func loadBranch(for directory: String) async {
-        let read = (branchReads[directory] ?? 0) + 1
-        branchReads[directory] = read
+        let read = nextBranchRead(directory)
         guard let api = api(forFolder: directory), let info = try? await api.vcs(directory: directory) else {
             // Asked before its engine answered (the window's folder as the app starts, a machine
             // still connecting): read again once it does.
             branchesUnread.insert(directory)
             return
         }
-        // A later read's answer is newer (an engine that just started answers no branch, then
-        // says it has read one): an earlier one landing after it doesn't undo it.
-        guard branchReads[directory] == read else { return }
+        // Answers can land out of order (an engine that just started answers no branch, then says
+        // it has read one): one older than what's shown doesn't undo it, and one newer that
+        // failed doesn't lose it.
+        guard read > (branchShown[directory] ?? 0) else { return }
+        branchShown[directory] = read
         branchesUnread.remove(directory)
         branches[directory] = info.branch?.current
         defaultBranches[directory] = info.branch?.default
     }
 
-    /// How many times each folder's branch was asked for, so only the latest answer counts.
+    /// Each folder's branch reads, numbered as they're asked, and the newest one shown.
     @ObservationIgnored private var branchReads: [String: Int] = [:]
+    @ObservationIgnored private var branchShown: [String: Int] = [:]
+    private func nextBranchRead(_ directory: String) -> Int {
+        let read = (branchReads[directory] ?? 0) + 1
+        branchReads[directory] = read
+        return read
+    }
     /// Folders whose branch couldn't be read yet, for `loadBranch` once their engine answers.
     @ObservationIgnored private var branchesUnread: Set<String> = []
 
@@ -2404,6 +2411,8 @@ final class Workspace {
         if event.type == "vcs.branch.updated", let directory = event.location?.directory {
             struct Branch: Decodable { var branch: String? }
             let folder = machine.map { RemoteFolder.folder(directory, on: $0) } ?? directory
+            // Newer than any read asked so far, which can't undo it when it lands.
+            branchShown[folder] = nextBranchRead(folder)
             branches[folder] = (try? event.payload(as: Branch.self))?.branch
             // And the branch it goes into, which an engine that just started didn't know at first
             // (read again, as opencode's own client does).
