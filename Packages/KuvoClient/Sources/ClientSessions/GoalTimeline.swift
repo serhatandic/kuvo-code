@@ -22,17 +22,16 @@ public struct GoalTimeline: Sendable {
         public var id: String { step.id }
     }
 
-    /// What shows of a goal, top to bottom: phases' names over their steps, and on a long goal
-    /// the steps done and those for later folded to a row each, unless nothing else would show.
+    /// What shows of a goal, top to bottom in the plan's order: on a long goal the steps done and
+    /// those for later folded to a row each, unless nothing else would show. Never phases, even an
+    /// old goal's: steps are just steps.
     public enum Row: Sendable, Identifiable {
-        case phase(String)
         case done([Lane])
         case later([Lane])
         case lane(Lane)
 
         public var id: String {
             switch self {
-            case .phase(let name): "phase:\(name)"
             case .done: "done"
             case .later: "later"
             case .lane(let lane): lane.id
@@ -46,8 +45,6 @@ public struct GoalTimeline: Sendable {
     public let now: Date
     /// Done or stopped.
     public let isOver: Bool
-    /// The plan's phases, in its order.
-    public let phases: [String]
     public let unit: Unit
     /// When it's likely done, where every step left says how far along it is.
     public let finish: Date?
@@ -60,7 +57,6 @@ public struct GoalTimeline: Sendable {
         isOver = plan.state == .done || plan.state == .stopped || plan.state == .declined
         let now = isOver ? plan.ended.map(ms).map { min($0, now) } ?? now : now
         self.now = now
-        phases = plan.phases
         start = ms(plan.started ?? plan.proposed)
         deadline = plan.ends.map(ms)
         var lanes: [Lane] = []
@@ -149,7 +145,7 @@ public struct GoalTimeline: Sendable {
     }
 
     /// The rows the goal bar lists, top to bottom, whatever the goal's length: the steps done
-    /// folded to one row (opened with `showsDone`), phases heading their steps, and more than five
+    /// folded to one row (opened with `showsDone`), and more than five
     /// steps not begun folded to one row at the end (opened with `showsLater`). A fold that would
     /// leave nothing else to see doesn't fold.
     public func list(showsDone: Bool = false, showsLater: Bool = false) -> [Row] {
@@ -181,17 +177,7 @@ public struct GoalTimeline: Sendable {
             left.removeAll { lane in done.contains { $0.id == lane.id } }
         }
         if foldsLater { left.removeAll { lane in later.contains { $0.id == lane.id } } }
-        if phases.count > 1 {
-            for phase in phases {
-                let lanes = left.filter { $0.step.phase == phase }
-                guard !lanes.isEmpty else { continue }
-                rows.append(.phase(phase))
-                rows += lanes.map(Row.lane)
-            }
-            rows += left.filter { $0.step.phase.map { !phases.contains($0) } ?? true }.map(Row.lane)
-        } else {
-            rows += left.map(Row.lane)
-        }
+        rows += left.map(Row.lane)
         if foldsLater {
             rows.append(.later(later))
             if showsLater { rows += later.map(Row.lane) }

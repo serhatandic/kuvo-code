@@ -6,7 +6,7 @@ import OpenCodeKit
 extension GoalPlans {
     /// KUVO_DEMO_GOAL=<bot's name>:<proposed|cant|running|month|weekly|done|sweep|sweepcard|sweepnew|sweeprun>: the bot's goal, a sample (the
     /// Driftwood landing page), for a look at its card and its lanes; `sweepnew` and `sweeprun` are Sweep with
-    /// short step names in two phases, before a step begins and three steps in, due in three days; `cant` is the card of a box
+    /// short step names, before a step begins and three steps in, due in three days; `cant` is the card of a box
     /// that can't work on it alone, its sandbox check failed (KUVO_DEMO_SANDBOX=<reason> for another reason,
     /// or `old`).
     func demo(for bot: Bot) {
@@ -150,17 +150,17 @@ extension GoalPlans {
             let run = kind == "sweeprun"
             let goal = "Build an iOS app that prints money: a shippable product, no backend, **RevenueCat** for users and payments, project at `~/Desktop/main/money-printer`. No budget needed: everything runs locally, no paid APIs or services. Concept I'd ship: **Sweep**, an on-device photo and storage cleaner that finds duplicates, blurry shots and old screenshots, with a yearly subscription."
             let steps: [GoalPlan.Step] = [
-                .init(id: "p1", text: "Set up the Xcode project", state: run ? .done : .todo, phase: "Build", began: run ? ms(-130) : nil, ended: run ? ms(-94) : nil),
-                .init(id: "p2", text: "Photo scan engine", state: run ? .done : .todo, phase: "Build", after: ["p1"], began: run ? ms(-94) : nil, ended: run ? ms(-22) : nil),
-                .init(id: "p3", text: "Storage dashboard", state: .todo, phase: "Build", after: ["p2"]),
-                .init(id: "p4", text: "RevenueCat paywall", state: run ? .doing : .todo, progress: run ? 0.5 : nil, note: run ? "2 of 4 screens" : nil, phase: "Build", site: revenuecat, after: ["p1"], began: run ? ms(-88) : nil),
-                .init(id: "p5", text: "Icon and polish", state: .todo, phase: "Build", after: ["p3", "p4"]),
-                .init(id: "p6", text: "Test on a device", state: .todo, phase: "Ship", after: ["p5"]),
-                .init(id: "p7", text: "App Store kit", state: .todo, phase: "Ship", site: apple, after: ["p6"]),
-                .init(id: "p8", text: "Submit for review", state: .todo, phase: "Ship", site: "appstoreconnect.apple.com", after: ["p7"]),
+                .init(id: "p1", text: "Set up the Xcode project", state: run ? .done : .todo, began: run ? ms(-130) : nil, ended: run ? ms(-94) : nil),
+                .init(id: "p2", text: "Photo scan engine", state: run ? .done : .todo, after: ["p1"], began: run ? ms(-94) : nil, ended: run ? ms(-22) : nil),
+                .init(id: "p3", text: "Storage dashboard", state: .todo, after: ["p2"]),
+                .init(id: "p4", text: "RevenueCat paywall", state: run ? .doing : .todo, progress: run ? 0.5 : nil, note: run ? "2 of 4 screens" : nil, site: revenuecat, after: ["p1"], began: run ? ms(-88) : nil),
+                .init(id: "p5", text: "Icon and polish", state: .todo, after: ["p3", "p4"]),
+                .init(id: "p6", text: "Test on a device", state: .todo, after: ["p5"]),
+                .init(id: "p7", text: "App Store kit", state: .todo, site: apple, after: ["p6"]),
+                .init(id: "p8", text: "Submit for review", state: .todo, site: "appstoreconnect.apple.com", after: ["p7"]),
             ]
             let waiting = [GoalPlan.Waiting(id: "w1", kind: .you, text: "RevenueCat project", detail: "with an API key for the app", url: URL(string: "https://app.revenuecat.com"), site: revenuecat, at: ms(-12))]
-            return GoalPlan(id: "goal_demo", bot: bot.id, name: bot.name, session: bot.sessionID, goal: goal, title: "Sweep iOS app",
+            return GoalPlan(id: "goal_demo_\(kind)", bot: bot.id, name: bot.name, session: bot.sessionID, goal: goal, title: "Sweep iOS app",
                             state: .running, steps: steps, ends: ms(3 * 24 * 60), proposed: ms(-140), started: ms(run ? -131 : -1), waiting: waiting, alone: true)
         default:
             return nil
@@ -170,7 +170,7 @@ extension GoalPlans {
     /// KUVO_DEMO_GOAL_STATE=<working|paused:<you|limit|error|stalled>>, with KUVO_DEMO_GOAL: the
     /// conversation's own goal beside the sample, so its bar has Pause, or Resume and why it's paused.
     static func demoGoal(for plan: GoalPlan) -> Goal? {
-        guard plan.id == "goal_demo", let spec = ProcessInfo.processInfo.environment["KUVO_DEMO_GOAL_STATE"] else { return nil }
+        guard plan.id.hasPrefix("goal_demo"), let spec = ProcessInfo.processInfo.environment["KUVO_DEMO_GOAL_STATE"] else { return nil }
         let parts = spec.split(separator: ":").map(String.init)
         guard !parts.isEmpty else { return nil }
         var goal: [String: Any] = ["session": plan.session, "condition": plan.goal, "state": parts[0], "started": plan.started ?? plan.proposed, "turns": 4, "checking": false]

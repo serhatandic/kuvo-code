@@ -4,8 +4,7 @@ import Testing
 
 /// A goal's timeline view, as both apps draw it: one row per step with its bar where it ran, what's
 /// left placed after what it waits for at the pace so far until it has times of its own, the due
-/// date on the axis or past its edge, a little room between phases, and the list until a step
-/// begins.
+/// date on the axis or past its edge, and the list until a step begins.
 struct GoalChartTests {
     private let start = Date(timeIntervalSince1970: 1_800_000_000)
 
@@ -75,9 +74,38 @@ struct GoalChartTests {
         #expect(soon.due == hours(9) && !soon.isDuePastEdge, "due tonight: on the axis")
     }
 
-    @Test func aNewPhaseStartsAfterALittleRoom() {
-        let chart = GoalTimeline(plan(sweep), now: hours(2.2)).chart()
-        #expect(chart.bars.filter(\.startsPhase).map(\.id) == ["s6"], "only Ship's first step, never the first row")
+    @Test func aStepUnderWayWithNoneDoneStillLeavesTheRestBeforeTheDueDate() throws {
+        let now = hours(0.1)
+        let due = start.addingTimeInterval(3 * 86400)
+        let steps: [GoalPlan.Step] = [
+            .init(id: "s1", text: "Set up the Xcode project", state: .doing, began: at(0)),
+            .init(id: "s2", text: "Photo scan engine", state: .todo, after: ["s1"]),
+            .init(id: "s3", text: "Storage dashboard", state: .todo, after: ["s2"])]
+        let chart = GoalTimeline(plan(steps, ends: due), now: now).chart()
+        #expect(try #require(chart.bars.last?.to) <= due, "on its first day, the goal doesn't look late already")
+        #expect(chart.due == due)
+    }
+
+    @Test func stepsMarkedDoneInOneGoDontSetThePace() throws {
+        // The bot marked two steps done straight from todo: they began as they ended.
+        let steps: [GoalPlan.Step] = [
+            .init(id: "s1", text: "Set up the Xcode project", state: .done, began: at(0), ended: at(1)),
+            .init(id: "s2", text: "App icon", state: .done, after: ["s1"], began: at(1), ended: at(1)),
+            .init(id: "s3", text: "Launch screen", state: .done, after: ["s1"], began: at(1), ended: at(1)),
+            .init(id: "s4", text: "Storage dashboard", state: .todo, after: ["s2", "s3"])]
+        let chart = GoalTimeline(plan(steps), now: hours(1.2)).chart()
+        let dashboard = try #require(chart.bars.first { $0.id == "s4" })
+        let (from, to) = (try #require(dashboard.from), try #require(dashboard.to))
+        #expect(to.timeIntervalSince(from) == 3600, "the pace of the one step that really took time, not a minute")
+    }
+
+    @Test func aStepWaitingOnItselfOrInACircleStillGetsPlaced() {
+        let steps: [GoalPlan.Step] = [
+            .init(id: "s1", text: "One", state: .todo, after: ["s2"]),
+            .init(id: "s2", text: "Two", state: .todo, after: ["s1"]),
+            .init(id: "s3", text: "Three", state: .todo, after: ["s3"])]
+        let chart = GoalTimeline(plan(steps), now: hours(0.1)).chart()
+        #expect(chart.bars.allSatisfy { $0.from != nil && $0.to != nil })
     }
 
     @Test func aStepSaysWhatItWaitsFor() {
@@ -108,5 +136,7 @@ struct GoalChartTests {
         let list = GoalPlanWords.line(goal, due: true, now: hours(2.2), timeZone: utc, locale: locale)
         #expect(list.hasPrefix("2 of 6") && list.hasSuffix("due Tue 19 Jan"))
         #expect(!GoalPlanWords.line(goal, now: hours(2.2), timeZone: utc, locale: locale).contains("due"))
+        let late = GoalPlanWords.line(goal, due: true, now: Date(timeIntervalSince1970: 1_800_400_000), timeZone: utc, locale: locale)
+        #expect(late.hasSuffix("was due Tue 19 Jan"), "past it, it says so")
     }
 }

@@ -92,10 +92,12 @@ struct GoalPlanBar: View {
         }
     }
 
-    /// "2 of 6 · 2 h 22 min", "2 of 6 · Next: Mon 09:00", "Paused · You", "Done · 3 days"; in the
-    /// list, which has no axis to show it on, when it's due too.
+    /// "2 of 6 · 2 h 22 min", "2 of 6 · Next: Mon 09:00", "Paused · You", "Done · 3 days"; and when
+    /// it's due wherever the timeline isn't showing it: in the list, with the steps hidden, or
+    /// overdue before the days the timeline opens on.
     private func progress(now: Date) -> String {
-        GoalPlanWords.line(plan, pausedBy: isPaused ? .some(goal?.pausedBy) : nil, due: view == .list, now: now)
+        let saysDue = view == .timeline && !isHidden && GoalChartView.saysDue(GoalTimeline(plan, now: now).chart())
+        return GoalPlanWords.line(plan, pausedBy: isPaused ? .some(goal?.pausedBy) : nil, due: !saysDue, now: now)
     }
 
     /// Paused, why in a word, stronger: orange where it needs you.
@@ -198,7 +200,7 @@ struct GoalPlanBar: View {
 
 /// A goal's steps as a list you read top to bottom (`GoalTimeline.list`): each step's state, its
 /// name with the service's mark and where it stands in a few words; the steps done, and many for
-/// later, folded to a row each; phases heading their steps. Many rows scroll.
+/// later, folded to a row each. Many rows scroll.
 struct GoalSteps: View {
     let plan: GoalPlan
     let timeline: GoalTimeline
@@ -208,7 +210,6 @@ struct GoalSteps: View {
     typealias Row = GoalTimeline.Row
 
     static let rowHeight: CGFloat = 28
-    static let phaseHeight: CGFloat = 24
     /// The state's mark, and the gap after it: names line up with the goal's words.
     static let markWidth: CGFloat = 18
     static let nameInset: CGFloat = markWidth + 10
@@ -217,20 +218,15 @@ struct GoalSteps: View {
 
     private var now: Date { timeline.now }
 
-    static func height(_ row: Row) -> CGFloat {
-        if case .phase = row { return phaseHeight }
-        return rowHeight
-    }
-
     var body: some View {
         let rows = timeline.list(showsDone: showsDone, showsLater: showsLater)
-        let rowsHeight = rows.reduce(0) { $0 + Self.height($1) }
+        let rowsHeight = CGFloat(rows.count) * Self.rowHeight
         // Many rows (a fold opened on a long goal) scroll, so the card doesn't take over the
         // conversation.
         ScrollView(.vertical) {
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(rows) { row in
-                    name(row).frame(height: Self.height(row))
+                    name(row).frame(height: Self.rowHeight)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -248,16 +244,6 @@ struct GoalSteps: View {
 
     @ViewBuilder private func name(_ row: Row) -> some View {
         switch row {
-        case .phase(let phase):
-            Text(phase.uppercased())
-                .font(.system(size: 10, weight: .semibold))
-                .tracking(0.4)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .padding(.leading, Self.nameInset)
-                .frame(maxHeight: .infinity, alignment: .bottom)
-                .padding(.bottom, 4)
-                .accessibilityAddTraits(.isHeader)
         case .done(let lanes):
             fold("\(lanes.count) done", shows: $showsDone, mark: AnyView(GoalStepMark(.done)), what: "steps that are done", spoken: lanes.count == 1 ? "1 step done" : "\(lanes.count) steps done")
         case .later(let lanes):
@@ -366,7 +352,6 @@ struct GoalSteps: View {
             ? date.formatted(date: .omitted, time: .shortened)
             : date.formatted(.dateTime.month(.abbreviated).day().hour().minute())
     }
-}
 }
 
 /// Which view a goal's steps show in: a pick for each goal, kept on this Mac (the phone keeps its

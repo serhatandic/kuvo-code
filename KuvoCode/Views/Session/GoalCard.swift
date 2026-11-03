@@ -335,7 +335,8 @@ struct GoalCard: View {
                     Text("When it’s done").tag(GoalPlan.Cadence.none)
                     Text("Daily").tag(GoalPlan.Cadence.day)
                     Text("Weekly").tag(GoalPlan.Cadence.week)
-                    if plan.phases.count > 1 || digest == .milestones {
+                    // An old goal's, set to hear after each of its phases: it keeps its pick.
+                    if digest == .milestones {
                         Text("After each phase").tag(GoalPlan.Cadence.milestones)
                     }
                 }

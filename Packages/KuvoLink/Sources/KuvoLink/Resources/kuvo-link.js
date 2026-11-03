@@ -10804,7 +10804,7 @@ function proposeGoal(bot, given, file = GOALS_FILE) {
   if (!steps.length)
     return { refused: "Give the plan, as its steps in order (steps)." };
   if (steps.length > 200)
-    return { refused: "That's more than 200 steps: make them bigger, in phases." };
+    return { refused: "That's more than 200 steps: make them bigger." };
   const checks = [];
   for (const each of Array.isArray(given.checks) ? given.checks.slice(0, 12) : []) {
     if (!isObject(each))

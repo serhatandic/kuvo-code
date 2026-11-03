@@ -19,11 +19,10 @@ struct GoalChartView: View {
     @State private var zoomKeys = ZoomKeys()
 
     static let rowHeight: CGFloat = 28
-    static let phaseRoom: CGFloat = 8
     static let axisHeight: CGFloat = 22
     static let barHeight: CGFloat = 20
     /// The most the rows take before they scroll: about ten.
-    static let mostHeight: CGFloat = 10 * rowHeight + phaseRoom
+    static let mostHeight: CGFloat = 10 * rowHeight
 
     private var now: Date { timeline.now }
     private var isRunning: Bool { plan.state == .running }
@@ -40,7 +39,6 @@ struct GoalChartView: View {
     private func placed(_ chart: GoalChart) -> [Placed] {
         var y: CGFloat = 0
         return chart.bars.enumerated().map { index, bar in
-            if bar.startsPhase { y += Self.phaseRoom }
             defer { y += Self.rowHeight }
             return Placed(bar: bar, index: index, y: y)
         }
@@ -54,7 +52,7 @@ struct GoalChartView: View {
         let long = chart.whole.duration > chart.shown.duration + 60
         VStack(alignment: .leading, spacing: 6) {
             GeometryReader { measured in
-                let x = ChartX(shown: chart.shown, width: measured.size.width)
+                let x = ChartX(shown: chart.shown, width: measured.size.width, kept: Self.saysDueAtEdge(chart) ? Self.edgeRoom : 0)
                 VStack(alignment: .leading, spacing: 0) {
                     axis(chart, x: x)
                         .frame(width: x.width, height: Self.axisHeight, alignment: .topLeading)
@@ -110,8 +108,14 @@ struct GoalChartView: View {
             if zooms { zoomKeys.start($zoomedOut) } else { zoomKeys.stop() }
         }
         .onDisappear { zoomKeys.stop() }
+        .onChange(of: plan.id) {
+            // Another goal in the same place: nothing pointed at or zoomed carries over.
+            pointed = nil
+            zoomedOut = false
+        }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Timeline")
+        .accessibilityValue(spokenAxis(chart))
         .accessibilityActions {
             if long || zoomedOut {
                 Button(zoomedOut ? "Show the Days Around Today" : "Show the Whole Goal") { zoomedOut.toggle() }
@@ -121,7 +125,7 @@ struct GoalChartView: View {
 
     /// While you point at a step, everything but it and what it waits for steps back.
     private func dims(_ bar: GoalChart.Bar, chart: GoalChart) -> Bool {
-        guard let pointed else { return false }
+        guard let pointed, chart.bars.contains(where: { $0.id == pointed }) else { return false }
         return bar.id != pointed && !chart.waitsFor(pointed).contains(bar.id)
     }
 
@@ -302,7 +306,7 @@ struct GoalChartView: View {
         let showsNow = isRunning && chart.shown.contains(now)
         let nowX = x(now)
         let due = chart.due.flatMap { chart.shown.contains($0) ? $0 : nil }
-        let edgeDue = chart.isDuePastEdge || (chart.due != nil && due == nil && (chart.due ?? now) > chart.shown.end)
+        let edgeDue = Self.saysDueAtEdge(chart)
         let finish = chart.finish.flatMap { finish -> Date? in
             guard isRunning, chart.shown.contains(finish) else { return nil }
             // Where it would crowd Now or the due date, Now and the due date say enough.
@@ -314,7 +318,7 @@ struct GoalChartView: View {
         let marks = hours ? chart.ticks().filter(chart.shown.contains) : Self.days(in: chart.shown)
         let dayWidth = x.width * 86400 / max(1, chart.shown.duration)
         let labeled = hours ? Set(marks) : Self.labeledDays(marks, dayWidth: dayWidth, week: chart.shown.duration <= 8 * 86400, now: now)
-        let rightRoom: CGFloat = edgeDue ? 64 : 18
+        let rightRoom: CGFloat = edgeDue ? Self.edgeRoom + 12 : 18
         return ZStack(alignment: .topLeading) {
             ForEach(marks, id: \.self) { mark in
                 // A day's label sits over its day; an hour's at its line.
@@ -369,11 +373,35 @@ struct GoalChartView: View {
             .position(x: min(max(at, 36), width - 36), y: 10)
     }
 
-    /// A flag's time: "18:20" today on an axis of hours, "Fri 6" another day.
+    /// A flag's time: "18:20" today on an axis of hours, "Fri 6" another day this week, "Fri 6 Nov"
+    /// further off.
     static func when(_ date: Date, now: Date, hours: Bool) -> String {
-        hours && Calendar.current.isDate(date, inSameDayAs: now)
-            ? date.formatted(.dateTime.hour().minute())
+        if hours && Calendar.current.isDate(date, inSameDayAs: now) { return date.formatted(.dateTime.hour().minute()) }
+        return abs(date.timeIntervalSince(now)) > 6 * 86400
+            ? date.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated))
             : date.formatted(.dateTime.weekday(.abbreviated).day())
+    }
+
+    /// The room at the axis's right for "Due Fri 6 Nov ›".
+    static let edgeRoom: CGFloat = 100
+
+    /// The due date said at the right edge: days past the work, or past the days around now.
+    static func saysDueAtEdge(_ chart: GoalChart) -> Bool {
+        chart.isDuePastEdge || (chart.due.map { $0 > chart.shown.end } ?? false)
+    }
+
+    /// Whether the timeline says when the goal is due, on its axis or at its edge, as it first
+    /// opens: where it doesn't (none, or overdue before the days it shows), the bar's line does.
+    static func saysDue(_ chart: GoalChart) -> Bool {
+        saysDueAtEdge(chart) || (chart.due.map(chart.shown.contains) ?? false)
+    }
+
+    /// The axis to VoiceOver, which can't see its flags: "Due Fri 6 Nov, likely done Thu 5".
+    private func spokenAxis(_ chart: GoalChart) -> String {
+        var said: [String] = []
+        if let deadline = chart.deadline, isRunning { said.append("\(deadline < now ? "Was due" : "Due") \(Self.when(deadline, now: now, hours: true))") }
+        if let finish = chart.finish, isRunning { said.append("likely done \(Self.when(finish, now: now, hours: true))") }
+        return said.joined(separator: ", ")
     }
 
     /// The days that start within `shown`, each at its start.
@@ -456,10 +484,13 @@ private struct BarRow<Fill: View, Label: View>: View {
 private struct ChartX {
     let shown: DateInterval
     let width: CGFloat
+    /// Room kept at the right that no time reaches: for the due date said past the edge, so no
+    /// flag or bar runs into it.
+    var kept: CGFloat = 0
 
     func callAsFunction(_ date: Date) -> CGFloat {
         guard shown.duration > 0 else { return 0 }
-        return CGFloat(date.timeIntervalSince(shown.start) / shown.duration) * width
+        return CGFloat(date.timeIntervalSince(shown.start) / shown.duration) * max(0, width - kept)
     }
 }
 

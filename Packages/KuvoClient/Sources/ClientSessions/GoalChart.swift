@@ -4,8 +4,7 @@ import Foundation
 /// in the plan's order, its bar from when it began to when it ended (or now). A step not begun is
 /// placed after what it waits for, at the pace of the steps done so far, until it has times of its
 /// own; before any has begun, the plan fills the time up to the due date. The due date sits on the
-/// axis, or past its edge where it's days beyond the work. A step that starts a new phase gets a
-/// little room above it, in place of the phase's name.
+/// axis, or past its edge where it's days beyond the work. No phases, even an old goal's.
 public struct GoalChart: Sendable {
     public struct Bar: Sendable, Identifiable {
         public enum Kind: Sendable, Equatable {
@@ -19,8 +18,6 @@ public struct GoalChart: Sendable {
         public let to: Date?
         /// Placed in order at the pace so far, not run: until it begins.
         public let isPlaced: Bool
-        /// The first step of a phase after another: a little room above it.
-        public let startsPhase: Bool
         public var id: String { lane.id }
         public var step: GoalPlan.Step { lane.step }
     }
@@ -64,15 +61,17 @@ public struct GoalChart: Sendable {
         self.deadline = deadline
         hasBegun = lanes.contains { $0.from != nil }
 
-        // The pace so far: the middle of how long the steps done took. With none done yet, the time
-        // left to the due date shared by the plan's levels, or an hour each.
+        // The pace so far: the middle of how long the steps done took, leaving out those marked done
+        // in one go (they began as they ended). With none done yet, the time left to the due date
+        // shared by the levels still to finish, the step under way's included, or an hour each.
         let durations = lanes.compactMap { lane -> TimeInterval? in
-            guard lane.step.state == .done, let from = lane.from, let to = lane.to else { return nil }
-            return max(60, to.timeIntervalSince(from))
+            guard lane.step.state == .done, let from = lane.from, let to = lane.to, to.timeIntervalSince(from) >= 300 else { return nil }
+            return to.timeIntervalSince(from)
         }.sorted()
         let depth = Self.depths(lanes)
         let left = lanes.filter { $0.from == nil }
-        let levels = Set(left.map { depth[$0.id] ?? 0 }).count
+        let unfinished = lanes.filter { $0.step.state != .done && $0.step.state != .skipped && ($0.from == nil || $0.likelyEnd == nil) }
+        let levels = Set(unfinished.map { depth[$0.id] ?? 0 }).count
         let pace: TimeInterval
         if !durations.isEmpty {
             let middle = durations.count / 2
@@ -107,10 +106,7 @@ public struct GoalChart: Sendable {
         }
         placesAny = !placed.isEmpty
 
-        var phase = lanes.first?.step.phase
-        bars = lanes.enumerated().map { index, lane in
-            let starts = index > 0 && timeline.phases.count > 1 && lane.step.phase != phase
-            phase = lane.step.phase
+        bars = lanes.map { lane in
             let state = timeline.isOver && lane.step.state != .done && lane.step.state != .skipped && lane.from == nil ? .skipped : lane.step.state
             let kind: Bar.Kind = switch state {
             case .done: .done
@@ -121,9 +117,9 @@ public struct GoalChart: Sendable {
             case .todo: .planned
             }
             if let (from, to) = placed[lane.id] {
-                return Bar(lane: lane, kind: .planned, from: from, to: to, isPlaced: true, startsPhase: starts)
+                return Bar(lane: lane, kind: .planned, from: from, to: to, isPlaced: true)
             }
-            return Bar(lane: lane, kind: kind, from: lane.from, to: lane.to, isPlaced: false, startsPhase: starts)
+            return Bar(lane: lane, kind: kind, from: lane.from, to: lane.to, isPlaced: false)
         }
 
         // The axis: from the start to the end of the work, with the due date on it where it's not

@@ -338,12 +338,6 @@ public struct GoalPlan: Decodable, Sendable, Hashable, Identifiable {
     public var underWay: [Step] { steps.filter { $0.state == .doing } }
     /// Whether its card waits for you.
     public var isProposed: Bool { state == .proposed }
-    /// Its phases, in the plan's order (none for a plan without them).
-    public var phases: [String] {
-        var seen: [String] = []
-        for step in steps { if let phase = step.phase, !seen.contains(phase) { seen.append(phase) } }
-        return seen
-    }
 }
 
 /// The goals on a box (`GET kuvo/work/goals`, and each line of its events).
@@ -585,17 +579,14 @@ public enum GoalPlanWords {
         return "Next: \(at.formatted(style))"
     }
 
-    /// The plan in a few words, for its card: "6 steps", "12 steps in 3 phases".
+    /// The plan in a few words, for its card: "6 steps".
     public static func summary(_ goal: GoalPlan) -> String {
-        let steps = goal.steps.count == 1 ? "1 step" : "\(goal.steps.count) steps"
-        let phases = goal.phases.count
-        return phases > 1 ? "\(steps) in \(phases) phases" : steps
+        goal.steps.count == 1 ? "1 step" : "\(goal.steps.count) steps"
     }
 
-    /// What the plan does, as a list in words: "Site, Domain, DNS and Deploy"; its phases, for a
-    /// plan with them.
+    /// What the plan does, as a list in words: "Site, Domain, DNS and Deploy".
     public static func outline(_ goal: GoalPlan) -> String {
-        let names = goal.phases.count > 1 ? goal.phases : goal.steps.map(\.text)
+        let names = goal.steps.map(\.text)
         // A long plan: its first few, and how many more.
         let shown = names.count > 6 ? Array(names.prefix(6)) + ["\(names.count - 6) more"] : names
         return shown.formatted(.list(type: .and))
