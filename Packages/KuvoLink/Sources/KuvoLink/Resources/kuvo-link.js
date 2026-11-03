@@ -21295,7 +21295,7 @@ import fs71 from "node:fs";
 import path75 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.179";
+var BRIDGE_VERSION = "0.9.180";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
