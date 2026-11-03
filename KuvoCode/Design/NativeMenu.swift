@@ -13,7 +13,7 @@ struct NativeMenuButton<Label: View>: View {
     var opensBelow = false
     let menu: () -> NSMenu
     @ViewBuilder let label: () -> Label
-    @State private var anchor = Anchor()
+    @State private var anchor = NativeMenuAnchor()
 
     var body: some View {
         Button {
@@ -21,10 +21,11 @@ struct NativeMenuButton<Label: View>: View {
             Modal.later { anchor.popUp(menu(), below: opensBelow) }
         } label: {
             label()
+                .environment(\.nativeMenuAnchor, anchor)
         }
         .buttonStyle(.plain)
         .clickablePointer()
-        .background(AnchorView(anchor: anchor))
+        .background(MenuAnchorView { anchor.view = $0 })
         #if DEBUG
         .task {
             // KUVO_DEMO_MENU=<name> opens this menu (its first submenu with "<name>s") after launch.
@@ -36,33 +37,75 @@ struct NativeMenuButton<Label: View>: View {
         }
         #endif
     }
+}
 
-    final class Anchor {
-        weak var view: NSView?
+/// Where a `NativeMenuButton` opens its menu: the button, or the value its label marks with
+/// `nativeMenuValue()`.
+final class NativeMenuAnchor {
+    weak var view: NSView?
+    /// The value a row shows on its right ("No limit ⌄"): its menu opens there, as a pop-up
+    /// button's does, with the chosen item over it, wherever on the row you clicked.
+    weak var value: NSView?
 
-        /// Opens the menu just above the button (the composer sits at the bottom of the window),
-        /// or just below it.
-        func popUp(_ menu: NSMenu, below: Bool = false) {
-            guard let view else { return }
-            let origin = below
-                ? NSPoint(x: 0, y: -4)
-                : NSPoint(x: -8, y: view.bounds.height + menu.size.height + 8)
-            menu.popUp(positioning: nil, at: origin, in: view)
+    /// Opens the menu over the label's value, with its chosen item there (one is checked); else
+    /// just above the button (the composer sits at the bottom of the window), or just below it.
+    func popUp(_ menu: NSMenu, below: Bool = false) {
+        if let value, value.window != nil, let chosen = menu.items.first(where: { $0.state == .on }) {
+            // A pop-up button's own cell opens it, so it's placed as theirs are: the chosen item's
+            // title over the value's. (It leaves the items' checks as they are.)
+            let cell = NSPopUpButtonCell(textCell: "", pullsDown: false)
+            cell.isBordered = false
+            cell.altersStateOfSelectedItem = false
+            cell.font = .menuFont(ofSize: 0)
+            cell.menu = menu
+            cell.select(chosen)
+            // It puts the item's title 14 points into its frame (measured on macOS 27), so the
+            // frame starts that much before the value.
+            cell.performClick(withFrame: value.bounds.offsetBy(dx: -14, dy: 0), in: value)
+            return
+        }
+        guard let view else { return }
+        let origin = below
+            ? NSPoint(x: 0, y: -4)
+            : NSPoint(x: -8, y: view.bounds.height + menu.size.height + 8)
+        menu.popUp(positioning: nil, at: origin, in: view)
+    }
+}
+
+extension EnvironmentValues {
+    @Entry var nativeMenuAnchor: NativeMenuAnchor?
+}
+
+extension View {
+    /// Marks the value a `NativeMenuButton`'s label shows (with its chevron): the menu opens over
+    /// it, its chosen item where the value is, as macOS pop-up buttons do.
+    func nativeMenuValue() -> some View {
+        modifier(NativeMenuValue())
+    }
+}
+
+private struct NativeMenuValue: ViewModifier {
+    @Environment(\.nativeMenuAnchor) private var anchor
+
+    func body(content: Content) -> some View {
+        content.background {
+            if let anchor { MenuAnchorView { anchor.value = $0 } }
         }
     }
+}
 
-    private struct AnchorView: NSViewRepresentable {
-        let anchor: Anchor
+/// An empty view that hands itself to `found`, for a menu to open at.
+private struct MenuAnchorView: NSViewRepresentable {
+    let found: (NSView) -> Void
 
-        func makeNSView(context: Context) -> NSView {
-            let view = NSView()
-            anchor.view = view
-            return view
-        }
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        found(view)
+        return view
+    }
 
-        func updateNSView(_ view: NSView, context: Context) {
-            anchor.view = view
-        }
+    func updateNSView(_ view: NSView, context: Context) {
+        found(view)
     }
 }
 
