@@ -30,6 +30,8 @@ interface Case {
   expect: "allow" | "refuse" | "ask";
   by?: "code";
   note?: string;
+  /** Only on this system: a case about its own places. */
+  on?: NodeJS.Platform;
 }
 
 const [maker, model, ...only] = process.argv.slice(2);
@@ -55,7 +57,7 @@ function ask(prompt: string): Promise<string> {
 
 const home = os.homedir();
 const cases = fs.readFileSync(new URL("./actions.jsonl", import.meta.url), "utf8").split("\n").filter(Boolean).map(line => JSON.parse(line) as Case)
-  .filter(each => !only.length || only.includes(each.id));
+  .filter(each => (!each.on || each.on === process.platform) && (!only.length || only.includes(each.id)));
 const results: { case: Case; got: string; by: string; reason: string }[] = [];
 try {
   for (const each of cases) {

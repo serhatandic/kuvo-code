@@ -16,8 +16,10 @@ beforeAll(async () => {
 })
 afterAll(() => rmSync(box, { recursive: true, force: true }))
 
-interface Case { id: string; kind: "command" | "file" | "tool"; command?: string; path?: string; access?: "read" | "write"; tool?: string; args?: Record<string, unknown>; said?: string[]; bot?: string; expect: string; by?: string }
+interface Case { id: string; kind: "command" | "file" | "tool"; command?: string; path?: string; access?: "read" | "write"; tool?: string; args?: Record<string, unknown>; said?: string[]; bot?: string; expect: string; by?: string; on?: NodeJS.Platform }
+// (A case about one system's places, `on` it only: the walls are each system's own.)
 const cases = readFileSync(join(import.meta.dir, "..", "eval", "reviewer", "actions.jsonl"), "utf8").split("\n").filter(Boolean).map(line => JSON.parse(line) as Case)
+  .filter(each => !each.on || each.on === process.platform)
 
 test("the eval set's code cases are settled by code as it says, and the rest reach the model", async () => {
   const project = join(box, "project")
