@@ -3719,6 +3719,35 @@ A box before 0.9.139 sends no `owner`, `gone` or `owners` and answers `?all` as 
 lists its rules by their projects' folders, adds for projects only, and reads them all again after
 an add.
 
+### Git
+
+A repository's own settings (its `.git/config` and what that includes) never start a program when
+the box runs git there, since whatever could write in the folder (a download, a command the sandbox
+let out) could have named one. The fence keeps a sandboxed command from writing them on macOS (above);
+this holds on every box, for a repository written by anything.
+
+- Every git the box runs in a repository gets `-c core.fsmonitor=false -c core.pager=cat -c
+  log.showSignature=false -c safe.bareRepository=explicit`, and its diffs (`diff`, `log`, `show`,
+  `stash show`) `--no-ext-diff`. (An empty `diff.external` would break them, so it isn't set.)
+- What the box does by itself (Changes' reads, Undo's snapshots, branch backups, reviews' scopes,
+  voice and artifacts' reads of what a turn changed) also gets `-c core.hooksPath=/dev/null -c
+  commit.gpgSign=false -c tag.gpgSign=false -c credential.helper=`, and, read first with `git
+  config --show-scope --get-regexp` unless the command never converts a file, the filters and diff
+  converters the repository names (the `local` and `worktree` scopes and what they include; your
+  own `~/.gitconfig` and the system's count as yours) switched off: a filter's `clean`, `smudge`
+  and `process` emptied and `required` false, and `--no-textconv` on a diff when one names a
+  converter. A command that can't be run without one (`blame`, `grep`, `cat-file --textconv`…)
+  isn't run, nor any where a filter's name can't be written after `-c` (an `=` in it), or the read
+  fails; Changes then says the repository names a program it won’t run. git before 2.26 can't say the scope, so
+  every filter or converter counts as the repository's there.
+- What you ask git for yourself (Stage, Commit, Push, Pull and the rest in Changes, a worktree made,
+  switched or brought back, a project cloned) gets only the first set: the repository's hooks,
+  filters and sign-ins run as in your terminal, so husky, LFS and the like work.
+- The engine's own git (its `vcs` routes and the session's diff) has fsmonitor off and no external
+  diff by itself, and keeps its snapshots outside the repository; a filter or converter the
+  repository names still runs in its status and diffs. Submodules' own settings aren't read: the
+  settings above reach their git too, but not their filters' names.
+
 ### Paired phones
 
 Each computer keeps the phones paired with it, and the ones removed, by the pairing they came in
