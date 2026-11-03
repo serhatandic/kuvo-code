@@ -51,8 +51,36 @@ final class ScrolledConversation {
         await settle {
             // Scrolled up for real: with the end in view there's no way back to it to show.
             if scroller.seesEnd { scroller.scroll(to: 0) } else { lineUpATextWithTheControl() }
-            return !scroller.seesEnd && pointsUnderAControl().count > 10 && besideTheControl() != nil
+            return !scroller.seesEnd && pointsUnderAControl().count > 10 && besideTheControl() != nil && textsTrackThePointer
         }
+    }
+
+    /// Every text in view has the tracking area it claims the pointer through. AppKit adds a new
+    /// view's on its run loop's next turn, not as it's laid out, and always before it hands over a
+    /// move of the real pointer; a move told to a text without one would reach nothing.
+    private var textsTrackThePointer: Bool {
+        texts.filter { $0.window != nil }.allSatisfy { text in text.trackingAreas.contains { $0.options.contains(.mouseMoved) } }
+    }
+
+    /// AppKit's run loop turned, as it does before the real pointer's next move: the texts that came
+    /// into view track the pointer.
+    func runLoopTurned() async {
+        await settle { textsTrackThePointer }
+    }
+
+    /// Scrolled down the conversation at once, as a flick of the trackpad does, to where the words
+    /// beside Scroll to the End are a row's not in view before (`shown`): its rows laid out there,
+    /// the run loop not turned yet. Whether it got there.
+    func scrollToRowsNotShownYet(besides shown: Set<ObjectIdentifier>) -> Bool {
+        guard let clip = stack?.enclosingScrollView?.contentView, let document = clip.documentView else { return false }
+        let start = clip.bounds.origin
+        for distance in stride(from: 500, through: 1_200, by: 20) {
+            clip.scroll(to: NSPoint(x: start.x, y: start.y + (document.isFlipped ? 1 : -1) * CGFloat(distance)))
+            clip.enclosingScrollView?.reflectScrolledClipView(clip)
+            window.contentView?.layoutSubtreeIfNeeded()
+            if let beside = besideTheControl(), let text = hit(beside), !shown.contains(ObjectIdentifier(text)) { return true }
+        }
+        return false
     }
 
     private var linedUpTo: CGFloat?
@@ -249,6 +277,21 @@ final class ScrolledConversation {
         defer { scene.done() }
         try scene.checkALinkShowsThePointingHand()
     }
+
+    /// Scrolled to rows not in view before: once the run loop has turned, as it does before the
+    /// pointer's next move, the I-beam shows on their words.
+    @Test func rowsScrolledIntoViewShowTheIBeam() async throws {
+        defer { scene.done() }
+        let shown = Set(scene.texts.map(ObjectIdentifier.init))
+        try #require(scene.scrollToRowsNotShownYet(besides: shown))
+        await scene.runLoopTurned()
+        let beside = try #require(scene.besideTheControl())
+        #expect(scene.hit(beside).map { !shown.contains(ObjectIdentifier($0)) } == true, "a row not in view before")
+        NSCursor.arrow.set()
+        try scene.move(to: beside)
+        #expect(NSCursor.current == .iBeam)
+    }
+
 }
 
 /// The same over your own messages: their words are drawn by AppKit's text as the composer's are,
