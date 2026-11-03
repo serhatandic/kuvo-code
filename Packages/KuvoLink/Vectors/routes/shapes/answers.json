@@ -3014,6 +3014,9 @@
             "literal": "approval.reviewer"
            },
            {
+            "literal": "git.backups"
+           },
+           {
             "literal": "accounts.ended"
            },
            {
@@ -3299,6 +3302,9 @@
            },
            {
             "literal": "approval.reviewer"
+           },
+           {
+            "literal": "git.backups"
            }
           ]
          }
@@ -3975,6 +3981,87 @@
      "object": {
       "diff": "string",
       "staged": "bool"
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/git/backups",
+   "answers": {
+    "200": {
+     "object": {
+      "repository": {
+       "oneOf": [
+        "string",
+        "null"
+       ]
+      },
+      "exists": "bool",
+      "backups": {
+       "list": {
+        "object": {
+         "id": "string",
+         "at": "number",
+         "head": "string",
+         "branches": "number",
+         "stashes": "number",
+         "gone": {
+          "list": "string"
+         },
+         "moved": {
+          "list": "string"
+         },
+         "stashesGone": "number"
+        }
+       }
+      }
+     }
+    },
+    "400": {
+     "object": {
+      "message": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/git/backups/restore",
+   "answers": {
+    "200": {
+     "object": {
+      "remade": "bool",
+      "branches": {
+       "list": {
+        "object": {
+         "name": "string",
+         "as": "string"
+        }
+       }
+      },
+      "stashes": "number",
+      "missed?": {
+       "list": "string"
+      }
+     }
+    },
+    "400": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "404": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "409": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "500": {
+     "object": {
+      "message": "string"
      }
     }
    }
