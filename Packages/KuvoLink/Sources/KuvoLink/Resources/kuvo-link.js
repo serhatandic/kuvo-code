@@ -10973,6 +10973,8 @@ function pauseGoal(bot, pause, file = GOALS_FILE) {
     if (!goal)
       return false;
     const key = pause.session ?? "bot";
+    if (pause.why !== REVIEW_PAUSE && goal.paused.some((each) => each.session === pause.session && each.why === REVIEW_PAUSE))
+      return true;
     if (!goal.paused.length)
       goal.pausedSince = Date.now();
     goal.paused = [...goal.paused.filter((each) => (each.session ?? "bot") !== key), pause];
@@ -11248,6 +11250,8 @@ async function lookAtGoals(tell, targets, { file = GOALS_FILE, here, now = Date.
     }
     const atLimit = loop.state === "paused" && loop.pausedBy === "limit" && typeof loop.resumesAt === "number";
     const shownPause = goal.paused.find((each) => each.session === goal.session);
+    if (shownPause?.why === REVIEW_PAUSE)
+      continue;
     if (atLimit && shownPause?.until !== loop.resumesAt)
       pauseGoal(goal.bot, { why: "the model's limit", until: loop.resumesAt, session: goal.session }, file);
     if (!atLimit && shownPause)
@@ -25783,6 +25787,7 @@ export {
   PROLOGUE,
   PUBLISH_ASK_RULES,
   RESTORED_WAIT,
+  REVIEW_PAUSE,
   SEEN_FILE,
   SHOWN_WITHIN,
   SKILL_REPOSITORIES,
@@ -25941,6 +25946,7 @@ export {
   ownsSettings,
   pairPhone,
   pairingLink,
+  pauseGoal,
   peerMail,
   peerOf,
   peerPlaces,
