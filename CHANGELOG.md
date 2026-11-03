@@ -17,6 +17,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 ### All Changes
 
 - Create Pull Request… asks first: it shows the branch it goes into and a title and description from the commits, which you can change or have the model write. Then it creates the pull request on GitHub from the project's computer, a machine's too, with GitHub's `gh` signed in there, or says `gh` isn't and opens GitHub's page instead.
+- A project on a branch of its own shows the branch in the title bar, with Merge and Create Pull Request in the Changes panel, as soon as Kuvo Code opens, also on a machine that was still connecting; before, they came only after you switched tabs.
 - A bot working on a goal no longer keeps your computer busy between its looks at the goal, which could spin the fans while nothing was happening.
 - Moving a chat whose `/goal` is still going says why it can't move yet, instead of moving and losing the goal.
 - A goal whose end you move later after it came carries on to the new end, rather than stopping at once.
