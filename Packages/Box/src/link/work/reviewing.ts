@@ -1,20 +1,23 @@
 // Auto's reviewer for a conversation here (`reviewer.ts` judges): which conversation an ask is in
-// (a subagent's is its own conversation's), whether it's in Auto here now, what you said in it (or
-// its bot's goal), and the small model of the maker it runs on: the engine's provider's own (its
-// Haiku, Flash, mini…) through the engine, a coding agent's (Claude Code's Haiku, Codex's Luna)
-// through the agents bridge, so it's counted on that account. One that isn't in Auto isn't
-// reviewed: what it asks goes to you as before. A pause stops the conversation's run.
+// (a subagent's is its own conversation's), whether it's in Auto (or Full Access) here now, what you
+// said in it (or its bot's goal), and the small model of the maker it runs on: the engine's
+// provider's own (its Haiku, Flash, mini…) through the engine, a coding agent's (Claude Code's
+// Haiku, Codex's Luna) through the agents bridge, so it's counted on that account. One that isn't
+// in Auto isn't reviewed: what it asks goes to you as before. A refusal goes back to the agent,
+// which carries on another way; one you approve later is told to the conversation. A pause stops
+// the conversation's run.
 
-import path from "node:path";
 import { isObject } from "../../shared/json";
 import { bridgeTarget, call, engineGet, readEngineFile } from "../engine/client";
-import { stopSession, writtenByYou } from "../engine/queue";
-import { alwaysAsks } from "./always";
+import { sendInto, stopSession, writtenByYou } from "../engine/queue";
+import { boxNote } from "../../shared/queues";
+import { messageID } from "../engine/sessions";
+import { alwaysAsks, asksPublishing } from "./always";
 import { approvalOf } from "./approval";
 import { asksIn, callOf } from "./answers";
 import { pauseGoal, REVIEW_PAUSE, runningGoal } from "./goals";
 import { usableModels, type Usable } from "./models";
-import { review, type ReviewedAction, type ReviewContext, type SmallModel, type Verdict } from "./reviewer";
+import { review, type Decision, type ReviewedAction, type ReviewContext, type SmallModel, type Verdict } from "./reviewer";
 import { botOfConversation, worksFor } from "./tree";
 import type { EngineAnswer } from "../engine/client";
 import type { EngineSession } from "../engine/sessions";
@@ -49,13 +52,20 @@ export async function conversationOf(session: string, engine = ownEngine(), brid
   return null;
 }
 
-/** The bot whose conversation or work this is, and its goal while it has one running. */
+/** The bot whose conversation or work this is, and its goal while it has one running (with the
+ * public steps you switched on: what it may publish). */
 function botOf(data: EngineSession): ReviewContext["bot"] | undefined {
   const bot = botOfConversation(data.id) ?? worksFor(data);
   if (!bot) return undefined;
-  const goal = runningGoal(bot.bot)?.goal;
+  const running = runningGoal(bot.bot);
+  const on = running?.public.filter(step => step.on).map(step => `"${step.text}"`) ?? [];
+  const goal = running ? `${running.goal}${running.public.length ? `\n(Public steps the user switched on: ${on.join(", ") || "none, so nothing public goes out"}.)` : ""}` : undefined;
   return { id: bot.bot, name: bot.name, ...(goal ? { goal } : {}) };
 }
+
+/** Whether a conversation, where it is, is in Full Access here now: nothing is reviewed or asked. */
+export const inFullAccess = (at: Conversation): boolean =>
+  approvalOf(at.data, { agents: at.agents, bot: Boolean(botOfConversation(at.data.id) ?? worksFor(at.data)) }).effective === "fullAccess";
 
 /** What you wrote in a conversation, oldest first: never what the box, another agent or a
  * wake-up put there. */
@@ -103,16 +113,14 @@ export async function reviewModelOf(at: Conversation, signal?: AbortSignal): Pro
 }
 
 /** What Auto's reviewer decides about `action` in `session`'s conversation, where it's in Auto here
- * now; null where it isn't (what it asks goes to you). In Full Access, `fullAccess`: nothing asks,
- * nothing's reviewed. A pause stops its run. `pin`: false where a script from the web it runs can't
- * be made the copy reviewed (`reviewer.ts`). */
-export async function reviewIn(session: string, action: ReviewedAction, signal?: AbortSignal, found?: Conversation | null, pin = true): Promise<(Verdict & { paused?: boolean; conversation: Conversation }) | { fullAccess: true; conversation: Conversation } | null> {
+ * now; null where it isn't (what it asks goes to you, and in Full Access nothing asks: callers look
+ * at `inFullAccess` first). A pause stops its run. `pin`: false where a script from the web it runs
+ * can't be made the copy reviewed (`reviewer.ts`). */
+export async function reviewIn(session: string, action: ReviewedAction, signal?: AbortSignal, found?: Conversation | null, pin = true): Promise<(Verdict & { paused?: boolean; conversation: Conversation }) | null> {
   const at = found === undefined ? await conversationOf(session) : found;
   if (!at) return null;
   const bot = botOf(at.data);
-  const effective = approvalOf(at.data, { agents: at.agents, bot: Boolean(bot) }).effective;
-  if (effective === "fullAccess") return { fullAccess: true, conversation: at };
-  if (effective !== "auto") return null;
+  if (approvalOf(at.data, { agents: at.agents, bot: Boolean(bot) }).effective !== "auto") return null;
   const context: ReviewContext = { session: at.data.id, said: bot ? [] : await yourMessages(at, signal), ...(bot ? { bot } : {}) };
   const verdict = await review(action, context, { model: await reviewModelOf(at, signal), signal, pin });
   if (verdict.paused) {
@@ -123,6 +131,25 @@ export async function reviewIn(session: string, action: ReviewedAction, signal?:
   return { ...verdict, conversation: at };
 }
 
+/** What the agent is told of a refusal: why, that it goes on another way, and for one held back,
+ * that you can approve it (and it'll hear when you do). */
+export function refusalWords(verdict: Extract<Verdict, { decision: "refuse" }> & { paused?: boolean }): string {
+  const paused = verdict.paused ? " Auto is paused here now: the user decides what's next." : "";
+  return verdict.held
+    ? `Auto's reviewer held this back: ${verdict.reason}${paused} Don't run it, nor get around the sandbox another way: carry on with the rest of the task another way, or without it. The user can approve it; if they do, you'll be told, and it will be allowed once.`
+    : `Auto's reviewer refused: ${verdict.reason}${paused} Don't run it, nor get around it another way: carry on without it.`;
+}
+
+/** One held back that you approved, told to its conversation: it's allowed once now, should the
+ * agent still need it. False where the conversation isn't here or can't be told. */
+export async function tellApproved(session: string, decision: Decision, found?: Conversation | null): Promise<boolean> {
+  const at = found === undefined ? await conversationOf(session) : found;
+  if (!at) return false;
+  const line = `You approved: ${decision.action}`;
+  const text = `[The user approved what Auto's reviewer held back] ${decision.action}\nIt's allowed once now: run it again, the same way, if the task still needs it.`;
+  return sendInto(at.target, at.data.id, { id: messageID(), text, delivery: "steer", metadata: boxNote("Your answer", line) }, { from: "Your answer", words: line }).then(() => true, () => false);
+}
+
 // The agent's own file tools, as their calls read (Claude Code's capitalised): which only read.
 const READING = new Set(["read", "glob", "grep", "list", "ls", "view", "notebookread"]);
 // Asks already taken up in this process (an event can come again as the stream reconnects).
@@ -130,9 +157,9 @@ const reviewing = new Set<string>();
 
 /** A permission an engine (or the coding agents' bridge) asks in a conversation in Auto, taken up
  * by its reviewer: the agent's own file tools outside its folder (`external_directory`), by the
- * file the tool call names; and in a bot's, what always came to you (`always.ts`: the engine asks
- * for it in every mode), by the call itself. Allowed or refused here; one that comes to you is left
- * asked, with why in the conversation's log. Anything that can't be read is left for you, and so
+ * file the tool call names; and in a bot's, what a bot never decides (`always.ts`: the engine asks
+ * for it in every mode), by the call itself. Allowed, or refused with why for the agent, which goes
+ * on another way: never left waiting for you. Anything that can't be read is left for you, and so
  * is what your own Settings › Permissions ask. */
 export async function reviewPermission(source: Target, event: { type?: string; data?: { id?: unknown; sessionID?: unknown; action?: unknown } }, signal?: AbortSignal, found?: Conversation | null): Promise<Verdict | null> {
   const { id, sessionID } = event.data ?? {};
@@ -151,19 +178,16 @@ export async function reviewPermission(source: Target, event: { type?: string; d
     if (!file) return null;
     action = { kind: "file", path: file, access: READING.has(seen.tool.toLowerCase()) ? "read" : "write", folder, tool: seen.tool, input: seen.input };
   } else {
-    // (Only a bot's asks what always came to you; anything else asked is your own rules'.)
-    if (!botOf(at.data) || !alwaysAsks(permission.action, permission.resources, seen)) return null;
+    // (Only a bot's asks what it never decides; anything else asked is your own rules'.)
+    if (!botOf(at.data) || !alwaysAsks(permission.action, permission.resources, seen, { publishing: asksPublishing(at.data.permissions) })) return null;
     const command = typeof seen.input.command === "string" ? seen.input.command : null;
-    const file = [seen.input.filePath, seen.input.file_path, seen.input.path].find((each): each is string => typeof each === "string");
-    action = (permission.action === "shell" || permission.action === "bash") && command ? { kind: "command", command, folder }
-      : ["edit", "write", "patch", "multiedit", "read"].includes(permission.action) && file ? { kind: "file", path: path.resolve(folder, file), access: permission.action === "read" ? "read" : "write", folder, tool: seen.tool, input: seen.input }
-      : { kind: "tool", tool: seen.tool, args: seen.input, folder };
+    action = (permission.action === "shell" || permission.action === "bash") && command ? { kind: "command", command, folder } : { kind: "tool", tool: seen.tool, args: seen.input, folder };
   }
   // (The engine runs a command it asked about itself: a script from the web in it can't be pinned
-  // to the copy reviewed, so that one comes to you.)
+  // to the copy reviewed, so that one is held back.)
   const verdict = await reviewIn(sessionID, action, signal, at, false);
-  if (!verdict || "fullAccess" in verdict || verdict.decision === "ask") return verdict && "fullAccess" in verdict ? null : verdict;
-  const reply = verdict.decision === "allow" ? { decision: "once" } : { decision: "reject", message: `Auto's reviewer: ${verdict.reason}` };
+  if (!verdict) return null;
+  const reply = verdict.decision === "allow" ? { decision: "once" } : { decision: "reject", message: refusalWords(verdict) };
   await call(source, "POST", `/api/session/${encodeURIComponent(permission.asker)}/permission/${encodeURIComponent(permission.id)}/reply`, reply, signal);
   return verdict;
 }

@@ -22,7 +22,7 @@ import { answerTo } from "./take";
 import { noteWorkChanged } from "../work/changes";
 import { botLimits, pastLimit } from "../work/limits";
 import { pickModel, usableModels } from "../work/models";
-import { approvalOf, approvalRules, effectiveApproval, fullAccessAllowed, isApproval, lowerOf, unavailable } from "../work/approval";
+import { approvalOf, approvalRules, defaultApproval, effectiveApproval, isApproval, lowerOf, rememberApproval, unavailable } from "../work/approval";
 import { settleAgain } from "../areas/approval";
 import { noteFullAccess } from "../work/full";
 import { keptFromSessions } from "../work/reviewer";
@@ -122,13 +122,13 @@ function wakesFrom(given: unknown, byBot: boolean, waits: boolean): string[] {
   return WAKES.filter(each => named.includes(each));
 }
 
-// The approval a start asks for: one of the box's, or as an older client says it (`ask` Ask First,
-// `approveAll` Full Access where you confirmed it on this computer, else Auto); none for the
-// starter's own.
+// The approval a start asks for: one of the box's, or as an older client says it (`ask` Ask First;
+// `approveAll`, its default, this computer's default: never Full Access unless you picked it last);
+// none for the starter's own.
 function approvalGiven(given: unknown): Approval | null | undefined {
   if (given === undefined || given === null) return null;
   if (given === "ask") return "askFirst";
-  if (given === "approveAll") return fullAccessAllowed() ? "fullAccess" : "auto";
+  if (given === "approveAll") return defaultApproval();
   return isApproval(given) ? given : undefined;
 }
 
@@ -345,13 +345,14 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
     if (typeof tree.branch === "string") picked.push(`worktree ${tree.branch}`);
   }
   // Its approval: the one asked for, never above the starter's (an agent outside any conversation
-  // here asks first); from a client, Auto unless it says. Kept with it, and its rules made for
+  // here asks first); from a client, this computer's default unless it says (and what it says is
+  // the last one picked here). Kept with it, and its rules made for
   // what that comes to here now: a bot's work never has Full Access, nor Auto without the sandbox.
   const agents = Boolean(bridge && target.port === bridge.port);
   const from = by?.place ? approvalOf(by.place.data, { agents: Boolean(bridge && by.place.target.port === bridge.port), bot: Boolean(bot) }) : null;
   const starters: Approval | null = by ? from?.approval ?? "askFirst" : null;
   // (A bot's work is kept with Auto at most, whatever started it.)
-  const chosen: Approval = starters ? lowerOf(requested ?? starters, starters) : requested ?? "auto";
+  const chosen: Approval = starters ? lowerOf(requested ?? starters, starters) : requested ?? defaultApproval();
   const wanted: Approval = bot ? lowerOf(chosen, "auto") : chosen;
   // Taking the approval of a conversation from before, it runs as that one does, and is one from
   // before too: nothing kept, so the box never makes its rules again. (Never a bot's: its work
@@ -366,12 +367,16 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   const rules = rulesFor(applied, parent, project?.folders ?? [], bot ? { publishing: Boolean(goal && !goal.public.some(step => step.on)) } : null);
   // Its mode: the one asked for, else the conversation's (one that plans starts sessions that plan).
   const agent = given.mode === "plan" || given.mode === "build" ? given.mode : parent?.agent ?? null;
+  // (Kept with it as it's made, so the box never takes it for one a client made without saying.)
+  const marks = { ...(by?.place ? { startedBy: by.session } : {}), ...(asBefore ? {} : { approval: wanted, applied }) };
   let session: string;
   try {
-    const made = await call(target, "POST", "/api/session", { location: { directory: folder }, ...(title ? { title } : {}), ...(agent ? { agent } : {}), ...(model ? { model } : {}), permissions: rules }, place.signal);
+    const made = await call(target, "POST", "/api/session", { location: { directory: folder }, ...(title ? { title } : {}), ...(agent ? { agent } : {}), ...(model ? { model } : {}), permissions: rules, metadata: { kuvo: marks } }, place.signal);
     if (!isObject(made) || typeof made.id !== "string" || !made.id) throw new Error("No session was made.");
     session = made.id;
     went(session);
+    // (What a client picked is the next one's here.)
+    if (!by && !bot && requested) rememberApproval(requested);
   } catch (error) {
     giveBack();
     if (madeTree) await answerWorktrees("POST", "kuvo/worktrees/remove", { path: madeTree, discard: true }, engine, place.signal).catch(() => {});

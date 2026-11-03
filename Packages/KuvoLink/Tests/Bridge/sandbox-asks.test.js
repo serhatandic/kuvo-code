@@ -51,8 +51,9 @@ const sessions = {
   ses_blog: { id: "ses_blog", title: "Write a post", location: { directory: blog }, permissions: ASK_FIRST },
   // A worktree of the repository `kept`, for a branch of its own.
   ses_branch: { id: "ses_branch", title: "Try a branch", location: { directory: path.join(root, "kept-branch") }, permissions: ASK_FIRST },
-  // A bot's own conversation, in its folder's workspace, and a chat, in the chats' folder.
-  ses_scout: { id: "ses_scout", title: "Scout", location: { directory: path.join(home, "bots", "bot_scout", "workspace") } },
+  // A bot's own conversation, in its folder's workspace (set to Ask First: in Auto, nothing comes to
+  // you), and a chat, in the chats' folder.
+  ses_scout: { id: "ses_scout", title: "Scout", location: { directory: path.join(home, "bots", "bot_scout", "workspace") }, permissions: ASK_FIRST },
   ses_chat: { id: "ses_chat", title: "Quick question", location: { directory: path.join(home, "chats") }, permissions: ASK_FIRST },
   // A bot's seat in a group chat.
   ses_seat: { id: "ses_seat", title: "Standup", location: { directory: shop }, metadata: { kuvo: { seat: "seat_1" } } },

@@ -164,7 +164,7 @@ async function makeOnce(given: GivenBot | null | undefined, readEngine: () => Ta
     // What always comes to you, asked whatever its approval.
     const rules = [...withAlwaysAsk(kit.rules ?? []), { action: "external_directory", resource: path.join(folder, "*"), effect: "allow" }];
     // The session it made, as far as its id.
-    const made = await call(target, "POST", "/api/session", { title: name, location: { directory }, model, permissions: rules }, AbortSignal.timeout(BOT_STEP)) as Fields<"id"> | null;
+    const made = await call(target, "POST", "/api/session", { title: name, location: { directory }, model, permissions: rules, metadata: { kuvo: { bot: id } } }, AbortSignal.timeout(BOT_STEP)) as Fields<"id"> | null;
     if (typeof made?.id !== "string" || !made.id) throw new Error("No conversation was made.");
     session = { id: made.id };
     // Marked as a bot's (without it, what it does would be news of an ordinary conversation), and

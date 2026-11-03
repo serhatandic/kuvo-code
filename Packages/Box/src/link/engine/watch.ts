@@ -16,8 +16,9 @@ import { workWatcher } from "../work/wakes";
 import { reviewPermission } from "../work/reviewing";
 import { forgetReviews } from "../work/reviewer";
 import { backUpSession } from "../work/backups";
-import { markFullAccess, noteFullAccess, noteFullAccessAtWork } from "../work/full";
+import { markConversation, noteFullAccess, noteFullAccessAtWork } from "../work/full";
 import { queueWatcher, scanQueues, type ScanFound } from "./queue";
+import { adoptConversation } from "../areas/approval";
 import type { Target } from "../../shared/records";
 import type { SignInEvent } from "../areas/accounts";
 import type { NoticeHold } from "../notices/hold";
@@ -332,8 +333,11 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
         if (work && (event.type === "session.execution.started" || RUN_ENDS.has(event.type)) && typeof event.data?.sessionID === "string") backUpSession(source, event.data.sessionID).catch(() => {});
         // Whether its commands run outside the sandbox (Full Access), kept for the launcher as each
         // run starts, before any command of it, and as its approval changes.
-        if (work && (event.type === "session.execution.started" || event.type === "session.created" || event.type === "session.metadata.updated" || event.type === "session.permissions.updated")) noteFullAccess(event.data?.sessionID ?? event.data?.info?.id).catch(() => {});
-        if (work && event.type === "session.deleted" && typeof event.data?.sessionID === "string") markFullAccess(event.data.sessionID, false);
+        if (work && (event.type === "session.execution.started" || event.type === "session.created" || event.type === "session.metadata.updated" || event.type === "session.updated")) noteFullAccess(event.data?.sessionID ?? event.data?.info?.id).catch(() => {});
+        if (work && event.type === "session.deleted" && typeof event.data?.sessionID === "string") markConversation(event.data.sessionID, false);
+        // One a client made without a kept approval: the one it was made with, else this computer's
+        // default (a client from before never gets Full Access unasked).
+        if (work && event.type === "session.created") adoptConversation(source, event.data?.sessionID ?? event.data?.info?.id, work === "bridge").catch(() => {});
         if (event.type === "session.deleted" && typeof event.data?.sessionID === "string") {
           letSessionFilesGo(attachmentsLooked, event.data.sessionID);
           forgetReviews(event.data.sessionID);
@@ -343,7 +347,7 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
         queue?.(event as QueueEvent);
         followWork?.(event);
         // A conversation in Auto: what its agent's file tools ask outside its folder, reviewed (and
-        // told to your phones below only once it comes to you).
+        // told to your phones below only where it isn't: the reviewer never leaves one for you).
         const reviewed = work && event.type === "permission.asked" ? reviewPermission(source, event, connection.signal).catch(() => null) : null;
         goalHeld?.(event).catch(() => {});
         if (signIns) noteSignIn(event, source).catch(() => {}).finally(() => signedIn(event));
@@ -366,7 +370,7 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
           continue;
         }
         (reviewed ?? Promise.resolve(null))
-          .then(verdict => (verdict && verdict.decision !== "ask" ? null : noticeFor(event, route => engineGet(source, route))))
+          .then(verdict => (verdict ? null : noticeFor(event, route => engineGet(source, route))))
           .then(notice => notice && tell(notice))
           .catch(() => {});
       }

@@ -22,26 +22,31 @@ export const SESSION_APPROVAL = object({
 });
 
 /** This computer's: whether you confirmed Full Access here (`fullAccess`: a client asks you the
- * first time you pick it, then sets it), and whether Auto runs for the engine's conversations and
- * the coding agents' (why it asks first for now, where it doesn't: `held`). */
+ * first time you pick it, then sets it), the one a new conversation starts with (`default`: Auto
+ * the first time, then the last one picked here), and whether Auto runs for the engine's
+ * conversations and the coding agents' (why it asks first for now, where it doesn't: `held`). */
 export const APPROVAL_HERE = object({
-  fullAccess: bool,
+  fullAccess: bool, default: APPROVAL,
   auto: object({ engine: object({ "held?": UNAVAILABLE }), agents: object({ "held?": UNAVAILABLE }) }),
 });
 
-/** One of Auto's reviewer's decisions in a conversation: when, the action in words and what kind
- * (a command run outside the sandbox, a file outside its folder, a tool), what was decided, why in
- * a sentence, and by code (a hard line, what always comes to you, a pause) or the model; for one
- * that came to you, why it did (`why`, and `always`, which kind). */
+/** One of Auto's reviewer's decisions in a conversation: its `id`, when, the action in words and
+ * what kind (a command run outside the sandbox, a file outside its folder, a tool), what was
+ * decided, why in a sentence, and by code (a hard line, a pause), the model, or you (one you
+ * approved, run again); for a refusal, why (`why`), and whether you can approve it (`held`: then
+ * `approved`, when you did, and `used`, when it ran again). (`asked`, and `always` with `why:
+ * always`, are from a box before 0.9.185, where some came to you.) */
 export const REVIEW_DECISION = object({
-  at: number, action: string, kind: words("command", "file", "tool"),
-  decision: words("allowed", "refused", "asked"), reason: string, by: words("code", "model"),
-  "why?": words("always", "reviewer", "unread", "unreadable", "noModel", "failed", "paused"),
-  "always?": words("payment", "delete", "permissions", "account", "message", "credentials", "gitConfig"),
+  "id?": string, at: number, action: string, kind: words("command", "file", "tool"),
+  decision: words("allowed", "refused", "asked"), reason: string, by: words("code", "model", "you"),
+  "why?": words("always", "reviewer", "unread", "unpinned", "unreadable", "noModel", "failed", "paused"),
+  "always?": words("payment", "delete", "permissions", "account", "message", "credentials", "gitConfig", "publish"),
+  "held?": bool, "approved?": number, "used?": number,
 });
 
 /** A conversation's decisions (the latest last), and since when Auto is paused there after too
- * many refusals (`paused`; `POST` with `{resume: true}` lets it go on). */
+ * many refusals (`paused`). `POST` with `{approve: id}` approves one held back, once (and lets a
+ * paused one go on); `{resume: true}` lets a paused one go on. */
 export const REVIEW_DECISIONS = object({ decisions: list(REVIEW_DECISION), "paused?": number });
 
 export type SessionApproval = Infer<typeof SESSION_APPROVAL>;
@@ -58,5 +63,5 @@ export const APPROVAL_ROUTES: RouteShape[] = [
   { route: "GET kuvo/sessions/:id/approval", answers: { 200: SESSION_APPROVAL, 404: REFUSED, 503: REFUSED } },
   { route: "PUT kuvo/sessions/:id/approval", answers: { 200: SESSION_APPROVAL, 400: REFUSED, 404: REFUSED, 409: NOT_THAT, 502: REFUSED, 503: REFUSED } },
   { route: "GET kuvo/sessions/:id/decisions", answers: { 200: REVIEW_DECISIONS } },
-  { route: "POST kuvo/sessions/:id/decisions", answers: { 200: REVIEW_DECISIONS, 400: REFUSED } },
+  { route: "POST kuvo/sessions/:id/decisions", answers: { 200: REVIEW_DECISIONS, 400: REFUSED, 404: REFUSED } },
 ];

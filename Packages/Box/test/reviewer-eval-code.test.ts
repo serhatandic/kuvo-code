@@ -4,8 +4,9 @@ import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 
 // The reviewer's eval set (`eval/reviewer/actions.jsonl`): every case it says code settles (a hard
-// line: your secrets, what runs at login, deleting your home) comes out so here, with no model at all; and none of the
-// others is settled by code, so the model gets to judge them. The model's own share is measured
+// line: Kuvo Code's own folders, wrecking your home; and the agent's own tools reading outside its
+// folder, which go ahead) comes out so here, with no model at all; and none of the others is
+// settled by code, so the model gets to judge them. The model's own share is measured
 // with `eval/reviewer/run.ts` on real models.
 
 let box: string
@@ -31,7 +32,7 @@ test("the eval set's code cases are settled by code as it says, and the rest rea
     const context = each.bot ? { session: `eval_${each.id}`, said: [], bot: { id: "bot_eval", name: "Eval", goal: each.bot } } : { session: `eval_${each.id}`, said: each.said ?? [] }
     const verdict = await reviewer.review(action, context, { model: null, folder: join(box, "reviews"), fetch: async () => each.fetched ?? Promise.reject(new Error("not in the eval set")) })
     reviewer.forgetFetched(verdict.fetched)
-    const byCode = verdict.by === "code" && !(verdict.decision === "ask" && verdict.why === "noModel")
+    const byCode = verdict.by === "code" && !(verdict.decision === "refuse" && verdict.why === "noModel")
     if (each.by === "code" ? !byCode || verdict.decision !== each.expect : byCode) wrong.push(`${each.id}: ${verdict.decision} by ${verdict.by} (${verdict.reason})`)
   }
   expect(wrong).toEqual([])

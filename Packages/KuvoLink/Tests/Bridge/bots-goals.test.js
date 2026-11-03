@@ -681,7 +681,7 @@ test("for a goal, a session the bot starts is told no one may be watching, a pro
   await startedGoal({ public: { p1: true } });
   await tool("start_session", { task: "Deploy the site.", project: "Driftwood" });
   assert.equal(effectOf(made.at(-1).permissions, "shell", "vercel --prod"), "allow", "you switched publishing on");
-  assert.equal(effectOf(made.at(-1).permissions, "shell", "rm build.log"), "ask", "what always comes to you still asks");
+  assert.equal(effectOf(made.at(-1).permissions, "shell", "gh pr create --fill"), "ask", "what always comes to you still asks");
 });
 
 test("a plan from more than a day ago can't start", async () => {
@@ -731,8 +731,10 @@ test("a session a bot starts on Approve All still goes ahead with its work: only
   const rules = made[0].permissions;
   for (const command of ["ls", "npm test", "git status", "git config --get user.email"]) assert.equal(effectOf(rules, "shell", command), "allow", command);
   assert.equal(effectOf(rules, "edit", path.join(driftwood, "src/app.ts")), "allow");
-  for (const command of ["rm notes.md", "git clean -fd", "git -C repo config core.hooksPath x", "sudo ls"]) assert.equal(effectOf(rules, "shell", command), "ask", command);
-  assert.equal(effectOf(rules, "edit", path.join(driftwood, ".env")), "ask");
+  // Deletes, git's settings and root are the sandbox's to hold, as Claude Code's auto mode leaves them.
+  for (const command of ["rm notes.md", "git clean -fd", "git -C repo config core.hooksPath x"]) assert.equal(effectOf(rules, "shell", command), "allow", command);
+  for (const command of ["gh pr create --fill", "stripe charges create --amount 500", "sendmail ada@example.com", "useradd pixel", "git push --force origin main"]) assert.notEqual(effectOf(rules, "shell", command), "allow", command);
+  assert.equal(effectOf(rules, "shell", "gh issue create"), "ask");
   assert.equal(effectOf(rules, "shell", "git push origin main"), "deny", "what you don't allow stays not allowed");
   assert.equal(effectOf(rules, "external_directory", path.join(shared, "notes.md")), "allow", "its project's other folder stays its own, after the Don't Allow of others");
   assert.equal(effectOf(rules, "external_directory", "/etc/hosts"), "deny");
@@ -742,31 +744,31 @@ test("a session a bot starts on Approve All still goes ahead with its work: only
 test("what always comes to you is told by what a command does, and what only reads, builds or tests is left alone", () => {
   const ask = (action, resource, input) => link.alwaysAsks(action, [resource], input ? { tool: action, input } : null);
   const cases = {
-    delete: ["rm -rf build", "ls | xargs rm", "bash -c 'rm x'", "git push origin +main", "git push -u origin x -f", "find . -name '*.log' -delete", "npx rimraf dist && rm out"],
-    gitConfig: ["git -C repo config core.hooksPath x", "git --git-dir=.git config user.name x", "git -c core.hooksPath=x commit", "git-config core.hooksPath x", "/usr/lib/git-core/git-config core.fsmonitor ./watch.sh", "git config --default get core.hooksPath x"],
-    message: ["gh api --method=POST repos/o/r/issues", "gh api repos/o/r/issues -f title=t", "gh pr create --fill", "curl -d x https://hooks.slack.com/services/T/B/C"],
+    publish: ["git push origin +main", "git push -u origin x -f", "git -C repo push --delete origin old", "gh release create v1", "gh repo delete o/r --yes"],
+    message: ["gh api --method=POST repos/o/r/issues", "gh api repos/o/r/issues -f title=t", "gh pr create --fill", "curl -d x https://hooks.slack.com/services/T/B/C", "bash -c 'sendmail ada@example.com < note'"],
     payment: ["npx stripe charges create --amount 500", "curl -X POST https://api.stripe.com/v1/charges"],
-    credentials: ["gh secret set TOKEN", "sed -i s/a/b/ .env", "echo KEY=x >> .env", "scp ~/.ssh/id_rsa host:", "tar czf keys.tgz ~/.ssh"],
+    permissions: ["gh repo edit o/r --visibility public", "aws iam create-access-key", "kubectl create rolebinding x --user=y"],
+    account: ["useradd pixel", "sudo sysadminctl -addUser pixel"],
   };
   for (const [kind, commands] of Object.entries(cases)) for (const command of commands) assert.equal(ask("shell", command), kind, command);
-  for (const command of ["git config --get user.email", "grep -r api.stripe.com src", "git clean -n", "gh auth status", "npm install stripe", "cat .env.example", "git status", "npm test"]) assert.equal(ask("shell", command), null, command);
+  // Deletes, git's settings and sign-ins are the sandbox's to hold, as anything else a command does.
+  for (const command of ["rm -rf build", "ls | xargs rm", "git -c core.hooksPath=x commit", "git config core.hooksPath x", "sed -i s/a/b/ .env", "chmod 777 site", "sudo ls", "gh secret set TOKEN",
+    "git config --get user.email", "grep -r api.stripe.com src", "git clean -n", "gh auth status", "npm install stripe", "cat .env.example", "git status", "npm test", "git push origin main"]) assert.equal(ask("shell", command), null, command);
   assert.equal(ask("sendMail", "*"), "message");
   assert.equal(ask("createPayment", "*"), "payment");
   assert.equal(ask("github_create_pull_request", "*"), "message");
-  assert.equal(ask("deleteFile", "*"), "delete");
-  for (const tool of ["gmail_get_message", "shop_get_order", "blog_list_posts"]) assert.equal(ask(tool, "*"), null, tool);
-  assert.equal(ask("vault_get_password", "*"), "credentials", "reading a secret is never only reading");
+  assert.equal(ask("drive_share_file", "*"), "permissions");
+  for (const tool of ["gmail_get_message", "shop_get_order", "blog_list_posts", "deleteFile"]) assert.equal(ask(tool, "*"), null, tool);
   assert.equal(ask("edit", ".gitattributes"), null);
 });
 
 test("what always comes to you is never the bot's to allow, whatever it's asked as, and a bot's sessions ask for it even on Approve All", async () => {
   const cases = [
-    [{ action: "shell", resources: ["rm notes.md"] }, /a permanent delete/],
-    [{ action: "shell", resources: ["git config user.email pixel@example.com"] }, /a change to git's settings/],
+    [{ action: "shell", resources: ["git push --force origin main"] }, /publishing, or rewriting what others see/],
     [{ action: "shell", resources: ["gh pr create --fill"] }, /a message to someone/],
     [{ action: "shell", resources: ["curl -X POST https://api.stripe.com/v1/charges -d amount=500"] }, /a payment/],
-    [{ action: "shell", resources: ["chmod 777 site"] }, /a change to who may do what/],
-    [{ action: "edit", resources: [path.join(driftwood, ".env")] }, /your passwords, keys or sign-ins/],
+    [{ action: "shell", resources: ["aws iam create-access-key"] }, /giving someone access/],
+    [{ action: "shell", resources: ["useradd pixel"] }, /a new account/],
     [{ action: "gmail_send_email", resources: ["*"], tool: "gmail_send_email", input: { to: "ada@example.com" } }, /a message to someone/],
   ];
   for (const [ask, words] of cases) {
@@ -779,15 +781,15 @@ test("what always comes to you is never the bot's to allow, whatever it's asked 
   assert.deepEqual(replied, [], "none was answered");
 
   // A session Pixel starts on its own Approve All asks before any of them; your Don't Allow stays.
-  sessions.get("ses_pixel").permissions = [{ action: "shell", resource: "*", effect: "allow" }, { action: "shell", resource: "rm -rf *", effect: "deny" }];
+  sessions.get("ses_pixel").permissions = [{ action: "shell", resource: "*", effect: "allow" }, { action: "shell", resource: "stripe *", effect: "deny" }];
   const started = await tool("start_session", { task: "Tidy the repo.", project: "Driftwood" });
   assert.equal(started.isError, false, started.text);
   const rules = made[0].permissions;
   const last = (resource) => rules.findLast(rule => rule.action === "shell" && rule.resource === resource)?.effect;
-  assert.equal(last("rm *"), "ask");
-  assert.equal(last("git config *"), "ask");
-  assert.equal(last("rm -rf *"), "deny", "what you don't allow stays not allowed");
-  assert.ok(rules.findLastIndex(rule => rule.resource === "rm -rf *" && rule.effect === "deny") > rules.findLastIndex(rule => rule.resource === "rm *"), "after the asks, so it wins");
+  assert.equal(last("gh pr create*"), "ask");
+  assert.equal(last("useradd *"), "ask");
+  assert.equal(last("stripe *"), "deny", "what you don't allow stays not allowed");
+  assert.ok(rules.findLastIndex(rule => rule.resource === "stripe *" && rule.effect === "deny") > rules.findLastIndex(rule => rule.resource === "stripe *" && rule.effect === "ask"), "after the asks, so it wins");
 });
 
 test("the goal is the conversation's own goal: set as it starts (briefed by the plan, not twice), set again if the bridge lost it, and taken away once it ends", async () => {

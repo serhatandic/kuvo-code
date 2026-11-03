@@ -43,13 +43,42 @@ export function fullAccessAllowed(file = APPROVAL_FILE): boolean {
   }
 }
 
-export function allowFullAccess(on: boolean, file = APPROVAL_FILE): void {
-  let kept: Record<string, unknown> = {};
+const keptHere = (file: string): Record<string, unknown> => {
   try {
     const read = JSON.parse(textOf(file) ?? "");
-    if (isObject(read)) kept = read;
+    if (isObject(read)) return read;
   } catch {}
-  writePrivate(file, JSON.stringify({ ...kept, fullAccess: on }, null, 2));
+  return {};
+};
+
+const keepHere = (change: Record<string, unknown>, file: string) =>
+  writePrivate(file, JSON.stringify({ ...keptHere(file), ...change }, null, 2));
+
+export function allowFullAccess(on: boolean, file = APPROVAL_FILE): void {
+  keepHere({ fullAccess: on }, file);
+}
+
+/** The approval a new conversation here gets where its client didn't say: Auto the first time on
+ * this computer, then the last one you picked here (never a bot's). */
+export function defaultApproval(file = APPROVAL_FILE): Approval {
+  const last = keptHere(file).last;
+  return isApproval(last) ? last : "auto";
+}
+
+/** Keeps `approval` as the last one you picked on this computer. */
+export function rememberApproval(approval: Approval, file = APPROVAL_FILE): void {
+  if (keptHere(file).last !== approval) keepHere({ last: approval }, file);
+}
+
+/** When this box first kept approvals for new conversations (kept the first time it's asked): a
+ * conversation from before then that no box kept an approval with ran as its rules say; one made
+ * since, by a client that doesn't say, gets the default. */
+export function approvalsSince(file = APPROVAL_FILE): number {
+  const since = keptHere(file).since;
+  if (typeof since === "number" && Number.isFinite(since)) return since;
+  const now = Date.now();
+  keepHere({ since: now }, file);
+  return now;
 }
 
 /** Why one can't be had here now, as a word a client maps and in words; none where it can. */
@@ -123,8 +152,19 @@ export function approvalRules(approval: Approval, current: readonly KitRule[], a
   // Access lets them, first, so a Don't Allow in Settings, after, still holds.
   if (approval === "auto" && settings.findLast(isOutside)?.effect === "ask") made = made.map(rule => (isOutside(rule) && rule.effect === "allow" ? { ...rule, effect: "ask" } : rule));
   if (approval === "fullAccess") made = [{ action: "external_directory", resource: "*", effect: "allow" }, ...made];
+  // The engine's own defaults ask before reading a `.env`: in Auto and Full Access, which never
+  // hold the agent for you, it reads them as any file in its folder (first, so a Don't Allow in
+  // Settings, after, still holds).
+  if (approval === "auto" || approval === "fullAccess") made = [...ENV_READS, ...made];
   return always ? withAlwaysAsk(made, always) : made;
 }
+
+const ENV_READS: KitRule[] = [{ action: "read", resource: "*.env", effect: "allow" }, { action: "read", resource: "*.env.*", effect: "allow" }];
+
+/** Whether rules made for `applied` lack what a box before 0.9.185 didn't give it (`.env` reads in
+ * Auto and Full Access): then they're made again. */
+export const madeBefore = (rules: readonly KitRule[], applied: Approval) =>
+  (applied === "auto" || applied === "fullAccess") && !ENV_READS.every(env => rules.some(rule => rule.action === env.action && rule.resource === env.resource && rule.effect === env.effect));
 
 const isOutside = (rule: KitRule) => rule.action === "external_directory" && rule.resource === "*";
 
@@ -135,11 +175,19 @@ export function alwaysFor(rules: unknown, bot: boolean, publishes = false): { pu
   return bot ? { publishing: publishes || asksPublishing(rules) } : null;
 }
 
-/** A conversation as far as its approval reads it: its rules and Kuvo Code's notes on it. */
+/** A conversation as far as its approval reads it: its rules, Kuvo Code's notes on it, and when it
+ * was made. */
 export interface WithApproval {
   permissions?: readonly KitRule[] | null;
   metadata?: { kuvo?: { approval?: unknown; applied?: unknown; [more: string]: unknown } | null; [more: string]: unknown } | null;
+  time?: { created?: number } | null;
+  parentID?: string | null;
 }
+
+/** Kuvo Code's marks on a conversation the box made, which keeps its approval itself or has none
+ * of its own: a bot's, one an agent started, an engine's copy of a coding agent's conversation, a
+ * reviewer's part, a seat. */
+const BOX_MADE = ["bot", "by", "startedBy", "engineFor", "reviewPart", "seat"];
 
 /** Whether a conversation's rules are still the ones the box made for `applied`: asking before
  * commands as those do, and edits not asking where it's Accept Edits. */
@@ -148,12 +196,15 @@ const madeFor = (rules: readonly KitRule[], applied: Approval) =>
 
 /** A conversation's approval: the one kept with it (`kuvo.approval`), while its rules are still the
  * ones the box made for it (`kuvo.applied`, what that came to then); a client from before that
- * changed them on its own leaves what they say. Else as its rules say: asking before commands is
- * Ask First, and nothing asking (Approve All, from before) is Full Access, as it ran: never the
- * reviewer it didn't have (but a bot's, which never has more than Auto). `stored`: whether it's the one kept; `applied`: what its rules are made
- * for now (null for one from before); `effective`: what it comes to here now, and `held`, why
- * that's less. */
-export function approvalOf(session: WithApproval, where: Where = {}): { approval: Approval; stored: boolean; applied: Approval | null; effective: Approval; held?: Unavailable } {
+ * changed them on its own leaves what they say. One a client made with `kuvo.approval` alone is
+ * that, and `pending` until the box makes its rules (`settle`). Else as its rules say: asking
+ * before commands is Ask First; nothing asking is, for one from before this box kept approvals
+ * (`approvalsSince`), Full Access, as it ran, and for one made since, this computer's default
+ * (`defaultApproval`: a client from before that made it Approve All never gets Full Access
+ * unasked), `pending` too; a bot's never more than Auto. `stored`: whether it's the one kept;
+ * `applied`: what its rules are made for now (null for one from before); `effective`: what it comes
+ * to here now, and `held`, why that's less. */
+export function approvalOf(session: WithApproval, where: Where = {}, since = approvalsSince()): { approval: Approval; stored: boolean; applied: Approval | null; effective: Approval; held?: Unavailable; pending?: boolean } {
   const rules = Array.isArray(session.permissions) ? session.permissions : [];
   const kept = session.metadata?.kuvo?.approval;
   const applied = session.metadata?.kuvo?.applied;
@@ -161,12 +212,17 @@ export function approvalOf(session: WithApproval, where: Where = {}): { approval
     const { approval, held } = effectiveApproval(kept, where);
     return { approval: kept, stored: true, applied, effective: approval, ...(held ? { held } : {}) };
   }
+  const asked = isApproval(kept) && applied === undefined ? kept : null;
+  const created = session.time?.created;
+  const marks = session.metadata?.kuvo ?? {};
+  const fresh = !asked && (typeof created !== "number" || created >= since) && !BOX_MADE.some(mark => mark in marks);
   // (Asking before commands was Ask First, before there was more: its rules are made again as that.
   // One from before runs as it did: what its rules say is what it does, whether or not you
   // confirmed Full Access here. But a bot's, which never has more than Auto, and comes to what Auto
   // does here: the box makes its rules so (`adoptBots`).)
-  const guessed: Approval = asksFor(rules, "shell") ? "askFirst" : where.bot ? "auto" : "fullAccess";
-  if (!where.bot) return { approval: guessed, stored: false, applied: null, effective: guessed };
+  const guessed: Approval = asked ?? (asksFor(rules, "shell") ? "askFirst" : where.bot ? "auto" : fresh ? defaultApproval() : "fullAccess");
+  const pending = Boolean((asked || fresh) && !session.parentID && !where.bot);
+  if (!where.bot && !pending && !fresh) return { approval: guessed, stored: false, applied: null, effective: guessed };
   const { approval, held } = effectiveApproval(guessed, where);
-  return { approval: guessed, stored: false, applied: null, effective: approval, ...(held ? { held } : {}) };
+  return { approval: guessed, stored: false, applied: null, effective: approval, ...(held ? { held } : {}), ...(pending ? { pending } : {}) };
 }

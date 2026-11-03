@@ -10,11 +10,12 @@ import path from "node:path";
 import { isObject, parsed } from "../../shared/json";
 import { BOX } from "../home";
 import { bridgeTarget, call, engineGet, readEngineFile } from "../engine/client";
-import { allowFullAccess, alwaysFor, APPROVALS, approvalOf, approvalRules, effectiveApproval, fullAccessAllowed, isApproval, unavailable } from "../work/approval";
+import { allowFullAccess, alwaysFor, APPROVALS, approvalOf, approvalRules, approvalsSince, defaultApproval, effectiveApproval, fullAccessAllowed, isApproval, madeBefore, rememberApproval, unavailable } from "../work/approval";
 import { resumeReviewedSession, runningGoal } from "../work/goals";
 import { sandboxOn } from "../work/sandbox";
-import { resumeReviews, reviewLog } from "../work/reviewer";
-import { markFullAccess } from "../work/full";
+import { approveHeld, clearFetched, resumeReviews, reviewLog, shownReviews } from "../work/reviewer";
+import { tellApproved } from "../work/reviewing";
+import { markConversation } from "../work/full";
 import { botOfConversation, worksFor } from "../work/tree";
 import { listBots } from "../bots/list";
 import type { Approval } from "../work/approval";
@@ -105,9 +106,25 @@ async function write(at: Found, change: NonNullable<ReturnType<typeof changeFor>
  * where nothing's left to do. */
 async function settle(at: Found, signal?: AbortSignal): Promise<boolean> {
   const now = approvalOf(at.data, { agents: at.agents, bot: at.bot });
-  if (now.stored ? now.applied === now.effective : !at.bot) return true;
+  if (now.stored ? now.applied === now.effective && !madeBefore(at.data.permissions ?? [], now.effective) : !(at.bot || now.pending)) return true;
   const change = changeFor(at, now.approval);
   return !change || await write(at, change, signal);
+}
+
+/** A conversation a client just made, without a kept approval: the one it was made with
+ * (`kuvo.approval` alone), else this computer's default (`defaultApproval`), kept with it and its
+ * rules made for that. A bot's, a subagent's and one the box made itself are left as they are. */
+export async function adoptConversation(target: Target, id: unknown, agents: boolean, signal?: AbortSignal): Promise<void> {
+  if (typeof id !== "string" || !id) return;
+  const data = (await engineGet(target, `api/session/${encodeURIComponent(id)}`).catch(() => null) as EngineAnswer<EngineSession> | null)?.data;
+  if (!data?.id) return;
+  const at = found(target, data, agents);
+  const now = approvalOf(at.data, { agents, bot: at.bot });
+  if (!now.pending) return;
+  const asked = at.data.metadata?.kuvo?.approval;
+  if (isApproval(asked)) rememberApproval(asked);
+  await settle(at, signal);
+  markConversation(at.data.id, approvalOf(at.data, { agents, bot: at.bot }).effective === "fullAccess");
 }
 
 /** The same for a conversation the box just made or changed, read again: what it comes to may have
@@ -131,10 +148,12 @@ export async function setApproval(id: string, wanted: Approval, engine: Target |
   if (not && not.reason !== "sandbox") return { status: 409, value: { message: not.why, reason: not.reason } };
   const change = changeFor(at, wanted);
   if (change && !await write(at, change, signal)) return { status: 502, value: { message: "It couldn't be changed: the engine didn't take it. Try again." } };
+  // (The next new conversation here starts with it: never with a bot's or a subagent's.)
+  if (!at.bot && !at.data.parentID) rememberApproval(wanted);
   // (What it comes to may have changed while it was written.)
   await settle(at, signal);
   // Its commands from now on in the sandbox or outside it, at once (and its next run's subagents).
-  markFullAccess(at.data.id, approvalOf(at.data, { agents: at.agents, bot: at.bot }).effective === "fullAccess");
+  markConversation(at.data.id, approvalOf(at.data, { agents: at.agents, bot: at.bot }).effective === "fullAccess");
   return { status: 200, value: shown(at) };
 }
 
@@ -145,7 +164,7 @@ export function approvalHere(): ApprovalHere {
     const not = unavailable("auto", { agents });
     return not ? { held: not } : {};
   };
-  return { fullAccess: fullAccessAllowed(), auto: { engine: auto(false), agents: auto(true) } };
+  return { fullAccess: fullAccessAllowed(), default: defaultApproval(), auto: { engine: auto(false), agents: auto(true) } };
 }
 
 /** Each conversation kept with an approval that comes to something else now (the sandbox started
@@ -167,11 +186,11 @@ export async function reapplyApprovals(engine: Target | null, bridge: Target | n
         const kept = data.metadata?.kuvo?.approval;
         const bot = found(target, data, agents).bot;
         // (Full Access's list for the sandbox's launcher, as each is now: one from before too.)
-        markFullAccess(data.id, approvalOf(data, { agents, bot }).effective === "fullAccess");
+        markConversation(data.id, approvalOf(data, { agents, bot }).effective === "fullAccess");
         // (Ask First and Accept Edits come to themselves anywhere; a bot's from before, to its own.)
-        if (kept !== "auto" && kept !== "fullAccess" && !(bot && kept === undefined)) continue;
         const now = approvalOf(data, { agents, bot });
-        if (now.stored ? now.applied === now.effective : !bot) continue;
+        if (kept !== "auto" && kept !== "fullAccess" && !(bot && kept === undefined) && !now.pending) continue;
+        if (now.stored ? now.applied === now.effective && !madeBefore(data.permissions ?? [], now.effective) : !(bot || now.pending)) continue;
         // (As it is now: what a client set since the list was read stays.)
         const fresh = (await engineGet(target, `api/session/${encodeURIComponent(data.id)}`).catch(() => null) as EngineAnswer<EngineSession> | null)?.data;
         if (!fresh?.id) { done = false; continue; }
@@ -211,6 +230,10 @@ async function adoptBots(engine: Target | null, bridge: Target | null, done: Set
 export function keepApprovals(engine: () => Target | null = ownEngine, bridge: () => Target | null = bridgeTarget, every: (round: () => Promise<void>) => void = round => { setInterval(round, 2_000).unref?.(); }): void {
   // (Tell Auto's rules, from a box before 0.9.184: Auto's reviewer is the box's alone now.)
   try { fs.rmSync(path.join(BOX, "tell-auto.json"), { force: true }); } catch {}
+  // (From now on, a new conversation a client doesn't say gets the default.)
+  try { approvalsSince(); } catch {}
+  // (Scripts from the web the reviewer fetched for a box before this one: nothing runs them now.)
+  clearFetched();
   let last: string | null = null;
   let going = false;
   const adopted = new Set<string>();
@@ -252,13 +275,20 @@ export async function* approvalRoute(context: RouteContext): AsyncGenerator<Answ
   }
   const decisions = idOf(route.match(SESSION_DECISIONS_ROUTE)?.[1]);
   if (decisions) {
-    const shownLog = (log: ReturnType<typeof reviewLog>) => ({ decisions: log.decisions, ...(log.paused ? { paused: log.paused } : {}) });
-    if (method === "GET") return yield* json(200, shownLog(reviewLog(decisions)));
-    if (method !== "POST") return yield* json(405, { message: "Read them with GET, or let a paused conversation go on with POST." });
-    if (given.resume !== true) return yield* json(400, { message: "Say resume: true to let Auto go on here." });
-    const resumed = resumeReviews(decisions);
+    if (method === "GET") return yield* json(200, shownReviews(reviewLog(decisions)));
+    if (method !== "POST") return yield* json(405, { message: "Read them with GET, or approve one held back (or let a paused conversation go on) with POST." });
+    if (typeof given.approve === "string" && given.approve) {
+      // Allowed once, the next time the agent does it the same way: it's told so, and goes on.
+      const approved = approveHeld(decisions, given.approve);
+      if (!approved) return yield* json(404, { message: "That isn't held back here: it was approved already, or it's gone." });
+      resumeReviewedSession(decisions);
+      await tellApproved(decisions, approved).catch(() => false);
+      return yield* json(200, shownReviews(reviewLog(decisions)));
+    }
+    if (given.resume !== true) return yield* json(400, { message: "Say approve: <id> to approve one held back, or resume: true to let Auto go on here." });
+    resumeReviews(decisions);
     resumeReviewedSession(decisions);
-    return yield* json(200, shownLog(resumed));
+    return yield* json(200, shownReviews(reviewLog(decisions)));
   }
   const id = idOf(route.match(SESSION_APPROVAL_ROUTE)?.[1]);
   if (!id) return yield* json(404, { message: "That conversation isn't here." });

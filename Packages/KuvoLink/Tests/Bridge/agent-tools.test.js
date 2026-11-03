@@ -362,7 +362,7 @@ test("an agent in Auto never starts a session where its commands could do real d
   }
 });
 
-test("a client starts a session with the approval it picks: Accept Edits edits on its own, Full Access only where it's switched on, an older client's words read as the box's", async () => {
+test("a client starts a session with the approval it picks, else this computer's default: Accept Edits edits on its own, Full Access only where it's switched on, an older client's words read as the box's", async () => {
   const edits = await route("POST", "kuvo/sessions", { task: "Tidy the README.", folder: other, approval: "acceptEdits" });
   assert.equal(edits.status, 200);
   assert.deepEqual(marked.get(edits.body.session), { kuvo: { approval: "acceptEdits", applied: "acceptEdits" } });
@@ -376,14 +376,22 @@ test("a client starts a session with the approval it picks: Accept Edits edits o
     { status: 409, body: { message: "Full Access isn't confirmed on this computer yet: confirm it first.", reason: "fullAccessOff" } });
   assert.equal(made.length, 1, "nothing started with less instead");
 
-  // An older client's Approve All: Auto until you confirmed Full Access here, then Full Access.
+  // An older client's Approve All (its default) is this computer's: Auto the first time, and never
+  // Full Access unasked, confirmed or not.
   const older = await route("POST", "kuvo/sessions", { task: "Hi.", folder: other, approval: "approveAll" });
   assert.equal(older.status, 200);
   assert.equal(marked.get(older.body.session).kuvo.approval, "auto");
   write(path.join(home, "box", "approval.json"), JSON.stringify({ fullAccess: true }));
   const confirmed = await route("POST", "kuvo/sessions", { task: "Hi.", folder: other, approval: "approveAll" });
-  assert.equal(confirmed.status, 200);
-  assert.equal(marked.get(confirmed.body.session).kuvo.approval, "fullAccess");
+  assert.equal(marked.get(confirmed.body.session).kuvo.approval, "auto");
+  // Picked once, Full Access is the default from then on: for a start that doesn't say, and for
+  // Approve All.
+  const picked = await route("POST", "kuvo/sessions", { task: "Hi.", folder: other, approval: "fullAccess" });
+  assert.equal(marked.get(picked.body.session).kuvo.approval, "fullAccess");
+  const unsaid = await route("POST", "kuvo/sessions", { task: "Hi.", folder: other });
+  assert.equal(marked.get(unsaid.body.session).kuvo.approval, "fullAccess");
+  const again = await route("POST", "kuvo/sessions", { task: "Hi.", folder: other, approval: "approveAll" });
+  assert.equal(marked.get(again.body.session).kuvo.approval, "fullAccess");
   fs.rmSync(path.join(home, "box", "approval.json"), { force: true });
 });
 

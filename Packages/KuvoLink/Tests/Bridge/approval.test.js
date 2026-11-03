@@ -28,8 +28,9 @@ const ASK_FIRST = ["edit", "write", "patch", "shell", "webfetch", "kuvo-browser_
 const NEVER_RM = { action: "shell", resource: "rm -rf /*", effect: "deny" };
 const OTHER_FOLDER = { action: "external_directory", resource: "/srv/shared/*", effect: "allow" };
 
-// The engine: its sessions, as PATCH changes them.
+// The engine: its sessions, as PATCH changes them, and what the box wrote into each.
 let sessions = new Map();
+let written = [];
 const engine = http.createServer((request, response) => {
   let body = "";
   request.on("data", chunk => { body += chunk; });
@@ -40,6 +41,8 @@ const engine = http.createServer((request, response) => {
     const one = url.pathname.match(/^\/api\/session\/([^/]+)$/);
     const id = one && decodeURIComponent(one[1]);
     if (one && request.method === "GET") return sessions.has(id) ? reply({ data: sessions.get(id) }) : reply({ message: "No such session." }, 404);
+    const prompt = url.pathname.match(/^\/api\/session\/([^/]+)\/prompt$/);
+    if (prompt && request.method === "POST") { written.push({ session: decodeURIComponent(prompt[1]), ...JSON.parse(body) }); return reply({ data: true }); }
     if (one && request.method === "PATCH" && sessions.has(id)) {
       const given = JSON.parse(body);
       sessions.set(id, { ...sessions.get(id), ...given });
@@ -68,7 +71,9 @@ beforeEach(() => {
     // Work Scout started, whose rules a client from before made again with only its folders.
     ["ses_work", session("ses_work", [...ASK_FIRST, OTHER_FOLDER], { metadata: { kuvo: { startedBy: "ses_scout", by: { bot: "bot_scout00001", name: "Scout" }, depth: 1 } } })],
   ]);
+  written = [];
   fs.rmSync(path.join(home, "box", "approval.json"), { force: true });
+  fs.rmSync(path.join(home, "box", "reviews"), { recursive: true, force: true });
   fs.rmSync(settingsFile, { force: true });
 });
 
@@ -176,7 +181,7 @@ test("a bot's conversation from before is kept with Auto, and asks first where t
   assert.equal(asks("ses_scout", "shell"), true);
   await route("PATCH", "kuvo/approval", { fullAccess: false }, { sandbox: true });
   assert.equal(asks("ses_scout", "shell"), false);
-  assert.ok(rules("ses_scout").some(rule => rule.action === "shell" && rule.resource === "rm *" && rule.effect === "ask"), "what always comes to you still asks");
+  assert.ok(rules("ses_scout").some(rule => rule.action === "shell" && rule.resource === "stripe *" && rule.effect === "ask"), "what always comes to you still asks");
 });
 
 test("Accept Edits lets edits go ahead even where Settings asks for them, and reads as Ask First once a client asks for edits again", async () => {
@@ -192,11 +197,15 @@ test("Accept Edits lets edits go ahead even where Settings asks for them, and re
   assert.deepEqual({ approval: read.approval, stored: read.stored }, { approval: "askFirst", stored: false });
 });
 
-test("a bot's work changed to any approval still asks for what always comes to you", async () => {
+test("a bot's work changed to any approval still asks for what always comes to you, and no longer for what the sandbox holds", async () => {
   for (const approval of ["acceptEdits", "auto"]) {
     assert.equal((await route("PUT", "kuvo/sessions/ses_work/approval", { approval }, { sandbox: true })).status, 200);
-    for (const resource of ["rm *", "sudo *", "chmod *", "ssh-add *"]) {
+    for (const resource of ["stripe *", "gh pr create*", "git push *--force*", "sendmail *"]) {
       assert.ok(rules("ses_work").some(rule => rule.action === "shell" && rule.resource === resource && rule.effect === "ask"), `${approval}: ${resource} asks`);
+    }
+    // Deletes, root and your sign-ins are the sandbox's to hold now: what a box before asked is gone.
+    for (const resource of ["rm *", "sudo *", "chmod *", "ssh-add *"]) {
+      assert.ok(!rules("ses_work").some(rule => rule.action === "shell" && rule.resource === resource && rule.effect === "ask"), `${approval}: ${resource} no longer asks`);
     }
     assert.deepEqual(sessions.get("ses_work").metadata.kuvo.by, { bot: "bot_scout00001", name: "Scout" }, "its other notes kept");
   }
@@ -246,4 +255,74 @@ test("Full Access only once it's switched on for this computer, and never for a 
   await route("PATCH", "kuvo/approval", { fullAccess: false });
   assert.equal(asks("ses_careful", "shell"), true);
   assert.equal((await route("PATCH", "kuvo/approval", { fullAccess: "yes" })).status, 400);
+});
+
+test("a new conversation a client made without saying gets this computer's default: Auto the first time, then the last one picked here; Approve All from a client from before never becomes Full Access", async () => {
+  assert.equal((await route("GET", "kuvo/approval")).body.default, "auto");
+  // Made since, with nothing asking (an older client's Approve All): Auto, never Full Access.
+  sessions.set("ses_new", session("ses_new", [NEVER_RM], { time: { created: Date.now() + 60_000, updated: Date.now() + 60_000 } }));
+  const fresh = (await route("GET", "kuvo/sessions/ses_new/approval", undefined, { sandbox: true })).body;
+  assert.deepEqual({ approval: fresh.approval, effective: fresh.effective }, { approval: "auto", effective: "auto" });
+  // The box keeps it so, its rules made for it.
+  await route("PATCH", "kuvo/approval", { fullAccess: false }, { sandbox: true });
+  assert.deepEqual(sessions.get("ses_new").metadata, { kuvo: { approval: "auto", applied: "auto" } });
+  assert.ok(rules("ses_new").some(rule => rule.resource === NEVER_RM.resource && rule.effect === "deny"), "what Settings never allows still holds");
+  // One a client made with the one it picked gets that.
+  sessions.set("ses_picked", session("ses_picked", [NEVER_RM], { time: { created: Date.now() + 60_000, updated: Date.now() + 60_000 }, metadata: { kuvo: { approval: "acceptEdits" } } }));
+  await route("PATCH", "kuvo/approval", { fullAccess: false }, { sandbox: true });
+  assert.deepEqual(sessions.get("ses_picked").metadata, { kuvo: { approval: "acceptEdits", applied: "acceptEdits" } });
+  assert.equal(asks("ses_picked", "shell"), true);
+  // The last one you pick here is the next one's.
+  await route("PATCH", "kuvo/approval", { fullAccess: true });
+  await route("PUT", "kuvo/sessions/ses_careful/approval", { approval: "fullAccess" });
+  assert.equal((await route("GET", "kuvo/approval")).body.default, "fullAccess");
+  sessions.set("ses_next", session("ses_next", [], { time: { created: Date.now() + 60_000, updated: Date.now() + 60_000 } }));
+  assert.equal((await route("GET", "kuvo/sessions/ses_next/approval")).body.approval, "fullAccess");
+  await route("PUT", "kuvo/sessions/ses_careful/approval", { approval: "askFirst" });
+  assert.equal((await route("GET", "kuvo/approval")).body.default, "askFirst");
+  // Never a bot's.
+  await route("PUT", "kuvo/sessions/ses_work/approval", { approval: "auto" }, { sandbox: true });
+  assert.equal((await route("GET", "kuvo/approval")).body.default, "askFirst");
+});
+
+test("Auto and Full Access read .env files without asking, a Don't Allow in Settings still winning; one kept from before gets that too", async () => {
+  const envReads = id => rules(id).filter(rule => rule.action === "read" && /\.env/.test(rule.resource));
+  await route("PUT", "kuvo/sessions/ses_careful/approval", { approval: "auto" }, { sandbox: true });
+  assert.deepEqual(envReads("ses_careful").map(rule => [rule.resource, rule.effect]), [["*.env", "allow"], ["*.env.*", "allow"]]);
+  await route("PUT", "kuvo/sessions/ses_careful/approval", { approval: "askFirst" });
+  assert.deepEqual(envReads("ses_careful"), [], "Ask First leaves the engine's own asks");
+  write(settingsFile, JSON.stringify({ permissions: [{ action: "read", resource: "*.env", effect: "deny" }] }));
+  await route("PATCH", "kuvo/approval", { fullAccess: true });
+  await route("PUT", "kuvo/sessions/ses_careful/approval", { approval: "fullAccess" });
+  assert.equal(envReads("ses_careful").findLast(rule => rule.resource === "*.env").effect, "deny", "your own Don't Allow, after, still holds");
+  fs.rmSync(settingsFile, { force: true });
+  // Kept with Auto by a box before, without them: made again as the box comes round.
+  sessions.set("ses_kept", session("ses_kept", [NEVER_RM], { metadata: { kuvo: { approval: "auto", applied: "auto" } } }));
+  await route("PATCH", "kuvo/approval", { fullAccess: false }, { sandbox: true });
+  assert.deepEqual(envReads("ses_kept").map(rule => rule.effect), ["allow", "allow"]);
+});
+
+test("one Auto's reviewer held back is approved from any client: allowed once, the agent told, and a paused conversation goes on", async () => {
+  sessions.set("ses_auto", session("ses_auto", [], { metadata: { kuvo: { approval: "auto", applied: "auto" } } }));
+  const decisions = [
+    { id: "rd_aaaaaa", at: 1, action: "make deploy", kind: "command", decision: "refused", reason: "Not what you asked.", by: "model", why: "reviewer", held: true, key: "command make deploy" },
+    { id: "rd_bbbbbb", at: 2, action: "rm -rf ~", kind: "command", decision: "refused", reason: "It deletes your home folder.", by: "code" },
+  ];
+  write(path.join(home, "box", "reviews", "ses_auto.json"), JSON.stringify({ decisions, refusedInRow: 3, refused: 3, paused: 2 }));
+  const read = await route("GET", "kuvo/sessions/ses_auto/decisions");
+  assert.equal(read.status, 200);
+  assert.equal(read.body.paused, 2);
+  assert.ok(read.body.decisions.every(each => !("key" in each)), "how it's matched stays on the box");
+  const approved = await route("POST", "kuvo/sessions/ses_auto/decisions", { approve: "rd_aaaaaa" });
+  assert.equal(approved.status, 200);
+  assert.equal(approved.body.paused, undefined);
+  assert.equal(typeof approved.body.decisions.find(each => each.id === "rd_aaaaaa").approved, "number");
+  assert.equal(written.length, 1);
+  assert.equal(written[0].session, "ses_auto");
+  assert.equal(written[0].delivery, "steer");
+  assert.match(written[0].text, /^\[The user approved what Auto's reviewer held back\] make deploy/);
+  // Once; and a hard line can't be.
+  assert.equal((await route("POST", "kuvo/sessions/ses_auto/decisions", { approve: "rd_aaaaaa" })).status, 404);
+  assert.equal((await route("POST", "kuvo/sessions/ses_auto/decisions", { approve: "rd_bbbbbb" })).status, 404);
+  assert.equal((await route("POST", "kuvo/sessions/ses_auto/decisions", {})).status, 400);
 });
