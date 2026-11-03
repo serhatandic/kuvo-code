@@ -9,18 +9,11 @@ extension StructuredText {
       let headingLevel = min(configuration.headingLevel, 6)
       let fontScale = Self.fontScales[headingLevel - 1]
 
-      WithFontScaledValue(.fontScaled(0.3)) { spacing in
-        VStack(alignment: .leading, spacing: spacing) {
-          makeLabel(configuration: configuration)
-            .textual.fontScale(fontScale)
-            .textual.lineSpacing(.fontScaled(0.125))
-            .fontWeight(.semibold)
-          if headingLevel <= 2 {
-            Divider()
-              .overlay(DynamicColor.gitHubDivider)
-          }
-        }
-      }
+      // No line under it, as Claude's and ChatGPT's apps have it: its size says it's a heading.
+      makeLabel(configuration: configuration)
+        .textual.fontScale(fontScale)
+        .textual.lineSpacing(.fontScaled(0.125))
+        .fontWeight(.semibold)
       // On the heading as a whole, where the block stack reads it as it lays the heading out.
       .textual.blockSpacing(.init(top: 24, bottom: 16))
     }

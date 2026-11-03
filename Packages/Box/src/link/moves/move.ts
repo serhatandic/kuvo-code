@@ -33,7 +33,7 @@ import { goalRuns } from "../work/goals";
 import { CHATS, engineWait, MOST_BUNDLE, NotTaken, TooBig, deleteSession, directoryOf, exportAll, folderOf, groupAction, conversationHash, hashOf, idsOf, importAll, keysOf, ownTree, pack, toTrash, unpack } from "./bundle";
 import type { Contents } from "./bundle";
 import { forgetQuiet, tellMoving } from "./elsewhere";
-import { MOVES, bundleOf, changeMove, endedAs, forgetMove, forgetMovedAway, moveOf, movesChanged, noteEnded, noteMovedAway, readMove, readMoves, saveMove, shownMove } from "./records";
+import { MOVES, bundleOf, changeMove, endedAs, forgetMove, forgetMovedAway, moveOf, movesChanged, noteEnded, noteMovedAway, readMove, readMoves, saveMove, shownMove, waitingFor } from "./records";
 import type { MoveRecord } from "./records";
 
 /** Raw bytes in each part (40,000 characters as base64url, as documents' parts are). */
@@ -49,8 +49,14 @@ const NO_ANSWER = 30_000;
 const QUIET_AT_MOST = 10 * 60_000;
 /** A copy there to let go of that it never says it let go of: given up on (it goes there by itself). */
 const DROP_AT_MOST = 24 * 3600_000;
-// When the other computer last said something of each move here (its parts' answers come often).
+// When the other computer last said something of each move here (its parts and their answers come
+// often).
 const heard = new Map<string, number>();
+/** The other computer quiet this long about a move's step: the move shows as waiting for it (longer
+ * than a step goes before it's sent again, so one going well never does). */
+const WAITING_AFTER = 90_000;
+// Since when this box has been looking at its moves (started again, it's heard nothing yet).
+let lookingSince = Date.now();
 /** How long the box it leaves waits for its conversations to settle, at most. */
 const SETTLE_FOR = 60;
 /** A copy held here with no word from the box it came from this long goes; one being let go of
@@ -568,6 +574,7 @@ async function takeBack(id: string, message: string, status = 409): Promise<void
     forgetMove(id);
   }
   heard.delete(id);
+  if (waitingFor.delete(id)) movesChanged();
   if (record.kind === "group") await wakeGroup(record.thing);
   ended(id, { ok: false, status, message });
 }
@@ -604,6 +611,7 @@ export function forgetMovesInMemory(): void {
   incoming.clear();
   outgoing.clear();
   heard.clear();
+  waitingFor.clear();
   loggedStuck.clear();
 }
 
@@ -723,7 +731,7 @@ async function setUp(sender: MailSender, id: string, file: string): Promise<void
     if (await hashOf(file) !== record.hash) throw new NotTaken("What came wasn’t what was sent.");
     const sessions = await bringIn(record, stop.signal);
     stop.signal.throwIfAborted();
-    changeMove(id, each => { each.sessions = sessions; each.setUpSince = undefined; });
+    changeMove(id, each => { each.sessions = sessions; each.setUpSince = undefined; each.setUpAt = Date.now(); });
     tell(sender.key, { op: "arrived", id, hash: record.hash });
   } catch (thrown) {
     const error = stop.signal.aborted ? stop.signal.reason : thrown;
@@ -806,7 +814,7 @@ async function switchHere(record: MoveRecord): Promise<void> {
 function letGo(id: string): MoveRecord | null {
   const record = readMove(id);
   if (!record || record.role !== "to") return null;
-  noteEnded(id, "dropped");
+  noteEnded(id, "dropped", Date.now(), record.sessions);
   if (!record.dropping) changeMove(id, each => { each.dropping = true; each.dropSince = Date.now(); });
   return record;
 }
@@ -893,6 +901,14 @@ async function wakeHeldGroups(): Promise<void> {
 /** A move's mail from another box (`{"move": {op, id, …}}`). */
 export async function takeMoveMail(sender: MailSender, given: unknown): Promise<void> {
   if (!isObject(given) || typeof given.op !== "string" || typeof given.id !== "string" || !/^mov_[A-Za-z0-9]{1,40}$/.test(given.id)) return;
+  // Heard as it comes, not in its turn: one held a while by what this box is doing (settling a
+  // conversation to send) doesn't make the other computer look quiet.
+  const record = readMove(given.id);
+  if (record && record.peer === sender.key) {
+    heard.set(given.id, Date.now());
+    // Back: clients see it carry on at once.
+    if (waitingFor.delete(given.id)) movesChanged();
+  }
   // Parts and their answers come many at once, and need no turn of their own (nor does word that a
   // copy's still being set up).
   if (given.op === "part" || given.op === "got" || given.op === "working" || given.op === "arrive") return moveMail(sender, given, given.id);
@@ -901,7 +917,6 @@ export async function takeMoveMail(sender: MailSender, given: unknown): Promise<
 
 async function moveMail(sender: MailSender, given: Record<string, unknown>, id: string): Promise<void> {
   const record = readMove(id);
-  if (record?.role === "from" && record.peer === sender.key) heard.set(id, Date.now());
   const mine = record && record.peer === sender.key ? record : null;
   switch (given.op) {
     // To the box it goes to.
@@ -974,7 +989,7 @@ async function moveMail(sender: MailSender, given: Record<string, unknown>, id: 
       if (mine?.role === "from" && mine.stage === "switching") return restore(mine, `${mine.name} couldn’t be set up there, so it stayed here. Try again.`);
       if (mine?.role === "from" && mine.step === "drop") return void forgetMove(id);
       return;
-    // Its copy there still being set up (`heard`, above, is all it's for).
+    // Its copy there still being set up (`heard`, as it came, is all it's for).
     case "working":
       return;
   }
@@ -999,6 +1014,8 @@ async function letGoOf(sender: MailSender, id: string): Promise<void> {
 // taken back (the other computer isn't there); one whose other computer was removed, ended. And your
 // other computers told what moves here, and what one quiet a while said forgotten (`elsewhere.ts`).
 export function keepMoving(now = Date.now()): void {
+  const records = readMoves();
+  noteWaiting(records, now);
   tellMoving(hostOf(), now);
   forgetQuiet(now);
   if (groupsToWake && now - groupsLookedAt > STEP_AGAIN) {
@@ -1009,7 +1026,7 @@ export function keepMoving(now = Date.now()): void {
   let names: string[] = [];
   try { names = fs.readdirSync(MOVES).filter(name => name.endsWith(".outcome.json")); } catch {}
   for (const name of names) try { if (now - fs.statSync(path.join(MOVES, name)).mtimeMs > OUTCOME_KEPT) fs.rmSync(path.join(MOVES, name), { force: true }); } catch {}
-  for (const record of readMoves()) {
+  for (const record of records) {
     if (!peers.has(record.peer)) {
       // Gone a while, not just left out as your computers are read again.
       const since = missing.get(record.id) ?? now;
@@ -1122,6 +1139,33 @@ export function keepMoving(now = Date.now()): void {
   }
 }
 
+/** The moves here waiting on their other computer (`waitingFor`), whose other computer has said
+ * nothing of them a while: from here, one that asked a step (its offer sent again, its parts, word
+ * it's all there, or the switch, and then to let its copy go instead); coming here, a copy whose
+ * parts or switch don't come. Clients told when that changes. */
+function noteWaiting(records: MoveRecord[], now: number): void {
+  const waiting = records.filter(record => {
+    if (record.failed) return false;
+    if (record.role === "to") {
+      // (Being let go of, or set up here now: this box is at it.)
+      if (record.dropping || record.setUpSince !== undefined) return false;
+      // Its parts, since it was offered; set up, the switch, since it said so (the other box gets
+      // the original ready to go first, a minute at most).
+      return record.complete
+        ? now - Math.max(record.setUpAt ?? record.started, heard.get(record.id) ?? 0, lookingSince) > WAITING_AFTER + SETTLE_FOR * 1000
+        : now - Math.max(record.started, heard.get(record.id) ?? 0, lookingSince) > WAITING_AFTER;
+    }
+    const asked = record.step === "switch" || (record.step === "drop" && record.stage === "switching") ? record.switchSince
+      : record.step === "parts" || record.step === "arrive" || (record.step === "offer" && record.tries > 0) ? record.sentAt
+      : undefined;
+    return asked !== undefined && now - Math.max(asked, heard.get(record.id) ?? 0, lookingSince) > WAITING_AFTER;
+  }).map(record => record.id);
+  if (waiting.length === waitingFor.size && waiting.every(id => waitingFor.has(id))) return;
+  waitingFor.clear();
+  for (const id of waiting) waitingFor.add(id);
+  movesChanged();
+}
+
 /** A move whose other computer you removed: what's here goes back as it was (a copy that came, or
  * an original, switching or not: only `switched` lets it go), or, switched already, the original
  * goes. */
@@ -1174,6 +1218,7 @@ export async function resumeMoves(now = Date.now()): Promise<void> {
 export function watchMoves(host: () => Pick<LinkHost, "send"> | null | undefined, signal?: AbortSignal): void {
   hostOf = host;
   watching = true;
+  lookingSince = Date.now();
   resumeMoves().catch(() => {});
   const timer = setInterval(() => keepMoving(), 3_000);
   signal?.addEventListener("abort", () => {

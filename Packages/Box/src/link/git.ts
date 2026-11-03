@@ -5,9 +5,10 @@ import { execFile, spawnSync } from "node:child_process";
 
 const GIT_ENV = { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" };
 
-/** git in `folder`: what it printed (trimmed), or null when it failed. */
-export function gitIn(folder: string, args: string[]): string | null {
-  const ran = spawnSync("git", args, { cwd: folder, encoding: "utf8", env: GIT_ENV, timeout: 60_000 });
+/** git in `folder`: what it printed (trimmed), or null when it failed. `env`: more of its
+ * environment (a scratch index, say). */
+export function gitIn(folder: string, args: string[], env: Record<string, string> = {}): string | null {
+  const ran = spawnSync("git", args, { cwd: folder, encoding: "utf8", env: { ...GIT_ENV, ...env }, timeout: 60_000 });
   return ran.status === 0 ? String(ran.stdout ?? "").trim() : null;
 }
 

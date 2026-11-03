@@ -8,8 +8,9 @@ import type { GoalPlaces } from "./goals"
 import { at, sessionInfo } from "./oneoff"
 
 /** What says where a conversation came from (an agent's start_session marks `startedBy`; older
- * ones also `beside`), and where its handoff went: a branch's own, not its source's. */
-const origins = ["branchedFrom", "handoffFrom", "handoffTo", "startedBy", "beside"]
+ * ones also `beside`; one carried on with the coding agents, `carriedFrom`), and where its handoff
+ * went: a branch's own, not its source's. */
+const origins = ["branchedFrom", "handoffFrom", "handoffTo", "startedBy", "beside", "carriedFrom"]
 /** Its source's place in the lists, which a branch starts without: pinned or archived. */
 const listed = ["kuvo.pinned", "kuvo.archived"]
 

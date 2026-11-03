@@ -105,6 +105,7 @@ export { forgetMovesInMemory, keepMoving, sendMovesWith, takeMoveMail, watchMove
 export { movesElsewhere } from "./moves/elsewhere";
 export { COMPATIBILITY_FILE, engineConfigContent, learnCompatibility, readCompatibility } from "./engine/compatibility";
 export { queueOf, queueWatcher, readQueues, scanQueues } from "./engine/queue";
+export { letAttachmentsGo } from "./server/attached";
 export { workWatcher } from "./work/wakes";
 export { goalFollowers, goalHolds, settleGoalHolds, lookAtGoals, periodOf, periodEnd } from "./work/goals";
 export { keptAwake, letGo } from "./work/awake";
@@ -128,7 +129,7 @@ export { answerIntegrations, reconnectEverywhere } from "./areas/integrations";
 export { allWakes, holdArchived, listWakes, nextWake, readWakes, repeatText, sendWakes, wakeFolder, wakeOf } from "./areas/wakes";
 export { readRemovedWorktrees, readWorktrees } from "./areas/worktree-records";
 export { answerProjects, boxProjects, changeProjects, readProjects } from "./areas/projects";
-export { answerWorktrees, branchSlug, nameWorktreeBranch, tellWorktree, worktreesWhere } from "./areas/worktrees";
+export { answerWorktrees, branchSlug, nameWorktreeBranch, tellWorktree, tidyWorktrees, worktreesWhere } from "./areas/worktrees";
 export { SKILL_REPOSITORIES, answerSkills, keepSkillTrashClear, skillAbout, skillName, skillTrashEntry, skillsIn } from "./areas/skills";
 export { agentsAllowed, allowed, canonicalPath, signInReturn, socketAllowed } from "./server/paths";
 export { KEEP_FOR, SEEN_FILE, forgetPhones, phoneSeenLately } from "./compat/leave-running";

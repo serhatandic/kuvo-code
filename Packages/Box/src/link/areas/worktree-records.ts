@@ -47,13 +47,30 @@ export function readRemovedWorktrees(): Record<string, string> {
   }
 }
 
+/** A worktree removed here (in Settings, or cleaned up as its last session went) that Restore
+ * Worktree can bring back (`restorable` in `box/worktrees.json`): its record, the commit its branch
+ * was at (`head`), and, when something in it wasn't committed and a session that ran there was
+ * kept, the commit that keeps that (`snapshot`, under `refs/kuvo/worktrees/`). Kept while a session
+ * that ran in it is. */
+export type RestorableWorktree = WorktreeRecord & { head: string; snapshot?: string };
+
+/** The worktrees removed here that can still come back. */
+export function readRestorableWorktrees(): RestorableWorktree[] {
+  try {
+    const list: unknown = JSON.parse(fs.readFileSync(WORKTREES_FILE, "utf8")).restorable;
+    return Array.isArray(list) ? list.filter(each => typeof each?.root === "string" && typeof each?.project === "string" && typeof each?.branch === "string" && typeof each?.head === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
 /** The list as `change` makes it, read again just before: a phone's request and a Mac's run
  * beside each other, each in a process of its own. `gone`: a worktree removed, kept in `removed`
- * (the latest 200). */
-export function updateWorktrees(change: (list: WorktreeRecord[]) => WorktreeRecord[], gone?: WorktreeRecord) {
+ * (the latest 200). `restorable`: the removed ones Restore Worktree can bring back, as it makes them. */
+export function updateWorktrees(change: (list: WorktreeRecord[]) => WorktreeRecord[], gone?: WorktreeRecord, restorable: (list: RestorableWorktree[]) => RestorableWorktree[] = list => list) {
   let removed = readRemovedWorktrees();
   if (gone) removed = Object.fromEntries([...Object.entries(removed).filter(([folder]) => folder !== (gone.folder ?? gone.root)), [gone.folder ?? gone.root, gone.project]].slice(-200));
-  writePrivate(WORKTREES_FILE, JSON.stringify({ worktrees: change(readWorktrees()), removed }, null, 2));
+  writePrivate(WORKTREES_FILE, JSON.stringify({ worktrees: change(readWorktrees()), removed, restorable: restorable(readRestorableWorktrees()) }, null, 2));
   for (const tell of worktreeFollowers) tell();
 }
 

@@ -2,13 +2,14 @@
 // branch of its own, kept by this box (`box/worktrees.json`): made, named after their session,
 // listed and removed here, from a Mac (through `box route`) or a phone, with the Mac closed too.
 
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { parsed } from "../../shared/json";
 import type { Fields } from "../../shared/json";
 import type { EngineRecord, Target } from "../../shared/records";
-import type { ListedWorktree, WorktreeRecordShape, Worktrees, WorktreesWhere } from "../../shared/routes/worktrees";
-import { bridgeTarget, call, engineGet, readEngineFile } from "../engine/client";
+import type { ListedRestorable, ListedWorktree, WorktreeRecordShape, Worktrees, WorktreesWhere } from "../../shared/routes/worktrees";
+import { bridgeTarget, call, engineGet, readBridgeFile, readEngineFile } from "../engine/client";
 import type { EngineAnswer } from "../engine/client";
 import { isHiddenRun } from "../engine/sessions";
 import type { EngineSession } from "../engine/sessions";
@@ -18,8 +19,8 @@ import { gitIn, gitLater, sizeLater } from "../git";
 import { ENGINE_DATA, homeFolder } from "../home";
 import type { AnswerPiece, JSONAnswer, RouteContext } from "../server/context";
 import { readProjects } from "./projects";
-import { BRANCH_PREFIX_FILE, branchPrefix, readWorktrees, updateWorktrees, worktreeFollowers } from "./worktree-records";
-import type { WorktreeRecord } from "./worktree-records";
+import { BRANCH_PREFIX_FILE, branchPrefix, readRestorableWorktrees, readWorktrees, updateWorktrees, worktreeFollowers } from "./worktree-records";
+import type { RestorableWorktree, WorktreeRecord } from "./worktree-records";
 
 /** Sessions by the folder they run in, and which are at work (their ids). */
 interface SessionsHere {
@@ -28,7 +29,8 @@ interface SessionsHere {
 }
 
 /** What a client sends `kuvo/worktrees…`, as it comes: a new one's project and branch prefix, one
- * an older Mac kept, or one to remove (`path`, `forget`, `discard`). Each is checked as it's used. */
+ * an older Mac kept, one to remove (`path`, `forget`, `discard`), or one to restore (`folder`, where
+ * its sessions ran). Each is checked as it's used. */
 export interface WorktreesBody {
   project?: unknown;
   branchPrefix?: unknown;
@@ -97,18 +99,30 @@ async function projectOf(engine: Target, folder: string, signal: AbortSignal | u
 }
 
 /** Sessions by the folder they run in, and which are at work, as its engine and the coding agents'
- * bridge (while it runs) have them; null when one of them can't say. */
+ * bridge (while it runs) have them, every one (page after page: one further back still counts);
+ * null when one of them can't say. */
 async function sessionsHere(engine: Target | null, signal: AbortSignal | undefined, bridge: Target | null = bridgeTarget()): Promise<SessionsHere | null> {
   if (!engine?.port) return null;
   const here: SessionsHere = { sessions: [], active: new Set() };
   for (const target of bridge?.port && bridge.port !== engine.port ? [engine, bridge] : [engine]) {
     const headers = { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}` };
     try {
-      const listed = await fetch(`http://127.0.0.1:${target.port}/api/session?parentID=null&limit=200&order=desc`, { headers, signal: AbortSignal.timeout(10_000) });
+      let query: string | null = "parentID=null&limit=200&order=desc";
+      for (let pages = 0; query; pages++) {
+        // (A list that doesn't end can't say.)
+        if (pages === 100 || signal?.aborted) return null;
+        const listed = await fetch(`http://127.0.0.1:${target.port}/api/session?${query}`, { headers, signal: AbortSignal.timeout(10_000) });
+        if (!listed.ok) return null;
+        // (As they answer it: their sessions, each whole, and where the next page starts.)
+        const page = await listed.json() as { data?: EngineSession[]; cursor?: { next?: string } | null } | null;
+        const data = page?.data ?? [];
+        here.sessions.push(...data);
+        const next = page?.cursor?.next;
+        query = data.length === 200 && next ? `parentID=null&limit=200&cursor=${encodeURIComponent(next)}` : null;
+      }
       const busy = await fetch(`http://127.0.0.1:${target.port}/api/session/active`, { headers, signal: AbortSignal.timeout(10_000) });
-      if (!listed.ok || !busy.ok) return null;
-      // (As they answer it: their sessions, each whole; those at work, by id or as a list.)
-      here.sessions.push(...(((await listed.json()) as { data?: EngineSession[] } | null)?.data ?? []));
+      if (!busy.ok) return null;
+      // (Those at work, by id or as a list.)
       const active = ((await busy.json()) as { data?: string[] | Record<string, unknown> } | null)?.data ?? {};
       for (const id of Array.isArray(active) ? active : Object.keys(active)) here.active.add(id);
     } catch {
@@ -215,7 +229,7 @@ export async function answerWorktrees(method: string, requestPath: string, body:
     // git says, their branches named.
     if (/(^|[?&])records=1(&|$)/.test(requestPath.split("?")[1] ?? "")) {
       await nameDueWorktrees(engine, signal);
-      return { status: 200, value: { worktrees: readWorktrees() } satisfies Worktrees };
+      return { status: 200, value: { worktrees: readWorktrees(), restorable: readRestorableWorktrees().map(listedRestorable) } satisfies Worktrees };
     }
     const { sessions, active } = await sessionsHere(engine, signal, bridge) ?? { sessions: [], active: new Set<string>() };
     const worktrees: ListedWorktree[] = [];
@@ -235,7 +249,7 @@ export async function answerWorktrees(method: string, requestPath: string, body:
       }
       worktrees.push(entry);
     }
-    return { status: 200, value: { worktrees } satisfies Worktrees };
+    return { status: 200, value: { worktrees, restorable: readRestorableWorktrees().map(listedRestorable) } satisfies Worktrees };
   }
   if (method !== "POST") return { status: route.startsWith("kuvo/worktrees") ? 405 : 404, value: {} };
   if (route === "kuvo/worktrees") {
@@ -285,51 +299,262 @@ export async function answerWorktrees(method: string, requestPath: string, body:
     updateWorktrees(list => (list.some(each => each.root === given.root) ? list : [...list, given as WorktreeRecord]));
     return { status: 200, value: {} };
   }
+  if (route === "kuvo/worktrees/restore") return restoreTree(body?.folder, engine, signal, bridge);
   const tree = list.find(each => each.root === body?.path);
   if (!tree) return { status: 404, value: message("That worktree isn't on this machine any more.") };
-  if (route === "kuvo/worktrees/remove") {
-    // Not while an agent works there (nor while that can't be told); with changes not committed
-    // only when they're to go.
-    const here = await sessionsHere(engine, signal, bridge);
-    if (!here) return { status: 503, value: message(engine?.port ? `It couldn't be told whether an agent is working in the worktree of ${tree.branch}, so it stays. Try again in a moment.` : `The engine isn't running, so the worktree of ${tree.branch} stays. Try again once it's started.`) };
-    const { sessions, active } = here;
-    if (sessions.some(session => inside(session.location?.directory ?? session.directory, tree.root) && active.has(session.id))) {
-      return { status: 409, value: message(`An agent is still working in the worktree of ${tree.branch}, so it stays. Stop it first, then remove the worktree.`) };
-    }
-    // One made for a session that never started (`forget`): not one a session has after all.
-    if (body?.forget === true && sessions.some(session => inside(session.location?.directory ?? session.directory, tree.root))) {
-      return { status: 409, value: message(`A session works in the worktree of ${tree.branch}, so it stays. Remove it with the session, or in Settings › Worktrees.`) };
-    }
-    const discard = body?.discard !== false;
-    if (!discard && fs.existsSync(tree.root) && gitIn(tree.root, ["status", "--porcelain", "--untracked-files=normal", "--ignore-submodules=none"]) !== "") {
-      return { status: 409, value: message(`The worktree of ${tree.branch} has changes that aren’t committed, so it stays. Commit them, or remove it in Settings › Worktrees, which throws them away.`) };
-    }
-    if (!engine?.port) return { status: 503, value: message("The engine isn't running.") };
-    const gone = !fs.existsSync(tree.root);
-    // Commits on no branch (an agent stopped mid-rebase, say): kept on a branch of their own, as
-    // its branch's are.
-    const head = gone || gitIn(tree.root, ["symbolic-ref", "--quiet", "HEAD"]) !== null ? null : gitIn(tree.root, ["rev-parse", "--verify", "--quiet", "HEAD"]);
-    if (head && !gitIn(tree.root, ["for-each-ref", "--contains", head, "--format=%(refname)", "refs/heads"])) {
-      const kept = freeBranch(tree.root, `${tree.branch}-kept`);
-      if (!kept || gitIn(tree.root, ["branch", kept, head]) === null) return { status: 409, value: message(`The worktree of ${tree.branch} has commits on no branch, and they couldn’t be kept on one, so it stays.`) };
-    }
-    try {
-      if (gone) {
-        // Its folder deleted by hand: the engine won't remove what isn't there, so git forgets it.
-        if (fs.existsSync(tree.project)) gitIn(tree.project, ["worktree", "prune"]);
+  if (route === "kuvo/worktrees/remove") return removeTree(tree, { discard: body?.discard !== false, forget: body?.forget === true }, engine, signal, bridge);
+  return { status: 404, value: {} };
+}
+
+/** Whether a session is archived, as a client marks it or the engine does. */
+const isArchived = (session: EngineSession) => Boolean(session.time?.archived || session.metadata?.["kuvo.archived"] === true || session.metadata?.kuvo?.archived === true);
+
+/** The folder a session runs in. */
+const folderOf = (session: EngineSession) => session.location?.directory ?? session.directory;
+
+/** Who made what Kuvo Code commits for itself, for git: there may be no name set on this computer. */
+const BY_KUVO = { GIT_AUTHOR_NAME: "Kuvo Code", GIT_AUTHOR_EMAIL: "kuvo-code@localhost", GIT_COMMITTER_NAME: "Kuvo Code", GIT_COMMITTER_EMAIL: "kuvo-code@localhost" };
+
+/** Where what wasn't committed in `root` is kept as `commit`: a ref of its own for each (a worktree
+ * made again in the same folder keeps its own), named so git takes it whatever the folder's called. */
+const snapshotRef = (root: string, commit: string) => `refs/kuvo/worktrees/${path.basename(root).replace(/[^A-Za-z0-9_-]+/g, "-")}-${commit.slice(0, 12)}`;
+
+/** The ref kept for `commit` deleted: only while it still names that commit. */
+const dropSnapshot = (project: string, root: string, commit: string) => gitIn(project, ["update-ref", "-d", snapshotRef(root, commit), commit]);
+
+/** What isn't committed in `root` kept as a commit on its HEAD (what git ignores left out), under
+ * a ref of its own (`snapshotRef`), which outlives the folder: the commit, null when there's nothing
+ * to keep, or undefined when it couldn't be kept. Made with an index of its own, so what's staged
+ * stays as it is. */
+function snapshot(root: string, branch: string): string | null | undefined {
+  const status = gitIn(root, ["status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none"]);
+  if (status === null) return undefined;
+  if (status === "") return null;
+  const gitFolder = gitIn(root, ["rev-parse", "--absolute-git-dir"]);
+  if (!gitFolder) return undefined;
+  const index = path.join(gitFolder, "kuvo-snapshot-index");
+  const env = { GIT_INDEX_FILE: index };
+  try {
+    if (gitIn(root, ["read-tree", "HEAD"], env) === null || gitIn(root, ["add", "-A"], env) === null) return undefined;
+    const tree = gitIn(root, ["write-tree"], env);
+    const commit = tree && gitIn(root, ["commit-tree", tree, "-p", "HEAD", "-m", `What wasn't committed in ${branch} when its worktree was removed`], BY_KUVO);
+    if (!commit || gitIn(root, ["update-ref", snapshotRef(root, commit), commit]) === null) return undefined;
+    return commit;
+  } finally {
+    fs.rmSync(index, { force: true });
+  }
+}
+
+/** A removed one as the records list it. */
+function listedRestorable(tree: RestorableWorktree): ListedRestorable {
+  const branchThere = fs.existsSync(tree.project) && gitIn(tree.project, ["rev-parse", "--verify", "--quiet", `refs/heads/${tree.branch}`]) !== null;
+  const saved = Boolean(tree.snapshot);
+  // Its branch merged and gone: made again at the commit it was at, while git still has it.
+  const headThere = !branchThere && fs.existsSync(tree.project) && gitIn(tree.project, ["cat-file", "-e", `${tree.head}^{commit}`]) !== null;
+  const entry: ListedRestorable = { project: tree.project, root: tree.root, folder: tree.folder ?? tree.root, branch: tree.branch, restorable: branchThere || saved || headThere, saved };
+  if (tree.base) {
+    entry.base = tree.base;
+    const ahead = branchThere ? gitIn(tree.project, ["rev-list", "--count", `${tree.base}..refs/heads/${tree.branch}`]) : null;
+    if (ahead !== null && /^\d+$/.test(ahead)) entry.ahead = Number(ahead);
+  }
+  return entry;
+}
+
+/** What `removeTree` is asked: whether what isn't committed goes (`discard`), whether it's one
+ * made for a session that never started (`forget`), and whether it's kept for Restore Worktree
+ * first (`keep`: a session that ran there stays, archived). */
+interface Removal {
+  discard: boolean;
+  forget?: boolean;
+  keep?: boolean;
+}
+
+/** `tree` removed: not while an agent works there (nor while that can't be told); with changes not
+ * committed only when they're to go, or kept first. Its branch goes only if it's merged. Unless it
+ * was made for nothing, it can come back with its sessions (Restore Worktree) while they're here. */
+async function removeTree(tree: WorktreeRecord, removal: Removal, engine: Target | null, signal: AbortSignal | undefined, bridge: Target | null, known?: SessionsHere): Promise<WorktreesAnswer> {
+  const message = (text: string) => ({ message: text });
+  const here = known ?? await sessionsHere(engine, signal, bridge);
+  if (!here) return { status: 503, value: message(engine?.port ? `It couldn't be told whether an agent is working in the worktree of ${tree.branch}, so it stays. Try again in a moment.` : `The engine isn't running, so the worktree of ${tree.branch} stays. Try again once it's started.`) };
+  const { sessions, active } = here;
+  if (sessions.some(session => inside(folderOf(session), tree.root) && active.has(session.id))) {
+    return { status: 409, value: message(`An agent is still working in the worktree of ${tree.branch}, so it stays. Stop it first, then remove the worktree.`) };
+  }
+  // One made for a session that never started (`forget`): not one a session has after all.
+  if (removal.forget && sessions.some(session => inside(folderOf(session), tree.root))) {
+    return { status: 409, value: message(`A session works in the worktree of ${tree.branch}, so it stays. Remove it with the session, or in Settings › Worktrees.`) };
+  }
+  const gone = !fs.existsSync(tree.root);
+  if (!removal.discard && !removal.keep && !gone && gitIn(tree.root, ["status", "--porcelain", "--untracked-files=normal", "--ignore-submodules=none"]) !== "") {
+    return { status: 409, value: message(`The worktree of ${tree.branch} has changes that aren’t committed, so it stays. Commit them, or remove it in Settings › Worktrees, which throws them away.`) };
+  }
+  if (!engine?.port) return { status: 503, value: message("The engine isn't running.") };
+  // Commits on no branch (an agent stopped mid-rebase, say): kept on a branch of their own, as
+  // its branch's are.
+  const head = gone || gitIn(tree.root, ["symbolic-ref", "--quiet", "HEAD"]) !== null ? null : gitIn(tree.root, ["rev-parse", "--verify", "--quiet", "HEAD"]);
+  let branch = tree.branch;
+  if (head && !gitIn(tree.root, ["for-each-ref", "--contains", head, "--format=%(refname)", "refs/heads"])) {
+    const kept = freeBranch(tree.root, `${tree.branch}-kept`);
+    if (!kept || gitIn(tree.root, ["branch", kept, head]) === null) return { status: 409, value: message(`The worktree of ${tree.branch} has commits on no branch, and they couldn’t be kept on one, so it stays.`) };
+    branch = kept;
+  }
+  // What it's at, and what isn't committed, kept for Restore Worktree.
+  const at = gone ? gitIn(tree.project, ["rev-parse", "--verify", "--quiet", `refs/heads/${tree.branch}`]) : gitIn(tree.root, ["rev-parse", "--verify", "--quiet", "HEAD"]);
+  const saved = removal.keep && !gone ? snapshot(tree.root, tree.branch) : null;
+  if (saved === undefined) return { status: 409, value: message(`What isn’t committed in the worktree of ${tree.branch} couldn’t be kept, so it stays.`) };
+  try {
+    if (gone) {
+      // Its folder deleted by hand: the engine won't remove what isn't there, so git forgets it.
+      if (fs.existsSync(tree.project)) gitIn(tree.project, ["worktree", "prune"]);
+    } else {
+      const force = removal.discard || removal.keep;
+      if (tree.restored) {
+        // Restored here, git made it, so the engine doesn't know it: git removes it.
+        const refused = spawnGit(tree.project, ["worktree", "remove", ...(force ? ["--force"] : []), tree.root]);
+        if (refused !== null) throw new Error(refused);
       } else {
         const id = await projectOf(engine, tree.project, signal);
-        await call(engine, "DELETE", "/api/worktree", { projectID: id, directory: tree.root, force: discard }, signal, tree.project);
+        await call(engine, "DELETE", "/api/worktree", { projectID: id, directory: tree.root, force }, signal, tree.project);
       }
-    } catch (error) {
-      return { status: 502, value: message((error as Error | null)?.message ?? String(error)) };
     }
-    // Its branch goes only if it's merged (made for nothing, it goes whatever: `forget`).
-    gitIn(tree.project, ["branch", body?.forget === true ? "-D" : "-d", tree.branch]);
-    updateWorktrees(list => list.filter(each => each.root !== tree.root), tree);
-    return { status: 200, value: {} };
+  } catch (error) {
+    if (saved) dropSnapshot(tree.project, tree.root, saved);
+    return { status: 502, value: message((error as Error | null)?.message ?? String(error)) };
   }
-  return { status: 404, value: {} };
+  // Its branch goes only if it's merged (made for nothing, it goes whatever: `forget`).
+  gitIn(tree.project, ["branch", removal.forget ? "-D" : "-d", tree.branch]);
+  const restorable: RestorableWorktree | null = removal.forget || !at ? null : { ...tree, branch, head: at, ...(saved ? { snapshot: saved } : {}) };
+  updateWorktrees(list => list.filter(each => each.root !== tree.root), tree, list => [...list.filter(each => each.root !== tree.root), ...(restorable ? [restorable] : [])]);
+  return { status: 200, value: {} };
+}
+
+/** The worktree whose sessions ran in `folder`, removed, brought back where it was: on its branch
+ * (made again at the commit it was at, if it went), with what wasn't committed back as it was, not
+ * committed. Answers it as the box keeps it again. */
+async function restoreTree(folder: unknown, engine: Target | null, signal: AbortSignal | undefined, bridge: Target | null): Promise<WorktreesAnswer> {
+  const message = (text: string) => ({ message: text });
+  const tree = readRestorableWorktrees().find(each => (each.folder ?? each.root) === folder || each.root === folder);
+  if (!tree) return { status: 404, value: message("It can’t come back any more.") };
+  if (!fs.existsSync(tree.project)) return { status: 409, value: message("Its project folder is gone.") };
+  if (fs.existsSync(tree.root) && fs.readdirSync(tree.root).length) return { status: 409, value: message("Something else is in its folder now.") };
+  const saved = tree.snapshot && gitIn(tree.project, ["cat-file", "-e", `${tree.snapshot}^{commit}`]) !== null ? tree.snapshot : undefined;
+  const branchThere = gitIn(tree.project, ["rev-parse", "--verify", "--quiet", `refs/heads/${tree.branch}`]) !== null;
+  const headThere = gitIn(tree.project, ["cat-file", "-e", `${tree.head}^{commit}`]) !== null;
+  if (!branchThere && !saved && !headThere) return { status: 409, value: message("Its work is gone, so it can’t come back.") };
+  gitIn(tree.project, ["worktree", "prune"]);
+  const made = branchThere
+    ? spawnGit(tree.project, ["worktree", "add", tree.root, tree.branch])
+    : spawnGit(tree.project, ["worktree", "add", "-b", tree.branch, tree.root, tree.head]);
+  if (made !== null) {
+    // Nothing of it left half made: the branch made for it goes too.
+    if (fs.existsSync(tree.root)) gitIn(tree.project, ["worktree", "remove", "--force", tree.root]);
+    if (!branchThere) gitIn(tree.project, ["branch", "-D", tree.branch]);
+    return { status: 409, value: message(made.includes("already") && made.includes("checked out") ? `${tree.branch} is open in another folder.` : "Its folder couldn’t be made again.") };
+  }
+  // What wasn't committed, back as it was: straight onto the commit it was kept on, or merged
+  // onto the branch as it is now. Kept until it's back.
+  if (saved) {
+    const onto = gitIn(tree.root, ["rev-parse", "HEAD"]);
+    const parent = gitIn(tree.root, ["rev-parse", `${saved}^`]);
+    const back = onto === parent
+      ? gitIn(tree.root, ["read-tree", "-m", "-u", "HEAD", saved]) !== null
+      : gitIn(tree.root, ["cherry-pick", "--no-commit", saved], BY_KUVO) !== null;
+    if (!back) {
+      gitIn(tree.root, ["cherry-pick", "--abort"]);
+      gitIn(tree.root, ["reset", "--quiet", "--hard", "HEAD"]);
+      gitIn(tree.project, ["worktree", "remove", "--force", tree.root]);
+      if (!branchThere) gitIn(tree.project, ["branch", "-D", tree.branch]);
+      return { status: 409, value: message(`Its saved changes clash with newer work on ${tree.branch}.`) };
+    }
+    // What was staged comes back as changes not staged: the snapshot keeps one tree for both.
+    gitIn(tree.root, ["reset", "--quiet"]);
+  }
+  const { head: _head, snapshot: _snapshot, made: _made, prefix: _prefix, ...kept } = tree;
+  // Not used again until a session there is open: with them all archived, the next sweep would only
+  // remove it again.
+  const record: WorktreeRecord = { ...kept, used: false, restored: true };
+  updateWorktrees(list => [...list.filter(each => each.root !== tree.root), record], undefined, list => list.filter(each => each.root !== tree.root));
+  if (saved) dropSnapshot(tree.project, tree.root, saved);
+  // Its sessions told where they work again, as they were.
+  const here = await sessionsHere(engine, signal, bridge);
+  for (const session of here?.sessions ?? []) {
+    if (!inside(folderOf(session), tree.root) || isHiddenRun(session)) continue;
+    // (Whichever has it: the other has no such session.)
+    for (const target of [engine, bridge]) if (target?.port) await tellWorktree(target, session.id).catch(() => {});
+  }
+  return { status: 200, value: record };
+}
+
+/** git in `folder`: null when it did it, or what it said when it didn't. */
+function spawnGit(folder: string, args: string[]): string | null {
+  const ran = spawnSync("git", args, { cwd: folder, encoding: "utf8", env: { ...process.env, GIT_TERMINAL_PROMPT: "0" }, timeout: 60_000 });
+  return ran.status === 0 ? null : String(ran.stderr || ran.stdout || "").trim().replace(/^fatal: /, "");
+}
+
+/** A sweep running now, and whether another was asked for meanwhile. */
+let sweeping: Promise<void> | null = null;
+let sweepAgain = false;
+
+/** This box's worktrees tidied as its sessions go (PROTOCOL.md, "Worktrees"): one a session has
+ * run in goes once no session left in it is anything but archived, and none is at work there,
+ * whoever archived or deleted it (a Mac, a phone, a bot). What isn't committed in it is kept for
+ * Restore Worktree while an archived session is there to bring it back; a removed one whose
+ * sessions have all gone can't come back, and what was kept for it goes. Runs as a session is
+ * archived or deleted, and as this box follows its engine again. `engine`, `bridge`: where its
+ * sessions are (this box's own engine, unless given). */
+export function tidyWorktrees(signal?: AbortSignal, engine?: Target | null, bridge?: Target | null): Promise<void> {
+  if (sweeping) {
+    sweepAgain = true;
+    return sweeping;
+  }
+  sweeping = (async () => {
+    do {
+      sweepAgain = false;
+      await sweep(signal, engine, bridge).catch(() => {});
+    } while (sweepAgain && !signal?.aborted);
+  })().finally(() => { sweeping = null; });
+  return sweeping;
+}
+
+async function sweep(signal: AbortSignal | undefined, given: Target | null | undefined, givenBridge: Target | null | undefined): Promise<void> {
+  if (!readWorktrees().length && !readRestorableWorktrees().length) return;
+  let engine = given ?? null;
+  if (given === undefined) try { engine = readEngineFile(); } catch {}
+  let bridge = givenBridge ?? null;
+  if (givenBridge === undefined) {
+    // The coding agents' sessions are the bridge's: while it's down (restarting, say), whether a
+    // worktree is still theirs can't be told.
+    let record: { port?: number } | null = null;
+    try { record = readBridgeFile(); } catch {}
+    bridge = bridgeTarget();
+    if (record?.port && !bridge) return;
+  }
+  const here = await sessionsHere(engine, signal, bridge);
+  if (!here) return;
+  const ranIn = (root: string, seen: SessionsHere = here) => seen.sessions.filter(session => !isHiddenRun(session) && !session.parentID && inside(folderOf(session), root));
+  // Ones a session runs in now, marked: an older one, from before this box marked them, by any
+  // session there; one restored, by an open one (with them all archived it would only go again).
+  const used = readWorktrees().filter(tree => (tree.used === undefined ? ranIn(tree.root).length : !tree.used && ranIn(tree.root).some(session => !isArchived(session)))).map(tree => tree.root);
+  if (used.length) updateWorktrees(list => list.map(each => (used.includes(each.root) ? { ...each, used: true } : each)));
+  const goes = (tree: WorktreeRecord, seen: SessionsHere) => {
+    const sessions = ranIn(tree.root, seen);
+    // (One restored, waiting for a session there to be open, goes once there's none.)
+    return (tree.used || (tree.used === false && !sessions.length)) && !sessions.some(session => !isArchived(session) || seen.active.has(session.id));
+  };
+  for (const tree of readWorktrees()) {
+    if (!goes(tree, here)) continue;
+    // Read again right before: a session there may have been opened, or an agent started, since.
+    const now = await sessionsHere(engine, signal, bridge);
+    if (!now || !goes(tree, now)) continue;
+    const left = ranIn(tree.root, now).length;
+    // With an archived one left, it can come back; with none, what isn't committed goes with it.
+    await removeTree(tree, { discard: !left, keep: left > 0 }, engine, signal, bridge, now).catch(() => {});
+  }
+  // Removed ones with no session left to bring them back: what was kept for them goes.
+  const orphans = readRestorableWorktrees().filter(tree => !ranIn(tree.root).length);
+  if (!orphans.length) return;
+  for (const tree of orphans) if (tree.snapshot && fs.existsSync(tree.project)) dropSnapshot(tree.project, tree.root, tree.snapshot);
+  updateWorktrees(list => list, undefined, list => list.filter(each => !orphans.some(gone => gone.root === each.root)));
 }
 
 // Where its engine keeps what's its own (its XDG_DATA_HOME's `opencode`): in this box's folder on
@@ -427,13 +652,14 @@ function canMake(folder: string): boolean {
   }
 }
 
-// Its worktrees' records followed: a line now, and again each time they change (one made for
-// a phone, renamed, removed), as a Mac shows them.
+// Its worktrees' records followed, with those removed whose sessions are still here: a line now,
+// and again each time they change (one made for a phone, renamed, removed, restored), as a Mac
+// shows them.
 export async function* worktreeEventsRoute(context: RouteContext): AsyncGenerator<AnswerPiece> {
   const { request, signal, json } = context;
   if (request.method.toUpperCase() !== "GET") return yield* json(405, {});
   yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
-  return yield* followed(() => ({ worktrees: readWorktrees() }), worktreeFollowers, signal);
+  return yield* followed(() => ({ worktrees: readWorktrees(), restorable: readRestorableWorktrees().map(listedRestorable) }), worktreeFollowers, signal);
 }
 
 // Settings › Worktrees, and a new session's worktree (PROTOCOL.md, "Worktrees").

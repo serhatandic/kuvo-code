@@ -10,6 +10,8 @@ struct GroupChatView: View {
     let group: BotGroup
     /// Goes up to open the find bar (⌘F).
     var findRequest = 0
+    /// Goes up to put the cursor in its composer.
+    var focusRequest = 0
     @Environment(GroupChats.self) private var groups
     @Environment(Bots.self) private var bots
     @Environment(AppModel.self) private var app
@@ -66,6 +68,7 @@ struct GroupChatView: View {
             groups.messages(in: group.id).map { ConversationFind.Row(id: $0.id, parts: Self.findParts($0)) }
         }
         .onChange(of: findRequest) { find.open() }
+        .onChange(of: focusRequest) { composerFocus += 1 }
         // What a bot's widget writes back goes to the group, as yours.
         .environment(\.answerAgent) { text in groups.send(text, to: group.id) }
         .overlay {
@@ -75,10 +78,18 @@ struct GroupChatView: View {
         }
         .conversationBar {
             VStack(spacing: 10) {
+                // Its move waiting for a computer that went quiet: that says it all, with nothing to
+                // connect, since the two computers move it between themselves.
+                let waiting = app.moves.underWay[group.id].flatMap { $0.waitingFor == nil ? nil : $0 }
+                if let waiting {
+                    MoveWaitingCard(going: waiting)
+                        .modifier(ComposerSurface())
+                        .transition(.opacity.combined(with: .offset(y: 6)))
+                }
                 // Where it lives can't be reached now: as last seen, and what you write waits.
                 switch groups.reach(group.id) {
                 case .away(let machine):
-                    if let engine = app.machines.engine(machine) {
+                    if waiting == nil, let engine = app.machines.engine(machine) {
                         MachineOfflineBar(engine: engine)
                             .modifier(ComposerSurface())
                             .transition(.opacity.combined(with: .offset(y: 6)))
@@ -112,6 +123,7 @@ struct GroupChatView: View {
             }
             .animation(.ui, value: groups.isPaused(group.id))
             .animation(.ui, value: groups.reach(group.id))
+            .animation(.ui, value: app.moves.underWay[group.id]?.waitingFor)
             .animation(.ui, value: seatAsks)
             .padding(.horizontal, Metrics.gutter)
             .padding(.bottom, 16)
@@ -307,9 +319,10 @@ private struct GroupMessageRow: View, Equatable {
                                 .recessedWell(Capsule())
                                 .help("What \(author?.name ?? "the bot") did on its part, in its own conversation")
                         }
-                        Text(message.time, format: .dateTime.hour().minute())
+                        Text(SentTime.short(message.time))
                             .font(.caption)
                             .foregroundStyle(.tertiary)
+                            .help(SentTime.full(message.time))
                         // Shown under the pointer, always laid out.
                         HStack(spacing: 0) {
                             CopyButton(text: message.text, help: "Copy")

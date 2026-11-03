@@ -56,7 +56,6 @@ struct ReplyDocument {
         static let secondaryBackground = dynamic(light: (247, 247, 249), dark: (37, 38, 42))
         static let link = dynamic(light: (44, 101, 207), dark: (76, 142, 248))
         static let border = dynamic(light: (228, 228, 232), dark: (66, 68, 78))
-        static let divider = dynamic(light: (208, 208, 211), dark: (51, 52, 56))
 
         static func dynamic(light: (Int, Int, Int), dark: (Int, Int, Int)) -> NSColor {
             NSColor(name: nil) { appearance in
@@ -126,9 +125,9 @@ struct ReplyDocument {
         var joined = self
         let gap: CGFloat
         if case .text = first {
-            gap = max(trailing.bottom, next.leadingTop) + trailing.below
+            gap = max(trailing.bottom, next.leadingTop)
         } else {
-            gap = trailing.bottom + trailing.below
+            gap = trailing.bottom
         }
         if case .text(let before) = last, case .text(let after) = first, before.length > 0 {
             // One text: the space goes after the paragraph before, less the line spacing TextKit
@@ -159,8 +158,6 @@ struct ReplyDocument {
     private struct Spacing {
         var top: CGFloat
         var bottom: CGFloat
-        /// Room of its own under it (a heading's line), on top of the space between.
-        var below: CGFloat = 0
     }
 
     /// One block of prose, before it's put in with the others.
@@ -239,7 +236,7 @@ struct ReplyDocument {
             let components = intent?.components ?? []
             // A code block: a view of its own.
             if let language = Self.codeLanguage(components) {
-                let gap = last.map { $0.spacing.bottom + $0.spacing.below } ?? 0
+                let gap = last.map { $0.spacing.bottom } ?? 0
                 flushText()
                 var code = String(content.characters)
                 if code.hasSuffix("\n") { code.removeLast() }
@@ -268,7 +265,7 @@ struct ReplyDocument {
                 // Out of a list: the list's own space below it; into one, none above it.
                 let bottom = last.list != nil ? 16 : last.spacing.bottom
                 let top = block.list != nil ? 0 : block.spacing.top
-                return max(bottom, top) + last.spacing.below
+                return max(bottom, top)
             }()
             if text.length > 0 {
                 // The space goes after the paragraph before (inside a table cell, it'd be inside
@@ -291,7 +288,7 @@ struct ReplyDocument {
         }
         context.sizeTables()
         flushText()
-        if let last { trailing = last.list != nil ? Spacing(top: 0, bottom: 16, below: last.spacing.below) : last.spacing }
+        if let last { trailing = last.list != nil ? Spacing(top: 0, bottom: 16) : last.spacing }
     }
 
     /// Whether a list item's first paragraph is a task's: "[ ] ", "[x] " or "[X] " ahead of its
@@ -404,15 +401,14 @@ struct ReplyDocument {
                 fontSize = size * scale
                 weight = .semibold
                 paragraph.lineSpacing = fontSize * 0.125
+                // No line under it, as Claude's and ChatGPT's apps have it: its size says it's a heading.
                 spacing = Spacing(top: 24, bottom: 16)
                 if level == 6 { color = Colors.tertiary }
-                if level <= 2 {
-                    rule = .underline(gap: size * 0.3)
-                    // Room for the line.
-                    spacing.below = size * 0.3 + 1
-                }
             case .thematicBreak:
-                rule = .line(height: size * 0.25)
+                // One thin line, quiet, the same room above and below.
+                rule = .line(height: 1)
+                // No line spacing under it, which would put the line off its middle.
+                paragraph.lineSpacing = 0
                 spacing = Spacing(top: 24, bottom: 24)
             case .tableCell(let column):
                 let row = outward.lazy.compactMap { component -> Int? in
@@ -508,9 +504,8 @@ struct ReplyCodeMark: Equatable {
     var foreground: NSColor?
 }
 
-/// A heading's line under it, or a line on its own (`---`).
+/// A line on its own (`---`).
 nonisolated enum ReplyRule {
-    case underline(gap: CGFloat)
     case line(height: CGFloat)
 }
 
@@ -519,7 +514,7 @@ extension NSAttributedString.Key {
     nonisolated static let replyInlineCode = NSAttributedString.Key("kuvo.reply.inlineCode")
     /// How many quotes it's in, drawn as a bar beside it.
     nonisolated static let replyQuote = NSAttributedString.Key("kuvo.reply.quote")
-    /// A rule under a heading, or one on its own.
+    /// A line on its own (`---`).
     nonisolated static let replyRule = NSAttributedString.Key("kuvo.reply.rule")
     /// What it is as plain text, copied (a list's marker, a picture in the text).
     nonisolated static let replyPlainText = NSAttributedString.Key("kuvo.reply.plainText")

@@ -38,10 +38,12 @@ enum DemoMoves {
             }
             guard environment["KUVO_DEMO_MOVES"] != nil else { return }
             var going: [String: Moves.Going] = [:]
-            if let bot = app.bots.list.first { going[bot.id] = Moves.Going(place: "lab", stage: "copying", sent: 12_400_000, size: 30_000_000) }
-            if let group = app.chats.list.first { going[group.id] = Moves.Going(place: "lab") }
+            // KUVO_DEMO_MOVES=waiting: each coming to this Mac, waiting for the machine it leaves.
+            let waiting = environment["KUVO_DEMO_MOVES"] == "waiting" ? "devbox" : nil
+            if let bot = app.bots.list.first { going[bot.id] = Moves.Going(place: waiting == nil ? "lab" : "this Mac", stage: "copying", sent: 12_400_000, size: 30_000_000, waitingFor: waiting) }
+            if let group = app.chats.list.first { going[group.id] = Moves.Going(place: waiting == nil ? "lab" : "this Mac", waitingFor: waiting) }
             if let chat = app.workspace.sessions.first(where: { $0.parentID == nil && Workspace.isChat($0.location.directory) }) {
-                going[chat.id] = Moves.Going(place: "Studio Mac", stage: "switching")
+                going[chat.id] = Moves.Going(place: waiting == nil ? "Studio Mac" : "this Mac", stage: waiting == nil ? "switching" : "copying", waitingFor: waiting)
             }
             app.moves.showDemo(going: going, places: Dictionary(uniqueKeysWithValues: app.bots.list.map { ($0.id, ($0.machine, places)) }))
             print("KUVO_DEMO_MOVES: \(going.count) on their way")

@@ -438,12 +438,17 @@ A client asks the box it lives on once, and watches; the move goes on with no cl
   of your computers. A client that goes doesn't stop it.
 - `GET kuvo/moves` → `200 {moves: [Move], away: [session]}`, and `GET kuvo/moves/events`, the same
   as a line now and each time it changes. `Move = {id, kind, thing, name, from, to, role, stage,
-  sessions, place?, sent?, size?}`: `from` and `to` are boxes' keys; `role`, whether this box is
+  sessions, place?, sent?, size?, waiting?}`: `from` and `to` are boxes' keys; `role`, whether this box is
   where it was (`from`) or where it's going (`to`); `stage`: `holding`, `copying`, `switching`,
   `finishing`; `sessions`, its conversations, root first; `place`, the other computer's name, as
   your computers call it (when this box knows it); `sent` and `size`, bytes, while its copy is on
   its way, for a client to show how far it is (a move taken back isn't listed, on either box,
-  while its copy is let go of). `away`: conversations this box's engine lists that don't live here (a copy not
+  while its copy is let go of). `waiting: true` (bridge 0.9.178) while the other computer has said
+  nothing of the move for a minute and a half (its engine away, or the computer off): on the box it
+  leaves, as it waits on a step; on the box it's going to, while its copy's parts don't come, or,
+  set up, the switch. It
+  carries on where it was once that computer is back, and clients say it waits for it (still taken
+  back after 10 minutes before the switch, as above). `away`: conversations this box's engine lists that don't live here (a copy not
   switched to yet or being let go of, an original still going): clients leave them out.
   `elsewhere: [{box, moves: [Move]}]` (bridge 0.9.169), left out when there are none: the moves your other
   computers said they have under way between them (`box`, its key; "Peers", `moving`), so a client
@@ -1393,9 +1398,10 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   503 while the coding agents aren't running there; 502 when the move failed. Nothing opens on
   the Mac. A machine's bridge does the same for its own, with the Mac closed: a phone asks the
   computer the conversation lives on. There the session's wake-ups and watches go
-  with it, the engine's is marked `kuvo.carriedTo` (the new one's id) as it's archived, and once
+  with it, the engine's is marked `kuvo.carriedTo` (the new one's id) as it's archived, the new
+  one `kuvo.carriedFrom` (the old one's id, under `kuvo` in its metadata), and once
   started it goes to its end, whatever becomes of the request. A client that carries one itself
-  marks it `kuvo.carriedTo` too, as it archives it: a session archived so takes its queue on the
+  marks both too, as it archives it: a session archived so takes its queue on the
   box with it, once (paused, stopped by you, it stays so in the new one, with what waited on the
   box). One brought back keeps the mark and its own queue, archived again too (the box keeps the
   carries it made in `run/queues-carried.json`). Changing a machine's bot's model there to
@@ -1659,9 +1665,9 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     changes not committed, which go when it's removed; `ahead`, commits `base` doesn't have, whose
     branch stays when it's removed. `size` in bytes. Where new ones go is `kuvo/config`'s
     `worktree.directory`. `?records=1` → `{"worktrees": [{project, root, folder, branch, base?,
-    made?, prefix?}]}`, as it keeps them (without asking git), any whose session has a title by
+    made?, prefix?, used?, restored?}], "restorable"?}`, as it keeps them (without asking git), any whose session has a title by
     now named first; `made`, the branch one made there started on, and `prefix`, what its name
-    starts with.
+    starts with; `used`, a session has run there.
   - `GET kuvo/worktrees/events`: `application/x-ndjson`, `{worktrees}` as `?records=1` has them,
     now and again each time they change (`worktrees.events` in `features`: a box that has it keeps and names its worktrees itself, a Mac's included).
   - `POST kuvo/worktrees/remove {"path", "discard"?}` removes it as Remove… does: its folder and
@@ -1670,6 +1676,29 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     never started; `409` when a session has it after all). `200 {}`; `409 {"message"}` while an
     agent works there; `502 {"message"}` when the engine couldn't remove it; `404 {"message"}` for
     one it doesn't have (removed already): a client takes it as gone.
+  - A worktree goes with its last session, as in Codex (bridge 0.9.176; a box from before
+    keeps every worktree until Remove…, and has no `restorable`): once a session has run in it, the box
+    removes it when every session there is archived or deleted and no agent works there (as it
+    hears of each, and as it follows its engine again). It counts every session of its engine and
+    the coding agents' bridge, and tidies nothing while the bridge is down. Archived sessions left:
+    what isn't committed (ignored files aside) is saved first, as a commit under
+    `refs/kuvo/worktrees/<folder name>-<commit>`, and its branch stays. None left: it goes as
+    Remove… does.
+    Its lists and the events carry `restorable`: `[{project, root, folder, branch, base?,
+    restorable, saved, ahead?}]`, one for each removed this way whose sessions are archived;
+    `saved` whether changes were saved, `restorable` whether it can come back (its branch, its
+    saved changes or the commit it was at are still there). An entry and its saved changes go once
+    no session is left there. A client shows one on an open (unarchived) session working in
+    `folder`.
+  - `POST kuvo/worktrees/restore {"folder"}` (bridge 0.9.176) brings one back where it was, on its branch (made
+    again from where it was if it's gone), with its saved changes as changes not committed, and
+    tells each session there → `200 {project, root, folder, branch, base?}`, kept again (marked
+    `restored`: git made it, so git removes it), and not removed again until a session there is
+    open;
+    `404 {"message"}` for one it can't bring back any more; `409 {"message"}` when its project or
+    its branch is gone, something else is in its folder, its branch is open in another folder,
+    or its saved changes clash with newer work on its branch (it stays removed, nothing left half
+    made).
   - For a new session's worktree, as the composer's Worktree makes one: `POST kuvo/worktrees
     {"project", "branchPrefix"?}` makes one of the project's repository on a branch of its own →
     `{project, root, folder, branch, base?, made, prefix}`; make the session in `folder`. `400`
@@ -3090,7 +3119,15 @@ Agents you add in Settings › Agents come from your settings, after the plugin,
 they work outside without asking unless a rule of yours says otherwise.
 
 What Kuvo Code and the engine keep for an agent stays open after that ask, for the agent to open:
-the box's `attachments` (and this Mac's app's `Attachments`), the agent's browser's downloads on a
+the box's `attachments` (and this Mac's app's `Attachments`; both keep a session's files in a folder
+named after it, `attachments/<session>/…` (bridge 0.9.177), which goes as the box hears the session's deleted, or for
+one deleted while it wasn't listening, once its engine and bridge both say it's gone, unless a
+conversation marked `kuvo.branchedFrom`, `handoffFrom`, `carriedFrom` or `startedBy` (or one of its
+own, back along such marks) still names its files; nothing goes while the bridge isn't running or
+either can't be read, nor a session being moved, moved away, or a copy here let go of as its move
+was taken back (`run/moves/ended.json` names its conversations for a week); a session deleted while
+the box wasn't listening leaves the Mac app's folder as it is; this Mac's box is told the app's folder in `KUVO_MAC_ATTACHMENTS`, and the app lets a
+machine's session's go itself), the agent's browser's downloads on a
 machine (this Mac's panel browser saves to `~/Downloads`, which asks), the engine's long outputs
 saved whole (`tool-output`), the repositories it reads (`repos`) and Plan's plans (`~/.opencode/plan`),
 and the folders of the skills the engine finds (learned again when they change, `skill.updated`;

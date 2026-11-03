@@ -14254,7 +14254,7 @@ class Roster {
 }
 
 // Packages/Box/src/agents/branch.ts
-var origins = ["branchedFrom", "handoffFrom", "handoffTo", "startedBy", "beside"];
+var origins = ["branchedFrom", "handoffFrom", "handoffTo", "startedBy", "beside", "carriedFrom"];
 var listed2 = ["kuvo.pinned", "kuvo.archived"];
 
 class BranchError extends Error {
@@ -22759,4 +22759,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 8b8febce949d90a0b586f2f256b111b9be71dfdad5ad61e0108eb3f6de2214fa
+// Built from Packages/Box/src/agents 10c94bac78d9c0c9bcb00d62ea49dc01ced4d6dd0896d13208c7c71f891f5603
