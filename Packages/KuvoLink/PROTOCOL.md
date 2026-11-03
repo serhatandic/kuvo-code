@@ -1781,6 +1781,27 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     Create opens the host's page (`compareURL`), and on GitHub `gh` says why: `signed-out` or
     `missing`, for the client to say so; on another host Create only pushes. `409 {"message"}` as
     Create would refuse.
+  - Branch backups (`git.backups`, bridge 0.9.182). As each agent's run starts and ends (the
+    engine's and the coding agents', in any approval), the box keeps the branches and stashes of
+    the repository the conversation works in, where something changed since the last time: what
+    each branch pointed at, the branch checked out, the stashes (older ones too) and the remotes'
+    addresses (without a sign-in in them), with their commits in a store of its own
+    (`box/branch-backups`), so a hard reset, a deleted branch, a dropped stash or `rm -rf .git`
+    can be taken back. The newest 100 are kept, none older than 30 days but the newest.
+    `GET kuvo/git/backups?folder=<folder>` → `{"repository", "exists", "backups": [{id, at, head,
+    branches, stashes, gone, moved, stashesGone}]}`, newest first: `repository`, the repository's
+    top folder (a linked worktree's are its repository's; null where none was backed up), found
+    from a folder above too once its `.git` is gone (`exists` false); `head`, the branch checked
+    out then ("" for none); `gone` and `moved`, its branches deleted since and those elsewhere now;
+    `stashesGone`, its stashes no longer on the list. `POST kuvo/git/backups/restore {"folder",
+    "id"}` takes one back, never moving a branch you have: one gone comes back under its name, one
+    elsewhere beside it as `<branch>-restored-<yyyymmdd-hhmm>` (the backup's time, UTC), a
+    detached checkout's commit as `detached-restored-…`, and stashes no longer there back on the
+    list as they were; a repository whose `.git` is gone is made again in its top folder, around
+    the files as they are (none changed: the index from the branch checked out then), with its
+    remotes → `{"remade", "branches": [{name, as}], "stashes"}` (`name` "" for a detached one).
+    `400` without a folder that's there or an `id`, `404` for none here, `409` for a `.git` that
+    can't be read, `500 {"message"}` with git's words.
 - `GET kuvo/folders[?path=<folder>&hidden=1]` (`folders`): the folders in one of this box's folders,
   for a client to choose one (Settings › Worktrees' folder) as a folder panel does → `{"path",
   "home", "parent", "folders": [{name, repository?}]}`, ordered as Finder orders names, without
@@ -2393,6 +2414,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `git.merge` | `POST kuvo/git/merge`: Merge into… (bridge 0.9.143) |
 | `git.pull-request` | `POST kuvo/git/pull-request`: Create Pull Request (bridge 0.9.143) |
 | `git.pull-request.draft` | `POST kuvo/git/pull-request/draft`: Create Pull Request's confirmation (bridge 0.9.179) |
+| `git.backups` | `kuvo/git/backups…`: branch backups, and taking one back (bridge 0.9.182) |
 | `git.push` | `POST kuvo/git/push`, and a commit's `committed` when only its push failed (bridge 0.9.143) |
 | `goals` | `kuvo/agents/api/kuvo/goals…`: goals ("Goals") |
 | `btw` | `kuvo/agents/api/kuvo/btw…`: side questions ("Side questions, handoffs and reviews") |
