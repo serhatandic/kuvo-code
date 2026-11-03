@@ -17,7 +17,7 @@
 // have come back on the stash list, and a repository whose `.git` is gone is made again around your
 // files as they are (none of them changed), with its branches, stashes and remotes.
 
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -36,8 +36,10 @@ const KEEP_FOR = 30 * 24 * 60 * 60 * 1000;
 export interface Backup {
   id: string;
   at: number;
-  /** The branch checked out, or the commit for a detached one. */
+  /** The branch checked out (the repository's own folder's), or the commit for a detached one. */
   head: { branch: string } | { commit: string } | null;
+  /** The commits checked out on no branch, in any of its worktrees. */
+  detached?: string[];
   branches: Record<string, string>;
   /** Newest first, as `git stash list` shows them. */
   stashes: { commit: string; message: string }[];
@@ -50,9 +52,11 @@ interface Index {
   backups: Backup[];
 }
 
-// git with nothing of the repository's own run: no hooks, filters, pager, fsmonitor or
-// credentials, never asking anything.
-const SAFE = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "core.pager=cat", "-c", "credential.helper=", "-c", "diff.external=", "-c", "protocol.file.allow=always", "-c", "gc.autoDetach=false"];
+// git with nothing of the repository's own run: no hooks, filters, pager, fsmonitor, signature
+// checks or credentials, never asking anything. (What's taken back never goes through git's
+// transports, which the repository's settings could point elsewhere: it's packed from the store
+// and indexed into the repository.)
+const SAFE = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "core.pager=cat", "-c", "credential.helper=", "-c", "diff.external=", "-c", "log.showSignature=false", "-c", "protocol.file.allow=always", "-c", "gc.autoDetach=false"];
 const ENV = { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_ASKPASS: "", SSH_ASKPASS: "" };
 
 interface Ran { ok: boolean; out: string; error: string }
@@ -61,6 +65,23 @@ function git(args: string[], options: { cwd?: string; input?: string } = {}): Pr
     const child = execFile("git", [...SAFE, ...args], { cwd: options.cwd, env: ENV, encoding: "utf8", timeout: 300_000, maxBuffer: 64 * 1024 * 1024 }, (error, out, err) =>
       resolve({ ok: !error, out: String(out ?? ""), error: String(err ?? "").trim() || (error ? String(error.message) : "") }));
     if (options.input !== undefined) child.stdin?.end(options.input);
+  });
+}
+
+/** `from`'s output into `to`, both git as above: whether both went through, and what failed. */
+function gitPipe(from: string[], input: string, to: string[]): Promise<Ran> {
+  return new Promise(resolve => {
+    const options = { env: ENV, stdio: ["pipe", "pipe", "pipe"] as ("pipe")[] };
+    const sender = spawn("git", [...SAFE, ...from], options);
+    const taker = spawn("git", [...SAFE, ...to], options);
+    let error = "";
+    sender.stderr.on("data", chunk => { error += chunk; });
+    taker.stderr.on("data", chunk => { error += chunk; });
+    taker.stdout.resume();
+    sender.stdout.pipe(taker.stdin);
+    sender.stdin.end(input);
+    const ended = (child: ReturnType<typeof spawn>) => new Promise<boolean>(done => { child.on("error", () => done(false)); child.on("close", code => done(code === 0)); });
+    Promise.all([ended(sender), ended(taker)]).then(([sent, taken]) => resolve({ ok: sent && taken, out: "", error: error.trim() }));
   });
 }
 
@@ -124,7 +145,7 @@ async function stateOf(gitDir: string): Promise<Omit<Backup, "id" | "at"> | null
     if (detached.ok && detached.out.trim()) head = { commit: detached.out.trim() };
   }
   const stashes: Backup["stashes"] = [];
-  const stash = await git([...at, "log", "-g", "--format=%H%x00%gs", "refs/stash", "--"]);
+  const stash = await git([...at, "log", "-g", "--no-show-signature", "--format=%H%x00%gs", "refs/stash", "--"]);
   if (stash.ok) for (const line of stash.out.split("\n")) {
     const [commit, message] = line.split("\0");
     if (commit && /^[0-9a-f]{40,64}$/.test(commit)) stashes.push({ commit, message: message ?? "" });
@@ -135,29 +156,46 @@ async function stateOf(gitDir: string): Promise<Omit<Backup, "id" | "at"> | null
     const found = line.match(/^remote\.(.+)\.url (.+)$/);
     if (found) remotes[found[1]!] = withoutSignIn(found[2]!);
   }
-  return { head, branches, stashes, remotes };
+  // Each worktree's checkout on no branch (an agent's worktree often is), its own folder's too.
+  const detached = new Set<string>();
+  const worktrees = await git([...at, "worktree", "list", "--porcelain"]);
+  let commit = "";
+  if (worktrees.ok) for (const line of worktrees.out.split("\n")) {
+    if (line.startsWith("HEAD ")) commit = line.slice(5).trim();
+    if (line === "detached" && /^[0-9a-f]{40,64}$/.test(commit)) detached.add(commit);
+  }
+  if (head && "commit" in head) detached.add(head.commit);
+  return { head, detached: [...detached].sort(), branches, stashes, remotes };
 }
 
-/** An address without the sign-in some put in it (`https://user:token@host/…`). */
-function withoutSignIn(url: string): string {
-  return url.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/@]*@/i, "$1");
+/** An address without the sign-in some put in it (`https://user:token@host/…`, a token in its
+ * query). */
+export function withoutSignIn(url: string): string {
+  return url.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/]*@/i, "$1").replace(/^([a-z][a-z0-9+.-]*:\/\/[^?#]*)[?#].*$/i, "$1");
 }
 
-const same = (a: Omit<Backup, "id" | "at">, b: Omit<Backup, "id" | "at">) =>
-  JSON.stringify([a.head, Object.entries(a.branches).sort(), a.stashes.map(each => each.commit), Object.entries(a.remotes).sort()])
-  === JSON.stringify([b.head, Object.entries(b.branches).sort(), b.stashes.map(each => each.commit), Object.entries(b.remotes).sort()]);
+const shape = (a: Omit<Backup, "id" | "at">) =>
+  JSON.stringify([a.head, a.detached ?? [], Object.entries(a.branches).sort(), a.stashes.map(each => each.commit), Object.entries(a.remotes).sort()]);
+const same = (a: Omit<Backup, "id" | "at">, b: Omit<Backup, "id" | "at">) => shape(a) === shape(b);
 
-const commitsOf = (backup: Pick<Backup, "head" | "branches" | "stashes">) =>
-  [...Object.values(backup.branches), ...backup.stashes.map(each => each.commit), ...(backup.head && "commit" in backup.head ? [backup.head.commit] : [])];
+const commitsOf = (backup: Pick<Backup, "head" | "detached" | "branches" | "stashes">) =>
+  [...Object.values(backup.branches), ...backup.stashes.map(each => each.commit), ...(backup.detached ?? []), ...(backup.head && "commit" in backup.head ? [backup.head.commit] : [])];
 
 /** Makes a repository's store: from a local clone of it, which links its objects where it can. */
 async function makeStore(store: string, gitDir: string): Promise<boolean> {
   fs.mkdirSync(path.dirname(store), { recursive: true, mode: 0o700 });
   const cloned = await git(["clone", "--bare", "--local", "--no-tags", "--template=", "-q", gitDir, store]);
   if (!cloned.ok) {
-    fs.rmSync(store, { recursive: true, force: true });
-    const made = await git(["init", "--bare", "--template=", "-q", store]);
+    await fs.promises.rm(store, { recursive: true, force: true });
+    const format = (await git(["--git-dir", gitDir, "rev-parse", "--show-object-format"])).out.trim() || "sha1";
+    const made = await git(["init", "--bare", "--template=", "-q", `--object-format=${format}`, store]);
     if (!made.ok) return false;
+  }
+  // Its own objects, never another repository's it borrowed from (which could go).
+  const borrowed = path.join(store, "objects", "info", "alternates");
+  if (fs.existsSync(borrowed)) {
+    if (!(await git(["--git-dir", store, "repack", "-a", "-d", "-q"])).ok) return false;
+    await fs.promises.rm(borrowed, { force: true });
   }
   // Nothing of the clone's own refs or remote: only what the backups keep. Its packs stay linked
   // (packed again only as loose objects pile up, never all at once).
@@ -169,22 +207,17 @@ async function makeStore(store: string, gitDir: string): Promise<boolean> {
   return true;
 }
 
-/** Keeps each commit `wanted` names in the store: fetched from the repository where the store
- * doesn't have it yet. Whether all of them are kept. */
+/** Keeps each commit `wanted` names in the store, fetched from the repository (quick for what
+ * the store has, and checked whole either way). Whether all of them are kept. */
 async function keepCommits(store: string, gitDir: string, wanted: string[]): Promise<boolean> {
   const unique = [...new Set(wanted)];
-  if (!unique.length) return true;
-  const checked = await git(["--git-dir", store, "cat-file", "--batch-check=%(objectname)"], { input: unique.map(each => `${each}^{commit}\n`).join("") });
-  const have = new Set(checked.out.split("\n").filter(line => /^[0-9a-f]+$/.test(line)));
-  const missing = unique.filter(each => !have.has(each));
   // (Stashes past the newest aren't refs the repository shows, so they're asked for by commit.)
-  for (let start = 0; start < missing.length; start += 200) {
-    const specs = missing.slice(start, start + 200).map(each => `+${each}:refs/kuvo/keep/${each}`);
-    const fetched = await git(["--git-dir", store, "-c", "uploadpack.allowAnySHA1InWant=true", "fetch", "--no-tags", "-q", gitDir, ...specs]);
+  for (let start = 0; start < unique.length; start += 200) {
+    const specs = unique.slice(start, start + 200).map(each => `+${each}:refs/kuvo/keep/${each}`);
+    const fetched = await git(["--git-dir", store, "-c", "uploadpack.allowAnySHA1InWant=true", "fetch", "--no-tags", "-q", "--update-shallow", gitDir, ...specs]);
     if (!fetched.ok) return false;
   }
-  const creates = unique.filter(each => have.has(each)).map(each => `update refs/kuvo/keep/${each} ${each}\n`).join("");
-  return !creates || (await git(["--git-dir", store, "update-ref", "--stdin"], { input: creates })).ok;
+  return true;
 }
 
 /** Takes a backup of the repository `folder` is in, where something changed since its last one:
@@ -194,7 +227,7 @@ export function takeBackup(folder: string, root = BACKUPS_FOLDER, now = Date.now
     if (!repository) return null;
     return one(storeOf(repository.top, root), async () => {
       const state = await stateOf(repository.gitDir);
-      if (!state || (!Object.keys(state.branches).length && !state.stashes.length)) return null;
+      if (!state || !commitsOf(state).length) return null;
       const index = readIndex(repository.top, root);
       const last = index.backups.at(-1);
       if (last && same(last, state)) return null;
@@ -277,9 +310,12 @@ export async function listBackups(folder: string, root = BACKUPS_FOLDER): Promis
 export interface Restored {
   /** The repository made again, where its `.git` was gone. */
   remade: boolean;
-  /** Each branch brought back, and the name it has now. */
+  /** Each branch brought back, and the name it has now ("" for a checkout on no branch). */
   branches: { name: string; as: string }[];
+  /** How many stashes came back (on top of the list). */
   stashes: number;
+  /** What didn't come back, in words, where something didn't. */
+  missed?: string[];
 }
 
 export class RestoreError extends Error {
@@ -288,7 +324,16 @@ export class RestoreError extends Error {
 
 const stamp = (at: number) => new Date(at).toISOString().slice(0, 16).replace(/[-:]/g, "").replace("T", "-");
 
-/** Takes backup `id` of the repository `folder` is in (or was) back. */
+/** The commits of `commits` that `gitDir` has. */
+async function present(gitDir: string, commits: string[]): Promise<Set<string>> {
+  if (!commits.length) return new Set();
+  const checked = await git(["--git-dir", gitDir, "cat-file", "--batch-check=%(objectname) %(objecttype)"], { input: commits.map(each => `${each}\n`).join("") });
+  return new Set(checked.out.split("\n").filter(line => line.endsWith(" commit")).map(line => line.split(" ")[0]!));
+}
+
+/** Takes backup `id` of the repository `folder` is in (or was) back. Nothing goes through git's
+ * transports: the commits are packed from the store and indexed into the repository, and the
+ * branches written in one go (none if one can't be), never over one you have. */
 export async function restoreBackup(folder: string, id: string, root = BACKUPS_FOLDER): Promise<Restored> {
   const at = await backedUpAt(folder, root);
   if (!at) throw new RestoreError("There are no backups of a repository here.", 404);
@@ -299,54 +344,86 @@ export async function restoreBackup(folder: string, id: string, root = BACKUPS_F
     let gitDir = at.gitDir;
     let remade = false;
     if (!gitDir) {
-      // Made again where it was, around the files as they are.
+      // Made again where it was, around the files as they are, as the store keeps its commits.
       if (fs.existsSync(path.join(at.top, ".git"))) throw new RestoreError("This folder's .git can't be read.", 409);
-      const made = await git(["init", "-q", "--template=", at.top]);
+      const format = (await git(["--git-dir", store, "rev-parse", "--show-object-format"])).out.trim() || "sha1";
+      const made = await git(["init", "-q", "--template=", `--object-format=${format}`, at.top]);
       if (!made.ok) throw new RestoreError(`The repository couldn't be made again: ${made.error}`, 500);
       gitDir = path.join(at.top, ".git");
       remade = true;
+      const shallow = textOf(path.join(store, "shallow"));
+      if (shallow) await fs.promises.writeFile(path.join(gitDir, "shallow"), shallow);
     }
-    const now = (await stateOf(gitDir)) ?? { head: null, branches: {}, stashes: [], remotes: {} };
-    const when = stamp(backup.at);
-    const names = new Set(Object.keys(now.branches));
-    const free = (name: string) => {
-      let candidate = name;
-      for (let n = 2; names.has(candidate); n++) candidate = `${name}-${n}`;
-      names.add(candidate);
-      return candidate;
-    };
-    const branches: Restored["branches"] = [];
-    for (const [name, commit] of Object.entries(backup.branches)) {
-      if (now.branches[name] === commit) continue;
-      branches.push({ name, as: now.branches[name] ? free(`${name}-restored-${when}`) : free(name) });
+    try {
+      return await restoreInto(gitDir, at.top, store, backup, remade);
+    } catch (error) {
+      // Nothing half made left behind.
+      if (remade) await fs.promises.rm(gitDir, { recursive: true, force: true });
+      throw error;
     }
-    // A detached one's commit, where no branch brought back or kept has it.
-    const detached = backup.head && "commit" in backup.head ? backup.head.commit : null;
-    if (detached && !Object.values(backup.branches).includes(detached) && !Object.values(now.branches).includes(detached)) branches.push({ name: "", as: free(`detached-restored-${when}`) });
-    const stashes = backup.stashes.filter(each => !now.stashes.some(have => have.commit === each.commit));
-    // Each from the store's own ref for its commit.
-    const specs = [
-      ...branches.map(each => `+refs/kuvo/keep/${each.name ? backup.branches[each.name] : detached}:refs/heads/${each.as}`),
-      ...stashes.map(each => `+refs/kuvo/keep/${each.commit}:refs/kuvo-restoring/${each.commit}`),
-    ];
-    if (specs.length) {
-      const fetched = await git(["--git-dir", gitDir, "fetch", "--no-tags", "-q", "--update-head-ok", store, ...specs]);
-      if (!fetched.ok) throw new RestoreError(`The backup couldn't be taken back: ${fetched.error}`, 500);
-    }
-    // Stashes back on the list, oldest first so the newest is on top, as they were.
-    const tree = ["--git-dir", gitDir, "--work-tree", at.top];
-    for (const each of stashes.slice().reverse()) await git([...tree, "stash", "store", "-m", each.message || "restored", each.commit], { cwd: at.top });
-    if (stashes.length) await git(["--git-dir", gitDir, "update-ref", "--stdin"], { input: stashes.map(each => `delete refs/kuvo-restoring/${each.commit}\n`).join("") });
-    if (remade) {
-      for (const [name, url] of Object.entries(backup.remotes)) await git(["--git-dir", gitDir, "remote", "add", name, url]);
-      const checkedOut = backup.head && "branch" in backup.head ? backup.head.branch : null;
-      const head = branches.find(each => each.name && each.name === checkedOut)?.as;
-      if (head) {
-        await git(["--git-dir", gitDir, "symbolic-ref", "HEAD", `refs/heads/${head}`]);
-        // The index from that branch, the files as they are.
-        await git([...tree, "reset", "-q"], { cwd: at.top });
-      }
-    }
-    return { remade, branches, stashes: stashes.length };
   });
+}
+
+async function restoreInto(gitDir: string, top: string, store: string, backup: Backup, remade: boolean): Promise<Restored> {
+  const now = (await stateOf(gitDir)) ?? { head: null, branches: {}, stashes: [], remotes: {} };
+  const when = stamp(backup.at);
+  // A name is taken by a branch you have, and by one a folder of whose would clash with it
+  // (`feature` and `feature/x`).
+  const taken = new Set(Object.keys(now.branches));
+  const clashes = (name: string) => taken.has(name) || [...taken].some(each => each.startsWith(`${name}/`) || name.startsWith(`${each}/`));
+  const free = (name: string) => {
+    let candidate = name;
+    for (let n = 2; clashes(candidate); n++) candidate = `${name}-${n}`;
+    taken.add(candidate);
+    return candidate;
+  };
+  const branches: (Restored["branches"][number] & { commit: string })[] = [];
+  for (const [name, commit] of Object.entries(backup.branches)) {
+    if (now.branches[name] === commit) continue;
+    branches.push({ name, as: now.branches[name] ? free(`${name}-restored-${when}`) : free(name), commit });
+  }
+  // Checkouts on no branch, where no branch brought back or kept has them.
+  const tips = new Set([...Object.values(backup.branches), ...Object.values(now.branches)]);
+  const detached = [...new Set([...(backup.detached ?? []), ...(backup.head && "commit" in backup.head ? [backup.head.commit] : [])])];
+  for (const commit of detached) if (!tips.has(commit)) branches.push({ name: "", as: free(`detached-restored-${when}`), commit });
+  const stashes = backup.stashes.filter(each => !now.stashes.some(have => have.commit === each.commit));
+
+  // The commits it lacks, packed from the store (without what the repository has, unless it's
+  // shallow) and indexed into it.
+  const wanted = [...new Set([...branches.map(each => each.commit), ...stashes.map(each => each.commit)])];
+  const had = await present(gitDir, wanted);
+  const needed = wanted.filter(each => !had.has(each));
+  if (needed.length) {
+    const shallow = fs.existsSync(path.join(gitDir, "shallow"));
+    const known = shallow ? new Set<string>() : await present(store, [...new Set(Object.values(now.branches))]);
+    const revisions = [...needed, ...[...known].map(each => `^${each}`)].join("\n") + "\n";
+    const packed = await gitPipe(["--git-dir", store, "pack-objects", "--revs", "--stdout", "-q"], revisions, ["--git-dir", gitDir, "index-pack", "--stdin", "--fix-thin"]);
+    if (!packed.ok) throw new RestoreError(`The backup couldn't be taken back: ${packed.error}`, 500);
+  }
+  if (branches.length) {
+    const lines = ["start", ...branches.map(each => `create refs/heads/${each.as} ${each.commit}`), "prepare", "commit"].join("\n") + "\n";
+    const written = await git(["--git-dir", gitDir, "update-ref", "--stdin"], { input: lines });
+    if (!written.ok) throw new RestoreError(`The branches couldn't be taken back: ${written.error}`, 500);
+  }
+  const missed: string[] = [];
+  // Stashes back on the list, oldest first so the newest is on top, as they were.
+  const tree = ["--git-dir", gitDir, "--work-tree", top];
+  let stashed = 0;
+  for (const each of stashes.slice().reverse()) {
+    if ((await git([...tree, "stash", "store", "-m", each.message || "restored", each.commit], { cwd: top })).ok) stashed++;
+    else missed.push(`The stash "${each.message}"`);
+  }
+  if (remade) {
+    for (const [name, url] of Object.entries(backup.remotes)) {
+      if (!(await git(["--git-dir", gitDir, "remote", "add", name, url])).ok) missed.push(`The remote ${name}`);
+    }
+    const checkedOut = backup.head && "branch" in backup.head ? backup.head.branch : null;
+    const head = branches.find(each => each.name && each.name === checkedOut)?.as;
+    if (head) {
+      // The index from that branch, the files as they are.
+      const set = await git(["--git-dir", gitDir, "symbolic-ref", "HEAD", `refs/heads/${head}`]);
+      if (!set.ok || !(await git([...tree, "reset", "-q"], { cwd: top })).ok) missed.push(`What's staged: run git reset in ${top} to see your changes against ${head}`);
+    }
+  }
+  return { remade, branches: branches.map(({ name, as }) => ({ name, as })), stashes: stashed, ...(missed.length ? { missed } : {}) };
 }

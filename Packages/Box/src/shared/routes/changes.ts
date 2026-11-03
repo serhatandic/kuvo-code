@@ -49,8 +49,9 @@ export const BRANCH_BACKUP = object({
 export const BRANCH_BACKUPS = object({ repository: nullable(string), exists: bool, backups: list(BRANCH_BACKUP) });
 
 /** A backup taken back: the repository made again (its `.git` was gone), each branch brought back
- * and the name it has now, and how many stashes came back. */
-export const BACKUP_RESTORED = object({ remade: bool, branches: list(object({ name: string, as: string })), stashes: number });
+ * and the name it has now ("" for a checkout on no branch), how many stashes came back, and what
+ * didn't, in words to show (`missed`). */
+export const BACKUP_RESTORED = object({ remade: bool, branches: list(object({ name: string, as: string })), stashes: number, "missed?": list(string) });
 
 export type BranchBackups = Infer<typeof BRANCH_BACKUPS>;
 export type BackupRestored = Infer<typeof BACKUP_RESTORED>;

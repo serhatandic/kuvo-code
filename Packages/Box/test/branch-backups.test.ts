@@ -34,7 +34,7 @@ function repository() {
   writeFileSync(join(top, "a.txt"), "two\n")
   git(top, "commit", "-qam", "second")
   git(top, "branch", "feature")
-  git(top, "remote", "add", "origin", "https://someone:secret-token@example.com/project.git")
+  git(top, "remote", "add", "origin", "https://someone:secret@token@example.com/project.git?access_token=secret-token")
   return { top, root: join(box, `store-${made}`) }
 }
 
@@ -169,6 +169,110 @@ test("a conversation's run backs up the repository it works in, from the folder 
   const listed = await backups.listBackups(top)
   expect(listed.backups.length).toBe(1)
   expect(listed.backups[0]).toMatchObject({ head: "main", branches: 2, gone: [], moved: [] })
+})
+
+// What a tampered repository could make the box run, as backups are taken and taken back.
+function planted(name: string): { script: string; marker: string } {
+  const marker = join(box, `${name}-ran`)
+  const script = join(box, `${name}.sh`)
+  writeFileSync(script, `#!/bin/sh\ntouch '${marker}'\n`, { mode: 0o755 })
+  return { script, marker }
+}
+
+test("a tampered repository's settings run nothing as a backup is taken", async () => {
+  const { top, root } = repository()
+  const { script, marker } = planted("signature")
+  // A stash entry with a signature, and settings that would check it with a program of its own.
+  const tree = git(top, "rev-parse", "HEAD^{tree}")
+  const parent = git(top, "rev-parse", "HEAD")
+  const signed = `tree ${tree}\nparent ${parent}\nauthor Test <test@example.com> 1 +0000\ncommitter Test <test@example.com> 1 +0000\ngpgsig -----BEGIN PGP SIGNATURE-----\n x\n -----END PGP SIGNATURE-----\n\nsigned\n`
+  const commit = spawnSync("git", ["hash-object", "-t", "commit", "-w", "--stdin"], { cwd: top, input: signed, encoding: "utf8", env: ENV }).stdout.trim()
+  git(top, "update-ref", "--create-reflog", "-m", "On main: signed", "refs/stash", commit)
+  git(top, "config", "log.showSignature", "true")
+  git(top, "config", "gpg.program", script)
+  expect(await backups.takeBackup(top, root, 1_000)).not.toBeNull()
+  expect(existsSync(marker)).toBe(false)
+})
+
+test("taking one back reaches only the box's store, whatever the repository's settings say", async () => {
+  const { top, root } = repository()
+  const main = git(top, "rev-parse", "main")
+  await backups.takeBackup(top, root, 1_000)
+  git(top, "branch", "-qD", "feature")
+  const { marker } = planted("transport")
+  const store = join(root, readdirOne(root), "store")
+  git(top, "config", "protocol.ext.allow", "always")
+  git(top, "config", `url.ext::sh -c touch% ${marker}% #.insteadOf`, store)
+  const listed = await backups.listBackups(top, root)
+  await backups.restoreBackup(top, listed.backups[0]!.id, root)
+  expect(existsSync(marker)).toBe(false)
+  expect(git(top, "rev-parse", "feature")).toBe(main)
+})
+
+test("a branch that would clash with one you have now comes back under a name of its own, and all of it comes back", async () => {
+  const { top, root } = repository()
+  writeFileSync(join(top, "a.txt"), "stashed\n")
+  git(top, "stash", "push", "-qm", "kept")
+  git(top, "branch", "other")
+  await backups.takeBackup(top, root, 1_000)
+  git(top, "branch", "-qD", "feature")
+  git(top, "branch", "-qD", "other")
+  git(top, "branch", "feature/x")
+  git(top, "stash", "clear")
+  const listed = await backups.listBackups(top, root)
+  const restored = await backups.restoreBackup(top, listed.backups[0]!.id, root)
+  expect(restored.branches).toEqual([{ name: "feature", as: "feature-2" }, { name: "other", as: "other" }])
+  expect(restored.stashes).toBe(1)
+  expect(git(top, "stash", "list", "--format=%gs")).toBe("On main: kept")
+  expect(git(top, "for-each-ref", "--format=%(refname)", "refs/kuvo-restoring")).toBe("")
+})
+
+test("rm -rf .git in a SHA-256 repository: made again as one", async () => {
+  const top = join(box, `project-${++made}`)
+  const root = join(box, `store-${made}`)
+  mkdirSync(top)
+  git(top, "init", "-q", "--object-format=sha256")
+  writeFileSync(join(top, "a.txt"), "one\n")
+  git(top, "add", "-A")
+  git(top, "commit", "-qm", "first")
+  const main = git(top, "rev-parse", "main")
+  await backups.takeBackup(top, root, 1_000)
+  rmSync(join(top, ".git"), { recursive: true, force: true })
+  const listed = await backups.listBackups(top, root)
+  expect((await backups.restoreBackup(top, listed.backups[0]!.id, root)).remade).toBe(true)
+  expect(git(top, "rev-parse", "main")).toBe(main)
+  expect(git(top, "status", "--porcelain")).toBe("")
+})
+
+test("rm -rf .git in a shallow clone: made again, as shallow as it was", async () => {
+  const { top: source } = repository()
+  const top = join(box, `shallow-${made}`)
+  const root = join(box, `store-shallow-${made}`)
+  git(box, "clone", "-q", "--depth=1", `file://${source}`, top)
+  const main = git(top, "rev-parse", "main")
+  await backups.takeBackup(top, root, 1_000)
+  rmSync(join(top, ".git"), { recursive: true, force: true })
+  const listed = await backups.listBackups(top, root)
+  expect((await backups.restoreBackup(top, listed.backups[0]!.id, root)).remade).toBe(true)
+  expect(git(top, "rev-parse", "main")).toBe(main)
+  expect(git(top, "log", "--format=%s")).toBe("second")
+  expect(git(top, "status", "--porcelain")).toBe("")
+})
+
+test("a linked worktree's detached checkout is kept too, and comes back as a branch", async () => {
+  const { top, root } = repository()
+  const linked = join(box, `detached-${made}`)
+  git(top, "worktree", "add", "-q", "--detach", linked)
+  writeFileSync(join(linked, "c.txt"), "agent work\n")
+  git(linked, "add", "-A")
+  git(linked, "commit", "-qm", "work on no branch")
+  const work = git(linked, "rev-parse", "HEAD")
+  await backups.takeBackup(linked, root, 1_000)
+  git(top, "worktree", "remove", "--force", linked)
+  const listed = await backups.listBackups(top, root)
+  const restored = await backups.restoreBackup(top, listed.backups[0]!.id, root)
+  expect(restored.branches).toEqual([{ name: "", as: "detached-restored-19700101-0000" }])
+  expect(git(top, "rev-parse", "detached-restored-19700101-0000")).toBe(work)
 })
 
 function readdirOne(folder: string): string {

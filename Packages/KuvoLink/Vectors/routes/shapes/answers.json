@@ -4038,7 +4038,10 @@
         }
        }
       },
-      "stashes": "number"
+      "stashes": "number",
+      "missed?": {
+       "list": "string"
+      }
      }
     },
     "400": {

@@ -1784,10 +1784,12 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   - Branch backups (`git.backups`, bridge 0.9.182). As each agent's run starts and ends (the
     engine's and the coding agents', in any approval), the box keeps the branches and stashes of
     the repository the conversation works in, where something changed since the last time: what
-    each branch pointed at, the branch checked out, the stashes (older ones too) and the remotes'
-    addresses (without a sign-in in them), with their commits in a store of its own
-    (`box/branch-backups`), so a hard reset, a deleted branch, a dropped stash or `rm -rf .git`
-    can be taken back. The newest 100 are kept, none older than 30 days but the newest.
+    each branch pointed at, the branch checked out, each worktree's checkout on no branch, the
+    stashes (older ones too) and the remotes' addresses (without a sign-in in them), with their
+    commits in a store of its own (`box/branch-backups`), so a hard reset, a deleted branch, a
+    dropped stash or `rm -rf .git` can be taken back. Tags and other refs aren't kept. The newest
+    100 are kept, none older than 30 days but the newest. No setting of the repository's runs a
+    program as it's taken or taken back, and taking one back never goes through git's transports.
     `GET kuvo/git/backups?folder=<folder>` → `{"repository", "exists", "backups": [{id, at, head,
     branches, stashes, gone, moved, stashesGone}]}`, newest first: `repository`, the repository's
     top folder (a linked worktree's are its repository's; null where none was backed up), found
@@ -1795,13 +1797,16 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     out then ("" for none); `gone` and `moved`, its branches deleted since and those elsewhere now;
     `stashesGone`, its stashes no longer on the list. `POST kuvo/git/backups/restore {"folder",
     "id"}` takes one back, never moving a branch you have: one gone comes back under its name, one
-    elsewhere beside it as `<branch>-restored-<yyyymmdd-hhmm>` (the backup's time, UTC), a
-    detached checkout's commit as `detached-restored-…`, and stashes no longer there back on the
-    list as they were; a repository whose `.git` is gone is made again in its top folder, around
-    the files as they are (none changed: the index from the branch checked out then), with its
-    remotes → `{"remade", "branches": [{name, as}], "stashes"}` (`name` "" for a detached one).
-    `400` without a folder that's there or an `id`, `404` for none here, `409` for a `.git` that
-    can't be read, `500 {"message"}` with git's words.
+    elsewhere beside it as `<branch>-restored-<yyyymmdd-hhmm>` (the backup's time, UTC; `-2`
+    and on where that's taken, or a branch of yours would clash with it, as `feature` with
+    `feature/x`), a checkout on no branch as `detached-restored-…`, and stashes no longer there
+    on top of the list, in their order; a repository whose `.git` is gone is made again in its
+    top folder (as SHA-256 or shallow as it was), around the files as they are (none changed: the
+    index from the branch checked out then), with its remotes → `{"remade", "branches": [{name,
+    as}], "stashes", "missed"?}` (`name` "" for a checkout on no branch; `missed`, what didn't
+    come back, in words). The branches come back all together or not at all. `400` without a
+    folder that's there or an `id`, `404` for none here, `409` for a `.git` that can't be read,
+    `500 {"message"}` with git's words (a repository made again is taken away again then).
 - `GET kuvo/folders[?path=<folder>&hidden=1]` (`folders`): the folders in one of this box's folders,
   for a client to choose one (Settings › Worktrees' folder) as a folder panel does → `{"path",
   "home", "parent", "folders": [{name, repository?}]}`, ordered as Finder orders names, without

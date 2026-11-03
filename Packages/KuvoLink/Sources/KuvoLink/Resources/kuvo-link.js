@@ -1,7 +1,7 @@
 // Built from Packages/Box/src by scripts/build-box.sh: change those, then run it. Never edit this file.
 
 // Packages/Box/src/link/main.ts
-import { spawn as spawn11 } from "node:child_process";
+import { spawn as spawn12 } from "node:child_process";
 import crypto37 from "node:crypto";
 import fs86 from "node:fs";
 import os14 from "node:os";
@@ -16396,20 +16396,42 @@ async function reviewPermission(source, event, signal, found) {
 }
 
 // Packages/Box/src/link/work/backups.ts
-import { execFile as execFile4 } from "node:child_process";
+import { execFile as execFile4, spawn as spawn6 } from "node:child_process";
 import crypto25 from "node:crypto";
 import fs59 from "node:fs";
 import path62 from "node:path";
 var BACKUPS_FOLDER = path62.join(BOX, "branch-backups");
 var KEEP = 100;
 var KEEP_FOR2 = 30 * 24 * 60 * 60 * 1000;
-var SAFE = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "core.pager=cat", "-c", "credential.helper=", "-c", "diff.external=", "-c", "protocol.file.allow=always", "-c", "gc.autoDetach=false"];
+var SAFE = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "core.pager=cat", "-c", "credential.helper=", "-c", "diff.external=", "-c", "log.showSignature=false", "-c", "protocol.file.allow=always", "-c", "gc.autoDetach=false"];
 var ENV = { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_ASKPASS: "", SSH_ASKPASS: "" };
 function git(args, options = {}) {
   return new Promise((resolve) => {
     const child = execFile4("git", [...SAFE, ...args], { cwd: options.cwd, env: ENV, encoding: "utf8", timeout: 300000, maxBuffer: 64 * 1024 * 1024 }, (error, out, err) => resolve({ ok: !error, out: String(out ?? ""), error: String(err ?? "").trim() || (error ? String(error.message) : "") }));
     if (options.input !== undefined)
       child.stdin?.end(options.input);
+  });
+}
+function gitPipe(from, input, to) {
+  return new Promise((resolve) => {
+    const options = { env: ENV, stdio: ["pipe", "pipe", "pipe"] };
+    const sender = spawn6("git", [...SAFE, ...from], options);
+    const taker = spawn6("git", [...SAFE, ...to], options);
+    let error = "";
+    sender.stderr.on("data", (chunk) => {
+      error += chunk;
+    });
+    taker.stderr.on("data", (chunk) => {
+      error += chunk;
+    });
+    taker.stdout.resume();
+    sender.stdout.pipe(taker.stdin);
+    sender.stdin.end(input);
+    const ended = (child) => new Promise((done) => {
+      child.on("error", () => done(false));
+      child.on("close", (code) => done(code === 0));
+    });
+    Promise.all([ended(sender), ended(taker)]).then(([sent, taken]) => resolve({ ok: sent && taken, out: "", error: error.trim() }));
   });
 }
 async function repositoryOf(folder) {
@@ -16478,7 +16500,7 @@ async function stateOf(gitDir) {
       head = { commit: detached.out.trim() };
   }
   const stashes = [];
-  const stash = await git([...at, "log", "-g", "--format=%H%x00%gs", "refs/stash", "--"]);
+  const stash = await git([...at, "log", "-g", "--no-show-signature", "--format=%H%x00%gs", "refs/stash", "--"]);
   if (stash.ok)
     for (const line of stash.out.split(`
 `)) {
@@ -16495,21 +16517,42 @@ async function stateOf(gitDir) {
       if (found)
         remotes[found[1]] = withoutSignIn(found[2]);
     }
-  return { head, branches, stashes, remotes };
+  const detached = new Set;
+  const worktrees = await git([...at, "worktree", "list", "--porcelain"]);
+  let commit = "";
+  if (worktrees.ok)
+    for (const line of worktrees.out.split(`
+`)) {
+      if (line.startsWith("HEAD "))
+        commit = line.slice(5).trim();
+      if (line === "detached" && /^[0-9a-f]{40,64}$/.test(commit))
+        detached.add(commit);
+    }
+  if (head && "commit" in head)
+    detached.add(head.commit);
+  return { head, detached: [...detached].sort(), branches, stashes, remotes };
 }
 function withoutSignIn(url) {
-  return url.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/@]*@/i, "$1");
+  return url.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/]*@/i, "$1").replace(/^([a-z][a-z0-9+.-]*:\/\/[^?#]*)[?#].*$/i, "$1");
 }
-var same2 = (a, b) => JSON.stringify([a.head, Object.entries(a.branches).sort(), a.stashes.map((each) => each.commit), Object.entries(a.remotes).sort()]) === JSON.stringify([b.head, Object.entries(b.branches).sort(), b.stashes.map((each) => each.commit), Object.entries(b.remotes).sort()]);
-var commitsOf = (backup) => [...Object.values(backup.branches), ...backup.stashes.map((each) => each.commit), ...backup.head && "commit" in backup.head ? [backup.head.commit] : []];
+var shape = (a) => JSON.stringify([a.head, a.detached ?? [], Object.entries(a.branches).sort(), a.stashes.map((each) => each.commit), Object.entries(a.remotes).sort()]);
+var same2 = (a, b) => shape(a) === shape(b);
+var commitsOf = (backup) => [...Object.values(backup.branches), ...backup.stashes.map((each) => each.commit), ...backup.detached ?? [], ...backup.head && "commit" in backup.head ? [backup.head.commit] : []];
 async function makeStore(store, gitDir) {
   fs59.mkdirSync(path62.dirname(store), { recursive: true, mode: 448 });
   const cloned = await git(["clone", "--bare", "--local", "--no-tags", "--template=", "-q", gitDir, store]);
   if (!cloned.ok) {
-    fs59.rmSync(store, { recursive: true, force: true });
-    const made = await git(["init", "--bare", "--template=", "-q", store]);
+    await fs59.promises.rm(store, { recursive: true, force: true });
+    const format = (await git(["--git-dir", gitDir, "rev-parse", "--show-object-format"])).out.trim() || "sha1";
+    const made = await git(["init", "--bare", "--template=", "-q", `--object-format=${format}`, store]);
     if (!made.ok)
       return false;
+  }
+  const borrowed = path62.join(store, "objects", "info", "alternates");
+  if (fs59.existsSync(borrowed)) {
+    if (!(await git(["--git-dir", store, "repack", "-a", "-d", "-q"])).ok)
+      return false;
+    await fs59.promises.rm(borrowed, { force: true });
   }
   const own = await git(["--git-dir", store, "for-each-ref", "--format=%(refname)"]);
   const deletes = own.out.split(`
@@ -16523,22 +16566,13 @@ async function makeStore(store, gitDir) {
 }
 async function keepCommits(store, gitDir, wanted) {
   const unique = [...new Set(wanted)];
-  if (!unique.length)
-    return true;
-  const checked = await git(["--git-dir", store, "cat-file", "--batch-check=%(objectname)"], { input: unique.map((each) => `${each}^{commit}
-`).join("") });
-  const have = new Set(checked.out.split(`
-`).filter((line) => /^[0-9a-f]+$/.test(line)));
-  const missing = unique.filter((each) => !have.has(each));
-  for (let start = 0;start < missing.length; start += 200) {
-    const specs = missing.slice(start, start + 200).map((each) => `+${each}:refs/kuvo/keep/${each}`);
-    const fetched = await git(["--git-dir", store, "-c", "uploadpack.allowAnySHA1InWant=true", "fetch", "--no-tags", "-q", gitDir, ...specs]);
+  for (let start = 0;start < unique.length; start += 200) {
+    const specs = unique.slice(start, start + 200).map((each) => `+${each}:refs/kuvo/keep/${each}`);
+    const fetched = await git(["--git-dir", store, "-c", "uploadpack.allowAnySHA1InWant=true", "fetch", "--no-tags", "-q", "--update-shallow", gitDir, ...specs]);
     if (!fetched.ok)
       return false;
   }
-  const creates = unique.filter((each) => have.has(each)).map((each) => `update refs/kuvo/keep/${each} ${each}
-`).join("");
-  return !creates || (await git(["--git-dir", store, "update-ref", "--stdin"], { input: creates })).ok;
+  return true;
 }
 function takeBackup(folder, root = BACKUPS_FOLDER, now = Date.now()) {
   return repositoryOf(folder).then((repository) => {
@@ -16546,7 +16580,7 @@ function takeBackup(folder, root = BACKUPS_FOLDER, now = Date.now()) {
       return null;
     return one(storeOf(repository.top, root), async () => {
       const state = await stateOf(repository.gitDir);
-      if (!state || !Object.keys(state.branches).length && !state.stashes.length)
+      if (!state || !commitsOf(state).length)
         return null;
       const index = readIndex(repository.top, root);
       const last = index.backups.at(-1);
@@ -16627,6 +16661,14 @@ class RestoreError extends Error {
   }
 }
 var stamp2 = (at) => new Date(at).toISOString().slice(0, 16).replace(/[-:]/g, "").replace("T", "-");
+async function present(gitDir, commits) {
+  if (!commits.length)
+    return new Set;
+  const checked = await git(["--git-dir", gitDir, "cat-file", "--batch-check=%(objectname) %(objecttype)"], { input: commits.map((each) => `${each}
+`).join("") });
+  return new Set(checked.out.split(`
+`).filter((line) => line.endsWith(" commit")).map((line) => line.split(" ")[0]));
+}
 async function restoreBackup(folder, id, root = BACKUPS_FOLDER) {
   const at = await backedUpAt(folder, root);
   if (!at)
@@ -16641,59 +16683,93 @@ async function restoreBackup(folder, id, root = BACKUPS_FOLDER) {
     if (!gitDir) {
       if (fs59.existsSync(path62.join(at.top, ".git")))
         throw new RestoreError("This folder's .git can't be read.", 409);
-      const made = await git(["init", "-q", "--template=", at.top]);
+      const format = (await git(["--git-dir", store, "rev-parse", "--show-object-format"])).out.trim() || "sha1";
+      const made = await git(["init", "-q", "--template=", `--object-format=${format}`, at.top]);
       if (!made.ok)
         throw new RestoreError(`The repository couldn't be made again: ${made.error}`, 500);
       gitDir = path62.join(at.top, ".git");
       remade = true;
+      const shallow = textOf(path62.join(store, "shallow"));
+      if (shallow)
+        await fs59.promises.writeFile(path62.join(gitDir, "shallow"), shallow);
     }
-    const now = await stateOf(gitDir) ?? { head: null, branches: {}, stashes: [], remotes: {} };
-    const when = stamp2(backup.at);
-    const names = new Set(Object.keys(now.branches));
-    const free = (name) => {
-      let candidate = name;
-      for (let n = 2;names.has(candidate); n++)
-        candidate = `${name}-${n}`;
-      names.add(candidate);
-      return candidate;
-    };
-    const branches = [];
-    for (const [name, commit] of Object.entries(backup.branches)) {
-      if (now.branches[name] === commit)
-        continue;
-      branches.push({ name, as: now.branches[name] ? free(`${name}-restored-${when}`) : free(name) });
+    try {
+      return await restoreInto(gitDir, at.top, store, backup, remade);
+    } catch (error) {
+      if (remade)
+        await fs59.promises.rm(gitDir, { recursive: true, force: true });
+      throw error;
     }
-    const detached = backup.head && "commit" in backup.head ? backup.head.commit : null;
-    if (detached && !Object.values(backup.branches).includes(detached) && !Object.values(now.branches).includes(detached))
-      branches.push({ name: "", as: free(`detached-restored-${when}`) });
-    const stashes = backup.stashes.filter((each) => !now.stashes.some((have) => have.commit === each.commit));
-    const specs = [
-      ...branches.map((each) => `+refs/kuvo/keep/${each.name ? backup.branches[each.name] : detached}:refs/heads/${each.as}`),
-      ...stashes.map((each) => `+refs/kuvo/keep/${each.commit}:refs/kuvo-restoring/${each.commit}`)
-    ];
-    if (specs.length) {
-      const fetched = await git(["--git-dir", gitDir, "fetch", "--no-tags", "-q", "--update-head-ok", store, ...specs]);
-      if (!fetched.ok)
-        throw new RestoreError(`The backup couldn't be taken back: ${fetched.error}`, 500);
-    }
-    const tree = ["--git-dir", gitDir, "--work-tree", at.top];
-    for (const each of stashes.slice().reverse())
-      await git([...tree, "stash", "store", "-m", each.message || "restored", each.commit], { cwd: at.top });
-    if (stashes.length)
-      await git(["--git-dir", gitDir, "update-ref", "--stdin"], { input: stashes.map((each) => `delete refs/kuvo-restoring/${each.commit}
-`).join("") });
-    if (remade) {
-      for (const [name, url] of Object.entries(backup.remotes))
-        await git(["--git-dir", gitDir, "remote", "add", name, url]);
-      const checkedOut = backup.head && "branch" in backup.head ? backup.head.branch : null;
-      const head = branches.find((each) => each.name && each.name === checkedOut)?.as;
-      if (head) {
-        await git(["--git-dir", gitDir, "symbolic-ref", "HEAD", `refs/heads/${head}`]);
-        await git([...tree, "reset", "-q"], { cwd: at.top });
-      }
-    }
-    return { remade, branches, stashes: stashes.length };
   });
+}
+async function restoreInto(gitDir, top, store, backup, remade) {
+  const now = await stateOf(gitDir) ?? { head: null, branches: {}, stashes: [], remotes: {} };
+  const when = stamp2(backup.at);
+  const taken = new Set(Object.keys(now.branches));
+  const clashes = (name) => taken.has(name) || [...taken].some((each) => each.startsWith(`${name}/`) || name.startsWith(`${each}/`));
+  const free = (name) => {
+    let candidate = name;
+    for (let n = 2;clashes(candidate); n++)
+      candidate = `${name}-${n}`;
+    taken.add(candidate);
+    return candidate;
+  };
+  const branches = [];
+  for (const [name, commit] of Object.entries(backup.branches)) {
+    if (now.branches[name] === commit)
+      continue;
+    branches.push({ name, as: now.branches[name] ? free(`${name}-restored-${when}`) : free(name), commit });
+  }
+  const tips = new Set([...Object.values(backup.branches), ...Object.values(now.branches)]);
+  const detached = [...new Set([...backup.detached ?? [], ...backup.head && "commit" in backup.head ? [backup.head.commit] : []])];
+  for (const commit of detached)
+    if (!tips.has(commit))
+      branches.push({ name: "", as: free(`detached-restored-${when}`), commit });
+  const stashes = backup.stashes.filter((each) => !now.stashes.some((have) => have.commit === each.commit));
+  const wanted = [...new Set([...branches.map((each) => each.commit), ...stashes.map((each) => each.commit)])];
+  const had = await present(gitDir, wanted);
+  const needed = wanted.filter((each) => !had.has(each));
+  if (needed.length) {
+    const shallow = fs59.existsSync(path62.join(gitDir, "shallow"));
+    const known = shallow ? new Set : await present(store, [...new Set(Object.values(now.branches))]);
+    const revisions = [...needed, ...[...known].map((each) => `^${each}`)].join(`
+`) + `
+`;
+    const packed = await gitPipe(["--git-dir", store, "pack-objects", "--revs", "--stdout", "-q"], revisions, ["--git-dir", gitDir, "index-pack", "--stdin", "--fix-thin"]);
+    if (!packed.ok)
+      throw new RestoreError(`The backup couldn't be taken back: ${packed.error}`, 500);
+  }
+  if (branches.length) {
+    const lines = ["start", ...branches.map((each) => `create refs/heads/${each.as} ${each.commit}`), "prepare", "commit"].join(`
+`) + `
+`;
+    const written = await git(["--git-dir", gitDir, "update-ref", "--stdin"], { input: lines });
+    if (!written.ok)
+      throw new RestoreError(`The branches couldn't be taken back: ${written.error}`, 500);
+  }
+  const missed = [];
+  const tree = ["--git-dir", gitDir, "--work-tree", top];
+  let stashed = 0;
+  for (const each of stashes.slice().reverse()) {
+    if ((await git([...tree, "stash", "store", "-m", each.message || "restored", each.commit], { cwd: top })).ok)
+      stashed++;
+    else
+      missed.push(`The stash "${each.message}"`);
+  }
+  if (remade) {
+    for (const [name, url] of Object.entries(backup.remotes)) {
+      if (!(await git(["--git-dir", gitDir, "remote", "add", name, url])).ok)
+        missed.push(`The remote ${name}`);
+    }
+    const checkedOut = backup.head && "branch" in backup.head ? backup.head.branch : null;
+    const head = branches.find((each) => each.name && each.name === checkedOut)?.as;
+    if (head) {
+      const set = await git(["--git-dir", gitDir, "symbolic-ref", "HEAD", `refs/heads/${head}`]);
+      if (!set.ok || !(await git([...tree, "reset", "-q"], { cwd: top })).ok)
+        missed.push(`What's staged: run git reset in ${top} to see your changes against ${head}`);
+    }
+  }
+  return { remade, branches: branches.map(({ name, as }) => ({ name, as })), stashes: stashed, ...missed.length ? { missed } : {} };
 }
 
 // Packages/Box/src/link/engine/watch.ts
@@ -16942,7 +17018,7 @@ import fs62 from "node:fs";
 import path65 from "node:path";
 
 // Packages/Box/src/link/moves/bundle.ts
-import { spawn as spawn6 } from "node:child_process";
+import { spawn as spawn7 } from "node:child_process";
 import crypto26 from "node:crypto";
 import fs60 from "node:fs";
 import path63 from "node:path";
@@ -16955,7 +17031,7 @@ var folderOf2 = (kind, thing) => kind === "bot" ? path63.join(BOTS, thing) : kin
 var directoryOf = (kind, thing) => kind === "bot" ? path63.join(BOTS, thing, "workspace") : CHATS2;
 function run(program, args) {
   return new Promise((resolve, reject) => {
-    const child = spawn6(program, args, { stdio: ["ignore", "ignore", "pipe"], env: { ...process.env, COPYFILE_DISABLE: "1" } });
+    const child = spawn7(program, args, { stdio: ["ignore", "ignore", "pipe"], env: { ...process.env, COPYFILE_DISABLE: "1" } });
     let said = "";
     child.stderr.on("data", (chunk) => {
       said += chunk;
@@ -18486,7 +18562,7 @@ function watchMoves(host, signal) {
 }
 
 // Packages/Box/src/link/keeper.ts
-import { spawn as spawn7 } from "node:child_process";
+import { spawn as spawn8 } from "node:child_process";
 import fs64 from "node:fs";
 import path67 from "node:path";
 
@@ -19102,7 +19178,7 @@ function keepKeeper() {
   delete environment.BUN_BE_BUN;
   delete environment.BUN_RUNTIME_TRANSPILER_CACHE_PATH;
   try {
-    spawn7("sh", [start], { cwd: K, env: environment, detached: true, stdio: "ignore" }).unref();
+    spawn8("sh", [start], { cwd: K, env: environment, detached: true, stdio: "ignore" }).unref();
   } catch {}
 }
 function runningBridge() {
@@ -19115,7 +19191,7 @@ function runningBridge() {
 }
 function startBridge() {
   const workspace = path67.join(K, "workspace");
-  const child = spawn7(process.execPath, [...OWN_RUNTIME, SCRIPT, "run"], {
+  const child = spawn8(process.execPath, [...OWN_RUNTIME, SCRIPT, "run"], {
     detached: true,
     stdio: "ignore",
     cwd: fs64.existsSync(workspace) ? workspace : K,
@@ -21330,7 +21406,7 @@ function snippet(text, at, length) {
 }
 
 // Packages/Box/src/link/areas/changes.ts
-import { execFile as execFile5, execFileSync as execFileSync3, spawn as spawn8 } from "node:child_process";
+import { execFile as execFile5, execFileSync as execFileSync3, spawn as spawn9 } from "node:child_process";
 import fs71 from "node:fs";
 import os8 from "node:os";
 import path75 from "node:path";
@@ -21414,7 +21490,7 @@ function git2(folder, args, changing = false, more = {}, program = "git", timeou
   return new Promise((resolve) => {
     const out = [];
     const said = [];
-    const child = spawn8(program, args, { cwd: folder, env, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn9(program, args, { cwd: folder, env, stdio: ["ignore", "pipe", "pipe"] });
     child.stdout.on("data", (piece) => out.push(piece));
     child.stderr.on("data", (piece) => said.push(piece));
     child.on("error", () => resolve({ ok: false, out: Buffer.alloc(0), said: `${program} isn’t there.` }));
@@ -22484,7 +22560,7 @@ async function* backupsRoute(context) {
 }
 
 // Packages/Box/src/link/fence/outside.ts
-import { spawn as spawn10 } from "node:child_process";
+import { spawn as spawn11 } from "node:child_process";
 import crypto30 from "node:crypto";
 import fs77 from "node:fs";
 import os9 from "node:os";
@@ -22581,7 +22657,7 @@ function askBook(prefix, no) {
 }
 
 // Packages/Box/src/link/run-command.ts
-import { spawn as spawn9 } from "node:child_process";
+import { spawn as spawn10 } from "node:child_process";
 import fs76 from "node:fs";
 var PRIVATE = ["BUN_BE_BUN", "BUN_RUNTIME_TRANSPILER_CACHE_PATH"];
 var MOST_KEPT2 = 4 * 1024 * 1024;
@@ -22619,7 +22695,7 @@ process.once("exit", () => {
 function runCommand(command, folder, env, timeout, signal, name = String(Math.random()), ended) {
   return new Promise((resolve) => {
     const shell = env.SHELL && fs76.existsSync(env.SHELL) ? env.SHELL : "/bin/sh";
-    const child = spawn9(shell, ["-lc", command], { cwd: folder, env, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" });
+    const child = spawn10(shell, ["-lc", command], { cwd: folder, env, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" });
     if (child.pid)
       running.set(name, { pid: child.pid, ended });
     let output = Buffer.alloc(0);
@@ -22709,7 +22785,7 @@ async function stopsFor(session, command, minutes = 3, signal) {
     return [];
   const tagged = `kuvo-sandbox ${session} ${commandSum(command)}`;
   const read = await new Promise((resolve) => {
-    const child = spawn10("/usr/bin/log", ["show", "--last", `${minutes}m`, "--style", "ndjson", "--predicate", `sender == "Sandbox" AND eventMessage CONTAINS "${tagged}"`], { stdio: ["ignore", "pipe", "ignore"] });
+    const child = spawn11("/usr/bin/log", ["show", "--last", `${minutes}m`, "--style", "ndjson", "--predicate", `sender == "Sandbox" AND eventMessage CONTAINS "${tagged}"`], { stdio: ["ignore", "pipe", "ignore"] });
     let out = "";
     const timer = setTimeout(() => child.kill("SIGKILL"), 20000);
     signal?.addEventListener("abort", () => child.kill("SIGKILL"), { once: true });
@@ -25860,7 +25936,7 @@ async function box(command) {
         return say({ status: 409, message: blocked });
       if (isUpdating())
         return say({ status: 409, message: "It's updating already." });
-      spawn11(process.execPath, [...OWN_RUNTIME, fileURLToPath3(import.meta.url), "update", "--now"], { detached: true, stdio: "ignore", cwd: K, env: process.env }).unref();
+      spawn12(process.execPath, [...OWN_RUNTIME, fileURLToPath3(import.meta.url), "update", "--now"], { detached: true, stdio: "ignore", cwd: K, env: process.env }).unref();
       return say({ status: 202, ...updateStatus(), updating: "checking" });
     }
     case "route": {
