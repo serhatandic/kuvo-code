@@ -3239,12 +3239,15 @@ rules. Plan mode stays the conversation's agent (`plan`), beside it.
 - A new conversation a client makes (feature `approval.default`): with `kuvo.approval` alone in the
   metadata it's made with, that one; with none, this computer's default: Auto the first time, then
   the last one you picked here (a conversation's `PUT`, or a start that says; never a bot's or a
-  subagent's), or Auto while Full Access, picked last, is switched off here since. The box keeps it
+  subagent's), or Auto once Full Access, picked last, is switched off here (until you pick it again).
+  Your Don't Allows on whole tools don't change that; one kept with an approval before, whose rules
+  an older client changed since, is what its rules say, never the default again. The box keeps it
   with the conversation and makes its rules for it as it hears the conversation was made, and looks
   again at the newest each round for one it missed. One the box makes itself (a bot's, one an agent
   started, a group chat's seat, a handoff's, one moved to the coding agents, a reviewer's part, an
   engine's copy of a coding agent's conversation) is marked in the metadata it's made with, and
-  keeps its own (a handoff's and a moved one's, the one they carry on from). The coding agents'
+  keeps its own (a handoff's and a moved one's, the one they carry on from; an engine's copy runs
+  as the coding agent's conversation it's for, reviewed and in Full Access as that one is). The coding agents'
   bridge keeps the metadata a conversation is made with, too. But a bot's and its
   work's, which the box keeps with the one their rules say (Ask First, or Auto that asks first
   without the sandbox), as it starts and as a bot is made or comes here.
@@ -3295,10 +3298,15 @@ Settings › Permissions ask.
   sandbox keeps as secrets), which the model judges.
 - Code holds back, too, what changes your own settings for every project, unless what you said
   (or the bot's goal) names it (`why: "unasked"`, with what the agent does instead): your global git
-  settings (`git config --global` or `--system`, `~/.gitconfig`, `~/.config/git/config`), your SSH
-  keys (anything written in `~/.ssh`, `ssh-keygen` making a key there), and your sign-ins' files
+  settings (`git config --global` or `--system` setting a value, `--file ~/.gitconfig`,
+  `~/.gitconfig`, `~/.config/git/config`, `gh auth setup-git`), your SSH keys (a key, `config` or
+  `authorized_keys` written in `~/.ssh`, `ssh-keygen` making a key there), and your sign-ins' files
   (`~/.aws/credentials`, `~/.netrc`, `~/.npmrc`, `~/.docker/config.json`, `~/.kube/config`, gh's,
-  gcloud's, keychains and the like). Named, the model judges it, told what it changes.
+  gcloud's, keychains and the like; `npm config set` but the project's, `aws configure`, `gh auth
+  login`, `docker login`), past `sudo -u`, quotes and `$HOME` in a line read by its words. Reading a
+  setting, making `~/.ssh` and trusting a host in `known_hosts` aren't changing them. Words that only
+  sound like it ("the login page", "a global handler") don't name it. Named, the model judges it,
+  told what it changes.
 - Everything else is the model's: your secrets (routine use allowed, printing, archiving or sending
   them off refused), Docker and its like (bringing a container up to test, reading its logs:
   allowed; one given `/`, your home, your secrets or the runtime's socket: refused), what writes
@@ -3333,7 +3341,7 @@ Settings › Permissions ask.
   or fills the address in itself) is held back with how to do it instead, and so is an ask the
   engine runs itself (in a bot's work), which can't be pinned. Never fetched from this computer's or
   its network's own addresses (`localhost`, private, link-local and loopback ones, `.local`
-  names): held back (`unread`).
+  names), by a name that leads there or a redirect on the way: held back (`unread`).
 - It allows (the command runs outside the sandbox, `Ran outside the sandbox · Allowed by Auto's
   reviewer: <reason>`; the engine's ask is answered once), or refuses with a reason the agent
   hears (the engine's ask is rejected with it): `Auto's reviewer refused: …` for a code line,
@@ -3341,8 +3349,8 @@ Settings › Permissions ask.
   can't judge is held back the same way, never allowed: a local script it runs that can't be read
   whole (`why: "unread"`), one from the web it couldn't fetch or pin (`unread`, `unpinned`), an
   answer that isn't one JSON object with a known decision (`unreadable`), no model (`noModel`), or a
-  model that fails or doesn't answer within a minute (`failed`: no quota, offline). A model that
-  answers `ask` refuses (`reviewer`).
+  model that fails or doesn't answer within a minute, or a review that fails on the box's side
+  (`failed`: no quota, offline). A model that answers `ask` refuses (`reviewer`).
 - Three refusals in a row, or twenty in a conversation, pause Auto there: its run is stopped, and
   what it wants next is held back (`why: "paused"`) until you let it go on or approve one. Those for
   want of a model (`noModel`, `failed`, `unreadable`) don't count. A review that can't be had at all
