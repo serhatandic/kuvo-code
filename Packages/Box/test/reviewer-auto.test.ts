@@ -265,29 +265,46 @@ test("in Auto, a coding agent's ask to work outside its folder is the reviewer's
   expect(reviewer.reviewLog("ses_codex").decisions.at(-1)).toMatchObject({ decision: "refused", held: true })
 })
 
-test("when the engine doesn't answer, a command in Auto is held back, never asked; one in Full Access still runs", async () => {
-  conversation("ses_down", "auto", "Fix the build")
-  conversation("ses_down_full", "approveAll", "Ship it")
-  reply = () => '{"decision": "allow", "reason": "Builds it."}'
-  expect((await sandboxAsk("ses_down", "echo seen")).text).toMatch(/^Ran outside the sandbox · Allowed by Auto's reviewer/)
-  expect((await sandboxAsk("ses_down_full", "echo seen")).text).toMatch(/^Ran outside the sandbox · Full Access/)
+// The engine doesn't answer for a moment (starting again, busy): `work` runs meanwhile.
+async function engineDown(work: () => Promise<void>) {
   down = true
-  try {
+  try { await work() } finally { down = false }
+}
+
+test("when the engine doesn't answer, a command in a conversation found in Auto before is held back, never asked", async () => {
+  conversation("ses_down", "auto", "Fix the build")
+  // Found while the engine answered: known as it was.
+  expect((await reviewing.findConversation("ses_down")).at).not.toBeNull()
+  await engineDown(async () => {
     expect((await sandboxAsk("ses_down", "echo again")).text).toMatch(/^Auto's reviewer held this back: /)
+  })
+  expect(outside.listSandboxAsks()).toEqual([])
+  expect(reviewer.reviewLog("ses_down").decisions.at(-1)).toMatchObject({ decision: "refused", held: true, why: "failed" })
+})
+
+test("when the engine doesn't answer, one found in Full Access before still runs", async () => {
+  conversation("ses_down_full", "approveAll", "Ship it")
+  expect((await reviewing.findConversation("ses_down_full")).at).not.toBeNull()
+  await engineDown(async () => {
     expect((await sandboxAsk("ses_down_full", "echo again")).text).toMatch(/^Ran outside the sandbox · Full Access\n\nagain/)
-    // One the box hasn't seen yet: held back too, for you to approve, never left waiting.
-    conversation("ses_down_new", "askFirst", "Build it")
+  })
+})
+
+test("when the engine doesn't answer, one the box hasn't found is held back for you to approve, never left waiting", async () => {
+  conversation("ses_down_new", "askFirst", "Build it")
+  await engineDown(async () => {
     expect((await sandboxAsk("ses_down_new", "echo new")).text).toMatch(/^Auto's reviewer held this back: /)
-    expect(outside.listSandboxAsks()).toEqual([])
-    // One in Full Access the box hasn't seen since it started again: marked so, it still runs.
-    conversation("ses_down_full_unseen", "approveAll", "Ship it")
-    ;(await import("../src/link/work/full")).markConversation("ses_down_full_unseen", true)
+  })
+  expect(outside.listSandboxAsks()).toEqual([])
+  expect(reviewer.reviewLog("ses_down_new").decisions.at(-1)).toMatchObject({ decision: "refused", held: true, why: "failed" })
+})
+
+test("when the engine doesn't answer, one in Full Access the box hasn't found since it started again runs, as it's marked", async () => {
+  conversation("ses_down_full_unseen", "approveAll", "Ship it")
+  ;(await import("../src/link/work/full")).markConversation("ses_down_full_unseen", true)
+  await engineDown(async () => {
     expect((await sandboxAsk("ses_down_full_unseen", "echo unseen")).text).toMatch(/^Ran outside the sandbox · Full Access\n\nunseen/)
-    expect(reviewer.reviewLog("ses_down").decisions.at(-1)).toMatchObject({ decision: "refused", held: true, why: "failed" })
-    expect(reviewer.reviewLog("ses_down_new").decisions.at(-1)).toMatchObject({ decision: "refused", held: true, why: "failed" })
-  } finally {
-    down = false
-  }
+  })
 })
 
 test("in Auto, a maker's install script is fetched once, reviewed, and that copy is what runs, without asking you", async () => {
