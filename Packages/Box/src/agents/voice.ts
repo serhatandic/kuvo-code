@@ -10,7 +10,7 @@ import { readFile, stat } from "node:fs/promises"
 import { basename, dirname, join } from "node:path"
 import type { GoalPlace, GoalPlaces } from "./goals"
 import { messages, sessionInfo } from "./oneoff"
-import { run } from "./proc"
+import { runGit } from "./proc"
 
 /** The words a client gets, at most. */
 export const wordLimit = 100
@@ -65,7 +65,7 @@ export interface Project {
 }
 
 async function git(directory: string, args: string[]): Promise<string | undefined> {
-  const ran = await run("git", ["-C", directory, ...args], { timeout: 5_000 }).catch(() => undefined)
+  const ran = await runGit(["-C", directory, ...args], { timeout: 5_000 }).catch(() => undefined)
   return ran && ran.code === 0 && !ran.timedOut ? ran.stdout : undefined
 }
 

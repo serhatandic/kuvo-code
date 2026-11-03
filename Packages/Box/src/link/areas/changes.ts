@@ -8,6 +8,7 @@ import { execFile, execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { askedArgs, ownArgsLater } from "../../shared/git";
 import { parsed } from "../../shared/json";
 import type { GitChanges, PullRequestDraft } from "../../shared/routes/changes";
 import { K } from "../home";
@@ -32,11 +33,14 @@ interface Ran {
 }
 
 /**
- * git in `folder`, never asking anything. Reading takes no locks it needn't and is stopped after
- * ten minutes (stuck on a lock or a hung disk); what changes the repository (a commit's hooks, a
- * push) takes as long as it takes.
+ * git in `folder`, never asking anything. Reading takes no locks it needn't, starts nothing the
+ * repository's own settings name (`../../shared/git`) and is stopped after ten minutes (stuck on
+ * a lock or a hung disk); what changes the repository, which you asked for (a commit with its
+ * hooks, a push), takes as long as it takes.
  */
-function git(folder: string, args: string[], changing = false, more: Record<string, string> = {}, program = "git", timeout = 600_000): Promise<Ran> {
+async function git(folder: string, given: string[], changing = false, more: Record<string, string> = {}, program = "git", timeout = 600_000): Promise<Ran> {
+  const args = program !== "git" ? given : changing ? askedArgs(given) : await ownArgsLater(given, folder);
+  if (!args) return { ok: false, out: Buffer.alloc(0), said: "This repository’s own settings name a program Kuvo Code won’t run for it." };
   const env = { ...process.env, GIT_TERMINAL_PROMPT: "0", ...(changing ? {} : { GIT_OPTIONAL_LOCKS: "0" }), ...more };
   if (!changing) {
     return new Promise(resolve => {
