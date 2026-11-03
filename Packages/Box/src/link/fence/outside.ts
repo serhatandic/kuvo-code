@@ -165,24 +165,6 @@ async function askToRun(caller: Caller, args: Record<string, unknown>, signal?: 
   const project = caller.folder && fs.existsSync(caller.folder) ? caller.folder : null;
   if (!project) return failed("This conversation's folder isn't there, so nothing can run for it.");
 
-  // (By the command as it ran, whitespace and all.)
-  const stopped = caller.session ? await stopsFor(caller.session, String(args.command)) : [];
-  let always = alwaysFor(stopped, project);
-  // macOS writes what its sandbox refused to its log a while after (a busy Mac, seconds): until
-  // it's there, the ask goes up without it, and gets it once it is.
-  let asking: string | undefined;
-  const heard = new AbortController();
-  if (!stopped.length && caller.session && process.platform === "darwin") void (async () => {
-    for (const wait of LOG_LATER) {
-      await new Promise(resolve => setTimeout(resolve, wait).unref?.());
-      if (heard.signal.aborted) return;
-      const found = await stopsFor(caller.session!, String(args.command), 3, heard.signal);
-      if (heard.signal.aborted || !found.length) continue;
-      always = alwaysFor(found, project);
-      if (asking) book.update(asking, { stopped: found, ...(always ? { always } : {}) });
-      return;
-    }
-  })();
   // In Full Access it just runs. In Auto, its reviewer decides, never you: it runs, or the agent
   // hears why not and goes on another way (and you can approve it later, from Decisions).
   // (Where the engine doesn't answer, as it was last found; one never found is held back, as one
@@ -195,10 +177,28 @@ async function askToRun(caller: Caller, args: Record<string, unknown>, signal?: 
   const reviewing = at && !full ? reviewIn(conversation!, action, signal, at) : unreached ? heldUnreached(conversation!, action, signal) : null;
   const verdict = reviewing && await reviewing
     .catch(error => ({ decision: "refuse" as const, reason: `Auto's reviewer couldn't review it (${String((error as Error)?.message ?? error).slice(0, 120)}).`, by: "code" as const, held: false, why: "failed" as const, paused: false, fetched: undefined }));
-  if (verdict?.decision === "refuse") {
-    heard.abort();
-    return { text: refusalWords(verdict), isError: false };
-  }
+  if (verdict?.decision === "refuse") return { text: refusalWords(verdict), isError: false };
+  // What the sandbox refused, from macOS's log, is for you when you're asked: read only then, so
+  // Full Access and Auto don't wait on the log.
+  const asks = !full && verdict?.decision !== "allow";
+  // (By the command as it ran, whitespace and all.)
+  const stopped = asks && caller.session ? await stopsFor(caller.session, String(args.command)) : [];
+  let always = alwaysFor(stopped, project);
+  // macOS writes what its sandbox refused to its log a while after (a busy Mac, seconds): until
+  // it's there, the ask goes up without it, and gets it once it is.
+  let asking: string | undefined;
+  const heard = new AbortController();
+  if (asks && !stopped.length && caller.session && process.platform === "darwin") void (async () => {
+    for (const wait of LOG_LATER) {
+      await new Promise(resolve => setTimeout(resolve, wait).unref?.());
+      if (heard.signal.aborted) return;
+      const found = await stopsFor(caller.session!, String(args.command), 3, heard.signal);
+      if (heard.signal.aborted || !found.length) continue;
+      always = alwaysFor(found, project);
+      if (asking) book.update(asking, { stopped: found, ...(always ? { always } : {}) });
+      return;
+    }
+  })();
   const answered: SandboxAnswer = full ? { answer: "once", client: "Full Access" } : verdict?.decision === "allow" ? { answer: "once", client: "Auto" } : await book.ask({
     ...(caller.root ? { session: caller.root, ...(caller.sessionName ? { sessionName: caller.sessionName } : {}) } : {}),
     ...(caller.bot ? { bot: caller.bot, botName: caller.botName } : {}),
