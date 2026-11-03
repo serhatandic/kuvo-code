@@ -353,7 +353,7 @@ struct GoalSteps: View {
                 GoalStepMark(GoalSteps.track(state), progress: step.progress)
                     .frame(width: Self.markWidth)
                 HStack(spacing: 5) {
-                    if let site = step.site { SiteServiceMark(site: site) }
+                    if GoalPlanWords.mark(of: step) != nil { StepServiceMark(step: step) }
                     // Cut in the middle: steps named alike ("…(3 of 9)") still differ.
                     Text(step.text)
                         .lineLimit(1)

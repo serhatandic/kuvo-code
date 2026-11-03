@@ -594,12 +594,41 @@ public enum GoalPlanWords {
     }
 
     /// A service's name from its site, for its mark's letter and its buttons: "stripe.com" is
-    /// "Stripe", "dash.cloudflare.com" "Cloudflare".
+    /// "Stripe", "dash.cloudflare.com" "Cloudflare", "appstoreconnect.apple.com" "App Store Connect".
     public static func service(_ site: String) -> String {
-        let labels = site.lowercased().split(separator: ".").filter { $0 != "www" }
+        let host = site.lowercased()
+        if let named = services.first(where: { host == $0.key || host.hasSuffix(".\($0.key)") }) { return named.value }
+        let labels = host.split(separator: ".").filter { $0 != "www" }
         let name = labels.count >= 2 ? labels[labels.count - 2] : labels.first ?? Substring(site)
         return name.prefix(1).uppercased() + name.dropFirst()
     }
+
+    /// Services on a maker's domain with a name of their own.
+    static let services = [
+        "appstoreconnect.apple.com": "App Store Connect", "developer.apple.com": "Apple Developer", "testflight.apple.com": "TestFlight",
+    ]
+
+    /// What a step's mark is: a product its words name that has a mark of its own ("Scaffold the
+    /// Xcode project" is Xcode's), else its site's, but never a maker's site for many of its
+    /// products (a step done "at" developer.apple.com isn't Apple's). Nil for no mark.
+    public static func mark(of step: GoalPlan.Step) -> StepMark? {
+        let words = step.text.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+        if let product = products.first(where: { words.contains(Substring($0.key)) }) { return .product(product.value) }
+        guard let site = step.site?.lowercased(), !makers.contains(site.hasPrefix("www.") ? String(site.dropFirst(4)) : site) else { return nil }
+        return .site(site)
+    }
+
+    public enum StepMark: Equatable, Sendable {
+        /// A bundled mark, by its id (`BrandMark`).
+        case product(String)
+        /// The site's own icon.
+        case site(String)
+    }
+
+    /// Products a step names, by the word, with the id of their bundled mark.
+    static let products = ["xcode": "xcode"]
+    /// Makers' sites for all they make: their mark says nothing of the step.
+    static let makers: Set<String> = ["apple.com", "developer.apple.com", "google.com", "developers.google.com", "microsoft.com", "learn.microsoft.com"]
 
     /// An amount in its currency, as people write it: "$15", "€9.50".
     public static func money(_ amount: Double, _ currency: String) -> String {

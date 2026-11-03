@@ -98,7 +98,7 @@ public enum BrandMark {
         // Simple Icons (CC0)
         "asana", "atlassian", "bluesky", "calendly", "chrome", "cloudflare", "discord", "figma", "github", "gmail",
         "google-calendar", "linear", "mastodon", "notion", "reddit", "sentry", "stripe", "supabase", "telegram",
-        "todoist", "whatsapp", "x", "zoom",
+        "todoist", "whatsapp", "x", "xcode", "zoom",
         // UsageKit's provider icons (MIT, from OpenUsage)
         "antigravity", "claude", "codex", "copilot", "cursor", "devin", "grok", "ollama",
     ]

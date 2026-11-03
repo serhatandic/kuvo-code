@@ -56,6 +56,19 @@ struct SiteServiceMark: View {
     }
 }
 
+/// A step's mark (`GoalPlanWords.mark(of:)`): the product it's about, or its service's.
+struct StepServiceMark: View {
+    let step: GoalPlan.Step
+
+    var body: some View {
+        switch GoalPlanWords.mark(of: step) {
+        case .product(let id): ServiceMark(icon: BrandMark.image(id), name: id).foregroundStyle(.secondary)
+        case .site(let site): SiteServiceMark(site: site)
+        case nil: EmptyView()
+        }
+    }
+}
+
 /// A line that names a service, with its mark just before its name ("Add a ◼︎ Cloudflare API
 /// token"), or before the line where the name isn't in it.
 struct ServiceText: View {
