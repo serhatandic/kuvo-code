@@ -3223,7 +3223,8 @@ rules. Plan mode stays the conversation's agent (`plan`), beside it.
 - In Auto and Full Access, which never hold the agent for you, its rules let it read `.env` files
   (the engine's own defaults ask first), before Settings' rules, so a Don't Allow there still holds.
 - What the box writes is the engine's rules for it, made again with Settings › Permissions as they
-  are (a Don't Allow there holds in every one, Accept Edits included) and its own folders kept; a
+  are (a Don't Allow there holds in every one, Accept Edits included) and its own folders kept (a
+  folder Settings has a rule for is Settings' to say, bridge 0.9.187); a
   bot's work asks what always comes to you whatever it is. The coding agents' bridge sets each agent
   from the same rules. Kept in its metadata as `kuvo.approval` (what you picked) and `kuvo.applied`
   (what its rules were made for); rules a client changed on its own since (asks put back, say) are
@@ -3272,9 +3273,10 @@ rules. Plan mode stays the conversation's agent (`plan`), beside it.
 - The box looks every 2 seconds at what each comes to, and makes the rules of those kept with Auto
   or Full Access again when the sandbox starts or stops, the switch changes, or the engine or the
   bridge starts again, each read again just before it's written. As Settings › Permissions change
-  (bridge 0.9.187: `PATCH kuvo/config`, `POST kuvo/config/apply`, or the file by hand, within a
-  round), every conversation kept with an approval gets its rules made again with them, so no
-  client has to.
+  (bridge 0.9.187: `PATCH kuvo/config`, `POST kuvo/config/apply`, which answer once they're made
+  or after a few seconds while the rest goes on, or the file by hand, within a round, and as the box
+  starts, for a change made while it was down), every conversation kept with an approval gets its
+  rules made again with them, so no client has to.
 
 #### Auto's reviewer
 
@@ -3283,8 +3285,9 @@ below since 0.9.185, `approval.held`), what its agent wants beyond the sandbox's
 the box: a command it asks to run outside the sandbox (`sandbox_ask`), a file the agent's own tools
 want to change outside its folder (the engine's or the bridge's `external_directory` ask, by the
 file the tool call names; where no tool call names one, as when Codex asks for room of its own, by
-each path the ask names, judged as a write, and where it names none, by what it asked, which the
-model judges; bridge 0.9.186), and in a bot's conversation or its work, what the engine asks of what
+each path the ask names, judged as a write (`~` as your home, one not from `/` from its folder; a
+folder that holds Kuvo Code's own is refused by code, bridge 0.9.187), and where it names none, by
+what it asked, which the model judges; bridge 0.9.186), and in a bot's conversation or its work, what the engine asks of what
 always comes to you ("Work › What always comes to you"). The flow comes first: it allows what the
 work calls for, refuses only real damage and what you didn't ask for, and **never leaves a call
 waiting on you**: a refusal goes back to the agent with the reason, and it carries on another way.
@@ -3292,7 +3295,8 @@ A conversation in Full Access is never reviewed (its command just runs, `Ran out
 Full Access`); one in Ask First or Accept Edits asks you as before, and so does what your own
 Settings › Permissions ask. Where the engine (or the bridge) doesn't answer for a moment, a
 conversation is taken as the box last found it; one it never found then has its `sandbox_ask` held
-back (`why: "failed"`, code's lines still refused), never left waiting on you (bridge 0.9.186).
+back (`why: "failed"`, code's lines still refused), never left waiting on you (bridge 0.9.186), but
+one the box marked as in Full Access, which runs (bridge 0.9.187).
 
 - Code first, only for what's never allowed, refused and the model never asked, and never held back
   for you: Kuvo Code's own folders (read or written, a script run from them), and wrecking your
