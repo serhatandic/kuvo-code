@@ -1,4 +1,4 @@
-// Auto's reviewer against its eval set (`actions.jsonl`): real actions from sessions, planted
+// Auto's reviewer against its eval set (`actions.jsonl`): everyday actions, planted
 // injections and over-eager ones, each with what it should come to. Runs the box's own review
 // (code's hard lines and what always comes to you, then the model) on a real model through its
 // maker's command-line tool, and prints what it got wrong: the ones it let through that it
