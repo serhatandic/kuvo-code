@@ -1739,7 +1739,7 @@ export class Sessions {
    * conversation: a commit message, say. Coding agents that can't answer one so say why, or with
    * `orAnother`, another agent you're signed in to answers (a goal's check).
    */
-  async generate(id: string, prompt: string, { orAnother = false } = {}): Promise<string> {
+  async generate(id: string, prompt: string, { orAnother = false, model: given }: { orAnother?: boolean; model?: ModelRef } = {}): Promise<string> {
     const model = this.record(id).session.model
     if (!model) throw new BadRequest("This session has no model yet.")
     const candidates: ModelRef[] = []
@@ -1750,6 +1750,12 @@ export class Sessions {
         tried.add(Auto.modelKey(entry))
         candidates.push({ providerID: entry.providerID, id: entry.modelID, ...(entry.variant ? { variant: entry.variant } : {}) })
       }
+    }
+    // A model of the session's own maker (its small one), never another's.
+    if (given) {
+      const agent = candidates.some((candidate) => candidate.providerID === given.providerID) ? this.agent(given.providerID) : undefined
+      if (!agent?.generate) throw new BadRequest(`${this.agent(given.providerID)?.name ?? "That agent"} can't answer on ${given.id} for this session.`)
+      return agent.generate(prompt, given)
     }
     for (const candidate of candidates) {
       const agent = this.agent(candidate.providerID)

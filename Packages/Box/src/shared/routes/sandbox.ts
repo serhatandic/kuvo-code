@@ -44,6 +44,15 @@ export const SANDBOX_RULE = object({
  * folder for (`POST` with `owner`), besides the projects it knows. */
 export const SANDBOX_ALLOWED = object({ allowed: list(SANDBOX_RULE), "owners?": list(SANDBOX_OWNER) });
 
+/** Why Auto's reviewer brought something to you: in a sentence to show, and as a word a client
+ * maps (`always`: it always comes to you, and which kind; `reviewer`: the reviewer asked;
+ * `unreadable`, `noModel`, `failed`: it couldn't be reviewed; `paused`: Auto is paused there). */
+export const REVIEW_ASKED = object({
+  reason: string,
+  why: words("always", "reviewer", "unreadable", "noModel", "failed", "paused"),
+  "always?": words("payment", "delete", "permissions", "account", "message", "credentials", "gitConfig"),
+});
+
 /**
  * A command an agent wants to run outside the sandbox (its `sandbox_ask`), waiting for your answer:
  * the conversation and its project, its bot, the command, why, what the sandbox stopped (`stopped`,
@@ -51,6 +60,9 @@ export const SANDBOX_ALLOWED = object({ allowed: list(SANDBOX_RULE), "owners?": 
  * the one folder it was stopped writing in, when the box knows it and it may be given; none, and
  * it's only once or no, for anything else). `machine`: the
  * computer's name, on a machine. `owner`: whose its folder is, which Always would give it to.
+ * `review`: in Auto, why its reviewer brought it to you (`reason`, a sentence to show; `why`: it
+ * always comes to you, the reviewer asked, or it couldn't be reviewed, and what kind for one that
+ * always comes to you).
  */
 export const SANDBOX_ASK = object({
   id: string, at: number,
@@ -58,7 +70,7 @@ export const SANDBOX_ASK = object({
   project: string, command: string, why: string,
   "stopped?": list(SANDBOX_STOP), "error?": string,
   "always?": object({ kind: words("write"), path: string }),
-  "machine?": string, "owner?": SANDBOX_OWNER,
+  "machine?": string, "owner?": SANDBOX_OWNER, "review?": REVIEW_ASKED,
 });
 export const SANDBOX_ASKS = object({ asks: list(SANDBOX_ASK), "restart?": bool });
 

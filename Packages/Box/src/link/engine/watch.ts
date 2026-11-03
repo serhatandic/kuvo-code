@@ -13,6 +13,7 @@ import { bridgeTarget, engineGet, peerTargets, readBridgeFile, readEngineFile } 
 import { learnCompatibility } from "./compatibility";
 import { goalHolds, settleGoalHolds } from "../work/goals";
 import { workWatcher } from "../work/wakes";
+import { reviewPermission } from "../work/reviewing";
 import { queueWatcher, scanQueues, type ScanFound } from "./queue";
 import type { Target } from "../../shared/records";
 import type { SignInEvent } from "../areas/accounts";
@@ -326,6 +327,8 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
         steer?.(event);
         queue?.(event as QueueEvent);
         followWork?.(event);
+        // A conversation in Auto: what its agent's file tools ask outside its folder, reviewed.
+        if (work && event.type === "permission.asked") reviewPermission(source, event, connection.signal).catch(() => {});
         goalHeld?.(event).catch(() => {});
         if (signIns) noteSignIn(event, source).catch(() => {}).finally(() => signedIn(event));
         if (!bots) {

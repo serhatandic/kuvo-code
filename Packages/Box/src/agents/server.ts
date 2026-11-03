@@ -388,7 +388,9 @@ export function handler(context: Context) {
             const prompt = String(input.prompt ?? "")
             if (!prompt.trim()) throw new BadRequest("Say what to write.")
             // `orAnother`: another agent you're signed in to may answer, where this one can't.
-            return json({ data: { text: await sessions.generate(id, prompt, { orAnother: input.orAnother === true }) } })
+            // `model`: on that model of the session's own maker (Auto's reviewer, on its small one).
+            const model = input.model && typeof input.model.providerID === "string" && typeof input.model.id === "string" ? { providerID: input.model.providerID, id: input.model.id } : undefined
+            return json({ data: { text: await sessions.generate(id, prompt, { orAnother: input.orAnother === true, model }) } })
           }
           case "command": {
             // One of yours (Settings › Commands): what it says, with what you wrote after it. Any
