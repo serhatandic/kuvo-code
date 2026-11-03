@@ -53,7 +53,7 @@ struct PermissionsSettings: View {
             } header: {
                 Text("When the Agent Wants To")
             } footer: {
-                Text("For every session and mode. Don't Allow holds even in Approve All. Codex, Cursor, Grok and Antigravity may read files without asking.")
+                Text("For every session and mode. Don't Allow holds even in Full Access. Codex, Cursor, Grok and Antigravity may read files without asking.")
                     .foregroundStyle(.secondary)
             }
 

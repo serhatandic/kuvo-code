@@ -24,7 +24,7 @@ import { dropRelayed, relayedServers, relayedTools, relayPort } from "../toolrel
 import { computerServers } from "../servers"
 import { skillsFolder, skillsFor, turnedOff, upward } from "../skills"
 import { onMachine, ownFoldersScript } from "../machine"
-import { fenceAgent, fenceAttachments, fenceCopy, fenceKey, fenceOn, seatBot } from "../fence"
+import { fenceAgent, fenceAttachments, fenceCopy, fenceKey, fenceOn, seatBot, fullAccessMark } from "../fence"
 import { addShell, endShell } from "../shells"
 import { pictureData, pictureFile, withPictures } from "../pictures"
 import type { Turn } from "../turn"
@@ -625,7 +625,7 @@ class ClaudeThread implements Thread {
     // Settings › Skills' skills, as a plugin of its own (but those it reads itself).
     const skills = skillsFolder(await skillsFor(this.session.location.directory, this.agent.ownSkillFolders(this.session.location.directory), turnedOff(hooks)))
     // So does it when the box's sandbox was turned on or off, or its rules changed.
-    const fence = fenceKey()
+    const fence = fenceKey() + fullAccessMark(this.session.id)
     if (this.query && (this.opened?.append !== append || this.opened?.program !== this.agent.program || this.opened?.tools !== tools?.key || this.opened?.skills !== skills || this.opened?.fence !== fence)) this.close()
     // The computer's MCP servers (yours, the integrations', a bot's with its own keys), through the
     // relay, which keeps their keys: another set of them is told to the same Claude Code.
@@ -858,7 +858,7 @@ class ClaudeThread implements Thread {
     const whole = this.whole(skills)
     this.input = new Queue()
     const tools = fenceOn() ? relayedTools(this.session.id, this) : kuvoTools(this.session.id)
-    this.opened = { model: modelID, effort, plan, append, program: this.agent.program, tools: tools?.key, skills, fence: fenceKey() }
+    this.opened = { model: modelID, effort, plan, append, program: this.agent.program, tools: tools?.key, skills, fence: fenceKey() + fullAccessMark(this.session.id) }
     this.query = sdk.query({
       prompt: this.input,
       options: {

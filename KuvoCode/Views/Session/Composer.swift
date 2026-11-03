@@ -58,6 +58,16 @@ struct Composer: View {
     var onDiscardComments: () -> Void = {}
     var onSelectAgent: (String) -> Void
     var onSelectApproval: (ToolApproval) -> Void
+    /// The approval as its box shows it (why it asks first for now, which can't be picked).
+    var approvalShown: ApprovalShown?
+    /// Opens Auto's Decisions here (nil: none to open, as for a new conversation).
+    var onDecisions: (() -> Void)?
+    /// Auto's Decisions, open over the mode chip.
+    var showsDecisions: Binding<Bool> = .constant(false)
+    var decisions: AnyView?
+    /// Full Access was picked where it isn't confirmed yet: the composer asks (`onConfirmFullAccess`).
+    var confirmsFullAccess: Binding<Bool> = .constant(false)
+    var onConfirmFullAccess: () -> Void = {}
     var onSelectModel: (ModelRef) -> Void
     /// A new session in a git repository: whether it gets a worktree of its own (nil hides it).
     var worktree: Bool?
@@ -305,51 +315,57 @@ struct Composer: View {
             }
             if let keywordProblem { KeywordProblem(text: keywordProblem) }
 
-            if let voice = listening {
-                // The chips make way for the voice: how long, how loud, Cancel and Done.
-                VoiceComposerRow(voice: voice, cancel: { app.dictation.cancel(); focusAtEnd() }, done: { app.dictation.finish() }, openSettings: { Self.openPrivacySettings(for: voice.phase) })
-                    .transition(.opacity)
-            } else {
-                HStack(spacing: 4) {
-                    if isShell {
-                        ShellModeLabel(folder: folders.first)
-                            .transition(.opacity)
-                    } else {
-                        Group {
-                            Button(action: chooseFiles) {
-                                Image(systemName: "paperclip")
-                                    .font(.system(size: 14, weight: .medium))
-                                    .frame(width: 30, height: 28)
-                                    .hoverHighlight(in: Capsule(), mutesInk: true)
-                            }
-                            .buttonStyle(.plain)
-                            .clickablePointer()
-                            .accessibilityLabel("Attach Files")
-                            .help("Attach Files… You can also drop files here, or paste them.")
-                            // Set on the engine: not while it's out of reach.
-                            if showsMode {
-                                ModeChip(agent: agent, approval: approval, onSelectAgent: onSelectAgent, onSelectApproval: onSelectApproval)
-                                    .disabled(isOffline)
-                            }
-                            if showsModel {
-                                ModelChip(selection: model, onSelect: onSelectModel, scope: modelScope, inUse: modelInUse, openRequest: modelMenuRequest)
-                                    .disabled(isOffline)
-                            }
-                            if let worktree {
-                                WorkplaceChip(worktree: worktree, attempts: attempts, onSelect: onSelectWorktree, onSelectAttempts: onSelectAttempts)
-                            }
-                        }
+            // Decisions and Full Access's confirmation open over the chips' row, which stays while
+            // the mode chip makes way (a shell command, the voice).
+            ZStack(alignment: .leading) {
+                if let voice = listening {
+                    // The chips make way for the voice: how long, how loud, Cancel and Done.
+                    VoiceComposerRow(voice: voice, cancel: { app.dictation.cancel(); focusAtEnd() }, done: { app.dictation.finish() }, openSettings: { Self.openPrivacySettings(for: voice.phase) })
                         .transition(.opacity)
+                } else {
+                    HStack(spacing: 4) {
+                        if isShell {
+                            ShellModeLabel(folder: folders.first)
+                                .transition(.opacity)
+                        } else {
+                            Group {
+                                Button(action: chooseFiles) {
+                                    Image(systemName: "paperclip")
+                                        .font(.system(size: 14, weight: .medium))
+                                        .frame(width: 30, height: 28)
+                                        .hoverHighlight(in: Capsule(), mutesInk: true)
+                                }
+                                .buttonStyle(.plain)
+                                .clickablePointer()
+                                .accessibilityLabel("Attach Files")
+                                .help("Attach Files… You can also drop files here, or paste them.")
+                                // Set on the engine: not while it's out of reach.
+                                if showsMode {
+                                    ModeChip(agent: agent, approval: approval, shown: approvalShown, onDecisions: onDecisions, onSelectAgent: onSelectAgent, onSelectApproval: onSelectApproval)
+                                        .disabled(isOffline)
+                                }
+                                if showsModel {
+                                    ModelChip(selection: model, onSelect: onSelectModel, scope: modelScope, inUse: modelInUse, openRequest: modelMenuRequest)
+                                        .disabled(isOffline)
+                                }
+                                if let worktree {
+                                    WorkplaceChip(worktree: worktree, attempts: attempts, onSelect: onSelectWorktree, onSelectAttempts: onSelectAttempts)
+                                }
+                            }
+                            .transition(.opacity)
+                        }
+                        Spacer(minLength: 0)
+                        if !isShell { voiceButton }
+                        actionButton
                     }
-                    Spacer(minLength: 0)
-                    if !isShell { voiceButton }
-                    actionButton
+                    .animation(.easeOut(duration: 0.15), value: isShell)
+                    // The pills are flat, so their text lines up with the message field above;
+                    // their hover fill reaches past it.
+                    .padding(.leading, -8)
                 }
-                .animation(.easeOut(duration: 0.15), value: isShell)
-                // The pills are flat, so their text lines up with the message field above;
-                // their hover fill reaches past it.
-                .padding(.leading, -8)
             }
+            .popover(isPresented: showsDecisions, attachmentAnchor: .point(UnitPoint(x: 0.12, y: 0)), arrowEdge: .top) { decisions }
+            .modifier(FullAccessConfirmation(isPresented: confirmsFullAccess, computer: folders.first.flatMap(RemoteFolder.machine(of:)), confirm: onConfirmFullAccess))
         }
         .animation(.ui, value: listening != nil)
         .padding(.horizontal, 16)

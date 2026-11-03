@@ -117,6 +117,29 @@ extension NSMenuItem {
     }
 }
 
+extension NSMenu {
+    /// Draws the check of each item in `checked` on its trailing side, lined up, in place of the
+    /// leading column, which the menu then leaves out.
+    func checksOnTrailingSide(_ checked: Set<NSMenuItem>) {
+        showsStateColumn = false
+        let font = NSFont.menuFont(ofSize: 0)
+        let small = NSFont.menuFont(ofSize: NSFont.smallSystemFontSize)
+        let rows = items.filter { !$0.isSeparatorItem && !$0.isSectionHeader && !$0.title.isEmpty }
+        // Past the widest title and subtitle, so every check sits in one column.
+        let width = rows.reduce(CGFloat(200)) { widest, item in
+            max(widest, (item.title as NSString).size(withAttributes: [.font: font]).width + 36, ((item.subtitle ?? "") as NSString).size(withAttributes: [.font: small]).width + 12)
+        }
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.tabStops = [NSTextTab(textAlignment: .right, location: width)]
+        for item in rows {
+            // (No color of its own: a highlighted row draws it as it draws the title.)
+            item.attributedTitle = NSAttributedString(string: item.title + "\t" + (checked.contains(item) ? "✓" : ""), attributes: [.font: font, .paragraphStyle: paragraph])
+            // (Its state too, which VoiceOver reads as selected; the column that would draw it is gone.)
+            item.state = checked.contains(item) ? .on : .off
+        }
+    }
+}
+
 extension NSAttributedString {
     /// "Title            Value", the value right-aligned and secondary.
     static func withValue(_ title: String, _ value: String) -> NSAttributedString {

@@ -478,6 +478,8 @@ when you're there to answer.
 | `KUVO_ANALYTICS_URL` | Send anonymous usage to this collector, e.g. `http://127.0.0.1:8787/kuvo/code`; debug builds send none otherwise |
 | `KUVO_DEMO_AGENTS_FAILED` | This Mac's coding agents' bridge (and its group chats) as if it had stopped for good, with that reason |
 | `KUVO_DEMO_GROUP_REPLAY` | `setup`, then `run`: a three-bot group chat discussion measured (`Tests/Perf`, `groups`) |
+| `KUVO_DEMO_BRANCH_BACKUPS` | `listed`, `gone`, `empty`, `none`, `failed`, `old`, `restored` or `gone-restored`: Branch Backups opens from the Changes panel with sample backups, the `restored` ones with the first taken back |
+| `KUVO_DEMO_AUTO` | With `KUVO_DEMO_SESSION`: it in Auto with sample decisions and no box behind it: `held` (one held back over the composer), `paused`, `decisions` (Auto's Decisions open), `fullAccess` (Full Access asked for) or `unread` (Decisions with its computer out of reach) |
 | `KUVO_PERF_PROVIDER` | The stand-in model that discussion talks on, an OpenAI-compatible URL (`kuvo_perf.py` serves it) |
 
 ### Rehearsing the group chats' upgrade

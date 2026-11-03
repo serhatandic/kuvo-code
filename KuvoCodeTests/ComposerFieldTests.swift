@@ -32,7 +32,7 @@ import Testing
                     }
                 }
                 Composer(session: model.id, text: $model.draftText, files: $model.draftFiles, quotes: $model.draftQuotes, quoteFocus: model.quoteFocus,
-                         agent: "build", approval: .approveAll, model: nil, isRunning: false, keywords: [.review],
+                         agent: "build", approval: .auto, model: nil, isRunning: false, keywords: [.review],
                          onSelectAgent: { _ in }, onSelectApproval: { _ in }, onSelectModel: { _ in }, onSend: {}, onStop: {})
             }
         }

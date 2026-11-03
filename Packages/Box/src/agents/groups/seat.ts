@@ -256,10 +256,12 @@ export class Seats implements SeatHome {
     if (!api) throw new Error("the coding agents aren’t running")
     const agent = onAgents && model?.providerID.split("@")[0] === "cursor" ? "plan" : undefined
     const text = this.seatText(bot, chat)
-    const session = await api.create(bot.directory, title, agent, model, this.rules(bot))
+    // Whose seat it is, in which chat: what a chat on another computer asks of a seat is checked
+    // against it (`owns`). Marked as it's made, so nothing takes it for a conversation of yours.
+    const metadata = { kuvo: { seat: { group: chat.id, bot: bot.id, ...(scratch ? { scratch: true } : {}) } } }
+    const session = await api.create(bot.directory, title, agent, model, this.rules(bot), metadata)
     try {
-      // Whose seat it is, in which chat: what a chat on another computer asks of a seat is checked against it (`owns`).
-      await api.setMetadata(session.id, { kuvo: { seat: { group: chat.id, bot: bot.id, ...(scratch ? { scratch: true } : {}) } } })
+      await api.setMetadata(session.id, metadata)
       await api.setInstruction(session.id, seatKey, text)
     } catch (error) {
       await api.delete(session.id).catch(() => {})

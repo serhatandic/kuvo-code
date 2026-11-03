@@ -89,8 +89,10 @@ export class SeatAPI {
     return { name: String(provider?.name ?? model.providerID), signedOut: provider !== undefined && !ready.includes(model.providerID) }
   }
 
-  async create(directory: string, title: string, agent: string | undefined, model: ModelRef | undefined, permissions: Rule[]): Promise<any> {
-    const body: Record<string, unknown> = { title, location: { directory }, permissions }
+  /** A conversation made, with `metadata` from the start (what the box marks it as, before any
+   * event about it goes out). */
+  async create(directory: string, title: string, agent: string | undefined, model: ModelRef | undefined, permissions: Rule[], metadata?: Record<string, unknown>): Promise<any> {
+    const body: Record<string, unknown> = { title, location: { directory }, permissions, ...(metadata ? { metadata } : {}) }
     if (agent) body.agent = agent
     if (model) body.model = model
     return (await this.requester.request("POST", "/api/session", body))?.data

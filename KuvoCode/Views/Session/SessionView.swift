@@ -135,7 +135,6 @@ private struct BottomStack: View {
     @Environment(Catalog.self) private var catalog
     @Environment(Workspace.self) private var workspace
     @Environment(AppModel.self) private var app
-    @AppStorage(ToolApproval.key) private var defaultApproval = ToolApproval.approveAll
     @Environment(\.takesCardKeys) private var takesCardKeys
     /// Each conversation's card as it was last seen here: which bar is open once it's full
     /// (`BarFolds`), and the bars and news it had, so coming back to it reads what changed
@@ -492,6 +491,13 @@ private struct BottomStack: View {
                                 .transition(.fold)
                         }
                     }
+                    // Auto held something back, or paused: never tucked, as it waits on you.
+                    if model.approval == .auto, model.decisions?.paused != nil || !model.unseenHeld.isEmpty {
+                        ApprovalBar(model: model)
+                            .disabled(offlineMachine != nil)
+                            .modifier(CardRow())
+                            .transition(.fold)
+                    }
                     // What's waiting for the agent (and the message just removed, for Undo).
                     if !model.waiting.isEmpty || model.putAways.isPutAway(.message) {
                         QueueDock(model: model, inCard: true, isOpen: $queueOpen)
@@ -523,10 +529,13 @@ private struct BottomStack: View {
                         commentCount: model.reviewComments.count,
                         onDiscardComments: { model.reviewComments = [] },
                         onSelectAgent: model.selectAgent,
-                        onSelectApproval: { approval in
-                            model.setApproval(approval)
-                            defaultApproval = approval
-                        },
+                        onSelectApproval: model.setApproval,
+                        approvalShown: model.approvalShown,
+                        onDecisions: model.decisionsToShow,
+                        showsDecisions: $model.showsDecisions,
+                        decisions: AnyView(DecisionsView(model: model)),
+                        confirmsFullAccess: $model.confirmsFullAccess,
+                        onConfirmFullAccess: { model.confirmFullAccess(in: workspace) },
                         onSelectModel: { ref in
                             // A coding agent's model (or Auto) in a session on the engine: it carries on with them.
                             if !OutsideAgents.isAgentSession(model.session), OutsideAgents.runsInBridge(ref.providerID) {
@@ -557,6 +566,13 @@ private struct BottomStack: View {
             .animation(.ui, value: tucked)
             .animation(.ui, value: removedWorktree?.folder)
             .animation(.ui, value: waitingMove != nil)
+            .animation(.ui, value: model.unseenHeld.map(\.id))
+            .animation(.ui, value: model.decisions?.paused)
+            // Its approval and Auto's decisions, as its box has them.
+            .task(id: model.id) {
+                await model.readApproval()
+                model.readDecisions()
+            }
             // A machine's box removes and restores worktrees without telling this Mac: read as it shows.
             .task(id: model.session.location.directory) { await workspace.refreshWorktrees(for: model.session) }
             // A bot's work read from its box as it changes (a session of it started, at work,
@@ -714,7 +730,12 @@ struct DraftSessionView: View {
     /// Picked in the composer; until then, the mode Settings starts new sessions in.
     @State private var pickedAgent: String?
     private var agent: String { pickedAgent ?? catalog.startingAgent(chosen: EngineConfig.of(catalog.machine)?.value(at: ["default_agent"])?.string) }
-    @AppStorage(ToolApproval.key) private var approval = ToolApproval.approveAll
+    /// Picked in the composer; until then, its computer's default (the last one picked there).
+    @State private var pickedApproval: ToolApproval?
+    @State private var confirmsFullAccess = false
+    /// Its computer's approvals, as last read.
+    private var here: ApprovalHere? { workspace.approvalsHere[Workspace.box(of: directory)] }
+    private var approval: ToolApproval { pickedApproval ?? here?.default ?? .auto }
     /// New sessions in a git repository get a worktree of their own (remembered).
     @AppStorage("newSessionWorktree") private var worktree = false
     /// How many sessions try the task, each in its own worktree; back to one after sending.
@@ -760,7 +781,23 @@ struct DraftSessionView: View {
                 keywords: newSessionKeywords,
                 focusRequest: focusRequest,
                 onSelectAgent: { pickedAgent = $0 },
-                onSelectApproval: { approval = $0 },
+                onSelectApproval: { picked in
+                    // Full Access the first time on its computer: asked first.
+                    if picked == .fullAccess, here?.fullAccess != true { confirmsFullAccess = true } else { pickedApproval = picked; ToolApproval.lastPicked = picked }
+                },
+                approvalShown: here?.shown(approval, agents: OutsideAgents.runsInBridge(startingModel?.providerID)),
+                confirmsFullAccess: $confirmsFullAccess,
+                onConfirmFullAccess: {
+                    Task {
+                        do {
+                            try await workspace.allowFullAccess(for: directory)
+                            pickedApproval = .fullAccess
+                            ToolApproval.lastPicked = .fullAccess
+                        } catch {
+                            failure = error.localizedDescription
+                        }
+                    }
+                },
                 onSelectModel: { lastModel = $0 },
                 worktree: isRepository ? worktree : nil,
                 onSelectWorktree: { worktree = $0 },
@@ -788,6 +825,7 @@ struct DraftSessionView: View {
             Spacer()
         }
         .task(id: directory) { await catalog.loadCommands(in: directory) }
+        .task(id: directory) { await workspace.readApprovalHere(for: directory) }
         .onAppear { Analytics.shared.onboardingStep("composer") }
     }
 
@@ -813,7 +851,7 @@ struct DraftSessionView: View {
             do {
                 // One after another: each worktree's setup runs on its own.
                 for _ in 0..<count {
-                    sessions.append(try await workspace.createSession(in: directory, model: startingModel, agent: agent, approval: approval, worktree: inWorktrees))
+                    sessions.append(try await workspace.createSession(in: directory, model: startingModel, agent: agent, approval: pickedApproval, worktree: inWorktrees))
                 }
                 if count > 1 { Analytics.shared.track("attempts_started", ["count": count]) }
                 let since = Drafts.shared[draftKey]

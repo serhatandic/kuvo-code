@@ -40,6 +40,13 @@ export function noteToolServer(url: string | undefined) {
   } catch {}
 }
 
+/** For the keys an agent's process is started again by: " full" while the box has `session` in
+ * Full Access here (`run/fence/full/<session>`), which the launcher runs outside the sandbox. */
+export function fullAccessMark(session: string | undefined): string {
+  const where = folder()
+  return where && session && /^ses_[A-Za-z0-9_]+$/.test(session) && existsSync(join(where, "full", session)) ? " full" : ""
+}
+
 /** Whether the box's sandbox is on here: its commands run in it. */
 export function fenceOn(): boolean {
   const where = folder()

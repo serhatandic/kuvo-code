@@ -93,17 +93,20 @@ struct BoxRefusal: LocalizedError {
     var status: Int
     var message: String
     var problem: String?
+    /// Why, as a word a client maps (`reason`): Full Access not confirmed on that computer, say.
+    var reason: String?
     var errorDescription: String? { message }
 
-    init(status: Int, message: String, problem: String? = nil) {
+    init(status: Int, message: String, problem: String? = nil, reason: String? = nil) {
         self.status = status
         self.message = message
         self.problem = problem
+        self.reason = reason
     }
 
     init(status: Int, data: Data) {
         let said = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-        self.init(status: status, message: said?["message"] as? String ?? "It said no (\(status)).", problem: said?["problem"] as? String)
+        self.init(status: status, message: said?["message"] as? String ?? "It said no (\(status)).", problem: said?["problem"] as? String, reason: said?["reason"] as? String)
     }
 }
 

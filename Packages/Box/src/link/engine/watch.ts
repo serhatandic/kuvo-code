@@ -16,7 +16,9 @@ import { workWatcher } from "../work/wakes";
 import { reviewPermission } from "../work/reviewing";
 import { forgetReviews } from "../work/reviewer";
 import { backUpSession } from "../work/backups";
+import { markConversation, noteFullAccess, noteFullAccessAtWork } from "../work/full";
 import { queueWatcher, scanQueues, type ScanFound } from "./queue";
+import { adoptConversation } from "../areas/approval";
 import type { Target } from "../../shared/records";
 import type { SignInEvent } from "../areas/accounts";
 import type { NoticeHold } from "../notices/hold";
@@ -318,6 +320,8 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
       if (!bots) nameDueWorktrees(source, connection.signal).then(() => tidyWorktrees(connection.signal)).catch(() => {});
       // A goal's change it missed meanwhile: what's held for one let go, or kept, as it is now.
       if (goalHeld) settleGoalHolds(source, goalHeld).catch(() => {});
+      // Full Access's list for the sandbox's launcher, for those at work now (one changed meanwhile).
+      if (work) noteFullAccessAtWork(source, atWork).catch(() => {});
       for await (const event of serverEvents(response.body)) {
         // The box's own work, Mac connected or not: a session made in one of its worktrees told
         // so; a worktree's branch named after its session (as it's made with a title, or given
@@ -327,6 +331,13 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
         // Its repository's branches and stashes kept as each run starts and ends, whatever the agent
         // and its approval, so what a turn takes from them can be taken back (work/backups.ts).
         if (work && (event.type === "session.execution.started" || RUN_ENDS.has(event.type)) && typeof event.data?.sessionID === "string") backUpSession(source, event.data.sessionID).catch(() => {});
+        // Whether its commands run outside the sandbox (Full Access), kept for the launcher as each
+        // run starts, before any command of it, and as its approval changes.
+        if (work && (event.type === "session.execution.started" || event.type === "session.created" || event.type === "session.metadata.updated" || event.type === "session.updated")) noteFullAccess(event.data?.sessionID ?? event.data?.info?.id).catch(() => {});
+        if (work && event.type === "session.deleted" && typeof event.data?.sessionID === "string") markConversation(event.data.sessionID, false);
+        // One a client made without a kept approval: the one it was made with, else this computer's
+        // default (a client from before never gets Full Access unasked).
+        if (work && event.type === "session.created") adoptConversation(source, event.data?.sessionID ?? event.data?.info?.id, work === "bridge").catch(() => {});
         if (event.type === "session.deleted" && typeof event.data?.sessionID === "string") {
           letSessionFilesGo(attachmentsLooked, event.data.sessionID);
           forgetReviews(event.data.sessionID);
@@ -336,7 +347,7 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
         queue?.(event as QueueEvent);
         followWork?.(event);
         // A conversation in Auto: what its agent's file tools ask outside its folder, reviewed (and
-        // told to your phones below only once it comes to you).
+        // told to your phones below only where it isn't: the reviewer never leaves one for you).
         const reviewed = work && event.type === "permission.asked" ? reviewPermission(source, event, connection.signal).catch(() => null) : null;
         goalHeld?.(event).catch(() => {});
         if (signIns) noteSignIn(event, source).catch(() => {}).finally(() => signedIn(event));
@@ -359,7 +370,7 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
           continue;
         }
         (reviewed ?? Promise.resolve(null))
-          .then(verdict => (verdict && verdict.decision !== "ask" ? null : noticeFor(event, route => engineGet(source, route))))
+          .then(verdict => (verdict ? null : noticeFor(event, route => engineGet(source, route))))
           .then(notice => notice && tell(notice))
           .catch(() => {});
       }
@@ -369,4 +380,10 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
     attempt += 1;
     await pause(Math.min(30_000, 1000 * 2 ** Math.min(attempt, 5)), signal);
   }
+}
+
+/** The sessions at work on `target` now. */
+async function atWork(target: Target): Promise<string[]> {
+  const active = (await engineGet(target, "api/session/active").catch(() => null) as { data?: string[] | Record<string, unknown> } | null)?.data ?? {};
+  return Array.isArray(active) ? active : Object.keys(active);
 }

@@ -1275,6 +1275,12 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     vault: ["GET", "kuvo/vault/tools"], sandbox: ["GET", "kuvo/sandbox"], "sandbox.check": ["POST", "kuvo/sandbox/check"], "sandbox.asks": ["GET", "kuvo/sandbox/allowed"],
     approval: ["GET", "kuvo/approval"],
     "approval.reviewer": ["GET", "kuvo/sessions/ses_none/decisions"],
+    // (Full Access outside the sandbox, confirmed per computer: what kuvo/approval says.)
+    "approval.fullAccess": ["GET", "kuvo/approval"],
+    // (Held back, approved from a client; a new conversation's mode, the last picked: kuvo/approval's `default`.)
+    "approval.held": ["POST", "kuvo/sessions/ses_none/decisions"],
+    "approval.default": ["GET", "kuvo/approval"],
+    "approval.seen": ["POST", "kuvo/sessions/ses_none/decisions"],
     "git.backups": ["GET", "kuvo/git/backups?folder=/"],
   };
   const named = (await answer(handle, "GET", "kuvo/info")).json.features;

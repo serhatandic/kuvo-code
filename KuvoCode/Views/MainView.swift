@@ -42,6 +42,8 @@ struct MainView: View {
     @State private var showsOpenQuickly = false
     /// The command palette (⌘K) is showing.
     @State private var showsPalette = false
+    /// The folder whose Branch Backups are showing, from the Session menu.
+    @State private var backupsFolder: String?
     /// Terminals open as tabs, standing in for a conversation.
     private var terminals: MainTerminals { app.mainTerminals }
     /// A tab's session being renamed, and the title being typed.
@@ -247,6 +249,7 @@ struct MainView: View {
     private var followingSessions: some View {
         windowContent
         .focusedSceneValue(\.sessionActions, actions)
+        .branchBackupsSheet(isPresented: Binding(get: { backupsFolder != nil }, set: { if !$0 { backupsFolder = nil } }), folder: backupsFolder ?? "")
         // Escape stops the agent also when the composer doesn't have the keyboard.
         .background(EscapeToStop(canStop: actions.canStop && !app.showsSettings, stop: actions.stop))
         // Viewed only while you're here: finished while you're in another app, it waits for you
@@ -936,6 +939,8 @@ struct MainView: View {
             newChat: { tabs.newSession(in: Workspace.chatsFolder) },
             stop: { model?.stop() },
             selectAgent: { model?.selectAgent($0) },
+            showDecisions: model?.decisionsToShow,
+            branchBackups: { if let model { backupsFolder = model.session.location.directory } },
             togglePanel: { withAnimation(.ui) { tabs.showPanel(!panelOnScreen) } },
             showChanges: { showInPanel { utilities.showChanges() } },
             showFiles: { showInPanel { utilities.showFiles() } },

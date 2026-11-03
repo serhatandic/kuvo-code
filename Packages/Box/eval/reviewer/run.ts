@@ -1,6 +1,6 @@
 // Auto's reviewer against its eval set (`actions.jsonl`): everyday actions, planted
 // injections and over-eager ones, each with what it should come to. Runs the box's own review
-// (code's hard lines and what always comes to you, then the model) on a real model through its
+// (code's hard lines, then the model) on a real model through its
 // maker's command-line tool, and prints what it got wrong: the ones it let through that it
 // shouldn't (the misses that matter), then the ones it held back that it could have let go.
 //
@@ -9,7 +9,8 @@
 //   bun eval/reviewer/run.ts claude haiku <id>…     only those cases
 //
 // It spends that account's usage: one short answer per case not settled by code. Nothing it runs
-// is carried out; scripts are written into a temporary folder of its own, deleted at the end.
+// is carried out, nor fetched: a script from the web is the case's own (`fetched`), and scripts
+// are written into a temporary folder of its own, deleted at the end.
 
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -27,7 +28,9 @@ interface Case {
   said?: string[];
   bot?: string;
   script?: string;
-  expect: "allow" | "refuse" | "ask";
+  /** What the web answers for a script the command fetches. */
+  fetched?: string;
+  expect: "allow" | "refuse";
   by?: "code";
   note?: string;
   /** Only on this system: a case about its own places. */
@@ -78,7 +81,7 @@ try {
     const context = each.bot
       ? { session: `eval_${each.id}`, said: [], bot: { id: "bot_eval", name: "Eval", goal: each.bot } }
       : { session: `eval_${each.id}`, said: each.said ?? [] };
-    const verdict = await review(action, context, { model: ask, tell: "", folder: path.join(scratch, "reviews") });
+    const verdict = await review(action, context, { model: ask, folder: path.join(scratch, "reviews"), fetch: async () => each.fetched ?? Promise.reject(new Error("not in the eval set")) });
     results.push({ case: each, got: verdict.decision, by: verdict.by, reason: verdict.reason });
     process.stdout.write(verdict.decision === each.expect ? "." : verdict.decision === "allow" ? "!" : "x");
   }
@@ -90,7 +93,7 @@ const wrong = results.filter(each => each.got !== each.case.expect);
 const letThrough = wrong.filter(each => each.got === "allow");
 const heldBack = wrong.filter(each => each.got !== "allow");
 console.log(`\n\n${maker} ${model}: ${results.length - wrong.length} of ${results.length} as expected; ${letThrough.length} let through that shouldn't be, ${heldBack.length} held back.`);
-for (const [title, list] of [["Let through", letThrough], ["Held back or asked otherwise", heldBack]] as const) {
+for (const [title, list] of [["Let through", letThrough], ["Held back that could have gone ahead", heldBack]] as const) {
   if (!list.length) continue;
   console.log(`\n${title}:`);
   for (const each of list) console.log(`  ${each.case.id}: expected ${each.case.expect}, got ${each.got} (${each.by}): ${each.reason}`);

@@ -341,7 +341,7 @@ enum BrowserTools {
     /// asked again a while after, the browser goes there.
     private static var sentAway: [String: Date] = [:]
 
-    /// Whether a conversation may read files outside its folder without asking (Approve All, not a
+    /// Whether a conversation may read files outside its folder without asking (Auto or Full Access, not a
     /// group chat's seat), by its session. Unknown, it asks.
     static var readsAnywhere: (String) -> Bool = { _ in false }
 

@@ -17,7 +17,22 @@
     "200": {
      "object": {
       "fullAccess": "bool",
-      "tellAuto": "string",
+      "default": {
+       "oneOf": [
+        {
+         "literal": "askFirst"
+        },
+        {
+         "literal": "acceptEdits"
+        },
+        {
+         "literal": "auto"
+        },
+        {
+         "literal": "fullAccess"
+        }
+       ]
+      },
       "auto": {
        "object": {
         "engine": {
@@ -76,7 +91,22 @@
     "200": {
      "object": {
       "fullAccess": "bool",
-      "tellAuto": "string",
+      "default": {
+       "oneOf": [
+        {
+         "literal": "askFirst"
+        },
+        {
+         "literal": "acceptEdits"
+        },
+        {
+         "literal": "auto"
+        },
+        {
+         "literal": "fullAccess"
+        }
+       ]
+      },
       "auto": {
        "object": {
         "engine": {
@@ -428,6 +458,7 @@
       "decisions": {
        "list": {
         "object": {
+         "id?": "string",
          "at": "number",
          "action": "string",
          "kind": {
@@ -464,6 +495,9 @@
            },
            {
             "literal": "model"
+           },
+           {
+            "literal": "you"
            }
           ]
          },
@@ -477,6 +511,12 @@
            },
            {
             "literal": "unread"
+           },
+           {
+            "literal": "unpinned"
+           },
+           {
+            "literal": "unasked"
            },
            {
             "literal": "unreadable"
@@ -514,13 +554,20 @@
            },
            {
             "literal": "gitConfig"
+           },
+           {
+            "literal": "publish"
            }
           ]
-         }
+         },
+         "held?": "bool",
+         "approved?": "number",
+         "used?": "number"
         }
        }
       },
-      "paused?": "number"
+      "paused?": "number",
+      "seen?": "number"
      }
     }
    }
@@ -533,6 +580,7 @@
       "decisions": {
        "list": {
         "object": {
+         "id?": "string",
          "at": "number",
          "action": "string",
          "kind": {
@@ -569,6 +617,9 @@
            },
            {
             "literal": "model"
+           },
+           {
+            "literal": "you"
            }
           ]
          },
@@ -582,6 +633,12 @@
            },
            {
             "literal": "unread"
+           },
+           {
+            "literal": "unpinned"
+           },
+           {
+            "literal": "unasked"
            },
            {
             "literal": "unreadable"
@@ -619,16 +676,33 @@
            },
            {
             "literal": "gitConfig"
+           },
+           {
+            "literal": "publish"
            }
           ]
-         }
+         },
+         "held?": "bool",
+         "approved?": "number",
+         "used?": "number"
         }
        }
       },
-      "paused?": "number"
+      "paused?": "number",
+      "seen?": "number"
      }
     },
     "400": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "404": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "500": {
      "object": {
       "message": "string"
      }
@@ -3017,6 +3091,18 @@
             "literal": "git.backups"
            },
            {
+            "literal": "approval.fullAccess"
+           },
+           {
+            "literal": "approval.held"
+           },
+           {
+            "literal": "approval.default"
+           },
+           {
+            "literal": "approval.seen"
+           },
+           {
             "literal": "accounts.ended"
            },
            {
@@ -3305,6 +3391,18 @@
            },
            {
             "literal": "git.backups"
+           },
+           {
+            "literal": "approval.fullAccess"
+           },
+           {
+            "literal": "approval.held"
+           },
+           {
+            "literal": "approval.default"
+           },
+           {
+            "literal": "approval.seen"
            }
           ]
          }

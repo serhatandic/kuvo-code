@@ -1011,7 +1011,7 @@ export class Sessions {
 
   // MARK: Sessions
 
-  create(body: { title?: string; agent?: string; model?: ModelRef; location: { directory: string }; permissions?: PermissionRule[] }): Session {
+  create(body: { title?: string; agent?: string; model?: ModelRef; location: { directory: string }; permissions?: PermissionRule[]; metadata?: Record<string, unknown> }): Session {
     if (body.model?.providerID === autoProvider && !this.auto.list(body.model.id).length) throw new BadRequest("That Custom Auto list is empty: add models to it in Settings › Custom Auto.")
     if (!body.model?.id || !this.runs(body.model)) throw new BadRequest("Pick a model of an agent you've connected.")
     const now = Date.now()
@@ -1027,7 +1027,8 @@ export class Sessions {
       title: body.title,
       location: { directory },
       permissions: body.permissions,
-      metadata: { kuvoAgent: this.kind(body.model.providerID) },
+      // (What the box marks it as comes with it, before the event about it: the bridge's own note stays.)
+      metadata: { ...(body.metadata && typeof body.metadata === "object" && !Array.isArray(body.metadata) ? body.metadata : {}), kuvoAgent: this.kind(body.model.providerID) },
     }
     this.store.add(session)
     emit("session.created", { sessionID: session.id, session }, directory)
@@ -1050,7 +1051,7 @@ export class Sessions {
    * session with its messages, whose agents are handed all of it as they first run, and the
    * messages you'd sent that were waiting there, still waiting (nothing starts).
    */
-  importSession(body: { title?: string; agent?: string; model?: ModelRef; location: { directory: string }; permissions?: PermissionRule[]; messages?: unknown[]; waiting?: unknown[] }): Session {
+  importSession(body: { title?: string; agent?: string; model?: ModelRef; location: { directory: string }; permissions?: PermissionRule[]; metadata?: Record<string, unknown>; messages?: unknown[]; waiting?: unknown[] }): Session {
     const session = this.create(body)
     const record = this.store.get(session.id)!
     const known = new Set(["user", "assistant", "synthetic", "system", "idle", "model-switched", "agent-switched", "shell"])

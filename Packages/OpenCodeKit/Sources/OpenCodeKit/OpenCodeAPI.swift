@@ -325,9 +325,9 @@ public struct OpenCodeAPI: Sendable {
         return Set(active.keys)
     }
 
-    public func createSession(directory: String, title: String? = nil, agent: String? = nil, model: ModelRef? = nil, permissions: [PermissionRule]? = nil) async throws -> Session {
-        struct Body: Encodable { var title: String?; var agent: String?; var model: ModelRef?; var location: Location; var permissions: [PermissionRule]? }
-        let body = Body(title: title, agent: agent, model: model, location: Location(directory: enginePath(directory)), permissions: permissions)
+    public func createSession(directory: String, title: String? = nil, agent: String? = nil, model: ModelRef? = nil, permissions: [PermissionRule]? = nil, metadata: JSONValue? = nil) async throws -> Session {
+        struct Body: Encodable { var title: String?; var agent: String?; var model: ModelRef?; var location: Location; var permissions: [PermissionRule]?; var metadata: JSONValue? }
+        let body = Body(title: title, agent: agent, model: model, location: Location(directory: enginePath(directory)), permissions: permissions, metadata: metadata)
         return appSession(try await send("POST", "api/session", body: body, as: DataEnvelope<Session>.self).data)
     }
 

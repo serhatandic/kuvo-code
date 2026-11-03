@@ -430,6 +430,25 @@ final class SessionModel {
     @ObservationIgnored private var queueFollow: Task<Void, Never>?
     /// The session's box (this Mac's, or its machine's).
     @ObservationIgnored var box: () -> BoxClient? = { nil }
+    /// Its approval as its box shows it (`readApproval`); nil until read.
+    var approvalShown: ApprovalShown?
+    /// Auto's reviewer's decisions here, as its box keeps them (`readDecisions`); nil until read.
+    var decisions: ReviewDecisions?
+    /// Its box couldn't be asked for them, with none read yet: Decisions says so, not a loader.
+    var decisionsUnread = false
+    /// Auto's Decisions are open over the composer.
+    var showsDecisions = false
+    /// Full Access was picked on a computer where it isn't confirmed yet: the composer asks.
+    var confirmsFullAccess = false
+    /// The held-back decisions you've seen in Decisions: the bar over the composer names only newer ones.
+    var decisionsSeen: Set<String> = []
+    @ObservationIgnored var decisionsRead: Task<Void, Never>?
+    /// Reads and changes of Auto's decisions asked for so far (`readDecisions`).
+    @ObservationIgnored var decisionsAsked = 0
+    @ObservationIgnored var approvalChanges = 0
+    /// Picks of its approval still on their way to its box, and how many were made since none was.
+    @ObservationIgnored var approvalsPending = 0
+    @ObservationIgnored var approvalBurst = 0
     @ObservationIgnored private var queueRead: Task<Void, Never>?
     /// Changes asked of the box's queue so far (`queueRoute`).
     @ObservationIgnored private var queueChanges = 0
@@ -852,6 +871,16 @@ final class SessionModel {
             // Final: there's nothing left to redo, and the conversation no longer ends at the undo.
             session.revert = nil
             undone = nil
+        default:
+            break
+        }
+        // Auto's reviewer decides as tools are called, and a pause ends the run; another client
+        // may pick another approval.
+        switch event.type {
+        case "session.tool.success", "session.tool.failed", "session.execution.succeeded", "session.execution.interrupted", "session.execution.failed":
+            if approval == .auto || decisions?.paused != nil { readDecisions() }
+        case "session.updated", "session.metadata.updated":
+            Task { await readApproval() }
         default:
             break
         }
@@ -2481,19 +2510,9 @@ final class SessionModel {
     /// What the agent hears when you switch its model mid-run (the conversation doesn't show it).
     static let switchedModelNote = "<system-reminder>The user switched the model while you were working. Carry on with the task from where you left off.</system-reminder>"
 
-    var approval: ToolApproval { ToolApproval(rules: session.permissions) }
+    var approval: ToolApproval { approvalShown?.approval ?? ToolApproval.of(session) }
 
-    func setApproval(_ approval: ToolApproval) {
-        guard canReach else { return }
-        // The rules for particular things (the project's folders, a bot's folder and its
-        // wake-ups) stay, after the approval rules and what Settings › Permissions asks of them.
-        let settings = EngineConfig.rules(on: RemoteFolder.machine(of: session.location.directory))
-        let rules = approval.rules(settings: settings) + (session.permissions ?? []).filter(ToolApproval.isParticular)
-        session.permissions = rules
-        Task {
-            do { try await api.setPermissions(session: id, rules: rules) } catch { fail(error) }
-        }
-    }
+    func failApproval(_ error: any Error) { fail(error) }
 
     /// Gives the agent the project's folders as they're set now, if it doesn't have them yet:
     /// allowed in its permissions, and named in its instructions.
@@ -2503,19 +2522,13 @@ final class SessionModel {
         let machine = RemoteFolder.machine(of: session.location.directory)
         // Its computer's rules not known yet: once they are (they're read as it's reached).
         guard EngineConfig.knowsRules(on: machine) else { return }
-        var current = session.permissions ?? []
-        // Its approval with Settings › Permissions as they are now on its computer, too.
-        var rules = ProjectFolders.permissions(ToolApproval.refreshed(current, settings: EngineConfig.rules(on: machine)), folders: folders)
+        let current = session.permissions ?? []
+        // Its folders only: its box makes the rest from its approval and Settings › Permissions,
+        // and keeps these as it does.
+        let rules = ProjectFolders.permissions(current, folders: folders)
         guard rules != current else { return }
         do {
             try await api.setPermissions(session: id, rules: rules)
-            // An approval picked while that went (its own rules sent too): again, from it, so the
-            // last word is yours with the folders, not these from before it.
-            for _ in 0..<3 where (session.permissions ?? []) != current {
-                current = session.permissions ?? []
-                rules = ProjectFolders.permissions(ToolApproval.refreshed(current, settings: EngineConfig.rules(on: machine)), folders: folders)
-                try await api.setPermissions(session: id, rules: rules)
-            }
             session.permissions = rules
             if folders.isEmpty {
                 try await api.removeInstruction(session: id, key: ProjectFolders.instructionKey)

@@ -324,34 +324,45 @@ test("a client starts a session with a task, as the user's own first message", a
   assert.deepEqual(await route("POST", "kuvo/sessions", { task: "Hi.", startedBy: "ses_gone" }), { status: 404, body: { message: "There's no such conversation here." } });
 });
 
-// Its commands would write such a folder whole (what runs later, a personal folder): only you start
-// one there, never an agent.
-test("an agent never starts a session in a folder the sandbox keeps, as you can", async () => {
-  const kept = path.join(home, ".local", "bin");
+// Its commands would write such a folder whole: an agent in Auto never starts one where that's
+// real damage (your home, a whole personal folder, what runs as you log in, your secrets), as you
+// can; anywhere else in your home is its to work in; and from Full Access, nothing stops it.
+test("an agent in Auto never starts a session where its commands could do real damage, as you can", async () => {
+  const onPath = path.join(home, ".local", "bin");
   const documents = path.join(home, "Documents");
   const site = path.join(documents, "site");
-  for (const folder of [kept, site, path.join(documents, "finances"), path.join(home, ".config")]) fs.mkdirSync(folder, { recursive: true });
-  // Inside what runs later, a personal folder or what's in it, or a folder holding walls (your home, ~/.config).
-  for (const folder of [kept, "~/.local/bin", documents, site, path.join(documents, "finances"), home, "~", path.join(home, ".config")]) {
+  const agents = path.join(home, "Library", "LaunchAgents");
+  for (const folder of [onPath, site, agents, path.join(home, ".config"), path.join(home, ".ssh")]) fs.mkdirSync(folder, { recursive: true });
+  const refused = {
+    [documents]: "its commands could delete a whole personal folder of yours",
+    [home]: "its commands could delete your home folder",
+    "~": "its commands could delete your home folder",
+    [agents]: "its commands would reach what runs as you log in",
+    [path.join(home, ".ssh")]: "its commands would reach your secrets",
+  };
+  for (const [folder, why] of Object.entries(refused)) {
     const said = await tool("start_session", { task: "Tidy it.", folder }, "ses_helper");
-    assert.deepEqual(said, { text: `${folder} is kept from commands on this machine (what runs later, a personal folder or the like). Ask the user to start it there.`, isError: true });
+    assert.deepEqual(said, { text: `An agent in Auto can't start a session in ${folder} on this machine: ${why}. Ask the user to start it there.`, isError: true });
   }
-  assert.equal((await route("POST", "kuvo/sessions", { task: "Tidy it.", folder: kept, startedBy: "ses_helper" })).status, 403);
-  // A project of yours in a personal folder is the agent's to start, as it's yours.
-  const projects = path.join(home, "box", "projects.json");
-  const before = fs.existsSync(projects) ? fs.readFileSync(projects) : null;
-  fs.mkdirSync(path.dirname(projects), { recursive: true });
-  fs.writeFileSync(projects, JSON.stringify({ projects: [{ directory: site, folders: [] }] }));
+  // (Your tools' settings hold both your secrets and what runs as you log in.)
+  assert.match((await tool("start_session", { task: "Tidy it.", folder: path.join(home, ".config") }, "ses_helper")).text, /can't start a session .*: its commands would reach (your secrets|what runs as you log in)\./);
+  assert.equal((await route("POST", "kuvo/sessions", { task: "Tidy it.", folder: home, startedBy: "ses_helper" })).status, 403);
+  // Anywhere else: a folder on your PATH, a project in a personal folder.
+  for (const folder of [onPath, "~/.local/bin", site]) assert.equal((await tool("start_session", { task: "Tidy it.", folder }, "ses_helper")).isError, false, folder);
+  // You start one anywhere.
+  assert.equal((await route("POST", "kuvo/sessions", { task: "Tidy it.", folder: home })).status, 200);
+  // From a conversation in Full Access, nothing stops it.
+  const lead = sessions.get("ses_lead");
+  const rules = lead.permissions;
+  lead.permissions = [];
   try {
-    assert.equal((await tool("start_session", { task: "Tidy it.", folder: site }, "ses_helper")).isError, false);
-    assert.equal((await tool("start_session", { task: "Tidy it.", folder: path.join(documents, "finances") }, "ses_helper")).isError, true);
+    assert.equal((await tool("start_session", { task: "Tidy it.", folder: documents }, "ses_helper")).isError, false);
   } finally {
-    if (before) fs.writeFileSync(projects, before); else fs.rmSync(projects, { force: true });
+    lead.permissions = rules;
   }
-  assert.equal((await route("POST", "kuvo/sessions", { task: "Tidy it.", folder: kept })).status, 200);
 });
 
-test("a client starts a session with the approval it picks: Accept Edits edits on its own, Full Access only where it's switched on, an older client's words read as the box's", async () => {
+test("a client starts a session with the approval it picks, else this computer's default: Accept Edits edits on its own, Full Access only where it's switched on, an older client's words read as the box's", async () => {
   const edits = await route("POST", "kuvo/sessions", { task: "Tidy the README.", folder: other, approval: "acceptEdits" });
   assert.equal(edits.status, 200);
   assert.deepEqual(marked.get(edits.body.session), { kuvo: { approval: "acceptEdits", applied: "acceptEdits" } });
@@ -362,12 +373,26 @@ test("a client starts a session with the approval it picks: Accept Edits edits o
 
   fs.rmSync(path.join(home, "box", "approval.json"), { force: true });
   assert.deepEqual(await route("POST", "kuvo/sessions", { task: "Hi.", folder: other, approval: "fullAccess" }),
-    { status: 409, body: { message: "Full Access is off for this computer. Turn it on in Settings first.", reason: "fullAccessOff" } });
+    { status: 409, body: { message: "Full Access isn't confirmed on this computer yet: confirm it first.", reason: "fullAccessOff" } });
   assert.equal(made.length, 1, "nothing started with less instead");
 
+  // An older client's Approve All (its default) is this computer's: Auto the first time, and never
+  // Full Access unasked, confirmed or not.
   const older = await route("POST", "kuvo/sessions", { task: "Hi.", folder: other, approval: "approveAll" });
   assert.equal(older.status, 200);
   assert.equal(marked.get(older.body.session).kuvo.approval, "auto");
+  write(path.join(home, "box", "approval.json"), JSON.stringify({ fullAccess: true }));
+  const confirmed = await route("POST", "kuvo/sessions", { task: "Hi.", folder: other, approval: "approveAll" });
+  assert.equal(marked.get(confirmed.body.session).kuvo.approval, "auto");
+  // Picked once, Full Access is the default from then on: for a start that doesn't say, and for
+  // Approve All.
+  const picked = await route("POST", "kuvo/sessions", { task: "Hi.", folder: other, approval: "fullAccess" });
+  assert.equal(marked.get(picked.body.session).kuvo.approval, "fullAccess");
+  const unsaid = await route("POST", "kuvo/sessions", { task: "Hi.", folder: other });
+  assert.equal(marked.get(unsaid.body.session).kuvo.approval, "fullAccess");
+  const again = await route("POST", "kuvo/sessions", { task: "Hi.", folder: other, approval: "approveAll" });
+  assert.equal(marked.get(again.body.session).kuvo.approval, "fullAccess");
+  fs.rmSync(path.join(home, "box", "approval.json"), { force: true });
 });
 
 test("a session an agent starts never does more on its own than its conversation, and the agent is told what it got", async () => {

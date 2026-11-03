@@ -12,7 +12,7 @@ import type { Limit } from "../auto"
 import { accountName, ContextWindows, failure, KnownAccount, model, signOutWith } from "../agent"
 import { fileDiff, fromPatch } from "../diff"
 import { emit } from "../events"
-import { allowedFolders, fenceAgent, fenceAttachments, fenceCopy, fenceKey, fenceRules, seatBot } from "../fence"
+import { allowedFolders, fenceAgent, fenceAttachments, fenceCopy, fenceKey, fenceRules, seatBot, fullAccessMark } from "../fence"
 import { kuvoTools, toolServerName } from "../kuvotools"
 import { dropRelayed, relayedServers, relayedTools, relayPort } from "../toolrelay"
 import { computerServers } from "../servers"
@@ -248,7 +248,7 @@ export class CodexAgent implements Agent {
     slot.lastUse = Date.now()
     // The box's sandbox changed (its rules, the folders you let this session's commands write in):
     // Codex starts again with it once it's quiet.
-    const fence = key === SHARED ? "" : key === ACCOUNT ? fenceKey() : fenceKey() + JSON.stringify(allowedFolders(thread!.session.location.directory))
+    const fence = key === SHARED ? "" : key === ACCOUNT ? fenceKey() : fenceKey() + JSON.stringify(allowedFolders(thread!.session.location.directory)) + fullAccessMark(thread!.session.id)
     if (slot.server && !slot.server.isClosed && slot.fence !== fence) slot.outdated ??= slot.server
     // A turn starting while agents it spawned still work in the Codex its thread is in: there, as
     // long as that's as safe (one outside the box's sandbox, now that it's on, isn't); it starts

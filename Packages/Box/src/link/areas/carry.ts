@@ -13,6 +13,7 @@ import { conversationOf } from "../engine/conversations";
 import { messageID } from "../engine/sessions";
 import { listOf } from "../files";
 import { BOTS, HERE, SESSION_WAKES } from "../home";
+import { settleAgain } from "./approval";
 import { holdArchived } from "./wakes";
 import { tellWorktree } from "./worktrees";
 import type { Target } from "../../shared/records";
@@ -120,8 +121,14 @@ export async function carryToAgents(id: string, model: unknown, readEngine: () =
       if (!(id in still)) break;
     }
     const renamed: Record<string, string> = Object.fromEntries(waiting.map(item => [item.id, messageID()]));
+    // Marked as carried on from this one, whose files its words show (they stay while it does:
+    // `letAttachmentsGo`); a bot's as its too; in the mode it was in, its rules made for it. As
+    // it's made, so nothing takes it for a new conversation of yours.
+    const kuvo = bot ? session.metadata?.kuvo ?? { bot: bot.described.id } : {};
+    const { approval, applied } = session.metadata?.kuvo ?? {};
+    const marks = { kuvo: { ...(approval ? { approval } : {}), ...(applied ? { applied } : {}), ...kuvo, carriedFrom: id } };
     const moved = await call(agents, "POST", "/api/session/import", {
-      title: session.title, agent: session.agent, model, location: { directory }, permissions: session.permissions, messages,
+      title: session.title, agent: session.agent, model, location: { directory }, permissions: session.permissions, metadata: marks, messages,
       waiting: waiting.map(item => ({ id: renamed[item.id], text: item.text, files: promptFiles(item.payload) })),
     }) as Fields<"id"> | null;
     if (typeof moved?.id !== "string") return no(502, "The coding agents didn’t take it.");
@@ -130,10 +137,10 @@ export async function carryToAgents(id: string, model: unknown, readEngine: () =
     for (const item of waiting) await call(engine, "DELETE", `/${route}/inbox/${encodeURIComponent(item.id)}`).catch(() => {});
     const entries = `/api/experimental/session/${encodeURIComponent(moved.id)}/instructions/entries`;
     await tellWorktree(agents, moved.id).catch(() => {});
-    // Marked as carried on from this one, whose files its words show (they stay while it does:
-    // `letAttachmentsGo`); a bot's as its too.
-    const kuvo = bot ? session.metadata?.kuvo ?? { bot: bot.described.id } : {};
-    await call(agents, "PATCH", `/api/session/${encodeURIComponent(moved.id)}`, { metadata: { kuvo: { ...kuvo, carriedFrom: id } } }).catch(() => {});
+    // (Again, for an engine that drops what an import carries; then its rules made for what its
+    // approval comes to with the coding agents, which may be less than where it was.)
+    await call(agents, "PATCH", `/api/session/${encodeURIComponent(moved.id)}`, { metadata: marks }).catch(() => {});
+    await settleAgain(agents, moved.id, true, signal).catch(() => {});
     if (bot) {
       // The bot's conversation is the new one, told what it is.
       const kit = readKit();

@@ -5,7 +5,8 @@
 // output back. Always also lets the project's commands write, in the sandbox, the one folder this
 // one was stopped writing in (fence/allowed.ts); a command itself is never let out for good, and
 // is asked about each time. The agent never lets a command out of the sandbox itself, and no tool
-// answers an ask: only a client.
+// answers an ask: only a client, or in Auto the conversation's reviewer (which never asks you), or
+// in Full Access nothing.
 
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
@@ -20,7 +21,9 @@ import { askBook } from "../notices/asking";
 import type { Notice } from "../notices/notice";
 import { commandEnv, runCommand } from "../run-command";
 import type { Caller } from "../vault/who";
-import { reviewIn } from "../work/reviewing";
+import { markedFullAccess } from "../work/full";
+import { findConversation, heldUnreached, inFullAccess, refusalWords, reviewIn } from "../work/reviewing";
+import { forgetFetched } from "../work/reviewer";
 import { addRule, ownerOf, writeRuleWouldBe } from "./allowed";
 
 /** Your answer, and who gave it: "Mac", or a phone's name. */
@@ -163,14 +166,31 @@ async function askToRun(caller: Caller, args: Record<string, unknown>, signal?: 
   const project = caller.folder && fs.existsSync(caller.folder) ? caller.folder : null;
   if (!project) return failed("This conversation's folder isn't there, so nothing can run for it.");
 
+  // In Full Access it just runs. In Auto, its reviewer decides, never you: it runs, or the agent
+  // hears why not and goes on another way (and you can approve it later, from Decisions).
+  // (Where the engine doesn't answer, as it was last found; one never found is held back, as one
+  // the reviewer couldn't judge.)
+  const conversation = caller.root ?? caller.session;
+  const { at, unreached } = conversation ? await findConversation(conversation).catch(() => ({ at: null, unreached: true })) : { at: null, unreached: false };
+  // (One the box hasn't found since it started again goes as it's marked: Full Access has no asks.)
+  const full = at ? inFullAccess(at) : Boolean(unreached && conversation && markedFullAccess(conversation));
+  const action = { kind: "command" as const, command, folder: project };
+  // (A review that fails is a refusal: in Auto nothing waits for you.)
+  const reviewing = full ? null : at ? reviewIn(conversation!, action, signal, at) : unreached ? heldUnreached(conversation!, action, signal) : null;
+  const verdict = reviewing && await reviewing
+    .catch(error => ({ decision: "refuse" as const, reason: `Auto's reviewer couldn't review it (${String((error as Error)?.message ?? error).slice(0, 120)}).`, by: "code" as const, held: false, why: "failed" as const, paused: false, fetched: undefined }));
+  if (verdict?.decision === "refuse") return { text: refusalWords(verdict), isError: false };
+  // What the sandbox refused, from macOS's log, is for you when you're asked: read only then, so
+  // Full Access and Auto don't wait on the log.
+  const asks = !full && verdict?.decision !== "allow";
   // (By the command as it ran, whitespace and all.)
-  const stopped = caller.session ? await stopsFor(caller.session, String(args.command)) : [];
+  const stopped = asks && caller.session ? await stopsFor(caller.session, String(args.command)) : [];
   let always = alwaysFor(stopped, project);
   // macOS writes what its sandbox refused to its log a while after (a busy Mac, seconds): until
   // it's there, the ask goes up without it, and gets it once it is.
   let asking: string | undefined;
   const heard = new AbortController();
-  if (!stopped.length && caller.session && process.platform === "darwin") void (async () => {
+  if (asks && !stopped.length && caller.session && process.platform === "darwin") void (async () => {
     for (const wait of LOG_LATER) {
       await new Promise(resolve => setTimeout(resolve, wait).unref?.());
       if (heard.signal.aborted) return;
@@ -181,16 +201,7 @@ async function askToRun(caller: Caller, args: Record<string, unknown>, signal?: 
       return;
     }
   })();
-  // In Auto, its reviewer first: it runs, is refused, or comes to you with why (never let through
-  // on a review that couldn't be had: that comes to you as before).
-  const conversation = caller.root ?? caller.session;
-  const reviewed = conversation ? await reviewIn(conversation, { kind: "command", command, folder: project }, signal).catch(() => null) : null;
-  if (reviewed?.decision === "refuse") {
-    heard.abort();
-    const paused = reviewed.paused ? " Auto is paused here now: the user decides what's next." : "";
-    return { text: `Auto's reviewer said no: ${reviewed.reason}${paused} Don't run it, nor get around the sandbox another way. Find another way to do the task, or ask the user.`, isError: false };
-  }
-  const answered: SandboxAnswer = reviewed?.decision === "allow" ? { answer: "once", client: "Auto" } : await book.ask({
+  const answered: SandboxAnswer = full ? { answer: "once", client: "Full Access" } : verdict?.decision === "allow" ? { answer: "once", client: "Auto" } : await book.ask({
     ...(caller.root ? { session: caller.root, ...(caller.sessionName ? { sessionName: caller.sessionName } : {}) } : {}),
     ...(caller.bot ? { bot: caller.bot, botName: caller.botName } : {}),
     project,
@@ -201,9 +212,9 @@ async function askToRun(caller: Caller, args: Record<string, unknown>, signal?: 
     ...(always ? { always } : {}),
     ...(IS_MAC ? {} : { machine: os.hostname() }),
     owner: ownerOf(project),
-    ...(reviewed?.decision === "ask" ? { review: { reason: reviewed.reason, why: reviewed.why, ...(reviewed.always ? { always: reviewed.always } : {}) } } : {}),
-  }, signal, undefined, id => { asking = id; });
-  heard.abort();
+  }, signal, undefined, id => { asking = id; }).finally(() => heard.abort());
+  // (A script from the web, fetched once for the review: that copy is what runs, then it's gone.)
+  const fetched = verdict?.fetched;
   if (answered.unanswered) return { text: "Nobody answered in time, so it didn't run. Don't get around the sandbox another way: go on without it, or ask the user when they're back.", isError: false };
   if (answered.answer === "no") return { text: "The user said no: don't run it, nor get around the sandbox another way. Find another way to do the task, or ask them why.", isError: false };
   let how: "once" | "always" = "once";
@@ -212,11 +223,11 @@ async function askToRun(caller: Caller, args: Record<string, unknown>, signal?: 
   }
   const left = Math.floor((CALL_BUDGET - (Date.now() - started)) / 1000);
   const seconds = Math.max(1, Math.min(600, left, Number(args.timeout) || 300));
-  const { output, code, timedOut } = await runCommand(command, project, commandEnv(), seconds * 1000, signal);
+  const { output, code, timedOut } = await runCommand(fetched?.command ?? command, project, commandEnv(), seconds * 1000, signal).finally(() => forgetFetched(fetched));
   let shown = output;
   if (shown.length > MOST_OUTPUT) shown = "…" + shown.slice(-MOST_OUTPUT).replace(/^[^\n]*\n/, "");
   const ended = timedOut ? `It was stopped after ${seconds} seconds.` : `It ended with ${code}.`;
-  const head = how === "always" ? `Ran outside the sandbox · Always for this: from now on your commands can write in ${always!.path} in the sandbox, so run them there.` : reviewed?.decision === "allow" ? `Ran outside the sandbox · Allowed by Auto's reviewer: ${reviewed.reason}` : "Ran outside the sandbox · Allowed once";
+  const head = how === "always" ? `Ran outside the sandbox · Always for this: from now on your commands can write in ${always!.path} in the sandbox, so run them there.` : verdict?.decision === "allow" ? (verdict.by === "you" ? "Ran outside the sandbox · Approved by the user" : `Ran outside the sandbox · Allowed by Auto's reviewer: ${verdict.reason}`) : full ? "Ran outside the sandbox · Full Access" : "Ran outside the sandbox · Allowed once";
   return { text: `${head}\n\n${shown.trim() ? shown.trimEnd() + "\n\n" : "It printed nothing.\n\n"}${ended}`, isError: timedOut || code !== 0 };
 }
 

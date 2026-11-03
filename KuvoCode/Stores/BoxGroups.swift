@@ -756,12 +756,11 @@ final class BoxGroups {
     /// and how you write dates.
     func giveSettings(to machine: String?) async {
         guard let api = api(machine) else { return }
-        let approval = UserDefaults.standard.string(forKey: ToolApproval.key).flatMap(ToolApproval.init) ?? .approveAll
         let denies = EngineConfig.rules(on: machine).filter { $0.effect.holdsBack }
         let settings: [String: JSONValue] = [
             "personalities": .object(Dictionary(Personalities.shared.all.map { ($0.id, JSONValue.string($0.instruction)) }) { first, _ in first }),
             "identityNote": .string(Bots.identityNote),
-            "askFirst": .bool(approval == .askFirst),
+            "askFirst": .bool([.askFirst, .acceptEdits].contains(ToolApproval.lastPicked)),
             "denies": Self.json(denies) ?? .array([]),
             "timeZone": .string(TimeZone.current.identifier),
             "locale": .string(Locale.current.identifier(.bcp47)),
