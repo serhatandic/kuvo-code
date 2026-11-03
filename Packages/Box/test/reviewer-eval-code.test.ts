@@ -12,7 +12,6 @@ let box: string
 let reviewer: typeof import("../src/link/work/reviewer")
 beforeAll(async () => {
   box = mkdtempSync(join(tmpdir(), "kuvo-reviewer-eval-"))
-  process.env.KUVO_HOME = join(box, "kuvo")
   reviewer = await import("../src/link/work/reviewer")
 })
 afterAll(() => rmSync(box, { recursive: true, force: true }))

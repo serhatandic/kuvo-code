@@ -570,7 +570,7 @@ its own, which a `SIGTERM` stops waiting.
 - **`POST kuvo/sessions`** `{task, title?, folder? | project? | chat?, worktree?, model?, effort?,
   mode?, approval?, wake?, startedBy?, wait? = false}` →
   `{session, title, folder, project, answer?, got?}` (`project` null for a chat; `answer` with
-  `wait`, its first answer in ten minutes, else null; `got`, the approval it runs with now where
+  `wait`, its first answer in ten minutes, else null; `got` (bridge 0.9.180), the approval it runs with now where
   that's less than asked: Auto that asks first without the sandbox, say). `start_session` is this route, from the
   calling conversation.
   - From a conversation (`startedBy`, its root found as above): in its folder unless `folder` names
@@ -2432,8 +2432,8 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `sandbox` | `kuvo/sandbox` ("Sandbox", bridge 0.9.118) |
 | `sandbox.check` | `reason`, `action` and the rest in `kuvo/sandbox`, and `POST kuvo/sandbox/check` |
 | `sandbox.asks` | `kuvo/sandbox/asks…`, `kuvo/sandbox/allowed…` and `kuvo/sandbox/tools` ("Sandbox", "Asks", bridge 0.9.118) |
-| `approval` | `kuvo/approval` and `kuvo/sessions/<id>/approval` ("Approval") |
-| `approval.reviewer` | Auto's reviewer: `kuvo/sessions/<id>/decisions`, `tellAuto` in `kuvo/approval`, and a sandbox ask's `review` ("Approval", "Auto's reviewer") |
+| `approval` | `kuvo/approval` and `kuvo/sessions/<id>/approval` ("Approval", bridge 0.9.180) |
+| `approval.reviewer` | Auto's reviewer: `kuvo/sessions/<id>/decisions`, `tellAuto` in `kuvo/approval`, and a sandbox ask's `review` ("Approval", "Auto's reviewer", bridge 0.9.181) |
 | `wakes` | `kuvo/wakes`, a session's, and cancelling one or sending it now |
 | `wakes.edit` | adding one (`POST kuvo/wakes/<session>`) and pausing them |
 | `wakes.events` | `kuvo/wakes/events`, and making a watch (`POST kuvo/wakes/<session>/watch`) |
@@ -3162,7 +3162,7 @@ hold: Claude Code's plans, each project's memory, what it saved of a long output
 ### Approval
 
 How much a conversation's agent does on its own is kept on the box, with the conversation
-(`approval` in `features`): every client shows the same one, and none guesses it from the engine's
+(`approval` in `features`, bridge 0.9.180): every client shows the same one, and none guesses it from the engine's
 rules. Plan mode stays the conversation's agent (`plan`), beside it.
 
 - `askFirst`: edits, commands and the rest wait for your OK. `acceptEdits`: edits in its folders go
@@ -3208,7 +3208,7 @@ rules. Plan mode stays the conversation's agent (`plan`), beside it.
 
 #### Auto's reviewer
 
-In a conversation that's in Auto here now (`approval.reviewer` in `features`), what its agent wants
+In a conversation that's in Auto here now (`approval.reviewer` in `features`, bridge 0.9.181), what its agent wants
 beyond the sandbox's walls is judged on the box before it comes to you: a command it asks to run
 outside the sandbox (`sandbox_ask`), and a file the agent's own tools want outside its folder (the
 engine's or the bridge's `external_directory` ask, by the file the tool call names). Any other
@@ -3277,7 +3277,7 @@ writes none of those). Only you start a conversation in such a folder: an agent'
 (`start_session`, or `POST kuvo/sessions` with `startedBy`) in one, in a folder that holds any of
 them (your home, the folders above it, `~/.config`), in a personal folder or one in it but your
 projects there and its own conversation's folder, or in a folder on the box's PATH outside your
-home or one that holds it, is refused (403); it starts where the folder really is as it's checked.
+home or one that holds it, is refused (403, bridge 0.9.180); it starts where the folder really is as it's checked.
 Its repository is only ever a folder named as one (`.git`, `….git`), else its folder alone: a
 command could make what looks like one anywhere it adds files, then a folder whose `.git` names it.
 Tools' caches inside what's kept (pnpm's store in its folder on your PATH on macOS) are still

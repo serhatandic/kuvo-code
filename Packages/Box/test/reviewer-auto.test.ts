@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 
 // A conversation set to Auto, as its agent meets the reviewer: a command it asks to run outside
 // the sandbox runs on the reviewer's allow without asking you, is refused with its reason, or
@@ -36,13 +36,20 @@ function conversation(id: string, approval: "auto" | "askFirst", ...words: strin
   said[id] = words
 }
 
+// (The run's home is the preload's: the engine's file goes where the link reads it, and what was
+// there before comes back after.)
+let engineFile: string
+let engineBefore: string | null = null
+const sandboxOnBefore = process.env.KUVO_TEST_SANDBOX_ON
+
 beforeAll(async () => {
   box = mkdtempSync(join(tmpdir(), "kuvo-auto-"))
-  process.env.KUVO_HOME = join(box, "kuvo")
   process.env.KUVO_TEST_SANDBOX_ON = "1"
   project = join(box, "project")
   mkdirSync(project, { recursive: true })
-  mkdirSync(join(box, "kuvo", "run"), { recursive: true })
+  engineFile = (await import("../src/link/home")).ENGINE_FILE
+  mkdirSync(dirname(engineFile), { recursive: true })
+  engineBefore = existsSync(engineFile) ? readFileSync(engineFile, "utf8") : null
   engine = Bun.serve({
     port: 0,
     async fetch(request) {
@@ -68,13 +75,17 @@ beforeAll(async () => {
       return Response.json({ data: sessions[id] })
     },
   })
-  writeFileSync(join(box, "kuvo", "run", "engine.json"), JSON.stringify({ pid: process.pid, port: engine.port, password: "pw", version: "test" }))
+  writeFileSync(engineFile, JSON.stringify({ pid: process.pid, port: engine.port, password: "pw", version: "test" }))
   outside = await import("../src/link/fence/outside")
   reviewing = await import("../src/link/work/reviewing")
   reviewer = await import("../src/link/work/reviewer")
 })
 afterAll(() => {
   engine.stop(true)
+  if (engineBefore === null) rmSync(engineFile, { force: true })
+  else writeFileSync(engineFile, engineBefore)
+  if (sandboxOnBefore === undefined) delete process.env.KUVO_TEST_SANDBOX_ON
+  else process.env.KUVO_TEST_SANDBOX_ON = sandboxOnBefore
   rmSync(box, { recursive: true, force: true })
 })
 

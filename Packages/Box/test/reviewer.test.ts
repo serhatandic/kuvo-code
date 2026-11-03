@@ -14,7 +14,6 @@ let reviewer: typeof import("../src/link/work/reviewer")
 
 beforeAll(async () => {
   box = mkdtempSync(join(tmpdir(), "kuvo-reviewer-"))
-  process.env.KUVO_HOME = join(box, "kuvo")
   project = join(box, "project")
   mkdirSync(project, { recursive: true })
   reviewer = await import("../src/link/work/reviewer")
