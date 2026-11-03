@@ -329,6 +329,8 @@ struct AppCommands: Commands {
             Divider()
             Button("Auto’s Decisions…") { actions?.showDecisions?() }
                 .disabled(actions?.showDecisions == nil)
+            Button("Branch Backups…") { actions?.branchBackups() }
+                .disabled(actions?.hasSession != true)
         }
         CommandMenu("Tools") {
             Group {
@@ -421,6 +423,8 @@ struct SessionActions {
     var selectAgent: (String) -> Void
     /// Auto's Decisions in the focused conversation (nil: none to show there).
     var showDecisions: (() -> Void)?
+    /// Branch Backups for the focused conversation's folder.
+    var branchBackups: () -> Void
     var togglePanel: () -> Void
     var showChanges: () -> Void
     var showFiles: () -> Void

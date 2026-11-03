@@ -49,6 +49,7 @@ struct ChangesPanel: View {
     @Environment(\.colorScheme) private var scheme
     @Environment(\.isPanelShown) private var isShown
     @State private var isCommitting = false
+    @State private var showsBackups = false
 
     /// The session's own worktree, when it has one.
     private var worktree: Workspace.Worktree? { workspace.worktrees[changes.directory] }
@@ -297,9 +298,35 @@ struct ChangesPanel: View {
             .help(collapsed.count == changes.files.count ? "Expand All" : "Collapse All")
             .accessibilityLabel(collapsed.count == changes.files.count ? "Expand All" : "Collapse All")
             .disabled(changes.files.isEmpty)
+            // Also outside a repository: one whose .git is gone is made again from its backups.
+            NativeMenuButton(name: "changes", opensBelow: true, menu: panelMenu) {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 13))
+                    .frame(width: 26, height: 24)
+                    .hoverHighlight(in: RoundedRectangle(cornerRadius: 6), mutesInk: true)
+            }
+            .help("More")
+            .accessibilityLabel("More")
+            .fixedSize()
         }
         .padding(.horizontal, 14)
         .frame(height: 40)
+        .branchBackupsSheet(isPresented: $showsBackups, folder: changes.directory)
+        #if DEBUG
+        // KUVO_DEMO_BRANCH_BACKUPS=<sample>: Branch Backups open, with that sample (`DemoBackups`).
+        .task {
+            guard ProcessInfo.processInfo.environment["KUVO_DEMO_BRANCH_BACKUPS"] != nil, !showsBackups else { return }
+            await DemoWait.pause(.conversationShows)
+            showsBackups = true
+        }
+        #endif
+    }
+
+    /// The panel's ⋯ menu.
+    private func panelMenu() -> NSMenu {
+        let menu = NSMenu()
+        menu.addItem(ActionItem("Branch Backups…", subtitle: "Take back deleted branches and stashes") { showsBackups = true })
+        return menu
     }
 
     /// A review of what the tab shows: the uncommitted changes with fresh eyes (/review), or the
