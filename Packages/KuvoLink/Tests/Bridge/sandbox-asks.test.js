@@ -41,17 +41,19 @@ const blog = path.join(root, "blog");
 // files, but only their own project's are theirs to delete).
 const outside = path.join(root, "outside");
 
-// The engine, as far as the box asks it: who a conversation is, its folder, and the tool calls it's
+// The engine, as far as the box asks it: who a conversation is, its folder, its rules (Ask First:
+// one that asks nothing is in Full Access, whose commands never ask), and the tool calls it's
 // making now (only a call the conversation is really making is answered).
+const ASK_FIRST = [{ action: "shell", resource: "*", effect: "ask" }];
 const sessions = {
-  ses_shop: { id: "ses_shop", title: "Fix checkout", location: { directory: shop } },
-  ses_shop2: { id: "ses_shop2", title: "Install hooks", location: { directory: shop } },
-  ses_blog: { id: "ses_blog", title: "Write a post", location: { directory: blog } },
+  ses_shop: { id: "ses_shop", title: "Fix checkout", location: { directory: shop }, permissions: ASK_FIRST },
+  ses_shop2: { id: "ses_shop2", title: "Install hooks", location: { directory: shop }, permissions: ASK_FIRST },
+  ses_blog: { id: "ses_blog", title: "Write a post", location: { directory: blog }, permissions: ASK_FIRST },
   // A worktree of the repository `kept`, for a branch of its own.
-  ses_branch: { id: "ses_branch", title: "Try a branch", location: { directory: path.join(root, "kept-branch") } },
+  ses_branch: { id: "ses_branch", title: "Try a branch", location: { directory: path.join(root, "kept-branch") }, permissions: ASK_FIRST },
   // A bot's own conversation, in its folder's workspace, and a chat, in the chats' folder.
   ses_scout: { id: "ses_scout", title: "Scout", location: { directory: path.join(home, "bots", "bot_scout", "workspace") } },
-  ses_chat: { id: "ses_chat", title: "Quick question", location: { directory: path.join(home, "chats") } },
+  ses_chat: { id: "ses_chat", title: "Quick question", location: { directory: path.join(home, "chats") }, permissions: ASK_FIRST },
   // A bot's seat in a group chat.
   ses_seat: { id: "ses_seat", title: "Standup", location: { directory: shop }, metadata: { kuvo: { seat: "seat_1" } } },
 };

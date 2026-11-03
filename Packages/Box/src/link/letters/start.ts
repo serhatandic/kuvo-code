@@ -12,7 +12,7 @@ import { asked, call, engineGet } from "../engine/client";
 import { writtenByYou } from "../engine/queue";
 import { messageID } from "../engine/sessions";
 import { BOTS, CHATS, HERE, homeFolder } from "../home";
-import { keptFromWork } from "../fence/policy";
+import { realish } from "../fence/policy";
 import { changeProjects, PROJECTS_FILE, readProjects } from "../areas/projects";
 import { readWorktrees } from "../areas/worktree-records";
 import { answerWorktrees, settleNewSession } from "../areas/worktrees";
@@ -22,8 +22,10 @@ import { answerTo } from "./take";
 import { noteWorkChanged } from "../work/changes";
 import { botLimits, pastLimit } from "../work/limits";
 import { pickModel, usableModels } from "../work/models";
-import { approvalOf, approvalRules, effectiveApproval, isApproval, lowerOf, unavailable } from "../work/approval";
+import { approvalOf, approvalRules, effectiveApproval, fullAccessAllowed, isApproval, lowerOf, unavailable } from "../work/approval";
 import { settleAgain } from "../areas/approval";
+import { noteFullAccess } from "../work/full";
+import { keptFromSessions } from "../work/reviewer";
 import type { Approval } from "../work/approval";
 import { linkSession, pauseGoal, runningGoal } from "../work/goals";
 import { nextMidnight, startOfDay } from "../work/clock";
@@ -121,11 +123,12 @@ function wakesFrom(given: unknown, byBot: boolean, waits: boolean): string[] {
 }
 
 // The approval a start asks for: one of the box's, or as an older client says it (`ask` Ask First,
-// `approveAll` Auto); none for the starter's own.
+// `approveAll` Full Access where you confirmed it on this computer, else Auto); none for the
+// starter's own.
 function approvalGiven(given: unknown): Approval | null | undefined {
   if (given === undefined || given === null) return null;
   if (given === "ask") return "askFirst";
-  if (given === "approveAll") return "auto";
+  if (given === "approveAll") return fullAccessAllowed() ? "fullAccess" : "auto";
   return isApproval(given) ? given : undefined;
 }
 
@@ -228,13 +231,17 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
     let isFolder = false;
     try { isFolder = fs.statSync(full).isDirectory(); } catch {}
     if (!path.isAbsolute(full) || !isFolder) return no(400, `${written} isn't a folder on ${HERE}. Give a full path to one.`);
-    // (Its commands would write it whole: only you start one there. In a personal folder, an agent
-    // starts one only in your projects there, or its own conversation's folder.)
+    // (Its commands would write it whole, in the sandbox: an agent in Auto never starts one where
+    // that's real damage, its own conversation's folder and your projects aside; one in Full
+    // Access, anywhere, as its own commands go.)
     const ours = [...readProjects().filter(each => !each.removed).flatMap(each => [each.directory, ...(each.folders ?? [])]),
-      ...readWorktrees().map(each => each.folder ?? each.root), ...(parentFolder ? [parentFolder] : [])];
+      ...readWorktrees().map(each => each.folder ?? each.root), ...(parentFolder ? [parentFolder] : [])].map(realish);
     // (An agent's by where it really is as it's checked: a link swapped in after is never followed.)
     const at = by ? fs.realpathSync(full) : full;
-    if (by && keptFromWork(at, ours)) return no(403, `${written} is kept from commands on ${HERE} (what runs later, a personal folder or the like). Ask the user to start it there.`);
+    const bridgeNow = place.bridge?.() ?? null;
+    const fullAccess = Boolean(by?.place && approvalOf(by.place.data, { agents: Boolean(bridgeNow && by.place.target.port === bridgeNow.port), bot: Boolean(botOfConversation(by.session) ?? worksFor(by.place.data)) }).effective === "fullAccess");
+    const kept = by && !fullAccess && !ours.includes(at) ? keptFromSessions(at) : null;
+    if (kept) return no(403, `An agent in Auto can't start a session in ${written} on ${HERE}: ${kept}. Ask the user to start it there.`);
     folder = isBotFolder(at) ? CHATS : at;
   }
   if (!folder) return no(400, "Give the folder it works in (folder), as a full path.");
@@ -382,6 +389,8 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   const marked = await call(target, "PATCH", `/api/session/${address}`, { metadata: { kuvo } }).then(() => true, () => false);
   // (What it comes to may have changed while it was made.)
   if (marked && !asBefore) await settleAgain(target, session, agents, place.signal).catch(() => {});
+  // In Full Access, its commands outside the sandbox from the first.
+  await noteFullAccess(session).catch(() => {});
   if (by?.place && bot) noteWorkChanged(bot.bot);
   if (!marked || !by?.place) wakes = [];
   if (bot && goal && given.step !== undefined && given.step !== null) linkSession(bot.bot, given.step, session);

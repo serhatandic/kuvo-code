@@ -6,9 +6,10 @@
 // - Auto: everything inside the sandbox's walls goes ahead; what's beyond them asks. Only where the
 //   sandbox runs: elsewhere a conversation set to Auto asks first until it's back (it fails
 //   closed, and says why).
-// - Full Access: no approval asks. Only where you switched it on for this computer
-//   (`box/approval.json`), and never for a bot's work, whatever started it. Its commands still run
-//   in the sandbox where it runs, as every conversation's do.
+// - Full Access: nothing asks, and nothing stands in the way: its commands (and a coding agent's
+//   own program) run outside the sandbox, no reviewer, its file tools go anywhere. Picked once you
+//   confirmed it on this computer (`box/approval.json`: a client asks you the first time), and
+//   never for a bot's work, whatever started it.
 // Plan stays the conversation's agent, beside this. What the box writes is the engine's rules for
 // it (the coding agents' bridge reads the same ones and sets each agent from them), made again
 // with Settings › Permissions as they are, so a Don't Allow there still holds in every one.
@@ -31,7 +32,8 @@ export const lowerOf = (a: Approval, b: Approval): Approval => (RANK[a] <= RANK[
 
 export const APPROVAL_FILE = path.join(BOX, "approval.json");
 
-/** Whether Full Access may be picked on this computer (off until you switch it on). */
+/** Whether you confirmed Full Access on this computer (a client asks you the first time you pick
+ * it): until then it can't be picked here. */
 export function fullAccessAllowed(file = APPROVAL_FILE): boolean {
   try {
     const kept = JSON.parse(textOf(file) ?? "");
@@ -74,7 +76,7 @@ const SANDBOX_WHY = {
 export function unavailable(approval: Approval, { agents = false, bot = false }: Where = {}): Unavailable | null {
   if (approval === "fullAccess") {
     if (bot) return { reason: "bot", why: "Bots can't use Full Access: Auto is the most they get." };
-    if (!fullAccessAllowed()) return { reason: "fullAccessOff", why: "Full Access is off for this computer. Turn it on in Settings first." };
+    if (!fullAccessAllowed()) return { reason: "fullAccessOff", why: "Full Access isn't confirmed on this computer yet: confirm it first." };
   }
   if (approval === "auto") {
     const gap = sandboxGap(agents);
@@ -147,8 +149,8 @@ const madeFor = (rules: readonly KitRule[], applied: Approval) =>
 /** A conversation's approval: the one kept with it (`kuvo.approval`), while its rules are still the
  * ones the box made for it (`kuvo.applied`, what that came to then); a client from before that
  * changed them on its own leaves what they say. Else as its rules say: asking before commands is
- * Ask First, and nothing asking is Auto where the sandbox runs (or for a bot's), Full Access where
- * it doesn't (as it ran). `stored`: whether it's the one kept; `applied`: what its rules are made
+ * Ask First, and nothing asking (Approve All, from before) is Full Access, as it ran: never the
+ * reviewer it didn't have (but a bot's, which never has more than Auto). `stored`: whether it's the one kept; `applied`: what its rules are made
  * for now (null for one from before); `effective`: what it comes to here now, and `held`, why
  * that's less. */
 export function approvalOf(session: WithApproval, where: Where = {}): { approval: Approval; stored: boolean; applied: Approval | null; effective: Approval; held?: Unavailable } {
@@ -160,9 +162,10 @@ export function approvalOf(session: WithApproval, where: Where = {}): { approval
     return { approval: kept, stored: true, applied, effective: approval, ...(held ? { held } : {}) };
   }
   // (Asking before commands was Ask First, before there was more: its rules are made again as that.
-  // One from before runs as it did: what its rules say is what it does. But a bot's, which never
-  // has more than Auto, and comes to what Auto does here: the box makes its rules so (`adoptBots`).)
-  const guessed: Approval = asksFor(rules, "shell") ? "askFirst" : where.bot || sandboxGap(where.agents) === null ? "auto" : "fullAccess";
+  // One from before runs as it did: what its rules say is what it does, whether or not you
+  // confirmed Full Access here. But a bot's, which never has more than Auto, and comes to what Auto
+  // does here: the box makes its rules so (`adoptBots`).)
+  const guessed: Approval = asksFor(rules, "shell") ? "askFirst" : where.bot ? "auto" : "fullAccess";
   if (!where.bot) return { approval: guessed, stored: false, applied: null, effective: guessed };
   const { approval, held } = effectiveApproval(guessed, where);
   return { approval: guessed, stored: false, applied: null, effective: approval, ...(held ? { held } : {}) };

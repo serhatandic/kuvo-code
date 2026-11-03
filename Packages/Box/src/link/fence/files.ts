@@ -45,6 +45,25 @@ export interface FencePlaces {
 
 const sh = (text: string) => `'${text.replace(/'/g, `'\\''`)}'`;
 
+/** Its conversation's wake-ups and watches (kuvo-wake): its bot's folder, or its own in the box's
+ * wakes folder, which this makes with the folder it works in (`$work`; never the command's: a
+ * watch's check runs there). The engine names the conversation; your ! commands have none, and
+ * name no folder (one that isn't there). */
+const wakeLines = (places: FencePlaces) => [
+  `own=$F/none w_bot=`,
+  `case \${OPENCODE_SESSION_ID-} in`,
+  `  ses_*[!A-Za-z0-9_]*|ses_) ;;`,
+  `  ses_*)`,
+  `    w_own=`,
+  `    for b in ${sh(places.bots)}/*/; do [ "$(cat "\${b}session" 2>/dev/null)" = "$OPENCODE_SESSION_ID" ] && w_own=\${b%/} && w_bot=1 && break; done`,
+  `    if [ -z "$w_own" ]; then`,
+  `      w_own=${sh(places.wakes)}/$OPENCODE_SESSION_ID`,
+  `      [ -f "$w_own/session" ] || { (umask 077; mkdir -p "$w_own") && printf '%s' "$OPENCODE_SESSION_ID" >"$w_own/session" && printf '%s' "$work" >"$w_own/directory"; }`,
+  `    fi`,
+  `    (umask 077; mkdir -p "$w_own/wakes" "$w_own/watches" "$w_own/inbox") 2>/dev/null && touch "$w_own" && w_own=$(cd "$w_own" && pwd -P) && own=$w_own && export KUVO_WAKE_FOLDER="$own" ;;`,
+  `esac`,
+];
+
 /** `bin/kuvo-fence`: the shell the engine runs each command with (`kuvo-fence -c <command>`). */
 export function launcherScript(places: FencePlaces): string {
   const insideCases = [...places.inside.map(folder => `${sh(folder)}/?*`), ...places.shared.flatMap(folder => [sh(folder), `${sh(folder)}/?*`]), sh(places.probe)].join("|");
@@ -75,7 +94,8 @@ export function launcherScript(places: FencePlaces): string {
     "#!/bin/sh",
     "# Kuvo Code writes this each time its box starts: changes here don't last.",
     "# The engine runs each command an agent (or you, with !) runs through this: the command's own",
-    "# shell, in the sandbox. Its plugin (kuvo-sandbox.js) names the conversation's folder.",
+    "# shell, in the sandbox (outside it for a conversation in Full Access). Its plugin",
+    "# (kuvo-sandbox.js) names the conversation's folder.",
     `F=${sh(places.folder)}`,
     // Until the command runs, only the system's programs: never one a command put on your PATH
     // (in a folder it writes), run here outside the sandbox.
@@ -102,7 +122,19 @@ export function launcherScript(places: FencePlaces): string {
     `for v in $(env | sed -n 's/^\\(OPENCODE_[A-Za-z0-9_]*\\)=.*/\\1/p; s/^\\(KUVO_[A-Za-z0-9_]*\\)=.*/\\1/p'); do`,
     `  case $v in OPENCODE_SESSION_ID) ;; OPENCODE_*|*PASSWORD*|*SECRET*|*TOKEN*|*KEY*|KUVO_HOST_*|KUVO_VAULT_*) unset "$v" ;; esac`,
     `done`,
-    "unset SSH_AUTH_SOCK KUVO_WAKE_FOLDER",
+    // A conversation in Full Access (the box marks it in the sandbox's folder, which no command
+    // writes): its commands, and a coding agent's own program in it, run as yours, outside the
+    // sandbox, with your SSH agent. Still with its wake-ups' folder.
+    `full=`,
+    `case \${OPENCODE_SESSION_ID-} in ses_*[!A-Za-z0-9_]*|ses_|'') ;; ses_*) [ -f "$F/full/$OPENCODE_SESSION_ID" ] && full=1 ;; esac`,
+    "unset KUVO_WAKE_FOLDER",
+    `if [ -n "$full" ]; then`,
+    `  work=$(cd "\${work:-.}" 2>/dev/null && pwd -P) || work=$(pwd -P)`,
+    ...wakeLines(places).map(line => `  ${line}`),
+    `  [ "$as_bun" != 1 ] || export BUN_BE_BUN=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0`,
+    `  PATH=$user_path exec "$shell" "$@"`,
+    `fi`,
+    "unset SSH_AUTH_SOCK",
     `case $work in /*) ;; *) echo "This command can't run in the sandbox here: its conversation's folder wasn't given." >&2; exit 126 ;; esac`,
     `work=$(cd "$work" 2>/dev/null && pwd -P) || { echo "This command can't run: its conversation's folder isn't there." >&2; exit 126; }`,
     // Where the folder really was as the engine opened it (its plugin names it): a folder traded
@@ -174,22 +206,7 @@ export function launcherScript(places: FencePlaces): string {
     // Not the one Kuvo Code was started in either, which tmux would take for it.
     `export TMUX_TMPDIR="$tmp"`,
     "unset TMUX TMUX_PANE",
-    // Its conversation's wake-ups and watches (kuvo-wake): its bot's folder, or its own in the
-    // box's wakes folder, which this makes with the folder it works in (never the command's: a
-    // watch's check runs there). The engine names the conversation; your ! commands have none, and
-    // name no folder (one that isn't there).
-    `own=$F/none w_bot=`,
-    `case \${OPENCODE_SESSION_ID-} in`,
-    `  ses_*[!A-Za-z0-9_]*|ses_) ;;`,
-    `  ses_*)`,
-    `    w_own=`,
-    `    for b in ${sh(places.bots)}/*/; do [ "$(cat "\${b}session" 2>/dev/null)" = "$OPENCODE_SESSION_ID" ] && w_own=\${b%/} && w_bot=1 && break; done`,
-    `    if [ -z "$w_own" ]; then`,
-    `      w_own=${sh(places.wakes)}/$OPENCODE_SESSION_ID`,
-    `      [ -f "$w_own/session" ] || { (umask 077; mkdir -p "$w_own") && printf '%s' "$OPENCODE_SESSION_ID" >"$w_own/session" && printf '%s' "$work" >"$w_own/directory"; }`,
-    `    fi`,
-    `    (umask 077; mkdir -p "$w_own/wakes" "$w_own/watches" "$w_own/inbox") 2>/dev/null && touch "$w_own" && w_own=$(cd "$w_own" && pwd -P) && own=$w_own && export KUVO_WAKE_FOLDER="$own" ;;`,
-    `esac`,
+    ...wakeLines(places),
     // Its bot's memory (`MEMORY.md` in its folder), which it's told to keep: the bot whose
     // conversation this is; for its seat in a group chat, the bot the agents bridge names
     // (`KUVO_FENCE_BOT`, as its box marked the seat), or, run by the engine, the bot whose own

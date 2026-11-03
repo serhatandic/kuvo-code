@@ -6,8 +6,9 @@ const APPROVAL = words("askFirst", "acceptEdits", "auto", "fullAccess");
 
 const REASON = words("sandbox", "fullAccessOff", "bot");
 
-/** Why one can't be had here now: the sandbox isn't running (Auto), Full Access isn't switched on
- * here, or it's a bot's (never Full Access); in words to show (`why`). */
+/** Why one can't be had here now: the sandbox isn't running (Auto), Full Access isn't confirmed
+ * on this computer yet (`fullAccessOff`: ask, then `PATCH kuvo/approval {fullAccess: true}`), or
+ * it's a bot's (never Full Access); in words to show (`why`). */
 export const UNAVAILABLE = object({ reason: REASON, why: string });
 
 /** A conversation's approval: the one picked (`approval`; as its rules say, for one from before:
@@ -20,11 +21,11 @@ export const SESSION_APPROVAL = object({
   options: list(object({ approval: APPROVAL, "unavailable?": UNAVAILABLE, "held?": UNAVAILABLE })),
 });
 
-/** This computer's: whether Full Access may be picked (`fullAccess`, its switch), your rules for
- * Auto's reviewer in your words (`tellAuto`, "" for none), and whether Auto runs for the engine's
- * conversations and the coding agents' (why it asks first for now, where it doesn't: `held`). */
+/** This computer's: whether you confirmed Full Access here (`fullAccess`: a client asks you the
+ * first time you pick it, then sets it), and whether Auto runs for the engine's conversations and
+ * the coding agents' (why it asks first for now, where it doesn't: `held`). */
 export const APPROVAL_HERE = object({
-  fullAccess: bool, tellAuto: string,
+  fullAccess: bool,
   auto: object({ engine: object({ "held?": UNAVAILABLE }), agents: object({ "held?": UNAVAILABLE }) }),
 });
 
@@ -48,7 +49,7 @@ export type ReviewDecisions = Infer<typeof REVIEW_DECISIONS>;
 export type ApprovalHere = Infer<typeof APPROVAL_HERE>;
 
 const REFUSED = object({ message: string });
-/** Full Access refused: without its switch, or for a bot's. */
+/** Full Access refused: not confirmed on this computer yet, or for a bot's. */
 const NOT_THAT = object({ message: string, reason: REASON });
 
 export const APPROVAL_ROUTES: RouteShape[] = [

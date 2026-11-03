@@ -588,7 +588,7 @@ test("a bot never lets a session change what later commands run, nor reach past 
   fs.mkdirSync(path.join(home, ".ssh"), { recursive: true });
   const inHome = await tool("start_session", { task: "Look.", folder: home }, "ses_pixel");
   assert.equal(inHome.isError, true);
-  assert.match(inHome.text, /is kept from commands/);
+  assert.match(inHome.text, /its commands could delete your home folder/);
 });
 
 test("git is a bot's to allow only in the project's own repository, never one above it", async () => {

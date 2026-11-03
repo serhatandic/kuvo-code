@@ -11,7 +11,7 @@ import { resetsIn, type Limit } from "./auto"
 import { fileDiff } from "./diff"
 import { newID } from "./ids"
 import { RPC, RPCError } from "./rpc"
-import { allowedFolders, fenceAgent, fenceAttachments, fenceCopy, fenceKey, fenceRules, seatBot } from "./fence"
+import { allowedFolders, fenceAgent, fenceAttachments, fenceCopy, fenceKey, fenceRules, seatBot, fullAccessMark } from "./fence"
 import { isKuvoTool, kuvoToolName, kuvoTools, loadKuvoTools, toolServerName } from "./kuvotools"
 import { computerServers, type ComputerServers } from "./servers"
 import { dropRelayed, relayedServers, relayedTools, relayPort } from "./toolrelay"
@@ -217,7 +217,7 @@ export class AcpThread implements Thread {
     // other skills.
     // So does the box's sandbox changing, for one run whole in it (its rules, the folders you let
     // this project's commands write).
-    const fence = this.flavor.whole && fenceRules() ? fenceKey() + JSON.stringify(allowedFolders(this.session.location.directory)) : ""
+    const fence = this.flavor.whole && fenceRules() ? fenceKey() + JSON.stringify(allowedFolders(this.session.location.directory)) + fullAccessMark(this.session.id) : ""
     // And the computer's MCP servers, another set of them (one you added, or took away).
     const computer = await computerServers(this.session.location.directory)
     const key = JSON.stringify({ ...mode, program: this.flavor.program?.() ?? 0, tools: kuvoTools(this.session.id)?.key, fence, servers: computer.key })

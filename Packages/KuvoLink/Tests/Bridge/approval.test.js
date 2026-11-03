@@ -98,9 +98,12 @@ test("a conversation from before reads as its rules say, and can be set to any o
   assert.equal(careful.body.approval, "askFirst");
   assert.equal(careful.body.stored, false);
   assert.equal(careful.body.plan, false);
-  // Nothing asks: Full Access where the sandbox doesn't run (as it ran), Auto where it does.
-  assert.equal((await route("GET", "kuvo/sessions/ses_free/approval")).body.approval, "fullAccess");
-  assert.equal((await route("GET", "kuvo/sessions/ses_free/approval", undefined, { sandbox: true })).body.approval, "auto");
+  // Nothing asks (Approve All): Full Access, as it ran, with the sandbox or without, and whether or
+  // not you confirmed it here: never Auto's reviewer, which it didn't have.
+  for (const sandbox of [false, true]) {
+    const free = (await route("GET", "kuvo/sessions/ses_free/approval", undefined, { sandbox })).body;
+    assert.deepEqual({ approval: free.approval, effective: free.effective, stored: free.stored }, { approval: "fullAccess", effective: "fullAccess", stored: false });
+  }
   // A bot's never reads as Full Access, and its Auto asks first where the sandbox doesn't run.
   const scout = (await route("GET", "kuvo/sessions/ses_scout/approval")).body;
   assert.deepEqual({ approval: scout.approval, effective: scout.effective, reason: scout.held?.reason }, { approval: "auto", effective: "askFirst", reason: "sandbox" });

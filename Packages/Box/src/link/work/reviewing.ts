@@ -5,9 +5,11 @@
 // through the agents bridge, so it's counted on that account. One that isn't in Auto isn't
 // reviewed: what it asks goes to you as before. A pause stops the conversation's run.
 
+import path from "node:path";
 import { isObject } from "../../shared/json";
 import { bridgeTarget, call, engineGet, readEngineFile } from "../engine/client";
 import { stopSession, writtenByYou } from "../engine/queue";
+import { alwaysAsks } from "./always";
 import { approvalOf } from "./approval";
 import { asksIn, callOf } from "./answers";
 import { pauseGoal, REVIEW_PAUSE, runningGoal } from "./goals";
@@ -101,14 +103,18 @@ export async function reviewModelOf(at: Conversation, signal?: AbortSignal): Pro
 }
 
 /** What Auto's reviewer decides about `action` in `session`'s conversation, where it's in Auto here
- * now; null where it isn't (what it asks goes to you). A pause stops its run. */
-export async function reviewIn(session: string, action: ReviewedAction, signal?: AbortSignal, found?: Conversation | null): Promise<(Verdict & { paused?: boolean; conversation: Conversation }) | null> {
+ * now; null where it isn't (what it asks goes to you). In Full Access, `fullAccess`: nothing asks,
+ * nothing's reviewed. A pause stops its run. `pin`: false where a script from the web it runs can't
+ * be made the copy reviewed (`reviewer.ts`). */
+export async function reviewIn(session: string, action: ReviewedAction, signal?: AbortSignal, found?: Conversation | null, pin = true): Promise<(Verdict & { paused?: boolean; conversation: Conversation }) | { fullAccess: true; conversation: Conversation } | null> {
   const at = found === undefined ? await conversationOf(session) : found;
   if (!at) return null;
   const bot = botOf(at.data);
-  if (approvalOf(at.data, { agents: at.agents, bot: Boolean(bot) }).effective !== "auto") return null;
+  const effective = approvalOf(at.data, { agents: at.agents, bot: Boolean(bot) }).effective;
+  if (effective === "fullAccess") return { fullAccess: true, conversation: at };
+  if (effective !== "auto") return null;
   const context: ReviewContext = { session: at.data.id, said: bot ? [] : await yourMessages(at, signal), ...(bot ? { bot } : {}) };
-  const verdict = await review(action, context, { model: await reviewModelOf(at, signal), signal });
+  const verdict = await review(action, context, { model: await reviewModelOf(at, signal), signal, pin });
   if (verdict.paused) {
     await stopSession(at.target, at.data.id, false).catch(() => {});
     // A bot's: on its goal's card too.
@@ -123,22 +129,40 @@ const READING = new Set(["read", "glob", "grep", "list", "ls", "view", "notebook
 const reviewing = new Set<string>();
 
 /** A permission an engine (or the coding agents' bridge) asks in a conversation in Auto, taken up
- * by its reviewer: for now, the agent's own file tools outside its folder (`external_directory`),
- * by the file the tool call names. Allowed or refused here; one that comes to you is left asked,
- * with why in the conversation's log. Anything that can't be read is left for you. */
+ * by its reviewer: the agent's own file tools outside its folder (`external_directory`), by the
+ * file the tool call names; and in a bot's, what always came to you (`always.ts`: the engine asks
+ * for it in every mode), by the call itself. Allowed or refused here; one that comes to you is left
+ * asked, with why in the conversation's log. Anything that can't be read is left for you, and so
+ * is what your own Settings › Permissions ask. */
 export async function reviewPermission(source: Target, event: { type?: string; data?: { id?: unknown; sessionID?: unknown; action?: unknown } }, signal?: AbortSignal, found?: Conversation | null): Promise<Verdict | null> {
-  const { id, sessionID, action } = event.data ?? {};
-  if (event.type !== "permission.asked" || action !== "external_directory" || typeof id !== "string" || typeof sessionID !== "string" || reviewing.has(id)) return null;
+  const { id, sessionID } = event.data ?? {};
+  if (event.type !== "permission.asked" || typeof id !== "string" || typeof sessionID !== "string" || reviewing.has(id)) return null;
   reviewing.add(id);
   if (reviewing.size > 500) reviewing.delete(reviewing.values().next().value!);
   const { permissions } = await asksIn(source, sessionID, signal);
   const permission = permissions.find(each => each.id === id && each.asker === sessionID);
   const seen = permission ? await callOf(source, permission, signal) : null;
-  const file = [seen?.input.filePath, seen?.input.file_path, seen?.input.notebook_path, seen?.input.path, seen?.input.file].find((each): each is string => typeof each === "string" && each.startsWith("/"));
   const at = found === undefined ? await conversationOf(sessionID) : found;
-  if (!permission || !seen || !file || !at?.data.location?.directory) return null;
-  const verdict = await reviewIn(sessionID, { kind: "file", path: file, access: READING.has(seen.tool.toLowerCase()) ? "read" : "write", folder: at.data.location.directory, tool: seen.tool, input: seen.input }, signal, at);
-  if (!verdict || verdict.decision === "ask") return verdict;
+  const folder = at?.data.location?.directory;
+  if (!permission || !seen || !at || !folder) return null;
+  let action: ReviewedAction;
+  if (permission.action === "external_directory") {
+    const file = [seen.input.filePath, seen.input.file_path, seen.input.notebook_path, seen.input.path, seen.input.file].find((each): each is string => typeof each === "string" && each.startsWith("/"));
+    if (!file) return null;
+    action = { kind: "file", path: file, access: READING.has(seen.tool.toLowerCase()) ? "read" : "write", folder, tool: seen.tool, input: seen.input };
+  } else {
+    // (Only a bot's asks what always came to you; anything else asked is your own rules'.)
+    if (!botOf(at.data) || !alwaysAsks(permission.action, permission.resources, seen)) return null;
+    const command = typeof seen.input.command === "string" ? seen.input.command : null;
+    const file = [seen.input.filePath, seen.input.file_path, seen.input.path].find((each): each is string => typeof each === "string");
+    action = (permission.action === "shell" || permission.action === "bash") && command ? { kind: "command", command, folder }
+      : ["edit", "write", "patch", "multiedit", "read"].includes(permission.action) && file ? { kind: "file", path: path.resolve(folder, file), access: permission.action === "read" ? "read" : "write", folder, tool: seen.tool, input: seen.input }
+      : { kind: "tool", tool: seen.tool, args: seen.input, folder };
+  }
+  // (The engine runs a command it asked about itself: a script from the web in it can't be pinned
+  // to the copy reviewed, so that one comes to you.)
+  const verdict = await reviewIn(sessionID, action, signal, at, false);
+  if (!verdict || "fullAccess" in verdict || verdict.decision === "ask") return verdict && "fullAccess" in verdict ? null : verdict;
   const reply = verdict.decision === "allow" ? { decision: "once" } : { decision: "reject", message: `Auto's reviewer: ${verdict.reason}` };
   await call(source, "POST", `/api/session/${encodeURIComponent(permission.asker)}/permission/${encodeURIComponent(permission.id)}/reply`, reply, signal);
   return verdict;

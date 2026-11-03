@@ -6550,6 +6550,10 @@ function noteToolServer(url) {
     renameSync7(record + ".new", record);
   } catch {}
 }
+function fullAccessMark(session) {
+  const where = folder();
+  return where && session && /^ses_[A-Za-z0-9_]+$/.test(session) && existsSync7(join15(where, "full", session)) ? " full" : "";
+}
 function fenceOn() {
   const where = folder();
   return Boolean(where) && process.env.KUVO_SANDBOX !== "off" && existsSync7(join15(where, "on"));
@@ -7304,7 +7308,7 @@ class AcpThread {
   async open(input, hooks) {
     const skills = await this.flavor.skills?.(this.session.location.directory, hooks);
     const mode = { approvesAll: hooks.approvesAll(), plan: input.plan, skills, ...this.flavor.whole && fenceRules() ? { whole: true } : {} };
-    const fence = this.flavor.whole && fenceRules() ? fenceKey() + JSON.stringify(allowedFolders(this.session.location.directory)) : "";
+    const fence = this.flavor.whole && fenceRules() ? fenceKey() + JSON.stringify(allowedFolders(this.session.location.directory)) + fullAccessMark(this.session.id) : "";
     const computer = await computerServers(this.session.location.directory);
     const key = JSON.stringify({ ...mode, program: this.flavor.program?.() ?? 0, tools: kuvoTools(this.session.id)?.key, fence, servers: computer.key });
     this.computer = computer;
@@ -10009,7 +10013,7 @@ class ClaudeThread {
     const append = hooks.instructions();
     const tools = fenceOn() ? relayedTools(this.session.id, this) : kuvoTools(this.session.id);
     const skills = skillsFolder(await skillsFor(this.session.location.directory, this.agent.ownSkillFolders(this.session.location.directory), turnedOff(hooks)));
-    const fence = fenceKey();
+    const fence = fenceKey() + fullAccessMark(this.session.id);
     if (this.query && (this.opened?.append !== append || this.opened?.program !== this.agent.program || this.opened?.tools !== tools?.key || this.opened?.skills !== skills || this.opened?.fence !== fence))
       this.close();
     const computer = await computerServers(this.session.location.directory);
@@ -10230,7 +10234,7 @@ class ClaudeThread {
     const whole = this.whole(skills);
     this.input = new Queue;
     const tools = fenceOn() ? relayedTools(this.session.id, this) : kuvoTools(this.session.id);
-    this.opened = { model: modelID, effort, plan, append, program: this.agent.program, tools: tools?.key, skills, fence: fenceKey() };
+    this.opened = { model: modelID, effort, plan, append, program: this.agent.program, tools: tools?.key, skills, fence: fenceKey() + fullAccessMark(this.session.id) };
     this.query = sdk.query({
       prompt: this.input,
       options: {
@@ -11474,7 +11478,7 @@ class CodexAgent {
     const key = !fenceRules() ? SHARED : thread ? thread.session.id : ACCOUNT;
     const slot = this.slot(key);
     slot.lastUse = Date.now();
-    const fence = key === SHARED ? "" : key === ACCOUNT ? fenceKey() : fenceKey() + JSON.stringify(allowedFolders(thread.session.location.directory));
+    const fence = key === SHARED ? "" : key === ACCOUNT ? fenceKey() : fenceKey() + JSON.stringify(allowedFolders(thread.session.location.directory)) + fullAccessMark(thread.session.id);
     if (slot.server && !slot.server.isClosed && slot.fence !== fence)
       slot.outdated ??= slot.server;
     if (thread && starting && thread.server && !thread.server.isClosed && thread.keepsWorking && (this.isFenced(thread.server) || !fenceRules()))
@@ -13628,7 +13632,7 @@ class CursorThread {
     const approvesAll = hooks.approvesAll(false);
     const skills = options.local?.dirs?.[0];
     const tools = JSON.stringify([kuvoTools(this.session.id)?.key, Object.keys(options.mcpServers ?? {}).sort()]);
-    const fence = fenceRules() ? fenceKey() + JSON.stringify(allowedFolders(this.session.location.directory)) : "";
+    const fence = fenceRules() ? fenceKey() + JSON.stringify(allowedFolders(this.session.location.directory)) + fullAccessMark(this.session.id) : "";
     if (this.startedApproving !== approvesAll || this.startedSkills !== skills || this.startedTools !== tools || this.startedFence !== fence || this.worker?.isClosed)
       this.stop();
     if (this.agent)
@@ -22926,4 +22930,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 58fa4e57f5d2d403c141e9213f016826f7a8cb7b05091d42719602aaa6c11037
+// Built from Packages/Box/src/agents 3f5e51877dd8ba41078183960cddaaaa74468cd6fd82f9636bbe00db4d344751

@@ -5,12 +5,16 @@
 // as the sandbox starts or stops and the switch changes (`keepApprovals`), and a bot's conversation
 // from before there were approvals to Auto's (`adoptBots`).
 
+import fs from "node:fs";
+import path from "node:path";
 import { isObject, parsed } from "../../shared/json";
+import { BOX } from "../home";
 import { bridgeTarget, call, engineGet, readEngineFile } from "../engine/client";
 import { allowFullAccess, alwaysFor, APPROVALS, approvalOf, approvalRules, effectiveApproval, fullAccessAllowed, isApproval, unavailable } from "../work/approval";
 import { resumeReviewedSession, runningGoal } from "../work/goals";
 import { sandboxOn } from "../work/sandbox";
-import { resumeReviews, reviewLog, setTellAuto, tellAuto } from "../work/reviewer";
+import { resumeReviews, reviewLog } from "../work/reviewer";
+import { markFullAccess } from "../work/full";
 import { botOfConversation, worksFor } from "../work/tree";
 import { listBots } from "../bots/list";
 import type { Approval } from "../work/approval";
@@ -129,6 +133,8 @@ export async function setApproval(id: string, wanted: Approval, engine: Target |
   if (change && !await write(at, change, signal)) return { status: 502, value: { message: "It couldn't be changed: the engine didn't take it. Try again." } };
   // (What it comes to may have changed while it was written.)
   await settle(at, signal);
+  // Its commands from now on in the sandbox or outside it, at once (and its next run's subagents).
+  markFullAccess(at.data.id, approvalOf(at.data, { agents: at.agents, bot: at.bot }).effective === "fullAccess");
   return { status: 200, value: shown(at) };
 }
 
@@ -139,7 +145,7 @@ export function approvalHere(): ApprovalHere {
     const not = unavailable("auto", { agents });
     return not ? { held: not } : {};
   };
-  return { fullAccess: fullAccessAllowed(), tellAuto: tellAuto(), auto: { engine: auto(false), agents: auto(true) } };
+  return { fullAccess: fullAccessAllowed(), auto: { engine: auto(false), agents: auto(true) } };
 }
 
 /** Each conversation kept with an approval that comes to something else now (the sandbox started
@@ -160,6 +166,8 @@ export async function reapplyApprovals(engine: Target | null, bridge: Target | n
         if (!data?.id) continue;
         const kept = data.metadata?.kuvo?.approval;
         const bot = found(target, data, agents).bot;
+        // (Full Access's list for the sandbox's launcher, as each is now: one from before too.)
+        markFullAccess(data.id, approvalOf(data, { agents, bot }).effective === "fullAccess");
         // (Ask First and Accept Edits come to themselves anywhere; a bot's from before, to its own.)
         if (kept !== "auto" && kept !== "fullAccess" && !(bot && kept === undefined)) continue;
         const now = approvalOf(data, { agents, bot });
@@ -201,6 +209,8 @@ async function adoptBots(engine: Target | null, bridge: Target | null, done: Set
  * once as it starts), the conversations kept with them made again, until every one is; and each
  * new bot's from before, once. `every`: what runs its round (a test's runs each by hand). */
 export function keepApprovals(engine: () => Target | null = ownEngine, bridge: () => Target | null = bridgeTarget, every: (round: () => Promise<void>) => void = round => { setInterval(round, 2_000).unref?.(); }): void {
+  // (Tell Auto's rules, from a box before 0.9.184: Auto's reviewer is the box's alone now.)
+  try { fs.rmSync(path.join(BOX, "tell-auto.json"), { force: true }); } catch {}
   let last: string | null = null;
   let going = false;
   const adopted = new Set<string>();
@@ -233,11 +243,7 @@ export async function* approvalRoute(context: RouteContext): AsyncGenerator<Answ
   if (route === "kuvo/approval") {
     if (method === "GET") return yield* json(200, approvalHere());
     if (method !== "PATCH") return yield* json(405, { message: "Read it with GET, or change it with PATCH." });
-    if (given.fullAccess === undefined && given.tellAuto === undefined) return yield* json(400, { message: "Say whether Full Access may be picked here (fullAccess, true or false), or your rules for Auto (tellAuto, in words)." });
-    if (given.fullAccess !== undefined && typeof given.fullAccess !== "boolean") return yield* json(400, { message: "fullAccess is true or false." });
-    if (given.tellAuto !== undefined && typeof given.tellAuto !== "string") return yield* json(400, { message: "tellAuto is your rules for Auto, in words." });
-    if (typeof given.tellAuto === "string") setTellAuto(given.tellAuto);
-    if (typeof given.fullAccess !== "boolean") return yield* json(200, approvalHere());
+    if (typeof given.fullAccess !== "boolean") return yield* json(400, { message: "Say whether you confirmed Full Access on this computer (fullAccess, true or false)." });
     allowFullAccess(given.fullAccess);
     // What had it, or was held from it, comes to what it can be now at once, rather than at the
     // box's next look.

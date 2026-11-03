@@ -17,7 +17,6 @@
     "200": {
      "object": {
       "fullAccess": "bool",
-      "tellAuto": "string",
       "auto": {
        "object": {
         "engine": {
@@ -76,7 +75,6 @@
     "200": {
      "object": {
       "fullAccess": "bool",
-      "tellAuto": "string",
       "auto": {
        "object": {
         "engine": {
@@ -3017,6 +3015,9 @@
             "literal": "git.backups"
            },
            {
+            "literal": "approval.fullAccess"
+           },
+           {
             "literal": "accounts.ended"
            },
            {
@@ -3305,6 +3306,9 @@
            },
            {
             "literal": "git.backups"
+           },
+           {
+            "literal": "approval.fullAccess"
            }
           ]
          }

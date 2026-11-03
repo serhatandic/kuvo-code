@@ -21,6 +21,7 @@ import type { Notice } from "../notices/notice";
 import { commandEnv, runCommand } from "../run-command";
 import type { Caller } from "../vault/who";
 import { reviewIn } from "../work/reviewing";
+import { forgetFetched } from "../work/reviewer";
 import { addRule, ownerOf, writeRuleWouldBe } from "./allowed";
 
 /** Your answer, and who gave it: "Mac", or a phone's name. */
@@ -182,15 +183,17 @@ async function askToRun(caller: Caller, args: Record<string, unknown>, signal?: 
     }
   })();
   // In Auto, its reviewer first: it runs, is refused, or comes to you with why (never let through
-  // on a review that couldn't be had: that comes to you as before).
+  // on a review that couldn't be had: that comes to you as before). In Full Access it just runs.
   const conversation = caller.root ?? caller.session;
-  const reviewed = conversation ? await reviewIn(conversation, { kind: "command", command, folder: project }, signal).catch(() => null) : null;
+  const looked = conversation ? await reviewIn(conversation, { kind: "command", command, folder: project }, signal).catch(() => null) : null;
+  const full = Boolean(looked && "fullAccess" in looked);
+  const reviewed = looked && !("fullAccess" in looked) ? looked : null;
   if (reviewed?.decision === "refuse") {
     heard.abort();
     const paused = reviewed.paused ? " Auto is paused here now: the user decides what's next." : "";
     return { text: `Auto's reviewer said no: ${reviewed.reason}${paused} Don't run it, nor get around the sandbox another way. Find another way to do the task, or ask the user.`, isError: false };
   }
-  const answered: SandboxAnswer = reviewed?.decision === "allow" ? { answer: "once", client: "Auto" } : await book.ask({
+  const answered: SandboxAnswer = full ? { answer: "once", client: "Full Access" } : reviewed?.decision === "allow" ? { answer: "once", client: "Auto" } : await book.ask({
     ...(caller.root ? { session: caller.root, ...(caller.sessionName ? { sessionName: caller.sessionName } : {}) } : {}),
     ...(caller.bot ? { bot: caller.bot, botName: caller.botName } : {}),
     project,
@@ -204,6 +207,9 @@ async function askToRun(caller: Caller, args: Record<string, unknown>, signal?: 
     ...(reviewed?.decision === "ask" ? { review: { reason: reviewed.reason, why: reviewed.why, ...(reviewed.always ? { always: reviewed.always } : {}) } } : {}),
   }, signal, undefined, id => { asking = id; });
   heard.abort();
+  // (A script from the web, fetched once for the review: that copy is what runs, then it's gone.)
+  const fetched = reviewed?.fetched;
+  if (answered.unanswered || answered.answer === "no") forgetFetched(fetched);
   if (answered.unanswered) return { text: "Nobody answered in time, so it didn't run. Don't get around the sandbox another way: go on without it, or ask the user when they're back.", isError: false };
   if (answered.answer === "no") return { text: "The user said no: don't run it, nor get around the sandbox another way. Find another way to do the task, or ask them why.", isError: false };
   let how: "once" | "always" = "once";
@@ -212,11 +218,11 @@ async function askToRun(caller: Caller, args: Record<string, unknown>, signal?: 
   }
   const left = Math.floor((CALL_BUDGET - (Date.now() - started)) / 1000);
   const seconds = Math.max(1, Math.min(600, left, Number(args.timeout) || 300));
-  const { output, code, timedOut } = await runCommand(command, project, commandEnv(), seconds * 1000, signal);
+  const { output, code, timedOut } = await runCommand(fetched?.command ?? command, project, commandEnv(), seconds * 1000, signal).finally(() => forgetFetched(fetched));
   let shown = output;
   if (shown.length > MOST_OUTPUT) shown = "…" + shown.slice(-MOST_OUTPUT).replace(/^[^\n]*\n/, "");
   const ended = timedOut ? `It was stopped after ${seconds} seconds.` : `It ended with ${code}.`;
-  const head = how === "always" ? `Ran outside the sandbox · Always for this: from now on your commands can write in ${always!.path} in the sandbox, so run them there.` : reviewed?.decision === "allow" ? `Ran outside the sandbox · Allowed by Auto's reviewer: ${reviewed.reason}` : "Ran outside the sandbox · Allowed once";
+  const head = how === "always" ? `Ran outside the sandbox · Always for this: from now on your commands can write in ${always!.path} in the sandbox, so run them there.` : reviewed?.decision === "allow" ? `Ran outside the sandbox · Allowed by Auto's reviewer: ${reviewed.reason}` : full ? "Ran outside the sandbox · Full Access" : "Ran outside the sandbox · Allowed once";
   return { text: `${head}\n\n${shown.trim() ? shown.trimEnd() + "\n\n" : "It printed nothing.\n\n"}${ended}`, isError: timedOut || code !== 0 };
 }
 
