@@ -475,8 +475,9 @@ test("Claude Code run whole in the sandbox writes its conversations and sign-in,
   const box = boxAt("claude-whole", !linux);
   const project = path.join(root, "claude-whole-project");
   fs.mkdirSync(path.join(project, ".claude", "hooks"), { recursive: true });
-  // Its settings folder, as yours is (`~/.claude`), and your Claude Code's settings file beside it.
-  const own = path.join(root, ".claude");
+  // Its settings folder, as yours is on a Mac (`~/.claude`), and your Claude Code's settings file
+  // beside it. (A machine's is in Kuvo Code's folder, its bridge's: `~/.claude` is a wall there.)
+  const own = linux ? path.join(box.home, "agents", "claude", "home") : path.join(root, ".claude");
   fs.mkdirSync(own, { recursive: true });
   fs.writeFileSync(path.join(own, "settings.json"), "{}\n");
   fs.writeFileSync(path.join(root, ".claude.json"), "{}\n");

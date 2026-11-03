@@ -127,9 +127,11 @@ export function seatbeltProfile(policy: FencePolicy, options: SeatbeltOptions): 
   // (Tools' caches in ~/Library again.)
   allow(WRITE, ...policy.writable.filter(folder => (policy.homeKept ?? []).some(kept => folder.startsWith(kept + "/"))).map(subpath));
   // What runs later, in as few rules as the system can read (each a pattern well under its limit):
-  // and every other project's in your home too, its git hooks and settings and its agents'.
+  // and every other project's in your home too, its git hooks and settings and its agents', but in
+  // tools' caches (Xcode's and SwiftPM's checkouts, cargo's), which are theirs to clone and remove.
+  const caches = (home: string) => policy.writable.filter(folder => folder.startsWith(home + "/")).map(folder => `(require-not ${subpath(folder)})`);
   deny(WRITE, ...chunked(policy.readOnly).map(regex), ...(policy.readOnlyPatterns ?? []).map(regex),
-    ...(policy.homeWrites ?? []).map(home => regex(`^${escapeRegex(home)}/${GUARDED}`)));
+    ...(policy.homeWrites ?? []).map(home => `(require-all ${regex(`^${escapeRegex(home)}/${GUARDED}`)} ${caches(home).join(" ")})`));
   // (But tools' caches inside one again, as Linux's sandbox has them: pnpm's store in its folder on
   // your PATH.)
   allow(WRITE, ...policy.writable.filter(folder => policy.readOnly.some(wall => folder.startsWith(wall + "/"))).map(subpath));

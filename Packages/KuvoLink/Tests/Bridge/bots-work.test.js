@@ -584,13 +584,11 @@ test("a bot never lets a session change what later commands run, nor reach past 
   assert.equal((await answer("per_new")).isError, false, "a new source file, made");
   assert.equal((await answer("per_doc")).isError, false);
 
-  // A session working in your home folder still can't read your keys.
+  // Nor start one working in your home folder, which holds your keys and what runs later.
   fs.mkdirSync(path.join(home, ".ssh"), { recursive: true });
-  const inHome = startedAddress(await tool("start_session", { task: "Look.", folder: home }, "ses_pixel"));
-  fs.mkdirSync(path.join(home, "Library", "Keychains"), { recursive: true });
-  asked.set(inHome, [{ id: "per_key", sessionID: inHome, action: "shell", resources: ["cat .ssh/id_ed25519"] }, { id: "per_chain", sessionID: inHome, action: "shell", resources: ["cat Library/Keychains/login.keychain-db"] }]);
-  assert.equal((await tool("answer_ask", { session: inHome, ask: "per_key", decision: "allow", reason: "Look." }, "ses_pixel")).isError, true);
-  assert.match((await tool("answer_ask", { session: inHome, ask: "per_chain", decision: "allow", reason: "Look." }, "ses_pixel")).text, /your keys and sign-ins/);
+  const inHome = await tool("start_session", { task: "Look.", folder: home }, "ses_pixel");
+  assert.equal(inHome.isError, true);
+  assert.match(inHome.text, /is kept from commands/);
 });
 
 test("git is a bot's to allow only in the project's own repository, never one above it", async () => {

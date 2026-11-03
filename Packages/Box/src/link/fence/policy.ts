@@ -252,11 +252,13 @@ export function sshSockets(home: string, system = "/etc/ssh/ssh_config"): { path
 }
 
 /** A name with `*` in it (`sshSockets`' globs) as a regular expression over whole paths, the folders
- * it's in as the system has them. */
+ * before its first `*` as the system has them (`/tmp` is `/private/tmp` on a Mac). */
 function globPattern(glob: string): string {
-  const folder = path.dirname(glob);
-  const where = folder.includes("*") ? escapeRegex(folder).replace(/\\\*/g, "[^/]*") : escapeRegex(realish(folder));
-  return `^${where}/${escapeRegex(path.basename(glob)).replace(/\\\*/g, "[^/]*")}$`;
+  const parts = glob.split("/");
+  const first = parts.findIndex(part => part.includes("*"));
+  const plain = realish(parts.slice(0, first).join("/") || "/");
+  const rest = parts.slice(first).map(part => escapeRegex(part).replace(/\\\*/g, "[^/]*")).join("/");
+  return `^${plain === "/" ? "" : escapeRegex(plain)}/${rest}$`;
 }
 
 /** The files a path with `*` and `?` in its last name names (as SSH's `Include` reads it). */
@@ -408,7 +410,7 @@ export function fencePolicy(ports: number[] = []): FencePolicy {
       ],
       patternFolders: [`^${escapeRegex(home)}/Library/[^/]+$`, `^/private/var/folders/[^/]+/[^/]+/[^/]+$`],
       writable: ["/private/tmp", "/private/var/tmp", "/dev", ...userTemporary(), ...inHome([...CACHES, ...MAC_CACHES])],
-      sockets: [...inHome([".codex/ipc", ".grok", ".ssh/agent", "Library/Group Containers/2BUA8C4S2C.com.1password/t",
+      sockets: [...inHome([".codex/ipc", ".grok/leader.sock", ".ssh/agent", "Library/Group Containers/2BUA8C4S2C.com.1password/t",
         "Library/Containers/com.maxgoedjen.Secretive.SecretAgent/Data", ".bitwarden-ssh-agent.sock",
         "Library/Containers/com.bitwarden.desktop/Data",
         // Terminals' own, which open tabs and type into them (Rex's, iTerm2's, WezTerm's).
@@ -479,33 +481,27 @@ function userTemporary(): string[] {
   return user ? [user] : [];
 }
 
-/** A path as the system has it, through symlinks (`/tmp` is `/private/tmp` on macOS), as the
- * sandbox compares them: its deepest folder that's there resolved, the rest as it's named. */
-/** Where a conversation's git repository is never taken to be, as `case` patterns a line: your
- * homes and the folders above them, your personal folders and what's in them. */
-export function notRepositories(policy: FencePolicy): string {
-  const lines = new Set<string>();
-  for (const home of policy.homeWrites ?? [policy.home])
-    for (let at = home; ; at = path.dirname(at)) { lines.add(at); if (at === path.dirname(at)) break; }
-  for (const folder of policy.personal ?? []) { lines.add(folder); lines.add(folder + "/*"); }
-  // (A name with a pattern's own characters in it is matched as it's written, or not at all.)
-  return [...lines].filter(line => !/[\[?\\]|\*(?!$)/.test(line)).map(line => line + "\n").join("");
-}
-
 /** Whether a folder is one the walls keep from commands, as a conversation's own folder would write
- * it whole: inside what runs later or `~/Library`, a personal folder itself, or a folder on PATH
- * outside your home (or one holding it). Only you start a conversation there, never an agent. */
-export function keptFromWork(folder: string, policy: FencePolicy = fencePolicy()): boolean {
+ * it whole: inside what runs later or `~/Library`, one holding any wall (your home, the folders above
+ * it, `~/.config`), a personal folder or what's in it but `ours` (your projects there, and the
+ * starting conversation's own folder), or a folder on PATH outside your home (or one holding it).
+ * Only you start a conversation there, never an agent. */
+export function keptFromWork(folder: string, ours: readonly string[] = [], policy: FencePolicy = fencePolicy()): boolean {
   const at = realish(folder);
   const inside = (wall: string) => at === wall || at.startsWith(wall + "/");
-  if ([...policy.readOnly, ...(policy.homeKept ?? [])].some(inside)) return true;
-  if ((policy.personal ?? []).includes(at)) return true;
+  const holds = (wall: string) => wall.startsWith(at === "/" ? "/" : at + "/");
+  const personal = policy.personal ?? [];
   const homes = (policy.homeWrites ?? [policy.home]);
+  const walls = [...policy.readOnly, ...(policy.homeKept ?? []), ...personal, ...policy.kuvo, ...policy.secrets, ...homes];
+  if ([...policy.readOnly, ...(policy.homeKept ?? [])].some(inside) || walls.some(holds)) return true;
+  if (personal.some(inside) && !ours.map(realish).some(own => !personal.includes(own) && inside(own))) return true;
   const onPath = (process.env.PATH ?? "").split(":").filter(each => path.isAbsolute(each)).map(realish)
     .filter(each => !homes.some(home => each === home || each.startsWith(home + "/")));
-  return onPath.some(each => inside(each) || each.startsWith(at === "/" ? "/" : at + "/"));
+  return onPath.some(each => inside(each) || holds(each));
 }
 
+/** A path as the system has it, through symlinks (`/tmp` is `/private/tmp` on macOS), as the
+ * sandbox compares them: its deepest folder that's there resolved, the rest as it's named. */
 export function realish(where: string): string {
   const full = path.resolve(where);
   for (let at = full, rest = ""; ; rest = path.join(path.basename(at), rest), at = path.dirname(at)) {

@@ -329,15 +329,25 @@ test("a client starts a session with a task, as the user's own first message", a
 test("an agent never starts a session in a folder the sandbox keeps, as you can", async () => {
   const kept = path.join(home, ".local", "bin");
   const documents = path.join(home, "Documents");
-  fs.mkdirSync(kept, { recursive: true });
-  fs.mkdirSync(path.join(documents, "site"), { recursive: true });
-  for (const folder of [kept, "~/.local/bin", documents]) {
+  const site = path.join(documents, "site");
+  for (const folder of [kept, site, path.join(documents, "finances"), path.join(home, ".config")]) fs.mkdirSync(folder, { recursive: true });
+  // Inside what runs later, a personal folder or what's in it, or a folder holding walls (your home, ~/.config).
+  for (const folder of [kept, "~/.local/bin", documents, site, path.join(documents, "finances"), home, "~", path.join(home, ".config")]) {
     const said = await tool("start_session", { task: "Tidy it.", folder }, "ses_helper");
     assert.deepEqual(said, { text: `${folder} is kept from commands on this machine (what runs later, a personal folder or the like). Ask the user to start it there.`, isError: true });
   }
   assert.equal((await route("POST", "kuvo/sessions", { task: "Tidy it.", folder: kept, startedBy: "ses_helper" })).status, 403);
-  // A project in a personal folder is the agent's to start, as one there is yours.
-  assert.equal((await tool("start_session", { task: "Tidy it.", folder: path.join(documents, "site") }, "ses_helper")).isError, false);
+  // A project of yours in a personal folder is the agent's to start, as it's yours.
+  const projects = path.join(home, "box", "projects.json");
+  const before = fs.existsSync(projects) ? fs.readFileSync(projects) : null;
+  fs.mkdirSync(path.dirname(projects), { recursive: true });
+  fs.writeFileSync(projects, JSON.stringify({ projects: [{ directory: site, folders: [] }] }));
+  try {
+    assert.equal((await tool("start_session", { task: "Tidy it.", folder: site }, "ses_helper")).isError, false);
+    assert.equal((await tool("start_session", { task: "Tidy it.", folder: path.join(documents, "finances") }, "ses_helper")).isError, true);
+  } finally {
+    if (before) fs.writeFileSync(projects, before); else fs.rmSync(projects, { force: true });
+  }
   assert.equal((await route("POST", "kuvo/sessions", { task: "Tidy it.", folder: kept })).status, 200);
 });
 

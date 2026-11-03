@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs"
 import { createServer, type Server } from "node:net"
 import { tmpdir, userInfo } from "node:os"
 import { dirname, join } from "node:path"
@@ -286,6 +286,29 @@ test.skipIf(!canFence || !mac)("on a Mac, other apps' sockets and the folders ho
   }
 })
 
+// SSH's shared connections named by tokens (`ControlPath /tmp/ssh-%r/%h`), in a folder reached
+// through a link as `/tmp` is on a Mac, are refused where they really are.
+test.skipIf(!canFence || !mac)("on a Mac, SSH's shared connections named by tokens behind a linked folder stay", async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "kuvo-sock-")))
+  let server: Server | undefined
+  try {
+    const home = join(root, "home")
+    const project = join(home, "a")
+    mkdirSync(join(home, ".ssh"), { recursive: true })
+    mkdirSync(join(project, "real", "cm-me"), { recursive: true })
+    symlinkSync(join(project, "real"), join(root, "l"))
+    writeFileSync(join(home, ".ssh", "config"), `Host *\n  ControlPath ${join(root, "l")}/cm-%r/%h\n`)
+    const patterns = (policyIn(home).socketPatterns ?? []).filter(each => each.includes("kuvo-sock-"))
+    const { run } = walled(root, { socketPatterns: patterns })
+    server = await listening(join(project, "real", "cm-me", "host"))
+    const out = run(project, [tries("removes it by its real path", `rm real/cm-me/host`), tries("removes it through the link", `rm ${join(root, "l")}/cm-me/host`)].join("\n"))
+    expect(outcomes(out)).toEqual({ "removes it by its real path": "refused", "removes it through the link": "refused" })
+  } finally {
+    server?.close()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 // Preferences go through cfprefsd, outside the files the walls keep: launchd's and login items'
 // among them.
 test.skipIf(!canFence || !mac)("on a Mac, a command reads preferences but never writes them", () => {
@@ -328,35 +351,38 @@ test.skipIf(!canFence)("a folder on your PATH is kept, whatever its name, but fo
 })
 
 // A command can make what looks like a git repository anywhere it adds files, then a folder whose
-// .git names it: its conversation's repository is never your home, nor a personal folder by any name
-// but a repository's own.
-test.skipIf(!canFence)("a conversation's repository is never your home or a personal folder", () => {
+// .git names it: its conversation's repository is only ever a folder named as one (`.git`, `….git`).
+test.skipIf(!canFence)("a conversation's repository is never your home, a personal folder or another folder not named as one", () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "kuvo-sandbox-walls-git-")))
   try {
     const { home, run } = walled(root)
     const project = join(home, "Documents", "proj")
-    files(home, { "notes.txt": "mine\n", "Documents/budget.txt": "1000\n", "Documents/proj/.git/HEAD": "ref: refs/heads/main\n", "Documents/proj/sub/a.txt": "a\n" })
+    files(home, { "notes.txt": "mine\n", "code/old/a.txt": "a\n", "Documents/budget.txt": "1000\n", "Documents/proj/.git/HEAD": "ref: refs/heads/main\n", "Documents/proj/sub/a.txt": "a\n" })
     mkdirSync(join(project, ".git", "objects"), { recursive: true })
     const at = (git: string, label: string, command: string) => run(join(project, "sub"), tries(label, command), { KUVO_FENCE_GIT: git })
     const out = [
       at(home, "deletes in your home", `rm ${home}/notes.txt`),
       at(join(home, "Documents"), "deletes a document", `rm ${home}/Documents/budget.txt`),
+      at(join(home, "code"), "deletes another project", `rm -r ${home}/code/old`),
       at(join(project, ".git"), "writes its own repository", `echo x > ${project}/.git/objects/new && rm ${project}/.git/objects/new`),
     ].join("")
-    expect(outcomes(out)).toEqual({ "deletes in your home": "refused", "deletes a document": "refused", "writes its own repository": "allowed" })
+    expect(outcomes(out)).toEqual({ "deletes in your home": "refused", "deletes a document": "refused", "deletes another project": "refused", "writes its own repository": "allowed" })
     expect(readFileSync(join(home, "notes.txt"), "utf8")).toBe("mine\n")
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
-})
+  // (Four fenced runs, each starting a sandbox: longer than a test is given unless it says.)
+}, 30_000)
 
 // Another project's git hooks and settings, and its coding agents', run outside the sandbox when you
-// work there. (Linux's sandbox can't keep these: only the conversation's own.)
-test.skipIf(!canFence || !mac)("on a Mac, a command never writes another project's hooks or agents' settings", () => {
+// work there. (Linux's sandbox can't keep these: only the conversation's own.) Tools' caches clone
+// and remove repositories of their own (Xcode's packages, cargo's).
+test.skipIf(!canFence || !mac)("on a Mac, a command never writes another project's hooks or agents' settings, and tools still clone into their caches", () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "kuvo-sandbox-walls-others-")))
   try {
     const { home, run } = walled(root)
     files(home, { "other/.git/hooks/pre-commit.sample": "x\n", "other/.git/config": "[core]\n", "other/.claude/settings.json": "{}\n", "other/README.md": "x\n" })
+    mkdirSync(join(home, "Library", "Developer"), { recursive: true })
     const project = join(home, "app")
     mkdirSync(project, { recursive: true })
     const out = run(project, [
@@ -364,8 +390,10 @@ test.skipIf(!canFence || !mac)("on a Mac, a command never writes another project
       tries("another project's git settings", `echo planted >> ${home}/other/.git/config`),
       tries("another project's agent settings", `echo planted > ${home}/other/.claude/settings.json`),
       tries("another project's files", `echo more >> ${home}/other/README.md`),
+      tries("a package checkout in Xcode's cache", `p=${home}/Library/Developer/Xcode/DerivedData/x/SourcePackages/checkouts/p && git init -q $p && rm -rf $p`),
     ].join("\n"))
-    expect(outcomes(out)).toEqual({ "another project's hook": "refused", "another project's git settings": "refused", "another project's agent settings": "refused", "another project's files": "allowed" })
+    expect(outcomes(out)).toEqual({ "another project's hook": "refused", "another project's git settings": "refused", "another project's agent settings": "refused", "another project's files": "allowed",
+      "a package checkout in Xcode's cache": "allowed" })
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

@@ -110,9 +110,9 @@ export function launcherScript(places: FencePlaces): string {
     // isn't worked in there.
     `case $work_at in ''|"$work") ;; *) echo "This command can't run: its conversation's folder now leads somewhere else than when it was opened (it was replaced by a link). Ask the user." >&2; exit 126 ;; esac`,
     `case $git in /*) git=$(cd "$git" 2>/dev/null && pwd -P) || git=$work ;; *) git=$work ;; esac`,
-    // Never a home or what holds one, nor a personal folder or what's in one, but by a repository's
-    // own name (a command can make what looks like a repository there, then a folder that names it).
-    `case $git in *.git) ;; *) while IFS= read -r p; do case $git in $p) git=$work; break ;; esac; done <"$F/not-repositories" ;; esac`,
+    // Only by a repository's own name (`.git`, `….git`): a command can make what looks like a
+    // repository in any folder it writes, then a worktree that names it.
+    `case $git in *.git) ;; *) git=$work ;; esac`,
     "profile=project",
     `case $work in ${insideCases}) profile=inside ;; esac`,
     // Temporary files of its own: each conversation's folder has its own (by a sum no folder's

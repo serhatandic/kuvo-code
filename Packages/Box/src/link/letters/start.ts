@@ -228,9 +228,14 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
     let isFolder = false;
     try { isFolder = fs.statSync(full).isDirectory(); } catch {}
     if (!path.isAbsolute(full) || !isFolder) return no(400, `${written} isn't a folder on ${HERE}. Give a full path to one.`);
-    // (Its commands would write it whole: only you start one there.)
-    if (by && keptFromWork(full)) return no(403, `${written} is kept from commands on ${HERE} (what runs later, a personal folder or the like). Ask the user to start it there.`);
-    folder = isBotFolder(full) ? CHATS : full;
+    // (Its commands would write it whole: only you start one there. In a personal folder, an agent
+    // starts one only in your projects there, or its own conversation's folder.)
+    const ours = [...readProjects().filter(each => !each.removed).flatMap(each => [each.directory, ...(each.folders ?? [])]),
+      ...readWorktrees().map(each => each.folder ?? each.root), ...(parentFolder ? [parentFolder] : [])];
+    // (An agent's by where it really is as it's checked: a link swapped in after is never followed.)
+    const at = by ? fs.realpathSync(full) : full;
+    if (by && keptFromWork(at, ours)) return no(403, `${written} is kept from commands on ${HERE} (what runs later, a personal folder or the like). Ask the user to start it there.`);
+    folder = isBotFolder(at) ? CHATS : at;
   }
   if (!folder) return no(400, "Give the folder it works in (folder), as a full path.");
   if (given.mode !== undefined && given.mode !== null && given.mode !== "build" && given.mode !== "plan") return no(400, "mode is build or plan.");

@@ -3520,9 +3520,11 @@ function sshSockets(home, system = "/etc/ssh/ssh_config") {
   return { paths: [...paths], globs: [...globs] };
 }
 function globPattern(glob) {
-  const folder = path13.dirname(glob);
-  const where = folder.includes("*") ? escapeRegex(folder).replace(/\\\*/g, "[^/]*") : escapeRegex(realish(folder));
-  return `^${where}/${escapeRegex(path13.basename(glob)).replace(/\\\*/g, "[^/]*")}$`;
+  const parts = glob.split("/");
+  const first = parts.findIndex((part) => part.includes("*"));
+  const plain = realish(parts.slice(0, first).join("/") || "/");
+  const rest = parts.slice(first).map((part) => escapeRegex(part).replace(/\\\*/g, "[^/]*")).join("/");
+  return `^${plain === "/" ? "" : escapeRegex(plain)}/${rest}$`;
 }
 function matching(pattern) {
   if (!/[*?]/.test(pattern))
@@ -3701,7 +3703,7 @@ function fencePolicy(ports = []) {
       sockets: [
         ...inHome([
           ".codex/ipc",
-          ".grok",
+          ".grok/leader.sock",
           ".ssh/agent",
           "Library/Group Containers/2BUA8C4S2C.com.1password/t",
           "Library/Containers/com.maxgoedjen.Secretive.SecretAgent/Data",
@@ -3805,31 +3807,19 @@ function userTemporary() {
   const user = t.match(/^(\/private\/var\/folders\/[^/]+\/[^/]+)\//)?.[1];
   return user ? [user] : [];
 }
-function notRepositories(policy) {
-  const lines = new Set;
-  for (const home of policy.homeWrites ?? [policy.home])
-    for (let at = home;; at = path13.dirname(at)) {
-      lines.add(at);
-      if (at === path13.dirname(at))
-        break;
-    }
-  for (const folder of policy.personal ?? []) {
-    lines.add(folder);
-    lines.add(folder + "/*");
-  }
-  return [...lines].filter((line) => !/[\[?\\]|\*(?!$)/.test(line)).map((line) => line + `
-`).join("");
-}
-function keptFromWork(folder, policy = fencePolicy()) {
+function keptFromWork(folder, ours = [], policy = fencePolicy()) {
   const at = realish(folder);
   const inside = (wall) => at === wall || at.startsWith(wall + "/");
-  if ([...policy.readOnly, ...policy.homeKept ?? []].some(inside))
-    return true;
-  if ((policy.personal ?? []).includes(at))
-    return true;
+  const holds = (wall) => wall.startsWith(at === "/" ? "/" : at + "/");
+  const personal = policy.personal ?? [];
   const homes = policy.homeWrites ?? [policy.home];
+  const walls = [...policy.readOnly, ...policy.homeKept ?? [], ...personal, ...policy.kuvo, ...policy.secrets, ...homes];
+  if ([...policy.readOnly, ...policy.homeKept ?? []].some(inside) || walls.some(holds))
+    return true;
+  if (personal.some(inside) && !ours.map(realish).some((own) => !personal.includes(own) && inside(own)))
+    return true;
   const onPath = (process.env.PATH ?? "").split(":").filter((each) => path13.isAbsolute(each)).map(realish).filter((each) => !homes.some((home) => each === home || each.startsWith(home + "/")));
-  return onPath.some((each) => inside(each) || each.startsWith(at === "/" ? "/" : at + "/"));
+  return onPath.some((each) => inside(each) || holds(each));
 }
 function realish(where) {
   const full = path13.resolve(where);
@@ -4301,7 +4291,8 @@ function seatbeltProfile(policy, options) {
   allow(HOME_WRITES, ...(policy.homeOpen ?? []).map(subpath));
   deny("file-write-data file-write-unlink file-write-mode file-write-flags", ...(policy.personal ?? []).map(subpath));
   allow(WRITE, ...policy.writable.filter((folder) => (policy.homeKept ?? []).some((kept) => folder.startsWith(kept + "/"))).map(subpath));
-  deny(WRITE, ...chunked(policy.readOnly).map(regex), ...(policy.readOnlyPatterns ?? []).map(regex), ...(policy.homeWrites ?? []).map((home) => regex(`^${escapeRegex(home)}/${GUARDED}`)));
+  const caches = (home) => policy.writable.filter((folder) => folder.startsWith(home + "/")).map((folder) => `(require-not ${subpath(folder)})`);
+  deny(WRITE, ...chunked(policy.readOnly).map(regex), ...(policy.readOnlyPatterns ?? []).map(regex), ...(policy.homeWrites ?? []).map((home) => `(require-all ${regex(`^${escapeRegex(home)}/${GUARDED}`)} ${caches(home).join(" ")})`));
   allow(WRITE, ...policy.writable.filter((folder) => policy.readOnly.some((wall) => folder.startsWith(wall + "/"))).map(subpath));
   allowGiven(true);
   out.push(";; Kuvo Code's own folders: neither read nor written; its helpers run");
@@ -4404,7 +4395,7 @@ function launcherScript(places) {
     `work=$(cd "$work" 2>/dev/null && pwd -P) || { echo "This command can't run: its conversation's folder isn't there." >&2; exit 126; }`,
     `case $work_at in ''|"$work") ;; *) echo "This command can't run: its conversation's folder now leads somewhere else than when it was opened (it was replaced by a link). Ask the user." >&2; exit 126 ;; esac`,
     `case $git in /*) git=$(cd "$git" 2>/dev/null && pwd -P) || git=$work ;; *) git=$work ;; esac`,
-    `case $git in *.git) ;; *) while IFS= read -r p; do case $git in $p) git=$work; break ;; esac; done <"$F/not-repositories" ;; esac`,
+    `case $git in *.git) ;; *) git=$work ;; esac`,
     "profile=project",
     `case $work in ${insideCases}) profile=inside ;; esac`,
     `sum=$( (printf '%s' "$work" | sha256sum || printf '%s' "$work" | shasum -a 256) 2>/dev/null | cut -c 1-32)`,
@@ -4911,9 +4902,8 @@ function writeProfiles() {
     ["inside.sb", seatbeltProfile(policy, { inside: true })],
     ["project-agent.sb", seatbeltProfile(policy, { inside: false, agent: true })],
     ["inside-agent.sb", seatbeltProfile(policy, { inside: true, agent: true })],
-    ["policy.json", landlockPolicy(policy)],
-    ["not-repositories", notRepositories(policy)]
-  ] : [["policy.json", landlockPolicy(policy)], ["not-repositories", notRepositories(policy)], ["runtime", runtime() ?? ""], ["namespace", namespace ?? "-"], ["sockets", (policy.sockets ?? []).map((each) => each + `
+    ["policy.json", landlockPolicy(policy)]
+  ] : [["policy.json", landlockPolicy(policy)], ["runtime", runtime() ?? ""], ["namespace", namespace ?? "-"], ["sockets", (policy.sockets ?? []).map((each) => each + `
 `).join("")]];
   if (platform === "linux")
     fs17.mkdirSync(NAMESPACE_FOLDER, { recursive: true, mode: 448 });
@@ -19395,9 +19385,15 @@ async function startSession(given, by, place) {
     } catch {}
     if (!path68.isAbsolute(full) || !isFolder)
       return no(400, `${written} isn't a folder on ${HERE}. Give a full path to one.`);
-    if (by && keptFromWork(full))
+    const ours = [
+      ...readProjects().filter((each) => !each.removed).flatMap((each) => [each.directory, ...each.folders ?? []]),
+      ...readWorktrees().map((each) => each.folder ?? each.root),
+      ...parentFolder ? [parentFolder] : []
+    ];
+    const at = by ? fs65.realpathSync(full) : full;
+    if (by && keptFromWork(at, ours))
       return no(403, `${written} is kept from commands on ${HERE} (what runs later, a personal folder or the like). Ask the user to start it there.`);
-    folder = isBotFolder(full) ? CHATS : full;
+    folder = isBotFolder(at) ? CHATS : at;
   }
   if (!folder)
     return no(400, "Give the folder it works in (folder), as a full path.");

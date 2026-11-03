@@ -818,7 +818,7 @@ describe.skipIf(!canFence)("Codex in the box's sandbox", () => {
       const refused = process.platform === "darwin" || readFileSync(join(kuvo, "run", "fence", "namespace"), "utf8") !== "-"
       expect(said(id)).toBe(`app=${refused ? "no" : "yes"} other=yes`)
       // The box's own rules name your Codex's socket so (and Grok's shared leader's).
-      if (process.platform === "darwin") expect(fencePolicy().sockets?.filter((folder) => folder.endsWith("/.codex/ipc") || folder.endsWith("/.grok"))).toHaveLength(2)
+      if (process.platform === "darwin") expect(fencePolicy().sockets?.filter((folder) => folder.endsWith("/.codex/ipc") || folder.endsWith("/.grok/leader.sock"))).toHaveLength(2)
     } finally {
       app.close()
       other.close()

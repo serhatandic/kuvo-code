@@ -3217,12 +3217,14 @@ one that's there. The conversation's folder, its repository and Also Allowed are
 where they're inside a personal folder, what runs later or `~/Library` (a project in Documents,
 `~/.config/nvim`), and around them where they hold some (a conversation in your home itself
 writes none of those). Only you start a conversation in such a folder: an agent's
-(`start_session`, or `POST kuvo/sessions` with `startedBy`) in one, in a personal folder itself, or
-in a folder on the box's PATH outside your home or one that holds it, is refused (403). Its
-repository is never your home or a folder above it, nor a personal folder or one in it but by a
-repository's own name (`.git`, `….git`): elsewhere a command could make what looks like one, then a
-folder whose `.git` names it. Tools' caches inside what's kept (pnpm's store in its folder on your
-PATH on macOS) are still written. On macOS no command writes preferences through cfprefsd either (`defaults
+(`start_session`, or `POST kuvo/sessions` with `startedBy`) in one, in a folder that holds any of
+them (your home, the folders above it, `~/.config`), in a personal folder or one in it but your
+projects there and its own conversation's folder, or in a folder on the box's PATH outside your
+home or one that holds it, is refused (403); it starts where the folder really is as it's checked.
+Its repository is only ever a folder named as one (`.git`, `….git`), else its folder alone: a
+command could make what looks like one anywhere it adds files, then a folder whose `.git` names it.
+Tools' caches inside what's kept (pnpm's store in its folder on your PATH on macOS) are still
+written, and on macOS clone and remove repositories of their own (Xcode's packages, cargo's). On macOS no command writes preferences through cfprefsd either (`defaults
 write`: Seatbelt's `user-preference-write`), which reach launchd's and login items'. On macOS no
 folder that holds what's kept (your home, `~/.ssh`) is closed off by its mode or flags either. On
 Linux, nothing is made or removed right in a folder that holds what's kept (your home, `~/.config`,
