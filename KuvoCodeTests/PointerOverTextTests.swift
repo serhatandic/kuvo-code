@@ -27,6 +27,7 @@ final class ScrolledConversation {
     init(composer: Bool = false, row: @escaping (Item) -> AnyView) async {
         band = composer ? 46 + Self.composerHeight : 46
         TestEnvironment.prepare()
+        WindowServer.pointerIsOver(window)
         let words = String(repeating: "The keeper climbed the stairs at dusk and lit the great lamp for the ships out at sea. ", count: 14)
         let items = (0..<6).map { Item(id: "\($0)", text: "Read [the harbor log](https://example.com/log) first. " + words) }
         let view = ConversationScroll(scroller: scroller, change: 0, quote: { _ in }) {
@@ -117,6 +118,7 @@ final class ScrolledConversation {
     }
 
     func done() {
+        WindowServer.pointerLeft(window)
         NSCursor.arrow.set()
         window.orderOut(nil)
         window.close()
@@ -125,12 +127,49 @@ final class ScrolledConversation {
     /// The pointer moved to `point` (in the window), as AppKit tells it: a move to the owner of each
     /// text's tracking area for moves that has the point.
     func move(to point: NSPoint) throws {
-        let event = try #require(NSEvent.mouseEvent(with: .mouseMoved, location: point, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 0, pressure: 0))
-        for text in texts where text.window != nil {
+        let event = try moveEvent(to: point)
+        for owner in owners(at: point) { owner.mouseMoved(with: event) }
+    }
+
+    /// Each owner of a tracking area for moves at `point` told of a move there on its own, as
+    /// AppKit tells them in an order of its own: the pointer each shows after it, from the arrow.
+    func pointersShown(movingTo point: NSPoint, over only: PointerAwareTextView? = nil) throws -> [NSCursor] {
+        let event = try moveEvent(to: point)
+        return areas(at: point, for: .mouseMoved, over: only).compactMap { $0.owner as? NSResponder }.map { owner in
+            NSCursor.arrow.set()
+            owner.mouseMoved(with: event)
+            return NSCursor.current
+        }
+    }
+
+    /// Each owner of a tracking area for coming on and leaving at `point` told the pointer came on
+    /// there, on its own, by an event naming its area as AppKit's do: the pointer each shows after
+    /// it, from the arrow. As when a row comes in under the pointer resting there.
+    func pointersShown(comingOnAt point: NSPoint, over only: PointerAwareTextView? = nil) throws -> [NSCursor] {
+        try areas(at: point, for: .mouseEnteredAndExited, over: only).map { area in
+            let event = try #require(NSEvent.enterExitEvent(with: .mouseEntered, location: point, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber, context: nil, eventNumber: 0, trackingNumber: Int(bitPattern: Unmanaged.passUnretained(area).toOpaque()), userData: nil))
+            NSCursor.arrow.set()
+            (area.owner as? NSResponder)?.mouseEntered(with: event)
+            return NSCursor.current
+        }
+    }
+
+    private func moveEvent(to point: NSPoint) throws -> NSEvent {
+        try #require(NSEvent.mouseEvent(with: .mouseMoved, location: point, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 0, pressure: 0))
+    }
+
+    /// The owners of the texts' tracking areas for moves that have `point` (in the window): the
+    /// claim's own, and AppKit's text view's.
+    private func owners(at point: NSPoint) -> [NSResponder] {
+        areas(at: point, for: .mouseMoved).compactMap { $0.owner as? NSResponder }
+    }
+
+    /// The texts' tracking areas for `events` that have `point` (in the window), or only `only`'s.
+    private func areas(at point: NSPoint, for events: NSTrackingArea.Options, over only: PointerAwareTextView? = nil) -> [NSTrackingArea] {
+        texts.filter { $0.window != nil && (only == nil || $0 === only) }.flatMap { text in
             let local = text.convert(point, from: nil)
-            for area in text.trackingAreas where area.options.contains(.mouseMoved) {
-                let rect = area.options.contains(.inVisibleRect) ? text.visibleRect : area.rect
-                if rect.contains(local) { (area.owner as? NSResponder)?.mouseMoved(with: event) }
+            return text.trackingAreas.filter { area in
+                area.options.contains(events) && (area.options.contains(.inVisibleRect) ? text.visibleRect : area.rect).contains(local)
             }
         }
     }
@@ -170,6 +209,16 @@ final class ScrolledConversation {
     /// it, the bottom's edge or the composer).
     func controlMiddle() -> NSPoint? {
         pointsUnderAControl().last.map { NSPoint(x: 360, y: $0.y - 15) }
+    }
+
+    /// A point (in the window) on `text`'s words where nothing is over them.
+    func pointOnTheWords(of text: PointerAwareTextView) -> NSPoint? {
+        guard text.window != nil, let bounds = window.contentView?.bounds else { return nil }
+        let frame = text.convert(text.visibleRect, to: nil).intersection(bounds)
+        guard !frame.isEmpty else { return nil }
+        return stride(from: frame.minY + 4, to: frame.maxY, by: 8).lazy.flatMap { y in
+            stride(from: frame.minX + 4, to: frame.maxX, by: 16).lazy.map { NSPoint(x: $0, y: y) }
+        }.first { self.hit($0) === text && text.pointer(at: $0) == .iBeam }
     }
 
     /// A point on a row's words beside the button, level with its middle.
@@ -226,6 +275,24 @@ final class ScrolledConversation {
         }
     }
 
+    /// However AppKit orders the moves it hands the texts' tracking areas (the claim's, and each
+    /// text view's own), none leaves the I-beam over Scroll to the End, nor does a row coming in
+    /// under the pointer resting on it.
+    func checkNoMoveShowsTheIBeamOverScrollToTheEnd() throws {
+        for point in pointsUnderAControl() {
+            let shown = try pointersShown(movingTo: point)
+            #expect(shown.count > 1, "the claim's tracking area and the text view's own at \(point.y)")
+            #expect(!shown.contains(.iBeam), "the I-beam at \(point.y), over Scroll to the End")
+            // A row come in under the pointer resting on it.
+            #expect(try !pointersShown(comingOnAt: point).contains(.iBeam), "the I-beam coming on at \(point.y), over Scroll to the End")
+        }
+        // On the words beside it, the text there shows the I-beam from each.
+        let beside = try #require(besideTheControl())
+        let onTheWords = try pointersShown(movingTo: beside, over: try #require(hit(beside) as? PointerAwareTextView))
+        #expect(onTheWords.count > 1 && onTheWords.allSatisfy { $0 == .iBeam }, "on the words: \(onTheWords)")
+        #expect(try pointersShown(comingOnAt: beside, over: try #require(hit(beside) as? PointerAwareTextView)).contains(.iBeam), "coming on the words")
+    }
+
     func checkMovingOntoScrollToTheEndLetsTheIBeamGo() throws {
         let beside = try #require(besideTheControl())
         let under = try #require(pointsUnderAControl().first { abs($0.y - beside.y) < 1 })
@@ -273,6 +340,11 @@ final class ScrolledConversation {
         try scene.checkMovingOntoScrollToTheEndLetsTheIBeamGo()
     }
 
+    @Test func noMoveShowsTheIBeamOverScrollToTheEnd() throws {
+        defer { scene.done() }
+        try scene.checkNoMoveShowsTheIBeamOverScrollToTheEnd()
+    }
+
     @Test func aLinkShowsThePointingHand() throws {
         defer { scene.done() }
         try scene.checkALinkShowsThePointingHand()
@@ -285,10 +357,10 @@ final class ScrolledConversation {
         let shown = Set(scene.texts.map(ObjectIdentifier.init))
         try #require(scene.scrollToRowsNotShownYet(besides: shown))
         await scene.runLoopTurned()
-        let beside = try #require(scene.besideTheControl())
-        #expect(scene.hit(beside).map { !shown.contains(ObjectIdentifier($0)) } == true, "a row not in view before")
+        // Wherever the rows settled: words of one not in view before.
+        let words = try #require(scene.texts.lazy.filter { !shown.contains(ObjectIdentifier($0)) }.compactMap { scene.pointOnTheWords(of: $0) }.first, "a row not in view before")
         NSCursor.arrow.set()
-        try scene.move(to: beside)
+        try scene.move(to: words)
         #expect(NSCursor.current == .iBeam)
     }
 }
@@ -323,6 +395,11 @@ final class ScrolledConversation {
     @Test func movingOntoScrollToTheEndLetsTheIBeamGo() throws {
         defer { scene.done() }
         try scene.checkMovingOntoScrollToTheEndLetsTheIBeamGo()
+    }
+
+    @Test func noMoveShowsTheIBeamOverScrollToTheEnd() throws {
+        defer { scene.done() }
+        try scene.checkNoMoveShowsTheIBeamOverScrollToTheEnd()
     }
 
     @Test func aLinkShowsThePointingHand() throws {
@@ -428,5 +505,38 @@ final class ScrolledConversation {
     @Test func movingOntoScrollToTheEndLetsTheIBeamGo() throws {
         defer { scene.done() }
         try scene.checkMovingOntoScrollToTheEndLetsTheIBeamGo()
+    }
+
+    @Test func noMoveShowsTheIBeamOverScrollToTheEnd() throws {
+        defer { scene.done() }
+        try scene.checkNoMoveShowsTheIBeamOverScrollToTheEnd()
+    }
+}
+
+/// The window server's answer to which window is under a point on the screen, while a scene is up:
+/// its window, as the user's window is under their pointer (a test's is off the screen, under
+/// nothing). AppKit's text views ask it before they show their I-beam on a move.
+@MainActor enum WindowServer {
+    private static var over: Int?
+    private static var isStubbed = false
+
+    /// The pointer gone from `window`: the real answer again, unless another scene's window has it.
+    static func pointerLeft(_ window: NSWindow) {
+        if over == window.windowNumber { over = nil }
+    }
+
+    static func pointerIsOver(_ window: NSWindow?) {
+        over = window?.windowNumber
+        guard !isStubbed else { return }
+        isStubbed = true
+        let selector = #selector(NSWindow.windowNumber(at:belowWindowWithWindowNumber:))
+        let method = class_getClassMethod(NSWindow.self, selector)!
+        typealias Call = @convention(c) (AnyClass, Selector, NSPoint, Int) -> Int
+        let real = unsafeBitCast(method_getImplementation(method), to: Call.self)
+        let answer: @convention(block) (AnyClass, NSPoint, Int) -> Int = { type, point, below in
+            // Asked off the main thread too, where no scene is.
+            (Thread.isMainThread ? MainActor.assumeIsolated { over } : nil) ?? real(type, selector, point, below)
+        }
+        method_setImplementation(method, imp_implementationWithBlock(answer))
     }
 }

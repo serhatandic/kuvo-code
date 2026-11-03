@@ -80,8 +80,13 @@ enum CursorRects {
             TextPointer.of(view).cameOn(event) { appKits(view, #selector(NSResponder.cursorUpdate(with:)), event) }
         }
         replace(#selector(NSResponder.mouseMoved(with:))) { view, event, appKits in
-            appKits(view, #selector(NSResponder.mouseMoved(with:)), event)
+            // AppKit's sets the I-beam by the text's frame alone: it runs only where the text is on top.
+            if PointerClaim.isTopmost(view, at: event.locationInWindow) { appKits(view, #selector(NSResponder.mouseMoved(with:)), event) }
             TextPointer.of(view).moved(event)
+        }
+        replace(#selector(NSResponder.mouseEntered(with:))) { view, event, appKits in
+            // So does its coming on (a row in under a still pointer): only where it's on top.
+            if PointerClaim.isTopmost(view, at: event.locationInWindow) { appKits(view, #selector(NSResponder.mouseEntered(with:)), event) }
         }
         replace(#selector(NSResponder.mouseExited(with:))) { view, event, appKits in
             appKits(view, #selector(NSResponder.mouseExited(with:)), event)

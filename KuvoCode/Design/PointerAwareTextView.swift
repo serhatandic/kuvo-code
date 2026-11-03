@@ -107,6 +107,20 @@ class PointerAwareTextView: NSTextView {
         claimPointer(for: event)
     }
 
+    // AppKit's, from its own tracking area, sets the I-beam by the text's frame alone too: it runs
+    // only where the text is on top. Elsewhere what it does besides (a link's or a detected date's
+    // hover) is for what's on top, and the claim lets go.
+    override func mouseMoved(with event: NSEvent) {
+        guard PointerClaim.isTopmost(self, at: event.locationInWindow) else { return }
+        super.mouseMoved(with: event)
+    }
+
+    // So does its coming on, as a row comes in under a pointer resting on what's over it.
+    override func mouseEntered(with event: NSEvent) {
+        guard PointerClaim.isTopmost(self, at: event.locationInWindow) else { return }
+        super.mouseEntered(with: event)
+    }
+
     // Removed under the pointer (a reply rebuilt, a row let go): no `mouseExited` comes.
     override func viewWillMove(toWindow newWindow: NSWindow?) {
         super.viewWillMove(toWindow: newWindow)
