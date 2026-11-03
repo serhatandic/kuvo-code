@@ -16,6 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- A goal's **Open** buttons, like signing in to RevenueCat or making a key, open the page in the bot's own browser in the panel instead of yours, so a sign-in there is one the bot can use. On a machine, it opens in that machine's browser.
 - What your phone asks of this Mac no longer fails now and then with a lost connection when it asks for something right after a reply that streamed.
 - Replies draw fewer lines: headings no longer have a line under them, and `---` is one thin line with even space around it, as in Claude's and ChatGPT's apps.
 - The sidebar is easier to read: its headings are as bright as the names under them, and the quieter words and buttons are no longer washed out by the window behind it.

@@ -142,7 +142,7 @@ struct GoalCard: View {
                     ForEach(yours) { check in
                         YoursRow(text: check.text, detail: check.detail, site: check.site, failed: check.state == .failed, button: check.action.map { action in
                             (action.label, { open(action) })
-                        })
+                        }, help: check.action?.kind == .open ? opensIn : nil)
                     }
                 }
             }
@@ -416,10 +416,14 @@ struct GoalCard: View {
         periods = plan.spend.map(\.per)
     }
 
-    /// A check's button: its page, or where new projects go (Settings › Worktrees, on its computer).
+    /// "Opens in Pixel’s browser, so it can use your sign-in."
+    private var opensIn: String { GoalPlanWords.opensIn(bot: plan.name, computer: onThisMac ? nil : computer) }
+
+    /// A check's button: its page, in the bot's browser (a sign-in there is one it can use), or
+    /// where new projects go (Settings › Worktrees, on its computer).
     private func open(_ action: GoalPlan.Check.Action) {
         switch action.kind {
-        case .open: if let url = action.url { NSWorkspace.shared.open(url) }
+        case .open: if let url = action.url { app.utilities.openForAgent(url, bot: plan.bot, machine: onThisMac ? nil : box) }
         case .projectsFolder: app.openSettings(.worktrees, on: SidebarBox(machine: onThisMac ? nil : box))
         }
     }
@@ -471,6 +475,8 @@ struct YoursRow: View {
     var site: String?
     var failed = false
     var button: (String, () -> Void)?
+    /// What the button does, under the pointer and to VoiceOver, where its words don't say.
+    var help: String?
     /// Puts it away (what waits for you while it runs).
     var clear: (() -> Void)?
     /// A check is on its way: a spinner in place of the dot.
@@ -517,6 +523,8 @@ struct YoursRow: View {
                 .buttonStyle(GoalPillButtonStyle())
                 // Whole, its row's words wrapping before it: "Open Str…" says nothing.
                 .fixedSize()
+                .help(help ?? "")
+                .accessibilityHint(help ?? "")
             }
             if !more.isEmpty {
                 Menu {

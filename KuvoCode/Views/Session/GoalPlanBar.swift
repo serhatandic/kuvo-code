@@ -198,15 +198,21 @@ struct GoalPlanBar: View {
 
     private func waitingRow(_ item: GoalPlan.Waiting, now: Date) -> some View {
         let since = Date(timeIntervalSince1970: item.at / 1000)
+        let onThisMac = box == BoxClient.mac
         let button: (String, () -> Void)?
+        var help: String?
         if let url = item.url {
-            button = (item.site.map { "Open \(GoalPlanWords.service($0))" } ?? "Open", { NSWorkspace.shared.open(url) })
+            // In the bot's browser, not yours: a sign-in there is one it can use.
+            button = (item.site.map { "Open \(GoalPlanWords.service($0))" } ?? "Open", {
+                app.utilities.openForAgent(url, bot: plan.bot, machine: onThisMac ? nil : box)
+            })
+            help = GoalPlanWords.opensIn(bot: plan.name, computer: onThisMac ? nil : app.machines.engine(box)?.machine.name ?? box)
         } else if let session = item.session {
             button = ("Open", { app.tabs.open(.session(session)) })
         } else {
             button = nil
         }
-        return YoursRow(text: item.text, detail: item.detail, aside: "since \(GoalSteps.time(since, now: now))", site: item.site, button: button) {
+        return YoursRow(text: item.text, detail: item.detail, aside: "since \(GoalSteps.time(since, now: now))", site: item.site, button: button, help: help) {
             Task {
                 do { try await app.goalPlans.answer(plan, on: box, .clear(waiting: item.id)) } catch { failed(error.localizedDescription) }
             }

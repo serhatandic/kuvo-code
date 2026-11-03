@@ -310,12 +310,26 @@ final class Utilities {
 
     /// A new tab in a machine's browser: it opens a page there once you go somewhere (at
     /// `address` at once, if given).
-    func newMachinePage(_ machine: String, address: String? = nil) {
+    func newMachinePage(_ machine: String, address: String? = nil, owner: String? = nil) {
         Analytics.shared.track("panel_opened", ["tool": "machine_browser"])
         Analytics.shared.trackOnce("browser_used", key: "you.machine", ["by": "you", "place": "machine"])
-        let tab = Tab(kind: .machinePage(machine, nil), owner: panelKey)
+        let tab = Tab(kind: .machinePage(machine, nil), owner: owner ?? panelKey)
         add(tab)
         if let address { open(address, inTab: tab.id) }
+    }
+
+    /// A page you open for a bot to use (what its goal needs you to do on a site): in the browser
+    /// it browses with, not yours, so a sign-in there is one it can use. On this Mac, a tab of the
+    /// bot's own, where it goes on next; on a machine, a page in that machine's browser. The
+    /// panel comes forward to show it.
+    func openForAgent(_ url: URL, bot: String, machine: String?) {
+        if let machine {
+            newMachinePage(machine, address: url.absoluteString, owner: bot)
+        } else {
+            let browser = newBrowser(url.absoluteString, owner: bot)
+            botWorks(bot, in: browser)
+        }
+        revealRequest += 1
     }
 
     /// Opens `address` in a machine's new tab: a page there, which the tab then shows.

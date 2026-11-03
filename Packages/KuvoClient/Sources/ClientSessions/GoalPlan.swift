@@ -430,6 +430,12 @@ public enum GoalPlanWords {
         }
     }
 
+    /// What a goal's Open says of where its page opens: in the bot's browser, where a sign-in is
+    /// one it can use, rather than yours. `computer` is a machine's name, nil on this Mac.
+    public static func opensIn(bot: String, computer: String?) -> String {
+        "Opens in \(bot)’s browser\(computer.map { " on \($0)" } ?? ""), so it can use your sign-in"
+    }
+
     /// "2 of 5".
     public static func progress(_ goal: GoalPlan) -> String { "\(goal.done) of \(goal.steps.count)" }
 
