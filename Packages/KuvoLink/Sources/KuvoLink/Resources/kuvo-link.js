@@ -2858,7 +2858,7 @@ var HOSTS = [
   [/:\/\/(api\.stripe\.com|api\.paypal\.com|api\.braintreegateway\.com|connect\.squareup\.com|api\.lemonsqueezy\.com|api\.paddle\.com)/i, "payment"],
   [/:\/\/(hooks\.slack\.com|slack\.com\/api\/chat\.|discord(app)?\.com\/api\/webhooks|api\.telegram\.org|api\.twilio\.com|api\.sendgrid\.com|api\.mailgun\.net|api\.postmarkapp\.com|api\.resend\.com|graph\.facebook\.com|api\.twitter\.com|api\.x\.com|gmail\.googleapis\.com)/i, "message"]
 ];
-var SECRET_PLACES = /(^|[\s"'=/~])(\.ssh(\/|\s|$)|\.aws\/credentials|\.netrc\b|\.npmrc\b|\.pypirc\b|\.docker\/config\.json|\.git-credentials\b|\.kube\/config\b|id_(rsa|ed25519|ecdsa)\b|\.env(\s|$|["'])|\.env\.(?!example\b)[A-Za-z0-9_-]+)/;
+var SECRET_PLACES = /(^|[\s"'=/~@])(\.ssh(\/|\s|$)|\.aws\/credentials|\.netrc\b|\.npmrc\b|\.pypirc\b|\.docker\/config\.json|\.git-credentials\b|\.kube\/config\b|id_(rsa|ed25519|ecdsa)\b|\.env(\s|$|["'])|\.env\.(?!example\b)[A-Za-z0-9_-]+)/;
 var TOOL_WORDS = [
   [/\b(pay|payment|payments|charge|purchase|buy|checkout|refund|payout|transfer|subscribe|create order|place order)\b/, "payment"],
   [/\b(delete|remove|destroy|purge|trash|drop|erase|wipe)\b/, "delete"],
@@ -10982,6 +10982,13 @@ function pauseGoal(bot, pause, file = GOALS_FILE) {
     noteWorkChanged(bot);
   return done;
 }
+var REVIEW_PAUSE = "Auto's reviewer refused too many times: waiting for you";
+function resumeReviewedSession(session, file = GOALS_FILE) {
+  for (const goal of readKept2(file)) {
+    if (goal.state === "running" && goal.paused.some((each) => each.session === session && each.why === REVIEW_PAUSE))
+      unpause(goal.id, session, Date.now(), file);
+  }
+}
 function linkSession(bot, step, session, file = GOALS_FILE) {
   const linked = changeKept2((all) => {
     const goal = all.find((each) => each.bot === bot && each.state === "running");
@@ -14428,7 +14435,8 @@ function wallOf(where, write, policy) {
     return "Kuvo Code's own folders";
   if ((policy.sockets ?? []).some((wall) => inside3(where, wall)) || matching2(where, policy.socketPatterns))
     return "another app's socket, which runs what it's sent";
-  if (write && ([...policy.readOnly, ...policy.homeKept ?? []].some((wall) => inside3(where, wall)) || matching2(where, policy.readOnlyPatterns)))
+  const kept = (policy.homeKept ?? []).some((wall) => inside3(where, wall)) && ![...policy.writable, ...policy.homeOpen ?? []].some((open) => inside3(where, open));
+  if (write && (kept || policy.readOnly.some((wall) => inside3(where, wall)) || matching2(where, policy.readOnlyPatterns)))
     return "what runs later";
   return null;
 }
@@ -14899,7 +14907,9 @@ async function* approvalRoute(context) {
       return yield* json(405, { message: "Read them with GET, or let a paused conversation go on with POST." });
     if (given.resume !== true)
       return yield* json(400, { message: "Say resume: true to let Auto go on here." });
-    return yield* json(200, shownLog(resumeReviews(decisions)));
+    const resumed = resumeReviews(decisions);
+    resumeReviewedSession(decisions);
+    return yield* json(200, shownLog(resumed));
   }
   const id = idOf(route.match(SESSION_APPROVAL_ROUTE)?.[1]);
   if (!id)
@@ -16240,8 +16250,11 @@ async function reviewIn(session, action, signal, found) {
     return null;
   const context = { session: at.data.id, said: bot ? [] : await yourMessages(at, signal), ...bot ? { bot } : {} };
   const verdict = await review(action, context, { model: await reviewModelOf(at, signal), signal });
-  if (verdict.paused)
+  if (verdict.paused) {
     await stopSession(at.target, at.data.id, false).catch(() => {});
+    if (bot)
+      pauseGoal(bot.id, { why: REVIEW_PAUSE, session: at.data.id });
+  }
   return { ...verdict, conversation: at };
 }
 var READING = new Set(["read", "glob", "grep", "list", "ls", "view"]);

@@ -652,6 +652,16 @@ export function pauseGoal(bot: string, pause: { why: string; until?: number; ses
   return done;
 }
 
+/** Why a goal's session is paused by Auto's reviewer, as its card says it. */
+export const REVIEW_PAUSE = "Auto's reviewer refused too many times: waiting for you";
+
+/** A session paused by Auto's reviewer let go again (you resumed it): off any running goal's card. */
+export function resumeReviewedSession(session: string, file = GOALS_FILE): void {
+  for (const goal of readKept(file)) {
+    if (goal.state === "running" && goal.paused.some(each => each.session === session && each.why === REVIEW_PAUSE)) unpause(goal.id, session, Date.now(), file);
+  }
+}
+
 /** A session the bot started for one of its goal's steps (by number or id): the step's track
  * follows it. */
 export function linkSession(bot: string, step: unknown, session: string, file = GOALS_FILE): boolean {

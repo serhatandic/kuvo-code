@@ -8,7 +8,7 @@
 import { isObject, parsed } from "../../shared/json";
 import { bridgeTarget, call, engineGet, readEngineFile } from "../engine/client";
 import { allowFullAccess, alwaysFor, APPROVALS, approvalOf, approvalRules, effectiveApproval, fullAccessAllowed, isApproval, unavailable } from "../work/approval";
-import { runningGoal } from "../work/goals";
+import { resumeReviewedSession, runningGoal } from "../work/goals";
 import { sandboxOn } from "../work/sandbox";
 import { resumeReviews, reviewLog, setTellAuto, tellAuto } from "../work/reviewer";
 import { botOfConversation, worksFor } from "../work/tree";
@@ -250,7 +250,9 @@ export async function* approvalRoute(context: RouteContext): AsyncGenerator<Answ
     if (method === "GET") return yield* json(200, shownLog(reviewLog(decisions)));
     if (method !== "POST") return yield* json(405, { message: "Read them with GET, or let a paused conversation go on with POST." });
     if (given.resume !== true) return yield* json(400, { message: "Say resume: true to let Auto go on here." });
-    return yield* json(200, shownLog(resumeReviews(decisions)));
+    const resumed = resumeReviews(decisions);
+    resumeReviewedSession(decisions);
+    return yield* json(200, shownLog(resumed));
   }
   const id = idOf(route.match(SESSION_APPROVAL_ROUTE)?.[1]);
   if (!id) return yield* json(404, { message: "That conversation isn't here." });

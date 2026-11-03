@@ -83,7 +83,9 @@ function wallOf(where: string, write: boolean, policy: FencePolicy): string | nu
   if (sshKey || policy.secrets.some(wall => inside(where, wall))) return "your secrets";
   if (policy.kuvo.some(wall => inside(where, wall)) || matching(where, policy.kuvoPatterns)) return "Kuvo Code's own folders";
   if ((policy.sockets ?? []).some(wall => inside(where, wall)) || matching(where, policy.socketPatterns)) return "another app's socket, which runs what it's sent";
-  if (write && ([...policy.readOnly, ...(policy.homeKept ?? [])].some(wall => inside(where, wall)) || matching(where, policy.readOnlyPatterns))) return "what runs later";
+  // (~/Library is kept but for its caches and logs, which are written; tools' own in them aren't.)
+  const kept = (policy.homeKept ?? []).some(wall => inside(where, wall)) && ![...policy.writable, ...(policy.homeOpen ?? [])].some(open => inside(where, open));
+  if (write && (kept || policy.readOnly.some(wall => inside(where, wall)) || matching(where, policy.readOnlyPatterns))) return "what runs later";
   return null;
 }
 

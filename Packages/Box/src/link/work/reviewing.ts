@@ -10,7 +10,7 @@ import { bridgeTarget, call, engineGet, readEngineFile } from "../engine/client"
 import { stopSession, writtenByYou } from "../engine/queue";
 import { approvalOf } from "./approval";
 import { asksIn, callOf } from "./answers";
-import { runningGoal } from "./goals";
+import { pauseGoal, REVIEW_PAUSE, runningGoal } from "./goals";
 import { usableModels, type Usable } from "./models";
 import { review, type ReviewedAction, type ReviewContext, type SmallModel, type Verdict } from "./reviewer";
 import { botOfConversation, worksFor } from "./tree";
@@ -109,7 +109,11 @@ export async function reviewIn(session: string, action: ReviewedAction, signal?:
   if (approvalOf(at.data, { agents: at.agents, bot: Boolean(bot) }).effective !== "auto") return null;
   const context: ReviewContext = { session: at.data.id, said: bot ? [] : await yourMessages(at, signal), ...(bot ? { bot } : {}) };
   const verdict = await review(action, context, { model: await reviewModelOf(at, signal), signal });
-  if (verdict.paused) await stopSession(at.target, at.data.id, false).catch(() => {});
+  if (verdict.paused) {
+    await stopSession(at.target, at.data.id, false).catch(() => {});
+    // A bot's: on its goal's card too.
+    if (bot) pauseGoal(bot.id, { why: REVIEW_PAUSE, session: at.data.id });
+  }
   return { ...verdict, conversation: at };
 }
 
