@@ -18,42 +18,58 @@ import Testing
         private let manual: Set<String>
         /// Programs whose installer runs but leaves them as they were.
         private let stuck: Set<String>
+        /// Programs updated elsewhere (a terminal, another client) by the time they're asked.
+        private let updatedElsewhere: Set<String>
+        /// Programs whose own sign-in's version check didn't answer in time: only the accounts you
+        /// added say they're out of date.
+        private let unchecked: Set<String>
         let url: String
         static let newest = ["claude-code": "2.1.309", "codex-cli": "0.164.0", "grok-cli": "1.0.67"]
 
-        init(port: Int, versions: [String: String], manual: Set<String> = [], stuck: Set<String> = [], added: [String] = []) {
+        init(port: Int, versions: [String: String], manual: Set<String> = [], stuck: Set<String> = [], updatedElsewhere: Set<String> = [], unchecked: Set<String> = [], added: [String] = []) {
             url = "http://127.0.0.1:\(port)"
             self.versions = versions
             self.manual = manual
             self.stuck = stuck
+            self.updatedElsewhere = updatedElsewhere
+            self.unchecked = unchecked
             StubWeb.handle(url + "/api/model") { _, _ in StubWeb.json(["data": []]) }
             StubWeb.handle(url + "/api/integration") { [weak self] request, _ in
                 guard let self else { return StubWeb.Answer(status: 503) }
                 return self.lock.withLock {
                     let parts = request.url!.path().split(separator: "/").map(String.init)
                     if request.httpMethod == "POST", parts.last == "update", parts.count == 4 {
-                        let id = parts[2]
-                        self.asked.append(id)
+                        self.asked.append(parts[2])
+                        let id = String(parts[2].split(separator: "@")[0])
+                        if self.updatedElsewhere.contains(id) {
+                            self.versions[id] = Self.newest[id]
+                            return StubWeb.json(["data": ["updated": false, "version": Self.newest[id] ?? ""]])
+                        }
                         if self.stuck.contains(id) {
                             return StubWeb.json(["data": ["updated": false, "version": self.versions[id] ?? "", "message": "Grok is still \(self.versions[id] ?? "") after `grok update`."]])
                         }
                         self.versions[id] = Self.newest[id]
                         return StubWeb.json(["data": ["updated": true, "version": Self.newest[id] ?? ""]])
                     }
-                    let accounts = self.versions.keys.sorted() + added
+                    // The accounts you added first: what Update All updates mustn't hang on the order.
+                    let accounts = added + self.versions.keys.sorted()
                     return StubWeb.json(["data": accounts.map { self.integration($0) }])
                 }
             }
         }
 
         private func integration(_ id: String) -> [String: Any] {
-            let program = String(id.split(separator: "@")[0])
+            let parts = id.split(separator: "@").map(String.init)
+            let program = parts[0]
             let version = versions[program] ?? ""
             let newest = Self.newest[program] ?? version
+            if parts.count == 1, unchecked.contains(program) {
+                return ["id": id, "name": program, "methods": [], "connections": [], "metadata": ["source": "agent", "agent": program, "accountID": "default", "installed": true]]
+            }
             return [
                 "id": id, "name": program, "methods": [], "connections": [],
                 "metadata": [
-                    "source": "agent", "agent": program, "installed": true, "version": version, "latestVersion": newest,
+                    "source": "agent", "agent": program, "accountID": parts.count == 2 ? parts[1] : "default", "installed": true, "version": version, "latestVersion": newest,
                     "outdated": version != newest, "updates": !manual.contains(program),
                 ] as [String: Any],
             ]
@@ -121,5 +137,33 @@ import Testing
         #expect(status("claude-code") == .updated("2.1.309"))
         #expect(status("grok-cli") == .failed("Grok is still 1.0.60 after `grok update`."))
         #expect(app.outdatedAgents(on: .mac).map(\.integration.id) == ["grok-cli"], "still out of date, so Update All stays")
+    }
+
+    @Test func theAgentsOwnRowSaysHowItWentWhicheverAccountWasUpdated() async throws {
+        TestEnvironment.prepare()
+        StubWeb.start(hosts: ["127.0.0.1"])
+        defer { StubWeb.stop() }
+        // Claude Code's own sign-in didn't hear back about its version in time, so only the
+        // account you added says it's out of date. And Codex was updated in a terminal since the
+        // page last looked.
+        let bridge = Bridge(port: 47974, versions: ["claude-code": "2.1.305", "codex-cli": "0.163.0"], updatedElsewhere: ["codex-cli"], unchecked: ["claude-code"], added: ["claude-code@1f2e"])
+        let app = AppModel()
+        app.catalog.outsideAgents = app.agents
+        app.agents.connect(bridge.endpoint, folderPrefix: "")
+        defer { app.agents.disconnect() }
+        await app.catalog.refreshAgents(fresh: true)
+        // What the page shows for each: the agent's own sign-in.
+        func status(_ id: String) -> OutsideAgents.UpdateStatus? {
+            app.catalog.codingAgents.first { $0.id == id }.flatMap(app.agents.updateStatus)
+        }
+
+        let updates = app.updateAllAgents(on: .mac)
+        #expect(status("claude-code") == .updating, "the agent's own row is updating, whichever account asked")
+        for update in updates { await update.value }
+        #expect(Set(bridge.updates) == ["claude-code@1f2e", "codex-cli"])
+
+        #expect(status("claude-code") == .updated("2.1.309"))
+        #expect(status("codex-cli") == .current("0.164.0"), "already on the newest when asked: up to date, not silence")
+        #expect(app.outdatedAgents(on: .mac).isEmpty)
     }
 }

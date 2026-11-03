@@ -94,7 +94,7 @@ extension AppModel {
         outdatedAgents(on: box).compactMap { outdated in
             let agents = agents(for: outdated.box)
             let catalog = catalog(for: outdated.box)
-            if agents.updating.contains(outdated.integration.id) { return nil }
+            if agents.isUpdating(outdated.integration.id) { return nil }
             return agents.update(outdated.integration.id) { await catalog.refreshAgents(fresh: true) }
         }
     }
