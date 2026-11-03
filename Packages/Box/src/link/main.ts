@@ -107,7 +107,7 @@ export { COMPATIBILITY_FILE, engineConfigContent, learnCompatibility, readCompat
 export { queueOf, queueWatcher, readQueues, scanQueues } from "./engine/queue";
 export { letAttachmentsGo } from "./server/attached";
 export { workWatcher } from "./work/wakes";
-export { goalFollowers, goalHolds, settleGoalHolds, lookAtGoals, periodOf, periodEnd } from "./work/goals";
+export { goalFollowers, goalHolds, settleGoalHolds, lookAtGoals, periodOf, periodEnd, pauseGoal, REVIEW_PAUSE } from "./work/goals";
 export { keptAwake, letGo } from "./work/awake";
 export { ALWAYS_ASK_RULES, PUBLISH_ASK_RULES, alwaysAsks, withAlwaysAsk } from "./work/always";
 export { macLink, readLink, updateLink, writeLink } from "./state";

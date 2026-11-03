@@ -1004,7 +1004,7 @@ final class PhoneLink {
         "file", "folders", "folders.files", "git", "git.merge", "git.pull-request", "git.pull-request.draft", "git.push", "goals", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "handoff", "integrations", "keys", "mcp.catalog", "moves",
         "named", "personalities", "phones", "phones.pair", "plugins.search", "programs", "projects", "providers.models", "reviews", "reviews.parts", "reviews.scopes", "search", "sessions.agents", "shell.stop", "sign-in.return", "skills",
         "personalities.events", "skills.trash", "sandbox", "sandbox.check", "sandbox.asks", "vault", "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events", "worktrees.where",
-        "agent-tools", "sessions.start", "letters-read", "queue", "queue.waits", "work", "work.projects", "work.goals", "approval",
+        "agent-tools", "sessions.start", "letters-read", "queue", "queue.waits", "work", "work.projects", "work.goals", "approval", "approval.reviewer",
         // The Mac's own.
         "accounts.ended", "claude-code", "hosts", "mac", "machines",
     ]
@@ -1305,9 +1305,9 @@ final class PhoneLink {
     /// Whether a route is answered by this Mac's box: an area that's moved there (`boxRoutes`).
     nonisolated static func movedToBox(_ route: String) -> Bool {
         boxRoutes.contains { route == $0 || route.hasPrefix($0 + "/") }
-            // A session started with a task, a session's queue and its approval (not its other
+            // A session started with a task, a session's queue, its approval and its reviewer's decisions (not its other
             // routes, `kuvo/sessions/<id>/agents`).
-            || route == "kuvo/sessions" || route.wholeMatch(of: /kuvo\/sessions\/(queues\/events|[^\/]+\/(stop|approval|queue(\/.+)?))/) != nil
+            || route == "kuvo/sessions" || route.wholeMatch(of: /kuvo\/sessions\/(queues\/events|[^\/]+\/(stop|approval|decisions|queue(\/.+)?))/) != nil
             // A plan signed out (`kuvo/accounts/<id>/forget`), and a command stopped
             // (`kuvo/shell/<id>/stop`): the box's too.
             || Self.oneOf(route, "kuvo/accounts/", "/forget") || Self.oneOf(route, "kuvo/shell/", "/stop")

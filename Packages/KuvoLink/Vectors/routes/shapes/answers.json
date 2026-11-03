@@ -17,6 +17,7 @@
     "200": {
      "object": {
       "fullAccess": "bool",
+      "tellAuto": "string",
       "auto": {
        "object": {
         "engine": {
@@ -75,6 +76,7 @@
     "200": {
      "object": {
       "fullAccess": "bool",
+      "tellAuto": "string",
       "auto": {
        "object": {
         "engine": {
@@ -412,6 +414,221 @@
      }
     },
     "503": {
+     "object": {
+      "message": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/sessions/:id/decisions",
+   "answers": {
+    "200": {
+     "object": {
+      "decisions": {
+       "list": {
+        "object": {
+         "at": "number",
+         "action": "string",
+         "kind": {
+          "oneOf": [
+           {
+            "literal": "command"
+           },
+           {
+            "literal": "file"
+           },
+           {
+            "literal": "tool"
+           }
+          ]
+         },
+         "decision": {
+          "oneOf": [
+           {
+            "literal": "allowed"
+           },
+           {
+            "literal": "refused"
+           },
+           {
+            "literal": "asked"
+           }
+          ]
+         },
+         "reason": "string",
+         "by": {
+          "oneOf": [
+           {
+            "literal": "code"
+           },
+           {
+            "literal": "model"
+           }
+          ]
+         },
+         "why?": {
+          "oneOf": [
+           {
+            "literal": "always"
+           },
+           {
+            "literal": "reviewer"
+           },
+           {
+            "literal": "unread"
+           },
+           {
+            "literal": "unreadable"
+           },
+           {
+            "literal": "noModel"
+           },
+           {
+            "literal": "failed"
+           },
+           {
+            "literal": "paused"
+           }
+          ]
+         },
+         "always?": {
+          "oneOf": [
+           {
+            "literal": "payment"
+           },
+           {
+            "literal": "delete"
+           },
+           {
+            "literal": "permissions"
+           },
+           {
+            "literal": "account"
+           },
+           {
+            "literal": "message"
+           },
+           {
+            "literal": "credentials"
+           },
+           {
+            "literal": "gitConfig"
+           }
+          ]
+         }
+        }
+       }
+      },
+      "paused?": "number"
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/sessions/:id/decisions",
+   "answers": {
+    "200": {
+     "object": {
+      "decisions": {
+       "list": {
+        "object": {
+         "at": "number",
+         "action": "string",
+         "kind": {
+          "oneOf": [
+           {
+            "literal": "command"
+           },
+           {
+            "literal": "file"
+           },
+           {
+            "literal": "tool"
+           }
+          ]
+         },
+         "decision": {
+          "oneOf": [
+           {
+            "literal": "allowed"
+           },
+           {
+            "literal": "refused"
+           },
+           {
+            "literal": "asked"
+           }
+          ]
+         },
+         "reason": "string",
+         "by": {
+          "oneOf": [
+           {
+            "literal": "code"
+           },
+           {
+            "literal": "model"
+           }
+          ]
+         },
+         "why?": {
+          "oneOf": [
+           {
+            "literal": "always"
+           },
+           {
+            "literal": "reviewer"
+           },
+           {
+            "literal": "unread"
+           },
+           {
+            "literal": "unreadable"
+           },
+           {
+            "literal": "noModel"
+           },
+           {
+            "literal": "failed"
+           },
+           {
+            "literal": "paused"
+           }
+          ]
+         },
+         "always?": {
+          "oneOf": [
+           {
+            "literal": "payment"
+           },
+           {
+            "literal": "delete"
+           },
+           {
+            "literal": "permissions"
+           },
+           {
+            "literal": "account"
+           },
+           {
+            "literal": "message"
+           },
+           {
+            "literal": "credentials"
+           },
+           {
+            "literal": "gitConfig"
+           }
+          ]
+         }
+        }
+       }
+      },
+      "paused?": "number"
+     }
+    },
+    "400": {
      "object": {
       "message": "string"
      }
@@ -2794,6 +3011,9 @@
             "literal": "approval"
            },
            {
+            "literal": "approval.reviewer"
+           },
+           {
             "literal": "accounts.ended"
            },
            {
@@ -3076,6 +3296,9 @@
            },
            {
             "literal": "approval"
+           },
+           {
+            "literal": "approval.reviewer"
            }
           ]
          }
@@ -5753,6 +5976,61 @@
            },
            "id?": "string",
            "name": "string"
+          }
+         },
+         "review?": {
+          "object": {
+           "reason": "string",
+           "why": {
+            "oneOf": [
+             {
+              "literal": "always"
+             },
+             {
+              "literal": "reviewer"
+             },
+             {
+              "literal": "unread"
+             },
+             {
+              "literal": "unreadable"
+             },
+             {
+              "literal": "noModel"
+             },
+             {
+              "literal": "failed"
+             },
+             {
+              "literal": "paused"
+             }
+            ]
+           },
+           "always?": {
+            "oneOf": [
+             {
+              "literal": "payment"
+             },
+             {
+              "literal": "delete"
+             },
+             {
+              "literal": "permissions"
+             },
+             {
+              "literal": "account"
+             },
+             {
+              "literal": "message"
+             },
+             {
+              "literal": "credentials"
+             },
+             {
+              "literal": "gitConfig"
+             }
+            ]
+           }
           }
          }
         }

@@ -809,6 +809,24 @@ test("the goal is the conversation's own goal: set as it starts (briefed by the 
   assert.equal(loops.has("ses_pixel"), false, "stopped, its conversation's goal goes too");
 });
 
+test("a goal's conversation Auto's reviewer paused stays paused on its card, whatever the bot's turn does at a model's limit, until you resume it", async () => {
+  const goal = await startedGoal();
+  link.pauseGoal(goal.bot, { why: link.REVIEW_PAUSE, session: "ses_pixel" });
+  const paused = [{ why: link.REVIEW_PAUSE, session: "ses_pixel" }];
+  await look();
+  assert.deepEqual((await goals())[0].paused, paused);
+  // A limit on its turn, and the turn going on again after, leave it as it is.
+  loops.set("ses_pixel", { ...loops.get("ses_pixel"), state: "paused", pausedBy: "limit", resumesAt: Date.now() + 3_600_000 });
+  await look();
+  assert.deepEqual((await goals())[0].paused, paused);
+  loops.set("ses_pixel", { ...loops.get("ses_pixel"), state: "working", pausedBy: undefined, resumesAt: undefined });
+  await look();
+  assert.deepEqual((await goals())[0].paused, paused);
+  // You resume Auto there: off the card.
+  assert.equal((await route("POST", "kuvo/sessions/ses_pixel/decisions", { resume: true })).status, 200);
+  assert.deepEqual((await goals())[0].paused, []);
+});
+
 const nudges = () => prompts.filter(each => each.to === "ses_pixel" && each.text.startsWith("[Goal] Nothing of the goal is at work"));
 
 test("with nothing of the goal at work, the bot is told to carry on after a while; told once with nothing changing after, it isn't told again until something does, and never while all that's left waits for you", async () => {

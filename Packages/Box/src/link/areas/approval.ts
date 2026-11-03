@@ -8,8 +8,9 @@
 import { isObject, parsed } from "../../shared/json";
 import { bridgeTarget, call, engineGet, readEngineFile } from "../engine/client";
 import { allowFullAccess, alwaysFor, APPROVALS, approvalOf, approvalRules, effectiveApproval, fullAccessAllowed, isApproval, unavailable } from "../work/approval";
-import { runningGoal } from "../work/goals";
+import { resumeReviewedSession, runningGoal } from "../work/goals";
 import { sandboxOn } from "../work/sandbox";
+import { resumeReviews, reviewLog, setTellAuto, tellAuto } from "../work/reviewer";
 import { botOfConversation, worksFor } from "../work/tree";
 import { listBots } from "../bots/list";
 import type { Approval } from "../work/approval";
@@ -21,6 +22,8 @@ import type { ApprovalHere, SessionApproval } from "../../shared/routes/approval
 import type { AnswerPiece, RouteContext } from "../server/context";
 
 export const SESSION_APPROVAL_ROUTE = /^kuvo\/sessions\/([^/]+)\/approval$/;
+/** A conversation's decisions by Auto's reviewer. */
+export const SESSION_DECISIONS_ROUTE = /^kuvo\/sessions\/([^/]+)\/decisions$/;
 
 /** How long the box waits on the engine for one conversation. */
 const WAIT = 30_000;
@@ -136,7 +139,7 @@ export function approvalHere(): ApprovalHere {
     const not = unavailable("auto", { agents });
     return not ? { held: not } : {};
   };
-  return { fullAccess: fullAccessAllowed(), auto: { engine: auto(false), agents: auto(true) } };
+  return { fullAccess: fullAccessAllowed(), tellAuto: tellAuto(), auto: { engine: auto(false), agents: auto(true) } };
 }
 
 /** Each conversation kept with an approval that comes to something else now (the sandbox started
@@ -230,12 +233,26 @@ export async function* approvalRoute(context: RouteContext): AsyncGenerator<Answ
   if (route === "kuvo/approval") {
     if (method === "GET") return yield* json(200, approvalHere());
     if (method !== "PATCH") return yield* json(405, { message: "Read it with GET, or change it with PATCH." });
-    if (typeof given.fullAccess !== "boolean") return yield* json(400, { message: "Say whether Full Access may be picked here: fullAccess, true or false." });
+    if (given.fullAccess === undefined && given.tellAuto === undefined) return yield* json(400, { message: "Say whether Full Access may be picked here (fullAccess, true or false), or your rules for Auto (tellAuto, in words)." });
+    if (given.fullAccess !== undefined && typeof given.fullAccess !== "boolean") return yield* json(400, { message: "fullAccess is true or false." });
+    if (given.tellAuto !== undefined && typeof given.tellAuto !== "string") return yield* json(400, { message: "tellAuto is your rules for Auto, in words." });
+    if (typeof given.tellAuto === "string") setTellAuto(given.tellAuto);
+    if (typeof given.fullAccess !== "boolean") return yield* json(200, approvalHere());
     allowFullAccess(given.fullAccess);
     // What had it, or was held from it, comes to what it can be now at once, rather than at the
     // box's next look.
     await reapplyApprovals(engine, bridge()).catch(() => false);
     return yield* json(200, approvalHere());
+  }
+  const decisions = idOf(route.match(SESSION_DECISIONS_ROUTE)?.[1]);
+  if (decisions) {
+    const shownLog = (log: ReturnType<typeof reviewLog>) => ({ decisions: log.decisions, ...(log.paused ? { paused: log.paused } : {}) });
+    if (method === "GET") return yield* json(200, shownLog(reviewLog(decisions)));
+    if (method !== "POST") return yield* json(405, { message: "Read them with GET, or let a paused conversation go on with POST." });
+    if (given.resume !== true) return yield* json(400, { message: "Say resume: true to let Auto go on here." });
+    const resumed = resumeReviews(decisions);
+    resumeReviewedSession(decisions);
+    return yield* json(200, shownLog(resumed));
   }
   const id = idOf(route.match(SESSION_APPROVAL_ROUTE)?.[1]);
   if (!id) return yield* json(404, { message: "That conversation isn't here." });

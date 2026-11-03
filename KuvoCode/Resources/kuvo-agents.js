@@ -16215,7 +16215,7 @@ ${others.join(`
     live.threads.get(own.adopt.providerID)?.turnAway?.();
     return true;
   }
-  async generate(id, prompt, { orAnother = false } = {}) {
+  async generate(id, prompt, { orAnother = false, model: given } = {}) {
     const model = this.record(id).session.model;
     if (!model)
       throw new BadRequest("This session has no model yet.");
@@ -16228,6 +16228,12 @@ ${others.join(`
         tried.add(Auto.modelKey(entry));
         candidates.push({ providerID: entry.providerID, id: entry.modelID, ...entry.variant ? { variant: entry.variant } : {} });
       }
+    }
+    if (given) {
+      const agent = candidates.some((candidate) => candidate.providerID === given.providerID) ? this.agent(given.providerID) : undefined;
+      if (!agent?.generate)
+        throw new BadRequest(`${this.agent(given.providerID)?.name ?? "That agent"} can't answer on ${given.id} for this session.`);
+      return agent.generate(prompt, given);
     }
     for (const candidate of candidates) {
       const agent = this.agent(candidate.providerID);
@@ -22232,7 +22238,8 @@ function handler(context) {
             const prompt = String(input.prompt ?? "");
             if (!prompt.trim())
               throw new BadRequest("Say what to write.");
-            return json11({ data: { text: await sessions.generate(id, prompt, { orAnother: input.orAnother === true }) } });
+            const model = input.model && typeof input.model.providerID === "string" && typeof input.model.id === "string" ? { providerID: input.model.providerID, id: input.model.id } : undefined;
+            return json11({ data: { text: await sessions.generate(id, prompt, { orAnother: input.orAnother === true, model }) } });
           }
           case "command": {
             const input = await body();
@@ -22759,4 +22766,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents d1cad7aa160548088511d6cb38f3a31ec05ce052d037b018541c9833ce7050da
+// Built from Packages/Box/src/agents 57688df27668508e91fa4a07ea5abe4721a4a7d6f3ebc19ed99062566dcee23a
