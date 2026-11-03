@@ -7,18 +7,24 @@ import type { Config } from "../../shared/routes/settings";
 import type { AnswerPiece, RouteContext } from "../server/context";
 import type { Target } from "../../shared/records";
 import { applySettings } from "./apply";
-import { reapplyApprovals } from "./approval";
+import { followSettings as followed } from "./approval";
 import { answerKeys } from "./box-keys";
 import { changeSettings, ownsSettings, readSettings } from "./config";
 import type { Settings } from "./config";
 import { addFromCatalog, mcpCatalog } from "./mcp-catalog";
+
+// How long a change to Settings › Permissions waits for the conversations to follow before it
+// answers (ms): one with thousands of them answers, and the rest follow meanwhile.
+const FOLLOW_WAIT = 5_000;
 
 // Conversations kept with an approval follow Settings › Permissions as they are now at once, rather
 // than at the box's next round (`keepApprovals`).
 async function followSettings({ readEngine, bridge }: RouteContext): Promise<void> {
   let engine: Target | null = null;
   try { engine = readEngine(); } catch {}
-  await reapplyApprovals(engine?.port ? engine : null, bridge(), true).catch(() => false);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([followed(engine?.port ? engine : null, bridge()), new Promise(resolve => { timer = setTimeout(resolve, FOLLOW_WAIT); })]);
+  clearTimeout(timer);
 }
 
 // Its own settings, and its integrations' keys (PROTOCOL.md, "Settings per box").

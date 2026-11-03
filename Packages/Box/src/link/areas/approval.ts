@@ -239,6 +239,27 @@ export async function reapplyApprovals(engine: Target | null, bridge: Target | n
   return done;
 }
 
+// Settings › Permissions as the conversations' rules were last made with, by the box's round or a
+// client's change (`followSettings`); null until made once as the box runs, so a change made while
+// it was down reaches them too.
+let settingsMade: string | null = null;
+let following: Promise<void> | null = null;
+
+/** Each conversation kept with an approval made again with Settings › Permissions as they are now,
+ * one pass at a time: a second asked for meanwhile waits on the one going, and the box's round
+ * catches what changed after it started. */
+export function followSettings(engine: Target | null, bridge: Target | null): Promise<void> {
+  following ??= (async () => {
+    try {
+      const settings = JSON.stringify(permissionsHere());
+      if (await reapplyApprovals(engine, bridge, true)) settingsMade = settings;
+    } catch {} finally {
+      following = null;
+    }
+  })();
+  return following;
+}
+
 const ownEngine = (): Target | null => {
   try {
     const engine = readEngineFile();
@@ -271,19 +292,18 @@ export function keepApprovals(engine: () => Target | null = ownEngine, bridge: (
   // (Scripts from the web the reviewer fetched for a box before this one: nothing runs them now.)
   clearFetched();
   let last: string | null = null;
-  // (Settings › Permissions as the conversations' rules were last made with: a change, from any
-  // client or by hand in the file, reaches them within a round.)
-  let lastSettings: string | null = null;
   let going = false;
   const adopted = new Set<string>();
   every(async () => {
     const [here, agents] = [engine(), bridge()];
     const now = `${sandboxOn(false)} ${sandboxOn(true)} ${fullAccessAllowed()} ${here?.port ?? 0} ${agents?.port ?? 0}`;
-    if (going) return;
+    if (going || following) return;
     going = true;
     try {
+      // (Settings › Permissions changed, from any client or by hand in the file, or not made with
+      // yet as the box runs: they reach every conversation within a round.)
       const settings = JSON.stringify(permissionsHere());
-      if ((now !== last || settings !== lastSettings) && await reapplyApprovals(here, agents, lastSettings !== null && settings !== lastSettings)) [last, lastSettings] = [now, settings];
+      if ((now !== last || settings !== settingsMade) && await reapplyApprovals(here, agents, settings !== settingsMade)) [last, settingsMade] = [now, settings];
       await adoptPending(here, agents);
       await adoptBots(here, agents, adopted);
     } catch {} finally {
