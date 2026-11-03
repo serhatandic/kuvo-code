@@ -317,7 +317,8 @@ struct GoalChartView: View {
         let flags = [showsNow ? nowX : nil, due.map { x($0) }, finish.map { x($0) }].compactMap { $0 }
         let marks = hours ? chart.ticks().filter(chart.shown.contains) : Self.days(in: chart.shown)
         let dayWidth = x.width * 86400 / max(1, chart.shown.duration)
-        let labeled = hours ? Set(marks) : Self.labeledDays(marks, dayWidth: dayWidth, week: chart.shown.duration <= 8 * 86400, now: now)
+        let hourWidth = marks.count > 1 ? x(marks[1]) - x(marks[0]) : x.width
+        let labeled = hours ? Self.labeledHours(marks, hourWidth: hourWidth) : Self.labeledDays(marks, dayWidth: dayWidth, week: chart.shown.duration <= 8 * 86400, now: now)
         let rightRoom: CGFloat = edgeDue ? Self.edgeRoom + 12 : 18
         return ZStack(alignment: .topLeading) {
             ForEach(marks, id: \.self) { mark in
@@ -414,6 +415,13 @@ struct GoalChartView: View {
             day = calendar.date(byAdding: .day, value: 1, to: day) ?? shown.end
         }
         return days
+    }
+
+    /// The hours that get a label: each where it has room for its time, else every second, third…
+    /// counted from the first, so no two run into each other on a narrow axis.
+    static func labeledHours(_ hours: [Date], hourWidth: CGFloat, room: CGFloat = 44) -> Set<Date> {
+        let step = hourWidth > 0 ? max(1, Int((room / hourWidth).rounded(.up))) : max(hours.count, 1)
+        return Set(hours.enumerated().compactMap { $0.offset % step == 0 ? $0.element : nil })
     }
 
     /// The days that get a label of their own: every day across a week or where each has room for
