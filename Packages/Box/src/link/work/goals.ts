@@ -408,6 +408,12 @@ export function proposeGoal(bot: { bot: string; name: string; session: string },
   return { goal: shown(made), ...(yours ? { yours } : {}) };
 }
 
+// A line's words, in lower case, without the marks between them.
+const wordsOf = (said: string) => said.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+// Whether a check names what a spend line is for: its words in a row there, two or more (one word,
+// like "ads", may only be near it: "Add a Google Ads account" is yours, the ads the bot's).
+const names = (check: string[], what: string[]) => what.length > 1 && check.some((_, at) => what.every((word, by) => check[at + by] === word));
+
 // A plan as propose_goal gives it, checked: what's kept of it, or why it won't do.
 function planGiven(given: Record<string, unknown>): { plan: Plan } | { refused: string } {
   const goal = text(given.goal, 2000);
@@ -427,8 +433,12 @@ function planGiven(given: Record<string, unknown>): { plan: Plan } | { refused: 
     checks.push({ id: `c${checks.length + 1}`, text: said, ...(text(each.detail, 300) ? { detail: text(each.detail, 300)! } : {}), state, by: "bot", ...(site ? { site } : {}), ...(url && state === "needs" ? { action: { kind: "open" as const, label: text(each.button, 30) ?? "Open", url } } : {}) });
   }
   const spend: KeptGoal["spend"] = [];
+  const yours = checks.filter(each => each.state === "needs").map(each => wordsOf(each.text));
   for (const each of Array.isArray(given.spend) ? given.spend.slice(0, 10) : []) {
     if (!isObject(each) || !text(each.what, 200) || typeof each.cap !== "number" || !(each.cap > 0)) return { refused: "Each spend line needs what it's for (what) and a cap above 0 (cap)." };
+    // What the plan has you do is yours to pay for (a membership you join, a fee on your account):
+    // it stays under what needs you, and isn't the bot's to spend.
+    if (yours.some(check => names(check, wordsOf(each.what as string)))) continue;
     const per = PERIODS.includes(each.per as (typeof PERIODS)[number]) ? each.per as (typeof PERIODS)[number] : "goal";
     spend.push({ what: text(each.what, 200)!, cap: each.cap, currency: (text(each.currency, 3) ?? "USD").toUpperCase(), per, spent: 0 });
   }

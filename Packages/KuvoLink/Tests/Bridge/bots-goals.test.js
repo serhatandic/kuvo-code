@@ -485,6 +485,22 @@ test("a spend cap holds what spends until its period starts again, while the res
   assert.match((await tool("may_spend", { what: "ads", amount: 5 })).text, /^Yes/);
 });
 
+test("what you pay for yourself, like a membership the plan needs you to join, is on the card as yours to do, never as the bot's spending", async () => {
+  const membership = { text: "Apple Developer Program membership and App Store Connect access", detail: "99 USD a year", url: "https://developer.apple.com/programs/enroll/", button: "Join" };
+  await tool("propose_goal", { ...PLAN, checks: [...PLAN.checks, membership], spend: [{ what: "Apple Developer Program membership", cap: 99 }, ...PLAN.spend] });
+  const [card] = await goals();
+  assert.deepEqual(card.spend.map(each => each.what), ["driftwood.coffee", "ads"], "only what the bot spends itself");
+  assert.deepEqual(card.checks.filter(each => each.state === "needs" && each.by === "bot").map(each => each.text), ["Add a Cloudflare API token", membership.text], "the membership is under what needs you");
+
+  // A plan where you pay for all there is to pay: it spends nothing, and isn't told it may.
+  await tool("propose_goal", { ...PLAN, checks: [membership], spend: [{ what: "Apple Developer Program", cap: 99, per: "goal" }] });
+  const [only] = await goals();
+  assert.deepEqual(only.spend, []);
+  assert.equal((await route("POST", `kuvo/work/goals/${only.id}`, { action: "start" })).status, 200);
+  assert.match(prompts.at(-1).text, /Spend nothing\./);
+  assert.match((await tool("may_spend", { what: "Apple Developer Program", amount: 99 })).text, /^No: .* isn't one of the plan's spend lines/);
+});
+
 test("the goal as it goes: tracks with real progress only, steps added as the plan changes, what waits for you told quietly (or waking you if you asked), whether you're here, and the report told once", async () => {
   await startedGoal();
   const moved = await tool("goal_progress", { steps: [{ step: 1, state: "done" }, { step: 2, state: "doing", progress: 0.5, note: "comparing registrars" }], add: ["Write the launch post"] });

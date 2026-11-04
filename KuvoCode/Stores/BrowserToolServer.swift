@@ -284,7 +284,7 @@ enum BrowserTools {
               "spend": ["type": "array", "items": ["type": "object", "properties": [
                   "what": ["type": "string"], "cap": ["type": "number"], "currency": ["type": "string", "description": "USD by default."],
                   "per": ["type": "string", "enum": ["day", "week", "month", "goal"], "description": "The period the cap is for: goal (the whole goal) by default."]], "required": ["what", "cap"]],
-                 "description": "What you'd spend, each with a cap. Nothing else may be spent."],
+                 "description": "What you'd spend yourself, each with a cap. Nothing else may be spent. What the user pays for themselves (a membership they join, a fee on their own account) is a check for them instead, its price in detail."],
               "projects": ["type": "array", "items": ["type": "string"], "description": "New projects the plan makes, by name, or by the folder the user named for one, as a full path (~/Desktop/tidepool): made with make_project, without asking, once the goal starts."],
               "ends": ["type": "string", "description": "An end the user named, as a date and time (2026-11-30T18:00). Leave it out otherwise."],
               "digest": ["type": "string", "enum": ["day", "week", "none"], "description": "How often the user hears how it goes: by the plan's size unless they said."]], required: ["goal", "steps"]),

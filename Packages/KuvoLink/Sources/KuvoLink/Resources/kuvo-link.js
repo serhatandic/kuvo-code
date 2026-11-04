@@ -10688,6 +10688,8 @@ function proposeGoal(bot, given, file = GOALS_FILE) {
   noteWorkChanged(bot.bot);
   return { goal: shown(made), ...yours ? { yours } : {} };
 }
+var wordsOf = (said) => said.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+var names = (check, what) => what.length > 1 && check.some((_, at) => what.every((word, by) => check[at + by] === word));
 function planGiven(given) {
   const goal = text(given.goal, 2000);
   if (!goal)
@@ -10710,9 +10712,12 @@ function planGiven(given) {
     checks.push({ id: `c${checks.length + 1}`, text: said, ...text(each.detail, 300) ? { detail: text(each.detail, 300) } : {}, state, by: "bot", ...site ? { site } : {}, ...url && state === "needs" ? { action: { kind: "open", label: text(each.button, 30) ?? "Open", url } } : {} });
   }
   const spend = [];
+  const yours = checks.filter((each) => each.state === "needs").map((each) => wordsOf(each.text));
   for (const each of Array.isArray(given.spend) ? given.spend.slice(0, 10) : []) {
     if (!isObject(each) || !text(each.what, 200) || typeof each.cap !== "number" || !(each.cap > 0))
       return { refused: "Each spend line needs what it's for (what) and a cap above 0 (cap)." };
+    if (yours.some((check) => names(check, wordsOf(each.what))))
+      continue;
     const per = PERIODS.includes(each.per) ? each.per : "goal";
     spend.push({ what: text(each.what, 200), cap: each.cap, currency: (text(each.currency, 3) ?? "USD").toUpperCase(), per, spent: 0 });
   }
