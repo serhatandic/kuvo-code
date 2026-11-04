@@ -9893,7 +9893,7 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
   caughtUp.then(lateAgain);
   const watch = (event) => {
     const id = event.data?.sessionID ?? event.data?.form?.sessionID;
-    if (typeof id !== "string" || !["session.execution.succeeded", "session.execution.failed", "permission.asked", "form.created", "permission.replied", "form.replied"].includes(event.type))
+    if (typeof id !== "string" || !["session.execution.started", "session.execution.succeeded", "session.execution.failed", "session.execution.interrupted", "permission.asked", "form.created", "permission.replied", "form.replied"].includes(event.type))
       return Promise.resolve();
     return (async () => {
       let session = await sessionOf(id);
@@ -9906,7 +9906,7 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
         noteWorkChanged(bot);
       const starter = startedByOf(session);
       const wakes = wakesOf(session);
-      const kind = event.type.startsWith("session.execution") ? "finished" : event.type.endsWith(".asked") || event.type === "form.created" ? "asks" : null;
+      const kind = event.type === "session.execution.succeeded" || event.type === "session.execution.failed" ? "finished" : event.type.endsWith(".asked") || event.type === "form.created" ? "asks" : null;
       if (!starter || !kind || !wakes.includes(kind))
         return;
       const at = now();
