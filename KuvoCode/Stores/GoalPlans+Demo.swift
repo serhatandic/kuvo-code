@@ -35,12 +35,11 @@ extension GoalPlans {
             .init(id: "c3", text: "Stripe key works", detail: "restricted, from the vault", state: .ok, by: .bot, site: stripe),
             .init(id: "c4", text: "driftwood.coffee is free", detail: "$10.46 a year", state: .ok, by: .bot),
         ]
-        let publics: [GoalPlan.Public] = [.init(id: "p1", text: "Publish the site when it’s ready", on: true), .init(id: "p2", text: "Turn on live payments", on: false)]
         let spend = [GoalPlan.Spend(what: "driftwood.coffee", cap: 15, currency: "USD", per: .goal, spent: kind == "proposed" || kind == "cant" ? 0 : 10.46)]
         let goal = "Launch a landing page for my coffee subscription, Driftwood, with a domain and Stripe checkout."
         let base = { (state: GoalPlan.State, steps: [GoalPlan.Step], checks: [GoalPlan.Check], started: Double?, ended: Double?, waiting: [GoalPlan.Waiting], paused: [GoalPlan.Paused], ends: Double?, report: String?, alone: Bool) in
             GoalPlan(id: "goal_demo", bot: bot.id, name: bot.name, session: bot.sessionID, goal: goal, title: "Driftwood’s landing page", state: state, steps: steps,
-                     checks: checks, spend: spend, public: publics, digest: .none, ends: ends, proposed: started ?? ms(-2), started: started, ended: ended,
+                     checks: checks, spend: spend, digest: .none, ends: ends, proposed: started ?? ms(-2), started: started, ended: ended,
                      waiting: waiting, paused: paused, report: report, alone: alone)
         }
         let plain: [GoalPlan.Step] = [

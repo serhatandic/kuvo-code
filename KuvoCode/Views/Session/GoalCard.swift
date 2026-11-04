@@ -6,9 +6,9 @@ import OpenCodeKit
 import SwiftUI
 
 /// The plan a bot puts to you for a goal, over its composer like the other cards that ask you
-/// something: what only you can do first, each with its button, then what's ready; the plan in a
-/// line; the limits as sentences you can change (what it may spend, when it ends, how often you
-/// hear); a switch for each step that goes public, and whether what needs you wakes you. Not Now,
+/// something, in sections: the plan in a line with Review for its steps; what needs you first,
+/// each with its button; Execution settings (when it ends, how often you hear, the model asked
+/// once, what it may spend, its projects, Wake me); and the checks that passed, folded. Not Now,
 /// or Start Goal, on its box. A box that can't work on it alone says why, with where to fix it,
 /// and starts it with you there.
 struct GoalCard: View {
@@ -20,7 +20,10 @@ struct GoalCard: View {
     @Environment(\.takesCardKeys) private var takesKeys
     @Environment(\.colorScheme) private var scheme
 
-    @State private var switches: [String: Bool] = [:]
+    /// A project's name is being typed: Return and Escape are its, not Start's and Not Now's.
+    @State private var renamesProject = false
+    /// The Model row asks, and you've kept the box's pick.
+    @State private var modelAsks = false
     @State private var wake = false
     @State private var digest: GoalPlan.Cadence = .none
     @State private var deadline: Deadline = .none
@@ -41,6 +44,8 @@ struct GoalCard: View {
     @State private var middleHeight: CGFloat = 0
     /// Bumped to read the sandbox again (after its fix ran).
     @State private var sandboxRound = 0
+    /// The plan's steps, shown from Review.
+    @State private var reviews = false
 
     private var isAnswering: Bool { app.goalPlans.answering.contains(plan.id) }
     private var onThisMac: Bool { box == BoxClient.mac }
@@ -62,7 +67,7 @@ struct GoalCard: View {
             .scrollBounceBehavior(.basedOnSize)
             HStack(spacing: 8) {
                 Button("Not Now", role: .cancel) { send(.decline) }
-                    .keyboardShortcut(takesKeys ? .cancelAction : nil)
+                    .keyboardShortcut(takesKeys && !renamesProject ? .cancelAction : nil)
                     .help("Put the plan away: \(plan.name) doesn’t start it")
                 Spacer()
                 if isAnswering, sent == .start {
@@ -71,7 +76,7 @@ struct GoalCard: View {
                 }
                 Button(plan.alone ? "Start Goal" : "Start With Me Here") { send(.start) }
                     .buttonStyle(.glassProminent)
-                    .keyboardShortcut(takesKeys ? .defaultAction : nil)
+                    .keyboardShortcut(takesKeys && !renamesProject ? .defaultAction : nil)
                     .help(plan.alone ? "\(plan.name) works through the plan on \(computer.lowercasedThisMac), with the window closed too"
                                      : "\(plan.name) works through the plan while you’re here")
             }
@@ -141,40 +146,30 @@ struct GoalCard: View {
         }
     }
 
-    /// The checks and the limits, between the header and the buttons.
+    /// What's between the header and the buttons, as sections: the plan, what needs you first,
+    /// how it runs, and the checks that passed, folded.
     private var middle: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 10) {
+            planSection
             if !yours.isEmpty || sandboxItem != nil {
-                VStack(spacing: 4) {
-                    if let row = sandboxItem {
-                        sandboxView(row)
-                    }
-                    ForEach(yours) { check in
-                        YoursRow(text: check.text, detail: check.detail, site: check.site, failed: check.state == .failed, button: check.action.map { action in
-                            (action.label, { open(action) })
-                        }, help: check.action?.kind == .open ? opensIn : nil)
-                    }
-                }
-            }
-            if !plan.ready.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(plan.ready) { check in
-                        HStack(alignment: .firstTextBaseline, spacing: 10) {
-                            Image(systemName: "checkmark")
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(.green)
-                                .accessibilityHidden(true)
-                            Text("\(ServiceText.text(check.text, site: check.site, scheme: scheme))\(check.detail.map { Text("  \($0)").foregroundStyle(.secondary) } ?? Text(""))")
-                                .font(.callout)
-                                .fixedSize(horizontal: false, vertical: true)
+                GoalCardSection(symbol: "exclamationmark.triangle", tint: .orange, title: "Needs attention", caption: "Check before starting") {
+                    VStack(spacing: 0) {
+                        if let row = sandboxItem {
+                            sandboxView(row)
                         }
-                        .padding(.horizontal, 6)
-                        .accessibilityElement(children: .combine)
-                        .accessibilityLabel("Ready: \(check.text)\(check.detail.map { ", \($0)" } ?? "")")
+                        ForEach(Array(yours.enumerated()), id: \.element.id) { index, check in
+                            if index > 0 || sandboxItem != nil { Divider().padding(.leading, 32 + GoalCardMetrics.markWidth) }
+                            GoalAttentionRow(text: check.text, detail: check.detail, mark: check.site.map { .site($0) }, symbol: Self.symbol(of: check),
+                                             failed: check.state == .failed, button: check.action.map { action in (action.label, { open(action) }) },
+                                             help: check.action?.kind == .open ? opensIn : nil)
+                        }
                     }
                 }
             }
-            limits
+            settingsSection
+            if !plan.ready.isEmpty {
+                GoalReadyFold(checks: plan.ready, box: box)
+            }
             if let failure {
                 Label(failure, systemImage: "exclamationmark.triangle.fill")
                     .font(.callout)
@@ -183,53 +178,52 @@ struct GoalCard: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
+        .font(.callout)
+        .disabled(isAnswering)
+    }
+
+    /// A symbol for what the box checks itself, which names no service.
+    static func symbol(of check: GoalPlan.Check) -> String? {
+        switch check.id {
+        case "power": "battery.25percent"
+        case "projectsFolder": "folder"
+        case "alone": "lock.shield"
+        default: nil
+        }
     }
 
     // MARK: The header
 
     private var header: some View {
-        HStack(alignment: .top, spacing: 12) {
+        HStack(alignment: .center, spacing: 14) {
             Group {
                 if let bot {
-                    BotAvatar(look: bot.look, size: 24, animates: false)
+                    BotAvatar(look: bot.look, size: 30, animates: false)
                 } else {
-                    Image(systemName: "scope").font(.title3).foregroundStyle(.tint)
+                    Image(systemName: "scope").font(.title2).foregroundStyle(.tint)
                 }
             }
-            .frame(width: 24, height: 24)
+            .frame(width: 30, height: 30)
             .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 3) {
+            Divider()
+                .frame(height: 30)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
                 Text(plan.title ?? plan.goal)
-                    .font(.headline)
+                    .font(.title3.weight(.semibold))
                     .fixedSize(horizontal: false, vertical: true)
-                Text(subtitle)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                // The goal in the bot's own words, under its name for it.
+                if plan.title != nil {
+                    Text(plan.goal)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .help(plan.goal)
+                }
             }
         }
         .accessibilityElement(children: .combine)
-    }
-
-    private var subtitle: String {
-        Self.subtitle(name: plan.name, yours: yours.count, sandbox: sandboxItem, hasReady: !plan.ready.isEmpty)
-    }
-
-    /// "Pixel’s plan. Two things are yours first; the rest is ready." What's yours is what you
-    /// can do something about: the sandbox's row counts once it has a button, not while it's
-    /// being checked or only says why it holds back.
-    static func subtitle(name: String, yours: Int, sandbox: GoalSandbox.Row?, hasReady: Bool) -> String {
-        let fixable = sandbox.map { !$0.checking && !$0.buttons.isEmpty }
-        let count = yours + (fixable == true ? 1 : 0)
-        let first = count == 0 ? "" : count == 1 ? " One thing is yours first" : " \(Self.spelled(count).capitalized) things are yours first"
-        // Nothing reads as ready over a row saying why it can't work alone yet, or still checking.
-        let ready = hasReady && fixable != false
-        let rest = !ready ? (count == 0 ? "" : ".") : (count == 0 ? " Everything’s ready." : "; the rest is ready.")
-        return "\(name)’s plan.\(first)\(rest)"
-    }
-
-    static func spelled(_ count: Int) -> String {
-        count < 10 ? (NumberFormatter.localizedString(from: count as NSNumber, number: .spellOut)) : "\(count)"
     }
 
     // MARK: The sandbox row
@@ -246,12 +240,13 @@ struct GoalCard: View {
     private func sandboxView(_ row: GoalSandbox.Row) -> some View {
         let first = row.buttons.first
         let detail = [row.text, sandboxFailure].compactMap { $0?.isEmpty == false ? $0 : nil }.joined(separator: "\n")
-        return YoursRow(text: row.title,
-                        detail: detail.isEmpty ? nil : detail,
-                        failed: sandboxFailure != nil,
-                        button: first.map { button in (button.label, { act(button.action) }) },
-                        busy: row.checking || sandboxBusy,
-                        more: row.buttons.dropFirst().map { button in (button.label, { act(button.action) }) })
+        return GoalAttentionRow(text: row.title,
+                                detail: detail.isEmpty ? nil : detail,
+                                symbol: "lock.shield",
+                                failed: sandboxFailure != nil,
+                                busy: row.checking || sandboxBusy,
+                                button: first.map { button in (button.label, { act(button.action) }) },
+                                more: row.buttons.dropFirst().map { button in (button.label, { act(button.action) }) })
             .disabled(sandboxBusy)
             .animation(.ui, value: row)
     }
@@ -287,73 +282,97 @@ struct GoalCard: View {
         }
     }
 
-    // MARK: Limits and switches
+    // MARK: The plan and how it runs
 
-    private var limits: some View {
-        VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(alignment: .firstTextBaseline) {
-                    Text("Plan")
-                    Spacer(minLength: 8)
-                    Text(GoalPlanWords.summary(plan))
-                        .foregroundStyle(.secondary)
-                }
-                Text(GoalPlanWords.outline(plan))
+    /// The plan in a line, its steps in order (side by side where they start together), how
+    /// many, and Review for the list of them.
+    private var planSection: some View {
+        GoalCardSection(symbol: "square.3.layers.3d", title: "Plan") {
+            HStack(spacing: 10) {
+                Text(GoalPlanWords.summary(plan))
                     .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(.vertical, 10)
-            .accessibilityElement(children: .combine)
-            ForEach(Array(plan.spend.enumerated()), id: \.offset) { index, line in
-                Divider()
-                LimitRow(label: plan.spend.count == 1 ? "Spending" : "Spending on \(line.what)") {
-                    Text("up to")
-                        .foregroundStyle(.secondary)
-                    Picker("Most it may spend", selection: capBinding(index)) {
-                        ForEach(Self.capChoices(line.cap), id: \.self) { cap in
-                            Text(GoalPlanWords.money(cap, line.currency)).tag(cap)
+                    .fixedSize()
+                Button("Review") { reviews = true }
+                    .buttonStyle(GoalPillButtonStyle())
+                    .fixedSize()
+                    .popover(isPresented: $reviews, arrowEdge: .bottom) {
+                        ScrollView {
+                            GoalStagesView(plan: plan, timeline: GoalTimeline(plan, now: .now), isPaused: false)
+                                .padding(16)
                         }
+                        .frame(width: 560)
+                        .frame(maxHeight: 520)
                     }
-                    Picker("Per", selection: periodBinding(index)) {
-                        ForEach(GoalPlan.Spend.Period.allCases, id: \.self) { period in
-                            Text(Self.words(period)).tag(period)
-                        }
-                    }
-                }
+                    .help("The plan’s steps, in order")
             }
-            Divider()
-            LimitRow(label: "Deadline") {
-                Picker("Deadline", selection: $deadline) {
-                    ForEach(deadlineChoices, id: \.self) { choice in
-                        Text(choice.words).tag(choice)
-                    }
-                }
-            }
-            Divider()
-            LimitRow(label: "Updates") {
-                Picker("Updates", selection: $digest) {
-                    Text("When it’s done").tag(GoalPlan.Cadence.none)
-                    Text("Daily").tag(GoalPlan.Cadence.day)
-                    Text("Weekly").tag(GoalPlan.Cadence.week)
-                    // An old goal's, set to hear after each of its phases: it keeps its pick.
-                    if digest == .milestones {
-                        Text("After each phase").tag(GoalPlan.Cadence.milestones)
-                    }
-                }
-            }
-            ForEach(plan.public) { item in
-                Divider()
-                SwitchRow(label: item.text, isOn: Binding(get: { switches[item.id] ?? item.on }, set: { switches[item.id] = $0 }))
-            }
-            Divider()
-            SwitchRow(label: "Wake me if something needs me", isOn: $wake)
-                .help("Notifications from this goal make a sound and show while you’re away")
+        } content: {
+            Text(GoalPlanWords.flow(plan))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.leading, GoalCardMetrics.markWidth + 10)
+                .padding(.bottom, 10)
+                .accessibilityLabel(GoalPlanWords.outline(plan))
         }
-        .font(.callout)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 2)
-        .background(Color.primary.opacity(scheme == .dark ? 0.06 : 0.045), in: .rect(cornerRadius: 10))
-        .disabled(isAnswering)
+    }
+
+    /// How it runs: its deadline, how often you hear, the model the box does the work on (asked once),
+    /// what it may spend, its projects and Wake me, each a row with its control on the right.
+    private var settingsSection: some View {
+        GoalCardSection(symbol: "slider.horizontal.3", title: "Execution settings", caption: "How the goal runs") {
+            VStack(spacing: 0) {
+                GoalSettingRow(symbol: "calendar", title: "Deadline", subtitle: "When it should be done") {
+                    Picker("Deadline", selection: $deadline) {
+                        ForEach(deadlineChoices, id: \.self) { choice in
+                            Text(choice == .none ? "No deadline" : choice.words).tag(choice)
+                        }
+                    }
+                }
+                Divider().padding(.leading, GoalCardMetrics.markWidth + 12)
+                GoalSettingRow(symbol: "waveform.path.ecg", title: "Progress updates", subtitle: "How often \(plan.name) reports back") {
+                    Picker("Progress updates", selection: $digest) {
+                        Text("When it’s done").tag(GoalPlan.Cadence.none)
+                        Text("Daily").tag(GoalPlan.Cadence.day)
+                        Text("Weekly").tag(GoalPlan.Cadence.week)
+                        // An old goal's, set to hear after each of its phases: it keeps its pick.
+                        if digest == .milestones {
+                            Text("After each phase").tag(GoalPlan.Cadence.milestones)
+                        }
+                    }
+                }
+                GoalModelRow(box: box, asks: $modelAsks)
+                ForEach(Array(plan.spend.enumerated()), id: \.offset) { index, line in
+                    Divider().padding(.leading, GoalCardMetrics.markWidth + 12)
+                    GoalSettingRow(symbol: "creditcard", title: plan.spend.count == 1 ? "Spending" : "Spending on \(line.what)", subtitle: plan.spend.count == 1 ? "On \(line.what)" : nil) {
+                        // Named for its line, where there are several.
+                        Picker(plan.spend.count == 1 ? "Most it may spend" : "Most it may spend on \(line.what)", selection: capBinding(index)) {
+                            ForEach(Self.capChoices(line.cap), id: \.self) { cap in
+                                Text(GoalPlanWords.money(cap, line.currency)).tag(cap)
+                            }
+                        }
+                        Picker(plan.spend.count == 1 ? "Per" : "Per, on \(line.what)", selection: periodBinding(index)) {
+                            ForEach(GoalPlan.Spend.Period.allCases, id: \.self) { period in
+                                Text(Self.words(period)).tag(period)
+                            }
+                        }
+                    }
+                }
+                if !plan.projects.isEmpty {
+                    Divider().padding(.leading, GoalCardMetrics.markWidth + 12)
+                    GoalProjectsRow(plan: plan, box: box, renames: $renamesProject) { projects in
+                        failure = nil
+                        Task {
+                            do { try await app.goalPlans.answer(plan, on: box, .projects(projects)) } catch { failure = error.localizedDescription }
+                        }
+                    }
+                }
+                Divider().padding(.leading, GoalCardMetrics.markWidth + 12)
+                GoalSettingRow(symbol: "bell", title: "Wake me", subtitle: "When something needs you, with a sound") {
+                    Toggle("Wake me", isOn: $wake)
+                        .toggleStyle(.switch)
+                        .controlSize(.small)
+                }
+            }
+        }
     }
 
     private func capBinding(_ index: Int) -> Binding<Double> {
@@ -419,7 +438,6 @@ struct GoalCard: View {
     // MARK: Answers
 
     private func takeIn() {
-        switches = Dictionary(uniqueKeysWithValues: plan.public.map { ($0.id, $0.on) })
         wake = plan.wake
         digest = plan.digest
         deadline = plan.ends.map(Deadline.at) ?? .none
@@ -443,9 +461,13 @@ struct GoalCard: View {
         sent = action
         failure = nil
         let answer: GoalPlanAnswer = action == .start
-            ? Self.start(plan, switches: switches, wake: wake, digest: digest, deadline: deadline, caps: caps, periods: periods)
+            ? Self.start(plan, wake: wake, digest: digest, deadline: deadline, caps: caps, periods: periods)
             : .decline
+        let client = action == .start && modelAsks ? app.goalPlans.client(box) : nil
         Task {
+            // Started with the box's pick kept: it isn't asked again. A box from before the ask
+            // turns it down, and nothing comes of that.
+            _ = try? await client?.value(ModelRoles.self, "PUT", "kuvo/models/roles", body: ModelRoles.Asked())
             do {
                 try await app.goalPlans.answer(plan, on: box, answer)
             } catch {
@@ -456,11 +478,10 @@ struct GoalCard: View {
 }
 
 extension GoalCard {
-    /// What Start Goal sends: each public step's switch, Wake me, how often you hear, the end
-    /// you picked, and each spend line's cap and period as you set them.
-    static func start(_ plan: GoalPlan, switches: [String: Bool], wake: Bool, digest: GoalPlan.Cadence, deadline: Deadline,
+    /// What Start Goal sends: Wake me, how often you hear, the end you picked, and each spend line's cap and period as you set them.
+    static func start(_ plan: GoalPlan, wake: Bool, digest: GoalPlan.Cadence, deadline: Deadline,
                       caps: [Double], periods: [GoalPlan.Spend.Period], now: Date = .now, calendar: Calendar = .current) -> GoalPlanAnswer {
-        .start(public: Dictionary(uniqueKeysWithValues: plan.public.map { ($0.id, switches[$0.id] ?? $0.on) }), wake: wake, digest: digest,
+        .start(wake: wake, digest: digest,
                ends: deadline.date(now: now, calendar: calendar),
                // None where the bot had proposed an end: no end.
                clearsEnd: deadline == .none && plan.ends != nil,
@@ -471,7 +492,7 @@ extension GoalCard {
     }
 }
 
-private extension String {
+extension String {
     /// "This Mac" mid-sentence.
     var lowercasedThisMac: String { self == "This Mac" ? "this Mac" : self }
 }
@@ -483,7 +504,8 @@ struct YoursRow: View {
     var detail: String?
     /// Said after it on its line, quieter ("since 12:20").
     var aside: String?
-    var site: String?
+    /// The site's or app's mark, before its name and on its button.
+    var mark: GoalPlanWords.StepMark?
     var failed = false
     var button: (String, () -> Void)?
     /// What the button does, under the pointer and to VoiceOver, where its words don't say.
@@ -495,6 +517,7 @@ struct YoursRow: View {
     /// Less common actions, in a menu after the button.
     var more: [(String, () -> Void)] = []
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.goalBox) private var box
 
     var body: some View {
         // On one line where its words have room beside its button; in a narrow card, its button
@@ -544,7 +567,7 @@ struct YoursRow: View {
 
     private var words: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text("\(ServiceText.text(text, site: site, scheme: scheme).fontWeight(aside == nil ? nil : .medium))\(aside.map { Text(" · \($0)").foregroundStyle(.secondary) } ?? Text(""))")
+            Text("\(ServiceText.text(text, mark: mark, on: box, scheme: scheme).fontWeight(aside == nil ? nil : .medium))\(aside.map { Text(" · \($0)").foregroundStyle(.secondary) } ?? Text(""))")
                 .fixedSize(horizontal: false, vertical: true)
             if let detail {
                 Text(detail)
@@ -561,7 +584,7 @@ struct YoursRow: View {
         if let (label, action) = button {
             Button(action: action) {
                 HStack(spacing: 5) {
-                    if let site { SiteServiceMark(site: site) }
+                    if let mark { GoalServiceMark(mark: mark) }
                     Text(label)
                 }
             }
@@ -597,53 +620,6 @@ struct YoursRow: View {
                 .foregroundStyle(.secondary)
                 .help("Put it away: it no longer waits for you")
         }
-    }
-}
-
-/// A row of the card's limits: what it is, and its controls at the end, as a sentence.
-private struct LimitRow<Controls: View>: View {
-    let label: String
-    @ViewBuilder let controls: () -> Controls
-
-    var body: some View {
-        // On one line where it fits; in a narrow card, its controls under its name.
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 8) {
-                Text(label)
-                    .fixedSize()
-                Spacer(minLength: 8)
-                choices
-            }
-            VStack(alignment: .leading, spacing: 6) {
-                Text(label)
-                HStack(spacing: 8) { choices }
-            }
-            .padding(.vertical, 8)
-        }
-        .frame(minHeight: 36)
-    }
-
-    private var choices: some View {
-        controls()
-            .pickerStyle(.menu)
-            .labelsHidden()
-            .fixedSize()
-    }
-}
-
-private struct SwitchRow: View {
-    let label: String
-    @Binding var isOn: Bool
-
-    var body: some View {
-        Toggle(isOn: $isOn) {
-            Text(label)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .toggleStyle(.switch)
-        .controlSize(.small)
-        .frame(minHeight: 36)
     }
 }
 

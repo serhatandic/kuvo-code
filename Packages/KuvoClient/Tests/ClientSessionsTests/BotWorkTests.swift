@@ -47,6 +47,9 @@ struct BotWorkTests {
         #expect(WorkWords.barTitle(atWork: 3, today: 5) == "3 sessions at work")
         #expect(WorkWords.barTitle(atWork: 1, today: 1) == "A session is at work")
         #expect(WorkWords.barTitle(atWork: 0, today: 5) == "5 sessions today, none at work")
+        // On a goal's line, in a word.
+        #expect(WorkWords.chipTitle(atWork: 2, today: 5) == "2 working")
+        #expect(WorkWords.chipTitle(atWork: 0, today: 4) == "4 today")
         #expect(WorkWords.limits(WorkLimits(atOnce: 2, depth: 1)) == "Your limits: 2 at once, sessions they start: none (Edit Bot › Work)")
         #expect(WorkWords.depth(3) == "2 levels")
         #expect(WorkWords.tokens(412_300) == "412k")

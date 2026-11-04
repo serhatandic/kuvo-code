@@ -130,7 +130,7 @@ extension EnvironmentValues {
 /// What's over the conversation's end: one card holding the bars (a goal, a review, a side question,
 /// work out of sight), the messages waiting, and the composer, or in its place what asks you
 /// something, one at a time; over it, what went wrong and what can't go on yet.
-private struct BottomStack: View {
+struct BottomStack: View {
     @Bindable var model: SessionModel
     @Binding var lastModel: ModelRef?
     @Environment(Catalog.self) private var catalog
@@ -241,7 +241,7 @@ private struct BottomStack: View {
         if model.review != nil { bars.append(.review) }
         if let id = model.shownSideQuestion, model.sideQuestions.contains(where: { $0.id == id }) { bars.append(.sideQuestion) }
         if !subagentsAtWork.isEmpty { bars.append(.subagents) }
-        if BotWorkBar.shows(workReport) { bars.append(.work) }
+        if showsWorkBar { bars.append(.work) }
         if !backgroundJobs.isEmpty { bars.append(.background) }
         if wakeOwner != nil { bars.append(.wakes) }
         return bars
@@ -298,6 +298,7 @@ private struct BottomStack: View {
             WorkAskCard(ask: ask, box: box) { model.failure = $0 }
         case .plan(let plan, let box):
             GoalCard(plan: plan, box: box)
+                .environment(\.goalBox, box)
                 .disabled(offlineMachine != nil && box != BoxClient.mac)
         }
     }
@@ -384,6 +385,14 @@ private struct BottomStack: View {
     /// Its sessions as its box last told them.
     private var workReport: BotWorkReport? { workBot.flatMap { app.botWork.reports[$0.id] } }
 
+    /// Its sessions' own bar: not while its goal shows, whose line has them (`BotWorkChip`).
+    private var showsWorkBar: Bool { BotWorkBar.shows(workReport) && !showsGoalPlan }
+
+    /// A bot's goal in the goal bar's place (not its Undo once put away).
+    private var showsGoalPlan: Bool {
+        shownPlan != nil && (model.goal.map { model.putAways.text(.goal(started: $0.started)) == nil } ?? true)
+    }
+
     /// What its work is read again on: a session of it started, at work or asking, or done, and the
     /// bot hearing of one (each wake comes to its conversation). Not each step a session takes.
     private var workChanges: String? {
@@ -467,7 +476,8 @@ private struct BottomStack: View {
                                 .modifier(CardRow())
                                 .transition(.fold)
                         } else if let (box, plan) = shownPlan {
-                            GoalPlanBar(plan: plan, box: box, goal: shownGoal(plan), isHidden: hidden(.goal, $model.hidesGoal), isChanging: model.isChangingGoal || offlineMachine != nil) {
+                            GoalPlanBar(plan: plan, box: box, goal: shownGoal(plan), isHidden: hidden(.goal, $model.hidesGoal), isChanging: model.isChangingGoal || offlineMachine != nil,
+                                        work: workBot.flatMap { bot in workReport.map { (bot, $0) } }) {
                                 model.changeGoal(.pause)
                             } resume: {
                                 model.changeGoal(.resume)
@@ -475,6 +485,7 @@ private struct BottomStack: View {
                                 app.goalPlans.putAway.insert(plan.id)
                                 if model.goal?.isOver == true { model.putAwayGoal() }
                             } failed: { model.failure = $0 }
+                            .environment(\.goalBox, box)
                             .modifier(CardRow())
                             .transition(.fold)
                         } else if let goal = model.goal {
@@ -496,7 +507,7 @@ private struct BottomStack: View {
                                 .modifier(CardRow())
                                 .transition(.fold)
                         }
-                        if let bot = workBot, let report = workReport, BotWorkBar.shows(report) {
+                        if let bot = workBot, let report = workReport, showsWorkBar {
                             BotWorkBar(bot: bot, report: report, isHidden: hidden(.work, $model.hidesWork))
                                 .modifier(CardRow())
                                 .transition(.fold)

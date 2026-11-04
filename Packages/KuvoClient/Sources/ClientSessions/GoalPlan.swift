@@ -10,6 +10,45 @@ import OpenCodeKit
 public struct GoalPlan: Decodable, Sendable, Hashable, Identifiable {
     public enum State: String, Decodable, Sendable { case proposed, running, done, stopped, declined }
 
+    /// An app on its box's computer something is done in, as the bot named it: with its id once
+    /// the box found it there, whose icon the box gives (`kuvo/work/apps/icon?app=<id>`).
+    public struct App: Decodable, Sendable, Hashable {
+        public let name: String
+        public let id: String?
+
+        public init(name: String, id: String? = nil) {
+            self.name = name
+            self.id = id
+        }
+    }
+
+    /// Where Start makes a project the plan names: its full path (nil while no projects folder is
+    /// picked), the same as people read it (`~/…`), and whether something with files is there
+    /// already, which never holds Start back.
+    public struct Folder: Decodable, Sendable, Hashable {
+        public let project: String
+        public let folder: String?
+        public let shown: String?
+        public let there: Bool
+
+        public init(project: String, folder: String?, shown: String?, there: Bool = false) {
+            self.project = project
+            self.folder = folder
+            self.shown = shown
+            self.there = there
+        }
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            project = try container.decode(String.self, forKey: .project)
+            folder = try container.decodeIfPresent(String.self, forKey: .folder)
+            shown = try container.decodeIfPresent(String.self, forKey: .shown)
+            there = (try? container.decodeIfPresent(Bool.self, forKey: .there)) ?? false
+        }
+
+        private enum CodingKeys: String, CodingKey { case project, folder, shown, there }
+    }
+
     /// A step of the plan, a track of its own.
     public struct Step: Decodable, Sendable, Hashable, Identifiable {
         public enum State: String, Decodable, Sendable { case todo, doing, done, waiting, paused, skipped }
@@ -26,6 +65,8 @@ public struct GoalPlan: Decodable, Sendable, Hashable, Identifiable {
         /// The site it's done at in the browser ("revenuecat.com"), whose icon is its mark; none for
         /// a step done on the computer.
         public let site: String?
+        /// The app on the computer it's done in.
+        public let app: App?
         /// The steps it waits for, by id.
         public let after: [String]
         /// The sessions working on it.
@@ -36,7 +77,7 @@ public struct GoalPlan: Decodable, Sendable, Hashable, Identifiable {
         public let began: Double?
         public let ended: Double?
 
-        public init(id: String, text: String, state: State, progress: Double? = nil, note: String? = nil, detail: String? = nil, phase: String? = nil, site: String? = nil, after: [String] = [], sessions: [String] = [], resumes: Double? = nil, began: Double? = nil, ended: Double? = nil) {
+        public init(id: String, text: String, state: State, progress: Double? = nil, note: String? = nil, detail: String? = nil, phase: String? = nil, site: String? = nil, app: App? = nil, after: [String] = [], sessions: [String] = [], resumes: Double? = nil, began: Double? = nil, ended: Double? = nil) {
             self.id = id
             self.text = text
             self.state = state
@@ -45,6 +86,7 @@ public struct GoalPlan: Decodable, Sendable, Hashable, Identifiable {
             self.detail = detail
             self.phase = phase
             self.site = site
+            self.app = app
             self.after = after
             self.sessions = sessions
             self.resumes = resumes
@@ -63,6 +105,7 @@ public struct GoalPlan: Decodable, Sendable, Hashable, Identifiable {
             detail = try? container.decodeIfPresent(String.self, forKey: .detail)
             phase = try container.decodeIfPresent(String.self, forKey: .phase)
             site = try container.decodeIfPresent(String.self, forKey: .site)
+            app = try? container.decodeIfPresent(App.self, forKey: .app)
             after = (try? container.decodeIfPresent([String].self, forKey: .after)) ?? []
             sessions = (try? container.decodeIfPresent([String].self, forKey: .sessions)) ?? []
             resumes = try container.decodeIfPresent(Double.self, forKey: .resumes)
@@ -70,7 +113,7 @@ public struct GoalPlan: Decodable, Sendable, Hashable, Identifiable {
             ended = try container.decodeIfPresent(Double.self, forKey: .ended)
         }
 
-        private enum CodingKeys: String, CodingKey { case id, text, state, progress, note, detail, phase, site, after, sessions, resumes, began, ended }
+        private enum CodingKeys: String, CodingKey { case id, text, state, progress, note, detail, phase, site, app, after, sessions, resumes, began, ended }
 
         public var resumesDate: Date? { resumes.map { Date(timeIntervalSince1970: $0 / 1000) } }
     }
@@ -185,16 +228,19 @@ public struct GoalPlan: Decodable, Sendable, Hashable, Identifiable {
         public let url: URL?
         /// The service it's about, by its site, for its icon.
         public let site: String?
+        /// The app on the computer it's in.
+        public let app: App?
         public let session: String?
         public let at: Double
 
-        public init(id: String, kind: Kind, text: String, detail: String? = nil, url: URL? = nil, site: String? = nil, session: String? = nil, at: Double) {
+        public init(id: String, kind: Kind, text: String, detail: String? = nil, url: URL? = nil, site: String? = nil, app: App? = nil, session: String? = nil, at: Double) {
             self.id = id
             self.kind = kind
             self.text = text
             self.detail = detail
             self.url = url
             self.site = site
+            self.app = app
             self.session = session
             self.at = at
         }
@@ -207,11 +253,12 @@ public struct GoalPlan: Decodable, Sendable, Hashable, Identifiable {
             detail = try container.decodeIfPresent(String.self, forKey: .detail)
             url = try? container.decodeIfPresent(URL.self, forKey: .url)
             site = try container.decodeIfPresent(String.self, forKey: .site)
+            app = try? container.decodeIfPresent(App.self, forKey: .app)
             session = try container.decodeIfPresent(String.self, forKey: .session)
             at = try container.decode(Double.self, forKey: .at)
         }
 
-        private enum CodingKeys: String, CodingKey { case id, kind, text, detail, url, site, session, at }
+        private enum CodingKeys: String, CodingKey { case id, kind, text, detail, url, site, app, session, at }
     }
 
     /// Something paused at a limit (the bot, or one of its sessions), and until when.
@@ -272,8 +319,10 @@ public struct GoalPlan: Decodable, Sendable, Hashable, Identifiable {
     public let report: String?
     /// Whether its box may work on it alone (else it runs with you there).
     public let alone: Bool
+    /// While it's proposed: where Start makes each of its projects.
+    public let folders: [Folder]
 
-    public init(id: String, bot: String, name: String, session: String, goal: String, title: String? = nil, state: State, steps: [Step], checks: [Check] = [], spend: [Spend] = [], public: [Public] = [], projects: [String] = [], wake: Bool = false, digest: Cadence = .none, ends: Double? = nil, proposed: Double, started: Double? = nil, ended: Double? = nil, waiting: [Waiting] = [], paused: [Paused] = [], waited: Double = 0, watching: [String] = [], next: Double? = nil, lastDigest: Digest? = nil, report: String? = nil, alone: Bool) {
+    public init(id: String, bot: String, name: String, session: String, goal: String, title: String? = nil, state: State, steps: [Step], checks: [Check] = [], spend: [Spend] = [], public: [Public] = [], projects: [String] = [], wake: Bool = false, digest: Cadence = .none, ends: Double? = nil, proposed: Double, started: Double? = nil, ended: Double? = nil, waiting: [Waiting] = [], paused: [Paused] = [], waited: Double = 0, watching: [String] = [], next: Double? = nil, lastDigest: Digest? = nil, report: String? = nil, alone: Bool, folders: [Folder] = []) {
         self.id = id
         self.bot = bot
         self.name = name
@@ -300,9 +349,10 @@ public struct GoalPlan: Decodable, Sendable, Hashable, Identifiable {
         self.lastDigest = lastDigest
         self.report = report
         self.alone = alone
+        self.folders = folders
     }
 
-    private enum CodingKeys: String, CodingKey { case id, bot, name, session, goal, title, state, steps, checks, spend, `public`, projects, wake, digest, ends, proposed, started, ended, waiting, paused, waited, watching, next, lastDigest, report, alone }
+    private enum CodingKeys: String, CodingKey { case id, bot, name, session, goal, title, state, steps, checks, spend, `public`, projects, wake, digest, ends, proposed, started, ended, waiting, paused, waited, watching, next, lastDigest, report, alone, folders }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -332,6 +382,7 @@ public struct GoalPlan: Decodable, Sendable, Hashable, Identifiable {
         lastDigest = try? container.decodeIfPresent(Digest.self, forKey: .lastDigest)
         report = try container.decodeIfPresent(String.self, forKey: .report)
         alone = (try? container.decode(Bool.self, forKey: .alone)) ?? false
+        folders = (try? container.decode([Lenient<Folder>].self, forKey: .folders))?.compactMap(\.value) ?? []
     }
 
     /// What only you can do, first on the card: the checks that need you.
@@ -359,10 +410,10 @@ public struct GoalPlanList: Decodable, Sendable, Equatable {
     }
 }
 
-/// Your answer to a goal (`POST kuvo/work/goals/<id>`): start it with your switches and limits, not
+/// Your answer to a goal (`POST kuvo/work/goals/<id>`): start it with your limits, not
 /// now, or stop it; while it runs, change its limits, or put away what waits for you.
 public struct GoalPlanAnswer: Encodable, Sendable {
-    public enum Action: String, Encodable, Sendable { case start, decline, stop, change, clear }
+    public enum Action: String, Encodable, Sendable { case start, decline, stop, change, clear, projects }
     /// A spend line's cap and period, as you set them on the card.
     public struct SpendChange: Encodable, Sendable, Equatable {
         public var cap: Double?
@@ -374,7 +425,6 @@ public struct GoalPlanAnswer: Encodable, Sendable {
     }
 
     public let action: Action
-    public let `public`: [String: Bool]?
     public let wake: Bool?
     public let digest: GoalPlan.Cadence?
     /// An end you set, in ms since 1970.
@@ -384,28 +434,35 @@ public struct GoalPlanAnswer: Encodable, Sendable {
     public let spend: [SpendChange]?
     /// What waits for you, put away (`clear`).
     public let waiting: String?
+    /// A proposed goal's projects as you named or moved them (`projects`): names, or full paths.
+    public var projects: [String]? = nil
 
     /// Start it. `ends`: the end you picked; `clearsEnd`: you picked none where the bot had
     /// proposed one, which takes it away (left out, the bot's stays).
-    public static func start(public switches: [String: Bool], wake: Bool, digest: GoalPlan.Cadence? = nil, ends: Date? = nil, clearsEnd: Bool = false, spend: [SpendChange]? = nil) -> GoalPlanAnswer {
-        GoalPlanAnswer(action: .start, public: switches, wake: wake, digest: digest, ends: ends.map { $0.timeIntervalSince1970 * 1000 }, clearsEnd: ends == nil && clearsEnd, spend: spend, waiting: nil)
+    public static func start(wake: Bool, digest: GoalPlan.Cadence? = nil, ends: Date? = nil, clearsEnd: Bool = false, spend: [SpendChange]? = nil) -> GoalPlanAnswer {
+        GoalPlanAnswer(action: .start, wake: wake, digest: digest, ends: ends.map { $0.timeIntervalSince1970 * 1000 }, clearsEnd: ends == nil && clearsEnd, spend: spend, waiting: nil)
     }
     /// A running goal's limits changed: only what's given (`clearsEnd` takes its end away).
-    public static func change(public switches: [String: Bool]? = nil, wake: Bool? = nil, digest: GoalPlan.Cadence? = nil, ends: Date? = nil, clearsEnd: Bool = false, spend: [SpendChange]? = nil) -> GoalPlanAnswer {
-        GoalPlanAnswer(action: .change, public: switches, wake: wake, digest: digest, ends: ends.map { $0.timeIntervalSince1970 * 1000 }, clearsEnd: ends == nil && clearsEnd, spend: spend, waiting: nil)
+    public static func change(wake: Bool? = nil, digest: GoalPlan.Cadence? = nil, ends: Date? = nil, clearsEnd: Bool = false, spend: [SpendChange]? = nil) -> GoalPlanAnswer {
+        GoalPlanAnswer(action: .change, wake: wake, digest: digest, ends: ends.map { $0.timeIntervalSince1970 * 1000 }, clearsEnd: ends == nil && clearsEnd, spend: spend, waiting: nil)
     }
     public static func clear(waiting id: String) -> GoalPlanAnswer {
-        GoalPlanAnswer(action: .clear, public: nil, wake: nil, digest: nil, ends: nil, clearsEnd: false, spend: nil, waiting: id)
+        GoalPlanAnswer(action: .clear, wake: nil, digest: nil, ends: nil, clearsEnd: false, spend: nil, waiting: id)
     }
-    public static let decline = GoalPlanAnswer(action: .decline, public: nil, wake: nil, digest: nil, ends: nil, clearsEnd: false, spend: nil, waiting: nil)
-    public static let stop = GoalPlanAnswer(action: .stop, public: nil, wake: nil, digest: nil, ends: nil, clearsEnd: false, spend: nil, waiting: nil)
+    /// A proposed goal's projects renamed or moved, in its order: a name, or a full path.
+    public static func projects(_ projects: [String]) -> GoalPlanAnswer {
+        var answer = GoalPlanAnswer(action: .projects, wake: nil, digest: nil, ends: nil, clearsEnd: false, spend: nil, waiting: nil)
+        answer.projects = projects
+        return answer
+    }
+    public static let decline = GoalPlanAnswer(action: .decline, wake: nil, digest: nil, ends: nil, clearsEnd: false, spend: nil, waiting: nil)
+    public static let stop = GoalPlanAnswer(action: .stop, wake: nil, digest: nil, ends: nil, clearsEnd: false, spend: nil, waiting: nil)
 
-    private enum CodingKeys: String, CodingKey { case action, `public`, wake, digest, ends, spend, waiting }
+    private enum CodingKeys: String, CodingKey { case action, wake, digest, ends, spend, waiting, projects }
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(action, forKey: .action)
-        try container.encodeIfPresent(self.public, forKey: .public)
         try container.encodeIfPresent(wake, forKey: .wake)
         try container.encodeIfPresent(digest, forKey: .digest)
         if let ends {
@@ -415,6 +472,7 @@ public struct GoalPlanAnswer: Encodable, Sendable {
         }
         try container.encodeIfPresent(spend, forKey: .spend)
         try container.encodeIfPresent(waiting, forKey: .waiting)
+        try container.encodeIfPresent(projects, forKey: .projects)
     }
 }
 
@@ -631,16 +689,55 @@ public enum GoalPlanWords {
         return service(site)
     }
 
-    /// A step's mark: the icon of the site the plan says it's done at, or none for a step done on
-    /// the computer. Never guessed from its words or its maker.
+    /// A step's mark: the icon of the site the plan says it's done at, else of the app on the
+    /// computer it's done in, once its box found that app; none otherwise. Never guessed from its
+    /// words or its maker.
     public static func mark(of step: GoalPlan.Step) -> StepMark? {
-        step.site.map(StepMark.site)
+        mark(site: step.site, app: step.app)
+    }
+
+    /// The same for what waits for you.
+    public static func mark(of item: GoalPlan.Waiting) -> StepMark? {
+        mark(site: item.site, app: item.app)
+    }
+
+    private static func mark(site: String?, app: GoalPlan.App?) -> StepMark? {
+        if let site { return .site(site) }
+        if let app, let id = app.id { return .app(id: id, name: app.name) }
+        return nil
     }
 
     public enum StepMark: Equatable, Sendable {
         /// The site's own icon.
         case site(String)
+        /// The app's own icon, from its box, by the app's id there; its name for the letter
+        /// until it comes.
+        case app(id: String, name: String)
     }
+
+    /// A project a plan names, by its name: the last part of a folder named for it ("Sweep" of
+    /// "~/Code/Sweep").
+    public static func projectName(_ entry: String) -> String {
+        isFolder(entry) ? (entry as NSString).lastPathComponent : entry
+    }
+
+    /// The project renamed `name`, where it was: a name stays a name, in the projects folder; one
+    /// in a folder of its own keeps its parent. Nil for a name that can't be one (empty, or with a
+    /// slash) or that's what it was.
+    public static func renamed(_ entry: String, to name: String) -> String? {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, !name.contains("/"), name != "." && name != "..", name != projectName(entry) else { return nil }
+        return isFolder(entry) ? ((entry as NSString).deletingLastPathComponent as NSString).appendingPathComponent(name) : name
+    }
+
+    /// The project moved into the folder `parent` (a full path), by its name: nil where it's there
+    /// already.
+    public static func moved(_ entry: String, into parent: String) -> String? {
+        let moved = (parent as NSString).appendingPathComponent(projectName(entry))
+        return moved == entry ? nil : moved
+    }
+
+    private static func isFolder(_ entry: String) -> Bool { entry.hasPrefix("/") || entry.hasPrefix("~/") }
 
     /// An amount in its currency, as people write it: "$15", "€9.50".
     public static func money(_ amount: Double, _ currency: String) -> String {

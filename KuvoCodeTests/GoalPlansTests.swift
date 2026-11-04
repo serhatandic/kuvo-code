@@ -1,3 +1,4 @@
+import AppKit
 import ClientSessions
 import Foundation
 import KuvoLink
@@ -5,7 +6,7 @@ import Testing
 @testable import KuvoCode
 
 /// A bot's goal, as this Mac shows it (PROTOCOL.md, "Work › Goals"): the card a bot puts to you
-/// waits on you in the sidebar; Start Goal takes your switches, end and digest to the bot's box,
+/// waits on you in the sidebar; Start Goal takes your end, limits and digest to the bot's box,
 /// which runs it; a box that can't work on it alone says so on the card and runs it all the same;
 /// Stop ends one under way; /goal in a bot's chat asks it for a plan. The machine's box is the real
 /// one (`kuvo-link.js serve`), reached over HTTP where a Mac reaches it over SSH.
@@ -20,7 +21,7 @@ import Testing
     }
 
     /// Pixel's goal on the machine, at `state`; the machine may work on it alone where `alone`.
-    private func lab(_ state: String = "proposed", alone: Bool = true, waiting: [[String: Any]] = [], ends: Double? = nil) async throws -> MachineTestBox {
+    private func lab(_ state: String = "proposed", alone: Bool = true, waiting: [[String: Any]] = [], ends: Double? = nil, projects: [String] = []) async throws -> MachineTestBox {
         let machine = try await MachineTestBox(name: "lab", environment: alone ? ["KUVO_TEST_SANDBOX_ON": "1"] : [:])
         let folder = machine.folder.appending(path: "bots/bot_pixel00001")
         try FileManager.default.createDirectory(at: folder.appending(path: "workspace"), withIntermediateDirectories: true)
@@ -33,7 +34,7 @@ import Testing
             "steps": [["id": "s1", "text": "Build the site", "state": state == "running" ? "doing" : "todo", "progress": 0.5], ["id": "s2", "text": "Deploy", "state": "todo", "phase": "Launch"]],
             "checks": [["id": "c1", "text": "Add a Cloudflare API token", "state": "needs", "by": "bot", "action": ["kind": "open", "label": "Add", "url": "https://dash.cloudflare.com"]]],
             "spend": [["what": "ads", "cap": 20, "currency": "USD", "per": "day", "spent": 0]], "public": [["id": "p1", "text": "Publish the site", "on": false]],
-            "projects": [String](), "wake": false, "digest": "day", "proposed": now, "waiting": waiting, "paused": [Any](), "waited": 0, "watching": [String](),
+            "projects": projects, "wake": false, "digest": "day", "proposed": now, "waiting": waiting, "paused": [Any](), "waited": 0, "watching": [String](),
         ].merging(state == "running" ? ["started": now] : [:]) { _, given in given }.merging(ends.map { ["ends": $0] } ?? [:]) { _, given in given }
         try FileManager.default.createDirectory(at: machine.folder.appending(path: "run/work"), withIntermediateDirectories: true)
         try JSONSerialization.data(withJSONObject: ["goals": [goal]]).write(to: machine.folder.appending(path: "run/work/goals.json"))
@@ -61,9 +62,8 @@ import Testing
         #expect(app.workspace.needsAttention("ses_pixel"), "the bot waits on you in the sidebar")
 
         let ends = Date.now.addingTimeInterval(7 * 86_400)
-        let started = try #require(try await app.goalPlans.answer(plan, on: box, .start(public: ["p1": true], wake: true, digest: .week, ends: ends, spend: [.init(cap: 30, per: .week)])))
+        let started = try #require(try await app.goalPlans.answer(plan, on: box, .start(wake: true, digest: .week, ends: ends, spend: [.init(cap: 30, per: .week)])))
         #expect(started.state == .running)
-        #expect(started.public.map(\.on) == [true])
         #expect(started.digest == .week)
         #expect(started.spend.first.map { [$0.cap, $0.per.rawValue] as [AnyHashable] } == [30.0, "week"])
         #expect(!app.workspace.needsAttention("ses_pixel"), "started, it no longer waits on you")
@@ -80,7 +80,7 @@ import Testing
         let check = try #require(found)
         #expect(check.text.hasPrefix("This machine can"))
         #expect(!check.text.localizedCaseInsensitiveContains("sandbox") && !check.text.localizedCaseInsensitiveContains("fence"))
-        let started = try #require(try await app.goalPlans.answer(plan, on: box, .start(public: [:], wake: false)))
+        let started = try #require(try await app.goalPlans.answer(plan, on: box, .start(wake: false)))
         #expect(started.state == .running)
     }
 
@@ -203,22 +203,22 @@ import Testing
         }
     }
 
-    @Test func startSendsTheCardsSwitchesDeadlineAndChangedLimits() throws {
+    @Test func startSendsTheCardsDeadlineAndChangedLimitsAndHoldsNothingPublicBack() throws {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "Europe/Istanbul")!
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let plan = GoalPlan(id: "goal_1", bot: "bot_pixel", name: "Pixel", session: "ses_pixel", goal: "Launch Driftwood.", state: .proposed, steps: [],
                             spend: [.init(what: "ads", cap: 20, currency: "USD", per: .day)],
-                            public: [.init(id: "p1", text: "Publish the site", on: true), .init(id: "p2", text: "Turn on live payments", on: false)],
                             proposed: now.timeIntervalSince1970 * 1000, alone: true)
-        let answer = GoalCard.start(plan, switches: ["p1": false], wake: true, digest: .week, deadline: .days(1), caps: [30], periods: [.week], now: now, calendar: calendar)
+        let answer = GoalCard.start(plan, wake: true, digest: .week, deadline: .days(1), caps: [30], periods: [.week], now: now, calendar: calendar)
         #expect(answer.action == .start)
-        #expect(answer.public == ["p1": false, "p2": false], "the switch turned off goes off; one left alone keeps the plan's")
+        let sent = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(answer)) as? [String: Any])
+        #expect(!sent.keys.contains("public"), "no switch for anything public: the conversation's mode decides")
         #expect(answer.spend == [.init(cap: 30, per: .week)])
         #expect(answer.wake == true && answer.digest == .week)
         let tomorrow = calendar.date(bySettingHour: 23, minute: 59, second: 0, of: calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now))!)!
         #expect(answer.ends == tomorrow.timeIntervalSince1970 * 1000, "Tomorrow ends as tomorrow does")
-        #expect(GoalCard.start(plan, switches: [:], wake: false, digest: .none, deadline: .none, caps: [], periods: [], now: now, calendar: calendar).ends == nil)
+        #expect(GoalCard.start(plan, wake: false, digest: .none, deadline: .none, caps: [], periods: [], now: now, calendar: calendar).ends == nil)
     }
 
     @Test func aCardFromMoreThanADayAgoSaysWhyItCantStart() async throws {
@@ -234,7 +234,7 @@ import Testing
         kept["goals"] = goals
         try JSONSerialization.data(withJSONObject: kept).write(to: file)
         do {
-            try await app.goalPlans.answer(plan, on: box, .start(public: [:], wake: false))
+            try await app.goalPlans.answer(plan, on: box, .start(wake: false))
             Issue.record("a stale plan can't start")
         } catch let refusal as BoxRefusal {
             #expect(refusal.status == 400)
@@ -263,10 +263,66 @@ import Testing
         await app.goalPlans.read("lab")
         let (box, plan) = try #require(app.goalPlans.plan(for: "ses_pixel"))
         #expect(plan.ends != nil, "the bot proposed an end")
-        let answer = GoalCard.start(plan, switches: [:], wake: false, digest: .none, deadline: .none, caps: [], periods: [])
+        let answer = GoalCard.start(plan, wake: false, digest: .none, deadline: .none, caps: [], periods: [])
         let started = try #require(try await app.goalPlans.answer(plan, on: box, answer))
         #expect(started.state == .running)
         #expect(started.ends == nil, "None takes the bot's end away")
         #expect(try kept(machine)["ends"] == nil)
+    }
+
+    /// A step, or what waits for you, done in an app on its computer shows that app's own icon,
+    /// from the box that found it there; what waits in an app opens it only at that computer: on a
+    /// machine, there's nothing to open from here.
+    @Test func whatWaitsInAnAppShowsItsIconFromItsBoxAndOpensOnlyAtThatComputer() async throws {
+        let machine = try await lab("running", waiting: [["id": "w1", "kind": "you", "text": "Sign in to Finder", "app": ["name": "Finder", "id": "com.apple.finder"], "at": Date.now.timeIntervalSince1970 * 1000]])
+        defer { machine.stop() }
+        // The icon as the box kept it once it found the app.
+        let apps = machine.folder.appending(path: "apps")
+        try FileManager.default.createDirectory(at: apps, withIntermediateDirectories: true)
+        let drawn = NSImage(size: NSSize(width: 64, height: 64), flipped: false) { rect in
+            NSColor.systemBlue.setFill()
+            rect.fill()
+            return true
+        }
+        let png = try #require(drawn.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:))?.representation(using: .png, properties: [:]))
+        try png.write(to: apps.appending(path: "com.apple.finder.png"))
+        ServiceIcons.shared.boxes = { [app] box in app.goalPlans.client(box) }
+        await app.goalPlans.read("lab")
+        let (_, plan) = try #require(app.goalPlans.plan(for: "ses_pixel"))
+        let item = try #require(plan.waiting.first)
+        let mark = try #require(GoalPlanWords.mark(of: item))
+        #expect(mark == .app(id: "com.apple.finder", name: "Finder"))
+        _ = ServiceIcons.shared.icon(mark, on: "lab")
+        try await until { ServiceIcons.shared.icon(mark, on: "lab") != nil }
+        #expect(ServiceIcons.shared.icon(mark, on: "lab")?.isValid == true, "the box's own icon")
+        #expect(GoalPlanBar.app(of: item, on: "lab") == nil, "an app on a machine has no Open here")
+        #expect(GoalPlanBar.app(of: item, on: BoxClient.mac)?.name == "Finder", "on this Mac's own box, Open Finder")
+    }
+
+    /// A proposed goal's projects renamed or moved on its card go to its box, which says again
+    /// where Start makes each: a folder with files there already says so, and never holds Start
+    /// back.
+    @Test func aProjectRenamedOrMovedOnTheCardIsWhereStartMakesIt() async throws {
+        let machine = try await lab(projects: ["Sweep"])
+        defer { machine.stop() }
+        await app.goalPlans.read("lab")
+        let (box, plan) = try #require(app.goalPlans.plan(for: "ses_pixel"))
+        #expect(plan.folders.map(\.project) == ["Sweep"])
+
+        let renamed = try #require(GoalPlanWords.renamed(plan.projects[0], to: "Tidy"))
+        let afterRename = try #require(try await app.goalPlans.answer(plan, on: box, .projects([renamed])))
+        #expect(afterRename.projects == ["Tidy"])
+
+        let code = machine.folder.appending(path: "Code")
+        try FileManager.default.createDirectory(at: code.appending(path: "Tidy"), withIntermediateDirectories: true)
+        try Data("hello".utf8).write(to: code.appending(path: "Tidy/README.md"))
+        let moved = try #require(GoalPlanWords.moved(afterRename.projects[0], into: code.path))
+        let afterMove = try #require(try await app.goalPlans.answer(afterRename, on: box, .projects([moved])))
+        #expect(afterMove.folders.first?.folder == code.appending(path: "Tidy").path)
+        #expect(afterMove.folders.first?.there == true, "something with files is there already")
+        #expect(try kept(machine)["projects"] as? [String] == [moved], "kept on its box, which makes it")
+
+        let started = try #require(try await app.goalPlans.answer(afterMove, on: box, .start(wake: false)))
+        #expect(started.state == .running, "a folder there already doesn't hold Start back")
     }
 }

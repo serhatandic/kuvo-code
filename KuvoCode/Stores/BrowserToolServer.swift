@@ -271,7 +271,7 @@ enum BrowserTools {
         tool("list_projects", "List the user's projects here: each one's folder, whether it's a git repository, and who made it, and where new projects go."),
         tool("propose_goal", "For a bot, when the user's message is a goal of many steps (hours, days or weeks of work), or was sent with /goal: put its plan to them on one card. Plan it and check what it needs first. Never for a small or quick request. The user starts it from the card, or says not now; you're told [Goal started] when they start it, and never start before. Proposing again replaces the card.",
              ["goal": ["type": "string", "description": "The goal, in the user's words."],
-              "steps": ["type": "array", "items": ["anyOf": [["type": "string"], ["type": "object", "properties": ["text": ["type": "string", "description": "Its short name, a few words on one line."], "detail": ["type": "string", "description": "A few words on what's in it, about 30 characters at most, like \"SDK, paywall, test config\": never a sentence."], "after": ["type": "array", "items": ["type": "integer"], "description": "The steps it waits for, by number; leave it out for one that can start now."], "site": ["type": "string", "description": "The site it's done at in the browser, like revenuecat.com for setting up a RevenueCat project or appstoreconnect.apple.com for submitting an app; leave it out for work on the computer (code, Xcode, a build) and never give a maker's site for its products."]], "required": ["text"]]]], "description": "The plan's steps, in order, each one session's whole task, with a short name of a few words that fits on one line, like \"Photo scan engine\" or \"Submit for review\": each shows on one row, so never a sentence or a list of what's in it. Steps that don't wait for each other run side by side."],
+              "steps": ["type": "array", "items": ["anyOf": [["type": "string"], ["type": "object", "properties": ["text": ["type": "string", "description": "Its short name, a few words on one line."], "detail": ["type": "string", "description": "A few words on what's in it, about 30 characters at most, like \"SDK, paywall, test config\": never a sentence."], "after": ["type": "array", "items": ["type": "integer"], "description": "The steps it waits for, by number; leave it out for one that can start now."], "site": ["type": "string", "description": "The site it's done at in the browser, like revenuecat.com for setting up a RevenueCat project or appstoreconnect.apple.com for submitting an app; leave it out for work on the computer (code, Xcode, a build) and never give a maker's site for its products."], "app": ["type": "string", "description": "The app on the computer it's done in, by the app's own name, like Xcode or Figma; leave it out for work in the browser or the terminal."]], "required": ["text"]]]], "description": "The plan's steps, in order, each one session's whole task, with a short name of a few words that fits on one line, like \"Photo scan engine\" or \"Submit for review\": each shows on one row, so never a sentence or a list of what's in it. Steps that don't wait for each other run side by side."],
               "title": ["type": "string", "description": "The goal's name in two to four words, like \"Landing page\" or \"Weekly summaries\": it shows in a narrow slot, so never a sentence."],
               "checks": ["type": "array", "items": ["type": "object", "properties": [
                   "text": ["type": "string", "description": "What's checked, like \"Stripe key works\", or what the user must do, like \"Add a Cloudflare API token\"."],
@@ -285,7 +285,6 @@ enum BrowserTools {
                   "what": ["type": "string"], "cap": ["type": "number"], "currency": ["type": "string", "description": "USD by default."],
                   "per": ["type": "string", "enum": ["day", "week", "month", "goal"], "description": "The period the cap is for: goal (the whole goal) by default."]], "required": ["what", "cap"]],
                  "description": "What you'd spend, each with a cap. Nothing else may be spent."],
-              "public": ["type": "array", "items": ["type": "string"], "description": "Each public step (publishing, submitting, deploying, sending), like \"Publish the site when it's ready\": the user switches each on or off."],
               "projects": ["type": "array", "items": ["type": "string"], "description": "New projects the plan makes, by name, or by the folder the user named for one, as a full path (~/Desktop/tidepool): made with make_project, without asking, once the goal starts."],
               "ends": ["type": "string", "description": "An end the user named, as a date and time (2026-11-30T18:00). Leave it out otherwise."],
               "digest": ["type": "string", "enum": ["day", "week", "none"], "description": "How often the user hears how it goes: by the plan's size unless they said."]], required: ["goal", "steps"]),
@@ -295,22 +294,24 @@ enum BrowserTools {
                   "state": ["type": "string", "enum": ["todo", "doing", "done", "waiting", "paused", "skipped"]],
                   "progress": ["type": "number", "description": "How far along, from 0 to 1, only where you can count it, with what you counted in note (3 of 8 pages is 0.375)."],
                   "note": ["type": "string", "description": "A few words: what you counted (\"3 of 8 pages\"), which the user sees, or like \"looks again at 2:40\"."],
-                  "until": ["type": "string", "description": "For a step that can only start at a time (a weekly run on Monday): that time, like 2026-11-02T09:00. Set a wake-up for it too; you aren't told to carry on before then. null takes it away."]], "required": ["step"]]],
+                  "until": ["type": "string", "description": "For a step that can only start at a time (a weekly run on Monday): that time, like 2026-11-02T09:00. Set a wake-up for it too; you aren't told to carry on before then. null takes it away."],
+                  "app": ["type": ["string", "null"], "description": "The app on the computer it's done in, by its own name, where that changed; null takes it away."]], "required": ["step"]]],
               "add": ["type": "array", "items": ["anyOf": [["type": "string"], ["type": "object", "properties": [
                   "text": ["type": "string", "description": "Its short name, a few words on one line."],
                   "detail": ["type": "string", "description": "A few words on what's in it, about 30 characters at most."],
                   "site": ["type": "string", "description": "The site it's done at in the browser; leave it out for work on the computer."],
+                  "app": ["type": "string", "description": "The app on the computer it's done in, by the app's own name, like Xcode or Figma; leave it out for work in the browser or the terminal."],
                   "after": ["type": "array", "items": ["type": "integer"], "description": "The steps it waits for, by number."]], "required": ["text"]]]],
                  "description": "New steps, as the plan changes, named like the plan's."],
               "waiting": ["type": "object", "properties": [
-                  "kind": ["type": "string", "enum": ["you", "judgment", "outside"], "description": "you: only the user can fix it; judgment: a call that's theirs before anything public; outside: not in the plan."],
+                  "kind": ["type": "string", "enum": ["you", "judgment", "outside"], "description": "you: only the user can fix it; judgment: a call only they can make; outside: not in the plan."],
                   "text": ["type": "string", "description": "What it is, like \"Finish Stripe's identity check\"."],
                   "detail": ["type": "string"],
-                  "url": ["type": "string", "description": "An https page where the user does it."]], "required": ["kind", "text"]],
+                  "url": ["type": "string", "description": "An https page where the user does it."],
+                  "site": ["type": "string", "description": "The service it's about, by its site, when there's no url."],
+                  "app": ["type": "string", "description": "The app on the computer it's done in, by its own name, like Xcode."]], "required": ["kind", "text"]],
               "spent": ["type": "array", "items": ["type": "object", "properties": ["what": ["type": "string"], "amount": ["type": "number"]], "required": ["what", "amount"]], "description": "What you spent, by the plan's spend line."],
               "watching": ["type": "array", "items": ["type": "string"], "description": "What you're still watching, like \"DNS for driftwood.coffee\": all of it, as it is now."]]),
-        tool("may_publish", "During your goal: whether one of its public steps is switched on, so you may do it once it's ready. Ask before every public step; if it's off, or not one of the goal's, prepare it as a draft for the user.",
-             ["step": ["type": "string", "description": "The public step, by its words or its id."]], required: ["step"]),
         tool("may_spend", "During your goal: whether a purchase fits the plan's cap for it, in its period now. Ask before every purchase.",
              ["what": ["type": "string", "description": "The plan's spend line it's for."], "amount": ["type": "number"]], required: ["what", "amount"]),
         tool("finish_goal", "End your goal with the report: what needs the user first, then what got done and where, what it spent, and what you're still watching.",
@@ -339,7 +340,7 @@ enum BrowserTools {
 
     /// The tools agents write to each other and run their sessions with, answered by this Mac's box
     /// (see `AgentMail`).
-    nonisolated static let mailTools: Set<String> = ["list_agents", "send_message", "read_conversation", "start_session", "list_sessions", "stop_session", "answer_ask", "list_models", "make_project", "list_projects", "propose_goal", "goal_progress", "may_publish", "may_spend", "finish_goal"]
+    nonisolated static let mailTools: Set<String> = ["list_agents", "send_message", "read_conversation", "start_session", "list_sessions", "stop_session", "answer_ask", "list_models", "make_project", "list_projects", "propose_goal", "goal_progress", "may_spend", "finish_goal"]
     /// Carries out their calls from this Mac's conversations.
     /// The added integrations' sites, which the browser sends the agent away from, to their tools.
     static var integrationSites: () -> [Integrations.Site] = { [] }

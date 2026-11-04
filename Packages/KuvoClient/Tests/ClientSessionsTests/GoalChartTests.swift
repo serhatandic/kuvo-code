@@ -50,6 +50,15 @@ struct GoalChartTests {
         #expect(chart.shown.contains(now) && chart.shown.end >= deviceTo, "every step on the axis")
     }
 
+    /// The start card's plan in a line: the steps in the order they start, those that start
+    /// together side by side.
+    @Test func thePlanInALineJoinsTheStepsThatStartTogether() {
+        let steps = sweep.map { GoalPlan.Step(id: $0.id, text: $0.text, state: .todo, phase: $0.phase, after: $0.after) }
+        #expect(GoalPlanWords.flow(plan(steps), now: hours(0.1)) == "Set up the Xcode project → Photo scan engine · RevenueCat paywall → Storage dashboard → Icon and polish → Test on a device")
+        let free = ["Research", "Draft", "Publish"].enumerated().map { GoalPlan.Step(id: "s\($0.offset)", text: $0.element, state: .todo) }
+        #expect(GoalPlanWords.flow(plan(free), now: hours(0.1)) == "Research · Draft · Publish", "steps that wait for nothing start together, as the list shows them")
+    }
+
     @Test func beforeItStartsTheStepsGoInOrderUpToTheDueDate() throws {
         let now = hours(0.1)
         let due = start.addingTimeInterval(3 * 86400)

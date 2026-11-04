@@ -50,15 +50,21 @@ export function accountName(): string {
 
 export const K = process.env.KUVO_HOME || path.join(homeFolder(), ".kuvo-code");
 
-/**
- * Where an opencode used apart from Kuvo Code keeps its sign-ins, on both systems: in its data
- * folder, your own `XDG_DATA_HOME` if you set one. On a machine, the box's points into Kuvo Code's
- * folder; yours is what its launch kept (`KUVO_OWN_XDG_DATA_HOME`).
- */
-export function opencodeAuthFile(home = homeFolder(), env: NodeJS.ProcessEnv = process.env): string {
+/** Your own data folder (`XDG_DATA_HOME`, else `~/.local/share`), as apps other than Kuvo Code's
+ * read it: on a machine, the box's points into Kuvo Code's folder, and yours is what its launch
+ * kept (`KUVO_OWN_XDG_DATA_HOME`, empty for none). */
+export function ownDataHome(env: NodeJS.ProcessEnv = process.env, home = homeFolder()): string {
   const own = "KUVO_OWN_XDG_DATA_HOME" in env ? env.KUVO_OWN_XDG_DATA_HOME
     : env.XDG_DATA_HOME && !path.resolve(env.XDG_DATA_HOME).startsWith(path.resolve(K)) ? env.XDG_DATA_HOME : undefined;
-  return path.join(own || path.join(home, ".local", "share"), "opencode", "auth.json");
+  return own && path.isAbsolute(own) ? own : path.join(home, ".local", "share");
+}
+
+/**
+ * Where an opencode used apart from Kuvo Code keeps its sign-ins, on both systems: in its data
+ * folder (`ownDataHome`).
+ */
+export function opencodeAuthFile(home = homeFolder(), env: NodeJS.ProcessEnv = process.env): string {
+  return path.join(ownDataHome(env, home), "opencode", "auth.json");
 }
 
 export const RUN = path.join(K, "run");

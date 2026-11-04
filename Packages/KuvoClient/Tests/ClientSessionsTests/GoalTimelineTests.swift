@@ -144,11 +144,11 @@ struct GoalTimelineTests {
         let json = { (answer: GoalPlanAnswer) throws -> [String: Any] in
             try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(answer)) as? [String: Any])
         }
-        let cleared = try json(.start(public: [:], wake: false, clearsEnd: true))
+        let cleared = try json(.start(wake: false, clearsEnd: true))
         #expect(cleared.keys.contains("ends") && cleared["ends"] is NSNull, "None picked: \"ends\": null")
-        let untouched = try json(.start(public: [:], wake: false))
+        let untouched = try json(.start(wake: false))
         #expect(!untouched.keys.contains("ends"), "left out: the bot's end stands")
-        let picked = try json(.start(public: [:], wake: false, ends: Date(timeIntervalSince1970: 1_800_000_000), clearsEnd: true))
+        let picked = try json(.start(wake: false, ends: Date(timeIntervalSince1970: 1_800_000_000), clearsEnd: true))
         #expect(picked["ends"] as? Double == 1_800_000_000_000, "an end picked wins")
         #expect(try json(.change(clearsEnd: true))["ends"] is NSNull)
     }
