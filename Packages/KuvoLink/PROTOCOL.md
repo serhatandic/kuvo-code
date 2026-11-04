@@ -827,7 +827,7 @@ beside it.
 - **Tools** (a bot's conversation only): `propose_goal` (`{goal, title?, steps: [text | {text, detail?,
   site?, app?, after?: [step number]}],
   checks?: [{text, ok?, detail?, url?, button?}], spend?: [{what, cap, currency?, per?:
-  day|week|month|goal}], public?: [text], projects?: [name | full path], ends?, digest?:
+  day|week|month|goal}], projects?: [name | full path], ends?, digest?:
   day|week|milestones|none}`) puts the card up, replacing one it proposed before (refused while one
   runs; `digest` is a day's for a plan in phases or of more than 12 steps unless it says);
   `goal_progress` (`{steps: [{step, state?: todo|doing|done|waiting|paused|skipped, progress?: 0–1,
@@ -835,7 +835,7 @@ beside it.
   takes it away; taken up, it goes; `app: null` takes the step's away), `add?: [text | {text, detail?, site?, app?, after?}]`, `waiting?: {kind: you|judgment|outside, text,
   detail?, url?, app?}`, `resolved?: [id or words]` (what waited and is dealt with), `spent?: [{what,
   amount}]` (one on no spend line is kept as waiting, kind `outside`), `watching?: [text]}`; all
-  checked before any is kept; it says whether you're here); `may_publish` (`{step}`: yes only for a public step you switched on); `may_spend` (`{what,
+  checked before any is kept; it says whether you're here); `may_spend` (`{what,
   amount}`: whether it fits the line's cap in its period now); `finish_goal` (`{report, watching?}`).
   `start_session` takes `step` (its number or id), and that step's track lists the session.
 - **Asked for**: `POST kuvo/work/goals/ask` `{session, goal}` (`/goal` in a bot's chat, from a
@@ -845,8 +845,7 @@ beside it.
   reads as you typed it, then (bridge 0.9.191) lines on how to plan it as a lead whose sessions do
   the work, which clients leave out with the block. One a box sent before 0.9.143 is `[Goal] <words>` then a note in
   parentheses; `SentWithKeyword.split` reads it the same way.
-- **Only you start it**: `POST kuvo/work/goals/<id>` from a client, `{action: start, public?: {<id>:
-  bool}, wake?, digest?, ends?, spend?: [{cap?, per?}] (by line)}`, `{action: decline}` or `{action:
+- **Only you start it**: `POST kuvo/work/goals/<id>` from a client, `{action: start, wake?, digest?, ends?, spend?: [{cap?, per?}] (by line)}`, `{action: decline}` or `{action:
   stop}` (and `{action: projects}`, below) → `{goal}` (`ends: null` starts it with no end, taking away the one the bot proposed; left
   out, the bot's stands); while it runs, `{action: change, …the same but start's}` (a cap raised past what's
   spent lets what spends go on; the bot is told `[Goal changed] …`) and `{action: clear, waiting:
@@ -870,7 +869,9 @@ beside it.
   [{id, text, state, progress?, note?, detail?, phase?, site?, app?: {name, id?}, after?, sessions?, resumes?, until?,
   began?, ended?}], checks: [{id, text,
   detail?, state: ok|needs|failed, by: bot|box, site?, action?: {kind: open|projectsFolder, label, url?}}], spend:
-  [{what, cap, currency, per, spent, until?}], public: [{id, text, on}], projects, wake, digest,
+  [{what, cap, currency, per, spent, until?}], public: [] (nothing is held back for a switch: what it publishes, deploys or
+  sends goes as its conversation's mode allows; before bridge 0.9.197 each public step waited as a
+  draft until you switched it on), projects, wake, digest,
   ends?, proposed, started?, ended?, waiting: [{id, kind: you|judgment|outside|ask, text, detail?,
   url?, site?, app?: {name, id?}, session?, at}], paused: [{why, until?, session?}], waited, watching, next?, lastDigest?: {at, text},
   report?, alone, folders?: [{project, folder: path|null, shown: path|null, there?}]}]}` (`next`: when it goes on next, while nothing of it is at work and nothing can be
@@ -3345,7 +3346,7 @@ one the box marked as in Full Access, which runs (bridge 0.9.187).
   `POST /api/session/<id>/generate` `{prompt, model}` (a model of that session's maker only); the
   conversation's own model where the maker has no small one. It's counted on that account. It's
   shown only what you wrote in the conversation (never what the box, another agent or a wake-up put
-  there), and for a bot's, its goal too (and which public steps you switched on); the action (for a
+  there), and for a bot's, its goal too; the action (for a
   file, the tool and its arguments); and what a command runs, read whole first: a script by its
   path, `bash x.sh`, `python x.py`, and the project's build files its program runs (`package.json`
   for npm, pnpm, yarn and bun, a Makefile, a justfile, `conftest.py`, `build.rs`, Gradle's, a

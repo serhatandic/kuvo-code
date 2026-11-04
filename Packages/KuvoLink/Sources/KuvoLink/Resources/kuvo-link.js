@@ -10350,7 +10350,7 @@ var shown = (goal) => {
     return paused ? { ...step, state: "paused", ...paused.until ? { resumes: paused.until } : {} } : step;
   });
   const proposed = goal.state === "proposed";
-  return { ...rest, steps, checks: proposed ? [...boxChecks(goal), ...goal.checks] : goal.checks, alone: alone(goal), ...proposed ? { folders: goalFolders(goal) } : {} };
+  return { ...rest, steps, public: [], checks: proposed ? [...boxChecks(goal), ...goal.checks] : goal.checks, alone: alone(goal), ...proposed ? { folders: goalFolders(goal) } : {} };
 };
 function goalPlans(file = GOALS_FILE) {
   const now = Date.now();
@@ -10551,7 +10551,6 @@ function planGiven(given) {
     const per = PERIODS.includes(each.per) ? each.per : "goal";
     spend.push({ what: text(each.what, 200), cap: each.cap, currency: (text(each.currency, 3) ?? "USD").toUpperCase(), per, spent: 0 });
   }
-  const publics = (Array.isArray(given.public) ? given.public.slice(0, 8) : []).map((each) => text(each, 200)).filter((each) => Boolean(each)).map((each, at) => ({ id: `p${at + 1}`, text: each, on: false }));
   const named = projectsGiven((Array.isArray(given.projects) ? given.projects.slice(0, 5) : []).filter((each) => !(typeof each === "string" && !each.trim())));
   if ("refused" in named)
     return named;
@@ -10560,7 +10559,7 @@ function planGiven(given) {
   if (ends === null)
     return { refused: "An end (ends) is a date and time to come, like 2026-11-30T18:00." };
   const digest = DIGESTS.includes(given.digest) ? given.digest : steps.length > 12 || steps.some((step) => step.phase) ? "day" : "none";
-  return { plan: { goal, ...text(given.title, 80) ? { title: text(given.title, 80) } : {}, steps: keptSteps(steps), checks, spend, public: publics, projects, digest, ...ends ? { ends } : {} } };
+  return { plan: { goal, ...text(given.title, 80) ? { title: text(given.title, 80) } : {}, steps: keptSteps(steps), checks, spend, public: [], projects, digest, ...ends ? { ends } : {} } };
 }
 async function answerGoal(id, given, targets, file = GOALS_FILE) {
   const action = given.action;
@@ -10575,7 +10574,6 @@ async function answerGoal(id, given, targets, file = GOALS_FILE) {
     return { refused: { status: 404, message: "There's no such goal here." } };
   if (action === "start" && frozen().has(before.bot))
     return { refused: { status: 409, message: MOVING } };
-  const switches = isObject(given.public) ? given.public : {};
   const ends = action === "start" ? endGiven(given.ends) : undefined;
   if (ends === null)
     return { refused: { status: 400, message: "The end (ends) is a date and time to come." } };
@@ -10603,7 +10601,6 @@ async function answerGoal(id, given, targets, file = GOALS_FILE) {
       return { status: 400, message: "A goal is running for this bot already." };
     goal.state = "running";
     goal.started = Date.now();
-    goal.public = goal.public.map((each) => ({ ...each, on: switches[each.id] === true }));
     goal.wake = given.wake === true;
     if (DIGESTS.includes(given.digest))
       goal.digest = given.digest;
@@ -10685,8 +10682,6 @@ async function changeGoal(id, action, given, targets, file) {
       goal.waiting = goal.waiting.filter((each) => each.id !== given.waiting);
       return goal;
     }
-    if (isObject(given.public))
-      goal.public = goal.public.map((each) => ({ ...each, on: typeof given.public[each.id] === "boolean" ? given.public[each.id] : each.on }));
     if (typeof given.wake === "boolean")
       goal.wake = given.wake;
     if (DIGESTS.includes(given.digest))
@@ -10704,7 +10699,7 @@ async function changeGoal(id, action, given, targets, file) {
     return { refused: changed };
   noteWorkChanged(changed.bot);
   if (action === "change")
-    await tellBot2(changed, `[Goal changed] The user changed the goal's limits. ${changed.spend.length ? `What you may spend now: ${changed.spend.map((each) => `${each.what}, up to ${each.cap} ${each.currency}${each.per === "goal" ? "" : ` a ${each.per}`}`).join("; ")}. ` : ""}Switched on: ${changed.public.filter((each) => each.on).map((each) => `"${each.text}"`).join(", ") || "nothing"}.${changed.ends ? ` It ends at ${resetTime(changed.ends)}.` : ""}`, "You changed the goal's limits", targets);
+    await tellBot2(changed, `[Goal changed] The user changed the goal's limits.${changed.spend.length ? ` What you may spend now: ${changed.spend.map((each) => `${each.what}, up to ${each.cap} ${each.currency}${each.per === "goal" ? "" : ` a ${each.per}`}`).join("; ")}.` : ""}${changed.ends ? ` It ends at ${resetTime(changed.ends)}.` : ""}`, "You changed the goal's limits", targets);
   return { goal: shown(changed) };
 }
 var loopCondition = (goal) => `${goal.goal}
@@ -10734,12 +10729,8 @@ var LEAD_WORDS = (projects) => [
 ].join(`
 `);
 function startWords(goal) {
-  const on = goal.public.filter((each) => each.on).map((each) => `"${each.text}"`);
-  const off = goal.public.filter((each) => !each.on).map((each) => `"${each.text}"`);
   const lines = [
     `[Goal started] The user approved the plan. Work through it now, steps side by side where they don't depend on each other: ${goal.steps.map((each, at) => `${at + 1}. ${each.text}`).join(" ")}`,
-    on.length ? `Switched on, so do them when they're ready: ${on.join(", ")}.` : "",
-    off.length ? `Switched off, so prepare them as drafts for the user: ${off.join(", ")}.` : "",
     goal.spend.length ? `What you may spend, never more: ${goal.spend.map((each) => `${each.what}, up to ${each.cap} ${each.currency}${each.per === "goal" ? "" : ` a ${each.per}`}`).join("; ")}. Ask may_spend before each purchase.` : "Spend nothing.",
     goal.ends ? `It ends at ${resetTime(goal.ends)}: be done by then, or wrap up and report.` : "",
     LEAD_WORDS(goal.projects.map(goalProject)),
@@ -11044,18 +11035,6 @@ function goalProgress(bot, given, file = GOALS_FILE) {
   }
   noteWorkChanged(bot);
   return { said: `${notes.length ? `Noted: ${notes.join("; ")}.` : "Nothing to note: give steps, add, waiting, spent or watching."} ${presence()}` };
-}
-function mayPublish(bot, given, file = GOALS_FILE) {
-  const goal = runningGoal(bot, file);
-  if (!goal)
-    return { refused: "No goal is running. Ask the user." };
-  const asked = text(given.step, 200);
-  if (!asked)
-    return { refused: `Say which public step (step): ${goal.public.map((each) => `${each.id} "${each.text}"`).join(", ") || "the plan has none"}.` };
-  const found = goal.public.find((each) => each.id === asked || each.text.toLowerCase() === asked.toLowerCase());
-  if (!found)
-    return { said: `"${asked}" isn't one of the goal's public steps, so it's not approved: prepare it as a draft and keep it as waiting for the user.` };
-  return { said: found.on ? `Yes: "${found.text}" is switched on. Do it once it's ready.` : `No: "${found.text}" is switched off. Prepare it as a draft, and keep it as waiting for the user.` };
 }
 function maySpend(bot, given, file = GOALS_FILE) {
   const goal = runningGoal(bot, file);
@@ -14729,9 +14708,7 @@ function botOf(data) {
   if (!bot)
     return;
   const running = runningGoal(bot.bot);
-  const on = running?.public.filter((step) => step.on).map((step) => `"${step.text}"`) ?? [];
-  const goal = running ? `${running.goal}${on.length ? `
-(Public steps the user switched on: ${on.join(", ")}.)` : ""}` : undefined;
+  const goal = running?.goal;
   return { id: bot.bot, name: bot.name, ...goal ? { goal } : {} };
 }
 var inFullAccess = (at) => approvalOf(at.data, { agents: at.agents, bot: Boolean(botOfConversation(at.data.id) ?? worksFor(at.data)) }).effective === "fullAccess";
@@ -21821,10 +21798,6 @@ async function goalProgressTool(caller, args) {
   await findApps(appsNamed(args)).catch(() => {});
   return answered2(goalProgress(bot.bot, args));
 }
-function mayPublishTool(caller, args) {
-  const bot = goalBot(caller);
-  return bot ? answered2(mayPublish(bot.bot, args)) : refused(ONLY_BOTS);
-}
 function maySpendTool(caller, args) {
   const bot = goalBot(caller);
   return bot ? answered2(maySpend(bot.bot, args)) : refused(ONLY_BOTS);
@@ -21835,7 +21808,7 @@ async function finishGoalTool(caller, args, targets) {
 }
 
 // Packages/Box/src/link/letters/tools.ts
-var AGENT_TOOLS = ["list_agents", "send_message", "read_conversation", "start_session", "list_sessions", "stop_session", "answer_ask", "list_models", "make_project", "list_projects", "propose_goal", "goal_progress", "may_publish", "may_spend", "finish_goal"];
+var AGENT_TOOLS = ["list_agents", "send_message", "read_conversation", "start_session", "list_sessions", "stop_session", "answer_ask", "list_models", "make_project", "list_projects", "propose_goal", "goal_progress", "may_spend", "finish_goal"];
 var isAgentTool = (name) => AGENT_TOOLS.includes(name);
 var said2 = (text) => ({ text, isError: false });
 var refused2 = (text) => ({ text, isError: true });
@@ -22065,7 +22038,6 @@ async function agentTool(name, args, session, place) {
     }
     case "propose_goal":
     case "goal_progress":
-    case "may_publish":
     case "may_spend":
     case "finish_goal": {
       if (!root)
@@ -22075,8 +22047,6 @@ async function agentTool(name, args, session, place) {
         return proposeGoalTool(caller, args);
       if (name === "goal_progress")
         return goalProgressTool(caller, args);
-      if (name === "may_publish")
-        return mayPublishTool(caller, args);
       if (name === "may_spend")
         return maySpendTool(caller, args);
       return finishGoalTool(caller, args, targets);

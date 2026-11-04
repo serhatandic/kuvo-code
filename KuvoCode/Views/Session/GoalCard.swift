@@ -20,7 +20,6 @@ struct GoalCard: View {
     @Environment(\.takesCardKeys) private var takesKeys
     @Environment(\.colorScheme) private var scheme
 
-    @State private var switches: [String: Bool] = [:]
     /// A project's name is being typed: Return and Escape are its, not Start's and Not Now's.
     @State private var renamesProject = false
     @State private var wake = false
@@ -437,7 +436,6 @@ struct GoalCard: View {
     // MARK: Answers
 
     private func takeIn() {
-        switches = Dictionary(uniqueKeysWithValues: plan.public.map { ($0.id, $0.on) })
         wake = plan.wake
         digest = plan.digest
         deadline = plan.ends.map(Deadline.at) ?? .none
@@ -461,7 +459,7 @@ struct GoalCard: View {
         sent = action
         failure = nil
         let answer: GoalPlanAnswer = action == .start
-            ? Self.start(plan, switches: switches, wake: wake, digest: digest, deadline: deadline, caps: caps, periods: periods)
+            ? Self.start(plan, wake: wake, digest: digest, deadline: deadline, caps: caps, periods: periods)
             : .decline
         Task {
             do {
@@ -474,11 +472,10 @@ struct GoalCard: View {
 }
 
 extension GoalCard {
-    /// What Start Goal sends: each public step's switch, Wake me, how often you hear, the end
-    /// you picked, and each spend line's cap and period as you set them.
-    static func start(_ plan: GoalPlan, switches: [String: Bool], wake: Bool, digest: GoalPlan.Cadence, deadline: Deadline,
+    /// What Start Goal sends: Wake me, how often you hear, the end you picked, and each spend line's cap and period as you set them.
+    static func start(_ plan: GoalPlan, wake: Bool, digest: GoalPlan.Cadence, deadline: Deadline,
                       caps: [Double], periods: [GoalPlan.Spend.Period], now: Date = .now, calendar: Calendar = .current) -> GoalPlanAnswer {
-        .start(public: Dictionary(uniqueKeysWithValues: plan.public.map { ($0.id, switches[$0.id] ?? $0.on) }), wake: wake, digest: digest,
+        .start(wake: wake, digest: digest,
                ends: deadline.date(now: now, calendar: calendar),
                // None where the bot had proposed an end: no end.
                clearsEnd: deadline == .none && plan.ends != nil,

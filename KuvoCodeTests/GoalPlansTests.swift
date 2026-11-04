@@ -6,7 +6,7 @@ import Testing
 @testable import KuvoCode
 
 /// A bot's goal, as this Mac shows it (PROTOCOL.md, "Work › Goals"): the card a bot puts to you
-/// waits on you in the sidebar; Start Goal takes your switches, end and digest to the bot's box,
+/// waits on you in the sidebar; Start Goal takes your end, limits and digest to the bot's box,
 /// which runs it; a box that can't work on it alone says so on the card and runs it all the same;
 /// Stop ends one under way; /goal in a bot's chat asks it for a plan. The machine's box is the real
 /// one (`kuvo-link.js serve`), reached over HTTP where a Mac reaches it over SSH.
@@ -62,9 +62,8 @@ import Testing
         #expect(app.workspace.needsAttention("ses_pixel"), "the bot waits on you in the sidebar")
 
         let ends = Date.now.addingTimeInterval(7 * 86_400)
-        let started = try #require(try await app.goalPlans.answer(plan, on: box, .start(public: ["p1": true], wake: true, digest: .week, ends: ends, spend: [.init(cap: 30, per: .week)])))
+        let started = try #require(try await app.goalPlans.answer(plan, on: box, .start(wake: true, digest: .week, ends: ends, spend: [.init(cap: 30, per: .week)])))
         #expect(started.state == .running)
-        #expect(started.public.map(\.on) == [true])
         #expect(started.digest == .week)
         #expect(started.spend.first.map { [$0.cap, $0.per.rawValue] as [AnyHashable] } == [30.0, "week"])
         #expect(!app.workspace.needsAttention("ses_pixel"), "started, it no longer waits on you")
@@ -81,7 +80,7 @@ import Testing
         let check = try #require(found)
         #expect(check.text.hasPrefix("This machine can"))
         #expect(!check.text.localizedCaseInsensitiveContains("sandbox") && !check.text.localizedCaseInsensitiveContains("fence"))
-        let started = try #require(try await app.goalPlans.answer(plan, on: box, .start(public: [:], wake: false)))
+        let started = try #require(try await app.goalPlans.answer(plan, on: box, .start(wake: false)))
         #expect(started.state == .running)
     }
 
@@ -204,22 +203,22 @@ import Testing
         }
     }
 
-    @Test func startSendsTheCardsSwitchesDeadlineAndChangedLimits() throws {
+    @Test func startSendsTheCardsDeadlineAndChangedLimitsAndHoldsNothingPublicBack() throws {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "Europe/Istanbul")!
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let plan = GoalPlan(id: "goal_1", bot: "bot_pixel", name: "Pixel", session: "ses_pixel", goal: "Launch Driftwood.", state: .proposed, steps: [],
                             spend: [.init(what: "ads", cap: 20, currency: "USD", per: .day)],
-                            public: [.init(id: "p1", text: "Publish the site", on: true), .init(id: "p2", text: "Turn on live payments", on: false)],
                             proposed: now.timeIntervalSince1970 * 1000, alone: true)
-        let answer = GoalCard.start(plan, switches: ["p1": false], wake: true, digest: .week, deadline: .days(1), caps: [30], periods: [.week], now: now, calendar: calendar)
+        let answer = GoalCard.start(plan, wake: true, digest: .week, deadline: .days(1), caps: [30], periods: [.week], now: now, calendar: calendar)
         #expect(answer.action == .start)
-        #expect(answer.public == ["p1": false, "p2": false], "the switch turned off goes off; one left alone keeps the plan's")
+        let sent = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(answer)) as? [String: Any])
+        #expect(!sent.keys.contains("public"), "no switch for anything public: the conversation's mode decides")
         #expect(answer.spend == [.init(cap: 30, per: .week)])
         #expect(answer.wake == true && answer.digest == .week)
         let tomorrow = calendar.date(bySettingHour: 23, minute: 59, second: 0, of: calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now))!)!
         #expect(answer.ends == tomorrow.timeIntervalSince1970 * 1000, "Tomorrow ends as tomorrow does")
-        #expect(GoalCard.start(plan, switches: [:], wake: false, digest: .none, deadline: .none, caps: [], periods: [], now: now, calendar: calendar).ends == nil)
+        #expect(GoalCard.start(plan, wake: false, digest: .none, deadline: .none, caps: [], periods: [], now: now, calendar: calendar).ends == nil)
     }
 
     @Test func aCardFromMoreThanADayAgoSaysWhyItCantStart() async throws {
@@ -235,7 +234,7 @@ import Testing
         kept["goals"] = goals
         try JSONSerialization.data(withJSONObject: kept).write(to: file)
         do {
-            try await app.goalPlans.answer(plan, on: box, .start(public: [:], wake: false))
+            try await app.goalPlans.answer(plan, on: box, .start(wake: false))
             Issue.record("a stale plan can't start")
         } catch let refusal as BoxRefusal {
             #expect(refusal.status == 400)
@@ -264,7 +263,7 @@ import Testing
         await app.goalPlans.read("lab")
         let (box, plan) = try #require(app.goalPlans.plan(for: "ses_pixel"))
         #expect(plan.ends != nil, "the bot proposed an end")
-        let answer = GoalCard.start(plan, switches: [:], wake: false, digest: .none, deadline: .none, caps: [], periods: [])
+        let answer = GoalCard.start(plan, wake: false, digest: .none, deadline: .none, caps: [], periods: [])
         let started = try #require(try await app.goalPlans.answer(plan, on: box, answer))
         #expect(started.state == .running)
         #expect(started.ends == nil, "None takes the bot's end away")
@@ -323,7 +322,7 @@ import Testing
         #expect(afterMove.folders.first?.there == true, "something with files is there already")
         #expect(try kept(machine)["projects"] as? [String] == [moved], "kept on its box, which makes it")
 
-        let started = try #require(try await app.goalPlans.answer(afterMove, on: box, .start(public: [:], wake: false)))
+        let started = try #require(try await app.goalPlans.answer(afterMove, on: box, .start(wake: false)))
         #expect(started.state == .running, "a folder there already doesn't hold Start back")
     }
 }

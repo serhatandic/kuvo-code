@@ -191,7 +191,8 @@ const shown = (goal: KeptGoal): GoalPlanShape => {
     return paused ? { ...step, state: "paused" as const, ...(paused.until ? { resumes: paused.until } : {}) } : step;
   });
   const proposed = goal.state === "proposed";
-  return { ...rest, steps, checks: proposed ? [...boxChecks(goal), ...goal.checks] : goal.checks, alone: alone(goal), ...(proposed ? { folders: goalFolders(goal) } : {}) };
+  // Public steps aren't held back any more, a goal kept from before too: none is shown.
+  return { ...rest, steps, public: [], checks: proposed ? [...boxChecks(goal), ...goal.checks] : goal.checks, alone: alone(goal), ...(proposed ? { folders: goalFolders(goal) } : {}) };
 };
 
 /** The goals here, as clients show them: each bot's latest while it's proposed or running, or
@@ -431,7 +432,6 @@ function planGiven(given: Record<string, unknown>): { plan: Plan } | { refused: 
     const per = PERIODS.includes(each.per as (typeof PERIODS)[number]) ? each.per as (typeof PERIODS)[number] : "goal";
     spend.push({ what: text(each.what, 200)!, cap: each.cap, currency: (text(each.currency, 3) ?? "USD").toUpperCase(), per, spent: 0 });
   }
-  const publics: KeptGoal["public"] = (Array.isArray(given.public) ? given.public.slice(0, 8) : []).map(each => text(each, 200)).filter((each): each is string => Boolean(each)).map((each, at) => ({ id: `p${at + 1}`, text: each, on: false }));
   const named = projectsGiven((Array.isArray(given.projects) ? given.projects.slice(0, 5) : []).filter(each => !(typeof each === "string" && !each.trim())));
   if ("refused" in named) return named;
   const { projects } = named;
@@ -440,7 +440,7 @@ function planGiven(given: Record<string, unknown>): { plan: Plan } | { refused: 
   // A digest for a long goal, by the plan's size unless the bot says: a day's for one with phases or
   // many steps, none for a short one.
   const digest = DIGESTS.includes(given.digest as (typeof DIGESTS)[number]) ? given.digest as (typeof DIGESTS)[number] : steps.length > 12 || steps.some(step => step.phase) ? "day" : "none";
-  return { plan: { goal, ...(text(given.title, 80) ? { title: text(given.title, 80)! } : {}), steps: keptSteps(steps), checks, spend, public: publics, projects, digest, ...(ends ? { ends } : {}) } };
+  return { plan: { goal, ...(text(given.title, 80) ? { title: text(given.title, 80)! } : {}), steps: keptSteps(steps), checks, spend, public: [], projects, digest, ...(ends ? { ends } : {}) } };
 }
 
 /** Why your answer can't be taken: no such goal (404), or one that won't do (400). */
@@ -450,8 +450,7 @@ export interface GoalRefusal {
 }
 
 /** Your answer to the goal `id`: `projects` (its projects as you set them, while it's proposed),
- * `start` (with your switches for its public steps, `public: {id:
- * on}`, `wake`, `digest`, an end, `ends` (null for none, taking away the bot's), and each spend line's cap and period, `spend: [{cap,
+ * `start` (with `wake`, `digest`, an end, `ends` (null for none, taking away the bot's), and each spend line's cap and period, `spend: [{cap,
  * per}]`), `decline` or `stop`. */
 export async function answerGoal(id: string, given: Record<string, unknown>, targets: () => Target[], file = GOALS_FILE): Promise<{ goal: GoalPlanShape } | { refused: GoalRefusal }> {
   const action = given.action;
@@ -463,7 +462,6 @@ export async function answerGoal(id: string, given: Record<string, unknown>, tar
   // Not while its bot moves: a goal stays on the computer it started on, and nothing reaches the bot
   // meanwhile.
   if (action === "start" && frozen().has(before.bot)) return { refused: { status: 409, message: MOVING } };
-  const switches = isObject(given.public) ? given.public : {};
   const ends = action === "start" ? endGiven(given.ends) : undefined;
   if (ends === null) return { refused: { status: 400, message: "The end (ends) is a date and time to come." } };
   const changed = changeKept(all => {
@@ -485,7 +483,6 @@ export async function answerGoal(id: string, given: Record<string, unknown>, tar
     if (all.some(each => each.bot === goal.bot && each.state === "running")) return { status: 400 as const, message: "A goal is running for this bot already." };
     goal.state = "running";
     goal.started = Date.now();
-    goal.public = goal.public.map(each => ({ ...each, on: switches[each.id] === true }));
     goal.wake = given.wake === true;
     if (DIGESTS.includes(given.digest as (typeof DIGESTS)[number])) goal.digest = given.digest as (typeof DIGESTS)[number];
     if (ends !== undefined) goal.ends = ends;
@@ -561,7 +558,6 @@ async function changeGoal(id: string, action: "change" | "clear", given: Record<
       goal.waiting = goal.waiting.filter(each => each.id !== given.waiting);
       return goal;
     }
-    if (isObject(given.public)) goal.public = goal.public.map(each => ({ ...each, on: typeof (given.public as Record<string, unknown>)[each.id] === "boolean" ? (given.public as Record<string, boolean>)[each.id] : each.on }));
     if (typeof given.wake === "boolean") goal.wake = given.wake;
     if (DIGESTS.includes(given.digest as (typeof DIGESTS)[number])) goal.digest = given.digest as (typeof DIGESTS)[number];
     if (ends !== undefined) goal.ends = ends;
@@ -573,7 +569,7 @@ async function changeGoal(id: string, action: "change" | "clear", given: Record<
   }, file);
   if (!("id" in changed)) return { refused: changed };
   noteWorkChanged(changed.bot);
-  if (action === "change") await tellBot(changed, `[Goal changed] The user changed the goal's limits. ${changed.spend.length ? `What you may spend now: ${changed.spend.map(each => `${each.what}, up to ${each.cap} ${each.currency}${each.per === "goal" ? "" : ` a ${each.per}`}`).join("; ")}. ` : ""}Switched on: ${changed.public.filter(each => each.on).map(each => `"${each.text}"`).join(", ") || "nothing"}.${changed.ends ? ` It ends at ${resetTime(changed.ends)}.` : ""}`, "You changed the goal's limits", targets);
+  if (action === "change") await tellBot(changed, `[Goal changed] The user changed the goal's limits.${changed.spend.length ? ` What you may spend now: ${changed.spend.map(each => `${each.what}, up to ${each.cap} ${each.currency}${each.per === "goal" ? "" : ` a ${each.per}`}`).join("; ")}.` : ""}${changed.ends ? ` It ends at ${resetTime(changed.ends)}.` : ""}`, "You changed the goal's limits", targets);
   return { goal: shown(changed) };
 }
 
@@ -611,12 +607,8 @@ const LEAD_WORDS = (projects: { name: string; folder?: string }[]) => [
 
 // What the bot is told as the goal starts: what's approved, and how it goes.
 function startWords(goal: KeptGoal): string {
-  const on = goal.public.filter(each => each.on).map(each => `"${each.text}"`);
-  const off = goal.public.filter(each => !each.on).map(each => `"${each.text}"`);
   const lines = [
     `[Goal started] The user approved the plan. Work through it now, steps side by side where they don't depend on each other: ${goal.steps.map((each, at) => `${at + 1}. ${each.text}`).join(" ")}`,
-    on.length ? `Switched on, so do them when they're ready: ${on.join(", ")}.` : "",
-    off.length ? `Switched off, so prepare them as drafts for the user: ${off.join(", ")}.` : "",
     goal.spend.length ? `What you may spend, never more: ${goal.spend.map(each => `${each.what}, up to ${each.cap} ${each.currency}${each.per === "goal" ? "" : ` a ${each.per}`}`).join("; ")}. Ask may_spend before each purchase.` : "Spend nothing.",
     goal.ends ? `It ends at ${resetTime(goal.ends)}: be done by then, or wrap up and report.` : "",
     LEAD_WORDS(goal.projects.map(goalProject)),
@@ -952,17 +944,6 @@ export function goalProgress(bot: string, given: Record<string, unknown>, file =
   }
   noteWorkChanged(bot);
   return { said: `${notes.length ? `Noted: ${notes.join("; ")}.` : "Nothing to note: give steps, add, waiting, spent or watching."} ${presence()}` };
-}
-
-/** may_publish: whether a public step of the running goal is switched on. */
-export function mayPublish(bot: string, given: Record<string, unknown>, file = GOALS_FILE): { said: string } | { refused: string } {
-  const goal = runningGoal(bot, file);
-  if (!goal) return { refused: "No goal is running. Ask the user." };
-  const asked = text(given.step, 200);
-  if (!asked) return { refused: `Say which public step (step): ${goal.public.map(each => `${each.id} "${each.text}"`).join(", ") || "the plan has none"}.` };
-  const found = goal.public.find(each => each.id === asked || each.text.toLowerCase() === asked.toLowerCase());
-  if (!found) return { said: `"${asked}" isn't one of the goal's public steps, so it's not approved: prepare it as a draft and keep it as waiting for the user.` };
-  return { said: found.on ? `Yes: "${found.text}" is switched on. Do it once it's ready.` : `No: "${found.text}" is switched off. Prepare it as a draft, and keep it as waiting for the user.` };
 }
 
 /** may_spend: whether `amount` for `what` fits the plan's cap for it, in its period now. */

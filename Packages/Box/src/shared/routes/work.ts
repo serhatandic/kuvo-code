@@ -134,7 +134,7 @@ export const GOAL_CHECK = object({
   "action?": object({ kind: words("open", "projectsFolder"), label: string, "url?": string }),
 });
 
-/** What waits for you: what only you can fix, a judgment call before anything public, something
+/** What waits for you: what only you can fix, a call only you can make, something
  * outside the plan, or an ask (a permission or a question one of its sessions has, waiting for you).
  * A page to open for it, the site or app it's at, and the session it's in. */
 export const GOAL_WAITING = object({
@@ -161,8 +161,8 @@ export const GOAL_FOLDER = object({ project: string, folder: nullable(string), s
 
 /** A bot's goal (PROTOCOL.md, "Work › Goals"): the goal in your words and its plan, kept on the box
  * beside the conversation's own goal (`kuvo/agents/api/kuvo/goals`), which keeps the bot at it. The
- * steps (one track each), what it checked, what it may spend, its public steps with your switch for
- * each (off until you turn it on), the projects it may make, whether what needs you wakes you, how
+ * steps (one track each), what it checked, what it may spend, `public` (always empty now: what it
+ * publishes goes as its conversation's mode allows), the projects it may make, whether what needs you wakes you, how
  * often you hear how it goes (`digest`), when it ends if you set an end, where it stands, what waits
  * for you, what's paused at a limit and until when, how long it has waited at limits (ms), what's
  * still watched, when it goes on next while nothing of it can before a time (`next`: its bot's

@@ -98,14 +98,12 @@ export async function heldUnreached(session: string, action: ReviewedAction, sig
   return review(action, { session, said: [] }, { model: unanswered, signal });
 }
 
-/** The bot whose conversation or work this is, and its goal while it has one running (with the
- * public steps you switched on: what it may publish). */
+/** The bot whose conversation or work this is, and its goal while it has one running. */
 function botOf(data: EngineSession): ReviewContext["bot"] | undefined {
   const bot = botOfConversation(data.id) ?? worksFor(data);
   if (!bot) return undefined;
   const running = runningGoal(bot.bot);
-  const on = running?.public.filter(step => step.on).map(step => `"${step.text}"`) ?? [];
-  const goal = running ? `${running.goal}${on.length ? `\n(Public steps the user switched on: ${on.join(", ")}.)` : ""}` : undefined;
+  const goal = running?.goal;
   return { id: bot.bot, name: bot.name, ...(goal ? { goal } : {}) };
 }
 

@@ -1,6 +1,6 @@
 // A bot's goal (PROTOCOL.md, "Work › Goals"), of any length: a bot puts its plan to you on one card,
-// with what it checked, what it may spend in a period, a switch for each public step, and how often
-// you hear how it goes; only you start it. As it goes, what its sessions ask waits for you (never a
+// with what it checked, what it may spend in a period, and how often you hear how it goes; only you
+// start it, and nothing it would publish is held back (its conversation's mode decides). As it goes, what its sessions ask waits for you (never a
 // no, never a stall), a model's limit or a daily limit pauses what hit it until the reset and the box
 // carries it on then (through a restart too), a spend cap starts again with its period, an end you set
 // has it wrap up and report, and digests and the report reach your phones. Its sessions run as any
@@ -218,11 +218,12 @@ const PLAN = {
     { text: "Stripe key works", ok: true },
   ],
   spend: [{ what: "driftwood.coffee", cap: 15 }, { what: "ads", cap: 20, per: "day" }],
+  // What a bot told by older words still sends: nothing comes of it.
   public: ["Publish the site when it's ready", "Turn on live payments"],
   projects: ["Storefront"],
 };
 const goals = async () => (await route("GET", "kuvo/work/goals")).body.goals;
-async function startedGoal(answer = { public: { p1: true } }) {
+async function startedGoal(answer = {}) {
   const proposed = await tool("propose_goal", PLAN);
   assert.equal(proposed.isError, false, proposed.text);
   const [goal] = await goals();
@@ -243,7 +244,7 @@ const tell = notice => { told.push(notice); return true; };
 const look = (now = Date.now()) => link.lookAtGoals(tell, target, { now });
 beforeEach(() => { told = []; });
 
-test("a bot puts its goal to you on one card: the plan with its phases, what it checked, what it may spend and in what period, a switch per public step, how often you hear how it goes", async () => {
+test("a bot puts its goal to you on one card: the plan with its phases, what it checked, what it may spend and in what period, how often you hear how it goes", async () => {
   const said = await tool("propose_goal", PLAN, { unattended: false });
   assert.equal(said.isError, false, said.text);
   assert.match(said.text, /can't work on it alone yet/);
@@ -263,7 +264,7 @@ test("a bot puts its goal to you on one card: the plan with its phases, what it 
   assert.equal(token.site, "dash.cloudflare.com", "a check's site, from its page");
   assert.deepEqual([token.state, token.by, token.action], ["needs", "bot", { kind: "open", label: "Add", url: "https://dash.cloudflare.com/profile/api-tokens" }]);
   assert.deepEqual(goal.spend.map(each => [each.what, each.cap, each.currency, each.per, each.spent]), [["driftwood.coffee", 15, "USD", "goal", 0], ["ads", 20, "USD", "day", 0]]);
-  assert.deepEqual(goal.public.map(each => each.on), [false, false], "every public step starts switched off");
+  assert.deepEqual(goal.public, [], "nothing it would publish is held back for a switch");
   assert.equal(goal.digest, "day", "a plan in phases gets a daily digest unless the bot says");
   assert.equal(goal.wake, false);
 
@@ -273,31 +274,30 @@ test("a bot puts its goal to you on one card: the plan with its phases, what it 
   assert.equal(start.body.goal.state, "running");
 });
 
-test("only you start the goal, with your switches, its end and its caps; the bot's told what's approved, and asks the box before a public step", async () => {
+test("only you start the goal, with its end and its caps; the bot's told what's approved, and nothing it would publish waits on a switch", async () => {
   await tool("propose_goal", { ...PLAN, steps: ["Build the site"] });
   await tool("propose_goal", PLAN);
   const listed = await goals();
   assert.equal(listed.length, 1, "proposed again, it's the one card");
   assert.equal(listed[0].alone, true);
   const ends = Date.now() + 7 * 86_400_000;
-  const started = await route("POST", `kuvo/work/goals/${listed[0].id}`, { action: "start", public: { p1: true }, wake: true, digest: "week", ends, spend: [{ cap: 12 }, { per: "week" }] });
+  const started = await route("POST", `kuvo/work/goals/${listed[0].id}`, { action: "start", wake: true, digest: "week", ends, spend: [{ cap: 12 }, { per: "week" }] });
   assert.equal(started.status, 200, JSON.stringify(started.body));
   const goal = started.body.goal;
   assert.deepEqual([goal.state, goal.wake, goal.digest, goal.ends], ["running", true, "week", ends]);
-  assert.deepEqual(goal.public.map(each => each.on), [true, false]);
+  assert.deepEqual(goal.public, []);
   assert.deepEqual(goal.spend.map(each => [each.cap, each.per]), [[12, "goal"], [20, "week"]]);
   const [message] = prompts;
   assert.equal(message.to, "ses_pixel");
   assert.match(message.text, /^\[Goal started\]/);
   // The box's own words to the bot, marked for what they are: a client shows a line, never your bubble.
   assert.deepEqual(message.metadata, { kuvo: { note: { from: "Goal", line: "Goal started" } } });
-  assert.match(message.text, /Switched on, so do them when they're ready: "Publish the site when it's ready"\./);
-  assert.match(message.text, /Switched off, so prepare them as drafts for the user: "Turn on live payments"\./);
+  assert.doesNotMatch(message.text, /draft|switched/i, "never told to keep what it publishes as a draft");
   assert.match(message.text, /ads, up to 20 USD a week/);
   assert.doesNotMatch(message.text, /night|morning|sleep/i);
 
-  assert.match((await tool("may_publish", { step: "p1" })).text, /^Yes/);
-  assert.match((await tool("may_publish", { step: "Turn on live payments" })).text, /^No: .* switched off/);
+  const asked = await route("POST", "kuvo/agent-tools", { name: "may_publish", arguments: { step: "p1" }, session: "ses_pixel" });
+  assert.equal(asked.status, 400, "no tool to ask: its mode decides");
   assert.equal((await route("POST", `kuvo/work/goals/${listed[0].id}`, { action: "start" })).status, 400);
   assert.equal((await tool("propose_goal", PLAN)).isError, true);
   assert.match((await tool("propose_goal", PLAN, { session: "ses_site" })).text, /Only a bot takes a goal/);
@@ -744,7 +744,7 @@ test("for a goal, a session the bot starts is told no one may be watching, a pro
 
   const [goal] = await goals();
   await route("POST", `kuvo/work/goals/${goal.id}`, { action: "stop" });
-  await startedGoal({ public: { p1: true } });
+  await startedGoal();
   await tool("start_session", { task: "Deploy the site.", project: "Driftwood" });
   assert.equal(effectOf(made.at(-1).permissions, "shell", "vercel --prod"), "allow");
 });

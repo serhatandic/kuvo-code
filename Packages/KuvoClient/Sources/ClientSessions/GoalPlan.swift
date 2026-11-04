@@ -410,7 +410,7 @@ public struct GoalPlanList: Decodable, Sendable, Equatable {
     }
 }
 
-/// Your answer to a goal (`POST kuvo/work/goals/<id>`): start it with your switches and limits, not
+/// Your answer to a goal (`POST kuvo/work/goals/<id>`): start it with your limits, not
 /// now, or stop it; while it runs, change its limits, or put away what waits for you.
 public struct GoalPlanAnswer: Encodable, Sendable {
     public enum Action: String, Encodable, Sendable { case start, decline, stop, change, clear, projects }
@@ -425,7 +425,6 @@ public struct GoalPlanAnswer: Encodable, Sendable {
     }
 
     public let action: Action
-    public let `public`: [String: Bool]?
     public let wake: Bool?
     public let digest: GoalPlan.Cadence?
     /// An end you set, in ms since 1970.
@@ -440,31 +439,30 @@ public struct GoalPlanAnswer: Encodable, Sendable {
 
     /// Start it. `ends`: the end you picked; `clearsEnd`: you picked none where the bot had
     /// proposed one, which takes it away (left out, the bot's stays).
-    public static func start(public switches: [String: Bool], wake: Bool, digest: GoalPlan.Cadence? = nil, ends: Date? = nil, clearsEnd: Bool = false, spend: [SpendChange]? = nil) -> GoalPlanAnswer {
-        GoalPlanAnswer(action: .start, public: switches, wake: wake, digest: digest, ends: ends.map { $0.timeIntervalSince1970 * 1000 }, clearsEnd: ends == nil && clearsEnd, spend: spend, waiting: nil)
+    public static func start(wake: Bool, digest: GoalPlan.Cadence? = nil, ends: Date? = nil, clearsEnd: Bool = false, spend: [SpendChange]? = nil) -> GoalPlanAnswer {
+        GoalPlanAnswer(action: .start, wake: wake, digest: digest, ends: ends.map { $0.timeIntervalSince1970 * 1000 }, clearsEnd: ends == nil && clearsEnd, spend: spend, waiting: nil)
     }
     /// A running goal's limits changed: only what's given (`clearsEnd` takes its end away).
-    public static func change(public switches: [String: Bool]? = nil, wake: Bool? = nil, digest: GoalPlan.Cadence? = nil, ends: Date? = nil, clearsEnd: Bool = false, spend: [SpendChange]? = nil) -> GoalPlanAnswer {
-        GoalPlanAnswer(action: .change, public: switches, wake: wake, digest: digest, ends: ends.map { $0.timeIntervalSince1970 * 1000 }, clearsEnd: ends == nil && clearsEnd, spend: spend, waiting: nil)
+    public static func change(wake: Bool? = nil, digest: GoalPlan.Cadence? = nil, ends: Date? = nil, clearsEnd: Bool = false, spend: [SpendChange]? = nil) -> GoalPlanAnswer {
+        GoalPlanAnswer(action: .change, wake: wake, digest: digest, ends: ends.map { $0.timeIntervalSince1970 * 1000 }, clearsEnd: ends == nil && clearsEnd, spend: spend, waiting: nil)
     }
     public static func clear(waiting id: String) -> GoalPlanAnswer {
-        GoalPlanAnswer(action: .clear, public: nil, wake: nil, digest: nil, ends: nil, clearsEnd: false, spend: nil, waiting: id)
+        GoalPlanAnswer(action: .clear, wake: nil, digest: nil, ends: nil, clearsEnd: false, spend: nil, waiting: id)
     }
     /// A proposed goal's projects renamed or moved, in its order: a name, or a full path.
     public static func projects(_ projects: [String]) -> GoalPlanAnswer {
-        var answer = GoalPlanAnswer(action: .projects, public: nil, wake: nil, digest: nil, ends: nil, clearsEnd: false, spend: nil, waiting: nil)
+        var answer = GoalPlanAnswer(action: .projects, wake: nil, digest: nil, ends: nil, clearsEnd: false, spend: nil, waiting: nil)
         answer.projects = projects
         return answer
     }
-    public static let decline = GoalPlanAnswer(action: .decline, public: nil, wake: nil, digest: nil, ends: nil, clearsEnd: false, spend: nil, waiting: nil)
-    public static let stop = GoalPlanAnswer(action: .stop, public: nil, wake: nil, digest: nil, ends: nil, clearsEnd: false, spend: nil, waiting: nil)
+    public static let decline = GoalPlanAnswer(action: .decline, wake: nil, digest: nil, ends: nil, clearsEnd: false, spend: nil, waiting: nil)
+    public static let stop = GoalPlanAnswer(action: .stop, wake: nil, digest: nil, ends: nil, clearsEnd: false, spend: nil, waiting: nil)
 
-    private enum CodingKeys: String, CodingKey { case action, `public`, wake, digest, ends, spend, waiting, projects }
+    private enum CodingKeys: String, CodingKey { case action, wake, digest, ends, spend, waiting, projects }
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(action, forKey: .action)
-        try container.encodeIfPresent(self.public, forKey: .public)
         try container.encodeIfPresent(wake, forKey: .wake)
         try container.encodeIfPresent(digest, forKey: .digest)
         if let ends {

@@ -12,7 +12,7 @@ import { noteWorkChanged } from "./changes";
 import { callOf, keepAnswer, noteSession, pendingAsk, permissionWords, ruleFor, rulesOf, type PendingPermission } from "./answers";
 import { allowRefusal } from "./policy";
 import { approvalOf } from "./approval";
-import { appsNamed, finishGoal, goalProgress, goalProject, mayPublish, maySpend, progressRefused, proposalRefused, proposeGoal, runningGoal } from "./goals";
+import { appsNamed, finishGoal, goalProgress, goalProject, maySpend, progressRefused, proposalRefused, proposeGoal, runningGoal } from "./goals";
 import { findApps } from "./apps";
 import fs from "node:fs";
 import path from "node:path";
@@ -273,12 +273,6 @@ export async function goalProgressTool(caller: Caller, args: Record<string, unkn
   if (wrong) return refused(wrong);
   await findApps(appsNamed(args)).catch(() => {});
   return answered(goalProgress(bot.bot, args));
-}
-
-/** may_publish: whether one of the goal's public steps is switched on. */
-export function mayPublishTool(caller: Caller, args: Record<string, unknown>): ToolAnswer {
-  const bot = goalBot(caller);
-  return bot ? answered(mayPublish(bot.bot, args)) : refused(ONLY_BOTS);
 }
 
 /** may_spend: whether a purchase fits the plan's cap for it, in its period. */
