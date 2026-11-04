@@ -9,6 +9,8 @@ import SwiftUI
 struct GoalProjectsRow: View {
     let plan: GoalPlan
     let box: String
+    /// Whether a chip's name is being typed, for the card to leave Return and Escape to it.
+    @Binding var renames: Bool
     /// The projects as you renamed or moved them, in the plan's order.
     let change: ([String]) -> Void
     @Environment(AppModel.self) private var app
@@ -41,6 +43,8 @@ struct GoalProjectsRow: View {
         }
         .padding(.vertical, 9)
         .frame(minHeight: 44)
+        .onChange(of: renaming) { _, now in renames = now != nil }
+        .onDisappear { renames = false }
         .sheet(isPresented: Binding(get: { browsing != nil }, set: { if !$0 { browsing = nil } })) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Move \(browsing.map { GoalPlanWords.projectName(plan.projects[$0]) } ?? "") on \(computer)")

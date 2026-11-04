@@ -21,6 +21,8 @@ struct GoalCard: View {
     @Environment(\.colorScheme) private var scheme
 
     @State private var switches: [String: Bool] = [:]
+    /// A project's name is being typed: Return and Escape are its, not Start's and Not Now's.
+    @State private var renamesProject = false
     @State private var wake = false
     @State private var digest: GoalPlan.Cadence = .none
     @State private var deadline: Deadline = .none
@@ -64,7 +66,7 @@ struct GoalCard: View {
             .scrollBounceBehavior(.basedOnSize)
             HStack(spacing: 8) {
                 Button("Not Now", role: .cancel) { send(.decline) }
-                    .keyboardShortcut(takesKeys ? .cancelAction : nil)
+                    .keyboardShortcut(takesKeys && !renamesProject ? .cancelAction : nil)
                     .help("Put the plan away: \(plan.name) doesn’t start it")
                 Spacer()
                 if isAnswering, sent == .start {
@@ -73,7 +75,7 @@ struct GoalCard: View {
                 }
                 Button(plan.alone ? "Start Goal" : "Start With Me Here") { send(.start) }
                     .buttonStyle(.glassProminent)
-                    .keyboardShortcut(takesKeys ? .defaultAction : nil)
+                    .keyboardShortcut(takesKeys && !renamesProject ? .defaultAction : nil)
                     .help(plan.alone ? "\(plan.name) works through the plan on \(computer.lowercasedThisMac), with the window closed too"
                                      : "\(plan.name) works through the plan while you’re here")
             }
@@ -340,12 +342,13 @@ struct GoalCard: View {
                 ForEach(Array(plan.spend.enumerated()), id: \.offset) { index, line in
                     Divider().padding(.leading, GoalCardMetrics.markWidth + 12)
                     GoalSettingRow(symbol: "creditcard", title: plan.spend.count == 1 ? "Spending" : "Spending on \(line.what)", subtitle: plan.spend.count == 1 ? "On \(line.what)" : nil) {
-                        Picker("Most it may spend", selection: capBinding(index)) {
+                        // Named for its line, where there are several.
+                        Picker(plan.spend.count == 1 ? "Most it may spend" : "Most it may spend on \(line.what)", selection: capBinding(index)) {
                             ForEach(Self.capChoices(line.cap), id: \.self) { cap in
                                 Text(GoalPlanWords.money(cap, line.currency)).tag(cap)
                             }
                         }
-                        Picker("Per", selection: periodBinding(index)) {
+                        Picker(plan.spend.count == 1 ? "Per" : "Per, on \(line.what)", selection: periodBinding(index)) {
                             ForEach(GoalPlan.Spend.Period.allCases, id: \.self) { period in
                                 Text(Self.words(period)).tag(period)
                             }
@@ -354,7 +357,7 @@ struct GoalCard: View {
                 }
                 if !plan.projects.isEmpty {
                     Divider().padding(.leading, GoalCardMetrics.markWidth + 12)
-                    GoalProjectsRow(plan: plan, box: box) { projects in
+                    GoalProjectsRow(plan: plan, box: box, renames: $renamesProject) { projects in
                         failure = nil
                         Task {
                             do { try await app.goalPlans.answer(plan, on: box, .projects(projects)) } catch { failure = error.localizedDescription }
