@@ -16,6 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- A bot on a goal works like a lead with a team: once you start the goal, it makes the project (where you said it goes, if you did) and hands each step to a session of its own, following them as they report, rather than writing the code itself. Tell it if you'd rather it did the work alone.
 - In Edit Bot › Work, a limit's menu opens at the value you click, with the current choice over it, instead of at the row's left edge.
 - The model menu gets shorter again when you turn from a long list to a short page like Custom Auto, instead of keeping the long list's height with empty space above and below.
 - **Update All** in Settings › Accounts updates the coding agents on the page's own computer (each machine's page has its own), and every agent it updates says how it went where you see it, signed in or not: Updating…, Updated to its new version, or why it couldn't be updated.

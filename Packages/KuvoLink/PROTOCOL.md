@@ -773,13 +773,17 @@ folder you pick once per box, after asking you.
   kept in `box/work.json`. None until you pick one; `suggested` is `~/Developer` or `~/Projects`
   when there's one. PATCH `{projectsFolder}` takes a full path (`~` is fine) to a folder that's
   there, or null; 400 otherwise. The box makes projects only there, and never deletes one.
-- **Tools**: `make_project` (`{name, git?, clone?}`: a folder named after it, lowercase with
+- **Tools**: `make_project` (`{name, git?, clone?, folder?}`: a folder named after it, lowercase with
   dashes, a new git repository there unless `git: false`, or a repository cloned from an https or
-  ssh address), `list_projects` (each project here: its folder, whether it's git, who made it).
+  ssh address; `folder`, bridge 0.9.191, is where you said it goes, a full path (`~` is fine; the
+  folders on the way there are made too), which needs no projects folder picked), `list_projects` (each project here:
+  its folder, whether it's git, who made it).
   A folder that's there with files in it, a project there already, or an address git can't clone
   is refused without asking.
-- **Asking you first**: `make_project` asks unless you said Always to that bot for that kind,
-  and a projects folder is picked. The ask is kept in `run/work/asks.json` until you answer; the
+- **Asking you first**: `make_project` asks unless you said Always to that bot for that kind, or
+  it's a project in the goal you started (by its name, or by the folder named for it there), and a
+  projects folder is picked (or a folder named for it). An ask for one with a folder named has that
+  as its `folder`, and no `suggested`. The ask is kept in `run/work/asks.json` until you answer; the
   tool waits up to ten minutes, then says it stays asked, and the conversation gets
   `[The user answered] …` as a message when you do (for a conversation the engine doesn't know
   while the coding agents' bridge isn't running, or one moving to or from another computer, tried
@@ -823,7 +827,7 @@ beside it.
 - **Tools** (a bot's conversation only): `propose_goal` (`{goal, title?, steps: [text | {text, phase?,
   site?, after?: [step number]}],
   checks?: [{text, ok?, detail?, url?, button?}], spend?: [{what, cap, currency?, per?:
-  day|week|month|goal}], public?: [text], projects?: [name], ends?, digest?:
+  day|week|month|goal}], public?: [text], projects?: [name | full path], ends?, digest?:
   day|week|milestones|none}`) puts the card up, replacing one it proposed before (refused while one
   runs; `digest` is a day's for a plan in phases or of more than 12 steps unless it says);
   `goal_progress` (`{steps: [{step, state?: todo|doing|done|waiting|paused|skipped, progress?: 0–1,
@@ -838,7 +842,8 @@ beside it.
   client) has the bot plan it and propose it at once → `{text}`; 400 for a conversation that isn't
   a bot's. It goes as your message: your words, then a `<sent-with>` block (below) with the goal's
   own heading (`SentWithKeyword.goalHeading`, which tells the bot to plan it) and `/goal`, so it
-  reads as you typed it. One a box sent before 0.9.143 is `[Goal] <words>` then a note in
+  reads as you typed it, then (bridge 0.9.191) lines on how to plan it as a lead whose sessions do
+  the work, which clients leave out with the block. One a box sent before 0.9.143 is `[Goal] <words>` then a note in
   parentheses; `SentWithKeyword.split` reads it the same way.
 - **Only you start it**: `POST kuvo/work/goals/<id>` from a client, `{action: start, public?: {<id>:
   bool}, wake?, digest?, ends?, spend?: [{cap?, per?}] (by line)}`, `{action: decline}` or `{action:
@@ -851,7 +856,10 @@ beside it.
   for one) while its bot moves to another computer (a goal stays on the box it started on, and a
   bot working on one doesn't move: `kuvo/moves`), when the bot isn't told anything of its goal
   either. Starting tells the bot `[Goal
-  started] …` (what's switched on and off, what it may spend, the projects it may make, the end) and
+  started] …` (what's switched on and off, what it may spend, the projects it may make, the end,
+  and, bridge 0.9.191, how to work through it: make its projects with `make_project`, hand each step
+  to a session with `start_session`, follow them up, and write none of the work itself unless you
+  said to) and
   sets the conversation's goal with `long: true` (no brief of its own: this is it); declining tells
   it `[Not now] …`; stopping stops its work as `stop-all` does, and takes the conversation's goal
   away. The box's watch keeps the two as one: it sets the conversation's goal again where its bridge
@@ -869,7 +877,8 @@ beside it.
   before a time: the bot's soonest wake-up, or the steps it put off; clients say "Next: Mon 09:00"): each bot's latest, while it's proposed or running, or ended within a day. Kept
   in `run/work/goals.json`; `kuvo/work/events` moves too. While it's proposed, the box's own checks
   come first: `alone` (failed where this box can't work on it alone yet), `power` (a Mac on battery),
-  `projectsFolder` (needs, when the plan makes a project and none is picked). `progress` is given only
+  `projectsFolder` (needs, when the plan makes a project without a folder named for it, and none is
+  picked). `progress` is given only
   where the bot counted it, always with what it counted in `note` ("3 of 8 pages"), which is what
   the apps show; a step without it is in progress, not some share of it. `site` (a step,
   a check or what waits, tied to a service: `stripe.com`, from its page's address or as the bot

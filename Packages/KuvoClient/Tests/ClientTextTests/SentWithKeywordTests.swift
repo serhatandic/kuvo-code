@@ -19,9 +19,18 @@ import ClientText
         <sent-with>
         The user sent this as a goal, with Kuvo Code's /goal. Plan it, check what it needs, and put it to them with propose_goal before doing any of the work:
         /goal
+        Plan it as a lead whose sessions do the work: make each step one session's whole task ("Build the app's screens", "Write the tests"), not a command.
+        Put each project it needs in projects: by name, or, where the user named a folder for it, that folder as a full path (~/… or /…). You make it with make_project once the goal starts.
+        Make nothing before [Goal started]: no folders, files or code.
         </sent-with>
         """
         #expect(SentWithKeyword.split(sent) == ("Write a short weekly summary of this repo's commits every Monday for a month", "/goal"))
+    }
+
+    /// One a box sent before it told the bot how to plan it, with /goal last: read the same way.
+    @Test func aGoalAskedForByAnOlderBoxReadsTheSame() {
+        let sent = "Summarize the commits weekly\n\n<sent-with>\n\(SentWithKeyword.goalHeading)\n/goal\n</sent-with>"
+        #expect(SentWithKeyword.split(sent) == ("Summarize the commits weekly", "/goal"))
     }
 
     /// One sent before the goal's words went in a block: read the same way.

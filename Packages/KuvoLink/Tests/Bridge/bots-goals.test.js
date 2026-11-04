@@ -324,7 +324,10 @@ test("/goal in a bot's chat asks it for a plan at once, and Not Now tells it", a
   // (KuvoClient's SentWithKeyword), so it reads as the composer showed it: /goal and your words.
   const [words, block] = prompts[0].text.split("\n\n<sent-with>\n");
   assert.equal(words, "Ship the Driftwood site this week");
-  assert.deepEqual(block.split("\n"), ["The user sent this as a goal, with Kuvo Code's /goal. Plan it, check what it needs, and put it to them with propose_goal before doing any of the work:", "/goal", "</sent-with>"]);
+  const lines = block.split("\n");
+  // (Clients read the heading and /goal, and leave out the block whole: how to plan it is the bot's.)
+  assert.deepEqual(lines.slice(0, 2), ["The user sent this as a goal, with Kuvo Code's /goal. Plan it, check what it needs, and put it to them with propose_goal before doing any of the work:", "/goal"]);
+  assert.equal(lines.at(-1), "</sent-with>");
   assert.equal((await route("POST", "kuvo/work/goals/ask", { session: "ses_site", goal: "x" })).status, 400, "only a bot's chat");
 
   await tool("propose_goal", PLAN);
@@ -333,6 +336,65 @@ test("/goal in a bot's chat asks it for a plan at once, and Not Now tells it", a
   assert.equal(declined.body.goal.state, "declined");
   assert.match(prompts.at(-1).text, /^\[Not now\]/);
   assert.deepEqual(prompts.at(-1).metadata, { kuvo: { note: { from: "Goal", line: "You said not now" } } });
+});
+
+// The user's goal for a bot that builds iOS apps, with the folder they want it in.
+const MONEY = "build an ios app that would print money. project should be at ~/Desktop/main/money-printer";
+
+test("a bot on a goal leads it as a person with a team does: it plans steps for sessions, makes the project where you named it, hands each step to a session and writes no code itself", async () => {
+  const desktop = path.join(home, "Desktop", "main");
+  fs.mkdirSync(desktop, { recursive: true });
+  atEnd(() => fs.rmSync(path.join(home, "Desktop"), { recursive: true, force: true }));
+  // As it plans: steps that are sessions' tasks, the project by the folder you named, nothing made yet.
+  assert.equal((await route("POST", "kuvo/work/goals/ask", { session: "ses_pixel", goal: MONEY })).status, 200);
+  const planning = prompts[0].text.split("\n\n<sent-with>\n")[1];
+  assert.match(planning, /one session's whole task/);
+  assert.match(planning, /projects: .*folder .* as a full path/);
+  assert.match(planning, /make_project once the goal starts/);
+  assert.match(planning, /Make nothing before \[Goal started\]/);
+
+  const proposed = await tool("propose_goal", { goal: MONEY, title: "Money printer", steps: ["Build the app's screens", "Add in-app purchases", { text: "Write the tests", after: [1, 2] }], projects: ["~/Desktop/main/money-printer"] });
+  assert.equal(proposed.isError, false, proposed.text);
+  const [card] = await goals();
+  assert.equal(card.checks.find(each => each.id === "projectsFolder"), undefined, "no projects folder to pick: you named where it goes");
+  const started = await route("POST", `kuvo/work/goals/${card.id}`, { action: "start" });
+  assert.equal(started.status, 200, JSON.stringify(started.body));
+
+  // As it starts: make the project there, a session for each step, follow them up, write no code.
+  const go = prompts.at(-1).text;
+  assert.match(go, /^\[Goal started\]/);
+  assert.match(go, /Make money-printer with make_project \(name "money-printer", folder "~\/Desktop\/main\/money-printer"\) first: you may, without asking\. Never make a project's folder with mkdir or git init\./);
+  assert.match(go, /Hand each step to a session with start_session: in the project, with the step's number \(step\)/);
+  assert.match(go, /each in a worktree of its own/);
+  assert.match(go, /A new project has no commits yet: its first session works in it without a worktree and commits/);
+  assert.match(go, /woken when one finishes or asks\. Read its report/);
+  assert.match(go, /Write no code and make no files of the work yourself/);
+  assert.match(go, /Unless the user told you to do it yourself/);
+
+  // The project, where you named it, at once: it was in the plan you started.
+  const project = await tool("make_project", { name: "money-printer" });
+  assert.equal(project.isError, false, project.text);
+  assert.ok(fs.existsSync(path.join(desktop, "money-printer", ".git")), project.text);
+  assert.match(project.text, /~\/Desktop\/main\/money-printer/);
+  assert.deepEqual((await route("GET", "kuvo/work/asks")).body.asks, [], "nothing asked");
+  const first = await tool("start_session", { task: "Build the app's screens.", project: "money-printer", step: 1 });
+  assert.equal(first.isError, false, first.text);
+  assert.equal(made.at(-1).location.directory, path.join(desktop, "money-printer"), "its session works in the project");
+
+  // One that isn't in the plan, where you name it, is asked as before, showing where it goes, and
+  // made there without a projects folder picked, with the folders on the way there.
+  const asking = tool("make_project", { name: "Coin flip", folder: "~/Desktop/side/coin-flip" });
+  let ask;
+  while (!(ask = (await route("GET", "kuvo/work/asks")).body.asks[0])) await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual([ask.project, ask.folder, ask.folderName, ask.suggested], ["Coin flip", path.join(desktop, "..", "side", "coin-flip"), "coin-flip", undefined]);
+  assert.equal((await route("POST", `kuvo/work/asks/${ask.id}`, { answer: "allow" })).status, 200);
+  assert.equal((await asking).isError, false);
+  assert.ok(fs.existsSync(path.join(desktop, "..", "side", "coin-flip", ".git")));
+
+  // A conversation that isn't a bot gets no goal of this kind, and nothing of it.
+  const before = prompts.length;
+  assert.equal((await route("POST", "kuvo/work/goals/ask", { session: "ses_site", goal: MONEY })).status, 400);
+  assert.equal(prompts.length, before);
 });
 
 test("what its sessions ask waits for you: never said no to, listed once it settles, and gone once it's answered", async () => {
