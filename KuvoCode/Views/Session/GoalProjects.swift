@@ -37,6 +37,7 @@ struct GoalProjectsRow: View {
                 Flow(spacing: 6) { chips }
                     .padding(.leading, GoalCardMetrics.markWidth + 12)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.vertical, 9)
         .frame(minHeight: 44)

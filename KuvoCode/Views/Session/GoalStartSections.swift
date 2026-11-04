@@ -68,7 +68,8 @@ struct GoalCardPanel: View {
 }
 
 /// A setting in Execution settings: its mark, what it is, a line on what it does, and its control
-/// on the right (under its words in a narrow card).
+/// on the right, whole, its words wrapping beside it in a narrow card (so every row in a section
+/// keeps one shape).
 struct GoalSettingRow<Control: View>: View {
     let symbol: String
     let title: String
@@ -76,17 +77,10 @@ struct GoalSettingRow<Control: View>: View {
     @ViewBuilder var control: () -> Control
 
     var body: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 12) {
-                words
-                    .frame(minWidth: 180, maxWidth: .infinity, alignment: .leading)
-                choices
-            }
-            VStack(alignment: .leading, spacing: 8) {
-                words
-                choices
-                    .padding(.leading, GoalCardMetrics.markWidth + 12)
-            }
+        HStack(spacing: 12) {
+            words
+                .frame(maxWidth: .infinity, alignment: .leading)
+            choices
         }
         .padding(.vertical, 9)
         .frame(minHeight: 44)
@@ -204,24 +198,12 @@ struct GoalAttentionRow: View {
     var more: [(String, () -> Void)] = []
 
     var body: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(alignment: .center, spacing: 12) {
-                lead
-                words
-                    .frame(minWidth: 200, maxWidth: .infinity, alignment: .leading)
-                controls
-            }
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(alignment: .firstTextBaseline, spacing: 12) {
-                    lead
-                    words
-                    Spacer(minLength: 0)
-                }
-                if button != nil || !more.isEmpty {
-                    HStack(spacing: 2) { controls }
-                        .padding(.leading, 12 + 8 + 12 + GoalCardMetrics.markWidth)
-                }
-            }
+        // Its button whole on the right, its words wrapping beside it in a narrow card.
+        HStack(alignment: .center, spacing: 12) {
+            lead
+            words
+                .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: 2) { controls }
         }
         .padding(.vertical, 8)
         .frame(minHeight: 40)

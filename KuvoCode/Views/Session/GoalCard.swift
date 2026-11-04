@@ -6,9 +6,9 @@ import OpenCodeKit
 import SwiftUI
 
 /// The plan a bot puts to you for a goal, over its composer like the other cards that ask you
-/// something: what only you can do first, each with its button, then what's ready; the plan in a
-/// line; the limits as sentences you can change (what it may spend, when it ends, how often you
-/// hear); a switch for each step that goes public, and whether what needs you wakes you. Not Now,
+/// something, in sections: the plan in a line with Review for its steps; what needs you first,
+/// each with its button; Execution settings (when it ends, how often you hear, the model asked
+/// once, what it may spend, its projects, Wake me); and the checks that passed, folded. Not Now,
 /// or Start Goal, on its box. A box that can't work on it alone says why, with where to fix it,
 /// and starts it with you there.
 struct GoalCard: View {
