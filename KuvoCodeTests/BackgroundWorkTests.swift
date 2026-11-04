@@ -216,6 +216,93 @@ import Testing
         #expect(newerGone.how == nil)
     }
 
+    /// The first launch after an update, with nothing under way: the keeper of the version before
+    /// goes the moment the app asks it to make way. The window shows one start, until the installed
+    /// app's keeper is up, rather than the workspace on the keeper that's going, then the loader
+    /// again as it goes.
+    @Test func afterAnUpdateWithNothingUnderWayTheWindowStartsOnceOnTheNewKeeper() async throws {
+        let node = try #require(TestBox.node, "Node runs this Mac's box in the tests")
+        let binary = try standIns(node: node)
+        setenv("KUVO_OPENCODE_BINARY", binary.path(percentEncoded: false), 1)
+        setenv("KUVO_KEEPER", "follow", 1)
+        try await StubWeb.listen(port: 47921)
+        let clock = TestClock()
+        let realClock = Keeper.clock
+        Keeper.clock = { [clock] seconds in await clock.wait(seconds) }
+        let olderGone = Gone(), newerGone = Gone()
+        let older = Keeper(version: "0.0.1", build: "1", exits: { olderGone.say($0) })
+        let newer = Keeper(exits: { newerGone.say($0) })
+        let app = AppModel()
+        // A session finishing as the update is installed: the older keeper's first look after the
+        // app asks it to make way still sees it at work (and looks again two seconds on); by the
+        // time the app asks, nothing is.
+        let finishing = Finishing()
+        var starting: Task<Void, Never>?
+        defer {
+            starting?.cancel()
+            app.stop()
+            app.stopBox()
+            older.finish(.stopped)
+            newer.finish(.stopped)
+            Keeper.clock = realClock
+            unsetenv("KUVO_OPENCODE_BINARY")
+            unsetenv("KUVO_KEEPER")
+            try? FileManager.default.removeItem(at: folder)
+            StubWeb.stopListening(port: 47921)
+            engine.stop()
+        }
+        engine.on("GET", "/api/info", json: ["version": OpenCodeEngine.version, "pid": 1])
+        bridge.on("GET", "/api/info", json: ["version": OpenCodeEngine.version, "pid": 2])
+        bridge.on("GET", "/api/session/active", json: ["data": [:] as [String: Any]])
+        engine.on("GET", "/api/session/active") { [finishing] _ in
+            StubWeb.json(["data": finishing.once() ? ["ses_done": ["type": "busy"]] : [:] as [String: Any]])
+        }
+        engine.list([StubEngine.session("ses_done", title: "Done", directory: "/tmp/kuvo-tests-keeper")])
+        await older.start()
+        try Self.reach(keeper: KeeperRecord.read())
+        let olderBox = try #require(recorded("serve.json"), "the older keeper's box runs")
+        let looked = engine.requests("GET", "/api/session/active").count
+
+        // The new app opens, and asks the older keeper to make way: the keeper's look and the app's
+        // question to it (before the app asks the engine anything itself), and the window still
+        // says it's starting.
+        finishing.arm()
+        starting = Task { await app.start() }
+        try await until { app.engine == .ready || engine.requests("GET", "/api/session/active").count >= looked + 2 }
+        #expect(app.engine != .ready, "the workspace showed on the keeper that's going")
+
+        // Nothing's under way when it looks again: it goes, launchd starts the installed app's
+        // keeper, and the window shows the workspace on it, once.
+        try await until { clock.waits.contains(2) }
+        clock.pass(2)
+        try await until { olderGone.how != nil }
+        #expect(olderGone.how == .again)
+        #expect(app.engine != .ready)
+        await newer.start()
+        try Self.reach(keeper: KeeperRecord.read())
+        let newerBox = try #require(recorded("serve.json"), "the newer keeper's box runs")
+        await starting?.value
+        #expect(app.engine == .ready)
+        #expect(app.box.endpoint == newerBox && newerBox != olderBox)
+        #expect(!app.engineStoppedWhileRunning, "the workspace never showed an engine that then stopped")
+        #expect(!app.keeperMakesWay)
+        #expect(app.workspace.session("ses_done") != nil)
+        #expect(engineStarts == 2, "the older keeper's engine and the newer's, none of the app's")
+    }
+
+    /// A session at work for the next look at it only, once armed.
+    nonisolated final class Finishing: @unchecked Sendable {
+        private let lock = NSLock()
+        private var armed = false
+        func arm() { lock.withLock { armed = true } }
+        func once() -> Bool {
+            lock.withLock {
+                defer { armed = false }
+                return armed
+            }
+        }
+    }
+
     /// macOS has background work on for this copy, but launchd has no keeper to start (the app it
     /// was registered from was moved or deleted): the app runs this Mac's box itself at once, never
     /// waiting on a keeper that isn't coming; Settings says it didn't start, and quitting stops the
