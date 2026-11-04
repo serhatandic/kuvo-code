@@ -1163,3 +1163,36 @@ test("a goal's card shows the folder Start makes each project in, as making it w
   assert.equal(started.status, 200, "a folder there already is only shown");
   assert.equal(started.body.goal.folders, undefined, "a goal under way shows none");
 });
+
+test("you rename a proposed goal's project or move it to a folder of your own from its card, and the card follows; the bot isn't told, and once it runs they can't change", async () => {
+  const desktop = path.join(home, "Desktop");
+  const settings = path.join(home, "box", "work.json");
+  fs.rmSync(settings, { force: true });
+  atEnd(() => fs.rmSync(desktop, { recursive: true, force: true }));
+  atEnd(() => fs.rmSync(settings, { force: true }));
+  assert.equal((await tool("propose_goal", { ...PLAN, projects: ["Storefront"] })).isError, false);
+  let [card] = await goals();
+  assert.ok(card.checks.some(check => check.id === "projectsFolder"), "a project named alone, with no projects folder picked");
+  const told = prompts.length;
+
+  const renamed = await route("POST", `kuvo/work/goals/${card.id}`, { action: "projects", projects: ["Tide Pool"] });
+  assert.equal(renamed.status, 200);
+  assert.deepEqual(renamed.body.goal.projects, ["Tide Pool"]);
+  assert.deepEqual(renamed.body.goal.folders, [{ project: "Tide Pool", folder: null, shown: null }]);
+
+  // Moved to a folder of yours that has files: there, and nothing left to pick for it.
+  write(path.join(desktop, "tides", "README.md"), "Mine.\n");
+  const moved = await route("POST", `kuvo/work/goals/${card.id}`, { action: "projects", projects: ["~/Desktop/tides"] });
+  assert.equal(moved.status, 200);
+  assert.deepEqual(moved.body.goal.folders, [{ project: "tides", folder: path.join(desktop, "tides"), shown: "~/Desktop/tides", there: true }]);
+  assert.equal(moved.body.goal.checks.some(check => check.id === "projectsFolder"), false);
+  [card] = await goals();
+  assert.deepEqual(card.projects, ["~/Desktop/tides"], "kept");
+  assert.equal(prompts.length, told, "the bot hears them as the goal starts");
+
+  for (const projects of [[], ["a", "b", "c", "d", "e", "f"], ["~"], "Storefront"]) assert.equal((await route("POST", `kuvo/work/goals/${card.id}`, { action: "projects", projects })).status, 400, JSON.stringify(projects));
+  assert.equal((await route("POST", "kuvo/work/goals/goal_none", { action: "projects", projects: ["Storefront"] })).status, 404);
+
+  assert.equal((await route("POST", `kuvo/work/goals/${card.id}`, { action: "start" })).status, 200);
+  assert.equal((await route("POST", `kuvo/work/goals/${card.id}`, { action: "projects", projects: ["Storefront"] })).status, 400, "made already");
+});

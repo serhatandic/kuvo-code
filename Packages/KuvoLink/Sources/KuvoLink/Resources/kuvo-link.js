@@ -1678,6 +1678,7 @@ var FEATURES = [
   "work.projects",
   "work.goals",
   "work.goals.apps",
+  "work.goals.projects",
   "vault",
   "sandbox",
   "sandbox.check",
@@ -10478,8 +10479,10 @@ async function answerGoal(id, given, targets, file = GOALS_FILE) {
   const action = given.action;
   if (action === "change" || action === "clear")
     return changeGoal(id, action, given, targets, file);
+  if (action === "projects")
+    return goalProjects(id, given.projects, file);
   if (action !== "start" && action !== "decline" && action !== "stop")
-    return { refused: { status: 400, message: "Say start, change, clear, decline or stop (action)." } };
+    return { refused: { status: 400, message: "Say start, change, clear, projects, decline or stop (action)." } };
   const before = readKept2(file).find((goal) => goal.id === id);
   if (!before || !botHere(before.bot))
     return { refused: { status: 404, message: "There's no such goal here." } };
@@ -10537,6 +10540,36 @@ async function answerGoal(id, given, targets, file = GOALS_FILE) {
     await setGoalLoop(changed, loopCondition(changed), targets);
     await tellBot2(changed, startWords(changed), "Goal started", targets);
   }
+  return { goal: shown(changed) };
+}
+function goalProjects(id, given, file) {
+  const no = (message) => ({ refused: { status: 400, message } });
+  if (!Array.isArray(given) || !given.length || given.length > 5)
+    return no("Send the plan's projects (projects): one to five, each a name or a full path (~/… or /…).");
+  const projects = [];
+  for (const each of given) {
+    const entry = typeof each === "string" ? each.trim() : "";
+    if (!entry || entry.length > 200)
+      return no("Each project is a name or a full path (~/… or /…), of 200 characters at most.");
+    if (/^(~\/|\/)/.test(entry) || entry === "~") {
+      const named = namedPlace(entry);
+      if ("refused" in named)
+        return no(named.refused);
+    }
+    projects.push(entry);
+  }
+  const changed = changeKept2((all) => {
+    const goal = all.find((each) => each.id === id);
+    if (!goal || !botHere(goal.bot))
+      return { status: 404, message: "There's no such goal here." };
+    if (goal.state !== "proposed")
+      return { status: 400, message: goal.state === "running" ? "That goal is running: its projects are made already." : "That goal has ended." };
+    goal.projects = projects;
+    return goal;
+  }, file);
+  if (!("id" in changed))
+    return { refused: changed };
+  noteWorkChanged(changed.bot);
   return { goal: shown(changed) };
 }
 function capsGiven(lines, given) {

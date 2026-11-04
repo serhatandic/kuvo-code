@@ -3040,6 +3040,9 @@
             "literal": "work.goals.apps"
            },
            {
+            "literal": "work.goals.projects"
+           },
+           {
             "literal": "vault"
            },
            {
@@ -3346,6 +3349,9 @@
            },
            {
             "literal": "work.goals.apps"
+           },
+           {
+            "literal": "work.goals.projects"
            },
            {
             "literal": "vault"

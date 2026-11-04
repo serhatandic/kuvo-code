@@ -383,13 +383,15 @@ export interface GoalRefusal {
   message: string;
 }
 
-/** Your answer to the goal `id`: `start` (with your switches for its public steps, `public: {id:
+/** Your answer to the goal `id`: `projects` (its projects as you set them, while it's proposed),
+ * `start` (with your switches for its public steps, `public: {id:
  * on}`, `wake`, `digest`, an end, `ends` (null for none, taking away the bot's), and each spend line's cap and period, `spend: [{cap,
  * per}]`), `decline` or `stop`. */
 export async function answerGoal(id: string, given: Record<string, unknown>, targets: () => Target[], file = GOALS_FILE): Promise<{ goal: GoalPlanShape } | { refused: GoalRefusal }> {
   const action = given.action;
   if (action === "change" || action === "clear") return changeGoal(id, action, given, targets, file);
-  if (action !== "start" && action !== "decline" && action !== "stop") return { refused: { status: 400, message: "Say start, change, clear, decline or stop (action)." } };
+  if (action === "projects") return goalProjects(id, given.projects, file);
+  if (action !== "start" && action !== "decline" && action !== "stop") return { refused: { status: 400, message: "Say start, change, clear, projects, decline or stop (action)." } };
   const before = readKept(file).find(goal => goal.id === id);
   if (!before || !botHere(before.bot)) return { refused: { status: 404, message: "There's no such goal here." } };
   // Not while its bot moves: a goal stays on the computer it started on, and nothing reaches the bot
@@ -438,6 +440,34 @@ export async function answerGoal(id: string, given: Record<string, unknown>, tar
     await setGoalLoop(changed, loopCondition(changed), targets);
     await tellBot(changed, startWords(changed), "Goal started", targets);
   }
+  return { goal: shown(changed) };
+}
+
+// The projects a plan makes, as you set them on its card before it starts (renamed, or moved to
+// another folder): each a name, or a full path (~/… or /…), one to five, in their order. The bot
+// isn't told: it hears them as the goal starts.
+function goalProjects(id: string, given: unknown, file: string): { goal: GoalPlanShape } | { refused: GoalRefusal } {
+  const no = (message: string) => ({ refused: { status: 400 as const, message } });
+  if (!Array.isArray(given) || !given.length || given.length > 5) return no("Send the plan's projects (projects): one to five, each a name or a full path (~/… or /…).");
+  const projects: string[] = [];
+  for (const each of given) {
+    const entry = typeof each === "string" ? each.trim() : "";
+    if (!entry || entry.length > 200) return no("Each project is a name or a full path (~/… or /…), of 200 characters at most.");
+    if (/^(~\/|\/)/.test(entry) || entry === "~") {
+      const named = namedPlace(entry);
+      if ("refused" in named) return no(named.refused);
+    }
+    projects.push(entry);
+  }
+  const changed = changeKept(all => {
+    const goal = all.find(each => each.id === id);
+    if (!goal || !botHere(goal.bot)) return { status: 404 as const, message: "There's no such goal here." };
+    if (goal.state !== "proposed") return { status: 400 as const, message: goal.state === "running" ? "That goal is running: its projects are made already." : "That goal has ended." };
+    goal.projects = projects;
+    return goal;
+  }, file);
+  if (!("id" in changed)) return { refused: changed };
+  noteWorkChanged(changed.bot);
   return { goal: shown(changed) };
 }
 
