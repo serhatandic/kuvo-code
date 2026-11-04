@@ -4,8 +4,8 @@ import ClientSessions
 import SwiftUI
 
 /// A goal's steps on a timeline (`GoalChart`), the width of the card: one row per step in order,
-/// its name on its bar after its mark, the bar a quiet fill (grey done, the accent under way with
-/// a line as far as now, faint what's planned). Over them an axis with Now, the due date and when
+/// each a pill from its start that holds its whole name after its mark, a line along its foot as
+/// long as its time (grey done, the accent under way, lit as far as now, faint what's planned). Over them an axis with Now, the due date and when
 /// it's likely done as flags, the due date at the edge where it's days past the work. Point at a
 /// step for lines from what it waits for, the rest dimmed. A long goal opens on the days around
 /// now; pinch or ⌘-scroll shows it whole.
@@ -52,7 +52,7 @@ struct GoalChartView: View {
         let long = chart.whole.duration > chart.shown.duration + 60
         VStack(alignment: .leading, spacing: 6) {
             GeometryReader { measured in
-                let x = ChartX(shown: chart.shown, width: measured.size.width, kept: Self.saysDueAtEdge(chart) ? Self.edgeRoom : 0)
+                let x = ChartX(shown: chart.shown, width: measured.size.width, kept: Self.kept(chart, width: measured.size.width))
                 VStack(alignment: .leading, spacing: 0) {
                     axis(chart, x: x)
                         .frame(width: x.width, height: Self.axisHeight, alignment: .topLeading)
@@ -131,90 +131,133 @@ struct GoalChartView: View {
 
     // MARK: A row
 
-    private enum Spot {
-        /// On the axis, from `x0` to `x1`.
-        case span(CGFloat, CGFloat)
-        /// Past the right edge (or with no time at all): its name sits against the edge.
-        case after
-        /// Before the left edge: against it.
-        case before
+    /// A step's pill: from where it starts, as long as its time or as its name where that's
+    /// longer (never past the right edge), and how much of it is its time, which its foot line
+    /// shows. A step past the right edge sits against it, one before the left against that.
+    struct Pill: Equatable {
+        var start: CGFloat
+        var width: CGFloat
+        var time: CGFloat
+        /// Whether its time falls on the axis, for the lines into a step you point at.
+        var isOnAxis: Bool
     }
 
-    private func spot(_ bar: GoalChart.Bar, chart: GoalChart, x: ChartX) -> Spot {
-        guard let from = bar.from else { return .after }
-        let to = max(from, bar.to ?? now)
-        if from >= chart.shown.end { return .after }
-        if to <= chart.shown.start { return .before }
-        return .span(max(0, x(from)), min(x.width, x(to)))
+    static func pill(_ bar: GoalChart.Bar, chart: GoalChart, x: ChartX, now: Date) -> Pill {
+        let name = nameWidth(bar)
+        guard let from = bar.from, from < chart.shown.end else {
+            return Pill(start: max(0, x.width - name), width: min(name, x.width), time: 0, isOnAxis: false)
+        }
+        let to = max(from, bar.kind == .doing ? expectedEnd(bar, chart: chart, now: now) : bar.to ?? now)
+        guard to > chart.shown.start else {
+            return Pill(start: 0, width: min(name, x.width), time: 0, isOnAxis: false)
+        }
+        let start = max(0, x(from)), end = min(x.width, x(to))
+        return Pill(start: start, width: min(x.width - start, max(end - start, name)), time: end - start, isOnAxis: true)
+    }
+
+    /// What a pill's label takes: its number or mark, and its whole name, at the chart's size.
+    static func nameWidth(_ bar: GoalChart.Bar) -> CGFloat {
+        let weight: NSFont.Weight = bar.kind == .doing || bar.kind == .waiting ? .medium : .regular
+        let text = (bar.step.text as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 12, weight: weight)]).width
+        return 4 + (GoalPlanWords.mark(of: bar.step) != nil ? 14 : 15) + 6 + ceil(text) + 8
+    }
+
+    /// Where the step under way is likely to end: where the steps waiting on it are placed to
+    /// begin, else how long it measured it would take, else now.
+    static func expectedEnd(_ bar: GoalChart.Bar, chart: GoalChart, now: Date) -> Date {
+        let next = chart.bars.filter { $0.isPlaced && $0.step.after.contains(bar.id) }.compactMap(\.from).min()
+        return max(next ?? bar.lane.likelyEnd ?? now, now)
+    }
+
+    /// The room at the right the axis leaves: enough that every step's name fits whole from where
+    /// it starts (the times drawn closer together where one would run past the edge), and the
+    /// due date said at the edge.
+    static func kept(_ chart: GoalChart, width: CGFloat) -> CGFloat {
+        let edge = saysDueAtEdge(chart) ? edgeRoom : 0
+        let duration = max(1, chart.shown.duration)
+        var room = width - edge
+        for bar in chart.bars {
+            guard let from = bar.from, from > chart.shown.start, from < chart.shown.end else { continue }
+            let along = CGFloat(from.timeIntervalSince(chart.shown.start) / duration)
+            room = min(room, (width - nameWidth(bar)) / along)
+        }
+        return max(edge, width - max(40, room))
     }
 
     private func row(_ row: Placed, chart: GoalChart, x: ChartX) -> some View {
         let bar = row.bar
-        let spot = spot(bar, chart: chart, x: x)
-        let span: (CGFloat, CGFloat)? = if case .span(let a, let b) = spot { (a, b) } else { nil }
-        return BarRow(start: span?.0, end: span?.1, pinsLeft: { if case .before = spot { true } else { false } }()) {
-            if let span {
-                fill(bar, from: span.0, to: span.1, x: x)
-            }
-        } label: {
-            label(bar, index: row.index, wide: x.width >= 460)
-        }
-        .contentShape(.rect)
-        .help(help(bar))
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(bar.step.text)
-        .accessibilityValue(spoken(bar))
+        let pill = Self.pill(bar, chart: chart, x: x, now: now)
+        return self.pill(bar, index: row.index, pill: pill, x: x)
+            .frame(width: pill.width, height: Self.barHeight)
+            .offset(x: pill.start, y: (Self.rowHeight - Self.barHeight) / 2)
+            .frame(width: x.width, height: Self.rowHeight, alignment: .topLeading)
+            .contentShape(.rect)
+            .help(help(bar))
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(bar.step.text)
+            .accessibilityValue(spoken(bar))
     }
 
-    @ViewBuilder private func fill(_ bar: GoalChart.Bar, from: CGFloat, to: CGFloat, x: ChartX) -> some View {
+    private func pill(_ bar: GoalChart.Bar, index: Int, pill: Pill, x: ChartX) -> some View {
         let shape = RoundedRectangle(cornerRadius: 6, style: .continuous)
-        switch bar.kind {
-        case .doing:
-            shape.fill(accent.opacity(scheme == .dark ? 0.24 : 0.16))
-                .overlay(alignment: .bottomLeading) {
-                    // As far as now.
-                    Rectangle().fill(accent)
-                        .frame(width: max(0, min(to, x(now)) - from), height: 3)
+        return shape.fill(fill(bar.kind))
+            .overlay(alignment: .bottomLeading) {
+                // How long it takes: a line along the foot, as far as its time; under way, the
+                // accent as far as now.
+                ZStack(alignment: .leading) {
+                    Rectangle().fill(foot(bar.kind)).frame(width: max(0, min(pill.width, pill.time)))
+                    if bar.kind == .doing {
+                        Rectangle().fill(accent).frame(width: max(0, min(pill.time, x(now) - pill.start)))
+                    }
                 }
-                .clipShape(shape)
-        case .waiting:
-            shape.fill(Color.orange.opacity(0.2))
-        case .done:
-            shape.fill(Color.primary.opacity(scheme == .dark ? 0.13 : 0.085))
-        case .paused, .planned:
-            shape.fill(Color.primary.opacity(scheme == .dark ? 0.08 : 0.055))
-        case .skipped:
-            shape.fill(Color.primary.opacity(0.035))
-        }
+                .frame(height: bar.kind == .doing ? 3 : 2)
+            }
+            .clipShape(shape)
+            .overlay(alignment: .leading) { label(bar, index: index) }
     }
 
-    private func label(_ bar: GoalChart.Bar, index: Int, wide: Bool) -> some View {
+    private func label(_ bar: GoalChart.Bar, index: Int) -> some View {
         let step = bar.step
-        let said = GoalPlanWords.state(of: step, in: plan, now: now)
         return HStack(spacing: 6) {
             if GoalPlanWords.mark(of: step) != nil {
                 StepServiceMark(step: step)
             } else {
                 Text("\(index + 1)")
                     .font(.system(size: 9.5, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(bar.kind == .doing ? AnyShapeStyle(.white) : AnyShapeStyle(.secondary))
                     .frame(width: 15, height: 15)
-                    .background(Circle().fill(Color.primary.opacity(0.07)))
+                    .background(Circle().fill(bar.kind == .doing ? accent : Color.primary.opacity(0.08)))
             }
-            // Cut in the middle: steps named alike ("…(3 of 9)") still differ.
+            // Whole where the pill holds it; cut in the middle only where a name is longer than
+            // the card, so steps named alike ("…(3 of 9)") still differ.
             Text(step.text)
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .fontWeight(bar.kind == .doing || bar.kind == .waiting ? .medium : .regular)
                 .foregroundStyle(ink(bar.kind))
-                .layoutPriority(1)
-            if wide, bar.kind == .doing, step.note != nil, let words = said.text {
-                Text("· \(words)").foregroundStyle(.tertiary).lineLimit(1).fixedSize()
-            } else if bar.kind == .waiting, let words = said.text {
-                Text("· \(words)").fontWeight(.semibold).foregroundStyle(.orange).lineLimit(1).fixedSize()
-            }
         }
-        .padding(.horizontal, 6)
+        .padding(.leading, 4)
+        .padding(.trailing, 8)
+    }
+
+    private func fill(_ kind: GoalChart.Bar.Kind) -> Color {
+        switch kind {
+        case .doing: accent.opacity(scheme == .dark ? 0.22 : 0.14)
+        case .waiting: Color.orange.opacity(0.2)
+        case .done: Color.primary.opacity(scheme == .dark ? 0.1 : 0.065)
+        case .paused, .planned: Color.primary.opacity(scheme == .dark ? 0.065 : 0.045)
+        case .skipped: Color.primary.opacity(0.03)
+        }
+    }
+
+    private func foot(_ kind: GoalChart.Bar.Kind) -> Color {
+        switch kind {
+        case .doing: accent.opacity(0.35)
+        case .waiting: Color.orange.opacity(0.8)
+        case .done: Color.primary.opacity(scheme == .dark ? 0.32 : 0.24)
+        case .paused, .planned: Color.primary.opacity(scheme == .dark ? 0.2 : 0.14)
+        case .skipped: Color.primary.opacity(0.08)
+        }
     }
 
     private func ink(_ kind: GoalChart.Bar.Kind) -> AnyShapeStyle {
@@ -254,9 +297,14 @@ struct GoalChartView: View {
         let target = rows.first { $0.id == id }
         let sources = rows.filter { chart.waitsFor(id).contains($0.id) }
         return Canvas { context, _ in
-            guard let target, case .span(let start, _) = spot(target.bar, chart: chart, x: x) else { return }
+            guard let target else { return }
+            let into = Self.pill(target.bar, chart: chart, x: x, now: now)
+            guard into.isOnAxis else { return }
+            let start = into.start
             for source in sources {
-                guard case .span(_, let end) = spot(source.bar, chart: chart, x: x) else { continue }
+                let from = Self.pill(source.bar, chart: chart, x: x, now: now)
+                guard from.isOnAxis else { continue }
+                let end = from.start + from.time
                 let across = max(2, min(end - 3, start - 8))
                 let top = source.mid + Self.barHeight / 2 + 1
                 guard target.mid - 4 > top else { continue }
@@ -437,63 +485,12 @@ struct GoalChartView: View {
     }
 }
 
-/// A row's bar and its label: the bar from `start` to `end`, the label at the bar's start, or
-/// against the right edge where it would pass it (and for a step past the edge, `start` nil), or
-/// against the left for one before it. Laid out in one pass, so a label never jumps.
-private struct BarRow<Fill: View, Label: View>: View {
-    let start: CGFloat?
-    let end: CGFloat?
-    var pinsLeft = false
-    @ViewBuilder let fill: Fill
-    @ViewBuilder let label: Label
-
-    var body: some View {
-        RowLayout(start: start, end: end, pinsLeft: pinsLeft) {
-            fill
-            label
-        }
-    }
-
-    private struct RowLayout: Layout {
-        let start: CGFloat?
-        let end: CGFloat?
-        let pinsLeft: Bool
-
-        func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-            CGSize(width: proposal.width ?? 0, height: proposal.height ?? GoalChartView.rowHeight)
-        }
-
-        func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-            let width = bounds.width
-            var label = subviews.last
-            if let start, let end, subviews.count == 2 {
-                let barHeight = GoalChartView.barHeight
-                subviews[0].place(at: CGPoint(x: bounds.minX + start, y: bounds.midY - barHeight / 2), proposal: ProposedViewSize(width: max(8, end - start), height: barHeight))
-            } else if subviews.count == 2 {
-                subviews[0].place(at: CGPoint(x: bounds.minX, y: bounds.minY), proposal: .zero)
-            } else {
-                label = subviews.first
-            }
-            guard let label else { return }
-            let ideal = min(label.sizeThatFits(.unspecified).width, width)
-            let x: CGFloat = if pinsLeft {
-                0
-            } else if let start, start + ideal <= width {
-                start
-            } else {
-                max(0, width - ideal)
-            }
-            label.place(at: CGPoint(x: bounds.minX + x, y: bounds.midY), anchor: .leading, proposal: ProposedViewSize(width: width - x, height: GoalChartView.barHeight))
-        }
-    }
-}
-
 /// Where a time falls across the chart, `width` wide, showing `shown` of the goal.
-private struct ChartX {
+struct ChartX {
     let shown: DateInterval
     let width: CGFloat
-    /// Room kept at the right that no time reaches: for the due date said past the edge, so no
-    /// flag or bar runs into it.
+    /// Room kept at the right that no time reaches: for the names that run past their steps' time,
+    /// and the due date said past the edge, so no flag or bar runs into it.
     var kept: CGFloat = 0
 
     func callAsFunction(_ date: Date) -> CGFloat {
