@@ -36,13 +36,13 @@ import { keepAwake, keepsAwake, onPower } from "./awake";
 import { noteWorkChanged, WORK_FOLDER } from "./changes";
 import { sandboxOn } from "./sandbox";
 import { appNamed, appNameGiven } from "./apps";
-import { namedPlace, shownPath } from "./projects";
+import { isEmptyFolder, namedPlace, projectPlace, shownPath } from "./projects";
 import { projectsFolder } from "./settings";
 import { stopBotWork } from "./stop";
 import { ofBot, workingNow, workSessions } from "./tree";
 import type { Listed } from "./tree";
 import type { Target } from "../../shared/records";
-import type { GoalAppShape, GoalCheckShape, GoalPlanShape, GoalStepShape, GoalWaitingShape } from "../../shared/routes/work";
+import type { GoalAppShape, GoalCheckShape, GoalFolderShape, GoalPlanShape, GoalStepShape, GoalWaitingShape } from "../../shared/routes/work";
 import type { Notice } from "../notices/notice";
 
 export const GOALS_FILE = path.join(WORK_FOLDER, "goals.json");
@@ -62,7 +62,7 @@ const DAY = 86_400_000;
 
 /** A goal as it's kept: as it's shown, less what's worked out when it's shown, with what the box
  * keeps besides. */
-export interface KeptGoal extends Omit<GoalPlanShape, "alone" | "steps" | "spend" | "waiting" | "paused" | "public" | "checks"> {
+export interface KeptGoal extends Omit<GoalPlanShape, "alone" | "folders" | "steps" | "spend" | "waiting" | "paused" | "public" | "checks"> {
   steps: GoalStepShape[];
   spend: GoalPlanShape["spend"][number][];
   waiting: GoalWaitingShape[];
@@ -153,6 +153,19 @@ export function goalProject(entry: string): { name: string; folder?: string } {
   return "folder" in named ? { name: path.basename(named.folder), folder: named.folder } : { name: path.basename(entry) };
 }
 
+/** Where Start makes each project the plan names, as making it will (`make_project`, the way the
+ * bot is told to): in the folder named for it, or in the projects folder by its name (none while
+ * none is picked), and whether something with files is there already. Only shown: it holds nothing
+ * back. */
+export function goalFolders(goal: Pick<KeptGoal, "projects">): GoalFolderShape[] {
+  return goal.projects.map(entry => {
+    const { name, folder: named } = goalProject(entry);
+    const folder = named ?? projectPlace(name);
+    if (!folder) return { project: name, folder: null, shown: null };
+    return { project: name, folder, shown: shownPath(folder), there: fs.existsSync(folder) && !isEmptyFolder(folder) };
+  });
+}
+
 /** The checks the box makes itself, as they stand now: whether it may work on its own here, on
  * power (a Mac), and where new projects go (when the plan makes one without a folder named for it,
  * and none is picked). */
@@ -174,7 +187,8 @@ const shown = (goal: KeptGoal): GoalPlanShape => {
     const paused = goal.state === "running" && step.state !== "done" && step.state !== "skipped" ? goal.paused.find(each => each.session && step.sessions?.includes(each.session)) : undefined;
     return paused ? { ...step, state: "paused" as const, ...(paused.until ? { resumes: paused.until } : {}) } : step;
   });
-  return { ...rest, steps, checks: goal.state === "proposed" ? [...boxChecks(goal), ...goal.checks] : goal.checks, alone: alone(goal) };
+  const proposed = goal.state === "proposed";
+  return { ...rest, steps, checks: proposed ? [...boxChecks(goal), ...goal.checks] : goal.checks, alone: alone(goal), ...(proposed ? { folders: goalFolders(goal) } : {}) };
 };
 
 /** The goals here, as clients show them: each bot's latest while it's proposed or running, or

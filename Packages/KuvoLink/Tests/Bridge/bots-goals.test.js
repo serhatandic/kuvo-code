@@ -1048,7 +1048,7 @@ test("what waits for you goes once it's dealt with, by the bot or by you, and yo
   assert.ok(current.waiting.some(each => each.kind === "outside" && /a logo/.test(each.text)));
 });
 
-// ——— Where it's done: the app's own icon ———
+// ——— Where it's done: the app's own icon, and the folders Start makes ———
 
 // A PNG of `size` pixels, whole, as an icon theme has them.
 function png(size) {
@@ -1135,4 +1135,31 @@ test("the app a step is done in can be named as it goes, and so can what waits f
   [goal] = await goals();
   assert.equal(goal.steps[0].app, undefined, "taken away");
   assert.match((await tool("goal_progress", { steps: [{ step: 1, app: "~/bin/tool" }] })).text, /app is the app the step is done in/);
+});
+
+test("a goal's card shows the folder Start makes each project in, as making it will, and whether something's there already; none of it holds Start back", async () => {
+  const desktop = path.join(home, "Desktop");
+  atEnd(() => fs.rmSync(desktop, { recursive: true, force: true }));
+  write(path.join(desktop, "money-printer", "README.md"), "Mine.\n");
+  fs.mkdirSync(path.join(desktop, "empty"), { recursive: true });
+  const projects = ["Storefront", "~/Desktop/money-printer", "~/Desktop/empty", `${desktop}/new-thing`];
+  assert.equal((await tool("propose_goal", { ...PLAN, projects })).isError, false);
+  let [card] = await goals();
+  assert.deepEqual(card.projects, projects, "kept as the plan said, for older clients");
+  assert.deepEqual(card.folders, [
+    { project: "Storefront", folder: null, shown: null },
+    { project: "money-printer", folder: path.join(desktop, "money-printer"), shown: "~/Desktop/money-printer", there: true },
+    { project: "empty", folder: path.join(desktop, "empty"), shown: "~/Desktop/empty", there: false },
+    { project: "new-thing", folder: path.join(desktop, "new-thing"), shown: "~/Desktop/new-thing", there: false },
+  ], "no projects folder picked: none yet for the one named alone; an empty folder isn't something there");
+
+  // Once you pick where new projects go: there, by its name, where something is already.
+  write(path.join(developer, "storefront", "index.html"), "<h1>Old</h1>\n");
+  write(path.join(home, "box", "work.json"), JSON.stringify({ projectsFolder: developer }));
+  [card] = await goals();
+  assert.deepEqual(card.folders[0], { project: "Storefront", folder: path.join(developer, "storefront"), shown: "~/Developer/storefront", there: true });
+
+  const started = await route("POST", `kuvo/work/goals/${card.id}`, { action: "start" });
+  assert.equal(started.status, 200, "a folder there already is only shown");
+  assert.equal(started.body.goal.folders, undefined, "a goal under way shows none");
 });

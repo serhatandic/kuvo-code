@@ -873,7 +873,7 @@ beside it.
   [{what, cap, currency, per, spent, until?}], public: [{id, text, on}], projects, wake, digest,
   ends?, proposed, started?, ended?, waiting: [{id, kind: you|judgment|outside|ask, text, detail?,
   url?, site?, app?: {name, id?}, session?, at}], paused: [{why, until?, session?}], waited, watching, next?, lastDigest?: {at, text},
-  report?, alone}]}` (`next`: when it goes on next, while nothing of it is at work and nothing can be
+  report?, alone, folders?: [{project, folder: path|null, shown: path|null, there?}]}]}` (`next`: when it goes on next, while nothing of it is at work and nothing can be
   before a time: the bot's soonest wake-up, or the steps it put off; clients say "Next: Mon 09:00"): each bot's latest, while it's proposed or running, or ended within a day. Kept
   in `run/work/goals.json`; `kuvo/work/events` moves too. While it's proposed, the box's own checks
   come first: `alone` (failed where this box can't work on it alone yet), `power` (a Mac on battery),
@@ -899,6 +899,11 @@ beside it.
   an id that isn't one). Not found, or with an icon that's SVG alone, it has no `id`, and clients
   show no mark. A step can have both `site` and `app`; clients show the site's. Kept in the box's
   `apps` folder (`found.json`, `<id>.png`).
+- **Folders** (bridge 0.9.195): while it's proposed, `folders` says where Start makes each project
+  the plan names, worked out as `make_project` will: the folder named for it, or the projects folder
+  and its name (`folder` null, and `shown`, while none is picked); `shown` is the same with `~` for
+  the box's home; `there` is true when something with files is there already. It's only shown: it
+  never holds Start back. A plan can't name a repository to clone yet, so there's no `clone`.
 - **Alone, or with you there**: a goal goes on alone only where the box's commands run in the
   sandbox (`sandboxOn`: `kuvo/sandbox`'s `on`, and for a bot on a coding agent its `agents` too; a
   test box says yes with `KUVO_TEST_SANDBOX_ON=1`, never the real app's, `run.kuvo.code/box`, whose

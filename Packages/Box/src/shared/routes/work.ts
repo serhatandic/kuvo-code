@@ -153,6 +153,12 @@ export const GOAL_WAITING = object({
  * it spent in the period now, and, once the cap's reached, until when what spends waits (ms). */
 export const GOAL_SPEND = object({ what: string, cap: number, currency: string, per: words("day", "week", "month", "goal"), spent: number, "until?": number });
 
+/** Where Start makes a project the plan names, worked out as making it will: the full path
+ * (`folder`; null while the plan names no folder for it and no projects folder is picked), the same
+ * with `~` for the home folder (`shown`), and whether something with files is there already
+ * (`there`, shown only: it never holds Start back). */
+export const GOAL_FOLDER = object({ project: string, folder: nullable(string), shown: nullable(string), "there?": bool });
+
 /** A bot's goal (PROTOCOL.md, "Work › Goals"): the goal in your words and its plan, kept on the box
  * beside the conversation's own goal (`kuvo/agents/api/kuvo/goals`), which keeps the bot at it. The
  * steps (one track each), what it checked, what it may spend, its public steps with your switch for
@@ -162,7 +168,7 @@ export const GOAL_SPEND = object({ what: string, cap: number, currency: string, 
  * still watched, when it goes on next while nothing of it can before a time (`next`: its bot's
  * wake-up, or the steps it put off), the last digest and the final report. Proposed by the bot; only you start it,
  * decline it or stop it. `alone`: whether this box may work on it on its own (else it runs with you
- * there). Times in ms since 1970. */
+ * there). While it's proposed, where Start makes its projects (`folders`). Times in ms since 1970. */
 export const GOAL_PLAN = object({
   id: string,
   bot: string,
@@ -190,6 +196,7 @@ export const GOAL_PLAN = object({
   "lastDigest?": object({ at: number, text: string }),
   "report?": string,
   alone: bool,
+  "folders?": list(GOAL_FOLDER),
 });
 /** The goals here: each bot's latest, while it's proposed or running, or ended in the last day. */
 export const GOAL_PLANS = object({ goals: list(GOAL_PLAN) });
@@ -207,6 +214,7 @@ export type GoalWaitingShape = Infer<typeof GOAL_WAITING>;
 export type GoalCheckShape = Infer<typeof GOAL_CHECK>;
 export type GoalStepShape = Infer<typeof GOAL_STEP>;
 export type GoalAppShape = Infer<typeof GOAL_APP>;
+export type GoalFolderShape = Infer<typeof GOAL_FOLDER>;
 
 export const WORK_ROUTES: RouteShape[] = [
   { route: "GET kuvo/work", answers: { 200: WORK, 400: REFUSED, 404: REFUSED, 503: REFUSED } },
