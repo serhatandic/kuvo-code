@@ -8346,24 +8346,34 @@ async function commandSignIn(options) {
   })();
   let url = "";
   let printedAt;
-  for (let waited = 0;waited < 15000 && !url; waited += 200) {
+  const look = (waited) => {
     const printed = firstURL(output);
-    if (options.printedPage) {
-      if (printed)
-        url = printed;
-    } else {
-      if (existsSync9(urlFile))
-        url = readFileSync15(urlFile, "utf8").split(`
+    if (options.printedPage)
+      return printed ?? "";
+    if (existsSync9(urlFile))
+      return readFileSync15(urlFile, "utf8").split(`
 `)[0].trim();
-      if (printed)
-        printedAt ??= waited;
-      if (!url && printed && waited - printedAt >= 3000)
-        url = printed;
-    }
+    if (printed)
+      printedAt ??= waited;
+    return printed && waited - printedAt >= 3000 ? printed : "";
+  };
+  let waited = 0;
+  for (;waited < (options.pageWait ?? 15000) && !url; waited += 200) {
+    url = look(waited);
     if (!url)
       await Bun.sleep(200);
     if (status.status !== "pending")
       break;
+  }
+  let late;
+  if (!url) {
+    (async () => {
+      for (;status.status === "pending" && !late; waited += 200) {
+        late = look(waited) || undefined;
+        if (!late)
+          await Bun.sleep(200);
+      }
+    })();
   }
   let userCode;
   for (let waited = 0;options.userCode && waited < 2000; waited += 200) {
@@ -8394,7 +8404,7 @@ async function commandSignIn(options) {
         }
       }
     } : undefined,
-    status: () => status,
+    status: () => late && status.status === "pending" ? { ...status, url: late, instructions: options.instructions } : status,
     cancel() {
       if (status.status === "pending")
         status = { status: "failed", message: "Cancelled." };
@@ -23028,4 +23038,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 1c97966141e6119c46fa795c646fdb8b5172793cb1411a0a00991867c78cacf3
+// Built from Packages/Box/src/agents 8cc8a9e7811305770b3faff17d5b37f4d3c1941d0d24bb6c321907ba9e9e3679

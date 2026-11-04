@@ -28,6 +28,9 @@ export interface CommandSignInOptions {
   /** For a page opened on another device: the one it prints, at once (what it hands its browser
    * comes back to this computer, which another device can't reach). */
   printedPage?: boolean
+  /** How long the attempt waits for its page before it's handed back without one (its status
+   * gives the page once it comes). */
+  pageWait?: number
   /** Where a device code is in what it prints, for showing beside the page. */
   userCode?: RegExp
 }
@@ -96,17 +99,29 @@ export async function commandSignIn(options: CommandSignInOptions): Promise<Sign
   // taken when nothing reaches the browser a few seconds after it.
   let url = ""
   let printedAt: number | undefined
-  for (let waited = 0; waited < 15_000 && !url; waited += 200) {
+  const look = (waited: number) => {
     const printed = firstURL(output)
-    if (options.printedPage) {
-      if (printed) url = printed
-    } else {
-      if (existsSync(urlFile)) url = readFileSync(urlFile, "utf8").split("\n")[0].trim()
-      if (printed) printedAt ??= waited
-      if (!url && printed && waited - printedAt! >= 3_000) url = printed
-    }
+    if (options.printedPage) return printed ?? ""
+    if (existsSync(urlFile)) return readFileSync(urlFile, "utf8").split("\n")[0].trim()
+    if (printed) printedAt ??= waited
+    return printed && waited - printedAt! >= 3_000 ? printed : ""
+  }
+  let waited = 0
+  for (; waited < (options.pageWait ?? 15_000) && !url; waited += 200) {
+    url = look(waited)
     if (!url) await Bun.sleep(200)
     if (status.status !== "pending") break
+  }
+  // Not come yet (the command slow to start, or waiting on another Claude Code): looked for still,
+  // and given with its status once it comes, for the app to open then.
+  let late: string | undefined
+  if (!url) {
+    void (async () => {
+      for (; status.status === "pending" && !late; waited += 200) {
+        late = look(waited) || undefined
+        if (!late) await Bun.sleep(200)
+      }
+    })()
   }
   // A device code printed with the page: a moment more for it, if it comes after.
   let userCode: string | undefined
@@ -138,7 +153,7 @@ export async function commandSignIn(options: CommandSignInOptions): Promise<Sign
           }
         }
       : undefined,
-    status: () => status,
+    status: () => (late && status.status === "pending" ? { ...status, url: late, instructions: options.instructions } : status),
     cancel() {
       if (status.status === "pending") status = { status: "failed", message: "Cancelled." }
       child.kill()
