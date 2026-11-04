@@ -298,7 +298,6 @@ private struct QuestionPager: View {
         get { progress.page }
         nonmutating set { progress.page = newValue }
     }
-    @State private var choicesHeight: CGFloat = 0
     @FocusState private var isWriting: Bool
     @State private var monitor: Any?
     @State private var windowBox = WindowBox()
@@ -315,21 +314,12 @@ private struct QuestionPager: View {
             if questions.indices.contains(index) {
                 let field = questions[index]
                 header(field)
-                Text(field.description ?? field.title ?? form.title)
-                    .font(.system(size: 14))
-                    .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
-                if !options(of: field).isEmpty {
-                    // As tall as they are, up to the room there is; then they scroll.
-                    ScrollView {
-                        choices(field)
-                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { choicesHeight = $0 }
-                    }
-                    .frame(height: min(max(choicesHeight, 1), room))
-                    .scrollBounceBehavior(.basedOnSize)
-                    // The rows' fill reaches out past the column, so their numbers line up
-                    // with the question above.
-                    .padding(.horizontal, -ChoiceRow.inset)
+                // Each question its own page: the one you leave goes as a whole, its pick with
+                // it, never fading into the next one's rows.
+                ZStack(alignment: .topLeading) {
+                    question(field)
+                        .id(field.key)
+                        .transition(QuestionFade.transition)
                 }
                 footer(field)
             }
@@ -340,7 +330,6 @@ private struct QuestionPager: View {
             if let monitor { NSEvent.removeMonitor(monitor) }
             monitor = nil
         }
-        .animation(.ui, value: index)
         // Greyed out (its machine away, Settings over it): keys aren't its.
         .onChange(of: isEnabled, initial: true) { _, enabled in windowBox.isEnabled = enabled }
         // Keys go to the first question only: this one, once the ones before it are answered.
@@ -360,6 +349,24 @@ private struct QuestionPager: View {
             #if DEBUG
             // KUVO_DEMO_QUESTIONS=<n>: on the nth question (from 0).
             if let n = Int(ProcessInfo.processInfo.environment["KUVO_DEMO_QUESTIONS"] ?? "") { page = n }
+            // KUVO_DEMO_QUESTIONS_PICK=<n>: five seconds on, picks the nth choice (from 1), as its
+            // number key does (0 presses Next), and writes how the main thread kept up over the next second and a
+            // half to KUVO_PERF_LOG (its stalls to KUVO_PERF_STALLS).
+            let environment = ProcessInfo.processInfo.environment
+            if let n = Int(environment["KUVO_DEMO_QUESTIONS_PICK"] ?? "") {
+                Task {
+                    try? await Task.sleep(for: .seconds(5))
+                    let field = questions[index]
+                    guard n == 0 || options(of: field).indices.contains(n - 1) else { return }
+                    let meter = PerfMeter()
+                    meter.start()
+                    if n == 0 { next(field) } else { pick(options(of: field)[n - 1], in: field) }
+                    try? await Task.sleep(for: .milliseconds(1500))
+                    let line = "question pick: " + meter.stop() + "\n"
+                    if let file = environment["KUVO_PERF_LOG"] { try? line.write(toFile: file, atomically: true, encoding: .utf8) }
+                    if let file = environment["KUVO_PERF_STALLS"] { try? meter.stallReport().write(toFile: file, atomically: true, encoding: .utf8) }
+                }
+            }
             #endif
         }
     }
@@ -367,18 +374,23 @@ private struct QuestionPager: View {
     private func header(_ field: FormField) -> some View {
         HStack(spacing: 6) {
             // The question tool's short header, when it has one.
-            Text(field.description != nil ? field.title ?? "Question" : "Question")
+            let title = field.description != nil ? field.title ?? "Question" : "Question"
+            Text(title)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
+                // It goes with its question, when it says something else.
+                .id(title)
+                .transition(QuestionFade.transition)
             Spacer()
             if questions.count > 1 {
-                Button { page = index - 1 } label: { Image(systemName: "chevron.left") }
+                Button { go(to: index - 1) } label: { Image(systemName: "chevron.left") }
                     .disabled(index == 0)
                     .help("Previous Question")
                 Text("\(index + 1) of \(questions.count)")
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
-                Button { page = index + 1 } label: { Image(systemName: "chevron.right") }
+                    .contentTransition(.identity)
+                Button { go(to: index + 1) } label: { Image(systemName: "chevron.right") }
                     .disabled(isLast)
                     .help("Next Question")
             }
@@ -389,6 +401,29 @@ private struct QuestionPager: View {
         }
         .font(.callout)
         .buttonStyle(IconButtonStyle())
+    }
+
+    /// The question and its choices.
+    private func question(_ field: FormField) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(field.description ?? field.title ?? form.title)
+                .font(.system(size: 14))
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+            if !options(of: field).isEmpty {
+                // As tall as they are, up to the room there is; then they scroll. Sized in the
+                // same pass as the question, so the card grows with it rather than after it.
+                ScrollView {
+                    choices(field)
+                }
+                .scrollBounceBehavior(.basedOnSize)
+                .frame(maxHeight: room)
+                .fixedSize(horizontal: false, vertical: true)
+                // The rows' fill reaches out past the column, so their numbers line up
+                // with the question above.
+                .padding(.horizontal, -ChoiceRow.inset)
+            }
+        }
     }
 
     private func choices(_ field: FormField) -> some View {
@@ -525,21 +560,33 @@ private struct QuestionPager: View {
         if !isLast {
             let from = index
             Task {
-                try? await Task.sleep(for: .milliseconds(200))
-                if index == from { page = from + 1 }
+                // A beat to see it picked.
+                try? await Task.sleep(for: QuestionFade.beat)
+                if index == from { go(to: from + 1) }
             }
         }
     }
 
+    /// To another question. The whole window moves with it, so the card's edge and the
+    /// conversation above grow or shrink along with the question, not a frame ahead of it.
+    private func go(to next: Int) {
+        withAnimation(.ui) { page = next }
+        // The row VoiceOver was on went with the question.
+        if questions.indices.contains(next) {
+            let field = questions[next]
+            AccessibilityNotification.Announcement("\(next + 1) of \(questions.count). \(field.description ?? field.title ?? form.title)").post()
+        }
+    }
+
     private func next(_ field: FormField) {
-        if isLast { submit(payload) } else { page = index + 1 }
+        if isLast { submit(payload) } else { go(to: index + 1) }
     }
 
     private func skip(_ field: FormField) {
         answers[field.key] = nil
         written[field.key] = nil
         guard isLast else {
-            page = index + 1
+            go(to: index + 1)
             return
         }
         // Nothing answered at all: the same as dismissing.
@@ -564,7 +611,7 @@ private struct QuestionPager: View {
     }
 }
 
-/// One of a question's choices: its number, its words, and under the pointer, where it goes.
+/// One of a question's choices: its number and its words.
 private struct ChoiceRow: View {
     let number: Int
     let option: FormField.Option
@@ -572,18 +619,15 @@ private struct ChoiceRow: View {
     let isMultiple: Bool
     let action: () -> Void
     @Environment(\.accent) private var accent
-    @State private var isHovering = false
 
     var body: some View {
         Button(action: action) {
-            // The badge and the arrow centered on the choice's first line, which sits in a row as
-            // tall as the badge.
-            HStack(alignment: .top, spacing: 10) {
+            // The number in the middle of the whole choice, its description too.
+            HStack(alignment: .center, spacing: 10) {
                 badge
                 VStack(alignment: .leading, spacing: 2) {
                     Text(option.label)
                         .foregroundStyle(.primary)
-                        .frame(minHeight: Self.badgeSize)
                     if let description = ChoiceText.detail(option.description, label: option.label) {
                         Text(description)
                             .font(.callout)
@@ -591,12 +635,6 @@ private struct ChoiceRow: View {
                     }
                 }
                 Spacer(minLength: 8)
-                if !isMultiple {
-                    Image(systemName: "arrow.right")
-                        .foregroundStyle(.secondary)
-                        .frame(height: Self.badgeSize)
-                        .opacity(isHovering ? 1 : 0)
-                }
             }
             .padding(.horizontal, Self.inset)
             .padding(.vertical, 8)
@@ -604,8 +642,6 @@ private struct ChoiceRow: View {
         }
         .buttonStyle(.plain)
         .clickablePointer()
-        .onHover { isHovering = $0 }
-        .animation(.easeOut(duration: 0.12), value: isHovering)
     }
 
     private var badge: some View {
@@ -630,6 +666,26 @@ private struct ChoiceRow: View {
     private static let badgeSize: CGFloat = 22
     /// How far its content sits inside its fill.
     static let inset: CGFloat = 10
+}
+
+/// How one question goes to the next: the one you leave fades out before the next one fades
+/// in, so the two never show over each other.
+private enum QuestionFade {
+    /// The beat between a pick and the next question.
+    static var beat: Duration { .milliseconds(200 * slow) }
+
+    static var transition: AnyTransition {
+        .asymmetric(insertion: .opacity.animation(.easeOut(duration: 0.16 * slow).delay(0.07 * slow)),
+                    removal: .opacity.animation(.easeOut(duration: 0.07 * slow)))
+    }
+
+    /// KUVO_DEMO_SLOW, as `Animation.ui` reads it.
+    private static var slow: Double {
+        #if DEBUG
+        if let slow = ProcessInfo.processInfo.environment["KUVO_DEMO_SLOW"].flatMap(Double.init) { return slow }
+        #endif
+        return 1
+    }
 }
 
 /// A form a tool needs filled (an MCP server's, say): its fields together, then Answer.

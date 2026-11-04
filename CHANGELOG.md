@@ -16,6 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- When the agent asks several questions, picking a choice goes on to the next one cleanly: the question you answered fades out before the next fades in, and the card grows or shrinks with it, instead of both showing over each other with your pick lingering on the next one's choices. Each choice's number sits in the middle of its row, and the arrow beside a choice is gone.
 - In Settings › Accounts, an account's line no longer lights up under the pointer, and its **…** menu is always there in quiet ink, as in System Settings.
 - The first launch after an update shows "Getting the agent engine ready" once, instead of showing the app and then the loader again a moment later.
 - Messages from other agents, a group chat's work and a bot's wake-ups line up with the rest of the conversation, on the same edges as its errors, code and composer, instead of reaching past them.
