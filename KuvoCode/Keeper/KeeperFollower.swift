@@ -202,7 +202,9 @@ final class KeeperFollower {
         // Stopped while the keeper was asked (above too).
         guard following else { return }
         // A keeper that runs but doesn't answer (hung): since when, for how long the window waits.
-        if engineRecord != nil || answered || KeeperRecord.read() == nil {
+        // One making way that's hung is waited for too, though its engine's record is still there:
+        // the window waits on it, not on that engine.
+        if (engineRecord != nil && !makingWay) || answered || KeeperRecord.read() == nil {
             silentSince = nil
         } else if silentSince == nil {
             silentSince = .now

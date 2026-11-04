@@ -235,7 +235,8 @@ import Testing
         let app = AppModel()
         // A session finishing as the update is installed: the older keeper's first look after the
         // app asks it to make way still sees it at work (and looks again two seconds on); by the
-        // time the app asks, nothing is.
+        // time the app asks, nothing is. The one busy answer is the look's: the keeper starts it as
+        // it takes the request to make way, a whole round trip before the app's question reaches it.
         let finishing = Finishing()
         var starting: Task<Void, Never>?
         defer {
