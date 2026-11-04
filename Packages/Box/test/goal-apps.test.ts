@@ -40,7 +40,7 @@ const write = (file: string, text: string | Buffer) => {
   writeFileSync(file, text)
 }
 
-test("a Linux box finds an app by its desktop entry's name, in any language, yours over the system's, with its icon as a PNG, and none whose icon is SVG alone", () => {
+test("a Linux box finds an app by its desktop entry's name, in any language, yours over the system's, with its icon as a PNG, and none whose icon is SVG alone", async () => {
   const root = mkdtempSync(join(tmpdir(), "kuvo-goal-apps-"))
   try {
     const home = join(root, "home")
@@ -72,6 +72,11 @@ test("a Linux box finds an app by its desktop entry's name, in any language, you
     // Flatpak's and snap's exported entries are read too, after yours and the system's.
     expect(linuxDataFolders(env, home)).toEqual([own, system, join(own, "flatpak", "exports", "share"), "/var/lib/flatpak/exports/share", "/var/lib/snapd/desktop"])
     expect(linuxDataFolders({}, home).slice(0, 3)).toEqual([own, "/usr/local/share", "/usr/share"])
+    // On a machine, the box's own data folder is Kuvo Code's: yours is the one its launch kept.
+    const { K } = await import("../src/link/home")
+    expect(linuxDataFolders({ XDG_DATA_HOME: join(K, "data"), KUVO_OWN_XDG_DATA_HOME: "/data/ada" }, home)[0]).toBe("/data/ada")
+    expect(linuxDataFolders({ XDG_DATA_HOME: join(K, "data"), KUVO_OWN_XDG_DATA_HOME: "" }, home)[0]).toBe(own)
+    expect(linuxDataFolders({ XDG_DATA_HOME: join(K, "data") }, home)[0]).toBe(own)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

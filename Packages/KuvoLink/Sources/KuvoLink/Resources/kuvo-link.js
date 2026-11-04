@@ -265,6 +265,10 @@ function accountName() {
   return accountEntry().name;
 }
 var K = process.env.KUVO_HOME || path2.join(homeFolder(), ".kuvo-code");
+function ownDataHome(env = process.env, home = homeFolder()) {
+  const own = "KUVO_OWN_XDG_DATA_HOME" in env ? env.KUVO_OWN_XDG_DATA_HOME : env.XDG_DATA_HOME && !path2.resolve(env.XDG_DATA_HOME).startsWith(path2.resolve(K)) ? env.XDG_DATA_HOME : undefined;
+  return own && path2.isAbsolute(own) ? own : path2.join(home, ".local", "share");
+}
 var RUN = path2.join(K, "run");
 var LINK_FILE = path2.join(RUN, "link.json");
 var ENGINE_FILE = path2.join(RUN, "engine.json");
@@ -9608,7 +9612,7 @@ async function spotlightApp(name) {
 `).map((line) => line.trim()).find((line) => line.endsWith(".app") && !/\/\.Trash\/|\/DerivedData\/|\/Build\/Products\//.test(line)) ?? null;
 }
 function linuxDataFolders(env = process.env, home = homeFolder()) {
-  const own = env.XDG_DATA_HOME && path39.isAbsolute(env.XDG_DATA_HOME) ? env.XDG_DATA_HOME : path39.join(home, ".local", "share");
+  const own = ownDataHome(env, home);
   const system = (env.XDG_DATA_DIRS || "/usr/local/share:/usr/share").split(":").filter((folder) => path39.isAbsolute(folder));
   const exported = [path39.join(own, "flatpak", "exports", "share"), "/var/lib/flatpak/exports/share", "/var/lib/snapd/desktop"];
   return [...new Set([own, ...system, ...exported].map((folder) => path39.resolve(folder)))];
@@ -21975,8 +21979,7 @@ async function* startRoute(context) {
 import { readFileSync } from "node:fs";
 import path76 from "node:path";
 function opencodeAuthFile(home = homeFolder(), env = process.env) {
-  const own = "KUVO_OWN_XDG_DATA_HOME" in env ? env.KUVO_OWN_XDG_DATA_HOME : env.XDG_DATA_HOME && !path76.resolve(env.XDG_DATA_HOME).startsWith(path76.resolve(K)) ? env.XDG_DATA_HOME : undefined;
-  return path76.join(own || path76.join(home, ".local", "share"), "opencode", "auth.json");
+  return path76.join(ownDataHome(env, home), "opencode", "auth.json");
 }
 var readFrom = () => process.env.KUVO_DEMO_OPENCODE_AUTH || opencodeAuthFile();
 function readOpencode(file) {

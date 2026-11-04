@@ -10,7 +10,7 @@ import { type Body, isObject, parsed } from "../../shared/json";
 import type { Target } from "../../shared/records";
 import type { Found } from "../../shared/routes/box";
 import { call } from "../engine/client";
-import { K, homeFolder } from "../home";
+import { homeFolder, ownDataHome } from "../home";
 import type { AnswerPiece, RouteContext } from "../server/context";
 
 /** One entry of opencode's `auth.json`, in the engine's own form for `api/credential`. */
@@ -26,9 +26,7 @@ export interface OpencodeEntry {
  * folder; yours is what its launch kept (`KUVO_OWN_XDG_DATA_HOME`).
  */
 export function opencodeAuthFile(home = homeFolder(), env: NodeJS.ProcessEnv = process.env): string {
-  const own = "KUVO_OWN_XDG_DATA_HOME" in env ? env.KUVO_OWN_XDG_DATA_HOME
-    : env.XDG_DATA_HOME && !path.resolve(env.XDG_DATA_HOME).startsWith(path.resolve(K)) ? env.XDG_DATA_HOME : undefined;
-  return path.join(own || path.join(home, ".local", "share"), "opencode", "auth.json");
+  return path.join(ownDataHome(env, home), "opencode", "auth.json");
 }
 
 /** The one this box reads: a demo copy, or a test, names one of its own (`KUVO_DEMO_OPENCODE_AUTH`). */

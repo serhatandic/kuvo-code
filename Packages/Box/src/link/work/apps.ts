@@ -18,7 +18,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { locked, textOf, writePrivate } from "../files";
-import { homeFolder, K } from "../home";
+import { homeFolder, K, ownDataHome } from "../home";
 
 /** Where the box keeps the apps it found and their icons. */
 export const APPS = path.join(K, "apps");
@@ -214,9 +214,10 @@ async function spotlightApp(name: string): Promise<string | null> {
 // ——— Linux ———
 
 /** The folders a Linux computer's desktop entries and icons are in, first first: yours
- * (`XDG_DATA_HOME`), the system's (`XDG_DATA_DIRS`), and flatpak's and snap's exported ones. */
+ * (`XDG_DATA_HOME`, as you have it, not the box's own), the system's (`XDG_DATA_DIRS`), and
+ * flatpak's and snap's exported ones. */
 export function linuxDataFolders(env: NodeJS.ProcessEnv = process.env, home = homeFolder()): string[] {
-  const own = env.XDG_DATA_HOME && path.isAbsolute(env.XDG_DATA_HOME) ? env.XDG_DATA_HOME : path.join(home, ".local", "share");
+  const own = ownDataHome(env, home);
   const system = (env.XDG_DATA_DIRS || "/usr/local/share:/usr/share").split(":").filter(folder => path.isAbsolute(folder));
   const exported = [path.join(own, "flatpak", "exports", "share"), "/var/lib/flatpak/exports/share", "/var/lib/snapd/desktop"];
   return [...new Set([own, ...system, ...exported].map(folder => path.resolve(folder)))];

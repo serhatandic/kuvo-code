@@ -49,6 +49,15 @@ export function accountName(): string {
 }
 
 export const K = process.env.KUVO_HOME || path.join(homeFolder(), ".kuvo-code");
+
+/** Your own data folder (`XDG_DATA_HOME`, else `~/.local/share`), as apps other than Kuvo Code's
+ * read it: on a machine, the box's points into Kuvo Code's folder, and yours is what its launch
+ * kept (`KUVO_OWN_XDG_DATA_HOME`, empty for none). */
+export function ownDataHome(env: NodeJS.ProcessEnv = process.env, home = homeFolder()): string {
+  const own = "KUVO_OWN_XDG_DATA_HOME" in env ? env.KUVO_OWN_XDG_DATA_HOME
+    : env.XDG_DATA_HOME && !path.resolve(env.XDG_DATA_HOME).startsWith(path.resolve(K)) ? env.XDG_DATA_HOME : undefined;
+  return own && path.isAbsolute(own) ? own : path.join(home, ".local", "share");
+}
 export const RUN = path.join(K, "run");
 export const LINK_FILE = path.join(RUN, "link.json");
 export const ENGINE_FILE = path.join(RUN, "engine.json");
