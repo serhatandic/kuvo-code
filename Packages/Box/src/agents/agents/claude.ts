@@ -3,7 +3,7 @@
 // by message, its replies streamed into the session as the engine's own would be.
 
 import { spawn, spawnSync } from "node:child_process"
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import { existsSync, readFileSync, statSync } from "node:fs"
 import { homedir } from "node:os"
 import { join, resolve } from "node:path"
@@ -206,12 +206,13 @@ export class ClaudeAgent implements Agent {
    * Keychain.
    */
   protected credentialsWritten(): number {
-    const folder = this.instance.home ?? process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude")
+    const own = this.instance.home ?? process.env.CLAUDE_CONFIG_DIR
     let written = 0
     try {
-      written = statSync(join(folder, ".credentials.json")).mtimeMs
+      written = statSync(join(own ?? join(homedir(), ".claude"), ".credentials.json")).mtimeMs
     } catch {}
-    if (process.platform === "darwin" && !this.instance.home) written = Math.max(written, keychainWritten("Claude Code-credentials"))
+    // On a Mac, in the Keychain: an account with a folder of its own under a name of its own.
+    if (process.platform === "darwin") written = Math.max(written, keychainWritten(`Claude Code-credentials${own ? `-${createHash("sha256").update(own).digest("hex").slice(0, 8)}` : ""}`))
     return written
   }
 

@@ -9285,7 +9285,7 @@ function unzipper() {
 
 // Packages/Box/src/agents/agents/claude.ts
 import { spawn as spawn5, spawnSync as spawnSync3 } from "child_process";
-import { randomUUID } from "crypto";
+import { createHash as createHash6, randomUUID } from "crypto";
 import { existsSync as existsSync13, readFileSync as readFileSync18, statSync as statSync8 } from "fs";
 import { homedir } from "os";
 import { join as join21, resolve as resolve6 } from "path";
@@ -9714,13 +9714,13 @@ class ClaudeAgent {
     return account.installed && !account.signedIn;
   }
   credentialsWritten() {
-    const folder = this.instance.home ?? process.env.CLAUDE_CONFIG_DIR ?? join21(homedir(), ".claude");
+    const own = this.instance.home ?? process.env.CLAUDE_CONFIG_DIR;
     let written = 0;
     try {
-      written = statSync8(join21(folder, ".credentials.json")).mtimeMs;
+      written = statSync8(join21(own ?? join21(homedir(), ".claude"), ".credentials.json")).mtimeMs;
     } catch {}
-    if (process.platform === "darwin" && !this.instance.home)
-      written = Math.max(written, keychainWritten("Claude Code-credentials"));
+    if (process.platform === "darwin")
+      written = Math.max(written, keychainWritten(`Claude Code-credentials${own ? `-${createHash6("sha256").update(own).digest("hex").slice(0, 8)}` : ""}`));
     return written;
   }
   signsInRemotely = true;
@@ -14501,7 +14501,7 @@ async function branchRoutes(places, method, parts, body) {
 }
 
 // Packages/Box/src/agents/sessions.ts
-import { createHash as createHash6 } from "crypto";
+import { createHash as createHash7 } from "crypto";
 import { spawn as spawnProcess } from "child_process";
 import { readFileSync as readFileSync23, realpathSync as realpathSync6, statSync as statSync9 } from "fs";
 import { homedir as homedir5 } from "os";
@@ -15779,7 +15779,7 @@ class Sessions {
     const directory = body.location.directory;
     const session = {
       id: newID("ses"),
-      projectID: "prj_" + createHash6("sha1").update(directory).digest("hex").slice(0, 16),
+      projectID: "prj_" + createHash7("sha1").update(directory).digest("hex").slice(0, 16),
       agent: typeof body.agent === "string" && body.agent ? body.agent : "build",
       model: body.model,
       cost: 0,
@@ -23008,4 +23008,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents e7f7b685a46362730e54facee09199a3e3a3c4f65dde1381482373e8875d5970
+// Built from Packages/Box/src/agents f862bec7a6ab92f7f3a51abdce955ff1bd3726efd8c616d8c9eb27f202f18d4a
