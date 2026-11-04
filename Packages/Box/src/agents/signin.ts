@@ -66,10 +66,19 @@ export async function commandSignIn(options: CommandSignInOptions): Promise<Sign
   // What it printed, its terminal codes taken out as a whole (one can come split over two reads).
   let printed = ""
   let output = ""
+  const refused = options.refusedCode ?? /invalid code/i
+  // Where its output stood when the code was typed, while it's being taken.
+  let pastedAt: number | undefined
   const take = (text: string) => {
     printed += text
     output = plain(printed)
     options.onOutput?.(output)
+    // A code turned away after it was checked over the network, however long that took: one that
+    // takes no second code ends the sign-in.
+    if (options.refusedEnds && pastedAt !== undefined && status.status === "pending" && refused.test(output.slice(pastedAt))) {
+      status = { status: "failed", message: options.refusedEnds }
+      child.kill()
+    }
   }
   let type: (text: string) => Promise<void>
   let child: ReturnType<typeof Bun.spawn>
@@ -180,21 +189,20 @@ export async function commandSignIn(options: CommandSignInOptions): Promise<Sign
           if (status.status !== "pending") throw new Error("That sign-in is over. Start it again.")
           pasted = true
           const from = output.length
+          pastedAt = from
           await type(code.trim() + "\n")
           // A code it can't read (part of one) is turned away at once, and it waits for another.
           for (let waited = 0; waited < 1_500 && status.status === "pending"; waited += 100) {
             await Bun.sleep(100)
-            if ((options.refusedCode ?? /invalid code/i).test(output.slice(from))) {
+            if (!options.refusedEnds && refused.test(output.slice(from))) {
               pasted = false
-              // One that takes no second code: this sign-in is over.
-              if (options.refusedEnds) {
-                status = { status: "failed", message: options.refusedEnds }
-                child.kill()
-                throw new Error(options.refusedEnds)
-              }
+              pastedAt = undefined
               throw new Error("That code couldn't be read. Copy all of it from the page, and paste it again.")
             }
           }
+          // (Set as its output comes in, meanwhile.)
+          const now = status as OAuthStatus
+          if (options.refusedEnds && now.status === "failed" && now.message === options.refusedEnds) throw new Error(options.refusedEnds)
         }
       : undefined,
     status: () => (late && status.status === "pending" ? { ...status, url: late, instructions: options.instructions } : status),

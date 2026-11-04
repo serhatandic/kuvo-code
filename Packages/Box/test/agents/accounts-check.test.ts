@@ -6,7 +6,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, setSystemTime, test } from "bun:test"
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { delimiter, join } from "node:path"
+import { delimiter, dirname, join } from "node:path"
 import { TookTooLong, type Agent } from "../../src/agents/agent"
 import { ClaudeAgent } from "../../src/agents/agents/claude"
 import { CodexAgent } from "../../src/agents/agents/codex"
@@ -508,6 +508,101 @@ esac
       await agent.signOut!()
       expect((await box.account(agent)).connections).toEqual([])
       expect(readFileSync(join(yours, "signed-in"), "utf8").trim()).toBe("--claudeai")
+    } finally {
+      ClaudeAgent.keychain = keychain
+    }
+  })
+
+  /** A Claude Code that keeps a sign-in per folder (yours by default), as `auth login` says. */
+  function consoleClaude(yours: string) {
+    writeFileSync(join(bin, "claude"), `#!/bin/sh
+dir="\${CLAUDE_CONFIG_DIR:-${yours}}"
+case "$1 $2" in
+  "auth login") mkdir -p "$dir"; echo "$3" > "$dir/signed-in" ;;
+  "auth logout") rm -f "$dir/signed-in" ;;
+  "auth status")
+    [ -f "$dir/signed-in" ] || { echo '{"loggedIn":false,"authMethod":"none"}'; exit 1; }
+    grep -q console "$dir/signed-in" && echo '{"loggedIn":true,"authMethod":"console","email":"ops@example.com"}' || echo '{"loggedIn":true,"authMethod":"claude.ai","email":"ada@example.com"}' ;;
+esac
+`)
+    chmodSync(join(bin, "claude"), 0o755)
+    mkdirSync(yours, { recursive: true })
+    writeFileSync(join(yours, "signed-in"), "--claudeai")
+  }
+
+  function ownToken(agent: ClaudeAgent) {
+    mkdirSync(dirname(agent.tokenFile), { recursive: true })
+    writeFileSync(agent.tokenFile, JSON.stringify({ token: TOKEN, made: Date.now() }))
+  }
+
+  test("a Console sign-in while Kuvo Code has its own plan sign-in takes its place, and never writes yours", async () => {
+    const yours = join(root, "claude-yours-switch")
+    consoleClaude(yours)
+    ClaudeAgent.keychain = true
+    try {
+      const agent = new ClaudeAgent(context())
+      ownToken(agent)
+      const sign = await agent.signIn("console", {})
+      for (let waited = 0; waited < 10_000 && sign.status().status === "pending"; waited += 50) await Bun.sleep(50)
+      expect(sign.status().status).toBe("complete")
+      expect(readFileSync(join(yours, "signed-in"), "utf8").trim()).toBe("--claudeai")
+      expect(agent.env().CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined()
+      expect((await bridge([agent]).account(agent)).connections[0]?.label).toBe("ops@example.com")
+    } finally {
+      ClaudeAgent.keychain = keychain
+    }
+  })
+
+  test("Sign Out after moving from a Console sign-in to a Claude plan signs out of both", async () => {
+    const yours = join(root, "claude-yours-out")
+    consoleClaude(yours)
+    ClaudeAgent.keychain = true
+    try {
+      const agent = new ClaudeAgent(context())
+      const sign = await agent.signIn("console", {})
+      for (let waited = 0; waited < 10_000 && sign.status().status === "pending"; waited += 50) await Bun.sleep(50)
+      ownToken(agent)
+      await agent.signOut!()
+      expect((await bridge([agent]).account(agent)).connections).toEqual([])
+      expect(readFileSync(join(yours, "signed-in"), "utf8").trim()).toBe("--claudeai")
+    } finally {
+      ClaudeAgent.keychain = keychain
+    }
+  })
+
+  test("an added account an earlier version signed in to a Claude plan in its folder asks to sign in again", async () => {
+    consoleClaude(join(root, "claude-yours-added"))
+    const home = join(root, "claude-added-old")
+    mkdirSync(home, { recursive: true })
+    writeFileSync(join(home, "signed-in"), "--claudeai")
+    ClaudeAgent.keychain = true
+    try {
+      const agent = new ClaudeAgent(context(), { id: "old", home })
+      expect((await bridge([agent]).account(agent)).connections).toEqual([])
+    } finally {
+      ClaudeAgent.keychain = keychain
+    }
+  })
+
+  test("a code Claude turns away only after checking it still ends the sign-in", async () => {
+    const go = join(root, "refuse-now")
+    writeFileSync(join(bin, "claude"), `#!/bin/sh
+printf 'https://claude.com/cai/oauth/authorize?code=true\\n\\nPaste code here if prompted > '
+read code
+while [ ! -f '${go}' ]; do sleep 0.05; done
+printf "OAuth error: That code wasn't accepted. Press Enter to retry.\\n"
+read again
+`)
+    chmodSync(join(bin, "claude"), 0o755)
+    ClaudeAgent.keychain = true
+    try {
+      const agent = new ClaudeAgent(context())
+      const sign = await agent.signIn("claudeai", { remote: true })
+      await sign.complete!("a-whole-code#state")
+      expect(sign.status().status).toBe("pending")
+      writeFileSync(go, "")
+      for (let waited = 0; waited < 10_000 && sign.status().status === "pending"; waited += 50) await Bun.sleep(50)
+      expect(sign.status()).toEqual({ status: "failed", message: "Claude didn't take that code. Start again for a new one." })
     } finally {
       ClaudeAgent.keychain = keychain
     }

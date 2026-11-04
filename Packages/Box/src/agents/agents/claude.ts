@@ -108,10 +108,12 @@ export class ClaudeAgent implements Agent {
     if (ClaudeAgent.keychain) {
       // Kuvo Code's own: yours, in Terminal, stays signed in.
       this.signOut = async () => {
-        const had = existsSync(this.tokenFile)
         rmSync(this.tokenFile, { force: true })
-        // An Anthropic Console sign-in, in Kuvo Code's own folder.
-        if (!had) await signOutWith("Claude Code", this.executable(), ["auth", "logout"], this.env())
+        // An Anthropic Console sign-in, in Kuvo Code's own folder (an added account's: any of its
+        // own), there or not known to be gone.
+        if ((await this.readStatus(this.consoleEnv()).catch(() => undefined))?.loggedIn !== false) {
+          await signOutWith("Claude Code", this.executable(), ["auth", "logout"], this.consoleEnv())
+        }
         this.programUpdated()
         this.known.reset()
         this.modelList = undefined
@@ -201,9 +203,10 @@ export class ClaudeAgent implements Agent {
       if (ClaudeAgent.keychain) {
         if (!this.token()) {
           // Signed in with an Anthropic Console account, in Kuvo Code's own folder (an added
-          // account's, its own).
-          const console = await this.readStatus(this.env()).catch(() => undefined)
-          if (console?.loggedIn) return { installed: true, signedIn: true, label: describe(console) || "Anthropic Console" }
+          // account's, its own). Not a Claude plan an earlier version signed it in to there:
+          // Claude Code would renew that one in the sandbox, which can't keep what it renews.
+          const console = await this.readStatus(this.consoleEnv())
+          if (console.loggedIn && console.authMethod !== "claude.ai") return { installed: true, signedIn: true, label: describe(console) || "Anthropic Console" }
           return { installed: true, signedIn: false, message: "Sign in to Claude Code with your Claude plan or an Anthropic Console account." }
         }
         // Who and which plan, from your own sign-in (Kuvo Code's can only ask Claude for answers),
@@ -293,6 +296,12 @@ export class ClaudeAgent implements Agent {
     return process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude")
   }
 
+  /** Claude Code's env for an Anthropic Console sign-in on a Mac: in Kuvo Code's own folder, without
+   * Kuvo Code's token (which would win), so yours in Terminal is never written. */
+  consoleEnv() {
+    return { ...this.env({ ownToken: false }), CLAUDE_CONFIG_DIR: this.consoleHome }
+  }
+
   get tokenFile() {
     return join(this.context.home, "claude", "tokens", `${this.instance.id}.json`)
   }
@@ -350,19 +359,26 @@ export class ClaudeAgent implements Agent {
       })
     }
     if (ClaudeAgent.keychain) mkdirSync(this.consoleHome, { recursive: true, mode: 0o700 })
+    const env = ClaudeAgent.keychain ? this.consoleEnv() : this.env()
     return commandSignIn({
       command: executable,
       args: ["auth", "login", methodID === "console" ? "--console" : "--claudeai"],
-      env: this.env(),
+      env,
       home: this.context.home,
       temporary: this.context.temporary,
       instructions: "Finish signing in on Claude's page. Claude Code keeps the sign-in, as when you run claude auth login.",
       // Claude Code's word: a sign-in Claude ended still reads as signed in there, so signing in
       // again counts once the command says it worked (another Claude Code writing its settings
       // meanwhile isn't it).
-      signedIn: async () => (await this.readStatus(this.env())).loggedIn === true,
+      signedIn: async () => (await this.readStatus(env)).loggedIn === true,
       codePrompt: /Paste code here if prompted >\s*/g,
       onComplete: () => {
+        // In place of Kuvo Code's own Claude plan sign-in, on a Mac.
+        if (ClaudeAgent.keychain) {
+          rmSync(this.tokenFile, { force: true })
+          this.modelList = undefined
+          this.programUpdated()
+        }
         this.turnedAway = undefined
         this.known.reset()
       },

@@ -8301,10 +8301,16 @@ async function commandSignIn(options) {
       delete env[name];
   let printed = "";
   let output = "";
+  const refused = options.refusedCode ?? /invalid code/i;
+  let pastedAt;
   const take = (text) => {
     printed += text;
     output = plain2(printed);
     options.onOutput?.(output);
+    if (options.refusedEnds && pastedAt !== undefined && status.status === "pending" && refused.test(output.slice(pastedAt))) {
+      status = { status: "failed", message: options.refusedEnds };
+      child.kill();
+    }
   };
   let type;
   let child;
@@ -8420,20 +8426,20 @@ async function commandSignIn(options) {
         throw new Error("That sign-in is over. Start it again.");
       pasted = true;
       const from = output.length;
+      pastedAt = from;
       await type(code.trim() + `
 `);
       for (let waited = 0;waited < 1500 && status.status === "pending"; waited += 100) {
         await Bun.sleep(100);
-        if ((options.refusedCode ?? /invalid code/i).test(output.slice(from))) {
+        if (!options.refusedEnds && refused.test(output.slice(from))) {
           pasted = false;
-          if (options.refusedEnds) {
-            status = { status: "failed", message: options.refusedEnds };
-            child.kill();
-            throw new Error(options.refusedEnds);
-          }
+          pastedAt = undefined;
           throw new Error("That code couldn't be read. Copy all of it from the page, and paste it again.");
         }
       }
+      const now = status;
+      if (options.refusedEnds && now.status === "failed" && now.message === options.refusedEnds)
+        throw new Error(options.refusedEnds);
     } : undefined,
     status: () => late && status.status === "pending" ? { ...status, url: late, instructions: options.instructions } : status,
     cancel() {
@@ -9667,10 +9673,12 @@ class ClaudeAgent {
     this.providerID = providerID("claude", instance.id);
     if (ClaudeAgent.keychain) {
       this.signOut = async () => {
-        const had = existsSync13(this.tokenFile);
         rmSync10(this.tokenFile, { force: true });
-        if (!had)
-          await signOutWith("Claude Code", this.executable(), ["auth", "logout"], this.env());
+        if ((await this.readStatus(this.consoleEnv()).catch(() => {
+          return;
+        }))?.loggedIn !== false) {
+          await signOutWith("Claude Code", this.executable(), ["auth", "logout"], this.consoleEnv());
+        }
         this.programUpdated();
         this.known.reset();
         this.modelList = undefined;
@@ -9749,10 +9757,8 @@ class ClaudeAgent {
     const account = await this.known.read(fresh, async () => {
       if (ClaudeAgent.keychain) {
         if (!this.token()) {
-          const console2 = await this.readStatus(this.env()).catch(() => {
-            return;
-          });
-          if (console2?.loggedIn)
+          const console2 = await this.readStatus(this.consoleEnv());
+          if (console2.loggedIn && console2.authMethod !== "claude.ai")
             return { installed: true, signedIn: true, label: describe(console2) || "Anthropic Console" };
           return { installed: true, signedIn: false, message: "Sign in to Claude Code with your Claude plan or an Anthropic Console account." };
         }
@@ -9821,6 +9827,9 @@ class ClaudeAgent {
       return this.consoleHome;
     return process.env.CLAUDE_CONFIG_DIR ?? join21(homedir(), ".claude");
   }
+  consoleEnv() {
+    return { ...this.env({ ownToken: false }), CLAUDE_CONFIG_DIR: this.consoleHome };
+  }
   get tokenFile() {
     return join21(this.context.home, "claude", "tokens", `${this.instance.id}.json`);
   }
@@ -9875,16 +9884,22 @@ class ClaudeAgent {
     }
     if (ClaudeAgent.keychain)
       mkdirSync13(this.consoleHome, { recursive: true, mode: 448 });
+    const env = ClaudeAgent.keychain ? this.consoleEnv() : this.env();
     return commandSignIn({
       command: executable,
       args: ["auth", "login", methodID === "console" ? "--console" : "--claudeai"],
-      env: this.env(),
+      env,
       home: this.context.home,
       temporary: this.context.temporary,
       instructions: "Finish signing in on Claude's page. Claude Code keeps the sign-in, as when you run claude auth login.",
-      signedIn: async () => (await this.readStatus(this.env())).loggedIn === true,
+      signedIn: async () => (await this.readStatus(env)).loggedIn === true,
       codePrompt: /Paste code here if prompted >\s*/g,
       onComplete: () => {
+        if (ClaudeAgent.keychain) {
+          rmSync10(this.tokenFile, { force: true });
+          this.modelList = undefined;
+          this.programUpdated();
+        }
         this.turnedAway = undefined;
         this.known.reset();
       },
@@ -23174,4 +23189,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents be64df20511e73e2f0f622456d47f3aa690e9fde4826b9f6e8d6a8ae87338135
+// Built from Packages/Box/src/agents fc80bd0008aa70545610800492901e7ee0ca96f23f7b3e99ef02e94ead5100a5
