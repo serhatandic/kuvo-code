@@ -14,6 +14,7 @@ import { allowRefusal } from "./policy";
 import { approvalOf } from "./approval";
 import { appsNamed, finishGoal, goalProgress, goalProject, maySpend, progressRefused, proposalRefused, proposeGoal, runningGoal } from "./goals";
 import { findApps } from "./apps";
+import { isObject } from "../../shared/json";
 import fs from "node:fs";
 import path from "node:path";
 import { readProjects } from "../areas/projects";
@@ -257,11 +258,14 @@ export async function proposeGoalTool(caller: Caller, args: Record<string, unkno
   if ("refused" in outcome) return refused(outcome.refused);
   const { goal, yours: set } = outcome;
   const yours = goal.checks.filter(check => check.state === "needs").map(check => check.text);
+  // A spend line the user pays for themselves, left out of the plan's spending.
+  const theirs = (Array.isArray(args.spend) ? args.spend.slice(0, 10) : []).map(each => (isObject(each) && typeof each.what === "string" ? each.what.trim() : "")).filter(what => what && !goal.spend.some(line => line.what.toLowerCase() === what.slice(0, 200).toLowerCase()));
+  const paid = theirs.length ? ` ${theirs.join("; ")} ${theirs.length > 1 ? "are" : "is"} the user's to pay, as one of the checks: not yours to spend, so not in the plan's spending.` : "";
   const alone = goal.alone ? "" : ` ${HERE[0].toUpperCase()}${HERE.slice(1)} can't work on it alone yet, so once it starts, what your sessions ask waits for the user rather than for you.`;
   // The projects the user set on the card before: kept, or replaced by others the bot proposed.
   const names = set ? set.projects.map(each => `"${each}"`).join(", ") : "";
   const projects = !set ? "" : set.kept ? ` The user set its projects on the card: ${names}. They're kept: call them that.` : ` The user had set its projects on the card to ${names}; the ones you gave replace them. If they didn't ask you to change those, propose it again with theirs.`;
-  return said(`The card is up on ${HERE}: the user starts the goal from it, or says not now.${projects} ${yours.length ? `What's theirs to do first: ${yours.join("; ")}. ` : ""}Don't start the work until you hear [Goal started]. If they change something, propose it again as it is now.${alone}`);
+  return said(`The card is up on ${HERE}: the user starts the goal from it, or says not now.${projects} ${yours.length ? `What's theirs to do first: ${yours.join("; ")}. ` : ""}Don't start the work until you hear [Goal started].${paid} If they change something, propose it again as it is now.${alone}`);
 }
 
 /** goal_progress: the goal's steps, what waits for the user, what's spent and what's still watched

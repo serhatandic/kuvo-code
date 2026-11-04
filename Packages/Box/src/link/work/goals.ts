@@ -411,8 +411,10 @@ export function proposeGoal(bot: { bot: string; name: string; session: string },
 // A line's words, in lower case, without the marks between them.
 const wordsOf = (said: string) => said.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
 // Whether a check names what a spend line is for: its words in a row there, two or more (one word,
-// like "ads", may only be near it: "Add a Google Ads account" is yours, the ads the bot's).
+// like "ads", may only be near it).
 const names = (check: string[], what: string[]) => what.length > 1 && check.some((_, at) => what.every((word, by) => check[at + by] === word));
+// The amounts a check gives ("99 USD a year", "$99.00", "99,00 €").
+const pricesIn = (said: string) => [...said.matchAll(/\d+(?:[.,]\d+)?/g)].map(each => Number(each[0].replace(",", ".")));
 
 // A plan as propose_goal gives it, checked: what's kept of it, or why it won't do.
 function planGiven(given: Record<string, unknown>): { plan: Plan } | { refused: string } {
@@ -433,12 +435,13 @@ function planGiven(given: Record<string, unknown>): { plan: Plan } | { refused: 
     checks.push({ id: `c${checks.length + 1}`, text: said, ...(text(each.detail, 300) ? { detail: text(each.detail, 300)! } : {}), state, by: "bot", ...(site ? { site } : {}), ...(url && state === "needs" ? { action: { kind: "open" as const, label: text(each.button, 30) ?? "Open", url } } : {}) });
   }
   const spend: KeptGoal["spend"] = [];
-  const yours = checks.filter(each => each.state === "needs").map(each => wordsOf(each.text));
+  const yours = checks.filter(each => each.state === "needs").map(each => ({ words: wordsOf(each.text), prices: pricesIn(`${each.text} ${each.detail ?? ""}`) }));
   for (const each of Array.isArray(given.spend) ? given.spend.slice(0, 10) : []) {
     if (!isObject(each) || !text(each.what, 200) || typeof each.cap !== "number" || !(each.cap > 0)) return { refused: "Each spend line needs what it's for (what) and a cap above 0 (cap)." };
-    // What the plan has you do is yours to pay for (a membership you join, a fee on your account):
-    // it stays under what needs you, and isn't the bot's to spend.
-    if (yours.some(check => names(check, wordsOf(each.what as string)))) continue;
+    // What the plan has you pay for yourself (a membership you join, at its price) stays under what
+    // needs you, and isn't the bot's to spend. (A check that only names it, like a key for a service
+    // the bot then spends on, leaves the bot its line.)
+    if (yours.some(check => check.prices.includes(each.cap as number) && names(check.words, wordsOf(each.what as string)))) continue;
     const per = PERIODS.includes(each.per as (typeof PERIODS)[number]) ? each.per as (typeof PERIODS)[number] : "goal";
     spend.push({ what: text(each.what, 200)!, cap: each.cap, currency: (text(each.currency, 3) ?? "USD").toUpperCase(), per, spent: 0 });
   }
