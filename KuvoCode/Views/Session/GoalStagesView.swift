@@ -5,7 +5,8 @@ import SwiftUI
 /// A goal's steps as a list (`GoalTimeline.stages`), read left to right like the timeline: what's
 /// done, small and faint; the step under way as a card with its mark, name, its line on what's in
 /// it, how far along it is and about how long it has left, two under way one card over the other; then what's ahead, the
-/// next a little stronger, and steps that start together side by side on one row. Before it
+/// next a little stronger, and steps that start together under one tall mark, two and a count
+/// past three. Before it
 /// starts, the first step waits in a grey card. Narrow, the same top to bottom, with what's done
 /// folded into one faint line; once it's over, what's done and what it left, one under the other.
 /// Three cards at most, those waiting for you first, the rest under way named on a line under them.
@@ -20,16 +21,17 @@ struct GoalStagesView: View {
     var isPaused = false
     @Environment(\.accent) private var accent
     @Environment(\.colorScheme) private var scheme
+    /// The groups of steps that start together opened past their count, by their first step.
+    @State private var opened: Set<String> = []
 
     static let rowHeight: CGFloat = 26
     /// The most the done column takes; its names are cut at their end past it.
     static let doneWidth: CGFloat = 220
     static let gap: CGFloat = 18
-    /// The least a card takes beside steps side by side (its line cut at its end below its own
+    /// The least a card takes beside the steps ahead (its line cut at its end below its own
     /// width), and the most of the room after what's done.
     static let cardWidth: CGFloat = 200
     static let cardShare: CGFloat = 0.62
-    static let aheadSpacing: CGFloat = 14
     /// The most rows take before they scroll: ten. Every row is `rowHeight` tall, so a pane this
     /// high ends between two; the cards are never in it, so they're always whole.
     static let mostRows: CGFloat = 10 * rowHeight
@@ -51,6 +53,8 @@ struct GoalStagesView: View {
                 .frame(maxWidth: .infinity, alignment: .topLeading)
         }
         .accessibilityElement(children: .contain)
+        // Another goal in the same place: no group opened carries over.
+        .onChange(of: plan.id) { opened = [] }
     }
 
     /// Rows that scroll once they're more than `mostRows` tall. Done ones open on the latest,
@@ -247,34 +251,73 @@ struct GoalStagesView: View {
 
     // MARK: The rows
 
-    /// Steps that start together side by side, each name whole, in as few rows as they fit (three
-    /// to a row at most), each group on its own; more of them wrap onto the rows under, still side
-    /// by side. Where even one to a row has no room, names are cut at their end.
+    /// Steps that start together under one tall mark, the step's circle drawn as long as they are,
+    /// one under another with each name whole. Past `GoalStages.mostCards`, two of them and a count
+    /// that opens the rest in place.
     private func ahead(_ stages: GoalStages) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(stages.ahead.enumerated()), id: \.element.first?.id) { index, group in
-                ViewThatFits(in: .horizontal) {
-                    ForEach([3, 2, 1].filter { $0 == 1 || $0 <= group.count }, id: \.self) { most in
-                        aheadGroup(group, stages, isNext: index == 0, most: most, whole: true)
-                    }
-                    aheadGroup(group, stages, isNext: index == 0, most: 1, whole: false)
-                }
+                aheadGroup(group, stages, isNext: index == 0 && !stages.isOver)
             }
         }
     }
 
-    private func aheadGroup(_ group: [GoalTimeline.Lane], _ stages: GoalStages, isNext: Bool, most: Int, whole: Bool) -> some View {
-        let rows = stride(from: 0, to: group.count, by: most).map { Array(group[$0..<min($0 + most, group.count)]) }
-        return Grid(alignment: .leading, horizontalSpacing: Self.aheadSpacing, verticalSpacing: 0) {
-            ForEach(rows, id: \.first?.id) { row in
-                GridRow {
-                    ForEach(row) { lane in
-                        aheadRow(lane, number: stages.number(lane.id), isNext: isNext && !stages.isOver, isOver: stages.isOver)
-                            .fixedSize(horizontal: whole, vertical: false)
+    /// How many of a group of `count` that start together show: all of them up to
+    /// `GoalStages.mostCards`, or once opened; else two, and a count for the rest.
+    static func shownTogether(_ count: Int, opened: Bool) -> Int {
+        opened || count <= GoalStages.mostCards ? count : GoalStages.mostCards - 1
+    }
+
+    private func aheadGroup(_ group: [GoalTimeline.Lane], _ stages: GoalStages, isNext: Bool) -> some View {
+        let id = group.first?.id ?? ""
+        let shown = Self.shownTogether(group.count, opened: opened.contains(id))
+        let rows = shown + (shown < group.count ? 1 : 0)
+        return HStack(alignment: .top, spacing: 8) {
+            Group {
+                if group.count == 1 {
+                    GoalStepMark(stages.isOver ? .skipped : .todo).frame(height: Self.rowHeight)
+                } else {
+                    // The step's circle, as tall as the steps that share its start.
+                    Capsule()
+                        .strokeBorder(Color.primary.opacity(stages.isOver ? (scheme == .dark ? 0.2 : 0.16) : (scheme == .dark ? 0.32 : 0.26)), lineWidth: 1.2)
+                        .frame(width: 12.5, height: CGFloat(rows) * Self.rowHeight - 13)
+                        .padding(.vertical, 6.5)
+                        .accessibilityHidden(true)
+                }
+            }
+            .frame(width: 14)
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(group.prefix(shown)) { lane in
+                    aheadRow(lane, number: stages.number(lane.id), isNext: isNext, isOver: stages.isOver)
+                }
+                if shown < group.count {
+                    more(group.count - shown, isNext: isNext) {
+                        withAnimation(.ui) { _ = opened.insert(id) }
                     }
                 }
             }
         }
+        .accessibilityElement(children: .contain)
+    }
+
+    /// "+8": the rest of the steps that start together, opened in place.
+    private func more(_ count: Int, isNext: Bool, open: @escaping () -> Void) -> some View {
+        Button(action: open) {
+            Text("+\(count)")
+                .font(.system(size: 11.5, weight: .semibold).monospacedDigit())
+                .foregroundStyle(isNext ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+                .padding(.horizontal, 7)
+                .frame(height: 19)
+                .background(Capsule().fill(Color.primary.opacity(scheme == .dark ? 0.1 : 0.065)))
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .clickablePointer()
+        .fixedSize()
+        .frame(height: Self.rowHeight)
+        .help("Show \(count) more that start at the same time")
+        .accessibilityLabel("Show \(count) more")
+        .accessibilityHint("Steps that start at the same time")
     }
 
     private func doneRow(_ lane: GoalTimeline.Lane, number: Int) -> some View {
@@ -283,17 +326,18 @@ struct GoalStagesView: View {
             .foregroundStyle(.tertiary)
     }
 
-    /// A step ahead: the next a little stronger than the rest; once the goal is over, what it left.
+    /// A step ahead, its mark the group's: the next a little stronger than the rest; once the goal
+    /// is over, what it left.
     private func aheadRow(_ lane: GoalTimeline.Lane, number: Int, isNext: Bool, isOver: Bool) -> some View {
-        row(lane, number: number, mark: isOver ? .skipped : .todo, spacing: 8)
+        row(lane, number: number, mark: nil, spacing: 8)
             .font(.system(size: 12.5, weight: isNext ? .medium : .regular))
             .foregroundStyle(isOver ? AnyShapeStyle(.tertiary) : isNext ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
     }
 
-    private func row(_ lane: GoalTimeline.Lane, number: Int, mark: GoalTrack.State, spacing: CGFloat) -> some View {
+    private func row(_ lane: GoalTimeline.Lane, number: Int, mark: GoalTrack.State?, spacing: CGFloat) -> some View {
         let step = lane.step
         return HStack(spacing: spacing) {
-            GoalStepMark(mark).frame(width: 14)
+            if let mark { GoalStepMark(mark).frame(width: 14) }
             // As wide as the plan's longest number, so the names line up.
             Text("\(number)")
                 .monospacedDigit()
@@ -323,10 +367,9 @@ struct GoalStagesView: View {
 }
 
 /// The list's columns side by side, as wide as each asks: what's done as wide as its names (up to
-/// `GoalStagesView.doneWidth`), what's ahead as wide as its steps side by side with their names
-/// whole (that's what says which run together), and the cards as wide as their names and lines
+/// `GoalStagesView.doneWidth`), what's ahead as wide as its names whole, and the cards as wide as their names and lines
 /// in what's left: they give way first, down to `cardWidth`. Where even that leaves too little for
-/// the steps side by side, those stack and the cards take up to `cardShare` of the rest. The rows'
+/// the names ahead, those are cut and the cards take up to `cardShare` of the rest. The rows'
 /// columns are as tall as their rows up to `mostRows`, or the cards' height rounded up to a whole
 /// row, and scroll past it: each ends between two rows.
 private struct StageColumns: Layout {
