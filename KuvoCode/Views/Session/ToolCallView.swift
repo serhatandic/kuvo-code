@@ -1,5 +1,6 @@
 import AppKit
 import ClientDesign
+import ClientSandbox
 import ClientSessions
 import OpenCodeKit
 import SwiftUI
@@ -41,6 +42,7 @@ struct ToolCallView: View {
     /// What its box asks, where it's given rather than heard (a summary outside the transcript).
     private(set) var givenStopped: Set<String>?
     private var sandboxStopped: Set<String>? { givenStopped ?? heardStopped }
+    @Environment(\.askReviews) private var askReviews
     @Environment(\.sandboxReleased) private var heardReleased
     private(set) var givenReleased: Set<String>?
     private var sandboxReleased: Set<String> { givenReleased ?? heardReleased }
@@ -137,6 +139,9 @@ struct ToolCallView: View {
                 DiffStat(additions: stat.additions, deletions: stat.deletions)
             }
             if let mark = sandboxMark {
+                mark
+            }
+            if let mark = reviewMark {
                 mark
             }
             // A command run outside the sandbox: its mark says how, and only that it failed, here.
@@ -450,6 +455,13 @@ struct ToolCallView: View {
         return Text("\(symbol)\(outcome)").foregroundStyle(.secondary)
     }
 
+    /// What Auto's reviewer did with what this step asked (working outside its folder): checking,
+    /// allowed, held back for you, or refused.
+    private var reviewMark: Text? {
+        guard let review = askReviews[call.id], let words = review.mark else { return nil }
+        return Text(words).foregroundStyle(review.state == .heldBack ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+    }
+
     /// A command that didn't go through: it exited with an error, or failed.
     private var isStopped: Bool {
         if case .failed = call.state { return true }
@@ -715,6 +727,8 @@ extension EnvironmentValues {
     @Entry var sandboxStopped: Set<String>? = nil
     /// The commands whose asks were seen open and have closed since: only those may be running.
     @Entry var sandboxReleased: Set<String> = []
+    /// What Auto's reviewer did with what each step asked, by its tool call.
+    @Entry var askReviews: [String: AskReview] = [:]
     /// What a bot answered for the conversation's asks, by the tool call that asked (`kuvo.answers`).
     @Entry var workAnswers: [String: WorkAnswer] = [:]
 }

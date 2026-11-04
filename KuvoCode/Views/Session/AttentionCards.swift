@@ -5,16 +5,35 @@ import ClientText
 import OpenCodeKit
 import SwiftUI
 
-/// The agent wants to do something that needs your OK.
+/// The agent wants to do something that needs your OK, in the composer's place: what Allow allows,
+/// a line to tell it what to do instead, and the answers. Return allows it once; Escape goes to the
+/// line, and again says no.
 struct PermissionCard: View {
     let request: PermissionRequest
     /// For a command: the whole command line, pipes and all, which the request names in parts.
     var command: String?
     let directory: String
-    let reply: (PermissionRequest.Decision) -> Void
+    /// A coding agent's conversation (Claude Code, Codex), where Always lasts for it, not the project.
+    var forConversation = false
+    /// The answer, and for Don't Allow what to do instead, when you wrote it.
+    let reply: (PermissionRequest.Decision, String?) -> Void
     @Environment(\.takesCardKeys) private var takesKeys
+    @Environment(\.cardRoom) private var room
     /// Files whose changes you asked to see all of.
     @State private var shownWhole: Set<String> = []
+    /// What to do instead, as you write it.
+    @State private var instead = ""
+    @FocusState private var isWritingInstead: Bool
+    /// Its keys answer only once the keyboard has been still a moment, after it shows and after
+    /// each key typed: Return ending a message you were writing as it came doesn't allow it.
+    @State private var typing = KeysTyped()
+    /// A long command shown whole, and how tall it is whole and as shown.
+    @State private var showsAll = false
+    @State private var wholeHeight: CGFloat = 0
+    @State private var shownHeight: CGFloat = 0
+    private var isCut: Bool { shownHeight > 0 && wholeHeight > shownHeight + 1 }
+    /// Lines of a command shown before Show All.
+    private static let commandLines = 6
     /// A file's lines shown before Show All: enough to read, not so many that a huge new file
     /// holds the window up.
     private static let linesShown = 400
@@ -31,19 +50,21 @@ struct PermissionCard: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
                         .font(.headline)
+                        .accessibilityAddTraits(.isHeader)
                     if let message = request.message {
                         Text(message)
                             .font(.callout)
                             .foregroundStyle(.secondary)
                     }
                 }
+                .fixedSize(horizontal: false, vertical: true)
             }
 
             // All that Allow allows: every file's changes, the whole command, scrolling when long.
             if !diffs.isEmpty {
                 // Each file's changes, made as they scroll into view; a long one's rest a click
                 // away, so nothing Allow allows is out of reach.
-                AllowedWell(maxHeight: 360) {
+                AllowedWell(maxHeight: room) {
                     LazyVStack(alignment: .leading, spacing: 10) {
                         ForEach(diffs) { diff in
                             let whole = shownWhole.contains(diff.id)
@@ -56,34 +77,116 @@ struct PermissionCard: View {
                     }
                 }
             } else if !request.resources.isEmpty {
-                AllowedWell(maxHeight: 180) {
-                    let allowed = allowed
-                    Text(allowed.shown)
-                        .transcriptCodeFont()
-                        .textSelection(.enabled)
-                        .accessibilityLabel(allowed.spoken.map(Text.init) ?? Text(allowed.shown))
-                        .padding(10)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                VStack(alignment: .leading, spacing: 6) {
+                    AllowedWell(maxHeight: room) {
+                        let allowed = allowed
+                        Text(allowed.shown)
+                            .transcriptCodeFont()
+                            .lineLimit(showsAll ? nil : Self.commandLines)
+                            .textSelection(.enabled)
+                            .accessibilityLabel(allowed.spoken.map(Text.init) ?? Text(allowed.shown))
+                            // Whether it's cut: as tall as it is whole, against as shown.
+                            .background {
+                                Text(allowed.shown)
+                                    .transcriptCodeFont()
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .hidden()
+                                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { wholeHeight = $0 }
+                            }
+                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { shownHeight = $0 }
+                            .padding(10)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    // Sunk in like a code block, as it's paths and commands.
+                    .recessedWell(RoundedRectangle(cornerRadius: 10))
+                    if isCut && !showsAll {
+                        Button("Show All") { showsAll = true }
+                            .buttonStyle(TextButtonStyle())
+                            .accessibilityHint("Shows the whole command")
+                    }
                 }
-                // Sunk in like a code block, as it's paths and commands.
-                .recessedWell(RoundedRectangle(cornerRadius: 10))
             }
 
-            HStack(spacing: 8) {
-                // The same words as the sandbox's card, so the two read as one family.
-                Button("Don’t Allow", role: .cancel) { reply(.reject) }
-                    .keyboardShortcut(takesKeys ? .cancelAction : nil)
-                Spacer()
-                Button("Always for This") { reply(.always) }
-                    .help(alwaysHelp)
-                Button("Allow Once") { reply(.once) }
-                    .buttonStyle(.glassProminent)
-                    .keyboardShortcut(takesKeys ? .defaultAction : nil)
+            // Don't Allow, with what to do instead: the agent hears it as your message.
+            TextField("Or tell it what to do instead…", text: $instead, axis: .vertical)
+                .textFieldStyle(.plain)
+                .lineLimit(1...4)
+                .focused($isWritingInstead)
+                .onSubmit(refuse)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .recessedWell(RoundedRectangle(cornerRadius: 10))
+                .accessibilityLabel("What to do instead")
+                .accessibilityHint("Return says no, and tells the agent this instead")
+
+            // The same words and layout as the sandbox's card, so the two read as one family.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    dontAllow
+                    Spacer()
+                    alwaysButton(whole: true)
+                    allowOnce
+                }
+                // A narrow window: Always on a row of its own, its name whole as long as it fits.
+                VStack(alignment: .trailing, spacing: 8) {
+                    HStack(spacing: 8) {
+                        dontAllow
+                        Spacer()
+                        allowOnce
+                    }
+                    alwaysButton(whole: false)
+                }
             }
             .buttonStyle(.glass)
             .controlSize(.large)
         }
         .padding(16)
+        .background(escape)
+        .onChange(of: request.id) { typing.restart() }
+        // (What you write in its line is the card's own.)
+        .onChange(of: isWritingInstead) { _, writing in typing.ignores = writing }
+        .onAppear { typing.start() }
+        .onDisappear { typing.stop() }
+    }
+
+    private var dontAllow: some View {
+        Button("Don’t Allow", role: .cancel, action: refuse)
+            .help(words.isEmpty ? "" : "Says no, and tells the agent what you wrote")
+    }
+
+    private var allowOnce: some View {
+        Button("Allow Once") { reply(.once, nil) }
+            .buttonStyle(.glassProminent)
+            // (Return in the line says no instead.)
+            .keyboardShortcut(takesKeys && typing.isQuiet && !isWritingInstead ? .defaultAction : nil)
+    }
+
+    /// Escape: to the line, to say what to do instead; there, no.
+    private var escape: some View {
+        Button("") { if isWritingInstead { refuse() } else { isWritingInstead = true } }
+            .keyboardShortcut(takesKeys && typing.isQuiet ? .cancelAction : nil)
+            .frame(width: 0, height: 0)
+            .opacity(0)
+            .accessibilityHidden(true)
+    }
+
+    private var words: String { instead.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    private func refuse() {
+        reply(.reject, words.isEmpty ? nil : words)
+    }
+
+    /// Named by what it saves: every edit, a command's kind, a folder; whole in its hover text.
+    private func alwaysButton(whole: Bool) -> some View {
+        let always = always
+        return Button { reply(.always, nil) } label: {
+            Text("\(always.title)\(always.named.map { Text(" ") + Text($0).monospaced() } ?? Text(""))")
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .fixedSize(horizontal: whole, vertical: false)
+        }
+        .help(always.help)
+        .accessibilityLabel(always.spoken)
     }
 
     private var subject: String {
@@ -130,20 +233,9 @@ struct PermissionCard: View {
         RemoteFolder.parse(directory) == nil ? NSHomeDirectory() : nil
     }
 
-    var alwaysHelp: String {
-        let patterns = request.save ?? request.resources
-        guard !patterns.isEmpty, patterns != ["*"] else {
-            // Everything of its kind, which "*" doesn't say.
-            let kind = switch request.action {
-            case "edit", "patch", "write": "changes to any file"
-            case "shell": "any command"
-            case "webfetch": "any address"
-            default: "this"
-            }
-            return "Don't ask again for \(kind) in this project"
-        }
-        let named = request.action == "external_directory" ? patterns.map { OutsideFolders.shown($0, home: home) } : patterns
-        return "Don't ask again for: " + named.joined(separator: ", ")
+    /// What Always for this ask saves, in words.
+    var always: AlwaysWords {
+        AlwaysWords.of(action: request.action, save: request.save, resources: request.resources, home: home, forConversation: forConversation)
     }
 
     private func relative(_ path: String) -> String {
@@ -657,5 +749,42 @@ struct AllowedWell<Content: View>: View {
         }
         .scrollBounceBehavior(.basedOnSize)
         .frame(height: min(height, maxHeight))
+    }
+}
+
+/// Whether the app's keyboard has been quiet a moment (Return and Escape aside): a card's keys
+/// wait for typing meant for something else to stop. Changes only as typing starts and stops.
+@MainActor @Observable final class KeysTyped {
+    private(set) var isQuiet = false
+    /// Typing that's the card's own (its line) doesn't count.
+    @ObservationIgnored var ignores = false
+    @ObservationIgnored private var monitor: Any?
+    @ObservationIgnored private var wait: Task<Void, Never>?
+
+    func start() {
+        restart()
+        guard monitor == nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            // (Return, keypad Enter, Escape: the card's own answers.)
+            if let self, !ignores, ![36, 76, 53].contains(event.keyCode) { restart() }
+            return event
+        }
+    }
+
+    /// Quiet again a moment from now.
+    func restart() {
+        if isQuiet { isQuiet = false }
+        wait?.cancel()
+        wait = Task { [weak self] in
+            guard (try? await Task.sleep(for: .milliseconds(600))) != nil else { return }
+            self?.isQuiet = true
+        }
+    }
+
+    func stop() {
+        monitor.map(NSEvent.removeMonitor)
+        monitor = nil
+        wait?.cancel()
+        wait = nil
     }
 }

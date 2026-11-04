@@ -308,6 +308,7 @@ final class AppModel {
         botAsks.app = self
         botAsks.onChange = { [weak self] sessions in self?.workspace.askingForWork = sessions }
         Sandboxes.shared.onChange = { [weak self] sessions in self?.workspace.askingOutsideSandbox = sessions }
+        Sandboxes.shared.onYours = { [weak self] id in self?.workspace.reviewLeftForYou(id) }
         goalPlans.app = self
         SessionModel.askBotForGoal = { [weak self] session, words in
             guard let self, let bot = self.bots.bot(forSession: session) else { return false }

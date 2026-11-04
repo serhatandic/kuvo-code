@@ -320,10 +320,7 @@ struct AppCommands: Commands {
                 .keyboardShortcut(".")
                 .disabled(actions?.canStop != true)
             Divider()
-            Button("Build Mode") { actions?.selectAgent("build") }
-                .keyboardShortcut("1", modifiers: [.command, .option])
-                .disabled(actions?.hasSession != true)
-            Button("Plan Mode") { actions?.selectAgent("plan") }
+            Toggle("Plan Mode", isOn: Binding { actions?.isPlanning == true } set: { _ in actions?.togglePlan() })
                 .keyboardShortcut("2", modifiers: [.command, .option])
                 .disabled(actions?.hasSession != true)
             Divider()
@@ -420,7 +417,9 @@ struct SessionActions {
     var newGroup: () -> Void
     var newChat: () -> Void
     var stop: () -> Void
-    var selectAgent: (String) -> Void
+    /// Whether the focused conversation is in Plan (`/plan`), and turning it on or off.
+    var isPlanning: Bool
+    var togglePlan: () -> Void
     /// Auto's Decisions in the focused conversation (nil: none to show there).
     var showDecisions: (() -> Void)?
     /// Branch Backups for the focused conversation's folder.

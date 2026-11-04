@@ -1043,7 +1043,7 @@ test("engine events become notifications, as the Mac words them", async () => {
   // A subagent's permission shows in the session that started it.
   assert.deepEqual(await link.noticeFor({ type: "permission.asked", data: { id: "per_1", sessionID: "ses_sub", action: "shell", resources: ["npm test"] } }, get), {
     title: "Fix the tests", subtitle: "kuvo-ai", body: "Wants to run a command: npm test", category: "permission", thread: "ses_main",
-    data: { session: "ses_main", request: "per_1", requestSession: "ses_sub" },
+    data: { session: "ses_main", request: "per_1", requestSession: "ses_sub", alwaysTitle: "Always Allow npm test" },
   });
   const question = { id: "frm_1", sessionID: "ses_main", title: "Pick", metadata: { kind: "question" }, fields: [{ key: "a", type: "string", description: "Which database?" }] };
   // As the engine sends it: the form under `form`.
@@ -1125,6 +1125,21 @@ test("a permission whose Always would save more than its notice shows says so: i
   assert.equal((await asked(["src/app.ts"], ["*"])).data.always, "0", "any file, for one");
   assert.equal((await asked(["npm test"], ["npm test"])).data.always, undefined);
   assert.equal((await asked(["src/app.ts", "README.md"])).data.always, undefined, "what it shows, when the engine names no rule");
+});
+
+test("a permission's notice names what its Always saves, as the Mac's buttons say it: a phone offers Always Allow git push", async () => {
+  const get = async () => ({ data: { id: "ses_main", title: "Ship it", location: { directory: "/home/me/kuvo-ai" } } });
+  const titled = async (action, resources, save) => (await link.noticeFor({ type: "permission.asked", data: { id: "per_1", sessionID: "ses_main", action, resources, ...(save ? { save } : {}) } }, get)).data.alwaysTitle;
+  assert.equal(await titled("shell", ["git push origin main"], ["git push *"]), "Always Allow git push");
+  assert.equal(await titled("shell", ["npm install && npm test"], ["npm install *", "npm test *"]), "Always Allow These Commands");
+  assert.equal(await titled("shell", ["docker compose --project-directory infra up"], ["docker compose --project-directory infra up *"]), "Always Allow docker compose --projec…");
+  assert.equal(await titled("edit", ["src/app.ts"], ["*"]), "Always Allow Edits");
+  assert.equal(await titled("write", ["src/app.ts"]), "Always Allow Edits");
+  assert.equal(await titled("external_directory", [path.join(os.homedir(), "notes/a.md")], [path.join(os.homedir(), "notes/*")]), "Always Allow ~/notes");
+  assert.equal(await titled("external_directory", [], [path.join(os.homedir(), "Developer/clients/acme/website-2026/*")]), "Always Allow …/website-2026");
+  // The same words as the Mac's and the phone's, case for case (ClientText's AlwaysWordsTests reads them too).
+  const vectors = JSON.parse(fs.readFileSync(new URL("../../Vectors/always-words.json", import.meta.url), "utf8"));
+  for (const each of vectors.cases) assert.equal(link.alwaysTitle(each, each.home ?? null), each.plain, JSON.stringify(each));
 });
 
 test("a Mac's phones document, by mail, counts from the Macs that set the machine up alone, a newer one only: a phone removed there loses its way in", async () => {

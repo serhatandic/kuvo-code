@@ -40,7 +40,7 @@ public enum Keyword: String, CaseIterable, Sendable, Hashable {
         switch self {
         case .goal: "what should be true when it’s done, like “all tests pass”"
         case .loop: "what to do each time"
-        case .plan: "what to plan (or nothing, to switch to Plan)"
+        case .plan: "what to plan (or nothing, to turn Plan on or off)"
         case .review: nil
         case .handoff: "what to do next (or nothing)"
         case .btw: "your question"

@@ -62,9 +62,9 @@ import Testing
         #expect(!workspace.needsAttention(id))
     }
 
-    /// Two asks at once and a question below them: Return and Escape answer the card on top only
-    /// (not every card at once), each ask is answered once however often it's clicked, and the
-    /// next card is next once the engine has the answer.
+    /// Two asks at once and a question after them: the first takes the composer's place (its keys
+    /// answer it, not every ask at once), each ask is answered once however often it's clicked, and
+    /// the next shows once the engine has the answer.
     @Test func eachAskIsAnsweredOnceAndReturnAnswersTheTopOne() async throws {
         defer { engine.stop() }
         engine.on("POST", "/api/session/\(id)/permission/*", json: [:])
@@ -73,7 +73,7 @@ import Testing
         workspace.handle(try engine.event("permission.asked", ["id": "per_2", "sessionID": id, "action": "shell", "resources": ["curl example.com"]]))
         workspace.handle(try engine.event("form.created", session: id, ["form": ["id": "frm_1", "sessionID": id, "title": "Questions", "metadata": ["kind": "question"],
                                                                                    "fields": [["key": "q0", "title": "Database", "type": "string"]]]]))
-        #expect(model.keyedAsk == "per_1", "Return answers the first card, not the question or the second")
+        #expect(shown(model) == "per_1", "the first ask shows, not the question or the second")
 
         let first = try #require(model.permissions.first)
         model.reply(to: first, .once)
@@ -83,9 +83,15 @@ import Testing
         #expect(model.answering == ["per_1"], "its card waits for the engine")
         workspace.handle(try engine.event("permission.replied", ["sessionID": id, "requestID": "per_1"]))
         #expect(model.answering.isEmpty)
-        #expect(model.keyedAsk == "per_2")
+        #expect(shown(model) == "per_2")
         workspace.handle(try engine.event("permission.replied", ["sessionID": id, "requestID": "per_2"]))
-        #expect(model.keyedAsk == "frm_1", "then the question")
+        #expect(shown(model) == "frm_1", "then the question")
+    }
+
+    /// The ask in the composer's place: permissions, then questions.
+    private func shown(_ model: SessionModel) -> String? {
+        let ids = model.permissions.map(\.id) + model.forms.map(\.id)
+        return WaitingAskPosition(ids: ids, picked: nil).map { ids[$0.index] }
     }
 
     /// An ask answered from your phone (or gone with its run) just before you answer it here: the

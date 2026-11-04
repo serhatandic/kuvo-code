@@ -1,5 +1,6 @@
 import AppKit
 import ClientDesign
+import ClientSandbox
 import ClientSessions
 import ClientText
 import OpenCodeKit
@@ -97,6 +98,8 @@ struct TranscriptView: View {
         // (by the conversation they ask as: the one at the top of its chain).
         .environment(\.sandboxStopped, Sandboxes.shared.stoppedCommands(for: workspace.root(of: model.id), on: Workspace.box(of: model.session.location.directory)))
         .environment(\.sandboxReleased, Sandboxes.shared.releasedCommands(for: workspace.root(of: model.id), on: Workspace.box(of: model.session.location.directory)))
+        // What Auto's reviewer did with what its steps asked, beside them.
+        .environment(\.askReviews, Sandboxes.shared.reviewMarks(on: Workspace.box(of: model.session.location.directory)))
         .overlay {
             if model.isLoaded && rows.isEmpty {
                 EmptyConversationView(directory: model.session.location.directory) { text in

@@ -82,7 +82,7 @@ struct AgentsSettings: View {
             } header: {
                 Text("Agents")
             } footer: {
-                Text("Modes are the agents you pick in the composer. Subagents are ones the agent hands part of a task to.")
+                Text("Plan is what /plan turns on. Your own agents work when you name one in a message, or when the agent hands one part of a task.")
                     .foregroundStyle(.secondary)
             }
 
@@ -208,7 +208,7 @@ private struct AgentEditor: View {
         self.isBuiltIn = isBuiltIn
         self.done = done
         self.remove = remove
-        _draft = State(initialValue: id == nil ? EngineConfig(draft: ["agents": .object(["new": .object(["mode": .string("primary")])])]) : nil)
+        _draft = State(initialValue: id == nil ? EngineConfig(draft: ["agents": .object(["new": .object(["mode": .string("subagent")])])]) : nil)
     }
 
     private var config: EngineConfig { draft ?? app.config(for: box) }
@@ -356,9 +356,9 @@ private struct AgentEditor: View {
     /// What picking it as a mode, a subagent or both means.
     static func modeDetail(_ mode: String) -> String {
         switch mode {
-        case "subagent": "Other agents hand it part of their work; its description tells them when."
-        case "all": "You can pick it in the composer, and other agents can hand it part of their work."
-        default: "You pick it in the composer, as you pick Build or Plan."
+        case "subagent": "It works when you name it in a message, or when another agent hands it part of the work; its description tells them when."
+        case "all": "New sessions can start with it, and it works when you name it or another agent hands it part of the work."
+        default: "New sessions can start with it, as Mode for new sessions sets."
         }
     }
 
@@ -366,7 +366,7 @@ private struct AgentEditor: View {
     private func create() {
         guard let draft, !newID.isEmpty, problem == nil else { return }
         var agent = draft.value(at: Self.draftPath)?.object ?? [:]
-        if agent["mode"] == nil { agent["mode"] = .string("primary") }
+        if agent["mode"] == nil { agent["mode"] = .string("subagent") }
         // With the rules still being typed, and each pattern without spaces around it.
         let rules = (draft.items(Self.draftPath + ["permissions"]).compactMap(\.rule) + pendingRules).map {
             PermissionRule(action: $0.action, resource: $0.resource.trimmingCharacters(in: .whitespacesAndNewlines), effect: $0.effect).json

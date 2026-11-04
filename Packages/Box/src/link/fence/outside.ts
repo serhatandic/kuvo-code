@@ -1,6 +1,6 @@
 // A command an agent needs outside the sandbox (PROTOCOL.md, "Sandbox", "Asks"): its `sandbox_ask`,
 // which both tool servers (this Mac's app, a machine's kuvo-browser.js) pass here as it is. You're
-// asked on any client, with what the sandbox stopped; Allow Once and Always for This have the box
+// asked on any client, with what the sandbox stopped; Allow Once and Always have the box
 // run that one command itself, outside the sandbox, in the conversation's folder, and hand its
 // output back. Always also lets the project's commands write, in the sandbox, the one folder this
 // one was stopped writing in (fence/allowed.ts); a command itself is never let out for good, and

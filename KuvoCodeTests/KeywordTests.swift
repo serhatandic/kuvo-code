@@ -549,6 +549,38 @@ import Testing
         #expect(SentMessage.split(text).text == "how to test the blur pause")
     }
 
+    /// `/plan` alone turns Plan on, and again turns it off, back to Build; with words in Plan it
+    /// stays in Plan and sends them.
+    @Test func planAloneTurnsPlanOnAndOff() async throws {
+        defer { clean() }
+        serve(directory: "/tmp", answers: [])
+        engine.on("POST", "/api/session/\(id)/agent", json: ["data": [:]])
+        engine.on("POST", "/api/session/\(id)/prompt", json: ["data": [:]])
+        let model = try session()
+        let bridge = try await start(model)
+        defer { bridge.stop() }
+        let picked = { engine.requests("POST", "/api/session/\(id)/agent").compactMap { $0.body["agent"] as? String } }
+
+        model.draftText = "/plan"
+        model.submitDraft(for: nil, queue: false, commands: [])
+        try await until { picked() == ["plan"] }
+        #expect(model.session.agent == "plan")
+        #expect(model.draftText.isEmpty)
+
+        model.draftText = "/plan"
+        model.submitDraft(for: nil, queue: false, commands: [])
+        try await until { picked() == ["plan", "build"] }
+        #expect(model.session.agent == "build")
+
+        model.togglePlan()
+        model.draftText = "/plan the next step"
+        model.submitDraft(for: nil, queue: false, commands: [])
+        try await until { !engine.requests("POST", "/api/session/\(id)/prompt").isEmpty }
+        #expect(model.session.agent == "plan")
+        #expect(picked() == ["plan", "build", "plan"], "already in Plan: it stays, and sends")
+        #expect(engine.requests("POST", "/api/session/\(id)/prompt").count == 1)
+    }
+
     @Test func aLoopWhoseHowOftenCantBeReadComesBackAndSaysSo() async throws {
         defer { clean() }
         serve(directory: "/tmp", answers: [])

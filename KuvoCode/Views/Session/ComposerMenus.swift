@@ -170,17 +170,14 @@ struct ApprovalHere: Decodable, Equatable {
     }
 }
 
-/// The mode chip: how much the agent does on its own ("Auto ⌄"), and in its menu the agent
-/// (Build, Plan). A dot says it does less than picked for now (Auto without the sandbox).
+/// The mode chip: how much the agent does on its own ("Auto ⌄"). A dot says it does less than
+/// picked for now (Auto without the sandbox). Plan is `/plan`'s, with a chip of its own (`AgentChip`).
 struct ModeChip: View {
-    @Environment(Catalog.self) private var catalog
-    let agent: String
     let approval: ToolApproval
     /// As its box shows it; nil until read (or for a new conversation's: this computer's).
     var shown: ApprovalShown?
     /// Opens the conversation's Decisions (nil: none to open, as for a new conversation).
     var onDecisions: (() -> Void)?
-    let onSelectAgent: (String) -> Void
     let onSelectApproval: (ToolApproval) -> Void
 
     private var holding: ApprovalShown.Why? { shown?.holding }
@@ -188,17 +185,10 @@ struct ModeChip: View {
     var body: some View {
         NativeMenuButton(name: "mode", menu: makeMenu) {
             HStack(spacing: 5) {
-                if agent == "plan" {
-                    Image(systemName: ModeChip.symbol(agent))
-                        .font(.caption)
-                    Text("Plan")
-                } else {
-                    Image(systemName: approval.symbol)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    // A mode of your own goes before the approval.
-                    Text(agent == "build" ? approval.title : "\(agent.capitalized) · \(approval.title)")
-                }
+                Image(systemName: approval.symbol)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text(approval.title)
                 if holding != nil {
                     Circle()
                         .fill(.orange)
@@ -213,23 +203,27 @@ struct ModeChip: View {
             }
             .font(.callout)
             .lineLimit(1)
-            .foregroundStyle(agent == "plan" ? AnyShapeStyle(.orange) : AnyShapeStyle(.foreground))
+            .foregroundStyle(.foreground)
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
             .hoverHighlight(in: Capsule(), mutesInk: true)
         }
-        .help(holding.map { "\(approval.title) asks first for now. \($0.why)" } ?? "\(approval.title): \(approval.detail.lowercasedFirst). Build or Plan: ⌥⌘1, ⌥⌘2")
+        .help(holding.map { "\(approval.title) asks first for now. \($0.why)" } ?? "\(approval.title): \(approval.detail.lowercasedFirst)")
         .accessibilityLabel("Mode")
-        .accessibilityValue(agent == "plan" ? "Plan, \(approval.title)" : (holding != nil ? "\(approval.title), asks first for now" : approval.title))
+        .accessibilityValue(holding != nil ? "\(approval.title), asks first for now" : approval.title)
     }
 
     private func makeMenu() -> NSMenu {
         let menu = NSMenu()
         // (Each pick's check on its trailing side, lined up.)
         var checked: Set<NSMenuItem> = []
+        menu.autoenablesItems = false
         for option in ToolApproval.allCases {
-            let note = (option == approval ? holding : shown?.option(option)?.held).map { "Asks first for now. \($0.why)" }
+            // Not to be had here, as its box says (a bot's on a box before 0.9.188).
+            let refused = shown?.option(option)?.unavailable.flatMap { $0.reason == "fullAccessOff" ? nil : $0 }
+            let note = refused?.why ?? (option == approval ? holding : shown?.option(option)?.held).map { "Asks first for now. \($0.why)" }
             let item = ActionItem(option.title, subtitle: note ?? option.detail, image: NSImage(systemSymbolName: option.symbol, accessibilityDescription: nil)) { onSelectApproval(option) }
+            item.isEnabled = refused == nil
             menu.addItem(item)
             if option == approval { checked.insert(item) }
         }
@@ -237,34 +231,44 @@ struct ModeChip: View {
             menu.addItem(.separator())
             menu.addItem(ActionItem("Auto's Decisions…", subtitle: "What it allowed and held back here", image: NSImage(systemSymbolName: "list.bullet.rectangle", accessibilityDescription: nil)) { onDecisions() })
         }
-        menu.addItem(.separator())
-        menu.addItem(.sectionHeader(title: "Mode"))
-        for agent in catalog.primaryAgents {
-            let item = ActionItem(agent.name.capitalized, subtitle: Self.detail(agent), image: NSImage(systemSymbolName: Self.symbol(agent.id), accessibilityDescription: nil)) {
-                onSelectAgent(agent.id)
-            }
-            menu.addItem(item)
-            if agent.id == self.agent { checked.insert(item) }
-        }
         menu.checksOnTrailingSide(checked)
         return menu
     }
+}
 
-    static func symbol(_ agent: String) -> String {
-        switch agent {
-        case "build": "hammer"
-        case "plan": "list.bullet.clipboard"
-        default: "person.crop.circle"
-        }
-    }
+/// In the composer's row, while its conversation isn't with Build: Plan (`/plan`), or an agent
+/// of your own it was started with; ✕ goes back to Build.
+struct AgentChip: View {
+    @Environment(Catalog.self) private var catalog
+    let agent: String
+    let onLeave: () -> Void
 
-    /// Short, plain descriptions for the built-in modes; custom agents bring their own.
-    static func detail(_ agent: Agent) -> String? {
-        switch agent.id {
-        case "build": "Makes changes and runs commands"
-        case "plan": "Explores and plans, without changing files"
-        default: agent.description.map { String($0.prefix(60)) }
+    private var name: String { agent == "plan" ? "Plan" : catalog.agents.first { $0.id == agent }?.name ?? agent.capitalized }
+
+    var body: some View {
+        Button(action: onLeave) {
+            HStack(spacing: 5) {
+                Image(systemName: agent == "plan" ? "list.bullet.clipboard" : "person.crop.circle")
+                    .font(.caption)
+                Text(name)
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+            }
+            .font(.callout)
+            .lineLimit(1)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(Color.accentColor.opacity(0.16), in: Capsule())
+            .contentShape(Capsule())
         }
+        .buttonStyle(.plain)
+        .clickablePointer()
+        .help(agent == "plan" ? "Plan mode: it explores and plans, without changing files. Click to leave it, or type /plan." : "Click to go back to Build")
+        .accessibilityLabel(agent == "plan" ? "Plan mode" : name)
+        .accessibilityHint("Goes back to Build")
+        .accessibilityAddTraits(.isButton)
     }
 }
 

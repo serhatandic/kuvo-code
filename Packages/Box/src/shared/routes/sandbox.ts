@@ -73,7 +73,17 @@ export const SANDBOX_ASK = object({
   "always?": object({ kind: words("write"), path: string }),
   "machine?": string, "owner?": SANDBOX_OWNER, "review?": REVIEW_ASKED,
 });
-export const SANDBOX_ASKS = object({ asks: list(SANDBOX_ASK), "restart?": bool });
+/**
+ * How an ask to work outside a conversation's folder was taken up, in Auto: being checked by its
+ * reviewer, allowed (by it, or in the conversation's own project), held back for you to approve,
+ * refused, or left for you to answer (`yours`: in Auto, a client shows its card only then). `call`:
+ * the tool call it’s for. The latest two hundred, from bridge 0.9.192.
+ */
+export const ASK_REVIEW = object({
+  id: string, session: string, "call?": string,
+  state: words("checking", "allowed", "heldBack", "refused", "yours"), at: number,
+});
+export const SANDBOX_ASKS = object({ asks: list(SANDBOX_ASK), "restart?": bool, "reviews?": list(ASK_REVIEW) });
 
 /** The agents' sandbox tool (`sandbox_ask`), as a tool server lists it, and what a call answers. */
 export const SANDBOX_TOOL_LIST = object({ tools: list(any) });

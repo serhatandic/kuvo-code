@@ -106,7 +106,7 @@ public struct SandboxStop: Codable, Equatable, Sendable {
 
 /// A command an agent wants to run outside the sandbox, waiting for your answer: its conversation and
 /// project, its bot, the command and why, what the sandbox stopped or the error it got, and what
-/// Always for This would allow (`always`, the one folder it was stopped writing in; none, and it's
+/// Always would allow (`always`, the one folder it was stopped writing in; none, and it's
 /// only once or no). `machine`: the computer's name, on a machine.
 public struct SandboxAsk: Codable, Equatable, Identifiable, Sendable {
     /// A place a project's commands may write in the sandbox.
@@ -156,7 +156,7 @@ public struct SandboxAsk: Codable, Equatable, Identifiable, Sendable {
     /// Who's asking, by name.
     public var asker: String { botName ?? sessionName ?? "An agent" }
 
-    /// Always for This can be given: the box named the one place to allow.
+    /// Always can be given: the box named the one place to allow.
     public var canAlways: Bool { always != nil }
 }
 
@@ -196,7 +196,7 @@ public struct SandboxRule: Codable, Equatable, Identifiable, Sendable {
     public var path: String
     /// When it was given, in milliseconds.
     public var at: Double
-    /// Who gave it (an ask's Always for This, or a client).
+    /// Who gave it (an ask's Always, or a client).
     public var by: String?
     /// Whose it is; a box from before it says none, and it's its project's, by its folder's name.
     public var owner: SandboxOwner?
@@ -225,9 +225,59 @@ public struct SandboxAsks: Codable, Equatable, Sendable {
     public var asks: [SandboxAsk]
     /// The box asks you, once, to restart the agents started before its sandbox was on (`SandboxState.restart`).
     public var restart: Bool?
-    public init(asks: [SandboxAsk], restart: Bool? = nil) {
+    /// How Auto's reviewer takes up asks to work outside a conversation's folder (none from a box
+    /// before bridge 0.9.192, whose asks are all yours).
+    public var reviews: [AskReview]?
+    public init(asks: [SandboxAsk], restart: Bool? = nil, reviews: [AskReview]? = nil) {
         self.asks = asks
         self.restart = restart
+        self.reviews = reviews
+    }
+}
+
+/// How an ask to work outside a conversation's folder (`external_directory`) was taken up on its
+/// box (PROTOCOL.md, "Sandbox"): in Auto, its reviewer checks it and answers it, and only one left
+/// for you is yours to answer; the rest show as a quiet mark on the step that asked (`call`).
+public struct AskReview: Codable, Equatable, Sendable {
+    public enum State: String, Codable, Sendable {
+        case checking, allowed, heldBack, refused, yours
+    }
+
+    public var id: String
+    public var session: String
+    public var call: String?
+    public var state: State
+    public var at: Double
+
+    public init(id: String, session: String, call: String? = nil, state: State, at: Double) {
+        self.id = id
+        self.session = session
+        self.call = call
+        self.state = state
+        self.at = at
+    }
+
+    /// How long an ask its box would review waits for word of it before it's yours anyway (a box
+    /// that started again as it asked has no word of it).
+    public static let wait: Duration = .seconds(5)
+
+    /// Whether an ask is yours to answer: one the box left for you, or one it doesn't take up
+    /// (only asks to work outside the folder are, by a box that tells it); one it may take up but
+    /// hasn't said of yet, only once it's waited `wait` (`overdue`).
+    public static func isYours(action: String, review: AskReview?, boxTells: Bool, overdue: Bool) -> Bool {
+        if let review { return review.state == .yours }
+        return !boxTells || action != "external_directory" || overdue
+    }
+
+    /// The step's mark: what Auto did with what it asked.
+    public var mark: String? {
+        switch state {
+        case .checking: "Auto is checking…"
+        case .allowed: "Auto allowed"
+        case .heldBack: "Held back"
+        case .refused: "Auto refused"
+        case .yours: nil
+        }
     }
 }
 
@@ -279,7 +329,7 @@ public enum SandboxRestart {
 // MARK: The card's words
 
 /// How both apps word an ask's card (card A): who wants what, what the sandbox stopped, and what
-/// Always for This keeps.
+/// Always keeps.
 extension SandboxAsk {
     /// "Scout wants to run a command outside the sandbox".
     public var title: String { "\(asker) wants to run a command outside the sandbox" }
@@ -319,27 +369,27 @@ extension SandboxAsk {
         return "The sandbox stopped it."
     }
 
-    /// The place Always for This keeps, short (`~` for a home folder).
+    /// The place Always keeps, short (`~` for a home folder).
     public var alwaysPath: String? { always.map { SandboxStop.short($0.path) } }
 
     /// After Always's place, for the chats: one rule there is every chat's.
     public var alwaysScope: String? { owner?.kind == .chats ? "in every chat" : nil }
 
-    /// Always for This's button in words, for VoiceOver: "Always for ~/x in every chat".
+    /// Always's button in words, naming the place it keeps: "Always Allow ~/x in every chat".
     public var alwaysTitle: String? {
-        alwaysPath.map { "Always for \($0)" + (alwaysScope.map { " " + $0 } ?? "") }
+        alwaysPath.map { "Always Allow \($0)" + (alwaysScope.map { " " + $0 } ?? "") }
     }
 
-    /// What Always does, for VoiceOver only (nothing under the card says it): "Runs it, and from
-    /// now on lets Scout’s commands write there too, in the sandbox."
+    /// What Always does, with its place whole (the button may cut it): its hover text, and for
+    /// VoiceOver. "Runs it, and from now on lets Scout’s commands write in ~/x too, in the sandbox."
     public var alwaysHint: String? {
-        guard alwaysPath != nil else { return nil }
+        guard let path = alwaysPath else { return nil }
         let whose = switch owner?.kind {
         case .bot: "\(owner?.name ?? asker)’s commands"
         case .chats: "every chat’s commands"
         case .project, nil: "\(projectName)’s commands"
         }
-        return "Runs it, and from now on lets \(whose) write there too, in the sandbox."
+        return "Runs it, and from now on lets \(whose) write in \(path) too, in the sandbox."
     }
 
     /// "Scout is waiting for you · 12 min", once it's waited a minute (`now` and `at` in

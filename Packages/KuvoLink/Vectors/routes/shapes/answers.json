@@ -6194,7 +6194,36 @@
         }
        }
       },
-      "restart?": "bool"
+      "restart?": "bool",
+      "reviews?": {
+       "list": {
+        "object": {
+         "id": "string",
+         "session": "string",
+         "call?": "string",
+         "state": {
+          "oneOf": [
+           {
+            "literal": "checking"
+           },
+           {
+            "literal": "allowed"
+           },
+           {
+            "literal": "heldBack"
+           },
+           {
+            "literal": "refused"
+           },
+           {
+            "literal": "yours"
+           }
+          ]
+         },
+         "at": "number"
+        }
+       }
+      }
      }
     }
    }

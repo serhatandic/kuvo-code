@@ -154,20 +154,25 @@ export function approvalRules(approval: Approval, current: readonly KitRule[]): 
   // Access lets them, first, so a Don't Allow in Settings, after, still holds.
   if (approval === "auto" && settings.findLast(isOutside)?.effect === "ask") made = made.map(rule => (isOutside(rule) && rule.effect === "allow" ? { ...rule, effect: "ask" } : rule));
   if (approval === "fullAccess") made = [{ action: "external_directory", resource: "*", effect: "allow" }, ...made];
-  // The engine's own defaults ask before reading a `.env`: in Auto and Full Access, which never
-  // hold the agent for you, it reads them as any file in its folder (first, so a Don't Allow in
-  // Settings, after, still holds).
-  if (approval === "auto" || approval === "fullAccess") made = [...ENV_READS, ...made];
+  // The engine's own defaults ask before reading a `.env`, and before carrying on once the agent
+  // makes the same call again and again: in Auto and Full Access, which never hold the agent for
+  // you, it reads them as any file in its folder and carries on, as Claude Code's and Codex's do
+  // (first, so a Don't Allow in Settings, after, still holds).
+  if (approval === "auto" || approval === "fullAccess") made = [...NEVER_HELD, ...made];
   return made;
 }
 
-const ENV_READS: KitRule[] = [{ action: "read", resource: "*.env", effect: "allow" }, { action: "read", resource: "*.env.*", effect: "allow" }];
+const NEVER_HELD: KitRule[] = [
+  { action: "read", resource: "*.env", effect: "allow" },
+  { action: "read", resource: "*.env.*", effect: "allow" },
+  { action: "doom_loop", resource: "*", effect: "allow" },
+];
 
-/** Whether rules made for `applied` lack what a box before 0.9.185 didn't give it (`.env` reads in
- * Auto and Full Access), or keep the asks one before 0.9.189 put in a bot's: then they're made
- * again. */
+/** Whether rules made for `applied` lack what a box before 0.9.192 didn't give it (`.env` reads
+ * and carrying on after repeated calls, in Auto and Full Access), or keep the asks one before
+ * 0.9.189 put in a bot's: then they're made again. */
 export const madeBefore = (rules: readonly KitRule[], applied: Approval) => hasFormerAsks(rules, permissionsHere() ?? []) ||
-  (applied === "auto" || applied === "fullAccess") && !ENV_READS.every(env => rules.some(rule => rule.action === env.action && rule.resource === env.resource && rule.effect === env.effect));
+  (applied === "auto" || applied === "fullAccess") && !NEVER_HELD.every(env => rules.some(rule => rule.action === env.action && rule.resource === env.resource && rule.effect === env.effect));
 
 const isOutside = (rule: KitRule) => rule.action === "external_directory" && rule.resource === "*";
 
