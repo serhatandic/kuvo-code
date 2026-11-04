@@ -14708,7 +14708,9 @@ function botOf(data) {
   if (!bot)
     return;
   const running = runningGoal(bot.bot);
-  const goal = running?.goal;
+  const plan = running?.steps.map((step, at) => `${at + 1}. ${step.text}`).join(" ");
+  const goal = running ? `${running.goal}${plan ? `
+(The plan the user approved by starting it: ${plan})` : ""}` : undefined;
   return { id: bot.bot, name: bot.name, ...goal ? { goal } : {} };
 }
 var inFullAccess = (at) => approvalOf(at.data, { agents: at.agents, bot: Boolean(botOfConversation(at.data.id) ?? worksFor(at.data)) }).effective === "fullAccess";

@@ -855,7 +855,7 @@ beside it.
   for one) while its bot moves to another computer (a goal stays on the box it started on, and a
   bot working on one doesn't move: `kuvo/moves`), when the bot isn't told anything of its goal
   either. Starting tells the bot `[Goal
-  started] …` (what's switched on and off, what it may spend, the projects it may make, the end,
+  started] …` (what it may spend, the projects it may make, the end,
   and, bridge 0.9.191, how to work through it: make its projects with `make_project`, hand each step
   to a session with `start_session`, follow them up, and write none of the work itself unless you
   said to) and
@@ -3346,7 +3346,7 @@ one the box marked as in Full Access, which runs (bridge 0.9.187).
   `POST /api/session/<id>/generate` `{prompt, model}` (a model of that session's maker only); the
   conversation's own model where the maker has no small one. It's counted on that account. It's
   shown only what you wrote in the conversation (never what the box, another agent or a wake-up put
-  there), and for a bot's, its goal too; the action (for a
+  there), and for a bot's, its goal too, with the plan you approved by starting it; the action (for a
   file, the tool and its arguments); and what a command runs, read whole first: a script by its
   path, `bash x.sh`, `python x.py`, and the project's build files its program runs (`package.json`
   for npm, pnpm, yarn and bun, a Makefile, a justfile, `conftest.py`, `build.rs`, Gradle's, a

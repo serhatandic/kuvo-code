@@ -98,12 +98,14 @@ export async function heldUnreached(session: string, action: ReviewedAction, sig
   return review(action, { session, said: [] }, { model: unanswered, signal });
 }
 
-/** The bot whose conversation or work this is, and its goal while it has one running. */
+/** The bot whose conversation or work this is, and its goal while it has one running, with the
+ * plan you approved by starting it (what it publishes or deploys there is what you asked for). */
 function botOf(data: EngineSession): ReviewContext["bot"] | undefined {
   const bot = botOfConversation(data.id) ?? worksFor(data);
   if (!bot) return undefined;
   const running = runningGoal(bot.bot);
-  const goal = running?.goal;
+  const plan = running?.steps.map((step, at) => `${at + 1}. ${step.text}`).join(" ");
+  const goal = running ? `${running.goal}${plan ? `\n(The plan the user approved by starting it: ${plan})` : ""}` : undefined;
   return { id: bot.bot, name: bot.name, ...(goal ? { goal } : {}) };
 }
 
