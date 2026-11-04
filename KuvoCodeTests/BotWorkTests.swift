@@ -74,6 +74,36 @@ import Testing
         #expect(answer.verdict == "Allowed by Pixel" && answer.reason == "The plan runs the tests." && answer.session == "ses_signin")
     }
 
+    /// A session read as it was made, before its task reached it, isn't at work yet. Once it is, its
+    /// box says its bot's work changed, and the bar says so too, though nothing this Mac sees of
+    /// the sessions changed (the user's goal said "research session running" over "2 sessions
+    /// today, none at work").
+    @Test func theBarSaysASessionIsAtWorkOnceItsBoxSaysItStarted() async throws {
+        let machine = try await lab()
+        defer { done(machine) }
+        let pixel = try #require(app.bots.bot("bot_pixel00001"))
+        let signIn = StubEngine.session("ses_signin", title: "Sign-in", directory: "/home/me/tidepool", created: Date.now.timeIntervalSince1970 * 1000, extra: [
+            "metadata": ["kuvo": ["startedBy": "ses_pixel", "by": ["bot": "bot_pixel00001", "name": "Pixel"], "depth": 1]],
+        ])
+        let own = StubEngine.session("ses_pixel", title: "Pixel", directory: machine.folder.appending(path: "bots/bot_pixel00001/workspace").path)
+        engine.list([own, signIn], running: [])
+        await app.botWork.read(pixel)
+        #expect(BotWorkBar.title(app.botWork.reports[pixel.id]) == "1 session today, none at work")
+
+        app.botWork.reachable = { $0 == "lab" }
+        app.botWork.machineFollowPause = .zero
+        let following = Task { await app.botWork.follow(pixel) }
+        defer { following.cancel() }
+        // Its task reaches it, and it works: the box notes its bot's work changed, as it does on the
+        // engine's word that it started (the bridge's bots-work-wakes tests).
+        engine.list([own, signIn], running: ["ses_signin"])
+        let changes = machine.folder.appending(path: "run/work")
+        try FileManager.default.createDirectory(at: changes, withIntermediateDirectories: true)
+        try Data(#"{"bot_pixel00001": \#(Int(Date.now.timeIntervalSince1970 * 1000))}"#.utf8).write(to: changes.appending(path: "changes.json"))
+        try await until { app.botWork.reports[pixel.id]?.atWork.count == 1 }
+        #expect(BotWorkBar.title(app.botWork.reports[pixel.id]) == "A session is at work")
+    }
+
     @Test func limitsSetInEditBotAreKeptOnItsBoxAndCanBeTakenAway() async throws {
         let machine = try await lab()
         defer { done(machine) }
