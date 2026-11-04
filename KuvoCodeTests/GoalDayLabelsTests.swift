@@ -4,7 +4,8 @@ import Testing
 
 /// The days along a long goal's axis: each gets its own label where it has room, else one every few
 /// days counted out from Today, never so close that two labels run into each other, and a week
-/// apart (on Today's weekday) once the days are that narrow.
+/// apart (on Today's weekday) once the days are that narrow. A goal of hours labels its hours the
+/// same way.
 @MainActor
 struct GoalDayLabelsTests {
     private let calendar: Calendar = {
@@ -24,7 +25,7 @@ struct GoalDayLabelsTests {
     private func labeled(_ count: Int, todayAt: Int, room: CGFloat = 900) -> (labeled: [Date], dayWidth: CGFloat, now: Date) {
         let (days, now) = days(count, todayAt: todayAt)
         let dayWidth = room / CGFloat(count)
-        let set = GoalSteps.labeledDays(days, dayWidth: dayWidth, week: count <= 7, now: now, calendar: calendar)
+        let set = GoalChartView.labeledDays(days, dayWidth: dayWidth, week: count <= 7, now: now, calendar: calendar)
         return (days.filter(set.contains), dayWidth, now)
     }
 
@@ -66,7 +67,20 @@ struct GoalDayLabelsTests {
 
     @Test func withTodayOutsideTheWindowTheLabelsCountFromItsFirstDay() {
         let (days, _) = days(61, todayAt: 0)
-        let set = GoalSteps.labeledDays(days, dayWidth: 900 / 61, week: false, now: days[0].addingTimeInterval(-90 * 86400), calendar: calendar)
+        let set = GoalChartView.labeledDays(days, dayWidth: 900 / 61, week: false, now: days[0].addingTimeInterval(-90 * 86400), calendar: calendar)
         #expect(set.contains(days[0]))
+    }
+
+    @Test func hoursAcrossANarrowAxisLabelEveryFewClearOfEachOtherAndEachWhereThereIsRoom() {
+        let first = calendar.date(from: DateComponents(year: 2026, month: 11, day: 4, hour: 3))!
+        let hours = (0..<8).map { first.addingTimeInterval(Double($0) * 3600) }
+        // Eight hours over a narrow pane: about 35 points an hour, too close for every one.
+        let narrow = hours.filter(GoalChartView.labeledHours(hours, hourWidth: 35).contains)
+        #expect(narrow.count > 2)
+        #expect(narrow.first == hours.first)
+        for (a, b) in zip(narrow, narrow.dropFirst()) {
+            #expect(CGFloat(b.timeIntervalSince(a) / 3600) * 35 >= 44, "hour labels run into each other")
+        }
+        #expect(GoalChartView.labeledHours(hours, hourWidth: 90).count == 8)
     }
 }

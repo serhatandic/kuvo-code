@@ -4,8 +4,8 @@ import Foundation
 /// for a goal of any length, its axis counting hours for a few hours' work, days for a week or more,
 /// weeks for months. Each step spans from when it began to when it ended (or now), with where it's
 /// likely to end only where the bot measured how far it is; the finish line only where every step
-/// left can say; the deadline where you set one. Both apps list its steps as rows (`list`), each
-/// with its bar on the axis where there's room (`shown`).
+/// left can say; the deadline where you set one. Both apps lay its steps out as a list (`stages`) or
+/// on the axis (`chart`).
 public struct GoalTimeline: Sendable {
     public enum Unit: Sendable, Equatable {
         case hour, day, week
@@ -22,32 +22,12 @@ public struct GoalTimeline: Sendable {
         public var id: String { step.id }
     }
 
-    /// What shows of a goal, top to bottom: phases' names over their steps, and on a long goal
-    /// the steps done and those for later folded to a row each, unless nothing else would show.
-    public enum Row: Sendable, Identifiable {
-        case phase(String)
-        case done([Lane])
-        case later([Lane])
-        case lane(Lane)
-
-        public var id: String {
-            switch self {
-            case .phase(let name): "phase:\(name)"
-            case .done: "done"
-            case .later: "later"
-            case .lane(let lane): lane.id
-            }
-        }
-    }
-
     public let start: Date
     public let end: Date
     /// Now, or for a goal that's over, when it ended: what's laid out stops there.
     public let now: Date
     /// Done or stopped.
     public let isOver: Bool
-    /// The plan's phases, in its order.
-    public let phases: [String]
     public let unit: Unit
     /// When it's likely done, where every step left says how far along it is.
     public let finish: Date?
@@ -60,7 +40,6 @@ public struct GoalTimeline: Sendable {
         isOver = plan.state == .done || plan.state == .stopped || plan.state == .declined
         let now = isOver ? plan.ended.map(ms).map { min($0, now) } ?? now : now
         self.now = now
-        phases = plan.phases
         start = ms(plan.started ?? plan.proposed)
         deadline = plan.ends.map(ms)
         var lanes: [Lane] = []
@@ -99,6 +78,10 @@ public struct GoalTimeline: Sendable {
 
     /// Where the grid's lines go: on whole hours, days or weeks (Mondays), about 6 to 10 of them.
     public func ticks(calendar: Calendar = .current) -> [Date] {
+        Self.ticks(start: start, end: end, unit: unit, calendar: calendar)
+    }
+
+    static func ticks(start: Date, end: Date, unit: Unit, calendar: Calendar) -> [Date] {
         let span = end.timeIntervalSince(start)
         let (component, size): (Calendar.Component, TimeInterval) = switch unit {
         case .hour: (.hour, 3600)
@@ -128,6 +111,10 @@ public struct GoalTimeline: Sendable {
     /// goal that fits whole (a few hours, a couple of days), which shows whole; zoomed out, a long
     /// one shows whole too.
     public func window(calendar: Calendar = .current) -> DateInterval? {
+        Self.window(start: start, end: end, now: now, unit: unit, isOver: isOver, calendar: calendar)
+    }
+
+    static func window(start: Date, end: Date, now: Date, unit: Unit, isOver: Bool, calendar: Calendar) -> DateInterval? {
         let span = end.timeIntervalSince(start)
         guard unit != .hour, !isOver else { return nil }
         let long = span > 14 * 86400
@@ -140,54 +127,9 @@ public struct GoalTimeline: Sendable {
         return DateInterval(start: shifted, duration: length)
     }
 
-    /// The rows the goal bar lists, top to bottom, whatever the goal's length: the steps done
-    /// folded to one row (opened with `showsDone`), phases heading their steps, and more than five
-    /// steps not begun folded to one row at the end (opened with `showsLater`). A fold that would
-    /// leave nothing else to see doesn't fold.
-    public func list(showsDone: Bool = false, showsLater: Bool = false) -> [Row] {
-        let done = lanes.filter { $0.step.state == .done || $0.step.state == .skipped }
-        let later = lanes.filter { $0.step.state == .todo }
-        return rows(foldsDone: !done.isEmpty, foldsLater: later.count > 5, showsDone: showsDone, showsLater: showsLater)
-    }
-
     /// What of the axis a step's track shows: a long goal's days around now (`window`), else, or
     /// `whole`, the whole goal.
     public func shown(whole: Bool = false, calendar: Calendar = .current) -> DateInterval {
         (whole ? nil : window(calendar: calendar)) ?? DateInterval(start: start, end: max(start, end))
-    }
-
-    private func rows(foldsDone: Bool, foldsLater: Bool, showsDone: Bool, showsLater: Bool) -> [Row] {
-        var foldsDone = foldsDone, foldsLater = foldsLater
-        let done = lanes.filter { $0.step.state == .done || $0.step.state == .skipped }
-        let later = lanes.filter { $0.step.state == .todo }
-        let rest = lanes.filter { lane in !(foldsDone && done.contains { $0.id == lane.id }) && !(foldsLater && later.contains { $0.id == lane.id }) }
-        if rest.isEmpty {
-            // Only folds would show: what's in the bigger stays open.
-            if done.count >= later.count { foldsDone = false } else { foldsLater = false }
-        }
-        var rows: [Row] = []
-        var left = lanes
-        if foldsDone {
-            rows.append(.done(done))
-            if showsDone { rows += done.map(Row.lane) }
-            left.removeAll { lane in done.contains { $0.id == lane.id } }
-        }
-        if foldsLater { left.removeAll { lane in later.contains { $0.id == lane.id } } }
-        if phases.count > 1 {
-            for phase in phases {
-                let lanes = left.filter { $0.step.phase == phase }
-                guard !lanes.isEmpty else { continue }
-                rows.append(.phase(phase))
-                rows += lanes.map(Row.lane)
-            }
-            rows += left.filter { $0.step.phase.map { !phases.contains($0) } ?? true }.map(Row.lane)
-        } else {
-            rows += left.map(Row.lane)
-        }
-        if foldsLater {
-            rows.append(.later(later))
-            if showsLater { rows += later.map(Row.lane) }
-        }
-        return rows
     }
 }

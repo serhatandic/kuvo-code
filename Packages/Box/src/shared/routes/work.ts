@@ -103,6 +103,7 @@ export const GOAL_STEP = object({
   state: words("todo", "doing", "done", "waiting", "paused", "skipped"),
   "progress?": number,
   "note?": string,
+  "detail?": string,
   "phase?": string,
   "site?": string,
   "after?": list(string),

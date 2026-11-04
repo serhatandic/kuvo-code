@@ -55,7 +55,7 @@ import Testing
         #expect(box == "lab")
         #expect(plan.isProposed && plan.alone)
         #expect(plan.yours.map(\.text) == ["Add a Cloudflare API token"], "what only you can do comes first, with its button")
-        #expect(plan.phases == ["Launch"])
+        #expect(GoalPlanWords.summary(plan) == "2 steps", "its phase (Launch) isn't said")
         #expect(GoalPlanWords.spend(plan.spend[0]) == "ads, up to $20 a day")
         #expect(GoalPlanWords.spokenState(of: plan.steps[0], in: plan) == "not started")
         #expect(app.workspace.needsAttention("ses_pixel"), "the bot waits on you in the sidebar")

@@ -19,8 +19,12 @@ public struct GoalPlan: Decodable, Sendable, Hashable, Identifiable {
         /// How far along (0 to 1), only where the bot measured it: nil is in progress, not a share.
         public let progress: Double?
         public let note: String?
+        /// One line on what's in it ("SDK, paywall and a StoreKit test config"); older goals have none.
+        public let detail: String?
+        /// Kept from older bots' plans; never shown.
         public let phase: String?
-        /// The service it's done at, by its site ("stripe.com"), for its icon.
+        /// The site it's done at in the browser ("revenuecat.com"), whose icon is its mark; none for
+        /// a step done on the computer.
         public let site: String?
         /// The steps it waits for, by id.
         public let after: [String]
@@ -32,12 +36,13 @@ public struct GoalPlan: Decodable, Sendable, Hashable, Identifiable {
         public let began: Double?
         public let ended: Double?
 
-        public init(id: String, text: String, state: State, progress: Double? = nil, note: String? = nil, phase: String? = nil, site: String? = nil, after: [String] = [], sessions: [String] = [], resumes: Double? = nil, began: Double? = nil, ended: Double? = nil) {
+        public init(id: String, text: String, state: State, progress: Double? = nil, note: String? = nil, detail: String? = nil, phase: String? = nil, site: String? = nil, after: [String] = [], sessions: [String] = [], resumes: Double? = nil, began: Double? = nil, ended: Double? = nil) {
             self.id = id
             self.text = text
             self.state = state
             self.progress = progress
             self.note = note
+            self.detail = detail
             self.phase = phase
             self.site = site
             self.after = after
@@ -55,6 +60,7 @@ public struct GoalPlan: Decodable, Sendable, Hashable, Identifiable {
             state = (try? container.decode(State.self, forKey: .state)) ?? .todo
             progress = (try? container.decodeIfPresent(Double.self, forKey: .progress)).flatMap { $0 }.map { min(1, max(0, $0)) }
             note = try container.decodeIfPresent(String.self, forKey: .note)
+            detail = try? container.decodeIfPresent(String.self, forKey: .detail)
             phase = try container.decodeIfPresent(String.self, forKey: .phase)
             site = try container.decodeIfPresent(String.self, forKey: .site)
             after = (try? container.decodeIfPresent([String].self, forKey: .after)) ?? []
@@ -64,7 +70,7 @@ public struct GoalPlan: Decodable, Sendable, Hashable, Identifiable {
             ended = try container.decodeIfPresent(Double.self, forKey: .ended)
         }
 
-        private enum CodingKeys: String, CodingKey { case id, text, state, progress, note, phase, site, after, sessions, resumes, began, ended }
+        private enum CodingKeys: String, CodingKey { case id, text, state, progress, note, detail, phase, site, after, sessions, resumes, began, ended }
 
         public var resumesDate: Date? { resumes.map { Date(timeIntervalSince1970: $0 / 1000) } }
     }
@@ -338,12 +344,6 @@ public struct GoalPlan: Decodable, Sendable, Hashable, Identifiable {
     public var underWay: [Step] { steps.filter { $0.state == .doing } }
     /// Whether its card waits for you.
     public var isProposed: Bool { state == .proposed }
-    /// Its phases, in the plan's order (none for a plan without them).
-    public var phases: [String] {
-        var seen: [String] = []
-        for step in steps { if let phase = step.phase, !seen.contains(phase) { seen.append(phase) } }
-        return seen
-    }
 }
 
 /// The goals on a box (`GET kuvo/work/goals`, and each line of its events).
@@ -430,6 +430,12 @@ public enum GoalPlanWords {
         }
     }
 
+    /// What a goal's Open says of where its page opens: in the bot's browser, where a sign-in is
+    /// one it can use, rather than yours. `computer` is a machine's name, nil on this Mac.
+    public static func opensIn(bot: String, computer: String?) -> String {
+        "Opens in \(bot)’s browser\(computer.map { " on \($0)" } ?? ""), so it can use your sign-in"
+    }
+
     /// "2 of 5".
     public static func progress(_ goal: GoalPlan) -> String { "\(goal.done) of \(goal.steps.count)" }
 
@@ -453,14 +459,22 @@ public enum GoalPlanWords {
 
     /// What the bar's line says after the goal's name: "2 of 7 · 3 days", "2 of 7 · Next: Mon
     /// 09:00", "Paused · You" (`pausedBy` set while the conversation's goal is paused), "Done · 2 h",
-    /// "Stopped · 2 of 7".
-    public static func line(_ goal: GoalPlan, pausedBy: Goal.PausedBy?? = nil, now: Date = .now, timeZone: TimeZone = .current, locale: Locale = .current) -> String {
+    /// "Stopped · 2 of 7". With `due`, for the list, which has no axis to show it on: a goal under
+    /// way with an end says when, "2 of 7 · 3 days · due Fri 6 Nov".
+    public static func line(_ goal: GoalPlan, pausedBy: Goal.PausedBy?? = nil, due: Bool = false, now: Date = .now, timeZone: TimeZone = .current, locale: Locale = .current) -> String {
         let steps = progress(goal)
-        if goal.state == .running, let pausedBy { return ["Paused", pausedBy.map(Self.pausedBy)].compactMap { $0 }.joined(separator: " · ") }
+        var dueWords: String?
+        if due, goal.state == .running, let ends = goal.ends {
+            let date = Date(timeIntervalSince1970: ends / 1000)
+            var style = Date.FormatStyle(timeZone: timeZone).weekday(.abbreviated).day().month(.abbreviated)
+            style.locale = locale
+            dueWords = "\(date < now ? "was due" : "due") \(date.formatted(style))"
+        }
+        if goal.state == .running, let pausedBy { return ["Paused", pausedBy.map(Self.pausedBy), dueWords].compactMap { $0 }.joined(separator: " · ") }
         switch goal.state {
         case .done: return ["Done", took(goal, now: now)].compactMap { $0 }.joined(separator: " · ")
         case .stopped, .declined: return "Stopped · \(steps)"
-        default: return [steps, next(goal, now: now, timeZone: timeZone, locale: locale) ?? took(goal, now: now)].compactMap { $0 }.joined(separator: " · ")
+        default: return [steps, next(goal, now: now, timeZone: timeZone, locale: locale) ?? took(goal, now: now), dueWords].compactMap { $0 }.joined(separator: " · ")
         }
     }
 
@@ -571,17 +585,14 @@ public enum GoalPlanWords {
         return "Next: \(at.formatted(style))"
     }
 
-    /// The plan in a few words, for its card: "6 steps", "12 steps in 3 phases".
+    /// The plan in a few words, for its card: "6 steps".
     public static func summary(_ goal: GoalPlan) -> String {
-        let steps = goal.steps.count == 1 ? "1 step" : "\(goal.steps.count) steps"
-        let phases = goal.phases.count
-        return phases > 1 ? "\(steps) in \(phases) phases" : steps
+        goal.steps.count == 1 ? "1 step" : "\(goal.steps.count) steps"
     }
 
-    /// What the plan does, as a list in words: "Site, Domain, DNS and Deploy"; its phases, for a
-    /// plan with them.
+    /// What the plan does, as a list in words: "Site, Domain, DNS and Deploy".
     public static func outline(_ goal: GoalPlan) -> String {
-        let names = goal.phases.count > 1 ? goal.phases : goal.steps.map(\.text)
+        let names = goal.steps.map(\.text)
         // A long plan: its first few, and how many more.
         let shown = names.count > 6 ? Array(names.prefix(6)) + ["\(names.count - 6) more"] : names
         return shown.formatted(.list(type: .and))
@@ -593,6 +604,42 @@ public enum GoalPlanWords {
         let labels = site.lowercased().split(separator: ".").filter { $0 != "www" }
         let name = labels.count >= 2 ? labels[labels.count - 2] : labels.first ?? Substring(site)
         return name.prefix(1).uppercased() + name.dropFirst()
+    }
+
+    /// The service's name as the words about it write it, where they name it: "RevenueCat" from
+    /// "RevenueCat project" at app.revenuecat.com, "App Store Connect" at appstoreconnect.apple.com;
+    /// otherwise its name from its site.
+    public static func service(_ site: String, in words: [String?]) -> String {
+        let labels = site.lowercased().split(separator: ".").filter { $0 != "www" }.map(String.init)
+        // The site's own name first, written as a name (capitalized); then a name before it only
+        // where it's several words run together ("appstoreconnect"), never a plain word like
+        // "billing" or "console", or its ending.
+        let named = labels.count >= 2 ? [(labels[labels.count - 2], 1)] + labels.dropLast(2).map { ($0, 2) } : labels.map { ($0, 1) }
+        for words in words.compactMap({ $0 }) {
+            let tokens = words.split { !$0.isLetter && !$0.isNumber }.map(String.init)
+            for (label, least) in named where label.count >= 4 {
+                for start in tokens.indices where tokens[start].first?.isUppercase == true {
+                    var joined = ""
+                    for end in start..<tokens.count {
+                        joined += tokens[end].lowercased()
+                        if joined == label, end - start + 1 >= least { return tokens[start...end].joined(separator: " ") }
+                        if !label.hasPrefix(joined) { break }
+                    }
+                }
+            }
+        }
+        return service(site)
+    }
+
+    /// A step's mark: the icon of the site the plan says it's done at, or none for a step done on
+    /// the computer. Never guessed from its words or its maker.
+    public static func mark(of step: GoalPlan.Step) -> StepMark? {
+        step.site.map(StepMark.site)
+    }
+
+    public enum StepMark: Equatable, Sendable {
+        /// The site's own icon.
+        case site(String)
     }
 
     /// An amount in its currency, as people write it: "$15", "€9.50".

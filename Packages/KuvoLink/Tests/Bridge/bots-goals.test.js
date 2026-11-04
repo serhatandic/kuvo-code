@@ -210,7 +210,7 @@ const tool = async (name, args, { session = "ses_pixel", ...rest } = {}) => (awa
 const PLAN = {
   goal: "Launch a landing page for my coffee subscription, Driftwood. Get a domain, and add Stripe checkout.",
   title: "Driftwood's landing page",
-  steps: ["Build the site", { text: "Buy the domain", site: "cloudflare.com" }, { text: "Set up DNS", after: [2] }, { text: "Deploy", phase: "Launch", after: [1, 3] }, { text: "Add checkout", phase: "Launch" }],
+  steps: [{ text: "Build the site", detail: "Hero, menu and the\norder page" }, { text: "Buy the domain", site: "cloudflare.com" }, { text: "Set up DNS", after: [2] }, { text: "Deploy", phase: "Launch", after: [1, 3] }, { text: "Add checkout", phase: "Launch" }],
   checks: [
     { text: "Add a Cloudflare API token", detail: "for the domain, DNS and hosting", url: "https://dash.cloudflare.com/profile/api-tokens", button: "Add" },
     { text: "Stripe key works", ok: true },
@@ -255,7 +255,8 @@ test("a bot puts its goal to you on one card: the plan with its phases, what it 
   const alone = goal.checks.find(each => each.id === "alone");
   assert.deepEqual([alone.text, alone.state, alone.by], ["This machine can't work on its own yet", "failed", "box"]);
   assert.doesNotMatch(JSON.stringify(goal), /fence|sandbox|night|morning|tonight/i, "the card never says fence or sandbox, nor anything about nights");
-  assert.deepEqual(goal.steps.map(each => each.site ?? null), [null, "cloudflare.com", null, null, null], "a step tied to a service names its site, for its icon");
+  assert.deepEqual(goal.steps.map(each => each.site ?? null), [null, "cloudflare.com", null, null, null], "a step done at a service names its site");
+  assert.deepEqual(goal.steps.map(each => each.detail ?? null), ["Hero, menu and the order page", null, null, null, null], "a step's short description, kept on one line; none where it has none");
   const token = goal.checks.find(each => each.text === "Add a Cloudflare API token");
   assert.equal(token.site, "dash.cloudflare.com", "a check's site, from its page");
   assert.deepEqual([token.state, token.by, token.action], ["needs", "bot", { kind: "open", label: "Add", url: "https://dash.cloudflare.com/profile/api-tokens" }]);

@@ -240,7 +240,7 @@ const https = (value: unknown): string | null => {
     return null;
   }
 };
-// A service's site, for its icon: an address's host, or a site named (`stripe.com`).
+// The site something is done at: an address's host, or a site named (`stripe.com`).
 const siteOf = (value: unknown): string | null => {
   if (typeof value !== "string" || !value.trim()) return null;
   try {
@@ -254,15 +254,19 @@ const newID = (prefix: string) => `${prefix}_${crypto.randomBytes(9).toString("b
 const PERIODS = ["day", "week", "month", "goal"] as const;
 const DIGESTS = ["day", "week", "milestones", "none"] as const;
 
-// A step as given: its words, or {text, phase, after: [step numbers]}.
-function stepGiven(each: unknown): (Pick<GoalStepShape, "text" | "phase" | "site"> & { after?: number[] }) | null {
+// One line of words: what wraps (a newline, runs of spaces) said as one space.
+const line = (value: unknown, most: number): string | null => text(typeof value === "string" ? value.replace(/\s+/g, " ") : value, most);
+
+// A step as given: its words, or {text, detail, phase, site, after: [step numbers]}.
+function stepGiven(each: unknown): (Pick<GoalStepShape, "text" | "detail" | "phase" | "site"> & { after?: number[] }) | null {
   if (typeof each === "string") return text(each, 300) ? { text: text(each, 300)! } : null;
   if (!isObject(each)) return null;
   const said = text(each.text, 300);
   if (!said) return null;
   const after = Array.isArray(each.after) ? each.after.filter((one): one is number => Number.isInteger(one) && (one as number) >= 1) : [];
   const site = siteOf(each.site);
-  return { text: said, ...(text(each.phase, 80) ? { phase: text(each.phase, 80)! } : {}), ...(site ? { site } : {}), ...(after.length ? { after } : {}) };
+  const detail = line(each.detail, 120);
+  return { text: said, ...(detail ? { detail } : {}), ...(text(each.phase, 80) ? { phase: text(each.phase, 80)! } : {}), ...(site ? { site } : {}), ...(after.length ? { after } : {}) };
 }
 // Steps as kept: ids in order, and what each comes after by id (only steps before it).
 const keptSteps = (given: ReturnType<typeof stepGiven>[], from = 0): GoalStepShape[] => given.filter((each): each is NonNullable<typeof each> => Boolean(each)).map((each, at) => {
@@ -285,7 +289,7 @@ export function proposeGoal(bot: { bot: string; name: string; session: string },
   if (!goal) return { refused: "Say the goal, in the user's words (goal)." };
   const steps = (Array.isArray(given.steps) ? given.steps : []).map(stepGiven).filter((each): each is NonNullable<typeof each> => Boolean(each));
   if (!steps.length) return { refused: "Give the plan, as its steps in order (steps)." };
-  if (steps.length > 200) return { refused: "That's more than 200 steps: make them bigger, in phases." };
+  if (steps.length > 200) return { refused: "That's more than 200 steps: make them bigger." };
   const checks: GoalCheckShape[] = [];
   for (const each of Array.isArray(given.checks) ? given.checks.slice(0, 12) : []) {
     if (!isObject(each)) continue;
