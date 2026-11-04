@@ -123,6 +123,8 @@ struct ModelPicker: View {
             turnedTo = page
             focus = page == .list ? .search : .card
             highlight = current.map(rowID)
+            // What can't answer now, as of this moment (it ends at a reset, or once one answers).
+            Task { await catalog.readUnanswering() }
             #if DEBUG
             // KUVO_DEMO_RAIL: open on this entry of the rail (`★`, `auto`, a provider's ID).
             if let rail = ProcessInfo.processInfo.environment["KUVO_DEMO_RAIL"] { chosenRail = rail }
@@ -467,7 +469,10 @@ struct ModelPicker: View {
         let id = rowID(model)
         let isCurrent = model.ref.sameModel(as: current?.ref)
         let isStarred = favoriteKeys.contains(model.key)
-        let free = saysFree && Self.isZenFree(model)
+        // One that can't answer now (out of funds, at a limit): still offered, its name quieter and
+        // why on its second line.
+        let held = catalog.unanswering(model)
+        let free = saysFree && Self.isZenFree(model) && held?.saysFree != true
         let detail = showsProvider ? catalog.providerName(model.providerID) + (free ? " · Free" : "") : (free ? "Free" : nil)
         let showsMark = section.map { model.makerLogoID != $0.logo } ?? true
         return Button {
@@ -481,12 +486,18 @@ struct ModelPicker: View {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(Self.shownName(model))
                         .font(.system(size: 14))
+                        .foregroundStyle(held == nil ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
                         .lineLimit(1)
-                    if let detail {
-                        Text(detail)
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
+                    if detail != nil || held != nil {
+                        Group {
+                            switch (detail, held) {
+                            case let (detail?, held?): Text("\(detail) · ").foregroundStyle(.secondary) + Text(held.line).foregroundStyle(.tertiary)
+                            case let (nil, held?): Text(held.line).foregroundStyle(.tertiary)
+                            case let (detail, nil): Text(detail ?? "").foregroundStyle(.secondary)
+                            }
+                        }
+                        .font(.system(size: 11))
+                        .lineLimit(1)
                     }
                 }
                 .layoutPriority(1)
@@ -518,13 +529,15 @@ struct ModelPicker: View {
                     .opacity(isCurrent ? 1 : 0)
             }
             .padding(.horizontal, 10)
-            .frame(height: detail == nil ? 34 : 42)
+            .frame(height: detail == nil && held == nil ? 34 : 42)
             .background(highlight == id ? Color.primary.opacity(0.07) : .clear, in: .rect(cornerRadius: 10))
             .contentShape(.rect(cornerRadius: 10))
         }
         .buttonStyle(.plain)
         .clickablePointer()
         .onHover { if $0 { highlight = id } }
+        .help(held.map { "\($0.line). \($0.why)" } ?? "")
+        .accessibilityValue(held.map { "\($0.line). \($0.why)" } ?? "")
         .id(id)
     }
 
