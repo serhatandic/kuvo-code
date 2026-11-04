@@ -22,6 +22,7 @@ import { noteWorkChanged, WORK_FOLDER } from "./changes";
 import { asksIn } from "./answers";
 import { awaitedBy } from "./awaited";
 import { tellLateAnswers } from "./asks";
+import { holdWords, noteAnswered, noteFailed, turnError } from "./unanswering";
 import { lastReplyOf, placeWords, startedByOf, wakesOf, workSessions, worksFor, type Listed } from "./tree";
 import { projectNameOf } from "../notices/news";
 import type { Target } from "../../shared/records";
@@ -91,12 +92,19 @@ export async function wakeLine(event: WorkEvent, session: Partial<EngineSession>
   const named = `"${session.title || "New Session"}" ${placeWords({ project, folder })} (address ${session.id})`;
   switch (event.type) {
     case "session.execution.succeeded": {
+      if (session.model) noteAnswered(session.model);
       const reply = await lastReplyOf({ target, data: session as never });
       const since = session.time?.created ? `, after ${took(Date.now() - session.time.created)}` : "";
       return `[Session finished] ${named}${since}:\n${reply ? cut(reply, 1200) : "(It ended without a reply.)"}`;
     }
-    case "session.execution.failed":
-      return `[Session failed] ${named} stopped with an error. Read it with read_conversation, then start it again, try another way, or tell the user.`;
+    case "session.execution.failed": {
+      // Why, in its engine's words; one at its account or its limit fails the same way again there.
+      const error = await turnError(target, session.id).catch(() => null);
+      const held = error && session.model ? noteFailed(session.model, error) : null;
+      const why = error?.message ? `: ${cut(error.message.replace(/\.+$/, ""), 400)}` : "";
+      if (held) return `[Session failed] ${named} stopped with an error${why}. ${holdWords(held)}. Starting it again there fails the same way: start it again on a model that can, from list_models, or tell the user.`;
+      return `[Session failed] ${named} stopped with an error${why}. Read it with read_conversation, then start it again, try another way, or tell the user.`;
+    }
     case "permission.asked": {
       const what = describePermission(event.data as PermissionAsked).replace(/^Wants to /, "asks to ").replace(/\.$/, "");
       return `[Session asks] ${named} ${what} (ask ${event.data?.id}). Answer with answer_ask if it's yours to allow, or tell the user in a line and carry on.`;

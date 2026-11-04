@@ -13,6 +13,7 @@ import { bridgeTarget, engineGet, peerTargets, readBridgeFile, readEngineFile } 
 import { learnCompatibility } from "./compatibility";
 import { goalHolds, settleGoalHolds } from "../work/goals";
 import { workWatcher } from "../work/wakes";
+import { followUnanswering } from "../work/unanswering";
 import { reviewPermission } from "../work/reviewing";
 import { forgetReviews } from "../work/reviewer";
 import { backUpSession } from "../work/backups";
@@ -346,6 +347,8 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
         steer?.(event);
         queue?.(event as QueueEvent);
         followWork?.(event);
+        // Models that couldn't answer: let go once one answers, or an account's key changes.
+        if (work) followUnanswering(source, event).catch(() => {});
         // A conversation in Auto: what its agent's file tools ask outside its folder, reviewed (and
         // told to your phones below only where it isn't: the reviewer never leaves one for you).
         const reviewed = work && event.type === "permission.asked" ? reviewPermission(source, event, connection.signal).catch(() => null) : null;

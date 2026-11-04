@@ -59,6 +59,9 @@ interface EngineMessage {
   content?: { type: string; text?: string }[];
 }
 
+// Whether its turn after message `id` has ended (the engine's `idle` for it).
+const endedAfter = (messages: EngineMessage[], id: string) => messages.some(message => message.id > id && message.type === "idle");
+
 // What it wrote after message `id`, oldest first: up to the next message someone else gave it once
 // it had answered (said something and gone on to no tool), whose answer is theirs. One that came
 // while it was still at it (before it answered, or as it ran a tool) it answers with this.
@@ -127,7 +130,8 @@ async function waitForAnswer(target: Target, session: string, id: string, wait: 
     const messages = (page?.data ?? []).slice().reverse();
     const replies = answerAfter(messages, id);
     if (replies.length) return { text: cutText(replies.join("\n\n"), ANSWER_TEXT), reply: messages.filter(message => message.type === "assistant").at(-1)?.id };
-    if (started) break;
+    // (Ended before it was seen at work, as a turn that fails at once does: not waited on further.)
+    if (started || endedAfter(messages, id)) break;
   }
   return { text: null };
 }

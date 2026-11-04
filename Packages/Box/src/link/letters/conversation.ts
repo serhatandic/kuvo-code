@@ -22,6 +22,9 @@ interface ReadMessage {
   output?: { output?: string };
   /** `boxNote`'s mark, on one the box wrote. */
   metadata?: unknown;
+  /** A turn's end: how it went, and the error it failed with. */
+  outcome?: string;
+  error?: { message?: string };
 }
 
 /** A page of a session's messages, and where the next (older) one starts. */
@@ -87,6 +90,9 @@ export function conversationMarkdown(title: string, messages: ReadMessage[], age
     } else if (message.type === "shell") {
       const output = String(message.output?.output ?? "").trim();
       say("User", "Ran `" + message.command + "`" + (output ? "\n\n```\n" + output + "\n```" : ""));
+    } else if (message.type === "idle" && message.outcome === "failed") {
+      // Why a turn stopped, as the conversation shows it.
+      say("Stopped", `It stopped with an error: ${message.error?.message?.trim() || "the engine gave no reason."}`);
     } else if (message.type === "compaction") {
       say(agent, "_Summarized the conversation so far._");
     }

@@ -719,6 +719,20 @@ client shows it from the same routes.
   (`{session, archive?}`; only one of its own), `answer_ask` (`{session, ask, decision: allow|deny,
   reason}`, or `{session, ask, answer, reason}` for a question), `list_models` (the models there's
   an account for here, `provider/model`, with their efforts; none its provider is retiring).
+- **Models that can't answer** (`work/unanswering.ts`, `run/work/unanswering.json`, bridge
+  0.9.194): when a session a conversation started fails at its account (the engine's
+  `provider.quota`, `provider.budget-limit` or `provider.auth`: out of funds, at a plan's limit,
+  signed out), every model of that provider is held back; at its own limit (`provider.rate-limit`,
+  `provider.model-budget-limit`, `provider.free-limit`, or words that say a limit), that model. Its
+  starter's `[Session failed]` line gives the engine's words for the error and says so;
+  `list_models` leaves them out, naming them at its end; an agent's `start_session` on one still
+  starts it, and says why it may fail and the model the agent runs on, when that one can answer
+  (yours from a client says nothing: you may have topped it up). A `start_session` that waits ends
+  as soon as the session stops, with its error (an error result), rather than waiting for a reply
+  that won't come. A hold lasts until the reset the error names, else half an hour (a rate limit,
+  three minutes), or until a session on it finishes, or any account's key or sign-in changes (the
+  engine's `credential.*`, `integration.updated`, `provider.updated`). `read_conversation` shows a
+  turn's error where it stopped.
 - **Answering asks** (`work/policy.ts`, bridge 0.9.189): a bot answers its sessions' asks as far
   as its own conversation could go ahead without asking, as any conversation in its mode would.
   It's judged by the tool call itself (its whole input, found by the ask's `source`, which has a
