@@ -101,7 +101,7 @@ import Testing
         StubWeb.start(hosts: ["127.0.0.1", "models.opencode.ai"])
         catalog.api = OpenCodeAPI(endpoint: ServerEndpoint(url: URL(string: engine)!, password: "test"))
         let opus: [String: Any] = ["id": "claude-opus-5-5", "modelID": "claude-opus-5-5", "providerID": "anthropic", "name": "Opus 5.5",
-                                   "capabilities": ["tools": true, "input": ["text"], "output": ["text"]], "variants": ["low", "medium", "high", "max"],
+                                   "capabilities": ["tools": true, "input": ["text"], "output": ["text"]], "variants": ["low", "medium", "high", "max"].map { ["id": $0] },
                                    "time": ["released": 1], "cost": [["input": 1, "output": 1]], "status": "active", "enabled": true,
                                    "limit": ["context": 1_000_000, "output": 64_000]]
         let account: [String: Any] = ["id": "anthropic", "name": "Anthropic", "methods": [["type": "key"]],

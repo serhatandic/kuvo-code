@@ -9,6 +9,8 @@ import SwiftUI
 /// the card goes.
 struct GoalModelRow: View {
     let box: String
+    /// While it shows the box's pick and you haven't picked: Start Goal tells the box you were asked.
+    @Binding var asks: Bool
     @Environment(AppModel.self) private var app
     @State private var roles: ModelRoles?
     @State private var failure: String?
@@ -50,6 +52,7 @@ struct GoalModelRow: View {
                 .transition(.opacity)
             }
         }
+        .onChange(of: roles?.asksOnGoalCard == true && !picked, initial: true) { _, now in asks = now }
         .task(id: box) {
             roles = nil
             picked = false

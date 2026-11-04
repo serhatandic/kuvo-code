@@ -25,4 +25,11 @@ struct ModelRolesTests {
         #expect(sent?["id"] as? String == "power")
         #expect((sent?["entries"] as? [[String: String]]) == [["providerID": "openai", "modelID": "gpt-6", "variant": "max"]])
     }
+
+    @Test func keepingTheBoxsPickSaysYouWereAskedAndChangesNothingElse() throws {
+        let sent = try JSONSerialization.jsonObject(with: JSONEncoder().encode(ModelRoles.Asked())) as? [String: Any]
+        #expect(sent?["id"] as? String == "power")
+        #expect(sent?["asked"] as? Bool == true)
+        #expect(sent?["entries"] == nil, "the box's pick stays")
+    }
 }

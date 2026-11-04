@@ -75,4 +75,12 @@ public struct ModelRoles: Decodable, Sendable, Hashable {
             entries = [Entry(providerID: model.providerID, modelID: model.id, variant: model.variant)]
         }
     }
+
+    /// `PUT kuvo/models/roles`: you were asked on a goal's card and kept the box's pick. It's
+    /// never asked again.
+    public struct Asked: Encodable, Sendable {
+        public var id = "power"
+        public var asked = true
+        public init() {}
+    }
 }

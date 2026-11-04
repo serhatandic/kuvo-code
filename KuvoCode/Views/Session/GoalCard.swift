@@ -22,6 +22,8 @@ struct GoalCard: View {
 
     /// A project's name is being typed: Return and Escape are its, not Start's and Not Now's.
     @State private var renamesProject = false
+    /// The Model row asks, and you've kept the box's pick.
+    @State private var modelAsks = false
     @State private var wake = false
     @State private var digest: GoalPlan.Cadence = .none
     @State private var deadline: Deadline = .none
@@ -337,7 +339,7 @@ struct GoalCard: View {
                         }
                     }
                 }
-                GoalModelRow(box: box)
+                GoalModelRow(box: box, asks: $modelAsks)
                 ForEach(Array(plan.spend.enumerated()), id: \.offset) { index, line in
                     Divider().padding(.leading, GoalCardMetrics.markWidth + 12)
                     GoalSettingRow(symbol: "creditcard", title: plan.spend.count == 1 ? "Spending" : "Spending on \(line.what)", subtitle: plan.spend.count == 1 ? "On \(line.what)" : nil) {
@@ -461,7 +463,11 @@ struct GoalCard: View {
         let answer: GoalPlanAnswer = action == .start
             ? Self.start(plan, wake: wake, digest: digest, deadline: deadline, caps: caps, periods: periods)
             : .decline
+        let client = action == .start && modelAsks ? app.goalPlans.client(box) : nil
         Task {
+            // Started with the box's pick kept: it isn't asked again. A box from before the ask
+            // turns it down, and nothing comes of that.
+            _ = try? await client?.value(ModelRoles.self, "PUT", "kuvo/models/roles", body: ModelRoles.Asked())
             do {
                 try await app.goalPlans.answer(plan, on: box, answer)
             } catch {
