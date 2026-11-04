@@ -147,7 +147,11 @@ final class SessionModel {
         findUnnamedSubagents()
         // Answers in progress go once their question has (answered, or dismissed).
         if !questionProgress.isEmpty {
-            let open = Set(forms.map(\.id))
+            var open = Set(forms.map(\.id))
+            #if DEBUG
+            // KUVO_DEMO_QUESTIONS' questions, which aren't the engine's.
+            open.formUnion(questionProgress.keys.filter { $0.hasPrefix("frm_demo") })
+            #endif
             let kept = questionProgress.filter { open.contains($0.key) }
             if kept.count != questionProgress.count { questionProgress = kept }
         }

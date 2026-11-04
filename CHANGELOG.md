@@ -16,6 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- When the agent asks several questions, picking a choice goes on to the next one cleanly: the question you answered fades out before the next fades in, and the card grows or shrinks with it, instead of both showing over each other with your pick lingering on the next one's choices. Each choice's number sits in the middle of its row, and the arrow beside a choice is gone.
 - A bot on a goal works like a lead with a team: once you start the goal, it makes the project (where you said it goes, if you did) and hands each step to a session of its own, following them as they report, rather than writing the code itself. Tell it if you'd rather it did the work alone.
 - A goal's step shows the icon of the site it's done at, like RevenueCat's or App Store Connect's, and none for work done on your computer: an Xcode step no longer shows Apple's logo.
 - A goal's **Open** buttons, like signing in to RevenueCat or making a key, open the page in the bot's own browser in the panel instead of yours, so a sign-in there is one the bot can use. On a machine, it opens in that machine's browser. Opening it again brings back the same tab.
