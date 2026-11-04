@@ -75,6 +75,13 @@ export const WORK_ASK_ANSWERED = object({ answer: words("allow", "always", "deny
 /** Where new projects go here (null until you pick a folder), and a folder to offer without one. */
 export const WORK_SETTINGS = object({ projectsFolder: nullable(string), "suggested?": string });
 
+/** A model, or an account's models, that can't answer now (`GET kuvo/work/unanswering`), as the
+ * box holds them back from its bots: the provider, the model (left out for all of the account's,
+ * or `only` its paid or free ones), why in the engine's words, since and until when (ms; sooner
+ * when a session on it answers, or its key changes). */
+export const UNANSWERING = object({ provider: string, "model?": string, "only?": words("paid", "free"), why: string, since: number, until: number });
+export const UNANSWERING_LIST = object({ held: list(UNANSWERING) });
+
 /** A bot's work, as `GET kuvo/work?bot=` answers: its sessions (the latest first), the asks it
  * answered for them (the latest first), what it started today and how many work now, and the
  * limits you set (null for none). */
@@ -194,6 +201,7 @@ export type WorksFor = Infer<typeof WORKS_FOR>;
 export type WorkAnswer = Infer<typeof ANSWER>;
 export type WorkSession = Infer<typeof WORK_SESSION>;
 export type BotWork = Infer<typeof WORK>;
+export type UnansweringList = Infer<typeof UNANSWERING_LIST>;
 export type WorkAskShape = Infer<typeof WORK_ASK>;
 export type GoalPlanShape = Infer<typeof GOAL_PLAN>;
 export type GoalWaitingShape = Infer<typeof GOAL_WAITING>;
@@ -209,6 +217,7 @@ export const WORK_ROUTES: RouteShape[] = [
   { route: "POST kuvo/work/asks/:id", answers: { 200: WORK_ASK_ANSWERED, 400: REFUSED, 404: REFUSED } },
   { route: "GET kuvo/work/settings", answers: { 200: WORK_SETTINGS } },
   { route: "PATCH kuvo/work/settings", answers: { 200: WORK_SETTINGS, 400: REFUSED } },
+  { route: "GET kuvo/work/unanswering", answers: { 200: UNANSWERING_LIST } },
   { route: "GET kuvo/work/goals", answers: { 200: GOAL_PLANS } },
   { route: "GET kuvo/work/goals/events", answers: { 200: GOAL_PLANS } },
   { route: "POST kuvo/work/goals/ask", answers: { 200: object({ text: string }), 400: REFUSED, 404: REFUSED, 409: REFUSED } },

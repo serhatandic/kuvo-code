@@ -16,6 +16,7 @@ import { call } from "../engine/client";
 import { locked, writePrivate } from "../files";
 import { WORK_FOLDER } from "./changes";
 import type { Target } from "../../shared/records";
+import type { UnansweringList } from "../../shared/routes/work";
 
 export const UNANSWERING = path.join(WORK_FOLDER, "unanswering.json");
 
@@ -112,6 +113,16 @@ function change(file: string, now: number, edit: (held: Unanswering[]) => Unansw
   try {
     locked(file + ".lock", () => writePrivate(file, JSON.stringify(edit(read(file, now)))));
   } catch {}
+}
+
+/** What can't answer now, as a client reads it (`GET kuvo/work/unanswering`). */
+export function unansweringList(held = unansweringNow()): UnansweringList {
+  return {
+    held: held.map(each => {
+      const [provider, ...model] = each.key.split("/");
+      return { provider, ...(each.scope === "model" ? { model: model.join("/") } : {}), ...(each.paid ? { only: "paid" as const } : each.free ? { only: "free" as const } : {}), why: each.why, since: each.at, until: each.until };
+    }),
+  };
 }
 
 /** What can't answer now. */

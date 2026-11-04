@@ -1670,6 +1670,7 @@ var FEATURES = [
   "work",
   "work.projects",
   "work.goals",
+  "work.unanswering",
   "vault",
   "sandbox",
   "sandbox.check",
@@ -7171,6 +7172,8 @@ var WORK_ASK = object({
 var WORK_ASKS = object({ asks: list(WORK_ASK) });
 var WORK_ASK_ANSWERED = object({ answer: words("allow", "always", "deny"), text: string, isError: bool });
 var WORK_SETTINGS = object({ projectsFolder: nullable(string), "suggested?": string });
+var UNANSWERING = object({ provider: string, "model?": string, "only?": words("paid", "free"), why: string, since: number, until: number });
+var UNANSWERING_LIST = object({ held: list(UNANSWERING) });
 var WORK = object({
   bot: string,
   sessions: list(WORK_SESSION),
@@ -7256,6 +7259,7 @@ var WORK_ROUTES = [
   { route: "POST kuvo/work/asks/:id", answers: { 200: WORK_ASK_ANSWERED, 400: REFUSED, 404: REFUSED } },
   { route: "GET kuvo/work/settings", answers: { 200: WORK_SETTINGS } },
   { route: "PATCH kuvo/work/settings", answers: { 200: WORK_SETTINGS, 400: REFUSED } },
+  { route: "GET kuvo/work/unanswering", answers: { 200: UNANSWERING_LIST } },
   { route: "GET kuvo/work/goals", answers: { 200: GOAL_PLANS } },
   { route: "GET kuvo/work/goals/events", answers: { 200: GOAL_PLANS } },
   { route: "POST kuvo/work/goals/ask", answers: { 200: object({ text: string }), 400: REFUSED, 404: REFUSED, 409: REFUSED } },
@@ -9567,7 +9571,7 @@ import path41 from "node:path";
 // Packages/Box/src/link/work/unanswering.ts
 import fs37 from "node:fs";
 import path40 from "node:path";
-var UNANSWERING = path40.join(WORK_FOLDER, "unanswering.json");
+var UNANSWERING2 = path40.join(WORK_FOLDER, "unanswering.json");
 var UNKNOWN_RESET = 30 * 60000;
 var BRIEF_RESET = 3 * 60000;
 var FUNDS = ["provider.quota", "provider.budget-limit"];
@@ -9625,12 +9629,20 @@ function change(file, now, edit) {
     locked(file + ".lock", () => writePrivate(file, JSON.stringify(edit(read(file, now)))));
   } catch {}
 }
-var unansweringNow = (file = UNANSWERING, now = Date.now()) => read(file, now);
+function unansweringList(held = unansweringNow()) {
+  return {
+    held: held.map((each) => {
+      const [provider, ...model] = each.key.split("/");
+      return { provider, ...each.scope === "model" ? { model: model.join("/") } : {}, ...each.paid ? { only: "paid" } : each.free ? { only: "free" } : {}, why: each.why, since: each.at, until: each.until };
+    })
+  };
+}
+var unansweringNow = (file = UNANSWERING2, now = Date.now()) => read(file, now);
 function holdOf(model, held) {
   return held.find((each) => each.key === model.providerID && covers(each, model)) ?? held.find((each) => each.key === `${model.providerID}/${model.id}`) ?? null;
 }
 var covers = (held, model) => !(held.paid && model.free) && !(held.free && !model.free);
-function noteFailed(model, error, file = UNANSWERING, now = Date.now()) {
+function noteFailed(model, error, file = UNANSWERING2, now = Date.now()) {
   let scope = scopeOf(error);
   if (!scope)
     return null;
@@ -9647,20 +9659,20 @@ function noteFailed(model, error, file = UNANSWERING, now = Date.now()) {
   change(file, now, (all) => [...all.filter((each) => each.key !== held.key || Boolean(each.paid) !== Boolean(held.paid) || Boolean(each.free) !== Boolean(held.free)), held]);
   return held;
 }
-function noteAnswered(model, file = UNANSWERING, now = Date.now()) {
+function noteAnswered(model, file = UNANSWERING2, now = Date.now()) {
   const clears = (each) => each.key === `${model.providerID}/${model.id}` || each.key === model.providerID && covers(each, model);
   if (!read(file, now).some(clears))
     return;
   change(file, now, (all) => all.filter((each) => !clears(each)));
 }
-async function answeredOn(target, model, file = UNANSWERING, now = Date.now()) {
+async function answeredOn(target, model, file = UNANSWERING2, now = Date.now()) {
   const held = read(file, now);
   if (!held.some((each) => each.key === model.providerID || each.key === `${model.providerID}/${model.id}`))
     return;
   const free = held.some((each) => each.key === model.providerID && (each.paid || each.free)) ? await freeThere(target, model) : false;
   noteAnswered({ ...model, free }, file, now);
 }
-async function failedOn(target, model, error, file = UNANSWERING, now = Date.now()) {
+async function failedOn(target, model, error, file = UNANSWERING2, now = Date.now()) {
   const free = model.free ?? (FUNDS.includes(error.type) || error.type === FREE_USAGE ? await freeThere(target, model) : false);
   return noteFailed({ ...model, free }, error, file, now);
 }
@@ -9669,7 +9681,7 @@ function holdWords(held) {
   return `${what}: ${cut(held.why.replace(/\.+$/, ""), 200)} (since ${resetTime(held.at)}; offered again after ${resetTime(held.until)}, or once a session on it answers)`;
 }
 var ACCOUNT_CHANGES = new Set(["credential.updated", "credential.switched", "credential.removed", "integration.updated", "provider.updated"]);
-async function followUnanswering(source, event, file = UNANSWERING, now = Date.now()) {
+async function followUnanswering(source, event, file = UNANSWERING2, now = Date.now()) {
   if (!read(file, now).length)
     return;
   const data = isObject(event.data) ? event.data : {};
@@ -25290,7 +25302,7 @@ async function* movePlacesRoute(context) {
 
 // Packages/Box/src/link/areas/work.ts
 var WORK_ROUTE = /^kuvo\/(?:work(?:\/events)?|bots\/([^/]+)\/stop-all)$/;
-var WORK_ASKS_ROUTE = /^kuvo\/work\/(?:settings|asks(?:\/([^/]+))?)$/;
+var WORK_ASKS_ROUTE = /^kuvo\/work\/(?:settings|unanswering|asks(?:\/([^/]+))?)$/;
 var GOALS_ROUTE = /^kuvo\/work\/goals(?:\/([^/]+))?$/;
 async function botWork(bot, context) {
   const { readEngine, bridge, signal } = context;
@@ -25361,6 +25373,11 @@ async function* workAsksRoute(context, match) {
   const { request, readEngine, bridge, signal, json } = context;
   const method = request.method.toUpperCase();
   const route = request.path.split("?")[0];
+  if (route === "kuvo/work/unanswering") {
+    if (method !== "GET")
+      return yield* json(405, {});
+    return yield* json(200, unansweringList());
+  }
   if (route === "kuvo/work/settings") {
     if (method === "GET")
       return yield* json(200, workSettings());

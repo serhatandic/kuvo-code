@@ -20,6 +20,7 @@ import { answerWork, askFollowers, workAsks } from "../work/asks";
 import { madeWords, makeProject } from "../work/projects";
 import { startOfDay } from "../work/clock";
 import { setProjectsFolder, workSettings } from "../work/settings";
+import { unansweringList } from "../work/unanswering";
 import { answerGoal, askGoal, goalFollowers, goalPlans } from "../work/goals";
 import { readProjects } from "./projects";
 import { HERE } from "../home";
@@ -28,7 +29,7 @@ import type { BotWork, WorkAnswer } from "../../shared/routes/work";
 import type { AnswerPiece, RouteContext } from "../server/context";
 
 export const WORK_ROUTE = /^kuvo\/(?:work(?:\/events)?|bots\/([^/]+)\/stop-all)$/;
-export const WORK_ASKS_ROUTE = /^kuvo\/work\/(?:settings|asks(?:\/([^/]+))?)$/;
+export const WORK_ASKS_ROUTE = /^kuvo\/work\/(?:settings|unanswering|asks(?:\/([^/]+))?)$/;
 export const GOALS_ROUTE = /^kuvo\/work\/goals(?:\/([^/]+))?$/;
 
 // A bot's work as clients show it.
@@ -99,6 +100,11 @@ export async function* workAsksRoute(context: RouteContext, match: RegExpMatchAr
   const { request, readEngine, bridge, signal, json } = context;
   const method = request.method.toUpperCase();
   const route = request.path.split("?")[0];
+  // What can't answer now, as bots are told: for a client's model picker to say so too.
+  if (route === "kuvo/work/unanswering") {
+    if (method !== "GET") return yield* json(405, {});
+    return yield* json(200, unansweringList());
+  }
   if (route === "kuvo/work/settings") {
     if (method === "GET") return yield* json(200, workSettings());
     if (method !== "PATCH") return yield* json(405, {});

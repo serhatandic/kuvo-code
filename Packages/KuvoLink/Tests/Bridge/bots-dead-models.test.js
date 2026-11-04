@@ -132,6 +132,20 @@ function call(name, args, session = "ses_lead") {
 }
 mcp.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 0, method: "initialize", params: {} }) + "\n");
 const text = result => result.content?.[0]?.text ?? "";
+// A client's request to the box (as a machine's is asked, a process of its own).
+function route(method, pathname) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [path.join(home, "bin", "kuvo-link.js"), "box", "route"], { env: { ...process.env, KUVO_HOME: home }, stdio: ["pipe", "pipe", "ignore"] });
+    let out = "";
+    child.stdout.on("data", chunk => { out += chunk; });
+    child.on("error", reject);
+    child.on("close", () => {
+      const said = JSON.parse(out.trim().split("\n").pop());
+      resolve({ status: said.status, body: JSON.parse(said.body) });
+    });
+    child.stdin.end(JSON.stringify({ method, path: pathname }));
+  });
+}
 
 // The watcher's clock: what it would run later, run when the test says.
 const later = [];
@@ -164,6 +178,14 @@ test("a session that fails for want of funds tells its bot why, and the bot move
 
   const read = text(await call("read_conversation", { of: "ses_concept" }));
   assert.match(read, /\*\*Stopped\*\*\n\nIt stopped with an error: Upstream request failed: Insufficient account funds/, "its conversation shows why it stopped");
+});
+
+test("a client's model picker reads the same: which account's models can't answer, and why", async () => {
+  const { status, body } = await route("GET", "kuvo/work/unanswering");
+  assert.equal(status, 200);
+  assert.equal(body.held.length, 1);
+  assert.deepEqual({ ...body.held[0], since: 0, until: 0 }, { provider: "opencode", only: "paid", why: "Upstream request failed: Insufficient account funds", since: 0, until: 0 });
+  assert.ok(body.held[0].until > Date.now() && body.held[0].until - body.held[0].since === 30 * 60_000, "for half an hour, as the error names no reset");
 });
 
 test("a free model answering, or another account changing, says nothing of the account's funds; a paid one answering does", async () => {
