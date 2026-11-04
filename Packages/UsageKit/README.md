@@ -35,8 +35,9 @@ here.
 - **Claude Code's sign-in is only read** (`Providers/Claude`). Upstream renews its token when it's
   about to expire or turned away, outside Claude Code's lock, which spends its single-use refresh
   token and signs out a Claude Code holding the old one. Here an expired or turned-away token waits
-  for Claude Code to renew it the next time it runs ("Run `claude` to renew it"), and nothing is
-  written to its Keychain item or file.
+  for Claude Code to renew it the next time it runs, and nothing is written to its Keychain item or
+  file. Meanwhile the bars keep the last numbers read, "As of" when, with "Run `claude` to renew it"
+  under them.
 
 - **Plan limits for the host** (`Embedding/PlanLimits.swift`): the latest limits of one provider,
   read from what the panel already has, for Kuvo Code to show beside a session.

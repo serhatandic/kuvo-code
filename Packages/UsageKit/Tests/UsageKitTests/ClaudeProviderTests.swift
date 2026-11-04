@@ -530,6 +530,47 @@ final class ClaudeProviderTests: XCTestCase {
         }
     }
 
+    func testExpiredSignInKeepsTheLastNumbersAsOfWhenTheyWereRead() async {
+        // Claude Code's sign-in lapses (or is turned away) between refreshes while it isn't run:
+        // the bars keep the last numbers, said to be as of then, and how to renew comes second.
+        let t0 = OpenUsageISO8601.date(from: "2026-02-20T16:00:00.000Z")!
+        let expiresAt = Int(t0.addingTimeInterval(30 * 60).timeIntervalSince1970 * 1000)
+        for turnedAway in [false, true] {
+            let clock = TestClock(t0)
+            let usageCalls = CallCounter()
+            let files = FakeFiles(["/tmp/claude/.credentials.json": #"{"claudeAiOauth":{"accessToken":"token","refreshToken":"refresh-1","expiresAt":\#(turnedAway ? 4102444800000 : expiresAt),"subscriptionType":"pro","scopes":["user:profile"]}}"#])
+            let httpClient = RoutingHTTPClient { request in
+                guard request.url.path.hasSuffix("/api/oauth/usage"), request.url.query == nil else {
+                    return HTTPResponse(statusCode: 404, headers: [:], body: Data())
+                }
+                guard usageCalls.next() == 1 else { return HTTPResponse(statusCode: 401, headers: [:], body: Data()) }
+                return HTTPResponse(statusCode: 200, headers: [:], body: Data(#"{"five_hour":{"utilization":42,"resets_at":"2099-01-01T00:00:00.000Z"}}"#.utf8))
+            }
+            let provider = ClaudeProvider(
+                authStore: configuredAuthStore(files: files, now: { clock.now }),
+                usageClient: ClaudeUsageClient(httpClient: httpClient),
+                logUsageScanner: ClaudeLogFixture.scanner(home: nil),
+                now: { clock.now },
+                pricing: { TestPricing.bundled }
+            )
+
+            let first = await provider.refresh()
+            clock.set(t0.addingTimeInterval(60 * 60))
+            let later = await provider.refresh()
+
+            XCTAssertEqual(Self.progress(first.lines, "Session")?.used, 42)
+            XCTAssertEqual(Self.progress(later.lines, "Session")?.used, 42)
+            XCTAssertNil(badge(later.lines, "Error"))
+            guard case .text(_, let asOf, _, let renew)? = later.lines.first(where: { $0.label == "Note" }) else {
+                return XCTFail("no as-of line")
+            }
+            XCTAssertTrue(asOf.hasPrefix("As of "), asOf)
+            XCTAssertEqual(renew, ClaudeAuthError.tokenExpired.localizedDescription)
+            XCTAssertEqual(later.warning?.hasPrefix("Usage as of "), true)
+            XCTAssertFalse(httpClient.requests.contains { $0.url.path.hasSuffix("/oauth/token") }, "no renewal")
+        }
+    }
+
     func testFallsBackToFileWhenKeychainTokenIsLockedOut() async {
         // #687: a stale/locked-out token sits in the keychain (its refresh token is server-revoked →
         // invalid_grant → "session expired") while a fresh external `claude` re-login wrote a working

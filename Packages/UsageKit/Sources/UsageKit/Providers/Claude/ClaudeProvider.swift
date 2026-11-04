@@ -31,6 +31,9 @@ final class ClaudeProvider: ProviderRuntime {
     private var cachedCredentialFingerprint: Data?
     private var verifiedCredentialFingerprint: Data?
     private var lastGoodUsage: ClaudeMappedUsage?
+    /// When `lastGoodUsage` was read live (not for one kept from the launch cache): the numbers an
+    /// expired sign-in keeps showing are as of then (fork addition).
+    private var lastGoodAt: Date?
     private var rateLimitedUntil: Date?
     private static let rateLimitCooldown: TimeInterval = 5 * 60
     /// The account-stamped snapshot painted from the launch cache (see `adoptLaunchSnapshot`). Held in
@@ -365,28 +368,18 @@ final class ClaudeProvider: ProviderRuntime {
         }
         let claimEpoch = resetClaimEpoch
 
-        // Claude Code renews its own sign-in: an expired one waits for it (Kuvo Code's fork).
-        if authStore.hasExpired(state.oauth) { throw Self.expired(state.source) }
+        // Claude Code renews its own sign-in: an expired one waits for it (Kuvo Code's fork), with
+        // the last numbers read meanwhile.
+        if authStore.hasExpired(state.oauth) { return try expiredSnapshot(source: state.source) }
 
         var working = state
         defer { state = working }
-        var verificationResponse = try await verifyAccountIfNeeded(credentials: working.oauth)
-        let response = try await ProviderAuthRetry.fetch(
-            token: working.oauth.accessToken ?? "",
-            attempt: { accessToken in
-                if let response = verificationResponse {
-                    verificationResponse = nil
-                    return response
-                }
-                return try await self.usageClient.fetchUsage(
-                    accessToken: accessToken, config: self.authStore.oauthConfig()
-                )
-            },
-            // Turned away: never renewed here, only by its owner (Claude Code, Claude Desktop, the swap).
-            refreshAccessToken: { throw Self.expired(working.source) },
-            connectionFailed: ClaudeUsageError.connectionFailed,
-            authExpired: ClaudeAuthError.tokenExpired
-        )
+        let response: HTTPResponse
+        do {
+            response = try await fetchUsage(working: working)
+        } catch let error as ClaudeAuthError where Self.isExpiry(error) {
+            return try expiredSnapshot(source: working.source)
+        }
 
         let forceDesktopGeneration = working.source == .desktop
         try await checkCredentialGeneration(expectedGeneration, forceDesktopFallback: forceDesktopGeneration)
@@ -418,6 +411,7 @@ final class ClaudeProvider: ProviderRuntime {
         // post-claim refresh's.
         if resetClaimEpoch == claimEpoch {
             lastGoodUsage = mapped
+            lastGoodAt = now()
             rateLimitedUntil = nil
         }
         pendingLaunchSnapshot = nil
@@ -544,6 +538,43 @@ final class ClaudeProvider: ProviderRuntime {
         Data(SHA256.hash(data: Data((credentials.accessToken ?? "").utf8)))
     }
 
+    /// The usage call, after checking the login is the card's account. Turned away: never renewed here,
+    /// only by its owner (Claude Code, Claude Desktop, the swap).
+    private func fetchUsage(working: ClaudeCredentialState) async throws -> HTTPResponse {
+        var verificationResponse = try await verifyAccountIfNeeded(credentials: working.oauth)
+        return try await ProviderAuthRetry.fetch(
+            token: working.oauth.accessToken ?? "",
+            attempt: { accessToken in
+                if let response = verificationResponse {
+                    verificationResponse = nil
+                    return response
+                }
+                return try await self.usageClient.fetchUsage(
+                    accessToken: accessToken, config: self.authStore.oauthConfig()
+                )
+            },
+            refreshAccessToken: { throw Self.expired(working.source) },
+            connectionFailed: ClaudeUsageError.connectionFailed,
+            authExpired: ClaudeAuthError.tokenExpired
+        )
+    }
+
+    static func isExpiry(_ error: ClaudeAuthError) -> Bool {
+        [.tokenExpired, .desktopTokenExpired, .swapTokenExpired].contains(error)
+    }
+
+    /// A sign-in that has expired, or was turned away, until its owner renews it: the last numbers
+    /// read live for this login, as of when, rather than none (fork addition). With none read yet,
+    /// its error, which says so.
+    private func expiredSnapshot(source: ClaudeCredentialState.Source) throws -> ClaudeMappedUsage {
+        guard var mapped = lastGoodUsage, let at = lastGoodAt else { throw Self.expired(source) }
+        let when = at.formatted(date: Calendar.current.isDate(at, inSameDayAs: now()) ? .omitted : .abbreviated, time: .shortened)
+        let renew = Self.expired(source).localizedDescription
+        mapped.lines.append(.text(label: "Note", value: "As of \(when)", subtitle: renew))
+        mapped.warning = "Usage as of \(when). \(renew)"
+        return mapped
+    }
+
     /// Last-good usage with an appended staleness note when we have it; otherwise the plain rate-limited
     /// badge (no successful fetch yet this run). `lastGoodUsage` only ever holds a clean `mapUsageResponse`
     /// result (never a rate-limited snapshot), so the note is never duplicated and no stale spend tiles
@@ -570,6 +601,7 @@ final class ClaudeProvider: ProviderRuntime {
         guard cachedCredentialFingerprint != fingerprint else { return }
         cachedCredentialFingerprint = fingerprint
         lastGoodUsage = nil
+        lastGoodAt = nil
         rateLimitedUntil = nil
     }
 
@@ -585,6 +617,7 @@ final class ClaudeProvider: ProviderRuntime {
     func forgetUsageAfterResetClaim() {
         forgetGrantsAfterResetClaim()
         lastGoodUsage = nil
+        lastGoodAt = nil
         rateLimitedUntil = nil
     }
 
