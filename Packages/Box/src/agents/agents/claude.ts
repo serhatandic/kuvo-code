@@ -4,7 +4,7 @@
 
 import { spawn } from "node:child_process"
 import { createHash, randomUUID } from "node:crypto"
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
@@ -62,7 +62,7 @@ interface Status {
 
 /** `claude setup-token`'s token in what it printed, once all of it has (in a terminal wide enough
  * that it's on one line). */
-const PRINTED_TOKEN = /sk-ant-oat\d+-[A-Za-z0-9_-]+(?=[^A-Za-z0-9_-])/
+const PRINTED_TOKEN = /sk-ant-oat\d+-[A-Za-z0-9_-]{60,}(?=[^A-Za-z0-9_-])/
 /** Any of Claude's tokens, never said back in a failure's words. */
 const ANY_TOKEN = /sk-ant-[A-Za-z0-9_-]+/g
 
@@ -108,7 +108,10 @@ export class ClaudeAgent implements Agent {
     if (ClaudeAgent.keychain) {
       // Kuvo Code's own: yours, in Terminal, stays signed in.
       this.signOut = async () => {
+        const had = existsSync(this.tokenFile)
         rmSync(this.tokenFile, { force: true })
+        // An Anthropic Console sign-in, in Kuvo Code's own folder.
+        if (!had) await signOutWith("Claude Code", this.executable(), ["auth", "logout"], this.env())
         this.programUpdated()
         this.known.reset()
         this.modelList = undefined
@@ -170,10 +173,10 @@ export class ClaudeAgent implements Agent {
   }
 
   /** What `claude auth status` says; throws when it says nothing to go by (`TookTooLong`, or why not). */
-  private async readStatus(): Promise<Status> {
+  private async readStatus(env = this.env({ ownToken: false })): Promise<Status> {
     const executable = this.executable()
     if (!executable) throw new Error("Claude Code isn't installed.")
-    const result = await run(executable, ["auth", "status", "--json"], { timeout: 20_000, env: this.env({ ownToken: false }) })
+    const result = await run(executable, ["auth", "status", "--json"], { timeout: 20_000, env })
     if (result.timedOut) throw new TookTooLong("Claude Code took too long to say whether it's signed in.")
     let status: Status | undefined
     try {
@@ -196,10 +199,16 @@ export class ClaudeAgent implements Agent {
     }
     const account = await this.known.read(fresh, async () => {
       if (ClaudeAgent.keychain) {
-        if (!this.token()) return { installed: true, signedIn: false, message: "Sign in to Claude Code with your Claude plan or an Anthropic Console account." }
+        if (!this.token()) {
+          // Signed in with an Anthropic Console account, in Kuvo Code's own folder (an added
+          // account's, its own).
+          const console = await this.readStatus(this.env()).catch(() => undefined)
+          if (console?.loggedIn) return { installed: true, signedIn: true, label: describe(console) || "Anthropic Console" }
+          return { installed: true, signedIn: false, message: "Sign in to Claude Code with your Claude plan or an Anthropic Console account." }
+        }
         // Who and which plan, from your own sign-in (Kuvo Code's can only ask Claude for answers),
-        // read as it is: never renewed here.
-        const status = await this.readStatus().catch(() => undefined)
+        // read as it is: never renewed here. An added account's may be another one: not named.
+        const status = this.instance.home ? undefined : await this.readStatus().catch(() => undefined)
         return { installed: true, signedIn: true, label: (status?.loggedIn && describe(status)) || "Claude plan" }
       }
       const status = await this.readStatus()
@@ -271,6 +280,19 @@ export class ClaudeAgent implements Agent {
   readonly signsInRemotely = true
 
   /** Kuvo Code's own sign-in on a Mac: in its folder, which the sandbox hides from what runs there. */
+  /** On a Mac, the folder of an Anthropic Console sign-in: Kuvo Code's own, never your ~/.claude. */
+  get consoleHome() {
+    return this.instance.home ?? join(this.context.home, "claude", "console")
+  }
+
+  /** Claude Code's settings folder: an added account's, Kuvo Code's own for a Console sign-in on a
+   * Mac, or yours. */
+  get configHome() {
+    if (this.instance.home) return this.instance.home
+    if (ClaudeAgent.keychain && !this.token()) return this.consoleHome
+    return process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude")
+  }
+
   get tokenFile() {
     return join(this.context.home, "claude", "tokens", `${this.instance.id}.json`)
   }
@@ -303,12 +325,17 @@ export class ClaudeAgent implements Agent {
         terminal: true,
         codePrompt: /Paste code here if prompted\s*>\s*/g,
         refusedCode: /wasn.t accepted|invalid code/i,
+        // It asks for Enter to start over, with a new page: so does the app.
+        refusedEnds: "Claude didn't take that code. Start again for a new one.",
         onOutput: (output) => {
           if (handedOver) return
           const token = PRINTED_TOKEN.exec(output)?.[0]
           if (!token) return
           mkdirSync(dirname(this.tokenFile), { recursive: true, mode: 0o700 })
-          writeFileSync(this.tokenFile, JSON.stringify({ token, made: started }), { mode: 0o600 })
+          // Whole or not at all, for a session starting meanwhile.
+          const writing = `${this.tokenFile}.${process.pid}.tmp`
+          writeFileSync(writing, JSON.stringify({ token, made: started }), { mode: 0o600 })
+          renameSync(writing, this.tokenFile)
           handedOver = true
         },
         secret: ANY_TOKEN,
@@ -322,6 +349,7 @@ export class ClaudeAgent implements Agent {
         printedPage: options.remote,
       })
     }
+    if (ClaudeAgent.keychain) mkdirSync(this.consoleHome, { recursive: true, mode: 0o700 })
     return commandSignIn({
       command: executable,
       args: ["auth", "login", methodID === "console" ? "--console" : "--claudeai"],
@@ -332,7 +360,7 @@ export class ClaudeAgent implements Agent {
       // Claude Code's word: a sign-in Claude ended still reads as signed in there, so signing in
       // again counts once the command says it worked (another Claude Code writing its settings
       // meanwhile isn't it).
-      signedIn: async () => (await this.readStatus()).loggedIn === true,
+      signedIn: async () => (await this.readStatus(this.env())).loggedIn === true,
       codePrompt: /Paste code here if prompted >\s*/g,
       onComplete: () => {
         this.turnedAway = undefined
@@ -357,7 +385,7 @@ export class ClaudeAgent implements Agent {
    */
   ownsPath(path: string): boolean {
     const file = resolve(path)
-    const settings = this.instance.home ?? process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude")
+    const settings = this.configHome
     if (file.startsWith(settings + "/") && /^(plans\/[^/]+\.md|projects\/[^/]+\/memory\/.+|projects\/[^/]+\/[^/]+\/tool-results\/.+)$/.test(file.slice(settings.length + 1))) return true
     const uid = process.getuid?.()
     return uid !== undefined && ["/tmp", "/private/tmp"].some((tmp) => file.startsWith(`${tmp}/claude-${uid}/`) && /^[^/]+\/[^/]+\/tasks\/[^/]+$/.test(file.slice(`${tmp}/claude-${uid}/`.length)))
@@ -365,7 +393,7 @@ export class ClaudeAgent implements Agent {
 
   /** Where Claude Code reads skills itself: its settings folder's, and a project's `.claude/skills`. */
   ownSkillFolders(directory: string): string[] {
-    const settings = this.instance.home ?? process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude")
+    const settings = this.configHome
     return [join(settings, "skills"), ...upward(directory).map((folder) => join(folder, ".claude", "skills"))]
   }
 
@@ -374,11 +402,14 @@ export class ClaudeAgent implements Agent {
    * (not when asking about yours).
    */
   env({ ownToken = true }: { ownToken?: boolean } = {}): Record<string, string | undefined> {
-    const env: Record<string, string | undefined> = { ...process.env, CLAUDE_CODE_TMPDIR: join(this.context.temporary, "claude") }
-    delete env.CLAUDE_CODE_OAUTH_TOKEN
+    // Not one the box was started with (the runner would merge it back if only deleted).
+    const env: Record<string, string | undefined> = { ...process.env, CLAUDE_CODE_TMPDIR: join(this.context.temporary, "claude"), CLAUDE_CODE_OAUTH_TOKEN: undefined }
     if (this.instance.home) env.CLAUDE_CONFIG_DIR = this.instance.home
     const token = ownToken && ClaudeAgent.keychain ? this.token() : undefined
     if (token) env.CLAUDE_CODE_OAUTH_TOKEN = token
+    // Without one, an Anthropic Console sign-in of Kuvo Code's own: Claude Code names its Keychain
+    // item after its folder, so yours in Terminal is never written.
+    else if (ownToken && ClaudeAgent.keychain) env.CLAUDE_CONFIG_DIR = this.consoleHome
     // On a machine, its commands get the machine's own folders back (it keeps its own in Kuvo
     // Code's folder).
     const own = onMachine ? ownFoldersScript(this.context.home) : undefined
@@ -1028,7 +1059,7 @@ class ClaudeThread implements Thread {
     if (!this.sandboxedNow) return undefined
     const directory = this.session.location.directory
     const attached = fenceAttachments(directory)
-    const settings = this.agent.instance.home ?? process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude")
+    const settings = this.agent.configHome
     // (On a machine, the script that gives its commands the machine's own folders back, in Kuvo Code's.)
     const machineFolders = this.agent.env().CLAUDE_ENV_FILE
     const fence = fenceAgent(this.agent.executable()!, directory, {

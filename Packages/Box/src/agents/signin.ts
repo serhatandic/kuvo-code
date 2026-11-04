@@ -43,6 +43,8 @@ export interface CommandSignInOptions {
   terminal?: boolean
   /** What it says of a pasted code it turns away (as it waits for another). */
   refusedCode?: RegExp
+  /** A refused code ends the sign-in, with these words (its program takes no second one). */
+  refusedEnds?: string
 }
 
 /** The catcher, in the temporary folder: a path without spaces (Python splits BROWSER on them). */
@@ -58,7 +60,9 @@ export function catcher(temporary: string): string {
 
 export async function commandSignIn(options: CommandSignInOptions): Promise<SignInAttempt> {
   const urlFile = join(options.temporary, `${newID("att")}.url`)
-  const env = { ...process.env, ...options.env, BROWSER: catcher(options.temporary), KUVO_URL_FILE: urlFile }
+  const env: Record<string, string | undefined> = { ...process.env, ...options.env, BROWSER: catcher(options.temporary), KUVO_URL_FILE: urlFile }
+  // A value left `undefined` is unset, as in `run`.
+  for (const name of Object.keys(env)) if (env[name] === undefined) delete env[name]
   // What it printed, its terminal codes taken out as a whole (one can come split over two reads).
   let printed = ""
   let output = ""
@@ -182,6 +186,12 @@ export async function commandSignIn(options: CommandSignInOptions): Promise<Sign
             await Bun.sleep(100)
             if ((options.refusedCode ?? /invalid code/i).test(output.slice(from))) {
               pasted = false
+              // One that takes no second code: this sign-in is over.
+              if (options.refusedEnds) {
+                status = { status: "failed", message: options.refusedEnds }
+                child.kill()
+                throw new Error(options.refusedEnds)
+              }
               throw new Error("That code couldn't be read. Copy all of it from the page, and paste it again.")
             }
           }

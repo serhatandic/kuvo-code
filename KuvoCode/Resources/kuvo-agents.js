@@ -1,6 +1,6 @@
 // @bun
 // Packages/Box/src/agents/main.ts
-import { mkdirSync as mkdirSync19, readdirSync as readdirSync15, readFileSync as readFileSync28, renameSync as renameSync14, rmSync as rmSync15, writeFileSync as writeFileSync21 } from "fs";
+import { mkdirSync as mkdirSync19, readdirSync as readdirSync15, readFileSync as readFileSync28, renameSync as renameSync15, rmSync as rmSync15, writeFileSync as writeFileSync21 } from "fs";
 import { join as join29 } from "path";
 
 // Packages/Box/src/agents/accounts.ts
@@ -864,7 +864,8 @@ function firstURL(text) {
   return text.match(/https?:\/\/[^\s"'<>]+/)?.[0];
 }
 function plain2(text) {
-  return text.replace(/\x1b\[(\d*)C/g, (_, count) => " ".repeat(Math.min(Number(count || 1), 80))).replace(/\x1b\[\d*G/g, " ").replace(/\x1b\[[0-9;?>]*[ -/]*[@-~]/g, "").replace(/\x1b\][^\x07]*\x07/g, "").replace(/\x1b[78]/g, "");
+  return text.replace(/\x1b\[(\d*)C/g, (_, count) => " ".repeat(Math.min(Number(count || 1), 80))).replace(/\x1b\[\d*G/g, " ").replace(/\x1b\[[0-9;]*[BEFHfd]/g, `
+`).replace(/\x1b\[[0-9;?>]*[ -/]*[@-~]/g, "").replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "").replace(/\x1b[78]/g, "");
 }
 
 // Packages/Box/src/agents/artifacts/policy.ts
@@ -8295,6 +8296,9 @@ printf '%s\\n' "$1" >> "$KUVO_URL_FILE"
 async function commandSignIn(options) {
   const urlFile = join17(options.temporary, `${newID("att")}.url`);
   const env = { ...process.env, ...options.env, BROWSER: catcher(options.temporary), KUVO_URL_FILE: urlFile };
+  for (const name of Object.keys(env))
+    if (env[name] === undefined)
+      delete env[name];
   let printed = "";
   let output = "";
   const take = (text) => {
@@ -8422,6 +8426,11 @@ async function commandSignIn(options) {
         await Bun.sleep(100);
         if ((options.refusedCode ?? /invalid code/i).test(output.slice(from))) {
           pasted = false;
+          if (options.refusedEnds) {
+            status = { status: "failed", message: options.refusedEnds };
+            child.kill();
+            throw new Error(options.refusedEnds);
+          }
           throw new Error("That code couldn't be read. Copy all of it from the page, and paste it again.");
         }
       }
@@ -9318,7 +9327,7 @@ function unzipper() {
 // Packages/Box/src/agents/agents/claude.ts
 import { spawn as spawn5 } from "child_process";
 import { createHash as createHash6, randomUUID } from "crypto";
-import { existsSync as existsSync13, mkdirSync as mkdirSync13, readFileSync as readFileSync18, rmSync as rmSync10, statSync as statSync8, writeFileSync as writeFileSync15 } from "fs";
+import { existsSync as existsSync13, mkdirSync as mkdirSync13, readFileSync as readFileSync18, renameSync as renameSync10, rmSync as rmSync10, statSync as statSync8, writeFileSync as writeFileSync15 } from "fs";
 import { homedir } from "os";
 import { dirname as dirname11, join as join21, resolve as resolve6 } from "path";
 import { pathToFileURL as pathToFileURL3 } from "url";
@@ -9633,7 +9642,7 @@ var STATE_IN_HOME = [
   "*.lock"
 ];
 var KEPT_IN_HOME = ["settings*.json", "hooks", ".mcp.json"];
-var PRINTED_TOKEN = /sk-ant-oat\d+-[A-Za-z0-9_-]+(?=[^A-Za-z0-9_-])/;
+var PRINTED_TOKEN = /sk-ant-oat\d+-[A-Za-z0-9_-]{60,}(?=[^A-Za-z0-9_-])/;
 var ANY_TOKEN = /sk-ant-[A-Za-z0-9_-]+/g;
 
 class ClaudeAgent {
@@ -9658,7 +9667,10 @@ class ClaudeAgent {
     this.providerID = providerID("claude", instance.id);
     if (ClaudeAgent.keychain) {
       this.signOut = async () => {
+        const had = existsSync13(this.tokenFile);
         rmSync10(this.tokenFile, { force: true });
+        if (!had)
+          await signOutWith("Claude Code", this.executable(), ["auth", "logout"], this.env());
         this.programUpdated();
         this.known.reset();
         this.modelList = undefined;
@@ -9710,11 +9722,11 @@ class ClaudeAgent {
       { type: "oauth", id: "console", label: "Sign in with Anthropic Console" }
     ];
   }
-  async readStatus() {
+  async readStatus(env = this.env({ ownToken: false })) {
     const executable = this.executable();
     if (!executable)
       throw new Error("Claude Code isn't installed.");
-    const result = await run(executable, ["auth", "status", "--json"], { timeout: 20000, env: this.env({ ownToken: false }) });
+    const result = await run(executable, ["auth", "status", "--json"], { timeout: 20000, env });
     if (result.timedOut)
       throw new TookTooLong("Claude Code took too long to say whether it's signed in.");
     let status;
@@ -9736,9 +9748,15 @@ class ClaudeAgent {
     }
     const account = await this.known.read(fresh, async () => {
       if (ClaudeAgent.keychain) {
-        if (!this.token())
+        if (!this.token()) {
+          const console2 = await this.readStatus(this.env()).catch(() => {
+            return;
+          });
+          if (console2?.loggedIn)
+            return { installed: true, signedIn: true, label: describe(console2) || "Anthropic Console" };
           return { installed: true, signedIn: false, message: "Sign in to Claude Code with your Claude plan or an Anthropic Console account." };
-        const status = await this.readStatus().catch(() => {
+        }
+        const status = this.instance.home ? undefined : await this.readStatus().catch(() => {
           return;
         });
         return { installed: true, signedIn: true, label: status?.loggedIn && describe(status) || "Claude plan" };
@@ -9793,6 +9811,16 @@ class ClaudeAgent {
     return written;
   }
   signsInRemotely = true;
+  get consoleHome() {
+    return this.instance.home ?? join21(this.context.home, "claude", "console");
+  }
+  get configHome() {
+    if (this.instance.home)
+      return this.instance.home;
+    if (ClaudeAgent.keychain && !this.token())
+      return this.consoleHome;
+    return process.env.CLAUDE_CONFIG_DIR ?? join21(homedir(), ".claude");
+  }
   get tokenFile() {
     return join21(this.context.home, "claude", "tokens", `${this.instance.id}.json`);
   }
@@ -9822,6 +9850,7 @@ class ClaudeAgent {
         terminal: true,
         codePrompt: /Paste code here if prompted\s*>\s*/g,
         refusedCode: /wasn.t accepted|invalid code/i,
+        refusedEnds: "Claude didn't take that code. Start again for a new one.",
         onOutput: (output) => {
           if (handedOver)
             return;
@@ -9829,7 +9858,9 @@ class ClaudeAgent {
           if (!token)
             return;
           mkdirSync13(dirname11(this.tokenFile), { recursive: true, mode: 448 });
-          writeFileSync15(this.tokenFile, JSON.stringify({ token, made: started }), { mode: 384 });
+          const writing = `${this.tokenFile}.${process.pid}.tmp`;
+          writeFileSync15(writing, JSON.stringify({ token, made: started }), { mode: 384 });
+          renameSync10(writing, this.tokenFile);
           handedOver = true;
         },
         secret: ANY_TOKEN,
@@ -9842,6 +9873,8 @@ class ClaudeAgent {
         printedPage: options.remote
       });
     }
+    if (ClaudeAgent.keychain)
+      mkdirSync13(this.consoleHome, { recursive: true, mode: 448 });
     return commandSignIn({
       command: executable,
       args: ["auth", "login", methodID === "console" ? "--console" : "--claudeai"],
@@ -9849,7 +9882,7 @@ class ClaudeAgent {
       home: this.context.home,
       temporary: this.context.temporary,
       instructions: "Finish signing in on Claude's page. Claude Code keeps the sign-in, as when you run claude auth login.",
-      signedIn: async () => (await this.readStatus()).loggedIn === true,
+      signedIn: async () => (await this.readStatus(this.env())).loggedIn === true,
       codePrompt: /Paste code here if prompted >\s*/g,
       onComplete: () => {
         this.turnedAway = undefined;
@@ -9864,24 +9897,25 @@ class ClaudeAgent {
   }
   ownsPath(path) {
     const file = resolve6(path);
-    const settings = this.instance.home ?? process.env.CLAUDE_CONFIG_DIR ?? join21(homedir(), ".claude");
+    const settings = this.configHome;
     if (file.startsWith(settings + "/") && /^(plans\/[^/]+\.md|projects\/[^/]+\/memory\/.+|projects\/[^/]+\/[^/]+\/tool-results\/.+)$/.test(file.slice(settings.length + 1)))
       return true;
     const uid = process.getuid?.();
     return uid !== undefined && ["/tmp", "/private/tmp"].some((tmp) => file.startsWith(`${tmp}/claude-${uid}/`) && /^[^/]+\/[^/]+\/tasks\/[^/]+$/.test(file.slice(`${tmp}/claude-${uid}/`.length)));
   }
   ownSkillFolders(directory) {
-    const settings = this.instance.home ?? process.env.CLAUDE_CONFIG_DIR ?? join21(homedir(), ".claude");
+    const settings = this.configHome;
     return [join21(settings, "skills"), ...upward(directory).map((folder) => join21(folder, ".claude", "skills"))];
   }
   env({ ownToken = true } = {}) {
-    const env = { ...process.env, CLAUDE_CODE_TMPDIR: join21(this.context.temporary, "claude") };
-    delete env.CLAUDE_CODE_OAUTH_TOKEN;
+    const env = { ...process.env, CLAUDE_CODE_TMPDIR: join21(this.context.temporary, "claude"), CLAUDE_CODE_OAUTH_TOKEN: undefined };
     if (this.instance.home)
       env.CLAUDE_CONFIG_DIR = this.instance.home;
     const token = ownToken && ClaudeAgent.keychain ? this.token() : undefined;
     if (token)
       env.CLAUDE_CODE_OAUTH_TOKEN = token;
+    else if (ownToken && ClaudeAgent.keychain)
+      env.CLAUDE_CONFIG_DIR = this.consoleHome;
     const own = onMachine ? ownFoldersScript(this.context.home) : undefined;
     if (own)
       env.CLAUDE_ENV_FILE = own;
@@ -10392,7 +10426,7 @@ class ClaudeThread {
       return;
     const directory = this.session.location.directory;
     const attached = fenceAttachments(directory);
-    const settings = this.agent.instance.home ?? process.env.CLAUDE_CONFIG_DIR ?? join21(homedir(), ".claude");
+    const settings = this.agent.configHome;
     const machineFolders = this.agent.env().CLAUDE_ENV_FILE;
     const fence = fenceAgent(this.agent.executable(), directory, {
       homes: [settings],
@@ -13354,7 +13388,7 @@ import { homedir as homedir3 } from "os";
 import { dirname as dirname12, join as join24 } from "path";
 
 // Packages/Box/src/agents/agents/cursor-worker.ts
-import { readFileSync as readFileSync20, renameSync as renameSync10, writeFileSync as writeFileSync16 } from "fs";
+import { readFileSync as readFileSync20, renameSync as renameSync11, writeFileSync as writeFileSync16 } from "fs";
 import { join as join23 } from "path";
 var WORKER = `// Kuvo Code's agents bridge's Cursor, run in the box's sandbox (cursor-worker.ts).
 console.log = console.error
@@ -13434,7 +13468,7 @@ function cursorWorker(folder) {
   } catch {}
   const written = `${file}.${process.pid}.${Math.random().toString(36).slice(2)}`;
   writeFileSync16(written, WORKER, { mode: 384 });
-  renameSync10(written, file);
+  renameSync11(written, file);
   return file;
 }
 function revived(error) {
@@ -18415,7 +18449,7 @@ function seatRules(folder, askFirst, denies) {
 }
 
 // Packages/Box/src/agents/groups/store.ts
-import { existsSync as existsSync16, mkdirSync as mkdirSync17, readdirSync as readdirSync13, readFileSync as readFileSync24, renameSync as renameSync11, rmSync as rmSync13, writeFileSync as writeFileSync18 } from "fs";
+import { existsSync as existsSync16, mkdirSync as mkdirSync17, readdirSync as readdirSync13, readFileSync as readFileSync24, renameSync as renameSync12, rmSync as rmSync13, writeFileSync as writeFileSync18 } from "fs";
 import { join as join27 } from "path";
 var version2 = 1;
 function isTurning(value) {
@@ -18472,7 +18506,7 @@ var text2 = (file) => {
 };
 function write(file, value) {
   writeFileSync18(file + ".new", JSON.stringify(value, null, 2), { mode: 384 });
-  renameSync11(file + ".new", file);
+  renameSync12(file + ".new", file);
 }
 
 class GroupStore {
@@ -18532,7 +18566,7 @@ class GroupStore {
       return;
     const into = join27(trash, `${new Date().toISOString().replace(/[-:]/g, "").replace(/\..*/, "")}-group-${id}`);
     mkdirSync17(into, { recursive: true, mode: 448 });
-    renameSync11(this.folder(id), join27(into, id));
+    renameSync12(this.folder(id), join27(into, id));
     emit("kuvo.group.trashed", { id, path: into });
   }
   settings() {
@@ -18661,7 +18695,7 @@ class GroupStore {
   writeFile(path, contents) {
     mkdirSync17(join27(path, ".."), { recursive: true });
     writeFileSync18(path + ".new", contents, { mode: 384 });
-    renameSync11(path + ".new", path);
+    renameSync12(path + ".new", path);
   }
   removeFile(path) {
     rmSync13(path, { force: true });
@@ -19268,7 +19302,7 @@ async function make(runner, store, given, here) {
 }
 
 // Packages/Box/src/agents/groups/post.ts
-import { existsSync as existsSync17, readFileSync as readFileSync26, renameSync as renameSync12, writeFileSync as writeFileSync19 } from "fs";
+import { existsSync as existsSync17, readFileSync as readFileSync26, renameSync as renameSync13, writeFileSync as writeFileSync19 } from "fs";
 
 // Packages/Box/src/shared/seats.ts
 var SEAT_MAIL_KINDS = ["turn", "state", "result", "steer", "stop", "drop", "work", "held", "report", "memory"];
@@ -22121,7 +22155,7 @@ class PeerPost {
       return;
     try {
       writeFileSync19(this.file + ".new", JSON.stringify(this.kept), { mode: 384 });
-      renameSync12(this.file + ".new", this.file);
+      renameSync13(this.file + ".new", this.file);
     } catch {}
   }
   follow(signal) {
@@ -22799,7 +22833,7 @@ ${all}`;
 }
 
 // Packages/Box/src/agents/store.ts
-import { mkdirSync as mkdirSync18, readdirSync as readdirSync14, readFileSync as readFileSync27, renameSync as renameSync13, rmSync as rmSync14, statSync as statSync10, writeFileSync as writeFileSync20 } from "fs";
+import { mkdirSync as mkdirSync18, readdirSync as readdirSync14, readFileSync as readFileSync27, renameSync as renameSync14, rmSync as rmSync14, statSync as statSync10, writeFileSync as writeFileSync20 } from "fs";
 import { join as join28 } from "path";
 
 class Store {
@@ -22878,7 +22912,7 @@ class Store {
       ]) {
         const file = join28(folder, name);
         writeFileSync20(file + ".new", JSON.stringify(value));
-        renameSync13(file + ".new", file);
+        renameSync14(file + ".new", file);
       }
     } catch (error) {
       console.error(`session ${id} not written:`, error);
@@ -23105,7 +23139,7 @@ link3.whenReady().then(() => {
 var record2 = onMachine ? join29(machineHome, "run", "bridge.json") : undefined;
 if (record2) {
   writeFileSync21(record2 + ".new", JSON.stringify({ pid: process.pid, port: server4.port, password }), { mode: 384 });
-  renameSync14(record2 + ".new", record2);
+  renameSync15(record2 + ".new", record2);
 }
 var stopping = false;
 function stop() {
@@ -23140,4 +23174,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents b21cc0abc1dd77c176079f4586921253fa6d2de46ab063883e77c8a502d6c32c
+// Built from Packages/Box/src/agents be64df20511e73e2f0f622456d47f3aa690e9fde4826b9f6e8d6a8ae87338135

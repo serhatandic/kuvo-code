@@ -160,12 +160,14 @@ export function firstURL(text: string): string | undefined {
 }
 
 /** Text with terminal colors and cursor codes taken out; a move along the line (how a terminal UI
- * spaces its words) is a space. */
+ * spaces its words) is a space, and a move to another line a line break. */
 export function plain(text: string): string {
   return text
     .replace(/\x1b\[(\d*)C/g, (_, count) => " ".repeat(Math.min(Number(count || 1), 80)))
     .replace(/\x1b\[\d*G/g, " ")
+    // A move to another line (a terminal UI's next line) is a line break.
+    .replace(/\x1b\[[0-9;]*[BEFHfd]/g, "\n")
     .replace(/\x1b\[[0-9;?>]*[ -/]*[@-~]/g, "")
-    .replace(/\x1b\][^\x07]*\x07/g, "")
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
     .replace(/\x1b[78]/g, "")
 }
