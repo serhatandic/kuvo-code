@@ -485,6 +485,25 @@ test("a spend cap holds what spends until its period starts again, while the res
   assert.match((await tool("may_spend", { what: "ads", amount: 5 })).text, /^Yes/);
 });
 
+test("what you pay for yourself, like a membership the plan needs you to join, is on the card as yours to do, never as the bot's spending", async () => {
+  const membership = { text: "Apple Developer Program membership and App Store Connect access", detail: "99 USD a year", url: "https://developer.apple.com/programs/enroll/", button: "Join" };
+  // A key you add for a service the bot then spends on is yours to add, the spending the bot's.
+  const key = { text: "Add an OpenAI API key", url: "https://platform.openai.com/api-keys", button: "Add" };
+  const said = await tool("propose_goal", { ...PLAN, checks: [...PLAN.checks, membership, key], spend: [{ what: "Apple Developer Program membership", cap: 99 }, { what: "OpenAI API", cap: 20, per: "month" }, ...PLAN.spend] });
+  assert.match(said.text, /Apple Developer Program membership is the user's to pay/, "the bot hears it's not its to spend");
+  const [card] = await goals();
+  assert.deepEqual(card.spend.map(each => each.what), ["OpenAI API", "driftwood.coffee", "ads"], "only what the bot spends itself");
+  assert.deepEqual(card.checks.filter(each => each.state === "needs" && each.by === "bot").map(each => each.text), ["Add a Cloudflare API token", membership.text, key.text], "the membership is under what needs you");
+
+  // A plan where you pay for all there is to pay: it spends nothing, and isn't told it may.
+  await tool("propose_goal", { ...PLAN, checks: [membership], spend: [{ what: "Apple Developer Program", cap: 99, per: "goal" }] });
+  const [only] = await goals();
+  assert.deepEqual(only.spend, []);
+  assert.equal((await route("POST", `kuvo/work/goals/${only.id}`, { action: "start" })).status, 200);
+  assert.match(prompts.at(-1).text, /Spend nothing\./);
+  assert.match((await tool("may_spend", { what: "Apple Developer Program", amount: 99 })).text, /^No: .* isn't one of the plan's spend lines/);
+});
+
 test("the goal as it goes: tracks with real progress only, steps added as the plan changes, what waits for you told quietly (or waking you if you asked), whether you're here, and the report told once", async () => {
   await startedGoal();
   const moved = await tool("goal_progress", { steps: [{ step: 1, state: "done" }, { step: 2, state: "doing", progress: 0.5, note: "comparing registrars" }], add: ["Write the launch post"] });

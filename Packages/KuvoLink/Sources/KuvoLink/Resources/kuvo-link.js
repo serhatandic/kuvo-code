@@ -10688,6 +10688,9 @@ function proposeGoal(bot, given, file = GOALS_FILE) {
   noteWorkChanged(bot.bot);
   return { goal: shown(made), ...yours ? { yours } : {} };
 }
+var wordsOf = (said) => said.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+var names = (check, what) => what.length > 1 && check.some((_, at) => what.every((word, by) => check[at + by] === word));
+var pricesIn = (said) => [...said.matchAll(/\d+(?:[.,]\d+)?/g)].map((each) => Number(each[0].replace(",", ".")));
 function planGiven(given) {
   const goal = text(given.goal, 2000);
   if (!goal)
@@ -10710,9 +10713,12 @@ function planGiven(given) {
     checks.push({ id: `c${checks.length + 1}`, text: said, ...text(each.detail, 300) ? { detail: text(each.detail, 300) } : {}, state, by: "bot", ...site ? { site } : {}, ...url && state === "needs" ? { action: { kind: "open", label: text(each.button, 30) ?? "Open", url } } : {} });
   }
   const spend = [];
+  const yours = checks.filter((each) => each.state === "needs").map((each) => ({ words: wordsOf(each.text), prices: pricesIn(`${each.text} ${each.detail ?? ""}`) }));
   for (const each of Array.isArray(given.spend) ? given.spend.slice(0, 10) : []) {
     if (!isObject(each) || !text(each.what, 200) || typeof each.cap !== "number" || !(each.cap > 0))
       return { refused: "Each spend line needs what it's for (what) and a cap above 0 (cap)." };
+    if (yours.some((check) => check.prices.includes(each.cap) && names(check.words, wordsOf(each.what))))
+      continue;
     const per = PERIODS.includes(each.per) ? each.per : "goal";
     spend.push({ what: text(each.what, 200), cap: each.cap, currency: (text(each.currency, 3) ?? "USD").toUpperCase(), per, spent: 0 });
   }
@@ -21970,10 +21976,12 @@ async function proposeGoalTool(caller, args) {
     return refused(outcome.refused);
   const { goal, yours: set } = outcome;
   const yours = goal.checks.filter((check) => check.state === "needs").map((check) => check.text);
+  const theirs = (Array.isArray(args.spend) ? args.spend.slice(0, 10) : []).map((each) => isObject(each) && typeof each.what === "string" ? each.what.trim() : "").filter((what) => what && !goal.spend.some((line) => line.what.toLowerCase() === what.slice(0, 200).toLowerCase()));
+  const paid = theirs.length ? ` ${theirs.join("; ")} ${theirs.length > 1 ? "are" : "is"} the user's to pay, as one of the checks: not yours to spend, so not in the plan's spending.` : "";
   const alone = goal.alone ? "" : ` ${HERE[0].toUpperCase()}${HERE.slice(1)} can't work on it alone yet, so once it starts, what your sessions ask waits for the user rather than for you.`;
   const names = set ? set.projects.map((each) => `"${each}"`).join(", ") : "";
   const projects = !set ? "" : set.kept ? ` The user set its projects on the card: ${names}. They're kept: call them that.` : ` The user had set its projects on the card to ${names}; the ones you gave replace them. If they didn't ask you to change those, propose it again with theirs.`;
-  return said(`The card is up on ${HERE}: the user starts the goal from it, or says not now.${projects} ${yours.length ? `What's theirs to do first: ${yours.join("; ")}. ` : ""}Don't start the work until you hear [Goal started]. If they change something, propose it again as it is now.${alone}`);
+  return said(`The card is up on ${HERE}: the user starts the goal from it, or says not now.${projects} ${yours.length ? `What's theirs to do first: ${yours.join("; ")}. ` : ""}Don't start the work until you hear [Goal started].${paid} If they change something, propose it again as it is now.${alone}`);
 }
 async function goalProgressTool(caller, args) {
   const bot = goalBot(caller);

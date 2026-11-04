@@ -853,7 +853,10 @@ beside it.
   checks?: [{text, ok?, detail?, url?, button?}], spend?: [{what, cap, currency?, per?:
   day|week|month|goal}], projects?: [name | full path], ends?, digest?:
   day|week|milestones|none}`) puts the card up, replacing one it proposed before (refused while one
-  runs; `digest` is a day's for a plan in phases or of more than 12 steps unless it says);
+  runs; `digest` is a day's for a plan in phases or of more than 12 steps unless it says; a spend line
+  is only what the bot spends itself, so one whose `what` a check that needs you names (two words or
+  more of it, in a row) at its cap's price is yours to pay, like a membership, and isn't kept, the
+  reply telling the bot);
   `goal_progress` (`{steps: [{step, state?: todo|doing|done|waiting|paused|skipped, progress?: 0–1,
   note?, until?, app?}]}`, `until` a time like `2026-11-02T09:00` that a step can only start at (null
   takes it away; taken up, it goes; `app: null` takes the step's away), `add?: [text | {text, detail?, site?, app?, after?}]`, `waiting?: {kind: you|judgment|outside, text,
