@@ -722,9 +722,9 @@ client shows it from the same routes.
 - **Models that can't answer** (`work/unanswering.ts`, `run/work/unanswering.json`, bridge
   0.9.194): when a session a conversation started fails at its account (the engine's
   `provider.quota` or `provider.budget-limit`: out of funds or at a plan's spend, which holds back
-  that provider's models that cost something, its free ones spending none; `provider.auth`, signed
-  out, all of them), or at a model's own limit (`provider.rate-limit`,
-  `provider.model-budget-limit`, `provider.free-limit`, or an untyped error whose words say a limit,
+  that provider's models that cost something, its free ones spending none; `provider.free-limit`,
+  its free usage spent, its free ones; `provider.auth`, signed out, all of them), or at a model's
+  own limit (`provider.rate-limit`, `provider.model-budget-limit`, or an untyped error whose words say a limit,
   not that it's overloaded or at capacity), that model. Its starter's `[Session failed]` line says
   so in the engine's words; `list_models` leaves them out, naming them at its end; an agent's
   `start_session` on one still starts it, and says why it may fail and the model the agent runs on,
@@ -732,7 +732,8 @@ client shows it from the same routes.
   `start_session` that waits ends as soon as the new session stops, with its error (an error
   result), rather than waiting for a reply that won't come. A hold lasts until the reset the error
   names, counted from when it failed, else half an hour (a rate limit, three minutes), or until a
-  session on it answers (a free one says nothing of its account's funds), or until that account's
+  session on it answers (a free one says nothing of its account's funds, nor a paid one of its free
+  usage), or until that account's
   key or sign-in changes (the engine's `credential.switched` or `credential.removed`, and
   `integration.updated` or `provider.updated`, for the account they name, or every account when
   they name none). `read_conversation` shows a turn's error where it stopped.

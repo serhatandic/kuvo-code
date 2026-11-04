@@ -204,3 +204,21 @@ test("a session started and waited for whose model fails at once answers its sta
   assert.match(text(waited), /^Started "Harness ping" in the-app \(address ses_new\d+\): Claude Opus 5\.5 · high\. It stopped with an error before it answered: No paid opencode model can answer now: Upstream request failed: Insufficient account funds/);
   assert.match(text(await call("list_models", {})), /Left out, as a session on them just failed:\n- No paid opencode model/, "and the box knows it can't, without waiting for the watcher");
 });
+
+// As OpenCode's free usage runs out on a computer with no account: every free model fails the same.
+test("a free model at its account's free-usage limit holds back the account's free ones, until a free one answers", async () => {
+  prompts = [];
+  const spent = { type: "provider.free-limit", message: "Free usage limit reached. Connect a provider or subscribe to OpenCode Go to keep going, or switch models.", status: 429 };
+  sessions.ses_pickle = { id: "ses_pickle", title: "Sketch the screens", location: { directory: app }, model: { providerID: "opencode", id: "deepseek-v4.1-flash-free" }, time: { created: Date.now(), updated: 1 }, metadata: { kuvo: { startedBy: "ses_lead", by, depth: 1, wake: ["finished", "asks"] } } };
+  await watch({ type: "session.execution.failed", data: { sessionID: "ses_pickle", error: spent } });
+  await runAll();
+  assert.match(prompts.map(prompt => prompt.text).join("\n\n"), /\[Session failed\] "Sketch the screens" in the-app \(address ses_pickle\) stopped: No free opencode model can answer now: Free usage limit reached/m);
+  const listed = text(await call("list_models", {}));
+  assert.doesNotMatch(listed, /^- opencode\/deepseek-v4\.1-flash-free/m, "no free one of that account is offered");
+  assert.match(listed, /- No free opencode model can answer now: Free usage limit reached/);
+  await watch({ type: "session.execution.succeeded", data: { sessionID: "ses_build" } });
+  assert.match(text(await call("list_models", {})), /- No free opencode model can answer now/, "a paid one answering says nothing of the free usage");
+  await watch({ type: "session.execution.succeeded", data: { sessionID: "ses_free" } });
+  assert.doesNotMatch(text(await call("list_models", {})), /No free opencode model/, "a free one answering does");
+  await runAll();
+});

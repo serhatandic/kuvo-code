@@ -9571,8 +9571,9 @@ var UNANSWERING = path40.join(WORK_FOLDER, "unanswering.json");
 var UNKNOWN_RESET = 30 * 60000;
 var BRIEF_RESET = 3 * 60000;
 var FUNDS = ["provider.quota", "provider.budget-limit"];
-var ACCOUNT = [...FUNDS, "provider.auth"];
-var MODEL_LIMITS = ["provider.rate-limit", "provider.model-budget-limit", "provider.free-limit", "limit"];
+var FREE_USAGE = "provider.free-limit";
+var ACCOUNT = [...FUNDS, FREE_USAGE, "provider.auth"];
+var MODEL_LIMITS = ["provider.rate-limit", "provider.model-budget-limit", "limit"];
 function scopeOf(error) {
   if (ACCOUNT.includes(error.type))
     return "provider";
@@ -9626,26 +9627,28 @@ function change(file, now, edit) {
 }
 var unansweringNow = (file = UNANSWERING, now = Date.now()) => read(file, now);
 function holdOf(model, held) {
-  return held.find((each) => each.key === model.providerID && !(each.paid && model.free)) ?? held.find((each) => each.key === `${model.providerID}/${model.id}`) ?? null;
+  return held.find((each) => each.key === model.providerID && covers(each, model)) ?? held.find((each) => each.key === `${model.providerID}/${model.id}`) ?? null;
 }
+var covers = (held, model) => !(held.paid && model.free) && !(held.free && !model.free);
 function noteFailed(model, error, file = UNANSWERING, now = Date.now()) {
   let scope = scopeOf(error);
   if (!scope)
     return null;
   const funds = FUNDS.includes(error.type);
-  if (scope === "provider" && funds && model.free)
+  const freeUsage = error.type === FREE_USAGE;
+  if (scope === "provider" && (funds && model.free || freeUsage && !model.free))
     scope = "model";
   const at = Math.min(error.at ?? now, now);
   const reset = resetsIn(error.message, at);
   const brief = !reset && (error.type === "provider.rate-limit" || scope === "model" && /\b429\b|rate.?limit|too many requests/i.test(error.message));
-  const held = { key: keyOf(model, scope), scope, ...scope === "provider" && funds ? { paid: true } : {}, why: error.message || "It's at a usage limit.", at, until: reset ?? at + (brief ? BRIEF_RESET : UNKNOWN_RESET) };
+  const held = { key: keyOf(model, scope), scope, ...scope === "provider" && funds ? { paid: true } : scope === "provider" && freeUsage ? { free: true } : {}, why: error.message || "It's at a usage limit.", at, until: reset ?? at + (brief ? BRIEF_RESET : UNKNOWN_RESET) };
   if (held.until <= now)
     return null;
-  change(file, now, (all) => [...all.filter((each) => each.key !== held.key), held]);
+  change(file, now, (all) => [...all.filter((each) => each.key !== held.key || Boolean(each.paid) !== Boolean(held.paid) || Boolean(each.free) !== Boolean(held.free)), held]);
   return held;
 }
 function noteAnswered(model, file = UNANSWERING, now = Date.now()) {
-  const clears = (each) => each.key === `${model.providerID}/${model.id}` || each.key === model.providerID && !(each.paid && model.free);
+  const clears = (each) => each.key === `${model.providerID}/${model.id}` || each.key === model.providerID && covers(each, model);
   if (!read(file, now).some(clears))
     return;
   change(file, now, (all) => all.filter((each) => !clears(each)));
@@ -9654,15 +9657,15 @@ async function answeredOn(target, model, file = UNANSWERING, now = Date.now()) {
   const held = read(file, now);
   if (!held.some((each) => each.key === model.providerID || each.key === `${model.providerID}/${model.id}`))
     return;
-  const free = held.some((each) => each.key === model.providerID && each.paid) ? await freeThere(target, model) : false;
+  const free = held.some((each) => each.key === model.providerID && (each.paid || each.free)) ? await freeThere(target, model) : false;
   noteAnswered({ ...model, free }, file, now);
 }
 async function failedOn(target, model, error, file = UNANSWERING, now = Date.now()) {
-  const free = model.free ?? (FUNDS.includes(error.type) ? await freeThere(target, model) : false);
+  const free = model.free ?? (FUNDS.includes(error.type) || error.type === FREE_USAGE ? await freeThere(target, model) : false);
   return noteFailed({ ...model, free }, error, file, now);
 }
 function holdWords(held) {
-  const what = held.scope === "provider" ? `No ${held.paid ? "paid " : ""}${held.key} model can answer now` : `${held.key} can't answer now`;
+  const what = held.scope === "provider" ? `No ${held.paid ? "paid " : held.free ? "free " : ""}${held.key} model can answer now` : `${held.key} can't answer now`;
   return `${what}: ${cut(held.why.replace(/\.+$/, ""), 200)} (since ${resetTime(held.at)}; offered again after ${resetTime(held.until)}, or once a session on it answers)`;
 }
 var ACCOUNT_CHANGES = new Set(["credential.updated", "credential.switched", "credential.removed", "integration.updated", "provider.updated"]);

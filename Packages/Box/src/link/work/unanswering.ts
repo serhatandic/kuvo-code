@@ -1,7 +1,7 @@
 // Models that can't answer now (`run/work/unanswering.json`): one whose session's turn failed at its
 // account (out of funds, at a plan's limit, signed out), which holds back every model of that
-// provider (those that cost something, for funds: a free one spends none), or at its own limit (a
-// rate limit), which holds back that model. Its starter hears why;
+// provider (those that cost something, for funds: a free one spends none; the free ones, for the
+// free usage it allows), or at its own limit (a rate limit), which holds back that model. Its starter hears why;
 // list_models leaves them out, and start_session on one says so and names one that can, so a bot
 // moves its work to a model that can rather than trying the same again. None is kept for good: each
 // lasts until its reset (when the error says), else half an hour (a rate limit a few minutes), or
@@ -30,12 +30,13 @@ interface ModelRef {
 }
 
 /** What's held back: a provider ("opencode") or one model ("opencode/gpt-6.1-sol"), only those of
- * it that cost something (`paid`: its funds ran out), why in its engine's words, since when and
- * until when. */
+ * it that cost something (`paid`: its funds ran out) or only its free ones (`free`: its free usage
+ * did), why in its engine's words, since when and until when. */
 export interface Unanswering {
   key: string;
   scope: "provider" | "model";
   paid?: boolean;
+  free?: boolean;
   why: string;
   at: number;
   until: number;
@@ -51,8 +52,9 @@ export interface TurnError {
 // The engine's words for an account that can't (its funds, its plan's spend), or that's signed out;
 // for a model at its own limit.
 const FUNDS = ["provider.quota", "provider.budget-limit"];
-const ACCOUNT = [...FUNDS, "provider.auth"];
-const MODEL_LIMITS = ["provider.rate-limit", "provider.model-budget-limit", "provider.free-limit", "limit"];
+const FREE_USAGE = "provider.free-limit";
+const ACCOUNT = [...FUNDS, FREE_USAGE, "provider.auth"];
+const MODEL_LIMITS = ["provider.rate-limit", "provider.model-budget-limit", "limit"];
 
 /** Whether `error` says the model can't answer for now, and how widely: the whole account, or the
  * model alone. An error the engine didn't type counts by its words, if they say a limit (not that
@@ -118,8 +120,10 @@ export const unansweringNow = (file = UNANSWERING, now = Date.now()): Unanswerin
 /** Why `model` can't answer now, if it can't: its provider's hold (one for funds, if it costs
  * something), or its own. */
 export function holdOf(model: ModelRef, held: Unanswering[]): Unanswering | null {
-  return held.find(each => each.key === model.providerID && !(each.paid && model.free)) ?? held.find(each => each.key === `${model.providerID}/${model.id}`) ?? null;
+  return held.find(each => each.key === model.providerID && covers(each, model)) ?? held.find(each => each.key === `${model.providerID}/${model.id}`) ?? null;
 }
+// Whether a provider's hold is one on `model`: its paid ones', or its free ones', or all of them.
+const covers = (held: Unanswering, model: ModelRef) => !(held.paid && model.free) && !(held.free && !model.free);
 
 /** `model`'s turn failed with `error`: held back, when that says it can't answer for now. A free
  * model that fails for want of funds is held alone. Counted from when it failed: one that's over
@@ -128,20 +132,22 @@ export function noteFailed(model: ModelRef, error: TurnError, file = UNANSWERING
   let scope = scopeOf(error);
   if (!scope) return null;
   const funds = FUNDS.includes(error.type);
-  if (scope === "provider" && funds && model.free) scope = "model";
+  const freeUsage = error.type === FREE_USAGE;
+  if (scope === "provider" && ((funds && model.free) || (freeUsage && !model.free))) scope = "model";
   const at = Math.min(error.at ?? now, now);
   const reset = resetsIn(error.message, at);
   const brief = !reset && (error.type === "provider.rate-limit" || (scope === "model" && /\b429\b|rate.?limit|too many requests/i.test(error.message)));
-  const held: Unanswering = { key: keyOf(model, scope), scope, ...(scope === "provider" && funds ? { paid: true } : {}), why: error.message || "It's at a usage limit.", at, until: reset ?? at + (brief ? BRIEF_RESET : UNKNOWN_RESET) };
+  const held: Unanswering = { key: keyOf(model, scope), scope, ...(scope === "provider" && funds ? { paid: true } : scope === "provider" && freeUsage ? { free: true } : {}), why: error.message || "It's at a usage limit.", at, until: reset ?? at + (brief ? BRIEF_RESET : UNKNOWN_RESET) };
   if (held.until <= now) return null;
-  change(file, now, all => [...all.filter(each => each.key !== held.key), held]);
+  // (In place of the same one: an account's free models may be held apart from its paid ones.)
+  change(file, now, all => [...all.filter(each => each.key !== held.key || Boolean(each.paid) !== Boolean(held.paid) || Boolean(each.free) !== Boolean(held.free)), held]);
   return held;
 }
 
 /** A session on `model` answered: it, and its provider, can again (a free one says nothing of the
- * provider's funds). */
+ * provider's funds, nor a paid one of its free usage). */
 export function noteAnswered(model: ModelRef, file = UNANSWERING, now = Date.now()): void {
-  const clears = (each: Unanswering) => each.key === `${model.providerID}/${model.id}` || (each.key === model.providerID && !(each.paid && model.free));
+  const clears = (each: Unanswering) => each.key === `${model.providerID}/${model.id}` || (each.key === model.providerID && covers(each, model));
   if (!read(file, now).some(clears)) return;
   change(file, now, all => all.filter(each => !clears(each)));
 }
@@ -151,20 +157,20 @@ export function noteAnswered(model: ModelRef, file = UNANSWERING, now = Date.now
 export async function answeredOn(target: Target, model: ModelRef, file = UNANSWERING, now = Date.now()): Promise<void> {
   const held = read(file, now);
   if (!held.some(each => each.key === model.providerID || each.key === `${model.providerID}/${model.id}`)) return;
-  const free = held.some(each => each.key === model.providerID && each.paid) ? await freeThere(target, model) : false;
+  const free = held.some(each => each.key === model.providerID && (each.paid || each.free)) ? await freeThere(target, model) : false;
   noteAnswered({ ...model, free }, file, now);
 }
 
 /** `model`, at `target`, failed with `error`: as noteFailed, knowing whether it's free where that
  * matters (a failure for want of funds). */
 export async function failedOn(target: Target, model: ModelRef, error: TurnError, file = UNANSWERING, now = Date.now()): Promise<Unanswering | null> {
-  const free = model.free ?? (FUNDS.includes(error.type) ? await freeThere(target, model) : false);
+  const free = model.free ?? (FUNDS.includes(error.type) || error.type === FREE_USAGE ? await freeThere(target, model) : false);
   return noteFailed({ ...model, free }, error, file, now);
 }
 
 /** What a hold is, in a line for an agent: "No opencode model can answer now: …". */
 export function holdWords(held: Unanswering): string {
-  const what = held.scope === "provider" ? `No ${held.paid ? "paid " : ""}${held.key} model can answer now` : `${held.key} can't answer now`;
+  const what = held.scope === "provider" ? `No ${held.paid ? "paid " : held.free ? "free " : ""}${held.key} model can answer now` : `${held.key} can't answer now`;
   return `${what}: ${cut(held.why.replace(/\.+$/, ""), 200)} (since ${resetTime(held.at)}; offered again after ${resetTime(held.until)}, or once a session on it answers)`;
 }
 
