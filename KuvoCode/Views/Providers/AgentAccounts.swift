@@ -25,6 +25,8 @@ struct SubscriptionsSection: View {
     /// The agents shown: this Mac's, or a machine's (`agentsBridge`).
     @Environment(\.agentsBridge) private var bridge
     private var agents: OutsideAgents { bridge ?? app.agents }
+    /// The computer whose page this is.
+    @Environment(\.settingsBox) private var box
     @Environment(\.colorScheme) private var scheme
     /// Another account asked of a product, from the header's Add Account menu.
     @State private var addRequest: AddRequest?
@@ -69,8 +71,9 @@ struct SubscriptionsSection: View {
                     .fixedSize()
                     .help(shows == .agents ? "Another account, signed in on its own: each shows in the model picker" : "Another account: the engine uses one at a time")
                 }
-                if shows == .agents, !updatable.isEmpty {
-                    Button { app.updateAllAgents() } label: {
+                // Only while its agents show: a machine's that aren't running show none.
+                if shows == .agents, !updatable.isEmpty, machine.map(isRunning) != false {
+                    Button { app.updateAllAgents(on: box) } label: {
                         Label("Update All", systemImage: "arrow.down.circle")
                             .font(.callout)
                             .fixedSize()
@@ -134,14 +137,16 @@ struct SubscriptionsSection: View {
         .task(id: agents.api != nil) {
             if shows == .agents { await catalog.refreshAgents(fresh: true) }
         }
+        // How an update went is news while you're here, not the next time you look.
+        .onDisappear { if shows == .agents { agents.forgetUpdates() } }
     }
 
-    /// What Update All updates, on this Mac and your machines, not updating already: each named
-    /// with where it is.
+    /// What Update All updates, on this page's computer, not updating already; each shows how it
+    /// goes on its row or tile.
     private var updatable: [String] {
-        app.outdatedAgents.compactMap { outdated in
-            guard !app.agents(for: outdated.box).updating.contains(outdated.integration.id) else { return nil }
-            return "\(OutsideAgents.name(outdated.integration.id)) on \(app.name(of: outdated.box))"
+        app.outdatedAgents(on: box).compactMap { outdated in
+            guard !agents.isUpdating(outdated.id) else { return nil }
+            return OutsideAgents.name(outdated.id)
         }
     }
 
@@ -280,8 +285,8 @@ private struct ProductBlock: View {
     private var latest: String? { main.metadata?["outdated"]?.bool == true ? main.metadata?["latestVersion"]?.string : nil }
     private var updates: Bool { main.metadata?["updates"]?.bool == true }
     private var updateCommand: String? { main.metadata?["updateCommand"]?.string }
-    private var isUpdating: Bool { agents.updating.contains(main.id) }
-    private var updateFailure: String? { agents.updateFailures[main.id] }
+    private var isUpdating: Bool { agents.isUpdating(main.id) }
+    private var updateFailure: String? { agents.updateFailure(main.id) }
     private var isInstalling: Bool { agents.installing.contains(main.id) }
     private var installFailure: String? { agents.installFailures[main.id] }
 
@@ -346,7 +351,7 @@ private struct ProductBlock: View {
         } message: {
             Text(failure ?? "")
         }
-        .alert("Couldn't Update \(title)", isPresented: Binding(get: { updateFailure != nil }, set: { if !$0 { agents.updateFailures[main.id] = nil } })) {
+        .alert("Couldn't Update \(title)", isPresented: Binding(get: { updateFailure != nil }, set: { if !$0 { agents.dismissUpdateFailure(main.id) } })) {
             if let updateCommand {
                 Button("Copy Command") { Clipboard.copy(updateCommand) }
             }
@@ -383,14 +388,22 @@ private struct ProductBlock: View {
 
     /// What it needs from you, if anything: installing again, or an update.
     private enum Action {
-        case installing, install(command: String), updating, update(to: String)
+        case installing, install(command: String), updating, update(to: String), updated(String)
+        /// Asked to update, it was already on the newest.
+        case current
     }
 
     private var action: Action? {
         if isInstalling { return .installing }
         if isAgent, !isInstalled, let installCommand { return .install(command: installCommand) }
-        if isUpdating { return .updating }
-        return latest.map { .update(to: $0) }
+        switch agents.updateStatus(main) {
+        case .updating: return .updating
+        case .available(let latest): return .update(to: latest)
+        case .updated(let version): return .updated(version)
+        case .current: return .current
+        // Not updated: its update offered again, if there still is one.
+        case .failed, nil: return latest.map(Action.update)
+        }
     }
 
     /// What it needs from you, on the product's line: installing again, or an update; and another
@@ -424,6 +437,16 @@ private struct ProductBlock: View {
                         .lineLimit(1)
                         .foregroundStyle(.secondary)
                 }
+            case .updated(let version):
+                Label("Updated to \(version)", systemImage: "checkmark.circle")
+                    .font(.callout)
+                    .lineLimit(1)
+                    .foregroundStyle(.secondary)
+            case .current:
+                Label("Up to date", systemImage: "checkmark.circle")
+                    .font(.callout)
+                    .lineLimit(1)
+                    .foregroundStyle(.secondary)
             case .update(let latest):
                 if updates {
                     Button(action: update) {
@@ -508,11 +531,20 @@ private struct SubscriptionTile: View {
 
     private var isInstalling: Bool { agents.installing.contains(product.main.id) }
     private var installFailure: String? { agents.installFailures[product.main.id] }
+    /// Its program's update (Update All updates one you haven't signed in to too).
+    private var update: OutsideAgents.UpdateStatus? { product.isAgent ? agents.updateStatus(product.main) : nil }
 
     private var hint: String {
         if isInstalling { return "Installing…" }
         if installCommand != nil { return "Installs, then signs in" }
-        return product.isAgent ? "Coding agent" : "Your plan's models"
+        switch update {
+        case .updating: return "Updating…"
+        case .updated(let version): return "Updated to \(version)"
+        case .current: return "Up to date"
+        case .failed: return "Couldn't update"
+        case .available(let latest): return "\(latest) is out"
+        case nil: return product.isAgent ? "Coding agent" : "Your plan's models"
+        }
     }
 
     var body: some View {
@@ -530,7 +562,7 @@ private struct SubscriptionTile: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 0)
-            if isInstalling { Spinner(size: 12) }
+            if isInstalling || update == .updating { Spinner(size: 12) }
         }
         .padding(10)
         .background(SettingsMetrics.groupFill(scheme), in: .rect(cornerRadius: SettingsMetrics.groupRadius))
@@ -561,6 +593,14 @@ private struct SubscriptionTile: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(installFailure ?? "")
+        }
+        .alert("Couldn't Update \(product.title)", isPresented: Binding(get: { agents.updateFailure(product.main.id) != nil }, set: { if !$0 { agents.dismissUpdateFailure(product.main.id) } })) {
+            if let command = product.main.metadata?["updateCommand"]?.string {
+                Button("Copy Command") { Clipboard.copy(command) }
+            }
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(agents.updateFailure(product.main.id) ?? "")
         }
     }
 

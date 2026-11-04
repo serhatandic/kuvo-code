@@ -94,7 +94,8 @@ export function update(definition: MaintenanceDefinition, temporary: string): Pr
     const ran = await runGroup(before.command[0], before.command.slice(1), { cwd: temporary, env: { ...ownEnvironment(), ...before.env }, timeout: 10 * 60_000 })
     const after = await maintenance(definition, true)
     const changed = Boolean(after.installed && after.installed !== before.installed)
-    if (changed || (after.installed && !isOutdated(after))) return { updated: changed, version: after.installed }
+    // Unchanged, it's up to date only if the newest is known to be what it has.
+    if (changed || (after.installed && after.latest && !isOutdated(after))) return { updated: changed, version: after.installed }
     const output = plain(ran.stderr + "\n" + ran.stdout).trim().split("\n").slice(-6).join("\n").trim()
     return {
       updated: false,

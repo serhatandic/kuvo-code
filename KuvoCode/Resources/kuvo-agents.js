@@ -9334,7 +9334,7 @@ function update(definition, temporary) {
     const ran = await runGroup(before.command[0], before.command.slice(1), { cwd: temporary, env: { ...ownEnvironment(), ...before.env }, timeout: 10 * 60000 });
     const after = await maintenance(definition, true);
     const changed = Boolean(after.installed && after.installed !== before.installed);
-    if (changed || after.installed && !isOutdated(after))
+    if (changed || after.installed && after.latest && !isOutdated(after))
       return { updated: changed, version: after.installed };
     const output = plain2(ran.stderr + `
 ` + ran.stdout).trim().split(`
@@ -22932,4 +22932,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 3a891bd6bccf6961d172499b52d570dd301d3faf6e0cd4d527687c11f12c6072
+// Built from Packages/Box/src/agents b2cd3aeddfc5251fce3c68dc26a24f5876c5e2f2cd715850e0b41e5773ffd28d
