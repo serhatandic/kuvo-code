@@ -825,15 +825,15 @@ length, a couple of hours or a month, and it takes it end to end. It's the conve
 ("Goals", below: the agents bridge keeps the bot at it turn after turn), with a plan kept here
 beside it.
 - **Tools** (a bot's conversation only): `propose_goal` (`{goal, title?, steps: [text | {text, detail?,
-  site?, after?: [step number]}],
+  site?, app?, after?: [step number]}],
   checks?: [{text, ok?, detail?, url?, button?}], spend?: [{what, cap, currency?, per?:
   day|week|month|goal}], public?: [text], projects?: [name | full path], ends?, digest?:
   day|week|milestones|none}`) puts the card up, replacing one it proposed before (refused while one
   runs; `digest` is a day's for a plan in phases or of more than 12 steps unless it says);
   `goal_progress` (`{steps: [{step, state?: todo|doing|done|waiting|paused|skipped, progress?: 0–1,
-  note?, until?}]}`, `until` a time like `2026-11-02T09:00` that a step can only start at (null
-  takes it away; taken up, it goes), `add?: [text | {text, detail?, site?, after?}]`, `waiting?: {kind: you|judgment|outside, text,
-  detail?, url?}`, `resolved?: [id or words]` (what waited and is dealt with), `spent?: [{what,
+  note?, until?, app?}]}`, `until` a time like `2026-11-02T09:00` that a step can only start at (null
+  takes it away; taken up, it goes; `app: null` takes the step's away), `add?: [text | {text, detail?, site?, app?, after?}]`, `waiting?: {kind: you|judgment|outside, text,
+  detail?, url?, app?}`, `resolved?: [id or words]` (what waited and is dealt with), `spent?: [{what,
   amount}]` (one on no spend line is kept as waiting, kind `outside`), `watching?: [text]}`; all
   checked before any is kept; it says whether you're here); `may_publish` (`{step}`: yes only for a public step you switched on); `may_spend` (`{what,
   amount}`: whether it fits the line's cap in its period now); `finish_goal` (`{report, watching?}`).
@@ -867,12 +867,12 @@ beside it.
   as the plan's (`paused` with `session` the bot's conversation).
 - **`GET kuvo/work/goals`** and **`GET kuvo/work/goals/events`** (ndjson, now and at each change) →
   `{goals: [{id, bot, name, session, goal, title?, state: proposed|running|done|stopped|declined, steps:
-  [{id, text, state, progress?, note?, detail?, phase?, site?, after?, sessions?, resumes?, until?,
+  [{id, text, state, progress?, note?, detail?, phase?, site?, app?: {name, id?}, after?, sessions?, resumes?, until?,
   began?, ended?}], checks: [{id, text,
   detail?, state: ok|needs|failed, by: bot|box, site?, action?: {kind: open|projectsFolder, label, url?}}], spend:
   [{what, cap, currency, per, spent, until?}], public: [{id, text, on}], projects, wake, digest,
   ends?, proposed, started?, ended?, waiting: [{id, kind: you|judgment|outside|ask, text, detail?,
-  url?, site?, session?, at}], paused: [{why, until?, session?}], waited, watching, next?, lastDigest?: {at, text},
+  url?, site?, app?: {name, id?}, session?, at}], paused: [{why, until?, session?}], waited, watching, next?, lastDigest?: {at, text},
   report?, alone}]}` (`next`: when it goes on next, while nothing of it is at work and nothing can be
   before a time: the bot's soonest wake-up, or the steps it put off; clients say "Next: Mon 09:00"): each bot's latest, while it's proposed or running, or ended within a day. Kept
   in `run/work/goals.json`; `kuvo/work/events` moves too. While it's proposed, the box's own checks
@@ -887,6 +887,18 @@ beside it.
   it) is where it's done, and its mark is that site's own icon, which each client loads from the
   site itself; a step done on the computer has none, so no mark. `phase` is still kept from older
   bots, and the apps don't show it.
+- **Apps** (bridge 0.9.195, feature `work.goals.apps`, `work/apps.ts`): a step, or what waits, done
+  in an app on the computer names it (`app`, "Xcode"). The box looks for it on its own computer as
+  the tool is called, once per name (a name not found, again a day on): a Mac's in its Applications
+  folders (the system's, yours, their Utilities) by name, else Spotlight's by display name, its icon
+  drawn by AppKit at 64 px (asset catalogs' too); Linux's by a desktop entry's `Name=` (any
+  language's) through `XDG_DATA_HOME` and `XDG_DATA_DIRS`, and flatpak's and snap's exported entries,
+  its icon a PNG by path or from `hicolor` (the smallest of at least 64 px, else the largest) or
+  `pixmaps`. Found, `app` is `{name, id}`, the app's own name and its bundle's or desktop entry's
+  id, and **`GET kuvo/work/apps/icon?app=<id>`** gives its icon (`image/png`; 404 for none, 400 for
+  an id that isn't one). Not found, or with an icon that's SVG alone, it has no `id`, and clients
+  show no mark. A step can have both `site` and `app`; clients show the site's. Kept in the box's
+  `apps` folder (`found.json`, `<id>.png`).
 - **Alone, or with you there**: a goal goes on alone only where the box's commands run in the
   sandbox (`sandboxOn`: `kuvo/sandbox`'s `on`, and for a bot on a coding agent its `agents` too; a
   test box says yes with `KUVO_TEST_SANDBOX_ON=1`, never the real app's, `run.kuvo.code/box`, whose
@@ -2414,6 +2426,8 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `queue` | `kuvo/sessions/<id>/queue…`, `…/stop` and `kuvo/sessions/queues/events`: the box carries the queue (bridge 0.9.100) |
 | `queue.waits` | A Stop holds the conversation: what arrives waits on the box (`waiting`), `…/queue/add` and `DELETE …/queue/<item>` (bridge 0.9.128) |
 | `work` | a bot's work ("Work"): `kuvo/work`, `…/events`, `kuvo/bots/<id>/stop-all`, `start_session`'s and `kuvo/sessions`' new fields, the work tools, `limits` in `kuvo/bots` (bridge 0.9.106) |
+| `work.goals` | a bot's goal ("Work", Goals): `kuvo/work/goals…`, and its tools (bridge 0.9.122) |
+| `work.goals.apps` | `app` on a goal's steps and what waits, and `GET kuvo/work/apps/icon` ("Work", Goals, Apps; bridge 0.9.195) |
 | `work.projects` | a bot's projects ("Work", Projects): `make_project`, `list_projects`, `kuvo/work/asks`, `…/events`, `POST kuvo/work/asks/<id>`, `kuvo/work/settings`, `POST kuvo/projects/new`, `madeBy` on projects, `allowed` in `kuvo/bots` (bridge 0.9.107) |
 | `search` | `kuvo/search` |
 | `personalities` | `kuvo/personalities…` |

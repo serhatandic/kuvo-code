@@ -35,13 +35,14 @@ import { asksIn, permissionWords } from "./answers";
 import { keepAwake, keepsAwake, onPower } from "./awake";
 import { noteWorkChanged, WORK_FOLDER } from "./changes";
 import { sandboxOn } from "./sandbox";
+import { appNamed, appNameGiven } from "./apps";
 import { namedPlace, shownPath } from "./projects";
 import { projectsFolder } from "./settings";
 import { stopBotWork } from "./stop";
 import { ofBot, workingNow, workSessions } from "./tree";
 import type { Listed } from "./tree";
 import type { Target } from "../../shared/records";
-import type { GoalCheckShape, GoalPlanShape, GoalStepShape, GoalWaitingShape } from "../../shared/routes/work";
+import type { GoalAppShape, GoalCheckShape, GoalPlanShape, GoalStepShape, GoalWaitingShape } from "../../shared/routes/work";
 import type { Notice } from "../notices/notice";
 
 export const GOALS_FILE = path.join(WORK_FOLDER, "goals.json");
@@ -257,16 +258,31 @@ const DIGESTS = ["day", "week", "milestones", "none"] as const;
 // One line of words: what wraps (a newline, runs of spaces) said as one space.
 const line = (value: unknown, most: number): string | null => text(typeof value === "string" ? value.replace(/\s+/g, " ") : value, most);
 
-// A step as given: its words, or {text, detail, phase, site, after: [step numbers]}.
-function stepGiven(each: unknown): (Pick<GoalStepShape, "text" | "detail" | "phase" | "site"> & { after?: number[] }) | null {
+// The app something is done in, as the bot names it ("Xcode", or {name}): with its id once it's
+// found on this computer (`findApps`, as the tools are called).
+const appGiven = (value: unknown): GoalAppShape | null => {
+  const name = appNameGiven(value);
+  return name ? appNamed(name) : null;
+};
+
+/** The apps a goal's tool call names, for the box to look for before it's kept (`findApps`). */
+export function appsNamed(given: Record<string, unknown>): string[] {
+  const named = (value: unknown) => (isObject(value) ? [appNameGiven(value.app)] : []);
+  const lists = [given.steps, given.add].flatMap(each => (Array.isArray(each) ? each : []));
+  return [...lists.flatMap(named), ...named(given), ...named(given.waiting)].filter((each): each is string => Boolean(each));
+}
+
+// A step as given: its words, or {text, detail, phase, site, app, after: [step numbers]}.
+function stepGiven(each: unknown): (Pick<GoalStepShape, "text" | "detail" | "phase" | "site" | "app"> & { after?: number[] }) | null {
   if (typeof each === "string") return text(each, 300) ? { text: text(each, 300)! } : null;
   if (!isObject(each)) return null;
   const said = text(each.text, 300);
   if (!said) return null;
   const after = Array.isArray(each.after) ? each.after.filter((one): one is number => Number.isInteger(one) && (one as number) >= 1) : [];
   const site = siteOf(each.site);
+  const app = appGiven(each.app);
   const detail = line(each.detail, 120);
-  return { text: said, ...(detail ? { detail } : {}), ...(text(each.phase, 80) ? { phase: text(each.phase, 80)! } : {}), ...(site ? { site } : {}), ...(after.length ? { after } : {}) };
+  return { text: said, ...(detail ? { detail } : {}), ...(text(each.phase, 80) ? { phase: text(each.phase, 80)! } : {}), ...(site ? { site } : {}), ...(app ? { app } : {}), ...(after.length ? { after } : {}) };
 }
 // Steps as kept: ids in order, and what each comes after by id (only steps before it).
 const keptSteps = (given: ReturnType<typeof stepGiven>[], from = 0): GoalStepShape[] => given.filter((each): each is NonNullable<typeof each> => Boolean(each)).map((each, at) => {
@@ -725,7 +741,7 @@ function untilOf(value: unknown): number | null {
 export function goalProgress(bot: string, given: Record<string, unknown>, file = GOALS_FILE): { said: string } | { refused: string } {
   const running = runningGoal(bot, file);
   if (!running) return { refused: "No goal is running: propose one with propose_goal, and the user starts it." };
-  const marks = Array.isArray(given.steps) ? given.steps : given.step !== undefined ? [{ step: given.step, state: given.state, progress: given.progress, note: given.note, until: given.until }] : [];
+  const marks = Array.isArray(given.steps) ? given.steps : given.step !== undefined ? [{ step: given.step, state: given.state, progress: given.progress, note: given.note, until: given.until, app: given.app }] : [];
   const added = (Array.isArray(given.add) ? given.add : []).map(stepGiven).filter((each): each is NonNullable<typeof each> => Boolean(each));
   // All of it checked first: nothing's kept of a call that's wrong somewhere.
   const stepAt = (step: unknown, steps: readonly GoalStepShape[]) => (typeof step === "number" ? step - 1 : typeof step === "string" ? steps.findIndex(each => each.id === step) : -1);
@@ -736,6 +752,7 @@ export function goalProgress(bot: string, given: Record<string, unknown>, file =
     // The user sees what was counted, and the track fills by it: never a bare share.
     if (typeof mark.progress === "number" && mark.progress < 1 && !text(mark.note, 300)) return { refused: "Say what you counted with the share, in note: progress 0.375 with note \"3 of 8 pages\". The user sees the count." };
     if (mark.until !== undefined && mark.until !== null && untilOf(mark.until) === null) return { refused: "until is when the step can start, as a time like 2026-11-02T09:00 (or null to take it away)." };
+    if (mark.app !== undefined && mark.app !== null && !appNameGiven(mark.app)) return { refused: "app is the app the step is done in on the computer, by its name, like \"Xcode\" (or null to take it away)." };
   }
   if (isObject(given.waiting) && (!text(given.waiting.text, 300) || !WAITING_KINDS.includes(given.waiting.kind as (typeof WAITING_KINDS)[number]))) return { refused: "What waits needs its kind (you, judgment or outside) and what it is (text)." };
   const spent = Array.isArray(given.spent) ? given.spent : isObject(given.spent) ? [given.spent] : [];
@@ -762,6 +779,10 @@ export function goalProgress(bot: string, given: Record<string, unknown>, file =
       if (text(mark.note, 300)) next.note = text(mark.note, 300)!;
       else if (mark.note === null || mark.note === "") delete next.note;
       if (next.state !== "paused") delete next.resumes;
+      // The app it's done in, named again, or taken away.
+      const app = appGiven(mark.app);
+      if (app) next.app = app;
+      else if (mark.app === null) delete next.app;
       // Put off until a time, or no longer: taken up (or set aside), it's at it now.
       const until = mark.until === null ? null : untilOf(mark.until);
       if (until !== null) next.until = until;
@@ -803,7 +824,8 @@ export function goalProgress(bot: string, given: Record<string, unknown>, file =
   if (isObject(given.waiting)) {
     const url = https(given.waiting.url);
     const site = siteOf(given.waiting.site) ?? siteOf(url);
-    addWaiting(bot, { kind: given.waiting.kind as (typeof WAITING_KINDS)[number], text: text(given.waiting.text, 300)!, ...(text(given.waiting.detail, 500) ? { detail: text(given.waiting.detail, 500)! } : {}), ...(url ? { url } : {}), ...(site ? { site } : {}) }, file);
+    const app = appGiven(given.waiting.app);
+    addWaiting(bot, { kind: given.waiting.kind as (typeof WAITING_KINDS)[number], text: text(given.waiting.text, 300)!, ...(text(given.waiting.detail, 500) ? { detail: text(given.waiting.detail, 500)! } : {}), ...(url ? { url } : {}), ...(site ? { site } : {}), ...(app ? { app } : {}) }, file);
     notes.push("kept as waiting for the user: carry on with what doesn't depend on it");
   }
   noteWorkChanged(bot);
