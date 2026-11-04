@@ -4,14 +4,19 @@
 // id, so no mark.
 //
 // macOS: an `.app` in the Applications folders (the system's, yours, and their Utilities) by its
-// name, else Spotlight's by its display name; its icon as the system draws it (an asset catalog's
+// name, else Spotlight's by its display name in those folders and the system's own apps' (never
+// one in Downloads, Documents, iCloud Drive or a build's products: macOS would ask you about
+// those folders for Kuvo Code, and a build there is no app you use); its icon as the system draws it (an asset catalog's
 // too), at 64 px, through AppKit (`osascript -l JavaScript`), its id its bundle's. Linux: a desktop
 // entry by its `Name=` (any language's), read through `XDG_DATA_HOME` and `XDG_DATA_DIRS` (and
 // flatpak's and snap's exported entries), its icon a PNG, by path or from the `hicolor` theme or
-// `pixmaps`, its id the entry's. An app whose icon is SVG alone has no mark: clients draw PNGs.
+// `pixmaps` (none of more than ICON_MOST bytes), its id the entry's. An app whose icon is SVG
+// alone has no mark: clients draw PNGs.
 //
 // Each name is looked for once and the answer kept (`apps/found.json`, the icons beside it as
-// `<id>.png`), in the box's own folder; a name not found is looked for again a day on.
+// `<id>.png`), in the box's own folder: a name found is looked for again a week on (an app
+// updated, or gone), and one not found a day on (kept a month, then forgotten). A tool call has
+// at most NAMES_MOST names looked for.
 
 import { execFile } from "node:child_process";
 import crypto from "node:crypto";
@@ -24,8 +29,17 @@ import { homeFolder, K, ownDataHome } from "../home";
 export const APPS = path.join(K, "apps");
 const FOUND_FILE = path.join(APPS, "found.json");
 const LOCK = path.join(APPS, ".found.lock");
+const DAY = 86_400_000;
 /** How long a name not found is taken as not here, before it's looked for again. */
-const MISSED_FOR = 86_400_000;
+const MISSED_FOR = DAY;
+/** How long an app found is taken as it was, before it's looked for again. */
+const FOUND_FOR = 7 * DAY;
+/** How long a name not found is kept at all. */
+const MISSES_KEPT = 30 * DAY;
+/** How many names one call has looked for, at most: a plan names a handful of apps. */
+export const NAMES_MOST = 20;
+/** The largest icon file taken whole (Linux): a 256 px PNG is well under it. */
+const ICON_MOST = 1024 * 1024;
 /** The icon's size, in pixels: about what a client draws it at, on a screen of twice the points. */
 const SIZE = 64;
 
@@ -48,12 +62,15 @@ interface Found {
   at: number;
 }
 const keyOf = (name: string) => name.trim().toLowerCase();
-function readFound(): Record<string, Found> {
+// What's kept, by name: only its own entries (a name like "constructor" is a name, not a key every
+// object has).
+function readFound(): Map<string, Found> {
   try {
     const kept = JSON.parse(textOf(FOUND_FILE) ?? "");
-    return kept && typeof kept === "object" && !Array.isArray(kept) ? kept : {};
+    if (!kept || typeof kept !== "object" || Array.isArray(kept)) return new Map();
+    return new Map(Object.keys(kept).filter(key => Object.hasOwn(kept, key) && kept[key] && typeof kept[key] === "object" && typeof kept[key].at === "number").map(key => [key, kept[key] as Found]));
   } catch {
-    return {};
+    return new Map();
   }
 }
 
@@ -68,33 +85,42 @@ export function appNameGiven(value: unknown): string | null {
 /** The app named `name`, as it was found here: its own name and id, with its icon kept; the name
  * as given, with no id, when it isn't here (or hasn't been looked for: `findApps` first). */
 export function appNamed(name: string): { name: string; id?: string } {
-  const found = readFound()[keyOf(name)];
+  const found = readFound().get(keyOf(name));
   return found?.id && appIcon(found.id) ? { name: found.name || name, id: found.id } : { name };
 }
 
-/** Each of `names` looked for here, but those found already (their icon still kept) or not found
- * within a day. */
+/** Each of `names` looked for here (the first NAMES_MOST of them, each once), but those found
+ * within a week (their icon still kept) or not found within a day. */
 export async function findApps(names: string[], now = Date.now()): Promise<void> {
   const kept = readFound();
-  const wanted = [...new Map(names.map(name => [keyOf(name), name])).entries()].filter(([key]) => {
-    const found = kept[key];
-    return !found || (found.id ? !appIcon(found.id) : now - found.at >= MISSED_FOR);
+  const wanted = [...new Map(names.map(name => [keyOf(name), name])).entries()].slice(0, NAMES_MOST).filter(([key]) => {
+    const found = kept.get(key);
+    return !found || (found.id ? !appIcon(found.id) || now - found.at >= FOUND_FOR : now - found.at >= MISSED_FOR);
   });
+  if (!wanted.length) return;
+  // (Linux: the desktop entries read once, for all of them.)
+  const entries = process.platform === "darwin" ? null : linuxEntries();
+  const answers = new Map<string, Found>();
   for (const [key, name] of wanted) {
-    const found = await findApp(name).catch(() => null);
-    fs.mkdirSync(APPS, { recursive: true, mode: 0o700 });
-    locked(LOCK, () => {
-      const all = readFound();
-      all[key] = found ? { id: found.id, name: found.name, at: now } : { at: now };
-      writePrivate(FOUND_FILE, JSON.stringify(all, null, 1));
-    });
+    const found = await findApp(name, entries).catch(() => null);
+    answers.set(key, found ? { id: found.id, name: found.name, at: now } : { at: now });
   }
+  fs.mkdirSync(APPS, { recursive: true, mode: 0o700 });
+  locked(LOCK, () => {
+    const all = readFound();
+    for (const [key, answer] of answers) all.set(key, answer);
+    // Misses a month old forgotten, and the icon of an app no name has any more taken away.
+    for (const [key, found] of all) if (!found.id && now - found.at >= MISSES_KEPT) all.delete(key);
+    const ids = new Set([...all.values()].map(found => found.id));
+    for (const found of kept.values()) if (found.id && !ids.has(found.id)) fs.rmSync(path.join(APPS, `${found.id}.png`), { force: true });
+    writePrivate(FOUND_FILE, JSON.stringify(Object.fromEntries(all), null, 1));
+  });
 }
 
 /** The app named `name` on this computer, its icon kept as `<id>.png`; null for none. */
-function findApp(name: string): Promise<{ id: string; name: string } | null> {
+function findApp(name: string, entries: LinuxEntry[] | null): Promise<{ id: string; name: string } | null> {
   if (process.platform === "darwin") return findOnMac(name);
-  const found = findOnLinux(name);
+  const found = findOnLinux(name, process.env, homeFolder(), entries ?? undefined);
   if (!found) return Promise.resolve(null);
   try {
     keepIcon(found.id, temporary => fs.copyFileSync(found.icon, temporary));
@@ -203,12 +229,23 @@ export function macApp(name: string, folders = macFolders()): string | null {
   return null;
 }
 
-// An app Spotlight knows by its display name, elsewhere (inside another app, as Simulator is in
-// Xcode): never one in the Trash or a build's products.
+/** Where Spotlight's apps may be: the Applications folders and the system's own apps', with the
+ * apps inside them (Instruments, in Xcode). */
+export const spotlightFolders = (home = homeFolder()): string[] => ["/Applications", "/System/Applications", path.join(home, "Applications"), "/System/Library/CoreServices"];
+
+/** The app Spotlight's answer gives, of those in `folders`: never one elsewhere (Downloads,
+ * Documents, iCloud Drive, a worktree's build), or a build's products; null for none. */
+export function spotlightPick(said: string, folders = spotlightFolders()): string | null {
+  return said.split("\n").map(line => line.trim()).find(line => line.endsWith(".app") && folders.some(folder => line.startsWith(folder + "/")) && !/\/\.Trash\/|\/DerivedData\/|\/Build\/Products\//.test(line)) ?? null;
+}
+
+// An app Spotlight knows by its display name, in those folders (inside another app too, as
+// Simulator is in Xcode).
 async function spotlightApp(name: string): Promise<string | null> {
   if (/["\\*]/.test(name)) return null;
-  const said = await run("mdfind", [`kMDItemContentType == "com.apple.application-bundle" && (kMDItemDisplayName == "${name}"c || kMDItemDisplayName == "${name}.app"c)`], 10_000);
-  return (said ?? "").split("\n").map(line => line.trim()).find(line => line.endsWith(".app") && !/\/\.Trash\/|\/DerivedData\/|\/Build\/Products\//.test(line)) ?? null;
+  const folders = spotlightFolders();
+  const said = await run("mdfind", [...folders.flatMap(folder => ["-onlyin", folder]), `kMDItemContentType == "com.apple.application-bundle" && (kMDItemDisplayName == "${name}"c || kMDItemDisplayName == "${name}.app"c)`], 10_000);
+  return spotlightPick(said ?? "", folders);
 }
 
 // ——— Linux ———
@@ -251,34 +288,65 @@ function entryKeys(file: string): Map<string, string> {
   return keys;
 }
 
-/** The app named `name` among a Linux computer's desktop entries (its `Name=`, in any language, any
- * case), with its icon as a PNG: its id, its own name and the icon's file; null for none with a PNG
- * icon. */
-export function findOnLinux(name: string, env: NodeJS.ProcessEnv = process.env, home = homeFolder()): { id: string; name: string; icon: string } | null {
-  const folders = linuxDataFolders(env, home);
-  const wanted = keyOf(name);
+/** A Linux computer's apps, as its desktop entries list them: each entry's id, file, `Name=` (and
+ * the same lowercased, in every language) and `Icon=`. */
+export interface LinuxEntry {
+  id: string;
+  file: string;
+  name?: string;
+  names: string[];
+  icon: string;
+}
+
+/** The apps among a Linux computer's desktop entries, each id's first (yours over the system's),
+ * read once. */
+export function linuxEntries(env: NodeJS.ProcessEnv = process.env, home = homeFolder()): LinuxEntry[] {
   const seen = new Set<string>();
-  for (const folder of folders) {
+  const apps: LinuxEntry[] = [];
+  for (const folder of linuxDataFolders(env, home)) {
     for (const [id, file] of desktopEntries(path.join(folder, "applications"))) {
       // (An id's first entry is the one that counts: yours over the system's.)
       if (seen.has(id)) continue;
       seen.add(id);
       const keys = entryKeys(file);
       if ((keys.get("Type") ?? "Application") !== "Application" || keys.get("Hidden") === "true") continue;
-      const names = [...keys].filter(([key]) => key === "Name" || /^Name\[[^\]]+\]$/.test(key)).map(([, value]) => value);
-      if (!names.some(each => keyOf(each) === wanted)) continue;
-      const icon = linuxIcon(keys.get("Icon") ?? "", folders, home);
-      if (icon) return { id: idOf(id, file), name: keys.get("Name") || name, icon };
+      const names = [...keys].filter(([key]) => key === "Name" || /^Name\[[^\]]+\]$/.test(key)).map(([, value]) => keyOf(value));
+      apps.push({ id, file, name: keys.get("Name"), names, icon: keys.get("Icon") ?? "" });
     }
+  }
+  return apps;
+}
+
+/** The app named `name` among a Linux computer's desktop entries (its `Name=`, in any language, any
+ * case), with its icon as a PNG: its id, its own name and the icon's file; null for none with a PNG
+ * icon. */
+export function findOnLinux(name: string, env: NodeJS.ProcessEnv = process.env, home = homeFolder(), entries = linuxEntries(env, home)): { id: string; name: string; icon: string } | null {
+  const folders = linuxDataFolders(env, home);
+  const wanted = keyOf(name);
+  for (const entry of entries) {
+    if (!entry.names.includes(wanted)) continue;
+    const icon = linuxIcon(entry.icon, folders, home);
+    if (icon) return { id: idOf(entry.id, entry.file), name: entry.name || name, icon };
   }
   return null;
 }
 
+// A PNG small enough to take whole: its width, or null.
+const smallPNG = (file: string): number | null => {
+  try {
+    if (fs.statSync(file).size > ICON_MOST) return null;
+  } catch {
+    return null;
+  }
+  return pngWidth(file);
+};
+
 // A desktop entry's icon as a PNG: its path, or its name in the hicolor theme (the smallest of at
-// least SIZE pixels, else the largest) or in `pixmaps`; null for none, or one that's SVG alone.
+// least SIZE pixels, else the largest) or in `pixmaps`; null for none, one that's SVG alone, or one
+// too big to take whole.
 function linuxIcon(icon: string, folders: string[], home: string): string | null {
   if (!icon) return null;
-  if (path.isAbsolute(icon)) return pngWidth(icon) !== null ? icon : null;
+  if (path.isAbsolute(icon)) return smallPNG(icon) !== null ? icon : null;
   if (icon.includes("/")) return null;
   const named = icon.replace(/\.(png|svg|xpm)$/i, "");
   const themes = [path.join(home, ".icons", "hicolor"), ...folders.map(folder => path.join(folder, "icons", "hicolor"))];
@@ -288,13 +356,13 @@ function linuxIcon(icon: string, folders: string[], home: string): string | null
     try { sizes = fs.readdirSync(theme); } catch { continue; }
     for (const size of sizes) {
       const file = path.join(theme, size, "apps", `${named}.png`);
-      const width = pngWidth(file);
+      const width = smallPNG(file);
       if (width !== null) sized.push({ file, width });
     }
   }
   for (const folder of [...folders.map(each => path.join(each, "pixmaps")), "/usr/share/pixmaps"]) {
     const file = path.join(folder, `${named}.png`);
-    const width = pngWidth(file);
+    const width = smallPNG(file);
     if (width !== null) sized.push({ file, width });
   }
   if (!sized.length) return null;

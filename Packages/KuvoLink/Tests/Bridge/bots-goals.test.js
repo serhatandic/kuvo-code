@@ -1134,6 +1134,11 @@ test("the app a step is done in can be named as it goes, and so can what waits f
   assert.equal((await tool("goal_progress", { steps: [{ step: 1, app: null }] })).isError, false);
   [goal] = await goals();
   assert.equal(goal.steps[0].app, undefined, "taken away");
+  assert.equal((await tool("goal_progress", { steps: [{ step: 1, app: named }] }, { env })).isError, false);
+  const cleared = await tool("goal_progress", { steps: [{ step: 1, app: "" }] });
+  assert.equal(cleared.isError, false, cleared.text);
+  [goal] = await goals();
+  assert.equal(goal.steps[0].app, undefined, "an empty name takes it away too, as an empty note does");
   assert.match((await tool("goal_progress", { steps: [{ step: 1, app: "~/bin/tool" }] })).text, /app is the app the step is done in/);
 });
 
@@ -1266,4 +1271,73 @@ test("a plan the bot proposes again keeps the projects you set on its card, and 
   [card] = await goals();
   assert.deepEqual(card.projects, ["Storefront"]);
   assert.doesNotMatch(after.text, /projects on the card/);
+});
+
+// The apps the box has looked for, as it keeps them.
+const foundApps = () => JSON.parse(fs.readFileSync(path.join(home, "apps", "found.json"), "utf8"));
+
+test("a call that won't do has none of its apps looked for, and one call has twenty looked for at most, each name once", async () => {
+  fs.rmSync(path.join(home, "apps"), { recursive: true, force: true });
+  const steps = count => Array.from({ length: count }, (_, at) => ({ text: `Step ${at + 1}`, app: `Kuvo No Such App ${at + 1}` }));
+  const tooMany = await tool("propose_goal", { ...PLAN, steps: steps(1000) });
+  assert.match(tooMany.text, /more than 200 steps/);
+  assert.equal(fs.existsSync(path.join(home, "apps")), false, "refused before any app was looked for");
+
+  const proposed = await tool("propose_goal", { ...PLAN, steps: [...steps(30), { text: "Again", app: "kuvo no such app 1" }] });
+  assert.equal(proposed.isError, false, proposed.text);
+  assert.equal(Object.keys(foundApps()).length, 20, "the first twenty names");
+  const [card] = await goals();
+  assert.deepEqual(card.steps.at(-1).app, { name: "kuvo no such app 1" }, "each kept as it was named");
+
+  await route("POST", `kuvo/work/goals/${card.id}`, { action: "start" });
+  const wrong = await tool("goal_progress", { steps: [{ step: 99, app: "Kuvo Another App" }] });
+  assert.match(wrong.text, /There's no step 99/);
+  assert.equal(Object.hasOwn(foundApps(), "kuvo another app"), false, "a call that's refused looks for nothing");
+});
+
+// An app installed on this computer for the test: on a Mac, a bundle in your Applications folder
+// (the test's home); on Linux, a desktop entry with its icon, in the test's own data folders.
+function installApp(name, id) {
+  if (process.platform === "darwin") {
+    write(path.join(home, "Applications", `${name}.app`, "Contents", "Info.plist"), `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>${id}</string><key>CFBundleName</key><string>${name}</string><key>CFBundlePackageType</key><string>APPL</string></dict></plist>\n`);
+    return {};
+  }
+  const env = linuxApps();
+  write(path.join(env.XDG_DATA_DIRS, "applications", `${id}.desktop`), `[Desktop Entry]\nType=Application\nName=${name}\nIcon=${id}\n`);
+  write(path.join(env.XDG_DATA_DIRS, "icons", "hicolor", "64x64", "apps", `${id}.png`), png(64));
+  return env;
+}
+const uninstallApp = (name, id) => {
+  fs.rmSync(path.join(home, "Applications", `${name}.app`), { recursive: true, force: true });
+  fs.rmSync(path.join(home, "xdg", "system", "applications", `${id}.desktop`), { force: true });
+};
+
+test("an app found is looked for again a week on, so one you've uninstalled loses its mark and its icon; names not found are forgotten after a month; any name is a name, constructor too", async () => {
+  fs.rmSync(path.join(home, "apps"), { recursive: true, force: true });
+  atEnd(() => fs.rmSync(path.join(home, "Applications"), { recursive: true, force: true }));
+  const id = "com.example.constructor";
+  const env = installApp("Constructor", id);
+  const propose = async () => {
+    assert.equal((await tool("propose_goal", { ...PLAN, steps: [{ text: "Build it", app: "Constructor" }] }, { env })).isError, false);
+    return (await goals())[0].steps[0].app;
+  };
+  assert.deepEqual(await propose(), { name: "Constructor", id }, "found, though every object has a constructor");
+  assert.equal((await route("GET", `kuvo/work/apps/icon?app=${id}`)).status, 200);
+
+  // Uninstalled: within the week it's as it was found.
+  uninstallApp("Constructor", id);
+  assert.deepEqual(await propose(), { name: "Constructor", id });
+
+  // A week on, it's looked for again: gone, with its icon. A miss a month old is forgotten, a newer
+  // one kept.
+  const now = Date.now();
+  const aged = foundApps();
+  aged.constructor.at = now - 8 * 86_400_000;
+  aged["kuvo old miss"] = { at: now - 40 * 86_400_000 };
+  aged["kuvo new miss"] = { at: now - 2 * 86_400_000 };
+  fs.writeFileSync(path.join(home, "apps", "found.json"), JSON.stringify(aged));
+  assert.deepEqual(await propose(), { name: "Constructor" }, "no mark for an app that isn't here");
+  assert.equal((await route("GET", `kuvo/work/apps/icon?app=${id}`)).status, 404);
+  assert.deepEqual(fs.readdirSync(path.join(home, "apps")), ["found.json"], "its icon taken away");
+  assert.deepEqual(Object.keys(foundApps()).sort(), ["constructor", "kuvo new miss"]);
 });

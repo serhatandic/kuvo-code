@@ -889,16 +889,23 @@ beside it.
   bots, and the apps don't show it.
 - **Apps** (bridge 0.9.196, feature `work.goals.apps`, `work/apps.ts`): a step, or what waits, done
   in an app on the computer names it (`app`, "Xcode"). The box looks for it on its own computer as
-  the tool is called, once per name (a name not found, again a day on): a Mac's in its Applications
-  folders (the system's, yours, their Utilities) by name, else Spotlight's by display name, its icon
-  drawn by AppKit at 64 px (asset catalogs' too); Linux's by a desktop entry's `Name=` (any
-  language's) through `XDG_DATA_HOME` and `XDG_DATA_DIRS`, and flatpak's and snap's exported entries,
-  its icon a PNG by path or from `hicolor` (the smallest of at least 64 px, else the largest) or
-  `pixmaps`. Found, `app` is `{name, id}`, the app's own name and its bundle's or desktop entry's
-  id, and **`GET kuvo/work/apps/icon?app=<id>`** gives its icon (`image/png`; 404 for none, 400 for
-  an id that isn't one). Not found, or with an icon that's SVG alone, it has no `id`, and clients
-  show no mark. A step can have both `site` and `app`; clients show the site's. Kept in the box's
-  `apps` folder (`found.json`, `<id>.png`).
+  the tool is called, once the call has passed its own checks (a call that's refused has nothing
+  looked for), at most 20 names a call, once per name: a name found is looked for again a week on
+  (an app updated or uninstalled), one not found a day on, and a name not found is forgotten after
+  a month. A Mac's in its Applications folders (the system's, yours, their Utilities) by name, else
+  Spotlight's by display name, only in `/Applications`, `/System/Applications`, `~/Applications`
+  and `/System/Library/CoreServices` (apps inside them too, like Xcode's Instruments; never one in
+  Downloads, Documents, iCloud Drive or a build's products), its icon drawn by AppKit at 64 px
+  (asset catalogs' too); Linux's by a desktop entry's `Name=` (any language's) through
+  `XDG_DATA_HOME` and `XDG_DATA_DIRS`, and flatpak's and snap's exported entries, its icon a PNG of
+  1 MB at most by path or from `hicolor` (the smallest of at least 64 px, else the largest) or
+  `pixmaps`. Found, `app` is `{name, id}`, the app's own name and its id: its bundle's or desktop
+  entry's, or `app-<hash>` for one whose own can't name a file. **`GET
+  kuvo/work/apps/icon?app=<id>`** gives its icon (`image/png`; 404 for none, 400 for an id that
+  isn't one, 405 for a method other than GET). Not found, or with an icon that's SVG alone, it has
+  no `id`, and clients show no mark. A step can have both `site` and `app`; clients show the
+  site's. `goal_progress` takes `app` away with `null` or `""`. Kept in the box's `apps` folder
+  (`found.json`, `<id>.png`; an icon no name has any more is taken away).
 - **Folders** (bridge 0.9.196): while it's proposed, `folders` says where Start makes each project
   the plan names, worked out as `make_project` will: the folder named for it, or the projects folder
   and its name (`folder` null, and `shown`, while none is picked); `shown` is the same with `~` for

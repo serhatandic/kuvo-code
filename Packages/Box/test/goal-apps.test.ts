@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { deflateSync } from "node:zlib"
-import { findOnLinux, linuxDataFolders } from "../src/link/work/apps"
+import { findOnLinux, linuxDataFolders, spotlightPick } from "../src/link/work/apps"
 
 // The apps a goal's steps are done in, on a Linux box: found by their desktop entries' names (any
 // language's), yours over the system's, their icons as PNGs from the hicolor theme, `pixmaps` or a
@@ -80,4 +80,45 @@ test("a Linux box finds an app by its desktop entry's name, in any language, you
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
+})
+
+test("a Linux box takes no icon too big to copy whole: the theme's next size near 64 px instead, or none", () => {
+  const root = mkdtempSync(join(tmpdir(), "kuvo-goal-apps-"))
+  try {
+    const home = join(root, "home")
+    const system = join(root, "system")
+    const env = { XDG_DATA_DIRS: system }
+    // A PNG with a couple of megabytes after it: its header says it's a PNG all the same.
+    const huge = (size: number) => Buffer.concat([png(size), Buffer.alloc(2 * 1024 * 1024)])
+    write(join(system, "applications", "tidepool.desktop"), "[Desktop Entry]\nType=Application\nName=Tidepool\nIcon=tidepool\n")
+    write(join(system, "icons", "hicolor", "64x64", "apps", "tidepool.png"), huge(64))
+    write(join(system, "icons", "hicolor", "128x128", "apps", "tidepool.png"), png(128))
+    expect(findOnLinux("Tidepool", env, home)?.icon).toBe(join(system, "icons", "hicolor", "128x128", "apps", "tidepool.png"))
+    write(join(system, "applications", "big.desktop"), `[Desktop Entry]\nType=Application\nName=Big\nIcon=${join(root, "big.png")}\n`)
+    write(join(root, "big.png"), huge(64))
+    expect(findOnLinux("Big", env, home)).toBeNull()
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("on a Mac, an app Spotlight finds is taken only from the Applications folders and the system's own apps, never a build in a worktree, Downloads, Documents or iCloud Drive", () => {
+  const home = "/Users/ada"
+  const folders = ["/Applications", "/System/Applications", `${home}/Applications`, "/System/Library/CoreServices"]
+  const said = (...apps: string[]) => apps.join("\n") + "\n"
+  const elsewhere = [
+    `${home}/Desktop/main/kuvo-ai/build/Kuvo Code.app`,
+    `${home}/Downloads/Kuvo Code.app`,
+    `${home}/Documents/Old/Kuvo Code.app`,
+    `${home}/Library/Mobile Documents/com~apple~CloudDocs/Kuvo Code.app`,
+    "/Applications.old/Kuvo Code.app",
+  ]
+  expect(spotlightPick(said(...elsewhere, "/Applications/Kuvo Code.app"), folders)).toBe("/Applications/Kuvo Code.app")
+  expect(spotlightPick(said(...elsewhere), folders)).toBeNull()
+  // Inside an app there still counts (Instruments, in Xcode), and so do yours and the system's.
+  expect(spotlightPick(said("/Applications/Xcode.app/Contents/Applications/Instruments.app"), folders)).toBe("/Applications/Xcode.app/Contents/Applications/Instruments.app")
+  expect(spotlightPick(said(`${home}/Applications/Tidepool.app`), folders)).toBe(`${home}/Applications/Tidepool.app`)
+  expect(spotlightPick(said("/System/Library/CoreServices/Finder.app"), folders)).toBe("/System/Library/CoreServices/Finder.app")
+  // Never a build's products, even in Applications.
+  expect(spotlightPick(said("/Applications/Tools/DerivedData/Build/Products/Debug/Tidepool.app"), folders)).toBeNull()
 })

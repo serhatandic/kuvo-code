@@ -9470,7 +9470,12 @@ import path39 from "node:path";
 var APPS = path39.join(K, "apps");
 var FOUND_FILE = path39.join(APPS, "found.json");
 var LOCK4 = path39.join(APPS, ".found.lock");
-var MISSED_FOR = 86400000;
+var DAY = 86400000;
+var MISSED_FOR = DAY;
+var FOUND_FOR = 7 * DAY;
+var MISSES_KEPT = 30 * DAY;
+var NAMES_MOST = 20;
+var ICON_MOST = 1024 * 1024;
 var SIZE = 64;
 var ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/;
 var isAppID = (id) => typeof id === "string" && ID.test(id) && !id.includes("..");
@@ -9484,9 +9489,11 @@ var keyOf = (name) => name.trim().toLowerCase();
 function readFound() {
   try {
     const kept = JSON.parse(textOf(FOUND_FILE) ?? "");
-    return kept && typeof kept === "object" && !Array.isArray(kept) ? kept : {};
+    if (!kept || typeof kept !== "object" || Array.isArray(kept))
+      return new Map;
+    return new Map(Object.keys(kept).filter((key) => Object.hasOwn(kept, key) && kept[key] && typeof kept[key] === "object" && typeof kept[key].at === "number").map((key) => [key, kept[key]]));
   } catch {
-    return {};
+    return new Map;
   }
 }
 function appNameGiven(value) {
@@ -9497,29 +9504,42 @@ function appNameGiven(value) {
   return name && !/[/\\\u0000-\u001f]/.test(name) ? name : null;
 }
 function appNamed(name) {
-  const found = readFound()[keyOf(name)];
+  const found = readFound().get(keyOf(name));
   return found?.id && appIcon(found.id) ? { name: found.name || name, id: found.id } : { name };
 }
 async function findApps(names, now = Date.now()) {
   const kept = readFound();
-  const wanted = [...new Map(names.map((name) => [keyOf(name), name])).entries()].filter(([key]) => {
-    const found = kept[key];
-    return !found || (found.id ? !appIcon(found.id) : now - found.at >= MISSED_FOR);
+  const wanted = [...new Map(names.map((name) => [keyOf(name), name])).entries()].slice(0, NAMES_MOST).filter(([key]) => {
+    const found = kept.get(key);
+    return !found || (found.id ? !appIcon(found.id) || now - found.at >= FOUND_FOR : now - found.at >= MISSED_FOR);
   });
+  if (!wanted.length)
+    return;
+  const entries = process.platform === "darwin" ? null : linuxEntries();
+  const answers = new Map;
   for (const [key, name] of wanted) {
-    const found = await findApp(name).catch(() => null);
-    fs37.mkdirSync(APPS, { recursive: true, mode: 448 });
-    locked(LOCK4, () => {
-      const all = readFound();
-      all[key] = found ? { id: found.id, name: found.name, at: now } : { at: now };
-      writePrivate(FOUND_FILE, JSON.stringify(all, null, 1));
-    });
+    const found = await findApp(name, entries).catch(() => null);
+    answers.set(key, found ? { id: found.id, name: found.name, at: now } : { at: now });
   }
+  fs37.mkdirSync(APPS, { recursive: true, mode: 448 });
+  locked(LOCK4, () => {
+    const all = readFound();
+    for (const [key, answer] of answers)
+      all.set(key, answer);
+    for (const [key, found] of all)
+      if (!found.id && now - found.at >= MISSES_KEPT)
+        all.delete(key);
+    const ids = new Set([...all.values()].map((found) => found.id));
+    for (const found of kept.values())
+      if (found.id && !ids.has(found.id))
+        fs37.rmSync(path39.join(APPS, `${found.id}.png`), { force: true });
+    writePrivate(FOUND_FILE, JSON.stringify(Object.fromEntries(all), null, 1));
+  });
 }
-function findApp(name) {
+function findApp(name, entries) {
   if (process.platform === "darwin")
     return findOnMac(name);
-  const found = findOnLinux(name);
+  const found = findOnLinux(name, process.env, homeFolder(), entries ?? undefined);
   if (!found)
     return Promise.resolve(null);
   try {
@@ -9617,12 +9637,17 @@ function macApp(name, folders = macFolders2()) {
   }
   return null;
 }
+var spotlightFolders = (home = homeFolder()) => ["/Applications", "/System/Applications", path39.join(home, "Applications"), "/System/Library/CoreServices"];
+function spotlightPick(said, folders = spotlightFolders()) {
+  return said.split(`
+`).map((line) => line.trim()).find((line) => line.endsWith(".app") && folders.some((folder) => line.startsWith(folder + "/")) && !/\/\.Trash\/|\/DerivedData\/|\/Build\/Products\//.test(line)) ?? null;
+}
 async function spotlightApp(name) {
   if (/["\\*]/.test(name))
     return null;
-  const said = await run("mdfind", [`kMDItemContentType == "com.apple.application-bundle" && (kMDItemDisplayName == "${name}"c || kMDItemDisplayName == "${name}.app"c)`], 1e4);
-  return (said ?? "").split(`
-`).map((line) => line.trim()).find((line) => line.endsWith(".app") && !/\/\.Trash\/|\/DerivedData\/|\/Build\/Products\//.test(line)) ?? null;
+  const folders = spotlightFolders();
+  const said = await run("mdfind", [...folders.flatMap((folder) => ["-onlyin", folder]), `kMDItemContentType == "com.apple.application-bundle" && (kMDItemDisplayName == "${name}"c || kMDItemDisplayName == "${name}.app"c)`], 1e4);
+  return spotlightPick(said ?? "", folders);
 }
 function linuxDataFolders(env = process.env, home = homeFolder()) {
   const own = ownDataHome(env, home);
@@ -9660,11 +9685,10 @@ function entryKeys(file) {
   }
   return keys;
 }
-function findOnLinux(name, env = process.env, home = homeFolder()) {
-  const folders = linuxDataFolders(env, home);
-  const wanted = keyOf(name);
+function linuxEntries(env = process.env, home = homeFolder()) {
   const seen = new Set;
-  for (const folder of folders) {
+  const apps = [];
+  for (const folder of linuxDataFolders(env, home)) {
     for (const [id, file] of desktopEntries(path39.join(folder, "applications"))) {
       if (seen.has(id))
         continue;
@@ -9672,21 +9696,38 @@ function findOnLinux(name, env = process.env, home = homeFolder()) {
       const keys = entryKeys(file);
       if ((keys.get("Type") ?? "Application") !== "Application" || keys.get("Hidden") === "true")
         continue;
-      const names = [...keys].filter(([key]) => key === "Name" || /^Name\[[^\]]+\]$/.test(key)).map(([, value]) => value);
-      if (!names.some((each) => keyOf(each) === wanted))
-        continue;
-      const icon = linuxIcon(keys.get("Icon") ?? "", folders, home);
-      if (icon)
-        return { id: idOf(id, file), name: keys.get("Name") || name, icon };
+      const names = [...keys].filter(([key]) => key === "Name" || /^Name\[[^\]]+\]$/.test(key)).map(([, value]) => keyOf(value));
+      apps.push({ id, file, name: keys.get("Name"), names, icon: keys.get("Icon") ?? "" });
     }
+  }
+  return apps;
+}
+function findOnLinux(name, env = process.env, home = homeFolder(), entries = linuxEntries(env, home)) {
+  const folders = linuxDataFolders(env, home);
+  const wanted = keyOf(name);
+  for (const entry of entries) {
+    if (!entry.names.includes(wanted))
+      continue;
+    const icon = linuxIcon(entry.icon, folders, home);
+    if (icon)
+      return { id: idOf(entry.id, entry.file), name: entry.name || name, icon };
   }
   return null;
 }
+var smallPNG = (file) => {
+  try {
+    if (fs37.statSync(file).size > ICON_MOST)
+      return null;
+  } catch {
+    return null;
+  }
+  return pngWidth(file);
+};
 function linuxIcon(icon, folders, home) {
   if (!icon)
     return null;
   if (path39.isAbsolute(icon))
-    return pngWidth(icon) !== null ? icon : null;
+    return smallPNG(icon) !== null ? icon : null;
   if (icon.includes("/"))
     return null;
   const named = icon.replace(/\.(png|svg|xpm)$/i, "");
@@ -9701,14 +9742,14 @@ function linuxIcon(icon, folders, home) {
     }
     for (const size of sizes) {
       const file = path39.join(theme, size, "apps", `${named}.png`);
-      const width = pngWidth(file);
+      const width = smallPNG(file);
       if (width !== null)
         sized.push({ file, width });
     }
   }
   for (const folder of [...folders.map((each) => path39.join(each, "pixmaps")), "/usr/share/pixmaps"]) {
     const file = path39.join(folder, `${named}.png`);
-    const width = pngWidth(file);
+    const width = smallPNG(file);
     if (width !== null)
       sized.push({ file, width });
   }
@@ -10238,7 +10279,7 @@ var SHOWN = 24 * 3600000;
 var ASK_SETTLES = 2 * 60000;
 var WRAP_UP = 2 * 3600000;
 var UNKNOWN_RESET = 30 * 60000;
-var DAY = 86400000;
+var DAY2 = 86400000;
 var goalFollowers = new Set;
 var STATES = ["proposed", "running", "done", "stopped", "declined"];
 var readKept2 = (file = GOALS_FILE) => {
@@ -10435,6 +10476,12 @@ function projectsGiven(given) {
 }
 var sameProjects = (a, b) => a.length === b.length && a.every((each, at) => each.toLowerCase() === b[at].toLowerCase());
 var RUNS_ALREADY = "A goal is running already: report on it with goal_progress, and end it with finish_goal.";
+function proposalRefused(bot, given, file = GOALS_FILE) {
+  const planned = planGiven(given);
+  if ("refused" in planned)
+    return planned.refused;
+  return goalRuns(bot, file) ? RUNS_ALREADY : null;
+}
 function proposeGoal(bot, given, file = GOALS_FILE) {
   const planned = planGiven(given);
   if ("refused" in planned)
@@ -10480,11 +10527,11 @@ function planGiven(given) {
   const goal = text(given.goal, 2000);
   if (!goal)
     return { refused: "Say the goal, in the user's words (goal)." };
+  if (Array.isArray(given.steps) && given.steps.length > 200)
+    return { refused: "That's more than 200 steps: make them bigger." };
   const steps = (Array.isArray(given.steps) ? given.steps : []).map(stepGiven).filter((each) => Boolean(each));
   if (!steps.length)
     return { refused: "Give the plan, as its steps in order (steps)." };
-  if (steps.length > 200)
-    return { refused: "That's more than 200 steps: make them bigger." };
   const checks = [];
   for (const each of Array.isArray(given.checks) ? given.checks.slice(0, 12) : []) {
     if (!isObject(each))
@@ -10874,13 +10921,16 @@ function untilOf(value) {
   const at = typeof value === "number" ? value < 1000000000000 ? value * 1000 : value : typeof value === "string" && /^\d{4}-\d{2}-\d{2}/.test(value.trim()) ? Date.parse(value.trim()) : NaN;
   return Number.isFinite(at) && at > 0 ? at : null;
 }
-function goalProgress(bot, given, file = GOALS_FILE) {
+var stepAt = (step, steps) => typeof step === "number" ? step - 1 : typeof step === "string" ? steps.findIndex((each) => each.id === step) : -1;
+function progressRefused(bot, given, file = GOALS_FILE) {
+  const checked = progressGiven(bot, given, file);
+  return "refused" in checked ? checked.refused : null;
+}
+function progressGiven(bot, given, file) {
   const running = runningGoal(bot, file);
   if (!running)
     return { refused: "No goal is running: propose one with propose_goal, and the user starts it." };
   const marks = Array.isArray(given.steps) ? given.steps : given.step !== undefined ? [{ step: given.step, state: given.state, progress: given.progress, note: given.note, until: given.until, app: given.app }] : [];
-  const added = (Array.isArray(given.add) ? given.add : []).map(stepGiven).filter((each) => Boolean(each));
-  const stepAt = (step, steps) => typeof step === "number" ? step - 1 : typeof step === "string" ? steps.findIndex((each) => each.id === step) : -1;
   for (const mark of marks) {
     if (!isObject(mark) || !running.steps[stepAt(mark.step, running.steps)])
       return { refused: `There's no step ${isObject(mark) ? String(mark.step) : ""}: the plan has ${running.steps.length} (add new ones with add).` };
@@ -10892,7 +10942,7 @@ function goalProgress(bot, given, file = GOALS_FILE) {
       return { refused: 'Say what you counted with the share, in note: progress 0.375 with note "3 of 8 pages". The user sees the count.' };
     if (mark.until !== undefined && mark.until !== null && untilOf(mark.until) === null)
       return { refused: "until is when the step can start, as a time like 2026-11-02T09:00 (or null to take it away)." };
-    if (mark.app !== undefined && mark.app !== null && !appNameGiven(mark.app))
+    if (mark.app !== undefined && mark.app !== null && mark.app !== "" && !appNameGiven(mark.app))
       return { refused: 'app is the app the step is done in on the computer, by its name, like "Xcode" (or null to take it away).' };
   }
   if (isObject(given.waiting) && (!text(given.waiting.text, 300) || !WAITING_KINDS.includes(given.waiting.kind)))
@@ -10901,6 +10951,14 @@ function goalProgress(bot, given, file = GOALS_FILE) {
   for (const each of spent)
     if (!isObject(each) || !text(each.what, 200) || typeof each.amount !== "number" || !(each.amount > 0))
       return { refused: "What's spent is {what, amount}." };
+  return { marks, spent };
+}
+function goalProgress(bot, given, file = GOALS_FILE) {
+  const checked = progressGiven(bot, given, file);
+  if ("refused" in checked)
+    return checked;
+  const { marks, spent } = checked;
+  const added = (Array.isArray(given.add) ? given.add : []).map(stepGiven).filter((each) => Boolean(each));
   const resolved = (Array.isArray(given.resolved) ? given.resolved : []).map((each) => text(each, 300)).filter((each) => Boolean(each));
   const notes = [];
   const unplanned = [];
@@ -10935,7 +10993,7 @@ function goalProgress(bot, given, file = GOALS_FILE) {
       const app = appGiven(mark.app);
       if (app)
         next.app = app;
-      else if (mark.app === null)
+      else if (mark.app === null || mark.app === "")
         delete next.app;
       const until = mark.until === null ? null : untilOf(mark.until);
       if (until !== null)
@@ -11059,7 +11117,7 @@ async function failedTurn(target, session, signal) {
 function digestWords(goal, now) {
   const done = goal.steps.filter((step) => step.state === "done" || step.state === "skipped").length;
   const since = Math.max(0, done - (goal.doneAtDigest ?? 0));
-  const day = Math.max(1, Math.floor((now - (goal.started ?? now)) / DAY));
+  const day = Math.max(1, Math.floor((now - (goal.started ?? now)) / DAY2));
   const parts = [`${since} ${since === 1 ? "step" : "steps"} done (${done} of ${goal.steps.length} in all)`];
   if (goal.waiting.length)
     parts.push(`${goal.waiting.length} ${goal.waiting.length === 1 ? "waits" : "wait"} for you`);
@@ -11256,7 +11314,7 @@ async function lookAtGoals(tell, targets, { file = GOALS_FILE, here, now = Date.
           told.add(item.id);
       }
       const last = goal.lastDigest?.at ?? goal.started ?? now;
-      const every = goal.digest === "day" ? DAY : goal.digest === "week" ? 7 * DAY : 0;
+      const every = goal.digest === "day" ? DAY2 : goal.digest === "week" ? 7 * DAY2 : 0;
       const phases = [...new Set(goal.steps.map((step) => step.phase).filter((each) => Boolean(each)))];
       const done = phases.filter((phase) => goal.steps.filter((step) => step.phase === phase).every((step) => step.state === "done" || step.state === "skipped"));
       const milestone = goal.digest === "milestones" && done.some((phase) => !(goal.phasesDone ?? []).includes(phase));
@@ -12910,7 +12968,7 @@ function skillFolders() {
 }
 var SKILL_TRASH = path51.join(K, "trash", "skills");
 var SKILL_TRASH_DAYS = 30;
-var DAY2 = 86400000;
+var DAY3 = 86400000;
 var isDirectory = (file) => {
   try {
     return fs48.statSync(file).isDirectory();
@@ -12925,7 +12983,7 @@ function skillTrashEntry(entry) {
 function clearSkillTrash(now = Date.now()) {
   for (const id of listOf(SKILL_TRASH)) {
     const entry = skillTrashEntry(id);
-    if (entry && entry.deleted * 1000 <= now - SKILL_TRASH_DAYS * DAY2)
+    if (entry && entry.deleted * 1000 <= now - SKILL_TRASH_DAYS * DAY3)
       try {
         fs48.rmSync(path51.join(SKILL_TRASH, id), { recursive: true, force: true });
       } catch {}
@@ -12933,7 +12991,7 @@ function clearSkillTrash(now = Date.now()) {
 }
 function keepSkillTrashClear() {
   clearSkillTrash();
-  const timer = setInterval(() => clearSkillTrash(), DAY2);
+  const timer = setInterval(() => clearSkillTrash(), DAY3);
   timer.unref?.();
   return timer;
 }
@@ -21739,6 +21797,9 @@ async function proposeGoalTool(caller, args) {
   const bot = goalBot(caller);
   if (!bot)
     return refused(ONLY_BOTS);
+  const wrong = proposalRefused(bot.bot, args);
+  if (wrong)
+    return refused(wrong);
   await findApps(appsNamed(args)).catch(() => {});
   const outcome = proposeGoal({ ...bot, session: caller.session }, args);
   if ("refused" in outcome)
@@ -21754,6 +21815,9 @@ async function goalProgressTool(caller, args) {
   const bot = goalBot(caller);
   if (!bot)
     return refused(ONLY_BOTS);
+  const wrong = progressRefused(bot.bot, args);
+  if (wrong)
+    return refused(wrong);
   await findApps(appsNamed(args)).catch(() => {});
   return answered2(goalProgress(bot.bot, args));
 }
@@ -24340,7 +24404,7 @@ import os10 from "node:os";
 import fs83 from "node:fs";
 import path85 from "node:path";
 var ACTIVITY = path85.join(VAULT_FOLDER, "activity.jsonl");
-var DAY3 = 86400000;
+var DAY4 = 86400000;
 var prunedAt = 0;
 function note2(what, now = Date.now()) {
   const entry = { id: newID("a_"), at: now, ...what };
@@ -24350,7 +24414,7 @@ function note2(what, now = Date.now()) {
     fs83.mkdirSync(VAULT_FOLDER, { recursive: true, mode: 448 });
     fs83.appendFileSync(ACTIVITY, JSON.stringify(entry) + `
 `, { mode: 384 });
-    if (now - prunedAt > DAY3) {
+    if (now - prunedAt > DAY4) {
       prunedAt = now;
       prune(now);
     }
@@ -24359,7 +24423,7 @@ function note2(what, now = Date.now()) {
 }
 function prune(now) {
   const lines = readLines();
-  const kept = lines.filter((entry) => now - entry.at < KEPT_DAYS2 * DAY3);
+  const kept = lines.filter((entry) => now - entry.at < KEPT_DAYS2 * DAY4);
   if (kept.length === lines.length)
     return;
   const temporary = ACTIVITY + ".new";
@@ -24386,7 +24450,7 @@ function readLines() {
   return entries;
 }
 function readActivity({ item, bot, session, before, limit = 100 } = {}, now = Date.now()) {
-  return readLines().filter((entry) => now - entry.at < KEPT_DAYS2 * DAY3).filter((entry) => (!item || entry.item === item) && (!bot || entry.bot === bot) && (!session || entry.session === session) && (!before || entry.at < before)).sort((a, b) => b.at - a.at).slice(0, Math.max(1, Math.min(500, limit)));
+  return readLines().filter((entry) => now - entry.at < KEPT_DAYS2 * DAY4).filter((entry) => (!item || entry.item === item) && (!bot || entry.bot === bot) && (!session || entry.session === session) && (!before || entry.at < before)).sort((a, b) => b.at - a.at).slice(0, Math.max(1, Math.min(500, limit)));
 }
 
 // Packages/Box/src/link/vault/asks.ts

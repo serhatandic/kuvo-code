@@ -351,6 +351,14 @@ type Plan = Pick<KeptGoal, "goal" | "title" | "steps" | "checks" | "spend" | "pu
 
 const RUNS_ALREADY = "A goal is running already: report on it with goal_progress, and end it with finish_goal.";
 
+/** Why propose_goal can't take what it was given (as `proposeGoal` would refuse it), before anything
+ * is looked for; null for nothing. */
+export function proposalRefused(bot: string, given: Record<string, unknown>, file = GOALS_FILE): string | null {
+  const planned = planGiven(given);
+  if ("refused" in planned) return planned.refused;
+  return goalRuns(bot, file) ? RUNS_ALREADY : null;
+}
+
 /** What `proposeGoal` makes of the user's projects, when they set some on the card it replaces:
  * theirs, and whether they're kept (the bot proposed its own again) or the bot's replaced them. */
 export interface ProjectsByYou {
@@ -403,9 +411,10 @@ export function proposeGoal(bot: { bot: string; name: string; session: string },
 function planGiven(given: Record<string, unknown>): { plan: Plan } | { refused: string } {
   const goal = text(given.goal, 2000);
   if (!goal) return { refused: "Say the goal, in the user's words (goal)." };
+  // (Too many refused before any is read.)
+  if (Array.isArray(given.steps) && given.steps.length > 200) return { refused: "That's more than 200 steps: make them bigger." };
   const steps = (Array.isArray(given.steps) ? given.steps : []).map(stepGiven).filter((each): each is NonNullable<typeof each> => Boolean(each));
   if (!steps.length) return { refused: "Give the plan, as its steps in order (steps)." };
-  if (steps.length > 200) return { refused: "That's more than 200 steps: make them bigger." };
   const checks: GoalCheckShape[] = [];
   for (const each of Array.isArray(given.checks) ? given.checks.slice(0, 12) : []) {
     if (!isObject(each)) continue;
@@ -834,15 +843,20 @@ function untilOf(value: unknown): number | null {
   return Number.isFinite(at) && at > 0 ? at : null;
 }
 
-/** goal_progress: steps marked (and added as the plan changes), something waiting for you, what's
- * spent, what's still watched. */
-export function goalProgress(bot: string, given: Record<string, unknown>, file = GOALS_FILE): { said: string } | { refused: string } {
+const stepAt = (step: unknown, steps: readonly GoalStepShape[]) => (typeof step === "number" ? step - 1 : typeof step === "string" ? steps.findIndex(each => each.id === step) : -1);
+
+/** Why goal_progress can't take what it was given (as `goalProgress` would refuse it), before
+ * anything is looked for; null for nothing. */
+export function progressRefused(bot: string, given: Record<string, unknown>, file = GOALS_FILE): string | null {
+  const checked = progressGiven(bot, given, file);
+  return "refused" in checked ? checked.refused : null;
+}
+
+// goal_progress's call, checked whole: nothing's kept of a call that's wrong somewhere.
+function progressGiven(bot: string, given: Record<string, unknown>, file: string): { marks: Record<string, unknown>[]; spent: Record<string, unknown>[] } | { refused: string } {
   const running = runningGoal(bot, file);
   if (!running) return { refused: "No goal is running: propose one with propose_goal, and the user starts it." };
   const marks = Array.isArray(given.steps) ? given.steps : given.step !== undefined ? [{ step: given.step, state: given.state, progress: given.progress, note: given.note, until: given.until, app: given.app }] : [];
-  const added = (Array.isArray(given.add) ? given.add : []).map(stepGiven).filter((each): each is NonNullable<typeof each> => Boolean(each));
-  // All of it checked first: nothing's kept of a call that's wrong somewhere.
-  const stepAt = (step: unknown, steps: readonly GoalStepShape[]) => (typeof step === "number" ? step - 1 : typeof step === "string" ? steps.findIndex(each => each.id === step) : -1);
   for (const mark of marks) {
     if (!isObject(mark) || !running.steps[stepAt(mark.step, running.steps)]) return { refused: `There's no step ${isObject(mark) ? String(mark.step) : ""}: the plan has ${running.steps.length} (add new ones with add).` };
     if (mark.state !== undefined && !STEP_STATES.includes(mark.state as (typeof STEP_STATES)[number])) return { refused: "A step's state is todo, doing, done, waiting, paused or skipped." };
@@ -850,18 +864,28 @@ export function goalProgress(bot: string, given: Record<string, unknown>, file =
     // The user sees what was counted, and the track fills by it: never a bare share.
     if (typeof mark.progress === "number" && mark.progress < 1 && !text(mark.note, 300)) return { refused: "Say what you counted with the share, in note: progress 0.375 with note \"3 of 8 pages\". The user sees the count." };
     if (mark.until !== undefined && mark.until !== null && untilOf(mark.until) === null) return { refused: "until is when the step can start, as a time like 2026-11-02T09:00 (or null to take it away)." };
-    if (mark.app !== undefined && mark.app !== null && !appNameGiven(mark.app)) return { refused: "app is the app the step is done in on the computer, by its name, like \"Xcode\" (or null to take it away)." };
+    if (mark.app !== undefined && mark.app !== null && mark.app !== "" && !appNameGiven(mark.app)) return { refused: "app is the app the step is done in on the computer, by its name, like \"Xcode\" (or null to take it away)." };
   }
   if (isObject(given.waiting) && (!text(given.waiting.text, 300) || !WAITING_KINDS.includes(given.waiting.kind as (typeof WAITING_KINDS)[number]))) return { refused: "What waits needs its kind (you, judgment or outside) and what it is (text)." };
   const spent = Array.isArray(given.spent) ? given.spent : isObject(given.spent) ? [given.spent] : [];
   for (const each of spent) if (!isObject(each) || !text(each.what, 200) || typeof each.amount !== "number" || !(each.amount > 0)) return { refused: "What's spent is {what, amount}." };
+  return { marks: marks as Record<string, unknown>[], spent: spent as Record<string, unknown>[] };
+}
+
+/** goal_progress: steps marked (and added as the plan changes), something waiting for you, what's
+ * spent, what's still watched. */
+export function goalProgress(bot: string, given: Record<string, unknown>, file = GOALS_FILE): { said: string } | { refused: string } {
+  const checked = progressGiven(bot, given, file);
+  if ("refused" in checked) return checked;
+  const { marks, spent } = checked;
+  const added = (Array.isArray(given.add) ? given.add : []).map(stepGiven).filter((each): each is NonNullable<typeof each> => Boolean(each));
   const resolved = (Array.isArray(given.resolved) ? given.resolved : []).map(each => text(each, 300)).filter((each): each is string => Boolean(each));
   const notes: string[] = [];
   const unplanned: string[] = [];
   changeKept(all => {
     const goal = all.find(each => each.bot === bot && each.state === "running");
     if (!goal) return;
-    for (const mark of marks as Record<string, unknown>[]) {
+    for (const mark of marks) {
       const at = stepAt(mark.step, goal.steps);
       const step = goal.steps[at];
       const next: GoalStepShape = { ...step };
@@ -880,7 +904,7 @@ export function goalProgress(bot: string, given: Record<string, unknown>, file =
       // The app it's done in, named again, or taken away.
       const app = appGiven(mark.app);
       if (app) next.app = app;
-      else if (mark.app === null) delete next.app;
+      else if (mark.app === null || mark.app === "") delete next.app;
       // Put off until a time, or no longer: taken up (or set aside), it's at it now.
       const until = mark.until === null ? null : untilOf(mark.until);
       if (until !== null) next.until = until;
@@ -906,7 +930,7 @@ export function goalProgress(bot: string, given: Record<string, unknown>, file =
     // At it now: the bot is told to carry on only once it's quiet again a while.
     delete goal.idleSince;
     goal.nudges = 0;
-    for (const each of spent as Record<string, unknown>[]) {
+    for (const each of spent) {
       const line = goal.spend.find(line => line.what.toLowerCase() === String(each.what).trim().toLowerCase());
       if (!line) {
         unplanned.push(String(each.what).trim());
