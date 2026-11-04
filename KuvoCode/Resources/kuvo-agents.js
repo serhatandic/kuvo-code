@@ -9674,14 +9674,17 @@ class ClaudeAgent {
     if (ClaudeAgent.keychain) {
       this.signOut = async () => {
         rmSync10(this.tokenFile, { force: true });
-        if ((await this.readStatus(this.consoleEnv()).catch(() => {
-          return;
-        }))?.loggedIn !== false) {
-          await signOutWith("Claude Code", this.executable(), ["auth", "logout"], this.consoleEnv());
+        try {
+          if ((await this.readStatus(this.consoleEnv()).catch(() => {
+            return;
+          }))?.loggedIn !== false) {
+            await signOutWith("Claude Code", this.executable(), ["auth", "logout"], this.consoleEnv());
+          }
+        } finally {
+          this.programUpdated();
+          this.known.reset();
+          this.modelList = undefined;
         }
-        this.programUpdated();
-        this.known.reset();
-        this.modelList = undefined;
       };
     } else if (instance.id === "default" && instance.home) {
       this.signOut = async () => {
@@ -23189,4 +23192,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents fc80bd0008aa70545610800492901e7ee0ca96f23f7b3e99ef02e94ead5100a5
+// Built from Packages/Box/src/agents eb3b8a775fbd6371dcb33cb106407fd0d70dedb4946b82725cfe5fcf88ca0b18

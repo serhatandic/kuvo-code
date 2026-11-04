@@ -570,6 +570,28 @@ esac
     }
   })
 
+  test("a Sign Out whose Console sign-out fails still leaves Kuvo Code's own plan sign-in signed out", async () => {
+    writeFileSync(join(bin, "claude"), `#!/bin/sh
+case "$1 $2" in
+  "auth logout") echo "The Keychain is locked." >&2; exit 1 ;;
+  "auth status")
+    [ -n "$CLAUDE_CONFIG_DIR" ] && echo '{"loggedIn":true,"authMethod":"console","email":"ops@example.com"}' || echo '{"loggedIn":true,"authMethod":"claude.ai","email":"ada@example.com"}' ;;
+esac
+`)
+    chmodSync(join(bin, "claude"), 0o755)
+    ClaudeAgent.keychain = true
+    try {
+      const agent = new ClaudeAgent(context())
+      ownToken(agent)
+      expect((await agent.account()).label).toBe("ada@example.com")
+      await expect(agent.signOut!()).rejects.toThrow("The Keychain is locked.")
+      // Its own plan sign-in is gone, and said so at once (a Console one is still there).
+      expect((await agent.account()).label).toBe("ops@example.com")
+    } finally {
+      ClaudeAgent.keychain = keychain
+    }
+  })
+
   test("an added account an earlier version signed in to a Claude plan in its folder asks to sign in again", async () => {
     consoleClaude(join(root, "claude-yours-added"))
     const home = join(root, "claude-added-old")

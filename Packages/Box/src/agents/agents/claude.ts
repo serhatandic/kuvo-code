@@ -109,14 +109,18 @@ export class ClaudeAgent implements Agent {
       // Kuvo Code's own: yours, in Terminal, stays signed in.
       this.signOut = async () => {
         rmSync(this.tokenFile, { force: true })
-        // An Anthropic Console sign-in, in Kuvo Code's own folder (an added account's: any of its
-        // own), there or not known to be gone.
-        if ((await this.readStatus(this.consoleEnv()).catch(() => undefined))?.loggedIn !== false) {
-          await signOutWith("Claude Code", this.executable(), ["auth", "logout"], this.consoleEnv())
+        try {
+          // An Anthropic Console sign-in, in Kuvo Code's own folder (an added account's: any of
+          // its own), there or not known to be gone.
+          if ((await this.readStatus(this.consoleEnv()).catch(() => undefined))?.loggedIn !== false) {
+            await signOutWith("Claude Code", this.executable(), ["auth", "logout"], this.consoleEnv())
+          }
+        } finally {
+          // Its token is gone either way.
+          this.programUpdated()
+          this.known.reset()
+          this.modelList = undefined
         }
-        this.programUpdated()
-        this.known.reset()
-        this.modelList = undefined
       }
     } else if (instance.id === "default" && instance.home) {
       this.signOut = async () => {
