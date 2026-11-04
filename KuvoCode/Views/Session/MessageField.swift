@@ -103,6 +103,9 @@ struct MessageField: NSViewRepresentable {
 
         /// Undo brings back nothing from before (another conversation's draft).
         func forgetUndo() { view?.forgetUndo() }
+
+        /// The window it's in, active or not.
+        var window: NSWindow? { view?.window }
     }
 
     func makeNSView(context: Context) -> NSScrollView {

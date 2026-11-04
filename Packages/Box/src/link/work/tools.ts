@@ -11,15 +11,15 @@ import { holdArchived } from "../areas/wakes";
 import { noteWorkChanged } from "./changes";
 import { callOf, keepAnswer, noteSession, pendingAsk, permissionWords, ruleFor, rulesOf, type PendingPermission } from "./answers";
 import { allowRefusal } from "./policy";
-import { ALWAYS, alwaysAsks } from "./always";
-import { finishGoal, goalProgress, mayPublish, maySpend, proposeGoal, runningGoal } from "./goals";
+import { approvalOf } from "./approval";
+import { finishGoal, goalProgress, goalProject, mayPublish, maySpend, proposeGoal, runningGoal } from "./goals";
 import fs from "node:fs";
 import path from "node:path";
 import { readProjects } from "../areas/projects";
 import { gitIn } from "../git";
 import { HERE } from "../home";
 import { answerOf, askWork, botAllows, doWork } from "./asks";
-import { cloneable, folderName, isEmptyFolder, projectPlace, shownPath } from "./projects";
+import { cloneable, folderName, isEmptyFolder, namedPlace, projectPlace, shownPath } from "./projects";
 import { projectsFolder } from "./settings";
 import { describeModels, usableModels } from "./models";
 import { botOfConversation, describeWork, placeWords, under, workingNow, workSessions, worksFor } from "./tree";
@@ -121,7 +121,7 @@ function commandsInSandbox(target: Target, permission: PendingPermission): boole
 const projectFolders = (folder: string): readonly string[] => readProjects().find(each => each.directory === folder)?.folders ?? [];
 
 /** answer_ask: what one of the caller's sessions asks, answered. A permission it may allow only
- * where it could go ahead itself and never what always comes to the user; it may always say no. A
+ * where it could go ahead itself, as its own rules and mode say; it may always say no. A
  * question it answers in words. Kept on the session, with why. */
 export async function answerAskTool(caller: Caller, args: Record<string, unknown>, targets: Target[], signal?: AbortSignal): Promise<ToolAnswer> {
   const found = await oneOfMine(caller, args.session, targets, "answer", signal);
@@ -156,22 +156,13 @@ export async function answerAskTool(caller: Caller, args: Record<string, unknown
     const folder = data.location?.directory ?? data.directory ?? "";
     const rules = rulesOf((caller.place.data.permissions ?? []) as KitRule[]);
     const seen = await callOf(target, permission, signal);
-    // What always comes to the user, whatever the mode, the plan or the goal's switches, then the
-    // policy. A command that runs in the sandbox is the sandbox's rule's alone (`allowRefusal`):
-    // anything but what acts beyond this computer, which it reads as plainly as the line allows.
+    // What its own conversation could do without asking, as its own rules and mode say
+    // (`allowRefusal`): a command in the sandbox where its own run there, anywhere in Full Access.
     const sandboxed = commandsInSandbox(target, permission);
-    const user = `The user sees the ask on "${title}" and answers it there. Tell them in a line why it's needed, and carry on with the rest.`;
-    const always = () => {
-      const kind = alwaysAsks(permission.action, permission.resources, seen);
-      return kind ? refused(`That's ${ALWAYS[kind]}, which always comes to the user: you can't allow it. ${user}`) : null;
-    };
-    const policy = () => {
-      const why = allowRefusal(permission.action, permission.resources, folder ? [folder, ...projectFolders(folder)] : [], rules, ruleFor, seen, sandboxed);
-      if (why === "above") return refused(`You can't allow that: you'd have to ask the user about it yourself. ${user}`);
-      return why ? refused(`That's ${why}, which always comes to the user: you can't allow it. ${user}`) : null;
-    };
-    const refusal = sandboxed && (permission.action === "shell" || permission.action === "bash") ? policy() : always() ?? policy();
-    if (refusal) return refusal;
+    const bridge = (() => { try { return readEngineFile().port !== caller.place.target.port; } catch { return false; } })();
+    const free = approvalOf(caller.place.data, { agents: bridge, bot: Boolean(bot) }).effective === "fullAccess" || !commandsInSandbox(caller.place.target, { sandboxed: true } as PendingPermission);
+    const why = allowRefusal(permission.action, permission.resources, folder ? [folder, ...projectFolders(folder)] : [], rules, ruleFor, seen, { sandboxed, free });
+    if (why) return refused(`You can't allow that: you'd have to ask the user about it yourself. The user sees the ask on "${title}" and answers it there. Tell them in a line why it's needed, and carry on with the rest.`);
   }
   try {
     await call(target, "POST", `/api/session/${encodeURIComponent(permission.asker)}/permission/${encodeURIComponent(permission.id)}/reply`, args.decision === "allow" ? { decision: "once" } : { decision: "reject", message: `${by.name}: ${reason}` }, signal);
@@ -188,27 +179,38 @@ export async function listModelsTool(engine: Target | null, bridge: Target | nul
   return said(describeModels(await usableModels(engine, bridge, signal)));
 }
 
-/** make_project: a new project, in the projects folder you picked, made once you allow it (at once
- * for a bot you said Always to); what it is, or why not. Waits for your answer up to `wait` ms;
- * after that it stays asked, and the conversation is told when you answer. */
+/** make_project: a new project, in the projects folder you picked (or the folder you named for it),
+ * made once you allow it (at once for a bot you said Always to, or one whose goal you started with
+ * it in the plan); what it is, or why not. Waits for your answer up to `wait` ms; after that it
+ * stays asked, and the conversation is told when you answer. */
 export async function makeProjectTool(caller: Caller, args: Record<string, unknown>, { signal, wait, every }: { signal?: AbortSignal; wait?: number; every?: number } = {}): Promise<ToolAnswer> {
   const name = typeof args.name === "string" ? args.name.trim() : "";
   if (!name) return refused("Say what it's called (name).");
   if (!folderName(name)) return refused(`${name} can't be a folder's name: use letters or numbers.`);
   const clone = typeof args.clone === "string" && args.clone.trim() ? args.clone.trim() : undefined;
   if (clone && !cloneable(clone)) return refused(`${clone} isn't a repository address git can clone: give an https or ssh one.`);
+  const bot = botOfConversation(caller.session);
+  // In the goal you started: by its name, or by the folder you named for it there.
+  const inPlan = bot ? (runningGoal(bot.bot)?.projects ?? []).map(goalProject) : [];
+  let named: string | undefined;
+  if (typeof args.folder === "string" && args.folder.trim()) {
+    const checked = namedPlace(args.folder);
+    if ("refused" in checked) return refused(checked.refused);
+    named = checked.folder;
+  } else {
+    named = inPlan.find(each => each.folder && folderName(each.name) === folderName(name))?.folder;
+  }
+  const planned = inPlan.some(each => (each.folder ? each.folder === named : !named && each.name.toLowerCase() === name.toLowerCase()));
   // What would fail anyway isn't asked.
-  const place = projectPlace(name);
+  const place = named ?? projectPlace(name);
   const listed = place ? readProjects().find(each => each.directory === place && !each.removed) : null;
   if (listed) return refused(`There's a project at ${shownPath(place!)} already: ${listed.name ?? path.basename(place!)}. Start sessions in it with start_session.`);
-  if (place && fs.existsSync(place) && !isEmptyFolder(place)) return refused(`There's a folder at ${shownPath(place)} already, with files in it. Pick another name.`);
-  const bot = botOfConversation(caller.session);
+  if (place && fs.existsSync(place) && !isEmptyFolder(place)) return refused(`There's a folder at ${shownPath(place)} already, with files in it. ${named ? `To work on what's there, start sessions in it with start_session (folder: "${shownPath(place)}").` : "Pick another name."}`);
   const asker = { session: caller.session, name: bot?.name ?? caller.name, ...(bot ? { bot: bot.bot } : {}) };
   const action = clone ? "cloneProject" : "makeProject";
-  const given = { name, ...(args.git === false ? { git: false } : {}), ...(clone ? { clone } : {}) };
+  const given = { name, ...(args.git === false ? { git: false } : {}), ...(clone ? { clone } : {}), ...(named ? { folder: named } : {}) };
   // Named in the goal you started, or allowed Always.
-  const planned = Boolean(bot && runningGoal(bot.bot)?.projects.some(each => each.toLowerCase() === name.toLowerCase()));
-  if (bot && (planned || botAllows(bot.bot, action)) && projectsFolder()) {
+  if (bot && (planned || botAllows(bot.bot, action)) && (named || projectsFolder())) {
     try {
       const done = await doWork(action, given, asker);
       return done.isError ? refused(done.text) : said(done.text);

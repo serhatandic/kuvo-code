@@ -1,8 +1,7 @@
 // A bot answering what its sessions ask (answer_ask, PROTOCOL.md "Work"): a permission it may allow
-// only where it could go ahead itself (the engine's rules for its own conversation allow it, part
-// by part) and what it allows reads as safe (`policy.ts`: what it can't tell is safe, pushing,
-// publishing, deploying and deleting outside the project come to you), and saying no is always its
-// to do. An ask one of a session's subagents makes is the
+// only where its own conversation could go ahead without asking (`policy.ts`: the engine's rules
+// for it allow it, part by part, and in the sandbox where its own commands run there), and saying
+// no is always its to do. An ask one of a session's subagents makes is the
 // session's. Each answer is kept on the session (`kuvo.answers`), for every client to show it on
 // the step that asked ("Allowed by Pixel") and in the bot's work. A question it answers in words.
 

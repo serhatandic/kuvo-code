@@ -1,7 +1,7 @@
 // A new project made on this box (PROTOCOL.md, "Work": `POST kuvo/projects/new`, and the
-// make_project tool): a folder in the projects folder you picked, a new git repository there (or
-// one cloned into it), added to the box's projects, marked with the bot that made it. The box makes
-// projects only there, and never deletes one.
+// make_project tool): a folder in the projects folder you picked (or the one you named for it), a
+// new git repository there (or one cloned into it), added to the box's projects, marked with the
+// bot that made it. The box makes projects only there, and never deletes one.
 
 import { execFile } from "node:child_process";
 import fs from "node:fs";
@@ -28,11 +28,13 @@ export interface Made {
 }
 
 /** What a new project is given: its name, whether it's a git repository (yes unless it says
- * otherwise), and a repository to clone into it. */
+ * otherwise), a repository to clone into it, and the folder you named for it (a full path; in the
+ * projects folder otherwise). */
 export interface NewProject {
   name?: unknown;
   git?: unknown;
   clone?: unknown;
+  folder?: unknown;
 }
 
 /** Why one wasn't made: no projects folder picked yet (403), a name or address that won't do
@@ -65,6 +67,17 @@ export function projectPlace(name: string, root = projectsFolder()): string | nu
   return root && folder ? path.join(root, folder) : null;
 }
 
+/** The folder you named for a project (written with `~` or in full), as a full path, or why it
+ * can't be one: the folder it goes in has to be there. */
+export function namedPlace(given: unknown, home = homeFolder()): { folder: string } | { refused: string } {
+  if (typeof given !== "string" || !given.trim()) return { refused: "Give the folder as a full path." };
+  const written = given.trim().replace(/^~(?=$|\/)/, home);
+  if (!path.isAbsolute(written)) return { refused: `Give the folder as a full path, like ~/${given.trim().replace(/^\.?\//, "")}.` };
+  const folder = path.resolve(written);
+  if (folder === path.parse(folder).root || folder === home) return { refused: `${shownPath(folder, home)} can't be a project's folder: name one inside it.` };
+  return { folder };
+}
+
 /** A path as you'd write it: under your home folder with `~`. */
 export function shownPath(folder: string, home = homeFolder()): string {
   return folder === home || folder.startsWith(home + "/") ? "~" + folder.slice(home.length) : folder;
@@ -90,20 +103,23 @@ function cloneInto(address: string, folder: string): Promise<string | null> {
   });
 }
 
-/** A new project called `given.name`, in the projects folder: what's kept of it, or why not. */
+/** A new project called `given.name`, in the projects folder (or the folder named for it): what's
+ * kept of it, or why not. */
 export async function makeProject(given: NewProject, madeBy: MadeBy | null, root = projectsFolder()): Promise<{ made: Made } | { refused: ProjectRefusal }> {
   const no = (status: ProjectRefusal["status"], message: string, needs?: "projectsFolder") => ({ refused: { status, message, ...(needs ? { needs } : {}) } });
   const name = typeof given.name === "string" ? given.name.trim() : "";
   if (!name) return no(400, "Say what it's called (name).");
-  if (!root) return no(403, "There's no projects folder here yet: the user picks one.", "projectsFolder");
-  const folder = projectPlace(name, root);
+  const named = given.folder === undefined || given.folder === null ? null : namedPlace(given.folder);
+  if (named && "refused" in named) return no(400, named.refused);
+  if (!named && !root) return no(403, "There's no projects folder here yet: the user picks one.", "projectsFolder");
+  const folder = named ? named.folder : projectPlace(name, root);
   if (!folder) return no(400, `${name} can't be a folder's name: use letters or numbers.`);
   const clone = typeof given.clone === "string" && given.clone.trim() ? given.clone.trim() : null;
   if (clone && !cloneable(clone)) return no(400, `${clone} isn't a repository address git can clone: give an https or ssh one.`);
   const listed = readProjects().find(each => each.directory === folder && !each.removed);
   if (listed) return no(409, `There's a project at ${shownPath(folder)} already: ${listed.name ?? path.basename(folder)}.`);
   const there = fs.existsSync(folder);
-  if (there && !isEmptyFolder(folder)) return no(409, `There's a folder at ${shownPath(folder)} already, with files in it. Pick another name.`);
+  if (there && !isEmptyFolder(folder)) return no(409, `There's a folder at ${shownPath(folder)} already, with files in it. ${named ? `To work on what's there, start sessions in it with start_session (folder: "${shownPath(folder)}").` : "Pick another name."}`);
   let kind: Made["kind"] = "plain";
   if (clone) {
     // git makes the folder, and takes away what it made of one that failed. (An empty one there

@@ -81,6 +81,16 @@ struct GoalCard: View {
         }
         .padding(16)
         .onAppear(perform: takeIn)
+        #if DEBUG
+        // KUVO_DEMO_GOAL_OPEN=<seconds>: that long after it shows, its first page to open is
+        // opened, as its button does.
+        .task(id: plan.id) {
+            guard let wait = ProcessInfo.processInfo.environment["KUVO_DEMO_GOAL_OPEN"].flatMap(Double.init),
+                  let action = yours.compactMap(\.action).first(where: { $0.kind == .open }) else { return }
+            await DemoWait.pause(.asked(wait))
+            if !Task.isCancelled { open(action) }
+        }
+        #endif
         .onChange(of: plan.id) {
             // What you started on another plan's box isn't this one's.
             restartingAgents = false
@@ -142,7 +152,7 @@ struct GoalCard: View {
                     ForEach(yours) { check in
                         YoursRow(text: check.text, detail: check.detail, site: check.site, failed: check.state == .failed, button: check.action.map { action in
                             (action.label, { open(action) })
-                        })
+                        }, help: check.action?.kind == .open ? opensIn : nil)
                     }
                 }
             }
@@ -325,7 +335,8 @@ struct GoalCard: View {
                     Text("When it’s done").tag(GoalPlan.Cadence.none)
                     Text("Daily").tag(GoalPlan.Cadence.day)
                     Text("Weekly").tag(GoalPlan.Cadence.week)
-                    if plan.phases.count > 1 || digest == .milestones {
+                    // An old goal's, set to hear after each of its phases: it keeps its pick.
+                    if digest == .milestones {
                         Text("After each phase").tag(GoalPlan.Cadence.milestones)
                     }
                 }
@@ -416,10 +427,14 @@ struct GoalCard: View {
         periods = plan.spend.map(\.per)
     }
 
-    /// A check's button: its page, or where new projects go (Settings › Worktrees, on its computer).
+    /// "Opens in Pixel’s browser, so it can use your sign-in."
+    private var opensIn: String { GoalPlanWords.opensIn(bot: plan.name, computer: onThisMac ? nil : computer) }
+
+    /// A check's button: its page, in the bot's browser (a sign-in there is one it can use), or
+    /// where new projects go (Settings › Worktrees, on its computer).
     private func open(_ action: GoalPlan.Check.Action) {
         switch action.kind {
-        case .open: if let url = action.url { NSWorkspace.shared.open(url) }
+        case .open: if let url = action.url { app.utilities.openForAgent(url, bot: plan.bot, machine: onThisMac ? nil : box) }
         case .projectsFolder: app.openSettings(.worktrees, on: SidebarBox(machine: onThisMac ? nil : box))
         }
     }
@@ -471,6 +486,8 @@ struct YoursRow: View {
     var site: String?
     var failed = false
     var button: (String, () -> Void)?
+    /// What the button does, under the pointer and to VoiceOver, where its words don't say.
+    var help: String?
     /// Puts it away (what waits for you while it runs).
     var clear: (() -> Void)?
     /// A check is on its way: a spinner in place of the dot.
@@ -480,72 +497,106 @@ struct YoursRow: View {
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        HStack(spacing: 12) {
-            Group {
-                if busy {
-                    Spinner(size: 11)
-                } else if failed {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.orange)
-                } else {
-                    Circle().fill(.orange).frame(width: 7, height: 7)
-                }
+        // On one line where its words have room beside its button; in a narrow card, its button
+        // under its words rather than the words squeezed to a word a line.
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 12) {
+                dot
+                words
+                    .frame(minWidth: 180, idealWidth: 180, maxWidth: .infinity, alignment: .leading)
+                controls
+                clearButton
             }
-            .frame(width: 12)
-            .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("\(ServiceText.text(text, site: site, scheme: scheme).fontWeight(aside == nil ? nil : .medium))\(aside.map { Text(" · \($0)").foregroundStyle(.secondary) } ?? Text(""))")
-                    .fixedSize(horizontal: false, vertical: true)
-                if let detail {
-                    Text(detail)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .top, spacing: 12) {
+                    dot.padding(.top, 4)
+                    words
+                    Spacer(minLength: 0)
+                    clearButton
                 }
-            }
-            .font(.callout)
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel("Yours: \(text)\([detail, aside].compactMap { $0 }.map { ", \($0)" }.joined())")
-            Spacer(minLength: 8)
-            if let (label, action) = button {
-                Button(action: action) {
-                    HStack(spacing: 5) {
-                        if let site { SiteServiceMark(site: site) }
-                        Text(label)
-                    }
+                if button != nil || !more.isEmpty {
+                    HStack(spacing: 2) { controls }
+                        .padding(.leading, 24)
                 }
-                .buttonStyle(GoalPillButtonStyle())
-                // Whole, its row's words wrapping before it: "Open Str…" says nothing.
-                .fixedSize()
-            }
-            if !more.isEmpty {
-                Menu {
-                    ForEach(more.indices, id: \.self) { index in
-                        Button(more[index].0, action: more[index].1)
-                    }
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.system(size: 11, weight: .semibold))
-                }
-                .menuStyle(.button)
-                .menuIndicator(.hidden)
-                .buttonStyle(IconButtonStyle(width: 22, height: 22))
-                .foregroundStyle(.secondary)
-                .help("More")
-                .accessibilityLabel("More for \(text)")
-            }
-            if let clear {
-                Button("Put Away", systemImage: "xmark", action: clear)
-                    .font(.system(size: 10, weight: .semibold))
-                    .buttonStyle(IconButtonStyle(width: 22, height: 22))
-                    .foregroundStyle(.secondary)
-                    .help("Put it away: it no longer waits for you")
             }
         }
         .padding(.leading, 12)
         .padding(.trailing, 8)
         .padding(.vertical, 9)
         .background(Color.orange.opacity(scheme == .dark ? 0.13 : 0.08), in: .rect(cornerRadius: 10))
+    }
+
+    private var dot: some View {
+        Group {
+            if busy {
+                Spinner(size: 11)
+            } else if failed {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.orange)
+            } else {
+                Circle().fill(.orange).frame(width: 7, height: 7)
+            }
+        }
+        .frame(width: 12)
+        .accessibilityHidden(true)
+    }
+
+    private var words: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("\(ServiceText.text(text, site: site, scheme: scheme).fontWeight(aside == nil ? nil : .medium))\(aside.map { Text(" · \($0)").foregroundStyle(.secondary) } ?? Text(""))")
+                .fixedSize(horizontal: false, vertical: true)
+            if let detail {
+                Text(detail)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .font(.callout)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Yours: \(text)\([detail, aside].compactMap { $0 }.map { ", \($0)" }.joined())")
+    }
+
+    @ViewBuilder private var controls: some View {
+        if let (label, action) = button {
+            Button(action: action) {
+                HStack(spacing: 5) {
+                    if let site { SiteServiceMark(site: site) }
+                    Text(label)
+                }
+            }
+            .buttonStyle(GoalPillButtonStyle())
+            // Whole, its row's words wrapping before it: "Open Str…" says nothing.
+            .fixedSize()
+            .help(help ?? "")
+            .accessibilityHint(help ?? "")
+        }
+        if !more.isEmpty {
+            Menu {
+                ForEach(more.indices, id: \.self) { index in
+                    Button(more[index].0, action: more[index].1)
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 11, weight: .semibold))
+            }
+            .menuStyle(.button)
+            .menuIndicator(.hidden)
+            .buttonStyle(IconButtonStyle(width: 22, height: 22))
+            .foregroundStyle(.secondary)
+            .help("More")
+            .accessibilityLabel("More for \(text)")
+        }
+    }
+
+    @ViewBuilder private var clearButton: some View {
+        if let clear {
+            Button("Put Away", systemImage: "xmark", action: clear)
+                .font(.system(size: 10, weight: .semibold))
+                .buttonStyle(IconButtonStyle(width: 22, height: 22))
+                .foregroundStyle(.secondary)
+                .help("Put it away: it no longer waits for you")
+        }
     }
 }
 

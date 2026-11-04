@@ -1,0 +1,528 @@
+import AppKit
+import ClientDesign
+import ClientSessions
+import SwiftUI
+
+/// A goal's steps on a timeline (`GoalChart`), the width of the card: one row per step in order,
+/// its name on its bar after its mark, the bar a quiet fill (grey done, the accent under way with
+/// a line as far as now, faint what's planned). Over them an axis with Now, the due date and when
+/// it's likely done as flags, the due date at the edge where it's days past the work. Point at a
+/// step for lines from what it waits for, the rest dimmed. A long goal opens on the days around
+/// now; pinch or ⌘-scroll shows it whole.
+struct GoalChartView: View {
+    let plan: GoalPlan
+    let timeline: GoalTimeline
+    @Environment(\.accent) private var accent
+    @Environment(\.colorScheme) private var scheme
+    @State private var zoomedOut = false
+    @State private var pointed: String?
+    @State private var zoomKeys = ZoomKeys()
+
+    static let rowHeight: CGFloat = 28
+    static let axisHeight: CGFloat = 22
+    static let barHeight: CGFloat = 20
+    /// The most the rows take before they scroll: about ten.
+    static let mostHeight: CGFloat = 10 * rowHeight
+
+    private var now: Date { timeline.now }
+    private var isRunning: Bool { plan.state == .running }
+
+    /// Each bar and the top of its row.
+    private struct Placed: Identifiable {
+        let bar: GoalChart.Bar
+        let index: Int
+        let y: CGFloat
+        var id: String { bar.id }
+        var mid: CGFloat { y + GoalChartView.rowHeight / 2 }
+    }
+
+    private func placed(_ chart: GoalChart) -> [Placed] {
+        var y: CGFloat = 0
+        return chart.bars.enumerated().map { index, bar in
+            defer { y += Self.rowHeight }
+            return Placed(bar: bar, index: index, y: y)
+        }
+    }
+
+    var body: some View {
+        let chart = timeline.chart(whole: zoomedOut)
+        let rows = placed(chart)
+        let height = (rows.last?.y ?? -Self.rowHeight) + Self.rowHeight
+        let shownHeight = min(height, Self.mostHeight)
+        let long = chart.whole.duration > chart.shown.duration + 60
+        VStack(alignment: .leading, spacing: 6) {
+            GeometryReader { measured in
+                let x = ChartX(shown: chart.shown, width: measured.size.width, kept: Self.saysDueAtEdge(chart) ? Self.edgeRoom : 0)
+                VStack(alignment: .leading, spacing: 0) {
+                    axis(chart, x: x)
+                        .frame(width: x.width, height: Self.axisHeight, alignment: .topLeading)
+                    ScrollView(.vertical) {
+                        ZStack(alignment: .topLeading) {
+                            grid(chart, x: x, height: height)
+                            ForEach(rows) { row in
+                                self.row(row, chart: chart, x: x)
+                                    .frame(width: x.width, height: Self.rowHeight)
+                                    .offset(y: row.y)
+                                    .opacity(dims(row.bar, chart: chart) ? 0.38 : 1)
+                            }
+                            if let pointed {
+                                links(into: pointed, rows: rows, chart: chart, x: x)
+                                    .allowsHitTesting(false)
+                            }
+                        }
+                        .frame(width: x.width, height: height, alignment: .topLeading)
+                        .contentShape(.rect)
+                        .onContinuousHover { phase in
+                            switch phase {
+                            case .active(let at):
+                                let id = rows.last { $0.y <= at.y }?.id
+                                if id != pointed { withAnimation(.easeOut(duration: 0.12)) { pointed = id } }
+                            case .ended:
+                                withAnimation(.easeOut(duration: 0.12)) { pointed = nil }
+                            }
+                        }
+                    }
+                    .scrollDisabled(height <= Self.mostHeight)
+                    .scrollIndicators(height > Self.mostHeight ? .automatic : .never)
+                    .fadingScrollEdges(20)
+                    .frame(height: shownHeight)
+                }
+            }
+            .frame(height: Self.axisHeight + shownHeight)
+            if !chart.hasBegun, chart.placesAny {
+                Text("Placed in order until the steps have times.")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .padding(.leading, GoalSteps.nameInset)
+        .font(.system(size: 12))
+        // Pinch, or ⌘-scroll, for the whole goal and back.
+        .gesture(MagnifyGesture().onEnded { value in
+            guard long || zoomedOut else { return }
+            if value.magnification < 0.9, !zoomedOut { withAnimation(.ui) { zoomedOut = true } }
+            if value.magnification > 1.1, zoomedOut { withAnimation(.ui) { zoomedOut = false } }
+        })
+        .onHover { zoomKeys.hovering = $0 }
+        .onChange(of: long || zoomedOut, initial: true) { _, zooms in
+            if zooms { zoomKeys.start($zoomedOut) } else { zoomKeys.stop() }
+        }
+        .onDisappear { zoomKeys.stop() }
+        .onChange(of: plan.id) {
+            // Another goal in the same place: nothing pointed at or zoomed carries over.
+            pointed = nil
+            zoomedOut = false
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Timeline")
+        .accessibilityValue(spokenAxis(chart))
+        .accessibilityActions {
+            if long || zoomedOut {
+                Button(zoomedOut ? "Show the Days Around Today" : "Show the Whole Goal") { zoomedOut.toggle() }
+            }
+        }
+    }
+
+    /// While you point at a step, everything but it and what it waits for steps back.
+    private func dims(_ bar: GoalChart.Bar, chart: GoalChart) -> Bool {
+        guard let pointed, chart.bars.contains(where: { $0.id == pointed }) else { return false }
+        return bar.id != pointed && !chart.waitsFor(pointed).contains(bar.id)
+    }
+
+    // MARK: A row
+
+    private enum Spot {
+        /// On the axis, from `x0` to `x1`.
+        case span(CGFloat, CGFloat)
+        /// Past the right edge (or with no time at all): its name sits against the edge.
+        case after
+        /// Before the left edge: against it.
+        case before
+    }
+
+    private func spot(_ bar: GoalChart.Bar, chart: GoalChart, x: ChartX) -> Spot {
+        guard let from = bar.from else { return .after }
+        let to = max(from, bar.to ?? now)
+        if from >= chart.shown.end { return .after }
+        if to <= chart.shown.start { return .before }
+        return .span(max(0, x(from)), min(x.width, x(to)))
+    }
+
+    private func row(_ row: Placed, chart: GoalChart, x: ChartX) -> some View {
+        let bar = row.bar
+        let spot = spot(bar, chart: chart, x: x)
+        let span: (CGFloat, CGFloat)? = if case .span(let a, let b) = spot { (a, b) } else { nil }
+        return BarRow(start: span?.0, end: span?.1, pinsLeft: { if case .before = spot { true } else { false } }()) {
+            if let span {
+                fill(bar, from: span.0, to: span.1, x: x)
+            }
+        } label: {
+            label(bar, index: row.index, wide: x.width >= 460)
+        }
+        .contentShape(.rect)
+        .help(help(bar))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(bar.step.text)
+        .accessibilityValue(spoken(bar))
+    }
+
+    @ViewBuilder private func fill(_ bar: GoalChart.Bar, from: CGFloat, to: CGFloat, x: ChartX) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 6, style: .continuous)
+        switch bar.kind {
+        case .doing:
+            shape.fill(accent.opacity(scheme == .dark ? 0.24 : 0.16))
+                .overlay(alignment: .bottomLeading) {
+                    // As far as now.
+                    Rectangle().fill(accent)
+                        .frame(width: max(0, min(to, x(now)) - from), height: 3)
+                }
+                .clipShape(shape)
+        case .waiting:
+            shape.fill(Color.orange.opacity(0.2))
+        case .done:
+            shape.fill(Color.primary.opacity(scheme == .dark ? 0.13 : 0.085))
+        case .paused, .planned:
+            shape.fill(Color.primary.opacity(scheme == .dark ? 0.08 : 0.055))
+        case .skipped:
+            shape.fill(Color.primary.opacity(0.035))
+        }
+    }
+
+    private func label(_ bar: GoalChart.Bar, index: Int, wide: Bool) -> some View {
+        let step = bar.step
+        let said = GoalPlanWords.state(of: step, in: plan, now: now)
+        return HStack(spacing: 6) {
+            if GoalPlanWords.mark(of: step) != nil {
+                StepServiceMark(step: step)
+            } else {
+                Text("\(index + 1)")
+                    .font(.system(size: 9.5, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .frame(width: 15, height: 15)
+                    .background(Circle().fill(Color.primary.opacity(0.07)))
+            }
+            // Cut in the middle: steps named alike ("…(3 of 9)") still differ.
+            Text(step.text)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .fontWeight(bar.kind == .doing || bar.kind == .waiting ? .medium : .regular)
+                .foregroundStyle(ink(bar.kind))
+                .layoutPriority(1)
+            if wide, bar.kind == .doing, step.note != nil, let words = said.text {
+                Text("· \(words)").foregroundStyle(.tertiary).lineLimit(1).fixedSize()
+            } else if bar.kind == .waiting, let words = said.text {
+                Text("· \(words)").fontWeight(.semibold).foregroundStyle(.orange).lineLimit(1).fixedSize()
+            }
+        }
+        .padding(.horizontal, 6)
+    }
+
+    private func ink(_ kind: GoalChart.Bar.Kind) -> AnyShapeStyle {
+        switch kind {
+        case .doing, .waiting: AnyShapeStyle(.primary)
+        case .skipped: AnyShapeStyle(.tertiary)
+        default: AnyShapeStyle(.secondary)
+        }
+    }
+
+    /// Under the pointer: the step's name in full, where it stands, and when it ran or is placed.
+    private func help(_ bar: GoalChart.Bar) -> String {
+        var lines = [bar.step.text]
+        if let said = GoalPlanWords.state(of: bar.step, in: plan, now: now).text { lines.append(said) }
+        if let when = times(bar) { lines.append(when) }
+        return lines.joined(separator: "\n")
+    }
+
+    private func spoken(_ bar: GoalChart.Bar) -> String {
+        [GoalPlanWords.spokenState(of: bar.step, in: plan, now: now), times(bar)].compactMap { $0 }.joined(separator: ", ")
+    }
+
+    /// "10:00 – 10:36", "Since 10:42", "Around 13:20" for one placed.
+    private func times(_ bar: GoalChart.Bar) -> String? {
+        guard let from = bar.from else { return nil }
+        let time = { (date: Date) in GoalSteps.time(date, now: now) }
+        if bar.isPlaced { return "Around \(time(from))" }
+        if let to = bar.to, bar.kind == .done || bar.kind == .skipped { return "\(time(from)) – \(time(to))" }
+        return "Since \(time(from))"
+    }
+
+    // MARK: What a step waits for
+
+    /// Thin lines into the step you point at, from each step it waits for: down from under that
+    /// one's end, then across to its start.
+    private func links(into id: String, rows: [Placed], chart: GoalChart, x: ChartX) -> some View {
+        let target = rows.first { $0.id == id }
+        let sources = rows.filter { chart.waitsFor(id).contains($0.id) }
+        return Canvas { context, _ in
+            guard let target, case .span(let start, _) = spot(target.bar, chart: chart, x: x) else { return }
+            for source in sources {
+                guard case .span(_, let end) = spot(source.bar, chart: chart, x: x) else { continue }
+                let across = max(2, min(end - 3, start - 8))
+                let top = source.mid + Self.barHeight / 2 + 1
+                guard target.mid - 4 > top else { continue }
+                var path = Path()
+                path.move(to: CGPoint(x: across, y: top))
+                path.addLine(to: CGPoint(x: across, y: target.mid - 4))
+                path.addQuadCurve(to: CGPoint(x: across + 4, y: target.mid), control: CGPoint(x: across, y: target.mid))
+                path.addLine(to: CGPoint(x: start, y: target.mid))
+                context.stroke(path, with: .color(accent), style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+                context.fill(Path(ellipseIn: CGRect(x: across - 2, y: top - 2, width: 4, height: 4)), with: .color(accent))
+            }
+        }
+        .frame(width: x.width, height: (rows.last?.y ?? 0) + Self.rowHeight)
+    }
+
+    // MARK: The grid and the axis
+
+    /// The unit the axis counts in, for what shows of it.
+    private func unit(_ chart: GoalChart) -> GoalTimeline.Unit { GoalTimeline.unit(for: chart.shown.duration) }
+
+    /// The grid's lines: on each hour, or each day.
+    private func lines(_ chart: GoalChart) -> [Date] {
+        unit(chart) == .hour ? chart.ticks() : Self.days(in: chart.shown)
+    }
+
+    private func grid(_ chart: GoalChart, x: ChartX, height: CGFloat) -> some View {
+        Canvas { context, _ in
+            if isRunning, chart.shown.contains(now) {
+                // What's past, faintly, up to now.
+                let at = x(now)
+                context.fill(Path(CGRect(x: 0, y: 0, width: at, height: height)), with: .color(.primary.opacity(0.025)))
+                context.fill(Path(CGRect(x: at - 0.5, y: 0, width: 1, height: height)), with: .color(accent.opacity(0.25)))
+            }
+            for line in lines(chart) where chart.shown.contains(line) {
+                context.fill(Path(CGRect(x: x(line) - 0.5, y: 0, width: 1, height: height)), with: .color(.primary.opacity(0.06)))
+            }
+        }
+        .frame(width: x.width, height: height)
+        .allowsHitTesting(false)
+    }
+
+    /// Over the rows: a few times, and the flags: Now (Today on a goal counted in days) in the
+    /// accent, the due date in red with a short tick, when it's likely done in grey; the due date
+    /// at the edge where it's past what shows. No label runs into a flag or off the edge.
+    private func axis(_ chart: GoalChart, x: ChartX) -> some View {
+        let hours = unit(chart) == .hour
+        let showsNow = isRunning && chart.shown.contains(now)
+        let nowX = x(now)
+        let due = chart.due.flatMap { chart.shown.contains($0) ? $0 : nil }
+        let edgeDue = Self.saysDueAtEdge(chart)
+        let finish = chart.finish.flatMap { finish -> Date? in
+            guard isRunning, chart.shown.contains(finish) else { return nil }
+            // Where it would crowd Now or the due date, Now and the due date say enough.
+            if abs(x(finish) - nowX) < 70 { return nil }
+            if let due, abs(x(finish) - x(due)) < 80 { return nil }
+            return finish
+        }
+        let flags = [showsNow ? nowX : nil, due.map { x($0) }, finish.map { x($0) }].compactMap { $0 }
+        let marks = hours ? chart.ticks().filter(chart.shown.contains) : Self.days(in: chart.shown)
+        let dayWidth = x.width * 86400 / max(1, chart.shown.duration)
+        let hourWidth = marks.count > 1 ? x(marks[1]) - x(marks[0]) : x.width
+        let labeled = hours ? Self.labeledHours(marks, hourWidth: hourWidth) : Self.labeledDays(marks, dayWidth: dayWidth, week: chart.shown.duration <= 8 * 86400, now: now)
+        let rightRoom: CGFloat = edgeDue ? Self.edgeRoom + 12 : 18
+        return ZStack(alignment: .topLeading) {
+            ForEach(marks, id: \.self) { mark in
+                // A day's label sits over its day; an hour's at its line.
+                let at = hours ? x(mark) : x(mark.addingTimeInterval(43200))
+                if labeled.contains(mark), at > 16, at < x.width - rightRoom, flags.allSatisfy({ abs($0 - at) >= 40 }) {
+                    Text(hours ? mark.formatted(.dateTime.hour().minute()) : mark.formatted(chart.shown.duration <= 8 * 86400 ? .dateTime.weekday(.abbreviated).day() : .dateTime.month(.abbreviated).day()))
+                        .font(.system(size: 10.5).monospacedDigit())
+                        .foregroundStyle(.tertiary)
+                        .fixedSize()
+                        .position(x: at, y: 10)
+                }
+            }
+            if let finish {
+                flag("Done ~\(Self.when(finish, now: now, hours: hours))", ink: AnyShapeStyle(.secondary), rim: Color.primary.opacity(0.2), at: x(finish), width: x.width)
+            }
+            if let due {
+                flag("Due \(Self.when(due, now: now, hours: hours))", ink: AnyShapeStyle(Color.red), rim: Color.red.opacity(0.55), at: x(due), width: x.width)
+                Rectangle().fill(Color.red.opacity(0.7))
+                    .frame(width: 1.5, height: 5)
+                    .position(x: x(due), y: Self.axisHeight - 2.5)
+            }
+            if edgeDue, let deadline = chart.deadline {
+                Text("Due \(Self.when(deadline, now: now, hours: false)) ›")
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(.red)
+                    .fixedSize()
+                    .frame(width: x.width, height: 20, alignment: .trailing)
+            }
+            if showsNow {
+                Text(hours ? now.formatted(.dateTime.hour().minute()) : "Today")
+                    .font(.system(size: 10.5, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1)
+                    .background(Capsule().fill(accent))
+                    .fixedSize()
+                    .position(x: min(max(nowX, 22), x.width - 22), y: 10)
+            }
+        }
+        .accessibilityHidden(true)
+    }
+
+    private func flag(_ title: String, ink: AnyShapeStyle, rim: Color, at: CGFloat, width: CGFloat) -> some View {
+        Text(title)
+            .font(.system(size: 10.5, weight: .semibold).monospacedDigit())
+            .foregroundStyle(ink)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 1)
+            .background(Capsule().fill(Color(nsColor: .textBackgroundColor)))
+            .overlay(Capsule().strokeBorder(rim, lineWidth: 1))
+            .fixedSize()
+            .position(x: min(max(at, 36), width - 36), y: 10)
+    }
+
+    /// A flag's time: "18:20" today on an axis of hours, "Fri 6" another day this week, "Fri 6 Nov"
+    /// further off.
+    static func when(_ date: Date, now: Date, hours: Bool) -> String {
+        if hours && Calendar.current.isDate(date, inSameDayAs: now) { return date.formatted(.dateTime.hour().minute()) }
+        return abs(date.timeIntervalSince(now)) > 6 * 86400
+            ? date.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated))
+            : date.formatted(.dateTime.weekday(.abbreviated).day())
+    }
+
+    /// The room at the axis's right for "Due Fri 6 Nov ›".
+    static let edgeRoom: CGFloat = 100
+
+    /// The due date said at the right edge: days past the work, or past the days around now.
+    static func saysDueAtEdge(_ chart: GoalChart) -> Bool {
+        chart.isDuePastEdge || (chart.due.map { $0 > chart.shown.end } ?? false)
+    }
+
+    /// Whether the timeline says when the goal is due, on its axis or at its edge, as it first
+    /// opens: where it doesn't (none, or overdue before the days it shows), the bar's line does.
+    static func saysDue(_ chart: GoalChart) -> Bool {
+        saysDueAtEdge(chart) || (chart.due.map(chart.shown.contains) ?? false)
+    }
+
+    /// The axis to VoiceOver, which can't see its flags: "Due Fri 6 Nov, likely done Thu 5".
+    private func spokenAxis(_ chart: GoalChart) -> String {
+        var said: [String] = []
+        if let deadline = chart.deadline, isRunning { said.append("\(deadline < now ? "Was due" : "Due") \(Self.when(deadline, now: now, hours: true))") }
+        if let finish = chart.finish, isRunning { said.append("likely done \(Self.when(finish, now: now, hours: true))") }
+        return said.joined(separator: ", ")
+    }
+
+    /// The days that start within `shown`, each at its start.
+    static func days(in shown: DateInterval) -> [Date] {
+        let calendar = Calendar.current
+        var day = calendar.startOfDay(for: shown.start)
+        var days: [Date] = []
+        while day < shown.end, days.count < 400 {
+            days.append(day)
+            day = calendar.date(byAdding: .day, value: 1, to: day) ?? shown.end
+        }
+        return days
+    }
+
+    /// The hours that get a label: each where it has room for its time, else every second, third…
+    /// counted from the first, so no two run into each other on a narrow axis.
+    static func labeledHours(_ hours: [Date], hourWidth: CGFloat, room: CGFloat = 44) -> Set<Date> {
+        let step = hourWidth > 0 ? max(1, Int((room / hourWidth).rounded(.up))) : max(hours.count, 1)
+        return Set(hours.enumerated().compactMap { $0.offset % step == 0 ? $0.element : nil })
+    }
+
+    /// The days that get a label of their own: every day across a week or where each has room for
+    /// its date; else one every few days, counted out from Today (or the first day) so the labels
+    /// keep clear of it and of each other, and a week apart once that's most of a week.
+    static func labeledDays(_ days: [Date], dayWidth: CGFloat, week: Bool, now: Date, calendar: Calendar = .current) -> Set<Date> {
+        let fit = dayWidth > 0 ? Int((56 / dayWidth).rounded(.up)) : 7
+        let step = week || dayWidth >= 52 ? 1 : fit >= 5 ? 7 * Int((Double(fit) / 7).rounded(.up)) : max(fit, 1)
+        let origin = calendar.startOfDay(for: days.contains { calendar.isDate($0, inSameDayAs: now) } ? now : days.first ?? now)
+        return Set(days.filter { day in
+            (calendar.dateComponents([.day], from: origin, to: calendar.startOfDay(for: day)).day ?? 1) % step == 0
+        })
+    }
+}
+
+/// A row's bar and its label: the bar from `start` to `end`, the label at the bar's start, or
+/// against the right edge where it would pass it (and for a step past the edge, `start` nil), or
+/// against the left for one before it. Laid out in one pass, so a label never jumps.
+private struct BarRow<Fill: View, Label: View>: View {
+    let start: CGFloat?
+    let end: CGFloat?
+    var pinsLeft = false
+    @ViewBuilder let fill: Fill
+    @ViewBuilder let label: Label
+
+    var body: some View {
+        RowLayout(start: start, end: end, pinsLeft: pinsLeft) {
+            fill
+            label
+        }
+    }
+
+    private struct RowLayout: Layout {
+        let start: CGFloat?
+        let end: CGFloat?
+        let pinsLeft: Bool
+
+        func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+            CGSize(width: proposal.width ?? 0, height: proposal.height ?? GoalChartView.rowHeight)
+        }
+
+        func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+            let width = bounds.width
+            var label = subviews.last
+            if let start, let end, subviews.count == 2 {
+                let barHeight = GoalChartView.barHeight
+                subviews[0].place(at: CGPoint(x: bounds.minX + start, y: bounds.midY - barHeight / 2), proposal: ProposedViewSize(width: max(8, end - start), height: barHeight))
+            } else if subviews.count == 2 {
+                subviews[0].place(at: CGPoint(x: bounds.minX, y: bounds.minY), proposal: .zero)
+            } else {
+                label = subviews.first
+            }
+            guard let label else { return }
+            let ideal = min(label.sizeThatFits(.unspecified).width, width)
+            let x: CGFloat = if pinsLeft {
+                0
+            } else if let start, start + ideal <= width {
+                start
+            } else {
+                max(0, width - ideal)
+            }
+            label.place(at: CGPoint(x: bounds.minX + x, y: bounds.midY), anchor: .leading, proposal: ProposedViewSize(width: width - x, height: GoalChartView.barHeight))
+        }
+    }
+}
+
+/// Where a time falls across the chart, `width` wide, showing `shown` of the goal.
+private struct ChartX {
+    let shown: DateInterval
+    let width: CGFloat
+    /// Room kept at the right that no time reaches: for the due date said past the edge, so no
+    /// flag or bar runs into it.
+    var kept: CGFloat = 0
+
+    func callAsFunction(_ date: Date) -> CGFloat {
+        guard shown.duration > 0 else { return 0 }
+        return CGFloat(date.timeIntervalSince(shown.start) / shown.duration) * max(0, width - kept)
+    }
+}
+
+/// ⌘-scroll over a long goal's timeline: down for the whole goal, up for the days around today.
+@MainActor final class ZoomKeys {
+    var hovering = false
+    private var monitor: Any?
+
+    func start(_ zoomedOut: Binding<Bool>) {
+        guard monitor == nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+            let command = event.modifierFlags.contains(.command), delta = event.scrollingDeltaY
+            let taken = MainActor.assumeIsolated { () -> Bool in
+                guard let self, self.hovering, command, abs(delta) > 0.5 else { return false }
+                let out = delta < 0
+                if zoomedOut.wrappedValue != out { withAnimation(.ui) { zoomedOut.wrappedValue = out } }
+                return true
+            }
+            return taken ? nil : event
+        }
+    }
+
+    func stop() {
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        monitor = nil
+    }
+}

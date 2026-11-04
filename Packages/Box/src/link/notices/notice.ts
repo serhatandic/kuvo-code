@@ -19,9 +19,11 @@ export interface NoticeData {
   requestSession?: string;
   /** "0": its notification mustn't answer it from buttons. */
   answerable?: "0";
-  /** "0": a permission's Always for This would save more than its notification shows, so it has
-   * no Always there. */
+  /** "0": a permission's Always would save more than its notification shows, so a phone that
+   * can't name what it saves has no Always there. */
   always?: "0";
+  /** A permission's Always as its button says what it saves: "Always Allow git push". */
+  alwaysTitle?: string;
   ask?: string;
   /** What an agent asks of the vault (`kuvo/vault/asks`). */
   vaultAsk?: string;

@@ -444,6 +444,26 @@ describe("permissions", () => {
     expect(sessions.messages(id).some((message) => message.type === "agent-switched")).toBe(true)
   })
 
+  test("Don't Allow with words tells the agent what to do instead: the answer is no, and the words reach it as your message", async () => {
+    const answers: string[] = []
+    const seen: string[] = []
+    a.script = async (input, turn, hooks) => {
+      seen.push(input.text.split("User message:\n").pop()!)
+      if (seen.length === 1) answers.push(await hooks.permission({ action: "shell", resources: ["npm install"], save: ["npm install *"] }))
+      return { outcome: "succeeded" }
+    }
+    const id = create()
+    sessions.update(id, { permissions: [{ action: "shell", resource: "*", effect: "ask" }] })
+    send(id, "go")
+    await until(() => sessions.permissions(id).length === 1)
+    sessions.replyPermission(id, sessions.permissions(id)[0].id, "reject", "  Use pnpm instead  ")
+    await settled(id, 2)
+    expect(answers).toEqual(["reject"])
+    expect(seen.at(-1)).toContain("Use pnpm instead")
+    // Words with another answer are no message.
+    expect(() => sessions.replyPermission(id, "per_gone", "once", "x")).toThrow()
+  })
+
   test("Always on a command lets that command through, not a line that adds another", async () => {
     const answers: string[] = []
     a.script = async (_input, _turn, hooks) => {
@@ -483,6 +503,83 @@ describe("permissions", () => {
     sessions.replyPermission(id, sessions.permissions(id)[0].id, "reject")
     await settled(id, 1)
     expect(answers).toEqual(["always", "reject", "reject"])
+  })
+
+  test("Always on an edit lets every edit in the conversation through, and on a command its kind (git push, npm run build), as the engine's Always does, where the agent says nothing of what it saves (Claude Code, Codex)", async () => {
+    const answers: string[] = []
+    const saved: (string[] | undefined)[] = []
+    a.script = async (_input, _turn, hooks) => {
+      answers.push(await hooks.permission({ action: "edit", resources: ["sandbox-edit-test/pending-1.txt"] }))
+      answers.push(await hooks.permission({ action: "edit", resources: ["sandbox-edit-test/pending-2.txt"] }))
+      answers.push(await hooks.permission({ action: "write", resources: ["notes/new.md"] }))
+      answers.push(await hooks.permission({ action: "shell", resources: ["git push origin main"] }))
+      answers.push(await hooks.permission({ action: "shell", resources: ["git push --tags"] }))
+      answers.push(await hooks.permission({ action: "shell", resources: ["git reset --hard"] }))
+      answers.push(await hooks.permission({ action: "shell", resources: ["cd web && npm run build -- --prod"] }))
+      answers.push(await hooks.permission({ action: "shell", resources: ["npm run build"] }))
+      answers.push(await hooks.permission({ action: "shell", resources: ["npm run deploy"] }))
+      return { outcome: "succeeded" }
+    }
+    const id = create()
+    sessions.update(id, { permissions: [{ action: "*", resource: "*", effect: "ask" }] })
+    send(id, "go")
+    const answer = async (decision: "always" | "reject", resource: string) => {
+      await until(() => sessions.permissions(id)[0]?.resources[0] === resource).catch(() => { throw new Error(`waited for ${resource}, asked ${JSON.stringify(sessions.permissions(id).map((each) => each.resources))}`) })
+      saved.push(sessions.permissions(id)[0].save)
+      sessions.replyPermission(id, sessions.permissions(id)[0].id, decision)
+    }
+    await answer("always", "sandbox-edit-test/pending-1.txt")
+    await answer("always", "git push origin main")
+    await answer("reject", "git reset --hard")
+    await answer("always", "cd web && npm run build -- --prod")
+    await answer("reject", "npm run deploy")
+    await settled(id, 1)
+    expect(saved).toEqual([["*"], ["git push *"], ["git reset *"], ["npm run build *"], ["npm run deploy *"]])
+    expect(answers).toEqual(["always", "once", "once", "always", "once", "reject", "always", "once", "reject"])
+  })
+
+  test("Always on a command whose kind its words don't say saves the line too, never the whole program (git --no-pager diff, git -C x status, sudo, a variable first, cd alone)", async () => {
+    const answers: string[] = []
+    const saved: (string[] | undefined)[] = []
+    a.script = async (_input, _turn, hooks) => {
+      answers.push(await hooks.permission({ action: "shell", resources: ["cd web"] }))
+      answers.push(await hooks.permission({ action: "shell", resources: ["git --no-pager diff"] }))
+      answers.push(await hooks.permission({ action: "shell", resources: ["git --no-pager diff"] }))
+      answers.push(await hooks.permission({ action: "shell", resources: ["git diff HEAD~1"] }))
+      answers.push(await hooks.permission({ action: "shell", resources: ["git push --force"] }))
+      answers.push(await hooks.permission({ action: "shell", resources: ["git -C repo status"] }))
+      answers.push(await hooks.permission({ action: "shell", resources: ["git -C repo reset --hard"] }))
+      answers.push(await hooks.permission({ action: "shell", resources: ["CI=1 npm test"] }))
+      answers.push(await hooks.permission({ action: "shell", resources: ["CI=1 rm -rf build"] }))
+      answers.push(await hooks.permission({ action: "shell", resources: ["sudo npm i"] }))
+      answers.push(await hooks.permission({ action: "shell", resources: ["sudo rm -rf /"] }))
+      answers.push(await hooks.permission({ action: "shell", resources: ["ls"] }))
+      return { outcome: "succeeded" }
+    }
+    const id = create()
+    sessions.update(id, { permissions: [{ action: "*", resource: "*", effect: "ask" }] })
+    send(id, "go")
+    const answer = async (decision: "always" | "reject", resource: string) => {
+      await until(() => sessions.permissions(id)[0]?.resources[0] === resource).catch(() => { throw new Error(`waited for ${resource}, asked ${JSON.stringify(sessions.permissions(id).map((each) => each.resources))}`) })
+      saved.push(sessions.permissions(id)[0].save)
+      sessions.replyPermission(id, sessions.permissions(id)[0].id, decision)
+    }
+    await answer("always", "cd web")
+    await answer("always", "git --no-pager diff")
+    await answer("reject", "git push --force")
+    await answer("always", "git -C repo status")
+    await answer("reject", "git -C repo reset --hard")
+    await answer("always", "CI=1 npm test")
+    await answer("reject", "CI=1 rm -rf build")
+    await answer("always", "sudo npm i")
+    await answer("reject", "sudo rm -rf /")
+    await answer("reject", "ls")
+    await settled(id, 1)
+    // (Changing folder alone saves itself: nothing it could say "every command" about.)
+    expect(saved.slice(0, 4)).toEqual([["cd web"], ["git --no-pager diff", "git diff *"], ["git push *"], ["git -C repo status", "git status *"]])
+    expect(saved[5]).toEqual(["CI=1 npm test", "npm test *"])
+    expect(saved[7]).toEqual(["sudo npm i", "npm i *"])
+    expect(answers).toEqual(["always", "always", "once", "once", "reject", "always", "reject", "always", "reject", "always", "reject", "reject"])
   })
 
   test("Always also lets through what else waits on the same thing", async () => {

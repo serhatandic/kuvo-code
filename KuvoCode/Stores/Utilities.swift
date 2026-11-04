@@ -310,12 +310,41 @@ final class Utilities {
 
     /// A new tab in a machine's browser: it opens a page there once you go somewhere (at
     /// `address` at once, if given).
-    func newMachinePage(_ machine: String, address: String? = nil) {
+    func newMachinePage(_ machine: String, address: String? = nil, owner: String? = nil) {
         Analytics.shared.track("panel_opened", ["tool": "machine_browser"])
         Analytics.shared.trackOnce("browser_used", key: "you.machine", ["by": "you", "place": "machine"])
-        let tab = Tab(kind: .machinePage(machine, nil), owner: panelKey)
+        let tab = Tab(kind: .machinePage(machine, nil), owner: owner ?? panelKey)
         add(tab)
         if let address { open(address, inTab: tab.id) }
+    }
+
+    /// A page you open for a bot to use (what its goal needs you to do on a site): in the browser
+    /// it browses with, not yours, so a sign-in there is one it can use. On this Mac, a tab of the
+    /// bot's own, where it goes on next; on a machine, a page in that machine's browser. The
+    /// panel comes forward to show it.
+    func openForAgent(_ url: URL, bot: String, machine: String?) {
+        if let machine {
+            newMachinePage(machine, address: url.absoluteString, owner: bot)
+        } else if let open = browserTabs(of: bot).first(where: { tab in (tab.browser.url ?? openedForAgent[tab.id]).map { Self.sameSite($0, url) } ?? false }) {
+            // Opened again (from the card, then its waiting row), maybe signed in by now: the same
+            // tab, not another.
+            selection = open.id
+            botWorks(bot, in: open.browser)
+        } else {
+            let browser = newBrowser(url.absoluteString, owner: bot)
+            if let id = browsers.first(where: { $0.value === browser })?.key { openedForAgent[id] = url }
+            botWorks(bot, in: browser)
+        }
+        // Only where the panel in view shows it: not another conversation's, on a tab that has
+        // nothing to do with the page.
+        if let shown = tabs.last(where: { $0.owner == bot }), isVisible(shown) { revealRequest += 1 }
+    }
+
+    /// Where Open sent a bot's tab, for before its page has loaded.
+    @ObservationIgnored private var openedForAgent: [UUID: URL] = [:]
+
+    private static func sameSite(_ a: URL, _ b: URL) -> Bool {
+        a.host != nil ? a.host == b.host : a == b
     }
 
     /// Opens `address` in a machine's new tab: a page there, which the tab then shows.
@@ -811,6 +840,7 @@ final class Utilities {
         tabs.remove(at: index)
         terminals.removeValue(forKey: id)?.terminate()
         browsers.removeValue(forKey: id)?.close()
+        openedForAgent[id] = nil
         agentClaims[id] = nil
         unseen[id] = nil
         if wasSelected {

@@ -106,6 +106,9 @@ struct BarLine: View {
     /// `progress` drawn in its own look ("Paused · You", its why in a word stronger); VoiceOver
     /// reads `progress`.
     var status: Text?
+    /// What VoiceOver hears after it, which the line shows another way (a goal's steps waiting for
+    /// you, in its strip).
+    var spoken: String?
     var detail: Text?
     var accessory: AnyView?
     /// What stands for what's under it while that's hidden, after how far along it is (a goal's
@@ -141,7 +144,7 @@ struct BarLine: View {
             .buttonStyle(.plain)
             .clickablePointer()
             .help(isHidden ? showHelp : hideHelp)
-            .accessibilityLabel(progress.map { "\(title), \($0.replacingOccurrences(of: " · ", with: ", "))" } ?? title)
+            .accessibilityLabel(([title, progress?.replacingOccurrences(of: " · ", with: ", "), spoken].compactMap { $0 }).joined(separator: ", "))
             .accessibilityValue(isHidden ? "Hidden" : "Shown")
         } else {
             // Nothing under it: words, not a button, its detail read with them.
@@ -232,6 +235,19 @@ struct BarLine: View {
                     HStack(spacing: 8) {
                         says.fixedSize()
                         if isHidden, let folded { folded.fixedSize() }
+                    }
+                    says.fixedSize()
+                    // Whole pieces off its end ("· due Fri, Nov 6", then the time), never one
+                    // cut inside.
+                    if status == nil, let progress {
+                        let pieces = progress.components(separatedBy: " · ")
+                        ForEach((1..<max(1, pieces.count)).reversed(), id: \.self) { count in
+                            Text(pieces.prefix(count).joined(separator: " · "))
+                                .font(.system(size: 13).monospacedDigit())
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .fixedSize()
+                        }
                     }
                     says
                 }

@@ -415,8 +415,8 @@ export function handler(context: Context) {
             // What the engine asks for everyone ("global": its MCP servers') isn't asked here.
             if (!c) return json({ data: id === "global" ? [] : sessions.permissions(id) })
             if (d === "reply") {
-              const { decision } = await body()
-              sessions.replyPermission(id, c, decision)
+              const { decision, message } = await body()
+              sessions.replyPermission(id, c, decision, typeof message === "string" ? message : undefined)
               return json({})
             }
             break

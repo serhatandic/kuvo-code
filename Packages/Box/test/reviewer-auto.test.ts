@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
 import { dirname, join, relative } from "node:path"
 
@@ -265,6 +265,40 @@ test("in Auto, a coding agent's ask to work outside its folder is the reviewer's
   expect(reviewer.reviewLog("ses_codex").decisions.at(-1)).toMatchObject({ decision: "refused", held: true })
 })
 
+test("every client hears which of a conversation's asks Auto's reviewer is checking, then how each went, and which are left for you to answer", async () => {
+  const states: Record<string, string[]> = {}
+  const stop = reviewing.onAskReviewsChanged(() => {
+    for (const each of reviewing.listAskReviews()) if (each.id.startsWith("per_h") && states[each.id]?.at(-1) !== each.state) (states[each.id] ??= []).push(each.state)
+  })
+  const ask = (session: string, id: string, filePath: string) => {
+    calling[session] = [{ type: "tool", id: `call_${id}`, name: "edit", state: { input: { filePath } } }]
+    asking[session] = [{ id, action: "external_directory", resources: [join(filePath, "..", "*")], source: { id: `call_${id}`, messageID: "msg_1" } }]
+    return reviewing.reviewPermission({ port: engine.port, password: "pw" } as never, { type: "permission.asked", data: { id, sessionID: session, action: "external_directory" } })
+  }
+  try {
+    conversation("ses_heard", "auto", "Update the shared notes")
+    reply = () => '{"decision": "allow", "reason": "The notes the user asked for."}'
+    await ask("ses_heard", "per_h1", join(box, "notes", "shared.md"))
+    reply = () => '{"decision": "refuse", "reason": "Nobody asked for that."}'
+    await ask("ses_heard", "per_h2", join(homedir(), ".zshrc"))
+    // Kuvo Code's own folders: refused, with nothing to approve.
+    const kuvo = (await import("../src/link/fence/policy")).fencePolicy().kuvo[0]
+    await ask("ses_heard", "per_h3", join(kuvo, "notes.txt"))
+    // In its own project: allowed, with nothing to check.
+    await ask("ses_heard", "per_h4", join(project, "src", "main.ts"))
+    conversation("ses_mine", "askFirst", "Update the shared notes")
+    await ask("ses_mine", "per_h5", join(box, "notes", "shared.md"))
+    expect(states).toEqual({
+      per_h1: ["checking", "allowed"], per_h2: ["checking", "heldBack"], per_h3: ["checking", "refused"],
+      // (Each listed as checked before anything about it is read, so no client shows it meanwhile.)
+      per_h4: ["checking", "allowed"], per_h5: ["checking", "yours"],
+    })
+    expect(reviewing.listAskReviews().find(each => each.id === "per_h2")).toMatchObject({ session: "ses_heard", call: "call_per_h2", state: "heldBack" })
+  } finally {
+    stop()
+  }
+})
+
 // The engine doesn't answer for a moment (starting again, busy): `work` runs meanwhile.
 async function engineDown(work: () => Promise<void>) {
   down = true
@@ -356,7 +390,7 @@ test("Full Access never asks nor reviews: a conversation from before that ran wi
   expect(existsSync(join(full.FULL_ACCESS_FOLDER, "ses_old_task"))).toBe(false)
 })
 
-test("in Auto, what a bot's work asks of what always comes to you is the reviewer's: allowed at the engine when its goal calls for it", async () => {
+test("in Auto, what the engine asks in a bot's work is answered as in any conversation: only working outside its folder is the reviewer's", async () => {
   conversation("ses_botwork", "auto")
   sessions.ses_botwork.metadata = { kuvo: { approval: "auto", applied: "auto", by: { bot: "bot_pixel", name: "Pixel" } } }
   reply = () => '{"decision": "allow", "reason": "Its goal is publishing the release."}'
@@ -365,16 +399,77 @@ test("in Auto, what a bot's work asks of what always comes to you is the reviewe
     asking.ses_botwork = [{ id, action, resources: [String(input.command ?? "")], source: { id: `call_${id}`, messageID: "msg_1" } }]
     return reviewing.reviewPermission({ port: engine.port, password: "pw" } as never, { type: "permission.asked", data: { id, sessionID: "ses_botwork", action } })
   }
-  expect((await asked("per_b1", "shell", { command: "gh release create v1.2.0 --generate-notes" }))?.decision).toBe("allow")
-  expect(replies.at(-1)).toEqual({ path: "/permission/per_b1/reply", body: { decision: "once" } })
-  // Deleting your home is still refused by code, there too.
-  expect((await asked("per_b2", "shell", { command: "rm -rf ~ && git push --force origin main" }))?.decision).toBe("refuse")
-  expect(replies.at(-1)?.body).toMatchObject({ decision: "reject" })
-  // What isn't of those (deletes the sandbox lets it make, your own Settings' asks) stays as it is.
+  // (A command asks only where your own Settings › Permissions say so: that stays yours, as anywhere.)
   const mine = replies.length
+  expect(await asked("per_b1", "shell", { command: "gh release create v1.2.0 --generate-notes" })).toBeNull()
   expect(await asked("per_b3", "webfetch", { url: "https://example.com" })).toBeNull()
-  expect(await asked("per_b4", "shell", { command: "rm -rf dist" })).toBeNull()
   expect(replies.length).toBe(mine)
+})
+
+test("in Auto, a bot works in its own projects (one it made, its goal's) as in its own folder, and a project by another spelling of its path is the project: its file tools there aren't reviewed", async () => {
+  const { BOTS } = await import("../src/link/home")
+  const { PROJECTS_FILE } = await import("../src/link/areas/projects")
+  const { GOALS_FILE } = await import("../src/link/work/goals")
+  const folder = join(BOTS, "bot_maker")
+  const made = join(box, "made-app"), aimed = join(box, "goal-site"), theirs = join(box, "someone-elses"), linked = join(box, "project-link")
+  for (const each of [join(folder, "workspace"), made, aimed, theirs]) mkdirSync(each, { recursive: true })
+  symlinkSync(project, linked)
+  writeFileSync(join(folder, "bot.json"), JSON.stringify({ kuvo: 1, id: "bot_maker", name: "Maker", created: "2026-11-03" }))
+  writeFileSync(join(folder, "session"), "ses_maker")
+  const kept = (file: string) => existsSync(file) ? readFileSync(file, "utf8") : null
+  const before = { projects: kept(PROJECTS_FILE), goals: kept(GOALS_FILE) }
+  for (const file of [PROJECTS_FILE, GOALS_FILE]) mkdirSync(dirname(file), { recursive: true })
+  writeFileSync(PROJECTS_FILE, JSON.stringify({ version: 1, projects: [{ directory: made, folders: [], madeBy: { bot: "bot_maker", name: "Maker", at: 1 } }, { directory: theirs, folders: [] }] }))
+  writeFileSync(GOALS_FILE, JSON.stringify({ goals: [{ id: "goal_site", bot: "bot_maker", name: "Maker", session: "ses_maker", goal: "Ship the site", state: "running", projects: [aimed], steps: [], checks: [], spend: [], public: [], waiting: [], paused: [] }] }))
+  const ask = (session: string, id: string, filePath: string) => {
+    calling[session] = [{ type: "tool", id: `call_${id}`, name: "edit", state: { input: { filePath } } }]
+    asking[session] = [{ id, action: "external_directory", resources: [join(filePath, "..", "*")], source: { id: `call_${id}`, messageID: "msg_1" } }]
+    return reviewing.reviewPermission({ port: engine.port, password: "pw" } as never, { type: "permission.asked", data: { id, sessionID: session, action: "external_directory" } })
+  }
+  try {
+    conversation("ses_maker", "auto", "Make me a site")
+    sessions.ses_maker.location = { directory: join(folder, "workspace") }
+    reply = () => '{"decision": "refuse", "reason": "Nobody asked for that."}'
+    const asked = prompts.length
+    expect((await ask("ses_maker", "per_m1", join(made, "index.html")))?.decision).toBe("allow")
+    expect(replies.at(-1)).toEqual({ path: "/permission/per_m1/reply", body: { decision: "once" } })
+    expect((await ask("ses_maker", "per_m2", join(aimed, "src", "app.ts")))?.decision).toBe("allow")
+    // Any conversation's own project, named through a link to it.
+    conversation("ses_linked", "auto", "Fix the build")
+    expect((await ask("ses_linked", "per_m3", join(linked, "src", "main.ts")))?.decision).toBe("allow")
+    expect(replies.at(-1)).toEqual({ path: "/permission/per_m3/reply", body: { decision: "once" } })
+    expect(prompts.length).toBe(asked)
+    expect(reviewer.reviewLog("ses_maker").decisions).toEqual([])
+    // A project that isn't its own is the reviewer's, as before.
+    expect((await ask("ses_maker", "per_m4", join(theirs, "notes.txt")))?.decision).toBe("refuse")
+    expect(prompts.length).toBe(asked + 1)
+  } finally {
+    rmSync(folder, { recursive: true, force: true })
+    rmSync(linked, { force: true })
+    for (const [file, was] of [[PROJECTS_FILE, before.projects], [GOALS_FILE, before.goals]] as const) {
+      if (was === null) rmSync(file, { force: true })
+      else writeFileSync(file, was)
+    }
+  }
+})
+
+test("in Auto, a session a bot started is reviewed by what you told the bot too: the work it does is what you asked for", async () => {
+  const { BOTS } = await import("../src/link/home")
+  const folder = join(BOTS, "bot_deployer")
+  mkdirSync(folder, { recursive: true })
+  writeFileSync(join(folder, "bot.json"), JSON.stringify({ kuvo: 1, id: "bot_deployer", name: "Deployer", created: "2026-11-03" }))
+  writeFileSync(join(folder, "session"), "ses_deployer")
+  try {
+    conversation("ses_deployer", "auto", "Deploy the site to production tonight")
+    conversation("ses_deploywork", "auto")
+    sessions.ses_deploywork.metadata = { kuvo: { approval: "auto", applied: "auto", by: { bot: "bot_deployer", name: "Deployer" } } }
+    said.ses_deploywork = ["You were started by Deployer: run the deploy."]
+    const ran = await sandboxAsk("ses_deploywork", "echo deployed")
+    expect(ran.isError).toBe(false)
+    expect(prompts.at(-1)).toContain("Deploy the site to production tonight")
+  } finally {
+    rmSync(folder, { recursive: true, force: true })
+  }
 })
 
 test("a run the coding agents have the engine make is reviewed as the conversation it's for, as that one's approval says", async () => {

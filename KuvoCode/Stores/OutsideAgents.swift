@@ -601,31 +601,75 @@ final class OutsideAgents {
         try await api.removeAgentAccount(providerID)
     }
 
-    /// Agents whose program is updating, by the account it was asked for: updating wherever you
-    /// look (Settings closed and opened again), and not asked twice.
-    private(set) var updating: Set<String> = []
-    /// Why an update didn't work, until you've seen it (where you look next, when you'd gone).
-    var updateFailures: [String: String] = [:]
+    /// Agents whose program is updating, by program (an added account's update is its agent's):
+    /// updating wherever you look (Settings closed and opened again), and not asked twice.
+    private var updating: Set<String> = []
+    /// Why an update didn't work, by program, until you've seen it (where you look next, when you'd gone).
+    private var updateFailures: [String: String] = [:]
+    /// The version an update left, by program, and whether it brought it, until another starts.
+    private var updated: [String: (version: String, changed: Bool)] = [:]
+
+    func isUpdating(_ providerID: String) -> Bool { updating.contains(Self.base(providerID)) }
+    func updateFailure(_ providerID: String) -> String? { updateFailures[Self.base(providerID)] }
+    func dismissUpdateFailure(_ providerID: String) { updateFailures[Self.base(providerID)] = nil }
+
+    /// How an agent's program stands, as its row or tile in Settings › Accounts says it.
+    enum UpdateStatus: Equatable {
+        /// A newer version is out.
+        case available(String)
+        case updating
+        /// Updated just now, to this version.
+        case updated(String)
+        /// Asked to update, it was already on the newest, this version.
+        case current(String)
+        /// Why it couldn't be updated.
+        case failed(String)
+    }
+
+    func updateStatus(_ integration: Integration) -> UpdateStatus? {
+        let program = Self.base(integration.id)
+        if updating.contains(program) { return .updating }
+        if let failure = updateFailures[program] { return .failed(failure) }
+        let metadata = integration.metadata
+        if metadata?["outdated"]?.bool == true, let latest = metadata?["latestVersion"]?.string { return .available(latest) }
+        // Only while it's still on that version: once it moves on (its own updater), it's news no more.
+        guard let result = updated[program], metadata?["version"]?.string.map({ $0 == result.version }) ?? true else { return nil }
+        return result.changed ? .updated(result.version) : .current(result.version)
+    }
 
     /// Updates an agent's program (Claude Code, Codex, Grok's CLI) through the installer that owns
     /// it, then `refresh`es what the app shows of it; it's updating until then.
     @discardableResult
     func update(_ providerID: String, then refresh: @escaping () async -> Void) -> Task<Void, Never>? {
-        guard let api, !updating.contains(providerID) else { return nil }
-        updating.insert(providerID)
-        updateFailures[providerID] = nil
+        let program = Self.base(providerID)
+        guard let api, !updating.contains(program) else { return nil }
+        updating.insert(program)
+        updateFailures[program] = nil
+        updated[program] = nil
         return Task {
+            var failure: String?
             do {
                 let result = try await api.updateAgent(providerID)
-                if !result.updated, let message = result.message { updateFailures[providerID] = message }
+                if let message = result.message, !result.updated {
+                    failure = message
+                } else if let version = result.version {
+                    updated[program] = (version, result.updated)
+                } else {
+                    failure = "The update finished without saying which version it left."
+                }
             } catch {
-                updateFailures[providerID] = error.localizedDescription
+                failure = error.localizedDescription
             }
-            // Its version and models, as they are now, before its button comes back.
+            // Its version and models, as they are now, before its button comes back; and why it
+            // didn't work once it's no longer Updating….
             await refresh()
-            updating.remove(providerID)
+            updating.remove(program)
+            updateFailures[program] = failure
         }
     }
+
+    /// What updates brought, said once: gone when you leave the page that said it.
+    func forgetUpdates() { updated = [:] }
 
     /// Agents whose program is installing, by the account it was asked for.
     private(set) var installing: Set<String> = []

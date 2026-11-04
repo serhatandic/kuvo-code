@@ -9334,7 +9334,7 @@ function update(definition, temporary) {
     const ran = await runGroup(before.command[0], before.command.slice(1), { cwd: temporary, env: { ...ownEnvironment(), ...before.env }, timeout: 10 * 60000 });
     const after = await maintenance(definition, true);
     const changed = Boolean(after.installed && after.installed !== before.installed);
-    if (changed || after.installed && !isOutdated(after))
+    if (changed || after.installed && after.latest && !isOutdated(after))
       return { updated: changed, version: after.installed };
     const output = plain2(ran.stderr + `
 ` + ran.stdout).trim().split(`
@@ -15490,6 +15490,44 @@ function partsOf2(ask) {
 function isShell(action) {
   return action === "shell" || action === "bash";
 }
+function alwaysSaves(ask) {
+  if (ask.save)
+    return ask.save;
+  if (EDITS.has(ask.action))
+    return ["*"];
+  if (!isShell(ask.action))
+    return ask.resources;
+  const saves = ask.resources.flatMap((line) => {
+    const { commands, sure } = parseCommands(line.trim());
+    if (!sure)
+      return [line];
+    const forms = (commands.length ? commands : [line.trim()]).filter((command) => !/^cd(\s|$)/.test(command));
+    if (!forms.length)
+      return [line.trim()];
+    const kinds = forms.map(commandKind);
+    return [...kinds.some((kind) => !kind) ? [line.trim()] : [], ...kinds.filter((kind) => Boolean(kind)).map((kind) => `${kind} *`)];
+  });
+  return [...new Set(saves)];
+}
+var EDITS = new Set(["edit", "write", "patch"]);
+var sameKind = (saved, asked) => saved === asked || EDITS.has(saved) && EDITS.has(asked);
+var KIND_WORDS = Object.fromEntries([
+  ...["git", "npm", "pnpm", "yarn", "bun", "npx", "bunx", "pnpx", "deno", "docker", "podman", "kubectl", "helm", "cargo", "go", "gh", "brew", "make", "swift", "uv", "pip", "pip3", "poetry", "apt", "apt-get", "dnf", "systemctl", "terraform", "rustup", "gcloud", "aws", "az", "xcrun", "launchctl", "tmux", "composer", "mvn", "gradle", "dotnet", "mix", "rails", "bundle", "conda", "flutter", "dart", "turbo", "nx", "vercel", "wrangler", "firebase", "supabase"].map((program) => [program, 2]),
+  ...["npm run", "pnpm run", "yarn run", "bun run", "docker compose", "docker container", "docker image", "docker volume", "docker network", "git remote", "git stash", "git worktree", "git submodule", "gh pr", "gh issue", "gh repo", "gh run", "gh release", "aws s3", "kubectl config", "npm exec", "uv run", "uv pip", "poetry run", "cargo run"].map((program) => [program, 3])
+]);
+var RUNS_ANOTHER = new Set(["sudo", "doas", "env", "command", "builtin", "exec", "nice", "nohup", "time", "timeout", "stdbuf", "caffeinate"]);
+function commandKind(command) {
+  const words = command.split(/\s+/).filter(Boolean);
+  if (!words.length || !/^[\w.+-]+$/.test(words[0]) || RUNS_ANOTHER.has(words[0]))
+    return;
+  let count = 1;
+  while ((KIND_WORDS[words.slice(0, count).join(" ")] ?? 1) > count) {
+    if (count >= words.length || words[count].startsWith("-"))
+      return;
+    count++;
+  }
+  return words.slice(0, count).join(" ");
+}
 function coveredBy(patterns, action, resources) {
   return resources.every((resource) => {
     if (patterns.includes(resource))
@@ -15499,7 +15537,7 @@ function coveredBy(patterns, action, resources) {
     const { commands, sure } = parseCommands(resource.trim());
     if (!sure)
       return false;
-    return (commands.length ? commands : [resource.trim()]).every((command) => patterns.some((pattern) => matches(pattern, command)));
+    return (commands.length ? commands : [resource.trim()]).every((command) => /^cd(\s|$)/.test(command) || patterns.some((pattern) => matches(pattern, command)));
   });
 }
 var agentActions = new Set(["*", "edit", "write", "patch", "shell", "bash", "read", "webfetch", "websearch", "external_directory"]);
@@ -17079,7 +17117,7 @@ ${live.agentPrompt}` : ""
     return paths;
   }
   allowedBefore(live, ask) {
-    return live.always.some((rule) => rule.action === ask.action && coveredBy(rule.patterns, ask.action, ask.resources));
+    return live.always.some((rule) => sameKind(rule.action, ask.action) && coveredBy(rule.patterns, ask.action, ask.resources));
   }
   allowedOutside(live, folders) {
     return live.always.some((rule) => rule.action === "external_directory" && coveredBy(rule.patterns, "external_directory", folders));
@@ -17128,7 +17166,7 @@ ${live.agentPrompt}` : ""
       sessionID: id,
       action: ask.action,
       resources: ask.resources,
-      save: ask.save ?? ask.resources,
+      save: alwaysSaves(ask),
       metadata: ask.metadata,
       message: ask.message
     };
@@ -17180,7 +17218,7 @@ ${live.agentPrompt}` : ""
     this.record(id);
     return [...this.live.get(id)?.permissions.values() ?? []].map((pending) => pending.request);
   }
-  replyPermission(id, requestID, decision) {
+  replyPermission(id, requestID, decision, message) {
     const live = this.live.get(id);
     const pending = live?.permissions.get(requestID);
     if (!live || !pending)
@@ -17191,11 +17229,14 @@ ${live.agentPrompt}` : ""
     live.permissions.delete(requestID);
     pending.resolve(decision);
     emit("permission.replied", { sessionID: id, requestID }, directory);
+    const instead = decision === "reject" && typeof message === "string" ? message.trim() : "";
+    if (instead)
+      this.prompt(id, { id: newID("msg"), text: instead, files: [], delivery: "steer" });
     if (decision !== "always")
       return;
     const patterns = pending.request.save ?? pending.request.resources;
     for (const [otherID, other] of [...live.permissions]) {
-      const covered = other.request.action === pending.request.action && coveredBy(patterns, other.request.action, other.request.resources);
+      const covered = sameKind(other.request.action, pending.request.action) && coveredBy(patterns, other.request.action, other.request.resources);
       if (!covered)
         continue;
       live.permissions.delete(otherID);
@@ -22428,8 +22469,8 @@ function handler(context) {
             if (!c)
               return json11({ data: id === "global" ? [] : sessions.permissions(id) });
             if (d === "reply") {
-              const { decision } = await body();
-              sessions.replyPermission(id, c, decision);
+              const { decision, message } = await body();
+              sessions.replyPermission(id, c, decision, typeof message === "string" ? message : undefined);
               return json11({});
             }
             break;
@@ -22932,4 +22973,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 615f90e57335a6d9e069b57a2b87a722bb0da45dba7c3716528ed6f706f713dc
+// Built from Packages/Box/src/agents 22690757d159d23d47c7660eb2c979124532ffe89016bdec3889860ad2b075c8

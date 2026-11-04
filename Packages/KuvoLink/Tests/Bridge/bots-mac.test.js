@@ -26,9 +26,6 @@ Object.assign(process.env, {
 });
 const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
 
-// A bot's rules as its box makes them: what always comes to you asked whatever its approval (PROTOCOL.md,
-// "What always comes to you"; bots-night.test.js holds what that does).
-const withAlways = rules => link.withAlwaysAsk(rules);
 const bots = process.env.KUVO_BOTS;
 const home = process.env.KUVO_HOME;
 const settingsFile = path.join(process.env.KUVO_ENGINE_CONFIG, "opencode", "opencode.json");
@@ -290,21 +287,28 @@ test("a bot told other words behind the box's back (by a Mac of an earlier versi
   assert.match(fake.entries.ses_bot_scout00001["kuvo.bot"], /You run on this Mac\./);
 });
 
-test("a bot's own rules are put right at its next run: its folder its own, an old version's kuvo-wake rules gone", async t => {
+test("a bot's own rules are put right at its next run: its folder its own, an old version's kuvo-wake rules and the asks it put in a bot's gone, your own kept", async t => {
   const folder = bot("bot_scout00001");
   const wake = process.env.KUVO_WAKE_COMMAND;
-  // Settings › Permissions here: never rm -rf.
-  write(settingsFile, JSON.stringify({ permissions: [{ action: "shell", resource: "rm -rf *", effect: "deny" }] }));
+  // Settings › Permissions here: never rm -rf, and Ask for stripe, which a box before also asked of a bot.
+  const STRIPE = { action: "shell", resource: "stripe *", effect: "ask" };
+  write(settingsFile, JSON.stringify({ permissions: [{ action: "shell", resource: "rm -rf *", effect: "deny" }, STRIPE] }));
   const fake = await engine({ rules: { ses_bot_scout00001: [
     { action: "shell", resource: "rm -rf *", effect: "deny" },
+    STRIPE,
+    { action: "shell", resource: "gh pr create*", effect: "ask" },
+    { action: "shell", resource: "git push *--force*", effect: "ask" },
     { action: "shell", resource: `"${wake}" bot_scout00001 add *`, effect: "allow" },
     { action: "shell", resource: "kuvo-wake bot_scout00001 list", effect: "allow" },
   ] } });
   t.after(fake.close);
   fs.rmSync(path.join(folder, "MEMORY.md"));
   await link.freshenBot(fake.read(), "ses_bot_scout00001");
+  // Your own kept as any conversation in Auto has them (its Ask goes to Auto, so it's allowed here),
+  // and the asks a box before put in a bot's gone.
   assert.deepEqual(fake.rules.ses_bot_scout00001, [
-    ...withAlways([{ action: "shell", resource: "rm -rf *", effect: "deny" }]),
+    { ...STRIPE, effect: "allow" },
+    { action: "shell", resource: "rm -rf *", effect: "deny" },
     { action: "external_directory", resource: path.join(folder, "*"), effect: "allow" },
   ]);
   // Its memory, for one made before it was made with it.
@@ -423,7 +427,7 @@ test("a bot brought here from another computer is made this Mac's: its folder sa
   assert.equal(fs.existsSync(path.join(folder, "timezone")), false, "this Mac's bots go by its own clock");
   assert.equal(fs.existsSync(path.join(folder, "zoneinfo")), false);
   assert.deepEqual(fake.rules.ses_bot_moved00001, [
-    ...withAlways([{ action: "shell", resource: "git push *", effect: "allow" }]),
+    { action: "shell", resource: "git push *", effect: "allow" },
     { action: "external_directory", resource: path.join(folder, "*"), effect: "allow" },
   ]);
   assert.match(told(fake.asked, "ses_bot_moved00001").at(-1).body.value, /You run on this Mac\./);

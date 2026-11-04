@@ -1,11 +1,14 @@
+import AppKit
 import ClientDesign
 import ClientNews
 import ClientSessions
 import ClientText
 import KuvoVoice
 import OpenCodeKit
+import SwiftTerm
 import SwiftUI
 import UniformTypeIdentifiers
+import WebKit
 
 /// Where you talk to the agent: a floating glass panel with the message field,
 /// the mode (Build/Plan) and model pickers, and a send button that turns into
@@ -82,8 +85,8 @@ struct Composer: View {
     /// ↑ in an empty composer brings back the last waiting message; false if there's none.
     var onEditLast: () -> Bool = { false }
     var onStop: () -> Void
-    /// The mode and approval chip: hidden where they're not yours to pick (a subagent's are its
-    /// agent's).
+    /// The approval chip and the Plan chip: hidden where they're not yours to pick (a subagent's
+    /// are its agent's).
     var showsMode = true
     /// The model chip: hidden where the model isn't yours to pick (a coding agent's subagent's).
     var showsModel = true
@@ -94,6 +97,9 @@ struct Composer: View {
     var scope: ModelScope?
     /// Takes the keyboard as it shows; a subagent's beside the conversation leaves it there.
     var focusesOnAppear = true
+    /// Back in its place after an ask had it: takes the keyboard only where nothing else you type
+    /// in has it (a terminal, a page, a file you're editing keep it).
+    var yieldsKeyboard = false
     /// What the empty field says, when it isn't the usual.
     var prompt: String?
     /// Its own card; off in the card it shares with the bars and the queue over it (the session's).
@@ -340,8 +346,13 @@ struct Composer: View {
                                 .accessibilityLabel("Attach Files")
                                 .help("Attach Files… You can also drop files here, or paste them.")
                                 // Set on the engine: not while it's out of reach.
+                                if showsMode && !agent.isEmpty && agent != "build" {
+                                    AgentChip(agent: agent) { onSelectAgent("build") }
+                                        .disabled(isOffline)
+                                        .transition(.opacity)
+                                }
                                 if showsMode {
-                                    ModeChip(agent: agent, approval: approval, shown: approvalShown, onDecisions: onDecisions, onSelectAgent: onSelectAgent, onSelectApproval: onSelectApproval)
+                                    ModeChip(approval: approval, shown: approvalShown, onDecisions: onDecisions, onSelectApproval: onSelectApproval)
                                         .disabled(isOffline)
                                 }
                                 if showsModel {
@@ -435,7 +446,7 @@ struct Composer: View {
             focusAtEnd()
         }
         .onAppear {
-            if focusesOnAppear { focusAtEnd() }
+            if focusesOnAppear && (!yieldsKeyboard || keyboardIsFree) { focusAtEnd() }
             #if DEBUG
             // KUVO_DEMO_COMPOSER_FILES: comma-separated paths to show as attached.
             if files.isEmpty, let list = ProcessInfo.processInfo.environment["KUVO_DEMO_COMPOSER_FILES"] {
@@ -449,6 +460,20 @@ struct Composer: View {
     private func stopListening() {
         if isDictating { app.dictation.cancel() }
         app.dictation.withdraw(voiceOwner)
+    }
+
+    /// Nothing you type in has the keyboard in its window (active or not): the window, a list or
+    /// a button does, or the ask's own line, which goes with it.
+    private var keyboardIsFree: Bool {
+        guard let window = field.window ?? NSApp.keyWindow else { return false }
+        let responder = window.firstResponder
+        if let text = responder as? NSTextView, text.isFieldEditor {
+            // (A line it's gone from, or one in the ask's place.)
+            guard let line = text.delegate as? NSView else { return true }
+            return line.window == nil || AskArea.holds(line)
+        }
+        if let text = responder as? NSTextView { return !text.isEditable }
+        return !(responder is WKWebView || responder is TerminalView)
     }
 
     /// Puts the cursor in the field, after what's there.

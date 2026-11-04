@@ -769,6 +769,53 @@ function isShell(action: string): boolean {
   return action === "shell" || action === "bash"
 }
 
+/** What Always saves for an ask whose agent doesn't say (Claude Code's, Codex's), as the engine's
+ * does: every edit, for an edit; for a command, each command in its line by its kind ("git push *",
+ * "npm run build *"), and the line itself where a command in it has no kind to save (`git
+ * --no-pager diff`, `sudo npm i`, `make`); `cd` needs none. A line it can't read through: itself. */
+function alwaysSaves(ask: PermissionAsk): string[] {
+  if (ask.save) return ask.save
+  if (EDITS.has(ask.action)) return ["*"]
+  if (!isShell(ask.action)) return ask.resources
+  const saves = ask.resources.flatMap((line) => {
+    const { commands, sure } = parseCommands(line.trim())
+    if (!sure) return [line]
+    // Each form of each command (as written, without its prefixes, git's own options taken off).
+    const forms = (commands.length ? commands : [line.trim()]).filter((command) => !/^cd(\s|$)/.test(command))
+    if (!forms.length) return [line.trim()]
+    const kinds = forms.map(commandKind)
+    return [...(kinds.some((kind) => !kind) ? [line.trim()] : []), ...kinds.filter((kind): kind is string => Boolean(kind)).map((kind) => `${kind} *`)]
+  })
+  return [...new Set(saves)]
+}
+
+const EDITS = new Set(["edit", "write", "patch"])
+/** Whether Always on one action covers another: the same, or both changes to files. */
+const sameKind = (saved: string, asked: string) => saved === asked || EDITS.has(saved) && EDITS.has(asked)
+
+// How many words name a command's kind, as the engine counts them: a program alone (ls, python3),
+// with its subcommand (git push, make test), or with the one after (npm run build, docker compose up).
+const KIND_WORDS: Record<string, number> = Object.fromEntries([
+  ...["git", "npm", "pnpm", "yarn", "bun", "npx", "bunx", "pnpx", "deno", "docker", "podman", "kubectl", "helm", "cargo", "go", "gh", "brew", "make", "swift", "uv", "pip", "pip3", "poetry", "apt", "apt-get", "dnf", "systemctl", "terraform", "rustup", "gcloud", "aws", "az", "xcrun", "launchctl", "tmux", "composer", "mvn", "gradle", "dotnet", "mix", "rails", "bundle", "conda", "flutter", "dart", "turbo", "nx", "vercel", "wrangler", "firebase", "supabase"].map((program) => [program, 2]),
+  ...["npm run", "pnpm run", "yarn run", "bun run", "docker compose", "docker container", "docker image", "docker volume", "docker network", "git remote", "git stash", "git worktree", "git submodule", "gh pr", "gh issue", "gh repo", "gh run", "gh release", "aws s3", "kubectl config", "npm exec", "uv run", "uv pip", "poetry run", "cargo run"].map((program) => [program, 3]),
+])
+// Programs that run another (its kind is the other's), saved as the line itself.
+const RUNS_ANOTHER = new Set(["sudo", "doas", "env", "command", "builtin", "exec", "nice", "nohup", "time", "timeout", "stdbuf", "caffeinate"])
+
+/** A command's kind: its program and as many words after as `KIND_WORDS` says. None where that
+ * can't be told from its words: an option before them (`git -C x status`), too few (`git`), a
+ * program by its path or after a variable (`FOO=1 make`), or one that runs another (`sudo`). */
+function commandKind(command: string): string | undefined {
+  const words = command.split(/\s+/).filter(Boolean)
+  if (!words.length || !/^[\w.+-]+$/.test(words[0]) || RUNS_ANOTHER.has(words[0])) return undefined
+  let count = 1
+  while ((KIND_WORDS[words.slice(0, count).join(" ")] ?? 1) > count) {
+    if (count >= words.length || words[count].startsWith("-")) return undefined
+    count++
+  }
+  return words.slice(0, count).join(" ")
+}
+
 /**
  * You allowed it before ("Always"): each of its resources is one you allowed as it is, or, for a
  * command line, each command in it is covered (a command allowed doesn't take others along).
@@ -780,7 +827,8 @@ function coveredBy(patterns: string[], action: string, resources: string[]): boo
     // A line that can't be read through is never let through on its own.
     const { commands, sure } = parseCommands(resource.trim())
     if (!sure) return false
-    return (commands.length ? commands : [resource.trim()]).every((command) => patterns.some((pattern) => matches(pattern, command)))
+    // (Changing folder is no command of its own: its Always saves none.)
+    return (commands.length ? commands : [resource.trim()]).every((command) => /^cd(\s|$)/.test(command) || patterns.some((pattern) => matches(pattern, command)))
   })
 }
 
@@ -2468,7 +2516,7 @@ export class Sessions {
   }
 
   private allowedBefore(live: Live, ask: PermissionAsk): boolean {
-    return live.always.some((rule) => rule.action === ask.action && coveredBy(rule.patterns, ask.action, ask.resources))
+    return live.always.some((rule) => sameKind(rule.action, ask.action) && coveredBy(rule.patterns, ask.action, ask.resources))
   }
 
   /** You allowed working in these folders outside the project before ("Always"). */
@@ -2522,7 +2570,7 @@ export class Sessions {
       sessionID: id,
       action: ask.action,
       resources: ask.resources,
-      save: ask.save ?? ask.resources,
+      save: alwaysSaves(ask),
       metadata: ask.metadata,
       message: ask.message,
     }
@@ -2583,7 +2631,9 @@ export class Sessions {
     return [...(this.live.get(id)?.permissions.values() ?? [])].map((pending) => pending.request)
   }
 
-  replyPermission(id: string, requestID: string, decision: Decision) {
+  /** Answers an ask; a reject with `message` (what to do instead) has the agent hear it as your
+   * message, at its next step, as the engine passes on a reject's words. */
+  replyPermission(id: string, requestID: string, decision: Decision, message?: string) {
     const live = this.live.get(id)
     const pending = live?.permissions.get(requestID)
     if (!live || !pending) throw new NotFound("That request was answered already.")
@@ -2592,11 +2642,13 @@ export class Sessions {
     live.permissions.delete(requestID)
     pending.resolve(decision)
     emit("permission.replied", { sessionID: id, requestID }, directory)
+    const instead = decision === "reject" && typeof message === "string" ? message.trim() : ""
+    if (instead) this.prompt(id, { id: newID("msg"), text: instead, files: [], delivery: "steer" })
     // "Always": what else waits on the same thing goes too, as the engine does.
     if (decision !== "always") return
     const patterns = pending.request.save ?? pending.request.resources
     for (const [otherID, other] of [...live.permissions]) {
-      const covered = other.request.action === pending.request.action && coveredBy(patterns, other.request.action, other.request.resources)
+      const covered = sameKind(other.request.action, pending.request.action) && coveredBy(patterns, other.request.action, other.request.resources)
       if (!covered) continue
       live.permissions.delete(otherID)
       other.resolve("once")

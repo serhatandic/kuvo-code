@@ -30,19 +30,18 @@ import { locked, textOf, writePrivate } from "../files";
 import { BOTS, HERE } from "../home";
 import { placeOfSession } from "../letters/letter";
 import { readWakes } from "../areas/wakes";
-import { asksAlways, withAlwaysAsk } from "./always";
 import { periodEnd, periodOf, startOfDay, timeGiven } from "./clock";
 import { asksIn, permissionWords } from "./answers";
 import { keepAwake, keepsAwake, onPower } from "./awake";
 import { noteWorkChanged, WORK_FOLDER } from "./changes";
 import { sandboxOn } from "./sandbox";
+import { namedPlace, shownPath } from "./projects";
 import { projectsFolder } from "./settings";
 import { stopBotWork } from "./stop";
 import { ofBot, workingNow, workSessions } from "./tree";
 import type { Listed } from "./tree";
 import type { Target } from "../../shared/records";
 import type { GoalCheckShape, GoalPlanShape, GoalStepShape, GoalWaitingShape } from "../../shared/routes/work";
-import type { KitRule } from "../bots/kit";
 import type { Notice } from "../notices/notice";
 
 export const GOALS_FILE = path.join(WORK_FOLDER, "goals.json");
@@ -145,14 +144,24 @@ const Here = `${HERE[0].toUpperCase()}${HERE.slice(1)}`;
 /** Whether `goal` may go on alone here: its bot's commands in the sandbox, a coding agent's too. */
 const alone = (goal: Pick<KeptGoal, "bot">): boolean => sandboxOn(botHere(goal.bot)?.agents ?? false);
 
+/** A project a plan names: by name, to go in the projects folder, or by the folder the user named
+ * for it (a full path, or one with `~`), named after that folder. */
+export function goalProject(entry: string): { name: string; folder?: string } {
+  if (!/^(~\/|\/)/.test(entry)) return { name: entry };
+  const named = namedPlace(entry);
+  return "folder" in named ? { name: path.basename(named.folder), folder: named.folder } : { name: path.basename(entry) };
+}
+
 /** The checks the box makes itself, as they stand now: whether it may work on its own here, on
- * power (a Mac), and where new projects go (when the plan makes one and none is picked). */
+ * power (a Mac), and where new projects go (when the plan makes one without a folder named for it,
+ * and none is picked). */
 export function boxChecks(goal: Pick<KeptGoal, "projects" | "name" | "bot">): GoalCheckShape[] {
   const checks: GoalCheckShape[] = [];
   if (!alone(goal)) checks.push({ id: "alone", text: `${Here} can't work on its own yet`, detail: `${goal.name} works on it with you here: what it asks waits for you`, state: "failed", by: "box" });
   if (keepsAwake() && onPower() === false) checks.push({ id: "power", text: "Your Mac is on battery", detail: "If it sleeps, the goal carries on once it wakes", state: "needs", by: "box" });
-  if (goal.projects.length && !projectsFolder()) {
-    checks.push({ id: "projectsFolder", text: "Pick where new projects go", detail: `for ${goal.projects.join(", ")}`, state: "needs", by: "box", action: { kind: "projectsFolder", label: "Pick" } });
+  const placeless = goal.projects.filter(each => !/^(~\/|\/)/.test(each));
+  if (placeless.length && !projectsFolder()) {
+    checks.push({ id: "projectsFolder", text: "Pick where new projects go", detail: `for ${placeless.join(", ")}`, state: "needs", by: "box", action: { kind: "projectsFolder", label: "Pick" } });
   }
   return checks;
 }
@@ -231,7 +240,7 @@ const https = (value: unknown): string | null => {
     return null;
   }
 };
-// A service's site, for its icon: an address's host, or a site named (`stripe.com`).
+// The site something is done at: an address's host, or a site named (`stripe.com`).
 const siteOf = (value: unknown): string | null => {
   if (typeof value !== "string" || !value.trim()) return null;
   try {
@@ -245,15 +254,19 @@ const newID = (prefix: string) => `${prefix}_${crypto.randomBytes(9).toString("b
 const PERIODS = ["day", "week", "month", "goal"] as const;
 const DIGESTS = ["day", "week", "milestones", "none"] as const;
 
-// A step as given: its words, or {text, phase, after: [step numbers]}.
-function stepGiven(each: unknown): (Pick<GoalStepShape, "text" | "phase" | "site"> & { after?: number[] }) | null {
+// One line of words: what wraps (a newline, runs of spaces) said as one space.
+const line = (value: unknown, most: number): string | null => text(typeof value === "string" ? value.replace(/\s+/g, " ") : value, most);
+
+// A step as given: its words, or {text, detail, phase, site, after: [step numbers]}.
+function stepGiven(each: unknown): (Pick<GoalStepShape, "text" | "detail" | "phase" | "site"> & { after?: number[] }) | null {
   if (typeof each === "string") return text(each, 300) ? { text: text(each, 300)! } : null;
   if (!isObject(each)) return null;
   const said = text(each.text, 300);
   if (!said) return null;
   const after = Array.isArray(each.after) ? each.after.filter((one): one is number => Number.isInteger(one) && (one as number) >= 1) : [];
   const site = siteOf(each.site);
-  return { text: said, ...(text(each.phase, 80) ? { phase: text(each.phase, 80)! } : {}), ...(site ? { site } : {}), ...(after.length ? { after } : {}) };
+  const detail = line(each.detail, 120);
+  return { text: said, ...(detail ? { detail } : {}), ...(text(each.phase, 80) ? { phase: text(each.phase, 80)! } : {}), ...(site ? { site } : {}), ...(after.length ? { after } : {}) };
 }
 // Steps as kept: ids in order, and what each comes after by id (only steps before it).
 const keptSteps = (given: ReturnType<typeof stepGiven>[], from = 0): GoalStepShape[] => given.filter((each): each is NonNullable<typeof each> => Boolean(each)).map((each, at) => {
@@ -276,7 +289,7 @@ export function proposeGoal(bot: { bot: string; name: string; session: string },
   if (!goal) return { refused: "Say the goal, in the user's words (goal)." };
   const steps = (Array.isArray(given.steps) ? given.steps : []).map(stepGiven).filter((each): each is NonNullable<typeof each> => Boolean(each));
   if (!steps.length) return { refused: "Give the plan, as its steps in order (steps)." };
-  if (steps.length > 200) return { refused: "That's more than 200 steps: make them bigger, in phases." };
+  if (steps.length > 200) return { refused: "That's more than 200 steps: make them bigger." };
   const checks: GoalCheckShape[] = [];
   for (const each of Array.isArray(given.checks) ? given.checks.slice(0, 12) : []) {
     if (!isObject(each)) continue;
@@ -294,7 +307,7 @@ export function proposeGoal(bot: { bot: string; name: string; session: string },
     spend.push({ what: text(each.what, 200)!, cap: each.cap, currency: (text(each.currency, 3) ?? "USD").toUpperCase(), per, spent: 0 });
   }
   const publics: KeptGoal["public"] = (Array.isArray(given.public) ? given.public.slice(0, 8) : []).map(each => text(each, 200)).filter((each): each is string => Boolean(each)).map((each, at) => ({ id: `p${at + 1}`, text: each, on: false }));
-  const projects = (Array.isArray(given.projects) ? given.projects.slice(0, 5) : []).map(each => text(each, 80)).filter((each): each is string => Boolean(each));
+  const projects = (Array.isArray(given.projects) ? given.projects.slice(0, 5) : []).map(each => text(each, 200)).filter((each): each is string => Boolean(each));
   const ends = endGiven(given.ends);
   if (ends === null) return { refused: "An end (ends) is a date and time to come, like 2026-11-30T18:00." };
   // A digest for a long goal, by the plan's size unless the bot says: a day's for one with phases or
@@ -462,6 +475,17 @@ async function setGoalLoop(goal: KeptGoal, condition: string | null, _targets?: 
   return done;
 }
 
+// How a bot works through its goal, as a person who leads a team does: its sessions do the work,
+// and it makes the projects, hands each step to one and follows them up. Told as it plans and as
+// the goal starts, where even a small model reads it, unless the user said to do it all itself.
+const LEAD_WORDS = (projects: { name: string; folder?: string }[]) => [
+  "How you work through it: you lead, and sessions you start do the work. Unless the user told you to do it yourself:",
+  `1. ${projects.length ? `Make ${projects.map(each => (each.folder ? `${each.name} with make_project (name "${each.name}", folder "${shownPath(each.folder)}")` : `${each.name} with make_project`)).join(", ")} first: you may, without asking.` : "Make a new project with make_project first, if the work needs one."} Never make a project's folder with mkdir or git init.`,
+  "2. Hand each step to a session with start_session: in the project, with the step's number (step), and a task it can do from the message alone (what to do, where, what's there already, when it's done, what to report). A new project has no commits yet: its first session works in it without a worktree and commits, and the rest start once it has. After that, start every step that waits for nothing at once, each in a worktree of its own (worktree) when others work in the same project.",
+  "3. Follow them up: you're woken when one finishes or asks. Read its report, answer what it asks, start the steps that waited for it, and send it back to fix what isn't done.",
+  "Write no code and make no files of the work yourself, not even the first ones: a session does. If the plan is one small step, you may do it yourself.",
+].join("\n");
+
 // What the bot is told as the goal starts: what's approved, and how it goes.
 function startWords(goal: KeptGoal): string {
   const on = goal.public.filter(each => each.on).map(each => `"${each.text}"`);
@@ -471,8 +495,8 @@ function startWords(goal: KeptGoal): string {
     on.length ? `Switched on, so do them when they're ready: ${on.join(", ")}.` : "",
     off.length ? `Switched off, so prepare them as drafts for the user: ${off.join(", ")}.` : "",
     goal.spend.length ? `What you may spend, never more: ${goal.spend.map(each => `${each.what}, up to ${each.cap} ${each.currency}${each.per === "goal" ? "" : ` a ${each.per}`}`).join("; ")}. Ask may_spend before each purchase.` : "Spend nothing.",
-    goal.projects.length ? `You may make these projects without asking: ${goal.projects.join(", ")}.` : "",
     goal.ends ? `It ends at ${resetTime(goal.ends)}: be done by then, or wrap up and report.` : "",
+    LEAD_WORDS(goal.projects.map(goalProject)),
     "Mark each step with goal_progress as it starts, moves and ends (with progress where you can measure it), and keep what only the user can fix as waiting (it never stalls the rest: carry on with other steps). End with finish_goal and your report.",
   ];
   return lines.filter(Boolean).join("\n");
@@ -598,6 +622,12 @@ async function tellBot(goal: Pick<KeptGoal, "session">, said: string, line: stri
 // leaves out to show /goal in front of them, as the composer did (KuvoClient's
 // SentWithKeyword.goalHeading, in these words).
 const GOAL_ASKED = "The user sent this as a goal, with Kuvo Code's /goal. Plan it, check what it needs, and put it to them with propose_goal before doing any of the work:";
+// How to plan it, after /goal in the block (clients read only its first two lines).
+const GOAL_PLANNING = [
+  "Plan it as a lead whose sessions do the work: make each step one session's whole task (\"Build the app's screens\", \"Write the tests\"), not a command.",
+  "Put each project it needs in projects: by name, or, where the user named a folder for it, that folder as a full path (~/… or /…). You make it with make_project once the goal starts.",
+  "Make nothing before [Goal started]: no folders, files or code.",
+];
 
 /** /goal in a bot's chat: the bot asked to plan `words` as a goal and put it to you, now. */
 export async function askGoal(session: string, words: string, targets: () => Target[]): Promise<{ text: string } | { refused: GoalRefusal }> {
@@ -610,7 +640,7 @@ export async function askGoal(session: string, words: string, targets: () => Tar
   changeQueue(session, state => ({ ...state, paused: false }));
   const sent = await asked(place.target, "POST", `api/session/${encodeURIComponent(session)}/prompt`, {
     id: messageID(),
-    text: [said, "", "<sent-with>", GOAL_ASKED, "/goal", "</sent-with>"].join("\n"),
+    text: [said, "", "<sent-with>", GOAL_ASKED, "/goal", ...GOAL_PLANNING, "</sent-with>"].join("\n"),
     delivery: "queue",
   }).then(() => true, () => false);
   return sent ? { text: "Asked for a plan." } : { refused: { status: 404, message: "The conversation can't be reached now." } };
@@ -681,7 +711,7 @@ export function linkSession(bot: string, step: unknown, session: string, file = 
 }
 
 // Where you are, in a line, for what the bot does next.
-const presence = () => (isHere() ? "The user is here now." : "The user is away now: prepare anything public or sent as a draft, unless its switch is on, and carry on with what doesn't need them.");
+const presence = () => (isHere() ? "The user is here now." : "The user is away now: carry on with what doesn't need them.");
 
 // A time a step waits for, as goal_progress takes it (ISO words, or ms; seconds, as wake-ups give
 // it, read as such): null for one it can't read.
@@ -877,8 +907,6 @@ const NUDGE_AFTER = [10, 30, 60, 120, 240, 480, 720].map(minutes => minutes * 60
  * - the conversation's goal (its loop) kept as the plan is: set while it runs, taken away once it
  *   ends; its pause at a model's limit shown as the plan's;
  * - the Mac kept awake only while some goal's work is at it (on power);
- * - its sessions' rules (only those started for it) asking for what always comes to you, and for
- *   publishing unless a public step is on;
  * - a session that failed at a model's limit paused until the reset (from when it failed), and told
  *   to carry on then; a paused session that's gone let go;
  * - what its sessions (and the bot itself) ask that the bot hasn't answered, listed as waiting for
@@ -949,13 +977,6 @@ export async function lookAtGoals(tell: (notice: Notice) => boolean, targets: ()
   for (const goal of running) {
     const work = workOf(goal);
     const own = await placeOfSession(goal.session, targets()).catch(() => null);
-    // Its rules, and its sessions', ask for what always comes to you, and for publishing unless a
-    // public step is switched on.
-    const publishing = !goal.public.some(step => step.on);
-    for (const place of [...(own ? [{ target: own.target, id: goal.session, rules: own.data.permissions }] : []), ...work.map(each => ({ target: each.target, id: each.data.id, rules: each.data.permissions }))]) {
-      if (asksAlways(place.rules, { publishing })) continue;
-      await call(place.target, "PATCH", `/api/session/${encodeURIComponent(place.id)}`, { permissions: withAlwaysAsk((place.rules ?? []) as KitRule[], { publishing }) }, signal).catch(() => {});
-    }
     // A session whose turn failed at a model's limit: paused until it resets.
     const limitsSeen = { ...(goal.limitsSeen ?? {}) };
     for (const each of work) {

@@ -30,9 +30,34 @@ struct ReviewDecisions: Decodable, Equatable {
     /// When you last looked at them, on any client: what's held back after it is news.
     var seen: Double?
 
-    /// The latest first, as Decisions lists them.
-    var latestFirst: [Decision] { decisions.reversed() }
+    /// The latest first. (Not the box's note that one you approved ran: its own line says so.)
+    var latestFirst: [Decision] { decisions.reversed().filter { $0.by != "you" } }
     var waiting: [Decision] { decisions.filter(\.waiting) }
+
+    /// As Decisions lists them: what's yours to approve first, then the rest, the latest first;
+    /// past `limit` of the rest, how many more there are (what waits on you always shows).
+    func listed(limit: Int?) -> (rows: [Decision], more: Int) {
+        let rest = latestFirst.filter { !$0.waiting }
+        let shown = limit.map { rest.prefix($0) } ?? rest[...]
+        return (latestFirst.filter(\.waiting) + shown, rest.count - shown.count)
+    }
+
+    /// How many it holds back, and of what it allowed (or you approved after), how many of each kind.
+    struct Counts: Equatable {
+        var heldBack = 0, edits = 0, reads = 0, commands = 0, other = 0
+    }
+
+    var counts: Counts {
+        latestFirst.reduce(into: Counts()) { counts, each in
+            switch (each.refused, each.kind, each.action.hasPrefix("Read ")) {
+            case (true, _, _) where each.approved == nil: counts.heldBack += 1
+            case (_, "command", _): counts.commands += 1
+            case (_, "file", true): counts.reads += 1
+            case (_, "file", false): counts.edits += 1
+            default: counts.other += 1
+            }
+        }
+    }
 }
 
 extension SessionModel {
@@ -79,11 +104,11 @@ extension SessionModel {
     /// answered it's read again, as the box may have taken them in another order.
     func setApproval(_ approval: ToolApproval) {
         guard canReach, let box = box() else { return }
-        let option = approvalShown?.option(approval)
-        if option?.unavailable?.reason == "bot" { return }
-        if option?.unavailable?.reason == "fullAccessOff" {
-            confirmsFullAccess = true
-            return
+        switch approvalShown?.option(approval)?.unavailable?.reason {
+        case nil: break
+        case "fullAccessOff": confirmsFullAccess = true; return
+        // Not to be had here, as its box says (a bot's on a box before 0.9.188): shown, not picked.
+        default: return
         }
         approvalChanges += 1
         approvalsPending += 1
@@ -92,6 +117,7 @@ extension SessionModel {
         if var shown = approvalShown { shown.approval = approval; approvalShown = shown }
         Task {
             var latest: Bool { pick == approvalChanges }
+            var refused = false
             do {
                 let shown = try await box.value(ApprovalShown.self, "PUT", approvalRoute, body: ["approval": approval.rawValue])
                 if latest {
@@ -104,6 +130,11 @@ extension SessionModel {
                     approvalShown = before
                     confirmsFullAccess = true
                 }
+            } catch let refusal as BoxRefusal where refusal.status == 409 && refusal.reason == "bot" {
+                // Not to be had here (a bot's on a box before 0.9.188), picked before its options
+                // were read: its menu shows why once read again.
+                if latest { approvalShown = before }
+                refused = true
             } catch {
                 if latest {
                     approvalShown = before
@@ -114,7 +145,7 @@ extension SessionModel {
             guard approvalsPending == 0 else { return }
             let overlapped = approvalBurst > 1
             approvalBurst = 0
-            if overlapped { await readApproval() }
+            if overlapped || refused { await readApproval() }
         }
         approvalBurst += 1
     }

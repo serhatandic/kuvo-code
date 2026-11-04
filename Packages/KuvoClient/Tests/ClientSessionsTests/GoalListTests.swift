@@ -4,9 +4,9 @@ import OpenCodeKit
 import Testing
 
 /// A bot's goal as both apps show it over its composer: a short name on the bar, how far along it
-/// is or, paused, why in a word; opened, its steps as rows top to bottom (the done ones folded,
-/// phases heading theirs, each step's state in a few words that fit whole), and when it's likely
-/// done and due under them.
+/// is or, paused, why in a word; opened, its steps as rows top to bottom in the plan's order (the
+/// done ones folded, each step's state in a few words that fit whole, and no phases, even an old
+/// goal's), and when it's likely done and due under them.
 struct GoalListTests {
     private let start = Date(timeIntervalSince1970: 1_800_000_000)
     private let utc = TimeZone(identifier: "UTC")!
@@ -18,17 +18,6 @@ struct GoalListTests {
     }
 
     private func at(_ hours: Double) -> Double { (start.timeIntervalSince1970 + hours * 3600) * 1000 }
-
-    private func names(_ rows: [GoalTimeline.Row]) -> [String] {
-        rows.map { row in
-            switch row {
-            case .phase(let name): "phase \(name)"
-            case .done(let lanes): "\(lanes.count) done"
-            case .later(let lanes): "\(lanes.count) later"
-            case .lane(let lane): lane.step.text
-            }
-        }
-    }
 
     /// The drafts' landing page: two done, the site under way, the domain waiting for you, three to go.
     private var landing: [GoalPlan.Step] {
@@ -68,35 +57,6 @@ struct GoalListTests {
         #expect(GoalPlanWords.line(plan(landing, state: .stopped), now: now) == "Stopped · 2 of 7")
         // A paused goal that's over says it's over.
         #expect(GoalPlanWords.line(plan(landing, state: .stopped), pausedBy: .some(.you), now: now) == "Stopped · 2 of 7")
-    }
-
-    @Test func theStepsAreRowsWithTheDoneOnesFoldedAndPhasesHeadingTheirs() {
-        let timeline = GoalTimeline(plan(landing), now: start.addingTimeInterval(7 * 3600))
-        #expect(names(timeline.list()) == ["2 done", "phase Build", "Build the site", "Buy the domain", "phase Launch", "Point DNS at the host", "Deploy", "Add checkout"])
-        // Opened, the done ones show under their fold.
-        #expect(names(timeline.list(showsDone: true)).prefix(3) == ["2 done", "Pick a theme", "Write the copy"])
-    }
-
-    @Test func aGoalThatsAllDoneShowsItsStepsRatherThanOneFold() {
-        let done = landing.map { GoalPlan.Step(id: $0.id, text: $0.text, state: .done, phase: $0.phase, began: at(0), ended: at(8)) }
-        let timeline = GoalTimeline(plan(done, state: .done), now: start.addingTimeInterval(9 * 3600))
-        #expect(!names(timeline.list()).contains("7 done"))
-        #expect(names(timeline.list()).filter { !$0.hasPrefix("phase") }.count == 7)
-    }
-
-    @Test func aLongPlanFoldsWhatsLaterIntoOneRowWhateverItsLength() {
-        let steps = (1...20).map { (week: Int) -> GoalPlan.Step in
-            let state: GoalPlan.Step.State = week <= 3 ? .done : week == 4 ? .doing : .todo
-            let began: Double? = week <= 4 ? at(Double(week) * 24) : nil
-            let ended: Double? = week <= 3 ? at(Double(week) * 24 + 2) : nil
-            return GoalPlan.Step(id: "s\(week)", text: "Week \(week) summary", state: state, began: began, ended: ended)
-        }
-        let timeline = GoalTimeline(plan(steps), now: start.addingTimeInterval(4.5 * 86400))
-        #expect(names(timeline.list()) == ["3 done", "Week 4 summary", "16 later"])
-        #expect(names(timeline.list(showsLater: true)).count == 3 + 16)
-        // A few left aren't folded away.
-        let few = Array(steps.prefix(7))
-        #expect(names(GoalTimeline(plan(few), now: start.addingTimeInterval(4.5 * 86400)).list()) == ["3 done", "Week 4 summary", "Week 5 summary", "Week 6 summary", "Week 7 summary"])
     }
 
     @Test func eachStepSaysWhereItIsInAFewWords() {

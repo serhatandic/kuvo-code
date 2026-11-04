@@ -11,7 +11,7 @@ import { call } from "../engine/client";
 import { listOf, textOf } from "../files";
 import { BOTS, HERE, IS_MAC, WAKE_COMMAND } from "../home";
 import { botPersonalities } from "../personalities/library";
-import { withAlwaysAsk } from "../work/always";
+import { withoutFormerAsks } from "../work/former-asks";
 import { approvalOf, approvalRules } from "../work/approval";
 import { botHere, isMoving, noteBotsChanged } from "./here";
 import { jobOf } from "./jobs";
@@ -212,7 +212,7 @@ export function permissionsHere(): KitRule[] | null {
 // makes them (ToolApproval.refreshed): Approve All runs what Settings asks first about, Ask First
 // still lets through what Settings allows, and both keep what Settings doesn't allow.
 export function refreshedRules(current: KitRule[], settings: KitRule[]): KitRule[] {
-  // (Its own approval's rule: what always comes to you asks for some commands whatever it is.)
+  // (Its own approval's rule: Ask First's ask before every command.)
   const asks = current.some(rule => rule.action === "shell" && rule.resource === "*" && rule.effect === "ask");
   const denied = settings.filter(holdsBack);
   let made: KitRule[];
@@ -258,8 +258,8 @@ async function repairRules(target: Target, here: BotHere, sessionID: string): Pr
   // kept with it, where there is one (Accept Edits isn't in its rules alone).
   const approval = settings ? approvalOf({ permissions: kept as KitRule[], metadata: isObject(metadata) ? metadata : null }, { bot: true }) : null;
   const made = settings ? (approval?.stored ? approvalRules(approval.effective, kept as KitRule[]) : refreshedRules(kept as KitRule[], settings)) : kept as KitRule[];
-  // What always comes to you, asked whatever its approval.
-  const repaired = [...withAlwaysAsk(made), own];
+  // (Without the asks a box before put in a bot's: only what you set in Edit Bot holds it back.)
+  const repaired = [...withoutFormerAsks(made, settings ?? []), own];
   if (JSON.stringify(repaired) === JSON.stringify(rules)) return true;
   return call(target, "PATCH", `/api/session/${encodeURIComponent(sessionID)}`, { permissions: repaired }).then(() => true, () => false);
 }

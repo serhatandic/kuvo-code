@@ -1,3 +1,4 @@
+import ClientText
 import Foundation
 import OpenCodeKit
 import Testing
@@ -35,25 +36,26 @@ import Testing
         #expect(Notifier.response(to: Notifier.replyAction, info: [:], text: "hi") == nil)
     }
 
-    /// Always for This saves the engine's rule for a permission, which can be wider than its
-    /// notification shows (`git push *` for `git push origin main`, any file for one): then the
-    /// notification offers Allow Once and Don't Allow only, and an Always from it saves nothing.
-    @Test func alwaysIsOfferedOnlyForWhatTheNotificationShows() throws {
-        func request(_ resources: [String], save: [String]?) throws -> PermissionRequest {
-            var json: [String: Any] = ["id": "per_push", "sessionID": id, "action": "shell", "resources": resources]
+    /// A permission's notification names what its Always saves, as the conversation's card does:
+    /// the kind of command (`git push *` for `git push origin main`), every edit, the folder.
+    @Test func alwaysSaysWhatItSaves() throws {
+        func request(_ action: String, _ resources: [String], save: [String]?) throws -> PermissionRequest {
+            var json: [String: Any] = ["id": "per_push", "sessionID": id, "action": action, "resources": resources]
             if let save { json["save"] = save }
             return try JSONDecoder().decode(PermissionRequest.self, from: JSONSerialization.data(withJSONObject: json))
         }
-        #expect(!Notifier.offersAlways(try request(["git push origin main"], save: ["git push *"])), "a wider rule than it shows")
-        #expect(!Notifier.offersAlways(try request(["Sources/App.swift"], save: ["*"])), "any file, for one")
-        #expect(Notifier.offersAlways(try request(["npm test"], save: ["npm test"])))
-        #expect(Notifier.offersAlways(try request(["Sources/App.swift", "README.md"], save: nil)), "what it shows, when the engine names no rule")
-        #expect(Notifier.buttons(offeringAlways: false) == [.once, .reject])
-        #expect(Notifier.buttons(offeringAlways: true) == [.once, .always, .reject])
+        func titles(_ request: PermissionRequest) -> [String] {
+            Notifier.buttons(always: AlwaysWords.of(action: request.action, save: request.save, resources: request.resources, home: "/Users/me").plain).map(\.title)
+        }
+        #expect(titles(try request("shell", ["git push origin main"], save: ["git push *"])) == ["Allow Once", "Always Allow git push", "Don’t Allow"])
+        #expect(titles(try request("edit", ["Sources/App.swift"], save: ["*"])) == ["Allow Once", "Always Allow Edits", "Don’t Allow"])
+        #expect(titles(try request("external_directory", ["/Users/me/notes/a.md"], save: ["/Users/me/notes/*"])) == ["Allow Once", "Always Allow ~/notes", "Don’t Allow"])
+        #expect(Notifier.buttons(always: nil).map(\.answer) == [.once, .reject])
 
-        let info = Notifier.info(session: id, permission: (session: id, request: "per_push"), question: nil, offersAlways: false)
-        #expect(Notifier.response(to: Notifier.PermissionAnswer.always.rawValue, info: info, text: nil) == .open(session: id), "no Always from it")
-        #expect(Notifier.response(to: Notifier.PermissionAnswer.once.rawValue, info: info, text: nil) == .permission(session: id, request: "per_push", .once))
+        let always = Notifier.info(session: id, permission: (session: id, request: "per_push"), question: nil)
+        #expect(Notifier.response(to: Notifier.PermissionAnswer.always.rawValue, info: always, text: nil) == .permission(session: id, request: "per_push", .always))
+        let none = Notifier.info(session: id, permission: (session: id, request: "per_push"), question: nil, offersAlways: false)
+        #expect(Notifier.response(to: Notifier.PermissionAnswer.always.rawValue, info: none, text: nil) == .open(session: id), "no Always from one that has none")
     }
 
     @Test func aReplyGoesToTheConversation() async throws {

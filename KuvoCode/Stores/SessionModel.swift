@@ -95,8 +95,6 @@ final class SessionModel {
     /// Asks whose answer is on its way, or has gone and waits for the engine to say so: answered
     /// once (a second click, or Return again, sends nothing).
     private(set) var answering: Set<String> = []
-    /// The ask Return and Escape answer: the card on top (a permission first, then a question).
-    var keyedAsk: String? { permissions.first?.id ?? forms.first?.id }
     /// How much of the context window the last step used.
     private(set) var contextUsed: Int?
     /// The model its latest reply came from: on Auto, the one in your list at work now.
@@ -287,9 +285,6 @@ final class SessionModel {
     private(set) var isLoaded = false
     /// Your answers to the agent's questions so far, by form: kept while you look elsewhere.
     var questionProgress: [String: QuestionProgress] = [:]
-    /// Goes up when the agent asks something while the composer is empty: it lets go of the
-    /// keyboard, for the question.
-    private(set) var composerBlur = 0
     /// Showing the conversation as last seen (its machine is connecting, or this Mac's engine
     /// starting), not the engine's.
     private(set) var isCopy = false
@@ -387,10 +382,6 @@ final class SessionModel {
     func focusComposer() { composerFocus += 1 }
     func openModelMenu() { modelMenuRequest += 1 }
 
-    /// A question came: the composer lets go of the keyboard for it, unless you're writing.
-    func yieldComposer() {
-        if draftText.isEmpty, draftQuotes.allSatisfy({ $0.response.isEmpty }) { composerBlur += 1 }
-    }
 
     /// Replies to all of a message: it goes over the composer as a quote, to answer under.
     func reply(to text: String) {
@@ -1263,7 +1254,8 @@ final class SessionModel {
         case .goal:
             break
         case .plan:
-            selectAgent("plan")
+            // Alone, it turns Plan on or off; with words, it plans them.
+            if rest.isEmpty && files.isEmpty { togglePlan() } else { selectAgent("plan") }
             if !rest.isEmpty { send(rest, files: files, for: model, queue: queue, typed: Keyword.plan.typed) } else if !files.isEmpty { restore(text: "", files: files) }
         case .compact:
             compact()
@@ -2538,6 +2530,11 @@ final class SessionModel {
         } catch {
             fail(error)
         }
+    }
+
+    /// Plan on, or off again: back to the agent a new session starts with (Build).
+    func togglePlan() {
+        selectAgent(session.agent == "plan" ? catalog()?.startingAgent(chosen: nil) ?? "build" : "plan")
     }
 
     func selectAgent(_ agent: String) {

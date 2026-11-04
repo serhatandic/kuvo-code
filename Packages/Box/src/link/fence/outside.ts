@@ -1,6 +1,6 @@
 // A command an agent needs outside the sandbox (PROTOCOL.md, "Sandbox", "Asks"): its `sandbox_ask`,
 // which both tool servers (this Mac's app, a machine's kuvo-browser.js) pass here as it is. You're
-// asked on any client, with what the sandbox stopped; Allow Once and Always for This have the box
+// asked on any client, with what the sandbox stopped; Allow Once and Always have the box
 // run that one command itself, outside the sandbox, in the conversation's folder, and hand its
 // output back. Always also lets the project's commands write, in the sandbox, the one folder this
 // one was stopped writing in (fence/allowed.ts); a command itself is never let out for good, and
@@ -22,9 +22,10 @@ import type { Notice } from "../notices/notice";
 import { commandEnv, runCommand } from "../run-command";
 import type { Caller } from "../vault/who";
 import { markedFullAccess } from "../work/full";
-import { findConversation, heldUnreached, inFullAccess, refusalWords, reviewIn } from "../work/reviewing";
+import { findConversation, heldUnreached, inAuto, inFullAccess, refusalWords, reviewIn } from "../work/reviewing";
 import { forgetFetched } from "../work/reviewer";
 import { addRule, ownerOf, writeRuleWouldBe } from "./allowed";
+import { fencePolicy, type FencePolicy } from "./policy";
 
 /** Your answer, and who gave it: "Mac", or a phone's name. */
 export interface SandboxAnswer {
@@ -223,12 +224,79 @@ async function askToRun(caller: Caller, args: Record<string, unknown>, signal?: 
   }
   const left = Math.floor((CALL_BUDGET - (Date.now() - started)) / 1000);
   const seconds = Math.max(1, Math.min(600, left, Number(args.timeout) || 300));
-  const { output, code, timedOut } = await runCommand(fetched?.command ?? command, project, commandEnv(), seconds * 1000, signal).finally(() => forgetFetched(fetched));
-  let shown = output;
-  if (shown.length > MOST_OUTPUT) shown = "…" + shown.slice(-MOST_OUTPUT).replace(/^[^\n]*\n/, "");
+  const { shown, code, timedOut } = await runOutside(fetched?.command ?? command, project, seconds, signal).finally(() => forgetFetched(fetched));
   const ended = timedOut ? `It was stopped after ${seconds} seconds.` : `It ended with ${code}.`;
   const head = how === "always" ? `Ran outside the sandbox · Always for this: from now on your commands can write in ${always!.path} in the sandbox, so run them there.` : verdict?.decision === "allow" ? (verdict.by === "you" ? "Ran outside the sandbox · Approved by the user" : `Ran outside the sandbox · Allowed by Auto's reviewer: ${verdict.reason}`) : full ? "Ran outside the sandbox · Full Access" : "Ran outside the sandbox · Allowed once";
   return { text: `${head}\n\n${shown.trim() ? shown.trimEnd() + "\n\n" : "It printed nothing.\n\n"}${ended}`, isError: timedOut || code !== 0 };
+}
+
+/** Whether the sandbox, and not something else, stopped a command that printed `printed`: on a
+ * Mac, "Operation not permitted", which its sandbox answers and a file's own permissions or a
+ * database don't (its log isn't enough: it has what the sandbox quietly refused any command too);
+ * on Linux, what Landlock answers (or a read-only folder), or a secret that's hidden from commands
+ * said not to be there. */
+function stoppedBySandbox(printed: string, policy: FencePolicy): boolean {
+  if (process.platform === "darwin") return /operation not permitted|\bEPERM\b/i.test(printed);
+  if (/permission denied|read-only file system|operation not permitted|\bE(PERM|ACCES|ROFS)\b/i.test(printed)) return true;
+  const named = printed.match(/(?:~|\/)[^\s'"`:,;()]+/g) ?? [];
+  return /no such file or directory/i.test(printed) && named.some(word => {
+    const where = path.resolve(word.replace(/^~(?=\/|$)/, policy.home));
+    return policy.secrets.some(wall => where === wall || where.startsWith(wall + "/"));
+  });
+}
+
+/** A command the sandbox stopped as an agent's shell tool ran it (the engine's plugin tells the box
+ * as the call ends: `kuvo/sandbox/stopped`), in a conversation in Auto: its reviewer decides, as for
+ * sandbox_ask, with nobody asked, seeing what it printed and what the sandbox refused it. Allowed,
+ * it runs again outside the sandbox where the agent ran it, and the agent gets that output instead
+ * (`exit`); refused, why not, after what it printed (no `exit`: the call ended as it did). Stopped
+ * once the agent's call is (`calling`). Null in any other mode (the agent can ask you with
+ * sandbox_ask), for what something else refused, and where it can't be told. */
+export async function stoppedInAuto(caller: Caller, input: Record<string, unknown>, printed: string, calling: () => Promise<boolean>, signal?: AbortSignal): Promise<{ text: string; exit?: number } | null> {
+  const started = Date.now();
+  const command = typeof input.command === "string" ? input.command : "";
+  const project = caller.folder && fs.existsSync(caller.folder) ? caller.folder : null;
+  if (caller.seat || !command.trim() || command.length > 8000 || !project) return null;
+  // (Where the agent ran it: its shell tool's own folder, from the conversation's.)
+  const given = typeof input.workdir === "string" ? input.workdir : typeof input.cwd === "string" ? input.cwd : "";
+  const folder = given ? path.resolve(project, given.replace(/^~(?=\/|$)/, os.homedir())) : project;
+  if (!fs.existsSync(folder)) return null;
+  const conversation = caller.root ?? caller.session;
+  const at = conversation ? (await findConversation(conversation).catch(() => ({ at: null }))).at : null;
+  if (!at || !inAuto(at) || !stoppedBySandbox(printed, fencePolicy())) return null;
+  // What macOS's log says the sandbox refused it, which comes a moment after (by the command as it
+  // ran, whitespace and all).
+  let stops: SandboxStop[] = [];
+  if (process.platform === "darwin" && caller.session) {
+    for (const wait of [0, ...LOG_LATER.slice(0, 2)]) {
+      if (wait) await new Promise(resolve => setTimeout(resolve, wait).unref?.());
+      stops = await stopsFor(caller.session, command, 3, signal);
+      if (stops.length || signal?.aborted) break;
+    }
+  }
+  const verdict = await reviewIn(conversation!, { kind: "command", command, folder, stopped: { printed: cut(printed, 4000), stops } }, signal, at)
+    .catch(error => ({ decision: "refuse" as const, reason: `Auto's reviewer couldn't review it (${String((error as Error)?.message ?? error).slice(0, 120)}).`, by: "code" as const, held: false, why: "failed" as const, paused: false, fetched: undefined }));
+  if (!verdict) return null;
+  if (verdict.decision === "refuse") return { text: refusalWords(verdict) };
+  // (A shell tool's timeout is in milliseconds, and none is the most; within what the call has left.)
+  const asked = Number(input.timeout);
+  const left = Math.floor((CALL_BUDGET - (Date.now() - started)) / 1000);
+  const seconds = Math.max(1, Math.min(600, left, asked > 0 ? Math.ceil(asked / 1000) : asked === 0 ? 600 : 300));
+  // Stopped with the agent's call: the user pressed Stop.
+  const stop = new AbortController();
+  signal?.addEventListener("abort", () => stop.abort(), { once: true });
+  const watching = setInterval(() => { void calling().then(still => { if (!still) stop.abort(); }, () => {}); }, 3000);
+  const ran = await runOutside(verdict.fetched?.command ?? command, folder, seconds, stop.signal).finally(() => { clearInterval(watching); forgetFetched(verdict.fetched); });
+  const head = verdict.by === "you" ? "The sandbox stopped it · Ran again outside the sandbox · Approved by the user" : `The sandbox stopped it · Ran again outside the sandbox · Allowed by Auto's reviewer: ${verdict.reason}`;
+  return { text: `${head}\n\n${ran.shown.trimEnd()}${ran.timedOut ? `\n\nIt was stopped after ${seconds} seconds.` : ""}`, exit: ran.timedOut ? 124 : ran.code ?? 1 };
+}
+
+/** `command` run outside the sandbox in `folder`, for at most `seconds`: its output, cut to the
+ * end where it's long. */
+async function runOutside(command: string, folder: string, seconds: number, signal?: AbortSignal) {
+  const { output, code, timedOut } = await runCommand(command, folder, commandEnv(), seconds * 1000, signal);
+  const shown = output.length > MOST_OUTPUT ? "…" + output.slice(-MOST_OUTPUT).replace(/^[^\n]*\n/, "") : output;
+  return { shown, code, timedOut };
 }
 
 /** One of the tools, called for `caller`. */

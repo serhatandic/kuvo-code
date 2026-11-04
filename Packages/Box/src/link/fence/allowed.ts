@@ -1,5 +1,5 @@
 // Also Allowed (PROTOCOL.md, "Sandbox"): what you let a project's commands do beyond the sandbox,
-// from an ask's Always for This or added in Settings: a folder (or file) its commands write in the
+// from an ask's Always or added in Settings: a folder (or file) its commands write in the
 // sandbox. A bot's own folder and the chats' are projects here too, each rule listed by whose it is
 // (`ownerOf`); a bot's go once it's no longer here (`forgetGoneBots`). Kept in the box's own folder,
 // which nothing in a project can write, and changed only by the box's long-running process. (Never a command

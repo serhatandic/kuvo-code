@@ -34,7 +34,8 @@ export const WORK_ACTIONS: readonly WorkAction[] = ["makeProject", "cloneProject
 /** An ask as it's kept: as it's listed, what it was given, and once answered, how it went (and
  * whether its tool had stopped waiting, so its conversation is told instead). */
 export interface KeptAsk extends WorkAskShape {
-  given: { name: string; git?: boolean; clone?: string };
+  /** What make_project was given, with the folder named for it as a full path (`namedPlace`). */
+  given: { name: string; git?: boolean; clone?: string; folder?: string };
   late?: boolean;
   /** For one answered after its tool stopped waiting: whether its conversation has been told. */
   toldLate?: boolean;
@@ -75,11 +76,14 @@ function changeKept<T>(change: (asks: KeptAsk[]) => T, file = WORK_ASKS): T {
 /** What's asked now (not answered), as clients list them: of bots still here, and of other
  * conversations. */
 export function workAsks(file = WORK_ASKS): WorkAskShape[] {
-  return readKept(file).filter(each => !each.answered && (!each.bot || botHere(each.bot))).map(({ given: _, late: __, answering: ____, answered: ___, toldLate: _____, ...listed }) => {
-    // Where it would go, as it stands now: the folder may have been picked since.
+  return readKept(file).filter(each => !each.answered && (!each.bot || botHere(each.bot))).map(kept => {
+    const { given: _, late: __, answering: ____, answered: ___, toldLate: _____, ...listed } = kept;
+    // Where it would go, as it stands now: the folder may have been picked since (unless one was
+    // named for it).
     const root = projectsFolder();
-    const folder = projectPlace(listed.project, root);
-    const suggested = root ? null : suggestedFolder();
+    const named = kept.given?.folder;
+    const folder = named ?? projectPlace(listed.project, root);
+    const suggested = root || named ? null : suggestedFolder();
     const shown: WorkAskShape = { ...listed, folder: folder ?? null };
     delete shown.suggested;
     if (suggested) shown.suggested = suggested;
@@ -138,8 +142,8 @@ export function askWork(asker: Asker, action: WorkAction, given: KeptAsk["given"
       ...(asker.bot ? { bot: asker.bot } : {}),
       project: given.name,
       ...(given.clone ? { clone: given.clone } : {}),
-      folderName: folderName(given.name) ?? given.name,
-      folder: projectPlace(given.name),
+      folderName: given.folder ? path.basename(given.folder) : folderName(given.name) ?? given.name,
+      folder: given.folder ?? projectPlace(given.name),
       at: Date.now(),
       given,
     };
@@ -174,7 +178,7 @@ export async function answerOf(id: string, { wait = 10 * 60_000, every = 1000, s
 /** What the asked action does, in its maker's words; done now. */
 export async function doWork(action: WorkAction, given: KeptAsk["given"], asker: Asker): Promise<{ text: string; isError: boolean }> {
   const madeBy = asker.bot ? { bot: asker.bot, name: asker.name, at: Date.now() } : null;
-  const outcome = await makeProject({ name: given.name, git: given.git, clone: action === "cloneProject" ? given.clone : undefined }, madeBy);
+  const outcome = await makeProject({ name: given.name, git: given.git, clone: action === "cloneProject" ? given.clone : undefined, folder: given.folder }, madeBy);
   if ("refused" in outcome) return { text: outcome.refused.message, isError: true };
   if (asker.bot) noteWorkChanged(asker.bot);
   return { text: madeWords(outcome.made, HERE), isError: false };
@@ -193,9 +197,10 @@ export async function answerWork(id: string, given: Record<string, unknown>, tar
   if (!ask) return { refused: { status: 404, message: "That's been answered, or it isn't asked any more." } };
   const answer = given.answer;
   if (answer !== "allow" && answer !== "always" && answer !== "deny") return { refused: { status: 400, message: "Answer allow, always or deny." } };
-  // The projects folder, picked with the first: only where none is, and kept once it's claimed.
+  // The projects folder, picked with the first: only where none is, and kept once it's claimed (not
+  // for one with a folder named for it).
   let picked: string | null = null;
-  if (answer !== "deny" && !projectsFolder()) {
+  if (answer !== "deny" && !projectsFolder() && !ask.given.folder) {
     if (given.folder === undefined || given.folder === null) return { refused: { status: 400, message: "Pick the folder new projects go in." } };
     const checked = folderGiven(given.folder);
     if ("refused" in checked) return { refused: { status: 400, message: checked.refused } };

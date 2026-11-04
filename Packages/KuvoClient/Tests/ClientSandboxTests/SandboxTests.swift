@@ -6,6 +6,28 @@ import Testing
 /// words a newer box adds read as none rather than failing the page; an agent's ask and what Always
 /// for This would keep; and a project's Also Allowed, asked for by its folder.
 @Suite struct SandboxTests {
+    /// In Auto, an ask to work outside the folder is its reviewer's: no card while it checks, nor
+    /// once it allowed or held it back, only a mark on its step; one it leaves for you is yours. A
+    /// box from before says nothing of reviews, and every ask of it is yours.
+    @Test func anAskAutosReviewerTakesUpIsntYours() throws {
+        let line = #"{"asks":[],"reviews":[{"id":"per_1","session":"ses_a","call":"call_1","state":"checking","at":1},{"id":"per_2","session":"ses_a","state":"yours","at":2}]}"#
+        let list = try JSONDecoder().decode(SandboxAsks.self, from: Data(line.utf8))
+        let reviews = try #require(list.reviews)
+        let outside = "external_directory"
+        #expect(!AskReview.isYours(action: outside, review: reviews[0], boxTells: true, overdue: true), "being checked")
+        #expect(reviews[0].mark == "Auto is checking…")
+        #expect(AskReview.isYours(action: outside, review: reviews[1], boxTells: true, overdue: false), "left for you")
+        #expect(reviews[1].mark == nil)
+        // Not heard of yet: it waits for the box's word, a moment at most.
+        #expect(!AskReview.isYours(action: outside, review: nil, boxTells: true, overdue: false))
+        #expect(AskReview.isYours(action: outside, review: nil, boxTells: true, overdue: true))
+        // What the reviewer never takes up, and every ask of a box from before.
+        #expect(AskReview.isYours(action: "shell", review: nil, boxTells: true, overdue: false))
+        let before = try JSONDecoder().decode(SandboxAsks.self, from: Data(#"{"asks":[]}"#.utf8))
+        #expect(before.reviews == nil)
+        #expect(AskReview.isYours(action: outside, review: nil, boxTells: false, overdue: false))
+    }
+
     @Test func aStateThatIsntOnSaysWhyAndWhatToDo() throws {
         let state = try JSONDecoder().decode(SandboxState.self, from: Data("""
         {"on":false,"why":"Its check failed: a command could write outside its folder.","able":true,"agents":false,
@@ -66,7 +88,7 @@ import Testing
 }
 
 /// The card's words, the same in both apps: what was stopped first, the error where the sandbox
-/// can't say (a machine's), and Always for This's place with its home folder as ~.
+/// can't say (a machine's), and Always's place with its home folder as ~.
 @Suite struct SandboxCardWordsTests {
     private let ask = SandboxAsk(id: "sa_1", at: 1_000_000, botName: "Scout", project: "/Users/me/kuvo-ai", command: "./scripts/install-hooks.sh",
                                  why: "Installing the repo's hooks, as the README asks.",
@@ -77,7 +99,7 @@ import Testing
         #expect(ask.subtitle == "The sandbox stopped it from changing a file outside kuvo-ai.")
         #expect(ask.stopped?.map { "\($0.label) \($0.detail)" } == ["Write ~/.zshrc"])
         #expect(ask.alwaysPath == "~/.zshrc")
-        #expect(ask.alwaysScope == nil && ask.alwaysTitle == "Always for ~/.zshrc")
+        #expect(ask.alwaysScope == nil && ask.alwaysTitle == "Always Allow ~/.zshrc")
     }
 
     @Test func aBotsOwnFolderOrTheChatsAreNamedAsSuchAndAChatsAlwaysIsEveryChats() {
@@ -85,15 +107,15 @@ import Testing
         fromScout.project = "/Users/me/.kuvo-code/bots/bot_scout/workspace"
         fromScout.owner = SandboxOwner(kind: .bot, id: "bot_scout", name: "Scout")
         #expect(fromScout.subtitle == "The sandbox stopped it from changing a file outside Scout’s folder.")
-        #expect(fromScout.alwaysTitle == "Always for ~/.zshrc")
-        #expect(fromScout.alwaysHint == "Runs it, and from now on lets Scout’s commands write there too, in the sandbox.")
+        #expect(fromScout.alwaysTitle == "Always Allow ~/.zshrc")
+        #expect(fromScout.alwaysHint == "Runs it, and from now on lets Scout’s commands write in ~/.zshrc too, in the sandbox.")
         var fromChat = ask
         fromChat.botName = nil
         fromChat.project = "/home/me/.kuvo-code/chats"
         fromChat.owner = .chats
         #expect(fromChat.subtitle == "The sandbox stopped it from changing a file outside Chats.")
-        #expect(fromChat.alwaysScope == "in every chat" && fromChat.alwaysTitle == "Always for ~/.zshrc in every chat")
-        #expect(fromChat.alwaysHint == "Runs it, and from now on lets every chat’s commands write there too, in the sandbox.")
+        #expect(fromChat.alwaysScope == "in every chat" && fromChat.alwaysTitle == "Always Allow ~/.zshrc in every chat")
+        #expect(fromChat.alwaysHint == "Runs it, and from now on lets every chat’s commands write in ~/.zshrc too, in the sandbox.")
         // A box before owners: by the folder's name, as before.
         var before = fromChat
         before.owner = nil

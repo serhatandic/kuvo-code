@@ -46,9 +46,6 @@
               },
               {
                "literal": "fullAccessOff"
-              },
-              {
-               "literal": "bot"
               }
              ]
             },
@@ -68,9 +65,6 @@
               },
               {
                "literal": "fullAccessOff"
-              },
-              {
-               "literal": "bot"
               }
              ]
             },
@@ -120,9 +114,6 @@
               },
               {
                "literal": "fullAccessOff"
-              },
-              {
-               "literal": "bot"
               }
              ]
             },
@@ -142,9 +133,6 @@
               },
               {
                "literal": "fullAccessOff"
-              },
-              {
-               "literal": "bot"
               }
              ]
             },
@@ -211,9 +199,6 @@
           },
           {
            "literal": "fullAccessOff"
-          },
-          {
-           "literal": "bot"
           }
          ]
         },
@@ -249,9 +234,6 @@
              },
              {
               "literal": "fullAccessOff"
-             },
-             {
-              "literal": "bot"
              }
             ]
            },
@@ -267,9 +249,6 @@
              },
              {
               "literal": "fullAccessOff"
-             },
-             {
-              "literal": "bot"
              }
             ]
            },
@@ -340,9 +319,6 @@
           },
           {
            "literal": "fullAccessOff"
-          },
-          {
-           "literal": "bot"
           }
          ]
         },
@@ -378,9 +354,6 @@
              },
              {
               "literal": "fullAccessOff"
-             },
-             {
-              "literal": "bot"
              }
             ]
            },
@@ -396,9 +369,6 @@
              },
              {
               "literal": "fullAccessOff"
-             },
-             {
-              "literal": "bot"
              }
             ]
            },
@@ -430,9 +400,6 @@
         },
         {
          "literal": "fullAccessOff"
-        },
-        {
-         "literal": "bot"
         }
        ]
       }
@@ -3103,6 +3070,9 @@
             "literal": "approval.seen"
            },
            {
+            "literal": "approval.stopped"
+           },
+           {
             "literal": "accounts.ended"
            },
            {
@@ -3403,6 +3373,9 @@
            },
            {
             "literal": "approval.seen"
+           },
+           {
+            "literal": "approval.stopped"
            }
           ]
          }
@@ -6221,7 +6194,36 @@
         }
        }
       },
-      "restart?": "bool"
+      "restart?": "bool",
+      "reviews?": {
+       "list": {
+        "object": {
+         "id": "string",
+         "session": "string",
+         "call?": "string",
+         "state": {
+          "oneOf": [
+           {
+            "literal": "checking"
+           },
+           {
+            "literal": "allowed"
+           },
+           {
+            "literal": "heldBack"
+           },
+           {
+            "literal": "refused"
+           },
+           {
+            "literal": "yours"
+           }
+          ]
+         },
+         "at": "number"
+        }
+       }
+      }
      }
     }
    }
@@ -6457,6 +6459,17 @@
      "object": {
       "text": "string",
       "isError": "bool"
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/sandbox/stopped",
+   "answers": {
+    "200": {
+     "object": {
+      "text?": "string",
+      "exit?": "number"
      }
     }
    }
