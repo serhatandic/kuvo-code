@@ -134,4 +134,18 @@ struct GoalListTests {
         // Zoomed out, the whole goal.
         #expect(timeline.shown(whole: true) == DateInterval(start: timeline.start, end: timeline.end))
     }
+
+    /// In the bot's own conversation, what it asks there is its question card, so it isn't a row of
+    /// what's waiting as well; a session's ask, and what the bot kept for you, still are.
+    @Test func theBotsOwnQuestionIsntARowInItsConversationAsItsCardShowsIt() {
+        let waiting: [GoalPlan.Waiting] = [
+            .init(id: "w1", kind: .you, text: "Apple Developer Program membership", at: at(0)),
+            .init(id: "ask:ses_bot:frm_1", kind: .ask, text: "Pixel asks: Go with LeafCheck, or change it?", session: "ses_bot", at: at(1)),
+            .init(id: "ask:ses_site:per_1", kind: .ask, text: "Build the site: Run npm install outside the sandbox", session: "ses_site", at: at(2)),
+        ]
+        let shown = GoalPlan(id: "goal_1", bot: "bot_pixel", name: "Pixel", session: "ses_bot", goal: "Launch LeafCheck", state: .running, steps: landing,
+                             proposed: at(0), started: at(0), waiting: waiting, alone: true)
+        #expect(shown.waitingInItsConversation.map(\.id) == ["w1", "ask:ses_site:per_1"])
+        #expect(shown.waiting.count == 3, "elsewhere, all three")
+    }
 }
