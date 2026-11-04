@@ -887,7 +887,7 @@ beside it.
   it) is where it's done, and its mark is that site's own icon, which each client loads from the
   site itself; a step done on the computer has none, so no mark. `phase` is still kept from older
   bots, and the apps don't show it.
-- **Apps** (bridge 0.9.195, feature `work.goals.apps`, `work/apps.ts`): a step, or what waits, done
+- **Apps** (bridge 0.9.196, feature `work.goals.apps`, `work/apps.ts`): a step, or what waits, done
   in an app on the computer names it (`app`, "Xcode"). The box looks for it on its own computer as
   the tool is called, once per name (a name not found, again a day on): a Mac's in its Applications
   folders (the system's, yours, their Utilities) by name, else Spotlight's by display name, its icon
@@ -899,7 +899,7 @@ beside it.
   an id that isn't one). Not found, or with an icon that's SVG alone, it has no `id`, and clients
   show no mark. A step can have both `site` and `app`; clients show the site's. Kept in the box's
   `apps` folder (`found.json`, `<id>.png`).
-- **Folders** (bridge 0.9.195): while it's proposed, `folders` says where Start makes each project
+- **Folders** (bridge 0.9.196): while it's proposed, `folders` says where Start makes each project
   the plan names, worked out as `make_project` will: the folder named for it, or the projects folder
   and its name (`folder` null, and `shown`, while none is picked); `shown` is the same with `~` for
   the box's home; `there` is true when something with files is there already. It's only shown: it
@@ -2432,7 +2432,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `queue.waits` | A Stop holds the conversation: what arrives waits on the box (`waiting`), `…/queue/add` and `DELETE …/queue/<item>` (bridge 0.9.128) |
 | `work` | a bot's work ("Work"): `kuvo/work`, `…/events`, `kuvo/bots/<id>/stop-all`, `start_session`'s and `kuvo/sessions`' new fields, the work tools, `limits` in `kuvo/bots` (bridge 0.9.106) |
 | `work.goals` | a bot's goal ("Work", Goals): `kuvo/work/goals…`, and its tools (bridge 0.9.122) |
-| `work.goals.apps` | `app` on a goal's steps and what waits, and `GET kuvo/work/apps/icon` ("Work", Goals, Apps; bridge 0.9.195) |
+| `work.goals.apps` | `app` on a goal's steps and what waits, and `GET kuvo/work/apps/icon` ("Work", Goals, Apps; bridge 0.9.196) |
 | `work.projects` | a bot's projects ("Work", Projects): `make_project`, `list_projects`, `kuvo/work/asks`, `…/events`, `POST kuvo/work/asks/<id>`, `kuvo/work/settings`, `POST kuvo/projects/new`, `madeBy` on projects, `allowed` in `kuvo/bots` (bridge 0.9.107) |
 | `search` | `kuvo/search` |
 | `personalities` | `kuvo/personalities…` |
@@ -3302,7 +3302,7 @@ one the box marked as in Full Access, which runs (bridge 0.9.187).
   `~/.gitconfig`, `~/.config/git/config`, `gh auth setup-git`), your SSH keys (a key, `config` or
   `authorized_keys` written in `~/.ssh`, `ssh-keygen` making a key there), and your sign-ins' files
   (`~/.aws/credentials`, `~/.netrc`, `~/.npmrc`, `~/.docker/config.json`, `~/.kube/config`, gh's,
-  gcloud's, keychains and the like; `npm config set` but the project's, `aws configure`, `gh auth
+  gcloud's, the coding agents' and opencode's sign-ins, keychains and the like; `npm config set` but the project's, `aws configure`, `gh auth
   login`, `docker login`), past `sudo -u`, quotes and `$HOME` in a line read by its words. Reading a
   setting, making `~/.ssh` and trusting a host in `known_hosts` aren't changing them. Words that only
   sound like it ("the login page", "a global handler") don't name it. Named, the model judges it,
@@ -3463,9 +3463,12 @@ it writes as it writes the files beside them; and before Linux 6.2 (Landlock 3),
 path (`truncate`), which Landlock checks only from then. It can't read
 Kuvo Code's own folders (on a machine `~/.kuvo-code`; on this Mac the app's folders under `Library`,
 any `run.kuvo.code…` copy's, its temporary folder and `/tmp/kuvo-ssh-<uid>`) but its `bin`, nor your
-secrets (cloud, package and git tokens, browsers' and password managers' data, private SSH keys:
-every file in `~/.ssh` but its config, known hosts and public keys; gh's `hosts.yml` when it holds
-the token). A bot's or a chat's command gets its own folder back, and not its neighbours'. Its
+secrets (cloud, package and git tokens, browsers' and password managers' data, the coding agents'
+sign-ins and opencode's, wherever your `XDG_DATA_HOME` puts it, private SSH keys: every file in
+`~/.ssh` but its config, known hosts and public keys; gh's `hosts.yml` when it holds the token). A
+coding agent run whole in it keeps its own sign-in in its first home (Codex's `auth.json` in
+`~/.codex`), read and written as the rest of its state, and so do the commands it runs itself, which
+share its sandbox; never your own in another home of it (your Codex's, for an account you added). A bot's or a chat's command gets its own folder back, and not its neighbours'. Its
 environment has none of the engine's `OPENCODE_…` (but `OPENCODE_SESSION_ID`), no `KUVO_…` password,
 secret, token or key, and no `SSH_AUTH_SOCK` but its own SSH agent's (below); on macOS it can't
 reach your SSH and GPG agents' sockets either, which sign with the keys it can't read: the

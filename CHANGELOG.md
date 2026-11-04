@@ -16,8 +16,10 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- The coding agents' sign-ins (Codex's and Grok's `auth.json`, Claude Code's and the Gemini CLI's credentials files) and opencode's, wherever it keeps them, are treated like your other keys: commands in the sandbox can't read them, and in **Auto** the reviewer judges an agent reading or changing one. A coding agent running in the sandbox still uses its own sign-in, and so can the commands it runs itself.
 - A bot on a goal works like a lead with a team: once you start the goal, it makes the project (where you said it goes, if you did) and hands each step to a session of its own, following them as they report, rather than writing the code itself. Tell it if you'd rather it did the work alone.
 - A goal's step shows the icon of the site it's done at, like RevenueCat's or App Store Connect's, and none for work done on your computer: an Xcode step no longer shows Apple's logo.
+- A bot's conversation says a session is at work as soon as it starts, on this Mac or a machine, rather than "none at work" while its goal's step says it's running.
 - A goal's **Open** buttons, like signing in to RevenueCat or making a key, open the page in the bot's own browser in the panel instead of yours, so a sign-in there is one the bot can use. On a machine, it opens in that machine's browser. Opening it again brings back the same tab.
 - In Edit Bot › Work, a limit's menu opens at the value you click, with the current choice over it, instead of at the row's left edge.
 - The model menu gets shorter again when you turn from a long list to a short page like Custom Auto, instead of keeping the long list's height with empty space above and below.

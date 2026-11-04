@@ -198,8 +198,11 @@ export function seatbeltProfile(policy: FencePolicy, options: SeatbeltOptions): 
 
   out.push(";; your secrets");
   // Never read, nor moved, named again or replaced: one in a folder commands write (cargo's sign-in
-  // in its cache) would be read by another name.
-  deny(`file-read* ${WRITE}`, ...policy.secrets.map(subpath));
+  // in its cache) would be read by another name. (Read by name too, so no folder read above gives
+  // one back.) But a coding agent's own sign-in, run whole in the sandbox: in its first home (your
+  // Codex's `auth.json`), read and written as the rest of its state; never your own in another home
+  // of it (your Codex's, for an account you added).
+  if (policy.secrets.length) deny(`file-read* file-read-data ${WRITE}`, `(require-all (require-any ${policy.secrets.map(subpath).join(" ")}) (require-not ${param("OWN0")}))`);
 
   out.push(";; Kuvo Code's own servers and sockets");
   deny("network-outbound", ...policy.ports.map(port => `(remote tcp ${quote(`localhost:${port}`)})`));

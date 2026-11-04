@@ -5,12 +5,11 @@
 // Linux. No key leaves the box: a client sees names, and asks for one to be used by its id.
 
 import { readFileSync } from "node:fs";
-import path from "node:path";
 import { type Body, isObject, parsed } from "../../shared/json";
 import type { Target } from "../../shared/records";
 import type { Found } from "../../shared/routes/box";
 import { call } from "../engine/client";
-import { homeFolder, ownDataHome } from "../home";
+import { opencodeAuthFile } from "../home";
 import type { AnswerPiece, RouteContext } from "../server/context";
 
 /** One entry of opencode's `auth.json`, in the engine's own form for `api/credential`. */
@@ -18,15 +17,6 @@ export interface OpencodeEntry {
   integrationID: string;
   kind: "key" | "signIn";
   value?: Record<string, unknown>;
-}
-
-/**
- * Where an opencode used apart from Kuvo Code keeps its sign-ins, on both systems: in its data
- * folder, your own `XDG_DATA_HOME` if you set one. On a machine, the box's points into Kuvo Code's
- * folder; yours is what its launch kept (`KUVO_OWN_XDG_DATA_HOME`).
- */
-export function opencodeAuthFile(home = homeFolder(), env: NodeJS.ProcessEnv = process.env): string {
-  return path.join(ownDataHome(env, home), "opencode", "auth.json");
 }
 
 /** The one this box reads: a demo copy, or a test, names one of its own (`KUVO_DEMO_OPENCODE_AUTH`). */

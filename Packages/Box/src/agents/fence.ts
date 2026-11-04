@@ -217,7 +217,8 @@ const AGENT_FOLDERS = 4
 
 /** An agent's own places, as it runs whole in the sandbox (`fenceAgent`). */
 export interface AgentPlaces {
-  /** Its homes: read, and written only in its state (on a Mac; on Linux, whole). */
+  /** Its homes: read, and written only in its state (on a Mac; on Linux, whole). The first is where
+   * its sign-in is: a secret of yours there is its own (your Codex's `auth.json`), never in another. */
   homes: string[]
   /** What at its homes' top it writes (its sign-in, databases, conversations, logs): files, or folders whole, by name (`*` for any letters). */
   state: string[]

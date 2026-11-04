@@ -58,6 +58,15 @@ export function ownDataHome(env: NodeJS.ProcessEnv = process.env, home = homeFol
     : env.XDG_DATA_HOME && !path.resolve(env.XDG_DATA_HOME).startsWith(path.resolve(K)) ? env.XDG_DATA_HOME : undefined;
   return own && path.isAbsolute(own) ? own : path.join(home, ".local", "share");
 }
+
+/**
+ * Where an opencode used apart from Kuvo Code keeps its sign-ins, on both systems: in its data
+ * folder (`ownDataHome`).
+ */
+export function opencodeAuthFile(home = homeFolder(), env: NodeJS.ProcessEnv = process.env): string {
+  return path.join(ownDataHome(env, home), "opencode", "auth.json");
+}
+
 export const RUN = path.join(K, "run");
 export const LINK_FILE = path.join(RUN, "link.json");
 export const ENGINE_FILE = path.join(RUN, "engine.json");
