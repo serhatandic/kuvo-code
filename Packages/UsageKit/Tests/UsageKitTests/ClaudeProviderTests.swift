@@ -495,45 +495,39 @@ final class ClaudeProviderTests: XCTestCase {
         }
     }
 
-    func testRetriesOnceAfter401AndPersistsRefreshedCredentials() async {
+    /// Claude Code's sign-in is Claude Code's to renew, under its own lock: renewing it here spends its
+    /// single-use refresh token behind its back, and a Claude Code holding the old one is signed out
+    /// (Kuvo Code's fork). A rejected or expired token asks for `claude` instead, and nothing is written.
+    func testNeverRenewsClaudeCodesSignIn() async {
         let now = OpenUsageISO8601.date(from: "2026-02-20T16:00:00.000Z")!
-        let files = FakeFiles([
-            "/tmp/claude/.credentials.json": #"{"claudeAiOauth":{"accessToken":"stale-token","refreshToken":"refresh-1","expiresAt":4102444800000,"subscriptionType":"pro","scopes":["user:profile"]}}"#
-        ])
-        let httpClient = RoutingHTTPClient { request in
-            if request.url.path.hasSuffix("/api/oauth/usage") {
-                let authorization = request.headers["Authorization"] ?? ""
-                guard authorization.contains("fresh-token") else {
+        let rejected = #"{"claudeAiOauth":{"accessToken":"stale-token","refreshToken":"refresh-1","expiresAt":4102444800000,"subscriptionType":"pro","scopes":["user:profile"]}}"#
+        let expired = #"{"claudeAiOauth":{"accessToken":"old-token","refreshToken":"refresh-1","expiresAt":1771000000000,"subscriptionType":"pro","scopes":["user:profile"]}}"#
+        for credentials in [rejected, expired] {
+            let files = FakeFiles(["/tmp/claude/.credentials.json": credentials])
+            let httpClient = RoutingHTTPClient { request in
+                if request.url.path.hasSuffix("/api/oauth/usage") {
                     return HTTPResponse(statusCode: 401, headers: [:], body: Data())
                 }
                 return HTTPResponse(
                     statusCode: 200,
                     headers: [:],
-                    body: Data(#"{"five_hour":{"utilization":25,"resets_at":"2099-01-01T00:00:00.000Z"}}"#.utf8)
+                    body: Data(#"{"access_token":"fresh-token","refresh_token":"refresh-2","expires_in":3600}"#.utf8)
                 )
             }
-            return HTTPResponse(
-                statusCode: 200,
-                headers: [:],
-                body: Data(#"{"access_token":"fresh-token","refresh_token":"refresh-2","expires_in":3600}"#.utf8)
+            let provider = ClaudeProvider(
+                authStore: configuredAuthStore(files: files, now: { now }),
+                usageClient: ClaudeUsageClient(httpClient: httpClient),
+                logUsageScanner: ClaudeLogFixture.scanner(home: nil),
+                now: { now },
+                pricing: { TestPricing.bundled }
             )
+
+            let snapshot = await provider.refresh()
+
+            XCTAssertFalse(httpClient.requests.contains { $0.url.path.hasSuffix("/oauth/token") }, "no renewal")
+            XCTAssertEqual(files.files["/tmp/claude/.credentials.json"], credentials, "Claude Code's sign-in left as it was")
+            XCTAssertEqual(badge(snapshot.lines, "Error"), ClaudeAuthError.tokenExpired.localizedDescription)
         }
-        let provider = ClaudeProvider(
-            authStore: configuredAuthStore(files: files, now: { now }),
-            usageClient: ClaudeUsageClient(httpClient: httpClient),
-            logUsageScanner: ClaudeLogFixture.scanner(home: nil),
-            now: { now },
-            pricing: { TestPricing.bundled }
-        )
-
-        let snapshot = await provider.refresh()
-
-        XCTAssertNotNil(snapshot.lines.first(where: { $0.label == "Session" }))
-        let usageCalls = httpClient.requests.filter { $0.isClaudeUsagePoll }
-        XCTAssertEqual(usageCalls.count, 2)
-        let saved = files.files["/tmp/claude/.credentials.json"] ?? ""
-        XCTAssertTrue(saved.contains("fresh-token"))
-        XCTAssertTrue(saved.contains("refresh-2"))
     }
 
     func testFallsBackToFileWhenKeychainTokenIsLockedOut() async {
@@ -633,8 +627,8 @@ final class ClaudeProviderTests: XCTestCase {
 
     func testSurfacesAuthErrorWhenAllCredentialSourcesAreExpired() async {
         // The fallback must not mask a genuine all-sources-expired state: when both keychain and file
-        // tokens are revoked, the refresh fails loudly with the auth error rather than silently
-        // recovering or dropping it.
+        // tokens are turned away, the refresh fails loudly with the auth error rather than silently
+        // recovering or dropping it, and neither is renewed (Claude Code renews its own).
         let now = OpenUsageISO8601.date(from: "2026-02-20T16:00:00.000Z")!
         let files = FakeFiles([
             "/tmp/claude/.credentials.json": #"{"claudeAiOauth":{"accessToken":"file-stale","refreshToken":"file-refresh","expiresAt":4070908800000,"subscriptionType":"pro","scopes":["user:profile"]}}"#
@@ -644,12 +638,10 @@ final class ClaudeProviderTests: XCTestCase {
         let hashedService = authStore.keychainServiceCandidates().first!
         keychain.currentUserValues[hashedService] = #"{"claudeAiOauth":{"accessToken":"keychain-stale","refreshToken":"keychain-refresh","expiresAt":4102444800000,"subscriptionType":"max","scopes":["user:profile"]}}"#
 
-        // Every usage call 401s and every refresh is revoked → both sources are dead.
+        // Every usage call 401s → both sources are dead.
         let httpClient = RoutingHTTPClient { request in
-            if request.url.path.hasSuffix("/api/oauth/usage") {
-                return HTTPResponse(statusCode: 401, headers: [:], body: Data())
-            }
-            return HTTPResponse(statusCode: 400, headers: [:], body: Data(#"{"error":"invalid_grant"}"#.utf8))
+            XCTAssertEqual(request.url.path, "/api/oauth/usage")
+            return HTTPResponse(statusCode: 401, headers: [:], body: Data())
         }
         let provider = ClaudeProvider(
             authStore: authStore,
@@ -661,7 +653,7 @@ final class ClaudeProviderTests: XCTestCase {
 
         let snapshot = await provider.refresh()
 
-        XCTAssertEqual(badge(snapshot.lines, "Error"), ClaudeAuthError.sessionExpired.localizedDescription)
+        XCTAssertEqual(badge(snapshot.lines, "Error"), ClaudeAuthError.tokenExpired.localizedDescription)
     }
 
     func testNoCredentialsReportsNotLoggedIn() async {
@@ -767,33 +759,6 @@ final class ClaudeProviderTests: XCTestCase {
         XCTAssertEqual(Self.progress(third.lines, "Session")?.used, 25)
         XCTAssertEqual(third.warning?.hasPrefix("Updates blocked by Anthropic"), true)
         XCTAssertEqual(httpClient.requests.filter { $0.isClaudeUsagePoll }.count, 2)
-    }
-
-    func testRefreshSurfacesRequestFailureForNonOAuthRefreshErrorBody() async {
-        // The usage call 401s (forcing a refresh); the refresh endpoint then returns a non-OAuth 400
-        // (an HTML proxy/WAF page). The snapshot must report a request failure, NOT "token expired" —
-        // a transport/infra error the user can't fix by re-logging in.
-        let now = OpenUsageISO8601.date(from: "2026-02-20T16:00:00.000Z")!
-        let files = FakeFiles([
-            "/tmp/claude/.credentials.json": #"{"claudeAiOauth":{"accessToken":"stale-token","refreshToken":"refresh-1","expiresAt":4102444800000,"subscriptionType":"pro","scopes":["user:profile"]}}"#
-        ])
-        let httpClient = RoutingHTTPClient { request in
-            if request.url.path.hasSuffix("/api/oauth/usage") {
-                return HTTPResponse(statusCode: 401, headers: [:], body: Data())
-            }
-            return HTTPResponse(statusCode: 400, headers: [:], body: Data("<html>Bad Gateway</html>".utf8))
-        }
-        let provider = ClaudeProvider(
-            authStore: configuredAuthStore(files: files, now: { now }),
-            usageClient: ClaudeUsageClient(httpClient: httpClient),
-            logUsageScanner: ClaudeLogFixture.scanner(home: nil),
-            now: { now },
-            pricing: { TestPricing.bundled }
-        )
-
-        let snapshot = await provider.refresh()
-
-        XCTAssertEqual(badge(snapshot.lines, "Error"), ProviderUsageErrorText.requestFailed(statusCode: 400))
     }
 
     private func configuredAuthStore(

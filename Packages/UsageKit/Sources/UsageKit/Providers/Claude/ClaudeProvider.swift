@@ -354,8 +354,7 @@ final class ClaudeProvider: ProviderRuntime {
         state: inout ClaudeCredentialState,
         credentialGeneration: inout ClaudeCredentialGeneration
     ) async throws -> ClaudeMappedUsage {
-        var expectedGeneration = credentialGeneration
-        defer { credentialGeneration = expectedGeneration }
+        let expectedGeneration = credentialGeneration
         activateLiveUsageCache(for: state.oauth)
 
         // Inside an active rate-limit cooldown, skip the live call and serve the last-good usage so a
@@ -366,17 +365,8 @@ final class ClaudeProvider: ProviderRuntime {
         }
         let claimEpoch = resetClaimEpoch
 
-        if authStore.needsRefresh(state.oauth),
-           let refreshToken = state.oauth.refreshToken,
-           !refreshToken.isEmpty {
-            let refreshed = try await refreshAccessToken(
-                state: &state,
-                refreshToken: refreshToken,
-                expectedGeneration: expectedGeneration
-            )
-            state.oauth.accessToken = refreshed.accessToken
-            if refreshed.persisted { expectedGeneration = expectedGeneration.replacing(state) }
-        }
+        // Claude Code renews its own sign-in: an expired one waits for it (Kuvo Code's fork).
+        if authStore.hasExpired(state.oauth) { throw Self.expired(state.source) }
 
         var working = state
         defer { state = working }
@@ -392,28 +382,8 @@ final class ClaudeProvider: ProviderRuntime {
                     accessToken: accessToken, config: self.authStore.oauthConfig()
                 )
             },
-            refreshAccessToken: {
-                if working.source == .swapVault {
-                    throw ClaudeAuthError.swapTokenExpired
-                }
-                if working.source == .desktop {
-                    throw ClaudeAuthError.desktopTokenExpired
-                }
-                guard let refreshToken = working.oauth.refreshToken, !refreshToken.isEmpty else {
-                    throw ClaudeAuthError.tokenExpired
-                }
-                let refreshed = try await self.refreshAccessToken(
-                    state: &working,
-                    refreshToken: refreshToken,
-                    expectedGeneration: expectedGeneration
-                )
-                if refreshed.persisted {
-                    expectedGeneration = expectedGeneration.replacing(working)
-                }
-                // `refreshAccessToken` already moved `working` onto the rotated token.
-                verificationResponse = try await self.verifyAccountIfNeeded(credentials: working.oauth)
-                return refreshed.accessToken
-            },
+            // Turned away: never renewed here, only by its owner (Claude Code, Claude Desktop, the swap).
+            refreshAccessToken: { throw Self.expired(working.source) },
             connectionFailed: ClaudeUsageError.connectionFailed,
             authExpired: ClaudeAuthError.tokenExpired
         )
@@ -626,69 +596,14 @@ final class ClaudeProvider: ProviderRuntime {
         return Data(SHA256.hash(data: pair))
     }
 
-    struct RefreshedAccess {
-        var accessToken: String
-        var persisted: Bool
-    }
-
-    func refreshAccessToken(
-        state: inout ClaudeCredentialState,
-        refreshToken: String,
-        expectedGeneration: ClaudeCredentialGeneration
-    ) async throws -> RefreshedAccess {
-        AppLog.info(LogTag.auth("claude"), "token refresh attempt")
-        let response = try await usageClient.refreshToken(refreshToken, config: authStore.oauthConfig())
-        if response.statusCode == 400 || response.statusCode == 401 {
-            let body = (try? JSONSerialization.jsonObject(with: response.body)) as? [String: Any]
-            let errorCode = body?["error"] as? String ?? body?["error_description"] as? String
-            if errorCode == "invalid_grant" {
-                AppLog.warn(LogTag.auth("claude"), "session expired (invalid_grant)")
-                throw ClaudeAuthError.sessionExpired
-            }
-            // A 400/401 without a recognized OAuth error code isn't necessarily an expired token — it
-            // can be an HTML proxy/WAF page or a gateway error. Surface the HTTP status rather than
-            // telling the user to re-login (which can't fix a transport/infra failure).
-            throw ClaudeUsageError.requestFailed(response.statusCode)
+    /// The words for a token its owner hasn't renewed: Claude Desktop's, a swapped-in account's, or
+    /// Claude Code's own.
+    static func expired(_ source: ClaudeCredentialState.Source) -> ClaudeAuthError {
+        switch source {
+        case .desktop: .desktopTokenExpired
+        case .swapVault: .swapTokenExpired
+        default: .tokenExpired
         }
-        guard (200..<300).contains(response.statusCode) else {
-            throw ClaudeUsageError.requestFailed(response.statusCode)
-        }
-        // NEVER log decoded.accessToken / refreshToken — only the fact that a rotation happened.
-        let decoded = try JSONDecoder().decode(ClaudeRefreshResponse.self, from: response.body)
-        let previousOAuth = state.oauth
-        state.oauth.accessToken = decoded.accessToken
-        if let refreshToken = decoded.refreshToken {
-            state.oauth.refreshToken = refreshToken
-        }
-        if let expiresIn = decoded.expiresIn {
-            state.oauth.expiresAt = now().timeIntervalSince1970 * 1000 + expiresIn * 1000
-        }
-        // Fail loudly: a swallowed save leaves the OLD refresh token on disk after a rotation, so the
-        // next launch refreshes with a server-invalidated token and the user sees a misleading
-        // "session expired". The refreshed token still works for this session, so we log and continue
-        // rather than fail the live fetch.
-        let persisted: Bool
-        do {
-            guard try await Task.detached(priority: .utility, operation: { [authStore, state] in
-                try authStore.save(state, ifUnchanged: expectedGeneration)
-            }).value else {
-                throw ClaudeAuthError.credentialsChanged
-            }
-            persisted = true
-        } catch let error as ClaudeAuthError where error == .credentialsChanged {
-            throw error
-        } catch {
-            AppLog.error(LogTag.auth("claude"), "failed to persist rotated credentials; using the refreshed token for this session only: \(error.localizedDescription)")
-            persisted = false
-        }
-        if cachedCredentialFingerprint == Self.credentialFingerprint(previousOAuth) {
-            cachedCredentialFingerprint = Self.credentialFingerprint(state.oauth)
-        }
-        if resetGrantsCheck?.credentialFingerprint == Self.credentialFingerprint(previousOAuth) {
-            resetGrantsCheck?.credentialFingerprint = Self.credentialFingerprint(state.oauth)
-        }
-        AppLog.info(LogTag.auth("claude"), "token refresh ok (rotated)")
-        return RefreshedAccess(accessToken: decoded.accessToken, persisted: persisted)
     }
 
 }

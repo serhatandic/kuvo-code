@@ -32,6 +32,11 @@ here.
   again (`HostAccounts.setReader`). Refreshing starts only once the host has handed its accounts
   over, so a tool's own login is never read in their place at launch. OpenCode also reads the databases of Kuvo Code's private engine,
   so Kuvo Code's own runs count toward spend, and its OpenCode Go key is found there.
+- **Claude Code's sign-in is only read** (`Providers/Claude`). Upstream renews its token when it's
+  about to expire or turned away, outside Claude Code's lock, which spends its single-use refresh
+  token and signs out a Claude Code holding the old one. Here an expired or turned-away token waits
+  for Claude Code to renew it the next time it runs ("Run `claude` to renew it"), and nothing is
+  written to its Keychain item or file.
 
 - **Plan limits for the host** (`Embedding/PlanLimits.swift`): the latest limits of one provider,
   read from what the panel already has, for Kuvo Code to show beside a session.
