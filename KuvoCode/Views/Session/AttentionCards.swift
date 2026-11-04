@@ -319,7 +319,7 @@ private struct QuestionPager: View {
                 ZStack(alignment: .topLeading) {
                     question(field)
                         .id(field.key)
-                        .transition(QuestionMotion.current.transition)
+                        .transition(QuestionFade.transition)
                 }
                 footer(field)
             }
@@ -380,7 +380,7 @@ private struct QuestionPager: View {
                 .lineLimit(1)
                 // It goes with its question, when it says something else.
                 .id(title)
-                .transition(QuestionMotion.current.transition)
+                .transition(QuestionFade.transition)
             Spacer()
             if questions.count > 1 {
                 Button { go(to: index - 1) } label: { Image(systemName: "chevron.left") }
@@ -561,7 +561,7 @@ private struct QuestionPager: View {
             let from = index
             Task {
                 // A beat to see it picked.
-                try? await Task.sleep(for: QuestionMotion.beat)
+                try? await Task.sleep(for: QuestionFade.beat)
                 if index == from { go(to: from + 1) }
             }
         }
@@ -622,12 +622,12 @@ private struct ChoiceRow: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(alignment: ChoiceAlign.current == .row ? .center : ChoiceAlign.current == .plain ? .firstTextBaseline : .top, spacing: 10) {
-                if ChoiceAlign.current == .plain { numeral } else { badge }
+            // The number in the middle of the whole choice, its description too.
+            HStack(alignment: .center, spacing: 10) {
+                badge
                 VStack(alignment: .leading, spacing: 2) {
                     Text(option.label)
                         .foregroundStyle(.primary)
-                        .frame(minHeight: ChoiceAlign.current == .title ? Self.badgeSize : nil)
                     if let description = ChoiceText.detail(option.description, label: option.label) {
                         Text(description)
                             .font(.callout)
@@ -642,18 +642,6 @@ private struct ChoiceRow: View {
         }
         .buttonStyle(.plain)
         .clickablePointer()
-    }
-
-    private var numeral: some View {
-        Group {
-            if isSelected && isMultiple {
-                Image(systemName: "checkmark").font(.system(size: 11, weight: .bold))
-            } else {
-                Text(number <= 9 ? "\(number)" : "").monospacedDigit()
-            }
-        }
-        .foregroundStyle(isSelected ? AnyShapeStyle(accent) : AnyShapeStyle(.secondary))
-        .frame(width: 14, alignment: .leading)
     }
 
     private var badge: some View {
@@ -680,55 +668,24 @@ private struct ChoiceRow: View {
     static let inset: CGFloat = 10
 }
 
-// DRAFTS (to pick from, then fold into the code): how a question goes to the next, and where a
-// choice's number sits. KUVO_DEMO_QUESTION_MOTION=instant|fade, KUVO_DEMO_CHOICE_ALIGN=title|row|plain.
-private enum QuestionMotion: String {
-    case instant, fade
-
-    static let current: QuestionMotion = {
-        #if DEBUG
-        if let picked = ProcessInfo.processInfo.environment["KUVO_DEMO_QUESTION_MOTION"].flatMap(QuestionMotion.init) { return picked }
-        #endif
-        return .fade
-    }()
-
+/// How one question goes to the next: the one you leave fades out before the next one fades
+/// in, so the two never show over each other.
+private enum QuestionFade {
     /// The beat between a pick and the next question.
-    static var beat: Duration {
-        #if DEBUG
-        if let slow = ProcessInfo.processInfo.environment["KUVO_DEMO_SLOW"].flatMap(Double.init) { return .milliseconds(200 * slow) }
-        #endif
-        return .milliseconds(200)
+    static var beat: Duration { .milliseconds(200 * slow) }
+
+    static var transition: AnyTransition {
+        .asymmetric(insertion: .opacity.animation(.easeOut(duration: 0.16 * slow).delay(0.07 * slow)),
+                    removal: .opacity.animation(.easeOut(duration: 0.07 * slow)))
     }
 
-    /// The question you leave fades out before the next one fades in, so the two never show
-    /// over each other.
-    var transition: AnyTransition {
-        switch self {
-        case .instant:
-            .identity
-        case .fade:
-            .asymmetric(insertion: .opacity.animation(.easeOut(duration: Self.scaled(0.16)).delay(Self.scaled(0.07))),
-                        removal: .opacity.animation(.easeOut(duration: Self.scaled(0.07))))
-        }
-    }
-
-    private static func scaled(_ seconds: Double) -> Double {
+    /// KUVO_DEMO_SLOW, as `Animation.ui` reads it.
+    private static var slow: Double {
         #if DEBUG
-        if let slow = ProcessInfo.processInfo.environment["KUVO_DEMO_SLOW"].flatMap(Double.init) { return seconds * slow }
+        if let slow = ProcessInfo.processInfo.environment["KUVO_DEMO_SLOW"].flatMap(Double.init) { return slow }
         #endif
-        return seconds
+        return 1
     }
-}
-
-private enum ChoiceAlign: String {
-    case title, row, plain
-
-    static let current: ChoiceAlign = {
-        #if DEBUG
-        if let picked = ProcessInfo.processInfo.environment["KUVO_DEMO_CHOICE_ALIGN"].flatMap(ChoiceAlign.init) { return picked }
-        #endif
-        return .row
-    }()
 }
 
 /// A form a tool needs filled (an MCP server's, say): its fields together, then Answer.
