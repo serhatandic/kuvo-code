@@ -63,6 +63,15 @@ enum DemoDirector {
         case "dark": NSApp.appearance = NSAppearance(named: .darkAqua)
         default: break
         }
+        // KUVO_DEMO_APPEARANCE_THEN=light|dark: switched to that once the conversation's been read
+        // a while, as the Mac does at sunset (a widget drawn in the first draws again).
+        if let then = environment["KUVO_DEMO_APPEARANCE_THEN"] {
+            Task { @MainActor in
+                await DemoWait.pause(.launchSettles)
+                await DemoWait.pause(.conversationRead)
+                NSApp.appearance = NSAppearance(named: then == "dark" ? .darkAqua : .aqua)
+            }
+        }
         if environment["KUVO_DEMO_CHANGES"] != nil { app.tabs.showPanel() }
         DemoLoaders.showIfAsked(environment)
         DemoMoves.showIfAsked(environment, app: app)

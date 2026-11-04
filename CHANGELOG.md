@@ -124,6 +124,8 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - In a Claude Code or Codex conversation, the next message waiting goes once a run is done, also when saving what the run changed takes a moment, and Resume pressed right after Stop goes on. Both used to leave it waiting until you sent something else.
 - When Kuvo Code or a computer's box starts again after a conversation's run failed or was stopped, the messages waiting there stay paused for you to resume, instead of going on into the same error.
 - While you have a bot's goal paused, none of its sessions starts new work for it, even one woken by a message meanwhile. The bot still starts what you ask it for in its chat.
+- A widget follows light and dark: a chart made while your Mac was light draws again when it turns dark, instead of keeping labels you can't read.
+- A widget being written is drawn without its scripts, as it was meant to be, and comes alive once it's done, also when its last draft was already all of it. A link you click in a widget opens in your browser instead of inside the widget, and a widget no longer goes to another page by itself.
 - A widget gets shorter again when its content does (details hidden, a tab with less in it, a wider window), with no empty space left under it.
 - A widget the agent writes as a whole page is laid out as its page asks: it kept losing its doctype, so it was drawn the old way, as a page without one.
 - A widget made to fill its window (a wrapper as tall as the window, a sheet against its bottom) no longer grows a little more each time something on it changes.

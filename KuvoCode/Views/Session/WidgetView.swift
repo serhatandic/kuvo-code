@@ -145,8 +145,8 @@ struct WidgetCard: View {
             .font(.callout)
             .foregroundStyle(.secondary)
         } else {
-            WidgetPage(html: html, accent: NSColor.controlAccentColor, height: $height, isDraft: isDraft,
-                       send: answer(from: title), failed: { failed = true })
+            WidgetPage(html: html, accent: NSColor.controlAccentColor, height: $height,
+                       isDraft: isDraft, send: answer(from: title), failed: { failed = true })
                 .id(attempt)
                 .frame(height: max(height, 60))
                 .onChange(of: height) { if height > 0 { Self.heights[call.id] = height } }
@@ -226,6 +226,7 @@ struct WidgetPage: NSViewRepresentable {
         configuration.websiteDataStore = .nonPersistent()
         let content = configuration.userContentController
         content.addUserScript(WKUserScript(source: Self.bridge, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        content.addUserScript(WKUserScript(source: Self.watchesScheme, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         // Apart from the page's own scripts, so it measures a draft drawn without them too; and
         // the only way to the app: the page itself has none, so what it sends goes through
         // `forward`, which a click of yours lets through.
@@ -233,6 +234,7 @@ struct WidgetPage: NSViewRepresentable {
         content.addUserScript(WKUserScript(source: Self.forward, injectionTime: .atDocumentStart, forMainFrameOnly: true, in: .defaultClient))
         content.addUserScript(WKUserScript(source: Self.measure, injectionTime: .atDocumentEnd, forMainFrameOnly: true, in: .defaultClient))
         content.addUserScript(WKUserScript(source: Self.pressable, injectionTime: .atDocumentStart, forMainFrameOnly: true, in: .defaultClient))
+        content.addUserScript(WKUserScript(source: Self.schemeChanged, injectionTime: .atDocumentStart, forMainFrameOnly: true, in: .defaultClient))
         let view = WidgetWebView(frame: .zero, configuration: configuration)
         view.setValue(false, forKey: "drawsBackground")
         view.navigationDelegate = context.coordinator
@@ -254,23 +256,22 @@ struct WidgetPage: NSViewRepresentable {
 
     /// The look a page starts from, Kuvo Code's: its text, buttons, fields, tables and headings,
     /// and colors to draw with by name (`--kuvo-1`…`--kuvo-6` for a chart's series, `--kuvo-good`,
-    /// `--kuvo-bad`), in light and dark. Each rule counts for nothing against the page's own
+    /// `--kuvo-bad`), in light and dark, as plain colors a script can read and draw a canvas
+    /// with. Each rule counts for nothing against the page's own
     /// (`:where`), so whatever it styles itself looks as it says. The same on the Mac and the
     /// phone (kuvo-ai's and kuvo-code-ios's WidgetView): keep the two in step.
     static let starter = """
     :root {
       color-scheme: light dark; accent-color: var(--kuvo-accent);
-      --kuvo-text: CanvasText;
-      --kuvo-secondary: color-mix(in srgb, CanvasText 62%, transparent);
-      --kuvo-tertiary: color-mix(in srgb, CanvasText 40%, transparent);
-      --kuvo-fill: color-mix(in srgb, CanvasText 5%, transparent);
-      --kuvo-fill-strong: color-mix(in srgb, CanvasText 10%, transparent);
-      --kuvo-line: color-mix(in srgb, CanvasText 12%, transparent);
+      --kuvo-text: #000; --kuvo-secondary: rgb(0 0 0 / .62); --kuvo-tertiary: rgb(0 0 0 / .4);
+      --kuvo-fill: rgb(0 0 0 / .05); --kuvo-fill-strong: rgb(0 0 0 / .1); --kuvo-line: rgb(0 0 0 / .12);
       --kuvo-radius: 8px;
       --kuvo-1: #007AFF; --kuvo-2: #FF9500; --kuvo-3: #34C759; --kuvo-4: #AF52DE; --kuvo-5: #FF2D55; --kuvo-6: #5AC8FA;
       --kuvo-good: #34C759; --kuvo-bad: #FF3B30; --kuvo-warn: #FF9500;
     }
     @media (prefers-color-scheme: dark) { :root {
+      --kuvo-text: #fff; --kuvo-secondary: rgb(255 255 255 / .62); --kuvo-tertiary: rgb(255 255 255 / .4);
+      --kuvo-fill: rgb(255 255 255 / .05); --kuvo-fill-strong: rgb(255 255 255 / .1); --kuvo-line: rgb(255 255 255 / .12);
       --kuvo-1: #0A84FF; --kuvo-2: #FF9F0A; --kuvo-3: #30D158; --kuvo-4: #BF5AF2; --kuvo-5: #FF375F; --kuvo-6: #64D2FF;
       --kuvo-good: #30D158; --kuvo-bad: #FF453A; --kuvo-warn: #FF9F0A;
     } }
@@ -303,12 +304,22 @@ struct WidgetPage: NSViewRepresentable {
     /// `html` as a page: a fragment in a page of its own, or a whole page as it is; either way
     /// with the policy above, and the window's look to start from. Its words line up with the reply's.
     static func page(_ html: String, accent: NSColor) -> String {
-        let hex = accent.usingColorSpace(.sRGB).map { String(format: "#%02X%02X%02X", Int($0.redComponent * 255), Int($0.greenComponent * 255), Int($0.blueComponent * 255)) } ?? "#0A84FF"
+        // In both looks, so the page stays the same page when the look changes (`followsScheme`).
+        // High contrast, as the Mac is set.
+        let contrast = NSApp?.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua, .accessibilityHighContrastAqua, .accessibilityHighContrastDarkAqua])?.rawValue.contains("HighContrast") == true
+        func hex(_ look: NSAppearance.Name) -> String {
+            var hex = "#0A84FF"
+            NSAppearance(named: look)?.performAsCurrentDrawingAppearance {
+                if let color = accent.usingColorSpace(.sRGB) { hex = String(format: "#%02X%02X%02X", Int(color.redComponent * 255), Int(color.greenComponent * 255), Int(color.blueComponent * 255)) }
+            }
+            return hex
+        }
         let head = """
         <meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="\(policy)">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <style>
-        :root { --kuvo-accent: \(hex); }
+        :root { --kuvo-accent: \(hex(contrast ? .accessibilityHighContrastAqua : .aqua)); }
+        @media (prefers-color-scheme: dark) { :root { --kuvo-accent: \(hex(contrast ? .accessibilityHighContrastDarkAqua : .darkAqua)); } }
         \(starter)
         body { font: 13px/1.45 -apple-system, BlinkMacSystemFont, sans-serif; color: CanvasText; padding: 4px 2px; box-sizing: border-box; }
         </style>
@@ -349,6 +360,47 @@ struct WidgetPage: NSViewRepresentable {
       },
     };
     """
+
+    /// How the page's scripts take light and dark, marked on the page for `followsScheme`: the
+    /// scheme they last read it in (the scheme itself, or colors as they're drawn with, as a chart
+    /// does), and whether they listen for it to change, drawing again then themselves.
+    private static let watchesScheme = """
+    (() => {
+      const scheme = query => /prefers-color-scheme/.test(query);
+      const lists = MediaQueryList.prototype;
+      const matches = Object.getOwnPropertyDescriptor(lists, "matches");
+      const dark = matchMedia("(prefers-color-scheme: dark)");
+      // Set only when it changes: a chart reads styles on every move of the pointer.
+      const mark = (name, value = "") => { const root = document.documentElement; if (root && root.getAttribute(name) !== value) root.setAttribute(name, value); };
+      const reads = () => mark("data-kuvo-reads-scheme", matches.get.call(dark) ? "dark" : "light");
+      const follows = query => { if (scheme(query)) mark("data-kuvo-follows-scheme"); };
+      const add = lists.addEventListener, addListener = lists.addListener;
+      lists.addEventListener = function (type, ...rest) { if (type === "change") follows(this.media); return add.call(this, type, ...rest); };
+      lists.addListener = function (...rest) { follows(this.media); return addListener.apply(this, rest); };
+      const onchange = Object.getOwnPropertyDescriptor(lists, "onchange");
+      if (onchange?.set) Object.defineProperty(lists, "onchange", { ...onchange, set(value) { follows(this.media); onchange.set.call(this, value); } });
+      Object.defineProperty(lists, "matches", { ...matches, get() { if (scheme(this.media)) reads(); return matches.get.call(this); } });
+      const computed = window.getComputedStyle;
+      window.getComputedStyle = function (...rest) { reads(); return computed.apply(this, rest); };
+    })();
+    """
+
+    /// Whether the page is right in the scheme it's in now: its CSS follows by itself, so only
+    /// scripts that read the other scheme as they drew (a chart's labels, in dark grey on what's
+    /// now dark) and don't draw again by themselves need it loaded again. One that only reacts to
+    /// you (a slider, a regex to try) keeps what you did in it. Asked apart from the page's
+    /// scripts, which can't change what it says.
+    static let followsScheme = """
+    (() => {
+      const root = document.documentElement, read = root?.getAttribute("data-kuvo-reads-scheme");
+      if (!read || root.hasAttribute("data-kuvo-follows-scheme")) return true;
+      return read === (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+    })()
+    """
+
+    /// Tells the app when the page's light and dark has changed: once the page has it, not as the
+    /// Mac switches, so `followsScheme` compares with the look the page is in.
+    private static let schemeChanged = #"matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => window.webkit.messageHandlers.kuvo.postMessage({ type: "scheme" }));"#
 
     /// What the page sends, on to the app: only while a click of yours is fresh, which the page's
     /// own scripts can't make up.
@@ -495,6 +547,11 @@ struct WidgetPage: NSViewRepresentable {
         /// Loads `page`: the finished one at once, a draft at most twice a second (the last
         /// one coming once it's had its turn).
         func show(_ page: String, draft: Bool) {
+            // Finished as its last draft was: the same page again, with its scripts this time.
+            if loaded == page, !draft, isDraft {
+                waitingDraft?.cancel()
+                return load(page, draft: false)
+            }
             guard loaded != page else { return }
             waitingDraft?.cancel()
             let due = lastDraft.addingTimeInterval(0.5)
@@ -517,6 +574,18 @@ struct WidgetPage: NSViewRepresentable {
             settling?.cancel()
             navigation = view?.loadHTMLString(page, baseURL: nil)
             if (height?.wrappedValue ?? 0) > 0 { keepsHeightUntil = .distantFuture }
+        }
+
+        /// The page's look changed (the Mac's, or back in a window after it changed while it was
+        /// away): a finished page that drew itself in the other one (a chart's labels
+        /// in dark grey on what's now dark) loads again, at the height it has. A draft's CSS follows
+        /// by itself.
+        private func lookChanged() {
+            guard loaded != nil, !isDraft else { return }
+            view?.evaluateJavaScript(WidgetPage.followsScheme, in: nil, in: .defaultClient) { [weak self] result in
+                guard let self, !isDraft, case .success(let follows as Bool) = result, !follows, let loaded else { return }
+                load(loaded, draft: false)
+            }
         }
 
         /// Loaded: what it measures a moment later stands, shorter too.
@@ -544,6 +613,8 @@ struct WidgetPage: NSViewRepresentable {
                 let current = height?.wrappedValue ?? 0
                 if keepsHeightUntil > .now, new < current { return }
                 if abs(current - new) > 0.5 { height?.wrappedValue = new }
+            case "scheme":
+                lookChanged()
             case "pressable":
                 view?.focusPressable = body["value"] as? Bool ?? false
             case "send":
@@ -575,17 +646,21 @@ struct WidgetPage: NSViewRepresentable {
                 let configuration = WKSnapshotConfiguration()
                 guard let image = try? await webView.takeSnapshot(configuration: configuration),
                       let tiff = image.tiffRepresentation, let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) else { return }
-                let name = "widget-\(abs((loaded ?? "").hashValue) % 100_000).png"
+                let name = "widget-\(abs((loaded ?? "").hashValue) % 100_000)-\(webView.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? "dark" : "light").png"
                 try? png.write(to: URL(filePath: folder).appending(path: name))
             }
         }
         #endif
 
-        /// Its own page loads (a draft without its scripts); a link you click goes to your browser
-        /// instead, one for each click. One the page goes to by itself, without your click (its
-        /// script clicking a link counts as by itself), goes nowhere.
-        func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction, preferences: WKWebpagePreferences, decisionHandler: @escaping (WKNavigationActionPolicy, WKWebpagePreferences) -> Void) {
-            if action.navigationType == .linkActivated || (action.targetFrame?.isMainFrame == true && action.request.url?.scheme.map(["http", "https"].contains) == true) {
+        /// Its own page loads (a draft without its scripts), and a link to a place on it (`#details`,
+        /// a tab) goes there; a link you click goes to your browser instead, one for each click.
+        /// One the page goes to by itself, without your click (its script clicking a link counts as
+        /// by itself), goes nowhere.
+        func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction, preferences: WKWebpagePreferences, decisionHandler: @escaping @MainActor (WKNavigationActionPolicy, WKWebpagePreferences) -> Void) {
+            // By its address as written: Foundation finds no fragment in `about:blank#details`.
+            func page(_ url: URL?) -> String? { url?.absoluteString.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) }
+            let onThePage = action.request.url?.absoluteString.contains("#") == true && page(action.request.url) == page(webView.url)
+            if !onThePage, action.navigationType == .linkActivated || (action.targetFrame?.isMainFrame == true && action.request.url?.scheme.map(["http", "https"].contains) == true) {
                 if let url = action.request.url, ["http", "https"].contains(url.scheme ?? ""),
                    (webView as? WidgetWebView)?.takeClick() == true {
                     NSWorkspace.shared.open(url)
