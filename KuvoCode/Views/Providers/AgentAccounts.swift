@@ -829,7 +829,6 @@ private struct AccountLine<Menu: View>: View {
     let signIn: (() -> Void)?
     var badge: String? = nil
     @ViewBuilder let menu: () -> Menu
-    @State private var isHovering = false
 
     var body: some View {
         HStack(spacing: 8) {
@@ -868,8 +867,8 @@ private struct AccountLine<Menu: View>: View {
                     .buttonStyle(.glass)
                     .controlSize(.small)
             }
-            // Under the pointer only, in its place at the right edge: at rest, an account is its
-            // name. Right-click has the same.
+            // Always there, in quiet ink, as System Settings has it: the line itself doesn't change
+            // under the pointer. Right-click has the same.
             SwiftUI.Menu(content: menu) {
                 Image(systemName: "ellipsis")
                     .frame(width: 22, height: 22)
@@ -879,18 +878,12 @@ private struct AccountLine<Menu: View>: View {
             .buttonStyle(IconButtonStyle(width: 26, height: 22))
             .menuIndicator(.hidden)
             .fixedSize()
-            .opacity(isHovering ? 1 : 0)
             .accessibilityLabel("More")
             .help("More")
         }
         .frame(minHeight: 30)
-        .padding(.horizontal, 8)
-        .background(isHovering ? Pressable.hoverFill : .clear, in: .rect(cornerRadius: 7))
-        .padding(.horizontal, -8)
         .contentShape(.rect)
-        .onHover { isHovering = $0 }
         .contextMenu(menuItems: menu)
-        .animation(.easeOut(duration: 0.12), value: isHovering)
     }
 }
 
