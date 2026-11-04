@@ -23,7 +23,7 @@ import path from "node:path";
 import { isObject } from "../../shared/json";
 import { cut, oneLine } from "../../shared/text";
 import { locked, textOf, writePrivate } from "../files";
-import { BOX, homeFolder, IN_TEST_FOLDER, RUN } from "../home";
+import { BOX, homeFolder, IN_TEST_FOLDER, opencodeAuthFile, RUN } from "../home";
 import { fencePolicy, realish, type FencePolicy } from "../fence/policy";
 import { readLine } from "./policy";
 
@@ -386,13 +386,16 @@ export type OwnKind = keyof typeof OWN;
 
 // Your sign-ins' files, in your home.
 const CREDENTIALS = [".aws/credentials", ".aws/config", ".netrc", ".git-credentials", ".docker/config.json", ".kube/config", ".npmrc", ".pypirc", ".config/gh",
-  ".config/gcloud", ".azure", ".gnupg", ".password-store", ".local/share/keyrings", "Library/Keychains", ".cargo/credentials", ".cargo/credentials.toml", ".gem/credentials", ".terraform.d/credentials.tfrc.json"];
+  ".config/gcloud", ".azure", ".gnupg", ".password-store", ".local/share/keyrings", "Library/Keychains", ".cargo/credentials", ".cargo/credentials.toml", ".gem/credentials", ".terraform.d/credentials.tfrc.json",
+  ".composer/auth.json", ".config/composer/auth.json", ".local/share/opencode/auth.json", ".codex/auth.json", ".grok/auth.json", ".claude/.credentials.json", ".gemini/oauth_creds.json"];
 const GIT_GLOBAL = [".gitconfig", ".config/git/config"];
 
 /** Which of yours `where` is, if it's one: in ~/.ssh (its keys, its config and who may log in with
  * a key, not the hosts you trust), your credential files, your global git settings. */
 function ownAt(where: string, home: string): OwnKind | null {
   if (where === "/etc/gitconfig" || where === "/private/etc/gitconfig") return "git";
+  // (opencode's sign-ins where your own XDG_DATA_HOME puts them.)
+  if (where === realish(opencodeAuthFile(home))) return "credentials";
   if (!where.startsWith(home + "/")) return null;
   const rest = where.slice(home.length + 1);
   if (GIT_GLOBAL.some(each => inside(rest, each))) return "git";

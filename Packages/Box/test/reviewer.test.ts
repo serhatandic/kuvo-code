@@ -144,6 +144,10 @@ test("the agent's tools read anywhere but your secrets with no review; your secr
   expect((await reviewer.review(file(join(homedir(), ".ssh", "id_work"), "read"), yours("Check my SSH"), given(model(refuses)))).decision).toBe("refuse")
   await reviewer.review(file(join(homedir(), ".ssh", "id_work"), "read"), yours("Check my SSH"), given(ask))
   expect(ask.shown.at(-1)).toContain("printing, copying or archiving secrets")
+  // So are the coding agents' sign-ins, as your keys are.
+  for (const where of [join(homedir(), ".codex", "auth.json"), join(homedir(), ".grok", "auth.json")]) {
+    expect(await reviewer.review(file(where, "read"), reader, given(model(refuses)))).toMatchObject({ decision: "refuse", by: "model" })
+  }
   // Changing a file elsewhere: the model's, told the tool and its arguments.
   expect((await reviewer.review(file(join(homedir(), ".config", "tool", "settings.json"), "write"), yours("Set the tool's theme"), given(ask))).decision).toBe("allow")
   await reviewer.review({ ...file(join(box, "other", "notes.md"), "write"), tool: "write", input: { path: join(box, "other", "notes.md"), content: "TODO" } }, yours("Write the notes"), given(ask))
@@ -340,9 +344,19 @@ test("your own settings for every project (global git, SSH keys, sign-ins' files
     ["git config --global user.email bot@example.com", "git"], ["git -C repo config --system core.editor vim", "git"], ["cp templates/gitconfig ~/.gitconfig", "git"], ["echo '[user]' >> ~/.config/git/config", "git"],
     ["ssh-keygen -t ed25519 -f ~/.ssh/deploy", "keys"], ["ssh-keygen -t ed25519 -N ''", "keys"], ["cp id_deploy ~/.ssh/", "keys"],
     ["echo token >> ~/.npmrc", "credentials"], ["tee ~/.aws/credentials < creds.ini", "credentials"], ["sh -c 'echo machine x > ~/.netrc'", "credentials"],
+    ["cp auth.json ~/.codex/auth.json", "credentials"], ["echo '{}' > ~/.local/share/opencode/auth.json", "credentials"],
   ] as const) {
     const verdict = await reviewer.review(command(line), yours("Commit the fix"), given(ask))
     expect({ line, verdict }).toMatchObject({ line, verdict: { decision: "refuse", by: "code", held: true, why: "unasked", reason: expect.stringContaining(reviewer.OWN[kind].words) } })
+  }
+  // opencode's sign-ins where your own XDG_DATA_HOME puts them, as the box's launch kept it.
+  const kept = process.env.KUVO_OWN_XDG_DATA_HOME
+  process.env.KUVO_OWN_XDG_DATA_HOME = join(box, "your-data")
+  try {
+    expect(await reviewer.review(command(`echo '{}' > ${join(box, "your-data", "opencode", "auth.json")}`), yours("Commit the fix"), given(ask))).toMatchObject({ decision: "refuse", by: "code", held: true, why: "unasked" })
+  } finally {
+    if (kept === undefined) delete process.env.KUVO_OWN_XDG_DATA_HOME
+    else process.env.KUVO_OWN_XDG_DATA_HOME = kept
   }
   expect(ask.shown).toHaveLength(0)
   // Reading them, this repository's own settings, a key made in the project, or copying from them, aren't changing them.

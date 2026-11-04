@@ -67,6 +67,34 @@ final class BotWork {
         }
     }
 
+    /// A machine connected and ready, whose work can be followed (a test's own answer).
+    @ObservationIgnored var connected: ((String) -> Bool)?
+
+    /// The bot's work, read again each time its box says it changed (`kuvo/work/events`: a session
+    /// of it started, at work, asking or done), until the task following it ends. What this Mac
+    /// sees of the sessions alone misses some: one in a folder it doesn't show, or one whose task
+    /// reached it after it was read. A machine's while it's connected.
+    func follow(_ bot: Bot) async {
+        struct Line: Decodable { var changed: [String: Double] }
+        let onThisMac = bot.box == BoxClient.mac
+        while !Task.isCancelled {
+            if onThisMac || connected?(bot.box) ?? (app?.machines.engine(bot.box)?.isReady == true), runsWork(bot), let client = box(of: bot) {
+                // Each stream's first line is read, so what changed while it wasn't followed is
+                // too, though the box may not have noted it (it restarted meanwhile).
+                var seen: Double?
+                do {
+                    for try await data in client.follow("kuvo/work/events") {
+                        guard let at = (try? JSONDecoder().decode(Line.self, from: data))?.changed[bot.id], at != seen else { continue }
+                        seen = at
+                        await read(bot)
+                    }
+                } catch {}
+            }
+            // The box started again, or the machine went away: followed again in a moment.
+            try? await Task.sleep(for: .seconds(onThisMac ? 2 : 30))
+        }
+    }
+
     /// Every session of the bot's work stopped, on its box; its work read again.
     func stopAll(_ bot: Bot) async throws {
         guard let box = box(of: bot) else { return }
