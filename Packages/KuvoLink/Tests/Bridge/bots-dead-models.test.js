@@ -184,7 +184,7 @@ test("a client's model picker reads the same: which account's models can't answe
   const { status, body } = await route("GET", "kuvo/work/unanswering");
   assert.equal(status, 200);
   assert.equal(body.held.length, 1);
-  assert.deepEqual({ ...body.held[0], since: 0, until: 0 }, { provider: "opencode", only: "paid", why: "Upstream request failed: Insufficient account funds", since: 0, until: 0 });
+  assert.deepEqual({ ...body.held[0], since: 0, until: 0 }, { provider: "opencode", only: "paid", models: ["claude-opus-5-5", "gpt-6.1-sol"], why: "Upstream request failed: Insufficient account funds", since: 0, until: 0 }, "the models it covers named, so a picker marks the ones bots are kept off, its free one not among them");
   assert.ok(body.held[0].until > Date.now() && body.held[0].until - body.held[0].since === 30 * 60_000, "for half an hour, as the error names no reset");
 });
 
@@ -237,6 +237,8 @@ test("a free model at its account's free-usage limit holds back the account's fr
   assert.match(prompts.map(prompt => prompt.text).join("\n\n"), /\[Session failed\] "Sketch the screens" in the-app \(address ses_pickle\) stopped: No free opencode model can answer now: Free usage limit reached/m);
   const listed = text(await call("list_models", {}));
   assert.doesNotMatch(listed, /^- opencode\/deepseek-v4\.1-flash-free/m, "no free one of that account is offered");
+  const freeHold = (await route("GET", "kuvo/work/unanswering")).body.held.find(each => each.only === "free");
+  assert.deepEqual(freeHold.models, ["deepseek-v4.1-flash-free"], "its free ones alone: none that costs something");
   assert.match(listed, /- No free opencode model can answer now: Free usage limit reached/);
   await watch({ type: "session.execution.succeeded", data: { sessionID: "ses_build" } });
   assert.match(text(await call("list_models", {})), /- No free opencode model can answer now/, "a paid one answering says nothing of the free usage");

@@ -7172,7 +7172,7 @@ var WORK_ASK = object({
 var WORK_ASKS = object({ asks: list(WORK_ASK) });
 var WORK_ASK_ANSWERED = object({ answer: words("allow", "always", "deny"), text: string, isError: bool });
 var WORK_SETTINGS = object({ projectsFolder: nullable(string), "suggested?": string });
-var UNANSWERING = object({ provider: string, "model?": string, "only?": words("paid", "free"), why: string, since: number, until: number });
+var UNANSWERING = object({ provider: string, "model?": string, "only?": words("paid", "free"), "models?": list(string), why: string, since: number, until: number });
 var UNANSWERING_LIST = object({ held: list(UNANSWERING) });
 var WORK = object({
   bot: string,
@@ -8845,19 +8845,22 @@ var BY_KUVO = { GIT_AUTHOR_NAME: "Kuvo Code", GIT_AUTHOR_EMAIL: "kuvo-code@local
 function ranIn(folder, args, env) {
   if (!args)
     return null;
-  const ran = spawnSync5("git", args, { cwd: folder, encoding: "utf8", env: { ...GIT_ENV, ...env }, timeout: 60000 });
+  const ran = spawnSync5("git", args, { cwd: folder, encoding: "utf8", env: { ...GIT_ENV, ...env }, input: "", timeout: 60000 });
   return ran.status === 0 ? String(ran.stdout ?? "").trim() : null;
 }
 function gitIn(folder, args, env = {}) {
   return ranIn(folder, ownArgs(args, folder), env);
 }
 function firstCommit(folder) {
-  if (gitIn(folder, ["rev-parse", "--verify", "--quiet", "HEAD"]) !== null)
+  const has = () => gitIn(folder, ["rev-parse", "--verify", "--quiet", "HEAD"]) !== null;
+  if (has())
     return true;
+  if (gitIn(folder, ["for-each-ref", "--count=1", "--format=x"]) !== "")
+    return false;
   const empty = gitIn(folder, ["mktree"]);
   const made = (env) => empty ? gitIn(folder, ["-c", "user.useConfigOnly=true", "commit-tree", empty, "-m", "Initial commit"], env) : null;
   const commit = made({}) ?? made(BY_KUVO);
-  return commit !== null && gitIn(folder, ["update-ref", "-m", "commit (initial): Initial commit", "HEAD", commit, ""]) !== null;
+  return commit !== null && gitIn(folder, ["update-ref", "-m", "commit (initial): Initial commit", "HEAD", commit, ""]) !== null || has();
 }
 function gitAsked(folder, args, env = {}) {
   return ranIn(folder, askedArgs(args), env);
@@ -9640,11 +9643,13 @@ function change(file, now, edit) {
     locked(file + ".lock", () => writePrivate(file, JSON.stringify(edit(read(file, now)))));
   } catch {}
 }
-function unansweringList(held = unansweringNow()) {
+function unansweringList(held = unansweringNow(), listed = null) {
   return {
     held: held.map((each) => {
       const [provider, ...model] = each.key.split("/");
-      return { provider, ...each.scope === "model" ? { model: model.join("/") } : {}, ...each.paid ? { only: "paid" } : each.free ? { only: "free" } : {}, why: each.why, since: each.at, until: each.until };
+      const only = each.scope === "provider" && (each.paid || each.free);
+      const models = only && listed ? listed.filter((one) => isObject(one) && one.providerID === provider && typeof one.id === "string" && covers(each, { providerID: provider, id: one.id, free: isFree(one) })).map((one) => one.id) : null;
+      return { provider, ...each.scope === "model" ? { model: model.join("/") } : {}, ...each.paid ? { only: "paid" } : each.free ? { only: "free" } : {}, ...models ? { models } : {}, why: each.why, since: each.at, until: each.until };
     })
   };
 }
@@ -15198,7 +15203,7 @@ async function answerWorktrees(method, requestPath, body, engine, signal, bridge
     if (subpath === null)
       return { status: 409, value: message("That folder isn't in a git repository.") };
     if (!firstCommit(project))
-      return { status: 409, value: message("This repository has no commits yet, and git couldn't make it a first one. Make a first commit, then start a session in a worktree.") };
+      return { status: 409, value: message("This branch has no commits yet. Make a first commit, then start a session in a worktree.") };
     const base = gitIn(project, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
     let id, root;
     try {
@@ -25386,7 +25391,9 @@ async function* workAsksRoute(context, match) {
   if (route === "kuvo/work/unanswering") {
     if (method !== "GET")
       return yield* json(405, {});
-    return yield* json(200, unansweringList());
+    const held = unansweringNow();
+    const listed = held.some((each) => each.paid || each.free) ? await Promise.resolve().then(() => call(readEngine(), "GET", "/api/model", undefined, signal)).catch(() => null) : null;
+    return yield* json(200, unansweringList(held, Array.isArray(listed) ? listed : null));
   }
   if (route === "kuvo/work/settings") {
     if (method === "GET")

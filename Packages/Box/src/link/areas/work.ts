@@ -20,8 +20,9 @@ import { answerWork, askFollowers, workAsks } from "../work/asks";
 import { madeWords, makeProject } from "../work/projects";
 import { startOfDay } from "../work/clock";
 import { setProjectsFolder, workSettings } from "../work/settings";
-import { unansweringList } from "../work/unanswering";
+import { unansweringList, unansweringNow } from "../work/unanswering";
 import { answerGoal, askGoal, goalFollowers, goalPlans } from "../work/goals";
+import { call } from "../engine/client";
 import { readProjects } from "./projects";
 import { HERE } from "../home";
 import { botOfConversation, describeWork, ofBot, workingNow, workSessions } from "../work/tree";
@@ -103,7 +104,10 @@ export async function* workAsksRoute(context: RouteContext, match: RegExpMatchAr
   // What can't answer now, as bots are told: for a client's model picker to say so too.
   if (route === "kuvo/work/unanswering") {
     if (method !== "GET") return yield* json(405, {});
-    return yield* json(200, unansweringList());
+    const held = unansweringNow();
+    // (Which of an account's models a hold on its paid or free ones covers: as its engine prices them.)
+    const listed = held.some(each => each.paid || each.free) ? await Promise.resolve().then(() => call(readEngine(), "GET", "/api/model", undefined, signal)).catch(() => null) : null;
+    return yield* json(200, unansweringList(held, Array.isArray(listed) ? listed : null));
   }
   if (route === "kuvo/work/settings") {
     if (method === "GET") return yield* json(200, workSettings());

@@ -77,9 +77,10 @@ export const WORK_SETTINGS = object({ projectsFolder: nullable(string), "suggest
 
 /** A model, or an account's models, that can't answer now (`GET kuvo/work/unanswering`), as the
  * box holds them back from its bots: the provider, the model (left out for all of the account's,
- * or `only` its paid or free ones), why in the engine's words, since and until when (ms; sooner
- * when a session on it answers, or its key changes). */
-export const UNANSWERING = object({ provider: string, "model?": string, "only?": words("paid", "free"), why: string, since: number, until: number });
+ * or `only` its paid or free ones, then the `models` that covers, by id, when its engine could
+ * say), why in the engine's words, since and until when (ms; sooner when a session on it answers,
+ * or its key changes). */
+export const UNANSWERING = object({ provider: string, "model?": string, "only?": words("paid", "free"), "models?": list(string), why: string, since: number, until: number });
 export const UNANSWERING_LIST = object({ held: list(UNANSWERING) });
 
 /** A bot's work, as `GET kuvo/work?bot=` answers: its sessions (the latest first), the asks it

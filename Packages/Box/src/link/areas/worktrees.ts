@@ -265,8 +265,9 @@ export async function answerWorktrees(method: string, requestPath: string, body:
     // Where the project is in its repository, as git sees it (through any links in its path).
     const subpath = gitIn(project, ["rev-parse", "--show-prefix"]);
     if (subpath === null) return { status: 409, value: message("That folder isn't in a git repository.") };
-    // One with no commits yet gets its first (empty: what's staged stays so), as a project the box makes does.
-    if (!firstCommit(project)) return { status: 409, value: message("This repository has no commits yet, and git couldn't make it a first one. Make a first commit, then start a session in a worktree.") };
+    // One with no commits yet gets its first (empty: what's staged stays so), as a project the box
+    // makes does; a branch with none in one with history is yours to begin.
+    if (!firstCommit(project)) return { status: 409, value: message("This branch has no commits yet. Make a first commit, then start a session in a worktree.") };
     const base = gitIn(project, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
     let id: string | undefined, root: string | undefined;
     try {

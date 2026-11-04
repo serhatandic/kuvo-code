@@ -720,7 +720,7 @@ client shows it from the same routes.
   reason}`, or `{session, ask, answer, reason}` for a question), `list_models` (the models there's
   an account for here, `provider/model`, with their efforts; none its provider is retiring).
 - **Models that can't answer** (`work/unanswering.ts`, `run/work/unanswering.json`, bridge
-  0.9.194): when a session a conversation started fails at its account (the engine's
+  0.9.195): when a session a conversation started fails at its account (the engine's
   `provider.quota` or `provider.budget-limit`: out of funds or at a plan's spend, which holds back
   that provider's models that cost something, its free ones spending none; `provider.free-limit`,
   its free usage spent, its free ones; `provider.auth`, signed out, all of them), or at a model's
@@ -738,8 +738,9 @@ client shows it from the same routes.
   `integration.updated` or `provider.updated`, for the account they name, or every account when
   they name none). `read_conversation` shows a turn's error where it stopped. Clients mark them in
   their model pickers from `GET kuvo/work/unanswering` (feature `work.unanswering`) →
-  `{held: [{provider, model?, only?: "paid"|"free", why, since, until}]}`: `model` left out for an
-  account's models (`only` its paid or free ones), `why` in the engine's words, times in ms.
+  `{held: [{provider, model?, only?: "paid"|"free", models?, why, since, until}]}`: `model` left out
+  for an account's models (`only` its paid or free ones, then `models` the ids that covers, as its
+  engine prices them, when it could say), `why` in the engine's words, times in ms.
 - **Answering asks** (`work/policy.ts`, bridge 0.9.189): a bot answers its sessions' asks as far
   as its own conversation could go ahead without asking, as any conversation in its mode would.
   It's judged by the tool call itself (its whole input, found by the ask's `source`, which has a
@@ -2439,7 +2440,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `queue.waits` | A Stop holds the conversation: what arrives waits on the box (`waiting`), `…/queue/add` and `DELETE …/queue/<item>` (bridge 0.9.128) |
 | `work` | a bot's work ("Work"): `kuvo/work`, `…/events`, `kuvo/bots/<id>/stop-all`, `start_session`'s and `kuvo/sessions`' new fields, the work tools, `limits` in `kuvo/bots` (bridge 0.9.106) |
 | `work.projects` | a bot's projects ("Work", Projects): `make_project`, `list_projects`, `kuvo/work/asks`, `…/events`, `POST kuvo/work/asks/<id>`, `kuvo/work/settings`, `POST kuvo/projects/new`, `madeBy` on projects, `allowed` in `kuvo/bots` (bridge 0.9.107) |
-| `work.unanswering` | `GET kuvo/work/unanswering`: models that can't answer now ("Work", Models that can't answer; bridge 0.9.194) |
+| `work.unanswering` | `GET kuvo/work/unanswering`: models that can't answer now ("Work", Models that can't answer; bridge 0.9.195) |
 | `search` | `kuvo/search` |
 | `personalities` | `kuvo/personalities…` |
 | `personalities.events` | `kuvo/personalities/events` |

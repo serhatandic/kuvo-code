@@ -234,6 +234,18 @@ test("a repository with no commit yet gets an empty first one, and its worktree 
   assert.equal((await ask("POST", "kuvo/worktrees/remove", { path: made.value.root })).status, 200);
 });
 
+test("a branch begun with nothing on it, in a repository with history, is left for you to begin", async () => {
+  const site = path.join(home, "site");
+  fs.mkdirSync(site);
+  git(site, "init", "-q", "-b", "main");
+  git(site, "commit", "-q", "--allow-empty", "-m", "first");
+  git(site, "checkout", "-q", "--orphan", "pages");
+  const refused = await ask("POST", "kuvo/worktrees", { project: site });
+  assert.equal(refused.status, 409);
+  assert.match(refused.value.message, /first commit/);
+  assert.equal(git(site, "for-each-ref", "--format=%(refname)"), "refs/heads/main", "nothing committed on pages for you");
+});
+
 test("a branch prefix git can't use there is named", async () => {
   git(project, "branch", "taken");
   const refused = await ask("POST", "kuvo/worktrees", { project, branchPrefix: "taken/" });

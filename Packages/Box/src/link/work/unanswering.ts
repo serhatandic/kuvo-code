@@ -115,12 +115,15 @@ function change(file: string, now: number, edit: (held: Unanswering[]) => Unansw
   } catch {}
 }
 
-/** What can't answer now, as a client reads it (`GET kuvo/work/unanswering`). */
-export function unansweringList(held = unansweringNow()): UnansweringList {
+/** What can't answer now, as a client reads it (`GET kuvo/work/unanswering`): with the models a hold
+ * on an account's paid or free ones covers, out of `listed` (its engine's, when it could say). */
+export function unansweringList(held = unansweringNow(), listed: unknown[] | null = null): UnansweringList {
   return {
     held: held.map(each => {
       const [provider, ...model] = each.key.split("/");
-      return { provider, ...(each.scope === "model" ? { model: model.join("/") } : {}), ...(each.paid ? { only: "paid" as const } : each.free ? { only: "free" as const } : {}), why: each.why, since: each.at, until: each.until };
+      const only = each.scope === "provider" && (each.paid || each.free);
+      const models = only && listed ? listed.filter((one): one is { id: string } => isObject(one) && one.providerID === provider && typeof one.id === "string" && covers(each, { providerID: provider, id: one.id, free: isFree(one) })).map(one => one.id) : null;
+      return { provider, ...(each.scope === "model" ? { model: model.join("/") } : {}), ...(each.paid ? { only: "paid" as const } : each.free ? { only: "free" as const } : {}), ...(models ? { models } : {}), why: each.why, since: each.at, until: each.until };
     }),
   };
 }
