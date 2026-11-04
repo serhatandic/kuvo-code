@@ -31,11 +31,13 @@ const QUESTION = (id, session, labels) => ({
 });
 const ROASTS = ["Light and fruity", "Warm and roasty (Recommended)", "Dark and smoky"];
 
-// The engine: its sessions as PATCH changes them, the forms answered, the instructions kept and
-// the messages sent.
+// The engine: its sessions as PATCH changes them, the questions waiting and answered, the
+// instructions kept (and those it refuses) and the messages sent.
 let sessions;
+let waiting;
 let answered;
 let entries;
+let refusesEntries;
 let prompts;
 const engine = http.createServer((request, response) => {
   let body = "";
@@ -44,17 +46,28 @@ const engine = http.createServer((request, response) => {
     const reply = (value, status = 200) => { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value)); };
     const url = new URL(request.url, "http://x");
     const given = body ? JSON.parse(body) : undefined;
-    if (url.pathname === "/api/session" && request.method === "GET") return reply({ data: [...sessions.values()].filter(each => !each.parentID) });
+    if (url.pathname === "/api/session" && request.method === "GET") {
+      const parent = url.searchParams.get("parentID");
+      return reply({ data: [...sessions.values()].filter(each => (parent && parent !== "null" ? each.parentID === parent : !each.parentID)) });
+    }
     if (url.pathname === "/api/session/active") return reply({ data: {} });
     const entry = url.pathname.match(/^\/api\/experimental\/session\/([^/]+)\/instructions\/entries\/([^/]+)$/);
     if (entry) {
       const key = `${decodeURIComponent(entry[1])} ${decodeURIComponent(entry[2])}`;
+      if (refusesEntries) return reply({ message: "Not now." }, 500);
       if (request.method === "PUT") entries.set(key, given.value);
       if (request.method === "DELETE") entries.delete(key);
       return reply({ data: true });
     }
     const form = url.pathname.match(/^\/api\/session\/([^/]+)\/form\/([^/]+)\/reply$/);
-    if (form && request.method === "POST") { answered.push({ session: decodeURIComponent(form[1]), form: decodeURIComponent(form[2]), answer: given.answer }); return reply({ data: true }); }
+    if (form && request.method === "POST") {
+      const asker = decodeURIComponent(form[1]);
+      answered.push({ session: asker, form: decodeURIComponent(form[2]), answer: given.answer });
+      waiting.set(asker, (waiting.get(asker) ?? []).filter(each => each.id !== decodeURIComponent(form[2])));
+      return reply({ data: true });
+    }
+    const forms = url.pathname.match(/^\/api\/session\/([^/]+)\/form$/);
+    if (forms) return reply({ data: waiting.get(decodeURIComponent(forms[1])) ?? [] });
     const prompt = url.pathname.match(/^\/api\/session\/([^/]+)\/prompt$/);
     if (prompt && request.method === "POST") { prompts.push({ to: decodeURIComponent(prompt[1]), ...given }); return reply({ data: true }); }
     if (/\/(permission|form)$/.test(url.pathname)) return reply({ data: [] });
@@ -86,8 +99,10 @@ beforeEach(() => {
     ["ses_menu", session("ses_menu", { metadata: { kuvo: { startedBy: "ses_lead", wake: ["asks"], autopilot: true } } })],
     ["ses_copy", session("ses_copy", { metadata: { kuvo: { startedBy: "ses_lead", wake: ["asks"] } } })],
   ]);
+  waiting = new Map();
   answered = [];
   entries = new Map();
+  refusesEntries = false;
   prompts = [];
   fs.rmSync(path.join(home, "run", "work"), { recursive: true, force: true });
 });
@@ -107,10 +122,14 @@ function route(method, pathname, body) {
   });
 }
 
-// The watcher, its clock the test's: what it would tell later, told when the test says.
-function watcher() {
+// The watcher, as the box starts it (what it catches up on done), its clock the test's: what it
+// would tell later, told when the test says.
+async function watcher() {
   const later = [];
-  const watch = link.workWatcher(source, () => [source], { schedule: run => { later.push(run); } });
+  const stop = new AbortController();
+  atEnd(() => stop.abort());
+  const watch = link.workWatcher(source, () => [source], { schedule: run => { later.push(run); }, signal: stop.signal });
+  await watch.caughtUp;
   return { watch, tellAll: async () => { for (const run of later.splice(0)) await run(); } };
 }
 
@@ -125,14 +144,16 @@ test("a conversation is Interactive until it's turned on; on, it's kept with it 
   assert.equal((await route("GET", "kuvo/sessions/ses_mine/autopilot")).body.autopilot, true);
   const off = await route("PUT", "kuvo/sessions/ses_mine/autopilot", { autopilot: false });
   assert.equal(off.body.autopilot, false);
-  assert.deepEqual(sessions.get("ses_mine").metadata.kuvo, { approval: "auto", applied: "auto" });
+  assert.equal(sessions.get("ses_mine").metadata.kuvo.autopilot === true, false);
+  assert.equal(sessions.get("ses_mine").metadata.kuvo.approval, "auto");
   assert.equal(entries.has("ses_mine kuvo.autopilot"), false);
   assert.equal((await route("PUT", "kuvo/sessions/ses_mine/autopilot", { autopilot: "yes" })).status, 400);
+  assert.equal((await route("GET", "kuvo/sessions/ses_mine/autopilot")).body.autopilot, false);
   assert.equal((await route("GET", "kuvo/sessions/ses_gone/autopilot")).status, 404);
 });
 
 test("on Autopilot, a question that marks the choice it recommends goes ahead on it at once, a subagent's too, kept as a call it made", async () => {
-  const { watch } = watcher();
+  const { watch } = await watcher();
   await watch({ type: "form.created", data: { form: QUESTION("frm_1", "ses_away", ROASTS) } });
   await watch({ type: "form.created", data: { form: QUESTION("frm_2", "ses_helper", ["Pickup only (Recommended)", "Delivery too"]) } });
   assert.deepEqual(answered, [
@@ -146,7 +167,7 @@ test("on Autopilot, a question that marks the choice it recommends goes ahead on
 });
 
 test("a question without a recommendation, and any in an Interactive conversation, waits for you, and its starter hears of it as ever", async () => {
-  const { watch, tellAll } = watcher();
+  const { watch, tellAll } = await watcher();
   await watch({ type: "form.created", data: { form: QUESTION("frm_3", "ses_away", ["Light and fruity", "Warm and roasty"]) } });
   await watch({ type: "form.created", data: { form: QUESTION("frm_4", "ses_mine", ROASTS) } });
   await watch({ type: "form.created", data: { form: QUESTION("frm_5", "ses_copy", ROASTS) } });
@@ -158,7 +179,7 @@ test("a question without a recommendation, and any in an Interactive conversatio
 });
 
 test("one a session on Autopilot went ahead on isn't put to its starter", async () => {
-  const { watch, tellAll } = watcher();
+  const { watch, tellAll } = await watcher();
   await watch({ type: "form.created", data: { form: QUESTION("frm_6", "ses_menu", ROASTS) } });
   await tellAll();
   assert.deepEqual(answered.map(each => each.form), ["frm_6"]);
@@ -166,7 +187,7 @@ test("one a session on Autopilot went ahead on isn't put to its starter", async 
 });
 
 test("your choice on a call: the same confirms it quietly; another tells the conversation to go that way", async () => {
-  const { watch } = watcher();
+  const { watch } = await watcher();
   await watch({ type: "form.created", data: { form: QUESTION("frm_1", "ses_away", ROASTS) } });
   const same = await route("POST", "kuvo/sessions/ses_away/autopilot", { decided: "frm_1", choice: "Warm and roasty" });
   assert.equal(same.status, 200);
@@ -177,8 +198,72 @@ test("your choice on a call: the same confirms it quietly; another tells the con
   assert.equal(other.body.decided[0].yours.choice, "Light and fruity");
   assert.equal(prompts.length, 1);
   assert.equal(prompts[0].to, "ses_away");
-  assert.match(prompts[0].text, /^\[Decision changed\] For "Which roast for the house blend\?" the user picked Light and fruity, not Warm and roasty/);
+  assert.match(prompts[0].text, /^\[Decision changed\] For "Which roast for the house blend\?" the user (now )?picked Light and fruity, not Warm and roasty/);
   assert.deepEqual(prompts[0].metadata, { kuvo: { note: { from: "Autopilot", line: "You picked Light and fruity" } } });
+  // Back to its own choice: the conversation, going your way now, is told to go back.
+  await route("POST", "kuvo/sessions/ses_away/autopilot", { decided: "frm_1", choice: "Warm and roasty" });
+  assert.equal(prompts.length, 2);
+  assert.match(prompts[1].text, /the user now picked Warm and roasty, not Light and fruity/);
+  // The same again: nothing new to tell.
+  await route("POST", "kuvo/sessions/ses_away/autopilot", { decided: "frm_1", choice: "Warm and roasty" });
+  assert.equal(prompts.length, 2);
   assert.equal((await route("POST", "kuvo/sessions/ses_away/autopilot", { decided: "frm_9", choice: "Dark" })).status, 404);
   assert.equal((await route("POST", "kuvo/sessions/ses_away/autopilot", { decided: "frm_1" })).status, 400);
+});
+
+test("the engine doesn't take it: the conversation stays as it was, and says so", async () => {
+  refusesEntries = true;
+  assert.equal((await route("PUT", "kuvo/sessions/ses_mine/autopilot", { autopilot: true })).status, 502);
+  assert.deepEqual(sessions.get("ses_mine").metadata.kuvo, { approval: "auto", applied: "auto" }, "not marked: its questions don't go ahead while its agent was never told");
+  assert.equal((await route("GET", "kuvo/sessions/ses_mine/autopilot")).body.autopilot, false);
+  assert.equal((await route("PUT", "kuvo/sessions/ses_away/autopilot", { autopilot: false })).status, 502, "nor taken off while its agent is still told it's on");
+});
+
+test("turned on with a question waiting, it goes ahead on its recommendation then; one without waits", async () => {
+  waiting.set("ses_mine", [QUESTION("frm_7", "ses_mine", ROASTS), QUESTION("frm_8", "ses_mine", ["Pickup", "Delivery"])]);
+  const on = await route("PUT", "kuvo/sessions/ses_mine/autopilot", { autopilot: true });
+  assert.deepEqual(answered, [{ session: "ses_mine", form: "frm_7", answer: { roast: "r1" } }]);
+  assert.deepEqual(on.body.decided.map(each => each.choice), ["Warm and roasty"]);
+  assert.deepEqual(waiting.get("ses_mine").map(each => each.id), ["frm_8"]);
+});
+
+test("asked while the box wasn't listening: it goes ahead as the box starts again, a subagent's too", async () => {
+  waiting.set("ses_away", [QUESTION("frm_9", "ses_away", ROASTS)]);
+  waiting.set("ses_helper", [QUESTION("frm_10", "ses_helper", ["Pickup only (Recommended)", "Delivery too"])]);
+  waiting.set("ses_mine", [QUESTION("frm_11", "ses_mine", ROASTS)]);
+  await watcher();
+  assert.deepEqual(answered.map(each => each.form).sort(), ["frm_10", "frm_9"], "an Interactive conversation's still waits");
+  assert.equal((await route("GET", "kuvo/sessions/ses_away/autopilot")).body.decided.length, 2);
+});
+
+test("your phone isn't told of a question that goes ahead on Autopilot; of one that waits, as ever", async () => {
+  const get = async at => {
+    const id = decodeURIComponent(at.match(/^api\/session\/([^/?]+)$/)?.[1] ?? "");
+    return { data: sessions.get(id) };
+  };
+  assert.equal(await link.noticeFor({ type: "form.created", data: { form: QUESTION("frm_1", "ses_away", ROASTS) } }, get), null);
+  assert.equal(await link.noticeFor({ type: "form.created", data: { form: QUESTION("frm_2", "ses_helper", ROASTS) } }, get), null);
+  assert.notEqual(await link.noticeFor({ type: "form.created", data: { form: QUESTION("frm_3", "ses_away", ["Light", "Dark"]) } }, get), null);
+  assert.notEqual(await link.noticeFor({ type: "form.created", data: { form: QUESTION("frm_4", "ses_mine", ROASTS) } }, get), null);
+});
+
+// A bot's goal running in the conversation (its bot's own), as the box keeps it.
+function goalIn(session, more = {}) {
+  const bot = path.join(home, "bots", "bot_ada");
+  fs.mkdirSync(bot, { recursive: true });
+  fs.writeFileSync(path.join(bot, "bot.json"), JSON.stringify({ kuvo: 1, id: "bot_ada", name: "Ada", job: "Builds sites.", look: { color: "mint", shape: "round", face: "calm" }, created: "2026-10-01T09:00:00Z", updated: "2026-10-01T09:00:00Z" }));
+  fs.writeFileSync(path.join(bot, "session"), session);
+  fs.mkdirSync(path.join(home, "run", "work"), { recursive: true });
+  fs.writeFileSync(path.join(home, "run", "work", "goals.json"), JSON.stringify({ goals: [{ id: "goal_cafe", bot: "bot_ada", session, name: "Ada", goal: "A cafe site", title: "Cafe site", state: "running", steps: [], waiting: [], paused: [], checks: [], spend: [], waited: 0, ...more }] }));
+}
+const goalDecided = () => JSON.parse(fs.readFileSync(path.join(home, "run", "work", "goals.json"), "utf8")).goals[0].decided ?? [];
+
+test("a call made in a goal's conversation shows on the goal too; while you have the goal paused, it waits for you", async () => {
+  goalIn("ses_away");
+  const { watch } = await watcher();
+  await watch({ type: "form.created", data: { form: QUESTION("frm_1", "ses_away", ROASTS) } });
+  assert.deepEqual(goalDecided().map(each => [each.id, each.choice]), [["ask:ses_away:frm_1", "Warm and roasty"]]);
+  goalIn("ses_away", { heldByYou: 1 });
+  await watch({ type: "form.created", data: { form: QUESTION("frm_2", "ses_away", ROASTS) } });
+  assert.deepEqual(answered.map(each => each.form), ["frm_1"]);
 });

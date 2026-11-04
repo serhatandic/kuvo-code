@@ -4,7 +4,7 @@
 
 import { isObject, parsed } from "../../shared/json";
 import { engineGet } from "../engine/client";
-import { decidedByYou, decidedIn, isAutopilot, setAutopilot } from "../work/autopilot";
+import { decidedByYou, decidedIn, goAheadOnWaiting, isAutopilot, setAutopilot } from "../work/autopilot";
 import type { EngineAnswer } from "../engine/client";
 import type { EngineSession } from "../engine/sessions";
 import type { Target } from "../../shared/records";
@@ -47,7 +47,10 @@ export async function* autopilotRoute(context: RouteContext): AsyncGenerator<Ans
     const on = given.autopilot as boolean;
     if (!await setAutopilot(at.target, at.data, on, signal)) return yield* json(502, { message: "It couldn't be changed: the engine didn't take it. Try again." });
     const kuvo = isObject(at.data.metadata?.kuvo) ? at.data.metadata.kuvo : {};
-    return yield* json(200, shown({ ...at.data, metadata: { ...at.data.metadata, kuvo: { ...kuvo, autopilot: on } } }));
+    const now = { ...at.data, metadata: { ...at.data.metadata, kuvo: { ...kuvo, autopilot: on } } };
+    // What it asks already that recommends a choice goes ahead now, as what it asks from here will.
+    if (on) await goAheadOnWaiting(at.target, now, undefined, signal).catch(() => []);
+    return yield* json(200, shown(now));
   }
   if (method === "POST") {
     const changed = await decidedByYou(at.target, id, given.decided as string, (given.choice as string).trim().slice(0, 200));

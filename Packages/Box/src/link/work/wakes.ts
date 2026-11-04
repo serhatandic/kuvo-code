@@ -20,7 +20,7 @@ import { isPutAway, type PutAwayable } from "../peers/directory";
 import { describeForm, describePermission } from "../notices/news";
 import { noteWorkChanged, WORK_FOLDER } from "./changes";
 import { asksIn } from "./answers";
-import { goAheadOnAutopilot, isAutopilot } from "./autopilot";
+import { catchUpAutopilot, goAheadOnAutopilot, isAutopilot } from "./autopilot";
 import { awaitedBy } from "./awaited";
 import { tellLateAnswers } from "./asks";
 import { errorOf, failedOn, followUnanswering, holdWords, turnError } from "./unanswering";
@@ -428,7 +428,10 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
     const timer = schedule(() => catchingUp(), CATCH_UP_AGAIN);
     (timer as { unref?: () => void } | undefined)?.unref?.();
   });
-  const caughtUp = Promise.all([catchingUp(), tellLateAnswers(targets, undefined, bridgeRuns).catch(() => {})]).then(() => {});
+  // (Questions its conversations on Autopilot asked meanwhile go ahead first: no one is told of
+  // those.)
+  const caughtUp = catchUpAutopilot(source, undefined, signal).catch(() => {})
+    .then(() => Promise.all([catchingUp(), tellLateAnswers(targets, undefined, bridgeRuns).catch(() => {})])).then(() => {});
   // Answers given late that waited (the coding agents' bridge not running), tried again every few
   // minutes while the box runs.
   const lateAgain = () => {
@@ -456,7 +459,7 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
       if (bot) noteWorkChanged(bot);
       // On Autopilot, a question that marks the choice it recommends goes ahead on it: nothing waits.
       const form = event.type === "form.created" ? event.data?.form ?? event.data as unknown as EngineForm : null;
-      if (form && isAutopilot(session) && await goAheadOnAutopilot(source, session.id, { ...form, sessionID: form.sessionID ?? id }).catch(() => null)) return;
+      if (form && isAutopilot(session) && await goAheadOnAutopilot(source, session, { ...form, sessionID: form.sessionID ?? id }).catch(() => null)) return;
       const starter = startedByOf(session);
       const wakes = wakesOf(session);
       // (One starting or stopped is its bot's work changing, for clients to read: nothing to tell.)

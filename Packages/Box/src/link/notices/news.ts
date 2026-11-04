@@ -8,6 +8,8 @@ import { readProjects } from "../areas/projects";
 import { readRemovedWorktrees, readWorktrees } from "../areas/worktree-records";
 import { engineGet } from "../engine/client";
 import { isHiddenRun } from "../engine/sessions";
+import { recommendationOf } from "../work/answers";
+import { isAutopilot } from "../work/autopilot";
 import { IS_MAC, K } from "../home";
 import { masked, showsAll } from "./mask";
 import type { Fields } from "../../shared/json";
@@ -233,6 +235,8 @@ export async function noticeFor(event: EngineEvent, get: EngineAsk): Promise<Not
       if (!asker) return null;
       const where = await shown(asker);
       if (isHiddenRun(where)) return null;
+      // On Autopilot, one that recommends a choice goes ahead on it: nothing waits for you.
+      if (isAutopilot(where) && recommendationOf(form as unknown as Record<string, unknown>)) return null;
       const body = describeForm(form);
       const choices = (singleQuestion(form)?.options ?? []).map(option => String(option?.label ?? ""));
       return about(where, "question", body, { request: form.id, ...(where.id !== form.sessionID ? { requestSession: form.sessionID } : {}) },

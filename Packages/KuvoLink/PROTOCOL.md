@@ -3473,24 +3473,31 @@ what may be decided without asking. Every conversation is Interactive until it's
   asked, the choice it went with and why, the choices it had, the session that asked where it's a
   subagent's, and your choice since). 404 where there's no such conversation.
 - `PUT kuvo/sessions/<id>/autopilot` `{autopilot: bool}`: on or off; the answer as `GET`'s. It's
-  kept with the conversation (`metadata.kuvo.autopilot`), and its agent is told how to work in its
-  instructions (`kuvo.autopilot`), taken out again when it's turned off: decide what its own
-  research settles, stop only for what only you can do (paying on your own account, signing in,
-  making an account, handing over a key), and mark the choice it recommends when it does ask.
+  kept with the conversation (`metadata.kuvo.autopilot`, false once off), and its agent is told how
+  to work in its instructions (`kuvo.autopilot`), taken out again when it's turned off: decide what
+  its own research settles, stop only for what only you can do (paying on your own account, signing
+  in, making an account, handing over a key), and mark the choice it recommends when it does ask.
+  Its agent is told before it's marked on, and it's marked off before its agent is told: 502 where
+  the engine didn't take it, and the conversation stays as it was. Turned on, what it asks already
+  that recommends a choice goes ahead then.
 - On Autopilot, a question the conversation's agent or one of its subagents asks with the question
   tool that marks a choice `(Recommended)` in each field it needs goes ahead on that choice at
-  once: the box answers the form (`POST …/form/<id>/reply`) and keeps it in `decided`, and a session
-  that started it isn't woken for it. One that marks none waits for you as ever, and so do its
-  permissions, which are its approval's.
+  once: the box answers the form (`POST …/form/<id>/reply`) and keeps it in `decided`; your phones
+  aren't told of it, and a session that started it isn't woken for it. What its conversations asked
+  while the box couldn't hear (it started again, or its engine did) goes ahead as it catches up. One
+  that marks none waits for you as ever, and so do its permissions, which are its approval's.
 - `POST kuvo/sessions/<id>/autopilot` `{decided: <form id>, choice}`: your choice on a call it
-  made, kept as `yours`. The same choice confirms it quietly; another tells the conversation
-  `[Decision changed] For "…" the user picked …, not … as you decided. …` (a box note, `You picked
+  made, kept as `yours`. The one it goes by now (your last, else its own) confirms it quietly;
+  another tells the conversation `[Decision changed] For "…" the user picked …, not … as you
+  decided. …` (`… the user now picked …, not ….` after a choice of yours; a box note, `You picked
   …`). 404 where there's no such call, 502 where the engine didn't take it (your choice is kept).
 - A session a conversation starts (`start_session`) takes its Autopilot, and a client can start one
-  on it with `autopilot: true` in `POST kuvo/sessions`. A bot's goal has its own `mode` ("Work",
-  Goals, Interactive or Autopilot).
-- On the coding agents, Claude Code's and Codex's questions go ahead the same way; Cursor can't ask,
-  so Autopilot changes nothing there but what its agent is told.
+  on it with `autopilot: true` in `POST kuvo/sessions`.
+- A bot's goal has its own `mode` ("Work", Goals, Interactive or Autopilot). A call made in its
+  conversation, or its work's, shows in the goal's `decided` too (`ask:<conversation>:<form>`); while
+  you have the goal paused, nothing goes ahead.
+- On the coding agents, Claude Code's, Codex's and Grok's questions go ahead the same way; Cursor
+  can't ask, so Autopilot changes nothing there but what its agent is told.
 
 ### Sandbox
 

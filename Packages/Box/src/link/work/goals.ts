@@ -129,6 +129,10 @@ const readKept = (file = GOALS_FILE): KeptGoal[] => {
  * the bot). */
 export const goalRuns = (bot: string, file = GOALS_FILE): boolean => readKept(file).some(goal => goal.bot === bot && goal.state === "running");
 
+/** The running goal `conversation` works on: its bot's own conversation, or `bot`'s work. */
+export const runningGoalOf = (conversation: string, bot: string | null, file = GOALS_FILE): KeptGoal | null =>
+  readKept(file).find(goal => goal.state === "running" && (goal.session === conversation || goal.bot === bot)) ?? null;
+
 // The goals as `change` leaves them, under the lock: each bot's latest, while its bot is here.
 // Those following them are told only when that changed something (the watch's own look, finding
 // nothing new, would otherwise start the next at once, and every app read them again).
