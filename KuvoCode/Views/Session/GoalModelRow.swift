@@ -5,31 +5,47 @@ import SwiftUI
 
 /// The one time a goal's card asks which model does the work, in Execution settings: while the
 /// box picked Power itself and hasn't asked, its pick and why, and the model picker. A model picked
-/// there is Power on that box from then on, for every session and goal, and the row goes.
+/// there is Power on that box from then on, for every session and goal; the row shows it until
+/// the card goes.
 struct GoalModelRow: View {
     let box: String
     @Environment(AppModel.self) private var app
     @State private var roles: ModelRoles?
     @State private var failure: String?
     @State private var isSetting = false
+    /// Picked here: the row stays, with the pick, until the card goes.
+    @State private var picked = false
 
     var body: some View {
-        if let roles, roles.asksOnGoalCard, let power = roles.power {
-            VStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: .leading, spacing: 0) {
+            // What reads the roles, whichever box the card is on.
+            Color.clear.frame(height: 0)
+            if let roles, let power = roles.power, roles.asksOnGoalCard || picked {
                 Divider().padding(.leading, GoalCardMetrics.markWidth + 12)
-                GoalSettingRow(symbol: "cpu", title: "Model", subtitle: failure ?? power.why ?? "Kuvo’s pick for the work here") {
+                GoalSettingRow(symbol: "cpu", title: "Model", subtitle: failure ?? (picked ? "For all work on \(computer) from now on" : power.why ?? "Kuvo’s pick for the work here")) {
                     if isSetting { Spinner(size: 9) }
                     ModelChip(selection: power.model, onSelect: set, opensBelow: true, scope: .at(nil), offersAuto: false) { model, variant in
-                        ModelChipLabel(model: model.map { named($0, power) }, variant: variant)
+                        if power.entries.isEmpty {
+                            Text("None")
+                        } else {
+                            ModelChipLabel(model: model.map { named($0, power) }, variant: variant)
+                        }
                     }
                     .disabled(isSetting)
                 }
+                .transition(.opacity)
             }
-            .transition(.opacity)
-        } else {
-            Color.clear.frame(height: 0)
-                .task(id: box) { await read() }
         }
+        .task(id: box) {
+            roles = nil
+            picked = false
+            failure = nil
+            await read()
+        }
+    }
+
+    private var computer: String {
+        box == BoxClient.mac ? "this Mac" : app.machines.engine(box)?.machine.name ?? box
     }
 
     /// The box's own name for its pick where the models here aren't read yet (the picker shows its id).
@@ -54,7 +70,10 @@ struct GoalModelRow: View {
             defer { isSetting = false }
             do {
                 let answered = try await client.value(ModelRoles.self, "PUT", "kuvo/models/roles", body: ModelRoles.Set(model))
-                withAnimation(.ui) { roles = answered }
+                withAnimation(.ui) {
+                    roles = answered
+                    picked = true
+                }
             } catch {
                 failure = (error as? BoxRefusal)?.message ?? error.localizedDescription
             }
