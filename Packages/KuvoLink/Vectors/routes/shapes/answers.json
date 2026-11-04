@@ -8319,6 +8319,7 @@
             },
             "progress?": "number",
             "note?": "string",
+            "detail?": "string",
             "phase?": "string",
             "site?": "string",
             "after?": {
@@ -8563,6 +8564,7 @@
             },
             "progress?": "number",
             "note?": "string",
+            "detail?": "string",
             "phase?": "string",
             "site?": "string",
             "after?": {
@@ -8831,6 +8833,7 @@
            },
            "progress?": "number",
            "note?": "string",
+           "detail?": "string",
            "phase?": "string",
            "site?": "string",
            "after?": {
