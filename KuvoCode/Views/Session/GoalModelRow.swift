@@ -20,7 +20,7 @@ struct GoalModelRow: View {
                 GoalSettingRow(symbol: "cpu", title: "Model", subtitle: failure ?? power.why ?? "Kuvo’s pick for the work here") {
                     if isSetting { Spinner(size: 9) }
                     ModelChip(selection: power.model, onSelect: set, opensBelow: true, scope: .at(nil), offersAuto: false) { model, variant in
-                        ModelChipLabel(model: model, variant: variant)
+                        ModelChipLabel(model: model.map { named($0, power) }, variant: variant)
                     }
                     .disabled(isSetting)
                 }
@@ -30,6 +30,14 @@ struct GoalModelRow: View {
             Color.clear.frame(height: 0)
                 .task(id: box) { await read() }
         }
+    }
+
+    /// The box's own name for its pick where the models here aren't read yet (the picker shows its id).
+    private func named(_ model: Model, _ power: ModelRoles.Role) -> Model {
+        guard model.name == model.id, let entry = power.entries.first, entry.modelID == model.id, let name = entry.name else { return model }
+        var named = model
+        named.name = name
+        return named
     }
 
     private func read() async {
