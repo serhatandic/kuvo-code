@@ -8,7 +8,7 @@
 //
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/bots-projects.test.js`.
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -72,7 +72,9 @@ beforeEach(() => {
 // The box's answer to one request, as a machine's tool asks it: a process of its own.
 function route(method, pathname, body, env = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [script, "box", "route"], { env: { ...process.env, KUVO_HOME: home, HOME: home, TMPDIR: home, ...env }, stdio: ["pipe", "pipe", "inherit"] });
+    // (A variable given as undefined is left out.)
+    const given = Object.fromEntries(Object.entries({ ...process.env, KUVO_HOME: home, HOME: home, TMPDIR: home, ...env }).filter(([, value]) => value !== undefined));
+    const child = spawn(process.execPath, [script, "box", "route"], { env: given, stdio: ["pipe", "pipe", "inherit"] });
     let out = "";
     child.stdout.on("data", chunk => { out += chunk; });
     child.on("error", reject);
@@ -214,6 +216,32 @@ test("a client makes a project in the projects folder, and changes where they go
   assert.equal(fs.existsSync(path.join(developer, "tidepool", ".git")), false, "a plain folder, as asked");
   assert.equal((await route("POST", "kuvo/projects/new", { name: "Tidepool" })).status, 409);
   assert.equal((await route("PATCH", "kuvo/work/settings", { projectsFolder: "relative/path" })).status, 400);
+});
+
+test("a new project starts with a commit, so its sessions can each have a worktree at once: by whoever commits on this computer, or Kuvo Code where no one's set", async () => {
+  // No one set to commit on this computer but in its ~/.gitconfig: not the system's, the XDG one or the environment.
+  const noOne = { GIT_CONFIG_NOSYSTEM: "1", XDG_CONFIG_HOME: path.join(home, "no-config"), GIT_AUTHOR_NAME: undefined, GIT_AUTHOR_EMAIL: undefined, GIT_COMMITTER_NAME: undefined, GIT_COMMITTER_EMAIL: undefined, EMAIL: undefined };
+  const git = (folder, ...args) => spawnSync("git", args, { cwd: folder, encoding: "utf8", env: { ...process.env, HOME: home, GIT_CONFIG_NOSYSTEM: "1" } });
+  assert.equal((await route("PATCH", "kuvo/work/settings", { projectsFolder: "~/Developer" })).status, 200);
+  assert.equal((await route("POST", "kuvo/projects/new", { name: "Tidepool" }, noOne)).status, 201);
+  const tidepool = path.join(developer, "tidepool");
+  assert.equal(git(tidepool, "log", "--format=%an <%ae>|%s").stdout.trim(), "Kuvo Code <kuvo-code@localhost>|Initial commit", "one commit, by the box's own name where no one's set");
+  assert.equal(git(tidepool, "status", "--porcelain").stdout, "", "with nothing in it, nor left over");
+  const step = git(tidepool, "worktree", "add", "-b", "step-1", path.join(home, "step-1"));
+  assert.equal(step.status, 0, step.stderr);
+  fs.rmSync(path.join(home, "step-1"), { recursive: true, force: true });
+
+  // Who commits here, as your git settings say.
+  write(path.join(home, ".gitconfig"), "[user]\n\tname = Ada Lovelace\n\temail = ada@example.com\n");
+  try {
+    const made = tool("make_project", { name: "Lighthouse" }, noOne);
+    const [ask] = await asked();
+    assert.equal((await route("POST", `kuvo/work/asks/${ask.id}`, { answer: "allow" })).status, 200);
+    assert.equal((await made).isError, false);
+    assert.equal(git(path.join(developer, "lighthouse"), "log", "--format=%an <%ae>").stdout.trim(), "Ada Lovelace <ada@example.com>");
+  } finally {
+    fs.rmSync(path.join(home, ".gitconfig"), { force: true });
+  }
 });
 
 test("list_projects says where each project is and who made it", async () => {

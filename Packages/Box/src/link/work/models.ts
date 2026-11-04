@@ -5,9 +5,10 @@ import { isObject } from "../../shared/json";
 import { call } from "../engine/client";
 import { HERE } from "../home";
 import type { Target } from "../../shared/records";
+import { holdOf, holdWords, isFree, unansweringNow, type Unanswering } from "./unanswering";
 
-/** A model a session can run on here: its provider and id, its name, its efforts (variants), and
- * where it runs (the engine, or the coding agents' bridge). */
+/** A model a session can run on here: its provider and id, its name, its efforts (variants), where
+ * it runs (the engine, or the coding agents' bridge), and whether it costs nothing. */
 export interface Usable {
   providerID: string;
   id: string;
@@ -16,6 +17,7 @@ export interface Usable {
   target: Target;
   agents: boolean;
   retiring: boolean;
+  free: boolean;
 }
 
 function modelsIn(listed: unknown, target: Target, agents: boolean, ready: Set<string> | null): Usable[] {
@@ -24,7 +26,7 @@ function modelsIn(listed: unknown, target: Target, agents: boolean, ready: Set<s
     if (!isObject(each) || typeof each.id !== "string" || typeof each.providerID !== "string" || each.enabled === false) continue;
     if (ready && !ready.has(each.providerID)) continue;
     const efforts = Array.isArray(each.variants) ? each.variants.map(variant => (isObject(variant) ? variant.id : null)).filter((id): id is string => typeof id === "string") : [];
-    models.push({ providerID: each.providerID, id: each.id, name: typeof each.name === "string" && each.name ? each.name : each.id, efforts, target, agents, retiring: each.status === "deprecated" });
+    models.push({ providerID: each.providerID, id: each.id, name: typeof each.name === "string" && each.name ? each.name : each.id, efforts, target, agents, retiring: each.status === "deprecated", free: isFree(each) });
   }
   return models;
 }
@@ -41,13 +43,16 @@ export async function usableModels(engine: Target | null, bridge: Target | null,
   return models;
 }
 
-/** The list, for an agent to read. */
-export function describeModels(all: Usable[]): string {
+/** The list, for an agent to read: those that can't answer now (`held`) apart, at its end. */
+export function describeModels(all: Usable[], held: Unanswering[] = unansweringNow()): string {
   // Not one its provider is retiring, as the engine's own picker leaves it out.
   const models = all.filter(model => !model.retiring);
   if (!models.length) return `There's no model with an account on ${HERE}. Ask the user to sign in to one in Settings › Accounts.`;
   const line = (model: Usable) => `- ${model.providerID}/${model.id} (${model.name})${model.efforts.length ? `, efforts: ${model.efforts.join(", ")}` : ""}`;
-  return `Models you can start a session on, as provider/model (give it to start_session as model, and an effort as effort):\n${models.map(line).join("\n")}`;
+  const answering = models.filter(model => !holdOf(model, held));
+  const holds = held.filter(each => models.some(model => holdOf(model, [each])));
+  const list = answering.length ? `Models you can start a session on, as provider/model (give it to start_session as model, and an effort as effort):\n${answering.map(line).join("\n")}` : `No model here can answer now: tell the user why, from below.`;
+  return holds.length ? `${list}\n\nLeft out, as a session on them just failed:\n${holds.map(each => "- " + holdWords(each)).join("\n")}` : list;
 }
 
 /** The model `given` names ("provider/model", or {providerID, id}), with the effort it runs at, or

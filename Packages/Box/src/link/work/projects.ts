@@ -8,7 +8,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { changeProjects, readProjects } from "../areas/projects";
 import { askedArgs } from "../../shared/git";
-import { gitIn } from "../git";
+import { firstCommit, gitIn } from "../git";
 import { homeFolder } from "../home";
 import { projectsFolder } from "./settings";
 import type { Project } from "../../shared/routes/projects";
@@ -138,6 +138,7 @@ export async function makeProject(given: NewProject, madeBy: MadeBy | null, root
     fs.mkdirSync(folder, { recursive: true });
     if (given.git !== false) kind = gitIn(folder, ["init", "--quiet", "--initial-branch=main"]) !== null || gitIn(folder, ["init", "--quiet"]) !== null ? "git" : "noGit";
   }
+  if (kind === "git" || kind === "cloned") firstCommit(folder);
   let project!: Project;
   changeProjects(projects => {
     const before = projects.find(each => each.directory === folder);

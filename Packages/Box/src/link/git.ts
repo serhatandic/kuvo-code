@@ -7,9 +7,13 @@ import { askedArgs, ownArgs, ownArgsLater } from "../shared/git";
 
 const GIT_ENV = { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" };
 
+/** Who the box's own commits are by, where they aren't anyone's (a worktree's leftovers, a new
+ * project's first commit with no one set to commit). */
+export const BY_KUVO = { GIT_AUTHOR_NAME: "Kuvo Code", GIT_AUTHOR_EMAIL: "kuvo-code@localhost", GIT_COMMITTER_NAME: "Kuvo Code", GIT_COMMITTER_EMAIL: "kuvo-code@localhost" };
+
 function ranIn(folder: string, args: string[] | undefined, env: Record<string, string>): string | null {
   if (!args) return null;
-  const ran = spawnSync("git", args, { cwd: folder, encoding: "utf8", env: { ...GIT_ENV, ...env }, timeout: 60_000 });
+  const ran = spawnSync("git", args, { cwd: folder, encoding: "utf8", env: { ...GIT_ENV, ...env }, input: "", timeout: 60_000 });
   return ran.status === 0 ? String(ran.stdout ?? "").trim() : null;
 }
 
@@ -17,6 +21,22 @@ function ranIn(folder: string, args: string[] | undefined, env: Record<string, s
  * more of its environment (a scratch index, say). */
 export function gitIn(folder: string, args: string[], env: Record<string, string> = {}): string | null {
   return ranIn(folder, ownArgs(args, folder), env);
+}
+
+/** A repository with no commits yet (a new one, an empty one cloned) given an empty first one, so
+ * its sessions can each start in a worktree at once; what's staged stays staged. By whoever commits
+ * there (your git settings, or the environment's), else by Kuvo Code, as git won't guess a name.
+ * Only one with nothing in it at all: a branch you started with nothing on it (`checkout
+ * --orphan`) in one with history is yours to begin. Whether it has a commit now. */
+export function firstCommit(folder: string): boolean {
+  const has = () => gitIn(folder, ["rev-parse", "--verify", "--quiet", "HEAD"]) !== null;
+  if (has()) return true;
+  if (gitIn(folder, ["for-each-ref", "--count=1", "--format=x"]) !== "") return false;
+  const empty = gitIn(folder, ["mktree"]);
+  const made = (env: Record<string, string>) => (empty ? gitIn(folder, ["-c", "user.useConfigOnly=true", "commit-tree", empty, "-m", "Initial commit"], env) : null);
+  const commit = made({}) ?? made(BY_KUVO);
+  // (Another may have made one meanwhile: then it has one.)
+  return (commit !== null && gitIn(folder, ["update-ref", "-m", "commit (initial): Initial commit", "HEAD", commit, ""]) !== null) || has();
 }
 
 /** git in `folder` doing what you asked for (a worktree, merging one back): the repository's

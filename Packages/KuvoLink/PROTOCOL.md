@@ -719,6 +719,28 @@ client shows it from the same routes.
   (`{session, archive?}`; only one of its own), `answer_ask` (`{session, ask, decision: allow|deny,
   reason}`, or `{session, ask, answer, reason}` for a question), `list_models` (the models there's
   an account for here, `provider/model`, with their efforts; none its provider is retiring).
+- **Models that can't answer** (`work/unanswering.ts`, `run/work/unanswering.json`, bridge
+  0.9.198): when a session a conversation started fails at its account (the engine's
+  `provider.quota` or `provider.budget-limit`: out of funds or at a plan's spend, which holds back
+  that provider's models that cost something, its free ones spending none; `provider.free-limit`,
+  its free usage spent, its free ones; `provider.auth`, signed out, all of them), or at a model's
+  own limit (`provider.rate-limit`, `provider.model-budget-limit`, or an untyped error whose words say a limit,
+  not that it's overloaded or at capacity), that model. Its starter's `[Session failed]` line says
+  so in the engine's words; `list_models` leaves them out, naming them at its end; an agent's
+  `start_session` on one still starts it, and says why it may fail and the model the agent runs on,
+  when that one can answer (yours from a client says nothing: you may have topped it up). A
+  `start_session` that waits ends as soon as the new session stops, with its error (an error
+  result), rather than waiting for a reply that won't come. A hold lasts until the reset the error
+  names, counted from when it failed, else half an hour (a rate limit, three minutes), or until a
+  session on it answers (a free one says nothing of its account's funds, nor a paid one of its free
+  usage), or until that account's
+  key or sign-in changes (the engine's `credential.switched` or `credential.removed`, and
+  `integration.updated` or `provider.updated`, for the account they name, or every account when
+  they name none). `read_conversation` shows a turn's error where it stopped. Clients mark them in
+  their model pickers from `GET kuvo/work/unanswering` (feature `work.unanswering`) →
+  `{held: [{provider, model?, only?: "paid"|"free", models?, why, since, until}]}`: `model` left out
+  for an account's models (`only` its paid or free ones, then `models` the ids that covers, as its
+  engine prices them, when it could say), `why` in the engine's words, times in ms.
 - **Answering asks** (`work/policy.ts`, bridge 0.9.189): a bot answers its sessions' asks as far
   as its own conversation could go ahead without asking, as any conversation in its mode would.
   It's judged by the tool call itself (its whole input, found by the ask's `source`, which has a
@@ -775,7 +797,9 @@ folder you pick once per box, after asking you.
   there, or null; 400 otherwise. The box makes projects only there, and never deletes one.
 - **Tools**: `make_project` (`{name, git?, clone?, folder?}`: a folder named after it, lowercase with
   dashes, a new git repository there unless `git: false`, or a repository cloned from an https or
-  ssh address; `folder`, bridge 0.9.191, is where you said it goes, a full path (`~` is fine; the
+  ssh address; either way it has a commit at once (bridge 0.9.198: an empty `Initial commit` in a
+  new one, or in a clone with none, by whoever your git settings say commits there, else by
+  `Kuvo Code <kuvo-code@localhost>`), so each of its sessions can start in a worktree; `folder`, bridge 0.9.191, is where you said it goes, a full path (`~` is fine; the
   folders on the way there are made too), which needs no projects folder picked), `list_projects` (each project here:
   its folder, whether it's git, who made it).
   A folder that's there with files in it, a project there already, or an address git can't clone
@@ -1713,7 +1737,8 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     {"project", "branchPrefix"?}` makes one of the project's repository on a branch of its own →
     `{project, root, folder, branch, base?, made, prefix}`; make the session in `folder`. `400`
     for a project that isn't a folder there, `409 {"message"}` when it isn't in a git repository,
-    `503` while the engine isn't running. `POST kuvo/worktrees/record {project, root, folder?,
+    `503` while the engine isn't running. A repository with no commits yet gets an empty first one
+    (bridge 0.9.198; what's staged stays staged), as a project the box makes does. `POST kuvo/worktrees/record {project, root, folder?,
     branch, base?}` keeps one a Mac kept before its box did ("For released Macs"; `404` when it
     isn't there any more).
   - `GET kuvo/worktrees/where[?directory=<value>]` (`worktrees.where`): where new worktrees go
@@ -2456,6 +2481,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `work.goals.apps` | `app` on a goal's steps and what waits, and `GET kuvo/work/apps/icon` ("Work", Goals, Apps; bridge 0.9.196) |
 | `work.goals.projects` | `{action: projects}` on a proposed goal ("Work", Goals, Its projects; bridge 0.9.196) |
 | `work.projects` | a bot's projects ("Work", Projects): `make_project`, `list_projects`, `kuvo/work/asks`, `…/events`, `POST kuvo/work/asks/<id>`, `kuvo/work/settings`, `POST kuvo/projects/new`, `madeBy` on projects, `allowed` in `kuvo/bots` (bridge 0.9.107) |
+| `work.unanswering` | `GET kuvo/work/unanswering`: models that can't answer now ("Work", Models that can't answer; bridge 0.9.198) |
 | `search` | `kuvo/search` |
 | `personalities` | `kuvo/personalities…` |
 | `personalities.events` | `kuvo/personalities/events` |

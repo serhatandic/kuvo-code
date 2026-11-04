@@ -22,6 +22,7 @@ import { noteWorkChanged, WORK_FOLDER } from "./changes";
 import { asksIn } from "./answers";
 import { awaitedBy } from "./awaited";
 import { tellLateAnswers } from "./asks";
+import { errorOf, failedOn, followUnanswering, holdWords, turnError } from "./unanswering";
 import { lastReplyOf, placeWords, startedByOf, wakesOf, workSessions, worksFor, type Listed } from "./tree";
 import { projectNameOf } from "../notices/news";
 import type { Target } from "../../shared/records";
@@ -95,8 +96,15 @@ export async function wakeLine(event: WorkEvent, session: Partial<EngineSession>
       const since = session.time?.created ? `, after ${took(Date.now() - session.time.created)}` : "";
       return `[Session finished] ${named}${since}:\n${reply ? cut(reply, 1200) : "(It ended without a reply.)"}`;
     }
-    case "session.execution.failed":
-      return `[Session failed] ${named} stopped with an error. Read it with read_conversation, then start it again, try another way, or tell the user.`;
+    case "session.execution.failed": {
+      // Why, in its engine's words; one at its account or its limit fails the same way again there.
+      // (The event's own, as it happens; read from its conversation when caught up on later.)
+      const error = errorOf((event.data as { error?: unknown }).error) ?? await turnError(target, session.id).catch(() => null);
+      const held = error && session.model ? await failedOn(target, session.model, error).catch(() => null) : null;
+      if (held) return `[Session failed] ${named} stopped: ${holdWords(held)}. Starting it again there fails the same way: start it again on a model that can, from list_models, or tell the user.`;
+      const why = error?.message ? `: ${cut(error.message.replace(/\.+$/, ""), 400)}` : "";
+      return `[Session failed] ${named} stopped with an error${why}. Read it with read_conversation, then start it again, try another way, or tell the user.`;
+    }
     case "permission.asked": {
       const what = describePermission(event.data as PermissionAsked).replace(/^Wants to /, "asks to ").replace(/\.$/, "");
       return `[Session asks] ${named} ${what} (ask ${event.data?.id}). Answer with answer_ask if it's yours to allow, or tell the user in a line and carry on.`;
@@ -432,8 +440,10 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
     (timer as { unref?: () => void } | undefined)?.unref?.();
   };
   void caughtUp.then(lateAgain);
-  // (What each event set going, for a test to wait on.)
-  const watch = (event: WorkEvent) => {
+  // (What each event set going, for a test to wait on.) Models that couldn't answer, too: let go
+  // once one answers, or an account's key changes.
+  const watch = (event: WorkEvent) => Promise.all([followUnanswering(source, event).catch(() => {}), told(event)]).then(() => {});
+  const told = (event: WorkEvent) => {
     const id = event.data?.sessionID ?? event.data?.form?.sessionID;
     if (typeof id !== "string" || !["session.execution.started", "session.execution.succeeded", "session.execution.failed", "session.execution.interrupted", "permission.asked", "form.created", "permission.replied", "form.replied"].includes(event.type)) return Promise.resolve();
     return (async () => {

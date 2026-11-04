@@ -369,7 +369,8 @@ test("a bot on a goal leads it as a person with a team does: it plans steps for 
   assert.match(go, /Make money-printer with make_project \(name "money-printer", folder "~\/Desktop\/main\/money-printer"\) first: you may, without asking\. Never make a project's folder with mkdir or git init\./);
   assert.match(go, /Hand each step to a session with start_session: in the project, with the step's number \(step\)/);
   assert.match(go, /each in a worktree of its own/);
-  assert.match(go, /A new project has no commits yet: its first session works in it without a worktree and commits/);
+  assert.match(go, /Start every step that waits for nothing at once, each in a worktree of its own/);
+  assert.doesNotMatch(go, /no commits yet/, "a new project has its first commit already, so no step waits for one");
   assert.match(go, /woken when one finishes or asks\. Read its report/);
   assert.match(go, /Write no code and make no files of the work yourself/);
   assert.match(go, /Unless the user told you to do it yourself/);

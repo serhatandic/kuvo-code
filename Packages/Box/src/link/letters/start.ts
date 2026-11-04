@@ -22,6 +22,7 @@ import { answerTo } from "./take";
 import { noteWorkChanged } from "../work/changes";
 import { botLimits, pastLimit } from "../work/limits";
 import { pickModel, usableModels } from "../work/models";
+import { failedOn, holdOf, holdWords, turnError, unansweringNow } from "../work/unanswering";
 import { approvalOf, approvalRules, defaultApproval, effectiveApproval, isApproval, lowerOf, rememberApproval, unavailable } from "../work/approval";
 import { settleAgain } from "../areas/approval";
 import { noteFullAccess } from "../work/full";
@@ -85,6 +86,10 @@ export interface Started {
   /** Its approval, where that's less than it was asked for or would have (said to its agent). */
   got?: Approval;
   wakes?: string[];
+  /** Its model can't answer now, as far as the box knows: said to its agent. */
+  warning?: string;
+  /** Waited for, its turn failed before it answered: why. */
+  stopped?: string;
 }
 
 /** Why one wasn't started (a 502 was, but its task didn't reach it: `session`). */
@@ -270,10 +275,18 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   let target: Target | null = by?.place?.target ?? engine;
   let model = parent?.model ? { ...parent.model } : null;
   let picked: string[] = [];
+  let warning: string | undefined;
+  let free: boolean | undefined;
   if ((given.model !== undefined && given.model !== null && given.model !== "") || (given.effort !== undefined && given.effort !== null && given.effort !== "")) {
     const models = await usableModels(engine, bridge, place.signal);
     const choice = pickModel(given.model ?? (model ? { providerID: model.providerID, id: model.id } : null), given.effort, models);
     if ("refused" in choice) return no(400, choice.refused);
+    // An agent's, on one that just failed at its account or its limit, is started all the same (it
+    // may answer again), with a word on it and a model that can. (You choose for yourself.)
+    const held = by ? holdOf(choice.model, unansweringNow()) : null;
+    const own = model && models.find(each => each.providerID === model?.providerID && each.id === model?.id);
+    if (held) warning = `${holdWords(held)}, so this may fail the same way. If it does, start it on a model that can, from list_models${own && !holdOf(own, unansweringNow()) ? `, like the one you run on (${own.providerID}/${own.id})` : ""}, or tell the user.`;
+    free = choice.model.free;
     model = { providerID: choice.model.providerID, id: choice.model.id, ...(choice.variant ? { variant: choice.variant } : {}) };
     target = choice.model.target;
     picked = [choice.model.name, ...(choice.variant ? [choice.variant] : [])];
@@ -405,10 +418,14 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
     return no(502, `Started a session (${session}), but the task didn't reach it: ${String((error as Error | null)?.message ?? error)}`, session);
   }
   went(session, true);
-  const started: Started = { session, title, folder, project: project?.name ?? null, ...(picked.length ? { picked: picked.join(" · ") } : {}), ...(got ? { got } : {}), ...(wakes.length ? { wakes } : {}) };
+  const started: Started = { session, title, folder, project: project?.name ?? null, ...(picked.length ? { picked: picked.join(" · ") } : {}), ...(got ? { got } : {}), ...(wakes.length ? { wakes } : {}), ...(warning ? { warning } : {}) };
   if (!waits) return { started };
-  // A new session: anything it says is its answer.
-  return { started: { ...started, answer: await answerTo(target, session, id, { wait: place.step, signal: place.signal, by: by?.place ? by.session : null }) } };
+  // A new session: anything it says is its answer; a turn that failed before it said anything, why.
+  const answer = await answerTo(target, session, id, { wait: place.step, signal: place.signal, by: by?.place ? by.session : null, fresh: true });
+  const error = answer === null && !place.signal?.aborted ? await turnError(target, session, place.signal).catch(() => null) : null;
+  const held = error && model ? await failedOn(target, { ...model, free }, error).catch(() => null) : null;
+  const stopped = held ? `${holdWords(held)}.` : error ? error.message || "The engine gave no reason." : undefined;
+  return { started: { ...started, answer, ...(stopped ? { stopped, warning: undefined } : {}) } };
 }
 
 // What a session started with less than it was asked for does on its own.
@@ -422,12 +439,14 @@ const GOT: Record<Approval, string> = {
 /** How a start went, in the words the tool gives its agent. */
 export function startedWords(outcome: { started: Started } | { refused: StartRefusal }, waits: boolean): { text: string; isError: boolean } {
   if ("refused" in outcome) return { text: outcome.refused.message, isError: true };
-  const { session, title, project, answer, picked, got, wakes = [] } = outcome.started;
+  const { session, title, project, answer, picked, got, wakes = [], warning, stopped } = outcome.started;
   const name = title ? `"${title}"` : "a new session";
   const where = project ? ` in ${project}` : "";
   const what = picked ? `: ${picked}.` : ".";
   const asks = got ? ` ${GOT[got]}` : "";
   const hears = wakes.length ? ` You'll be woken when it ${wakes.length === 2 ? "finishes or asks for something" : wakes[0] === "finished" ? "finishes" : "asks for something"}, so don't check on it.` : "";
-  if (!waits) return { text: `Started ${name}${where} (address ${session})${what}${asks} It's on it now.${hears || " Write to it with send_message; it can write back to you the same way."}`, isError: false };
-  return { text: `Started ${name}${where} (address ${session})${what}${asks} ` + (answer ? `It answered:\n\n${answer}` : "It hasn't answered yet; it may still write back with send_message."), isError: false };
+  const warned = warning ? ` ${warning}` : "";
+  if (!waits) return { text: `Started ${name}${where} (address ${session})${what}${asks} It's on it now.${hears || " Write to it with send_message; it can write back to you the same way."}${warned}`, isError: false };
+  if (stopped) return { text: `Started ${name}${where} (address ${session})${what} It stopped with an error before it answered: ${stopped} Start it again on a model that can, from list_models, or tell the user.`, isError: true };
+  return { text: `Started ${name}${where} (address ${session})${what}${asks} ` + (answer ? `It answered:\n\n${answer}` : "It hasn't answered yet; it may still write back with send_message.") + warned, isError: false };
 }

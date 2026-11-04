@@ -23,6 +23,12 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - In Settings › Accounts, an account's line no longer lights up under the pointer, and its **…** menu is always there in quiet ink, as in System Settings.
 - The first launch after an update shows "Getting the agent engine ready" once, instead of showing the app and then the loader again a moment later.
 - Messages from other agents, a group chat's work and a bot's wake-ups line up with the rest of the conversation, on the same edges as its errors, code and composer, instead of reaching past them.
+- A bot no longer keeps starting sessions on models that can't answer: when one fails because its account is out of funds or at a limit, the bot hears why and moves the work to a model that can.
+- A bot that starts a session and waits for its reply no longer sits at **Starting a session** for minutes when the session fails at once: it hears the error right away.
+- The model menu dims a model that can't answer right now, because its account is out of funds or signed out or the model is at its limit, and says why under its name, with when a limit resets. You can still pick it.
+- A bot keeps only what you asked for in its job, close to your words, without adding how it'll work or rules you didn't give it.
+- A project a bot makes (or clones empty) starts with a first commit, so every step of its goal can begin at once in a worktree of its own, rather than waiting for the first session to commit.
+- Starting a session in a worktree of a repository with no commits yet works: it gets an empty first commit, and what you've staged stays staged.
 - The coding agents' sign-ins (Codex's and Grok's `auth.json`, Claude Code's and the Gemini CLI's credentials files) and opencode's, wherever it keeps them, are treated like your other keys: commands in the sandbox can't read them, and in **Auto** the reviewer judges an agent reading or changing one. A coding agent running in the sandbox still uses its own sign-in, and so can the commands it runs itself.
 - A bot on a goal works like a lead with a team: once you start the goal, it makes the project (where you said it goes, if you did) and hands each step to a session of its own, following them as they report, rather than writing the code itself. Tell it if you'd rather it did the work alone.
 - A goal's step shows the icon of the site it's done at, like RevenueCat's or App Store Connect's, and none for work done on your computer: an Xcode step no longer shows Apple's logo.

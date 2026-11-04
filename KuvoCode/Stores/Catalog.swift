@@ -378,6 +378,7 @@ final class Catalog {
         // Loaded once the models have been read: a new bot's model is checked against them.
         if modelsRead { isLoaded = true }
         await readEndedSignIns()
+        await readUnanswering()
         for directory in commandFolders { await loadCommands(in: directory) }
         merge()
         if starting { waitForEngine() } else { unavailableSince = nil }
@@ -553,6 +554,69 @@ final class Catalog {
         worksAhead.subtract(ahead)
         boxEnded = listed
         if now != endedSignIns { endedSignIns = now }
+    }
+
+    /// Models that can't answer now, as the box holds them back after a turn failed (out of funds,
+    /// at a limit, signed out: `kuvo/work/unanswering`): the picker marks them, and still offers them.
+    private var unanswering: [Unanswering] = []
+
+    struct Unanswering: Decodable, Equatable {
+        var provider: String
+        /// One model's own limit; nil for the account's.
+        var model: String?
+        /// Only the account's paid models (out of funds) or its free ones (free usage spent).
+        var only: String?
+        /// The ids that covers, as the engine prices them, when the box could say.
+        var models: [String]?
+        /// In the engine's words.
+        var why: String
+        /// Milliseconds.
+        var until: Double
+
+        func covers(_ model: Model) -> Bool {
+            guard provider == model.providerID else { return false }
+            if let held = self.model { return held == model.id }
+            guard let only else { return true }
+            if let models { return models.contains(model.id) }
+            return (only == "free") == model.isFree
+        }
+
+        /// What happened, in a few words.
+        var what: String {
+            if model != nil { return "At its limit" }
+            switch only {
+            case "paid": return "Out of funds"
+            case "free": return "Free usage spent"
+            default: return "Signed out"
+            }
+        }
+    }
+
+    /// Reads them again: with the rest, and as a picker opens.
+    func readUnanswering() async {
+        guard let box else { return }
+        struct Held: Decodable { var held: [Unanswering] }
+        guard let read = try? await box.value(Held.self, "GET", "kuvo/work/unanswering") else { return }
+        if read.held != unanswering { unanswering = read.held }
+    }
+
+    /// Why `model` can't answer now, if it can't: what happened and until when, for its row; the
+    /// engine's words; and whether the line says it's free already (its free usage spent).
+    func unanswering(_ model: Model, now: Date = .now) -> (line: String, why: String, saysFree: Bool)? {
+        guard let held = unanswering.first(where: { $0.covers(model) && $0.until > now.timeIntervalSince1970 * 1000 }) else { return nil }
+        let why = held.why.trimmingCharacters(in: .whitespacesAndNewlines)
+        let said = why.hasSuffix(".") ? why : why + "."
+        // Signed out or out of funds, it answers once you sign in or add funds, not at a time: its
+        // `until` is only when the box tries it again.
+        guard held.model != nil || held.only == "free" else { return (held.what, said, false) }
+        let until = Date(timeIntervalSince1970: held.until / 1000)
+        let calendar = Calendar.current
+        // Today's by its time, this week's by its weekday too, a later one by its date.
+        let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: now), to: calendar.startOfDay(for: until)).day ?? 0
+        let time = days == 0 ? until.formatted(date: .omitted, time: .shortened)
+            : days < 7 ? until.formatted(.dateTime.weekday(.abbreviated).hour().minute())
+            : until.formatted(.dateTime.month(.abbreviated).day().hour().minute())
+        return ("\(held.what) until \(time)", said, held.only == "free")
     }
 
     /// The plans whose sign-in in use ended.
