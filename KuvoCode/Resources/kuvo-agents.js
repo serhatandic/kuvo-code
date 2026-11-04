@@ -9284,7 +9284,7 @@ function unzipper() {
 }
 
 // Packages/Box/src/agents/agents/claude.ts
-import { spawn as spawn5, spawnSync as spawnSync3 } from "child_process";
+import { spawn as spawn5 } from "child_process";
 import { createHash as createHash6, randomUUID } from "crypto";
 import { existsSync as existsSync13, readFileSync as readFileSync18, statSync as statSync8 } from "fs";
 import { homedir } from "os";
@@ -9612,7 +9612,7 @@ class ClaudeAgent {
   }
   install = "curl -fsSL https://claude.ai/install.sh | bash";
   status;
-  authFailedAt;
+  turnedAway;
   modelList;
   loadingModels;
   program = 0;
@@ -9700,27 +9700,39 @@ class ClaudeAgent {
       const who = status.email ?? (status.apiProvider && status.apiProvider !== "firstParty" ? status.apiProvider : undefined);
       return { installed: true, signedIn: true, label: [who, plan].filter(Boolean).join(" \xB7 ") || "Claude Code" };
     });
-    if (account.signedIn && this.authFailedAt && this.credentialsWritten() <= this.authFailedAt + 60000) {
-      return { installed: true, signedIn: false, ended: true, message: "Claude ended this sign-in. Sign in again." };
+    const turnedAway = this.turnedAway;
+    if (!turnedAway)
+      return account;
+    if (turnedAway.written !== undefined && await this.credentialsWritten() > turnedAway.written) {
+      if (this.turnedAway === turnedAway)
+        this.turnedAway = undefined;
+      this.known.reset();
+      return this.account();
     }
-    return account;
+    return account.signedIn ? { installed: true, signedIn: false, ended: true, message: "Claude ended this sign-in. Sign in again." } : account;
   }
   usesKey() {
     const method = this.status?.status.authMethod ?? "";
     return method !== "" && method !== "claude.ai";
   }
-  async signedOut() {
-    const account = await this.account();
-    return account.installed && !account.signedIn;
+  turnAway() {
+    const turnedAway = {};
+    this.turnedAway = turnedAway;
+    this.credentialsWritten().then((written) => turnedAway.written = written, () => turnedAway.written = 0);
+    emit("integration.updated", { integrationID: this.providerID });
   }
-  credentialsWritten() {
+  async signedOut() {
+    const out = (account) => account.installed && !account.signedIn;
+    return out(await this.account()) && out(await this.account(true));
+  }
+  async credentialsWritten() {
     const own = this.instance.home ?? process.env.CLAUDE_CONFIG_DIR;
     let written = 0;
     try {
       written = statSync8(join21(own ?? join21(homedir(), ".claude"), ".credentials.json")).mtimeMs;
     } catch {}
     if (process.platform === "darwin")
-      written = Math.max(written, keychainWritten(`Claude Code-credentials${own ? `-${createHash6("sha256").update(own).digest("hex").slice(0, 8)}` : ""}`));
+      written = Math.max(written, await keychainWritten(`Claude Code-credentials${own ? `-${createHash6("sha256").update(own).digest("hex").slice(0, 8)}` : ""}`));
     return written;
   }
   signsInRemotely = true;
@@ -9738,7 +9750,7 @@ class ClaudeAgent {
       signedIn: async () => (await this.readStatus()).loggedIn === true,
       codePrompt: /Paste code here if prompted >\s*/g,
       onComplete: () => {
-        this.authFailedAt = undefined;
+        this.turnedAway = undefined;
         this.known.reset();
       },
       printedPage: options.remote
@@ -10231,6 +10243,7 @@ class ClaudeThread {
   open(sdk, modelID, effort, plan, append, hooks, skills) {
     if (!this.agent.executable())
       throw new Error(`Install Claude Code first: ${this.agent.install}`);
+    this.lastEnd = undefined;
     let id = this.state.claudeSession;
     const resume = Boolean(id && this.state.claudeStarted);
     if (!id) {
@@ -10394,13 +10407,16 @@ class ClaudeThread {
         const id = message.message?.id;
         const error = message.error ?? message.message?.error;
         if (error === "authentication_failed") {
-          this.agent.authFailedAt = Date.now();
+          this.agent.turnAway();
           if (active) {
             active.problem = "Claude ended this sign-in, and Claude Code couldn't renew it.";
             active.signInTurnedAway = true;
           }
-        } else if (typeof error === "string" && active && lane === active)
-          active.problem ??= apiErrorWords(error);
+        } else if (typeof error === "string" && active && lane === active) {
+          const said = content.flatMap((block) => block.type === "text" && block.text ? [String(block.text).trim()] : []).join(`
+`).trim();
+          active.problem ??= said || apiErrorWords(error);
+        }
         const failing = Boolean(error) && active !== undefined && lane === active;
         for (const block of content) {
           if (block.type === "tool_use" || block.type === "server_tool_use" || block.type === "mcp_tool_use") {
@@ -11205,9 +11221,11 @@ function safeBase642(path) {
     return;
   }
 }
-function keychainWritten(service) {
-  const result = spawnSync3("/usr/bin/security", ["find-generic-password", "-s", service], { encoding: "utf8", timeout: 5000 });
-  const date = /"mdat"<timedate>=0x[0-9A-F]+\s+"(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})Z/.exec(result.stdout ?? "");
+async function keychainWritten(service) {
+  const result = await run("/usr/bin/security", ["find-generic-password", "-s", service], { timeout: 5000 }).catch(() => {
+    return;
+  });
+  const date = /"mdat"<timedate>=0x[0-9A-F]+\s+"(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})Z/.exec(result?.stdout ?? "");
   return date ? Date.UTC(+date[1], +date[2] - 1, +date[3], +date[4], +date[5], +date[6]) : 0;
 }
 
@@ -16684,6 +16702,8 @@ ${text.slice(0, 4000)}
     }
     if (!input.adopt && await Promise.race([signedOut(agent).catch(() => false), Bun.sleep(1e4).then(() => false)])) {
       turnAway();
+      if (agent.id !== "engine")
+        emit("integration.updated", { integrationID: agent.providerID });
       const machine = onMachine ? process.env.KUVO_MACHINE_NAME || "this machine" : undefined;
       const message = machine ? `${agent.name} isn't signed in on ${machine}, where this conversation runs (each machine signs in on its own). Sign in to it there in Settings \u203A Accounts, with ${machine} picked, or pick another model.` : `${agent.name} isn't signed in. Sign in to it in Settings \u203A Accounts, or pick another model.`;
       return { outcome: "failed", error: { type: agent.id === "engine" ? "provider.auth" : "signin", message } };
@@ -17470,8 +17490,8 @@ async function signedOut(agent) {
     return agent.signedOut();
   if (agent.id === "engine" || !agent.methods().length)
     return false;
-  const account = await agent.account();
-  return account.installed !== false && !account.signedIn;
+  const out = (account) => account.installed !== false && !account.signedIn;
+  return out(await agent.account()) && out(await agent.account(true));
 }
 
 // Packages/Box/src/agents/artifacts/routes.ts
@@ -23008,4 +23028,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents f862bec7a6ab92f7f3a51abdce955ff1bd3726efd8c616d8c9eb27f202f18d4a
+// Built from Packages/Box/src/agents 1c97966141e6119c46fa795c646fdb8b5172793cb1411a0a00991867c78cacf3

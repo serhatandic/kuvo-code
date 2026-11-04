@@ -2,7 +2,7 @@
 // your own plan or key (`claude auth login`), one long-lived Claude Code per session fed message
 // by message, its replies streamed into the session as the engine's own would be.
 
-import { spawn, spawnSync } from "node:child_process"
+import { spawn } from "node:child_process"
 import { createHash, randomUUID } from "node:crypto"
 import { existsSync, readFileSync, statSync } from "node:fs"
 import { homedir } from "node:os"
@@ -70,11 +70,12 @@ export class ClaudeAgent implements Agent {
   install = "curl -fsSL https://claude.ai/install.sh | bash"
   private status?: { at: number; status: Status }
   /**
-   * When Claude last turned its sign-in away in a run ("OAuth access token has been revoked"):
-   * `claude auth status` may still say signed in then. Until its sign-in is written again (signing
-   * in, or renewed), the account says it needs a sign-in.
+   * Claude turned its sign-in away in a run ("OAuth access token has been revoked"), though
+   * `claude auth status` may still say signed in: with when its sign-in had last been written then
+   * (undefined while that's read). Until it's written again (signing in, or renewed), the account
+   * says it needs a sign-in; written again, `claude auth status` says.
    */
-  authFailedAt?: number
+  turnedAway?: { written?: number }
   private modelList?: { at: number; models: Model[] }
   private loadingModels?: Promise<void>
   /** Counts updates of Claude Code: a session's Claude Code started before the last one starts again. */
@@ -176,12 +177,16 @@ export class ClaudeAgent implements Agent {
       const who = status.email ?? (status.apiProvider && status.apiProvider !== "firstParty" ? status.apiProvider : undefined)
       return { installed: true, signedIn: true, label: [who, plan].filter(Boolean).join(" · ") || "Claude Code" }
     })
-    // Claude turned the sign-in away in a run, though `claude auth status` still says signed in.
-    // (The run that was turned away may write it too as it ends, marked dead: a minute's grace for that.)
-    if (account.signedIn && this.authFailedAt && this.credentialsWritten() <= this.authFailedAt + 60_000) {
-      return { installed: true, signedIn: false, ended: true, message: "Claude ended this sign-in. Sign in again." }
+    // Claude turned the sign-in away in a run, though `claude auth status` may still say signed in.
+    const turnedAway = this.turnedAway
+    if (!turnedAway) return account
+    if (turnedAway.written !== undefined && (await this.credentialsWritten()) > turnedAway.written) {
+      // Written since (signed in, or marked dead by the run that was turned away): as it says now.
+      if (this.turnedAway === turnedAway) this.turnedAway = undefined
+      this.known.reset()
+      return this.account()
     }
-    return account
+    return account.signedIn ? { installed: true, signedIn: false, ended: true, message: "Claude ended this sign-in. Sign in again." } : account
   }
 
   /** Paid per token (an API key), rather than by a plan. */
@@ -194,9 +199,18 @@ export class ClaudeAgent implements Agent {
    * Signed out of, as Claude Code says or as Claude turned it away: a message on it would only
    * fail, after Claude Code started and tried to renew it. Said first instead.
    */
+  /** Claude turned its sign-in away: said at once, and to the apps, which show it needs one. */
+  turnAway() {
+    const turnedAway: { written?: number } = {}
+    this.turnedAway = turnedAway
+    void this.credentialsWritten().then((written) => (turnedAway.written = written), () => (turnedAway.written = 0))
+    emit("integration.updated", { integrationID: this.providerID })
+  }
+
   async signedOut() {
-    const account = await this.account()
-    return account.installed && !account.signedIn
+    const out = (account: Account) => account.installed && !account.signedIn
+    // Asked anew before it's turned away: signed in a moment ago (in Terminal, say), it goes.
+    return out(await this.account()) && out(await this.account(true))
   }
 
   /**
@@ -205,14 +219,14 @@ export class ClaudeAgent implements Agent {
    * only); and the file Claude Code keeps it in on Linux, or on a Mac when it can't write the
    * Keychain.
    */
-  protected credentialsWritten(): number {
+  protected async credentialsWritten(): Promise<number> {
     const own = this.instance.home ?? process.env.CLAUDE_CONFIG_DIR
     let written = 0
     try {
       written = statSync(join(own ?? join(homedir(), ".claude"), ".credentials.json")).mtimeMs
     } catch {}
     // On a Mac, in the Keychain: an account with a folder of its own under a name of its own.
-    if (process.platform === "darwin") written = Math.max(written, keychainWritten(`Claude Code-credentials${own ? `-${createHash("sha256").update(own).digest("hex").slice(0, 8)}` : ""}`))
+    if (process.platform === "darwin") written = Math.max(written, await keychainWritten(`Claude Code-credentials${own ? `-${createHash("sha256").update(own).digest("hex").slice(0, 8)}` : ""}`))
     return written
   }
 
@@ -235,7 +249,7 @@ export class ClaudeAgent implements Agent {
       signedIn: async () => (await this.readStatus()).loggedIn === true,
       codePrompt: /Paste code here if prompted >\s*/g,
       onComplete: () => {
-        this.authFailedAt = undefined
+        this.turnedAway = undefined
         this.known.reset()
       },
       // On another device: the page it prints, which ends on a code to paste here.
@@ -864,6 +878,8 @@ class ClaudeThread implements Thread {
   private open(sdk: any, modelID: string, effort: string | undefined, plan: boolean, append: string, hooks: TurnHooks, skills?: string) {
     // (Without it, the SDK's own words would be about a build of its own it doesn't have.)
     if (!this.agent.executable()) throw new Error(`Install Claude Code first: ${this.agent.install}`)
+    // Why an earlier one ended is not this one's.
+    this.lastEnd = undefined
     let id = this.state.claudeSession as string | undefined
     const resume = Boolean(id && this.state.claudeStarted)
     if (!id) {
@@ -1056,12 +1072,16 @@ class ClaudeThread implements Thread {
         const id = message.message?.id
         const error = message.error ?? message.message?.error
         if (error === "authentication_failed") {
-          this.agent.authFailedAt = Date.now()
+          this.agent.turnAway()
           if (active) {
             active.problem = "Claude ended this sign-in, and Claude Code couldn't renew it."
             active.signInTurnedAway = true
           }
-        } else if (typeof error === "string" && active && lane === active) active.problem ??= apiErrorWords(error)
+        } else if (typeof error === "string" && active && lane === active) {
+          // Its own words when it has them ("prompt is too long: 210000 > 200000"), in the failure.
+          const said = content.flatMap((block: any) => (block.type === "text" && block.text ? [String(block.text).trim()] : [])).join("\n").trim()
+          active.problem ??= said || apiErrorWords(error)
+        }
         // Its words for an error the turn fails with: said once, as its failure, not as a reply too.
         const failing = Boolean(error) && active !== undefined && lane === active
         for (const block of content) {
@@ -1872,8 +1892,8 @@ function safeBase64(path: string): string | undefined {
 }
 
 /** When a Keychain item was last changed, by its date only (its secret is never read): 0 if none. */
-function keychainWritten(service: string): number {
-  const result = spawnSync("/usr/bin/security", ["find-generic-password", "-s", service], { encoding: "utf8", timeout: 5_000 })
-  const date = /"mdat"<timedate>=0x[0-9A-F]+\s+"(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})Z/.exec(result.stdout ?? "")
+async function keychainWritten(service: string): Promise<number> {
+  const result = await run("/usr/bin/security", ["find-generic-password", "-s", service], { timeout: 5_000 }).catch(() => undefined)
+  const date = /"mdat"<timedate>=0x[0-9A-F]+\s+"(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})Z/.exec(result?.stdout ?? "")
   return date ? Date.UTC(+date[1]!, +date[2]! - 1, +date[3]!, +date[4]!, +date[5]!, +date[6]!) : 0
 }

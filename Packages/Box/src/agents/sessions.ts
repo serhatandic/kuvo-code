@@ -13,7 +13,7 @@ import { readFileSync, realpathSync, statSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
-import type { Agent, OwnTurn, PermissionAsk, PromptFile, QuestionAsk, RunInput, RunResult, SubagentMessages, SubagentRun, SubagentTask, Thread, TurnHooks } from "./agent"
+import type { Account, Agent, OwnTurn, PermissionAsk, PromptFile, QuestionAsk, RunInput, RunResult, SubagentMessages, SubagentRun, SubagentTask, Thread, TurnHooks } from "./agent"
 import { failure } from "./agent"
 import { parseProvider } from "./accounts"
 import { citedIn, plainCitations } from "./agents/codex-citations"
@@ -2027,6 +2027,8 @@ export class Sessions {
     // a word (the engine's), or fail only after its agent started and tried (a coding agent's).
     if (!input.adopt && (await Promise.race([signedOut(agent).catch(() => false), Bun.sleep(10_000).then(() => false)]))) {
       turnAway()
+      // The apps may still take it for signed in (one Claude turned away as it ran): shown now.
+      if (agent.id !== "engine") emit("integration.updated", { integrationID: agent.providerID })
       const machine = onMachine ? process.env.KUVO_MACHINE_NAME || "this machine" : undefined
       const message = machine
         ? `${agent.name} isn't signed in on ${machine}, where this conversation runs (each machine signs in on its own). Sign in to it there in Settings › Accounts, with ${machine} picked, or pick another model.`
@@ -2864,6 +2866,7 @@ export function ownWords(message: string): string {
 async function signedOut(agent: Agent): Promise<boolean> {
   if (agent.signedOut) return agent.signedOut()
   if (agent.id === "engine" || !agent.methods().length) return false
-  const account = await agent.account()
-  return account.installed !== false && !account.signedIn
+  const out = (account: Account) => account.installed !== false && !account.signedIn
+  // Asked anew before it's turned away: signed in a moment ago (in Terminal, say), it goes.
+  return out(await agent.account()) && out(await agent.account(true))
 }

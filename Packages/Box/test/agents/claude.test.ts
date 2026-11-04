@@ -6,6 +6,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { homedir, tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { ClaudeAgent } from "../../src/agents/agents/claude"
+import { subscribe } from "../../src/agents/events"
 import { repositoryOf } from "../../src/agents/fence"
 import { setToolServer } from "../../src/agents/kuvotools"
 import { callServer, computerServers, KEYS } from "./support/servers"
@@ -175,7 +176,7 @@ class TestClaude extends ClaudeAgent {
   }
   /** When its sign-in was last written (signing in again, renewed): never, unless a test says. */
   signInWritten = 0
-  protected override credentialsWritten() {
+  protected override async credentialsWritten() {
     return this.signInWritten
   }
 }
@@ -231,6 +232,11 @@ describe("Claude Code that stops", () => {
   })
 
   test("Claude turns its sign-in away: the turn fails as one to sign in again for, its words said once, in the card, and that Claude Code goes", async () => {
+    // The apps hear it, to show the account needs a sign-in (the card's Sign In, the chip).
+    const updated: unknown[] = []
+    const unsubscribe = subscribe((event) => {
+      if (event.type === "integration.updated") updated.push(event.data.integrationID)
+    })
     const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
     sessions.prompt(id, { id: "msg_claude_auth001", text: "hello", files: [], delivery: "steer" })
     await until(() => fake.sent.length === 1)
@@ -245,6 +251,21 @@ describe("Claude Code that stops", () => {
     expect(texts(id).join(" ")).not.toContain("Failed to authenticate")
     // The next message starts a Claude Code that reads the sign-in as it is then.
     expect(fake.closed).toBe(true)
+    unsubscribe()
+    expect(updated).toContain(provider)
+  })
+
+  test("another error Claude gives: its own words, in the failure", async () => {
+    const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
+    sessions.prompt(id, { id: "msg_claude_long001", text: "hello", files: [], delivery: "steer" })
+    await until(() => fake.sent.length === 1)
+    const uuid = fake.sent[0].uuid
+    const words = "API Error: prompt is too long: 210000 tokens > 200000 maximum"
+    fake.out.push({ type: "assistant", message: { id: "msg_long", content: [{ type: "text", text: words }] }, error: "invalid_request", parent_tool_use_id: null, user_message_uuids: [uuid] })
+    fake.result([uuid], "success", { is_error: true, result: words })
+    await until(() => idles(id).length === 1)
+    expect(idles(id)[0].error?.message).toContain("prompt is too long")
+    expect(texts(id).join(" ")).not.toContain("prompt is too long")
   })
 
   test("after Claude turned its sign-in away, a message fails at once as one to sign in for, until it's signed in again", async () => {
@@ -264,8 +285,8 @@ describe("Claude Code that stops", () => {
     expect(idles(id)[1].outcome).toBe("failed")
     expect(idles(id)[1].error?.type).toBe("signin")
     expect(fake.sent).toHaveLength(1)
-    // Signed in again: the next one goes.
-    claude.signInWritten = Date.now() + 120_000
+    // Signed in again, at once (in Terminal, say): the next one goes.
+    claude.signInWritten = Date.now()
     fake.out = new Queue<any>()
     sessions.prompt(id, { id: "msg_claude_auth004", text: "once more", files: [], delivery: "steer" })
     await until(() => fake.sent.length === 2)
