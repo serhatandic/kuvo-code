@@ -9284,7 +9284,7 @@ function unzipper() {
 }
 
 // Packages/Box/src/agents/agents/claude.ts
-import { spawn as spawn5 } from "child_process";
+import { spawn as spawn5, spawnSync as spawnSync3 } from "child_process";
 import { randomUUID } from "crypto";
 import { existsSync as existsSync13, readFileSync as readFileSync18, statSync as statSync8 } from "fs";
 import { homedir } from "os";
@@ -9700,7 +9700,7 @@ class ClaudeAgent {
       const who = status.email ?? (status.apiProvider && status.apiProvider !== "firstParty" ? status.apiProvider : undefined);
       return { installed: true, signedIn: true, label: [who, plan].filter(Boolean).join(" \xB7 ") || "Claude Code" };
     });
-    if (account.signedIn && this.authFailedAt && this.settingsWritten() <= this.authFailedAt + 60000) {
+    if (account.signedIn && this.authFailedAt && this.credentialsWritten() <= this.authFailedAt + 60000) {
       return { installed: true, signedIn: false, ended: true, message: "Claude ended this sign-in. Sign in again." };
     }
     return account;
@@ -9709,13 +9709,19 @@ class ClaudeAgent {
     const method = this.status?.status.authMethod ?? "";
     return method !== "" && method !== "claude.ai";
   }
-  settingsWritten() {
-    const folder = this.instance.home ?? homedir();
+  async signedOut() {
+    const account = await this.account();
+    return account.installed && !account.signedIn;
+  }
+  credentialsWritten() {
+    const folder = this.instance.home ?? process.env.CLAUDE_CONFIG_DIR ?? join21(homedir(), ".claude");
+    let written = 0;
     try {
-      return statSync8(join21(folder, ".claude.json")).mtimeMs;
-    } catch {
-      return 0;
-    }
+      written = statSync8(join21(folder, ".credentials.json")).mtimeMs;
+    } catch {}
+    if (process.platform === "darwin" && !this.instance.home)
+      written = Math.max(written, keychainWritten("Claude Code-credentials"));
+    return written;
   }
   signsInRemotely = true;
   async signIn(methodID, options = {}) {
@@ -10043,6 +10049,8 @@ class ClaudeThread {
     }
     if (hooks.signal.aborted)
       return { outcome: "interrupted" };
+    if (!this.query || !this.input)
+      return { outcome: "failed", error: this.stoppedWhy(this.lastEnd) };
     return new Promise((resolve) => {
       this.lastHooks = hooks;
       const message = userMessage(input, this.copies());
@@ -10310,6 +10318,7 @@ class ClaudeThread {
     if (this.query === query) {
       this.query = undefined;
       this.input = undefined;
+      this.lastEnd = ended;
       this.leftRunning();
     }
     const active = this.active;
@@ -10325,7 +10334,17 @@ class ClaudeThread {
     else if (active.limit)
       active.resolve({ outcome: "failed", error: { type: "limit", message: active.problem ?? "You've reached a Claude usage limit." }, limit: active.limit });
     else
-      active.resolve({ outcome: "failed", error: failure(active.problem ?? ended ?? "Claude Code stopped.") });
+      active.resolve({ outcome: "failed", error: this.failed(active, failure(active.problem ?? ended ?? "Claude Code stopped.")) });
+  }
+  lastEnd;
+  stoppedWhy(ended) {
+    return failure(ended ?? "Claude Code stopped before it took your message.");
+  }
+  failed(active, error) {
+    if (!active.signInTurnedAway)
+      return error;
+    this.close();
+    return { ...error, type: "signin" };
   }
   handle(message) {
     if (message.type === "system" && message.subtype === "init") {
@@ -10376,10 +10395,13 @@ class ClaudeThread {
         const error = message.error ?? message.message?.error;
         if (error === "authentication_failed") {
           this.agent.authFailedAt = Date.now();
-          if (active)
-            active.problem = "Claude Code isn't signed in. Sign in again in Settings \u203A Accounts.";
+          if (active) {
+            active.problem = "Claude ended this sign-in, and Claude Code couldn't renew it.";
+            active.signInTurnedAway = true;
+          }
         } else if (typeof error === "string" && active && lane === active)
           active.problem ??= apiErrorWords(error);
+        const failing = Boolean(error) && active !== undefined && lane === active;
         for (const block of content) {
           if (block.type === "tool_use" || block.type === "server_tool_use" || block.type === "mcp_tool_use") {
             const name = block.type === "mcp_tool_use" ? `mcp__${block.server_name ?? "mcp"}__${block.name}` : block.name;
@@ -10393,7 +10415,7 @@ class ClaudeThread {
           } else if (typeof block.type === "string" && block.type.endsWith("_tool_result")) {
             this.serverResult(turn, block);
           } else if (!id || !lane.streamed.has(id)) {
-            if (block.type === "text" && block.text)
+            if (block.type === "text" && block.text && !failing)
               turn.text(block.text);
             else if (block.type === "thinking" && block.thinking)
               turn.reasoning(block.thinking);
@@ -10753,7 +10775,7 @@ class ClaudeThread {
     }
     const message = active.problem ?? (typeof result.result === "string" && result.result.trim() ? result.result.trim() : undefined) ?? (Array.isArray(result.errors) && result.errors.length ? result.errors.join(`
 `) : undefined) ?? reason(result);
-    active.resolve({ outcome: "failed", error: { type: "agent", message }, taken: true });
+    active.resolve({ outcome: "failed", error: this.failed(active, { type: "agent", message }), taken: true });
   }
   addCost(active, result) {
     const total = typeof result.total_cost_usd === "number" ? result.total_cost_usd : undefined;
@@ -11182,6 +11204,11 @@ function safeBase642(path) {
   } catch {
     return;
   }
+}
+function keychainWritten(service) {
+  const result = spawnSync3("/usr/bin/security", ["find-generic-password", "-s", service], { encoding: "utf8", timeout: 5000 });
+  const date = /"mdat"<timedate>=0x[0-9A-F]+\s+"(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})Z/.exec(result.stdout ?? "");
+  return date ? Date.UTC(+date[1], +date[2] - 1, +date[3], +date[4], +date[5], +date[6]) : 0;
 }
 
 // Packages/Box/src/agents/agents/codex.ts
@@ -16655,11 +16682,11 @@ ${text.slice(0, 4000)}
       turnAway();
       return { outcome: "failed", error: { type: "agent", message: "This model's agent isn't available: sign in to it in Settings \u203A Accounts, or pick another model." } };
     }
-    if (!input.adopt && await Promise.race([agent.signedOut?.().catch(() => false), Bun.sleep(1e4).then(() => false)])) {
+    if (!input.adopt && await Promise.race([signedOut(agent).catch(() => false), Bun.sleep(1e4).then(() => false)])) {
       turnAway();
       const machine = onMachine ? process.env.KUVO_MACHINE_NAME || "this machine" : undefined;
       const message = machine ? `${agent.name} isn't signed in on ${machine}, where this conversation runs (each machine signs in on its own). Sign in to it there in Settings \u203A Accounts, with ${machine} picked, or pick another model.` : `${agent.name} isn't signed in. Sign in to it in Settings \u203A Accounts, or pick another model.`;
-      return { outcome: "failed", error: { type: "provider.auth", message } };
+      return { outcome: "failed", error: { type: agent.id === "engine" ? "provider.auth" : "signin", message } };
     }
     if (signal.aborted) {
       turnAway();
@@ -17437,6 +17464,14 @@ function ownWords(message) {
       return text;
     text = text.slice(0, open).trimEnd();
   }
+}
+async function signedOut(agent) {
+  if (agent.signedOut)
+    return agent.signedOut();
+  if (agent.id === "engine" || !agent.methods().length)
+    return false;
+  const account = await agent.account();
+  return account.installed !== false && !account.signedIn;
 }
 
 // Packages/Box/src/agents/artifacts/routes.ts
@@ -22973,4 +23008,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 53dd9a8d8192aa15505e761a1357eef83188ceba51d0d6b1f236d95339fb4488
+// Built from Packages/Box/src/agents e7f7b685a46362730e54facee09199a3e3a3c4f65dde1381482373e8875d5970

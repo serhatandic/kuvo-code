@@ -2,7 +2,7 @@
 // your own plan or key (`claude auth login`), one long-lived Claude Code per session fed message
 // by message, its replies streamed into the session as the engine's own would be.
 
-import { spawn } from "node:child_process"
+import { spawn, spawnSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { existsSync, readFileSync, statSync } from "node:fs"
 import { homedir } from "node:os"
@@ -71,8 +71,8 @@ export class ClaudeAgent implements Agent {
   private status?: { at: number; status: Status }
   /**
    * When Claude last turned its sign-in away in a run ("OAuth access token has been revoked"):
-   * `claude auth status` still says signed in then. Until Claude Code writes its settings again
-   * (as signing in does), the account says it needs a sign-in.
+   * `claude auth status` may still say signed in then. Until its sign-in is written again (signing
+   * in, or renewed), the account says it needs a sign-in.
    */
   authFailedAt?: number
   private modelList?: { at: number; models: Model[] }
@@ -177,8 +177,8 @@ export class ClaudeAgent implements Agent {
       return { installed: true, signedIn: true, label: [who, plan].filter(Boolean).join(" · ") || "Claude Code" }
     })
     // Claude turned the sign-in away in a run, though `claude auth status` still says signed in.
-    // (The run that was turned away writes its settings too as it ends: a minute's grace for that.)
-    if (account.signedIn && this.authFailedAt && this.settingsWritten() <= this.authFailedAt + 60_000) {
+    // (The run that was turned away may write it too as it ends, marked dead: a minute's grace for that.)
+    if (account.signedIn && this.authFailedAt && this.credentialsWritten() <= this.authFailedAt + 60_000) {
       return { installed: true, signedIn: false, ended: true, message: "Claude ended this sign-in. Sign in again." }
     }
     return account
@@ -190,14 +190,29 @@ export class ClaudeAgent implements Agent {
     return method !== "" && method !== "claude.ai"
   }
 
-  /** When Claude Code last wrote its settings (signing in does). */
-  private settingsWritten(): number {
-    const folder = this.instance.home ?? homedir()
+  /**
+   * Signed out of, as Claude Code says or as Claude turned it away: a message on it would only
+   * fail, after Claude Code started and tried to renew it. Said first instead.
+   */
+  async signedOut() {
+    const account = await this.account()
+    return account.installed && !account.signedIn
+  }
+
+  /**
+   * When its sign-in was last written: signing in, or renewing it (not its settings, which every
+   * Claude Code writes as it runs). On a Mac, the Keychain's item (the account's own, by its date
+   * only); and the file Claude Code keeps it in on Linux, or on a Mac when it can't write the
+   * Keychain.
+   */
+  protected credentialsWritten(): number {
+    const folder = this.instance.home ?? process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude")
+    let written = 0
     try {
-      return statSync(join(folder, ".claude.json")).mtimeMs
-    } catch {
-      return 0
-    }
+      written = statSync(join(folder, ".credentials.json")).mtimeMs
+    } catch {}
+    if (process.platform === "darwin" && !this.instance.home) written = Math.max(written, keychainWritten("Claude Code-credentials"))
+    return written
   }
 
   /** Its page can end on a code to paste back, wherever it's opened. */
@@ -473,6 +488,8 @@ interface Active extends Lane {
   subagents: Map<string, Lane & { run: SubagentRun; background: boolean }>
   /** Why the turn will fail, if Claude Code says before its result. */
   problem?: string
+  /** Claude turned its sign-in away: a turn to sign in again for, not to try again. */
+  signInTurnedAway?: boolean
   /** A usage limit it reached (Auto goes on with the next model). */
   limit?: Limit
   /** On Auto: a limit ends the turn rather than being waited out. */
@@ -653,6 +670,8 @@ class ClaudeThread implements Thread {
       await this.query.setMcpServers(entries as any).catch(() => {})
     }
     if (hooks.signal.aborted) return { outcome: "interrupted" }
+    // Stopped while it was told what changed (it couldn't start, say): nothing to send it to.
+    if (!this.query || !this.input) return { outcome: "failed", error: this.stoppedWhy(this.lastEnd) }
     return new Promise<RunResult>((resolve) => {
       this.lastHooks = hooks
       const message = userMessage(input, this.copies())
@@ -955,6 +974,7 @@ class ClaudeThread implements Thread {
     if (this.query === query) {
       this.query = undefined
       this.input = undefined
+      this.lastEnd = ended
       // Claude Code stopped (or crashed): what it left running went with it.
       this.leftRunning()
     }
@@ -968,7 +988,26 @@ class ClaudeThread implements Thread {
     active.resolve = (value) => resolve(missed ? { ...value, missed } : value)
     if (active.stopping || active.hooks.signal.aborted) active.resolve({ outcome: "interrupted" })
     else if (active.limit) active.resolve({ outcome: "failed", error: { type: "limit", message: active.problem ?? "You've reached a Claude usage limit." }, limit: active.limit })
-    else active.resolve({ outcome: "failed", error: failure(active.problem ?? ended ?? "Claude Code stopped.") })
+    else active.resolve({ outcome: "failed", error: this.failed(active, failure(active.problem ?? ended ?? "Claude Code stopped.")) })
+  }
+
+  /** Why its last Claude Code stopped, when no turn was there to say. */
+  private lastEnd?: unknown
+
+  /** A Claude Code that stopped before it took the turn's message: why, as it said. */
+  private stoppedWhy(ended: unknown) {
+    return failure(ended ?? "Claude Code stopped before it took your message.")
+  }
+
+  /**
+   * A turn's failure, as the apps offer a way out of it. Claude turned the sign-in away: one to
+   * sign in again for, and this Claude Code goes (it holds the sign-in it started with), so the
+   * next message starts one that reads the sign-in as it is then.
+   */
+  private failed(active: Active, error: { type: string; message: string }) {
+    if (!active.signInTurnedAway) return error
+    this.close()
+    return { ...error, type: "signin" }
   }
 
   private handle(message: any) {
@@ -1017,8 +1056,13 @@ class ClaudeThread implements Thread {
         const error = message.error ?? message.message?.error
         if (error === "authentication_failed") {
           this.agent.authFailedAt = Date.now()
-          if (active) active.problem = "Claude Code isn't signed in. Sign in again in Settings › Accounts."
+          if (active) {
+            active.problem = "Claude ended this sign-in, and Claude Code couldn't renew it."
+            active.signInTurnedAway = true
+          }
         } else if (typeof error === "string" && active && lane === active) active.problem ??= apiErrorWords(error)
+        // Its words for an error the turn fails with: said once, as its failure, not as a reply too.
+        const failing = Boolean(error) && active !== undefined && lane === active
         for (const block of content) {
           if (block.type === "tool_use" || block.type === "server_tool_use" || block.type === "mcp_tool_use") {
             const name = block.type === "mcp_tool_use" ? `mcp__${block.server_name ?? "mcp"}__${block.name}` : block.name
@@ -1033,7 +1077,7 @@ class ClaudeThread implements Thread {
             this.serverResult(turn, block)
           } else if (!id || !lane.streamed.has(id)) {
             // Not streamed (it came whole): told now.
-            if (block.type === "text" && block.text) turn.text(block.text)
+            if (block.type === "text" && block.text && !failing) turn.text(block.text)
             else if (block.type === "thinking" && block.thinking) turn.reasoning(block.thinking)
             else if (block.type === "redacted_thinking") turn.reasoning("(The model kept this thinking to itself.)")
             else if (block.type === "compaction") this.noticeLater(lane, "Claude summarized the conversation to make room.")
@@ -1380,7 +1424,7 @@ class ClaudeThread implements Thread {
       (typeof result.result === "string" && result.result.trim() ? result.result.trim() : undefined) ??
       (Array.isArray(result.errors) && result.errors.length ? result.errors.join("\n") : undefined) ??
       reason(result)
-    active.resolve({ outcome: "failed", error: { type: "agent", message }, taken: true })
+    active.resolve({ outcome: "failed", error: this.failed(active, { type: "agent", message }), taken: true })
   }
 
   /**
@@ -1824,4 +1868,11 @@ function safeBase64(path: string): string | undefined {
   } catch {
     return undefined
   }
+}
+
+/** When a Keychain item was last changed, by its date only (its secret is never read): 0 if none. */
+function keychainWritten(service: string): number {
+  const result = spawnSync("/usr/bin/security", ["find-generic-password", "-s", service], { encoding: "utf8", timeout: 5_000 })
+  const date = /"mdat"<timedate>=0x[0-9A-F]+\s+"(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})Z/.exec(result.stdout ?? "")
+  return date ? Date.UTC(+date[1]!, +date[2]! - 1, +date[3]!, +date[4]!, +date[5]!, +date[6]!) : 0
 }

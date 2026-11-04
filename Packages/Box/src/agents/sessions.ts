@@ -2023,14 +2023,15 @@ export class Sessions {
       turnAway()
       return { outcome: "failed", error: { type: "agent", message: "This model's agent isn't available: sign in to it in Settings › Accounts, or pick another model." } }
     }
-    // Its account signed out of, where a request on it would be dropped without a word: said.
-    if (!input.adopt && (await Promise.race([agent.signedOut?.().catch(() => false), Bun.sleep(10_000).then(() => false)]))) {
+    // Its account signed out of: said at once, rather than sent where it would be dropped without
+    // a word (the engine's), or fail only after its agent started and tried (a coding agent's).
+    if (!input.adopt && (await Promise.race([signedOut(agent).catch(() => false), Bun.sleep(10_000).then(() => false)]))) {
       turnAway()
       const machine = onMachine ? process.env.KUVO_MACHINE_NAME || "this machine" : undefined
       const message = machine
         ? `${agent.name} isn't signed in on ${machine}, where this conversation runs (each machine signs in on its own). Sign in to it there in Settings › Accounts, with ${machine} picked, or pick another model.`
         : `${agent.name} isn't signed in. Sign in to it in Settings › Accounts, or pick another model.`
-      return { outcome: "failed", error: { type: "provider.auth", message } }
+      return { outcome: "failed", error: { type: agent.id === "engine" ? "provider.auth" : "signin", message } }
     }
     if (signal.aborted) {
       turnAway()
@@ -2857,4 +2858,12 @@ export function ownWords(message: string): string {
     if (open < 0 || (open > 0 && text[open - 1] !== "\n")) return text
     text = text.slice(0, open).trimEnd()
   }
+}
+
+/** An agent known to be signed out of: as it says, or (a coding agent) as its account says, one that has a sign-in. Unknown is not. */
+async function signedOut(agent: Agent): Promise<boolean> {
+  if (agent.signedOut) return agent.signedOut()
+  if (agent.id === "engine" || !agent.methods().length) return false
+  const account = await agent.account()
+  return account.installed !== false && !account.signedIn
 }
