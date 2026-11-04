@@ -170,7 +170,8 @@ struct GoalChartView: View {
     }
 
     /// The room at the right the axis leaves: enough that every step's name fits whole from where
-    /// it starts (the times drawn closer together where one would run past the edge), and the
+    /// it starts (the times drawn closer together where one would run past the edge, down to half
+    /// the width), and the
     /// due date said at the edge.
     static func kept(_ chart: GoalChart, width: CGFloat) -> CGFloat {
         let edge = saysDueAtEdge(chart) ? edgeRoom : 0
@@ -181,7 +182,8 @@ struct GoalChartView: View {
             let along = CGFloat(from.timeIntervalSince(chart.shown.start) / duration)
             room = min(room, (width - nameWidth(bar)) / along)
         }
-        return max(edge, width - max(40, room))
+        // Time keeps at least half the width: past that, a late step's long name is cut instead.
+        return max(edge, width - max(width / 2, room))
     }
 
     private func row(_ row: Placed, chart: GoalChart, x: ChartX) -> some View {

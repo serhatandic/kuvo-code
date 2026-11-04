@@ -44,6 +44,21 @@ import Testing
         #expect(abs(pill.time - (x(date(4)) - x(date(0)))) < 0.5, "a step done: its line as long as it took")
     }
 
+    /// A late step named longer than the card has room for: its name is cut, rather than every
+    /// step's time, now and the due date drawn into a sliver at the left.
+    @Test func timeKeepsHalfTheCardWhenALateStepIsNamedAtLength() {
+        let steps: [GoalPlan.Step] = [
+            .init(id: "s1", text: "Research three app concepts", state: .done, began: at(0), ended: at(4)),
+            .init(id: "s2", text: "Set up the Xcode project", state: .doing, after: ["s1"], began: at(4)),
+            .init(id: "s3", text: "Submit the first build for review with the screenshots, the privacy answers and the notes for reviewers", state: .todo, after: ["s2"]),
+        ]
+        let plan = GoalPlan(id: "goal_1", bot: "bot_pixel", name: "Pixel", session: "ses_bot", goal: "Ship Sweep.", state: .running, steps: steps,
+                            ends: nil, proposed: at(0), started: at(0), ended: nil, alone: true)
+        let chart = GoalTimeline(plan, now: date(7)).chart()
+        let width: CGFloat = 420
+        #expect(width - GoalChartView.kept(chart, width: width) >= width / 2)
+    }
+
     @Test func theStepUnderWayRunsUntilTheStepAfterItIsPlacedToBegin() {
         let timeline = GoalTimeline(started, now: date(7))
         let chart = timeline.chart()
@@ -88,10 +103,11 @@ import Testing
         }
 
         /// What VoiceOver finds in it, as it lays out now. (Read while the window lays out, which
-        /// `until` can't see: each look lays it out first, and says so.)
+        /// `until` can't see: each look lays it out first, and says so on the main queue's next turn,
+        /// once the wait is watching, for it to look again after SwiftUI's update.)
         var elements: [AXElement] {
             window.contentView?.layoutSubtreeIfNeeded()
-            TestPulse.beat()
+            DispatchQueue.main.async { TestPulse.beat() }
             return AXElement.all(in: window.contentView)
         }
 

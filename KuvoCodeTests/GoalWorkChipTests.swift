@@ -43,7 +43,6 @@ import Testing
 
     init() async throws {
         TestEnvironment.prepare()
-        AXElement.reading(true)
         try? FileManager.default.removeItem(at: Bots.file)
         let box = BoxClient(box: BoxClient.mac, transport: LocalBox { request in
             let path = request.path.hasPrefix("/") ? String(request.path.dropFirst()) : request.path
@@ -72,6 +71,8 @@ import Testing
         let pixel = try #require(app.bots.bot("bot_pixel00001"))
         await app.botWork.read(pixel)
         await app.goalPlans.read(BoxClient.mac)
+        // Last, once nothing here can throw: `done()` switches it off again.
+        AXElement.reading(true)
         let view = BottomStack(model: model, lastModel: .constant(nil))
             .environment(app)
             .environment(app.workspace)
@@ -91,10 +92,11 @@ import Testing
     }
 
     /// What VoiceOver finds over the composer, as it lays out now. (Read while the window lays
-    /// out, which `until` can't see: each look lays it out first, and says so.)
+    /// out, which `until` can't see: each look lays it out first, and says so on the main queue's
+    /// next turn, once the wait is watching, for it to look again after SwiftUI's update.)
     private var elements: [AXElement] {
         window.contentView?.layoutSubtreeIfNeeded()
-        TestPulse.beat()
+        DispatchQueue.main.async { TestPulse.beat() }
         return AXElement.all(in: window.contentView)
     }
 
