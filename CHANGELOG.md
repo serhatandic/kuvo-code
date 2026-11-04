@@ -18,7 +18,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 - A bot no longer keeps starting sessions on models that can't answer: when one fails because its account is out of funds or at a limit, the bot hears why and moves the work to a model that can.
 - A bot that starts a session and waits for its reply no longer sits at **Starting a session** for minutes when the session fails at once: it hears the error right away.
-- The model menu dims a model that can't answer right now, because its account is out of funds or signed out or the model is at its limit, and says why and until when under its name. You can still pick it.
+- The model menu dims a model that can't answer right now, because its account is out of funds or signed out or the model is at its limit, and says why under its name, with when a limit resets. You can still pick it.
 - A bot keeps only what you asked for in its job, close to your words, without adding how it'll work or rules you didn't give it.
 - A project a bot makes (or clones empty) starts with a first commit, so every step of its goal can begin at once in a worktree of its own, rather than waiting for the first session to commit.
 - Starting a session in a worktree of a repository with no commits yet works: it gets an empty first commit, and what you've staged stays staged.

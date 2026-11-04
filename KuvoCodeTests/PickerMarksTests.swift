@@ -75,7 +75,7 @@ import Testing
         ])
         await catalog.refresh()
 
-        #expect(line("claude-opus-5-5", now: now) == "Out of funds until \(time)")
+        #expect(line("claude-opus-5-5", now: now) == "Out of funds")
         #expect(line("pulse-alpha", now: now) == "At its limit until \(time)")
         // The free one the funds don't touch, and another account's: unmarked.
         #expect(line("big-pickle", now: now) == nil)
@@ -92,6 +92,17 @@ import Testing
         box.hold([])
         await catalog.readUnanswering()
         #expect(line("claude-opus-5-5", now: now) == nil)
+
+        // Signed out, it answers once you sign in, not at a time.
+        box.hold([["provider": "openai", "why": "Unauthorized", "since": now.timeIntervalSince1970 * 1000, "until": soon]])
+        await catalog.readUnanswering()
+        #expect(line("gpt-6.1", now: now) == "Signed out")
+
+        // A reset a week or more off says its date, not a weekday that reads as today's.
+        let later = Calendar.current.date(byAdding: .day, value: 7, to: now)!
+        box.hold([["provider": "opencode", "model": "pulse-alpha", "why": "Weekly limit reached", "since": now.timeIntervalSince1970 * 1000, "until": later.timeIntervalSince1970 * 1000]])
+        await catalog.readUnanswering()
+        #expect(line("pulse-alpha", now: now) == "At its limit until \(later.formatted(.dateTime.month(.abbreviated).day().hour().minute()))")
 
         // Its free usage spent: its free models, saying so without "Free" twice; its paid ones answer.
         box.hold([["provider": "opencode", "only": "free", "why": "Free usage limit reached", "since": now.timeIntervalSince1970 * 1000, "until": soon]])

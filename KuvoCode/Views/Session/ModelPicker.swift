@@ -530,14 +530,16 @@ struct ModelPicker: View {
             }
             .padding(.horizontal, 10)
             .frame(height: detail == nil && held == nil ? 34 : 42)
+            // A hold read as it opens grows the row: smoothly, not a jump under the pointer.
+            .animation(.snappy(duration: 0.2), value: held?.line)
             .background(highlight == id ? Color.primary.opacity(0.07) : .clear, in: .rect(cornerRadius: 10))
             .contentShape(.rect(cornerRadius: 10))
         }
         .buttonStyle(.plain)
         .clickablePointer()
         .onHover { if $0 { highlight = id } }
-        .help(held.map { "\($0.line). \($0.why)" } ?? "")
-        .accessibilityValue(held.map { "\($0.line). \($0.why)" } ?? "")
+        // The line is in its label already: the engine's words as its help, and VoiceOver's hint.
+        .help(held?.why ?? "")
         .id(id)
     }
 

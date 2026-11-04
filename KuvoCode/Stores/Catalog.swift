@@ -604,11 +604,19 @@ final class Catalog {
     /// engine's words; and whether the line says it's free already (its free usage spent).
     func unanswering(_ model: Model, now: Date = .now) -> (line: String, why: String, saysFree: Bool)? {
         guard let held = unanswering.first(where: { $0.covers(model) && $0.until > now.timeIntervalSince1970 * 1000 }) else { return nil }
-        let until = Date(timeIntervalSince1970: held.until / 1000)
-        // Another day's by its weekday: a reset is never a week off.
-        let time = Calendar.current.isDate(until, inSameDayAs: now) ? until.formatted(date: .omitted, time: .shortened) : until.formatted(.dateTime.weekday(.abbreviated).hour().minute())
         let why = held.why.trimmingCharacters(in: .whitespacesAndNewlines)
-        return ("\(held.what) until \(time)", why.hasSuffix(".") ? why : why + ".", held.only == "free")
+        let said = why.hasSuffix(".") ? why : why + "."
+        // Signed out or out of funds, it answers once you sign in or add funds, not at a time: its
+        // `until` is only when the box tries it again.
+        guard held.model != nil || held.only == "free" else { return (held.what, said, false) }
+        let until = Date(timeIntervalSince1970: held.until / 1000)
+        let calendar = Calendar.current
+        // Today's by its time, this week's by its weekday too, a later one by its date.
+        let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: now), to: calendar.startOfDay(for: until)).day ?? 0
+        let time = days == 0 ? until.formatted(date: .omitted, time: .shortened)
+            : days < 7 ? until.formatted(.dateTime.weekday(.abbreviated).hour().minute())
+            : until.formatted(.dateTime.month(.abbreviated).day().hour().minute())
+        return ("\(held.what) until \(time)", said, held.only == "free")
     }
 
     /// The plans whose sign-in in use ended.
