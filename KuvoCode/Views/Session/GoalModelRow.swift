@@ -24,11 +24,25 @@ struct GoalModelRow: View {
                 Divider().padding(.leading, GoalCardMetrics.markWidth + 12)
                 GoalSettingRow(symbol: "cpu", title: "Model", subtitle: failure ?? (picked ? "For all work on \(computer) from now on" : power.why ?? "Kuvo’s pick for the work here")) {
                     if isSetting { Spinner(size: 9) }
-                    ModelChip(selection: power.model, onSelect: set, opensBelow: true, scope: .at(nil), offersAuto: false) { model, variant in
-                        if power.entries.isEmpty {
-                            Text("None")
-                        } else {
-                            ModelChipLabel(model: model.map { named($0, power) }, variant: variant)
+                    // A filled pop-up like the rows' beside it, opening the composer's picker.
+                    ModelChip(selection: power.model, onSelect: set, opensBelow: true, scope: .at(nil), offersAuto: false, popUp: true) { model, variant in
+                        HStack(spacing: 5) {
+                            if power.entries.isEmpty {
+                                Text("None")
+                            } else {
+                                Text(model.map { named($0, power) }?.name ?? "Choose a Model")
+                                    .lineLimit(1)
+                                if let variant {
+                                    Text(EffortLevel.title(variant))
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            // Where a pop-up menu draws its own.
+                            Image(systemName: "chevron.up.chevron.down")
+                                .font(.system(size: 11, weight: .semibold))
+                                .padding(.leading, 13)
+                                .padding(.trailing, -2)
+                                .accessibilityHidden(true)
                         }
                     }
                     .disabled(isSetting)
