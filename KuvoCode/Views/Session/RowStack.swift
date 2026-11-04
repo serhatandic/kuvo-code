@@ -85,7 +85,9 @@ struct RowStack<Item, Row: View>: NSViewRepresentable {
         view.scrollAnchor = environment.scrollAnchor
         environment.scrollAnchor?.stack = view
         view.apply(ids: ids, changed: changed, spacing: spacing, animatesNew: animatesNew && !old.isEmpty, estimate: { estimate(items[$0]) }) { index in
-            AnyView(row(items[index], index).environment(\.self, environment))
+            // Light and dark again by itself: a row drawn only when what it shows changes
+            // (`.equatable()`, as the transcript's are) doesn't see it change in the whole.
+            AnyView(row(items[index], index).environment(\.self, environment).environment(\.colorScheme, environment.colorScheme))
         }
     }
 

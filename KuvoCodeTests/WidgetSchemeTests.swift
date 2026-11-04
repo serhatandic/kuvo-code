@@ -53,10 +53,11 @@ import WebKit
                 Message.ToolCall(id: "call_\(UUID().uuidString)", name: "kuvo-browser_show_widget",
                                  state: .completed(input: .object(["title": .string("Benchmarks"), "html": .string(html)]), output: [], metadata: nil))
             }
-            // In the rows a conversation shows its replies in, which hand each row what's around them.
+            // In the rows a conversation shows its replies in, which hand each row what's around
+            // them, each drawn again only when what it shows changes, as the transcript's are.
             host = NSHostingView(rootView: AnyView(ScrollView {
                 RowStack(items: calls, id: \.id, same: { $0.id == $1.id }, estimate: { _ in 120 }) { call, _ in
-                    WidgetCard(call: call, send: { _ in })
+                    Reply(call: call).equatable()
                 }
             }.frame(width: 640, height: 400)))
             window.contentView = host
@@ -81,6 +82,13 @@ import WebKit
         }
 
         func close() { window.close() }
+
+        /// A reply's row, as the transcript's `RowView`: equal while it shows the same call.
+        private struct Reply: View, Equatable {
+            let call: Message.ToolCall
+            static func == (lhs: Reply, rhs: Reply) -> Bool { lhs.call.id == rhs.call.id }
+            var body: some View { WidgetCard(call: call, send: { _ in }) }
+        }
     }
 
     @Test(arguments: [(NSAppearance.Name.aqua, NSAppearance.Name.darkAqua, "dark"), (.darkAqua, .aqua, "light")])
