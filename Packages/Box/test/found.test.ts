@@ -5,7 +5,8 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Target } from "../src/shared/records";
-import { found, opencodeAuthFile, useFound } from "../src/link/areas/found";
+import { found, useFound } from "../src/link/areas/found";
+import { opencodeAuthFile } from "../src/link/home";
 
 // The first launch's "Bring your subscriptions": what a computer already has, as its box lists it,
 // and a key of it brought over. The engine and the agents bridge are stand-ins that answer their
