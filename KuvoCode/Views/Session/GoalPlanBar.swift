@@ -214,9 +214,9 @@ struct GoalPlanBar: View {
                 case .timeline: GoalChartView(plan: plan, timeline: timeline)
                 }
             }
-            if !plan.waiting.isEmpty {
+            if !plan.waitingInItsConversation.isEmpty {
                 VStack(spacing: 4) {
-                    ForEach(plan.waiting) { item in waitingRow(item, now: now) }
+                    ForEach(plan.waitingInItsConversation) { item in waitingRow(item, now: now) }
                 }
                 .padding(.leading, GoalSteps.nameInset - 24)
             }
