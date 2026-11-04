@@ -361,8 +361,8 @@ struct WidgetPage: NSViewRepresentable {
     };
     """
 
-    /// How the page's scripts take light and dark, marked on the page for `followsScheme`: the
-    /// scheme they last read it in (the scheme itself, or colors as they're drawn with, as a chart
+    /// How the page's scripts take light and dark, marked on the page for `followsScheme`: each
+    /// scheme they read it in (the scheme itself, or colors as they're drawn with, as a chart
     /// does), and whether they listen for it to change, drawing again then themselves.
     private static let watchesScheme = """
     (() => {
@@ -370,10 +370,15 @@ struct WidgetPage: NSViewRepresentable {
       const lists = MediaQueryList.prototype;
       const matches = Object.getOwnPropertyDescriptor(lists, "matches");
       const dark = matchMedia("(prefers-color-scheme: dark)");
-      // Set only when it changes: a chart reads styles on every move of the pointer.
-      const mark = (name, value = "") => { const root = document.documentElement; if (root && root.getAttribute(name) !== value) root.setAttribute(name, value); };
-      const reads = () => mark("data-kuvo-reads-scheme", matches.get.call(dark) ? "dark" : "light");
-      const follows = query => { if (scheme(query)) mark("data-kuvo-follows-scheme"); };
+      // Each set only when it changes: a chart reads styles on every move of the pointer.
+      const follows = query => { const root = document.documentElement; if (scheme(query) && root && !root.hasAttribute("data-kuvo-follows-scheme")) root.setAttribute("data-kuvo-follows-scheme", ""); };
+      // Every scheme read in, kept: a chart drawn light that reads again once it's dark (a
+      // tooltip, an animation) still drew light.
+      const reads = () => {
+        const root = document.documentElement, now = matches.get.call(dark) ? "dark" : "light";
+        const read = root?.getAttribute("data-kuvo-reads-scheme");
+        if (root && !read?.split(" ").includes(now)) root.setAttribute("data-kuvo-reads-scheme", read ? read + " " + now : now);
+      };
       const add = lists.addEventListener, addListener = lists.addListener;
       lists.addEventListener = function (type, ...rest) { if (type === "change") follows(this.media); return add.call(this, type, ...rest); };
       lists.addListener = function (...rest) { follows(this.media); return addListener.apply(this, rest); };
@@ -386,7 +391,7 @@ struct WidgetPage: NSViewRepresentable {
     """
 
     /// Whether the page is right in the scheme it's in now: its CSS follows by itself, so only
-    /// scripts that read the other scheme as they drew (a chart's labels, in dark grey on what's
+    /// scripts that read another scheme as they drew (a chart's labels, in dark grey on what's
     /// now dark) and don't draw again by themselves need it loaded again. One that only reacts to
     /// you (a slider, a regex to try) keeps what you did in it. Asked apart from the page's
     /// scripts, which can't change what it says.
@@ -394,7 +399,8 @@ struct WidgetPage: NSViewRepresentable {
     (() => {
       const root = document.documentElement, read = root?.getAttribute("data-kuvo-reads-scheme");
       if (!read || root.hasAttribute("data-kuvo-follows-scheme")) return true;
-      return read === (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+      const now = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+      return read.split(" ").every(scheme => scheme === now);
     })()
     """
 

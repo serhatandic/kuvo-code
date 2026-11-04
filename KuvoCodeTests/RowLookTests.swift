@@ -47,6 +47,11 @@ import Testing
         try await until { seen.scheme == .light }
 
         if wholeMac { NSApp.appearance = NSAppearance(named: .darkAqua) } else { window.appearance = NSAppearance(named: .darkAqua) }
-        try await until { seen.scheme == .dark }
+        // Laid out again, as a window on screen is once its look changes (this one, off screen,
+        // isn't drawn): the stack hands its rows what's around them, and they draw.
+        try await until {
+            window.contentView?.layoutSubtreeIfNeeded()
+            return seen.scheme == .dark
+        }
     }
 }
