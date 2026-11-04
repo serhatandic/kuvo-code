@@ -795,6 +795,29 @@ export function addWaiting(bot: string, item: Omit<GoalWaitingShape, "id" | "at"
   return added;
 }
 
+/** Asks answered or skipped lately, by id, and when: a look at a conversation's asks begun
+ * before the answer doesn't bring one back. */
+const settledAsks = new Map<string, number>();
+const SETTLED_KEPT = 5 * 60_000;
+
+/** An ask answered or skipped (`ask`, a permission's or a form's id): what stands for it on a
+ * running goal goes at once, rather than on the watch's next look. */
+export function settleAsk(ask: string, file = GOALS_FILE, now = Date.now()): void {
+  for (const [id, at] of settledAsks) if (now - at > SETTLED_KEPT) settledAsks.delete(id);
+  settledAsks.set(ask, now);
+  const settled = changeKept(all => {
+    const bots: string[] = [];
+    for (const goal of all.filter(each => each.state === "running")) {
+      const left = goal.waiting.filter(item => !(item.kind === "ask" && item.id.startsWith("ask:") && item.id.endsWith(`:${ask}`)));
+      if (left.length === goal.waiting.length) continue;
+      goal.waiting = left;
+      bots.push(goal.bot);
+    }
+    return bots;
+  }, file);
+  for (const bot of settled) noteWorkChanged(bot);
+}
+
 /** A pause of `bot`'s running goal (or one of its sessions) until a limit resets: kept, its steps
  * marked, and carried on by the box's watch once `until` comes; or, with no `until`, until it's
  * let go (Auto's reviewer's, once you resume it). */
@@ -872,6 +895,7 @@ function progressGiven(bot: string, given: Record<string, unknown>, file: string
     if (mark.app !== undefined && mark.app !== null && mark.app !== "" && !appNameGiven(mark.app)) return { refused: "app is the app the step is done in on the computer, by its name, like \"Xcode\" (or null to take it away)." };
   }
   if (isObject(given.waiting) && (!text(given.waiting.text, 300) || !WAITING_KINDS.includes(given.waiting.kind as (typeof WAITING_KINDS)[number]))) return { refused: "What waits needs its kind (you, judgment or outside) and what it is (text)." };
+  if (isObject(given.waiting) && given.waiting.step !== undefined && given.waiting.step !== null && !running.steps[stepAt(given.waiting.step, running.steps)]) return { refused: `The step it holds up (step) is one of the plan's, from 1 to ${running.steps.length}.` };
   const spent = Array.isArray(given.spent) ? given.spent : isObject(given.spent) ? [given.spent] : [];
   for (const each of spent) if (!isObject(each) || !text(each.what, 200) || typeof each.amount !== "number" || !(each.amount > 0)) return { refused: "What's spent is {what, amount}." };
   return { marks: marks as Record<string, unknown>[], spent: spent as Record<string, unknown>[] };
@@ -887,9 +911,12 @@ export function goalProgress(bot: string, given: Record<string, unknown>, file =
   const resolved = (Array.isArray(given.resolved) ? given.resolved : []).map(each => text(each, 300)).filter((each): each is string => Boolean(each));
   const notes: string[] = [];
   const unplanned: string[] = [];
+  const goneOn = new Set<string>();
+  let holds: string | undefined;
   changeKept(all => {
     const goal = all.find(each => each.bot === bot && each.state === "running");
     if (!goal) return;
+    if (isObject(given.waiting)) holds = goal.steps[stepAt(given.waiting.step, goal.steps)]?.id;
     for (const mark of marks) {
       const at = stepAt(mark.step, goal.steps);
       const step = goal.steps[at];
@@ -916,6 +943,14 @@ export function goalProgress(bot: string, given: Record<string, unknown>, file =
       else if (mark.until === null || (mark.state !== undefined && next.state !== "todo")) delete next.until;
       goal.steps[at] = next;
       notes.push(`step ${at + 1} ${next.state}${next.until ? ` until ${new Date(next.until).toISOString()}` : ""}`);
+      // Gone on with, by this mark: not a word on how far a step under way has got.
+      if (next.state !== step.state && (next.state === "doing" || next.state === "done" || next.state === "skipped")) goneOn.add(next.id);
+    }
+    // What held up a step the bot goes on with now is settled.
+    if (goneOn.size) {
+      const before = goal.waiting.length;
+      goal.waiting = goal.waiting.filter(item => !(item.step && goneOn.has(item.step)));
+      if (goal.waiting.length < before) notes.push(`${before - goal.waiting.length} no longer waiting, as its step goes on`);
     }
     for (const step of keptSteps(added, goal.steps.length)) {
       goal.steps.push(step);
@@ -952,7 +987,7 @@ export function goalProgress(bot: string, given: Record<string, unknown>, file =
     const url = https(given.waiting.url);
     const site = siteOf(given.waiting.site) ?? siteOf(url);
     const app = appGiven(given.waiting.app);
-    addWaiting(bot, { kind: given.waiting.kind as (typeof WAITING_KINDS)[number], text: text(given.waiting.text, 300)!, ...(text(given.waiting.detail, 500) ? { detail: text(given.waiting.detail, 500)! } : {}), ...(url ? { url } : {}), ...(site ? { site } : {}), ...(app ? { app } : {}) }, file);
+    addWaiting(bot, { kind: given.waiting.kind as (typeof WAITING_KINDS)[number], text: text(given.waiting.text, 300)!, ...(text(given.waiting.detail, 500) ? { detail: text(given.waiting.detail, 500)! } : {}), ...(url ? { url } : {}), ...(site ? { site } : {}), ...(app ? { app } : {}), ...(holds && !goneOn.has(holds) ? { step: holds } : {}) }, file);
     notes.push("kept as waiting for the user: carry on with what doesn't depend on it");
   }
   noteWorkChanged(bot);
@@ -1150,12 +1185,13 @@ export async function lookAtGoals(tell: (notice: Notice) => boolean, targets: ()
     const askers = [...work.map(each => ({ target: each.target, id: each.data.id, title: each.data.title || "New Session" })), ...(own ? [{ target: own.target, id: goal.session, title: goal.name }] : [])];
     for (const each of askers) {
       const { permissions, questions } = await asksIn(each.target, each.id, signal).catch(() => ({ permissions: [], questions: [] }));
-      for (const ask of [...permissions.map(one => ({ id: one.id, what: permissionWords(one).replace(/\.$/, "") })), ...questions.map(one => ({ id: one.id, what: `Asks: ${one.text}` }))]) {
+      for (const ask of [...permissions.map(one => ({ id: one.id, text: `${each.title}: ${permissionWords(one).replace(/\.$/, "")}` })), ...questions.map(one => ({ id: one.id, text: `${each.title} asks: ${one.text}` }))]) {
         const key = `${each.id}:${ask.id}`;
+        if (settledAsks.has(ask.id)) continue;
         open.add(key);
         asksSeen[key] = kept?.asksSeen?.[key] ?? now;
         // (The bot's own: yours at once; its sessions': once the bot has had a moment.)
-        if (each.id === goal.session || now - asksSeen[key] >= ASK_SETTLES) addWaiting(goal.bot, { kind: "ask", text: `${each.title}: ${ask.what}`, session: each.id }, file, `ask:${key}`);
+        if (each.id === goal.session || now - asksSeen[key] >= ASK_SETTLES) addWaiting(goal.bot, { kind: "ask", text: ask.text, session: each.id }, file, `ask:${key}`);
       }
     }
     // Nothing of it at work a while, and something it can do now: the bot is told to carry on. Not
@@ -1183,9 +1219,10 @@ export async function lookAtGoals(tell: (notice: Notice) => boolean, targets: ()
       if (!kept) return;
       kept.asksSeen = asksSeen;
       kept.limitsSeen = limitsSeen;
-      // Asks answered since (here, on a phone, by the bot) leave the list.
+      // Asks answered since (here, on a phone, by the bot) leave the list, and clients are told.
+      const asked = kept.waiting.length;
       kept.waiting = kept.waiting.filter(item => item.kind !== "ask" || open.has(item.id.replace(/^ask:/, "")));
-      if (freshPeriods(kept, now)) noteWorkChanged(kept.bot);
+      if (freshPeriods(kept, now) || kept.waiting.length < asked) noteWorkChanged(kept.bot);
       const shownNext = atWork || kept.heldByYou ? undefined : next;
       if (kept.next !== shownNext) {
         if (shownNext === undefined) delete kept.next;
