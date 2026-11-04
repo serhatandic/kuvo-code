@@ -141,8 +141,10 @@ import Testing
         each.insert(#"{"id":"p","at":0.5,"action":"git push --force origin main","kind":"command","decision":"refused","reason":"Rewrites main.","by":"model","held":true,"key":"k"}"#, at: 1)
         each.append(#"{"id":"b","at":11,"action":"xcodebuild -scheme Sweep test","kind":"command","decision":"allowed","reason":"Its tests.","by":"model"}"#)
         each.append(#"{"id":"r","at":12,"action":"Read /Users/me/.ssh/config","kind":"file","decision":"allowed","reason":"You asked.","by":"model"}"#)
-        // Held back, then you approved it: it counts as what it was, not as held back still.
-        each.insert(#"{"id":"z","at":5.5,"action":"Change /Users/me/.zshrc","kind":"file","decision":"refused","reason":"Your shell's start-up.","by":"model","held":true,"key":"z","approved":6}"#, at: 7)
+        // Held back, then you approved it and it ran: it counts (and lists) once, as what it was,
+        // not as held back still. (The box also logs its run as allowed by you.)
+        each.insert(#"{"id":"z","at":5.5,"action":"Change /Users/me/.zshrc","kind":"file","decision":"refused","reason":"Your shell's start-up.","by":"model","held":true,"key":"z","approved":6,"used":6.5}"#, at: 7)
+        each.insert(#"{"id":"y","at":6.5,"action":"Change /Users/me/.zshrc","kind":"file","decision":"allowed","reason":"You approved it after Auto's reviewer held it back.","by":"you"}"#, at: 8)
         let decisions = try JSONDecoder().decode(ReviewDecisions.self, from: Data(#"{"decisions":[\#(each.joined(separator: ","))]}"#.utf8))
 
         #expect(decisions.counts == .init(heldBack: 1, edits: 11, reads: 1, commands: 1))

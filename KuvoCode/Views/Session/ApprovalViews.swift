@@ -300,7 +300,7 @@ private struct DecisionRow: View {
 
     /// Where it stands, where that's more than when: run or approved after it was held back.
     private var state: String? {
-        if decision.used != nil || decision.by == "you" { return "Ran" }
+        if decision.used != nil { return "Ran" }
         if decision.approved != nil { return "Approved" }
         return nil
     }

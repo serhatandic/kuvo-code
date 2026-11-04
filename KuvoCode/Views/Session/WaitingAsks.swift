@@ -77,5 +77,29 @@ struct AskInComposer<Content: View>: View {
             }
             content
         }
+        .background(AskArea())
+    }
+}
+
+/// Where an ask has the composer's place, for the composer back to tell the ask's own line
+/// (which goes with it) from another field that has the keyboard.
+struct AskArea: NSViewRepresentable {
+    final class Marker: NSView {
+        static let all = NSHashTable<Marker>.weakObjects()
+    }
+
+    func makeNSView(context: Context) -> Marker {
+        let marker = Marker()
+        Marker.all.add(marker)
+        return marker
+    }
+
+    func updateNSView(_ view: Marker, context: Context) {}
+
+    /// Whether `view` is in an ask's place in its window.
+    static func holds(_ view: NSView) -> Bool {
+        guard let window = view.window else { return false }
+        let frame = view.convert(view.bounds, to: nil)
+        return Marker.all.allObjects.contains { $0.window === window && $0.convert($0.bounds, to: nil).intersects(frame) }
     }
 }

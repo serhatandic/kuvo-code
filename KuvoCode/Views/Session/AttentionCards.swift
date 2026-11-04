@@ -26,7 +26,6 @@ struct PermissionCard: View {
     @FocusState private var isWritingInstead: Bool
     /// Its keys answer only once the keyboard has been still a moment, after it shows and after
     /// each key typed: Return ending a message you were writing as it came doesn't allow it.
-    @State private var isArmed = false
     @State private var typing = KeysTyped()
     /// A long command shown whole, and how tall it is whole and as shown.
     @State private var showsAll = false
@@ -143,11 +142,9 @@ struct PermissionCard: View {
         }
         .padding(16)
         .background(escape)
-        .task(id: "\(request.id) \(typing.count)") {
-            isArmed = false
-            try? await Task.sleep(for: .milliseconds(600))
-            isArmed = true
-        }
+        .onChange(of: request.id) { typing.restart() }
+        // (What you write in its line is the card's own.)
+        .onChange(of: isWritingInstead) { _, writing in typing.ignores = writing }
         .onAppear { typing.start() }
         .onDisappear { typing.stop() }
     }
@@ -161,13 +158,13 @@ struct PermissionCard: View {
         Button("Allow Once") { reply(.once, nil) }
             .buttonStyle(.glassProminent)
             // (Return in the line says no instead.)
-            .keyboardShortcut(takesKeys && isArmed && !isWritingInstead ? .defaultAction : nil)
+            .keyboardShortcut(takesKeys && typing.isQuiet && !isWritingInstead ? .defaultAction : nil)
     }
 
     /// Escape: to the line, to say what to do instead; there, no.
     private var escape: some View {
         Button("") { if isWritingInstead { refuse() } else { isWritingInstead = true } }
-            .keyboardShortcut(takesKeys && isArmed ? .cancelAction : nil)
+            .keyboardShortcut(takesKeys && typing.isQuiet ? .cancelAction : nil)
             .frame(width: 0, height: 0)
             .opacity(0)
             .accessibilityHidden(true)
@@ -755,23 +752,39 @@ struct AllowedWell<Content: View>: View {
     }
 }
 
-/// Keys typed in the app, but Return and Escape, counted while it's started: a card's keys wait
-/// for typing meant for something else to stop.
+/// Whether the app's keyboard has been quiet a moment (Return and Escape aside): a card's keys
+/// wait for typing meant for something else to stop. Changes only as typing starts and stops.
 @MainActor @Observable final class KeysTyped {
-    private(set) var count = 0
+    private(set) var isQuiet = false
+    /// Typing that's the card's own (its line) doesn't count.
+    @ObservationIgnored var ignores = false
     @ObservationIgnored private var monitor: Any?
+    @ObservationIgnored private var wait: Task<Void, Never>?
 
     func start() {
+        restart()
         guard monitor == nil else { return }
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             // (Return, keypad Enter, Escape: the card's own answers.)
-            if ![36, 76, 53].contains(event.keyCode) { self?.count += 1 }
+            if let self, !ignores, ![36, 76, 53].contains(event.keyCode) { restart() }
             return event
+        }
+    }
+
+    /// Quiet again a moment from now.
+    func restart() {
+        if isQuiet { isQuiet = false }
+        wait?.cancel()
+        wait = Task { [weak self] in
+            guard (try? await Task.sleep(for: .milliseconds(600))) != nil else { return }
+            self?.isQuiet = true
         }
     }
 
     func stop() {
         monitor.map(NSEvent.removeMonitor)
         monitor = nil
+        wait?.cancel()
+        wait = nil
     }
 }

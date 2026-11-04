@@ -146,10 +146,11 @@ private struct BottomStack: View {
         var news: [ComposerBar: Bool]?
         /// The ask you went to, while it waits.
         var pickedAsk: String?
-        /// An ask had the composer's place: the composer back takes only a keyboard that's free.
-        var askHadPlace = false
     }
     @State private var cards: [String: Card] = [:]
+    /// The conversation whose ask had the composer's place just before it: the composer back
+    /// takes only a keyboard that's free (not after you switch to another conversation).
+    @State private var askHadPlace: String?
     /// The waiting messages, open under their line once there are more than two.
     @State private var queueOpen = false
 
@@ -535,7 +536,7 @@ private struct BottomStack: View {
                         }
                         .id(asks[position.index].id)
                         .transition(.opacity)
-                        .onAppear { cards[model.id, default: Card()].askHadPlace = true }
+                        .onAppear { askHadPlace = model.id }
                         // What the composer opens, opened while an ask has its place (the bar's
                         // Decisions, Full Access to confirm), opens over the ask instead.
                         .popover(isPresented: $model.showsDecisions, attachmentAnchor: .point(UnitPoint(x: 0.12, y: 0)), arrowEdge: .top) { DecisionsView(model: model) }
@@ -588,10 +589,11 @@ private struct BottomStack: View {
                         onQueue: { send(queue: true) },
                         onEditLast: model.editLast,
                         onStop: model.stop,
-                    yieldsKeyboard: cards[model.id]?.askHadPlace ?? false,
+                    yieldsKeyboard: askHadPlace == model.id,
                     drawsSurface: false
                     )
                     .transition(.opacity)
+                    .onAppear { askHadPlace = nil }
                     }
                     }
                 }

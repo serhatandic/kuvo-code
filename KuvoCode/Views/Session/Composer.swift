@@ -5,6 +5,7 @@ import ClientSessions
 import ClientText
 import KuvoVoice
 import OpenCodeKit
+import SwiftTerm
 import SwiftUI
 import UniformTypeIdentifiers
 import WebKit
@@ -445,7 +446,7 @@ struct Composer: View {
             focusAtEnd()
         }
         .onAppear {
-            if focusesOnAppear && (!yieldsKeyboard || Self.keyboardIsFree) { focusAtEnd() }
+            if focusesOnAppear && (!yieldsKeyboard || keyboardIsFree) { focusAtEnd() }
             #if DEBUG
             // KUVO_DEMO_COMPOSER_FILES: comma-separated paths to show as attached.
             if files.isEmpty, let list = ProcessInfo.processInfo.environment["KUVO_DEMO_COMPOSER_FILES"] {
@@ -461,14 +462,18 @@ struct Composer: View {
         app.dictation.withdraw(voiceOwner)
     }
 
-    /// Nothing you type in has the keyboard: the window, a list or a button does, or a one-line
-    /// field (the ask's own, which goes with it).
-    private static var keyboardIsFree: Bool {
-        let responder = NSApp.keyWindow?.firstResponder
-        if let text = responder as? NSTextView { return text.isFieldEditor || !text.isEditable }
-        if responder is WKWebView { return false }
-        if let view = responder as? NSView, String(describing: type(of: view)).contains("Terminal") { return false }
-        return true
+    /// Nothing you type in has the keyboard in its window (active or not): the window, a list or
+    /// a button does, or the ask's own line, which goes with it.
+    private var keyboardIsFree: Bool {
+        guard let window = field.window ?? NSApp.keyWindow else { return false }
+        let responder = window.firstResponder
+        if let text = responder as? NSTextView, text.isFieldEditor {
+            // (A line it's gone from, or one in the ask's place.)
+            guard let line = text.delegate as? NSView else { return true }
+            return line.window == nil || AskArea.holds(line)
+        }
+        if let text = responder as? NSTextView { return !text.isEditable }
+        return !(responder is WKWebView || responder is TerminalView)
     }
 
     /// Puts the cursor in the field, after what's there.

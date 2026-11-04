@@ -30,8 +30,8 @@ struct ReviewDecisions: Decodable, Equatable {
     /// When you last looked at them, on any client: what's held back after it is news.
     var seen: Double?
 
-    /// The latest first.
-    var latestFirst: [Decision] { decisions.reversed() }
+    /// The latest first. (Not the box's note that one you approved ran: its own line says so.)
+    var latestFirst: [Decision] { decisions.reversed().filter { $0.by != "you" } }
     var waiting: [Decision] { decisions.filter(\.waiting) }
 
     /// As Decisions lists them: what's yours to approve first, then the rest, the latest first;
@@ -48,7 +48,7 @@ struct ReviewDecisions: Decodable, Equatable {
     }
 
     var counts: Counts {
-        decisions.reduce(into: Counts()) { counts, each in
+        latestFirst.reduce(into: Counts()) { counts, each in
             switch (each.refused, each.kind, each.action.hasPrefix("Read ")) {
             case (true, _, _) where each.approved == nil: counts.heldBack += 1
             case (_, "command", _): counts.commands += 1
