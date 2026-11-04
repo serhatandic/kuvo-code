@@ -720,7 +720,7 @@ client shows it from the same routes.
   reason}`, or `{session, ask, answer, reason}` for a question), `list_models` (the models there's
   an account for here, `provider/model`, with their efforts; none its provider is retiring).
 - **Models that can't answer** (`work/unanswering.ts`, `run/work/unanswering.json`, bridge
-  0.9.195): when a session a conversation started fails at its account (the engine's
+  0.9.196): when a session a conversation started fails at its account (the engine's
   `provider.quota` or `provider.budget-limit`: out of funds or at a plan's spend, which holds back
   that provider's models that cost something, its free ones spending none; `provider.free-limit`,
   its free usage spent, its free ones; `provider.auth`, signed out, all of them), or at a model's
@@ -797,7 +797,7 @@ folder you pick once per box, after asking you.
   there, or null; 400 otherwise. The box makes projects only there, and never deletes one.
 - **Tools**: `make_project` (`{name, git?, clone?, folder?}`: a folder named after it, lowercase with
   dashes, a new git repository there unless `git: false`, or a repository cloned from an https or
-  ssh address; either way it has a commit at once (bridge 0.9.195: an empty `Initial commit` in a
+  ssh address; either way it has a commit at once (bridge 0.9.196: an empty `Initial commit` in a
   new one, or in a clone with none, by whoever your git settings say commits there, else by
   `Kuvo Code <kuvo-code@localhost>`), so each of its sessions can start in a worktree; `folder`, bridge 0.9.191, is where you said it goes, a full path (`~` is fine; the
   folders on the way there are made too), which needs no projects folder picked), `list_projects` (each project here:
@@ -1700,7 +1700,7 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     `{project, root, folder, branch, base?, made, prefix}`; make the session in `folder`. `400`
     for a project that isn't a folder there, `409 {"message"}` when it isn't in a git repository,
     `503` while the engine isn't running. A repository with no commits yet gets an empty first one
-    (bridge 0.9.195; what's staged stays staged), as a project the box makes does. `POST kuvo/worktrees/record {project, root, folder?,
+    (bridge 0.9.196; what's staged stays staged), as a project the box makes does. `POST kuvo/worktrees/record {project, root, folder?,
     branch, base?}` keeps one a Mac kept before its box did ("For released Macs"; `404` when it
     isn't there any more).
   - `GET kuvo/worktrees/where[?directory=<value>]` (`worktrees.where`): where new worktrees go
@@ -2440,7 +2440,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `queue.waits` | A Stop holds the conversation: what arrives waits on the box (`waiting`), `…/queue/add` and `DELETE …/queue/<item>` (bridge 0.9.128) |
 | `work` | a bot's work ("Work"): `kuvo/work`, `…/events`, `kuvo/bots/<id>/stop-all`, `start_session`'s and `kuvo/sessions`' new fields, the work tools, `limits` in `kuvo/bots` (bridge 0.9.106) |
 | `work.projects` | a bot's projects ("Work", Projects): `make_project`, `list_projects`, `kuvo/work/asks`, `…/events`, `POST kuvo/work/asks/<id>`, `kuvo/work/settings`, `POST kuvo/projects/new`, `madeBy` on projects, `allowed` in `kuvo/bots` (bridge 0.9.107) |
-| `work.unanswering` | `GET kuvo/work/unanswering`: models that can't answer now ("Work", Models that can't answer; bridge 0.9.195) |
+| `work.unanswering` | `GET kuvo/work/unanswering`: models that can't answer now ("Work", Models that can't answer; bridge 0.9.196) |
 | `search` | `kuvo/search` |
 | `personalities` | `kuvo/personalities…` |
 | `personalities.events` | `kuvo/personalities/events` |
@@ -3309,7 +3309,7 @@ one the box marked as in Full Access, which runs (bridge 0.9.187).
   `~/.gitconfig`, `~/.config/git/config`, `gh auth setup-git`), your SSH keys (a key, `config` or
   `authorized_keys` written in `~/.ssh`, `ssh-keygen` making a key there), and your sign-ins' files
   (`~/.aws/credentials`, `~/.netrc`, `~/.npmrc`, `~/.docker/config.json`, `~/.kube/config`, gh's,
-  gcloud's, keychains and the like; `npm config set` but the project's, `aws configure`, `gh auth
+  gcloud's, the coding agents' and opencode's sign-ins, keychains and the like; `npm config set` but the project's, `aws configure`, `gh auth
   login`, `docker login`), past `sudo -u`, quotes and `$HOME` in a line read by its words. Reading a
   setting, making `~/.ssh` and trusting a host in `known_hosts` aren't changing them. Words that only
   sound like it ("the login page", "a global handler") don't name it. Named, the model judges it,
@@ -3470,9 +3470,12 @@ it writes as it writes the files beside them; and before Linux 6.2 (Landlock 3),
 path (`truncate`), which Landlock checks only from then. It can't read
 Kuvo Code's own folders (on a machine `~/.kuvo-code`; on this Mac the app's folders under `Library`,
 any `run.kuvo.code…` copy's, its temporary folder and `/tmp/kuvo-ssh-<uid>`) but its `bin`, nor your
-secrets (cloud, package and git tokens, browsers' and password managers' data, private SSH keys:
-every file in `~/.ssh` but its config, known hosts and public keys; gh's `hosts.yml` when it holds
-the token). A bot's or a chat's command gets its own folder back, and not its neighbours'. Its
+secrets (cloud, package and git tokens, browsers' and password managers' data, the coding agents'
+sign-ins and opencode's, wherever your `XDG_DATA_HOME` puts it, private SSH keys: every file in
+`~/.ssh` but its config, known hosts and public keys; gh's `hosts.yml` when it holds the token). A
+coding agent run whole in it keeps its own sign-in in its first home (Codex's `auth.json` in
+`~/.codex`), read and written as the rest of its state, and so do the commands it runs itself, which
+share its sandbox; never your own in another home of it (your Codex's, for an account you added). A bot's or a chat's command gets its own folder back, and not its neighbours'. Its
 environment has none of the engine's `OPENCODE_…` (but `OPENCODE_SESSION_ID`), no `KUVO_…` password,
 secret, token or key, and no `SSH_AUTH_SOCK` but its own SSH agent's (below); on macOS it can't
 reach your SSH and GPG agents' sockets either, which sign with the keys it can't read: the

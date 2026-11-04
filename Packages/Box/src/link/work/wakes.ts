@@ -445,7 +445,7 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
   const watch = (event: WorkEvent) => Promise.all([followUnanswering(source, event).catch(() => {}), told(event)]).then(() => {});
   const told = (event: WorkEvent) => {
     const id = event.data?.sessionID ?? event.data?.form?.sessionID;
-    if (typeof id !== "string" || !["session.execution.succeeded", "session.execution.failed", "permission.asked", "form.created", "permission.replied", "form.replied"].includes(event.type)) return Promise.resolve();
+    if (typeof id !== "string" || !["session.execution.started", "session.execution.succeeded", "session.execution.failed", "session.execution.interrupted", "permission.asked", "form.created", "permission.replied", "form.replied"].includes(event.type)) return Promise.resolve();
     return (async () => {
       // A subagent's ask is its conversation's.
       let session = await sessionOf(id);
@@ -455,7 +455,8 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
       if (bot) noteWorkChanged(bot);
       const starter = startedByOf(session);
       const wakes = wakesOf(session);
-      const kind = event.type.startsWith("session.execution") ? "finished" : event.type.endsWith(".asked") || event.type === "form.created" ? "asks" : null;
+      // (One starting or stopped is its bot's work changing, for clients to read: nothing to tell.)
+      const kind = event.type === "session.execution.succeeded" || event.type === "session.execution.failed" ? "finished" : event.type.endsWith(".asked") || event.type === "form.created" ? "asks" : null;
       if (!starter || !kind || !wakes.includes(kind)) return;
       const at = now();
       const last = kind === "finished" ? await lastReply(source, session.id).catch(() => null) : null;

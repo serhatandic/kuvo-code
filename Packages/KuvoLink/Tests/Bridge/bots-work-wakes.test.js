@@ -106,6 +106,21 @@ test("a session started without wake stays quiet, but its bot's work still chang
   assert.ok(JSON.parse(fs.readFileSync(changesFile, "utf8")).bot_pixel00001 > 0);
 });
 
+test("a session of a bot's starting to work, or stopped, changes its bot's work, so clients don't go on saying none is at work; its bot is told nothing", async () => {
+  // The bot's work changes as a session is made, before its task reaches it: read then, it isn't
+  // at work yet, and the bar over the bot's composer said "none at work" while it worked.
+  const { schedule, runAll } = clock();
+  const watch = link.workWatcher(source, () => [source], { schedule });
+  await watch({ type: "session.execution.started", data: { sessionID: "ses_signin" } });
+  await runAll();
+  const started = JSON.parse(fs.readFileSync(changesFile, "utf8")).bot_pixel00001;
+  assert.ok(started > 0, "its bot's work changed as it started, for clients to read it at work");
+  await watch({ type: "session.execution.interrupted", data: { sessionID: "ses_signin" } });
+  await runAll();
+  assert.ok(JSON.parse(fs.readFileSync(changesFile, "utf8")).bot_pixel00001 > started, "and again as it was stopped");
+  assert.equal(prompts.length, 0, "a session starting or stopped isn't news for its bot, even one that wakes it as it finishes");
+});
+
 test("what a box had gathered as it stopped still reaches the bot", async () => {
   fs.mkdirSync(path.dirname(wakesFile), { recursive: true });
   fs.writeFileSync(wakesFile, JSON.stringify({ ses_pixel: { lines: ["[Session finished] \"Sign-in\" in tidepool (address ses_signin):\nDone."], asks: false, since: 1 } }));

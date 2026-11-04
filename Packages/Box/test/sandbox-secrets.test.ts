@@ -72,3 +72,72 @@ process.exit(lib.symbols.clonefile(Buffer.from(process.argv[2] + "\\0"), Buffer.
     rmSync(root, { recursive: true, force: true })
   }
 })
+
+// The coding agents' sign-ins and opencode's are your secrets, as your API keys are: wherever your
+// own XDG_DATA_HOME puts opencode's too (the box's own is in Kuvo Code's folder).
+test("the coding agents' sign-ins and opencode's own are among your secrets", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "kuvo-sandbox-signins-")))
+  try {
+    const home = join(root, "home")
+    mkdirSync(home)
+    const { KUVO_OWN_XDG_DATA_HOME: _, ...env } = process.env as Record<string, string>
+    const asStarted = Bun.spawnSync([process.execPath, "-e", `import { fencePolicy } from ${JSON.stringify(join(import.meta.dir, "..", "src", "link", "fence", "policy"))}; console.log(JSON.stringify(fencePolicy().secrets))`],
+      { env: { ...env, HOME: home, XDG_DATA_HOME: join(root, "data"), BUN_BE_BUN: "1", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" } })
+    expect(asStarted.exitCode, asStarted.stderr.toString()).toBe(0)
+    const secrets: string[] = JSON.parse(asStarted.stdout.toString())
+    for (const file of [".codex/auth.json", ".grok/auth.json", ".claude/.credentials.json", ".gemini/oauth_creds.json", ".local/share/opencode/auth.json"])
+      expect(secrets).toContain(join(home, file))
+    expect(secrets).toContain(join(root, "data", "opencode", "auth.json"))
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+// The coding agents' sign-ins are your secrets too (`~/.codex/auth.json`, `~/.grok/auth.json`): a
+// command never reads one, an agent's own included. But the agent run whole in the sandbox with its
+// home (Codex with your `~/.codex`) still reads its own sign-in and writes it anew as it renews it,
+// while nothing it runs reads another's.
+test.skipIf(!canFence)("an agent's sign-in is hidden from commands, but not from the agent run whole with it as its own", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "kuvo-sandbox-signins-")))
+  try {
+    const kuvo = join(root, "kuvo")
+    const home = join(root, "home")
+    const codex = join(home, ".codex")
+    const grok = join(home, ".grok")
+    const project = join(root, "project")
+    for (const folder of [kuvo, codex, grok, project]) mkdirSync(folder, { recursive: true })
+    const mine = join(codex, "auth.json")
+    const theirs = join(grok, "auth.json")
+    writeFileSync(mine, '{"OPENAI_API_KEY":"TOPSECRET"}\n')
+    writeFileSync(theirs, '{"token":"TOPSECRET"}\n')
+    // (On a Mac, your Codex's home is what runs later, as the box has it; on Linux, an agent's home is
+    // Kuvo Code's own copy of it, which Landlock grants whole.)
+    realFence(kuvo, [], { secrets: [mine, theirs], readOnly: process.platform === "darwin" ? [codex, grok] : [] })
+    const script = [
+      ["find Codex's", `test -e ${mine}`],
+      ["read Codex's", `cat ${mine}`],
+      ["renew Codex's", `echo '{"OPENAI_API_KEY":"RENEWED"}' > ${mine}.tmp && mv ${mine}.tmp ${mine}`],
+      ["read Grok's", `cat ${theirs}`],
+    ].map(([what, command]) => `if ( ${command} ) >/dev/null 2>&1; then echo "${what}: allowed"; else echo "${what}: refused"; fi`).join("\n")
+    const run = (own: Record<string, string>) => {
+      const ran = Bun.spawnSync([join(kuvo, "bin", "kuvo-fence"), "-c", script], { cwd: project, env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: home, KUVO_FENCE_WORK: project, ...own } })
+      const out = ran.stdout.toString() + ran.stderr.toString()
+      return Object.fromEntries(out.trim().split("\n").filter(line => /: (allowed|refused)$/.test(line)).map(line => line.split(": ")))
+    }
+    // A command (the engine's, or one an agent runs).
+    // (Landlock keeps what's in a file, not that it's there.)
+    expect(run({})).toEqual({ "find Codex's": process.platform === "darwin" ? "refused" : "allowed", "read Codex's": "refused", "renew Codex's": "refused", "read Grok's": "refused" })
+    expect(readFileSync(mine, "utf8")).toBe('{"OPENAI_API_KEY":"TOPSECRET"}\n')
+    // Codex, run whole with its home (fence.ts `fenceAgent`).
+    expect(run({ KUVO_FENCE_OWN: codex, KUVO_FENCE_STATE: "auth.json*", KUVO_FENCE_KEPT: "*.toml" })).toEqual({ "find Codex's": "allowed", "read Codex's": "allowed", "renew Codex's": "allowed", "read Grok's": "refused" })
+    expect(readFileSync(mine, "utf8")).toBe('{"OPENAI_API_KEY":"RENEWED"}\n')
+    // Codex on an account you added: its home is Kuvo Code's copy, with your own Codex's as a second
+    // home it links to (codex.ts `fenced`), whose sign-in is yours, never the added account's.
+    const added = join(root, "added")
+    mkdirSync(added)
+    expect(run({ KUVO_FENCE_OWN: `${added}\n${codex}`, KUVO_FENCE_STATE: "auth.json*", KUVO_FENCE_KEPT: "*.toml" })).toEqual({ "find Codex's": process.platform === "darwin" ? "refused" : "allowed", "read Codex's": "refused", "renew Codex's": "refused", "read Grok's": "refused" })
+    expect(readFileSync(mine, "utf8")).toBe('{"OPENAI_API_KEY":"RENEWED"}\n')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})

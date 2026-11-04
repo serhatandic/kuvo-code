@@ -3037,6 +3037,9 @@
             "literal": "work.goals"
            },
            {
+            "literal": "work.unanswering"
+           },
+           {
             "literal": "vault"
            },
            {
@@ -3340,6 +3343,9 @@
            },
            {
             "literal": "work.goals"
+           },
+           {
+            "literal": "work.unanswering"
            },
            {
             "literal": "vault"
@@ -8258,6 +8264,39 @@
    }
   },
   {
+   "route": "GET kuvo/work/unanswering",
+   "answers": {
+    "200": {
+     "object": {
+      "held": {
+       "list": {
+        "object": {
+         "provider": "string",
+         "model?": "string",
+         "only?": {
+          "oneOf": [
+           {
+            "literal": "paid"
+           },
+           {
+            "literal": "free"
+           }
+          ]
+         },
+         "models?": {
+          "list": "string"
+         },
+         "why": "string",
+         "since": "number",
+         "until": "number"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
    "route": "GET kuvo/work/goals",
    "answers": {
     "200": {
@@ -8319,6 +8358,7 @@
             },
             "progress?": "number",
             "note?": "string",
+            "detail?": "string",
             "phase?": "string",
             "site?": "string",
             "after?": {
@@ -8563,6 +8603,7 @@
             },
             "progress?": "number",
             "note?": "string",
+            "detail?": "string",
             "phase?": "string",
             "site?": "string",
             "after?": {
@@ -8831,6 +8872,7 @@
            },
            "progress?": "number",
            "note?": "string",
+           "detail?": "string",
            "phase?": "string",
            "site?": "string",
            "after?": {
