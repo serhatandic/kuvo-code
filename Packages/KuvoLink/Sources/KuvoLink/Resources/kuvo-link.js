@@ -8133,10 +8133,10 @@ function noteSeen(id, now = Date.now()) {
   });
 }
 var delivering = new Set;
-async function answerTo(target, session, id, { wait = 2000, signal, by } = {}) {
-  return (await awaitingAnswer(session, by, () => waitForAnswer(target, session, id, wait, signal))).text;
+async function answerTo(target, session, id, { wait = 2000, signal, by, fresh = false } = {}) {
+  return (await awaitingAnswer(session, by, () => waitForAnswer(target, session, id, wait, signal, fresh))).text;
 }
-async function waitForAnswer(target, session, id, wait, signal) {
+async function waitForAnswer(target, session, id, wait, signal, fresh = false) {
   const began = Date.now();
   let started = false;
   while (Date.now() - began < 600000) {
@@ -8157,7 +8157,7 @@ async function waitForAnswer(target, session, id, wait, signal) {
       return { text: cutText(replies.join(`
 
 `), ANSWER_TEXT), reply: messages.filter((message) => message.type === "assistant").at(-1)?.id };
-    if (started || endedAfter(messages, id))
+    if (started || fresh && endedAfter(messages, id))
       break;
   }
   return { text: null };
@@ -9570,12 +9570,22 @@ import path40 from "node:path";
 var UNANSWERING = path40.join(WORK_FOLDER, "unanswering.json");
 var UNKNOWN_RESET = 30 * 60000;
 var BRIEF_RESET = 3 * 60000;
+var FUNDS = ["provider.quota", "provider.budget-limit"];
+var ACCOUNT = [...FUNDS, "provider.auth"];
+var MODEL_LIMITS = ["provider.rate-limit", "provider.model-budget-limit", "provider.free-limit", "limit"];
 function scopeOf(error) {
-  if (["provider.quota", "provider.budget-limit", "provider.auth"].includes(error.type))
+  if (ACCOUNT.includes(error.type))
     return "provider";
-  if (["provider.rate-limit", "provider.model-budget-limit", "provider.free-limit", "limit"].includes(error.type))
+  if (MODEL_LIMITS.includes(error.type))
     return "model";
-  return isLimit(error.message) ? "model" : null;
+  if (error.type && error.type !== "provider.unknown")
+    return null;
+  return isLimit(error.message) && !/overloaded|capacity/i.test(error.message) ? "model" : null;
+}
+function errorOf(value, at) {
+  if (!isObject(value) || typeof value.type !== "string" && typeof value.message !== "string")
+    return null;
+  return { type: String(value.type ?? ""), message: String(value.message ?? "").trim(), ...at ? { at } : {} };
 }
 async function turnError(target, session, signal) {
   const page = await call(target, "GET", `/api/session/${encodeURIComponent(session)}/message?limit=5&order=desc`, undefined, signal).catch(() => null);
@@ -9584,10 +9594,21 @@ async function turnError(target, session, signal) {
       continue;
     if (message.outcome !== "failed")
       return null;
-    const error = isObject(message.error) ? message.error : {};
-    return { type: String(error.type ?? ""), message: String(error.message ?? "").trim() };
+    return errorOf(message.error, Number(isObject(message.time) ? message.time.created : 0) || undefined) ?? { type: "", message: "" };
   }
   return null;
+}
+function isFree(model) {
+  if (!isObject(model))
+    return false;
+  const cost = Array.isArray(model.cost) ? model.cost : isObject(model.cost) ? [model.cost] : [];
+  if (cost.length && cost.every((each) => isObject(each) && each.input === 0 && each.output === 0))
+    return true;
+  return model.providerID === "opencode" && typeof model.name === "string" && /\sfree$/i.test(model.name);
+}
+async function freeThere(target, model) {
+  const listed = await call(target, "GET", "/api/model").catch(() => null);
+  return isFree((Array.isArray(listed) ? listed : []).find((each) => isObject(each) && each.providerID === model.providerID && each.id === model.id));
 }
 var keyOf = (model, scope) => scope === "provider" ? model.providerID : `${model.providerID}/${model.id}`;
 function read(file, now) {
@@ -9605,38 +9626,64 @@ function change(file, now, edit) {
 }
 var unansweringNow = (file = UNANSWERING, now = Date.now()) => read(file, now);
 function holdOf(model, held) {
-  return held.find((each) => each.key === model.providerID) ?? held.find((each) => each.key === `${model.providerID}/${model.id}`) ?? null;
+  return held.find((each) => each.key === model.providerID && !(each.paid && model.free)) ?? held.find((each) => each.key === `${model.providerID}/${model.id}`) ?? null;
 }
 function noteFailed(model, error, file = UNANSWERING, now = Date.now()) {
-  const scope = scopeOf(error);
+  let scope = scopeOf(error);
   if (!scope)
     return null;
-  const brief = error.type === "provider.rate-limit" && !resetsIn(error.message, now);
-  const held = { key: keyOf(model, scope), scope, why: error.message || "It's at a usage limit.", at: now, until: resetsIn(error.message, now) ?? now + (brief ? BRIEF_RESET : UNKNOWN_RESET) };
+  const funds = FUNDS.includes(error.type);
+  if (scope === "provider" && funds && model.free)
+    scope = "model";
+  const at = Math.min(error.at ?? now, now);
+  const reset = resetsIn(error.message, at);
+  const brief = !reset && (error.type === "provider.rate-limit" || scope === "model" && /\b429\b|rate.?limit|too many requests/i.test(error.message));
+  const held = { key: keyOf(model, scope), scope, ...scope === "provider" && funds ? { paid: true } : {}, why: error.message || "It's at a usage limit.", at, until: reset ?? at + (brief ? BRIEF_RESET : UNKNOWN_RESET) };
+  if (held.until <= now)
+    return null;
   change(file, now, (all) => [...all.filter((each) => each.key !== held.key), held]);
   return held;
 }
 function noteAnswered(model, file = UNANSWERING, now = Date.now()) {
-  if (!read(file, now).some((each) => each.key === model.providerID || each.key === `${model.providerID}/${model.id}`))
+  const clears = (each) => each.key === `${model.providerID}/${model.id}` || each.key === model.providerID && !(each.paid && model.free);
+  if (!read(file, now).some(clears))
     return;
-  change(file, now, (all) => all.filter((each) => each.key !== model.providerID && each.key !== `${model.providerID}/${model.id}`));
+  change(file, now, (all) => all.filter((each) => !clears(each)));
+}
+async function answeredOn(target, model, file = UNANSWERING, now = Date.now()) {
+  const held = read(file, now);
+  if (!held.some((each) => each.key === model.providerID || each.key === `${model.providerID}/${model.id}`))
+    return;
+  const free = held.some((each) => each.key === model.providerID && each.paid) ? await freeThere(target, model) : false;
+  noteAnswered({ ...model, free }, file, now);
+}
+async function failedOn(target, model, error, file = UNANSWERING, now = Date.now()) {
+  const free = model.free ?? (FUNDS.includes(error.type) ? await freeThere(target, model) : false);
+  return noteFailed({ ...model, free }, error, file, now);
 }
 function holdWords(held) {
-  const what = held.scope === "provider" ? `Every ${held.key} model` : held.key;
-  return `${what} can't answer now: ${cut(held.why.replace(/\.+$/, ""), 200)} (since ${resetTime(held.at)}; tried again after ${resetTime(held.until)}, or once a session on it answers)`;
+  const what = held.scope === "provider" ? `No ${held.paid ? "paid " : ""}${held.key} model can answer now` : `${held.key} can't answer now`;
+  return `${what}: ${cut(held.why.replace(/\.+$/, ""), 200)} (since ${resetTime(held.at)}; offered again after ${resetTime(held.until)}, or once a session on it answers)`;
 }
 var ACCOUNT_CHANGES = new Set(["credential.updated", "credential.switched", "credential.removed", "integration.updated", "provider.updated"]);
 async function followUnanswering(source, event, file = UNANSWERING, now = Date.now()) {
   if (!read(file, now).length)
     return;
-  if (ACCOUNT_CHANGES.has(event.type))
-    return change(file, now, () => []);
-  if (event.type !== "session.execution.succeeded" || typeof event.data?.sessionID !== "string")
+  const data = isObject(event.data) ? event.data : {};
+  if (ACCOUNT_CHANGES.has(event.type)) {
+    const named = [data.integrationID, data.providerID, data.id].find((each) => typeof each === "string" && each !== "");
+    if (named)
+      return change(file, now, (all) => all.filter((each) => each.key !== named && !each.key.startsWith(`${named}/`)));
+    if (event.type !== "credential.updated")
+      change(file, now, () => []);
     return;
-  const session = await call(source, "GET", `/api/session/${encodeURIComponent(event.data.sessionID)}`).catch(() => null);
+  }
+  if (event.type !== "session.execution.succeeded" || typeof data.sessionID !== "string")
+    return;
+  const session = await call(source, "GET", `/api/session/${encodeURIComponent(data.sessionID)}`).catch(() => null);
   const model = isObject(session) && isObject(session.model) ? session.model : null;
   if (model && typeof model.providerID === "string" && typeof model.id === "string")
-    noteAnswered({ providerID: model.providerID, id: model.id }, file, now);
+    await answeredOn(source, { providerID: model.providerID, id: model.id }, file, now);
 }
 
 // Packages/Box/src/link/work/wakes.ts
@@ -9678,19 +9725,17 @@ async function wakeLine(event, session, target) {
   const named = `"${session.title || "New Session"}" ${placeWords({ project, folder })} (address ${session.id})`;
   switch (event.type) {
     case "session.execution.succeeded": {
-      if (session.model)
-        noteAnswered(session.model);
       const reply = await lastReplyOf({ target, data: session });
       const since = session.time?.created ? `, after ${took(Date.now() - session.time.created)}` : "";
       return `[Session finished] ${named}${since}:
 ${reply ? cut(reply, 1200) : "(It ended without a reply.)"}`;
     }
     case "session.execution.failed": {
-      const error = await turnError(target, session.id).catch(() => null);
-      const held = error && session.model ? noteFailed(session.model, error) : null;
-      const why = error?.message ? `: ${cut(error.message.replace(/\.+$/, ""), 400)}` : "";
+      const error = errorOf(event.data.error) ?? await turnError(target, session.id).catch(() => null);
+      const held = error && session.model ? await failedOn(target, session.model, error).catch(() => null) : null;
       if (held)
-        return `[Session failed] ${named} stopped with an error${why}. ${holdWords(held)}. Starting it again there fails the same way: start it again on a model that can, from list_models, or tell the user.`;
+        return `[Session failed] ${named} stopped: ${holdWords(held)}. Starting it again there fails the same way: start it again on a model that can, from list_models, or tell the user.`;
+      const why = error?.message ? `: ${cut(error.message.replace(/\.+$/, ""), 400)}` : "";
       return `[Session failed] ${named} stopped with an error${why}. Read it with read_conversation, then start it again, try another way, or tell the user.`;
     }
     case "permission.asked": {
@@ -9979,7 +10024,8 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
     timer?.unref?.();
   };
   caughtUp.then(lateAgain);
-  const watch = (event) => {
+  const watch = (event) => Promise.all([followUnanswering(source, event).catch(() => {}), told(event)]).then(() => {});
+  const told = (event) => {
     const id = event.data?.sessionID ?? event.data?.form?.sessionID;
     if (typeof id !== "string" || !["session.execution.succeeded", "session.execution.failed", "permission.asked", "form.created", "permission.replied", "form.replied"].includes(event.type))
       return Promise.resolve();
@@ -14257,7 +14303,7 @@ function modelsIn(listed, target, agents, ready) {
     if (ready && !ready.has(each.providerID))
       continue;
     const efforts = Array.isArray(each.variants) ? each.variants.map((variant) => isObject(variant) ? variant.id : null).filter((id) => typeof id === "string") : [];
-    models.push({ providerID: each.providerID, id: each.id, name: typeof each.name === "string" && each.name ? each.name : each.id, efforts, target, agents, retiring: each.status === "deprecated" });
+    models.push({ providerID: each.providerID, id: each.id, name: typeof each.name === "string" && each.name ? each.name : each.id, efforts, target, agents, retiring: each.status === "deprecated", free: isFree(each) });
   }
   return models;
 }
@@ -14281,7 +14327,7 @@ function describeModels(all, held = unansweringNow()) {
   const holds = held.filter((each) => models.some((model) => holdOf(model, [each])));
   const list = answering.length ? `Models you can start a session on, as provider/model (give it to start_session as model, and an effort as effort):
 ${answering.map(line).join(`
-`)}` : `No model here can answer now.`;
+`)}` : `No model here can answer now: tell the user why, from below.`;
   return holds.length ? `${list}
 
 Left out, as a session on them just failed:
@@ -17695,8 +17741,6 @@ async function watchEvents(read, tell, signal, answered = () => {}, { bots = fal
         steer?.(event);
         queue?.(event);
         followWork?.(event);
-        if (work)
-          followUnanswering(source, event).catch(() => {});
         const reviewed = work && event.type === "permission.asked" ? reviewPermission(source, event, connection.signal).catch(() => null) : null;
         goalHeld?.(event).catch(() => {});
         if (signIns)
@@ -21077,14 +21121,17 @@ async function startSession(given, by, place) {
   let model = parent?.model ? { ...parent.model } : null;
   let picked = [];
   let warning;
+  let free;
   if (given.model !== undefined && given.model !== null && given.model !== "" || given.effort !== undefined && given.effort !== null && given.effort !== "") {
     const models = await usableModels(engine, bridge, place.signal);
     const choice = pickModel(given.model ?? (model ? { providerID: model.providerID, id: model.id } : null), given.effort, models);
     if ("refused" in choice)
       return no(400, choice.refused);
     const held = by ? holdOf(choice.model, unansweringNow()) : null;
+    const own = model && models.find((each) => each.providerID === model?.providerID && each.id === model?.id);
     if (held)
-      warning = `${holdWords(held)}, so this may fail the same way. If it does, start it on a model that can, from list_models${model && !holdOf(model, unansweringNow()) ? `, like the one you run on (${model.providerID}/${model.id})` : ""}, or tell the user.`;
+      warning = `${holdWords(held)}, so this may fail the same way. If it does, start it on a model that can, from list_models${own && !holdOf(own, unansweringNow()) ? `, like the one you run on (${own.providerID}/${own.id})` : ""}, or tell the user.`;
+    free = choice.model.free;
     model = { providerID: choice.model.providerID, id: choice.model.id, ...choice.variant ? { variant: choice.variant } : {} };
     target = choice.model.target;
     picked = [choice.model.name, ...choice.variant ? [choice.variant] : []];
@@ -21216,9 +21263,9 @@ ${goalNote}` : ""}` : "") : task;
   const started = { session, title, folder, project: project?.name ?? null, ...picked.length ? { picked: picked.join(" · ") } : {}, ...got ? { got } : {}, ...wakes.length ? { wakes } : {}, ...warning ? { warning } : {} };
   if (!waits)
     return { started };
-  const answer = await answerTo(target, session, id, { wait: place.step, signal: place.signal, by: by?.place ? by.session : null });
+  const answer = await answerTo(target, session, id, { wait: place.step, signal: place.signal, by: by?.place ? by.session : null, fresh: true });
   const error = answer === null && !place.signal?.aborted ? await turnError(target, session, place.signal).catch(() => null) : null;
-  const held = error && model ? noteFailed(model, error) : null;
+  const held = error && model ? await failedOn(target, { ...model, free }, error).catch(() => null) : null;
   const stopped = held ? `${holdWords(held)}.` : error ? error.message || "The engine gave no reason." : undefined;
   return { started: { ...started, answer, ...stopped ? { stopped, warning: undefined } : {} } };
 }

@@ -1,8 +1,9 @@
 // A bot hands its steps only to models that can answer (PROTOCOL.md, "Work"): when a session it
 // started fails because its model's account is out of funds or at a limit, the bot hears why, the
-// models of that account drop out of list_models, start_session on one of them says so and names a
-// model that can, and a start it waits on ends as soon as the session stops, with why; once a
-// session on it answers, it's back. As on the user's Mac, where a bot on OpenCode Go kept starting
+// models of that account that cost something drop out of list_models (its free ones stay),
+// start_session on one of them says so and names a model that can, and a start it waits on ends as
+// soon as the session stops, with why; once a paid session on it answers, or its key changes, it's
+// back. A model that's only busy (overloaded) isn't held back. As on the user's Mac, where a bot on OpenCode Go kept starting
 // sessions on OpenCode Zen with no funds, none of them telling it why, and a start it waited on hung
 // for ten minutes. The real tool and box script; only the engine is a stand-in, and the watcher's
 // clock is the test's.
@@ -36,6 +37,8 @@ const sessions = {
   ses_lead: { id: "ses_lead", title: "Mobile App Expert", location: { directory: app }, model: go, time: { created: 1, updated: 1 } },
   ses_concept: { id: "ses_concept", title: "Pick the concept", location: { directory: app }, model: zen("claude-opus-5-5"), time: { created: Date.now(), updated: 1 }, metadata: { kuvo: { startedBy: "ses_lead", by, depth: 1, wake: ["finished", "asks"] } } },
   ses_build: { id: "ses_build", title: "Build the core app", location: { directory: app }, model: zen("gpt-6.1-sol"), time: { created: Date.now(), updated: 1 }, metadata: { kuvo: { startedBy: "ses_lead", by, depth: 1, wake: ["finished", "asks"] } } },
+  ses_free: { id: "ses_free", title: "Name the app", location: { directory: app }, model: { providerID: "opencode", id: "deepseek-v4.1-flash-free" }, time: { created: Date.now(), updated: 1 }, metadata: { kuvo: { startedBy: "ses_lead", by, depth: 1, wake: ["finished", "asks"] } } },
+  ses_busy: { id: "ses_busy", title: "Write the copy", location: { directory: app }, model: { providerID: "opencode-go", id: "deepseek-v4.1-flash" }, time: { created: Date.now(), updated: 1 }, metadata: { kuvo: { startedBy: "ses_lead", by, depth: 1, wake: ["finished", "asks"] } } },
 };
 // Each session's messages, oldest first: the concept's turn failed before it wrote anything.
 const messages = {
@@ -49,11 +52,17 @@ const messages = {
     { id: "msg_5", type: "assistant", model: zen("gpt-6.1-sol"), content: [{ type: "text", text: "Built it, with tests." }] },
     { id: "msg_6", type: "idle", outcome: "succeeded" },
   ],
+  ses_free: [
+    { id: "msg_7", type: "user", text: "Name it." },
+    { id: "msg_8", type: "assistant", content: [{ type: "text", text: "Pocket Ledger." }] },
+    { id: "msg_9", type: "idle", outcome: "succeeded" },
+  ],
 };
 const models = [
-  { id: "claude-opus-5-5", providerID: "opencode", name: "Claude Opus 5.5", variants: [{ id: "high" }] },
-  { id: "gpt-6.1-sol", providerID: "opencode", name: "GPT-6.1 Sol", variants: [{ id: "high" }] },
-  { id: "deepseek-v4.1-flash", providerID: "opencode-go", name: "DeepSeek V4.1 Flash", variants: [{ id: "low" }, { id: "high" }] },
+  { id: "claude-opus-5-5", providerID: "opencode", name: "Claude Opus 5.5", variants: [{ id: "high" }], cost: [{ input: 5, output: 25 }] },
+  { id: "gpt-6.1-sol", providerID: "opencode", name: "GPT-6.1 Sol", variants: [{ id: "high" }], cost: [{ input: 1.25, output: 10 }] },
+  { id: "deepseek-v4.1-flash-free", providerID: "opencode", name: "DeepSeek V4.1 Flash Free", variants: [], cost: [{ input: 0, output: 0 }] },
+  { id: "deepseek-v4.1-flash", providerID: "opencode-go", name: "DeepSeek V4.1 Flash", variants: [{ id: "low" }, { id: "high" }], cost: [{ input: 0.2, output: 0.8 }] },
 ];
 let prompts = [];
 let made = 0;
@@ -130,22 +139,23 @@ const watch = link.workWatcher(source, () => [source], { schedule: run => { late
 const runAll = async () => { for (const run of later.splice(0)) await run(); };
 
 test("a session that fails for want of funds tells its bot why, and the bot moves its work to a model that can answer", async () => {
-  await watch({ type: "session.execution.failed", data: { sessionID: "ses_concept" } });
+  // (As the engine tells it: the error with the event.)
+  await watch({ type: "session.execution.failed", data: { sessionID: "ses_concept", error: funds } });
   await runAll();
   assert.equal(prompts.length, 1);
   assert.equal(prompts[0].to, "ses_lead");
-  assert.match(prompts[0].text, /^\[Session failed\] "Pick the concept" in the-app \(address ses_concept\) stopped with an error: Upstream request failed: Insufficient account funds\./, "the bot hears why");
-  assert.match(prompts[0].text, /Every opencode model can't answer now/, "and that the whole account can't");
+  assert.match(prompts[0].text, /^\[Session failed\] "Pick the concept" in the-app \(address ses_concept\) stopped: No paid opencode model can answer now: Upstream request failed: Insufficient account funds \(since /, "the bot hears why, and that the account can't");
   assert.match(prompts[0].text, /start it again on a model that can, from list_models/);
 
   const listed = text(await call("list_models", {}));
   assert.match(listed, /^- opencode-go\/deepseek-v4\.1-flash \(DeepSeek V4\.1 Flash\)/m, "a model that answers is there");
-  assert.doesNotMatch(listed, /^- opencode\/(claude-opus-5-5|gpt-6\.1-sol)/m, "none of the account out of funds is offered");
-  assert.match(listed, /Left out, as a session on them just failed:\n- Every opencode model can't answer now: Upstream request failed: Insufficient account funds/);
+  assert.match(listed, /^- opencode\/deepseek-v4\.1-flash-free \(DeepSeek V4\.1 Flash Free\)/m, "and the account's free one, which spends no funds");
+  assert.doesNotMatch(listed, /^- opencode\/(claude-opus-5-5|gpt-6\.1-sol)/m, "none of the account's paid ones is offered");
+  assert.match(listed, /Left out, as a session on them just failed:\n- No paid opencode model can answer now: Upstream request failed: Insufficient account funds/);
 
   const again = await call("start_session", { task: "Pick the concept.", title: "Pick the concept", folder: app, model: "opencode/gpt-6.1-sol", effort: "high" });
   assert.equal(again.isError ?? false, false, "the bot may still try it: it may answer again");
-  assert.match(text(again), /Every opencode model can't answer now: Upstream request failed: Insufficient account funds .*so this may fail the same way/, "but it hears it may not");
+  assert.match(text(again), /No paid opencode model can answer now: Upstream request failed: Insufficient account funds .*so this may fail the same way/, "but it hears it may not");
   assert.match(text(again), /like the one you run on \(opencode-go\/deepseek-v4\.1-flash\)/, "and which one can");
 
   const moved = await call("start_session", { task: "Pick the concept.", title: "Pick the concept", folder: app, model: "opencode-go/deepseek-v4.1-flash", effort: "high" });
@@ -156,19 +166,41 @@ test("a session that fails for want of funds tells its bot why, and the bot move
   assert.match(read, /\*\*Stopped\*\*\n\nIt stopped with an error: Upstream request failed: Insufficient account funds/, "its conversation shows why it stopped");
 });
 
-test("once a session on that account answers again, its models are offered again", async () => {
+test("a free model answering, or another account changing, says nothing of the account's funds; a paid one answering does", async () => {
   prompts = [];
+  await watch({ type: "session.execution.succeeded", data: { sessionID: "ses_free" } });
+  await watch({ type: "credential.updated", data: null });
+  await watch({ type: "credential.switched", data: { integrationID: "opencode-go", credentialID: "cred_1" } });
+  await runAll();
+  assert.match(text(await call("list_models", {})), /Left out, as a session on them just failed:\n- No paid opencode model/);
   await watch({ type: "session.execution.succeeded", data: { sessionID: "ses_build" } });
   await runAll();
-  assert.match(prompts[0]?.text ?? "", /^\[Session finished\] "Build the core app"/);
+  assert.match(prompts.map(prompt => prompt.text).join("\n\n"), /^\[Session finished\] "Build the core app"/m);
   const listed = text(await call("list_models", {}));
   assert.match(listed, /^- opencode\/claude-opus-5-5 \(Claude Opus 5\.5\)/m);
   assert.doesNotMatch(listed, /Left out/);
 });
 
+test("a new key for that account offers its models again", async () => {
+  await watch({ type: "session.execution.failed", data: { sessionID: "ses_concept", error: funds } });
+  assert.match(text(await call("list_models", {})), /Left out/);
+  await watch({ type: "credential.switched", data: { integrationID: "opencode", credentialID: "cred_2" } });
+  assert.doesNotMatch(text(await call("list_models", {})), /Left out/);
+  await runAll();
+});
+
+test("a model that's only busy isn't held back", async () => {
+  prompts = [];
+  messages.ses_busy = [{ id: "msg_10", type: "user", text: "Write it." }, { id: "msg_11", type: "idle", outcome: "failed", error: { type: "provider.unknown", message: "Overloaded" } }];
+  await watch({ type: "session.execution.failed", data: { sessionID: "ses_busy", error: { type: "provider.unknown", message: "Overloaded" } } });
+  await runAll();
+  assert.match(prompts[0]?.text ?? "", /^\[Session failed\] "Write the copy" in the-app \(address ses_busy\) stopped with an error: Overloaded\. Read it with read_conversation/);
+  assert.doesNotMatch(text(await call("list_models", {})), /Left out/);
+});
+
 test("a session started and waited for whose model fails at once answers its starter with why, as soon as it stops", async () => {
   const waited = await call("start_session", { task: "Reply with PING OK.", title: "Harness ping", folder: app, model: "opencode/claude-opus-5-5", effort: "high", wait: true });
   assert.equal(waited.isError, true, text(waited));
-  assert.match(text(waited), /^Started "Harness ping" in the-app \(address ses_new\d+\): Claude Opus 5\.5 · high\. It stopped with an error before it answered: Every opencode model can't answer now: Upstream request failed: Insufficient account funds/);
-  assert.match(text(await call("list_models", {})), /Left out, as a session on them just failed:\n- Every opencode model/, "and the box knows it can't, without waiting for the watcher");
+  assert.match(text(waited), /^Started "Harness ping" in the-app \(address ses_new\d+\): Claude Opus 5\.5 · high\. It stopped with an error before it answered: No paid opencode model can answer now: Upstream request failed: Insufficient account funds/);
+  assert.match(text(await call("list_models", {})), /Left out, as a session on them just failed:\n- No paid opencode model/, "and the box knows it can't, without waiting for the watcher");
 });

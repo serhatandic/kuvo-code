@@ -105,15 +105,17 @@ export interface AnswerWait {
   wait?: number;
   signal?: AbortSignal;
   by?: string | null;
+  /** A new session's first message: its turn ending before it's seen at work is this one's. */
+  fresh?: boolean;
 }
 
 // Its answer to message `id` (one this box made, so later ones sort after it): what it wrote after,
 // once it's done, ten minutes at most; null for none, or once its asker went.
-export async function answerTo(target: Target, session: string, id: string, { wait = 2000, signal, by }: AnswerWait = {}): Promise<string | null> {
-  return (await awaitingAnswer(session, by, () => waitForAnswer(target, session, id, wait, signal))).text;
+export async function answerTo(target: Target, session: string, id: string, { wait = 2000, signal, by, fresh = false }: AnswerWait = {}): Promise<string | null> {
+  return (await awaitingAnswer(session, by, () => waitForAnswer(target, session, id, wait, signal, fresh))).text;
 }
 // (With the id of its last reply, the one the box hears it finish with.)
-async function waitForAnswer(target: Target, session: string, id: string, wait: number, signal?: AbortSignal): Promise<{ text: string | null; reply?: string }> {
+async function waitForAnswer(target: Target, session: string, id: string, wait: number, signal?: AbortSignal, fresh = false): Promise<{ text: string | null; reply?: string }> {
   const began = Date.now();
   let started = false;
   while (Date.now() - began < 600_000) {
@@ -130,8 +132,9 @@ async function waitForAnswer(target: Target, session: string, id: string, wait: 
     const messages = (page?.data ?? []).slice().reverse();
     const replies = answerAfter(messages, id);
     if (replies.length) return { text: cutText(replies.join("\n\n"), ANSWER_TEXT), reply: messages.filter(message => message.type === "assistant").at(-1)?.id };
-    // (Ended before it was seen at work, as a turn that fails at once does: not waited on further.)
-    if (started || endedAfter(messages, id)) break;
+    // (A new session's turn that ended before it was seen at work, as one that fails at once does:
+    // not waited on further. Elsewhere an earlier turn may have ended after the message came.)
+    if (started || (fresh && endedAfter(messages, id))) break;
   }
   return { text: null };
 }

@@ -22,7 +22,7 @@ import { answerTo } from "./take";
 import { noteWorkChanged } from "../work/changes";
 import { botLimits, pastLimit } from "../work/limits";
 import { pickModel, usableModels } from "../work/models";
-import { holdOf, holdWords, noteFailed, turnError, unansweringNow } from "../work/unanswering";
+import { failedOn, holdOf, holdWords, turnError, unansweringNow } from "../work/unanswering";
 import { approvalOf, approvalRules, defaultApproval, effectiveApproval, isApproval, lowerOf, rememberApproval, unavailable } from "../work/approval";
 import { settleAgain } from "../areas/approval";
 import { noteFullAccess } from "../work/full";
@@ -276,6 +276,7 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   let model = parent?.model ? { ...parent.model } : null;
   let picked: string[] = [];
   let warning: string | undefined;
+  let free: boolean | undefined;
   if ((given.model !== undefined && given.model !== null && given.model !== "") || (given.effort !== undefined && given.effort !== null && given.effort !== "")) {
     const models = await usableModels(engine, bridge, place.signal);
     const choice = pickModel(given.model ?? (model ? { providerID: model.providerID, id: model.id } : null), given.effort, models);
@@ -283,7 +284,9 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
     // An agent's, on one that just failed at its account or its limit, is started all the same (it
     // may answer again), with a word on it and a model that can. (You choose for yourself.)
     const held = by ? holdOf(choice.model, unansweringNow()) : null;
-    if (held) warning = `${holdWords(held)}, so this may fail the same way. If it does, start it on a model that can, from list_models${model && !holdOf(model, unansweringNow()) ? `, like the one you run on (${model.providerID}/${model.id})` : ""}, or tell the user.`;
+    const own = model && models.find(each => each.providerID === model?.providerID && each.id === model?.id);
+    if (held) warning = `${holdWords(held)}, so this may fail the same way. If it does, start it on a model that can, from list_models${own && !holdOf(own, unansweringNow()) ? `, like the one you run on (${own.providerID}/${own.id})` : ""}, or tell the user.`;
+    free = choice.model.free;
     model = { providerID: choice.model.providerID, id: choice.model.id, ...(choice.variant ? { variant: choice.variant } : {}) };
     target = choice.model.target;
     picked = [choice.model.name, ...(choice.variant ? [choice.variant] : [])];
@@ -418,9 +421,9 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   const started: Started = { session, title, folder, project: project?.name ?? null, ...(picked.length ? { picked: picked.join(" · ") } : {}), ...(got ? { got } : {}), ...(wakes.length ? { wakes } : {}), ...(warning ? { warning } : {}) };
   if (!waits) return { started };
   // A new session: anything it says is its answer; a turn that failed before it said anything, why.
-  const answer = await answerTo(target, session, id, { wait: place.step, signal: place.signal, by: by?.place ? by.session : null });
+  const answer = await answerTo(target, session, id, { wait: place.step, signal: place.signal, by: by?.place ? by.session : null, fresh: true });
   const error = answer === null && !place.signal?.aborted ? await turnError(target, session, place.signal).catch(() => null) : null;
-  const held = error && model ? noteFailed(model, error) : null;
+  const held = error && model ? await failedOn(target, { ...model, free }, error).catch(() => null) : null;
   const stopped = held ? `${holdWords(held)}.` : error ? error.message || "The engine gave no reason." : undefined;
   return { started: { ...started, answer, ...(stopped ? { stopped, warning: undefined } : {}) } };
 }
