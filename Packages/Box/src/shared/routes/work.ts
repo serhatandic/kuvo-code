@@ -3,7 +3,7 @@
 // client stopping all of it; what's asked of a bot by its sessions, answered on the box; what a bot
 // asks you before it does it (making a project), and where new projects go.
 
-import { bool, type Infer, list, map, nullable, number, object, type RouteShape, string, words } from "../shape";
+import { bool, BYTES, type Infer, list, map, nullable, number, object, type RouteShape, string, words } from "../shape";
 import { PROJECT } from "./projects";
 
 /** Limits you set for a bot (Edit Bot › Work), each left out when you set none: sessions working
@@ -92,9 +92,14 @@ export const WORK = object({
  * work again when its time moves. */
 export const WORK_CHANGED = object({ changed: map(number) });
 
+/** An app on the box's computer something is done in, as the bot named it (`name`): with its `id`
+ * once the box found it installed there, whose icon is `kuvo/work/apps/icon?app=<id>`; none for one
+ * that isn't there. */
+export const GOAL_APP = object({ name: string, "id?": string });
+
 /** A step of a goal's plan, a track of its own: where it stands, how far along where the bot can
  * measure it (0 to 1; left out where it can't, never guessed), a word on it, the phase it's in, the
- * service it's done at (`site`, its address, for its icon), the steps it comes after (by id), the sessions working on it, while it waits for a limit to reset
+ * service it's done at (`site`, its address, for its icon), the app it's done in (`app`), the steps it comes after (by id), the sessions working on it, while it waits for a limit to reset
  * until when, when the bot put it off until (`until`, a step that starts at a time), and when it
  * began and ended (ms), for a time axis. */
 export const GOAL_STEP = object({
@@ -106,6 +111,7 @@ export const GOAL_STEP = object({
   "detail?": string,
   "phase?": string,
   "site?": string,
+  "app?": GOAL_APP,
   "after?": list(string),
   "sessions?": list(string),
   "resumes?": number,
@@ -130,7 +136,7 @@ export const GOAL_CHECK = object({
 
 /** What waits for you: what only you can fix, a judgment call before anything public, something
  * outside the plan, or an ask (a permission or a question one of its sessions has, waiting for you).
- * A page to open for it, and the session it's in. */
+ * A page to open for it, the site or app it's at, and the session it's in. */
 export const GOAL_WAITING = object({
   id: string,
   kind: words("you", "judgment", "outside", "ask"),
@@ -138,6 +144,7 @@ export const GOAL_WAITING = object({
   "detail?": string,
   "url?": string,
   "site?": string,
+  "app?": GOAL_APP,
   "session?": string,
   at: number,
 });
@@ -145,6 +152,12 @@ export const GOAL_WAITING = object({
 /** What it may spend, each with a cap for a period (a day, a week, a month, or the whole goal), what
  * it spent in the period now, and, once the cap's reached, until when what spends waits (ms). */
 export const GOAL_SPEND = object({ what: string, cap: number, currency: string, per: words("day", "week", "month", "goal"), spent: number, "until?": number });
+
+/** Where Start makes a project the plan names, worked out as making it will: the full path
+ * (`folder`; null while the plan names no folder for it and no projects folder is picked), the same
+ * with `~` for the home folder (`shown`), and whether something with files is there already
+ * (`there`, shown only: it never holds Start back). */
+export const GOAL_FOLDER = object({ project: string, folder: nullable(string), shown: nullable(string), "there?": bool });
 
 /** A bot's goal (PROTOCOL.md, "Work › Goals"): the goal in your words and its plan, kept on the box
  * beside the conversation's own goal (`kuvo/agents/api/kuvo/goals`), which keeps the bot at it. The
@@ -155,7 +168,7 @@ export const GOAL_SPEND = object({ what: string, cap: number, currency: string, 
  * still watched, when it goes on next while nothing of it can before a time (`next`: its bot's
  * wake-up, or the steps it put off), the last digest and the final report. Proposed by the bot; only you start it,
  * decline it or stop it. `alone`: whether this box may work on it on its own (else it runs with you
- * there). Times in ms since 1970. */
+ * there). While it's proposed, where Start makes its projects (`folders`). Times in ms since 1970. */
 export const GOAL_PLAN = object({
   id: string,
   bot: string,
@@ -183,6 +196,7 @@ export const GOAL_PLAN = object({
   "lastDigest?": object({ at: number, text: string }),
   "report?": string,
   alone: bool,
+  "folders?": list(GOAL_FOLDER),
 });
 /** The goals here: each bot's latest, while it's proposed or running, or ended in the last day. */
 export const GOAL_PLANS = object({ goals: list(GOAL_PLAN) });
@@ -199,6 +213,8 @@ export type GoalPlanShape = Infer<typeof GOAL_PLAN>;
 export type GoalWaitingShape = Infer<typeof GOAL_WAITING>;
 export type GoalCheckShape = Infer<typeof GOAL_CHECK>;
 export type GoalStepShape = Infer<typeof GOAL_STEP>;
+export type GoalAppShape = Infer<typeof GOAL_APP>;
+export type GoalFolderShape = Infer<typeof GOAL_FOLDER>;
 
 export const WORK_ROUTES: RouteShape[] = [
   { route: "GET kuvo/work", answers: { 200: WORK, 400: REFUSED, 404: REFUSED, 503: REFUSED } },
@@ -213,5 +229,6 @@ export const WORK_ROUTES: RouteShape[] = [
   { route: "GET kuvo/work/goals/events", answers: { 200: GOAL_PLANS } },
   { route: "POST kuvo/work/goals/ask", answers: { 200: object({ text: string }), 400: REFUSED, 404: REFUSED, 409: REFUSED } },
   { route: "POST kuvo/work/goals/:id", answers: { 200: object({ goal: GOAL_PLAN }), 400: REFUSED, 404: REFUSED, 409: REFUSED } },
+  { route: "GET kuvo/work/apps/icon", answers: { 200: BYTES, 400: REFUSED, 404: REFUSED } },
   { route: "POST kuvo/projects/new", answers: { 201: object({ project: PROJECT, text: string }), 400: REFUSED, 403: object({ message: string, needs: string }), 409: REFUSED, 502: REFUSED } },
 ];

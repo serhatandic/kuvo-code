@@ -12,7 +12,8 @@ import { noteWorkChanged } from "./changes";
 import { callOf, keepAnswer, noteSession, pendingAsk, permissionWords, ruleFor, rulesOf, type PendingPermission } from "./answers";
 import { allowRefusal } from "./policy";
 import { approvalOf } from "./approval";
-import { finishGoal, goalProgress, goalProject, mayPublish, maySpend, proposeGoal, runningGoal } from "./goals";
+import { appsNamed, finishGoal, goalProgress, goalProject, mayPublish, maySpend, proposeGoal, runningGoal } from "./goals";
+import { findApps } from "./apps";
 import fs from "node:fs";
 import path from "node:path";
 import { readProjects } from "../areas/projects";
@@ -244,10 +245,12 @@ const goalBot = (caller: Caller) => botOfConversation(caller.session);
 const ONLY_BOTS = "Only a bot takes a goal with a plan: ask the user to give it to one of their bots.";
 const answered = (outcome: { said: string } | { refused: string }): ToolAnswer => ("said" in outcome ? said(outcome.said) : refused(outcome.refused));
 
-/** propose_goal: the goal's plan and checks, put to the user on the goal card. */
-export function proposeGoalTool(caller: Caller, args: Record<string, unknown>): ToolAnswer {
+/** propose_goal: the goal's plan and checks, put to the user on the goal card (the apps its steps
+ * name looked for on this computer first). */
+export async function proposeGoalTool(caller: Caller, args: Record<string, unknown>): Promise<ToolAnswer> {
   const bot = goalBot(caller);
   if (!bot) return refused(ONLY_BOTS);
+  await findApps(appsNamed(args)).catch(() => {});
   const outcome = proposeGoal({ ...bot, session: caller.session }, args);
   if ("refused" in outcome) return refused(outcome.refused);
   const { goal } = outcome;
@@ -256,10 +259,13 @@ export function proposeGoalTool(caller: Caller, args: Record<string, unknown>): 
   return said(`The card is up on ${HERE}: the user starts the goal from it, or says not now. ${yours.length ? `What's theirs to do first: ${yours.join("; ")}. ` : ""}Don't start the work until you hear [Goal started]. If they change something, propose it again as it is now.${alone}`);
 }
 
-/** goal_progress: the goal's steps, what waits for the user, what's spent and what's still watched. */
-export function goalProgressTool(caller: Caller, args: Record<string, unknown>): ToolAnswer {
+/** goal_progress: the goal's steps, what waits for the user, what's spent and what's still watched
+ * (the apps it names looked for on this computer first). */
+export async function goalProgressTool(caller: Caller, args: Record<string, unknown>): Promise<ToolAnswer> {
   const bot = goalBot(caller);
-  return bot ? answered(goalProgress(bot.bot, args)) : refused(ONLY_BOTS);
+  if (!bot) return refused(ONLY_BOTS);
+  await findApps(appsNamed(args)).catch(() => {});
+  return answered(goalProgress(bot.bot, args));
 }
 
 /** may_publish: whether one of the goal's public steps is switched on. */
