@@ -84,12 +84,52 @@ export async function callOf(target: Target, permission: Pick<PendingPermission,
   return null;
 }
 
-/** A question a session asks (it, or a subagent: `asker`): its one field's key. */
+/** A question a session asks (it, or a subagent: `asker`): its one field's key, and what it
+ * recommends, where it marked a choice so ("Warm (Recommended)"). */
 export interface PendingQuestion {
   id: string;
   asker: string;
   key: string | null;
   text: string;
+  recommended?: Recommendation;
+}
+
+/** The answer a question recommends: a choice marked "(Recommended)" in each field it asks, as the
+ * form's answer (`answer`), and in words: what was asked, the choice (its label, unmarked), why (the
+ * choice's description) and the choices there were. */
+export interface Recommendation {
+  answer: Record<string, unknown>;
+  text: string;
+  choice: string;
+  why?: string;
+  options?: string[];
+}
+
+const RECOMMENDED = /\s*\(recommended\)\s*/i;
+const unmarked = (label: string) => label.replace(RECOMMENDED, " ").trim();
+
+/** What a question tool's form recommends: in each field it shows, the one choice it marked
+ * "(Recommended)" (or those it marked, of several); null when a field it needs has none, or for a
+ * form that isn't the question tool's (an MCP server's, a sign-in's). */
+export function recommendationOf(form: Record<string, unknown>): Recommendation | null {
+  if (!isObject(form.metadata) || form.metadata.kind !== "question") return null;
+  const fields = (Array.isArray(form.fields) ? form.fields : []).filter((field): field is Record<string, unknown> => isObject(field) && !field.hidden && !(Array.isArray(field.when) && field.when.length));
+  const answer: Record<string, unknown> = {};
+  const chosen: { label: string; why?: string }[] = [];
+  for (const field of fields) {
+    const options = (Array.isArray(field.options) ? field.options : []).filter((option): option is Record<string, unknown> => isObject(option) && typeof option.value === "string" && typeof option.label === "string");
+    const marked = options.filter(option => RECOMMENDED.test(option.label as string));
+    if (typeof field.key === "string" && field.type === "string" && marked.length === 1) answer[field.key] = marked[0].value;
+    else if (typeof field.key === "string" && field.type === "multiselect" && marked.length) answer[field.key] = marked.map(option => option.value);
+    else if (field.required === false) continue;
+    else return null;
+    chosen.push(...marked.map(option => ({ label: unmarked(option.label as string), ...(typeof option.description === "string" && option.description.trim() ? { why: option.description.trim() } : {}) })));
+  }
+  if (!chosen.length) return null;
+  const [one] = fields.length === 1 ? fields : [];
+  const asked = String((one && (one.description || one.title)) || form.title || "A question");
+  const options = one && Array.isArray(one.options) ? one.options.filter(isObject).map(option => unmarked(String(option.label ?? ""))).filter(Boolean) : [];
+  return { answer, text: asked, choice: chosen.map(each => each.label).join(", "), ...(chosen.length === 1 && chosen[0].why ? { why: chosen[0].why } : {}), ...(options.length ? { options } : {}) };
 }
 
 /** The session and its subagents (theirs too, a few levels down), which ask in its name. */
@@ -121,7 +161,8 @@ export async function asksIn(target: Target, session: string, signal?: AbortSign
       if (!isObject(form) || typeof form.id !== "string") continue;
       const fields = (Array.isArray(form.fields) ? form.fields : []).filter((field: unknown) => isObject(field) && !field.hidden && !(Array.isArray(field.when) && field.when.length));
       const one = fields.length === 1 && fields[0].type === "string" ? fields[0] : null;
-      questions.push({ id: form.id, asker, key: typeof one?.key === "string" ? one.key : null, text: String(one?.description || one?.title || form.title || "a question") });
+      const recommended = recommendationOf(form);
+      questions.push({ id: form.id, asker, key: typeof one?.key === "string" ? one.key : null, text: String(one?.description || one?.title || form.title || "a question"), ...(recommended ? { recommended } : {}) });
     }
   }
   return { permissions, questions };

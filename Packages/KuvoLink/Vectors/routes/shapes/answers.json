@@ -3043,6 +3043,9 @@
             "literal": "work.goals.projects"
            },
            {
+            "literal": "work.goals.modes"
+           },
+           {
             "literal": "work.unanswering"
            },
            {
@@ -3355,6 +3358,9 @@
            },
            {
             "literal": "work.goals.projects"
+           },
+           {
+            "literal": "work.goals.modes"
            },
            {
             "literal": "work.unanswering"
@@ -8557,6 +8563,37 @@
           }
          },
          "report?": "string",
+         "mode": {
+          "oneOf": [
+           {
+            "literal": "interactive"
+           },
+           {
+            "literal": "autopilot"
+           }
+          ]
+         },
+         "decided": {
+          "list": {
+           "object": {
+            "id": "string",
+            "text": "string",
+            "choice": "string",
+            "why?": "string",
+            "options?": {
+             "list": "string"
+            },
+            "session?": "string",
+            "at": "number",
+            "yours?": {
+             "object": {
+              "choice": "string",
+              "at": "number"
+             }
+            }
+           }
+          }
+         },
          "alone": "bool",
          "folders?": {
           "list": {
@@ -8834,6 +8871,37 @@
           }
          },
          "report?": "string",
+         "mode": {
+          "oneOf": [
+           {
+            "literal": "interactive"
+           },
+           {
+            "literal": "autopilot"
+           }
+          ]
+         },
+         "decided": {
+          "list": {
+           "object": {
+            "id": "string",
+            "text": "string",
+            "choice": "string",
+            "why?": "string",
+            "options?": {
+             "list": "string"
+            },
+            "session?": "string",
+            "at": "number",
+            "yours?": {
+             "object": {
+              "choice": "string",
+              "at": "number"
+             }
+            }
+           }
+          }
+         },
          "alone": "bool",
          "folders?": {
           "list": {
@@ -9135,6 +9203,37 @@
          }
         },
         "report?": "string",
+        "mode": {
+         "oneOf": [
+          {
+           "literal": "interactive"
+          },
+          {
+           "literal": "autopilot"
+          }
+         ]
+        },
+        "decided": {
+         "list": {
+          "object": {
+           "id": "string",
+           "text": "string",
+           "choice": "string",
+           "why?": "string",
+           "options?": {
+            "list": "string"
+           },
+           "session?": "string",
+           "at": "number",
+           "yours?": {
+            "object": {
+             "choice": "string",
+             "at": "number"
+            }
+           }
+          }
+         }
+        },
         "alone": "bool",
         "folders?": {
          "list": {

@@ -1679,6 +1679,7 @@ var FEATURES = [
   "work.goals",
   "work.goals.apps",
   "work.goals.projects",
+  "work.goals.modes",
   "work.unanswering",
   "vault",
   "sandbox",
@@ -5550,6 +5551,34 @@ async function callOf(target, permission, signal) {
   }
   return null;
 }
+var RECOMMENDED = /\s*\(recommended\)\s*/i;
+var unmarked = (label) => label.replace(RECOMMENDED, " ").trim();
+function recommendationOf(form) {
+  if (!isObject(form.metadata) || form.metadata.kind !== "question")
+    return null;
+  const fields = (Array.isArray(form.fields) ? form.fields : []).filter((field) => isObject(field) && !field.hidden && !(Array.isArray(field.when) && field.when.length));
+  const answer = {};
+  const chosen = [];
+  for (const field of fields) {
+    const options = (Array.isArray(field.options) ? field.options : []).filter((option) => isObject(option) && typeof option.value === "string" && typeof option.label === "string");
+    const marked = options.filter((option) => RECOMMENDED.test(option.label));
+    if (typeof field.key === "string" && field.type === "string" && marked.length === 1)
+      answer[field.key] = marked[0].value;
+    else if (typeof field.key === "string" && field.type === "multiselect" && marked.length)
+      answer[field.key] = marked.map((option) => option.value);
+    else if (field.required === false)
+      continue;
+    else
+      return null;
+    chosen.push(...marked.map((option) => ({ label: unmarked(option.label), ...typeof option.description === "string" && option.description.trim() ? { why: option.description.trim() } : {} })));
+  }
+  if (!chosen.length)
+    return null;
+  const [one] = fields.length === 1 ? fields : [];
+  const asked = String(one && (one.description || one.title) || form.title || "A question");
+  const options = one && Array.isArray(one.options) ? one.options.filter(isObject).map((option) => unmarked(String(option.label ?? ""))).filter(Boolean) : [];
+  return { answer, text: asked, choice: chosen.map((each) => each.label).join(", "), ...chosen.length === 1 && chosen[0].why ? { why: chosen[0].why } : {}, ...options.length ? { options } : {} };
+}
 async function askersOf(target, session, signal) {
   const found = [session];
   for (let at = 0;at < found.length && at < 40; at++) {
@@ -5581,7 +5610,8 @@ async function asksIn(target, session, signal) {
         continue;
       const fields = (Array.isArray(form.fields) ? form.fields : []).filter((field) => isObject(field) && !field.hidden && !(Array.isArray(field.when) && field.when.length));
       const one = fields.length === 1 && fields[0].type === "string" ? fields[0] : null;
-      questions.push({ id: form.id, asker, key: typeof one?.key === "string" ? one.key : null, text: String(one?.description || one?.title || form.title || "a question") });
+      const recommended = recommendationOf(form);
+      questions.push({ id: form.id, asker, key: typeof one?.key === "string" ? one.key : null, text: String(one?.description || one?.title || form.title || "a question"), ...recommended ? { recommended } : {} });
     }
   }
   return { permissions, questions };
@@ -7241,6 +7271,16 @@ var GOAL_WAITING = object({
   "session?": string,
   at: number
 });
+var GOAL_DECIDED = object({
+  id: string,
+  text: string,
+  choice: string,
+  "why?": string,
+  "options?": list(string),
+  "session?": string,
+  at: number,
+  "yours?": object({ choice: string, at: number })
+});
 var GOAL_SPEND = object({ what: string, cap: number, currency: string, per: words("day", "week", "month", "goal"), spent: number, "until?": number });
 var GOAL_FOLDER = object({ project: string, folder: nullable(string), shown: nullable(string), "there?": bool });
 var GOAL_PLAN = object({
@@ -7269,6 +7309,8 @@ var GOAL_PLAN = object({
   "next?": number,
   "lastDigest?": object({ at: number, text: string }),
   "report?": string,
+  mode: words("interactive", "autopilot"),
+  decided: list(GOAL_DECIDED),
   alone: bool,
   "folders?": list(GOAL_FOLDER)
 });
@@ -10440,6 +10482,8 @@ async function stopBotWork(bot, targets, signal) {
 var GOALS_FILE = path43.join(WORK_FOLDER, "goals.json");
 var LOCK6 = path43.join(WORK_FOLDER, ".goals.lock");
 var HERE_FILE = path43.join(WORK_FOLDER, "here.json");
+var MODES = ["interactive", "autopilot"];
+var modeOf = (goal) => goal.mode ?? "interactive";
 var SHOWN = 24 * 3600000;
 var ASK_SETTLES = 2 * 60000;
 var WRAP_UP = 2 * 3600000;
@@ -10515,7 +10559,7 @@ var shown = (goal) => {
     return paused ? { ...step, state: "paused", ...paused.until ? { resumes: paused.until } : {} } : step;
   });
   const proposed = goal.state === "proposed";
-  return { ...rest, steps, public: [], checks: proposed ? [...boxChecks(goal), ...goal.checks] : goal.checks, alone: alone(goal), ...proposed ? { folders: goalFolders(goal) } : {} };
+  return { ...rest, steps, public: [], checks: proposed ? [...boxChecks(goal), ...goal.checks] : goal.checks, mode: modeOf(goal), decided: goal.decided ?? [], alone: alone(goal), ...proposed ? { folders: goalFolders(goal) } : {} };
 };
 function goalPlans(file = GOALS_FILE) {
   const now = Date.now();
@@ -10738,8 +10782,12 @@ async function answerGoal(id, given, targets, file = GOALS_FILE) {
     return changeGoal(id, action, given, targets, file);
   if (action === "projects")
     return goalProjects(id, given.projects, file);
+  if (action === "decided")
+    return decidedByYou(id, given, targets, file);
   if (action !== "start" && action !== "decline" && action !== "stop")
-    return { refused: { status: 400, message: "Say start, change, clear, projects, decline or stop (action)." } };
+    return { refused: { status: 400, message: "Say start, change, clear, decided, projects, decline or stop (action)." } };
+  if (given.mode !== undefined && !MODES.includes(given.mode))
+    return { refused: { status: 400, message: MODE_WORDS } };
   const before = readKept2(file).find((goal) => goal.id === id);
   if (!before || !botHere(before.bot))
     return { refused: { status: 404, message: "There's no such goal here." } };
@@ -10773,6 +10821,7 @@ async function answerGoal(id, given, targets, file = GOALS_FILE) {
     goal.state = "running";
     goal.started = Date.now();
     goal.wake = given.wake === true;
+    goal.mode = MODES.includes(given.mode) ? given.mode : modeOf(goal);
     if (DIGESTS.includes(given.digest))
       goal.digest = given.digest;
     if (ends !== undefined)
@@ -10841,6 +10890,10 @@ async function changeGoal(id, action, given, targets, file) {
   const ends = action === "change" ? endGiven(given.ends) : undefined;
   if (ends === null)
     return { refused: { status: 400, message: "The end (ends) is a date and time to come." } };
+  if (action === "change" && given.mode !== undefined && !MODES.includes(given.mode))
+    return { refused: { status: 400, message: MODE_WORDS } };
+  let switched = false;
+  const limits = ["wake", "digest", "ends", "spend"].some((key) => given[key] !== undefined);
   const changed = changeKept2((all) => {
     const goal = all.find((each) => each.id === id);
     if (!goal)
@@ -10855,6 +10908,10 @@ async function changeGoal(id, action, given, targets, file) {
     }
     if (typeof given.wake === "boolean")
       goal.wake = given.wake;
+    if (MODES.includes(given.mode) && given.mode !== modeOf(goal)) {
+      goal.mode = given.mode;
+      switched = true;
+    }
     if (DIGESTS.includes(given.digest))
       goal.digest = given.digest;
     if (ends !== undefined)
@@ -10869,8 +10926,11 @@ async function changeGoal(id, action, given, targets, file) {
   if (!("id" in changed))
     return { refused: changed };
   noteWorkChanged(changed.bot);
-  if (action === "change")
-    await tellBot2(changed, `[Goal changed] The user changed the goal's limits.${changed.spend.length ? ` What you may spend now: ${changed.spend.map((each) => `${each.what}, up to ${each.cap} ${each.currency}${each.per === "goal" ? "" : ` a ${each.per}`}`).join("; ")}.` : ""}${changed.ends ? ` It ends at ${resetTime(changed.ends)}.` : ""}`, "You changed the goal's limits", targets);
+  const limitWords = `The user changed the goal's limits.${changed.spend.length ? ` What you may spend now: ${changed.spend.map((each) => `${each.what}, up to ${each.cap} ${each.currency}${each.per === "goal" ? "" : ` a ${each.per}`}`).join("; ")}.` : ""}${changed.ends ? ` It ends at ${resetTime(changed.ends)}.` : ""}`;
+  const modeWords = `The user switched the goal to ${modeName(modeOf(changed))}. ${howItRuns(modeOf(changed))}`;
+  if (action === "change" && (switched || limits))
+    await tellBot2(changed, `[Goal changed] ${[switched ? modeWords : "", limits ? limitWords : ""].filter(Boolean).join(`
+`)}`, switched && !limits ? `Now ${modeName(modeOf(changed))}` : "You changed the goal's limits", targets);
   return { goal: shown(changed) };
 }
 var loopCondition = (goal) => `${goal.goal}
@@ -10899,11 +10959,28 @@ var LEAD_WORDS = (projects) => [
   "Write no code and make no files of the work yourself, not even the first ones: a session does. If the plan is one small step, you may do it yourself."
 ].join(`
 `);
+var MODE_WORDS = "A goal runs interactive or autopilot (mode).";
+var modeName = (mode) => mode === "autopilot" ? "Autopilot" : "Interactive";
+function howItRuns(mode) {
+  if (mode === "autopilot")
+    return [
+      "How it runs: Autopilot. The user wants it done without being asked. Make every call your research settles yourself, taste and close options too, by what serves the goal best: keep each with goal_progress (decided: what, your choice, why), say it in a line, and go on.",
+      "Take the plan's steps all the way, publishing, submitting, posting and sending included: the user's Start approved them.",
+      "Stop only at a real blocker, what only the user can do: pay for something on their own account (a membership, a subscription), sign in, make an account, hand over a key or a code. Keep it as waiting, and carry on with everything that doesn't depend on it.",
+      "If you do ask, mark your recommendation (Recommended): you go ahead on it at once, and the user's later answer confirms or redirects it. What's outside the plan still waits for the user, and you spend only what the plan names."
+    ].join(" ");
+  return [
+    "How it runs: Interactive. The user wants a say in the calls that are theirs: taste and brand, options your research leaves close, a change of scope.",
+    "Ask those gathered into one question, with your recommendation marked (Recommended). While other steps can go on, keep it as waiting (goal_progress waiting, kind judgment, your recommendation in its detail) and carry on with them; ask with the question tool only once nothing else can.",
+    "Decide yourself what your research settles clearly and how the work gets done, and say it in a line (goal_progress decided). Never ask the user to approve your work."
+  ].join(" ");
+}
 function startWords(goal) {
   const lines = [
     `[Goal started] The user approved the plan. Work through it now, steps side by side where they don't depend on each other: ${goal.steps.map((each, at) => `${at + 1}. ${each.text}`).join(" ")}`,
     goal.spend.length ? `What you may spend, never more: ${goal.spend.map((each) => `${each.what}, up to ${each.cap} ${each.currency}${each.per === "goal" ? "" : ` a ${each.per}`}`).join("; ")}. Ask may_spend before each purchase.` : "Spend nothing.",
     goal.ends ? `It ends at ${resetTime(goal.ends)}: be done by then, or wrap up and report.` : "",
+    howItRuns(modeOf(goal)),
     LEAD_WORDS(goal.projects.map(goalProject)),
     "Mark each step with goal_progress as it starts, moves and ends (with progress where you can measure it), and keep what only the user can fix as waiting (it never stalls the rest: carry on with other steps). End with finish_goal and your report."
   ];
@@ -11040,6 +11117,48 @@ function addWaiting(bot, item, file = GOALS_FILE, key) {
     noteWorkChanged(bot);
   return added;
 }
+function addDecided(bot, item, file = GOALS_FILE, key) {
+  const added = changeKept2((all) => {
+    const goal = all.find((each) => each.bot === bot && each.state === "running");
+    if (!goal)
+      return null;
+    const decided = goal.decided ?? [];
+    const same = decided.find((each) => key ? each.id === key : each.text === item.text && each.choice === item.choice);
+    if (same)
+      return same;
+    const made = { id: key ?? newID2("dec"), ...item, at: Date.now() };
+    goal.decided = [...decided, made].slice(-60);
+    return made;
+  }, file);
+  if (added)
+    noteWorkChanged(bot);
+  return added;
+}
+async function decidedByYou(id, given, targets, file) {
+  const choice = line(given.choice, 200);
+  if (!choice)
+    return { refused: { status: 400, message: "Say your choice (choice)." } };
+  let decided;
+  const changed = changeKept2((all) => {
+    const goal = all.find((each) => each.id === id);
+    if (!goal || !botHere(goal.bot))
+      return { status: 404, message: "There's no such goal here." };
+    if (goal.state !== "running")
+      return { status: 400, message: "That goal isn't running." };
+    decided = goal.decided?.find((each) => each.id === given.decided);
+    if (!decided)
+      return { status: 404, message: "There's no such call on it." };
+    decided.yours = { choice, at: Date.now() };
+    return goal;
+  }, file);
+  if (!("id" in changed))
+    return { refused: changed };
+  noteWorkChanged(changed.bot);
+  if (decided && choice.toLowerCase() !== decided.choice.toLowerCase()) {
+    await tellBot2(changed, `[Decision changed] For "${decided.text}" the user picked ${choice}, not ${decided.choice} as you decided. Go that way from here: redo what depends on it, and say in a line what changes.`, `You picked ${choice}`, targets);
+  }
+  return { goal: shown(changed) };
+}
 function pauseGoal(bot, pause, file = GOALS_FILE) {
   const done = changeKept2((all) => {
     const goal = all.find((each) => each.bot === bot && each.state === "running");
@@ -11078,7 +11197,7 @@ function linkSession(bot, step, session, file = GOALS_FILE) {
     noteWorkChanged(bot);
   return linked;
 }
-var presence = () => isHere() ? "The user is here now." : "The user is away now: carry on with what doesn't need them.";
+var presence = (mode = "interactive") => `${isHere() ? "The user is here now." : "The user is away now: carry on with what doesn't need them."} ${mode === "autopilot" ? "On Autopilot: decide what your research settles, and stop only at what only the user can do." : "Interactive: ask the user only the calls that are theirs."}`;
 function untilOf(value) {
   const at = typeof value === "number" ? value < 1000000000000 ? value * 1000 : value : typeof value === "string" && /^\d{4}-\d{2}-\d{2}/.test(value.trim()) ? Date.parse(value.trim()) : NaN;
   return Number.isFinite(at) && at > 0 ? at : null;
@@ -11109,6 +11228,8 @@ function progressGiven(bot, given, file) {
   }
   if (isObject(given.waiting) && (!text(given.waiting.text, 300) || !WAITING_KINDS.includes(given.waiting.kind)))
     return { refused: "What waits needs its kind (you, judgment or outside) and what it is (text)." };
+  if (given.decided !== undefined && (!isObject(given.decided) || !text(given.decided.text, 300) || !text(given.decided.choice, 200)))
+    return { refused: "A call you made is {text (what it was), choice, why}." };
   const spent = Array.isArray(given.spent) ? given.spent : isObject(given.spent) ? [given.spent] : [];
   for (const each of spent)
     if (!isObject(each) || !text(each.what, 200) || typeof each.amount !== "number" || !(each.amount > 0))
@@ -11204,8 +11325,15 @@ function goalProgress(bot, given, file = GOALS_FILE) {
     addWaiting(bot, { kind: given.waiting.kind, text: text(given.waiting.text, 300), ...text(given.waiting.detail, 500) ? { detail: text(given.waiting.detail, 500) } : {}, ...url ? { url } : {}, ...site ? { site } : {}, ...app ? { app } : {} }, file);
     notes.push("kept as waiting for the user: carry on with what doesn't depend on it");
   }
+  if (isObject(given.decided)) {
+    const options = (Array.isArray(given.decided.options) ? given.decided.options : []).map((each) => line(each, 200)).filter((each) => Boolean(each)).slice(0, 10);
+    const why = line(given.decided.why, 300);
+    addDecided(bot, { text: line(given.decided.text, 300), choice: line(given.decided.choice, 200), ...why ? { why } : {}, ...options.length ? { options } : {} }, file);
+    notes.push("decided, kept for the user to see: go on with it");
+  }
   noteWorkChanged(bot);
-  return { said: `${notes.length ? `Noted: ${notes.join("; ")}.` : "Nothing to note: give steps, add, waiting, spent or watching."} ${presence()}` };
+  const mode = runningGoal(bot, file)?.mode;
+  return { said: `${notes.length ? `Noted: ${notes.join("; ")}.` : "Nothing to note: give steps, add, waiting, decided, spent or watching."} ${presence(mode)}` };
 }
 function maySpend(bot, given, file = GOALS_FILE) {
   const goal = runningGoal(bot, file);
@@ -11264,6 +11392,7 @@ async function failedTurn(target, session, signal) {
   }
   return null;
 }
+var goAhead = (target, asker, form, recommended, signal) => call(target, "POST", `/api/session/${encodeURIComponent(asker)}/form/${encodeURIComponent(form)}/reply`, { answer: recommended.answer }, signal).then(() => true, () => false);
 function digestWords(goal, now) {
   const done = goal.steps.filter((step) => step.state === "done" || step.state === "skipped").length;
   const since = Math.max(0, done - (goal.doneAtDigest ?? 0));
@@ -11381,15 +11510,23 @@ async function lookAtGoals(tell, targets, { file = GOALS_FILE, here, now = Date.
     }
     const asksSeen = {};
     const open = new Set;
+    const autopilot = modeOf(kept ?? goal) === "autopilot";
     const askers = [...work.map((each) => ({ target: each.target, id: each.data.id, title: each.data.title || "New Session" })), ...own ? [{ target: own.target, id: goal.session, title: goal.name }] : []];
     for (const each of askers) {
       const { permissions, questions } = await asksIn(each.target, each.id, signal).catch(() => ({ permissions: [], questions: [] }));
-      for (const ask of [...permissions.map((one) => ({ id: one.id, what: permissionWords(one).replace(/\.$/, "") })), ...questions.map((one) => ({ id: one.id, what: `Asks: ${one.text}` }))]) {
+      const asks = [...permissions.map((one) => ({ id: one.id, what: permissionWords(one).replace(/\.$/, "") })), ...questions.map((one) => ({ id: one.id, what: `Asks: ${one.text}`, asker: one.asker, recommended: one.recommended }))];
+      for (const ask of asks) {
         const key = `${each.id}:${ask.id}`;
         open.add(key);
         asksSeen[key] = kept?.asksSeen?.[key] ?? now;
-        if (each.id === goal.session || now - asksSeen[key] >= ASK_SETTLES)
-          addWaiting(goal.bot, { kind: "ask", text: `${each.title}: ${ask.what}`, session: each.id }, file, `ask:${key}`);
+        if (each.id !== goal.session && now - asksSeen[key] < ASK_SETTLES)
+          continue;
+        if (autopilot && ask.recommended && ask.asker && !kept?.heldByYou && await goAhead(each.target, ask.asker, ask.id, ask.recommended, signal)) {
+          open.delete(key);
+          addDecided(goal.bot, { text: ask.recommended.text, choice: ask.recommended.choice, ...ask.recommended.why ? { why: ask.recommended.why } : {}, ...ask.recommended.options ? { options: ask.recommended.options } : {}, session: each.id }, file, `ask:${key}`);
+          continue;
+        }
+        addWaiting(goal.bot, { kind: "ask", text: `${each.title}: ${ask.what}`, session: each.id }, file, `ask:${key}`);
       }
     }
     const live = readKept2(file).find((each) => each.id === goal.id);
@@ -23482,7 +23619,7 @@ import fs78 from "node:fs";
 import path81 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.198";
+var BRIDGE_VERSION = "0.9.199";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

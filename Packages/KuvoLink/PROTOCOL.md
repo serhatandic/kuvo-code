@@ -861,8 +861,9 @@ beside it.
   note?, until?, app?}]}`, `until` a time like `2026-11-02T09:00` that a step can only start at (null
   takes it away; taken up, it goes; `app: null` takes the step's away), `add?: [text | {text, detail?, site?, app?, after?}]`, `waiting?: {kind: you|judgment|outside, text,
   detail?, url?, app?}`, `resolved?: [id or words]` (what waited and is dealt with), `spent?: [{what,
-  amount}]` (one on no spend line is kept as waiting, kind `outside`), `watching?: [text]}`; all
-  checked before any is kept; it says whether you're here); `may_spend` (`{what,
+  amount}]` (one on no spend line is kept as waiting, kind `outside`), `watching?: [text]`,
+  `decided?: {text, choice, why?, options?: [text]}` (a call the bot made on its own, bridge
+  0.9.199)}; all checked before any is kept; it says whether you're here, and how the goal runs); `may_spend` (`{what,
   amount}`: whether it fits the line's cap in its period now); `finish_goal` (`{report, watching?}`).
   `start_session` takes `step` (its number or id), and that step's track lists the session.
 - **Asked for**: `POST kuvo/work/goals/ask` `{session, goal}` (`/goal` in a bot's chat, from a
@@ -872,11 +873,13 @@ beside it.
   reads as you typed it, then (bridge 0.9.191) lines on how to plan it as a lead whose sessions do
   the work, which clients leave out with the block. One a box sent before 0.9.143 is `[Goal] <words>` then a note in
   parentheses; `SentWithKeyword.split` reads it the same way.
-- **Only you start it**: `POST kuvo/work/goals/<id>` from a client, `{action: start, wake?, digest?, ends?, spend?: [{cap?, per?}] (by line)}`, `{action: decline}` or `{action:
+- **Only you start it**: `POST kuvo/work/goals/<id>` from a client, `{action: start, mode?, wake?, digest?, ends?, spend?: [{cap?, per?}] (by line)}`, `{action: decline}` or `{action:
   stop}` (and `{action: projects}`, below) → `{goal}` (`ends: null` starts it with no end, taking away the one the bot proposed; left
   out, the bot's stands); while it runs, `{action: change, …the same but start's}` (a cap raised past what's
-  spent lets what spends go on; the bot is told `[Goal changed] …`) and `{action: clear, waiting:
-  <id>}` (what waited, put away). An end written without a zone (`2026-11-30T18:00`) is in yours
+  spent lets what spends go on; the bot is told `[Goal changed] …` once a limit is given, or the
+  mode is another than it was), `{action: clear, waiting:
+  <id>}` (what waited, put away) and `{action: decided, decided: <id>, choice}` ("Interactive or
+  Autopilot", below). An end written without a zone (`2026-11-30T18:00`) is in yours
   (`KUVO_TZ`, else the computer's). Never a tool, an agent's message or another computer's mail. 400 for one in the
   wrong state or a card from more than a day ago; 404 for none; 409 for starting one (or asking
   for one) while its bot moves to another computer (a goal stays on the box it started on, and a
@@ -901,7 +904,8 @@ beside it.
   draft until you switched it on), projects, wake, digest,
   ends?, proposed, started?, ended?, waiting: [{id, kind: you|judgment|outside|ask, text, detail?,
   url?, site?, app?: {name, id?}, session?, at}], paused: [{why, until?, session?}], waited, watching, next?, lastDigest?: {at, text},
-  report?, alone, folders?: [{project, folder: path|null, shown: path|null, there?}]}]}` (`next`: when it goes on next, while nothing of it is at work and nothing can be
+  report?, mode: interactive|autopilot, decided: [{id, text, choice, why?, options?, session?, at,
+  yours?: {choice, at}}], alone, folders?: [{project, folder: path|null, shown: path|null, there?}]}]}` (`next`: when it goes on next, while nothing of it is at work and nothing can be
   before a time: the bot's soonest wake-up, or the steps it put off; clients say "Next: Mon 09:00"): each bot's latest, while it's proposed or running, or ended within a day. Kept
   in `run/work/goals.json`; `kuvo/work/events` moves too. While it's proposed, the box's own checks
   come first: `alone` (failed where this box can't work on it alone yet), `power` (a Mac on battery),
@@ -915,6 +919,33 @@ beside it.
   it) is where it's done, and its mark is that site's own icon, which each client loads from the
   site itself; a step done on the computer has none, so no mark. `phase` is still kept from older
   bots, and the apps don't show it.
+- **Interactive or Autopilot** (bridge 0.9.199, feature `work.goals.modes`): how the bot runs it,
+  `mode`, set as you start it (`interactive` unless you say) and changed while it runs (`{action:
+  change, mode}`); a goal kept from before runs Interactive. It never changes what the goal's
+  conversations may do (their own modes, Auto or Full Access), nor what it may spend (the plan's
+  lines). The bot is told how to run it in `[Goal started] …`, and again in `[Goal changed] The user
+  switched the goal to …` (a box note, `Now Autopilot`), and each `goal_progress` says it:
+  - **Interactive**: it asks you the calls that are yours (taste and brand, options its research
+    leaves close, a change of scope), gathered into one with its recommendation, keeping them as
+    waiting (kind `judgment`) while other steps can go on; it decides the rest itself, and never
+    asks you to approve its work;
+  - **Autopilot**: it decides whatever its research settles, keeps each call with `goal_progress`
+    `decided`, and goes on; it takes the plan's steps all the way, publishing, submitting, posting
+    and sending included (your Start approved them); it stops only at what only you can do (paying
+    on your own account, signing in, making an account, handing over a key), kept as waiting while
+    it carries on with the rest. A question the bot asks with the question tool (`metadata.kind:
+    question`) that marks a choice `(Recommended)` in each field it needs (one of a list; any of a
+    multiselect) goes ahead on it on the box's next look instead of waiting for you: the bot's own
+    at once, its sessions' once the bot has had its couple of minutes; the box answers the form
+    with it (`POST …/form/<id>/reply`) and keeps it in `decided` (with `session`, the choice's
+    description as `why`, and the choices there were as `options`). A question with none, and any
+    permission, waits for you as on Interactive; nothing is answered while you have the goal
+    paused.
+  - `decided` lists the calls it made on its own, the newest 60. `{action: decided, decided: <id>,
+    choice}` is your choice on one (`yours`): the same as the bot's confirms it, and the bot isn't
+    told; another tells it `[Decision changed] For "<call>" the user picked <yours>, not <its> …`
+    (a box note, `You picked <yours>`), to go that way from there. 404 for a call it doesn't have,
+    400 without a choice or once the goal isn't running.
 - **Apps** (bridge 0.9.196, feature `work.goals.apps`, `work/apps.ts`): a step, or what waits, done
   in an app on the computer names it (`app`, "Xcode"). The box looks for it on its own computer as
   the tool is called, once the call has passed its own checks (a call that's refused has nothing
@@ -974,7 +1005,8 @@ beside it.
   `run/work/here.json` for the tools. Whether you're here or not, unattended rules hold:
   - what its sessions ask that the bot hasn't answered in a couple of minutes, and what the bot
     asks itself, is listed as `waiting` (kind `ask`) and waits for you, however long: it never
-    stalls the rest and is never said no to; it leaves the list once it's answered;
+    stalls the rest and is never said no to; it leaves the list once it's answered (on Autopilot, a
+    question that recommends a choice goes ahead on it instead: "Interactive or Autopilot");
   - a session the bot starts for a goal is told you may not be watching: what it asks can wait,
     so it carries on with what doesn't depend on it (before bridge 0.9.189 it was also told not to
     publish, deploy, send or pay, and publishing and deploying asked in the bot's conversation and
@@ -2483,6 +2515,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `work.goals` | a bot's goal ("Work", Goals): `kuvo/work/goals…`, and its tools (bridge 0.9.122) |
 | `work.goals.apps` | `app` on a goal's steps and what waits, and `GET kuvo/work/apps/icon` ("Work", Goals, Apps; bridge 0.9.196) |
 | `work.goals.projects` | `{action: projects}` on a proposed goal ("Work", Goals, Its projects; bridge 0.9.196) |
+| `work.goals.modes` | a goal's `mode` and `decided`, `mode` on start and change, `{action: decided}` ("Work", Goals, Interactive or Autopilot; bridge 0.9.199) |
 | `work.projects` | a bot's projects ("Work", Projects): `make_project`, `list_projects`, `kuvo/work/asks`, `…/events`, `POST kuvo/work/asks/<id>`, `kuvo/work/settings`, `POST kuvo/projects/new`, `madeBy` on projects, `allowed` in `kuvo/bots` (bridge 0.9.107) |
 | `work.unanswering` | `GET kuvo/work/unanswering`: models that can't answer now ("Work", Models that can't answer; bridge 0.9.198) |
 | `search` | `kuvo/search` |

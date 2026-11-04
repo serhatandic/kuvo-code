@@ -157,6 +157,21 @@ export const GOAL_WAITING = object({
   at: number,
 });
 
+/** A call the bot made on its own (Autopilot): what it was, what it chose and why, the other choices
+ * there were, the session that asked (a question the box answered with its recommendation) or none
+ * (one the bot kept with goal_progress), when, and once you've seen it, the choice you made (`yours`:
+ * the same confirms it; another, the bot was told to go that way). */
+export const GOAL_DECIDED = object({
+  id: string,
+  text: string,
+  choice: string,
+  "why?": string,
+  "options?": list(string),
+  "session?": string,
+  at: number,
+  "yours?": object({ choice: string, at: number }),
+});
+
 /** What it may spend, each with a cap for a period (a day, a week, a month, or the whole goal), what
  * it spent in the period now, and, once the cap's reached, until when what spends waits (ms). */
 export const GOAL_SPEND = object({ what: string, cap: number, currency: string, per: words("day", "week", "month", "goal"), spent: number, "until?": number });
@@ -176,7 +191,10 @@ export const GOAL_FOLDER = object({ project: string, folder: nullable(string), s
  * still watched, when it goes on next while nothing of it can before a time (`next`: its bot's
  * wake-up, or the steps it put off), the last digest and the final report. Proposed by the bot; only you start it,
  * decline it or stop it. `alone`: whether this box may work on it on its own (else it runs with you
- * there). While it's proposed, where Start makes its projects (`folders`). Times in ms since 1970. */
+ * there). How it runs (`mode`): Interactive, asking you the calls that are yours, or Autopilot,
+ * deciding what its research settles and stopping only at what only you can do; the calls it made
+ * on its own (`decided`). While it's proposed, where Start makes its projects (`folders`). Times in
+ * ms since 1970. */
 export const GOAL_PLAN = object({
   id: string,
   bot: string,
@@ -203,6 +221,8 @@ export const GOAL_PLAN = object({
   "next?": number,
   "lastDigest?": object({ at: number, text: string }),
   "report?": string,
+  mode: words("interactive", "autopilot"),
+  decided: list(GOAL_DECIDED),
   alone: bool,
   "folders?": list(GOAL_FOLDER),
 });
@@ -224,6 +244,7 @@ export type GoalCheckShape = Infer<typeof GOAL_CHECK>;
 export type GoalStepShape = Infer<typeof GOAL_STEP>;
 export type GoalAppShape = Infer<typeof GOAL_APP>;
 export type GoalFolderShape = Infer<typeof GOAL_FOLDER>;
+export type GoalDecidedShape = Infer<typeof GOAL_DECIDED>;
 
 export const WORK_ROUTES: RouteShape[] = [
   { route: "GET kuvo/work", answers: { 200: WORK, 400: REFUSED, 404: REFUSED, 503: REFUSED } },
