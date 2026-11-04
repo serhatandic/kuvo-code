@@ -335,6 +335,16 @@ final class Catalog {
         Self.planName(id) ?? providerName(id)
     }
 
+    /// It has a way to sign in that the sign-in sheet offers (a key, a sign-in page, or its own).
+    func offersSignIn(_ id: String) -> Bool {
+        integrations.first { $0.id == id }?.offeredSignInMethods.contains { method in
+            switch method {
+            case .oauth, .key, .external: true
+            default: false
+            }
+        } ?? false
+    }
+
     static func planName(_ id: String) -> String? {
         switch id {
         case "openai": "Codex (your ChatGPT plan, under Subscriptions)"
@@ -362,6 +372,8 @@ final class Catalog {
         // later refresh is in the background, and what's shown meanwhile is still right.
         let slowness = isLoaded ? nil : Task {
             try await Task.sleep(for: Self.slowAfter)
+            // Loaded just as the wait ran out: not slow after all.
+            guard !Task.isCancelled, !isLoaded else { return }
             isSlow = true
         }
         defer {

@@ -28,15 +28,13 @@ struct TranscriptView: View {
         let model = model
         return { model.openModelMenu() }
     }
-    @Environment(\.agentsBridge) private var agentsBridge
     /// The account a failed turn's card is signing in to, in a sheet over the conversation.
     @State private var signingIn: SigningIn?
     private struct SigningIn: Identifiable { let id: String }
-    /// A failed turn's Sign In: to the account of the model the conversation is on, here (one of
-    /// your Custom Auto lists has several: Accounts lists them).
+    /// A failed turn's Sign In, to its model's account, here.
     private var signIn: ConversationSignIn? {
-        guard let ref = model.session.model, ref.providerID != OutsideAgents.autoProvider, !isOffline else { return nil }
-        return ConversationSignIn(model: ref) { signingIn = SigningIn(id: ref.providerID) }
+        guard !isOffline else { return nil }
+        return ConversationSignIn { providerID in signingIn = SigningIn(id: providerID) }
     }
     @AppStorage(StepsDetail.key) private var stepsDetail = StepsDetail.summary
     @State private var scroller = ConversationScroller()
@@ -115,7 +113,6 @@ struct TranscriptView: View {
         .sheet(item: $signingIn) { item in
             ConnectView(integrationID: item.id, onDone: { signingIn = nil }, onCancel: { signingIn = nil })
                 .environment(catalog)
-                .environment(\.agentsBridge, agentsBridge)
                 .frame(width: 480)
                 .frame(minHeight: 380)
         }
@@ -582,6 +579,8 @@ struct TurnStats: Hashable {
     var text: [String] = []
     /// The mode that answered: a plan can be built from its end.
     var agent: String?
+    /// The model that answered: a failed turn signs in to its account.
+    var model: ModelRef?
     /// The files the agent changed, in the order first changed, with their lines.
     var files: [TurnFile] = []
 
@@ -605,6 +604,7 @@ struct TurnStats: Hashable {
 
     mutating func add(_ message: Message.Assistant) {
         agent = message.agent
+        model = message.model
         for block in message.content {
             guard case .tool(let call) = block, case .completed(let input, _, let metadata) = call.state else { continue }
             // Read straight from the JSON: this runs on every update while a reply streams, and
@@ -1463,19 +1463,19 @@ private struct TurnEndView: View {
         return kind
     }
 
-    /// The conversation's model is known to still need the sign-in the turn failed for: its Try
-    /// Again would only fail the same way. (Not known for a Custom Auto list's, which skips one
-    /// signed out of.)
-    private var stillSignedOut: Bool {
-        guard let signIn else { return false }
-        return catalog.needsSignIn(signIn.model) || catalog.hasEndedSignIn(signIn.model.providerID)
+    /// The account the turn failed for, to sign in to from here: its model's, where that has a
+    /// sign-in (not Auto's, whose Custom Auto lists can have several: Accounts lists them).
+    private var account: ModelRef? {
+        guard signIn != nil, let model = stats.model, model.providerID != OutsideAgents.autoProvider,
+              catalog.offersSignIn(model.providerID) else { return nil }
+        return model
     }
 
-    /// Signed in again since, as a coding agent's account says (the engine's may read as signed in
-    /// with a key or sign-in its provider turns away): Try Again is the way on.
-    private var signedInSince: Bool {
-        guard let signIn, OutsideAgents.isAgent(signIn.model.providerID) else { return false }
-        return !stillSignedOut
+    /// Its account is known to still need the sign-in the turn failed for: its Try Again would
+    /// only fail the same way.
+    private var stillSignedOut: Bool {
+        guard let account else { return false }
+        return catalog.needsSignIn(account) || catalog.hasEndedSignIn(account.providerID)
     }
 
     /// The engine's words under the headline; for a sign-in that ended, which the engine says only
@@ -1503,15 +1503,15 @@ private struct TurnEndView: View {
                     // this conversation runs (a machine signs in on its own). Or another model.
                     case .signIn:
                         let machine = RemoteFolder.machine(of: directory)
-                        if let signIn, !signedInSince {
+                        if let signIn, let account {
                             let again = kind == .signIn(ended: true) ? "Sign In Again" : "Sign In"
-                            Button(machine.map { "\(again) on \($0)" } ?? again, action: signIn.open)
-                                .help("Sign in to \(catalog.signInName(signIn.model.providerID))\(machine.map { " on \($0): its sign-ins are its own" } ?? "")")
-                            if SignInCard.offersSwitch, let switchModel {
+                            Button(machine.map { "\(again) on \($0)" } ?? again) { signIn.open(account.providerID) }
+                                .help("Sign in to \(catalog.signInName(account.providerID))\(machine.map { " on \($0): its sign-ins are its own" } ?? "")")
+                            if SignInCard.offersSwitch, stillSignedOut, let switchModel {
                                 Button("Switch Model", action: switchModel)
                                     .help("Choose another model for this conversation")
                             }
-                        } else if signIn == nil {
+                        } else {
                             // Several to sign in to (a Custom Auto list's), or not known which: Accounts.
                             Button(machine.map { "Open Accounts on \($0)" } ?? "Open Accounts") { app.openAccounts(on: machine) }
                                 .help(machine.map { "Accounts, on \($0): its sign-ins are its own" } ?? "Accounts")
@@ -2312,10 +2312,9 @@ extension TranscriptView {
     }
 }
 
-/// The model the conversation is on, for a failed turn's card to sign in to its account from.
+/// A failed turn's card signs in to its model's account (a provider's ID) from here.
 struct ConversationSignIn {
-    let model: ModelRef
-    let open: () -> Void
+    let open: (String) -> Void
 }
 
 extension EnvironmentValues {

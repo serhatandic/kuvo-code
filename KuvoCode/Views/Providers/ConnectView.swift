@@ -350,6 +350,12 @@ struct ConnectView: View {
                     }
                 } else {
                     HandoffWait("Waiting for you to finish…", to: .browser)
+                    if let note = ClaudeSignInNote.text(for: integrationID, on: catalog.machine) {
+                        Text(note)
+                            .font(.callout)
+                            .foregroundStyle(.tertiary)
+                            .multilineTextAlignment(.center)
+                    }
                 }
                 if attempt.acceptsCode == true, isPastingCode, !isCheckingCode {
                     VStack(alignment: .leading, spacing: 8) {
@@ -606,6 +612,8 @@ struct ConnectView: View {
                     }
                     continue
                 }
+                // Closed while it asked: nothing to open or say.
+                guard !Task.isCancelled else { return }
                 misses = 0
                 hasStatus = true
                 switch status.status {
@@ -743,6 +751,11 @@ struct ConnectView: View {
         guard !url.isEmpty, let url = URL(string: url), ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return }
         // An agent on a machine: the page comes back to it there.
         if let machine = catalog.machine { forward.start(for: url, on: machine) }
+        #if DEBUG
+        // KUVO_DEMO_NO_BROWSER: a demo copy's sign-in waits as if the page had opened, without
+        // taking over the browser.
+        if ProcessInfo.processInfo.environment["KUVO_DEMO_NO_BROWSER"] != nil { return }
+        #endif
         withAnimation(.ui) { browserRefused = !NSWorkspace.shared.open(url) }
     }
 
@@ -754,7 +767,7 @@ struct ConnectView: View {
         copyReset = Task {
             try? await Task.sleep(for: .seconds(2))
             guard !Task.isCancelled else { return }
-            withAnimation(.ui) { linkCopied = false }
+            withAnimation(.ui) { linkCopied = false; copied = false }
         }
     }
 
@@ -766,7 +779,7 @@ struct ConnectView: View {
         copyReset = Task {
             try? await Task.sleep(for: .seconds(2))
             guard !Task.isCancelled else { return }
-            withAnimation(.ui) { copied = false }
+            withAnimation(.ui) { copied = false; linkCopied = false }
         }
     }
 
@@ -819,5 +832,19 @@ struct AnyPrimitiveButtonStyle: PrimitiveButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         make(configuration)
+    }
+}
+
+// DRAFTS (to pick from, then fold into the code): whether Claude Code's sign-in on a Mac says it's
+// Kuvo Code's own. KUVO_DEMO_CLAUDE_SIGNIN=note shows the line; otherwise nothing is added.
+enum ClaudeSignInNote {
+    static func text(for integrationID: String, on machine: String?) -> String? {
+        #if DEBUG
+        guard ProcessInfo.processInfo.environment["KUVO_DEMO_CLAUDE_SIGNIN"] == "note",
+              machine == nil, OutsideAgents.base(integrationID) == "claude-code" else { return nil }
+        return "Separate from Claude Code in Terminal"
+        #else
+        return nil
+        #endif
     }
 }
