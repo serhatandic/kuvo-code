@@ -10303,7 +10303,7 @@ function boxChecks(goal) {
   return checks;
 }
 var shown = (goal) => {
-  const { periods: _, asksSeen: __, limitsSeen: ___, told: ____, reportTold: _____, endTold: ______, phasesDone: _______, doneAtDigest: ________, pausedSince: _________, idleSince: __________, nudges: ___________, loop: ____________, heldByYou: _____________, nudgedPlan: ______________, ...rest } = goal;
+  const { periods: _, asksSeen: __, limitsSeen: ___, told: ____, reportTold: _____, endTold: ______, phasesDone: _______, doneAtDigest: ________, pausedSince: _________, idleSince: __________, nudges: ___________, loop: ____________, heldByYou: _____________, nudgedPlan: ______________, botProjects: _______________, ...rest } = goal;
   const steps = goal.steps.map((step) => {
     const paused = goal.state === "running" && step.state !== "done" && step.state !== "skipped" ? goal.paused.find((each) => each.session && step.sessions?.includes(each.session)) : undefined;
     return paused ? { ...step, state: "paused", ...paused.until ? { resumes: paused.until } : {} } : step;
@@ -10405,7 +10405,78 @@ function endGiven(value, now = Date.now()) {
   const at = timeGiven(value);
   return at !== null && at > now ? at : null;
 }
+function projectsGiven(given) {
+  const projects = [];
+  const places = new Map;
+  for (const each of given) {
+    const entry = line(each, 201);
+    if (!entry || entry.length > 200)
+      return { refused: "Each project is a name or a full path (~/… or /…), of 200 characters at most." };
+    let name = entry;
+    let place = null;
+    if (/^(~\/|\/)/.test(entry) || entry === "~") {
+      const named = namedPlace(entry);
+      if ("refused" in named)
+        return { refused: named.refused };
+      name = path42.basename(named.folder);
+      place = named.folder;
+    }
+    const folder = folderName(name);
+    if (!folder)
+      return { refused: `${name} can't be a folder's name: use letters or numbers.` };
+    place ??= projectPlace(name) ?? `name:${folder}`;
+    const twin = places.get(place);
+    if (twin)
+      return { refused: `${twin} and ${entry} would be the same folder: give them names apart.` };
+    places.set(place, entry);
+    projects.push(entry);
+  }
+  return { projects };
+}
+var sameProjects = (a, b) => a.length === b.length && a.every((each, at) => each.toLowerCase() === b[at].toLowerCase());
+var RUNS_ALREADY = "A goal is running already: report on it with goal_progress, and end it with finish_goal.";
 function proposeGoal(bot, given, file = GOALS_FILE) {
+  const planned = planGiven(given);
+  if ("refused" in planned)
+    return planned;
+  const { plan } = planned;
+  let yours;
+  const made = changeKept2((all) => {
+    if (all.some((each) => each.bot === bot.bot && each.state === "running"))
+      return null;
+    const kept = {
+      id: newID2("goal"),
+      bot: bot.bot,
+      name: bot.name,
+      session: bot.session,
+      ...plan,
+      state: "proposed",
+      wake: false,
+      proposed: Date.now(),
+      waiting: [],
+      paused: [],
+      waited: 0,
+      watching: []
+    };
+    const before = all.find((each) => each.bot === bot.bot && each.state === "proposed" && each.botProjects);
+    if (before?.botProjects) {
+      const keep = sameProjects(plan.projects, before.botProjects);
+      yours = { projects: before.projects, kept: keep };
+      if (keep)
+        Object.assign(kept, { projects: before.projects, botProjects: before.botProjects });
+    }
+    for (let at = all.length - 1;at >= 0; at--)
+      if (all[at].bot === bot.bot && all[at].state === "proposed")
+        all.splice(at, 1);
+    all.push(kept);
+    return kept;
+  }, file);
+  if (!made)
+    return { refused: RUNS_ALREADY };
+  noteWorkChanged(bot.bot);
+  return { goal: shown(made), ...yours ? { yours } : {} };
+}
+function planGiven(given) {
   const goal = text(given.goal, 2000);
   if (!goal)
     return { refused: "Say the goal, in the user's words (goal)." };
@@ -10434,46 +10505,15 @@ function proposeGoal(bot, given, file = GOALS_FILE) {
     spend.push({ what: text(each.what, 200), cap: each.cap, currency: (text(each.currency, 3) ?? "USD").toUpperCase(), per, spent: 0 });
   }
   const publics = (Array.isArray(given.public) ? given.public.slice(0, 8) : []).map((each) => text(each, 200)).filter((each) => Boolean(each)).map((each, at) => ({ id: `p${at + 1}`, text: each, on: false }));
-  const projects = (Array.isArray(given.projects) ? given.projects.slice(0, 5) : []).map((each) => text(each, 200)).filter((each) => Boolean(each));
+  const named = projectsGiven((Array.isArray(given.projects) ? given.projects.slice(0, 5) : []).filter((each) => !(typeof each === "string" && !each.trim())));
+  if ("refused" in named)
+    return named;
+  const { projects } = named;
   const ends = endGiven(given.ends);
   if (ends === null)
     return { refused: "An end (ends) is a date and time to come, like 2026-11-30T18:00." };
   const digest = DIGESTS.includes(given.digest) ? given.digest : steps.length > 12 || steps.some((step) => step.phase) ? "day" : "none";
-  const made = changeKept2((all) => {
-    if (all.some((each) => each.bot === bot.bot && each.state === "running"))
-      return null;
-    const kept = {
-      id: newID2("goal"),
-      bot: bot.bot,
-      name: bot.name,
-      session: bot.session,
-      goal,
-      ...text(given.title, 80) ? { title: text(given.title, 80) } : {},
-      state: "proposed",
-      steps: keptSteps(steps),
-      checks,
-      spend,
-      public: publics,
-      projects,
-      wake: false,
-      digest,
-      ...ends ? { ends } : {},
-      proposed: Date.now(),
-      waiting: [],
-      paused: [],
-      waited: 0,
-      watching: []
-    };
-    for (let at = all.length - 1;at >= 0; at--)
-      if (all[at].bot === bot.bot && all[at].state === "proposed")
-        all.splice(at, 1);
-    all.push(kept);
-    return kept;
-  }, file);
-  if (!made)
-    return { refused: "A goal is running already: report on it with goal_progress, and end it with finish_goal." };
-  noteWorkChanged(bot.bot);
-  return { goal: shown(made) };
+  return { plan: { goal, ...text(given.title, 80) ? { title: text(given.title, 80) } : {}, steps: keptSteps(steps), checks, spend, public: publics, projects, digest, ...ends ? { ends } : {} } };
 }
 async function answerGoal(id, given, targets, file = GOALS_FILE) {
   const action = given.action;
@@ -10546,25 +10586,22 @@ function goalProjects(id, given, file) {
   const no = (message) => ({ refused: { status: 400, message } });
   if (!Array.isArray(given) || !given.length || given.length > 5)
     return no("Send the plan's projects (projects): one to five, each a name or a full path (~/… or /…).");
-  const projects = [];
-  for (const each of given) {
-    const entry = typeof each === "string" ? each.trim() : "";
-    if (!entry || entry.length > 200)
-      return no("Each project is a name or a full path (~/… or /…), of 200 characters at most.");
-    if (/^(~\/|\/)/.test(entry) || entry === "~") {
-      const named = namedPlace(entry);
-      if ("refused" in named)
-        return no(named.refused);
-    }
-    projects.push(entry);
-  }
+  const named = projectsGiven(given);
+  if ("refused" in named)
+    return no(named.refused);
+  const { projects } = named;
   const changed = changeKept2((all) => {
     const goal = all.find((each) => each.id === id);
     if (!goal || !botHere(goal.bot))
       return { status: 404, message: "There's no such goal here." };
     if (goal.state !== "proposed")
       return { status: 400, message: goal.state === "running" ? "That goal is running: its projects are made already." : "That goal has ended." };
+    const bots = goal.botProjects ?? goal.projects;
     goal.projects = projects;
+    if (sameProjects(projects, bots))
+      delete goal.botProjects;
+    else
+      goal.botProjects = bots;
     return goal;
   }, file);
   if (!("id" in changed))
@@ -21706,10 +21743,12 @@ async function proposeGoalTool(caller, args) {
   const outcome = proposeGoal({ ...bot, session: caller.session }, args);
   if ("refused" in outcome)
     return refused(outcome.refused);
-  const { goal } = outcome;
+  const { goal, yours: set } = outcome;
   const yours = goal.checks.filter((check) => check.state === "needs").map((check) => check.text);
   const alone = goal.alone ? "" : ` ${HERE[0].toUpperCase()}${HERE.slice(1)} can't work on it alone yet, so once it starts, what your sessions ask waits for the user rather than for you.`;
-  return said(`The card is up on ${HERE}: the user starts the goal from it, or says not now. ${yours.length ? `What's theirs to do first: ${yours.join("; ")}. ` : ""}Don't start the work until you hear [Goal started]. If they change something, propose it again as it is now.${alone}`);
+  const names = set ? set.projects.map((each) => `"${each}"`).join(", ") : "";
+  const projects = !set ? "" : set.kept ? ` The user set its projects on the card: ${names}. They're kept: call them that.` : ` The user had set its projects on the card to ${names}; the ones you gave replace them. If they didn't ask you to change those, propose it again with theirs.`;
+  return said(`The card is up on ${HERE}: the user starts the goal from it, or says not now.${projects} ${yours.length ? `What's theirs to do first: ${yours.join("; ")}. ` : ""}Don't start the work until you hear [Goal started]. If they change something, propose it again as it is now.${alone}`);
 }
 async function goalProgressTool(caller, args) {
   const bot = goalBot(caller);
@@ -23214,7 +23253,7 @@ import fs77 from "node:fs";
 import path80 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.196";
+var BRIDGE_VERSION = "0.9.197";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

@@ -907,9 +907,16 @@ beside it.
 - **Its projects, set on the card** (bridge 0.9.196, feature `work.goals.projects`): while it's
   proposed, `POST kuvo/work/goals/<id>` `{action: projects, projects: [name | path]}` replaces the
   plan's projects, in order: one to five, each a name or a full path (`~/…` or `/…`, not `~` or
-  `/` itself), of 200 characters at most (a project renamed, or moved to a folder of its own) →
-  `{goal}`, its `folders` and checks worked out again. The bot isn't told: it hears them as the goal
-  starts. 400 for a list that won't do, or once it's running or ended; 404 for none.
+  `/` itself), of 200 characters at most, in one line (spaces and newlines in a row are one space)
+  (a project renamed, or moved to a folder of its own) → `{goal}`, its `folders` and checks worked
+  out again. Each has to be one `make_project` can make: a name (or a path's last folder) with
+  letters or numbers a folder's name can take (not "日本語" or "🚀"), and no two the same folder
+  ("Tide Pool" and "tide-pool", or a name and its folder's path); `propose_goal` refuses the bot's
+  own the same way, in the same words. The bot isn't told then: it hears them as the goal starts,
+  or as it proposes the plan again. A plan proposed again with the projects the bot proposed before
+  keeps yours (its answer names them); one with other projects replaces yours (its answer says what
+  yours were). 400 for a list that won't do (`message` says why), or once it's running or ended;
+  404 for none.
 - **Alone, or with you there**: a goal goes on alone only where the box's commands run in the
   sandbox (`sandboxOn`: `kuvo/sandbox`'s `on`, and for a bot on a coding agent its `agents` too; a
   test box says yes with `KUVO_TEST_SANDBOX_ON=1`, never the real app's, `run.kuvo.code/box`, whose

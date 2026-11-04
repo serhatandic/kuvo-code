@@ -36,7 +36,7 @@ import { keepAwake, keepsAwake, onPower } from "./awake";
 import { noteWorkChanged, WORK_FOLDER } from "./changes";
 import { sandboxOn } from "./sandbox";
 import { appNamed, appNameGiven } from "./apps";
-import { isEmptyFolder, namedPlace, projectPlace, shownPath } from "./projects";
+import { folderName, isEmptyFolder, namedPlace, projectPlace, shownPath } from "./projects";
 import { projectsFolder } from "./settings";
 import { stopBotWork } from "./stop";
 import { ofBot, workingNow, workSessions } from "./tree";
@@ -97,6 +97,9 @@ export interface KeptGoal extends Omit<GoalPlanShape, "alone" | "folders" | "ste
   /** Since when you've had it paused (its conversation's goal, from any app): nothing of it goes
    * on, not even at a limit's reset, until you resume it. */
   heldByYou?: number;
+  /** The projects the bot proposed, while you've set others on its card (`projects`): a proposal
+   * again with these keeps yours. */
+  botProjects?: readonly string[];
 }
 
 /** Those following the goals here, in this process. */
@@ -181,7 +184,7 @@ export function boxChecks(goal: Pick<KeptGoal, "projects" | "name" | "bot">): Go
 }
 
 const shown = (goal: KeptGoal): GoalPlanShape => {
-  const { periods: _, asksSeen: __, limitsSeen: ___, told: ____, reportTold: _____, endTold: ______, phasesDone: _______, doneAtDigest: ________, pausedSince: _________, idleSince: __________, nudges: ___________, loop: ____________, heldByYou: _____________, nudgedPlan: ______________, ...rest } = goal;
+  const { periods: _, asksSeen: __, limitsSeen: ___, told: ____, reportTold: _____, endTold: ______, phasesDone: _______, doneAtDigest: ________, pausedSince: _________, idleSince: __________, nudges: ___________, loop: ____________, heldByYou: _____________, nudgedPlan: ______________, botProjects: _______________, ...rest } = goal;
   // A step whose session waits for a limit to reset is paused, until then.
   const steps = goal.steps.map(step => {
     const paused = goal.state === "running" && step.state !== "done" && step.state !== "skipped" ? goal.paused.find(each => each.session && step.sessions?.includes(each.session)) : undefined;
@@ -312,9 +315,92 @@ function endGiven(value: unknown, now = Date.now()): number | null | undefined {
   return at !== null && at > now ? at : null;
 }
 
+// The projects a plan makes, as the bot or you give them: each a name, or a full path (`~/…` or
+// `/…`, not `~` or `/` itself), in a line; each one make_project can make (a folder's name with
+// letters or numbers), and no two the same folder ("Tide Pool" and "tide-pool").
+function projectsGiven(given: unknown[]): { projects: string[] } | { refused: string } {
+  const projects: string[] = [];
+  const places = new Map<string, string>();
+  for (const each of given) {
+    const entry = line(each, 201);
+    if (!entry || entry.length > 200) return { refused: "Each project is a name or a full path (~/… or /…), of 200 characters at most." };
+    let name = entry;
+    let place: string | null = null;
+    if (/^(~\/|\/)/.test(entry) || entry === "~") {
+      const named = namedPlace(entry);
+      if ("refused" in named) return { refused: named.refused };
+      name = path.basename(named.folder);
+      place = named.folder;
+    }
+    const folder = folderName(name);
+    // (As make_project says it.)
+    if (!folder) return { refused: `${name} can't be a folder's name: use letters or numbers.` };
+    place ??= projectPlace(name) ?? `name:${folder}`;
+    const twin = places.get(place);
+    if (twin) return { refused: `${twin} and ${entry} would be the same folder: give them names apart.` };
+    places.set(place, entry);
+    projects.push(entry);
+  }
+  return { projects };
+}
+
+// Two lists of projects that are the same, but for case.
+const sameProjects = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every((each, at) => each.toLowerCase() === b[at].toLowerCase());
+
+type Plan = Pick<KeptGoal, "goal" | "title" | "steps" | "checks" | "spend" | "public" | "projects" | "digest" | "ends">;
+
+const RUNS_ALREADY = "A goal is running already: report on it with goal_progress, and end it with finish_goal.";
+
+/** What `proposeGoal` makes of the user's projects, when they set some on the card it replaces:
+ * theirs, and whether they're kept (the bot proposed its own again) or the bot's replaced them. */
+export interface ProjectsByYou {
+  projects: readonly string[];
+  kept: boolean;
+}
+
 /** A goal proposed by `bot` (its name, and its conversation), from what propose_goal was given: the
- * card it puts to you, replacing one it proposed before. Refused while one runs. */
-export function proposeGoal(bot: { bot: string; name: string; session: string }, given: Record<string, unknown>, file = GOALS_FILE): { goal: GoalPlanShape } | { refused: string } {
+ * card it puts to you, replacing one it proposed before. Refused while one runs. The projects you
+ * set on the card it replaces stay, unless the bot proposes others than it did then. */
+export function proposeGoal(bot: { bot: string; name: string; session: string }, given: Record<string, unknown>, file = GOALS_FILE): { goal: GoalPlanShape; yours?: ProjectsByYou } | { refused: string } {
+  const planned = planGiven(given);
+  if ("refused" in planned) return planned;
+  const { plan } = planned;
+  let yours: ProjectsByYou | undefined;
+  const made = changeKept(all => {
+    if (all.some(each => each.bot === bot.bot && each.state === "running")) return null;
+    const kept: KeptGoal = {
+      id: newID("goal"),
+      bot: bot.bot,
+      name: bot.name,
+      session: bot.session,
+      ...plan,
+      state: "proposed",
+      wake: false,
+      proposed: Date.now(),
+      waiting: [],
+      paused: [],
+      waited: 0,
+      watching: [],
+    };
+    // The projects you set on the card it replaces: kept while the bot proposes the ones it did.
+    const before = all.find(each => each.bot === bot.bot && each.state === "proposed" && each.botProjects);
+    if (before?.botProjects) {
+      const keep = sameProjects(plan.projects, before.botProjects);
+      yours = { projects: before.projects, kept: keep };
+      if (keep) Object.assign(kept, { projects: before.projects, botProjects: before.botProjects });
+    }
+    // (The one proposed before goes: this one's the card now.)
+    for (let at = all.length - 1; at >= 0; at--) if (all[at].bot === bot.bot && all[at].state === "proposed") all.splice(at, 1);
+    all.push(kept);
+    return kept;
+  }, file);
+  if (!made) return { refused: RUNS_ALREADY };
+  noteWorkChanged(bot.bot);
+  return { goal: shown(made), ...(yours ? { yours } : {}) };
+}
+
+// A plan as propose_goal gives it, checked: what's kept of it, or why it won't do.
+function planGiven(given: Record<string, unknown>): { plan: Plan } | { refused: string } {
   const goal = text(given.goal, 2000);
   if (!goal) return { refused: "Say the goal, in the user's words (goal)." };
   const steps = (Array.isArray(given.steps) ? given.steps : []).map(stepGiven).filter((each): each is NonNullable<typeof each> => Boolean(each));
@@ -337,44 +423,15 @@ export function proposeGoal(bot: { bot: string; name: string; session: string },
     spend.push({ what: text(each.what, 200)!, cap: each.cap, currency: (text(each.currency, 3) ?? "USD").toUpperCase(), per, spent: 0 });
   }
   const publics: KeptGoal["public"] = (Array.isArray(given.public) ? given.public.slice(0, 8) : []).map(each => text(each, 200)).filter((each): each is string => Boolean(each)).map((each, at) => ({ id: `p${at + 1}`, text: each, on: false }));
-  const projects = (Array.isArray(given.projects) ? given.projects.slice(0, 5) : []).map(each => text(each, 200)).filter((each): each is string => Boolean(each));
+  const named = projectsGiven((Array.isArray(given.projects) ? given.projects.slice(0, 5) : []).filter(each => !(typeof each === "string" && !each.trim())));
+  if ("refused" in named) return named;
+  const { projects } = named;
   const ends = endGiven(given.ends);
   if (ends === null) return { refused: "An end (ends) is a date and time to come, like 2026-11-30T18:00." };
   // A digest for a long goal, by the plan's size unless the bot says: a day's for one with phases or
   // many steps, none for a short one.
   const digest = DIGESTS.includes(given.digest as (typeof DIGESTS)[number]) ? given.digest as (typeof DIGESTS)[number] : steps.length > 12 || steps.some(step => step.phase) ? "day" : "none";
-  const made = changeKept(all => {
-    if (all.some(each => each.bot === bot.bot && each.state === "running")) return null;
-    const kept: KeptGoal = {
-      id: newID("goal"),
-      bot: bot.bot,
-      name: bot.name,
-      session: bot.session,
-      goal,
-      ...(text(given.title, 80) ? { title: text(given.title, 80)! } : {}),
-      state: "proposed",
-      steps: keptSteps(steps),
-      checks,
-      spend,
-      public: publics,
-      projects,
-      wake: false,
-      digest,
-      ...(ends ? { ends } : {}),
-      proposed: Date.now(),
-      waiting: [],
-      paused: [],
-      waited: 0,
-      watching: [],
-    };
-    // (The one proposed before goes: this one's the card now.)
-    for (let at = all.length - 1; at >= 0; at--) if (all[at].bot === bot.bot && all[at].state === "proposed") all.splice(at, 1);
-    all.push(kept);
-    return kept;
-  }, file);
-  if (!made) return { refused: "A goal is running already: report on it with goal_progress, and end it with finish_goal." };
-  noteWorkChanged(bot.bot);
-  return { goal: shown(made) };
+  return { plan: { goal, ...(text(given.title, 80) ? { title: text(given.title, 80)! } : {}), steps: keptSteps(steps), checks, spend, public: publics, projects, digest, ...(ends ? { ends } : {}) } };
 }
 
 /** Why your answer can't be taken: no such goal (404), or one that won't do (400). */
@@ -445,25 +502,22 @@ export async function answerGoal(id: string, given: Record<string, unknown>, tar
 
 // The projects a plan makes, as you set them on its card before it starts (renamed, or moved to
 // another folder): each a name, or a full path (~/… or /…), one to five, in their order. The bot
-// isn't told: it hears them as the goal starts.
+// isn't told now: it hears them as the goal starts, or as it proposes the plan again (which keeps
+// them, unless it proposes other projects than it did).
 function goalProjects(id: string, given: unknown, file: string): { goal: GoalPlanShape } | { refused: GoalRefusal } {
   const no = (message: string) => ({ refused: { status: 400 as const, message } });
   if (!Array.isArray(given) || !given.length || given.length > 5) return no("Send the plan's projects (projects): one to five, each a name or a full path (~/… or /…).");
-  const projects: string[] = [];
-  for (const each of given) {
-    const entry = typeof each === "string" ? each.trim() : "";
-    if (!entry || entry.length > 200) return no("Each project is a name or a full path (~/… or /…), of 200 characters at most.");
-    if (/^(~\/|\/)/.test(entry) || entry === "~") {
-      const named = namedPlace(entry);
-      if ("refused" in named) return no(named.refused);
-    }
-    projects.push(entry);
-  }
+  const named = projectsGiven(given);
+  if ("refused" in named) return no(named.refused);
+  const { projects } = named;
   const changed = changeKept(all => {
     const goal = all.find(each => each.id === id);
     if (!goal || !botHere(goal.bot)) return { status: 404 as const, message: "There's no such goal here." };
     if (goal.state !== "proposed") return { status: 400 as const, message: goal.state === "running" ? "That goal is running: its projects are made already." : "That goal has ended." };
+    const bots = goal.botProjects ?? goal.projects;
     goal.projects = projects;
+    if (sameProjects(projects, bots)) delete goal.botProjects;
+    else goal.botProjects = bots;
     return goal;
   }, file);
   if (!("id" in changed)) return { refused: changed };

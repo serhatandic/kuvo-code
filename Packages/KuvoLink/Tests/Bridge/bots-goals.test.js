@@ -1179,6 +1179,11 @@ test("you rename a proposed goal's project or move it to a folder of your own fr
   assert.equal(renamed.status, 200);
   assert.deepEqual(renamed.body.goal.projects, ["Tide Pool"]);
   assert.deepEqual(renamed.body.goal.folders, [{ project: "Tide Pool", folder: null, shown: null }]);
+  // Once you pick where new projects go, it's there by its new name.
+  write(settings, JSON.stringify({ projectsFolder: developer }));
+  [card] = await goals();
+  assert.deepEqual(card.folders, [{ project: "Tide Pool", folder: path.join(developer, "tide-pool"), shown: "~/Developer/tide-pool", there: false }]);
+  fs.rmSync(settings, { force: true });
 
   // Moved to a folder of yours that has files: there, and nothing left to pick for it.
   write(path.join(desktop, "tides", "README.md"), "Mine.\n");
@@ -1190,9 +1195,75 @@ test("you rename a proposed goal's project or move it to a folder of your own fr
   assert.deepEqual(card.projects, ["~/Desktop/tides"], "kept");
   assert.equal(prompts.length, told, "the bot hears them as the goal starts");
 
-  for (const projects of [[], ["a", "b", "c", "d", "e", "f"], ["~"], "Storefront"]) assert.equal((await route("POST", `kuvo/work/goals/${card.id}`, { action: "projects", projects })).status, 400, JSON.stringify(projects));
+  for (const projects of [[], ["a", "b", "c", "d", "e", "f"], [""], ["~"], ["/"], "Storefront"]) assert.equal((await route("POST", `kuvo/work/goals/${card.id}`, { action: "projects", projects })).status, 400, JSON.stringify(projects));
   assert.equal((await route("POST", "kuvo/work/goals/goal_none", { action: "projects", projects: ["Storefront"] })).status, 404);
 
   assert.equal((await route("POST", `kuvo/work/goals/${card.id}`, { action: "start" })).status, 200);
   assert.equal((await route("POST", `kuvo/work/goals/${card.id}`, { action: "projects", projects: ["Storefront"] })).status, 400, "made already");
+});
+
+test("a project whose name has no letters or numbers a folder can take, or two that would be the same folder, is refused on the card and in the bot's plan, as make_project would; a name over lines is one line", async () => {
+  const settings = path.join(home, "box", "work.json");
+  atEnd(() => fs.rmSync(settings, { force: true }));
+  // The bot's own plan: told why, so it can propose it again.
+  for (const [projects, why] of [[["Магазин"], /Магазин can't be a folder's name: use letters or numbers/], [["🚀"], /🚀 can't be a folder's name/], [["Tide Pool", "tide-pool"], /Tide Pool and tide-pool would be the same folder/]]) {
+    const refused = await tool("propose_goal", { ...PLAN, projects });
+    assert.equal(refused.isError, true, JSON.stringify(projects));
+    assert.match(refused.text, why);
+  }
+  assert.deepEqual(await goals(), [], "no card for a plan whose projects can't be made");
+
+  assert.equal((await tool("propose_goal", { ...PLAN, projects: ["Storefront"] })).isError, false);
+  const [card] = await goals();
+  const set = projects => route("POST", `kuvo/work/goals/${card.id}`, { action: "projects", projects });
+  for (const [projects, why] of [
+    [["日本語"], "日本語 can't be a folder's name: use letters or numbers."],
+    [["~/Desktop/日本語"], "日本語 can't be a folder's name: use letters or numbers."],
+    [["Tide Pool", "tide pool"], "Tide Pool and tide pool would be the same folder: give them names apart."],
+    [["~/Desktop/tides", `${home}/Desktop/tides`], `~/Desktop/tides and ${home}/Desktop/tides would be the same folder: give them names apart.`],
+  ]) {
+    const refused = await set(projects);
+    assert.equal(refused.status, 400, JSON.stringify(projects));
+    assert.equal(refused.body.message, why);
+  }
+  // In the projects folder, a name and the path it would go to are the same folder too.
+  write(settings, JSON.stringify({ projectsFolder: developer }));
+  assert.equal((await set(["Tide Pool", path.join(developer, "tide-pool")])).status, 400);
+  const [still] = await goals();
+  assert.deepEqual(still.projects, ["Storefront"], "nothing kept of a list that won't do");
+
+  const lines = await set(["Tide\n  Pool"]);
+  assert.equal(lines.status, 200);
+  assert.deepEqual(lines.body.goal.projects, ["Tide Pool"], "one line, as the card shows it");
+});
+
+test("a plan the bot proposes again keeps the projects you set on its card, and it's told their names; projects it changes itself replace yours, and it's told what yours were", async () => {
+  assert.equal((await tool("propose_goal", { ...PLAN, projects: ["Storefront"] })).isError, false);
+  let [card] = await goals();
+  assert.equal((await route("POST", `kuvo/work/goals/${card.id}`, { action: "projects", projects: ["Tide Pool", "~/Desktop/docs"] })).status, 200);
+
+  // You ask it to change a step: it proposes the plan again, with the projects it had.
+  const again = await tool("propose_goal", { ...PLAN, steps: [...PLAN.steps, "Write the launch post"], projects: ["Storefront"] });
+  assert.equal(again.isError, false, again.text);
+  [card] = await goals();
+  assert.equal(card.steps.length, PLAN.steps.length + 1, "the step it changed");
+  assert.deepEqual(card.projects, ["Tide Pool", "~/Desktop/docs"], "your projects, as you set them");
+  assert.match(again.text, /The user set its projects on the card: "Tide Pool", "~\/Desktop\/docs"\. They're kept/);
+  // And again: still yours.
+  assert.equal((await tool("propose_goal", { ...PLAN, projects: ["Storefront"] })).isError, false);
+  [card] = await goals();
+  assert.deepEqual(card.projects, ["Tide Pool", "~/Desktop/docs"]);
+
+  // It changes the projects itself (you asked it in its chat for another): its own replace yours,
+  // and it hears what yours were.
+  const changed = await tool("propose_goal", { ...PLAN, projects: ["Storefront", "Admin"] });
+  assert.equal(changed.isError, false, changed.text);
+  [card] = await goals();
+  assert.deepEqual(card.projects, ["Storefront", "Admin"]);
+  assert.match(changed.text, /The user had set its projects on the card to "Tide Pool", "~\/Desktop\/docs"; the ones you gave replace them/);
+  // With nothing of yours left to keep, nothing more is said of them.
+  const after = await tool("propose_goal", { ...PLAN, projects: ["Storefront"] });
+  [card] = await goals();
+  assert.deepEqual(card.projects, ["Storefront"]);
+  assert.doesNotMatch(after.text, /projects on the card/);
 });

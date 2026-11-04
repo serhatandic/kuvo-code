@@ -253,10 +253,13 @@ export async function proposeGoalTool(caller: Caller, args: Record<string, unkno
   await findApps(appsNamed(args)).catch(() => {});
   const outcome = proposeGoal({ ...bot, session: caller.session }, args);
   if ("refused" in outcome) return refused(outcome.refused);
-  const { goal } = outcome;
+  const { goal, yours: set } = outcome;
   const yours = goal.checks.filter(check => check.state === "needs").map(check => check.text);
   const alone = goal.alone ? "" : ` ${HERE[0].toUpperCase()}${HERE.slice(1)} can't work on it alone yet, so once it starts, what your sessions ask waits for the user rather than for you.`;
-  return said(`The card is up on ${HERE}: the user starts the goal from it, or says not now. ${yours.length ? `What's theirs to do first: ${yours.join("; ")}. ` : ""}Don't start the work until you hear [Goal started]. If they change something, propose it again as it is now.${alone}`);
+  // The projects the user set on the card before: kept, or replaced by others the bot proposed.
+  const names = set ? set.projects.map(each => `"${each}"`).join(", ") : "";
+  const projects = !set ? "" : set.kept ? ` The user set its projects on the card: ${names}. They're kept: call them that.` : ` The user had set its projects on the card to ${names}; the ones you gave replace them. If they didn't ask you to change those, propose it again with theirs.`;
+  return said(`The card is up on ${HERE}: the user starts the goal from it, or says not now.${projects} ${yours.length ? `What's theirs to do first: ${yours.join("; ")}. ` : ""}Don't start the work until you hear [Goal started]. If they change something, propose it again as it is now.${alone}`);
 }
 
 /** goal_progress: the goal's steps, what waits for the user, what's spent and what's still watched
