@@ -298,8 +298,6 @@ private struct QuestionPager: View {
         get { progress.page }
         nonmutating set { progress.page = newValue }
     }
-    /// Whether the question in view came after the one before it (Previous goes back).
-    @State private var isForward = true
     @FocusState private var isWriting: Bool
     @State private var monitor: Any?
     @State private var windowBox = WindowBox()
@@ -321,7 +319,7 @@ private struct QuestionPager: View {
                 ZStack(alignment: .topLeading) {
                     question(field)
                         .id(field.key)
-                        .transition(QuestionMotion.current.transition(forward: isForward))
+                        .transition(QuestionMotion.current.transition)
                 }
                 footer(field)
             }
@@ -352,17 +350,17 @@ private struct QuestionPager: View {
             // KUVO_DEMO_QUESTIONS=<n>: on the nth question (from 0).
             if let n = Int(ProcessInfo.processInfo.environment["KUVO_DEMO_QUESTIONS"] ?? "") { page = n }
             // KUVO_DEMO_QUESTIONS_PICK=<n>: five seconds on, picks the nth choice (from 1), as its
-            // number key does, and writes how the main thread kept up over the next second and a
+            // number key does (0 presses Next), and writes how the main thread kept up over the next second and a
             // half to KUVO_PERF_LOG (its stalls to KUVO_PERF_STALLS).
             let environment = ProcessInfo.processInfo.environment
             if let n = Int(environment["KUVO_DEMO_QUESTIONS_PICK"] ?? "") {
                 Task {
                     try? await Task.sleep(for: .seconds(5))
                     let field = questions[index]
-                    guard options(of: field).indices.contains(n - 1) else { return }
+                    guard n == 0 || options(of: field).indices.contains(n - 1) else { return }
                     let meter = PerfMeter()
                     meter.start()
-                    pick(options(of: field)[n - 1], in: field)
+                    if n == 0 { next(field) } else { pick(options(of: field)[n - 1], in: field) }
                     try? await Task.sleep(for: .milliseconds(1500))
                     let line = "question pick: " + meter.stop() + "\n"
                     if let file = environment["KUVO_PERF_LOG"] { try? line.write(toFile: file, atomically: true, encoding: .utf8) }
@@ -376,12 +374,13 @@ private struct QuestionPager: View {
     private func header(_ field: FormField) -> some View {
         HStack(spacing: 6) {
             // The question tool's short header, when it has one.
-            Text(field.description != nil ? field.title ?? "Question" : "Question")
+            let title = field.description != nil ? field.title ?? "Question" : "Question"
+            Text(title)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
-                // It goes with its question.
-                .id(field.key)
-                .transition(QuestionMotion.current.transition(forward: isForward))
+                // It goes with its question, when it says something else.
+                .id(title)
+                .transition(QuestionMotion.current.transition)
             Spacer()
             if questions.count > 1 {
                 Button { go(to: index - 1) } label: { Image(systemName: "chevron.left") }
@@ -571,8 +570,12 @@ private struct QuestionPager: View {
     /// To another question. The whole window moves with it, so the card's edge and the
     /// conversation above grow or shrink along with the question, not a frame ahead of it.
     private func go(to next: Int) {
-        isForward = next >= index
         withAnimation(.ui) { page = next }
+        // The row VoiceOver was on went with the question.
+        if questions.indices.contains(next) {
+            let field = questions[next]
+            AccessibilityNotification.Announcement("\(next + 1) of \(questions.count). \(field.description ?? field.title ?? form.title)").post()
+        }
     }
 
     private func next(_ field: FormField) {
@@ -678,9 +681,9 @@ private struct ChoiceRow: View {
 }
 
 // DRAFTS (to pick from, then fold into the code): how a question goes to the next, and where a
-// choice's number sits. KUVO_DEMO_QUESTION_MOTION=instant|slide|fade, KUVO_DEMO_CHOICE_ALIGN=title|row|plain.
+// choice's number sits. KUVO_DEMO_QUESTION_MOTION=instant|fade, KUVO_DEMO_CHOICE_ALIGN=title|row|plain.
 private enum QuestionMotion: String {
-    case instant, slide, fade
+    case instant, fade
 
     static let current: QuestionMotion = {
         #if DEBUG
@@ -697,15 +700,12 @@ private enum QuestionMotion: String {
         return .milliseconds(200)
     }
 
-    /// The question you leave fades out where it is; the next one comes in from the side it's
-    /// on, so the two never cross over each other's words.
-    func transition(forward: Bool) -> AnyTransition {
+    /// The question you leave fades out before the next one fades in, so the two never show
+    /// over each other.
+    var transition: AnyTransition {
         switch self {
         case .instant:
             .identity
-        case .slide:
-            .asymmetric(insertion: .offset(x: forward ? 28 : -28).combined(with: .opacity),
-                        removal: .offset(x: forward ? -28 : 28).combined(with: .opacity))
         case .fade:
             .asymmetric(insertion: .opacity.animation(.easeOut(duration: Self.scaled(0.16)).delay(Self.scaled(0.07))),
                         removal: .opacity.animation(.easeOut(duration: Self.scaled(0.07))))
