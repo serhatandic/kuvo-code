@@ -69,8 +69,9 @@ struct ModelPicker: View {
 
         /// The longest page: the search and the list.
         static let tallest: CGFloat = 421
-        /// The arrow, and a little air from the screen's edge.
-        private static let margin: CGFloat = 24
+        /// The popover's rim above and below the card (its arrow in it), and a little air from the
+        /// screen's edge: taller than the room, the popover would open beside its chip instead.
+        private static let margin: CGFloat = 34
 
         init() {}
 
@@ -109,6 +110,10 @@ struct ModelPicker: View {
             }
         }
         .frame(width: 372)
+        // As tall as the page and no taller: the divider beside the rail took whatever height it
+        // was offered, so after a longer page the popover kept that height, the short page sunk
+        // in its middle.
+        .fixedSize(horizontal: false, vertical: true)
         .focusable()
         .focusEffectDisabled()
         .focused($focus, equals: .card)

@@ -17,6 +17,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 ### All Changes
 
 - In Edit Bot › Work, a limit's menu opens at the value you click, with the current choice over it, instead of at the row's left edge.
+- The model menu gets shorter again when you turn from a long list to a short page like Custom Auto, instead of keeping the long list's height with empty space above and below.
 - What your phone asks of this Mac no longer fails now and then with a lost connection when it asks for something right after a reply that streamed.
 - Replies draw fewer lines: headings no longer have a line under them, and `---` is one thin line with even space around it, as in Claude's and ChatGPT's apps.
 - The sidebar is easier to read: its headings are as bright as the names under them, and the quieter words and buttons are no longer washed out by the window behind it.
