@@ -190,10 +190,11 @@ final class KeeperFollower {
         let engineRecord = Self.record("engine.json")
         let serve = Self.record("serve.json")
         let bridge = Self.record("bridge.json")
-        // Why one isn't there, when the keeper can say (asked only then).
+        // Why one isn't there, when the keeper can say (asked only then), and whether one making way
+        // still has work under way.
         var status: [String: Any] = [:]
         var answered = true
-        if serve == nil || bridge == nil || engineRecord == nil {
+        if serve == nil || bridge == nil || engineRecord == nil || makingWay {
             let said = try? await KeeperControl.send(.status)
             answered = said != nil
             status = said ?? [:]
@@ -201,14 +202,20 @@ final class KeeperFollower {
         // Stopped while the keeper was asked (above too).
         guard following else { return }
         // A keeper that runs but doesn't answer (hung): since when, for how long the window waits.
-        if engineRecord != nil || answered || KeeperRecord.read() == nil {
+        // One making way that's hung is waited for too, though its engine's record is still there:
+        // the window waits on it, not on that engine.
+        if (engineRecord != nil && !makingWay) || answered || KeeperRecord.read() == nil {
             silentSince = nil
         } else if silentSince == nil {
             silentSince = .now
         }
         box.follow(serve, failure: (status["box"] as? [String: Any])?["failure"] as? String)
         agents.follow(bridge, failure: (status["agents"] as? [String: Any])?["failure"] as? String)
-        if let engineRecord {
+        // One making way with nothing under way (or already going, and not answering) goes this
+        // moment: its engine isn't connected to, only to start over on the new keeper's a moment
+        // later. The app waits for that one; one still at work is followed until it's done.
+        let goesNow = makingWay && status["busy"] as? Bool != true
+        if let engineRecord, !goesNow {
             askedToStart = nil
             engine = .ready(engineRecord)
         } else if let reason = stoppedReason() {
