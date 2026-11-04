@@ -533,6 +533,8 @@ final class ClaudeProviderTests: XCTestCase {
     func testExpiredSignInKeepsTheLastNumbersAsOfWhenTheyWereRead() async {
         // Claude Code's sign-in lapses (or is turned away) between refreshes while it isn't run:
         // the bars keep the last numbers, said to be as of then, and how to renew comes second.
+        // The reading is as old as it is (the panel says Outdated from its age, and a session's
+        // limits leave it out), and a window that started over since isn't kept.
         let t0 = OpenUsageISO8601.date(from: "2026-02-20T16:00:00.000Z")!
         let expiresAt = Int(t0.addingTimeInterval(30 * 60).timeIntervalSince1970 * 1000)
         for turnedAway in [false, true] {
@@ -544,7 +546,7 @@ final class ClaudeProviderTests: XCTestCase {
                     return HTTPResponse(statusCode: 404, headers: [:], body: Data())
                 }
                 guard usageCalls.next() == 1 else { return HTTPResponse(statusCode: 401, headers: [:], body: Data()) }
-                return HTTPResponse(statusCode: 200, headers: [:], body: Data(#"{"five_hour":{"utilization":42,"resets_at":"2099-01-01T00:00:00.000Z"}}"#.utf8))
+                return HTTPResponse(statusCode: 200, headers: [:], body: Data(#"{"five_hour":{"utilization":42,"resets_at":"2026-02-20T16:30:00.000Z"},"seven_day":{"utilization":61,"resets_at":"2099-01-01T00:00:00.000Z"}}"#.utf8))
             }
             let provider = ClaudeProvider(
                 authStore: configuredAuthStore(files: files, now: { clock.now }),
@@ -559,7 +561,10 @@ final class ClaudeProviderTests: XCTestCase {
             let later = await provider.refresh()
 
             XCTAssertEqual(Self.progress(first.lines, "Session")?.used, 42)
-            XCTAssertEqual(Self.progress(later.lines, "Session")?.used, 42)
+            XCTAssertNil(Self.progress(later.lines, "Session"), "its window started over since")
+            XCTAssertEqual(Self.progress(later.lines, "Weekly")?.used, 61)
+            XCTAssertEqual(later.refreshedAt, t0)
+            XCTAssertNil(PlanLimits(later, now: clock.now))
             XCTAssertNil(badge(later.lines, "Error"))
             guard case .text(_, let asOf, _, let renew)? = later.lines.first(where: { $0.label == "Note" }) else {
                 return XCTFail("no as-of line")

@@ -37,7 +37,8 @@ here.
   token and signs out a Claude Code holding the old one. Here an expired or turned-away token waits
   for Claude Code to renew it the next time it runs, and nothing is written to its Keychain item or
   file. Meanwhile the bars keep the last numbers read, "As of" when, with "Run `claude` to renew it"
-  under them.
+  under them; the reading keeps its age (Outdated in the panel, left out of `PlanLimits`), and a
+  window that started over since goes.
 
 - **Plan limits for the host** (`Embedding/PlanLimits.swift`): the latest limits of one provider,
   read from what the panel already has, for Kuvo Code to show beside a session.

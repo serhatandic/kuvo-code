@@ -347,7 +347,7 @@ final class ClaudeProvider: ProviderRuntime {
             provider: provider,
             plan: mapped.plan,
             lines: mapped.lines,
-            refreshedAt: now(),
+            refreshedAt: mapped.readAt ?? now(),
             usageHistory: usageHistory,
             warning: warning
         )
@@ -568,7 +568,14 @@ final class ClaudeProvider: ProviderRuntime {
     /// its error, which says so.
     private func expiredSnapshot(source: ClaudeCredentialState.Source) throws -> ClaudeMappedUsage {
         guard var mapped = lastGoodUsage, let at = lastGoodAt else { throw Self.expired(source) }
-        let when = at.formatted(date: Calendar.current.isDate(at, inSameDayAs: now()) ? .omitted : .abbreviated, time: .shortened)
+        // Not a window that started over since, at an amount not read yet.
+        let current = now()
+        mapped.lines = mapped.lines.compactMap { line in
+            if case .progress(_, _, _, _, let resetsAt?, _, _) = line, resetsAt <= current { return nil }
+            return ClaudeUsageMapper.droppingElapsedResetGrants(line, now: current)
+        }
+        mapped.readAt = at
+        let when = at.formatted(date: Calendar.current.isDate(at, inSameDayAs: current) ? .omitted : .abbreviated, time: .shortened)
         let renew = Self.expired(source).localizedDescription
         mapped.lines.append(.text(label: "Note", value: "As of \(when)", subtitle: renew))
         mapped.warning = "Usage as of \(when). \(renew)"
