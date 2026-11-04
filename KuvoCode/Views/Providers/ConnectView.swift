@@ -504,6 +504,11 @@ struct ConnectView: View {
             step = .connected
             return
         }
+        // KUVO_DEMO_CONNECT_METHOD=<id>: that way to sign in, started.
+        if let id = ProcessInfo.processInfo.environment["KUVO_DEMO_CONNECT_METHOD"], let method = supportedMethods.first(where: { $0.id == id }) {
+            start(method)
+            return
+        }
         #endif
         if supportedMethods.count == 1, let method = supportedMethods.first { start(method) }
     }
