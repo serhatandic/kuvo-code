@@ -18,6 +18,9 @@ import { shellOutput, shells } from "../../src/agents/shells"
 import { Store } from "../../src/agents/store"
 import type { Message, PermissionRule } from "../../src/agents/wire"
 
+// Claude Code's own sign-in, as on a machine (a Mac's own is Kuvo Code's: accounts-check.test.ts).
+ClaudeAgent.keychain = false
+
 /** A Claude Code that answers as the test says: what it was sent, and what it says. */
 class FakeClaude {
   sent: any[] = []

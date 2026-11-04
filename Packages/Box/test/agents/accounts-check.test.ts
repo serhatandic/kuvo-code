@@ -4,7 +4,7 @@
 // Claude Code and Grok are fake programs on the PATH; Codex's app-server and Cursor's SDK are stand-ins.
 
 import { afterAll, afterEach, beforeAll, describe, expect, setSystemTime, test } from "bun:test"
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { delimiter, join } from "node:path"
 import { TookTooLong, type Agent } from "../../src/agents/agent"
@@ -19,8 +19,11 @@ import type { ServerEvent } from "../../src/agents/wire"
 let root: string
 let bin: string
 const path = process.env.PATH
+const keychain = ClaudeAgent.keychain
 
 beforeAll(() => {
+  // Claude Code's own sign-in, as a machine's is (a Mac's is Kuvo Code's own: its describe below).
+  ClaudeAgent.keychain = false
   root = mkdtempSync(join(tmpdir(), "kuvo-accounts-check-"))
   bin = join(root, "bin")
   mkdirSync(bin)
@@ -29,6 +32,7 @@ beforeAll(() => {
 })
 
 afterAll(() => {
+  ClaudeAgent.keychain = keychain
   process.env.PATH = path
   rmSync(root, { recursive: true, force: true })
 })
@@ -370,3 +374,56 @@ describe("signing out of an agent's own sign-in", () => {
   })
 })
 
+describe("Claude Code on a Mac: Kuvo Code's own sign-in", () => {
+  test("signed in once, in a terminal of its own; kept in Kuvo Code's folder and handed to Claude Code; your own sign-in only read, and never signed out of", async () => {
+    const said = join(root, "claude-mac-status")
+    const logout = join(root, "claude-mac-logout")
+    writeFileSync(join(bin, "claude"), `#!/bin/sh
+case "$1" in
+  setup-token)
+    [ -t 0 ] || exit 3
+    printf 'https://claude.com/cai/oauth/authorize?code=true&scope=user%%3Ainference\\n\\nPaste code here if prompted > '
+    read code
+    [ "$code" = "good#state" ] || { echo "OAuth error: That code wasn't accepted."; exit 1; }
+    printf '\\nYour OAuth token (valid for 1 year):\\n\\nsk-ant-oat01-kuvo_test-token\\n\\nStore this token securely.\\n'
+    read wait ;;
+  auth)
+    echo "\${CLAUDE_CODE_OAUTH_TOKEN:-none}" >> '${said}'
+    [ "$2" = logout ] && { echo out > '${logout}'; exit 0; }
+    echo '{"loggedIn":true,"authMethod":"claude.ai","email":"ada@example.com","subscriptionType":"max"}' ;;
+esac
+`)
+    chmodSync(join(bin, "claude"), 0o755)
+    ClaudeAgent.keychain = true
+    try {
+      const agent = new ClaudeAgent(context())
+      const box = bridge([agent])
+      expect((await box.account(agent)).connections).toEqual([])
+
+      const sign = await agent.signIn("claudeai", { remote: true })
+      expect(sign.url).toContain("scope=user%3Ainference")
+      await sign.complete!("good#state")
+      for (let waited = 0; waited < 10_000 && sign.status().status === "pending"; waited += 50) await Bun.sleep(50)
+      expect(sign.status().status).toBe("complete")
+
+      const account = await box.account(agent)
+      expect(account.connections[0]?.label).toBe("ada@example.com · Max plan")
+      expect(account.metadata.signsOut).toBe(true)
+      expect(agent.env().CLAUDE_CODE_OAUTH_TOKEN).toBe("sk-ant-oat01-kuvo_test-token")
+      // Kept where only Kuvo Code reads it, and never shown to `claude auth status`.
+      expect(agent.tokenFile.startsWith(agent.context.home + "/")).toBe(true)
+      expect(statSync(agent.tokenFile).mode & 0o777).toBe(0o600)
+      expect(readFileSync(said, "utf8")).not.toContain("sk-ant")
+
+      // Sign Out: Kuvo Code's own sign-in goes; yours stays.
+      const answer = handler({ roster: { all: () => [agent], find: (id: string) => (id === agent.providerID ? agent : undefined) }, password: "pw" } as any)
+      const out = await answer(new Request(`http://box/api/integration/${encodeURIComponent(agent.providerID)}/disconnect`, { method: "POST", headers: { authorization: "Basic " + Buffer.from("opencode:pw").toString("base64") } }))
+      expect(out.status).toBe(200)
+      expect(existsSync(logout)).toBe(false)
+      expect(agent.env().CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined()
+      expect((await box.account(agent)).connections).toEqual([])
+    } finally {
+      ClaudeAgent.keychain = keychain
+    }
+  })
+})

@@ -33,6 +33,16 @@ export interface CommandSignInOptions {
   pageWait?: number
   /** Where a device code is in what it prints, for showing beside the page. */
   userCode?: RegExp
+  /** What it has printed so far, each time it prints: for a sign-in it hands over rather than
+   * keeps (`claude setup-token`'s token), taken as soon as it shows. */
+  onOutput?: (output: string) => void
+  /** What it prints that's never said back (a token it hands over): left out of a failure's words. */
+  secret?: RegExp
+  /** Run in a terminal of its own, for a command that prints its page and takes a code only there
+   * (`claude setup-token`): wide, so nothing it prints wraps. */
+  terminal?: boolean
+  /** What it says of a pasted code it turns away (as it waits for another). */
+  refusedCode?: RegExp
 }
 
 /** The catcher, in the temporary folder: a path without spaces (Python splits BROWSER on them). */
@@ -48,20 +58,41 @@ export function catcher(temporary: string): string {
 
 export async function commandSignIn(options: CommandSignInOptions): Promise<SignInAttempt> {
   const urlFile = join(options.temporary, `${newID("att")}.url`)
-  const child = Bun.spawn([options.command, ...options.args], {
-    env: { ...process.env, ...options.env, BROWSER: catcher(options.temporary), KUVO_URL_FILE: urlFile },
-    stdin: "pipe",
-    stdout: "pipe",
-    stderr: "pipe",
-  })
+  const env = { ...process.env, ...options.env, BROWSER: catcher(options.temporary), KUVO_URL_FILE: urlFile }
+  // What it printed, its terminal codes taken out as a whole (one can come split over two reads).
+  let printed = ""
   let output = ""
-  let status: OAuthStatus = { status: "pending" }
-  const read = async (stream: ReadableStream<Uint8Array>) => {
-    const decoder = new TextDecoder()
-    for await (const chunk of stream) output += plain(decoder.decode(chunk))
+  const take = (text: string) => {
+    printed += text
+    output = plain(printed)
+    options.onOutput?.(output)
   }
-  void read(child.stdout)
-  void read(child.stderr)
+  let type: (text: string) => Promise<void>
+  let child: ReturnType<typeof Bun.spawn>
+  if (options.terminal) {
+    const decoder = new TextDecoder()
+    const spawned = Bun.spawn([options.command, ...options.args], {
+      env,
+      terminal: { cols: 1000, rows: 50, data: (_terminal: unknown, data: Uint8Array) => take(decoder.decode(data, { stream: true })) },
+    } as any) as any
+    child = spawned
+    // A terminal's Return.
+    type = async (text) => void spawned.terminal.write(text.replace(/\n$/, "\r"))
+  } else {
+    const spawned = Bun.spawn([options.command, ...options.args], { env, stdin: "pipe", stdout: "pipe", stderr: "pipe" })
+    child = spawned
+    const read = async (stream: ReadableStream<Uint8Array>) => {
+      const decoder = new TextDecoder()
+      for await (const chunk of stream) take(decoder.decode(chunk, { stream: true }))
+    }
+    void read(spawned.stdout)
+    void read(spawned.stderr)
+    type = async (text) => {
+      spawned.stdin.write(text)
+      await spawned.stdin.flush()
+    }
+  }
+  let status: OAuthStatus = { status: "pending" }
   let pasted = false
   /** Whether it was signed in as it started (signing in again): undefined until known. */
   let signedInBefore: boolean | undefined
@@ -78,7 +109,11 @@ export async function commandSignIn(options: CommandSignInOptions): Promise<Sign
     // this one worked.
     if (signedIn && (code === 0 || signedInBefore === false)) succeed()
     else if (pasted) status = { status: "failed", message: "That code didn't work. Start again, and paste the code from the page this sign-in opens." }
-    else status = { status: "failed", message: lastLines(options.codePrompt ? output.replace(options.codePrompt, "") : output) || `Signing in stopped (exit code ${code}).` }
+    else {
+      let said = options.codePrompt ? output.replace(options.codePrompt, "") : output
+      if (options.secret) said = said.replace(options.secret, "")
+      status = { status: "failed", message: lastLines(said) || `Signing in stopped (exit code ${code}).` }
+    }
   })
   // Signed in while the command lingers (it waits on something after the page): done then.
   // Not when it was signed in already (signing in again, another way): its end says.
@@ -141,12 +176,11 @@ export async function commandSignIn(options: CommandSignInOptions): Promise<Sign
           if (status.status !== "pending") throw new Error("That sign-in is over. Start it again.")
           pasted = true
           const from = output.length
-          child.stdin.write(code.trim() + "\n")
-          await child.stdin.flush()
+          await type(code.trim() + "\n")
           // A code it can't read (part of one) is turned away at once, and it waits for another.
           for (let waited = 0; waited < 1_500 && status.status === "pending"; waited += 100) {
             await Bun.sleep(100)
-            if (/invalid code/i.test(output.slice(from))) {
+            if ((options.refusedCode ?? /invalid code/i).test(output.slice(from))) {
               pasted = false
               throw new Error("That code couldn't be read. Copy all of it from the page, and paste it again.")
             }

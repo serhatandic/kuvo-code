@@ -159,7 +159,13 @@ export function firstURL(text: string): string | undefined {
   return text.match(/https?:\/\/[^\s"'<>]+/)?.[0]
 }
 
-/** Text with terminal colors and cursor codes taken out. */
+/** Text with terminal colors and cursor codes taken out; a move along the line (how a terminal UI
+ * spaces its words) is a space. */
 export function plain(text: string): string {
-  return text.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "").replace(/\x1b\][^\x07]*\x07/g, "")
+  return text
+    .replace(/\x1b\[(\d*)C/g, (_, count) => " ".repeat(Math.min(Number(count || 1), 80)))
+    .replace(/\x1b\[\d*G/g, " ")
+    .replace(/\x1b\[[0-9;?>]*[ -/]*[@-~]/g, "")
+    .replace(/\x1b\][^\x07]*\x07/g, "")
+    .replace(/\x1b[78]/g, "")
 }

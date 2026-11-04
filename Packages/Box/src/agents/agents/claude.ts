@@ -4,9 +4,9 @@
 
 import { spawn } from "node:child_process"
 import { createHash, randomUUID } from "node:crypto"
-import { existsSync, readFileSync, statSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
-import { join, resolve } from "node:path"
+import { dirname, join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import { providerID, type AgentAccount } from "../accounts"
 import type { Agent, AgentContext, Account, MessageInput, OwnTurn, RunInput, RunResult, SignInAttempt, SignInOptions, SubagentMessages, SubagentRun, Thread, TurnHooks, PromptFile } from "../agent"
@@ -60,7 +60,23 @@ interface Status {
   apiProvider?: string
 }
 
+/** `claude setup-token`'s token in what it printed, once all of it has (in a terminal wide enough
+ * that it's on one line). */
+const PRINTED_TOKEN = /sk-ant-oat\d+-[A-Za-z0-9_-]+(?=[^A-Za-z0-9_-])/
+/** Any of Claude's tokens, never said back in a failure's words. */
+const ANY_TOKEN = /sk-ant-[A-Za-z0-9_-]+/g
+
 export class ClaudeAgent implements Agent {
+  /**
+   * On a Mac, Claude Code keeps its sign-in in the Keychain, which the box's sandbox can't write:
+   * renewing it there would spend its single-use refresh token and keep the new one nowhere,
+   * ending your own sign-in too. So Kuvo Code signs in once on its own (`claude setup-token`, a
+   * long-lived token nothing renews), keeps it in its folder, and hands it to Claude Code as it
+   * starts. On Linux, Claude Code's own sign-in is a file it renews itself, there in Kuvo Code's
+   * folder, so it's used as it is.
+   */
+  static keychain = process.platform === "darwin"
+
   id = "claude"
   readonly providerID: string
   get name() {
@@ -89,7 +105,15 @@ export class ClaudeAgent implements Agent {
     readonly instance: AgentAccount = { id: "default" },
   ) {
     this.providerID = providerID("claude", instance.id)
-    if (instance.id === "default" && instance.home) {
+    if (ClaudeAgent.keychain) {
+      // Kuvo Code's own: yours, in Terminal, stays signed in.
+      this.signOut = async () => {
+        rmSync(this.tokenFile, { force: true })
+        this.programUpdated()
+        this.known.reset()
+        this.modelList = undefined
+      }
+    } else if (instance.id === "default" && instance.home) {
       this.signOut = async () => {
         await signOutWith("Claude Code", this.executable(), ["auth", "logout"], this.env())
         // A session's Claude Code holds the sign-in it started with: its next message starts one signed out.
@@ -149,7 +173,7 @@ export class ClaudeAgent implements Agent {
   private async readStatus(): Promise<Status> {
     const executable = this.executable()
     if (!executable) throw new Error("Claude Code isn't installed.")
-    const result = await run(executable, ["auth", "status", "--json"], { timeout: 20_000, env: this.env() })
+    const result = await run(executable, ["auth", "status", "--json"], { timeout: 20_000, env: this.env({ ownToken: false }) })
     if (result.timedOut) throw new TookTooLong("Claude Code took too long to say whether it's signed in.")
     let status: Status | undefined
     try {
@@ -171,11 +195,16 @@ export class ClaudeAgent implements Agent {
       return { installed: false, signedIn: false, message: "Install Claude Code, then sign in here." }
     }
     const account = await this.known.read(fresh, async () => {
+      if (ClaudeAgent.keychain) {
+        if (!this.token()) return { installed: true, signedIn: false, message: "Sign in to Claude Code with your Claude plan or an Anthropic Console account." }
+        // Who and which plan, from your own sign-in (Kuvo Code's can only ask Claude for answers),
+        // read as it is: never renewed here.
+        const status = await this.readStatus().catch(() => undefined)
+        return { installed: true, signedIn: true, label: (status?.loggedIn && describe(status)) || "Claude plan" }
+      }
       const status = await this.readStatus()
       if (!status.loggedIn) return { installed: true, signedIn: false, message: "Sign in to Claude Code with your Claude plan or an Anthropic Console account." }
-      const plan = status.subscriptionType ? `${status.subscriptionType.charAt(0).toUpperCase()}${status.subscriptionType.slice(1)} plan` : undefined
-      const who = status.email ?? (status.apiProvider && status.apiProvider !== "firstParty" ? status.apiProvider : undefined)
-      return { installed: true, signedIn: true, label: [who, plan].filter(Boolean).join(" · ") || "Claude Code" }
+      return { installed: true, signedIn: true, label: describe(status) || "Claude Code" }
     })
     // Claude turned the sign-in away in a run, though `claude auth status` may still say signed in.
     const turnedAway = this.turnedAway
@@ -191,6 +220,7 @@ export class ClaudeAgent implements Agent {
 
   /** Paid per token (an API key), rather than by a plan. */
   usesKey() {
+    if (ClaudeAgent.keychain && this.token()) return false
     const method = this.status?.status.authMethod ?? ""
     return method !== "" && method !== "claude.ai"
   }
@@ -220,6 +250,13 @@ export class ClaudeAgent implements Agent {
    * Keychain.
    */
   protected async credentialsWritten(): Promise<number> {
+    if (ClaudeAgent.keychain) {
+      try {
+        return statSync(this.tokenFile).mtimeMs
+      } catch {
+        return 0
+      }
+    }
     const own = this.instance.home ?? process.env.CLAUDE_CONFIG_DIR
     let written = 0
     try {
@@ -233,9 +270,58 @@ export class ClaudeAgent implements Agent {
   /** Its page can end on a code to paste back, wherever it's opened. */
   readonly signsInRemotely = true
 
+  /** Kuvo Code's own sign-in on a Mac: in its folder, which the sandbox hides from what runs there. */
+  get tokenFile() {
+    return join(this.context.home, "claude", "tokens", `${this.instance.id}.json`)
+  }
+
+  /** Kuvo Code's own token, on a Mac, while it has one. */
+  token(): string | undefined {
+    try {
+      const token = JSON.parse(readFileSync(this.tokenFile, "utf8"))?.token
+      return typeof token === "string" && token ? token : undefined
+    } catch {
+      return undefined
+    }
+  }
+
   async signIn(methodID: string, options: SignInOptions = {}): Promise<SignInAttempt> {
     const executable = this.executable()
     if (!executable) throw new Error(`Install Claude Code first: ${this.install}`)
+    if (ClaudeAgent.keychain && methodID !== "console") {
+      const started = Date.now()
+      let handedOver = false
+      return commandSignIn({
+        command: executable,
+        args: ["setup-token"],
+        env: this.env({ ownToken: false }),
+        home: this.context.home,
+        temporary: this.context.temporary,
+        instructions: "Finish signing in on Claude's page. This sign-in is Kuvo Code's own: Claude Code in Terminal stays signed in as it is.",
+        signedIn: async () => handedOver,
+        // It prints its page, and takes the code from it, only in a terminal.
+        terminal: true,
+        codePrompt: /Paste code here if prompted\s*>\s*/g,
+        refusedCode: /wasn.t accepted|invalid code/i,
+        onOutput: (output) => {
+          if (handedOver) return
+          const token = PRINTED_TOKEN.exec(output)?.[0]
+          if (!token) return
+          mkdirSync(dirname(this.tokenFile), { recursive: true, mode: 0o700 })
+          writeFileSync(this.tokenFile, JSON.stringify({ token, made: started }), { mode: 0o600 })
+          handedOver = true
+        },
+        secret: ANY_TOKEN,
+        onComplete: () => {
+          this.turnedAway = undefined
+          this.known.reset()
+          this.modelList = undefined
+          // A session's Claude Code started without it: its next message starts one with it.
+          this.programUpdated()
+        },
+        printedPage: options.remote,
+      })
+    }
     return commandSignIn({
       command: executable,
       args: ["auth", "login", methodID === "console" ? "--console" : "--claudeai"],
@@ -283,10 +369,16 @@ export class ClaudeAgent implements Agent {
     return [join(settings, "skills"), ...upward(directory).map((folder) => join(folder, ".claude", "skills"))]
   }
 
-  /** Claude Code's environment: an added account's own folder (Claude Code keeps its sign-in in the Keychain, named after it). */
-  env(): Record<string, string | undefined> {
+  /**
+   * Claude Code's environment: an added account's own folder, and on a Mac Kuvo Code's own sign-in
+   * (not when asking about yours).
+   */
+  env({ ownToken = true }: { ownToken?: boolean } = {}): Record<string, string | undefined> {
     const env: Record<string, string | undefined> = { ...process.env, CLAUDE_CODE_TMPDIR: join(this.context.temporary, "claude") }
+    delete env.CLAUDE_CODE_OAUTH_TOKEN
     if (this.instance.home) env.CLAUDE_CONFIG_DIR = this.instance.home
+    const token = ownToken && ClaudeAgent.keychain ? this.token() : undefined
+    if (token) env.CLAUDE_CODE_OAUTH_TOKEN = token
     // On a machine, its commands get the machine's own folders back (it keeps its own in Kuvo
     // Code's folder).
     const own = onMachine ? ownFoldersScript(this.context.home) : undefined
@@ -297,8 +389,9 @@ export class ClaudeAgent implements Agent {
     return env
   }
 
-  /** An added account signs out as it goes (its Keychain item with it). */
+  /** An added account signs out as it goes (its Keychain item with it, and Kuvo Code's own sign-in). */
   async removeAccount() {
+    rmSync(this.tokenFile, { force: true })
     const executable = this.executable()
     if (executable && this.instance.home) await run(executable, ["auth", "logout"], { timeout: 20_000, env: this.env() }).catch(() => {})
   }
@@ -1896,4 +1989,11 @@ async function keychainWritten(service: string): Promise<number> {
   const result = await run("/usr/bin/security", ["find-generic-password", "-s", service], { timeout: 5_000 }).catch(() => undefined)
   const date = /"mdat"<timedate>=0x[0-9A-F]+\s+"(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})Z/.exec(result?.stdout ?? "")
   return date ? Date.UTC(+date[1]!, +date[2]! - 1, +date[3]!, +date[4]!, +date[5]!, +date[6]!) : 0
+}
+
+/** Who's signed in and on which plan, as `claude auth status` says. */
+function describe(status: Status): string {
+  const plan = status.subscriptionType ? `${status.subscriptionType.charAt(0).toUpperCase()}${status.subscriptionType.slice(1)} plan` : undefined
+  const who = status.email ?? (status.apiProvider && status.apiProvider !== "firstParty" ? status.apiProvider : undefined)
+  return [who, plan].filter(Boolean).join(" · ")
 }
