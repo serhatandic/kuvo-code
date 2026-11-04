@@ -16,6 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- Messages from other agents, a group chat's work and a bot's wake-ups line up with the rest of the conversation, on the same edges as its errors, code and composer, instead of reaching past them.
 - A bot on a goal works like a lead with a team: once you start the goal, it makes the project (where you said it goes, if you did) and hands each step to a session of its own, following them as they report, rather than writing the code itself. Tell it if you'd rather it did the work alone.
 - A goal's step shows the icon of the site it's done at, like RevenueCat's or App Store Connect's, and none for work done on your computer: an Xcode step no longer shows Apple's logo.
 - A goal's **Open** buttons, like signing in to RevenueCat or making a key, open the page in the bot's own browser in the panel instead of yours, so a sign-in there is one the bot can use. On a machine, it opens in that machine's browser. Opening it again brings back the same tab.
