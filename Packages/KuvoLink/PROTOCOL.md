@@ -796,7 +796,9 @@ folder you pick once per box, after asking you.
   there, or null; 400 otherwise. The box makes projects only there, and never deletes one.
 - **Tools**: `make_project` (`{name, git?, clone?, folder?}`: a folder named after it, lowercase with
   dashes, a new git repository there unless `git: false`, or a repository cloned from an https or
-  ssh address; `folder`, bridge 0.9.191, is where you said it goes, a full path (`~` is fine; the
+  ssh address; either way it has a commit at once (bridge 0.9.195: an empty `Initial commit` in a
+  new one, or in a clone with none, by whoever your git settings say commits there, else by
+  `Kuvo Code <kuvo-code@localhost>`), so each of its sessions can start in a worktree; `folder`, bridge 0.9.191, is where you said it goes, a full path (`~` is fine; the
   folders on the way there are made too), which needs no projects folder picked), `list_projects` (each project here:
   its folder, whether it's git, who made it).
   A folder that's there with files in it, a project there already, or an address git can't clone
@@ -1696,7 +1698,8 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     {"project", "branchPrefix"?}` makes one of the project's repository on a branch of its own →
     `{project, root, folder, branch, base?, made, prefix}`; make the session in `folder`. `400`
     for a project that isn't a folder there, `409 {"message"}` when it isn't in a git repository,
-    `503` while the engine isn't running. `POST kuvo/worktrees/record {project, root, folder?,
+    `503` while the engine isn't running. A repository with no commits yet gets an empty first one
+    (bridge 0.9.195; what's staged stays staged), as a project the box makes does. `POST kuvo/worktrees/record {project, root, folder?,
     branch, base?}` keeps one a Mac kept before its box did ("For released Macs"; `404` when it
     isn't there any more).
   - `GET kuvo/worktrees/where[?directory=<value>]` (`worktrees.where`): where new worktrees go

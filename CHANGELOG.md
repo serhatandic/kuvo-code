@@ -19,6 +19,8 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - A bot no longer keeps starting sessions on models that can't answer: when one fails because its account is out of funds or at a limit, the bot hears why and moves the work to a model that can.
 - A bot that starts a session and waits for its reply no longer sits at **Starting a session** for minutes when the session fails at once: it hears the error right away.
 - A bot keeps only what you asked for in its job, close to your words, without adding how it'll work or rules you didn't give it.
+- A project a bot makes (or clones empty) starts with a first commit, so every step of its goal can begin at once in a worktree of its own, rather than waiting for the first session to commit.
+- Starting a session in a worktree of a repository with no commits yet works: it gets an empty first commit, and what you've staged stays staged.
 - A bot on a goal works like a lead with a team: once you start the goal, it makes the project (where you said it goes, if you did) and hands each step to a session of its own, following them as they report, rather than writing the code itself. Tell it if you'd rather it did the work alone.
 - A goal's step shows the icon of the site it's done at, like RevenueCat's or App Store Connect's, and none for work done on your computer: an Xcode step no longer shows Apple's logo.
 - A goal's **Open** buttons, like signing in to RevenueCat or making a key, open the page in the bot's own browser in the panel instead of yours, so a sign-in there is one the bot can use. On a machine, it opens in that machine's browser. Opening it again brings back the same tab.

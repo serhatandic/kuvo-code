@@ -8841,6 +8841,7 @@ function askedArgs(args) {
 // Packages/Box/src/link/git.ts
 import { execFile as execFile3, spawnSync as spawnSync5 } from "node:child_process";
 var GIT_ENV = { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" };
+var BY_KUVO = { GIT_AUTHOR_NAME: "Kuvo Code", GIT_AUTHOR_EMAIL: "kuvo-code@localhost", GIT_COMMITTER_NAME: "Kuvo Code", GIT_COMMITTER_EMAIL: "kuvo-code@localhost" };
 function ranIn(folder, args, env) {
   if (!args)
     return null;
@@ -8849,6 +8850,14 @@ function ranIn(folder, args, env) {
 }
 function gitIn(folder, args, env = {}) {
   return ranIn(folder, ownArgs(args, folder), env);
+}
+function firstCommit(folder) {
+  if (gitIn(folder, ["rev-parse", "--verify", "--quiet", "HEAD"]) !== null)
+    return true;
+  const empty = gitIn(folder, ["mktree"]);
+  const made = (env) => empty ? gitIn(folder, ["-c", "user.useConfigOnly=true", "commit-tree", empty, "-m", "Initial commit"], env) : null;
+  const commit = made({}) ?? made(BY_KUVO);
+  return commit !== null && gitIn(folder, ["update-ref", "-m", "commit (initial): Initial commit", "HEAD", commit, ""]) !== null;
 }
 function gitAsked(folder, args, env = {}) {
   return ranIn(folder, askedArgs(args), env);
@@ -9015,6 +9024,8 @@ async function makeProject(given, madeBy, root = projectsFolder()) {
     if (given.git !== false)
       kind = gitIn(folder, ["init", "--quiet", "--initial-branch=main"]) !== null || gitIn(folder, ["init", "--quiet"]) !== null ? "git" : "noGit";
   }
+  if (kind === "git" || kind === "cloned")
+    firstCommit(folder);
   let project;
   changeProjects((projects) => {
     const before = projects.find((each) => each.directory === folder);
@@ -10460,7 +10471,7 @@ async function setGoalLoop(goal, condition, _targets, file = GOALS_FILE) {
 var LEAD_WORDS = (projects) => [
   "How you work through it: you lead, and sessions you start do the work. Unless the user told you to do it yourself:",
   `1. ${projects.length ? `Make ${projects.map((each) => each.folder ? `${each.name} with make_project (name "${each.name}", folder "${shownPath(each.folder)}")` : `${each.name} with make_project`).join(", ")} first: you may, without asking.` : "Make a new project with make_project first, if the work needs one."} Never make a project's folder with mkdir or git init.`,
-  "2. Hand each step to a session with start_session: in the project, with the step's number (step), and a task it can do from the message alone (what to do, where, what's there already, when it's done, what to report). A new project has no commits yet: its first session works in it without a worktree and commits, and the rest start once it has. After that, start every step that waits for nothing at once, each in a worktree of its own (worktree) when others work in the same project.",
+  "2. Hand each step to a session with start_session: in the project, with the step's number (step), and a task it can do from the message alone (what to do, where, what's there already, when it's done, what to report). Start every step that waits for nothing at once, each in a worktree of its own (worktree) when others work in the same project.",
   "3. Follow them up: you're woken when one finishes or asks. Read its report, answer what it asks, start the steps that waited for it, and send it back to fix what isn't done.",
   "Write no code and make no files of the work yourself, not even the first ones: a session does. If the plan is one small step, you may do it yourself."
 ].join(`
@@ -15186,8 +15197,8 @@ async function answerWorktrees(method, requestPath, body, engine, signal, bridge
     const subpath = gitIn(project, ["rev-parse", "--show-prefix"]);
     if (subpath === null)
       return { status: 409, value: message("That folder isn't in a git repository.") };
-    if (gitIn(project, ["rev-parse", "--verify", "--quiet", "HEAD"]) === null)
-      return { status: 409, value: message("This repository has no commits yet. Make a first commit, then start a session in a worktree.") };
+    if (!firstCommit(project))
+      return { status: 409, value: message("This repository has no commits yet, and git couldn't make it a first one. Make a first commit, then start a session in a worktree.") };
     const base = gitIn(project, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
     let id, root;
     try {
@@ -15230,7 +15241,6 @@ async function answerWorktrees(method, requestPath, body, engine, signal, bridge
 }
 var isArchived2 = (session) => Boolean(session.time?.archived || session.metadata?.["kuvo.archived"] === true || session.metadata?.kuvo?.archived === true);
 var folderOf = (session) => session.location?.directory ?? session.directory;
-var BY_KUVO = { GIT_AUTHOR_NAME: "Kuvo Code", GIT_AUTHOR_EMAIL: "kuvo-code@localhost", GIT_COMMITTER_NAME: "Kuvo Code", GIT_COMMITTER_EMAIL: "kuvo-code@localhost" };
 var snapshotRef = (root, commit) => `refs/kuvo/worktrees/${path57.basename(root).replace(/[^A-Za-z0-9_-]+/g, "-")}-${commit.slice(0, 12)}`;
 var dropSnapshot = (project, root, commit) => gitIn(project, ["update-ref", "-d", snapshotRef(root, commit), commit]);
 function snapshot(root, branch) {
@@ -23035,7 +23045,7 @@ import fs77 from "node:fs";
 import path81 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.194";
+var BRIDGE_VERSION = "0.9.195";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

@@ -18,6 +18,7 @@ const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
 
 const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } }).trim();
 const project = path.join(home, "shop");
+const emptyRepo = path.join(home, "empty");
 fs.mkdirSync(project, { recursive: true });
 git(project, "init", "-q", "-b", "main");
 fs.writeFileSync(path.join(project, "README.md"), "# Shop\n");
@@ -50,18 +51,20 @@ const engine = http.createServer((request, response) => {
     const send = (value, status = 200) => { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value)); };
     // Any folder in the repository (through a link too) is the project's.
     const real = (() => { try { return fs.realpathSync(folderOf(request)); } catch { return ""; } })();
-    if (url.pathname === "/api/location") return send({ directory: folderOf(request), project: { id: real === project || real.startsWith(project + "/") ? "prj_shop" : "prj_workspace" } });
-    if (url.pathname.startsWith("/api/worktree") && JSON.parse(body || "{}").projectID !== "prj_shop") return send({ message: "Not a git project" }, 400);
+    // (Another repository here, "empty", is a project of its own.)
+    if (url.pathname === "/api/location") return send({ directory: folderOf(request), project: { id: real === project || real.startsWith(project + "/") ? "prj_shop" : real === emptyRepo ? "prj_empty" : "prj_workspace" } });
+    const projectID = JSON.parse(body || "{}").projectID;
+    if (url.pathname.startsWith("/api/worktree") && projectID !== "prj_shop" && projectID !== "prj_empty") return send({ message: "Not a git project" }, 400);
     if (url.pathname === "/api/worktree" && request.method === "POST") {
       const folder = path.join(home, "worktrees", `brave-otter-${++made}`);
-      git(project, "worktree", "add", "--detach", folder);
+      git(projectID === "prj_empty" ? emptyRepo : project, "worktree", "add", "--detach", folder);
       return send({ directory: folder });
     }
     if (url.pathname === "/api/worktree" && request.method === "DELETE") {
       const sent = JSON.parse(body);
       // As the real one refuses one whose folder is gone.
       if (!fs.existsSync(sent.directory)) return send({ name: "WorktreeError", data: { message: `Worktree directory unavailable: ${sent.directory}` } }, 400);
-      try { git(project, "worktree", "remove", ...(sent.force ? ["--force"] : []), sent.directory); } catch { return send({ message: "git refused" }, 400); }
+      try { git(projectID === "prj_empty" ? emptyRepo : project, "worktree", "remove", ...(sent.force ? ["--force"] : []), sent.directory); } catch { return send({ message: "git refused" }, 400); }
       return send({});
     }
     if (url.pathname === "/api/session") {
@@ -216,13 +219,19 @@ test("commits on no branch in a worktree are kept on a branch of their own when 
   git(project, "branch", "-D", keeping);
 });
 
-test("a repository with no commit yet says to make one first", async () => {
-  const empty = path.join(home, "empty");
-  fs.mkdirSync(empty);
-  git(empty, "init", "-q", "-b", "main");
-  const refused = await ask("POST", "kuvo/worktrees", { project: empty });
-  assert.equal(refused.status, 409);
-  assert.match(refused.value.message, /first commit/);
+test("a repository with no commit yet gets an empty first one, and its worktree at once; what's staged stays staged", async () => {
+  fs.mkdirSync(emptyRepo);
+  git(emptyRepo, "init", "-q", "-b", "main");
+  fs.writeFileSync(path.join(emptyRepo, "notes.txt"), "draft\n");
+  git(emptyRepo, "add", "notes.txt");
+  const made = await ask("POST", "kuvo/worktrees", { project: emptyRepo, branchPrefix: "kuvo/" });
+  assert.equal(made.status, 200, JSON.stringify(made.value));
+  assert.equal(made.value.base, "main");
+  assert.equal(git(emptyRepo, "log", "--format=%s"), "Initial commit");
+  assert.equal(git(emptyRepo, "ls-tree", "-r", "--name-only", "HEAD"), "", "the first commit is empty");
+  assert.equal(git(emptyRepo, "status", "--porcelain"), "A  notes.txt", "what you'd staged is still staged, not committed for you");
+  assert.equal(git(made.value.root, "symbolic-ref", "--short", "HEAD"), made.value.branch);
+  assert.equal((await ask("POST", "kuvo/worktrees/remove", { path: made.value.root })).status, 200);
 });
 
 test("a branch prefix git can't use there is named", async () => {
