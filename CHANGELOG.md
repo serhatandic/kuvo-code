@@ -16,6 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- A bot's goal shows the icon of the app on its computer each step is done in, like Xcode, beside the step; when it waits on you in an app on your Mac, **Open** opens that app. A goal's card lists the projects it will make: click one to see where Start makes it and whether something's there already, and to rename it or move it.
 - The coding agents' sign-ins (Codex's and Grok's `auth.json`, Claude Code's and the Gemini CLI's credentials files) and opencode's, wherever it keeps them, are treated like your other keys: commands in the sandbox can't read them, and in **Auto** the reviewer judges an agent reading or changing one. A coding agent running in the sandbox still uses its own sign-in, and so can the commands it runs itself.
 - A bot on a goal works like a lead with a team: once you start the goal, it makes the project (where you said it goes, if you did) and hands each step to a session of its own, following them as they report, rather than writing the code itself. Tell it if you'd rather it did the work alone.
 - A goal's step shows the icon of the site it's done at, like RevenueCat's or App Store Connect's, and none for work done on your computer: an Xcode step no longer shows Apple's logo.

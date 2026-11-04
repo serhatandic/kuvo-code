@@ -218,6 +218,14 @@ struct GoalPlanBar: View {
         }
     }
 
+    /// The app on this Mac what waits for you is in, to open it there: none for a page to open, an
+    /// app this Mac doesn't have, or one on a machine, which is out of reach from here.
+    static func app(of item: GoalPlan.Waiting, on box: String) -> (name: String, at: URL)? {
+        guard box == BoxClient.mac, item.url == nil, let app = item.app, let id = app.id,
+              let place = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) else { return nil }
+        return (app.name, place)
+    }
+
     private func waitingRow(_ item: GoalPlan.Waiting, now: Date) -> some View {
         let since = Date(timeIntervalSince1970: item.at / 1000)
         let onThisMac = box == BoxClient.mac
@@ -229,12 +237,14 @@ struct GoalPlanBar: View {
                 app.utilities.openForAgent(url, bot: plan.bot, machine: onThisMac ? nil : box)
             })
             help = GoalPlanWords.opensIn(bot: plan.name, computer: onThisMac ? nil : app.machines.engine(box)?.machine.name ?? box)
+        } else if let (name, place) = Self.app(of: item, on: box) {
+            button = ("Open \(name)", { NSWorkspace.shared.openApplication(at: place, configuration: NSWorkspace.OpenConfiguration()) })
         } else if let session = item.session {
             button = ("Open", { app.tabs.open(.session(session)) })
         } else {
             button = nil
         }
-        return YoursRow(text: item.text, detail: item.detail, aside: "since \(GoalSteps.time(since, now: now))", site: item.site, button: button, help: help) {
+        return YoursRow(text: item.text, detail: item.detail, aside: "since \(GoalSteps.time(since, now: now))", mark: GoalPlanWords.mark(of: item), button: button, help: help) {
             Task {
                 do { try await app.goalPlans.answer(plan, on: box, .clear(waiting: item.id)) } catch { failed(error.localizedDescription) }
             }

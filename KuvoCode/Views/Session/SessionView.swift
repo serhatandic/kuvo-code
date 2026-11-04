@@ -298,6 +298,7 @@ private struct BottomStack: View {
             WorkAskCard(ask: ask, box: box) { model.failure = $0 }
         case .plan(let plan, let box):
             GoalCard(plan: plan, box: box)
+                .environment(\.goalBox, box)
                 .disabled(offlineMachine != nil && box != BoxClient.mac)
         }
     }
@@ -475,6 +476,7 @@ private struct BottomStack: View {
                                 app.goalPlans.putAway.insert(plan.id)
                                 if model.goal?.isOver == true { model.putAwayGoal() }
                             } failed: { model.failure = $0 }
+                            .environment(\.goalBox, box)
                             .modifier(CardRow())
                             .transition(.fold)
                         } else if let goal = model.goal {
