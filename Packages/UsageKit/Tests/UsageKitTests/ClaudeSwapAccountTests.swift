@@ -73,13 +73,8 @@ final class ClaudeSwapAccountTests: XCTestCase {
         )
         XCTAssertEqual(store.keychainServiceCandidates().count, 1)
         XCTAssertFalse(store.keychainServiceCandidates().contains("Claude Code-credentials"))
-        var state = try XCTUnwrap(store.loadCredentialCandidates().first)
+        let state = try XCTUnwrap(store.loadCredentialCandidates().first)
         XCTAssertEqual(state.oauth.accessToken, "session")
-        let generation = store.credentialGeneration()
-        state.oauth.accessToken = "rotated"
-        XCTAssertTrue(try store.save(state, ifUnchanged: generation))
-        XCTAssertTrue(files.files[account.sessionDirectory + "/.credentials.json"]?.contains("rotated") == true)
-        XCTAssertEqual(keychain.currentUserValues["Claude Code-credentials"], credentials("wrong-account"))
         files.files.removeAll()
         XCTAssertTrue(store.loadCredentialCandidates().isEmpty)
     }
@@ -92,7 +87,6 @@ final class ClaudeSwapAccountTests: XCTestCase {
         XCTAssertEqual(state.source, .swapVault)
         XCTAssertNil(state.oauth.refreshToken)
         XCTAssertEqual(keychain.lastAccount, "account-2-work@example.com")
-        XCTAssertFalse(try store.save(state, ifUnchanged: store.credentialGeneration()))
         let http = RoutingHTTPClient { request in
             XCTAssertEqual(request.url.path, "/api/oauth/profile")
             return HTTPResponse(statusCode: 401, headers: [:], body: Data())
@@ -144,11 +138,6 @@ final class ClaudeSwapAccountTests: XCTestCase {
                                     files: files, keychain: FakeKeychain(), swapAccount: account)
         XCTAssertEqual(store.expectedIdentityKey, account.identityKey)
         XCTAssertEqual(store.loadCredentialCandidates().count, 1)
-        let generation = store.credentialGeneration()
-        var rotated = try XCTUnwrap(store.loadCredentialCandidates().first)
-        rotated.oauth.accessToken = "new-session"
-        XCTAssertTrue(try store.save(rotated, ifUnchanged: generation))
-        XCTAssertEqual(store.credentialGeneration(), generation.replacing(rotated))
     }
 
     func testAdditionalSessionHistoryIsFilteredAndSharedHistoryIsDeduplicated() async throws {

@@ -28,6 +28,14 @@ struct TranscriptView: View {
         let model = model
         return { model.openModelMenu() }
     }
+    /// The account a failed turn's card is signing in to, in a sheet over the conversation.
+    @State private var signingIn: SigningIn?
+    private struct SigningIn: Identifiable { let id: String }
+    /// A failed turn's Sign In, to its model's account, here.
+    private var signIn: ConversationSignIn? {
+        guard !isOffline else { return nil }
+        return ConversationSignIn(current: model.session.model) { providerID in signingIn = SigningIn(id: providerID) }
+    }
     @AppStorage(StepsDetail.key) private var stepsDetail = StepsDetail.summary
     @State private var scroller = ConversationScroller()
     @State private var rowCache = RowCache()
@@ -100,6 +108,14 @@ struct TranscriptView: View {
         .environment(\.sandboxReleased, Sandboxes.shared.releasedCommands(for: workspace.root(of: model.id), on: Workspace.box(of: model.session.location.directory)))
         // What Auto's reviewer did with what its steps asked, beside them.
         .environment(\.askReviews, Sandboxes.shared.reviewMarks(on: Workspace.box(of: model.session.location.directory)))
+        .environment(\.conversationSignIn, signIn)
+        // Its sign-in, where this conversation runs (a machine signs in on its own).
+        .sheet(item: $signingIn) { item in
+            ConnectView(integrationID: item.id, onDone: { signingIn = nil }, onCancel: { signingIn = nil })
+                .environment(catalog)
+                .frame(width: 480)
+                .frame(minHeight: 380)
+        }
         .overlay {
             if model.isLoaded && rows.isEmpty {
                 EmptyConversationView(directory: model.session.location.directory) { text in
@@ -298,7 +314,7 @@ struct TranscriptView: View {
     /// turn gets a summary line, and queued messages come last.
     /// The rows, made again only when what they're made from changes (not as you scroll).
     private var rows: [Row] {
-        let key = RowCache.Key(version: model.transcriptVersion, detail: stepsDetail, revert: model.session.revert?.messageID, waiting: model.waiting.map(\.id))
+        let key = RowCache.Key(version: model.transcriptVersion, detail: stepsDetail, revert: model.session.revert?.messageID, waiting: model.waiting.map(\.id), model: model.session.model)
         if rowCache.key == key { return rowCache.rows }
         let rows = Self.rows(of: model, catalog: catalog, detail: stepsDetail)
         hover.turns = Self.turns(of: rows)
@@ -348,6 +364,11 @@ struct TranscriptView: View {
         let all = model.transcript.messages
         let cut = boundary.map { boundary in all.firstIndex { $0.id == boundary } ?? all.firstIndex { $0.id >= boundary } ?? all.count }
         let messages = cut.map { Array(all[..<$0]) } ?? all
+        // The model each turn runs on, for one that fails before any reply says it: the last switch's;
+        // before any, the one the first switch left (wherever it is), or the session's. Not a reply's:
+        // Auto's are the model it picked for that turn.
+        let firstSwitch = all.lazy.compactMap { if case .modelSwitched(let change) = $0 { change } else { nil } }.first
+        var current = firstSwitch.map(\.previous) ?? model.session.model
         // Summed up: the agent's steps between its replies, gathered into one row.
         var steps: [Message.Content] = []
         var stepsID = ""
@@ -382,7 +403,7 @@ struct TranscriptView: View {
             }
             switch message {
             case .user(let user):
-                turn = TurnStats(started: user.time.created, message: user)
+                turn = TurnStats(started: user.time.created, message: user, model: current)
                 rows.append(.message(user))
             case .assistant(let assistant):
                 turn.add(assistant)
@@ -448,6 +469,7 @@ struct TranscriptView: View {
                 rows.append(.turnEnd(idle, turn, isLast: index == last, isLatest: index == latestEnd))
                 turn = TurnStats()
             case .modelSwitched(let change):
+                current = change.model
                 // By its name, as the model menu shows it ("Big Pickle", not big-pickle).
                 rows.append(.notice(change.id, "cpu", "Switched to \(catalog.model(change.model)?.name ?? change.model.id)" + (change.model.variant.map { " · \(EffortLevel.title($0))" } ?? "")))
             case .agentSwitched(let change):
@@ -563,6 +585,8 @@ struct TurnStats: Hashable {
     var text: [String] = []
     /// The mode that answered: a plan can be built from its end.
     var agent: String?
+    /// The model that answered: a failed turn signs in to its account.
+    var model: ModelRef?
     /// The files the agent changed, in the order first changed, with their lines.
     var files: [TurnFile] = []
 
@@ -586,6 +610,7 @@ struct TurnStats: Hashable {
 
     mutating func add(_ message: Message.Assistant) {
         agent = message.agent
+        model = message.model
         for block in message.content {
             guard case .tool(let call) = block, case .completed(let input, _, let metadata) = call.state else { continue }
             // Read straight from the JSON: this runs on every update while a reply streams, and
@@ -1409,6 +1434,8 @@ private struct TurnEndView: View {
     /// The latest turn's end: its row stays in view.
     var isLatest = false
     @Environment(AppModel.self) private var app
+    @Environment(Catalog.self) private var catalog
+    @Environment(\.conversationSignIn) private var signIn
     @Environment(TurnHover.self) private var hover: TurnHover?
     /// Its Copy or Reply has the keyboard (Tab, with keyboard navigation on): the row shows.
     @FocusState private var focused: Helper?
@@ -1442,6 +1469,11 @@ private struct TurnEndView: View {
         return kind
     }
 
+    /// What its card offers for a sign-in, from here (none while offline).
+    private var actions: SignInCard.Actions? {
+        signIn.map { SignInCard.actions(failed: stats.model, current: $0.current, catalog: catalog) }
+    }
+
     /// The engine's words under the headline; for a sign-in that ended, which the engine says only
     /// as "Request failed: 400", what happened and where to sign in again.
     private var detail: String? {
@@ -1459,19 +1491,27 @@ private struct TurnEndView: View {
         case .failed:
             VStack(alignment: .leading, spacing: 8) {
                 let way = FailureWords.way(kind)
+                let actions = way == .signIn ? actions : nil
+                // Signed out still: sending it again would only fail the same way, after a while.
+                let retry = actions?.tryAgain == false ? nil : retry
                 FailureCard(headline: FailureWords.headline(kind), detail: detail, hasActions: retry != nil || switchModel != nil && way == .switchModel || way == .signIn) {
                     switch way {
-                    // The model's account, or a coding agent's, to sign in to: in Accounts, where
-                    // this conversation runs (a machine signs in on its own).
+                    // The model's account, or a coding agent's, to sign in to, from here: where
+                    // this conversation runs (a machine signs in on its own). Or another model.
                     case .signIn:
                         let machine = RemoteFolder.machine(of: directory)
-                        if kind == .agentSignIn {
-                            Button(machine.map { "Sign In on \($0)" } ?? "Open Accounts") { app.openAccounts(on: machine) }
-                                .help(machine.map { "Sign in to the coding agents on \($0): its sign-ins are its own" } ?? "Sign in to the coding agents")
+                        if let signIn, let account = actions?.signIn {
+                            let again = kind == .signIn(ended: true) ? "Sign In Again" : "Sign In"
+                            Button(machine.map { "\(again) on \($0)" } ?? again) { signIn.open(account.providerID) }
+                                .help("Sign in to \(catalog.signInName(account.providerID))\(machine.map { " on \($0): its sign-ins are its own" } ?? "")")
+                            if actions?.switchModel == true, let switchModel {
+                                Button("Switch Model", action: switchModel)
+                                    .help("Choose another model for this conversation")
+                            }
                         } else {
-                            // On a machine, the button names it: its sign-ins are its own.
-                            Button(kind == .signIn(ended: true) ? "Sign In Again" : machine.map { "Open Accounts on \($0)" } ?? "Open Accounts") { app.openAccounts(on: machine) }
-                                .help(machine.map { "Accounts, on \($0)" } ?? "Accounts")
+                            // Several to sign in to (a Custom Auto list's), or not known which: Accounts.
+                            Button(machine.map { "Open Accounts on \($0)" } ?? "Open Accounts") { app.openAccounts(on: machine) }
+                                .help(machine.map { "Accounts, on \($0): its sign-ins are its own" } ?? "Accounts")
                         }
                     case .switchModel:
                         if let switchModel {
@@ -2221,6 +2261,8 @@ final class RowCache {
         var detail: StepsDetail
         var revert: String?
         var waiting: [String]
+        /// The session's model, which a turn that failed before any reply runs on.
+        var model: ModelRef?
     }
 
     /// What changing animates: rows added or taken away at the end.
@@ -2266,5 +2308,49 @@ extension TranscriptView {
         }
         guard !isRunning, case .assistant(let step)? = last, step.error?.isInterruption == true else { return nil }
         return step
+    }
+}
+
+/// A failed turn's card signs in to its model's account (a provider's ID) from here.
+struct ConversationSignIn {
+    /// The model the conversation is on now, which Try Again sends with.
+    let current: ModelRef?
+    let open: (String) -> Void
+}
+
+extension EnvironmentValues {
+    @Entry var conversationSignIn: ConversationSignIn?
+}
+
+// DRAFTS (to pick from, then fold into the code): what a card for a sign-in offers.
+// KUVO_DEMO_SIGNIN_CARD=alone: Sign In only; otherwise Sign In and Switch Model.
+enum SignInCard {
+    static let offersSwitch: Bool = {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["KUVO_DEMO_SIGNIN_CARD"] == "alone" { return false }
+        #endif
+        return true
+    }()
+
+    /// What a card for a sign-in offers: Sign In to the account of the model the turn failed on
+    /// (one with a sign-in, not Auto's: Accounts lists a Custom Auto list's several), Switch Model
+    /// while the conversation is still on that model and it's still signed out, and Try Again
+    /// unless the model the conversation is on now is signed out (it sends with that one).
+    struct Actions: Equatable {
+        var signIn: ModelRef?
+        var switchModel = false
+        var tryAgain = true
+    }
+
+    static func actions(failed: ModelRef?, current: ModelRef?, catalog: Catalog) -> Actions {
+        func signedOut(_ ref: ModelRef?) -> Bool {
+            guard let ref, ref.providerID != OutsideAgents.autoProvider else { return false }
+            return catalog.needsSignIn(ref) || catalog.hasEndedSignIn(ref.providerID)
+        }
+        guard let failed, failed.providerID != OutsideAgents.autoProvider, catalog.offersSignIn(failed.providerID) else {
+            return Actions(tryAgain: !signedOut(current))
+        }
+        let onIt = current.map { $0.providerID == failed.providerID && $0.id == failed.id } ?? true
+        return Actions(signIn: failed, switchModel: offersSwitch && onIt && signedOut(failed), tryAgain: !signedOut(current ?? failed))
     }
 }

@@ -6,6 +6,8 @@ struct ClaudeMappedUsage: Equatable, Sendable {
     /// Provider header notice (amber triangle + tooltip) riding along with this usage, e.g. the
     /// rate-limited warning. `nil` for a clean fetch.
     var warning: String?
+    /// When its numbers were read, for ones kept from an earlier refresh (fork addition); `nil` for now.
+    var readAt: Date?
 }
 
 enum ClaudeUsageMapper {

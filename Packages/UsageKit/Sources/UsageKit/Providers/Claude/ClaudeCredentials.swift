@@ -24,19 +24,6 @@ struct ClaudeCredentialsFile: Hashable, Sendable {
         document = data
     }
 
-    func mergingRotatedOAuth(_ oauth: ClaudeOAuth) throws -> String {
-        guard var object = try JSONSerialization.jsonObject(with: document) as? [String: Any],
-              var storedOAuth = object["claudeAiOauth"] as? [String: Any]
-        else { throw ClaudeAuthError.credentialsChanged }
-        // These are the only fields returned by the refresh endpoint. Leave metadata, unknown
-        // nested fields, and every other credential in the document untouched.
-        if let accessToken = oauth.accessToken { storedOAuth["accessToken"] = accessToken }
-        if let refreshToken = oauth.refreshToken { storedOAuth["refreshToken"] = refreshToken }
-        if let expiresAt = oauth.expiresAt { storedOAuth["expiresAt"] = expiresAt }
-        object["claudeAiOauth"] = storedOAuth
-        let data = try JSONSerialization.data(withJSONObject: object)
-        return String(decoding: data, as: UTF8.self)
-    }
 }
 
 struct ClaudeCredentialState: Hashable, Sendable {

@@ -6,6 +6,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { homedir, tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { ClaudeAgent } from "../../src/agents/agents/claude"
+import { subscribe } from "../../src/agents/events"
 import { repositoryOf } from "../../src/agents/fence"
 import { setToolServer } from "../../src/agents/kuvotools"
 import { callServer, computerServers, KEYS } from "./support/servers"
@@ -17,6 +18,13 @@ import { shellOutput, shells } from "../../src/agents/shells"
 import { Store } from "../../src/agents/store"
 import type { Message, PermissionRule } from "../../src/agents/wire"
 
+// Claude Code's own sign-in, as on a machine (a Mac's own is Kuvo Code's: accounts-check.test.ts).
+const keychain = ClaudeAgent.keychain
+ClaudeAgent.keychain = false
+afterAll(() => {
+  ClaudeAgent.keychain = keychain
+})
+
 /** A Claude Code that answers as the test says: what it was sent, and what it says. */
 class FakeClaude {
   sent: any[] = []
@@ -26,6 +34,10 @@ class FakeClaude {
   stopped: string[] = []
   closed = false
   onInterrupt?: () => void
+  /** As it's told its MCP servers (as a turn starts): it stops there, say. */
+  onServers?: () => Promise<void>
+  /** Why it stopped, its stream ending in that error, as the SDK's does when Claude Code exits. */
+  private crashed?: Error
 
   /** One-off prompts it answered (a title). */
   oneOffs: string[] = []
@@ -57,9 +69,14 @@ class FakeClaude {
     })()
     const out = this.out
     return {
-      [Symbol.asyncIterator]: () => out[Symbol.asyncIterator](),
+      [Symbol.asyncIterator]: () => {
+        const inner = out[Symbol.asyncIterator]()
+        const next = (): Promise<IteratorResult<any>> => inner.next().then((result) => (this.crashed && result.done ? Promise.reject(this.crashed) : result))
+        return { next, return: inner.return }
+      },
       setMcpServers: async (servers: Record<string, unknown>) => {
         this.mcpServers = servers
+        await this.onServers?.()
       },
       initializationResult: async () => ({ models: this.models }),
       setModel: async (model?: string) => {
@@ -87,6 +104,12 @@ class FakeClaude {
         out.close()
       },
     }
+  }
+
+  /** Claude Code exits, its stream ending in `error`. */
+  crash(error: Error) {
+    this.crashed = error
+    this.out.close()
   }
 
   say(text: string, uuids: string[]) {
@@ -158,6 +181,11 @@ class TestClaude extends ClaudeAgent {
   override usesKey() {
     return this.key
   }
+  /** When its sign-in was last written (signing in again, renewed): never, unless a test says. */
+  signInWritten = 0
+  protected override async credentialsWritten() {
+    return this.signInWritten
+  }
 }
 
 const base = mkdtempSync(join(process.env.KUVO_TEST_ROOT ?? tmpdir(), "kuvo-claude-test-"))
@@ -194,6 +222,83 @@ async function until(condition: () => boolean, ms = 3_000) {
 
 const idles = (id: string) => sessions.messages(id).filter((message) => message.type === "idle") as Extract<Message, { type: "idle" }>[]
 const texts = (id: string) => sessions.messages(id).flatMap((message) => (message.type === "assistant" ? message.content.flatMap((content) => (content.type === "text" ? [content.text] : [])) : []))
+
+describe("Claude Code that stops", () => {
+  test("as it starts, before it takes your message: the turn fails with why it stopped", async () => {
+    fake.onServers = async () => {
+      fake.crash(new Error("Claude Code process exited with code 1"))
+      // (Its stream has ended by the time the turn goes on.)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    }
+    const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
+    sessions.prompt(id, { id: "msg_claude_crash01", text: "hello", files: [], delivery: "steer" })
+    await until(() => idles(id).length === 1)
+    expect(idles(id)[0].outcome).toBe("failed")
+    expect(idles(id)[0].error?.message).toContain("exited with code 1")
+    expect(idles(id)[0].error?.message).not.toContain("this.input")
+  })
+
+  test("Claude turns its sign-in away: the turn fails as one to sign in again for, its words said once, in the card, and that Claude Code goes", async () => {
+    // The apps hear it, to show the account needs a sign-in (the card's Sign In, the chip).
+    const updated: unknown[] = []
+    const unsubscribe = subscribe((event) => {
+      if (event.type === "integration.updated") updated.push(event.data.integrationID)
+    })
+    const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
+    sessions.prompt(id, { id: "msg_claude_auth001", text: "hello", files: [], delivery: "steer" })
+    await until(() => fake.sent.length === 1)
+    const uuid = fake.sent[0].uuid
+    const words = "Failed to authenticate: OAuth session expired and could not be refreshed"
+    fake.out.push({ type: "assistant", message: { id: "msg_auth", content: [{ type: "text", text: words }] }, error: "authentication_failed", parent_tool_use_id: null, user_message_uuids: [uuid] })
+    fake.result([uuid], "success", { is_error: true, result: words })
+    await until(() => idles(id).length === 1)
+    const idle = idles(id)[0]
+    expect(idle.outcome).toBe("failed")
+    expect(idle.error?.type).toBe("signin")
+    expect(texts(id).join(" ")).not.toContain("Failed to authenticate")
+    // The next message starts a Claude Code that reads the sign-in as it is then.
+    expect(fake.closed).toBe(true)
+    unsubscribe()
+    expect(updated).toContain(provider)
+  })
+
+  test("another error Claude gives: its own words, in the failure", async () => {
+    const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
+    sessions.prompt(id, { id: "msg_claude_long001", text: "hello", files: [], delivery: "steer" })
+    await until(() => fake.sent.length === 1)
+    const uuid = fake.sent[0].uuid
+    const words = "API Error: prompt is too long: 210000 tokens > 200000 maximum"
+    fake.out.push({ type: "assistant", message: { id: "msg_long", content: [{ type: "text", text: words }] }, error: "invalid_request", parent_tool_use_id: null, user_message_uuids: [uuid] })
+    fake.result([uuid], "success", { is_error: true, result: words })
+    await until(() => idles(id).length === 1)
+    expect(idles(id)[0].error?.message).toContain("prompt is too long")
+    expect(texts(id).join(" ")).not.toContain("prompt is too long")
+  })
+
+  test("after Claude turned its sign-in away, a message fails at once as one to sign in for, until it's signed in again", async () => {
+    // \`claude auth status\` still says signed in (Claude revoked it).
+    claude.at = join(root, "claude")
+    writeFileSync(claude.at, `#!/bin/sh\necho '{"loggedIn":true,"authMethod":"claude.ai"}'\n`, { mode: 0o755 })
+    const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
+    sessions.prompt(id, { id: "msg_claude_auth002", text: "hello", files: [], delivery: "steer" })
+    await until(() => fake.sent.length === 1)
+    const uuid = fake.sent[0].uuid
+    fake.out.push({ type: "assistant", message: { id: "msg_auth2", content: [{ type: "text", text: "Failed to authenticate" }] }, error: "authentication_failed", parent_tool_use_id: null, user_message_uuids: [uuid] })
+    fake.result([uuid], "success", { is_error: true, result: "Failed to authenticate" })
+    await until(() => idles(id).length === 1)
+    // Again, as a wake-up or Try Again would: said at once, not sent to Claude Code to wait on.
+    sessions.prompt(id, { id: "msg_claude_auth003", text: "again", files: [], delivery: "steer" })
+    await until(() => idles(id).length === 2)
+    expect(idles(id)[1].outcome).toBe("failed")
+    expect(idles(id)[1].error?.type).toBe("signin")
+    expect(fake.sent).toHaveLength(1)
+    // Signed in again, at once (in Terminal, say): the next one goes.
+    claude.signInWritten = Date.now()
+    fake.out = new Queue<any>()
+    sessions.prompt(id, { id: "msg_claude_auth004", text: "once more", files: [], delivery: "steer" })
+    await until(() => fake.sent.length === 2)
+  })
+})
 
 describe("Claude Code, messages sent partway", () => {
   test("one it takes after its last step: the turn goes on until it has answered it", async () => {
