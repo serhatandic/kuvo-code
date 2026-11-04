@@ -55,6 +55,9 @@ struct ConnectView: View {
     /// Why the engine didn't take the key, shown under it until you change it.
     @State private var keyError: String?
     @State private var copied = false
+    @State private var linkCopied = false
+    /// The browser didn't take the page (none set, say): opened by hand from here.
+    @State private var browserRefused = false
     @State private var copyReset: Task<Void, Never>?
     @State private var pollTask: Task<Void, Never>?
     /// The page to sign in on, once known: the attempt's, or one its status brought later.
@@ -276,8 +279,10 @@ struct ConnectView: View {
 
     /// Getting ready (an agent downloading first, its page not there yet): what it's doing, not
     /// yet waiting on you.
+    /// A coding agent's page always comes (late, from one slow to start): until then, it isn't
+    /// waiting on you, whatever its status said.
     private var gettingReady: String? {
-        progress ?? (signInURL.isEmpty && !hasStatus ? "Getting ready…" : nil)
+        progress ?? (signInURL.isEmpty && (!hasStatus || OutsideAgents.isAgent(integrationID)) ? "Getting ready…" : nil)
     }
 
     private func waiting(_ attempt: OAuthAttempt) -> some View {
@@ -311,7 +316,7 @@ struct ConnectView: View {
                         .contentTransition(.symbolEffect(.replace))
                 }
             } else if attempt.mode == .auto, gettingReady == nil {
-                Text("Finish signing in with your browser. This updates on its own.")
+                Text(browserRefused ? "Your browser didn’t open. Open the page to sign in. This updates on its own." : "Finish signing in with your browser. This updates on its own.")
                     .multilineTextAlignment(.center)
                     .foregroundStyle(.secondary)
             }
@@ -371,7 +376,9 @@ struct ConnectView: View {
 
             HStack(spacing: 16) {
                 if !signInURL.isEmpty {
-                    Button("Open the Page Again") { open(signInURL) }
+                    Button(browserRefused ? "Open the Page" : "Open the Page Again") { open(signInURL) }
+                    // Wherever the browser is (another one, another Mac): the page by hand.
+                    Button(linkCopied ? "Link Copied" : "Copy Link") { copyLink() }
                 }
                 if attempt.mode == .auto, attempt.acceptsCode == true, !isPastingCode, gettingReady == nil {
                     Button("Paste a Code") { isPastingCode = true }
@@ -537,6 +544,7 @@ struct ConnectView: View {
                     isCheckingCode = false
                     codeError = nil
                     hasStatus = false
+                    browserRefused = false
                     signInURL = attempt.url
                     if let code = attempt.userCode { copy(code) }
                     open(attempt.url)
@@ -735,7 +743,19 @@ struct ConnectView: View {
         guard !url.isEmpty, let url = URL(string: url), ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return }
         // An agent on a machine: the page comes back to it there.
         if let machine = catalog.machine { forward.start(for: url, on: machine) }
-        NSWorkspace.shared.open(url)
+        withAnimation(.ui) { browserRefused = !NSWorkspace.shared.open(url) }
+    }
+
+    /// The sign-in page's link, for a browser you open yourself.
+    private func copyLink() {
+        Clipboard.copy(signInURL)
+        withAnimation(.ui) { linkCopied = true }
+        copyReset?.cancel()
+        copyReset = Task {
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled else { return }
+            withAnimation(.ui) { linkCopied = false }
+        }
     }
 
     /// Copies the code, and says so for a moment.

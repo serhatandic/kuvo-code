@@ -28,6 +28,16 @@ struct TranscriptView: View {
         let model = model
         return { model.openModelMenu() }
     }
+    @Environment(\.agentsBridge) private var agentsBridge
+    /// The account a failed turn's card is signing in to, in a sheet over the conversation.
+    @State private var signingIn: SigningIn?
+    private struct SigningIn: Identifiable { let id: String }
+    /// A failed turn's Sign In: to the account of the model the conversation is on, here (one of
+    /// your Custom Auto lists has several: Accounts lists them).
+    private var signIn: ConversationSignIn? {
+        guard let ref = model.session.model, ref.providerID != OutsideAgents.autoProvider, !isOffline else { return nil }
+        return ConversationSignIn(model: ref) { signingIn = SigningIn(id: ref.providerID) }
+    }
     @AppStorage(StepsDetail.key) private var stepsDetail = StepsDetail.summary
     @State private var scroller = ConversationScroller()
     @State private var rowCache = RowCache()
@@ -100,6 +110,15 @@ struct TranscriptView: View {
         .environment(\.sandboxReleased, Sandboxes.shared.releasedCommands(for: workspace.root(of: model.id), on: Workspace.box(of: model.session.location.directory)))
         // What Auto's reviewer did with what its steps asked, beside them.
         .environment(\.askReviews, Sandboxes.shared.reviewMarks(on: Workspace.box(of: model.session.location.directory)))
+        .environment(\.conversationSignIn, signIn)
+        // Its sign-in, where this conversation runs (a machine signs in on its own).
+        .sheet(item: $signingIn) { item in
+            ConnectView(integrationID: item.id, onDone: { signingIn = nil }, onCancel: { signingIn = nil })
+                .environment(catalog)
+                .environment(\.agentsBridge, agentsBridge)
+                .frame(width: 480)
+                .frame(minHeight: 380)
+        }
         .overlay {
             if model.isLoaded && rows.isEmpty {
                 EmptyConversationView(directory: model.session.location.directory) { text in
@@ -1409,6 +1428,8 @@ private struct TurnEndView: View {
     /// The latest turn's end: its row stays in view.
     var isLatest = false
     @Environment(AppModel.self) private var app
+    @Environment(Catalog.self) private var catalog
+    @Environment(\.conversationSignIn) private var signIn
     @Environment(TurnHover.self) private var hover: TurnHover?
     /// Its Copy or Reply has the keyboard (Tab, with keyboard navigation on): the row shows.
     @FocusState private var focused: Helper?
@@ -1442,6 +1463,21 @@ private struct TurnEndView: View {
         return kind
     }
 
+    /// The conversation's model is known to still need the sign-in the turn failed for: its Try
+    /// Again would only fail the same way. (Not known for a Custom Auto list's, which skips one
+    /// signed out of.)
+    private var stillSignedOut: Bool {
+        guard let signIn else { return false }
+        return catalog.needsSignIn(signIn.model) || catalog.hasEndedSignIn(signIn.model.providerID)
+    }
+
+    /// Signed in again since, as a coding agent's account says (the engine's may read as signed in
+    /// with a key or sign-in its provider turns away): Try Again is the way on.
+    private var signedInSince: Bool {
+        guard let signIn, OutsideAgents.isAgent(signIn.model.providerID) else { return false }
+        return !stillSignedOut
+    }
+
     /// The engine's words under the headline; for a sign-in that ended, which the engine says only
     /// as "Request failed: 400", what happened and where to sign in again.
     private var detail: String? {
@@ -1459,19 +1495,26 @@ private struct TurnEndView: View {
         case .failed:
             VStack(alignment: .leading, spacing: 8) {
                 let way = FailureWords.way(kind)
+                // Signed out still: sending it again would only fail the same way, after a while.
+                let retry = way == .signIn && stillSignedOut ? nil : retry
                 FailureCard(headline: FailureWords.headline(kind), detail: detail, hasActions: retry != nil || switchModel != nil && way == .switchModel || way == .signIn) {
                     switch way {
-                    // The model's account, or a coding agent's, to sign in to: in Accounts, where
-                    // this conversation runs (a machine signs in on its own).
+                    // The model's account, or a coding agent's, to sign in to, from here: where
+                    // this conversation runs (a machine signs in on its own). Or another model.
                     case .signIn:
                         let machine = RemoteFolder.machine(of: directory)
-                        if kind == .agentSignIn {
-                            Button(machine.map { "Sign In on \($0)" } ?? "Open Accounts") { app.openAccounts(on: machine) }
-                                .help(machine.map { "Sign in to the coding agents on \($0): its sign-ins are its own" } ?? "Sign in to the coding agents")
-                        } else {
-                            // On a machine, the button names it: its sign-ins are its own.
-                            Button(kind == .signIn(ended: true) ? "Sign In Again" : machine.map { "Open Accounts on \($0)" } ?? "Open Accounts") { app.openAccounts(on: machine) }
-                                .help(machine.map { "Accounts, on \($0)" } ?? "Accounts")
+                        if let signIn, !signedInSince {
+                            let again = kind == .signIn(ended: true) ? "Sign In Again" : "Sign In"
+                            Button(machine.map { "\(again) on \($0)" } ?? again, action: signIn.open)
+                                .help("Sign in to \(catalog.signInName(signIn.model.providerID))\(machine.map { " on \($0): its sign-ins are its own" } ?? "")")
+                            if SignInCard.offersSwitch, let switchModel {
+                                Button("Switch Model", action: switchModel)
+                                    .help("Choose another model for this conversation")
+                            }
+                        } else if signIn == nil {
+                            // Several to sign in to (a Custom Auto list's), or not known which: Accounts.
+                            Button(machine.map { "Open Accounts on \($0)" } ?? "Open Accounts") { app.openAccounts(on: machine) }
+                                .help(machine.map { "Accounts, on \($0): its sign-ins are its own" } ?? "Accounts")
                         }
                     case .switchModel:
                         if let switchModel {
@@ -2267,4 +2310,25 @@ extension TranscriptView {
         guard !isRunning, case .assistant(let step)? = last, step.error?.isInterruption == true else { return nil }
         return step
     }
+}
+
+/// The model the conversation is on, for a failed turn's card to sign in to its account from.
+struct ConversationSignIn {
+    let model: ModelRef
+    let open: () -> Void
+}
+
+extension EnvironmentValues {
+    @Entry var conversationSignIn: ConversationSignIn?
+}
+
+// DRAFTS (to pick from, then fold into the code): what a card for a sign-in offers.
+// KUVO_DEMO_SIGNIN_CARD=alone: Sign In only; otherwise Sign In and Switch Model.
+enum SignInCard {
+    static let offersSwitch: Bool = {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["KUVO_DEMO_SIGNIN_CARD"] == "alone" { return false }
+        #endif
+        return true
+    }()
 }

@@ -25,6 +25,8 @@ final class Catalog {
     private(set) var integrations: [Integration] = []
     /// The engine's models, and the outside agents' after them.
     private(set) var models: [Model] = []
+    /// Each model as it was last listed: a coding agent's are listed only while you're signed in.
+    @ObservationIgnored private var lastListed: [ModelRef: Model] = [:]
     @ObservationIgnored private var engineIntegrations: [Integration] = []
     @ObservationIgnored private var engineModels: [Model] = []
     @ObservationIgnored private var agentIntegrations: [Integration] = []
@@ -48,8 +50,9 @@ final class Catalog {
     /// The coding agents' accounts and models have been read (or their bridge couldn't start):
     /// until then, theirs and Auto's aren't known.
     private(set) var areAgentsLoaded = false
-    /// True while a refresh has been waiting more than a few seconds.
+    /// True while the first load has been waiting on the engine more than `slowAfter`.
     private(set) var isSlow = false
+    static var slowAfter = Duration.seconds(3)
 
     private var refreshTask: Task<Void, Never>?
 
@@ -296,6 +299,21 @@ final class Catalog {
         return placeholder
     }
 
+    /// What a conversation's chip shows for `ref`: the model it's on, even while that model's
+    /// account needs a sign-in (its card says so, and how); nil for one that's gone, which asks you
+    /// to choose another; nothing picked, the default.
+    func chipModel(_ ref: ModelRef?) -> Model? {
+        if needsSignIn(ref), let ref {
+            if let model = model(ref) ?? lastListed[ModelRef(id: ref.id, providerID: ref.providerID)] { return model }
+            var placeholder = Self.autoTemplate
+            placeholder.id = ref.id
+            placeholder.providerID = ref.providerID
+            placeholder.name = ref.id
+            return placeholder
+        }
+        return isUnavailable(ref) ? nil : shownModel(ref) ?? defaultModel
+    }
+
     /// The model a new session or bot starts on: the first of `wanted` (the one picked, the one
     /// picked last) you can use now; else the engine's default, if you can; else the first model
     /// you can use. A model whose account you signed out of would only fail. Before the models are
@@ -340,12 +358,14 @@ final class Catalog {
 
     private func refreshEngine() async {
         guard let api else { return }
-        let slowness = Task {
-            try await Task.sleep(for: .seconds(3))
+        // Only while the first load waits on the engine (a macOS prompt it's waiting on, say): a
+        // later refresh is in the background, and what's shown meanwhile is still right.
+        let slowness = isLoaded ? nil : Task {
+            try await Task.sleep(for: Self.slowAfter)
             isSlow = true
         }
         defer {
-            slowness.cancel()
+            slowness?.cancel()
             isSlow = false
         }
         async let integrations = api.integrations()
@@ -376,7 +396,11 @@ final class Catalog {
         // tools there, so not before).
         merge()
         // Loaded once the models have been read: a new bot's model is checked against them.
-        if modelsRead { isLoaded = true }
+        if modelsRead {
+            isLoaded = true
+            slowness?.cancel()
+            isSlow = false
+        }
         await readEndedSignIns()
         await readUnanswering()
         for directory in commandFolders { await loadCommands(in: directory) }
@@ -469,6 +493,7 @@ final class Catalog {
     private func merge() {
         integrations = engineIntegrations + agentIntegrations
         models = engineModels + agentModels
+        for model in models { lastListed[ModelRef(id: model.id, providerID: model.providerID)] = model }
     }
 
     /// Where an account signs in: the agents bridge for an outside agent's, else the engine.

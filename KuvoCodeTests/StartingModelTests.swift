@@ -165,6 +165,58 @@ import Testing
         #expect(catalog.refusal(sonnet) == nil)
     }
 
+    /// A coding agent's sign-in Claude ended: its bridge lists none of its models then, and the
+    /// chip still names the one the conversation is on, not "Choose a Model".
+    @Test func aCodingAgentsChipKeepsItsModelOnceSignedOut() async throws {
+        defer { StubWeb.stop() }
+        nonisolated final class Account: @unchecked Sendable {
+            let lock = NSLock()
+            var signedIn = true
+        }
+        let account = Account()
+        let bridge = "http://127.0.0.1:47981"
+        StubWeb.handle(bridge + "/api/integration") { _, _ in
+            let signedIn = account.lock.withLock { account.signedIn }
+            return StubWeb.json(["data": [[
+                "id": "claude-code", "name": "Claude Code", "methods": [["type": "oauth", "id": "claudeai", "label": "Claude"]],
+                "connections": signedIn ? [["type": "credential", "credentialID": "cred_claude", "method": "oauth"]] : [],
+                "metadata": ["source": "agent", "agent": "claude-code", "accountID": "default", "installed": true],
+            ]]])
+        }
+        var opus = Self.model("claude-code", "opus")
+        opus["name"] = "Claude Opus"
+        let listed = StubWeb.json(["data": [opus]]), none = StubWeb.json(["data": []])
+        StubWeb.handle(bridge + "/api/model") { _, _ in
+            account.lock.withLock { account.signedIn } ? listed : none
+        }
+        try await engine(accounts: [Self.account("openai", signedIn: true)], models: [Self.model("openai", "luna")], defaultModel: Self.model("openai", "luna"))
+        let agents = OutsideAgents()
+        catalog.outsideAgents = agents
+        agents.connect(ServerEndpoint(url: URL(string: bridge)!, password: "test"), folderPrefix: "")
+        defer { agents.disconnect() }
+        await catalog.refreshAgents(fresh: true)
+        let claude = ModelRef(id: "opus", providerID: "claude-code")
+        #expect(catalog.chipModel(claude)?.name == "Claude Opus")
+
+        account.lock.withLock { account.signedIn = false }
+        await catalog.refreshAgents(fresh: true)
+        #expect(catalog.needsSignIn(claude))
+        #expect(catalog.chipModel(claude)?.name == "Claude Opus", "the model it's on, while its account needs a sign-in")
+    }
+
+    /// A conversation on a model whose account was signed out of: its chip still names that model
+    /// (the card under its last turn says to sign in, and how), rather than "Choose a Model" as if
+    /// none were picked. One that's gone from its account asks for another.
+    @Test func aConversationsChipNamesItsModelWhileItsAccountNeedsASignIn() async throws {
+        defer { StubWeb.stop() }
+        try await engine(accounts: [Self.account("anthropic", signedIn: false), Self.account("openai", signedIn: true)],
+                         models: [Self.model("anthropic", "sonnet"), Self.model("openai", "luna")],
+                         defaultModel: Self.model("openai", "luna"))
+        #expect(catalog.chipModel(sonnet)?.id == "sonnet")
+        #expect(catalog.chipModel(ModelRef(id: "gone", providerID: "openai")) == nil)
+        #expect(catalog.chipModel(nil)?.id == "luna", "nothing picked: the default")
+    }
+
     /// Sending on a model that's gone from its signed-in account is turned down before it's sent,
     /// saying to choose another (the engine would only fail it, and Try Again fail the same way);
     /// signed out, it says to sign in. A coding agent's model missing while the agents start goes.
