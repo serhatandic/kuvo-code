@@ -12,7 +12,8 @@ import { noteWorkChanged } from "./changes";
 import { callOf, keepAnswer, noteSession, pendingAsk, permissionWords, ruleFor, rulesOf, type PendingPermission } from "./answers";
 import { allowRefusal } from "./policy";
 import { approvalOf } from "./approval";
-import { finishGoal, goalProgress, goalProject, mayPublish, maySpend, proposeGoal, runningGoal } from "./goals";
+import { appsNamed, finishGoal, goalProgress, goalProject, maySpend, progressRefused, proposalRefused, proposeGoal, runningGoal } from "./goals";
+import { findApps } from "./apps";
 import fs from "node:fs";
 import path from "node:path";
 import { readProjects } from "../areas/projects";
@@ -244,28 +245,34 @@ const goalBot = (caller: Caller) => botOfConversation(caller.session);
 const ONLY_BOTS = "Only a bot takes a goal with a plan: ask the user to give it to one of their bots.";
 const answered = (outcome: { said: string } | { refused: string }): ToolAnswer => ("said" in outcome ? said(outcome.said) : refused(outcome.refused));
 
-/** propose_goal: the goal's plan and checks, put to the user on the goal card. */
-export function proposeGoalTool(caller: Caller, args: Record<string, unknown>): ToolAnswer {
+/** propose_goal: the goal's plan and checks, put to the user on the goal card (once it's checked,
+ * the apps its steps name looked for on this computer first). */
+export async function proposeGoalTool(caller: Caller, args: Record<string, unknown>): Promise<ToolAnswer> {
   const bot = goalBot(caller);
   if (!bot) return refused(ONLY_BOTS);
+  const wrong = proposalRefused(bot.bot, args);
+  if (wrong) return refused(wrong);
+  await findApps(appsNamed(args)).catch(() => {});
   const outcome = proposeGoal({ ...bot, session: caller.session }, args);
   if ("refused" in outcome) return refused(outcome.refused);
-  const { goal } = outcome;
+  const { goal, yours: set } = outcome;
   const yours = goal.checks.filter(check => check.state === "needs").map(check => check.text);
   const alone = goal.alone ? "" : ` ${HERE[0].toUpperCase()}${HERE.slice(1)} can't work on it alone yet, so once it starts, what your sessions ask waits for the user rather than for you.`;
-  return said(`The card is up on ${HERE}: the user starts the goal from it, or says not now. ${yours.length ? `What's theirs to do first: ${yours.join("; ")}. ` : ""}Don't start the work until you hear [Goal started]. If they change something, propose it again as it is now.${alone}`);
+  // The projects the user set on the card before: kept, or replaced by others the bot proposed.
+  const names = set ? set.projects.map(each => `"${each}"`).join(", ") : "";
+  const projects = !set ? "" : set.kept ? ` The user set its projects on the card: ${names}. They're kept: call them that.` : ` The user had set its projects on the card to ${names}; the ones you gave replace them. If they didn't ask you to change those, propose it again with theirs.`;
+  return said(`The card is up on ${HERE}: the user starts the goal from it, or says not now.${projects} ${yours.length ? `What's theirs to do first: ${yours.join("; ")}. ` : ""}Don't start the work until you hear [Goal started]. If they change something, propose it again as it is now.${alone}`);
 }
 
-/** goal_progress: the goal's steps, what waits for the user, what's spent and what's still watched. */
-export function goalProgressTool(caller: Caller, args: Record<string, unknown>): ToolAnswer {
+/** goal_progress: the goal's steps, what waits for the user, what's spent and what's still watched
+ * (once it's checked, the apps it names looked for on this computer first). */
+export async function goalProgressTool(caller: Caller, args: Record<string, unknown>): Promise<ToolAnswer> {
   const bot = goalBot(caller);
-  return bot ? answered(goalProgress(bot.bot, args)) : refused(ONLY_BOTS);
-}
-
-/** may_publish: whether one of the goal's public steps is switched on. */
-export function mayPublishTool(caller: Caller, args: Record<string, unknown>): ToolAnswer {
-  const bot = goalBot(caller);
-  return bot ? answered(mayPublish(bot.bot, args)) : refused(ONLY_BOTS);
+  if (!bot) return refused(ONLY_BOTS);
+  const wrong = progressRefused(bot.bot, args);
+  if (wrong) return refused(wrong);
+  await findApps(appsNamed(args)).catch(() => {});
+  return answered(goalProgress(bot.bot, args));
 }
 
 /** may_spend: whether a purchase fits the plan's cap for it, in its period. */

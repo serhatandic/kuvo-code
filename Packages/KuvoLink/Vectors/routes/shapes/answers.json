@@ -3037,6 +3037,12 @@
             "literal": "work.goals"
            },
            {
+            "literal": "work.goals.apps"
+           },
+           {
+            "literal": "work.goals.projects"
+           },
+           {
             "literal": "work.unanswering"
            },
            {
@@ -3343,6 +3349,12 @@
            },
            {
             "literal": "work.goals"
+           },
+           {
+            "literal": "work.goals.apps"
+           },
+           {
+            "literal": "work.goals.projects"
            },
            {
             "literal": "work.unanswering"
@@ -8361,6 +8373,12 @@
             "detail?": "string",
             "phase?": "string",
             "site?": "string",
+            "app?": {
+             "object": {
+              "name": "string",
+              "id?": "string"
+             }
+            },
             "after?": {
              "list": "string"
             },
@@ -8507,6 +8525,12 @@
             "detail?": "string",
             "url?": "string",
             "site?": "string",
+            "app?": {
+             "object": {
+              "name": "string",
+              "id?": "string"
+             }
+            },
             "session?": "string",
             "at": "number"
            }
@@ -8533,7 +8557,27 @@
           }
          },
          "report?": "string",
-         "alone": "bool"
+         "alone": "bool",
+         "folders?": {
+          "list": {
+           "object": {
+            "project": "string",
+            "folder": {
+             "oneOf": [
+              "string",
+              "null"
+             ]
+            },
+            "shown": {
+             "oneOf": [
+              "string",
+              "null"
+             ]
+            },
+            "there?": "bool"
+           }
+          }
+         }
         }
        }
       }
@@ -8606,6 +8650,12 @@
             "detail?": "string",
             "phase?": "string",
             "site?": "string",
+            "app?": {
+             "object": {
+              "name": "string",
+              "id?": "string"
+             }
+            },
             "after?": {
              "list": "string"
             },
@@ -8752,6 +8802,12 @@
             "detail?": "string",
             "url?": "string",
             "site?": "string",
+            "app?": {
+             "object": {
+              "name": "string",
+              "id?": "string"
+             }
+            },
             "session?": "string",
             "at": "number"
            }
@@ -8778,7 +8834,27 @@
           }
          },
          "report?": "string",
-         "alone": "bool"
+         "alone": "bool",
+         "folders?": {
+          "list": {
+           "object": {
+            "project": "string",
+            "folder": {
+             "oneOf": [
+              "string",
+              "null"
+             ]
+            },
+            "shown": {
+             "oneOf": [
+              "string",
+              "null"
+             ]
+            },
+            "there?": "bool"
+           }
+          }
+         }
         }
        }
       }
@@ -8875,6 +8951,12 @@
            "detail?": "string",
            "phase?": "string",
            "site?": "string",
+           "app?": {
+            "object": {
+             "name": "string",
+             "id?": "string"
+            }
+           },
            "after?": {
             "list": "string"
            },
@@ -9021,6 +9103,12 @@
            "detail?": "string",
            "url?": "string",
            "site?": "string",
+           "app?": {
+            "object": {
+             "name": "string",
+             "id?": "string"
+            }
+           },
            "session?": "string",
            "at": "number"
           }
@@ -9047,7 +9135,27 @@
          }
         },
         "report?": "string",
-        "alone": "bool"
+        "alone": "bool",
+        "folders?": {
+         "list": {
+          "object": {
+           "project": "string",
+           "folder": {
+            "oneOf": [
+             "string",
+             "null"
+            ]
+           },
+           "shown": {
+            "oneOf": [
+             "string",
+             "null"
+            ]
+           },
+           "there?": "bool"
+          }
+         }
+        }
        }
       }
      }
@@ -9063,6 +9171,22 @@
      }
     },
     "409": {
+     "object": {
+      "message": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/work/apps/icon",
+   "answers": {
+    "200": "bytes",
+    "400": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "404": {
      "object": {
       "message": "string"
      }

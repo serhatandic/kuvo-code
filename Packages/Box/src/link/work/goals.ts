@@ -35,13 +35,14 @@ import { asksIn, permissionWords } from "./answers";
 import { keepAwake, keepsAwake, onPower } from "./awake";
 import { noteWorkChanged, WORK_FOLDER } from "./changes";
 import { sandboxOn } from "./sandbox";
-import { namedPlace, shownPath } from "./projects";
+import { appNamed, appNameGiven } from "./apps";
+import { folderName, isEmptyFolder, namedPlace, projectPlace, shownPath } from "./projects";
 import { projectsFolder } from "./settings";
 import { stopBotWork } from "./stop";
 import { ofBot, workingNow, workSessions } from "./tree";
 import type { Listed } from "./tree";
 import type { Target } from "../../shared/records";
-import type { GoalCheckShape, GoalPlanShape, GoalStepShape, GoalWaitingShape } from "../../shared/routes/work";
+import type { GoalAppShape, GoalCheckShape, GoalFolderShape, GoalPlanShape, GoalStepShape, GoalWaitingShape } from "../../shared/routes/work";
 import type { Notice } from "../notices/notice";
 
 export const GOALS_FILE = path.join(WORK_FOLDER, "goals.json");
@@ -61,7 +62,7 @@ const DAY = 86_400_000;
 
 /** A goal as it's kept: as it's shown, less what's worked out when it's shown, with what the box
  * keeps besides. */
-export interface KeptGoal extends Omit<GoalPlanShape, "alone" | "steps" | "spend" | "waiting" | "paused" | "public" | "checks"> {
+export interface KeptGoal extends Omit<GoalPlanShape, "alone" | "folders" | "steps" | "spend" | "waiting" | "paused" | "public" | "checks"> {
   steps: GoalStepShape[];
   spend: GoalPlanShape["spend"][number][];
   waiting: GoalWaitingShape[];
@@ -96,6 +97,9 @@ export interface KeptGoal extends Omit<GoalPlanShape, "alone" | "steps" | "spend
   /** Since when you've had it paused (its conversation's goal, from any app): nothing of it goes
    * on, not even at a limit's reset, until you resume it. */
   heldByYou?: number;
+  /** The projects the bot proposed, while you've set others on its card (`projects`): a proposal
+   * again with these keeps yours. */
+  botProjects?: readonly string[];
 }
 
 /** Those following the goals here, in this process. */
@@ -152,6 +156,19 @@ export function goalProject(entry: string): { name: string; folder?: string } {
   return "folder" in named ? { name: path.basename(named.folder), folder: named.folder } : { name: path.basename(entry) };
 }
 
+/** Where Start makes each project the plan names, as making it will (`make_project`, the way the
+ * bot is told to): in the folder named for it, or in the projects folder by its name (none while
+ * none is picked), and whether something with files is there already. Only shown: it holds nothing
+ * back. */
+export function goalFolders(goal: Pick<KeptGoal, "projects">): GoalFolderShape[] {
+  return goal.projects.map(entry => {
+    const { name, folder: named } = goalProject(entry);
+    const folder = named ?? projectPlace(name);
+    if (!folder) return { project: name, folder: null, shown: null };
+    return { project: name, folder, shown: shownPath(folder), there: fs.existsSync(folder) && !isEmptyFolder(folder) };
+  });
+}
+
 /** The checks the box makes itself, as they stand now: whether it may work on its own here, on
  * power (a Mac), and where new projects go (when the plan makes one without a folder named for it,
  * and none is picked). */
@@ -167,13 +184,15 @@ export function boxChecks(goal: Pick<KeptGoal, "projects" | "name" | "bot">): Go
 }
 
 const shown = (goal: KeptGoal): GoalPlanShape => {
-  const { periods: _, asksSeen: __, limitsSeen: ___, told: ____, reportTold: _____, endTold: ______, phasesDone: _______, doneAtDigest: ________, pausedSince: _________, idleSince: __________, nudges: ___________, loop: ____________, heldByYou: _____________, nudgedPlan: ______________, ...rest } = goal;
+  const { periods: _, asksSeen: __, limitsSeen: ___, told: ____, reportTold: _____, endTold: ______, phasesDone: _______, doneAtDigest: ________, pausedSince: _________, idleSince: __________, nudges: ___________, loop: ____________, heldByYou: _____________, nudgedPlan: ______________, botProjects: _______________, ...rest } = goal;
   // A step whose session waits for a limit to reset is paused, until then.
   const steps = goal.steps.map(step => {
     const paused = goal.state === "running" && step.state !== "done" && step.state !== "skipped" ? goal.paused.find(each => each.session && step.sessions?.includes(each.session)) : undefined;
     return paused ? { ...step, state: "paused" as const, ...(paused.until ? { resumes: paused.until } : {}) } : step;
   });
-  return { ...rest, steps, checks: goal.state === "proposed" ? [...boxChecks(goal), ...goal.checks] : goal.checks, alone: alone(goal) };
+  const proposed = goal.state === "proposed";
+  // Public steps aren't held back any more, a goal kept from before too: none is shown.
+  return { ...rest, steps, public: [], checks: proposed ? [...boxChecks(goal), ...goal.checks] : goal.checks, alone: alone(goal), ...(proposed ? { folders: goalFolders(goal) } : {}) };
 };
 
 /** The goals here, as clients show them: each bot's latest while it's proposed or running, or
@@ -257,16 +276,31 @@ const DIGESTS = ["day", "week", "milestones", "none"] as const;
 // One line of words: what wraps (a newline, runs of spaces) said as one space.
 const line = (value: unknown, most: number): string | null => text(typeof value === "string" ? value.replace(/\s+/g, " ") : value, most);
 
-// A step as given: its words, or {text, detail, phase, site, after: [step numbers]}.
-function stepGiven(each: unknown): (Pick<GoalStepShape, "text" | "detail" | "phase" | "site"> & { after?: number[] }) | null {
+// The app something is done in, as the bot names it ("Xcode", or {name}): with its id once it's
+// found on this computer (`findApps`, as the tools are called).
+const appGiven = (value: unknown): GoalAppShape | null => {
+  const name = appNameGiven(value);
+  return name ? appNamed(name) : null;
+};
+
+/** The apps a goal's tool call names, for the box to look for before it's kept (`findApps`). */
+export function appsNamed(given: Record<string, unknown>): string[] {
+  const named = (value: unknown) => (isObject(value) ? [appNameGiven(value.app)] : []);
+  const lists = [given.steps, given.add].flatMap(each => (Array.isArray(each) ? each : []));
+  return [...lists.flatMap(named), ...named(given), ...named(given.waiting)].filter((each): each is string => Boolean(each));
+}
+
+// A step as given: its words, or {text, detail, phase, site, app, after: [step numbers]}.
+function stepGiven(each: unknown): (Pick<GoalStepShape, "text" | "detail" | "phase" | "site" | "app"> & { after?: number[] }) | null {
   if (typeof each === "string") return text(each, 300) ? { text: text(each, 300)! } : null;
   if (!isObject(each)) return null;
   const said = text(each.text, 300);
   if (!said) return null;
   const after = Array.isArray(each.after) ? each.after.filter((one): one is number => Number.isInteger(one) && (one as number) >= 1) : [];
   const site = siteOf(each.site);
+  const app = appGiven(each.app);
   const detail = line(each.detail, 120);
-  return { text: said, ...(detail ? { detail } : {}), ...(text(each.phase, 80) ? { phase: text(each.phase, 80)! } : {}), ...(site ? { site } : {}), ...(after.length ? { after } : {}) };
+  return { text: said, ...(detail ? { detail } : {}), ...(text(each.phase, 80) ? { phase: text(each.phase, 80)! } : {}), ...(site ? { site } : {}), ...(app ? { app } : {}), ...(after.length ? { after } : {}) };
 }
 // Steps as kept: ids in order, and what each comes after by id (only steps before it).
 const keptSteps = (given: ReturnType<typeof stepGiven>[], from = 0): GoalStepShape[] => given.filter((each): each is NonNullable<typeof each> => Boolean(each)).map((each, at) => {
@@ -282,14 +316,106 @@ function endGiven(value: unknown, now = Date.now()): number | null | undefined {
   return at !== null && at > now ? at : null;
 }
 
+// The projects a plan makes, as the bot or you give them: each a name, or a full path (`~/…` or
+// `/…`, not `~` or `/` itself), in a line; each one make_project can make (a folder's name with
+// letters or numbers), and no two the same folder ("Tide Pool" and "tide-pool").
+function projectsGiven(given: unknown[]): { projects: string[] } | { refused: string } {
+  const projects: string[] = [];
+  const places = new Map<string, string>();
+  for (const each of given) {
+    const entry = line(each, 201);
+    if (!entry || entry.length > 200) return { refused: "Each project is a name or a full path (~/… or /…), of 200 characters at most." };
+    let name = entry;
+    let place: string | null = null;
+    if (/^(~\/|\/)/.test(entry) || entry === "~") {
+      const named = namedPlace(entry);
+      if ("refused" in named) return { refused: named.refused };
+      name = path.basename(named.folder);
+      place = named.folder;
+    }
+    const folder = folderName(name);
+    // (As make_project says it.)
+    if (!folder) return { refused: `${name} can't be a folder's name: use letters or numbers.` };
+    place ??= projectPlace(name) ?? `name:${folder}`;
+    const twin = places.get(place);
+    if (twin) return { refused: `${twin} and ${entry} would be the same folder: give them names apart.` };
+    places.set(place, entry);
+    projects.push(entry);
+  }
+  return { projects };
+}
+
+// Two lists of projects that are the same, but for case.
+const sameProjects = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every((each, at) => each.toLowerCase() === b[at].toLowerCase());
+
+type Plan = Pick<KeptGoal, "goal" | "title" | "steps" | "checks" | "spend" | "public" | "projects" | "digest" | "ends">;
+
+const RUNS_ALREADY = "A goal is running already: report on it with goal_progress, and end it with finish_goal.";
+
+/** Why propose_goal can't take what it was given (as `proposeGoal` would refuse it), before anything
+ * is looked for; null for nothing. */
+export function proposalRefused(bot: string, given: Record<string, unknown>, file = GOALS_FILE): string | null {
+  const planned = planGiven(given);
+  if ("refused" in planned) return planned.refused;
+  return goalRuns(bot, file) ? RUNS_ALREADY : null;
+}
+
+/** What `proposeGoal` makes of the user's projects, when they set some on the card it replaces:
+ * theirs, and whether they're kept (the bot proposed its own again) or the bot's replaced them. */
+export interface ProjectsByYou {
+  projects: readonly string[];
+  kept: boolean;
+}
+
 /** A goal proposed by `bot` (its name, and its conversation), from what propose_goal was given: the
- * card it puts to you, replacing one it proposed before. Refused while one runs. */
-export function proposeGoal(bot: { bot: string; name: string; session: string }, given: Record<string, unknown>, file = GOALS_FILE): { goal: GoalPlanShape } | { refused: string } {
+ * card it puts to you, replacing one it proposed before. Refused while one runs. The projects you
+ * set on the card it replaces stay, unless the bot proposes others than it did then. */
+export function proposeGoal(bot: { bot: string; name: string; session: string }, given: Record<string, unknown>, file = GOALS_FILE): { goal: GoalPlanShape; yours?: ProjectsByYou } | { refused: string } {
+  const planned = planGiven(given);
+  if ("refused" in planned) return planned;
+  const { plan } = planned;
+  let yours: ProjectsByYou | undefined;
+  const made = changeKept(all => {
+    if (all.some(each => each.bot === bot.bot && each.state === "running")) return null;
+    const kept: KeptGoal = {
+      id: newID("goal"),
+      bot: bot.bot,
+      name: bot.name,
+      session: bot.session,
+      ...plan,
+      state: "proposed",
+      wake: false,
+      proposed: Date.now(),
+      waiting: [],
+      paused: [],
+      waited: 0,
+      watching: [],
+    };
+    // The projects you set on the card it replaces: kept while the bot proposes the ones it did.
+    const before = all.find(each => each.bot === bot.bot && each.state === "proposed" && each.botProjects);
+    if (before?.botProjects) {
+      const keep = sameProjects(plan.projects, before.botProjects);
+      yours = { projects: before.projects, kept: keep };
+      if (keep) Object.assign(kept, { projects: before.projects, botProjects: before.botProjects });
+    }
+    // (The one proposed before goes: this one's the card now.)
+    for (let at = all.length - 1; at >= 0; at--) if (all[at].bot === bot.bot && all[at].state === "proposed") all.splice(at, 1);
+    all.push(kept);
+    return kept;
+  }, file);
+  if (!made) return { refused: RUNS_ALREADY };
+  noteWorkChanged(bot.bot);
+  return { goal: shown(made), ...(yours ? { yours } : {}) };
+}
+
+// A plan as propose_goal gives it, checked: what's kept of it, or why it won't do.
+function planGiven(given: Record<string, unknown>): { plan: Plan } | { refused: string } {
   const goal = text(given.goal, 2000);
   if (!goal) return { refused: "Say the goal, in the user's words (goal)." };
+  // (Too many refused before any is read.)
+  if (Array.isArray(given.steps) && given.steps.length > 200) return { refused: "That's more than 200 steps: make them bigger." };
   const steps = (Array.isArray(given.steps) ? given.steps : []).map(stepGiven).filter((each): each is NonNullable<typeof each> => Boolean(each));
   if (!steps.length) return { refused: "Give the plan, as its steps in order (steps)." };
-  if (steps.length > 200) return { refused: "That's more than 200 steps: make them bigger." };
   const checks: GoalCheckShape[] = [];
   for (const each of Array.isArray(given.checks) ? given.checks.slice(0, 12) : []) {
     if (!isObject(each)) continue;
@@ -306,45 +432,15 @@ export function proposeGoal(bot: { bot: string; name: string; session: string },
     const per = PERIODS.includes(each.per as (typeof PERIODS)[number]) ? each.per as (typeof PERIODS)[number] : "goal";
     spend.push({ what: text(each.what, 200)!, cap: each.cap, currency: (text(each.currency, 3) ?? "USD").toUpperCase(), per, spent: 0 });
   }
-  const publics: KeptGoal["public"] = (Array.isArray(given.public) ? given.public.slice(0, 8) : []).map(each => text(each, 200)).filter((each): each is string => Boolean(each)).map((each, at) => ({ id: `p${at + 1}`, text: each, on: false }));
-  const projects = (Array.isArray(given.projects) ? given.projects.slice(0, 5) : []).map(each => text(each, 200)).filter((each): each is string => Boolean(each));
+  const named = projectsGiven((Array.isArray(given.projects) ? given.projects.slice(0, 5) : []).filter(each => !(typeof each === "string" && !each.trim())));
+  if ("refused" in named) return named;
+  const { projects } = named;
   const ends = endGiven(given.ends);
   if (ends === null) return { refused: "An end (ends) is a date and time to come, like 2026-11-30T18:00." };
   // A digest for a long goal, by the plan's size unless the bot says: a day's for one with phases or
   // many steps, none for a short one.
   const digest = DIGESTS.includes(given.digest as (typeof DIGESTS)[number]) ? given.digest as (typeof DIGESTS)[number] : steps.length > 12 || steps.some(step => step.phase) ? "day" : "none";
-  const made = changeKept(all => {
-    if (all.some(each => each.bot === bot.bot && each.state === "running")) return null;
-    const kept: KeptGoal = {
-      id: newID("goal"),
-      bot: bot.bot,
-      name: bot.name,
-      session: bot.session,
-      goal,
-      ...(text(given.title, 80) ? { title: text(given.title, 80)! } : {}),
-      state: "proposed",
-      steps: keptSteps(steps),
-      checks,
-      spend,
-      public: publics,
-      projects,
-      wake: false,
-      digest,
-      ...(ends ? { ends } : {}),
-      proposed: Date.now(),
-      waiting: [],
-      paused: [],
-      waited: 0,
-      watching: [],
-    };
-    // (The one proposed before goes: this one's the card now.)
-    for (let at = all.length - 1; at >= 0; at--) if (all[at].bot === bot.bot && all[at].state === "proposed") all.splice(at, 1);
-    all.push(kept);
-    return kept;
-  }, file);
-  if (!made) return { refused: "A goal is running already: report on it with goal_progress, and end it with finish_goal." };
-  noteWorkChanged(bot.bot);
-  return { goal: shown(made) };
+  return { plan: { goal, ...(text(given.title, 80) ? { title: text(given.title, 80)! } : {}), steps: keptSteps(steps), checks, spend, public: [], projects, digest, ...(ends ? { ends } : {}) } };
 }
 
 /** Why your answer can't be taken: no such goal (404), or one that won't do (400). */
@@ -353,19 +449,19 @@ export interface GoalRefusal {
   message: string;
 }
 
-/** Your answer to the goal `id`: `start` (with your switches for its public steps, `public: {id:
- * on}`, `wake`, `digest`, an end, `ends` (null for none, taking away the bot's), and each spend line's cap and period, `spend: [{cap,
+/** Your answer to the goal `id`: `projects` (its projects as you set them, while it's proposed),
+ * `start` (with `wake`, `digest`, an end, `ends` (null for none, taking away the bot's), and each spend line's cap and period, `spend: [{cap,
  * per}]`), `decline` or `stop`. */
 export async function answerGoal(id: string, given: Record<string, unknown>, targets: () => Target[], file = GOALS_FILE): Promise<{ goal: GoalPlanShape } | { refused: GoalRefusal }> {
   const action = given.action;
   if (action === "change" || action === "clear") return changeGoal(id, action, given, targets, file);
-  if (action !== "start" && action !== "decline" && action !== "stop") return { refused: { status: 400, message: "Say start, change, clear, decline or stop (action)." } };
+  if (action === "projects") return goalProjects(id, given.projects, file);
+  if (action !== "start" && action !== "decline" && action !== "stop") return { refused: { status: 400, message: "Say start, change, clear, projects, decline or stop (action)." } };
   const before = readKept(file).find(goal => goal.id === id);
   if (!before || !botHere(before.bot)) return { refused: { status: 404, message: "There's no such goal here." } };
   // Not while its bot moves: a goal stays on the computer it started on, and nothing reaches the bot
   // meanwhile.
   if (action === "start" && frozen().has(before.bot)) return { refused: { status: 409, message: MOVING } };
-  const switches = isObject(given.public) ? given.public : {};
   const ends = action === "start" ? endGiven(given.ends) : undefined;
   if (ends === null) return { refused: { status: 400, message: "The end (ends) is a date and time to come." } };
   const changed = changeKept(all => {
@@ -387,7 +483,6 @@ export async function answerGoal(id: string, given: Record<string, unknown>, tar
     if (all.some(each => each.bot === goal.bot && each.state === "running")) return { status: 400 as const, message: "A goal is running for this bot already." };
     goal.state = "running";
     goal.started = Date.now();
-    goal.public = goal.public.map(each => ({ ...each, on: switches[each.id] === true }));
     goal.wake = given.wake === true;
     if (DIGESTS.includes(given.digest as (typeof DIGESTS)[number])) goal.digest = given.digest as (typeof DIGESTS)[number];
     if (ends !== undefined) goal.ends = ends;
@@ -408,6 +503,31 @@ export async function answerGoal(id: string, given: Record<string, unknown>, tar
     await setGoalLoop(changed, loopCondition(changed), targets);
     await tellBot(changed, startWords(changed), "Goal started", targets);
   }
+  return { goal: shown(changed) };
+}
+
+// The projects a plan makes, as you set them on its card before it starts (renamed, or moved to
+// another folder): each a name, or a full path (~/… or /…), one to five, in their order. The bot
+// isn't told now: it hears them as the goal starts, or as it proposes the plan again (which keeps
+// them, unless it proposes other projects than it did).
+function goalProjects(id: string, given: unknown, file: string): { goal: GoalPlanShape } | { refused: GoalRefusal } {
+  const no = (message: string) => ({ refused: { status: 400 as const, message } });
+  if (!Array.isArray(given) || !given.length || given.length > 5) return no("Send the plan's projects (projects): one to five, each a name or a full path (~/… or /…).");
+  const named = projectsGiven(given);
+  if ("refused" in named) return no(named.refused);
+  const { projects } = named;
+  const changed = changeKept(all => {
+    const goal = all.find(each => each.id === id);
+    if (!goal || !botHere(goal.bot)) return { status: 404 as const, message: "There's no such goal here." };
+    if (goal.state !== "proposed") return { status: 400 as const, message: goal.state === "running" ? "That goal is running: its projects are made already." : "That goal has ended." };
+    const bots = goal.botProjects ?? goal.projects;
+    goal.projects = projects;
+    if (sameProjects(projects, bots)) delete goal.botProjects;
+    else goal.botProjects = bots;
+    return goal;
+  }, file);
+  if (!("id" in changed)) return { refused: changed };
+  noteWorkChanged(changed.bot);
   return { goal: shown(changed) };
 }
 
@@ -438,7 +558,6 @@ async function changeGoal(id: string, action: "change" | "clear", given: Record<
       goal.waiting = goal.waiting.filter(each => each.id !== given.waiting);
       return goal;
     }
-    if (isObject(given.public)) goal.public = goal.public.map(each => ({ ...each, on: typeof (given.public as Record<string, unknown>)[each.id] === "boolean" ? (given.public as Record<string, boolean>)[each.id] : each.on }));
     if (typeof given.wake === "boolean") goal.wake = given.wake;
     if (DIGESTS.includes(given.digest as (typeof DIGESTS)[number])) goal.digest = given.digest as (typeof DIGESTS)[number];
     if (ends !== undefined) goal.ends = ends;
@@ -450,7 +569,7 @@ async function changeGoal(id: string, action: "change" | "clear", given: Record<
   }, file);
   if (!("id" in changed)) return { refused: changed };
   noteWorkChanged(changed.bot);
-  if (action === "change") await tellBot(changed, `[Goal changed] The user changed the goal's limits. ${changed.spend.length ? `What you may spend now: ${changed.spend.map(each => `${each.what}, up to ${each.cap} ${each.currency}${each.per === "goal" ? "" : ` a ${each.per}`}`).join("; ")}. ` : ""}Switched on: ${changed.public.filter(each => each.on).map(each => `"${each.text}"`).join(", ") || "nothing"}.${changed.ends ? ` It ends at ${resetTime(changed.ends)}.` : ""}`, "You changed the goal's limits", targets);
+  if (action === "change") await tellBot(changed, `[Goal changed] The user changed the goal's limits.${changed.spend.length ? ` What you may spend now: ${changed.spend.map(each => `${each.what}, up to ${each.cap} ${each.currency}${each.per === "goal" ? "" : ` a ${each.per}`}`).join("; ")}.` : ""}${changed.ends ? ` It ends at ${resetTime(changed.ends)}.` : ""}`, "You changed the goal's limits", targets);
   return { goal: shown(changed) };
 }
 
@@ -488,12 +607,8 @@ const LEAD_WORDS = (projects: { name: string; folder?: string }[]) => [
 
 // What the bot is told as the goal starts: what's approved, and how it goes.
 function startWords(goal: KeptGoal): string {
-  const on = goal.public.filter(each => each.on).map(each => `"${each.text}"`);
-  const off = goal.public.filter(each => !each.on).map(each => `"${each.text}"`);
   const lines = [
     `[Goal started] The user approved the plan. Work through it now, steps side by side where they don't depend on each other: ${goal.steps.map((each, at) => `${at + 1}. ${each.text}`).join(" ")}`,
-    on.length ? `Switched on, so do them when they're ready: ${on.join(", ")}.` : "",
-    off.length ? `Switched off, so prepare them as drafts for the user: ${off.join(", ")}.` : "",
     goal.spend.length ? `What you may spend, never more: ${goal.spend.map(each => `${each.what}, up to ${each.cap} ${each.currency}${each.per === "goal" ? "" : ` a ${each.per}`}`).join("; ")}. Ask may_spend before each purchase.` : "Spend nothing.",
     goal.ends ? `It ends at ${resetTime(goal.ends)}: be done by then, or wrap up and report.` : "",
     LEAD_WORDS(goal.projects.map(goalProject)),
@@ -720,15 +835,20 @@ function untilOf(value: unknown): number | null {
   return Number.isFinite(at) && at > 0 ? at : null;
 }
 
-/** goal_progress: steps marked (and added as the plan changes), something waiting for you, what's
- * spent, what's still watched. */
-export function goalProgress(bot: string, given: Record<string, unknown>, file = GOALS_FILE): { said: string } | { refused: string } {
+const stepAt = (step: unknown, steps: readonly GoalStepShape[]) => (typeof step === "number" ? step - 1 : typeof step === "string" ? steps.findIndex(each => each.id === step) : -1);
+
+/** Why goal_progress can't take what it was given (as `goalProgress` would refuse it), before
+ * anything is looked for; null for nothing. */
+export function progressRefused(bot: string, given: Record<string, unknown>, file = GOALS_FILE): string | null {
+  const checked = progressGiven(bot, given, file);
+  return "refused" in checked ? checked.refused : null;
+}
+
+// goal_progress's call, checked whole: nothing's kept of a call that's wrong somewhere.
+function progressGiven(bot: string, given: Record<string, unknown>, file: string): { marks: Record<string, unknown>[]; spent: Record<string, unknown>[] } | { refused: string } {
   const running = runningGoal(bot, file);
   if (!running) return { refused: "No goal is running: propose one with propose_goal, and the user starts it." };
-  const marks = Array.isArray(given.steps) ? given.steps : given.step !== undefined ? [{ step: given.step, state: given.state, progress: given.progress, note: given.note, until: given.until }] : [];
-  const added = (Array.isArray(given.add) ? given.add : []).map(stepGiven).filter((each): each is NonNullable<typeof each> => Boolean(each));
-  // All of it checked first: nothing's kept of a call that's wrong somewhere.
-  const stepAt = (step: unknown, steps: readonly GoalStepShape[]) => (typeof step === "number" ? step - 1 : typeof step === "string" ? steps.findIndex(each => each.id === step) : -1);
+  const marks = Array.isArray(given.steps) ? given.steps : given.step !== undefined ? [{ step: given.step, state: given.state, progress: given.progress, note: given.note, until: given.until, app: given.app }] : [];
   for (const mark of marks) {
     if (!isObject(mark) || !running.steps[stepAt(mark.step, running.steps)]) return { refused: `There's no step ${isObject(mark) ? String(mark.step) : ""}: the plan has ${running.steps.length} (add new ones with add).` };
     if (mark.state !== undefined && !STEP_STATES.includes(mark.state as (typeof STEP_STATES)[number])) return { refused: "A step's state is todo, doing, done, waiting, paused or skipped." };
@@ -736,17 +856,28 @@ export function goalProgress(bot: string, given: Record<string, unknown>, file =
     // The user sees what was counted, and the track fills by it: never a bare share.
     if (typeof mark.progress === "number" && mark.progress < 1 && !text(mark.note, 300)) return { refused: "Say what you counted with the share, in note: progress 0.375 with note \"3 of 8 pages\". The user sees the count." };
     if (mark.until !== undefined && mark.until !== null && untilOf(mark.until) === null) return { refused: "until is when the step can start, as a time like 2026-11-02T09:00 (or null to take it away)." };
+    if (mark.app !== undefined && mark.app !== null && mark.app !== "" && !appNameGiven(mark.app)) return { refused: "app is the app the step is done in on the computer, by its name, like \"Xcode\" (or null to take it away)." };
   }
   if (isObject(given.waiting) && (!text(given.waiting.text, 300) || !WAITING_KINDS.includes(given.waiting.kind as (typeof WAITING_KINDS)[number]))) return { refused: "What waits needs its kind (you, judgment or outside) and what it is (text)." };
   const spent = Array.isArray(given.spent) ? given.spent : isObject(given.spent) ? [given.spent] : [];
   for (const each of spent) if (!isObject(each) || !text(each.what, 200) || typeof each.amount !== "number" || !(each.amount > 0)) return { refused: "What's spent is {what, amount}." };
+  return { marks: marks as Record<string, unknown>[], spent: spent as Record<string, unknown>[] };
+}
+
+/** goal_progress: steps marked (and added as the plan changes), something waiting for you, what's
+ * spent, what's still watched. */
+export function goalProgress(bot: string, given: Record<string, unknown>, file = GOALS_FILE): { said: string } | { refused: string } {
+  const checked = progressGiven(bot, given, file);
+  if ("refused" in checked) return checked;
+  const { marks, spent } = checked;
+  const added = (Array.isArray(given.add) ? given.add : []).map(stepGiven).filter((each): each is NonNullable<typeof each> => Boolean(each));
   const resolved = (Array.isArray(given.resolved) ? given.resolved : []).map(each => text(each, 300)).filter((each): each is string => Boolean(each));
   const notes: string[] = [];
   const unplanned: string[] = [];
   changeKept(all => {
     const goal = all.find(each => each.bot === bot && each.state === "running");
     if (!goal) return;
-    for (const mark of marks as Record<string, unknown>[]) {
+    for (const mark of marks) {
       const at = stepAt(mark.step, goal.steps);
       const step = goal.steps[at];
       const next: GoalStepShape = { ...step };
@@ -762,6 +893,10 @@ export function goalProgress(bot: string, given: Record<string, unknown>, file =
       if (text(mark.note, 300)) next.note = text(mark.note, 300)!;
       else if (mark.note === null || mark.note === "") delete next.note;
       if (next.state !== "paused") delete next.resumes;
+      // The app it's done in, named again, or taken away.
+      const app = appGiven(mark.app);
+      if (app) next.app = app;
+      else if (mark.app === null || mark.app === "") delete next.app;
       // Put off until a time, or no longer: taken up (or set aside), it's at it now.
       const until = mark.until === null ? null : untilOf(mark.until);
       if (until !== null) next.until = until;
@@ -787,7 +922,7 @@ export function goalProgress(bot: string, given: Record<string, unknown>, file =
     // At it now: the bot is told to carry on only once it's quiet again a while.
     delete goal.idleSince;
     goal.nudges = 0;
-    for (const each of spent as Record<string, unknown>[]) {
+    for (const each of spent) {
       const line = goal.spend.find(line => line.what.toLowerCase() === String(each.what).trim().toLowerCase());
       if (!line) {
         unplanned.push(String(each.what).trim());
@@ -803,22 +938,12 @@ export function goalProgress(bot: string, given: Record<string, unknown>, file =
   if (isObject(given.waiting)) {
     const url = https(given.waiting.url);
     const site = siteOf(given.waiting.site) ?? siteOf(url);
-    addWaiting(bot, { kind: given.waiting.kind as (typeof WAITING_KINDS)[number], text: text(given.waiting.text, 300)!, ...(text(given.waiting.detail, 500) ? { detail: text(given.waiting.detail, 500)! } : {}), ...(url ? { url } : {}), ...(site ? { site } : {}) }, file);
+    const app = appGiven(given.waiting.app);
+    addWaiting(bot, { kind: given.waiting.kind as (typeof WAITING_KINDS)[number], text: text(given.waiting.text, 300)!, ...(text(given.waiting.detail, 500) ? { detail: text(given.waiting.detail, 500)! } : {}), ...(url ? { url } : {}), ...(site ? { site } : {}), ...(app ? { app } : {}) }, file);
     notes.push("kept as waiting for the user: carry on with what doesn't depend on it");
   }
   noteWorkChanged(bot);
   return { said: `${notes.length ? `Noted: ${notes.join("; ")}.` : "Nothing to note: give steps, add, waiting, spent or watching."} ${presence()}` };
-}
-
-/** may_publish: whether a public step of the running goal is switched on. */
-export function mayPublish(bot: string, given: Record<string, unknown>, file = GOALS_FILE): { said: string } | { refused: string } {
-  const goal = runningGoal(bot, file);
-  if (!goal) return { refused: "No goal is running. Ask the user." };
-  const asked = text(given.step, 200);
-  if (!asked) return { refused: `Say which public step (step): ${goal.public.map(each => `${each.id} "${each.text}"`).join(", ") || "the plan has none"}.` };
-  const found = goal.public.find(each => each.id === asked || each.text.toLowerCase() === asked.toLowerCase());
-  if (!found) return { said: `"${asked}" isn't one of the goal's public steps, so it's not approved: prepare it as a draft and keep it as waiting for the user.` };
-  return { said: found.on ? `Yes: "${found.text}" is switched on. Do it once it's ready.` : `No: "${found.text}" is switched off. Prepare it as a draft, and keep it as waiting for the user.` };
 }
 
 /** may_spend: whether `amount` for `what` fits the plan's cap for it, in its period now. */

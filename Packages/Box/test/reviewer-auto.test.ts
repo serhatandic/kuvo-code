@@ -420,7 +420,7 @@ test("in Auto, a bot works in its own projects (one it made, its goal's) as in i
   const before = { projects: kept(PROJECTS_FILE), goals: kept(GOALS_FILE) }
   for (const file of [PROJECTS_FILE, GOALS_FILE]) mkdirSync(dirname(file), { recursive: true })
   writeFileSync(PROJECTS_FILE, JSON.stringify({ version: 1, projects: [{ directory: made, folders: [], madeBy: { bot: "bot_maker", name: "Maker", at: 1 } }, { directory: theirs, folders: [] }] }))
-  writeFileSync(GOALS_FILE, JSON.stringify({ goals: [{ id: "goal_site", bot: "bot_maker", name: "Maker", session: "ses_maker", goal: "Ship the site", state: "running", projects: [aimed], steps: [], checks: [], spend: [], public: [], waiting: [], paused: [] }] }))
+  writeFileSync(GOALS_FILE, JSON.stringify({ goals: [{ id: "goal_site", bot: "bot_maker", name: "Maker", session: "ses_maker", goal: "Ship the site", state: "running", projects: [aimed], steps: [{ id: "s1", text: "Deploy it to Cloudflare Pages", state: "todo" }], checks: [], spend: [], public: [], waiting: [], paused: [] }] }))
   const ask = (session: string, id: string, filePath: string) => {
     calling[session] = [{ type: "tool", id: `call_${id}`, name: "edit", state: { input: { filePath } } }]
     asking[session] = [{ id, action: "external_directory", resources: [join(filePath, "..", "*")], source: { id: `call_${id}`, messageID: "msg_1" } }]
@@ -443,6 +443,8 @@ test("in Auto, a bot works in its own projects (one it made, its goal's) as in i
     // A project that isn't its own is the reviewer's, as before.
     expect((await ask("ses_maker", "per_m4", join(theirs, "notes.txt")))?.decision).toBe("refuse")
     expect(prompts.length).toBe(asked + 1)
+    // Starting the goal approved its plan: what it publishes or deploys there is what you asked for.
+    expect(prompts.at(-1)).toContain("Deploy it to Cloudflare Pages")
   } finally {
     rmSync(folder, { recursive: true, force: true })
     rmSync(linked, { force: true })

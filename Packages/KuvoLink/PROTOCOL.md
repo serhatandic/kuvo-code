@@ -720,7 +720,7 @@ client shows it from the same routes.
   reason}`, or `{session, ask, answer, reason}` for a question), `list_models` (the models there's
   an account for here, `provider/model`, with their efforts; none its provider is retiring).
 - **Models that can't answer** (`work/unanswering.ts`, `run/work/unanswering.json`, bridge
-  0.9.196): when a session a conversation started fails at its account (the engine's
+  0.9.198): when a session a conversation started fails at its account (the engine's
   `provider.quota` or `provider.budget-limit`: out of funds or at a plan's spend, which holds back
   that provider's models that cost something, its free ones spending none; `provider.free-limit`,
   its free usage spent, its free ones; `provider.auth`, signed out, all of them), or at a model's
@@ -797,7 +797,7 @@ folder you pick once per box, after asking you.
   there, or null; 400 otherwise. The box makes projects only there, and never deletes one.
 - **Tools**: `make_project` (`{name, git?, clone?, folder?}`: a folder named after it, lowercase with
   dashes, a new git repository there unless `git: false`, or a repository cloned from an https or
-  ssh address; either way it has a commit at once (bridge 0.9.196: an empty `Initial commit` in a
+  ssh address; either way it has a commit at once (bridge 0.9.198: an empty `Initial commit` in a
   new one, or in a clone with none, by whoever your git settings say commits there, else by
   `Kuvo Code <kuvo-code@localhost>`), so each of its sessions can start in a worktree; `folder`, bridge 0.9.191, is where you said it goes, a full path (`~` is fine; the
   folders on the way there are made too), which needs no projects folder picked), `list_projects` (each project here:
@@ -849,17 +849,17 @@ length, a couple of hours or a month, and it takes it end to end. It's the conve
 ("Goals", below: the agents bridge keeps the bot at it turn after turn), with a plan kept here
 beside it.
 - **Tools** (a bot's conversation only): `propose_goal` (`{goal, title?, steps: [text | {text, detail?,
-  site?, after?: [step number]}],
+  site?, app?, after?: [step number]}],
   checks?: [{text, ok?, detail?, url?, button?}], spend?: [{what, cap, currency?, per?:
-  day|week|month|goal}], public?: [text], projects?: [name | full path], ends?, digest?:
+  day|week|month|goal}], projects?: [name | full path], ends?, digest?:
   day|week|milestones|none}`) puts the card up, replacing one it proposed before (refused while one
   runs; `digest` is a day's for a plan in phases or of more than 12 steps unless it says);
   `goal_progress` (`{steps: [{step, state?: todo|doing|done|waiting|paused|skipped, progress?: 0–1,
-  note?, until?}]}`, `until` a time like `2026-11-02T09:00` that a step can only start at (null
-  takes it away; taken up, it goes), `add?: [text | {text, detail?, site?, after?}]`, `waiting?: {kind: you|judgment|outside, text,
-  detail?, url?}`, `resolved?: [id or words]` (what waited and is dealt with), `spent?: [{what,
+  note?, until?, app?}]}`, `until` a time like `2026-11-02T09:00` that a step can only start at (null
+  takes it away; taken up, it goes; `app: null` takes the step's away), `add?: [text | {text, detail?, site?, app?, after?}]`, `waiting?: {kind: you|judgment|outside, text,
+  detail?, url?, app?}`, `resolved?: [id or words]` (what waited and is dealt with), `spent?: [{what,
   amount}]` (one on no spend line is kept as waiting, kind `outside`), `watching?: [text]}`; all
-  checked before any is kept; it says whether you're here); `may_publish` (`{step}`: yes only for a public step you switched on); `may_spend` (`{what,
+  checked before any is kept; it says whether you're here); `may_spend` (`{what,
   amount}`: whether it fits the line's cap in its period now); `finish_goal` (`{report, watching?}`).
   `start_session` takes `step` (its number or id), and that step's track lists the session.
 - **Asked for**: `POST kuvo/work/goals/ask` `{session, goal}` (`/goal` in a bot's chat, from a
@@ -869,9 +869,8 @@ beside it.
   reads as you typed it, then (bridge 0.9.191) lines on how to plan it as a lead whose sessions do
   the work, which clients leave out with the block. One a box sent before 0.9.143 is `[Goal] <words>` then a note in
   parentheses; `SentWithKeyword.split` reads it the same way.
-- **Only you start it**: `POST kuvo/work/goals/<id>` from a client, `{action: start, public?: {<id>:
-  bool}, wake?, digest?, ends?, spend?: [{cap?, per?}] (by line)}`, `{action: decline}` or `{action:
-  stop}` → `{goal}` (`ends: null` starts it with no end, taking away the one the bot proposed; left
+- **Only you start it**: `POST kuvo/work/goals/<id>` from a client, `{action: start, wake?, digest?, ends?, spend?: [{cap?, per?}] (by line)}`, `{action: decline}` or `{action:
+  stop}` (and `{action: projects}`, below) → `{goal}` (`ends: null` starts it with no end, taking away the one the bot proposed; left
   out, the bot's stands); while it runs, `{action: change, …the same but start's}` (a cap raised past what's
   spent lets what spends go on; the bot is told `[Goal changed] …`) and `{action: clear, waiting:
   <id>}` (what waited, put away). An end written without a zone (`2026-11-30T18:00`) is in yours
@@ -880,7 +879,7 @@ beside it.
   for one) while its bot moves to another computer (a goal stays on the box it started on, and a
   bot working on one doesn't move: `kuvo/moves`), when the bot isn't told anything of its goal
   either. Starting tells the bot `[Goal
-  started] …` (what's switched on and off, what it may spend, the projects it may make, the end,
+  started] …` (what it may spend, the projects it may make, the end,
   and, bridge 0.9.191, how to work through it: make its projects with `make_project`, hand each step
   to a session with `start_session`, follow them up, and write none of the work itself unless you
   said to) and
@@ -891,13 +890,15 @@ beside it.
   as the plan's (`paused` with `session` the bot's conversation).
 - **`GET kuvo/work/goals`** and **`GET kuvo/work/goals/events`** (ndjson, now and at each change) →
   `{goals: [{id, bot, name, session, goal, title?, state: proposed|running|done|stopped|declined, steps:
-  [{id, text, state, progress?, note?, detail?, phase?, site?, after?, sessions?, resumes?, until?,
+  [{id, text, state, progress?, note?, detail?, phase?, site?, app?: {name, id?}, after?, sessions?, resumes?, until?,
   began?, ended?}], checks: [{id, text,
   detail?, state: ok|needs|failed, by: bot|box, site?, action?: {kind: open|projectsFolder, label, url?}}], spend:
-  [{what, cap, currency, per, spent, until?}], public: [{id, text, on}], projects, wake, digest,
+  [{what, cap, currency, per, spent, until?}], public: [] (nothing is held back for a switch: what it publishes, deploys or
+  sends goes as its conversation's mode allows; before bridge 0.9.197 each public step waited as a
+  draft until you switched it on), projects, wake, digest,
   ends?, proposed, started?, ended?, waiting: [{id, kind: you|judgment|outside|ask, text, detail?,
-  url?, site?, session?, at}], paused: [{why, until?, session?}], waited, watching, next?, lastDigest?: {at, text},
-  report?, alone}]}` (`next`: when it goes on next, while nothing of it is at work and nothing can be
+  url?, site?, app?: {name, id?}, session?, at}], paused: [{why, until?, session?}], waited, watching, next?, lastDigest?: {at, text},
+  report?, alone, folders?: [{project, folder: path|null, shown: path|null, there?}]}]}` (`next`: when it goes on next, while nothing of it is at work and nothing can be
   before a time: the bot's soonest wake-up, or the steps it put off; clients say "Next: Mon 09:00"): each bot's latest, while it's proposed or running, or ended within a day. Kept
   in `run/work/goals.json`; `kuvo/work/events` moves too. While it's proposed, the box's own checks
   come first: `alone` (failed where this box can't work on it alone yet), `power` (a Mac on battery),
@@ -911,6 +912,43 @@ beside it.
   it) is where it's done, and its mark is that site's own icon, which each client loads from the
   site itself; a step done on the computer has none, so no mark. `phase` is still kept from older
   bots, and the apps don't show it.
+- **Apps** (bridge 0.9.196, feature `work.goals.apps`, `work/apps.ts`): a step, or what waits, done
+  in an app on the computer names it (`app`, "Xcode"). The box looks for it on its own computer as
+  the tool is called, once the call has passed its own checks (a call that's refused has nothing
+  looked for), at most 20 names a call, once per name: a name found is looked for again a week on
+  (an app updated or uninstalled), one not found a day on, and a name not found is forgotten after
+  a month. A Mac's in its Applications folders (the system's, yours, their Utilities) by name, else
+  Spotlight's by display name, only in `/Applications`, `/System/Applications`, `~/Applications`
+  and `/System/Library/CoreServices` (apps inside them too, like Xcode's Instruments; never one in
+  Downloads, Documents, iCloud Drive or a build's products), its icon drawn by AppKit at 64 px
+  (asset catalogs' too); Linux's by a desktop entry's `Name=` (any language's) through
+  `XDG_DATA_HOME` and `XDG_DATA_DIRS`, and flatpak's and snap's exported entries, its icon a PNG of
+  1 MB at most by path or from `hicolor` (the smallest of at least 64 px, else the largest) or
+  `pixmaps`. Found, `app` is `{name, id}`, the app's own name and its id: its bundle's or desktop
+  entry's, or `app-<hash>` for one whose own can't name a file. **`GET
+  kuvo/work/apps/icon?app=<id>`** gives its icon (`image/png`; 404 for none, 400 for an id that
+  isn't one, 405 for a method other than GET). Not found, or with an icon that's SVG alone, it has
+  no `id`, and clients show no mark. A step can have both `site` and `app`; clients show the
+  site's. `goal_progress` takes `app` away with `null` or `""`. Kept in the box's `apps` folder
+  (`found.json`, `<id>.png`; an icon no name has any more is taken away).
+- **Folders** (bridge 0.9.196): while it's proposed, `folders` says where Start makes each project
+  the plan names, worked out as `make_project` will: the folder named for it, or the projects folder
+  and its name (`folder` null, and `shown`, while none is picked); `shown` is the same with `~` for
+  the box's home; `there` is true when something with files is there already. It's only shown: it
+  never holds Start back. A plan can't name a repository to clone yet, so there's no `clone`.
+- **Its projects, set on the card** (bridge 0.9.196, feature `work.goals.projects`): while it's
+  proposed, `POST kuvo/work/goals/<id>` `{action: projects, projects: [name | path]}` replaces the
+  plan's projects, in order: one to five, each a name or a full path (`~/…` or `/…`, not `~` or
+  `/` itself), of 200 characters at most, in one line (spaces and newlines in a row are one space)
+  (a project renamed, or moved to a folder of its own) → `{goal}`, its `folders` and checks worked
+  out again. Each has to be one `make_project` can make: a name (or a path's last folder) with
+  letters or numbers a folder's name can take (not "日本語" or "🚀"), and no two the same folder
+  ("Tide Pool" and "tide-pool", or a name and its folder's path); `propose_goal` refuses the bot's
+  own the same way, in the same words. The bot isn't told then: it hears them as the goal starts,
+  or as it proposes the plan again. A plan proposed again with the projects the bot proposed before
+  keeps yours (its answer names them); one with other projects replaces yours (its answer says what
+  yours were). 400 for a list that won't do (`message` says why), or once it's running or ended;
+  404 for none.
 - **Alone, or with you there**: a goal goes on alone only where the box's commands run in the
   sandbox (`sandboxOn`: `kuvo/sandbox`'s `on`, and for a bot on a coding agent its `agents` too; a
   test box says yes with `KUVO_TEST_SANDBOX_ON=1`, never the real app's, `run.kuvo.code/box`, whose
@@ -1700,7 +1738,7 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     `{project, root, folder, branch, base?, made, prefix}`; make the session in `folder`. `400`
     for a project that isn't a folder there, `409 {"message"}` when it isn't in a git repository,
     `503` while the engine isn't running. A repository with no commits yet gets an empty first one
-    (bridge 0.9.196; what's staged stays staged), as a project the box makes does. `POST kuvo/worktrees/record {project, root, folder?,
+    (bridge 0.9.198; what's staged stays staged), as a project the box makes does. `POST kuvo/worktrees/record {project, root, folder?,
     branch, base?}` keeps one a Mac kept before its box did ("For released Macs"; `404` when it
     isn't there any more).
   - `GET kuvo/worktrees/where[?directory=<value>]` (`worktrees.where`): where new worktrees go
@@ -2439,8 +2477,11 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `queue` | `kuvo/sessions/<id>/queue…`, `…/stop` and `kuvo/sessions/queues/events`: the box carries the queue (bridge 0.9.100) |
 | `queue.waits` | A Stop holds the conversation: what arrives waits on the box (`waiting`), `…/queue/add` and `DELETE …/queue/<item>` (bridge 0.9.128) |
 | `work` | a bot's work ("Work"): `kuvo/work`, `…/events`, `kuvo/bots/<id>/stop-all`, `start_session`'s and `kuvo/sessions`' new fields, the work tools, `limits` in `kuvo/bots` (bridge 0.9.106) |
+| `work.goals` | a bot's goal ("Work", Goals): `kuvo/work/goals…`, and its tools (bridge 0.9.122) |
+| `work.goals.apps` | `app` on a goal's steps and what waits, and `GET kuvo/work/apps/icon` ("Work", Goals, Apps; bridge 0.9.196) |
+| `work.goals.projects` | `{action: projects}` on a proposed goal ("Work", Goals, Its projects; bridge 0.9.196) |
 | `work.projects` | a bot's projects ("Work", Projects): `make_project`, `list_projects`, `kuvo/work/asks`, `…/events`, `POST kuvo/work/asks/<id>`, `kuvo/work/settings`, `POST kuvo/projects/new`, `madeBy` on projects, `allowed` in `kuvo/bots` (bridge 0.9.107) |
-| `work.unanswering` | `GET kuvo/work/unanswering`: models that can't answer now ("Work", Models that can't answer; bridge 0.9.196) |
+| `work.unanswering` | `GET kuvo/work/unanswering`: models that can't answer now ("Work", Models that can't answer; bridge 0.9.198) |
 | `search` | `kuvo/search` |
 | `personalities` | `kuvo/personalities…` |
 | `personalities.events` | `kuvo/personalities/events` |
@@ -3331,7 +3372,7 @@ one the box marked as in Full Access, which runs (bridge 0.9.187).
   `POST /api/session/<id>/generate` `{prompt, model}` (a model of that session's maker only); the
   conversation's own model where the maker has no small one. It's counted on that account. It's
   shown only what you wrote in the conversation (never what the box, another agent or a wake-up put
-  there), and for a bot's, its goal too (and which public steps you switched on); the action (for a
+  there), and for a bot's, its goal too, with the plan you approved by starting it; the action (for a
   file, the tool and its arguments); and what a command runs, read whole first: a script by its
   path, `bash x.sh`, `python x.py`, and the project's build files its program runs (`package.json`
   for npm, pnpm, yarn and bun, a Makefile, a justfile, `conftest.py`, `build.rs`, Gradle's, a

@@ -13,7 +13,7 @@ import Testing
         TestEnvironment.prepare()
         let note = String(repeating: "Checked the harbor log and the tide tables, and wrote down what changed. ", count: 3)
         window.isReleasedWhenClosed = false
-        window.contentView = NSHostingView(rootView: WakeRow(note: note, at: 0).padding(.horizontal, 10).frame(width: 500))
+        window.contentView = NSHostingView(rootView: WakeRow(note: note, at: 0).frame(width: 500))
         window.orderBack(nil)
     }
 

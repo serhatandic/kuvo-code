@@ -2012,8 +2012,6 @@ private struct FoldingCard<Header: View, Accessory: View, Content: View>: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 9)
         .recessedWell(RoundedRectangle(cornerRadius: 10))
-        // The well reaches past the column, so its icon and text line up with the steps'.
-        .padding(.horizontal, -10)
         .help(help)
     }
 }
@@ -2116,8 +2114,6 @@ struct WakeRow: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 9)
         .recessedWell(RoundedRectangle(cornerRadius: 10))
-        // The well reaches past the column, so its icon and text line up with the steps'.
-        .padding(.horizontal, -10)
         .help("A wake-up the bot scheduled for itself")
     }
 }

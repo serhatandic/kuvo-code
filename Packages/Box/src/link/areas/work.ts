@@ -6,8 +6,10 @@
 // you before it does it (`kuvo/work/asks`, its events, and your answer, `POST kuvo/work/asks/<id>`),
 // where new projects go (`kuvo/work/settings`), a project made (`POST kuvo/projects/new`), and a
 // bot's goal (`kuvo/work/goals`, its events, a goal asked for, `POST kuvo/work/goals/ask`, and your
-// answer to one, `POST kuvo/work/goals/<id>`).
+// answer to one, `POST kuvo/work/goals/<id>`), and the icon of an app its steps are done in
+// (`kuvo/work/apps/icon`).
 
+import fs from "node:fs";
 import { isObject, parsed } from "../../shared/json";
 import { followed } from "../follow";
 import { botHere } from "../bots/here";
@@ -23,6 +25,7 @@ import { setProjectsFolder, workSettings } from "../work/settings";
 import { unansweringList, unansweringNow } from "../work/unanswering";
 import { answerGoal, askGoal, goalFollowers, goalPlans } from "../work/goals";
 import { call } from "../engine/client";
+import { appIcon, isAppID } from "../work/apps";
 import { readProjects } from "./projects";
 import { HERE } from "../home";
 import { botOfConversation, describeWork, ofBot, workingNow, workSessions } from "../work/tree";
@@ -32,6 +35,7 @@ import type { AnswerPiece, RouteContext } from "../server/context";
 export const WORK_ROUTE = /^kuvo\/(?:work(?:\/events)?|bots\/([^/]+)\/stop-all)$/;
 export const WORK_ASKS_ROUTE = /^kuvo\/work\/(?:settings|unanswering|asks(?:\/([^/]+))?)$/;
 export const GOALS_ROUTE = /^kuvo\/work\/goals(?:\/([^/]+))?$/;
+export const APP_ICON_ROUTE = "kuvo/work/apps/icon";
 
 // A bot's work as clients show it.
 async function botWork(bot: string, context: RouteContext): Promise<BotWork> {
@@ -171,4 +175,19 @@ export async function* goalsRoute(context: RouteContext, match: RegExpMatchArray
     return yield* json(status, refusal);
   }
   return yield* json(200, outcome);
+}
+
+// `kuvo/work/apps/icon?app=<id>`: the icon of an app on this computer that a goal's step or what
+// waits names, by the id the box gave it: a PNG; 404 for one it has none of.
+export async function* appIconRoute(context: RouteContext): AsyncGenerator<AnswerPiece> {
+  const { request, json } = context;
+  if (request.method.toUpperCase() !== "GET") return yield* json(405, {});
+  const id = new URLSearchParams(request.path.split("?")[1] ?? "").get("app");
+  if (!isAppID(id)) return yield* json(400, { message: "Name the app by its id: kuvo/work/apps/icon?app=<id>." });
+  const file = appIcon(id);
+  let bytes: Buffer | null = null;
+  try { bytes = file ? fs.readFileSync(file) : null; } catch {}
+  if (!bytes) return yield* json(404, { message: "There's no icon for that app here." });
+  yield { head: { status: 200, headers: { "content-type": "image/png", "content-length": String(bytes.length) } } };
+  yield { body: bytes };
 }

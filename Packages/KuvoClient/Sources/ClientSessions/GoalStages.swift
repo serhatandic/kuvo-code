@@ -96,6 +96,25 @@ extension GoalTimeline {
 }
 
 extension GoalPlanWords {
+    /// The plan in a line, in the order its steps start, as the list lays them out: "Pick the
+    /// concept → Build the core app → Paywall · Icon and store screenshots → Submit", steps that
+    /// start together joined by "·".
+    public static func flow(_ goal: GoalPlan, now: Date = .now, calendar: Calendar = .current) -> String {
+        let timeline = GoalTimeline(goal, now: now)
+        let starts = Dictionary(timeline.chart(calendar: calendar).bars.map { ($0.id, $0.from.map { Int($0.timeIntervalSince1970.rounded()) }) }, uniquingKeysWith: { first, _ in first })
+        var rows: [(start: Int, names: [String])] = []
+        for lane in timeline.lanes {
+            let start = (starts[lane.id] ?? nil) ?? .max
+            if start != .max, let at = rows.firstIndex(where: { $0.start == start }) {
+                rows[at].names.append(lane.step.text)
+            } else {
+                rows.append((start, [lane.step.text]))
+            }
+        }
+        return rows.enumerated().sorted { ($0.element.start, $0.offset) < ($1.element.start, $1.offset) }
+            .map { $0.element.names.joined(separator: " · ") }.joined(separator: " → ")
+    }
+
     /// About how long a card's step has left, from how far along the bot measured it: "about 1 h
     /// left", "about 25 min left". Nil where it wasn't measured, or for one not under way.
     public static func left(_ card: GoalStages.Card, now: Date) -> String? {

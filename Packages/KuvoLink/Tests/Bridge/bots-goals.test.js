@@ -1,6 +1,6 @@
 // A bot's goal (PROTOCOL.md, "Work › Goals"), of any length: a bot puts its plan to you on one card,
-// with what it checked, what it may spend in a period, a switch for each public step, and how often
-// you hear how it goes; only you start it. As it goes, what its sessions ask waits for you (never a
+// with what it checked, what it may spend in a period, and how often you hear how it goes; only you
+// start it, and nothing it would publish is held back (its conversation's mode decides). As it goes, what its sessions ask waits for you (never a
 // no, never a stall), a model's limit or a daily limit pauses what hit it until the reset and the box
 // carries it on then (through a restart too), a spend cap starts again with its period, an end you set
 // has it wrap up and report, and digests and the report reach your phones. Its sessions run as any
@@ -18,6 +18,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, test } from "node:test";
 import { fileURLToPath } from "node:url";
+import zlib from "node:zlib";
 import { atEnd, removeAtEnd } from "./at-end.js";
 
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-bots-goals-")));
@@ -186,11 +187,12 @@ beforeEach(() => {
 });
 
 // The box's answer to one request, as a machine's tool asks it: a process of its own, on a box that
-// may work on its own (`unattended`, its commands in the sandbox), or one that can't yet.
-function route(method, pathname, body, { unattended = true } = {}) {
+// may work on its own (`unattended`, its commands in the sandbox), or one that can't yet; with more
+// in its environment (`env`). Bytes that aren't text come as `bytes`, with their `type`.
+function route(method, pathname, body, { unattended = true, env: more = {} } = {}) {
   return new Promise((resolve, reject) => {
     // (In the test's own time zone, which a runner may set apart from the machine's: midnight is the same one.)
-    const env = { ...process.env, KUVO_HOME: home, HOME: home, TMPDIR: home, TZ: Intl.DateTimeFormat().resolvedOptions().timeZone };
+    const env = { ...process.env, KUVO_HOME: home, HOME: home, TMPDIR: home, TZ: Intl.DateTimeFormat().resolvedOptions().timeZone, ...more };
     delete env.KUVO_TEST_SANDBOX_ON;
     if (unattended) env.KUVO_TEST_SANDBOX_ON = "1";
     const child = spawn(process.execPath, [script, "box", "route"], { env, stdio: ["pipe", "pipe", "inherit"] });
@@ -199,7 +201,7 @@ function route(method, pathname, body, { unattended = true } = {}) {
     child.on("error", reject);
     child.on("close", () => {
       const said = JSON.parse(out.trim().split("\n").pop());
-      resolve({ status: said.status, body: JSON.parse(said.body) });
+      resolve(said.bodyBase64 === undefined ? { status: said.status, body: JSON.parse(said.body) } : { status: said.status, bytes: Buffer.from(said.bodyBase64, "base64"), type: said.type });
     });
     child.stdin.end(JSON.stringify({ method, path: pathname, body }));
   });
@@ -216,11 +218,12 @@ const PLAN = {
     { text: "Stripe key works", ok: true },
   ],
   spend: [{ what: "driftwood.coffee", cap: 15 }, { what: "ads", cap: 20, per: "day" }],
+  // What a bot told by older words still sends: nothing comes of it.
   public: ["Publish the site when it's ready", "Turn on live payments"],
   projects: ["Storefront"],
 };
 const goals = async () => (await route("GET", "kuvo/work/goals")).body.goals;
-async function startedGoal(answer = { public: { p1: true } }) {
+async function startedGoal(answer = {}) {
   const proposed = await tool("propose_goal", PLAN);
   assert.equal(proposed.isError, false, proposed.text);
   const [goal] = await goals();
@@ -241,7 +244,7 @@ const tell = notice => { told.push(notice); return true; };
 const look = (now = Date.now()) => link.lookAtGoals(tell, target, { now });
 beforeEach(() => { told = []; });
 
-test("a bot puts its goal to you on one card: the plan with its phases, what it checked, what it may spend and in what period, a switch per public step, how often you hear how it goes", async () => {
+test("a bot puts its goal to you on one card: the plan with its phases, what it checked, what it may spend and in what period, how often you hear how it goes", async () => {
   const said = await tool("propose_goal", PLAN, { unattended: false });
   assert.equal(said.isError, false, said.text);
   assert.match(said.text, /can't work on it alone yet/);
@@ -261,7 +264,7 @@ test("a bot puts its goal to you on one card: the plan with its phases, what it 
   assert.equal(token.site, "dash.cloudflare.com", "a check's site, from its page");
   assert.deepEqual([token.state, token.by, token.action], ["needs", "bot", { kind: "open", label: "Add", url: "https://dash.cloudflare.com/profile/api-tokens" }]);
   assert.deepEqual(goal.spend.map(each => [each.what, each.cap, each.currency, each.per, each.spent]), [["driftwood.coffee", 15, "USD", "goal", 0], ["ads", 20, "USD", "day", 0]]);
-  assert.deepEqual(goal.public.map(each => each.on), [false, false], "every public step starts switched off");
+  assert.deepEqual(goal.public, [], "nothing it would publish is held back for a switch");
   assert.equal(goal.digest, "day", "a plan in phases gets a daily digest unless the bot says");
   assert.equal(goal.wake, false);
 
@@ -271,31 +274,30 @@ test("a bot puts its goal to you on one card: the plan with its phases, what it 
   assert.equal(start.body.goal.state, "running");
 });
 
-test("only you start the goal, with your switches, its end and its caps; the bot's told what's approved, and asks the box before a public step", async () => {
+test("only you start the goal, with its end and its caps; the bot's told what's approved, and nothing it would publish waits on a switch", async () => {
   await tool("propose_goal", { ...PLAN, steps: ["Build the site"] });
   await tool("propose_goal", PLAN);
   const listed = await goals();
   assert.equal(listed.length, 1, "proposed again, it's the one card");
   assert.equal(listed[0].alone, true);
   const ends = Date.now() + 7 * 86_400_000;
-  const started = await route("POST", `kuvo/work/goals/${listed[0].id}`, { action: "start", public: { p1: true }, wake: true, digest: "week", ends, spend: [{ cap: 12 }, { per: "week" }] });
+  const started = await route("POST", `kuvo/work/goals/${listed[0].id}`, { action: "start", wake: true, digest: "week", ends, spend: [{ cap: 12 }, { per: "week" }] });
   assert.equal(started.status, 200, JSON.stringify(started.body));
   const goal = started.body.goal;
   assert.deepEqual([goal.state, goal.wake, goal.digest, goal.ends], ["running", true, "week", ends]);
-  assert.deepEqual(goal.public.map(each => each.on), [true, false]);
+  assert.deepEqual(goal.public, []);
   assert.deepEqual(goal.spend.map(each => [each.cap, each.per]), [[12, "goal"], [20, "week"]]);
   const [message] = prompts;
   assert.equal(message.to, "ses_pixel");
   assert.match(message.text, /^\[Goal started\]/);
   // The box's own words to the bot, marked for what they are: a client shows a line, never your bubble.
   assert.deepEqual(message.metadata, { kuvo: { note: { from: "Goal", line: "Goal started" } } });
-  assert.match(message.text, /Switched on, so do them when they're ready: "Publish the site when it's ready"\./);
-  assert.match(message.text, /Switched off, so prepare them as drafts for the user: "Turn on live payments"\./);
+  assert.doesNotMatch(message.text, /draft|switched/i, "never told to keep what it publishes as a draft");
   assert.match(message.text, /ads, up to 20 USD a week/);
   assert.doesNotMatch(message.text, /night|morning|sleep/i);
 
-  assert.match((await tool("may_publish", { step: "p1" })).text, /^Yes/);
-  assert.match((await tool("may_publish", { step: "Turn on live payments" })).text, /^No: .* switched off/);
+  const asked = await route("POST", "kuvo/agent-tools", { name: "may_publish", arguments: { step: "p1" }, session: "ses_pixel" });
+  assert.equal(asked.status, 400, "no tool to ask: its mode decides");
   assert.equal((await route("POST", `kuvo/work/goals/${listed[0].id}`, { action: "start" })).status, 400);
   assert.equal((await tool("propose_goal", PLAN)).isError, true);
   assert.match((await tool("propose_goal", PLAN, { session: "ses_site" })).text, /Only a bot takes a goal/);
@@ -743,7 +745,7 @@ test("for a goal, a session the bot starts is told no one may be watching, a pro
 
   const [goal] = await goals();
   await route("POST", `kuvo/work/goals/${goal.id}`, { action: "stop" });
-  await startedGoal({ public: { p1: true } });
+  await startedGoal();
   await tool("start_session", { task: "Deploy the site.", project: "Driftwood" });
   assert.equal(effectOf(made.at(-1).permissions, "shell", "vercel --prod"), "allow");
 });
@@ -1045,4 +1047,298 @@ test("what waits for you goes once it's dealt with, by the bot or by you, and yo
   await tool("goal_progress", { spent: { what: "a logo", amount: 50 } });
   [current] = await goals();
   assert.ok(current.waiting.some(each => each.kind === "outside" && /a logo/.test(each.text)));
+});
+
+// ——— Where it's done: the app's own icon, and the folders Start makes ———
+
+// A PNG of `size` pixels, whole, as an icon theme has them.
+function png(size) {
+  const crc = bytes => {
+    let c = ~0;
+    for (const byte of bytes) {
+      c ^= byte;
+      for (let bit = 0; bit < 8; bit++) c = (c >>> 1) ^ (0xedb88320 & -(c & 1));
+    }
+    return ~c >>> 0;
+  };
+  const chunk = (kind, data) => {
+    const head = Buffer.alloc(8);
+    head.writeUInt32BE(data.length);
+    head.write(kind, 4, "latin1");
+    const tail = Buffer.alloc(4);
+    tail.writeUInt32BE(crc(Buffer.concat([head.subarray(4), data])));
+    return Buffer.concat([head, data, tail]);
+  };
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(size, 0);
+  header.writeUInt32BE(size, 4);
+  header.set([8, 6, 0, 0, 0], 8);
+  const rows = Buffer.alloc((size * 4 + 1) * size, 0x7f);
+  for (let row = 0; row < size; row++) rows[row * (size * 4 + 1)] = 0;
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk("IHDR", header), chunk("IDAT", zlib.deflateSync(rows)), chunk("IEND", Buffer.alloc(0))]);
+}
+const isPNG = bytes => bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+
+// A Linux computer's apps, as desktop entries and an icon theme in the test's own data folders
+// (XDG_DATA_HOME, XDG_DATA_DIRS): Tidepool Studio, its icon a PNG at 48 and 128 pixels; Sketchpad,
+// whose icon is an SVG alone.
+function linuxApps() {
+  const own = path.join(home, "xdg", "own");
+  const system = path.join(home, "xdg", "system");
+  fs.rmSync(path.join(home, "xdg"), { recursive: true, force: true });
+  write(path.join(system, "applications", "tidepool.desktop"), "[Desktop Entry]\nType=Application\nName=Tidepool Studio\nIcon=tidepool\nExec=tidepool %U\n\n[Desktop Action new]\nName=New Window\n");
+  write(path.join(system, "applications", "sketchpad.desktop"), "[Desktop Entry]\nType=Application\nName=Sketchpad\nIcon=sketchpad\n");
+  for (const size of [48, 128]) write(path.join(system, "icons", "hicolor", `${size}x${size}`, "apps", "tidepool.png"), png(size));
+  write(path.join(system, "icons", "hicolor", "scalable", "apps", "sketchpad.svg"), "<svg xmlns='http://www.w3.org/2000/svg'/>");
+  return { XDG_DATA_HOME: own, XDG_DATA_DIRS: system };
+}
+
+test("a step done in an app on this computer has that app's id, and its icon is the app's own, as a PNG; one that isn't here has none, and no icon", async () => {
+  fs.rmSync(path.join(home, "apps"), { recursive: true, force: true });
+  const mac = process.platform === "darwin";
+  // On a Mac, Safari, which every Mac has; on Linux, an app among the test's own desktop entries.
+  const env = mac ? {} : linuxApps();
+  const named = mac ? "safari" : "tidepool studio";
+  const steps = [{ text: "Check the site", app: named }, { text: "Draw the icons", app: "Kuvo No Such App" }, "Build the site", ...(mac ? [] : [{ text: "Sketch the screens", app: "Sketchpad" }])];
+  const proposed = await tool("propose_goal", { ...PLAN, steps }, { env });
+  assert.equal(proposed.isError, false, proposed.text);
+  const [goal] = await goals();
+  const [found, missing, none, svgOnly] = goal.steps.map(each => each.app);
+  assert.deepEqual(found, mac ? { name: "Safari", id: "com.apple.Safari" } : { name: "Tidepool Studio", id: "tidepool" }, "the app by its own name and id here");
+  assert.deepEqual(missing, { name: "Kuvo No Such App" }, "no such app here: no id, so no mark");
+  assert.equal(none, undefined, "a step that names no app has none");
+  if (!mac) assert.deepEqual(svgOnly, { name: "Sketchpad" }, "an icon that's SVG alone: no mark");
+
+  const icon = await route("GET", `kuvo/work/apps/icon?app=${encodeURIComponent(found.id)}`);
+  assert.equal(icon.status, 200);
+  assert.equal(icon.type, "image/png");
+  assert.ok(isPNG(icon.bytes), "a PNG");
+  assert.equal(icon.bytes.readUInt32BE(16), mac ? 64 : 128, "at about the size a client draws it (Linux: the theme's smallest that's at least that)");
+  assert.equal((await route("GET", "kuvo/work/apps/icon?app=com.example.none")).status, 404);
+  assert.equal((await route("GET", "kuvo/work/apps/icon?app=..%2Frun%2Flink")).status, 400);
+  // Kept in the box's own folder, and nothing else of it left there.
+  assert.deepEqual(fs.readdirSync(path.join(home, "apps")).sort(), [`${found.id}.png`, "found.json"].sort());
+});
+
+test("the app a step is done in can be named as it goes, and so can what waits for you", async () => {
+  fs.rmSync(path.join(home, "apps"), { recursive: true, force: true });
+  const mac = process.platform === "darwin";
+  const env = mac ? {} : linuxApps();
+  const [named, id] = mac ? ["Safari", "com.apple.Safari"] : ["Tidepool Studio", "tidepool"];
+  await startedGoal();
+  const said = await tool("goal_progress", { steps: [{ step: 1, state: "doing", app: named }], add: [{ text: "Record the demo", app: named }], waiting: { kind: "you", text: "Sign in to the store", app: named } }, { env });
+  assert.equal(said.isError, false, said.text);
+  let [goal] = await goals();
+  assert.deepEqual(goal.steps[0].app, { name: named, id });
+  assert.deepEqual(goal.steps.at(-1).app, { name: named, id }, "a step added with its app");
+  assert.deepEqual(goal.waiting.find(each => each.text === "Sign in to the store").app, { name: named, id });
+  assert.equal((await tool("goal_progress", { steps: [{ step: 1, app: null }] })).isError, false);
+  [goal] = await goals();
+  assert.equal(goal.steps[0].app, undefined, "taken away");
+  assert.equal((await tool("goal_progress", { steps: [{ step: 1, app: named }] }, { env })).isError, false);
+  const cleared = await tool("goal_progress", { steps: [{ step: 1, app: "" }] });
+  assert.equal(cleared.isError, false, cleared.text);
+  [goal] = await goals();
+  assert.equal(goal.steps[0].app, undefined, "an empty name takes it away too, as an empty note does");
+  assert.match((await tool("goal_progress", { steps: [{ step: 1, app: "~/bin/tool" }] })).text, /app is the app the step is done in/);
+});
+
+test("a goal's card shows the folder Start makes each project in, as making it will, and whether something's there already; none of it holds Start back", async () => {
+  const desktop = path.join(home, "Desktop");
+  atEnd(() => fs.rmSync(desktop, { recursive: true, force: true }));
+  write(path.join(desktop, "money-printer", "README.md"), "Mine.\n");
+  fs.mkdirSync(path.join(desktop, "empty"), { recursive: true });
+  const projects = ["Storefront", "~/Desktop/money-printer", "~/Desktop/empty", `${desktop}/new-thing`];
+  assert.equal((await tool("propose_goal", { ...PLAN, projects })).isError, false);
+  let [card] = await goals();
+  assert.deepEqual(card.projects, projects, "kept as the plan said, for older clients");
+  assert.deepEqual(card.folders, [
+    { project: "Storefront", folder: null, shown: null },
+    { project: "money-printer", folder: path.join(desktop, "money-printer"), shown: "~/Desktop/money-printer", there: true },
+    { project: "empty", folder: path.join(desktop, "empty"), shown: "~/Desktop/empty", there: false },
+    { project: "new-thing", folder: path.join(desktop, "new-thing"), shown: "~/Desktop/new-thing", there: false },
+  ], "no projects folder picked: none yet for the one named alone; an empty folder isn't something there");
+
+  // Once you pick where new projects go: there, by its name, where something is already.
+  write(path.join(developer, "storefront", "index.html"), "<h1>Old</h1>\n");
+  write(path.join(home, "box", "work.json"), JSON.stringify({ projectsFolder: developer }));
+  [card] = await goals();
+  assert.deepEqual(card.folders[0], { project: "Storefront", folder: path.join(developer, "storefront"), shown: "~/Developer/storefront", there: true });
+
+  const started = await route("POST", `kuvo/work/goals/${card.id}`, { action: "start" });
+  assert.equal(started.status, 200, "a folder there already is only shown");
+  assert.equal(started.body.goal.folders, undefined, "a goal under way shows none");
+});
+
+test("you rename a proposed goal's project or move it to a folder of your own from its card, and the card follows; the bot isn't told, and once it runs they can't change", async () => {
+  const desktop = path.join(home, "Desktop");
+  const settings = path.join(home, "box", "work.json");
+  fs.rmSync(settings, { force: true });
+  atEnd(() => fs.rmSync(desktop, { recursive: true, force: true }));
+  atEnd(() => fs.rmSync(settings, { force: true }));
+  assert.equal((await tool("propose_goal", { ...PLAN, projects: ["Storefront"] })).isError, false);
+  let [card] = await goals();
+  assert.ok(card.checks.some(check => check.id === "projectsFolder"), "a project named alone, with no projects folder picked");
+  const told = prompts.length;
+
+  const renamed = await route("POST", `kuvo/work/goals/${card.id}`, { action: "projects", projects: ["Tide Pool"] });
+  assert.equal(renamed.status, 200);
+  assert.deepEqual(renamed.body.goal.projects, ["Tide Pool"]);
+  assert.deepEqual(renamed.body.goal.folders, [{ project: "Tide Pool", folder: null, shown: null }]);
+  // Once you pick where new projects go, it's there by its new name.
+  write(settings, JSON.stringify({ projectsFolder: developer }));
+  [card] = await goals();
+  assert.deepEqual(card.folders, [{ project: "Tide Pool", folder: path.join(developer, "tide-pool"), shown: "~/Developer/tide-pool", there: false }]);
+  fs.rmSync(settings, { force: true });
+
+  // Moved to a folder of yours that has files: there, and nothing left to pick for it.
+  write(path.join(desktop, "tides", "README.md"), "Mine.\n");
+  const moved = await route("POST", `kuvo/work/goals/${card.id}`, { action: "projects", projects: ["~/Desktop/tides"] });
+  assert.equal(moved.status, 200);
+  assert.deepEqual(moved.body.goal.folders, [{ project: "tides", folder: path.join(desktop, "tides"), shown: "~/Desktop/tides", there: true }]);
+  assert.equal(moved.body.goal.checks.some(check => check.id === "projectsFolder"), false);
+  [card] = await goals();
+  assert.deepEqual(card.projects, ["~/Desktop/tides"], "kept");
+  assert.equal(prompts.length, told, "the bot hears them as the goal starts");
+
+  for (const projects of [[], ["a", "b", "c", "d", "e", "f"], [""], ["~"], ["/"], "Storefront"]) assert.equal((await route("POST", `kuvo/work/goals/${card.id}`, { action: "projects", projects })).status, 400, JSON.stringify(projects));
+  assert.equal((await route("POST", "kuvo/work/goals/goal_none", { action: "projects", projects: ["Storefront"] })).status, 404);
+
+  assert.equal((await route("POST", `kuvo/work/goals/${card.id}`, { action: "start" })).status, 200);
+  assert.equal((await route("POST", `kuvo/work/goals/${card.id}`, { action: "projects", projects: ["Storefront"] })).status, 400, "made already");
+});
+
+test("a project whose name has no letters or numbers a folder can take, or two that would be the same folder, is refused on the card and in the bot's plan, as make_project would; a name over lines is one line", async () => {
+  const settings = path.join(home, "box", "work.json");
+  atEnd(() => fs.rmSync(settings, { force: true }));
+  // The bot's own plan: told why, so it can propose it again.
+  for (const [projects, why] of [[["Магазин"], /Магазин can't be a folder's name: use letters or numbers/], [["🚀"], /🚀 can't be a folder's name/], [["Tide Pool", "tide-pool"], /Tide Pool and tide-pool would be the same folder/]]) {
+    const refused = await tool("propose_goal", { ...PLAN, projects });
+    assert.equal(refused.isError, true, JSON.stringify(projects));
+    assert.match(refused.text, why);
+  }
+  assert.deepEqual(await goals(), [], "no card for a plan whose projects can't be made");
+
+  assert.equal((await tool("propose_goal", { ...PLAN, projects: ["Storefront"] })).isError, false);
+  const [card] = await goals();
+  const set = projects => route("POST", `kuvo/work/goals/${card.id}`, { action: "projects", projects });
+  for (const [projects, why] of [
+    [["日本語"], "日本語 can't be a folder's name: use letters or numbers."],
+    [["~/Desktop/日本語"], "日本語 can't be a folder's name: use letters or numbers."],
+    [["Tide Pool", "tide pool"], "Tide Pool and tide pool would be the same folder: give them names apart."],
+    [["~/Desktop/tides", `${home}/Desktop/tides`], `~/Desktop/tides and ${home}/Desktop/tides would be the same folder: give them names apart.`],
+  ]) {
+    const refused = await set(projects);
+    assert.equal(refused.status, 400, JSON.stringify(projects));
+    assert.equal(refused.body.message, why);
+  }
+  // In the projects folder, a name and the path it would go to are the same folder too.
+  write(settings, JSON.stringify({ projectsFolder: developer }));
+  assert.equal((await set(["Tide Pool", path.join(developer, "tide-pool")])).status, 400);
+  const [still] = await goals();
+  assert.deepEqual(still.projects, ["Storefront"], "nothing kept of a list that won't do");
+
+  const lines = await set(["Tide\n  Pool"]);
+  assert.equal(lines.status, 200);
+  assert.deepEqual(lines.body.goal.projects, ["Tide Pool"], "one line, as the card shows it");
+});
+
+test("a plan the bot proposes again keeps the projects you set on its card, and it's told their names; projects it changes itself replace yours, and it's told what yours were", async () => {
+  assert.equal((await tool("propose_goal", { ...PLAN, projects: ["Storefront"] })).isError, false);
+  let [card] = await goals();
+  assert.equal((await route("POST", `kuvo/work/goals/${card.id}`, { action: "projects", projects: ["Tide Pool", "~/Desktop/docs"] })).status, 200);
+
+  // You ask it to change a step: it proposes the plan again, with the projects it had.
+  const again = await tool("propose_goal", { ...PLAN, steps: [...PLAN.steps, "Write the launch post"], projects: ["Storefront"] });
+  assert.equal(again.isError, false, again.text);
+  [card] = await goals();
+  assert.equal(card.steps.length, PLAN.steps.length + 1, "the step it changed");
+  assert.deepEqual(card.projects, ["Tide Pool", "~/Desktop/docs"], "your projects, as you set them");
+  assert.match(again.text, /The user set its projects on the card: "Tide Pool", "~\/Desktop\/docs"\. They're kept/);
+  // And again: still yours.
+  assert.equal((await tool("propose_goal", { ...PLAN, projects: ["Storefront"] })).isError, false);
+  [card] = await goals();
+  assert.deepEqual(card.projects, ["Tide Pool", "~/Desktop/docs"]);
+
+  // It changes the projects itself (you asked it in its chat for another): its own replace yours,
+  // and it hears what yours were.
+  const changed = await tool("propose_goal", { ...PLAN, projects: ["Storefront", "Admin"] });
+  assert.equal(changed.isError, false, changed.text);
+  [card] = await goals();
+  assert.deepEqual(card.projects, ["Storefront", "Admin"]);
+  assert.match(changed.text, /The user had set its projects on the card to "Tide Pool", "~\/Desktop\/docs"; the ones you gave replace them/);
+  // With nothing of yours left to keep, nothing more is said of them.
+  const after = await tool("propose_goal", { ...PLAN, projects: ["Storefront"] });
+  [card] = await goals();
+  assert.deepEqual(card.projects, ["Storefront"]);
+  assert.doesNotMatch(after.text, /projects on the card/);
+});
+
+// The apps the box has looked for, as it keeps them.
+const foundApps = () => JSON.parse(fs.readFileSync(path.join(home, "apps", "found.json"), "utf8"));
+
+test("a call that won't do has none of its apps looked for, and one call has twenty looked for at most, each name once", async () => {
+  fs.rmSync(path.join(home, "apps"), { recursive: true, force: true });
+  const steps = count => Array.from({ length: count }, (_, at) => ({ text: `Step ${at + 1}`, app: `Kuvo No Such App ${at + 1}` }));
+  const tooMany = await tool("propose_goal", { ...PLAN, steps: steps(1000) });
+  assert.match(tooMany.text, /more than 200 steps/);
+  assert.equal(fs.existsSync(path.join(home, "apps")), false, "refused before any app was looked for");
+
+  const proposed = await tool("propose_goal", { ...PLAN, steps: [...steps(30), { text: "Again", app: "kuvo no such app 1" }] });
+  assert.equal(proposed.isError, false, proposed.text);
+  assert.equal(Object.keys(foundApps()).length, 20, "the first twenty names");
+  const [card] = await goals();
+  assert.deepEqual(card.steps.at(-1).app, { name: "kuvo no such app 1" }, "each kept as it was named");
+
+  await route("POST", `kuvo/work/goals/${card.id}`, { action: "start" });
+  const wrong = await tool("goal_progress", { steps: [{ step: 99, app: "Kuvo Another App" }] });
+  assert.match(wrong.text, /There's no step 99/);
+  assert.equal(Object.hasOwn(foundApps(), "kuvo another app"), false, "a call that's refused looks for nothing");
+});
+
+// An app installed on this computer for the test: on a Mac, a bundle in your Applications folder
+// (the test's home); on Linux, a desktop entry with its icon, in the test's own data folders.
+function installApp(name, id) {
+  if (process.platform === "darwin") {
+    write(path.join(home, "Applications", `${name}.app`, "Contents", "Info.plist"), `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>${id}</string><key>CFBundleName</key><string>${name}</string><key>CFBundlePackageType</key><string>APPL</string></dict></plist>\n`);
+    return {};
+  }
+  const env = linuxApps();
+  write(path.join(env.XDG_DATA_DIRS, "applications", `${id}.desktop`), `[Desktop Entry]\nType=Application\nName=${name}\nIcon=${id}\n`);
+  write(path.join(env.XDG_DATA_DIRS, "icons", "hicolor", "64x64", "apps", `${id}.png`), png(64));
+  return env;
+}
+const uninstallApp = (name, id) => {
+  fs.rmSync(path.join(home, "Applications", `${name}.app`), { recursive: true, force: true });
+  fs.rmSync(path.join(home, "xdg", "system", "applications", `${id}.desktop`), { force: true });
+};
+
+test("an app found is looked for again a week on, so one you've uninstalled loses its mark and its icon; names not found are forgotten after a month; any name is a name, constructor too", async () => {
+  fs.rmSync(path.join(home, "apps"), { recursive: true, force: true });
+  atEnd(() => fs.rmSync(path.join(home, "Applications"), { recursive: true, force: true }));
+  const id = "com.example.constructor";
+  const env = installApp("Constructor", id);
+  const propose = async () => {
+    assert.equal((await tool("propose_goal", { ...PLAN, steps: [{ text: "Build it", app: "Constructor" }] }, { env })).isError, false);
+    return (await goals())[0].steps[0].app;
+  };
+  assert.deepEqual(await propose(), { name: "Constructor", id }, "found, though every object has a constructor");
+  assert.equal((await route("GET", `kuvo/work/apps/icon?app=${id}`)).status, 200);
+
+  // Uninstalled: within the week it's as it was found.
+  uninstallApp("Constructor", id);
+  assert.deepEqual(await propose(), { name: "Constructor", id });
+
+  // A week on, it's looked for again: gone, with its icon. A miss a month old is forgotten, a newer
+  // one kept.
+  const now = Date.now();
+  const aged = foundApps();
+  aged.constructor.at = now - 8 * 86_400_000;
+  aged["kuvo old miss"] = { at: now - 40 * 86_400_000 };
+  aged["kuvo new miss"] = { at: now - 2 * 86_400_000 };
+  fs.writeFileSync(path.join(home, "apps", "found.json"), JSON.stringify(aged));
+  assert.deepEqual(await propose(), { name: "Constructor" }, "no mark for an app that isn't here");
+  assert.equal((await route("GET", `kuvo/work/apps/icon?app=${id}`)).status, 404);
+  assert.deepEqual(fs.readdirSync(path.join(home, "apps")), ["found.json"], "its icon taken away");
+  assert.deepEqual(Object.keys(foundApps()).sort(), ["constructor", "kuvo new miss"]);
 });

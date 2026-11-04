@@ -37,7 +37,7 @@ import { skillsRoute } from "../areas/skills";
 import { moveEventsRoute, movePlacesRoute, movesRoute } from "../areas/moves";
 import { sessionWakesRoute, wakeEventsRoute, wakesRoute } from "../areas/wakes";
 import { worktreeEventsRoute, worktreesRoute } from "../areas/worktrees";
-import { newProjectRoute, GOALS_ROUTE, goalsRoute, WORK_ASKS_ROUTE, WORK_ROUTE, workAsksRoute, workRoute } from "../areas/work";
+import { APP_ICON_ROUTE, appIconRoute, newProjectRoute, GOALS_ROUTE, goalsRoute, WORK_ASKS_ROUTE, WORK_ROUTE, workAsksRoute, workRoute } from "../areas/work";
 import { phoneHere } from "../compat/leave-running";
 import { readBridgeFile, readEngineFile } from "../engine/client";
 import { linkRoute } from "../mac/routes";
@@ -110,6 +110,7 @@ const ROUTES: (Route | Route<RegExpMatchArray>)[] = [
   { when: route => route.match(WORK_ROUTE), answer: workRoute },
   { when: route => route.match(WORK_ASKS_ROUTE), answer: workAsksRoute },
   { when: route => route.match(GOALS_ROUTE), answer: goalsRoute },
+  { when: route => route === APP_ICON_ROUTE, answer: appIconRoute },
   // (Before the bot keys' route, which would take "keys" for a bot.)
   { when: route => route === "kuvo/bots/keys/refresh", answer: botKeysRefreshRoute },
   { when: route => /^kuvo\/bots\/[^/]+\/keys(\/[^/]+)?$/.test(route), answer: botKeysRoute },
