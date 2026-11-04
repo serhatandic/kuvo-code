@@ -20,6 +20,7 @@ import { isPutAway, type PutAwayable } from "../peers/directory";
 import { describeForm, describePermission } from "../notices/news";
 import { noteWorkChanged, WORK_FOLDER } from "./changes";
 import { asksIn } from "./answers";
+import { goAheadOnAutopilot, isAutopilot } from "./autopilot";
 import { awaitedBy } from "./awaited";
 import { tellLateAnswers } from "./asks";
 import { errorOf, failedOn, followUnanswering, holdWords, turnError } from "./unanswering";
@@ -453,6 +454,9 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
       if (!session || (session.id !== id && event.type.startsWith("session.execution"))) return;
       const bot = worksFor(session)?.bot;
       if (bot) noteWorkChanged(bot);
+      // On Autopilot, a question that marks the choice it recommends goes ahead on it: nothing waits.
+      const form = event.type === "form.created" ? event.data?.form ?? event.data as unknown as EngineForm : null;
+      if (form && isAutopilot(session) && await goAheadOnAutopilot(source, session.id, { ...form, sessionID: form.sessionID ?? id }).catch(() => null)) return;
       const starter = startedByOf(session);
       const wakes = wakesOf(session);
       // (One starting or stopped is its bot's work changing, for clients to read: nothing to tell.)

@@ -31,6 +31,7 @@ import type { Approval } from "../work/approval";
 import { linkSession, pauseGoal, runningGoal } from "../work/goals";
 import { nextMidnight, startOfDay } from "../work/clock";
 import { botOfConversation, depthOf, ofBot, workingNow, workSessions, worksFor } from "../work/tree";
+import { isAutopilot, tellAutopilot } from "../work/autopilot";
 import type { WorksFor } from "../../shared/routes/work";
 import type { Target } from "../../shared/records";
 import type { KitRule } from "../bots/kit";
@@ -39,7 +40,8 @@ import type { SessionPlace } from "./letter";
 
 /** What a session's start is given: its task, and what's optional: where (a folder, a project by
  * name or folder, a chat), in a worktree, on which model and effort, in which mode, with which
- * approval, and what its starter hears of it (`wake`). (Unknown fields are ignored, so a newer
+ * approval, on Autopilot (a client's start; a conversation's starts take its own), and what its
+ * starter hears of it (`wake`). (Unknown fields are ignored, so a newer
  * client can ask an older box.) */
 export interface StartGiven {
   task?: unknown;
@@ -52,6 +54,7 @@ export interface StartGiven {
   effort?: unknown;
   mode?: unknown;
   approval?: unknown;
+  autopilot?: unknown;
   wake?: unknown;
   /** The goal's step it works on (its number or id), for that step's track. */
   step?: unknown;
@@ -376,8 +379,10 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   const rules = rulesFor(applied, parent, project?.folders ?? []);
   // Its mode: the one asked for, else the conversation's (one that plans starts sessions that plan).
   const agent = given.mode === "plan" || given.mode === "build" ? given.mode : parent?.agent ?? null;
+  // On Autopilot where its starter is (or a client asked for it): it decides as its starter does.
+  const autopilot = by?.place ? isAutopilot(by.place.data) : given.autopilot === true;
   // (Kept with it as it's made, so the box never takes it for one a client made without saying.)
-  const marks = { ...(by?.place ? { startedBy: by.session } : {}), ...(asBefore ? {} : { approval: wanted, applied }) };
+  const marks = { ...(by?.place ? { startedBy: by.session } : {}), ...(asBefore ? {} : { approval: wanted, applied }), ...(autopilot ? { autopilot: true } : {}) };
   let session: string;
   try {
     const made = await call(target, "POST", "/api/session", { location: { directory: folder }, ...(title ? { title } : {}), ...(agent ? { agent } : {}), ...(model ? { model } : {}), permissions: rules, metadata: { kuvo: marks } }, place.signal);
@@ -395,11 +400,12 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   if (project?.folders.length) {
     await call(target, "PUT", `/api/experimental/session/${address}/instructions/entries/kuvo.project-folders`, { value: projectsNote(folder, project.folders) }).catch(() => {});
   }
+  if (autopilot) await tellAutopilot(target, session, true).catch(() => {});
   await settleNewSession(target, session).catch(() => {});
   let wakes = wakesFrom(given.wake, Boolean(ownBot), given.wait === true);
   // What its starter hears of it, only once it's marked so: none for an agent outside any
   // conversation here, or for a mark the engine didn't take (it's told to write to it instead).
-  const kuvo = { ...(by?.place ? { startedBy: by.session, ...(bot ? { by: bot, depth } : {}), ...(wakes.length ? { wake: wakes } : {}) } : {}), ...(asBefore ? {} : { approval: wanted, applied }) };
+  const kuvo = { ...(by?.place ? { startedBy: by.session, ...(bot ? { by: bot, depth } : {}), ...(wakes.length ? { wake: wakes } : {}) } : {}), ...(asBefore ? {} : { approval: wanted, applied }), ...(autopilot ? { autopilot: true } : {}) };
   const marked = await call(target, "PATCH", `/api/session/${address}`, { metadata: { kuvo } }).then(() => true, () => false);
   // (What it comes to may have changed while it was made.)
   if (marked && !asBefore) await settleAgain(target, session, agents, place.signal).catch(() => {});
