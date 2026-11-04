@@ -797,6 +797,25 @@ describe("Claude Code's permissions", () => {
     expect((await fake.hook("Bash", { command: "npm test && rm -rf build" }, "toolu_3")).decision).toBe("ask")
   })
 
+  test("Allow Always on an edit lets every later edit in the session through, to other files and by other tools, without asking", async () => {
+    const [a, b] = [join(root, "a.ts"), join(root, "b.ts")]
+    writeFileSync(a, "const a = 1\n")
+    writeFileSync(b, "const b = 1\n")
+    const { id } = await begin({ permissions: askFirst })
+    const first = { file_path: a, old_string: "const a = 1", new_string: "const a = 2" }
+    const answer = fake.canUse("Edit", first, "toolu_1")
+    await until(() => sessions.permissions(id).length === 1)
+    sessions.replyPermission(id, sessions.permissions(id)[0].id, "always")
+    expect(await answer).toMatchObject({ behavior: "allow" })
+    const second = { file_path: b, old_string: "const b = 1", new_string: "const b = 2" }
+    expect((await fake.hook("Edit", second, "toolu_2")).decision).toBeUndefined()
+    expect(await fake.canUse("Edit", second, "toolu_2")).toMatchObject({ behavior: "allow" })
+    const created = { file_path: join(root, "c.ts"), content: "export {}\n" }
+    expect((await fake.hook("Write", created, "toolu_3")).decision).toBeUndefined()
+    expect(await fake.canUse("Write", created, "toolu_3")).toMatchObject({ behavior: "allow" })
+    expect(sessions.permissions(id)).toHaveLength(0)
+  })
+
   test("Deny: an edit's card shows what it would change; Claude Code is told you declined, and the turn goes on", async () => {
     const file = join(root, "a.ts")
     writeFileSync(file, "const a = 1\n")

@@ -523,6 +523,44 @@ describe("What ACP agents ask", () => {
     }
   })
 
+  test("Always on an edit lets every later edit in the session through, to other files too (Grok's: told as its call, asked bare)", async () => {
+    const asked = watch("permission.asked")
+    try {
+      const id = start(agentSaying([edit("e1", join(root, "a.txt")), edit("e2", join(root, "b.txt"))], [], [asking("e1"), asking("e2")]), { permissions: askFirst })
+      await until(() => sessions.permissions(id).length > 0)
+      sessions.replyPermission(id, sessions.permissions(id)[0].id, "always")
+      await settled(id)
+      expect(asked.of(id)).toHaveLength(1)
+      expect(answers()).toEqual([
+        { outcome: "selected", optionId: "allow-once" },
+        { outcome: "selected", optionId: "allow-once" },
+      ])
+    } finally {
+      asked.stop()
+    }
+  })
+
+  test("Always on an edit lets every later edit through (Antigravity's: the kind and file only in what it asks)", async () => {
+    const asked = watch("permission.asked")
+    const asks = (toolCallId: string, file: string, title: string) => ({
+      method: "session/request_permission",
+      params: { sessionId: "s1", toolCall: { toolCallId, title, kind: "edit", status: "pending", locations: [{ path: join(root, file) }], rawInput: { TargetFile: join(root, file) } }, options: offered },
+    })
+    try {
+      const id = start(agentSaying([], [], [asks("w1", "a.txt", "write_to_file"), asks("w2", "b.txt", "replace_file_content")]), { permissions: askFirst })
+      await until(() => sessions.permissions(id).length > 0)
+      sessions.replyPermission(id, sessions.permissions(id)[0].id, "always")
+      await settled(id)
+      expect(asked.of(id)).toHaveLength(1)
+      expect(answers()).toEqual([
+        { outcome: "selected", optionId: "allow-once" },
+        { outcome: "selected", optionId: "allow-once" },
+      ])
+    } finally {
+      asked.stop()
+    }
+  })
+
   test("Approve All: it's started approving all, and what it asks anyway is answered for you", async () => {
     const asked = watch("permission.asked")
     try {

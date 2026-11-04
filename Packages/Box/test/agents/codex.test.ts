@@ -507,6 +507,25 @@ describe("What Codex asks you", () => {
     expect(tools(id).map((tool: any) => tool.state.status)).toEqual(["completed", "completed", "completed"])
   })
 
+  test("Allow Always on a change lets every later change in the session through, to other files too, without asking", async () => {
+    const change = (file: string) => [{ path: join(root, file), kind: { type: "update", move_path: null }, diff: "@@ -1 +1 @@\n-a\n+b\n" }]
+    const id = start(
+      [
+        ["item/started", { item: { type: "fileChange", id: "p1", status: "inProgress", changes: change("src/a.ts") } }],
+        ["item/fileChange/requestApproval", { itemId: "p1" }],
+        ["item/completed", { item: { type: "fileChange", id: "p1", status: "completed", changes: change("src/a.ts") } }],
+        ["item/started", { item: { type: "fileChange", id: "p2", status: "inProgress", changes: change("src/b.ts") } }],
+        ["item/fileChange/requestApproval", { itemId: "p2" }],
+        ["item/completed", { item: { type: "fileChange", id: "p2", status: "completed", changes: change("src/b.ts") } }],
+      ],
+      { permissions: askFirst },
+    )
+    await until(() => sessions.permissions(id).length > 0)
+    sessions.replyPermission(id, sessions.permissions(id)[0].id, "always")
+    await until(() => ended(id))
+    expect(answers()).toEqual([{ decision: "accept" }, { decision: "accept" }])
+  })
+
   test("a change it asks to make shows its files and their lines on the card: Allow Once makes it, No declines the next", async () => {
     const sum = join(root, "src/sum.ts")
     const added = join(root, "test/sum.test.ts")
