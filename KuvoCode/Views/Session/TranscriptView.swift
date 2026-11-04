@@ -314,7 +314,7 @@ struct TranscriptView: View {
     /// turn gets a summary line, and queued messages come last.
     /// The rows, made again only when what they're made from changes (not as you scroll).
     private var rows: [Row] {
-        let key = RowCache.Key(version: model.transcriptVersion, detail: stepsDetail, revert: model.session.revert?.messageID, waiting: model.waiting.map(\.id))
+        let key = RowCache.Key(version: model.transcriptVersion, detail: stepsDetail, revert: model.session.revert?.messageID, waiting: model.waiting.map(\.id), model: model.session.model)
         if rowCache.key == key { return rowCache.rows }
         let rows = Self.rows(of: model, catalog: catalog, detail: stepsDetail)
         hover.turns = Self.turns(of: rows)
@@ -364,9 +364,10 @@ struct TranscriptView: View {
         let all = model.transcript.messages
         let cut = boundary.map { boundary in all.firstIndex { $0.id == boundary } ?? all.firstIndex { $0.id >= boundary } ?? all.count }
         let messages = cut.map { Array(all[..<$0]) } ?? all
-        // The model each turn runs on, for one that fails before any reply says it: the last one
-        // a reply or a switch named; before those, the one the first switch left, or the session's.
-        let firstSwitch = messages.lazy.compactMap { if case .modelSwitched(let change) = $0 { change } else { nil } }.first
+        // The model each turn runs on, for one that fails before any reply says it: the last switch's;
+        // before any, the one the first switch left (wherever it is), or the session's. Not a reply's:
+        // Auto's are the model it picked for that turn.
+        let firstSwitch = all.lazy.compactMap { if case .modelSwitched(let change) = $0 { change } else { nil } }.first
         var current = firstSwitch.map(\.previous) ?? model.session.model
         // Summed up: the agent's steps between its replies, gathered into one row.
         var steps: [Message.Content] = []
@@ -406,7 +407,6 @@ struct TranscriptView: View {
                 rows.append(.message(user))
             case .assistant(let assistant):
                 turn.add(assistant)
-                current = assistant.model
                 // The run's error shows once, at the end of the turn. A step you stopped isn't an
                 // error: the turn's end says "Stopped".
                 let nextIdle = turnEnds[index]
@@ -2261,6 +2261,8 @@ final class RowCache {
         var detail: StepsDetail
         var revert: String?
         var waiting: [String]
+        /// The session's model, which a turn that failed before any reply runs on.
+        var model: ModelRef?
     }
 
     /// What changing animates: rows added or taken away at the end.

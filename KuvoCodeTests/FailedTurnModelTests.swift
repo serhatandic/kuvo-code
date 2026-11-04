@@ -54,6 +54,20 @@ import Testing
         #expect(ends == [ModelRef(id: "default", providerID: "claude-code"), ModelRef(id: "big-pickle", providerID: "opencode")])
     }
 
+    @Test func anAutoTurnThatFailedBeforeAnyReplyIsAutos() async throws {
+        defer { engine.stop() }
+        // Auto's replies carry the model it picked for them: the next turn isn't on that one.
+        let ends = try await ends([
+            ["id": "msg_01", "type": "user", "time": ["created": 1_000], "text": "Write a short SEO checklist"],
+            ["id": "msg_02", "type": "assistant", "agent": "build", "time": ["created": 2_000, "completed": 3_000], "model": ["id": "default", "providerID": "claude-code"],
+             "content": [["type": "text", "text": "Here it is."]]],
+            ["id": "msg_03", "type": "idle", "time": ["created": 4_000], "outcome": "succeeded"],
+            ["id": "msg_04", "type": "user", "time": ["created": 5_000], "text": "Shorter"],
+            ["id": "msg_05", "type": "idle", "time": ["created": 6_000], "outcome": "failed", "error": Self.signedOut],
+        ], session: ["id": "auto", "providerID": OutsideAgents.autoProvider])
+        #expect(ends == [ModelRef(id: "default", providerID: "claude-code"), ModelRef(id: "auto", providerID: OutsideAgents.autoProvider)])
+    }
+
     @Test func switchingAwayFromASignedOutModelBringsBackTryAgain() async throws {
         defer { engine.stop() }
         let location = ["directory": "/"]
