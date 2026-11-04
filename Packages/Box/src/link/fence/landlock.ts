@@ -21,7 +21,7 @@ import type { FencePolicy } from "./policy";
 
 /** What the Linux script reads: the policy's parts it needs. */
 export function landlockPolicy(policy: FencePolicy): string {
-  return JSON.stringify({ hidden: [...policy.kuvo, ...policy.secrets], readable: policy.kuvoReadable, writable: [...policy.writable, ...policy.commandCaches], readOnly: policy.readOnly,
+  return JSON.stringify({ hidden: [...policy.kuvo, ...policy.secrets], secrets: policy.secrets, readable: policy.kuvoReadable, writable: [...policy.writable, ...policy.commandCaches], readOnly: policy.readOnly,
     homeWrites: policy.homeWrites ?? [], homeKept: policy.homeKept ?? [], homeOpen: policy.homeOpen ?? [], personal: policy.personal ?? [] }) + "\n";
 }
 
@@ -197,10 +197,12 @@ for (const where of [...policy.writable, work, git, ...allowed]) if (where) gran
 // own files at the top (its databases' journals, its sign-in written anew). Here its homes are Kuvo
 // Code's own copy of it (a machine's agents' homes are in Kuvo Code's folder), never the one you
 // use yourself. (What a command leaves there while it is on, Codex reads when the sandbox is off
-// too: you turn it off, and that's yours to judge.) Its tools' port needs no rule:
+// too: you turn it off, and that's yours to judge.) Its sign-in in its first home is its own, though
+// one of your secrets anywhere else (your own Codex's, for an account you added), as on a Mac. Its tools' port needs no rule:
 // Landlock leaves connections to it open.
 const lines = (text) => (text || "").split("\n").filter((line) => line.startsWith("/"));
-for (const where of lines(process.env.KUVO_FENCE_OWN).slice(0, 4)) grantExcept(where, all, kept);
+const secrets = new Set((policy.secrets || []).map(real));
+lines(process.env.KUVO_FENCE_OWN).slice(0, 4).forEach((where, at) => grantExcept(where, all, at ? kept : new Set([...kept].filter((each) => !(secrets.has(each) && inside(each, real(where)))))));
 for (const where of lines(process.env.KUVO_FENCE_READ).slice(0, 4)) grant(where, READS);
 if (tmp) { fs.mkdirSync(tmp, { recursive: true }); grant(tmp, all); }
 // Its conversation's wake-ups and watches (kuvo-wake): read, and only its inbox written, which the box

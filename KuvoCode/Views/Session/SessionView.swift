@@ -622,6 +622,11 @@ private struct BottomStack: View {
                 guard let bot = workBot else { return }
                 await app.botWork.read(bot)
             }
+            // And as its box says it changed, which sees what this Mac doesn't.
+            .task(id: workBot?.id) {
+                guard let bot = workBot else { return }
+                await app.botWork.follow(bot)
+            }
             #if DEBUG
             // KUVO_DEMO_TUCKED: the bars tucked into their line once the sample ones are in (`new`:
             // the side question marked).

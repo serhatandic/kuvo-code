@@ -20,7 +20,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { accountHome, accountName, homeFolder, IS_MAC, K } from "../home";
+import { accountHome, accountName, homeFolder, IS_MAC, K, opencodeAuthFile } from "../home";
 
 export interface FencePolicy {
   /** The home folder whose secrets are hidden. */
@@ -279,7 +279,10 @@ const SECRETS = [".aws", ".config/gcloud", ".azure", ".kube", ".docker/config.js
   ".terraform.d/credentials.tfrc.json", ".netrc", ".npmrc", ".yarnrc.yml", ".pypirc", ".cargo/credentials.toml",
   ".cargo/credentials", ".gem/credentials", ".git-credentials", ".gnupg/private-keys-v1.d", ".gnupg/secring.gpg",
   ".password-store", ".config/op", ".config/hub", ".pgpass", ".my.cnf", ".android/adbkey", ".composer/auth.json",
-  ".config/composer/auth.json", ".local/share/opencode/auth.json", ".config/stripe", ".wakatime.cfg"];
+  ".config/composer/auth.json", ".local/share/opencode/auth.json", ".config/stripe", ".wakatime.cfg",
+  // The coding agents' sign-ins (an agent run whole in the sandbox still has its own: seatbelt.ts,
+  // landlock.ts).
+  ".codex/auth.json", ".grok/auth.json", ".claude/.credentials.json", ".gemini/oauth_creds.json"];
 const MAC_SECRETS = ["Library/Application Support/Google/Chrome", "Library/Application Support/BraveSoftware",
   "Library/Application Support/Arc", "Library/Application Support/Firefox", "Library/Application Support/Microsoft Edge",
   "Library/Safari", "Library/Cookies", "Library/Application Support/1Password", "Library/Group Containers/2BUA8C4S2C.com.1password",
@@ -371,6 +374,8 @@ export function fencePolicy(ports: number[] = []): FencePolicy {
   const named = given === "/" || home.startsWith(given + "/") ? home : given;
   const homes = named === home ? [home] : [home, named];
   const inHomes = (names: string[]) => homes.flatMap(each => names.map(name => realish(path.join(each, name))));
+  // opencode's sign-ins where your own XDG_DATA_HOME puts them, besides where they are by default.
+  const opencodes = homes.map(each => realish(opencodeAuthFile(each))).filter(each => !inHomes([".local/share/opencode/auth.json"]).includes(each));
   // A machine's folder, and the real one if this is a test's own.
   const own = IS_MAC ? macFolders(home) : { kuvo: [K, path.join(home, ".kuvo-code")], readable: [path.join(K, "bin")] };
   const kuvo = [...new Set(own.kuvo.map(realish))];
@@ -445,7 +450,7 @@ export function fencePolicy(ports: number[] = []): FencePolicy {
       ],
       socketFolders: [`^/private/tmp/tmux-${os.userInfo().uid}$`, "^/private/tmp/com\\.apple\\.launchd\\.[^/]+$", "^/private/tmp/ssh-[^/]+$",
         "^/private/var/folders/[^/]+/[^/]+/T/(ssh-[^/]+|zellij-[^/]+|emacs[0-9]+|nvim\\.[^/]+|podman)$"],
-      secrets: [...inHomes([...SECRETS, ...MAC_SECRETS]), ...keychainDaemons(home).map(realish), ...homes.flatMap(each => [...sshKeys(each), ...ghHosts(each)]).map(realish)],
+      secrets: [...inHomes([...SECRETS, ...MAC_SECRETS]), ...opencodes, ...keychainDaemons(home).map(realish), ...homes.flatMap(each => [...sshKeys(each), ...ghHosts(each)]).map(realish)],
     };
   }
   return {
@@ -468,7 +473,7 @@ export function fencePolicy(ports: number[] = []): FencePolicy {
       // SSH's shared connections and agents your settings name; those named by host, by the names
       // they can have (each that's there as a command starts).
       ...sshPaths, ...sshGlobs],
-    secrets: [...inHomes([...SECRETS, ...LINUX_SECRETS]), ...homes.flatMap(each => [...sshKeys(each), ...ghHosts(each)])],
+    secrets: [...inHomes([...SECRETS, ...LINUX_SECRETS]), ...opencodes, ...homes.flatMap(each => [...sshKeys(each), ...ghHosts(each)])],
   };
 }
 
