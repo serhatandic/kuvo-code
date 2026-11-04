@@ -90,8 +90,7 @@ import Testing
         await app.botWork.read(pixel)
         #expect(BotWorkBar.title(app.botWork.reports[pixel.id]) == "1 session today, none at work")
 
-        app.botWork.reachable = { $0 == "lab" }
-        app.botWork.machineFollowPause = .zero
+        app.botWork.connected = { $0 == "lab" }
         let following = Task { await app.botWork.follow(pixel) }
         defer { following.cancel() }
         // Its task reaches it, and it works: the box notes its bot's work changed, as it does on the

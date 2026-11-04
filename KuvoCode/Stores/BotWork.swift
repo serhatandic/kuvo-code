@@ -67,10 +67,8 @@ final class BotWork {
         }
     }
 
-    /// How long a machine's work waits to be followed again once it isn't (a test's none).
-    @ObservationIgnored var machineFollowPause: Duration = .seconds(30)
     /// A machine connected and ready, whose work can be followed (a test's own answer).
-    @ObservationIgnored var reachable: ((String) -> Bool)?
+    @ObservationIgnored var connected: ((String) -> Bool)?
 
     /// The bot's work, read again each time its box says it changed (`kuvo/work/events`: a session
     /// of it started, at work, asking or done), until the task following it ends. What this Mac
@@ -79,9 +77,11 @@ final class BotWork {
     func follow(_ bot: Bot) async {
         struct Line: Decodable { var changed: [String: Double] }
         let onThisMac = bot.box == BoxClient.mac
-        var seen: Double?
         while !Task.isCancelled {
-            if onThisMac || reachable?(bot.box) ?? (app?.machines.engine(bot.box)?.isReady == true), runsWork(bot), let client = box(of: bot) {
+            if onThisMac || connected?(bot.box) ?? (app?.machines.engine(bot.box)?.isReady == true), runsWork(bot), let client = box(of: bot) {
+                // Each stream's first line is read, so what changed while it wasn't followed is
+                // too, though the box may not have noted it (it restarted meanwhile).
+                var seen: Double?
                 do {
                     for try await data in client.follow("kuvo/work/events") {
                         guard let at = (try? JSONDecoder().decode(Line.self, from: data))?.changed[bot.id], at != seen else { continue }
@@ -91,7 +91,7 @@ final class BotWork {
                 } catch {}
             }
             // The box started again, or the machine went away: followed again in a moment.
-            try? await Task.sleep(for: onThisMac ? .seconds(2) : machineFollowPause)
+            try? await Task.sleep(for: .seconds(onThisMac ? 2 : 30))
         }
     }
 
