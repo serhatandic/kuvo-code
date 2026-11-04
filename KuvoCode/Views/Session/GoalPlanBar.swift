@@ -6,10 +6,11 @@ import SwiftUI
 
 /// A bot's goal under way, in the goal bar's place over its composer: the line names the goal in a
 /// few words, how many steps are done and for how long (paused, why, in a word), and in the list
-/// when it's due; then the List | Timeline switch and Pause | Stop… (Resume once paused; Stop asks
-/// first); folded, a short track for each step. Open, the goal's own words, two lines until Show
-/// More, and its steps as a list (`GoalStagesView`) or on a timeline (`GoalChartView`): the list until a
-/// step begins, then the timeline, unless you picked one for this goal. Then what waits for you,
+/// when it's due; then the List | Timeline switch, the bot's sessions as a chip ("2 working") and
+/// Pause | Stop… (Resume once paused; Stop asks first); folded, a short track for each step. Open,
+/// the goal's own words, two lines until Show More, and its steps as a list (`GoalStagesView`) or
+/// on a timeline (`GoalChartView`): the list until a step begins, then the timeline, unless you
+/// picked one for this goal. Then what waits for you,
 /// each with its button. Once it's over, ✕ puts it away.
 struct GoalPlanBar: View {
     let plan: GoalPlan
@@ -18,6 +19,8 @@ struct GoalPlanBar: View {
     let goal: Goal?
     @Binding var isHidden: Bool
     var isChanging = false
+    /// The bot's sessions, on the line in the work bar's stead (`BotWorkChip`).
+    var work: (bot: Bot, report: BotWorkReport)?
     let pause: () -> Void
     let resume: () -> Void
     let putAway: () -> Void
@@ -143,16 +146,22 @@ struct GoalPlanBar: View {
             .padding(.horizontal, 2)
     }
 
-    /// The line's controls: which view shows the steps (over them in a narrow card), and while it
-    /// runs Pause | Stop… (Resume | Stop… once paused), one pair.
+    /// The line's controls: which view shows the steps and the bot's sessions (both over the steps
+    /// in a narrow card, while they show), and while it runs Pause | Stop… (Resume | Stop… once
+    /// paused), one pair.
     @ViewBuilder private func actions(switchOnLine: Bool) -> some View {
         HStack(spacing: 6) {
             if !plan.steps.isEmpty, switchOnLine { viewSwitch }
+            if switchOnLine || isHidden || plan.steps.isEmpty { workChip }
             if plan.state == .running {
                 ChipPair(first: firstAction, second: .init(title: "Stop…", help: "End the goal: \(plan.name) stops working on it", isRed: true) { confirmsStop = true })
                     .disabled(isBusy)
             }
         }
+    }
+
+    @ViewBuilder private var workChip: some View {
+        if let work, BotWorkBar.shows(work.report) { BotWorkChip(bot: work.bot, report: work.report) }
     }
 
     private var viewSwitch: some View {
@@ -191,7 +200,11 @@ struct GoalPlanBar: View {
                         Color.clear
                             .frame(idealWidth: Self.switchOnLineWidth - Self.detailsInsets - GoalSteps.nameInset, maxWidth: .infinity)
                             .frame(height: 0)
-                        viewSwitch.padding(.bottom, 10)
+                        HStack(spacing: 6) {
+                            viewSwitch
+                            workChip
+                        }
+                        .padding(.bottom, 10)
                     }
                     .padding(.leading, GoalSteps.nameInset)
                 }

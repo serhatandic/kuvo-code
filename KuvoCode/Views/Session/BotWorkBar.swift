@@ -72,6 +72,54 @@ struct BotWorkBar: View {
     }
 }
 
+/// A bot's sessions as a chip on its goal's line, in the work bar's stead while the goal shows:
+/// "1 working" with a spinner, or "4 today"; its whole work in a popover, as the bar's All has it.
+struct BotWorkChip: View {
+    let bot: Bot
+    let report: BotWorkReport
+    @State private var showsAll = false
+
+    var body: some View {
+        let atWork = report.atWork.count
+        Button { showsAll = true } label: {
+            HStack(spacing: 5) {
+                if atWork > 0 {
+                    Spinner(size: 11)
+                } else {
+                    Image(systemName: "rectangle.stack")
+                        .font(.system(size: 11, weight: .medium))
+                }
+                Text(WorkWords.chipTitle(atWork: atWork, today: report.today.started))
+                    .monospacedDigit()
+            }
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 9)
+            .frame(height: 22)
+            .background(Capsule().fill(Color.primary.opacity(0.04)))
+            .overlay(Capsule().strokeBorder(Color.primary.opacity(0.12), lineWidth: 1))
+            .contentShape(.capsule)
+        }
+        .buttonStyle(.plain)
+        .clickablePointer()
+        .clipShape(Capsule())
+        .fixedSize()
+        .help("\(BotWorkBar.title(report)): all of \(bot.name)’s work today")
+        .accessibilityLabel(BotWorkBar.title(report))
+        .accessibilityHint("Shows all of \(bot.name)’s work today")
+        .closesWhenKept($showsAll)
+        .popover(isPresented: $showsAll, arrowEdge: .top) {
+            ScrollView {
+                BotWorkList(bot: bot, report: report)
+                    .padding(16)
+            }
+            .popoverContent()
+            .frame(width: 440)
+            .frame(maxHeight: 520)
+        }
+    }
+}
+
 /// One of a bot's sessions: its title, then where it stands (its model and mode while it works,
 /// what it asks while it waits), and Open and Stop while the pointer's on it (VoiceOver has them always).
 private struct BotWorkRow: View {
