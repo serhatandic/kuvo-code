@@ -307,6 +307,12 @@ public enum WorkWords {
         return today == 1 ? "1 session today, none at work" : "\(today) sessions today, none at work"
     }
 
+    /// The same in a word, for the chip on a goal's line: "2 working", else "4 today". Its help
+    /// and VoiceOver say `barTitle`.
+    public static func chipTitle(atWork: Int, today: Int) -> String {
+        atWork > 0 ? "\(atWork) working" : "\(today) today"
+    }
+
     /// The depth limit, as Edit Bot › Work and the work list both say it: how deep the sessions a
     /// bot starts may start their own.
     public static func depth(_ depth: Int) -> String {
