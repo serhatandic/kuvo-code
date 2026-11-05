@@ -19,14 +19,24 @@
     public init() {}
 
     /// Whether `view`, or a view inside it, is what its window has under `location` (in the
-    /// window's coordinates): what a click there would reach.
+    /// window's coordinates), with that window the one on top there: what a click there would
+    /// reach.
     public static func isTopmost(_ view: NSView, at location: NSPoint) -> Bool {
       guard let window = view.window, var root = window.contentView else { return false }
       // From the window's frame view, so a title bar over the content counts too. It has no
       // superview, so it takes points in the window's coordinates.
       while let parent = root.superview { root = parent }
-      guard let hit = root.hitTest(location) else { return false }
-      return hit === view || hit.isDescendant(of: view)
+      guard let hit = root.hitTest(location), hit === view || hit.isDescendant(of: view) else { return false }
+      return isOnTop(window, at: location)
+    }
+
+    /// Whether `window` is the one on top at `location` (in its coordinates): under another
+    /// window, nothing in this one is. A menu, a popover or a sheet open over it is a window of its
+    /// own, and so is another app's. The window server's answer, which AppKit's own text views ask
+    /// too.
+    public static func isOnTop(_ window: NSWindow, at location: NSPoint) -> Bool {
+      let onScreen = window.convertPoint(toScreen: location)
+      return NSWindow.windowNumber(at: onScreen, belowWindowWithWindowNumber: 0) == window.windowNumber
     }
 
     /// Shows `cursor`; nil lets go of the one this showed, for `otherwise` (the arrow, or the

@@ -154,6 +154,37 @@ final class ScrolledConversation {
         }
     }
 
+    /// Each owner of a tracking area for pointer updates at `point` asked for its pointer there,
+    /// on its own, as AppKit asks when the pointer comes into its area: the pointer each shows
+    /// after it, from the arrow.
+    func pointersShown(updatingAt point: NSPoint, over only: PointerAwareTextView? = nil) throws -> [NSCursor] {
+        try areas(at: point, for: .cursorUpdate, over: only).map { area in
+            let event = try #require(NSEvent.enterExitEvent(with: .cursorUpdate, location: point, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber, context: nil, eventNumber: 0, trackingNumber: Int(bitPattern: Unmanaged.passUnretained(area).toOpaque()), userData: nil))
+            NSCursor.arrow.set()
+            (area.owner as? NSResponder)?.cursorUpdate(with: event)
+            return NSCursor.current
+        }
+    }
+
+    /// A menu opened over the rows at `point`, as the composer's chips open theirs (and Decisions
+    /// and the model picker their popovers): a window of its own in front of the conversation's,
+    /// the one the window server has under the pointer. Until `closeTheMenu`.
+    private func openAMenu(at point: NSPoint) -> NSWindow {
+        let corner = window.convertPoint(toScreen: point)
+        let menu = NSPanel(contentRect: NSRect(x: corner.x - 40, y: corner.y - 60, width: 240, height: 160), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        menu.level = .popUpMenu
+        menu.isReleasedWhenClosed = false
+        menu.orderFront(nil)
+        WindowServer.pointerIsOver(menu)
+        return menu
+    }
+
+    private func closeTheMenu(_ menu: NSWindow) {
+        WindowServer.pointerIsOver(window)
+        menu.orderOut(nil)
+        menu.close()
+    }
+
     private func moveEvent(to point: NSPoint) throws -> NSEvent {
         try #require(NSEvent.mouseEvent(with: .mouseMoved, location: point, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 0, pressure: 0))
     }
@@ -293,6 +324,27 @@ final class ScrolledConversation {
         #expect(try pointersShown(comingOnAt: beside, over: try #require(hit(beside) as? PointerAwareTextView)).contains(.iBeam), "coming on the words")
     }
 
+    /// A menu open over the words (the mode chip's, or a popover like Decisions): the words under
+    /// it show no I-beam, however AppKit tells them of the pointer, and the menu's own pointer
+    /// shows. Closed, the I-beam is back on them.
+    func checkNoIBeamUnderAMenu() throws {
+        let words = try #require(besideTheControl())
+        let text = try #require(hit(words) as? PointerAwareTextView)
+        let menu = openAMenu(at: words)
+        defer { if menu.isVisible { closeTheMenu(menu) } }
+        #expect(text.pointer(at: words) == nil, "the I-beam on the words under the menu")
+        let moved = try pointersShown(movingTo: words)
+        #expect(moved.count > 1, "the claim's tracking area and the text view's own")
+        #expect(!moved.contains(.iBeam), "the I-beam from a move under the menu: \(moved)")
+        #expect(try !pointersShown(comingOnAt: words).contains(.iBeam), "the I-beam coming on under the menu")
+        let updated = try pointersShown(updatingAt: words)
+        #expect(!updated.isEmpty, "a tracking area for pointer updates")
+        #expect(!updated.contains(.iBeam), "the I-beam from a pointer update under the menu: \(updated)")
+        closeTheMenu(menu)
+        #expect(text.pointer(at: words) == .iBeam, "the I-beam on the words once the menu is closed")
+        #expect(try pointersShown(movingTo: words, over: text).allSatisfy { $0 == .iBeam }, "a move on the words once the menu is closed")
+    }
+
     func checkMovingOntoScrollToTheEndLetsTheIBeamGo() throws {
         let beside = try #require(besideTheControl())
         let under = try #require(pointsUnderAControl().first { abs($0.y - beside.y) < 1 })
@@ -350,6 +402,11 @@ final class ScrolledConversation {
         try scene.checkALinkShowsThePointingHand()
     }
 
+    @Test func noIBeamUnderAMenu() throws {
+        defer { scene.done() }
+        try scene.checkNoIBeamUnderAMenu()
+    }
+
     /// Scrolled to rows not in view before: once the run loop has turned, as it does before the
     /// pointer's next move, the I-beam shows on their words.
     @Test func rowsScrolledIntoViewShowTheIBeam() async throws {
@@ -405,6 +462,11 @@ final class ScrolledConversation {
     @Test func aLinkShowsThePointingHand() throws {
         defer { scene.done() }
         try scene.checkALinkShowsThePointingHand()
+    }
+
+    @Test func noIBeamUnderAMenu() throws {
+        defer { scene.done() }
+        try scene.checkNoIBeamUnderAMenu()
     }
 }
 
@@ -515,7 +577,8 @@ final class ScrolledConversation {
 
 /// The window server's answer to which window is under a point on the screen, while a scene is up:
 /// its window, as the user's window is under their pointer (a test's is off the screen, under
-/// nothing). AppKit's text views ask it before they show their I-beam on a move.
+/// nothing), or a menu opened over it. AppKit's text views ask it before they show their I-beam on
+/// a move, and so does every view claiming the pointer (`PointerClaim`).
 @MainActor enum WindowServer {
     private static var over: Int?
     private static var isStubbed = false
@@ -534,8 +597,10 @@ final class ScrolledConversation {
         typealias Call = @convention(c) (AnyClass, Selector, NSPoint, Int) -> Int
         let real = unsafeBitCast(method_getImplementation(method), to: Call.self)
         let answer: @convention(block) (AnyClass, NSPoint, Int) -> Int = { type, point, below in
-            // Asked off the main thread too, where no scene is.
-            (Thread.isMainThread ? MainActor.assumeIsolated { over } : nil) ?? real(type, selector, point, below)
+            // Asked off the main thread too, where no scene is. Only within the window: a point
+            // anywhere else gets the real answer, as one given in the wrong coordinates would.
+            let window = Thread.isMainThread ? MainActor.assumeIsolated { over.flatMap { NSApp.window(withWindowNumber: $0)?.frame.contains(point) == true ? $0 : nil } } : nil
+            return window ?? real(type, selector, point, below)
         }
         method_setImplementation(method, imp_implementationWithBlock(answer))
     }
