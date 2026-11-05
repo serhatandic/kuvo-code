@@ -63,7 +63,8 @@ async function inBox(sessions: Record<string, string>, steps: string): Promise<{
     },
   })
   try {
-    for (const folder of ["kuvo", "home"]) mkdirSync(join(root, folder))
+    // (Laid out as a Mac's: the box's folder in the app's, beside your home.)
+    for (const folder of ["app/box", "home"]) mkdirSync(join(root, folder), { recursive: true })
     const script = `
       const fs = await import("node:fs");
       const path = await import("node:path");
@@ -72,6 +73,7 @@ async function inBox(sessions: Record<string, string>, steps: string): Promise<{
       const fence = await import(${JSON.stringify(join(link, "fence", "state.ts"))});
       const reviewing = await import(${JSON.stringify(join(link, "work", "reviewing.ts"))});
       const outside = await import(${JSON.stringify(join(link, "fence", "outside.ts"))});
+      const starting = await import(${JSON.stringify(join(link, "letters", "start.ts"))});
       const engine = { port: ${engine.port}, password: "pw" };
       fs.mkdirSync(path.dirname(home.ENGINE_FILE), { recursive: true });
       fs.writeFileSync(home.ENGINE_FILE, JSON.stringify({ pid: process.pid, port: engine.port, password: "pw", version: "test" }));
@@ -90,6 +92,8 @@ async function inBox(sessions: Record<string, string>, steps: string): Promise<{
       const read = (session, file) => fileAsk(session, "read", file);
       const write = (session, file) => fileAsk(session, "write", file);
       const ask = async (session, folder, command) => (await outside.callSandboxTool("sandbox_ask", { command, why: "To build the app." }, { session, root: session, sessionName: "LeafCheck", folder })).text.split("\\n")[0];
+      // An agent in Auto starting a session there: why it can't, if it can't.
+      const start = async folder => (await starting.startSession({ task: "Build it.", folder }, starting.OUTSIDE, { readEngine: () => engine })).refused?.message ?? null;
       const conversation = (id, folder) => fetch("http://127.0.0.1:" + engine.port + "/test/session", { method: "POST", body: JSON.stringify({ id, folder }) });
       fs.mkdirSync(home.BOX_KEYS, { recursive: true });
       fs.writeFileSync(path.join(home.BOX_KEYS, "box.key"), "secret");
@@ -100,7 +104,7 @@ async function inBox(sessions: Record<string, string>, steps: string): Promise<{
       process.exit(0);`
     const child = Bun.spawn([process.execPath, "-e", script], {
       cwd: root, stdout: "pipe", stderr: "pipe",
-      env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: join(root, "home"), KUVO_HOME: join(root, "kuvo"), KUVO_TEST_SANDBOX_ON: "1", BUN_BE_BUN: "1", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" },
+      env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: join(root, "home"), KUVO_HOME: join(root, "app", "box"), KUVO_TEST_SANDBOX_ON: "1", BUN_BE_BUN: "1", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" },
     })
     const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited])
     expect(code, err).toBe(0)
@@ -160,18 +164,29 @@ test.skipIf(!canFence)("in Auto, a conversation reads and writes its own tempora
   }
 }, 60_000)
 
-test.skipIf(!canFence)("in Auto, a conversation whose folder is in Kuvo Code's (a worktree in the engine's data) runs commands outside the sandbox there, as anywhere", async () => {
+test.skipIf(!canFence)("in Auto, a conversation whose folder is in Kuvo Code's (a worktree in the engine's data) works there as anywhere, but none starts in the rest of Kuvo Code's", async () => {
   const { said, prompts } = await inBox({}, `
     // (A worktree where the engine keeps new ones, and its conversation.)
     fs.mkdirSync(path.join(home.ENGINE_DATA, "worktree", "leafcheck", "scripts"), { recursive: true });
     const tree = fs.realpathSync(path.join(home.ENGINE_DATA, "worktree", "leafcheck"));
     fs.writeFileSync(path.join(tree, "scripts", "build.sh"), "echo built\\n");
     await conversation("ses_tree", tree);
+    // Its commands in the sandbox have it, and only it.
+    const ran = run("sh ./scripts/build.sh; cat " + path.join(home.BOX_KEYS, "box.key") + " 2>/dev/null || echo hidden", tree);
+    said.sandboxed = ran.stdout.trim();
     said.build = await ask("ses_tree", tree, "sh ./scripts/build.sh");
     said.named = await ask("ses_tree", tree, "ls " + tree);
     // Out of it, Kuvo Code's own are refused by code.
-    said.up = await ask("ses_tree", tree, "cat ../../../../box/keys/box.key");`)
+    said.up = await ask("ses_tree", tree, "cat ../../../../box/keys/box.key");
+    // An agent can't start a session in Kuvo Code's keys, whose engine would read them without
+    // asking; one in a worktree there, it can.
+    said.startKeys = await start(home.BOX_KEYS);
+    said.startTree = /can't start a session/.test(await start(tree) ?? "");`)
   const allowed = "Ran outside the sandbox · Allowed by Auto's reviewer: Builds the app, as asked."
-  expect(said).toEqual({ build: allowed, named: allowed, up: expect.stringMatching(/^Auto's reviewer refused: It reaches Kuvo Code's own folders/) })
+  expect(said).toEqual({
+    sandboxed: "built\nhidden", build: allowed, named: allowed, up: expect.stringMatching(/^Auto's reviewer refused: It reaches Kuvo Code's own folders/),
+    startKeys: expect.stringMatching(/^An agent in Auto can't start a session in .*: its commands would reach Kuvo Code's own folders\. Ask the user to start it there\.$/),
+    startTree: false,
+  })
   expect(prompts.length).toBe(2)
 }, 60_000)

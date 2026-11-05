@@ -17,6 +17,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 ### All Changes
 
 - In **Auto**, an agent works with its own temporary files, like screenshots its build saved in `$TMPDIR`, and runs commands in its own worktree or bot folder, instead of being refused as "Kuvo Code's own folders" until Auto paused. Kuvo Code's keys and other conversations' files stay off limits.
+- On a Mac, a session in a worktree the engine made in Kuvo Code's own data folder can use its own files in the sandbox, where every command there failed with "Operation not permitted".
 - On a Mac, a command in the sandbox can no longer swap its temporary folder for a link that let the next command read Kuvo Code's own keys.
 - When a coding agent's sign-in has run out, like Claude Code's, the conversation says so at once and offers **Sign In** right on its card, in place of a **Try Again** that could only fail the same way after a long wait; once you're signed in, Try Again comes back. A message sent before you sign in stops at once with the same card, and Claude's own error line no longer shows up as part of the reply.
 - The composer keeps naming the model a conversation is on while that model's account needs a sign-in, instead of **Choose a Model**.

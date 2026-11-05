@@ -150,13 +150,19 @@ function inKuvo(where: string, policy: FencePolicy, own: readonly string[] = [])
  * conversation's. */
 export function ownInside(own: readonly string[], policy: FencePolicy): string[] {
   const temporaries = new Set(own.map(commandTemporary).filter((each): each is string => Boolean(each)));
-  const { inside: holders, shared } = conversationPlaces();
   return own.flatMap(folder => {
     if (temporaries.has(folder)) return [folder];
     const at = realish(folder);
     const walled = policy.kuvo.some(wall => inside(at, wall) || inside(wall, at)) || matching(at, policy.kuvoPatterns);
-    return !walled || holders.some(each => at.startsWith(each + "/")) || shared.some(each => inside(at, each)) ? [at] : [];
+    return !walled || conversationPlace(at) ? [at] : [];
   });
+}
+
+/** Whether `at` (a real path) is where Kuvo Code keeps a conversation's own folder in its own: a
+ * folder in bots' or the engine's worktrees, or Chats'. */
+function conversationPlace(at: string): boolean {
+  const { inside: holders, shared } = conversationPlaces();
+  return holders.some(each => at.startsWith(each + "/")) || shared.some(each => inside(at, each));
 }
 
 /** Whether deleting `where` would delete your home: it, a folder that holds it, or everything in it. */
@@ -179,9 +185,12 @@ export function keptFromSessions(folder: string, policy: FencePolicy = fencePoli
   if (homes.some(home => deletesHome(at, home))) return "its commands could delete your home folder";
   if ((policy.personal ?? []).some(each => at === each || holds(at, each))) return "its commands could delete a whole personal folder of yours";
   if ([...policy.secrets, ...homes.map(home => home + "/.ssh")].some(each => inside(at, each) || holds(at, each))) return reach("your secrets");
-  // (Kuvo Code's own: one holding them. A bot's folder in them is its chats', and the sandbox hides
-  // the rest from any session's commands.)
+  // (Kuvo Code's own: one holding them, or one in them but where it keeps conversations' own, as its
+  // engine's tools read and write a session's folder without asking. A wall that holds your home is
+  // no folder of Kuvo Code's: a test's own box.)
   if (policy.kuvo.some(each => holds(at, each))) return reach("Kuvo Code's own folders");
+  const walled = policy.kuvo.some(each => inside(at, each) && !homes.some(home => inside(home, each))) || matching(at, policy.kuvoPatterns);
+  if (walled && !conversationPlace(at)) return reach("Kuvo Code's own folders");
   if (homes.some(home => atLogin(at, home)) || [...homes.flatMap(home => LOGIN.map(each => `${home}/${each}`)), ...SYSTEM_LOGIN].some(each => holds(at, each))) return reach("what runs as you log in");
   return null;
 }
@@ -293,9 +302,10 @@ function unreadLine(command: string, policy: FencePolicy, own: readonly string[]
   if (new RegExp(String.raw`(^|[^A-Za-z0-9_.-])(${[...LOCKERS].join("|")})\b[^;&|\n]*\s-[A-Za-z]*R[^;&|\n]*?${WHOLE_HOME}`).test(command)) return WRECKS_HOME;
   if (new RegExp(String.raw`\b(find|rsync)\b[^;&|\n]*?${WHOLE_HOME}`).test(command) && new RegExp(String.raw`\b(find|rsync)\b[^;&|\n]*\s(-delete|--delete[a-z-]*)\b`).test(command)) return WRECKS_HOME;
   const home = policy.home + "/";
-  // (Its own folders in them named, by their place in your home too, are no wall: but a path that
-  // goes up out of one, anywhere along it.)
-  const named = own.reduce((text, folder) => folder.startsWith(home) ? text.replace(new RegExp(`${escapeRegex(folder.slice(home.length))}(?=$|[\\s'"/;|&)])(?![^\\s'";|&)]*/\\.\\.)`, "g"), " ") : text, command);
+  // (Its own folders in them named, by their place in your home too, are no wall: but not in a line
+  // that goes up a folder anywhere, however it's quoted or escaped, which could go up out of one.)
+  const climbs = /(^|[\s/=:;|&(])\.\.(?=$|[\s/;|&)])/.test(command.replace(/["'\\]/g, ""));
+  const named = climbs ? command : own.reduce((text, folder) => folder.startsWith(home) ? text.replace(new RegExp(`${escapeRegex(folder.slice(home.length))}(?=$|[\\s'"/;|&)])`, "g"), " ") : text, command);
   for (const wall of policy.kuvo) {
     if (!wall.startsWith(home)) continue;
     const place = wall.slice(home.length).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

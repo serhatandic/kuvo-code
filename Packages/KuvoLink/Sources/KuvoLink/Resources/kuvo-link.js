@@ -3973,8 +3973,7 @@ var places = {
   folder: FOLDER,
   launcher: path15.join(K, "bin", "kuvo-fence"),
   runner: path15.join(K, "bin", "kuvo-fence.js"),
-  inside: [realish(BOTS)],
-  shared: [realish(CHATS)],
+  ...conversationPlaces(),
   probe: PROBE,
   bots: BOTS,
   wakes: SESSION_WAKES,
@@ -13812,14 +13811,17 @@ function inKuvo(where, policy, own = []) {
 }
 function ownInside(own, policy) {
   const temporaries = new Set(own.map(commandTemporary).filter((each) => Boolean(each)));
-  const { inside: holders, shared } = conversationPlaces();
   return own.flatMap((folder) => {
     if (temporaries.has(folder))
       return [folder];
     const at = realish(folder);
     const walled = policy.kuvo.some((wall) => inside2(at, wall) || inside2(wall, at)) || matching2(at, policy.kuvoPatterns);
-    return !walled || holders.some((each) => at.startsWith(each + "/")) || shared.some((each) => inside2(at, each)) ? [at] : [];
+    return !walled || conversationPlace(at) ? [at] : [];
   });
+}
+function conversationPlace(at) {
+  const { inside: holders, shared } = conversationPlaces();
+  return holders.some((each) => at.startsWith(each + "/")) || shared.some((each) => inside2(at, each));
 }
 function deletesHome(where, home) {
   const target = where.endsWith("/*") ? where.slice(0, -2) || "/" : where;
@@ -13836,6 +13838,9 @@ function keptFromSessions(folder, policy = fencePolicy()) {
   if ([...policy.secrets, ...homes.map((home) => home + "/.ssh")].some((each) => inside2(at, each) || holds(at, each)))
     return reach("your secrets");
   if (policy.kuvo.some((each) => holds(at, each)))
+    return reach("Kuvo Code's own folders");
+  const walled = policy.kuvo.some((each) => inside2(at, each) && !homes.some((home) => inside2(home, each))) || matching2(at, policy.kuvoPatterns);
+  if (walled && !conversationPlace(at))
     return reach("Kuvo Code's own folders");
   if (homes.some((home) => atLogin(at, home)) || [...homes.flatMap((home) => LOGIN.map((each) => `${home}/${each}`)), ...SYSTEM_LOGIN].some((each) => holds(at, each)))
     return reach("what runs as you log in");
@@ -13936,7 +13941,8 @@ function unreadLine(command, policy, own = []) {
   if (new RegExp(String.raw`\b(find|rsync)\b[^;&|\n]*?${WHOLE_HOME}`).test(command) && new RegExp(String.raw`\b(find|rsync)\b[^;&|\n]*\s(-delete|--delete[a-z-]*)\b`).test(command))
     return WRECKS_HOME;
   const home = policy.home + "/";
-  const named = own.reduce((text, folder) => folder.startsWith(home) ? text.replace(new RegExp(`${escapeRegex(folder.slice(home.length))}(?=$|[\\s'"/;|&)])(?![^\\s'";|&)]*/\\.\\.)`, "g"), " ") : text, command);
+  const climbs = /(^|[\s/=:;|&(])\.\.(?=$|[\s/;|&)])/.test(command.replace(/["'\\]/g, ""));
+  const named = climbs ? command : own.reduce((text, folder) => folder.startsWith(home) ? text.replace(new RegExp(`${escapeRegex(folder.slice(home.length))}(?=$|[\\s'"/;|&)])`, "g"), " ") : text, command);
   for (const wall of policy.kuvo) {
     if (!wall.startsWith(home))
       continue;

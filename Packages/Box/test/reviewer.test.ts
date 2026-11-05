@@ -80,7 +80,9 @@ test("a conversation's own folder inside Kuvo Code's is its own however a line n
     return { line, decision: verdict.decision, by: verdict.by }
   }
   for (const line of [`cd "$X"; ls ${named}/scripts"`, `cd "$X"; ls ${named}"`]) expect(await judged(line)).toEqual({ line, decision: "allow", by: "model" })
-  for (const line of [`cd "$X"; cat ${named}/scripts/../../../../../box/keys/box.key"`, `cd "$X"; cat ${named}/../../../box/keys/box.key"`, `cd "$X"; cat "$HOME/${kuvo.slice(home.length + 1)}/box/keys/box.key"`]) {
+  for (const line of [`cd "$X"; cat ${named}/scripts/../../../../../box/keys/box.key"`, `cd "$X"; cat ${named}/../../../box/keys/box.key"`, `cd "$X"; cat "$HOME/${kuvo.slice(home.length + 1)}/box/keys/box.key"`,
+    // (However the way up is quoted, escaped or put in a step of its own.)
+    `cd "$X"; cat ${named}/".."/../../../box/keys/box.key"`, `cd "$X"; cat ${named}/.\\./.\\./.\\./box/keys/box.key"`, `cd ${named}" && cd ../../.. && cat box/keys/box.key`]) {
     expect(await judged(line)).toEqual({ line, decision: "refuse", by: "code" })
   }
 })

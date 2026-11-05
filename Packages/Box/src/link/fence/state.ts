@@ -83,8 +83,7 @@ const places: FencePlaces = {
   folder: FOLDER,
   launcher: path.join(K, "bin", "kuvo-fence"),
   runner: path.join(K, "bin", "kuvo-fence.js"),
-  inside: [realish(BOTS)],
-  shared: [realish(CHATS)],
+  ...conversationPlaces(),
   probe: PROBE,
   bots: BOTS,
   wakes: SESSION_WAKES,
@@ -434,9 +433,9 @@ export function commandTemporary(work: string): string | null {
   return fs.lstatSync(tmp, { throwIfNoEntry: false })?.isSymbolicLink() ? null : tmp;
 }
 
-/** Where Kuvo Code keeps conversations' own folders inside its own, as their commands get them in
- * the sandbox: bots' folders and the engine's worktrees, each folder in them (`inside`), and Chats',
- * itself too (`shared`). (And their commands' temporary folders: `commandTemporary`.) */
+/** Where Kuvo Code keeps conversations' own folders inside its own, which their commands get whole
+ * in the sandbox: each folder in bots' and in the engine's worktrees (`inside`), and Chats', itself
+ * too (`shared`). (And their commands' temporary folders: `commandTemporary`.) */
 export function conversationPlaces(): { inside: string[]; shared: string[] } {
   return { inside: [realish(BOTS), realish(path.join(ENGINE_DATA, "worktree"))], shared: [realish(CHATS)] };
 }
