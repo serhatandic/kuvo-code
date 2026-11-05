@@ -1,0 +1,134 @@
+import Foundation
+import OpenCodeKit
+
+/// A conversation's Autopilot as its box shows it (`GET kuvo/sessions/<id>/autopilot`, PROTOCOL.md
+/// "Autopilot"): whether it's on, and the calls it made where a question would have waited.
+/// Mode says what may run without asking; Autopilot, what may be decided without asking.
+struct AutopilotShown: Decodable, Equatable {
+    struct Call: Decodable, Equatable, Identifiable {
+        struct Yours: Decodable, Equatable {
+            var choice: String
+            var at: Double
+        }
+        /// The question's form.
+        var id: String
+        var text: String
+        var choice: String
+        var why: String?
+        var options: [String]?
+        /// The session that asked, where it's a subagent's.
+        var session: String?
+        /// The tool call that asked it: the step it shows at.
+        var call: String?
+        var at: Double
+        /// Your choice since.
+        var yours: Yours?
+
+        /// What it goes with now: yours, once you've picked.
+        var current: String { yours?.choice ?? choice }
+        /// You picked another than it went with.
+        var changed: Bool { yours.map { $0.choice != choice } ?? false }
+    }
+    var autopilot: Bool
+    var decided: [Call]
+
+    static let symbol = "airplane"
+    static let detail = "Decides for itself; stops only for what needs you"
+
+    /// Whether a conversation is kept on Autopilot (`metadata.kuvo.autopilot`), until its box says.
+    static func isOn(_ session: Session) -> Bool {
+        session.metadata?["kuvo"]?["autopilot"]?.bool == true
+    }
+
+    /// The call it made where `call` asked, if it made one.
+    func decided(at call: String) -> Call? {
+        decided.last { $0.call == call }
+    }
+}
+
+/// Autopilot in a conversation's Mode menu: on or off, or why it isn't to be had there.
+struct AutopilotChoice: Equatable {
+    var on: Bool
+    /// Its computer's box is from before Autopilot.
+    var unavailable: String?
+}
+
+extension SessionModel {
+    private var autopilotRoute: String { "kuvo/sessions/\(id)/autopilot" }
+
+    /// On Autopilot, as its box shows it (as it's kept with it until read).
+    var isAutopilot: Bool { autopilotShown?.autopilot ?? AutopilotShown.isOn(session) }
+
+    /// As the Mode menu offers it: nil until its box is known.
+    var autopilotChoice: AutopilotChoice? {
+        if autopilotUnavailable { return AutopilotChoice(on: false, unavailable: "Needs a newer Kuvo Code on its computer") }
+        return autopilotShown.map { AutopilotChoice(on: $0.autopilot) }
+    }
+
+    /// Reads its Autopilot and the calls it made, as its box has them. Not while a switch is on its
+    /// way: what it brings may be from before the box took it.
+    func readAutopilot() async {
+        guard autopilotPending == 0, let box = box() else { return }
+        guard await boxHas("autopilot") else {
+            autopilotUnavailable = true
+            return
+        }
+        let asked = autopilotChanges
+        guard let shown = try? await box.value(AutopilotShown.self, "GET", autopilotRoute) else { return }
+        guard asked == autopilotChanges, autopilotPending == 0 else { return }
+        autopilotUnavailable = false
+        if autopilotShown != shown { autopilotShown = shown }
+    }
+
+    /// Turns Autopilot on or off here, on its box: shown at once, and back as it was if its box
+    /// doesn't take it.
+    func setAutopilot(_ on: Bool) {
+        guard on != isAutopilot else { return }
+        _ = sendAutopilot(on)
+    }
+
+    /// `setAutopilot`, done once its box has it: whether it's set so now.
+    @discardableResult
+    func switchAutopilot(_ on: Bool) async -> Bool {
+        guard on != isAutopilot else { return true }
+        return await sendAutopilot(on)?.value ?? false
+    }
+
+    /// Shows `on` at once and sends it to its box: whether its box took it. Nil where it can't be
+    /// sent.
+    private func sendAutopilot(_ on: Bool) -> Task<Bool, Never>? {
+        guard canReach, !autopilotUnavailable, let box = box() else { return nil }
+        autopilotChanges += 1
+        autopilotPending += 1
+        let pick = autopilotChanges
+        let before = autopilotShown
+        autopilotShown = AutopilotShown(autopilot: on, decided: autopilotShown?.decided ?? [])
+        let route = autopilotRoute
+        return Task {
+            defer { autopilotPending -= 1 }
+            do {
+                let shown = try await box.value(AutopilotShown.self, "PUT", route, body: ["autopilot": on])
+                if pick == autopilotChanges { autopilotShown = shown }
+                return true
+            } catch {
+                if pick == autopilotChanges {
+                    autopilotShown = before
+                    failApproval(error)
+                }
+                return false
+            }
+        }
+    }
+
+    /// Your choice on a call it made: the same confirms it; another tells its agent to go that way.
+    func choose(_ choice: String, on call: AutopilotShown.Call) {
+        guard canReach, let box = box(), choice != call.current else { return }
+        Task {
+            do {
+                autopilotShown = try await box.value(AutopilotShown.self, "POST", autopilotRoute, body: ["decided": call.id, "choice": choice])
+            } catch {
+                failApproval(error)
+            }
+        }
+    }
+}

@@ -890,10 +890,20 @@ final class Workspace {
     /// conversation's composer starts with there.
     var approvalsHere: [String: ApprovalHere] = [:]
 
-    /// Reads the approvals of the computer `directory` is on.
+    /// Whether each computer's box has Autopilot, by box, as last read: a new conversation's Mode
+    /// menu offers it there, or says it needs a newer Kuvo Code.
+    var autopilotHere: [String: Bool] = [:]
+
+    /// Reads the approvals of the computer `directory` is on, and whether it has Autopilot.
     func readApprovalHere(for directory: String) async {
         let id = Self.box(of: directory)
-        guard let box = boxes?(id), let here = try? await box.value(ApprovalHere.self, "GET", "kuvo/approval") else { return }
+        guard let box = boxes?(id) else { return }
+        if autopilotHere[id] == nil {
+            struct Info: Decodable { var features: [String]? }
+            let has = id == BoxClient.mac ? true : (try? await box.value(Info.self, "GET", "kuvo/info")).map { $0.features?.contains("autopilot") == true }
+            if let has { autopilotHere[id] = has }
+        }
+        guard let here = try? await box.value(ApprovalHere.self, "GET", "kuvo/approval") else { return }
         if approvalsHere[id] != here { approvalsHere[id] = here }
     }
 
@@ -906,7 +916,8 @@ final class Workspace {
 
     /// A new session in the project at `directory`, or with `worktree`, in a new worktree of it.
     /// `approval`: what it starts with, kept with it on its box (nil: that computer's default).
-    func createSession(in directory: String, model: ModelRef?, agent: String?, approval: ToolApproval? = nil, worktree: Bool = false) async throws -> Session {
+    /// `autopilot`: it starts on Autopilot, set on its box before its first message goes.
+    func createSession(in directory: String, model: ModelRef?, agent: String?, approval: ToolApproval? = nil, autopilot: Bool = false, worktree: Bool = false) async throws -> Session {
         // A model of an outside agent (Claude Code, Codex…), or Auto: the session is the agents
         // bridge's, here.
         let isAgents = OutsideAgents.runsInBridge(model?.providerID)
@@ -932,6 +943,17 @@ final class Workspace {
             // A worktree made for it goes too, with its branch (nothing's on it yet).
             if worktree { await discardWorktree(folder) }
             throw error
+        }
+        if autopilot {
+            do {
+                guard let box = boxes?(Self.box(of: directory)) else { throw CancellationError() }
+                _ = try await box.value(AutopilotShown.self, "PUT", "kuvo/sessions/\(session.id)/autopilot", body: ["autopilot": true])
+            } catch {
+                // Not to start Interactive when you picked Autopilot: it goes, and the message comes back.
+                try? await api.deleteSession(session.id)
+                if worktree { await discardWorktree(folder) }
+                throw error
+            }
         }
         if !extra.isEmpty {
             try? await api.setInstruction(session: session.id, key: ProjectFolders.instructionKey, text: ProjectFolders.instructions(primary: api.enginePath(folder), folders: extra))
@@ -2182,7 +2204,7 @@ final class Workspace {
                 found[form.id] = form.sessionID
                 guard tell, asking[form.id] == nil else { continue }
                 let question = Self.question(in: form)
-                notifyAsk(form.sessionID, body: question?.text ?? (form.isQuestion ? "Has a question for you." : "Needs your answer."), request: form.id, question: question)
+                notifyAsk(form.sessionID, body: question?.text ?? (form.isQuestion ? "Has a question for you." : "Needs your answer."), request: form.id, question: question, recommends: form.recommendsAnswer)
             }
         }
         // Answered meanwhile (on your phone, say): no longer asking.
@@ -2724,7 +2746,7 @@ final class Workspace {
             guard let form = try? event.payload(as: EventPayload.FormCreated.self).form else { return }
             asking[form.id] = form.sessionID
             let question = Self.question(in: form)
-            notifyAsk(form.sessionID, body: question?.text ?? (form.isQuestion ? "Has a question for you." : "Needs your answer."), request: form.id, question: question)
+            notifyAsk(form.sessionID, body: question?.text ?? (form.isQuestion ? "Has a question for you." : "Needs your answer."), request: form.id, question: question, recommends: form.recommendsAnswer)
         case "form.replied", "form.cancelled":
             if let form = try? event.payload(as: EventPayload.FormSettled.self) { settled(form.id) }
         case _ where SessionModel.runEnds.contains(event.type):
@@ -2841,7 +2863,9 @@ final class Workspace {
         tellYours(request)
     }
 
-    private func notifyAsk(_ id: String, body: String, request: String, isPermission: Bool = false, answerable: Bool = true, always: String? = nil, question: Notifier.Question? = nil) {
+    /// `recommends`: a question that marks the choice it recommends, which a conversation on
+    /// Autopilot goes ahead on without you (its box answers it): no notification for it there.
+    private func notifyAsk(_ id: String, body: String, request: String, isPermission: Bool = false, answerable: Bool = true, always: String? = nil, question: Notifier.Question? = nil, recommends: Bool = false) {
         // A seat's requests are answered by its group chat.
         guard !seats.contains(id) else { return }
         notifying.insert(request)
@@ -2866,7 +2890,7 @@ final class Workspace {
             }
             // The engine's run for a session with the coding agents, or a subagent of it: that
             // session asks you itself, and counts once on the Dock.
-            if isEngineRun {
+            if isEngineRun || (recommends && session.map(AutopilotShown.isOn) == true) {
                 asking[request] = nil
                 return
             }

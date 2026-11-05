@@ -1305,9 +1305,9 @@ final class PhoneLink {
     /// Whether a route is answered by this Mac's box: an area that's moved there (`boxRoutes`).
     nonisolated static func movedToBox(_ route: String) -> Bool {
         boxRoutes.contains { route == $0 || route.hasPrefix($0 + "/") }
-            // A session started with a task, a session's queue, its approval and its reviewer's decisions (not its other
-            // routes, `kuvo/sessions/<id>/agents`).
-            || route == "kuvo/sessions" || route.wholeMatch(of: /kuvo\/sessions\/(queues\/events|[^\/]+\/(stop|approval|decisions|queue(\/.+)?))/) != nil
+            // A session started with a task, a session's queue, its approval, its reviewer's decisions and its Autopilot
+            // (not its other routes, `kuvo/sessions/<id>/agents`).
+            || route == "kuvo/sessions" || route.wholeMatch(of: /kuvo\/sessions\/(queues\/events|[^\/]+\/(stop|approval|decisions|autopilot|queue(\/.+)?))/) != nil
             // A plan signed out (`kuvo/accounts/<id>/forget`), and a command stopped
             // (`kuvo/shell/<id>/stop`): the box's too.
             || Self.oneOf(route, "kuvo/accounts/", "/forget") || Self.oneOf(route, "kuvo/shell/", "/stop")
