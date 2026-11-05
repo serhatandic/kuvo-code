@@ -25,6 +25,8 @@ struct GoalCard: View {
     /// The Model row asks, and you've kept the box's pick.
     @State private var modelAsks = false
     @State private var wake = false
+    /// On Autopilot: one setting with the bot's conversation.
+    @State private var autopilot = false
     @State private var digest: GoalPlan.Cadence = .none
     @State private var deadline: Deadline = .none
     @State private var caps: [Double] = []
@@ -102,6 +104,10 @@ struct GoalCard: View {
             restartingSessions = false
             sandboxFailure = nil
             takeIn()
+        }
+        // Switched in its conversation meanwhile: one setting.
+        .onChange(of: app.workspace.model(for: plan.session)?.isAutopilot) { _, on in
+            if let on { autopilot = on }
         }
         .onChange(of: sandboxFailure) { _, failure in
             if let failure { AccessibilityNotification.Announcement(failure).post() }
@@ -320,6 +326,13 @@ struct GoalCard: View {
     private var settingsSection: some View {
         GoalCardSection(symbol: "slider.horizontal.3", title: "Execution settings", caption: "How the goal runs") {
             VStack(spacing: 0) {
+                // How it runs first: its one setting with the bot's conversation.
+                GoalSettingRow(symbol: AutopilotShown.symbol, title: "Autopilot", subtitle: AutopilotShown.detail) {
+                    Toggle("Autopilot", isOn: $autopilot)
+                        .toggleStyle(.switch)
+                        .controlSize(.small)
+                }
+                Divider().padding(.leading, GoalCardMetrics.markWidth + 12)
                 GoalSettingRow(symbol: "calendar", title: "Deadline", subtitle: "When it should be done") {
                     Picker("Deadline", selection: $deadline) {
                         ForEach(deadlineChoices, id: \.self) { choice in
@@ -439,6 +452,8 @@ struct GoalCard: View {
 
     private func takeIn() {
         wake = plan.wake
+        // As its conversation runs now, where it's on Autopilot already.
+        autopilot = plan.mode == .autopilot || app.workspace.model(for: plan.session)?.isAutopilot == true
         digest = plan.digest
         deadline = plan.ends.map(Deadline.at) ?? .none
         caps = plan.spend.map(\.cap)
@@ -461,7 +476,7 @@ struct GoalCard: View {
         sent = action
         failure = nil
         let answer: GoalPlanAnswer = action == .start
-            ? Self.start(plan, wake: wake, digest: digest, deadline: deadline, caps: caps, periods: periods)
+            ? Self.start(plan, wake: wake, digest: digest, deadline: deadline, caps: caps, periods: periods, autopilot: autopilot)
             : .decline
         let client = action == .start && modelAsks ? app.goalPlans.client(box) : nil
         Task {
@@ -480,7 +495,7 @@ struct GoalCard: View {
 extension GoalCard {
     /// What Start Goal sends: Wake me, how often you hear, the end you picked, and each spend line's cap and period as you set them.
     static func start(_ plan: GoalPlan, wake: Bool, digest: GoalPlan.Cadence, deadline: Deadline,
-                      caps: [Double], periods: [GoalPlan.Spend.Period], now: Date = .now, calendar: Calendar = .current) -> GoalPlanAnswer {
+                      caps: [Double], periods: [GoalPlan.Spend.Period], autopilot: Bool = false, now: Date = .now, calendar: Calendar = .current) -> GoalPlanAnswer {
         .start(wake: wake, digest: digest,
                ends: deadline.date(now: now, calendar: calendar),
                // None where the bot had proposed an end: no end.
@@ -488,7 +503,8 @@ extension GoalCard {
                spend: plan.spend.indices.map { index in
                    GoalPlanAnswer.SpendChange(cap: caps.indices.contains(index) ? caps[index] : plan.spend[index].cap,
                                               per: periods.indices.contains(index) ? periods[index] : plan.spend[index].per)
-               })
+               },
+               mode: autopilot ? .autopilot : .interactive)
     }
 }
 
