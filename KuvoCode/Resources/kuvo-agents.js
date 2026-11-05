@@ -9390,7 +9390,7 @@ function update(definition, temporary) {
     return {
       updated: false,
       version: after.installed,
-      message: `${definition.name} is still ${after.installed ?? "the same version"} after \`${before.shown}\`.${output ? `
+      message: `${definition.name} is still ${after.installed ?? "the same version"} after \u201C${before.shown}\u201D.${output ? `
 
 ${output}` : ""}`
     };
@@ -9411,7 +9411,7 @@ function install(name, command, temporary, found, readPath = refreshLoginPath) {
 ` + ran.stdout).trim().split(`
 `).slice(-6).join(`
 `).trim();
-    return { installed: false, message: `${name} isn't installed after \`${command}\`.${output ? `
+    return { installed: false, message: `${name} isn't installed after \u201C${command}\u201D.${output ? `
 
 ${output}` : ""}` };
   });
@@ -23283,4 +23283,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents eca2a0c00259a3153e435e0c40ad6b8e3d837764547b990b6dc07688c56aadfd
+// Built from Packages/Box/src/agents afc40f8d6e8f31fcb73a566785035fff7b28ed9312e4e4e4ad4027ccd47d6731
