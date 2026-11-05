@@ -145,7 +145,7 @@ func eachPhraseIsWrittenAfterItsPauseAndDonePutsInTheLast() async throws {
     try FileManager.default.createDirectory(at: speech, withIntermediateDirectories: true)
     try FileManager.default.copyItem(at: folder, to: speech.appending(path: folder.lastPathComponent))
     try Data(SpeechModel.system.utf8).write(to: speech.appending(path: folder.lastPathComponent).appending(path: SpeechModel.preparedMark))
-    let model = SpeechModel(defaults: UserDefaults(suiteName: "kuvo-voice-\(UUID().uuidString)")!, compiled: [])
+    let model = SpeechModel(defaults: MemoryDefaults.make(), compiled: [])
     model.use(folder: speech)
     try #require(model.listensWithWhisper)
     let voice = VoiceInput(model: model)
@@ -265,6 +265,26 @@ final class StubHub: URLProtocol, @unchecked Sendable {
     override func stopLoading() {}
 }
 
+/// Settings kept in memory. A named `UserDefaults` suite leaves a plist in ~/Library/Preferences that
+/// no call removes while the process runs (the system writes it again), one for every test run.
+private final class MemoryDefaults: UserDefaults, @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [String: Any] = [:]
+
+    override init?(suiteName: String?) { super.init(suiteName: suiteName) }
+    static func make() -> MemoryDefaults { MemoryDefaults(suiteName: nil)! }
+
+    private func get(_ key: String) -> Any? { lock.withLock { values[key] } }
+    private func put(_ key: String, _ value: Any?) { lock.withLock { values[key] = value } }
+
+    override func object(forKey key: String) -> Any? { get(key) }
+    override func set(_ value: Any?, forKey key: String) { put(key, value) }
+    override func set(_ value: Bool, forKey key: String) { put(key, value) }
+    override func removeObject(forKey key: String) { put(key, nil) }
+    override func bool(forKey key: String) -> Bool { get(key) as? Bool ?? false }
+    override func string(forKey key: String) -> String? { get(key) as? String }
+}
+
 /// A model of a few small files, served by its own stub host, kept in a folder of its own.
 @MainActor
 private final class Rig {
@@ -282,10 +302,9 @@ private final class Rig {
     var compiled: URL { folder.appending(path: "compiled") }
     /// How large a copy Core ML keeps when it's made ready (nil: kept where the app can't see).
     nonisolated let keeps = Mutex<Int64?>(nil)
-    let defaults: UserDefaults
+    let defaults: UserDefaults = MemoryDefaults.make()
 
     init() {
-        defaults = UserDefaults(suiteName: "kuvo-voice-\(UUID().uuidString)")!
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let host = host, contents = contents
         StubHub.hosts.withLock { $0[host] = .init(files: Dictionary(uniqueKeysWithValues: contents.map { ("/m/\($0.key)", $0.value) })) }
