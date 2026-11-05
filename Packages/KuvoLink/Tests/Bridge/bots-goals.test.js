@@ -414,11 +414,42 @@ test("what its sessions ask waits for you: never said no to, listed once it sett
   assert.deepEqual(dismissed, []);
   const waiting = (await goals())[0].waiting;
   assert.deepEqual(waiting.map(each => [each.kind, each.session]), [["ask", "ses_site"], ["ask", "ses_site"]]);
-  assert.match(waiting[1].text, /^Build the site: Asks: Which domain should I buy\?/);
+  assert.match(waiting[1].text, /^Build the site asks: Which domain should I buy\?/);
   assert.equal(told.filter(each => each.category === "blocked").length, 0, "the session's own ask notifies as asks do; nothing twice");
   asked.set("ses_site", []);
   await look(now + 30 * 86_400_000);
   assert.deepEqual((await goals())[0].waiting.map(each => each.text), [waiting[1].text], "answered, it leaves the list");
+});
+
+test("answering what the bot asks clears its row at once, on every client, and what held up a step goes once the bot goes on with that step", async () => {
+  await startedGoal();
+  forms.set("ses_pixel", [{ id: "frm_concept", title: "Concept approval", fields: [{ key: "q0", type: "string", description: "Go with LeafCheck, or change it?" }] }]);
+  await look();
+  // The bot keeps the decision as waiting too, holding up the step it's for.
+  assert.equal((await tool("goal_progress", { waiting: { kind: "judgment", text: "Approve the concept before building", step: 4 } })).isError, false);
+  assert.deepEqual((await goals())[0].waiting.map(each => [each.kind, each.text.endsWith("Go with LeafCheck, or change it?") || each.text]), [["ask", true], ["judgment", "Approve the concept before building"]]);
+  // You answer: as the engine says so, its row goes, without waiting for the box's next look,
+  // and clients are told it changed.
+  const changes = () => JSON.parse(fs.readFileSync(path.join(home, "run", "work", "changes.json"), "utf8"))[kept().bot];
+  const before = changes();
+  await link.workWatcher(target()[0], target, { schedule: () => {} })({ type: "form.replied", data: { id: "frm_concept", sessionID: "ses_pixel" } });
+  assert.deepEqual((await goals())[0].waiting.map(each => each.text), ["Approve the concept before building"], "the answered question's row is gone at once");
+  assert.ok(changes() > before, "clients are told it changed");
+  // A look that read the conversation's asks before your answer doesn't bring it back.
+  await look();
+  assert.deepEqual((await goals())[0].waiting.map(each => each.text), ["Approve the concept before building"], "answered, it stays gone");
+  forms.set("ses_pixel", []);
+  // What holds up a step under way stays while the bot only says how far it's got.
+  await tool("goal_progress", { steps: [{ step: 3, state: "doing" }] });
+  await tool("goal_progress", { waiting: { kind: "you", text: "Add your RevenueCat key", step: 3 } });
+  assert.doesNotMatch((await tool("goal_progress", { steps: [{ step: 3, state: "doing", progress: 0.5, note: "Half the screens" }] })).text, /no longer waiting/);
+  assert.deepEqual((await goals())[0].waiting.map(each => each.text), ["Approve the concept before building", "Add your RevenueCat key"]);
+  // The bot goes on with the step it held up: that's settled too, whether or not it says so.
+  const said = await tool("goal_progress", { steps: [{ step: 4, state: "doing" }] });
+  assert.match(said.text, /1 no longer waiting, as its step goes on/);
+  assert.deepEqual((await goals())[0].waiting.map(each => each.text), ["Add your RevenueCat key"]);
+  assert.equal((await tool("goal_progress", { waiting: { kind: "judgment", text: "Pick a color", step: null } })).isError, false, "null is no step, as elsewhere");
+  assert.equal((await tool("goal_progress", { waiting: { kind: "judgment", text: "Pick a name", step: 9 } })).isError, true, "a step the plan doesn't have is refused");
 });
 
 test("a session that hits a model's limit is paused until the reset, kept through a restart, and carried on by the box then", async () => {

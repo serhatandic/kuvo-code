@@ -161,6 +161,8 @@ export const GOAL_WAITING = object({
   "site?": string,
   "app?": GOAL_APP,
   "session?": string,
+  /** The step it holds up, by id: it goes once the bot goes on with that step. */
+  "step?": string,
   at: number,
 });
 

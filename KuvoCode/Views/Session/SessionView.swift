@@ -52,6 +52,7 @@ struct SessionView: View {
             BottomStack(model: model, lastModel: $lastModel)
                 // Room for the composer, the cards' own buttons and a little conversation.
                 .environment(\.cardRoom, max(160, height - 440))
+                .environment(\.stackRoom, height)
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
         // Its machine out of reach: the conversation to read, without what needs the engine.
@@ -137,6 +138,17 @@ struct BottomStack: View {
     @Environment(Workspace.self) private var workspace
     @Environment(AppModel.self) private var app
     @Environment(\.takesCardKeys) private var takesCardKeys
+    /// The conversation's height, which this stack leaves some of to the conversation.
+    @Environment(\.stackRoom) private var stackRoom
+    /// The stack's height, and the bars' in it, as they're laid out.
+    @State private var stackHeight: CGFloat = 0
+    @State private var barsShown: CGFloat = 0
+    /// What the conversation keeps over the stack, to read and scroll; and the least the bars
+    /// get, a line's worth, under what asks you.
+    static let conversationRoom: CGFloat = 140
+    static let barsFloor: CGFloat = 44
+    /// The room for the bars: what the conversation leaves, less the rest of the stack.
+    private var barsRoom: CGFloat { max(Self.barsFloor, stackRoom - Self.conversationRoom - (stackHeight - barsShown)) }
     /// Each conversation's card as it was last seen here: which bar is open once it's full
     /// (`BarFolds`), and the bars and news it had, so coming back to it reads what changed
     /// meanwhile. This stack stays as you switch conversations.
@@ -345,13 +357,15 @@ struct BottomStack: View {
                     var left = own.wrappedValue
                     folds.set(bar, hidden: hidden, among: bars, own: &left)
                     if left != own.wrappedValue { own.wrappedValue = left }
-                    if hidden, liveBars.count >= 2, allFolded { model.tuck.hide() }
+                    // (Not a look under a question: answering brings the card back as it was.)
+                    if hidden, !isAsking, liveBars.count >= 2, allFolded { model.tuck.hide() }
                 })
     }
 
-    /// Every bar showing is folded to its line.
+    /// Every bar showing is folded to its line, as you left them (not as a question folds them,
+    /// which answering undoes).
     private var allFolded: Bool {
-        liveBars.allSatisfy { folds.isHidden($0, among: bars, asking: isAsking, own: self.own($0).wrappedValue) }
+        liveBars.allSatisfy { folds.isHidden($0, among: bars, asking: false, own: self.own($0).wrappedValue) }
     }
 
     /// What in a bar is worth opening it for: a review that found something, a side question
@@ -360,7 +374,7 @@ struct BottomStack: View {
     private var news: [ComposerBar: Bool] {
         [.review: model.review.map { $0.state == .done && !$0.findings.isEmpty } ?? false,
          .sideQuestion: model.shownSideThread?.latest.state == .answered,
-         .goal: shownPlan.map { !$0.plan.waiting.isEmpty || $0.plan.state != .running } ?? model.goal.map { goal in
+         .goal: shownPlan.map { !$0.plan.waitingInItsConversation.isEmpty || $0.plan.state != .running } ?? model.goal.map { goal in
              goal.state == .met || goal.state == .unmet || (goal.state == .paused && (goal.pausedBy == .error || goal.pausedBy == .stalled))
          } ?? false]
     }
@@ -462,70 +476,82 @@ struct BottomStack: View {
                 }
                 // The bars, what's waiting and the composer: one card.
                 VStack(spacing: 0) {
-                    if tucked {
-                        // Kept current: a wake-up's "in 2 minutes".
-                        TimelineView(.periodic(from: .now, by: 30)) { context in
-                            BarStrip(items: stripItems(now: context.date), marked: model.tuck.marked) { model.tuck.show() }
-                        }
-                        .modifier(CardRow())
-                        .transition(.fold)
-                    } else {
-                        if let goal = model.goal, let text = model.putAways.text(.goal(started: goal.started)) {
-                            let item = PutAway.goal(started: goal.started)
-                            UndoLine(text: text, undo: model.putAways.canUndo(item) ? { model.putAways.undo(item) } : nil)
+                    // The bars: as tall as they are, up to the room the conversation leaves them; then
+                    // they scroll, what waits on you, what asks you and the composer staying in sight
+                    // under them. Sized in the same pass as what's in them.
+                    ScrollView {
+                        VStack(spacing: 0) {
+                            if tucked {
+                                // Kept current: a wake-up's "in 2 minutes".
+                                TimelineView(.periodic(from: .now, by: 30)) { context in
+                                    BarStrip(items: stripItems(now: context.date), marked: model.tuck.marked) { model.tuck.show() }
+                                }
                                 .modifier(CardRow())
                                 .transition(.fold)
-                        } else if let (box, plan) = shownPlan {
-                            GoalPlanBar(plan: plan, box: box, goal: shownGoal(plan), isHidden: hidden(.goal, $model.hidesGoal), isChanging: model.isChangingGoal || offlineMachine != nil,
-                                        work: workBot.flatMap { bot in workReport.map { (bot, $0) } }) {
-                                model.changeGoal(.pause)
-                            } resume: {
-                                model.changeGoal(.resume)
-                            } putAway: {
-                                app.goalPlans.putAway.insert(plan.id)
-                                if model.goal?.isOver == true { model.putAwayGoal() }
-                            } failed: { model.failure = $0 }
-                            .environment(\.goalBox, box)
-                            .modifier(CardRow())
-                            .transition(.fold)
-                        } else if let goal = model.goal {
-                            GoalBar(goal: goal, isHidden: hidden(.goal, $model.hidesGoal), isChanging: model.isChangingGoal || offlineMachine != nil, hasWaiting: !model.waiting.isEmpty) {
-                                model.changeGoal(.pause)
-                            } resume: {
-                                model.changeGoal(.resume)
-                            } stop: {
-                                model.stopGoal()
-                            } done: {
-                                model.putAwayGoal()
+                            } else {
+                                if let goal = model.goal, let text = model.putAways.text(.goal(started: goal.started)) {
+                                    let item = PutAway.goal(started: goal.started)
+                                    UndoLine(text: text, undo: model.putAways.canUndo(item) ? { model.putAways.undo(item) } : nil)
+                                        .modifier(CardRow())
+                                        .transition(.fold)
+                                } else if let (box, plan) = shownPlan {
+                                    GoalPlanBar(plan: plan, box: box, goal: shownGoal(plan), isHidden: hidden(.goal, $model.hidesGoal), isChanging: model.isChangingGoal || offlineMachine != nil,
+                                                work: workBot.flatMap { bot in workReport.map { (bot, $0) } }) {
+                                        model.changeGoal(.pause)
+                                    } resume: {
+                                        model.changeGoal(.resume)
+                                    } putAway: {
+                                        app.goalPlans.putAway.insert(plan.id)
+                                        if model.goal?.isOver == true { model.putAwayGoal() }
+                                    } failed: { model.failure = $0 }
+                                    .environment(\.goalBox, box)
+                                    .modifier(CardRow())
+                                    .transition(.fold)
+                                } else if let goal = model.goal {
+                                    GoalBar(goal: goal, isHidden: hidden(.goal, $model.hidesGoal), isChanging: model.isChangingGoal || offlineMachine != nil, hasWaiting: !model.waiting.isEmpty) {
+                                        model.changeGoal(.pause)
+                                    } resume: {
+                                        model.changeGoal(.resume)
+                                    } stop: {
+                                        model.stopGoal()
+                                    } done: {
+                                        model.putAwayGoal()
+                                    }
+                                    .modifier(CardRow())
+                                    .transition(.fold)
+                                }
+                                KeywordBars(model: model, hidden: hidden)
+                                if !subagentsAtWork.isEmpty {
+                                    SubagentsBar(subagents: subagentsAtWork, folder: model.session.location.directory, isHidden: hidden(.subagents, $model.hidesSubagents))
+                                        .modifier(CardRow())
+                                        .transition(.fold)
+                                }
+                                if let bot = workBot, let report = workReport, showsWorkBar {
+                                    BotWorkBar(bot: bot, report: report, isHidden: hidden(.work, $model.hidesWork))
+                                        .modifier(CardRow())
+                                        .transition(.fold)
+                                }
+                                if !backgroundJobs.isEmpty {
+                                    BackgroundBar(jobs: backgroundJobs, api: workspace.api(forSession: model.id), directory: model.session.location.directory, isHidden: hidden(.background, $model.hidesBackgroundJobs)) { job in
+                                        Task { await workspace.stopShellJob(job, in: model.id) }
+                                    }
+                                    .modifier(CardRow())
+                                    .transition(.fold)
+                                }
+                                if let owner = wakeOwner {
+                                    WakeBar(owner: owner, isHidden: hidden(.wakes, $model.hidesWakes))
+                                        .modifier(CardRow())
+                                        .transition(.fold)
+                                }
                             }
-                            .modifier(CardRow())
-                            .transition(.fold)
-                        }
-                        KeywordBars(model: model, hidden: hidden)
-                        if !subagentsAtWork.isEmpty {
-                            SubagentsBar(subagents: subagentsAtWork, folder: model.session.location.directory, isHidden: hidden(.subagents, $model.hidesSubagents))
-                                .modifier(CardRow())
-                                .transition(.fold)
-                        }
-                        if let bot = workBot, let report = workReport, showsWorkBar {
-                            BotWorkBar(bot: bot, report: report, isHidden: hidden(.work, $model.hidesWork))
-                                .modifier(CardRow())
-                                .transition(.fold)
-                        }
-                        if !backgroundJobs.isEmpty {
-                            BackgroundBar(jobs: backgroundJobs, api: workspace.api(forSession: model.id), directory: model.session.location.directory, isHidden: hidden(.background, $model.hidesBackgroundJobs)) { job in
-                                Task { await workspace.stopShellJob(job, in: model.id) }
-                            }
-                            .modifier(CardRow())
-                            .transition(.fold)
-                        }
-                        if let owner = wakeOwner {
-                            WakeBar(owner: owner, isHidden: hidden(.wakes, $model.hidesWakes))
-                                .modifier(CardRow())
-                                .transition(.fold)
                         }
                     }
-                    // Auto held something back, or paused: never tucked, as it waits on you.
+                    // From the top, as they read: a goal's line and its Stop first.
+                    .scrollBounceBehavior(.basedOnSize)
+                    .frame(maxHeight: barsRoom)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { barsShown = $0 }
+                    // Auto held something back, or paused: never tucked or scrolled away, as it waits on you.
                     if model.approval == .auto, model.decisions?.paused != nil || !model.unseenHeld.isEmpty {
                         ApprovalBar(model: model)
                             .disabled(offlineMachine != nil)
@@ -611,6 +637,7 @@ struct BottomStack: View {
                 .modifier(ComposerSurface())
 
             }
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { stackHeight = $0 }
             .animation(.ui, value: waitingAsks.map(\.id))
             .animation(.ui, value: bars)
             .animation(.ui, value: folds)
@@ -671,14 +698,16 @@ struct BottomStack: View {
                 // Another conversation shown: what it had last time here (none yet: nothing came).
                 let old = was.conversation == now.conversation ? was.value : cards[now.conversation]?.news ?? now.value
                 cards[now.conversation, default: Card()].news = now.value
-                for bar in folds.news(from: old, to: now.value) { model.tuck.changed(bar) }
+                for bar in folds.news(from: old, to: now.value, asking: isAsking) { model.tuck.changed(bar) }
             }
             // Another side question shown (picked in the sidebar, or just asked): its bar opens, unless a card asks.
             .onChange(of: Seen(conversation: model.id, value: model.shownSideQuestion)) { old, shown in
                 if old.conversation == shown.conversation, shown.value != nil, bars.count >= BarFolds<ComposerBar>.full { folds.changed(.sideQuestion) }
             }
-            .onChange(of: isAsking) { _, asking in
-                if !asking { folds.askingEnded() }
+            // Nothing asks in the conversation shown (answered, or another one shown): a bar you
+            // opened over a question is just open, there.
+            .onChange(of: Seen(conversation: model.id, value: isAsking)) { _, now in
+                if !now.value { folds.askingEnded() }
             }
             // Two waiting or fewer: the next time there are more, they start on their line.
             .onChange(of: model.waiting.count > 2) { _, folds in

@@ -1,9 +1,9 @@
 import ClientDesign
 import Testing
 
-/// The card over the composer, once it's full: with three bars or more, each folds to its line
-/// but the one that most needs you (the newest change; none while a card asks something), and
-/// opening one folds the others. With fewer, each opens and folds as you leave it.
+/// The card over the composer: while a card asks something, every bar folds to its line but one
+/// you open. Otherwise, once it's full (three bars or more), each folds to its line but the newest
+/// change, and opening one folds the others; with fewer, each opens and folds as you leave it.
 @Suite struct BarFoldsTests {
     /// Some bars, as an app has them.
     enum ComposerBar: Hashable { case goal, review, sideQuestion, wakes }
@@ -52,6 +52,57 @@ import Testing
         var own = false
         folds.set(.goal, hidden: false, among: bars, own: &own)
         #expect(open(folds, bars, asking: true) == [.goal])
+    }
+
+    /// However few bars there are: a goal folds to its line while its bot asks, and something new
+    /// in it doesn't open it over the question; opened by you, it stays open; answered, each is as
+    /// you left it.
+    @Test func aCardAskingFoldsEvenOneBarButOneYouOpen() {
+        var folds = BarFolds()
+        let bars: [ComposerBar] = [.goal, .review]
+        #expect(open(folds, bars, asking: true).isEmpty, "the question gets the room")
+        folds.changed(.goal)
+        #expect(open(folds, bars, asking: true).isEmpty, "news in it doesn't open it over the question")
+        #expect(open(folds, bars) == [.goal, .review], "answered: as you left them")
+
+        var own = false
+        folds.set(.goal, hidden: false, among: bars, own: &own)
+        #expect(open(folds, bars, asking: true, own: [.goal: own]) == [.goal], "opened by you, it stays open")
+        folds.set(.goal, hidden: true, among: bars, own: &own)
+        #expect(open(folds, bars, own: [.goal: own]) == [.review], "folded by you while it asked: it stays folded")
+
+        // A goal you'd opened before the question came stays open over it, once.
+        folds.askingEnded()
+        folds.set(.goal, hidden: false, among: bars, own: &own)
+        #expect(open(folds, bars, asking: true, own: [.goal: own]) == [.goal])
+        folds.askingEnded()
+        #expect(open(folds, bars, asking: true, own: [.goal: own]).isEmpty, "the next question folds it")
+    }
+
+    /// A bar you opened while a card asks stays open when something new comes in another, or another
+    /// bar comes.
+    @Test func whatYouOpenedOverAQuestionStaysOpenWhenAnotherBarHasNews() {
+        var folds = BarFolds()
+        let bars: [ComposerBar] = [.goal, .review, .sideQuestion]
+        var own = false
+        folds.set(.goal, hidden: false, among: bars, own: &own)
+        folds.news(from: [.review: false], to: [.review: true], asking: true)
+        #expect(open(folds, bars, asking: true) == [.goal])
+        folds.bars(from: bars, to: bars + [.wakes], asking: true, opens: { _ in true })
+        #expect(open(folds, bars + [.wakes], asking: true) == [.goal])
+    }
+
+    /// The card going from full while it asks: each keeps what it showed past the question, so
+    /// answering brings back the one that was open.
+    @Test func aCardNoLongerFullWhileItAsksKeepsWhatItShowedPastTheQuestion() {
+        var folds = BarFolds()
+        let full: [ComposerBar] = [.goal, .review, .wakes]
+        folds.changed(.review)
+        var own: [ComposerBar: Bool] = [:]
+        folds.update(from: full, to: [.review, .wakes], asking: true, own: { own[$0] ?? false }, keep: { own[$0] = $1 },
+                     news: { _ in false }, opens: { _ in true })
+        #expect(open(folds, [.review, .wakes], asking: true, own: own).isEmpty)
+        #expect(open(folds, [.review, .wakes], own: own) == [.review])
     }
 
     @Test func aBarThatWentIsntOpenAndTheNewestThatCameOpens() {
