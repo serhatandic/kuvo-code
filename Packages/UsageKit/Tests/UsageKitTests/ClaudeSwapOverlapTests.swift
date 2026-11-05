@@ -141,66 +141,6 @@ extension ClaudeDesktopAuthStoreTests {
         }
     }
 
-    @MainActor
-    func testOverlapRotationWritesOnlySupplyingSessionAndRejectsConcurrentReplacement() async throws {
-        for (useKeychain, replaceDuringRefresh) in [(false, false), (false, true), (true, false), (true, true)] {
-            let fixture = try overlapFixture()
-            let swaps = ClaudeSwapAccount.discover(files: fixture.files, home: home)
-            for (index, swap) in swaps.enumerated() {
-                let path = swap.sessionDirectory + "/.credentials.json"
-                fixture.files.files[path] = #"{"claudeAiOauth":{"accessToken":"expired","refreshToken":"session-refresh-\#(index)","expiresAt":1,"scopes":["user:profile"]}}"#
-                let keychain = ServiceKeychain(currentUserValues: ["Claude Code-credentials": cliCredentials(token: "unrelated-default")])
-                let auth = ClaudeAuthStore(environment: FakeEnvironment([:]), files: fixture.files,
-                    keychain: keychain, desktop: fixture.store, desktopOrganization: swap.organizationID,
-                    expectedIdentityKey: swap.identityKey, swapAccount: swap)
-                let service = try XCTUnwrap(auth.keychainServiceCandidates().first)
-                if useKeychain {
-                    keychain.currentUserValues[service] = fixture.files.files.removeValue(forKey: path)
-                }
-                let vault = swap.root + "/credentials/.creds-\(swap.slot)-\(swap.email).enc"
-                fixture.files.files[vault] = Data(#"{"claudeAiOauth":{"accessToken":"vault","refreshToken":"vault-refresh","expiresAt":1,"scopes":["user:profile"]}}"#.utf8).base64EncodedString()
-                let originalVault = fixture.files.files[vault]
-                let replacement = cliCredentials(token: "external-login")
-                let user = accountUUID
-                let http = RoutingHTTPClient { request in
-                    if request.url.path == "/v1/oauth/token" {
-                        XCTAssertFalse(String(decoding: request.body ?? Data(), as: UTF8.self).contains("vault-refresh"))
-                        if replaceDuringRefresh {
-                            if useKeychain { keychain.currentUserValues[service] = replacement }
-                            else { fixture.files.files[path] = replacement }
-                        }
-                        return HTTPResponse(statusCode: 200, headers: [:], body: Data(
-                            #"{"access_token":"rotated","refresh_token":"rotated-refresh","expires_in":3600}"#.utf8))
-                    }
-                    if request.url.path == "/api/oauth/profile" {
-                        XCTAssertNotEqual(request.headers["Authorization"], "Bearer vault")
-                        return HTTPResponse(statusCode: 200, headers: [:], body: Data(
-                            #"{"account":{"uuid":"\#(user)"},"organization":{"uuid":"\#(swap.organizationID)"}}"#.utf8))
-                    }
-                    XCTAssertEqual(request.headers["Authorization"], replaceDuringRefresh ? "Bearer external-login" : "Bearer rotated")
-                    return HTTPResponse(statusCode: 200, headers: [:], body: Data(#"{"five_hour":{"utilization":25}}"#.utf8))
-                }
-                let provider = ClaudeProvider(authStore: auth, usageClient: ClaudeUsageClient(httpClient: http),
-                    logUsageScanner: ClaudeLogFixture.scanner(home: nil), pricing: { TestPricing.bundled })
-                let otherFiles = fixture.files.files.filter { $0.key != path }
-                let otherKeychain = keychain.currentUserValues.filter { $0.key != service }
-                let result = await provider.refresh()
-                XCTAssertNil(badge(result.lines, "Error"))
-                XCTAssertEqual(fixture.files.files.filter { $0.key != path }, otherFiles)
-                XCTAssertEqual(fixture.files.files[vault], originalVault)
-                XCTAssertEqual(keychain.currentUserValues.filter { $0.key != service }, otherKeychain)
-                let saved = useKeychain ? keychain.currentUserValues[service] : fixture.files.files[path]
-                if useKeychain { XCTAssertNil(fixture.files.files[path]) }
-                if replaceDuringRefresh {
-                    XCTAssertEqual(saved, replacement)
-                    XCTAssertFalse(http.requests.contains { $0.headers["Authorization"] == "Bearer rotated" })
-                } else {
-                    XCTAssertTrue(saved?.contains("rotated-refresh") == true)
-                }
-            }
-        }
-    }
-
     private func setOverlapDefault(_ org: String, files: FakeFiles) {
         files.files[home.path + "/.claude.json"] =
             #"{"oauthAccount":{"accountUuid":"\#(accountUUID)","organizationUuid":"\#(org)"}}"#

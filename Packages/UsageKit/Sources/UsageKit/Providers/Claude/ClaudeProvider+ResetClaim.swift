@@ -24,13 +24,12 @@ extension ClaudeProvider {
 
         // Only the login the grants were read with may claim. Grant ids are shared promos, so another
         // login on this machine could hold the same id and would spend its own reset instead.
-        guard let (found, load) = await resetClaimLogin(fingerprint: check.credentialFingerprint) else {
+        guard let (found, _) = await resetClaimLogin(fingerprint: check.credentialFingerprint) else {
             AppLog.error(tag, "reset claim: the login the grants were read with is no longer available")
             return .noCredit
         }
-        var state = found
-        var generation = ClaudeCredentialGeneration(load.candidates)
-        guard await refreshIfNeeded(&state, generation: &generation) else { return .failed }
+        let state = found
+        guard stillValid(state) else { return .failed }
         let accessToken = state.oauth.accessToken ?? ""
         guard let organizationUUID = await claimOrganization(for: state.oauth, accessToken: accessToken) else {
             return .failed
@@ -90,24 +89,11 @@ extension ClaudeProvider {
         return nil
     }
 
-    /// Refreshes a token that's about to expire. Desktop and Swap tokens are renewed by their owners, so
-    /// they go out as they are. `false` means the refresh failed.
-    private func refreshIfNeeded(
-        _ state: inout ClaudeCredentialState, generation: inout ClaudeCredentialGeneration
-    ) async -> Bool {
-        guard authStore.needsRefresh(state.oauth), state.source != .desktop, state.source != .swapVault,
-              let refreshToken = state.oauth.refreshToken, !refreshToken.isEmpty
-        else { return true }
-        do {
-            let refreshed = try await refreshAccessToken(
-                state: &state, refreshToken: refreshToken, expectedGeneration: generation
-            )
-            if refreshed.persisted { generation = generation.replacing(state) }
-            return true
-        } catch {
-            AppLog.warn(LogTag.plugin("claude"), "reset claim: token refresh failed for \(state.source.label): \(error.localizedDescription)")
-            return false
-        }
+    /// A token its owner hasn't renewed yet can't claim: none is renewed here (Kuvo Code's fork).
+    private func stillValid(_ state: ClaudeCredentialState) -> Bool {
+        guard authStore.hasExpired(state.oauth) else { return true }
+        AppLog.warn(LogTag.plugin("claude"), "reset claim: \(state.source.label) token expired; waiting for its owner to renew it")
+        return false
     }
 
     /// The organization to claim against: cached from the profile request when this token already made

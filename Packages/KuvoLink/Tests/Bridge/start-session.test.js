@@ -15,8 +15,12 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { atEnd, removeAtEnd } from "./at-end.js";
 
-const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-start-session-")));
-removeAtEnd(home);
+// (Laid out as a Mac's: the box's folder in the app's, and the project beside it.)
+const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-start-session-")));
+removeAtEnd(root);
+const home = path.join(root, "app", "box");
+const work = path.join(root, "work");
+fs.mkdirSync(work, { recursive: true });
 const tool = fileURLToPath(new URL("../../../../KuvoCode/Resources/kuvo-browser.js", import.meta.url));
 fs.mkdirSync(path.join(home, "bin"), { recursive: true });
 fs.copyFileSync(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url), path.join(home, "bin", "kuvo-link.js"));
@@ -35,9 +39,9 @@ const engine = http.createServer((request, response) => {
     const one = request.url.match(/^\/api\/session\/([^/?]+)$/);
     if (one && request.method === "GET") {
       const id = decodeURIComponent(one[1]);
-      if (id === "ses_lead") return reply({ data: { id, location: { directory: home } } });
-      if (id === "ses_helper") return reply({ data: { id, parentID: "ses_lead", location: { directory: home } } });
-      if (id === "ses_run") return reply({ data: { id, location: { directory: home }, metadata: { kuvo: { engineFor: "ses_lead" } } } });
+      if (id === "ses_lead") return reply({ data: { id, location: { directory: work } } });
+      if (id === "ses_helper") return reply({ data: { id, parentID: "ses_lead", location: { directory: work } } });
+      if (id === "ses_run") return reply({ data: { id, location: { directory: work }, metadata: { kuvo: { engineFor: "ses_lead" } } } });
       return reply({ message: "No such session." }, 404);
     }
     if (request.method === "POST" && request.url === "/api/session") return reply({ data: { id: `ses_new${++made}` } });
@@ -92,7 +96,7 @@ test("an agent is promised it'll hear of a session it starts only once that sess
   const woken = /You'll be woken when it finishes/;
   const marked = await call("start_session", { task: "Port it.", title: "Port", wake: "finished" }, "ses_lead");
   assert.match(marked.content[0].text, woken, "marked: it'll hear");
-  const outside = await call("start_session", { task: "Port it.", title: "Port", wake: "finished", folder: home }, "ses_elsewhere");
+  const outside = await call("start_session", { task: "Port it.", title: "Port", wake: "finished", folder: work }, "ses_elsewhere");
   assert.equal(outside.isError ?? false, false, outside.content?.[0]?.text);
   assert.doesNotMatch(outside.content[0].text, woken, "nothing here would tell it");
   assert.match(outside.content[0].text, /Write to it with send_message/);

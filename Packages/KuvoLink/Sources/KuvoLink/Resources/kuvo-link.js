@@ -3463,7 +3463,7 @@ function seatbeltProfile(policy, options) {
   allow(HIDDEN, `(subpath (string-append (param "WAKES") "/inbox"))`);
   allow("file-read-data file-write-data", `(literal (param "MEMORY"))`);
   out.push(";; what runs outside the sandbox, or changes the engine");
-  deny("file-write-unlink file-write-create", `(literal (param "WORK"))`, `(literal (param "GIT"))`);
+  deny("file-write-unlink file-write-create", `(literal (param "WORK"))`, `(literal (param "GIT"))`, `(literal (param "TMP"))`);
   const holders = new Set;
   for (const kept of [...policy.secrets, ...policy.readOnly, ...policy.kuvo])
     for (let at = path14.dirname(kept);at !== path14.dirname(at); at = path14.dirname(at))
@@ -3599,6 +3599,7 @@ function launcherScript(places) {
     ] : [],
     ...Array.from({ length: MOST_FOLDERS }, (_, at) => `a${at}=$F/none r${at}=-`),
     `if [ -f "$allowed" ]; then i=0; while IFS= read -r line && [ $i -lt ${MOST_FOLDERS} ]; do case $line in /*) eval "a$i=\\$line"; ${places.platform === "darwin" ? `eval "r$i=\\$(escaped \\"\\$line\\")"; ` : ""}i=$((i + 1)) ;; esac; done <"$allowed"; else allowed=$F/none; fi`,
+    `if [ -L "$tmp" ]; then rm -f "$tmp" || exit 126; fi`,
     `(umask 077; mkdir -p "$tmp") && touch "$tmp" && export TMPDIR="$tmp/"`,
     `export PRE_COMMIT_HOME="$TMPDIR"pre-commit`,
     `(umask 077; mkdir -p ${[places.caches.npm, places.caches.pnpm, `${places.caches.uv}/cache`, `${places.caches.uv}/tools`, places.caches.corepack].map(sh).join(" ")})`,
@@ -3972,8 +3973,7 @@ var places = {
   folder: FOLDER,
   launcher: path15.join(K, "bin", "kuvo-fence"),
   runner: path15.join(K, "bin", "kuvo-fence.js"),
-  inside: [realish(BOTS)],
-  shared: [realish(CHATS)],
+  ...conversationPlaces(),
   probe: PROBE,
   bots: BOTS,
   wakes: SESSION_WAKES,
@@ -4254,6 +4254,23 @@ function writeTemporary() {
   writePrivate(file, `${root}
 ${crypto7.randomBytes(32).toString("hex")}
 `);
+}
+function commandTemporary(work) {
+  let real;
+  try {
+    real = fs16.realpathSync(work);
+  } catch {
+    return null;
+  }
+  const sum = (text) => crypto7.createHash("sha256").update(text).digest("hex");
+  const [root, key] = (textOf(path15.join(FOLDER, "temporary")) ?? "").split(`
+`);
+  const tmp = root?.startsWith("/") && key?.length === 64 ? path15.join(realish(root), sum(`${key}
+${real}`).slice(0, 8)) : path15.join(FOLDER, "tmp", sum(real).slice(0, 32));
+  return fs16.lstatSync(tmp, { throwIfNoEntry: false })?.isSymbolicLink() ? null : tmp;
+}
+function conversationPlaces() {
+  return { inside: [realish(BOTS), realish(path15.join(ENGINE_DATA, "worktree"))], shared: [realish(CHATS)] };
 }
 function setUpFence(found) {
   const can = able(found);
@@ -13835,8 +13852,22 @@ function atLogin(where, home) {
   const rest = where.slice(home.length + 1);
   return LOGIN.some((wall) => inside2(rest, wall)) || !rest.includes("/") && LOGIN_PREFIXES.some((prefix) => rest.startsWith(prefix));
 }
-function inKuvo(where, policy) {
-  return policy.kuvo.some((wall) => inside2(where, wall)) || matching2(where, policy.kuvoPatterns);
+function inKuvo(where, policy, own = []) {
+  return (policy.kuvo.some((wall) => inside2(where, wall)) || matching2(where, policy.kuvoPatterns)) && !own.some((folder) => inside2(where, folder));
+}
+function ownInside(own, policy) {
+  const temporaries = new Set(own.map(commandTemporary).filter((each) => Boolean(each)));
+  return own.flatMap((folder) => {
+    if (temporaries.has(folder))
+      return [folder];
+    const at = realish(folder);
+    const walled = policy.kuvo.some((wall) => inside2(at, wall) || inside2(wall, at)) || matching2(at, policy.kuvoPatterns);
+    return !walled || conversationPlace(at) ? [at] : [];
+  });
+}
+function conversationPlace(at) {
+  const { inside: holders, shared } = conversationPlaces();
+  return holders.some((each) => at.startsWith(each + "/")) || shared.some((each) => inside2(at, each));
 }
 function deletesHome(where, home) {
   const target = where.endsWith("/*") ? where.slice(0, -2) || "/" : where;
@@ -13853,6 +13884,9 @@ function keptFromSessions(folder, policy = fencePolicy()) {
   if ([...policy.secrets, ...homes.map((home) => home + "/.ssh")].some((each) => inside2(at, each) || holds(at, each)))
     return reach("your secrets");
   if (policy.kuvo.some((each) => holds(at, each)))
+    return reach("Kuvo Code's own folders");
+  const walled = policy.kuvo.some((each) => inside2(at, each) && !homes.some((home) => inside2(home, each))) || matching2(at, policy.kuvoPatterns);
+  if (walled && !conversationPlace(at))
     return reach("Kuvo Code's own folders");
   if (homes.some((home) => atLogin(at, home)) || [...homes.flatMap((home) => LOGIN.map((each) => `${home}/${each}`)), ...SYSTEM_LOGIN].some((each) => holds(at, each)))
     return reach("what runs as you log in");
@@ -13892,20 +13926,20 @@ function takenAway(program, args, words, at) {
     return named;
   return [];
 }
-function hardLine(action, policy = fencePolicy()) {
+function hardLine(action, policy = fencePolicy(), own = []) {
   if (action.kind === "file") {
     const where = realish(action.path);
-    return inKuvo(where, policy) || action.access === "write" && policy.kuvo.some((wall) => holds(where, wall)) ? KUVO : null;
+    return inKuvo(where, policy, own) || action.access === "write" && policy.kuvo.some((wall) => holds(where, wall)) ? KUVO : null;
   }
   if (action.kind === "tool")
     return null;
-  return commandLine(action.command, action.folder, policy, 0) ?? stoppedWrites(action).map((where) => hardLine({ kind: "file", path: where, access: "write", folder: action.folder }, policy)).find(Boolean) ?? null;
+  return commandLine(action.command, action.folder, policy, own, 0) ?? stoppedWrites(action).map((where) => hardLine({ kind: "file", path: where, access: "write", folder: action.folder }, policy, own)).find(Boolean) ?? null;
 }
 var stoppedWrites = (action) => action.kind === "command" ? (action.stopped?.stops ?? []).filter((stop) => stop.kind === "write" && stop.path).map((stop) => stop.path) : [];
-function commandLine(command, start, policy, depth) {
+function commandLine(command, start, policy, own, depth) {
   const line = readLine(command, true);
   if ("unreadable" in line || depth > 3)
-    return unreadLine(command, policy);
+    return unreadLine(command, policy, own);
   let folder = start;
   for (const part of line.parts) {
     const at = programAt(part.words);
@@ -13917,7 +13951,7 @@ function commandLine(command, start, policy, depth) {
         return WRECKS_HOME;
     }
     const inner = innerScript(program, part.words, at);
-    const found = inner ? commandLine(inner, folder, policy, depth + 1) : null;
+    const found = inner ? commandLine(inner, folder, policy, own, depth + 1) : null;
     if (found)
       return found;
     if (program === "cd" || program === "pushd") {
@@ -13927,12 +13961,12 @@ function commandLine(command, start, policy, depth) {
     }
     for (const word of part.words.slice(Math.max(at, 0))) {
       const where = pathOf(word, folder);
-      if (where && inKuvo(where, policy))
+      if (where && inKuvo(where, policy, own))
         return KUVO;
     }
     for (const word of [...part.writes, ...part.reads]) {
       const where = pathOf(word.startsWith("/") || word.startsWith("~") || word.startsWith(".") ? word : `./${word}`, folder);
-      if (where && inKuvo(where, policy))
+      if (where && inKuvo(where, policy, own))
         return KUVO;
     }
   }
@@ -13945,7 +13979,7 @@ function innerScript(program, words, at) {
   return program === "eval" ? words.slice(at + 1).join(" ") : flag > 0 ? words[flag + 1] : undefined;
 }
 var WHOLE_HOME = String.raw`(\s|['"=])(\$HOME|\$\{HOME\}|~|/)/?\*?(?=$|[\s'";|&)])`;
-function unreadLine(command, policy) {
+function unreadLine(command, policy, own = []) {
   if (new RegExp(String.raw`(^|[^A-Za-z0-9_.-])(${[...DELETERS, ...MOVERS].join("|")})\b[^;&|\n]*?${WHOLE_HOME}`).test(command))
     return WRECKS_HOME;
   if (new RegExp(String.raw`(^|[^A-Za-z0-9_.-])(${[...LOCKERS].join("|")})\b[^;&|\n]*\s-[A-Za-z]*R[^;&|\n]*?${WHOLE_HOME}`).test(command))
@@ -13953,11 +13987,13 @@ function unreadLine(command, policy) {
   if (new RegExp(String.raw`\b(find|rsync)\b[^;&|\n]*?${WHOLE_HOME}`).test(command) && new RegExp(String.raw`\b(find|rsync)\b[^;&|\n]*\s(-delete|--delete[a-z-]*)\b`).test(command))
     return WRECKS_HOME;
   const home = policy.home + "/";
+  const climbs = /(^|[\s/=:;|&(])\.\.(?=$|[\s/;|&)])/.test(command.replace(/["'\\]/g, ""));
+  const named = climbs ? command : own.reduce((text, folder) => folder.startsWith(home) ? text.replace(new RegExp(`${escapeRegex(folder.slice(home.length))}(?=$|[\\s'"/;|&)])`, "g"), " ") : text, command);
   for (const wall of policy.kuvo) {
     if (!wall.startsWith(home))
       continue;
     const place = wall.slice(home.length).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    if (new RegExp(`(^|[\\s'"=/:])${place}(?=$|[\\s'"/;|&)])`).test(command))
+    if (new RegExp(`(^|[\\s'"=/:])${place}(?=$|[\\s'"/;|&)])`).test(named))
       return KUVO;
   }
   return null;
@@ -14600,7 +14636,8 @@ async function review(action, context, given) {
 var heldBack = (reason, why) => ({ decision: "refuse", reason, by: "code", held: true, why });
 async function judge(action, context, given, now, folder) {
   const policy = given.policy ?? fencePolicy();
-  const line = hardLine(action, policy);
+  const ours = ownInside(given.own ?? [], policy);
+  const line = hardLine(action, policy, ours);
   if (line)
     return { verdict: { decision: "refuse", reason: line, by: "code", held: false }, key: actionKey(action) };
   if (action.kind === "file" && action.access === "read" && !isSecret(realish(action.path), policy))
@@ -14614,7 +14651,7 @@ async function judge(action, context, given, now, folder) {
     if (unpinned)
       problem = heldBack(`${unpinned} Fetch it into the project first, then run it from there.`, "unpinned");
     for (const file of files) {
-      if (inKuvo(realish(file), policy))
+      if (inKuvo(realish(file), policy, ours))
         return { verdict: { decision: "refuse", reason: "It runs a script in Kuvo Code's own folders, which is never allowed.", by: "code", held: false }, key: actionKey(action) };
       if (problem)
         continue;
@@ -14925,7 +14962,8 @@ async function heldUnreached(session, action, signal) {
   const unanswered = async () => {
     throw new Error("the engine didn't answer");
   };
-  return review(action, { session, said: [] }, { model: unanswered, signal });
+  const own = [action.folder, commandTemporary(action.folder)].filter((each) => Boolean(each));
+  return review(action, { session, said: [] }, { model: unanswered, signal, own });
 }
 function botOf(data) {
   const bot = botOfConversation(data.id) ?? worksFor(data);
@@ -14989,7 +15027,7 @@ async function reviewIn(session, action, signal, found, pin = true) {
   const context = { session: at.data.id, said, ...bot ? { bot } : {} };
   let verdict;
   try {
-    verdict = await review(action, context, { model: await reviewModelOf(at, signal), signal, pin });
+    verdict = await review(action, context, { model: await reviewModelOf(at, signal), signal, pin, own: ownFolders(at) });
   } catch (error) {
     return { decision: "refuse", reason: `Auto's reviewer couldn't review it (${oneLine(String(error?.message ?? error), 120)}).`, by: "code", held: false, why: "failed", conversation: at };
   }
@@ -15055,7 +15093,8 @@ async function reviewPermission(source, event, signal, found) {
   }
 }
 function ownFolders(at) {
-  const folders = [at.data.location?.directory].filter((each) => typeof each === "string");
+  const folder = at.data.location?.directory;
+  const folders = typeof folder === "string" ? [folder, commandTemporary(folder)].filter((each) => Boolean(each)) : [];
   const bot = botOfConversation(at.data.id) ?? worksFor(at.data);
   if (!bot)
     return folders;

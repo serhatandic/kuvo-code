@@ -27,7 +27,7 @@ enum ClaudeAuthError: Error, LocalizedError, Equatable {
         case .sessionExpired:
             return "Session expired. Run `claude` to log in again."
         case .tokenExpired:
-            return "Token expired. Run `claude` to log in again."
+            return "Sign-in expired. Run `claude` to renew it."
         case .credentialsChanged:
             return "Claude login changed during refresh. Refresh again."
         case .invalidOAuthURL(let value):
@@ -204,44 +204,15 @@ struct ClaudeAuthStore: Sendable {
         return liveCapable.isEmpty ? [envCandidate] : liveCapable + [envCandidate]
     }
 
-    func needsRefresh(_ oauth: ClaudeOAuth) -> Bool {
+    /// Past its expiry: Claude Code renews it, under its own lock, the next time it runs (Kuvo Code's
+    /// fork never renews it here, which would spend its single-use refresh token behind its back).
+    func hasExpired(_ oauth: ClaudeOAuth) -> Bool {
         guard let expiresAt = oauth.expiresAt else { return false }
-        return expiresAt - now().timeIntervalSince1970 * 1000 <= 5 * 60 * 1000
+        return expiresAt <= now().timeIntervalSince1970 * 1000
     }
 
     func credentialGeneration(forceDesktopFallback: Bool = false) -> ClaudeCredentialGeneration {
         ClaudeCredentialGeneration(loadCredentialSet(forceDesktopFallback: forceDesktopFallback).candidates)
-    }
-
-    /// Save an OAuth rotation only if the ordered effective candidate set is unchanged. Checking the
-    /// whole generation catches a newly added higher-priority source as well as replacement in place.
-    /// The underlying stores provide no atomic compare-and-swap, so this remains best-effort.
-    func save(_ state: ClaudeCredentialState, ifUnchanged expected: ClaudeCredentialGeneration) throws -> Bool {
-        let current = loadCredentialSet().candidates
-        guard ClaudeCredentialGeneration(current) == expected,
-              let latest = current.first(where: { $0.source == state.source })?.fullData
-        else { return false }
-        // Merge into the document read for this generation check, not the pre-refresh snapshot:
-        // Claude Code may have updated an MCP login while leaving its own OAuth login unchanged.
-        let text = try latest.mergingRotatedOAuth(state.oauth)
-
-        switch state.source {
-        case .file:
-            try files.writeText(credentialsPath(), text)
-        case .accountFile(let path):
-            try files.writeText(path, text)
-        case .keychainCurrentUser(let service):
-            try keychain.writeGenericPasswordForCurrentUser(service: service, value: text)
-        case .keychainLegacy(let service):
-            try keychain.writeGenericPassword(service: service, value: text)
-        case .desktop, .swapVault:
-            return false
-        case .environment:
-            return false
-        }
-        // NEVER log the credential blob/tokens — only that a rotation was persisted, and to where.
-        AppLog.debug(LogTag.auth("claude"), "persisted rotated credentials (source=\(state.source.label))")
-        return true
     }
 
     /// Why the live-usage endpoint (`/api/oauth/usage`, which backs Session / Weekly / Sonnet / Extra

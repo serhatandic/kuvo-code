@@ -341,8 +341,10 @@ private final class LinkAreaView: NSView {
 
     private func pointerMoved(_ event: NSEvent) {
         let onLink = PointerClaim.isTopmost(self, at: event.locationInWindow)
-        // Off a link, still on the words: the selectable text's I-beam, as it shows elsewhere.
+        // Off a link, still on the words: the selectable text's I-beam, as it shows elsewhere
+        // (not under a menu open over them).
         let onText = isSelectable && bounds.contains(convert(event.locationInWindow, from: nil))
+            && window.map { PointerClaim.isOnTop($0, at: event.locationInWindow) } == true
         claim.show(onLink ? .pointingHand : nil, otherwise: onText ? .iBeam : .arrow)
     }
 

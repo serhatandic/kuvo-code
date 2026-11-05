@@ -28,8 +28,23 @@ export interface CommandSignInOptions {
   /** For a page opened on another device: the one it prints, at once (what it hands its browser
    * comes back to this computer, which another device can't reach). */
   printedPage?: boolean
+  /** How long the attempt waits for its page before it's handed back without one (its status
+   * gives the page once it comes). */
+  pageWait?: number
   /** Where a device code is in what it prints, for showing beside the page. */
   userCode?: RegExp
+  /** What it has printed so far, each time it prints: for a sign-in it hands over rather than
+   * keeps (`claude setup-token`'s token), taken as soon as it shows. */
+  onOutput?: (output: string) => void
+  /** What it prints that's never said back (a token it hands over): left out of a failure's words. */
+  secret?: RegExp
+  /** Run in a terminal of its own, for a command that prints its page and takes a code only there
+   * (`claude setup-token`): wide, so nothing it prints wraps. */
+  terminal?: boolean
+  /** What it says of a pasted code it turns away (as it waits for another). */
+  refusedCode?: RegExp
+  /** A refused code ends the sign-in, with these words (its program takes no second one). */
+  refusedEnds?: string
 }
 
 /** The catcher, in the temporary folder: a path without spaces (Python splits BROWSER on them). */
@@ -45,20 +60,52 @@ export function catcher(temporary: string): string {
 
 export async function commandSignIn(options: CommandSignInOptions): Promise<SignInAttempt> {
   const urlFile = join(options.temporary, `${newID("att")}.url`)
-  const child = Bun.spawn([options.command, ...options.args], {
-    env: { ...process.env, ...options.env, BROWSER: catcher(options.temporary), KUVO_URL_FILE: urlFile },
-    stdin: "pipe",
-    stdout: "pipe",
-    stderr: "pipe",
-  })
+  const env: Record<string, string | undefined> = { ...process.env, ...options.env, BROWSER: catcher(options.temporary), KUVO_URL_FILE: urlFile }
+  // A value left `undefined` is unset, as in `run`.
+  for (const name of Object.keys(env)) if (env[name] === undefined) delete env[name]
+  // What it printed, its terminal codes taken out as a whole (one can come split over two reads).
+  let printed = ""
   let output = ""
-  let status: OAuthStatus = { status: "pending" }
-  const read = async (stream: ReadableStream<Uint8Array>) => {
-    const decoder = new TextDecoder()
-    for await (const chunk of stream) output += plain(decoder.decode(chunk))
+  const refused = options.refusedCode ?? /invalid code/i
+  // Where its output stood when the code was typed, while it's being taken.
+  let pastedAt: number | undefined
+  const take = (text: string) => {
+    printed += text
+    output = plain(printed)
+    options.onOutput?.(output)
+    // A code turned away after it was checked over the network, however long that took: one that
+    // takes no second code ends the sign-in.
+    if (options.refusedEnds && pastedAt !== undefined && status.status === "pending" && refused.test(output.slice(pastedAt))) {
+      status = { status: "failed", message: options.refusedEnds }
+      child.kill()
+    }
   }
-  void read(child.stdout)
-  void read(child.stderr)
+  let type: (text: string) => Promise<void>
+  let child: ReturnType<typeof Bun.spawn>
+  if (options.terminal) {
+    const decoder = new TextDecoder()
+    const spawned = Bun.spawn([options.command, ...options.args], {
+      env,
+      terminal: { cols: 1000, rows: 50, data: (_terminal: unknown, data: Uint8Array) => take(decoder.decode(data, { stream: true })) },
+    } as any) as any
+    child = spawned
+    // A terminal's Return.
+    type = async (text) => void spawned.terminal.write(text.replace(/\n$/, "\r"))
+  } else {
+    const spawned = Bun.spawn([options.command, ...options.args], { env, stdin: "pipe", stdout: "pipe", stderr: "pipe" })
+    child = spawned
+    const read = async (stream: ReadableStream<Uint8Array>) => {
+      const decoder = new TextDecoder()
+      for await (const chunk of stream) take(decoder.decode(chunk, { stream: true }))
+    }
+    void read(spawned.stdout)
+    void read(spawned.stderr)
+    type = async (text) => {
+      spawned.stdin.write(text)
+      await spawned.stdin.flush()
+    }
+  }
+  let status: OAuthStatus = { status: "pending" }
   let pasted = false
   /** Whether it was signed in as it started (signing in again): undefined until known. */
   let signedInBefore: boolean | undefined
@@ -75,7 +122,11 @@ export async function commandSignIn(options: CommandSignInOptions): Promise<Sign
     // this one worked.
     if (signedIn && (code === 0 || signedInBefore === false)) succeed()
     else if (pasted) status = { status: "failed", message: "That code didn't work. Start again, and paste the code from the page this sign-in opens." }
-    else status = { status: "failed", message: lastLines(options.codePrompt ? output.replace(options.codePrompt, "") : output) || `Signing in stopped (exit code ${code}).` }
+    else {
+      let said = options.codePrompt ? output.replace(options.codePrompt, "") : output
+      if (options.secret) said = said.replace(options.secret, "")
+      status = { status: "failed", message: lastLines(said) || `Signing in stopped (exit code ${code}).` }
+    }
   })
   // Signed in while the command lingers (it waits on something after the page): done then.
   // Not when it was signed in already (signing in again, another way): its end says.
@@ -96,17 +147,29 @@ export async function commandSignIn(options: CommandSignInOptions): Promise<Sign
   // taken when nothing reaches the browser a few seconds after it.
   let url = ""
   let printedAt: number | undefined
-  for (let waited = 0; waited < 15_000 && !url; waited += 200) {
+  const look = (waited: number) => {
     const printed = firstURL(output)
-    if (options.printedPage) {
-      if (printed) url = printed
-    } else {
-      if (existsSync(urlFile)) url = readFileSync(urlFile, "utf8").split("\n")[0].trim()
-      if (printed) printedAt ??= waited
-      if (!url && printed && waited - printedAt! >= 3_000) url = printed
-    }
+    if (options.printedPage) return printed ?? ""
+    if (existsSync(urlFile)) return readFileSync(urlFile, "utf8").split("\n")[0].trim()
+    if (printed) printedAt ??= waited
+    return printed && waited - printedAt! >= 3_000 ? printed : ""
+  }
+  let waited = 0
+  for (; waited < (options.pageWait ?? 15_000) && !url; waited += 200) {
+    url = look(waited)
     if (!url) await Bun.sleep(200)
     if (status.status !== "pending") break
+  }
+  // Not come yet (the command slow to start, or waiting on another Claude Code): looked for still,
+  // and given with its status once it comes, for the app to open then.
+  let late: string | undefined
+  if (!url) {
+    void (async () => {
+      for (; status.status === "pending" && !late; waited += 200) {
+        late = look(waited) || undefined
+        if (!late) await Bun.sleep(200)
+      }
+    })()
   }
   // A device code printed with the page: a moment more for it, if it comes after.
   let userCode: string | undefined
@@ -126,19 +189,23 @@ export async function commandSignIn(options: CommandSignInOptions): Promise<Sign
           if (status.status !== "pending") throw new Error("That sign-in is over. Start it again.")
           pasted = true
           const from = output.length
-          child.stdin.write(code.trim() + "\n")
-          await child.stdin.flush()
+          pastedAt = from
+          await type(code.trim() + "\n")
           // A code it can't read (part of one) is turned away at once, and it waits for another.
           for (let waited = 0; waited < 1_500 && status.status === "pending"; waited += 100) {
             await Bun.sleep(100)
-            if (/invalid code/i.test(output.slice(from))) {
+            if (!options.refusedEnds && refused.test(output.slice(from))) {
               pasted = false
+              pastedAt = undefined
               throw new Error("That code couldn't be read. Copy all of it from the page, and paste it again.")
             }
           }
+          // (Set as its output comes in, meanwhile.)
+          const now = status as OAuthStatus
+          if (options.refusedEnds && now.status === "failed" && now.message === options.refusedEnds) throw new Error(options.refusedEnds)
         }
       : undefined,
-    status: () => status,
+    status: () => (late && status.status === "pending" ? { ...status, url: late, instructions: options.instructions } : status),
     cancel() {
       if (status.status === "pending") status = { status: "failed", message: "Cancelled." }
       child.kill()

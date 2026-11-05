@@ -339,6 +339,8 @@ when you're there to answer.
 | `KUVO_DEMO_FILES` | Comma-separated paths to attach to that prompt |
 | `KUVO_DEMO_COMPOSER_FILES` | Comma-separated paths to show as attached in the composer |
 | `KUVO_DEMO_PROVIDERS` | Open Accounts (on a provider's sign-in if it names one) |
+| `KUVO_DEMO_CONNECT_METHOD` | With `KUVO_DEMO_PROVIDERS`: that way to sign in (its method ID, such as `oauth:claudeai`), started |
+| `KUVO_DEMO_NO_BROWSER` | A sign-in waits as if its page had opened, without opening it in your browser |
 | `KUVO_DEMO_APPEARANCE` | `light` or `dark` |
 | `KUVO_DEMO_APPEARANCE_THEN` | `light` or `dark`: switched to it some seconds after launch, as the Mac does at sunset |
 | `KUVO_DEMO_CHANGES` | Show the side panel |

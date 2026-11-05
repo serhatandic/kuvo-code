@@ -75,23 +75,12 @@ final class ClaudeLivePlanTests: XCTestCase {
         XCTAssertEqual(http.requests.filter { $0.url.path == "/api/oauth/profile" }.count, 1)
     }
 
-    func testTokenRotationTriggersOneFreshProfileLookup() async {
-        let usageCalls = CallCounter()
+    func testClaudeCodeRenewingItsTokenTriggersOneFreshProfileLookup() async {
         let http = RoutingHTTPClient { request in
             let authorization = request.headers["Authorization"] ?? ""
             switch request.url.path {
             case "/api/oauth/usage":
-                if request.isClaudeResetGrantsCheck { return Self.usage(percent: 42) }
-                // Second refresh: token-a has been revoked upstream, forcing a rotation to token-b.
-                if usageCalls.next() == 2, authorization == "Bearer token-a" {
-                    return HTTPResponse(statusCode: 401, headers: [:], body: Data())
-                }
                 return Self.usage(percent: 42)
-            case "/v1/oauth/token":
-                return HTTPResponse(
-                    statusCode: 200, headers: [:],
-                    body: Data(#"{"access_token":"token-b","refresh_token":"refresh-b","expires_in":3600}"#.utf8)
-                )
             case "/api/oauth/profile":
                 let tier = authorization == "Bearer token-b" ? "default_claude_max_20x" : "default_claude_max_5x"
                 return Self.profileResponse(tier: tier)
@@ -99,9 +88,14 @@ final class ClaudeLivePlanTests: XCTestCase {
                 return HTTPResponse(statusCode: 404, headers: [:], body: Data())
             }
         }
-        let provider = makeProvider(credentials: Self.staleMax5x, http: http)
+        let files = FakeFiles(["/tmp/claude/.credentials.json": Self.staleMax5x])
+        let provider = makeProvider(credentials: Self.staleMax5x, http: http, files: files)
 
         let first = await provider.refresh()
+        // Claude Code renews its own sign-in between refreshes.
+        files.files["/tmp/claude/.credentials.json"] = Self.staleMax5x
+            .replacingOccurrences(of: "token-a", with: "token-b")
+            .replacingOccurrences(of: "refresh-a", with: "refresh-b")
         let second = await provider.refresh()
         let third = await provider.refresh()
 
@@ -190,12 +184,13 @@ final class ClaudeLivePlanTests: XCTestCase {
     private func makeProvider(
         credentials: String,
         http: RoutingHTTPClient,
-        expectedIdentityKey: String? = nil
+        expectedIdentityKey: String? = nil,
+        files: FakeFiles? = nil
     ) -> ClaudeProvider {
         let now = OpenUsageISO8601.date(from: "2026-02-20T16:00:00.000Z")!
         let authStore = ClaudeAuthStore(
             environment: FakeEnvironment(["CLAUDE_CONFIG_DIR": "/tmp/claude"]),
-            files: FakeFiles(["/tmp/claude/.credentials.json": credentials]),
+            files: files ?? FakeFiles(["/tmp/claude/.credentials.json": credentials]),
             keychain: FakeKeychain(),
             expectedIdentityKey: expectedIdentityKey,
             now: { now }
@@ -240,17 +235,5 @@ final class ClaudeLivePlanTests: XCTestCase {
             return nil
         }
         return (used, limit)
-    }
-}
-
-private final class CallCounter: @unchecked Sendable {
-    private let lock = NSLock()
-    private var count = 0
-
-    func next() -> Int {
-        lock.lock()
-        defer { lock.unlock() }
-        count += 1
-        return count
     }
 }

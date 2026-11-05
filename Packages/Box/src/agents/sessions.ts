@@ -13,7 +13,7 @@ import { readFileSync, realpathSync, statSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
-import type { Agent, OwnTurn, PermissionAsk, PromptFile, QuestionAsk, RunInput, RunResult, SubagentMessages, SubagentRun, SubagentTask, Thread, TurnHooks } from "./agent"
+import type { Account, Agent, OwnTurn, PermissionAsk, PromptFile, QuestionAsk, RunInput, RunResult, SubagentMessages, SubagentRun, SubagentTask, Thread, TurnHooks } from "./agent"
 import { failure } from "./agent"
 import { parseProvider } from "./accounts"
 import { citedIn, plainCitations } from "./agents/codex-citations"
@@ -2023,14 +2023,18 @@ export class Sessions {
       turnAway()
       return { outcome: "failed", error: { type: "agent", message: "This model's agent isn't available: sign in to it in Settings › Accounts, or pick another model." } }
     }
-    // Its account signed out of, where a request on it would be dropped without a word: said.
-    if (!input.adopt && (await Promise.race([agent.signedOut?.().catch(() => false), Bun.sleep(10_000).then(() => false)]))) {
+    // Its account signed out of: said at once, rather than sent where it would be dropped without
+    // a word (the engine's), or fail only after its agent started and tried (a coding agent's).
+    if (!input.adopt && (await Promise.race([signedOut(agent).catch(() => false), Bun.sleep(10_000).then(() => false)]))) {
       turnAway()
+      // The apps may still take it for signed in (one Claude turned away as it ran): shown now.
+      if (agent.id !== "engine") emit("integration.updated", { integrationID: agent.providerID })
       const machine = onMachine ? process.env.KUVO_MACHINE_NAME || "this machine" : undefined
+      // Only what the card's Sign In and Switch Model don't say.
       const message = machine
-        ? `${agent.name} isn't signed in on ${machine}, where this conversation runs (each machine signs in on its own). Sign in to it there in Settings › Accounts, with ${machine} picked, or pick another model.`
-        : `${agent.name} isn't signed in. Sign in to it in Settings › Accounts, or pick another model.`
-      return { outcome: "failed", error: { type: "provider.auth", message } }
+        ? `${agent.name} isn't signed in on ${machine}, where this conversation runs: each machine signs in on its own.`
+        : `${agent.name} isn't signed in.`
+      return { outcome: "failed", error: { type: agent.id === "engine" ? "provider.auth" : "signin", message } }
     }
     if (signal.aborted) {
       turnAway()
@@ -2857,4 +2861,13 @@ export function ownWords(message: string): string {
     if (open < 0 || (open > 0 && text[open - 1] !== "\n")) return text
     text = text.slice(0, open).trimEnd()
   }
+}
+
+/** An agent known to be signed out of: as it says, or (a coding agent) as its account says, one that has a sign-in. Unknown is not. */
+async function signedOut(agent: Agent): Promise<boolean> {
+  if (agent.signedOut) return agent.signedOut()
+  if (agent.id === "engine" || !agent.methods().length) return false
+  const out = (account: Account) => account.installed !== false && !account.signedIn
+  // Asked anew before it's turned away: signed in a moment ago (in Terminal, say), it goes.
+  return out(await agent.account()) && out(await agent.account(true))
 }

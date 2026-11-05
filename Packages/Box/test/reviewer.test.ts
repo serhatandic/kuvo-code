@@ -63,6 +63,30 @@ test("only Kuvo Code's own folders and wrecking your home are refused by code, a
   }
 })
 
+// (A machine's: Kuvo Code's folder in your home, so a line names it by its place there too.)
+test("a conversation's own folder inside Kuvo Code's is its own however a line names it, but never a path that goes up out of it", async () => {
+  const ask = model(allows)
+  const { K, ENGINE_DATA } = await import("../src/link/home")
+  const { realish } = await import("../src/link/fence/policy")
+  const tree = join(realish(ENGINE_DATA), "worktree", "leaf")
+  mkdirSync(join(tree, "scripts"), { recursive: true })
+  const kuvo = realish(K)
+  const home = join(kuvo, "..")
+  const policy = { ...fencePolicy(), home, homeWrites: [home], kuvo: [kuvo], kuvoPatterns: [] }
+  const inTree = (line: string) => ({ kind: "command" as const, command: line, folder: tree })
+  const named = `"$HOME/${tree.slice(home.length + 1)}`
+  const judged = async (line: string) => {
+    const verdict = await reviewer.review(inTree(line), yours("Build it"), { ...given(ask), policy, own: [tree] })
+    return { line, decision: verdict.decision, by: verdict.by }
+  }
+  for (const line of [`cd "$X"; ls ${named}/scripts"`, `cd "$X"; ls ${named}"`]) expect(await judged(line)).toEqual({ line, decision: "allow", by: "model" })
+  for (const line of [`cd "$X"; cat ${named}/scripts/../../../../../box/keys/box.key"`, `cd "$X"; cat ${named}/../../../box/keys/box.key"`, `cd "$X"; cat "$HOME/${kuvo.slice(home.length + 1)}/box/keys/box.key"`,
+    // (However the way up is quoted, escaped or put in a step of its own.)
+    `cd "$X"; cat ${named}/".."/../../../box/keys/box.key"`, `cd "$X"; cat ${named}/.\\./.\\./.\\./box/keys/box.key"`, `cd ${named}" && cd ../../.. && cat box/keys/box.key`]) {
+    expect(await judged(line)).toEqual({ line, decision: "refuse", by: "code" })
+  }
+})
+
 test("what would run at login or on a schedule is told to the model as that, on the Mac's and Linux's ways, and allowed only where you asked for it", async () => {
   const ask = model(allows)
   const persists = "It sets up something that runs at login or on a schedule"
