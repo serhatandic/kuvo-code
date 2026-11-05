@@ -10464,7 +10464,7 @@ class ClaudeThread {
     }
     if (!resume)
       delete this.state.claudeCost;
-    const whole = this.whole(skills);
+    const whole = this.whole(skills, id);
     this.input = new Queue;
     const tools = fenceOn() ? relayedTools(this.session.id, this) : kuvoTools(this.session.id);
     this.opened = { model: modelID, effort, plan, append, program: this.agent.program, tools: tools?.key, skills, fence: fenceKey() + fullAccessMark(this.session.id) };
@@ -10490,10 +10490,11 @@ class ClaudeThread {
     });
     this.read(this.query);
   }
-  whole(skills) {
+  whole(skills, conversation) {
     this.sandboxedNow = fenceOn() || undefined;
     if (!this.sandboxedNow)
       return;
+    this.environment(conversation);
     const directory = this.session.location.directory;
     const attached = fenceAttachments(directory);
     const settings = this.agent.configHome;
@@ -10532,6 +10533,13 @@ class ClaudeThread {
         return child;
       }
     };
+  }
+  environment(conversation) {
+    if (!/^[A-Za-z0-9-]+$/.test(conversation))
+      return;
+    try {
+      mkdirSync13(join21(this.agent.configHome, "session-env", conversation), { recursive: true });
+    } catch {}
   }
   copies() {
     const directory = this.session.location.directory;
@@ -10612,6 +10620,8 @@ class ClaudeThread {
     this.said?.forget();
     if (message.type === "system" && message.subtype === "init") {
       if (!this.state.claudeStarted || this.state.claudeSession !== message.session_id) {
+        if (this.sandboxedNow && typeof message.session_id === "string")
+          this.environment(message.session_id);
         this.state.claudeSession = message.session_id;
         this.state.claudeStarted = true;
         this.active?.hooks.saveState();
@@ -15175,6 +15185,9 @@ class Turn {
   }
   notice(text) {
     if (this.ended)
+      return;
+    const last = this.messages.at(-1);
+    if (last?.type === "synthetic" && last.text === text)
       return;
     this.endBlock();
     if (this.step)
@@ -23283,4 +23296,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents eca2a0c00259a3153e435e0c40ad6b8e3d837764547b990b6dc07688c56aadfd
+// Built from Packages/Box/src/agents 000b7e70f440c5f5a2fc4f6a15c73561e268d26ee94393b1349fad1d73802ddb

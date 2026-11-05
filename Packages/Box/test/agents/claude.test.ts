@@ -2,7 +2,7 @@
 
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { spawnSync } from "node:child_process"
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { ClaudeAgent } from "../../src/agents/agents/claude"
@@ -712,6 +712,7 @@ describe("Claude Code in the box's sandbox", () => {
   // The box's sandbox folder, as the box sets it up (link/fence/state.ts): its rules, and its
   // launcher for an agent run whole, which here notes what it was told and runs the program.
   let fence: string
+  let givenSettings: string | undefined
   const turnOn = () => {
     writeFileSync(join(fence, "policy.json"), JSON.stringify({ hidden: [], readable: [], writable: [], readOnly: [] }))
     writeFileSync(join(fence, "on"), "")
@@ -726,9 +727,14 @@ describe("Claude Code in the box's sandbox", () => {
       { mode: 0o700 },
     )
     process.env.KUVO_FENCE = fence
+    // (Its settings folder a test's own: it makes things in it as it starts here.)
+    givenSettings = process.env.CLAUDE_CONFIG_DIR
+    process.env.CLAUDE_CONFIG_DIR = join(root, "claude-settings")
   })
   afterEach(() => {
     delete process.env.KUVO_FENCE
+    if (givenSettings === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = givenSettings
     setToolServer(undefined)
   })
 
@@ -753,7 +759,7 @@ describe("Claude Code in the box's sandbox", () => {
     expect(launched).toMatchObject({ program: "/bin/echo", args: "--output-format stream-json", folder: work, work, git: join(work, ".git") })
     // Its settings folder its own: its conversations, sign-in and caches written; never its
     // settings or hooks, which run outside the sandbox when you use it yourself.
-    expect(launched.own).toBe(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"))
+    expect(launched.own).toBe(join(work, "claude-settings"))
     expect(launched.state.split(" ")).toEqual(expect.arrayContaining(["projects", "sessions", "todos", ".credentials.json*"]))
     // Never what your own Claude Code, outside, runs or reads later: its settings, the shells its
     // commands source, a session's environment, an editor's lock, a settings backup.
@@ -768,6 +774,29 @@ describe("Claude Code in the box's sandbox", () => {
     const tools = Object.values(servers)[0]
     expect(tools.url).toBe(`http://127.0.0.1:${launched.port}/mcp`)
     expect(tools.headers.Authorization).not.toBe("Bearer app-password")
+  })
+
+  test("its hooks can start: this conversation's environment is there before it starts, and for the new name after /clear, as plain folders outside what it writes", async () => {
+    turnOn()
+    await begin()
+    const environments = join(process.env.CLAUDE_CONFIG_DIR!, "session-env")
+    expect(lstatSync(join(environments, fake.options.sessionId)).isDirectory()).toBe(true)
+    const { launched } = await started()
+    expect(launched.state.split(" ")).not.toContain("session-env")
+    // A new name it chose.
+    fake.out.push({ type: "system", subtype: "init", session_id: "cleared-conversation" })
+    await until(() => existsSync(join(environments, "cleared-conversation")))
+    expect(lstatSync(join(environments, "cleared-conversation")).isDirectory()).toBe(true)
+    // Never a name that would lead out of there.
+    fake.out.push({ type: "system", subtype: "init", session_id: "../escaped" })
+    fake.out.push({ type: "system", subtype: "init", session_id: "cleared-again" })
+    await until(() => existsSync(join(environments, "cleared-again")))
+    expect(existsSync(join(process.env.CLAUDE_CONFIG_DIR!, "escaped"))).toBe(false)
+  })
+
+  test("with the sandbox off, it makes its own as it always has", async () => {
+    await begin()
+    expect(existsSync(join(process.env.CLAUDE_CONFIG_DIR!, "session-env"))).toBe(false)
   })
 
   test("on, with no launcher of the box's yet (a box from before), Claude Code doesn't start, rather than outside the sandbox", async () => {

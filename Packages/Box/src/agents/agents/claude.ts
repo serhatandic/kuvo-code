@@ -42,7 +42,8 @@ const outputLimit = 30_000
  * agents, commands or plugins, which run outside the sandbox when you use it yourself, nor what
  * your own Claude Code runs or reads from there later: the shells its commands source
  * (`shell-snapshots`), a session's environment (`session-env`), an editor's lock (`ide`) and its
- * settings' backups. Without them it still runs its commands, with no shell snapshot of its own.
+ * settings' backups. Without them it still runs its commands, with no shell snapshot of its own. (A
+ * session's environment it finds made, or its hooks wouldn't start, and can't write in: `environment`.)
  */
 const STATE_IN_HOME = [
   "projects", "sessions", "file-history", "todos", "tasks", "teams", "plans", "history.jsonl*",
@@ -1112,7 +1113,7 @@ class ClaudeThread implements Thread {
     if (!resume) delete this.state.claudeCost
     // While the box's sandbox is on, Claude Code runs whole in it, and so does all it starts: its
     // commands, its hooks and MCP servers (yours, and a project's).
-    const whole = this.whole(skills)
+    const whole = this.whole(skills, id)
     this.input = new Queue()
     const tools = fenceOn() ? relayedTools(this.session.id, this) : kuvoTools(this.session.id)
     this.opened = { model: modelID, effort, plan, append, program: this.agent.program, tools: tools?.key, skills, fence: fenceKey() + fullAccessMark(this.session.id) }
@@ -1151,9 +1152,10 @@ class ClaudeThread implements Thread {
    * Undefined while it's off; on, but with no launcher yet (a box from before it had one, until it
    * starts again), it doesn't start, rather than outside it.
    */
-  private whole(skills: string | undefined) {
+  private whole(skills: string | undefined, conversation: string) {
     this.sandboxedNow = fenceOn() || undefined
     if (!this.sandboxedNow) return undefined
+    this.environment(conversation)
     const directory = this.session.location.directory
     const attached = fenceAttachments(directory)
     const settings = this.agent.configHome
@@ -1197,6 +1199,20 @@ class ClaudeThread implements Thread {
         return child
       },
     }
+  }
+
+  /**
+   * A conversation's `session-env` folder, made here, outside the sandbox. Claude Code makes it before
+   * each SessionStart hook (and Setup, CwdChanged and FileChanged hook) to name it a file there, and
+   * the hook doesn't start if it can't. It stays closed to the sandbox, as it must: your own Claude
+   * Code runs what's in it before each command if you open this conversation yourself. So a hook's
+   * `CLAUDE_ENV_FILE` isn't written, and what it sets doesn't reach the commands here.
+   */
+  private environment(conversation: string) {
+    if (!/^[A-Za-z0-9-]+$/.test(conversation)) return
+    try {
+      mkdirSync(join(this.agent.configHome, "session-env", conversation), { recursive: true })
+    } catch {}
   }
 
   /** How the files you attach reach this Claude Code: in the box's sandbox, copies it reads. */
@@ -1295,6 +1311,8 @@ class ClaudeThread implements Thread {
     this.said?.forget()
     if (message.type === "system" && message.subtype === "init") {
       if (!this.state.claudeStarted || this.state.claudeSession !== message.session_id) {
+        // (Its /clear: a new name it chose, for its next hooks. The one for that moment ran already.)
+        if (this.sandboxedNow && typeof message.session_id === "string") this.environment(message.session_id)
         this.state.claudeSession = message.session_id
         this.state.claudeStarted = true
         this.active?.hooks.saveState()
