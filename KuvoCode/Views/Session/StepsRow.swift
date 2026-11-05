@@ -29,6 +29,16 @@ struct StepsRow: View {
     let directory: String
     @AppStorage(StepsDetail.key) private var detail = StepsDetail.summary
     @State private var isExpanded = false
+    @Environment(\.autopilotCalls) private var autopilotCalls
+
+    /// The calls Autopilot made where these steps asked: shown under their line, folded or not.
+    private func decided(_ done: [Message.Content]) -> [AutopilotShown.Call] {
+        guard !autopilotCalls.isEmpty else { return [] }
+        return done.compactMap { block in
+            guard case .tool(let call) = block else { return nil }
+            return autopilotCalls[call.id]
+        }
+    }
 
     var body: some View {
         // The one under way, as it is; those before it in the line.
@@ -55,6 +65,14 @@ struct StepsRow: View {
                     .help(isExpanded ? "Hide the steps" : "Show each step")
                     // What they were, read with how long they took.
                     .accessibilityLabel(timed(done) ? line(done) + ": " + Self.summary(of: done) : line(done))
+                    // What it decided on Autopilot meanwhile: not folded away with the rest.
+                    let decided = decided(done)
+                    if !decided.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(decided) { DecidedLine(call: $0) }
+                        }
+                        .padding(.top, 8)
+                    }
                     if isExpanded {
                         // Together, so they fold as one, the space above them too.
                         VStack(alignment: .leading, spacing: 10) {
@@ -66,6 +84,7 @@ struct StepsRow: View {
                             }
                             ForEach(Array(done.enumerated()), id: \.offset) { _, block in step(block) }
                         }
+                        .environment(\.autopilotCallsShownAbove, !decided.isEmpty)
                         .padding(.top, 10)
                         .transition(.fold)
                     }

@@ -64,6 +64,17 @@ struct TranscriptView: View {
         return own.merging(WorkAnswer.byCall(above)) { mine, _ in mine }
     }
 
+    /// The conversation that keeps its Autopilot: this one, or the one a subagent works for.
+    private var autopilotModel: SessionModel {
+        let root = workspace.root(of: model.id)
+        return root == model.id ? model : workspace.model(for: root) ?? model
+    }
+
+    /// The calls Autopilot made here, by the tool call that asked.
+    private var autopilotCalls: [String: AutopilotShown.Call] {
+        Dictionary((autopilotModel.autopilotShown?.decided ?? []).compactMap { call in call.call.map { ($0, call) } }) { _, latest in latest }
+    }
+
     var body: some View {
         let rows = rows
         // More of a reply, in a row of its own, carries on from the row before rather than coming in.
@@ -102,6 +113,9 @@ struct TranscriptView: View {
         // What the bot that runs it answered for it, on the steps that asked; a subagent's are kept
         // on the session it works for.
         .environment(\.workAnswers, workAnswers)
+        // The calls it made on Autopilot, where its questions would have waited.
+        .environment(\.autopilotCalls, autopilotCalls)
+        .environment(\.chooseOnAutopilot) { [autopilotModel] choice, call in autopilotModel.choose(choice, on: call) }
         // The commands its agent asks to run outside the sandbox, whose rows say they were stopped
         // (by the conversation they ask as: the one at the top of its chain).
         .environment(\.sandboxStopped, Sandboxes.shared.stoppedCommands(for: workspace.root(of: model.id), on: Workspace.box(of: model.session.location.directory)))

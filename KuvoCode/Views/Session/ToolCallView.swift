@@ -27,7 +27,10 @@ struct ToolCallView: View {
     var body: some View {
         // Something the agent made: drawn, not described. A widget that failed is a step (the
         // card shows one so, through this view).
-        if WidgetCard.isWidget(call), !call.state.isFailure {
+        if let decided = autopilotCalls[call.id], !autopilotCallsShownAbove {
+            // A question Autopilot went ahead on: the call it made, where it was asked.
+            DecidedLine(call: decided)
+        } else if WidgetCard.isWidget(call), !call.state.isFailure {
             WidgetCard(call: call, send: answerAgent)
         } else if MadePictureRow.isMade(call) {
             MadePictureRow(call: call, directory: directory)
@@ -38,6 +41,8 @@ struct ToolCallView: View {
 
     @Environment(\.answerAgent) private var answerAgent
     @Environment(\.workAnswers) private var workAnswers
+    @Environment(\.autopilotCalls) private var autopilotCalls
+    @Environment(\.autopilotCallsShownAbove) private var autopilotCallsShownAbove
     @Environment(\.sandboxStopped) private var heardStopped
     /// What its box asks, where it's given rather than heard (a summary outside the transcript).
     private(set) var givenStopped: Set<String>?
@@ -237,6 +242,7 @@ struct ToolCallView: View {
         case "glob": return "Found files matching \(string("pattern") ?? "")"
         case "webfetch": return (isActive ? "Fetching " : "Fetched ") + (string("url") ?? "a page")
         case "websearch": return "Searched the web for “\(string("query") ?? "")”"
+        case "question" where autopilotCalls[call.id] != nil: return "Decided a question on Autopilot"
         case "question": return isActive ? "Asking you a question" : "Asked you a question"
         case _ where isSandboxAsk:
             let command = string("command").flatMap(InlineCode.command) ?? "a command"
