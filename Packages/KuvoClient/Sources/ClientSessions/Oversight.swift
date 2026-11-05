@@ -1,0 +1,121 @@
+import Foundation
+import OpenCodeKit
+
+// A bot overseeing its sessions, as both apps show it in the sidebar (PROTOCOL.md, "Work"): its face
+// on each project it has sessions in, a line in its colour from the project's folder to each of
+// them, and, as it does something to one (`kuvo/work/oversight`), a light running down its line to
+// that session. The sessions stay yours: they keep their own titles and marks.
+
+/// What a bot just did to one of its sessions (`kuvo/work/oversight`).
+public struct OversightMark: Decodable, Sendable, Hashable, Identifiable {
+    public enum Kind: String, Decodable, Sendable {
+        /// Started it, wrote to it, read it, answered what it asked, stopped it.
+        case started, told, read, answered, stopped
+        /// It finished well.
+        case finished
+    }
+
+    public let id: String
+    public let bot: String
+    public let session: String
+    public let kind: Kind
+    /// When, in ms since 1970.
+    public let at: Double
+
+    public init(id: String, bot: String, session: String, kind: Kind, at: Double) {
+        self.id = id
+        self.bot = bot
+        self.session = session
+        self.kind = kind
+        self.at = at
+    }
+}
+
+/// A box's latest marks (`GET kuvo/work/oversight`, and each line of its events): those of a kind
+/// a newer box makes that this client doesn't know are left out.
+public struct OversightMarks: Decodable, Sendable, Equatable {
+    public let marks: [OversightMark]
+
+    private enum CodingKeys: String, CodingKey { case marks }
+
+    public init(from decoder: Decoder) throws {
+        marks = try decoder.container(keyedBy: CodingKeys.self).decode([Lenient<OversightMark>].self, forKey: .marks).compactMap(\.value)
+    }
+}
+
+/// Which of a box's marks to play, line by line as its events come: none of the first (they
+/// happened before you looked), then each new one once, however often a line repeats it. A new
+/// follow (a reconnect) starts again, so nothing is played twice or late.
+public struct OversightPlayer: Sendable {
+    private var seen: Set<String>?
+
+    public init() {}
+
+    /// The marks in `marks` to play now, the oldest first.
+    public mutating func take(_ marks: [OversightMark]) -> [OversightMark] {
+        guard let seen else {
+            self.seen = Set(marks.map(\.id))
+            return []
+        }
+        let new = marks.filter { !seen.contains($0.id) }
+        self.seen = seen.union(new.map(\.id))
+        return new
+    }
+}
+
+/// A bot overseeing sessions in one project: who, and its sessions there in the order shown.
+public struct Overseer: Sendable, Hashable, Identifiable {
+    public let bot: String
+    public let name: String
+    public let sessions: [String]
+    public var id: String { bot }
+
+    public init(bot: String, name: String, sessions: [String]) {
+        self.bot = bot
+        self.name = name
+        self.sessions = sessions
+    }
+}
+
+public enum Oversight {
+    /// The bots overseeing `sessions` (a project's, in the order shown), the first to show first:
+    /// each with its sessions among them.
+    public static func overseers(of sessions: [Session]) -> [Overseer] {
+        var order: [String] = [], names: [String: String] = [:], theirs: [String: [String]] = [:]
+        for session in sessions {
+            guard let by = WorksFor(session) else { continue }
+            if theirs[by.bot] == nil {
+                order.append(by.bot)
+                names[by.bot] = by.name
+            }
+            theirs[by.bot, default: []].append(session.id)
+        }
+        return order.map { Overseer(bot: $0, name: names[$0] ?? "", sessions: theirs[$0] ?? []) }
+    }
+
+    /// What a project's row says of the bots overseeing it, for VoiceOver and its tooltip:
+    /// "Overseen by Pixel" or "Overseen by Pixel and Ada".
+    public static func overseenBy(_ overseers: [Overseer]) -> String {
+        "Overseen by " + ListFormatter.localizedString(byJoining: overseers.map(\.name))
+    }
+
+    /// What a session's row says of the bot overseeing it: "Overseen by Pixel".
+    public static func overseenBy(_ name: String) -> String { "Overseen by \(name)" }
+
+    /// A bot's line in Bots with `countsOverseen`: every session it oversees, as its lanes show
+    /// them. "Overseeing 4 sessions".
+    public static func overseeing(count: Int) -> String {
+        count == 1 ? "Overseeing 1 session" : "Overseeing \(count) sessions"
+    }
+
+    // Waiting on the user's word (2026-11-05); each is the one place to change it.
+
+    /// A project a bot made still shows its face on the folder's corner, besides on its row.
+    public static let keepsMadeByFace = true
+    /// A click on a bot's face on a project opens nothing of its own (the click toggles the
+    /// project, as on the rest of its row).
+    public static let faceOpensChat = false
+    /// A bot's line in Bots counts the sessions working now ("At work in Tidepool: 3 sessions"),
+    /// not every session it oversees.
+    public static let countsOverseen = false
+}
