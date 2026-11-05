@@ -2322,16 +2322,7 @@ extension EnvironmentValues {
     @Entry var conversationSignIn: ConversationSignIn?
 }
 
-// DRAFTS (to pick from, then fold into the code): what a card for a sign-in offers.
-// KUVO_DEMO_SIGNIN_CARD=alone: Sign In only; otherwise Sign In and Switch Model.
 enum SignInCard {
-    static let offersSwitch: Bool = {
-        #if DEBUG
-        if ProcessInfo.processInfo.environment["KUVO_DEMO_SIGNIN_CARD"] == "alone" { return false }
-        #endif
-        return true
-    }()
-
     /// What a card for a sign-in offers: Sign In to the account of the model the turn failed on
     /// (one with a sign-in, not Auto's: Accounts lists a Custom Auto list's several), Switch Model
     /// while the conversation is still on that model and it's still signed out, and Try Again
@@ -2351,6 +2342,6 @@ enum SignInCard {
             return Actions(tryAgain: !signedOut(current))
         }
         let onIt = current.map { $0.providerID == failed.providerID && $0.id == failed.id } ?? true
-        return Actions(signIn: failed, switchModel: offersSwitch && onIt && signedOut(failed), tryAgain: !signedOut(current ?? failed))
+        return Actions(signIn: failed, switchModel: onIt && signedOut(failed), tryAgain: !signedOut(current ?? failed))
     }
 }

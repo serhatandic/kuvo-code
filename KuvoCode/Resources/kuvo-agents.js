@@ -16869,7 +16869,7 @@ ${text.slice(0, 4000)}
       if (agent.id !== "engine")
         emit("integration.updated", { integrationID: agent.providerID });
       const machine = onMachine ? process.env.KUVO_MACHINE_NAME || "this machine" : undefined;
-      const message = machine ? `${agent.name} isn't signed in on ${machine}, where this conversation runs (each machine signs in on its own). Sign in to it there in Settings \u203A Accounts, with ${machine} picked, or pick another model.` : `${agent.name} isn't signed in. Sign in to it in Settings \u203A Accounts, or pick another model.`;
+      const message = machine ? `${agent.name} isn't signed in on ${machine}, where this conversation runs: each machine signs in on its own.` : `${agent.name} isn't signed in.`;
       return { outcome: "failed", error: { type: agent.id === "engine" ? "provider.auth" : "signin", message } };
     }
     if (signal.aborted) {
@@ -23192,4 +23192,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 123723aa71d4e05b5ccfb1afae7d80b372cba2eb8c10de31757c53115c52f66d
+// Built from Packages/Box/src/agents 19586bf0519ea4d15a84e32b28b7c449cfe536b389e84221f36892bf42c40d48
