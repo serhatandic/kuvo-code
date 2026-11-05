@@ -630,6 +630,13 @@ describe("Claude Code, nothing dropped", () => {
     ])
     expect(notices(id)).toEqual(["Claude Code summarized the conversation to make room.", "Claude's API is overloaded: trying again (2/10).", "Something new to read."])
   })
+
+  test("several hooks failing the same way at the same moment show as one row, and the same failure again later as another", async () => {
+    const failed = { type: "system", subtype: "hook_response", hook_name: "SessionStart:compact", hook_event: "SessionStart", outcome: "error", stderr: "Failed to run" }
+    const id = await turn(() => [failed, failed, failed, failed, { type: "system", subtype: "compact_boundary", compact_metadata: { trigger: "auto" } }, failed])
+    const row = "Your SessionStart:compact hook failed: Failed to run."
+    expect(notices(id)).toEqual([row, "Claude Code summarized the conversation to make room.", row])
+  })
 })
 
 describe("Claude Code's models", () => {
