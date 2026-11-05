@@ -61,7 +61,8 @@ test.skipIf(!canFence)("a coding agent run whole in a worktree the engine made w
       "read its files": "allowed",
       "write its files": "allowed",
       "commit": "allowed",
-      "list the worktrees beside it": "refused",
+      // (Landlock keeps what's in a file, not that it's there: on Linux, names can be listed.)
+      "list the worktrees beside it": process.platform === "darwin" ? "refused" : "allowed",
       "read another session's worktree": "refused",
       "write another session's worktree": "refused",
       "read Kuvo Code's own": "refused",
