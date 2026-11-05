@@ -180,11 +180,50 @@ import Testing
         #expect(queued.frame.minY > answer.frame.maxY, "over the question, as the card has it")
     }
 
+    /// While its bot asks, the goal folds to its line, which keeps how far along it is and Stop and
+    /// says how many things wait for you, so the question has the room. Opened by you, it stays
+    /// open over the question; answered, it's open again as it was.
+    @Test func aGoalFoldsToItsLineWhileItsBotAsksAndAnsweringOpensItAgain() async throws {
+        defer { done() }
+        // Tall enough for every row, whatever the card's room.
+        show(NSSize(width: 820, height: 1_400))
+        try await until { elements.contains { $0.label == "Answer" } && elements.contains { $0.label?.hasPrefix("Plant care app") == true } }
+        var line = try #require(elements.first { $0.label?.hasPrefix("Plant care app") == true })
+        #expect(line.label?.contains("3 wait for you") == true, "the line says what waits for you: \(line.label ?? "")")
+        #expect(elements.contains { $0.label == "Stop…" }, "the line keeps its Stop")
+        #expect(!elements.contains { $0.label == "Open RevenueCat" }, "its rows fold away while the question waits")
+
+        // Opened by you: it stays open over the question.
+        #expect(line.press())
+        try await until { elements.contains { $0.label == "Open RevenueCat" } }
+        line = try #require(elements.first { $0.label?.hasPrefix("Plant care app") == true })
+        #expect(line.press())
+        try await until { !elements.contains { $0.label == "Open RevenueCat" } }
+
+        // Answered, by you or elsewhere: the goal shows again, as you left it before.
+        app.workspace.handle(try engine.event("form.replied", session: "ses_pixel", ["id": "frm_concept", "sessionID": "ses_pixel"]))
+        try await until { !elements.contains { $0.label == "Answer" } }
+        #expect(!elements.contains { $0.label == "Open RevenueCat" }, "folded by you while it asked, it stays folded")
+    }
+
+    /// Never folded by you, the goal opens again once the question is answered.
+    @Test func answeringOpensTheGoalTheQuestionFolded() async throws {
+        defer { done() }
+        show(NSSize(width: 820, height: 1_400))
+        try await until { elements.contains { $0.label == "Answer" } && elements.contains { $0.label?.hasPrefix("Plant care app") == true } }
+        #expect(!elements.contains { $0.label == "Open RevenueCat" })
+        app.workspace.handle(try engine.event("form.replied", session: "ses_pixel", ["id": "frm_concept", "sessionID": "ses_pixel"]))
+        try await until { elements.contains { $0.label == "Open RevenueCat" } }
+    }
+
     @Test func whatTheBotAsksShowsOnceAsTheQuestionNotAgainAsARowOfWhatsWaiting() async throws {
         defer { done() }
         // Tall enough for every row, whatever the card's room.
         show(NSSize(width: 820, height: 1_400))
-        try await until { elements.contains { $0.label == "Answer" } && elements.contains { $0.label == "Open RevenueCat" } }
+        try await until { elements.contains { $0.label == "Answer" } && elements.contains { $0.label?.hasPrefix("Plant care app") == true } }
+        // The goal opened over the question, to see its rows.
+        #expect(try #require(elements.first { $0.label?.hasPrefix("Plant care app") == true }).press())
+        try await until { elements.contains { $0.label == "Open RevenueCat" } }
         // Each row of what's waiting puts away with its own button; the question's row would
         // have been the one that opens its conversation.
         let labels = elements.compactMap(\.label)
@@ -194,7 +233,7 @@ import Testing
 
     /// The window as it shows, in each size and look, into KUVO_DRAFTS_OUT (with `KUVO_DRAFTS_TAG`
     /// before each name: before, after): not a test of behavior, it runs only when that's set.
-    /// `folded`: the goal folded to its line, as the card would show it if what asks you folded it.
+    /// `folded`: the goal folded to its line by you.
     @Test func renders() async throws {
         defer { done() }
         guard let out = ProcessInfo.processInfo.environment["KUVO_DRAFTS_OUT"].map({ URL(fileURLWithPath: $0) }) else { return }

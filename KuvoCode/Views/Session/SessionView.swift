@@ -361,9 +361,10 @@ struct BottomStack: View {
                 })
     }
 
-    /// Every bar showing is folded to its line.
+    /// Every bar showing is folded to its line, as you left them (not as a question folds them,
+    /// which answering undoes).
     private var allFolded: Bool {
-        liveBars.allSatisfy { folds.isHidden($0, among: bars, asking: isAsking, own: self.own($0).wrappedValue) }
+        liveBars.allSatisfy { folds.isHidden($0, among: bars, asking: false, own: self.own($0).wrappedValue) }
     }
 
     /// What in a bar is worth opening it for: a review that found something, a side question
