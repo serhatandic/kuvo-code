@@ -14,4 +14,8 @@ import { join } from "node:path"
 const home = mkdtempSync(join(tmpdir(), "kuvo-box-tests-"))
 process.env.KUVO_HOME = home
 // (Once, when the last test file is done: a preload's hook is the whole run's.)
-afterAll(() => rmSync(home, { recursive: true, force: true }))
+afterAll(() => {
+  rmSync(home, { recursive: true, force: true })
+  // (And test-safety.js's folder, which holds it: Bun's runner ends without a word to its preloads.)
+  process.emit("kuvo-test-folders-removed" as any)
+})
