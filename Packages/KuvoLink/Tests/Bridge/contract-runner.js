@@ -9,6 +9,7 @@
 //
 // The caller sets the box's folders in the environment first (the bridge reads them as it loads),
 // then `contract({ box, root, files? })`.
+import "./test-safety.js";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { execFileSync, spawn } from "node:child_process";
@@ -547,6 +548,10 @@ async function run(scenario) {
 export function contract({ box: as, root: folder, files }) {
   box = as;
   root = folder;
+  // Every scenario starts by emptying these: they're the test's own, whatever the environment says.
+  for (const [name, given] of Object.entries({ KUVO_HOME: home, KUVO_BOTS: botsRoot, KUVO_WAKES: wakesRoot, KUVO_WAKE_COMMAND: wakeCommand })) {
+    if (!path.resolve(given).startsWith(path.resolve(root) + path.sep)) throw new Error(`${name} is ${given}, outside this test's own folder ${root}: not running the scenarios.`);
+  }
   for (const file of fs.readdirSync(vectors).filter(name => name.endsWith(".json") && (!files || files.includes(name))).sort()) {
     const { scenarios } = JSON.parse(read(vectors, file));
     for (const scenario of scenarios) {

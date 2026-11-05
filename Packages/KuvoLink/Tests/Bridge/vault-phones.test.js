@@ -3,6 +3,7 @@
 // may share ("iPhone"). So one phone's look at an item never reads as another's.
 //
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/vault-phones.test.js`.
+import "./test-safety.js";
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";

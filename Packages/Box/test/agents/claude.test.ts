@@ -1,5 +1,6 @@
 // Claude Code's thread against a fake SDK: messages you send partway, taken late or never.
 
+import "../safety"
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { spawnSync } from "node:child_process"
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"

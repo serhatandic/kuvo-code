@@ -1,3 +1,4 @@
+import "./safety"
 import { afterAll, beforeAll, expect, test } from "bun:test"
 import { mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
@@ -11,11 +12,18 @@ import { join } from "node:path"
 
 let box: string
 let reviewer: typeof import("../src/link/work/reviewer")
+// (What's judged here is your account's own home, as the code finds it, so HOME names it for these:
+// what they write and run stays in their own folders, and test-safety.js still refuses a delete.)
+const runsHome = process.env.HOME
 beforeAll(async () => {
+  process.env.HOME = process.env.KUVO_TEST_REAL_HOME
   box = mkdtempSync(join(tmpdir(), "kuvo-reviewer-eval-"))
   reviewer = await import("../src/link/work/reviewer")
 })
-afterAll(() => rmSync(box, { recursive: true, force: true }))
+afterAll(() => {
+  process.env.HOME = runsHome
+  rmSync(box, { recursive: true, force: true })
+})
 
 interface Case { id: string; kind: "command" | "file" | "tool"; command?: string; fetched?: string; path?: string; access?: "read" | "write"; tool?: string; args?: Record<string, unknown>; said?: string[]; bot?: string; expect: string; by?: string; on?: NodeJS.Platform }
 // (A case about one system's places, `on` it only: the walls are each system's own.)

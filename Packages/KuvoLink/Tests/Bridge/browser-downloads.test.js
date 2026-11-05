@@ -2,6 +2,7 @@
 // whose it is, the conversation at work in the page it started in, so only that conversation's
 // agent hears of it. One from a page no agent is in (yours) is nobody's. Chrome is a stand-in.
 
+import "./test-safety.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";

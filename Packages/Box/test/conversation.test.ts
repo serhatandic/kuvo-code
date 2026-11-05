@@ -1,3 +1,4 @@
+import "./safety"
 import { expect, test } from "bun:test";
 import { excerpt } from "../src/link/letters/conversation";
 

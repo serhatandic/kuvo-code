@@ -1,0 +1,3 @@
+# `bun test Packages/Box/...` from here: the same protection as from Packages/Box (test/preload.ts).
+[test]
+preload = ["./Packages/Box/test/preload.ts"]

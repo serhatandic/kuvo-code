@@ -66,6 +66,8 @@ function removeNow() {
   for (const folder of folders) {
     try { fs.rmSync(folder, { recursive: true, force: true, maxRetries: 3 }); } catch {}
   }
+  // (And the run's own folder, test-safety.js's.)
+  process.emit("kuvo-test-folders-removed");
 }
 process.once("exit", removeNow);
 for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {

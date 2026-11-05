@@ -1,6 +1,7 @@
 // An ACP agent (as Grok and Antigravity speak it), faked: what it sends shows, nothing lost; what
 // it asks is answered as the session's rules and modes say; Stop stops it; what it costs is counted.
 
+import "../safety"
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { execFileSync } from "node:child_process"

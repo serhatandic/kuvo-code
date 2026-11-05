@@ -3,6 +3,7 @@
 // unlock key. Here a stand-in for the app keeps them in memory. (A machine's: vault.test.js.)
 //
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/vault-host.test.js`.
+import "./test-safety.js";
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";

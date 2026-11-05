@@ -6,6 +6,7 @@
 // The real box code; only the engine and the coding agents' bridge are stand-ins.
 //
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/attachments-go.test.js`.
+import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import fs from "node:fs";

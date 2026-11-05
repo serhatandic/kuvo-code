@@ -1,3 +1,4 @@
+import "./safety"
 import { afterAll, beforeAll, expect, test } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
@@ -15,14 +16,21 @@ let project: string
 let reviewer: typeof import("../src/link/work/reviewer")
 let fencePolicy: typeof import("../src/link/fence/policy").fencePolicy
 
+// (What's judged here is your account's own home, as the code finds it, so HOME names it for these:
+// what they write and run stays in their own folders, and test-safety.js still refuses a delete.)
+const runsHome = process.env.HOME
 beforeAll(async () => {
+  process.env.HOME = process.env.KUVO_TEST_REAL_HOME
   box = mkdtempSync(join(tmpdir(), "kuvo-reviewer-"))
   project = join(box, "project")
   mkdirSync(project, { recursive: true })
   reviewer = await import("../src/link/work/reviewer")
   fencePolicy = (await import("../src/link/fence/policy")).fencePolicy
 })
-afterAll(() => rmSync(box, { recursive: true, force: true }))
+afterAll(() => {
+  process.env.HOME = runsHome
+  rmSync(box, { recursive: true, force: true })
+})
 
 let sessions = 0
 // A conversation of its own per test, with what you said in it.

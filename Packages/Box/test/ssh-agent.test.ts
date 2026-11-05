@@ -2,6 +2,7 @@
 // may use, and `ssh-keygen -Y sign` signs through it (as `ssh` and git over SSH do), with a key in
 // each of the formats `ssh-keygen` writes. Its keys come from the vault in the box; here, from the
 // files `ssh-keygen` made, with the vault's say on each signature stood in for.
+import "./safety"
 import { afterAll, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";

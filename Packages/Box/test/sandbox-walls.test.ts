@@ -1,3 +1,5 @@
+import "./safety"
+import { ownPath } from "../../KuvoLink/Tests/Bridge/test-safety.js"
 import { expect, test } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs"
 import { createServer, type Server } from "node:net"
@@ -322,7 +324,7 @@ test.skipIf(!canFence || !mac)("on a Mac, a command reads preferences but never 
     expect(outcomes(out)).toEqual({ "reads them": "allowed", "writes them": "refused" })
   } finally {
     // (cfprefsd keeps them in your own Library, whatever HOME says, where the old code wrote them.)
-    rmSync(join(userInfo().homedir, "Library", "Preferences", `${domain}.plist`), { force: true })
+    rmSync(ownPath(join(userInfo().homedir, "Library", "Preferences", `${domain}.plist`)), { force: true })
     rmSync(root, { recursive: true, force: true })
   }
 })

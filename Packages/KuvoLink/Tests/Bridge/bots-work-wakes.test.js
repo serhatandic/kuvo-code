@@ -5,6 +5,7 @@
 // watcher's clock is the test's.
 //
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/bots-work-wakes.test.js`.
+import "./test-safety.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import http from "node:http";

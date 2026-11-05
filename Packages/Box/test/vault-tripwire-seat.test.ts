@@ -1,3 +1,4 @@
+import "./safety"
 import { expect, test } from "bun:test"
 import { rmSync } from "node:fs"
 import { forgetKeys, makeVault, pausedFor, VAULT_FOLDER } from "../src/link/vault/store"

@@ -3,6 +3,7 @@
 // one of its calls that says how the page is, and to no other conversation. The real keeper and
 // tools; Chrome is a stand-in, with one page.
 
+import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import path from "node:path";

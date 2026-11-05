@@ -10,6 +10,7 @@
 // stand-in.
 //
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/bots-goals.test.js`.
+import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";

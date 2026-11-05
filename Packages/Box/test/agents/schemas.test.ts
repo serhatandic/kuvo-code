@@ -2,6 +2,7 @@
 // agent's update) fails here rather than being lost without a trace. Each check runs when that
 // agent's program or package is there, and is skipped otherwise.
 
+import "../safety"
 import { describe, expect, test } from "bun:test"
 import { mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -69,7 +70,7 @@ describe("Claude Code", () => {
 
 /** Cursor's SDK, where a Kuvo Code on this Mac installed it (its runtime folder), if any. */
 function cursorSDK(): string | undefined {
-  const support = join(process.env.HOME ?? "", "Library", "Application Support")
+  const support = join(process.env.KUVO_TEST_REAL_HOME ?? "", "Library", "Application Support")
   for (const app of ["run.kuvo.code", "run.kuvo.code.agents", "run.kuvo.code.agents2"]) {
     const path = join(support, app, "agents", "runtime", "cursor", "node_modules", "@cursor", "sdk", "dist", "esm", "index.js")
     if (Bun.file(path).size > 0) return path

@@ -111,6 +111,16 @@ node:test's `after` (a test's own `t.after` is fine). They stop what the file st
 first, and remove its folders last, even when a step fails. Then anything still open fails the
 file, named, rather than keeping its process and the whole run going.
 
+Every bridge test file starts with `import "./test-safety.js";`, and every box test file with
+`import "./safety"` (or `"../safety"`), which loads it; a test fails if one doesn't. It keeps a run
+away from the real Kuvo Code, whichever shell and folder start it: it drops the `KUVO_*`, `OPENCODE_*`
+and `XDG_*` variables that an agent's shell hands down (not `KUVO_TEST_*` or `OPENCODE_TEST_*`, which
+you set on purpose), the coding agents' folders and Kuvo Code's own commands on the `PATH`, gives the
+run a home of its own in `~/.kuvo-code-test`, and throws on deleting or moving anything but a folder
+the process made with `mkdtemp` or a path it named with `ownPath` (what a test has to make in a real
+cache, under a name of its own). A test sets what it wants itself, for its own folders. A run removes
+its home as it ends, and the next run clears what a killed one left.
+
 `./scripts/test-app.sh` runs one at a time: a run started while another is going
 waits for it, since they share the test copy's settings and temporary folders.
 

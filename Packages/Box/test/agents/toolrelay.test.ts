@@ -1,6 +1,7 @@
 // Kuvo Code's tools for an agent run whole in the box's sandbox, through the bridge's relay: each
 // call is its own session's, whatever it says, and reaches the tools where the sandbox can't.
 
+import "../safety"
 import { afterAll, afterEach, describe, expect, test } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"

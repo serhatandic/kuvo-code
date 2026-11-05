@@ -4,6 +4,7 @@
 // together when it goes (scripts/compat.sh lists them).
 //
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/compat.test.js`.
+import "./test-safety.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";

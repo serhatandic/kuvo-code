@@ -1,3 +1,5 @@
+import "./safety"
+import { ownPath } from "../../KuvoLink/Tests/Bridge/test-safety.js"
 import { expect, test } from "bun:test"
 import { createHash } from "node:crypto"
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
@@ -51,7 +53,8 @@ test.skipIf(!canFence || !tmux)("a command can't reach your tmux, and the one it
   const yours = `${realpathSync("/tmp")}/tmux-${uid}`
   const made = !existsSync(yours)
   // A server of yours, in your tmux's folder, by a name of its own (never your own sessions).
-  const server = join(yours, `kuvo-test-${root.slice(-6)}`)
+  const server = ownPath(join(yours, `kuvo-test-${root.slice(-6)}`))
+  if (made) ownPath(yours)
   try {
     const kuvo = join(root, "kuvo")
     const project = join(root, "project")

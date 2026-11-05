@@ -6,6 +6,7 @@
 // read again only once its session changed.
 //
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/search.test.js`.
+import "./test-safety.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import http from "node:http";

@@ -1,3 +1,4 @@
+import "./safety"
 import { afterAll, beforeAll, expect, test } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
@@ -55,7 +56,11 @@ let engineFile: string
 let engineBefore: string | null = null
 const sandboxOnBefore = process.env.KUVO_TEST_SANDBOX_ON
 
+// (What's judged here is your account's own home, as the code finds it, so HOME names it for these:
+// what they write and run stays in their own folders, and test-safety.js still refuses a delete.)
+const runsHome = process.env.HOME
 beforeAll(async () => {
+  process.env.HOME = process.env.KUVO_TEST_REAL_HOME
   box = mkdtempSync(join(tmpdir(), "kuvo-auto-"))
   process.env.KUVO_TEST_SANDBOX_ON = "1"
   process.env.KUVO_TEST_LOCAL_SCRIPTS = "1"
@@ -98,6 +103,7 @@ beforeAll(async () => {
   reviewer = await import("../src/link/work/reviewer")
 })
 afterAll(() => {
+  process.env.HOME = runsHome
   engine.stop(true)
   if (engineBefore === null) rmSync(engineFile, { force: true })
   else writeFileSync(engineFile, engineBefore)

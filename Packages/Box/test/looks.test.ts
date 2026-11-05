@@ -1,5 +1,6 @@
 // The looks a bot can have, as the route shapes hold answers to them, are the ones the apps draw:
 // bot-words.json's, which every box reads.
+import "./safety"
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { LOOKS } from "../src/shared/routes/bots";

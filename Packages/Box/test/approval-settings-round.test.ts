@@ -1,3 +1,4 @@
+import "./safety"
 import { afterAll, beforeAll, expect, test } from "bun:test"
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { dirname } from "node:path"

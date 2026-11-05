@@ -3,6 +3,7 @@
 // so none is left behind in your Keychain. The app is a stand-in; the box is the real one.
 //
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/bot-keys-left.test.js`.
+import "./test-safety.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import crypto from "node:crypto";

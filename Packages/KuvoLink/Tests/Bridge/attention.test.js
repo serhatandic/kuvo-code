@@ -3,6 +3,7 @@
 // reaches your phones; once no client is in use (its lease ran out, or it said so), what waits goes
 // at once, and with none, notices go at once. The clock is the test's own: nothing waits for real
 // time. Run with `node --test Packages/KuvoLink/Tests/Bridge/*.test.js`.
+import "./test-safety.js";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";

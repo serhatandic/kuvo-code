@@ -1,5 +1,6 @@
 // The bridge, checked against the shared vectors and against a phone and an engine in this
 // process. Run with `node --test Packages/KuvoLink/Tests/Bridge/*.test.js`.
+import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";

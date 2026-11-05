@@ -1,3 +1,4 @@
+import "./safety"
 import { expect, test } from "bun:test"
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"

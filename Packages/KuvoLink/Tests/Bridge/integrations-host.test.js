@@ -4,6 +4,7 @@
 // the agent uses there. Here a stand-in for the app keeps them in memory. The scenarios in
 // integrations-scenarios.js, then what's this Mac's own: nothing kept in the box's folder, its
 // browser's sign-ins, and the app not answering said plainly, with nothing half removed.
+import "./test-safety.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";

@@ -1,3 +1,4 @@
+import "./safety"
 import { expect, test } from "bun:test";
 import { searchText, snippet } from "../src/link/areas/search";
 import type { EngineMessage } from "../src/link/engine/conversations";

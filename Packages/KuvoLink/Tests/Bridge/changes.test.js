@@ -2,6 +2,7 @@
 // the relay: what's changed, new files with their stamps, staging and unstaging, Discard putting a
 // file back with anything in its way in Kuvo Code's trash, a picture's old side whole, a commit and a
 // push, and a branch's work brought back: Merge into… and Create Pull Request.
+import "./test-safety.js";
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";

@@ -3,6 +3,7 @@
 // connected or not), listed with what to know before removing it, and removed (not while an
 // agent works there). Real git; the engine is a stand-in that makes and removes worktrees with
 // git, as it does.
+import "./test-safety.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";

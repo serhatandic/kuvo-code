@@ -9,6 +9,7 @@
 // `scripts/test-linux.sh <ssh-host> sandbox.test.js`, and with `--engine` on the engine's own runner,
 // which the box runs on there (Bun's: `BUN_BE_BUN=1 <engine> test --timeout 120000 ./sandbox.test.js`,
 // as its 5 seconds a test are too few for some).
+import { ownPath, testsFolder } from "./test-safety.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
@@ -25,8 +26,7 @@ import { removeAtEnd } from "./at-end.js";
 
 // In the folder tests keep in your home (not the temporary folders, which commands may write), so
 // what a command mustn't write is somewhere it otherwise couldn't.
-fs.mkdirSync(path.join(os.homedir(), ".kuvo-code-test"), { recursive: true });
-const root = fs.realpathSync(fs.mkdtempSync(path.join(os.homedir(), ".kuvo-code-test", "sb-")));
+const root = fs.realpathSync(testsFolder("sb"));
 removeAtEnd(root);
 const linux = process.platform === "linux";
 // This file's runtime, for the commands that run it: run on a machine's engine, that's in the
@@ -1144,13 +1144,14 @@ test("commands get caches of Kuvo Code's own for pnpm, uv and corepack, which th
   const project = path.join(root, "tool-caches-project");
   fs.mkdirSync(project);
   const mark = `kuvo-sandbox-test-${process.pid}`;
+  for (const parts of yourToolCaches) ownPath(path.join(realHome, ...parts, mark));
   // (What a write that wasn't refused would leave in your home, to remove after: the mark, and
   // each folder down to it that wasn't there before.)
   const made = [];
   for (const parts of yourToolCaches) {
     for (let at = 1; at <= parts.length; at++) {
       const folder = path.join(realHome, ...parts.slice(0, at));
-      if (!fs.existsSync(folder) && !made.includes(folder)) made.push(folder);
+      if (!fs.existsSync(folder) && !made.includes(folder)) made.push(ownPath(folder));
     }
   }
   const running = await start(box);
@@ -1184,6 +1185,7 @@ test("this Mac's box keeps the caches for commands in its app's cache folder, in
   // (Its app's: the box's temporary folder in the app's, as the app gives it, `…/T/<bundle>/box`;
   // its cache folder `Library/Caches/<bundle>`. This test's HOME isn't your account's.)
   const bundle = `caches-mac-${process.pid}`;
+  ownPath(path.join(realHome, "Library", "Caches", bundle));
   const box = boxAt(bundle, true);
   const project = path.join(root, "mac-caches-project");
   fs.mkdirSync(project);
@@ -1207,7 +1209,7 @@ test("with a cache folder of your own (XDG_CACHE_HOME), the tools' caches in it 
   fs.mkdirSync(project);
   // Yours, where commands write tools' caches otherwise (on a Mac in `Library/Caches`, on Linux in
   // `~/.cache`), with uv's in it and another tool's.
-  const yours = path.join(realHome, ...(linux ? [".cache"] : ["Library", "Caches"]), `kuvo-sandbox-test-${process.pid}`);
+  const yours = ownPath(path.join(realHome, ...(linux ? [".cache"] : ["Library", "Caches"]), `kuvo-sandbox-test-${process.pid}`));
   for (const name of ["uv", "other"]) fs.mkdirSync(path.join(yours, name), { recursive: true });
   const running = await start(box, { XDG_CACHE_HOME: yours });
   try {
@@ -1228,7 +1230,7 @@ test("bunx's packages in your temporary folder, which it runs again as they are,
   fs.mkdirSync(project);
   // Your temporary folder, as bunx names its packages' folders in it (`bunx-<uid>-<package>`).
   const temporary = fs.realpathSync(spawnSync("getconf", ["DARWIN_USER_TEMP_DIR"], { encoding: "utf8" }).stdout.trim());
-  const [mine, bunx] = [`kuvo-sandbox-test-${process.pid}`, `bunx-${process.getuid()}-kuvo-sandbox-test-${process.pid}`].map(name => path.join(temporary, name));
+  const [mine, bunx] = [`kuvo-sandbox-test-${process.pid}`, `bunx-${process.getuid()}-kuvo-sandbox-test-${process.pid}`].map(name => ownPath(path.join(temporary, name)));
   const running = await start(box, { TMPDIR: temporary });
   try {
     const ran = await engineRuns(box, project, tries([
@@ -1343,7 +1345,7 @@ test("a command's own socket in its temporary folder works, as a server's tests 
   // A name of its own each run, as long as the app's, so two runs at once don't share it.
   const bundle = `kuvo.sock.${crypto.randomBytes(2).toString("hex").slice(0, 3)}`;
   const box = boxAt(path.join("Library", "Application Support", bundle), true);
-  const temporary = path.join(os.tmpdir(), bundle);
+  const temporary = ownPath(path.join(os.tmpdir(), bundle));
   fs.rmSync(temporary, { recursive: true, force: true });
   box.env.TMPDIR = path.join(temporary, "box") + "/";
   const project = path.join(root, "sockets");
