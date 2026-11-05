@@ -344,7 +344,8 @@ final class OverseerLightsView: PlatformView {
     var playing: Int { root.sublayers?.count ?? 0 }
 
     func play(_ lights: [OverseerLight], on lanes: [OverseerLane], still: Bool, scheme: ColorScheme) {
-        let new = lights.filter { !played.contains($0.id) }
+        // Only those with a lane to play on: one whose lane isn't laid out yet plays once it is.
+        let new = lights.filter { light in !played.contains(light.id) && lanes.contains { $0.bot == light.bot } }
         guard !new.isEmpty else { return }
         played = Array((played + new.map(\.id)).suffix(64))
         CATransaction.begin()

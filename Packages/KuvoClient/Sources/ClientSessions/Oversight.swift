@@ -79,9 +79,10 @@ public struct Overseer: Sendable, Hashable, Identifiable {
 }
 
 public enum Oversight {
-    /// The bots overseeing `sessions` (a project's, in the order shown), the first to show first:
-    /// each with its sessions among them.
-    public static func overseers(of sessions: [Session]) -> [Overseer] {
+    /// The bots overseeing `sessions` (a project's, in the order shown), each with its sessions
+    /// among them: in `ranked`'s order (the bots' own, so they keep their places as their sessions
+    /// take turns at the top), any it doesn't name after, the first to show first.
+    public static func overseers(of sessions: [Session], ranked: [String] = []) -> [Overseer] {
         var order: [String] = [], names: [String: String] = [:], theirs: [String: [String]] = [:]
         for session in sessions {
             guard let by = WorksFor(session) else { continue }
@@ -91,7 +92,10 @@ public enum Oversight {
             }
             theirs[by.bot, default: []].append(session.id)
         }
-        return order.map { Overseer(bot: $0, name: names[$0] ?? "", sessions: theirs[$0] ?? []) }
+        let rank = Dictionary(ranked.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
+        return order.enumerated()
+            .sorted { (rank[$0.element] ?? ranked.count + $0.offset, $0.offset) < (rank[$1.element] ?? ranked.count + $1.offset, $1.offset) }
+            .map { Overseer(bot: $0.element, name: names[$0.element] ?? "", sessions: theirs[$0.element] ?? []) }
     }
 
     /// What a project's row says of the bots overseeing it, for VoiceOver and its tooltip:

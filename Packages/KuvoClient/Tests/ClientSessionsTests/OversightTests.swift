@@ -28,6 +28,15 @@ struct OversightTests {
         #expect(Oversight.overseers(of: [try session("ses_mine")]).isEmpty)
     }
 
+    @Test func eachBotKeepsItsPlaceAsItsSessionsTakeTurnsAtTheTop() throws {
+        let adaBusy = [try session("ses_log", by: "ada"), try session("ses_core", by: "pixel")]
+        let pixelBusy = [try session("ses_core", by: "pixel"), try session("ses_log", by: "ada")]
+        let bots = ["pixel", "ada"]
+        #expect(Oversight.overseers(of: adaBusy, ranked: bots).map(\.bot) == ["pixel", "ada"])
+        #expect(Oversight.overseers(of: pixelBusy, ranked: bots).map(\.bot) == ["pixel", "ada"], "lanes and faces don't swap places")
+        #expect(Oversight.overseers(of: [try session("ses_new", by: "newer")] + adaBusy, ranked: bots).map(\.bot) == ["pixel", "ada", "newer"], "a bot Bots doesn't list yet goes last")
+    }
+
     @Test func whatABotDidBeforeYouLookedIsntPlayedAndEachNewThingPlaysOnce() throws {
         var player = OversightPlayer()
         let before = try marks(#"{"marks": [{"id": "m1", "bot": "pixel", "session": "ses_core", "kind": "read", "at": 1}]}"#)

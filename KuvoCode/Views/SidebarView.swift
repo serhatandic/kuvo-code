@@ -664,6 +664,7 @@ struct SidebarView: View {
     /// What its bots just did to its sessions, each on the lane to its row: one under another
     /// (a branch, a hand-off) lights the row it's under.
     private func lights(in project: Workspace.Project) -> [OverseerLight] {
+        guard !app.botOversight.recent.isEmpty else { return [] }
         let marks = app.botOversight.playing(in: Set(project.sessions.map(\.id)))
         guard !marks.isEmpty else { return [] }
         let tree = Branches.latestFirst(project.sessions)
@@ -682,7 +683,7 @@ struct SidebarView: View {
     /// of the bot's sessions, and on into Show More when some of them are among those not shown.
     private func lanes(in project: Workspace.Project, rows: [String: Anchor<CGRect>], proxy: GeometryProxy) -> [OverseerLane] {
         guard let folder = rows[OverseenRows.project].map({ proxy[$0] }) else { return [] }
-        let overseers = Oversight.overseers(of: Branches.latestFirst(project.sessions).top).compactMap { overseer in
+        let overseers = Oversight.overseers(of: Branches.latestFirst(project.sessions).top, ranked: bots.list.map(\.id)).compactMap { overseer in
             bots.bot(overseer.bot).map { (overseer: overseer, bot: $0) }
         }
         let icon = SidebarMetrics.iconWidth(messageFont), half = SidebarMetrics.rowHeight(messageFont) / 2
@@ -699,8 +700,10 @@ struct SidebarView: View {
             // elbow, where the line turns.
             let hidden = elbows.count < overseer.sessions.count
             guard let bottom = hidden ? (more ?? elbows.values.max()) : elbows.values.max().map({ $0 - OverseerLanes.radius }) else { return nil }
-            // Side by side under the folder, 6 points apart.
-            let x = 10 + icon / 2 + (CGFloat(index) - CGFloat(overseers.count - 1) / 2) * 6
+            // Side by side under the folder, 6 points apart, closer for more than three, so each
+            // turns into its rows before the title.
+            let gap = overseers.count > 3 ? 12 / CGFloat(overseers.count - 1) : 6
+            let x = 10 + icon / 2 + (CGFloat(index) - CGFloat(overseers.count - 1) / 2) * gap
             return OverseerLane(bot: bot.id, look: bot.look, paused: bots.paused.contains(bot.id), x: x, top: top,
                                 bottom: bottom, elbows: elbows, reach: 10 + icon + 10 - 6)
         }
@@ -1416,7 +1419,7 @@ private struct ProjectRow: View {
 
     /// The bots overseeing sessions here, the first to show first.
     private func overseers() -> [Bot] {
-        Oversight.overseers(of: Branches.latestFirst(project.sessions).top).compactMap { app.bots.bot($0.bot) }
+        Oversight.overseers(of: Branches.latestFirst(project.sessions).top, ranked: app.bots.list.map(\.id)).compactMap { app.bots.bot($0.bot) }
     }
 
     /// The size of a bot's face here, and how far the next one overlaps it.
@@ -1430,7 +1433,8 @@ private struct ProjectRow: View {
     /// while paused, pleased a moment as one finishes. Each opens its bot's chat.
     private func faces(_ overseers: [Bot]) -> some View {
         let size = faceSize
-        let finished = app.botOversight.playing(in: Set(project.sessions.map(\.id))).filter { $0.kind == .finished }
+        let finished = app.botOversight.recent.isEmpty ? []
+            : app.botOversight.playing(in: Set(project.sessions.map(\.id))).filter { $0.kind == .finished }
         return HStack(spacing: 2) {
             HStack(spacing: -(size / 5 + 4)) {
                 ForEach(overseers.prefix(3)) { bot in
@@ -1482,7 +1486,7 @@ private struct ProjectRow: View {
                 // they go under the pointer.
                 if !overseers.isEmpty {
                     Color.clear.frame(width: facesWidth(overseers.count), height: 1)
-                        .padding(.trailing, mark == nil ? -10 : 0)
+                        .padding(.trailing, mark == nil ? -10 : -2)
                 }
                 // Room for the compose button, so a long name never runs under it; folded, the
                 // mark of what's under it, where a session's sits, the button over it under the
@@ -1732,7 +1736,7 @@ private struct BotRow: View {
             ShimmerText(text: "Working…")
         } else if case let helpers = workspace.helpersAtWork(in: bot.sessionID), helpers > 0 {
             ShimmerText(text: helpers == 1 ? "Working on a task…" : "Working on \(helpers) tasks…")
-        } else if !bots.paused.contains(bot.id), case let overseen = workspace.overseen(by: bot.id), overseen.contains(where: { workspace.isWorking($0.id) || workspace.needsAttention($0.id) }) {
+        } else if !bots.paused.contains(bot.id), case let overseen = workspace.overseen(by: bot.id), overseen.contains(where: { workspace.isWorking($0.id) }) {
             // Every session it oversees, while one is at it (one waiting on you shows on its own row).
             ShimmerText(text: Oversight.overseeing(count: overseen.count))
         } else if let place = bots.waitingFor(bot) {
