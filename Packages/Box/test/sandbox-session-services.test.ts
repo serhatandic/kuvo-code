@@ -1,3 +1,4 @@
+import "./safety"
 import { expect, test } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import net from "node:net"

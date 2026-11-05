@@ -1,5 +1,6 @@
 // Settings › MCP Servers' popular servers as a box offers them from the catalog its Mac left: only
 // what it can say about each, as its route's shape says, whatever a newer Mac's catalog has.
+import "./safety"
 import { afterAll, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

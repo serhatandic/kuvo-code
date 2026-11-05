@@ -1,3 +1,4 @@
+import "./safety"
 import { ownPath } from "../../KuvoLink/Tests/Bridge/test-safety.js"
 import { expect, test } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs"

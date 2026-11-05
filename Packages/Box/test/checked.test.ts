@@ -1,3 +1,4 @@
+import "./safety"
 import { expect, test } from "bun:test"
 import { readdirSync, readFileSync } from "node:fs"
 import { join, relative } from "node:path"
