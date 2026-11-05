@@ -1043,6 +1043,7 @@ describe("Claude Code's permissions", () => {
     await until(() => sessions.forms(id).length === 1)
     const [form] = sessions.forms(id)
     expect(form.fields[0]).toMatchObject({ title: "Database", description: "Which database?", options: [{ value: "Postgres" }, { value: "SQLite", description: "One file" }] })
+    expect(form.metadata).toMatchObject({ kind: "question", tool: { id: "toolu_1" } })
     sessions.replyForm(id, form.id, { q0: "SQLite" })
     expect(await asked).toMatchObject({ behavior: "allow", updatedInput: { questions, answers: { "Which database?": "SQLite" } } })
     const again = fake.canUse("AskUserQuestion", { questions }, "toolu_2")

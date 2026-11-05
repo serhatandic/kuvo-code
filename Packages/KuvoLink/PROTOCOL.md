@@ -3469,9 +3469,11 @@ the conversation's approval, never part of it: approval says what may run withou
 what may be decided without asking. Every conversation is Interactive until it's turned on.
 
 - `GET kuvo/sessions/<id>/autopilot`: `{autopilot, decided}`, the calls it made, the latest last
-  (each `{id, text, choice, why?, options?, session?, at, yours?}`: the question's form, what it
-  asked, the choice it went with and why, the choices it had, the session that asked where it's a
-  subagent's, and your choice since). 404 where there's no such conversation.
+  (each `{id, text, choice, why?, options?, session?, call?, at, yours?}`: the question's form, what
+  it asked, the choice it went with and why, the choices it had, the session that asked where it's
+  a subagent's, the tool call that asked it (the form's `metadata.tool.id`, where it has one: a
+  client shows the call at that step), and your choice since). 404 where there's no such
+  conversation. The agents bridge's questions carry `metadata.tool.id` too, as the engine's do.
 - `PUT kuvo/sessions/<id>/autopilot` `{autopilot: bool}`: on or off; the answer as `GET`'s. It's
   kept with the conversation (`metadata.kuvo.autopilot`, false once off), and its agent is told how
   to work in its instructions (`kuvo.autopilot`), taken out again when it's turned off: decide what

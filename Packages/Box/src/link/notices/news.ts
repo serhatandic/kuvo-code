@@ -46,7 +46,7 @@ export interface EngineForm {
   id: string;
   sessionID: string;
   title?: string;
-  metadata?: { kind?: string; message?: string; server?: string };
+  metadata?: { kind?: string; message?: string; server?: string; tool?: { messageID?: string; id?: string } };
   fields?: FormField[];
 }
 

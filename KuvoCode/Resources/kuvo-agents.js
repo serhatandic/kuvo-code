@@ -17459,7 +17459,7 @@ ${live.agentPrompt}` : ""
     const session = this.record(id).session;
     if (turn.isEnded || refusesAsks(live.doing))
       return Promise.resolve(null);
-    const form = { id: newID("frm"), sessionID: id, title: ask.title, metadata: { kind: "question" }, fields: ask.fields };
+    const form = { id: newID("frm"), sessionID: id, title: ask.title, metadata: { kind: "question", ...ask.toolCallID ? { tool: { id: ask.toolCallID } } : {} }, fields: ask.fields };
     return new Promise((resolve) => {
       live.forms.set(form.id, { form, resolve });
       emit("form.created", { form }, session.location.directory);
@@ -23192,4 +23192,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 963a6b52b8e9d437b5324696fedfa7281127787c6367becf5b4186413baf823b
+// Built from Packages/Box/src/agents 803c18dae990b75b4a1f1976c269f3cb50ab413efe458bd15678de909b9335b4

@@ -5,10 +5,11 @@ import { bool, type Infer, list, number, object, type RouteShape, string } from 
 
 /** A call Autopilot made where a question would have waited: the question's form (`id`), what it
  * asked, the choice it went with and why, the choices it had (one question's), the session that
- * asked where it isn't the conversation itself (a subagent's), when; and your choice since
+ * asked where it isn't the conversation itself (a subagent's), the tool call that asked it (`call`,
+ * where its form names one: the step a client shows it at), when; and your choice since
  * (`yours`). */
 export const DECIDED = object({
-  id: string, text: string, choice: string, "why?": string, "options?": list(string), "session?": string, at: number,
+  id: string, text: string, choice: string, "why?": string, "options?": list(string), "session?": string, "call?": string, at: number,
   "yours?": object({ choice: string, at: number }),
 });
 

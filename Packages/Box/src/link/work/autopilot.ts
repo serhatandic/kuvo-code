@@ -12,7 +12,7 @@ import { boxNote } from "../../shared/queues";
 import { call, engineGet } from "../engine/client";
 import { sendInto } from "../engine/queue";
 import { locked, textOf, writePrivate } from "../files";
-import { asksIn, recommendationOf, type Recommendation } from "./answers";
+import { askedBy, asksIn, recommendationOf, type Recommendation } from "./answers";
 import { addDecided, runningGoalOf } from "./goals";
 import { worksFor } from "./tree";
 import { WORK_FOLDER } from "./changes";
@@ -113,7 +113,7 @@ export async function goAheadOnAutopilot(target: Target, conversation: Pick<Engi
   const recommended = recommendationOf(form);
   const asker = typeof form.sessionID === "string" ? form.sessionID : null;
   if (!recommended || !asker || typeof form.id !== "string") return null;
-  return goAhead(target, conversation, asker, form.id, recommended, file, signal);
+  return goAhead(target, conversation, asker, form.id, recommended, file, signal, askedBy(form));
 }
 
 /** What `conversation` (on Autopilot) and its subagents ask now that recommends a choice, answered
@@ -123,7 +123,7 @@ export async function goAheadOnWaiting(target: Target, conversation: Pick<Engine
   const made: DecidedShape[] = [];
   for (const question of questions) {
     if (!question.recommended || signal?.aborted) continue;
-    const one = await goAhead(target, conversation, question.asker, question.id, question.recommended, file, signal);
+    const one = await goAhead(target, conversation, question.asker, question.id, question.recommended, file, signal, question.call);
     if (one) made.push(one);
   }
   return made;
@@ -143,7 +143,7 @@ export async function catchUpAutopilot(target: Target, file = DECIDED_FILE, sign
 // Answered with what it recommends, and kept: with the conversation, and on its bot's running goal
 // (as the goal's own Autopilot keeps it), so the goal shows it too. Not while you have that goal
 // paused: it waits for you.
-async function goAhead(target: Target, conversation: Pick<EngineSession, "id" | "metadata">, asker: string, id: string, recommended: Recommendation, file: string, signal?: AbortSignal): Promise<DecidedShape | null> {
+async function goAhead(target: Target, conversation: Pick<EngineSession, "id" | "metadata">, asker: string, id: string, recommended: Recommendation, file: string, signal?: AbortSignal, asked?: string | null): Promise<DecidedShape | null> {
   const goal = runningGoalOf(conversation.id, worksFor(conversation)?.bot ?? null);
   if (goal?.heldByYou) return null;
   const went = await call(target, "POST", `/api/session/${encodeURIComponent(asker)}/form/${encodeURIComponent(id)}/reply`, { answer: recommended.answer }, signal).then(() => true, () => false);
@@ -157,6 +157,7 @@ async function goAhead(target: Target, conversation: Pick<EngineSession, "id" | 
       ...(recommended.why ? { why: recommended.why } : {}),
       ...(recommended.options ? { options: recommended.options } : {}),
       ...(asker !== conversation.id ? { session: asker } : {}),
+      ...(asked ? { call: asked } : {}),
       at: Date.now(),
     };
     all[conversation.id] = [...list, made].slice(-KEPT);

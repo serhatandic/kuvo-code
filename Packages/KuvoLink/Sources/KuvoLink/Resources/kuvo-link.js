@@ -8808,7 +8808,7 @@ async function goAheadOnAutopilot(target, conversation, form, file = DECIDED_FIL
   const asker = typeof form.sessionID === "string" ? form.sessionID : null;
   if (!recommended || !asker || typeof form.id !== "string")
     return null;
-  return goAhead2(target, conversation, asker, form.id, recommended, file, signal);
+  return goAhead2(target, conversation, asker, form.id, recommended, file, signal, askedBy(form));
 }
 async function goAheadOnWaiting(target, conversation, file = DECIDED_FILE, signal) {
   const { questions } = await asksIn(target, conversation.id, signal);
@@ -8816,7 +8816,7 @@ async function goAheadOnWaiting(target, conversation, file = DECIDED_FILE, signa
   for (const question of questions) {
     if (!question.recommended || signal?.aborted)
       continue;
-    const one = await goAhead2(target, conversation, question.asker, question.id, question.recommended, file, signal);
+    const one = await goAhead2(target, conversation, question.asker, question.id, question.recommended, file, signal, question.call);
     if (one)
       made.push(one);
   }
@@ -8832,7 +8832,7 @@ async function catchUpAutopilot(target, file = DECIDED_FILE, signal) {
     await goAheadOnWaiting(target, data, file, signal).catch(() => {});
   }
 }
-async function goAhead2(target, conversation, asker, id, recommended, file, signal) {
+async function goAhead2(target, conversation, asker, id, recommended, file, signal, asked) {
   const goal = runningGoalOf(conversation.id, worksFor(conversation)?.bot ?? null);
   if (goal?.heldByYou)
     return null;
@@ -8851,6 +8851,7 @@ async function goAhead2(target, conversation, asker, id, recommended, file, sign
       ...recommended.why ? { why: recommended.why } : {},
       ...recommended.options ? { options: recommended.options } : {},
       ...asker !== conversation.id ? { session: asker } : {},
+      ...asked ? { call: asked } : {},
       at: Date.now()
     };
     all[conversation.id] = [...list, made].slice(-KEPT);
@@ -9255,6 +9256,10 @@ function recommendationOf(form) {
   const options = one && Array.isArray(one.options) ? one.options.filter(isObject).map((option) => unmarked(String(option.label ?? ""))).filter(Boolean) : [];
   return { answer, text: asked, choice: chosen.map((each) => each.label).join(", "), ...chosen.length === 1 && chosen[0].why ? { why: chosen[0].why } : {}, ...options.length ? { options } : {} };
 }
+var askedBy = (form) => {
+  const tool = isObject(form.metadata) && isObject(form.metadata.tool) ? form.metadata.tool : null;
+  return typeof tool?.id === "string" && tool.id ? tool.id : null;
+};
 async function askersOf(target, session, signal) {
   const found = [session];
   for (let at = 0;at < found.length && at < 40; at++) {
@@ -9287,7 +9292,8 @@ async function asksIn(target, session, signal) {
       const fields = (Array.isArray(form.fields) ? form.fields : []).filter((field) => isObject(field) && !field.hidden && !(Array.isArray(field.when) && field.when.length));
       const one = fields.length === 1 && fields[0].type === "string" ? fields[0] : null;
       const recommended = recommendationOf(form);
-      questions.push({ id: form.id, asker, key: typeof one?.key === "string" ? one.key : null, text: String(one?.description || one?.title || form.title || "a question"), ...recommended ? { recommended } : {} });
+      const call = askedBy(form);
+      questions.push({ id: form.id, asker, key: typeof one?.key === "string" ? one.key : null, text: String(one?.description || one?.title || form.title || "a question"), ...recommended ? { recommended } : {}, ...call ? { call } : {} });
     }
   }
   return { permissions, questions };

@@ -92,6 +92,8 @@ export interface PendingQuestion {
   key: string | null;
   text: string;
   recommended?: Recommendation;
+  /** The tool call that asked it, where the form names it. */
+  call?: string;
 }
 
 /** The answer a question recommends: a choice marked "(Recommended)" in each field it asks, as the
@@ -132,6 +134,12 @@ export function recommendationOf(form: Record<string, unknown>): Recommendation 
   return { answer, text: asked, choice: chosen.map(each => each.label).join(", "), ...(chosen.length === 1 && chosen[0].why ? { why: chosen[0].why } : {}), ...(options.length ? { options } : {}) };
 }
 
+/** The tool call that asked a form (`metadata.tool.id`, the engine's and the agents bridge's). */
+export const askedBy = (form: Record<string, unknown>): string | null => {
+  const tool = isObject(form.metadata) && isObject(form.metadata.tool) ? form.metadata.tool : null;
+  return typeof tool?.id === "string" && tool.id ? tool.id : null;
+};
+
 /** The session and its subagents (theirs too, a few levels down), which ask in its name. */
 export async function askersOf(target: Target, session: string, signal?: AbortSignal): Promise<string[]> {
   const found = [session];
@@ -162,7 +170,8 @@ export async function asksIn(target: Target, session: string, signal?: AbortSign
       const fields = (Array.isArray(form.fields) ? form.fields : []).filter((field: unknown) => isObject(field) && !field.hidden && !(Array.isArray(field.when) && field.when.length));
       const one = fields.length === 1 && fields[0].type === "string" ? fields[0] : null;
       const recommended = recommendationOf(form);
-      questions.push({ id: form.id, asker, key: typeof one?.key === "string" ? one.key : null, text: String(one?.description || one?.title || form.title || "a question"), ...(recommended ? { recommended } : {}) });
+      const call = askedBy(form);
+      questions.push({ id: form.id, asker, key: typeof one?.key === "string" ? one.key : null, text: String(one?.description || one?.title || form.title || "a question"), ...(recommended ? { recommended } : {}), ...(call ? { call } : {}) });
     }
   }
   return { permissions, questions };

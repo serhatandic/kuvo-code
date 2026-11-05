@@ -154,7 +154,8 @@ test("a conversation is Interactive until it's turned on; on, it's kept with it 
 
 test("on Autopilot, a question that marks the choice it recommends goes ahead on it at once, a subagent's too, kept as a call it made", async () => {
   const { watch } = await watcher();
-  await watch({ type: "form.created", data: { form: QUESTION("frm_1", "ses_away", ROASTS) } });
+  // (Asked by a tool call, as the engine's questions are: a client shows the call at that step.)
+  await watch({ type: "form.created", data: { form: { ...QUESTION("frm_1", "ses_away", ROASTS), metadata: { kind: "question", tool: { messageID: "msg_1", id: "call_roast" } } } } });
   await watch({ type: "form.created", data: { form: QUESTION("frm_2", "ses_helper", ["Pickup only (Recommended)", "Delivery too"]) } });
   assert.deepEqual(answered, [
     { session: "ses_away", form: "frm_1", answer: { roast: "r1" } },
@@ -162,7 +163,8 @@ test("on Autopilot, a question that marks the choice it recommends goes ahead on
   ]);
   const { decided } = (await route("GET", "kuvo/sessions/ses_away/autopilot")).body;
   assert.equal(decided.length, 2);
-  assert.deepEqual({ ...decided[0], at: 0 }, { id: "frm_1", text: "Which roast for the house blend?", choice: "Warm and roasty", why: "Best reviewed, and it suits the pastries", options: ["Light and fruity", "Warm and roasty", "Dark and smoky"], at: 0 });
+  assert.deepEqual({ ...decided[0], at: 0 }, { id: "frm_1", text: "Which roast for the house blend?", choice: "Warm and roasty", why: "Best reviewed, and it suits the pastries", options: ["Light and fruity", "Warm and roasty", "Dark and smoky"], call: "call_roast", at: 0 });
+  assert.equal(decided[1].call, undefined, "one no tool call asked has none");
   assert.equal(decided[1].session, "ses_helper", "a subagent's says which asked");
 });
 
