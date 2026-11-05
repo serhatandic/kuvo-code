@@ -16,7 +16,7 @@ let reviewer: typeof import("../src/link/work/reviewer")
 let fencePolicy: typeof import("../src/link/fence/policy").fencePolicy
 
 // (What's judged here is your account's own home, as the code finds it, so HOME names it for these:
-// nothing here runs a command or writes there, and test-safety.js still refuses a delete.)
+// what they write and run stays in their own folders, and test-safety.js still refuses a delete.)
 const runsHome = process.env.HOME
 beforeAll(async () => {
   process.env.HOME = process.env.KUVO_TEST_REAL_HOME

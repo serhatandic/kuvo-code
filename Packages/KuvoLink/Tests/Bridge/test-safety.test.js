@@ -31,7 +31,7 @@ const untouched = folder => {
 
 const scenarioName = JSON.parse(fs.readFileSync(path.join(here, "../../Vectors/routes/wakes.json"), "utf8")).scenarios.find(each => each.only !== "mac").name;
 
-// (Bun's runner has no `--test` to start a run with, and shares one process.)
+// (These two start a process of their own, with Node's way of running a test or a script: not on Bun's runner.)
 test("a run of the route scenarios leaves the folders its shell names alone, and passes on its own", { skip: !!process.versions.bun }, () => {
   const folder = decoy();
   // (A run of its own: this one's runner tells its files apart by this, and a file it finds set only reports to it.)
@@ -47,11 +47,10 @@ test("a run of the route scenarios leaves the folders its shell names alone, and
   }
 });
 
-test("a test's process has dropped what Kuvo Code's shells hand down, and has a home of its own", () => {
+test("a test's process has dropped what Kuvo Code's shells hand down, and has a home of its own", { skip: !!process.versions.bun }, () => {
   const folder = decoy();
   const script = `import "${path.join(here, "test-safety.js")}"; import os from "node:os"; console.log(JSON.stringify({ env: process.env, tmp: os.tmpdir() }));`;
   const named = { KUVO_WAKES: path.join(folder, "wakes"), KUVO_BOTS: path.join(folder, "bots"), KUVO_HOME: path.join(folder, "home"), KUVO_BIN: folder, XDG_DATA_HOME: folder, OPENCODE_CONFIG: folder, KUVO_TEST_BUN: "/kept/bun", OPENCODE_TEST_BINARY: "/kept/engine", HOME: folder };
-  if (process.versions.bun) return; // (Above: it needs a test of its own to load in, under Bun's runner.)
   const { env } = JSON.parse(execFileSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8", env: { ...process.env, ...named } }));
   for (const name of ["KUVO_WAKES", "KUVO_BOTS", "KUVO_HOME", "KUVO_BIN", "XDG_DATA_HOME", "OPENCODE_CONFIG"]) assert.equal(env[name], undefined, name);
   assert.equal(env.KUVO_TEST_BUN, "/kept/bun", "what you set to run tests stays");
