@@ -58,7 +58,8 @@ public struct OversightPlayer: Sendable {
             return []
         }
         let new = marks.filter { !seen.contains($0.id) }
-        self.seen = seen.union(new.map(\.id))
+        // Each line has all the box keeps: one gone from it never comes back.
+        self.seen = Set(marks.map(\.id))
         return new
     }
 }
@@ -95,27 +96,16 @@ public enum Oversight {
 
     /// What a project's row says of the bots overseeing it, for VoiceOver and its tooltip:
     /// "Overseen by Pixel" or "Overseen by Pixel and Ada".
-    public static func overseenBy(_ overseers: [Overseer]) -> String {
-        "Overseen by " + ListFormatter.localizedString(byJoining: overseers.map(\.name))
+    public static func overseenBy(_ names: [String]) -> String {
+        "Overseen by " + ListFormatter.localizedString(byJoining: names)
     }
 
     /// What a session's row says of the bot overseeing it: "Overseen by Pixel".
     public static func overseenBy(_ name: String) -> String { "Overseen by \(name)" }
 
-    /// A bot's line in Bots with `countsOverseen`: every session it oversees, as its lanes show
-    /// them. "Overseeing 4 sessions".
+    /// A bot's line in Bots: every session it oversees, as its lanes show them. "Overseeing 4
+    /// sessions".
     public static func overseeing(count: Int) -> String {
         count == 1 ? "Overseeing 1 session" : "Overseeing \(count) sessions"
     }
-
-    // Waiting on the user's word (2026-11-05); each is the one place to change it.
-
-    /// A project a bot made still shows its face on the folder's corner, besides on its row.
-    public static let keepsMadeByFace = true
-    /// A click on a bot's face on a project opens nothing of its own (the click toggles the
-    /// project, as on the rest of its row).
-    public static let faceOpensChat = false
-    /// A bot's line in Bots counts the sessions working now ("At work in Tidepool: 3 sessions"),
-    /// not every session it oversees.
-    public static let countsOverseen = false
 }

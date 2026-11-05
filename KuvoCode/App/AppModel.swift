@@ -62,6 +62,7 @@ final class AppModel {
     /// What bots ask you before they do it (making a project), on every box.
     let botAsks = BotAsks()
     let goalPlans = GoalPlans()
+    let botOversight = BotOversight()
     /// Voice input, for whichever composer listens.
     let dictation = Dictation()
     // COMPAT(0.7 mac-group-chats): `GroupMigration.run` before the box's group chats start. Goes 3 months after 0.8.0.
@@ -310,6 +311,7 @@ final class AppModel {
         Sandboxes.shared.onChange = { [weak self] sessions in self?.workspace.askingOutsideSandbox = sessions }
         Sandboxes.shared.onYours = { [weak self] id in self?.workspace.reviewLeftForYou(id) }
         goalPlans.app = self
+        botOversight.app = self
         ServiceIcons.shared.boxes = { [weak self] box in self?.goalPlans.client(box) }
         SessionModel.askBotForGoal = { [weak self] session, words in
             guard let self, let bot = self.bots.bot(forSession: session) else { return false }
@@ -524,6 +526,7 @@ final class AppModel {
                         async let asks: Void = botAsks.follow(BoxClient.mac)
                         async let sandboxAsks: Void = Sandboxes.shared.follow(BoxClient.mac)
                         async let goalsFollowed: Void = goalPlans.follow(BoxClient.mac)
+                        async let oversight: Void = botOversight.follow(BoxClient.mac)
                         // COMPAT(0.7 mac-personalities): what an earlier Kuvo Code changed in its own copy, taken in. Goes 3 months after 0.8.0.
                         // What a 0.8.0 beta changed of your personalities where it kept them.
                         await Personalities.shared.takeFromOld()
@@ -536,6 +539,7 @@ final class AppModel {
                         await asks
                         await sandboxAsks
                         await goalsFollowed
+                        await oversight
                     }
                 }
             }

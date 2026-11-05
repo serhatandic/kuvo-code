@@ -24,7 +24,7 @@ struct OversightTests {
             Overseer(bot: "pixel", name: "Pixel", sessions: ["ses_core", "ses_icons"]),
             Overseer(bot: "ada", name: "Ada", sessions: ["ses_log"]),
         ])
-        #expect(Oversight.overseenBy(overseers) == "Overseen by Pixel and Ada")
+        #expect(Oversight.overseenBy(overseers.map(\.name)) == "Overseen by Pixel and Ada")
         #expect(Oversight.overseers(of: [try session("ses_mine")]).isEmpty)
     }
 

@@ -111,6 +111,8 @@ final class OverseerFaceView: PlatformView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         if spec != self.spec {
+            // Its pose changed (one of its sessions asks you, say): shown at once.
+            if spec.pose != self.spec?.pose { face.removeAnimation(forKey: "pleased") }
             self.spec = spec
             let picture = Self.picture(spec, mood: spec.pose.mood)
             face.contents = picture
@@ -226,7 +228,8 @@ public struct OverseerLanes: View {
         self.lights = lights
     }
 
-    static let radius: CGFloat = 6
+    /// How round a lane turns into a session's row.
+    public static let radius: CGFloat = 6
 
     public var body: some View {
         ZStack(alignment: .topLeading) {

@@ -16,6 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- A bot oversees its sessions rather than owning them: in the sidebar, its face sits on each project it has sessions in, with a line in its color down to each one, and a click on the face opens its conversation. A light runs down the line as the bot starts, reads, writes to, answers or stops a session, and its face looks pleased when one finishes, bright while one needs you, and asleep while it's paused. Its row under Bots says how many sessions it oversees. The sessions keep their own titles, with no face in front, and a project a bot made no longer has its face on the folder.
 - When a coding agent's sign-in has run out, like Claude Code's, the conversation says so at once and offers **Sign In** right on its card, in place of a **Try Again** that could only fail the same way after a long wait; once you're signed in, Try Again comes back. A message sent before you sign in stops at once with the same card, and Claude's own error line no longer shows up as part of the reply.
 - The composer keeps naming the model a conversation is on while that model's account needs a sign-in, instead of **Choose a Model**.
 - Signing in to a coding agent no longer sits at "Finish signing in with your browser" with nothing opened when the agent is slow to start: it says it's getting ready until the page is there, opens it once it comes, and **Copy Link** lets you open the page in any browser yourself.
