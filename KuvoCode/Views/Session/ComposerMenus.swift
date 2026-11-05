@@ -178,6 +178,9 @@ struct ModeChip: View {
     var shown: ApprovalShown?
     /// Opens the conversation's Decisions (nil: none to open, as for a new conversation).
     var onDecisions: (() -> Void)?
+    /// Autopilot, in a group of its own under the modes (nil: not offered here).
+    var autopilot: AutopilotChoice?
+    var onSelectAutopilot: (Bool) -> Void = { _ in }
     let onSelectApproval: (ToolApproval) -> Void
 
     private var holding: ApprovalShown.Why? { shown?.holding }
@@ -218,6 +221,9 @@ struct ModeChip: View {
         // (Each pick's check on its trailing side, lined up.)
         var checked: Set<NSMenuItem> = []
         menu.autoenablesItems = false
+        // With Autopilot beside them, each group says what it's about: Auto and Autopilot answer
+        // different questions, and both can be checked.
+        if autopilot != nil { menu.addItem(.sectionHeader(title: "Tools")) }
         for option in ToolApproval.allCases {
             // Not to be had here, as its box says (a bot's on a box before 0.9.188).
             let refused = shown?.option(option)?.unavailable.flatMap { $0.reason == "fullAccessOff" ? nil : $0 }
@@ -226,6 +232,16 @@ struct ModeChip: View {
             item.isEnabled = refused == nil
             menu.addItem(item)
             if option == approval { checked.insert(item) }
+        }
+        if let autopilot {
+            menu.addItem(.separator())
+            menu.addItem(.sectionHeader(title: "Questions"))
+            let item = ActionItem("Autopilot", subtitle: autopilot.unavailable ?? AutopilotShown.detail, image: NSImage(systemSymbolName: AutopilotShown.symbol, accessibilityDescription: nil)) { [onSelectAutopilot] in
+                onSelectAutopilot(!autopilot.on)
+            }
+            item.isEnabled = autopilot.unavailable == nil
+            menu.addItem(item)
+            if autopilot.on { checked.insert(item) }
         }
         if let onDecisions {
             menu.addItem(.separator())
@@ -268,6 +284,38 @@ struct AgentChip: View {
         .help(agent == "plan" ? "Plan mode: it explores and plans, without changing files. Click to leave it, or type /plan." : "Click to go back to Build")
         .accessibilityLabel(agent == "plan" ? "Plan mode" : name)
         .accessibilityHint("Goes back to Build")
+        .accessibilityAddTraits(.isButton)
+    }
+}
+
+/// In the composer's row while its conversation is on Autopilot, before the mode chip: it decides
+/// for itself and stops only for what needs you; ✕ goes back to Interactive.
+struct AutopilotChip: View {
+    let onLeave: () -> Void
+
+    var body: some View {
+        Button(action: onLeave) {
+            HStack(spacing: 5) {
+                Image(systemName: AutopilotShown.symbol)
+                    .font(.caption)
+                Text("Autopilot")
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+            }
+            .font(.callout)
+            .lineLimit(1)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(Color.accentColor.opacity(0.16), in: Capsule())
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .clickablePointer()
+        .help("Autopilot: it decides for itself and stops only for what needs you. Click to ask you again, or type /autopilot.")
+        .accessibilityLabel("Autopilot")
+        .accessibilityHint("Goes back to Interactive")
         .accessibilityAddTraits(.isButton)
     }
 }

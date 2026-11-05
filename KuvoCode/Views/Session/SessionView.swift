@@ -580,6 +580,8 @@ struct BottomStack: View {
                         onSelectApproval: model.setApproval,
                         approvalShown: model.approvalShown,
                         onDecisions: model.decisionsToShow,
+                        autopilot: model.autopilotChoice,
+                        onSelectAutopilot: model.setAutopilot,
                         showsDecisions: $model.showsDecisions,
                         decisions: AnyView(DecisionsView(model: model)),
                         confirmsFullAccess: $model.confirmsFullAccess,
@@ -624,6 +626,7 @@ struct BottomStack: View {
             .task(id: model.id) {
                 await model.readApproval()
                 model.readDecisions()
+                await model.readAutopilot()
             }
             // A machine's box removes and restores worktrees without telling this Mac: read as it shows.
             .task(id: model.session.location.directory) { await workspace.refreshWorktrees(for: model.session) }
@@ -789,6 +792,8 @@ struct DraftSessionView: View {
     private var agent: String { pickedAgent ?? catalog.startingAgent(chosen: EngineConfig.of(catalog.machine)?.value(at: ["default_agent"])?.string) }
     /// Picked in the composer; until then, its computer's default (the last one picked there).
     @State private var pickedApproval: ToolApproval?
+    /// Starts on Autopilot: picked for this one only (a new one starts Interactive).
+    @State private var autopilot = false
     @State private var confirmsFullAccess = false
     /// Its computer's approvals, as last read.
     private var here: ApprovalHere? { workspace.approvalsHere[Workspace.box(of: directory)] }
@@ -799,10 +804,17 @@ struct DraftSessionView: View {
     @State private var attempts = 1
     @State private var isCreating = false
 
-    /// What "/" offers a new conversation: a goal where its computer runs them, a loop, and Plan.
+    /// What "/" offers a new conversation: a goal where its computer runs them, a loop, Plan, and
+    /// Autopilot where its computer has it.
     private var newSessionKeywords: [Keyword] {
         let goals = workspace.agents(forFolder: directory).map { $0.api != nil && $0.runsGoals != false } ?? false
-        return Keyword.allCases.filter { $0 == .loop || $0 == .plan || ($0 == .goal && goals) }
+        let autopilot = workspace.autopilotHere[Workspace.box(of: directory)] == true
+        return Keyword.allCases.filter { $0 == .loop || $0 == .plan || ($0 == .goal && goals) || ($0 == .autopilot && autopilot) }
+    }
+
+    /// Autopilot as its Mode menu offers it, once its computer is known.
+    private var autopilotChoice: AutopilotChoice? {
+        workspace.autopilotHere[Workspace.box(of: directory)].map { AutopilotChoice(on: autopilot && $0, unavailable: $0 ? nil : "Needs a newer Kuvo Code on its computer") }
     }
 
     /// Worktrees are for git repositories.
@@ -843,6 +855,8 @@ struct DraftSessionView: View {
                     if picked == .fullAccess, here?.fullAccess != true { confirmsFullAccess = true } else { pickedApproval = picked; ToolApproval.lastPicked = picked }
                 },
                 approvalShown: here?.shown(approval, agents: OutsideAgents.runsInBridge(startingModel?.providerID)),
+                autopilot: autopilotChoice,
+                onSelectAutopilot: { autopilot = $0 },
                 confirmsFullAccess: $confirmsFullAccess,
                 onConfirmFullAccess: {
                     Task {
@@ -890,6 +904,14 @@ struct DraftSessionView: View {
         guard !isCreating else { return }
         // What the last try said goes with this one.
         failure = nil
+        // "/autopilot": alone, it turns Autopilot on or off for this one; with words, it starts
+        // with them on Autopilot.
+        if let (keyword, rest) = Keyword.parse(Drafts.shared[draftKey].text), keyword == .autopilot, newSessionKeywords.contains(.autopilot) {
+            Drafts.shared[draftKey].text = rest
+            guard !rest.isEmpty || !Drafts.shared[draftKey].files.isEmpty else { return autopilot.toggle() }
+            autopilot = true
+            guard !rest.isEmpty else { return }
+        }
         // "/goal" with nothing to give the agent (alone, pause, resume, clear): a new conversation
         // has no goal to act on, so none is made for it.
         if let goal = GoalCommand(Drafts.shared[draftKey].text), !goal.needsModel {
@@ -908,7 +930,7 @@ struct DraftSessionView: View {
             do {
                 // One after another: each worktree's setup runs on its own.
                 for _ in 0..<count {
-                    sessions.append(try await workspace.createSession(in: directory, model: startingModel, agent: agent, approval: pickedApproval, worktree: inWorktrees))
+                    sessions.append(try await workspace.createSession(in: directory, model: startingModel, agent: agent, approval: pickedApproval, autopilot: autopilotChoice?.on == true, worktree: inWorktrees))
                 }
                 if count > 1 { Analytics.shared.track("attempts_started", ["count": count]) }
                 let since = Drafts.shared[draftKey]
