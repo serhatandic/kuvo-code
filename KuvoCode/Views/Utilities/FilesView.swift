@@ -631,7 +631,12 @@ struct FileViewer: View {
         case unavailable(String)
     }
 
-    private var isMarkdown: Bool { ["md", "markdown", "mdx"].contains(url.pathExtension.lowercased()) }
+    private var isMarkdown: Bool { Self.isMarkdown(named: url.lastPathComponent) }
+
+    /// Whether a file is Markdown, by its name: shown rendered here and in the Artifacts popover.
+    static func isMarkdown(named name: String) -> Bool {
+        ["md", "markdown", "mdx"].contains((name as NSString).pathExtension.lowercased())
+    }
 
     var body: some View {
         VStack(spacing: 0) {

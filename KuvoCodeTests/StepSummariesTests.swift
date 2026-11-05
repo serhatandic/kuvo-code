@@ -96,6 +96,42 @@ import Testing
         #expect(try words("kuvo-browser_browser_tabs", ["action": "switch", "tab": -1e300]) == "Switched to tab")
     }
 
+    /// A bot's other tools come from the same server as the browser's, and say what they do: only
+    /// the browser's own are "Used the browser", in a row and in the line that sums them up.
+    @Test func aBotsOtherToolsAreNotTheBrowser() throws {
+        #expect(try words("kuvo-browser_list_sessions", [:]) == "Checked its sessions")
+        #expect(try words("kuvo-browser_list_sessions", [:], running: true) == "Checking its sessions")
+        #expect(try words("kuvo-browser_set_job", ["summary": "Keeps the build green"]) == "Set its job: Keeps the build green")
+        #expect(try words("kuvo-browser_stop_session", ["session": "ses_1"]) == "Stopped a session")
+        #expect(try words("kuvo-browser_make_project", ["name": "Tidepool"]) == "Made the project “Tidepool”")
+        #expect(try words("kuvo-browser_vault_items", [:]) == "Looked up its vault items")
+        #expect(try words("kuvo-browser_schedule_wake_up", ["when": "+2h", "note": "check CI"]) == "Scheduled a wake-up in 2 hr: check CI")
+        #expect(try words("kuvo-browser_send_message", ["to": "&Mira", "text": "hi"]) == "Wrote to Mira")
+        #expect(try words("kuvo-browser_start_session", ["task": "x", "title": "Write the tests"]) == "Started a session: Write the tests")
+        // One the app doesn't know yet is named by what it is, never called the browser.
+        #expect(try words("kuvo-browser_make_coffee", [:]) == "Used make coffee")
+        #expect(try words("kuvo-browser_browser_fill", ["index": 3]) == "Filled [3] from your vault")
+        #expect(try words("kuvo-browser_browser_unheard_of", [:]) == "Used the browser")
+        let calls = [try step("kuvo-browser_list_sessions", [:]), try step("kuvo-browser_set_job", ["summary": "x"]), try step("kuvo-browser_browser_snapshot", [:])]
+        #expect(StepsSummary.summary(of: calls) == "Checked its sessions, set its job, used the browser")
+    }
+
+    /// The line over a turn's steps counts the rows it opens to: a last step that has ended (the
+    /// model is still working out what next) is one of them, and only one still going is shown by
+    /// itself below it.
+    @Test func theLineCountsTheStepsItOpensTo() throws {
+        let browser = Message.Content.tool(try step("kuvo-browser_list_sessions", [:]))
+        let ended = Message.Content.tool(try step("shell", ["command": "date"]))
+        let going = Message.Content.tool(try step("shell", ["command": "swift test"], running: true))
+        let live = StepsRow.split([browser, ended], isLive: true)
+        #expect(live.done.count == 2 && live.current == nil)
+        #expect(StepsRow.count(live.done) == "2 steps")
+        let working = StepsRow.split([browser, ended, going], isLive: true)
+        #expect(working.done.count == 2 && working.current != nil)
+        let finished = StepsRow.split([browser, going], isLive: false)
+        #expect(finished.done.count == 2 && finished.current == nil)
+    }
+
     /// Reading or writing to another agent says whom by name, whichever way the agent addressed
     /// it; an address the app can't place is never shown.
     @Test func anotherAgentByNameNotByAddress() throws {
