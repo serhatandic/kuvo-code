@@ -419,6 +419,21 @@ function writeTemporary(): void {
 }
 
 /**
+ * The temporary folder a conversation's commands are given (their TMPDIR), as the launcher names it
+ * from the conversation's folder (`work`, through its links): in the folder `temporary` names, by
+ * the key there; in the sandbox's own `tmp` where the box hasn't named one. Null for a folder
+ * that isn't there.
+ */
+export function commandTemporary(work: string): string | null {
+  let real: string;
+  try { real = fs.realpathSync(work); } catch { return null; }
+  const sum = (text: string) => crypto.createHash("sha256").update(text).digest("hex");
+  const [root, key] = (textOf(path.join(FOLDER, "temporary")) ?? "").split("\n");
+  if (root?.startsWith("/") && key?.length === 64) return realish(path.join(root, sum(`${key}\n${real}`).slice(0, 8)));
+  return realish(path.join(FOLDER, "tmp", sum(real).slice(0, 32)));
+}
+
+/**
  * Sets the sandbox up: its files written and checked, then its plugin given to the engine; where it
  * can't run or the check fails (or with the kill switch), the plugin taken away, so commands run as
  * before rather than not at all. `found`: as `able`'s.

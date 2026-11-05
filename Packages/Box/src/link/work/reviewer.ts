@@ -24,7 +24,7 @@ import { isObject } from "../../shared/json";
 import { cut, oneLine } from "../../shared/text";
 import { locked, textOf, writePrivate } from "../files";
 import { BOX, homeFolder, IN_TEST_FOLDER, opencodeAuthFile, RUN } from "../home";
-import { fencePolicy, realish, type FencePolicy } from "../fence/policy";
+import { escapeRegex, fencePolicy, realish, type FencePolicy } from "../fence/policy";
 import { readLine } from "./policy";
 
 /** What's judged: a command to run outside the sandbox (in `folder`), a file one of the agent's
@@ -135,9 +135,20 @@ function atLogin(where: string, home: string): boolean {
 }
 
 /** Whether `where` is behind the line never crossed, read or written: Kuvo Code's own folders (its
- * keys, and the sandbox's own files). Anything else, your secrets too, is the model's to judge. */
-function inKuvo(where: string, policy: FencePolicy): boolean {
-  return policy.kuvo.some(wall => inside(where, wall)) || matching(where, policy.kuvoPatterns);
+ * keys, and the sandbox's own files), but for what's the conversation's own in them (`own`, as
+ * `ownInside` has them: its commands' temporary folder, its folder). Anything else, your secrets
+ * too, is the model's to judge. */
+function inKuvo(where: string, policy: FencePolicy, own: readonly string[] = []): boolean {
+  return (policy.kuvo.some(wall => inside(where, wall)) || matching(where, policy.kuvoPatterns)) && !own.some(folder => inside(where, folder));
+}
+
+/** Of the folders a conversation works in as its own, as the sandbox gives them to its commands
+ * (its folder, its commands' temporary folder, a bot's own), those that are its inside Kuvo Code's
+ * folders too: never one that is or holds them, or a copy's whole folder (a conversation started
+ * there), whose keys would be its. */
+function ownInside(own: readonly string[], policy: FencePolicy): string[] {
+  const whole = (folder: string) => matching(folder, policy.kuvoPatterns) && !matching(path.dirname(folder), policy.kuvoPatterns);
+  return own.map(realish).filter(folder => folder !== "/" && !policy.kuvo.some(wall => inside(wall, folder)) && !whole(folder));
 }
 
 /** Whether deleting `where` would delete your home: it, a folder that holds it, or everything in it. */
@@ -208,23 +219,24 @@ function takenAway(program: string, args: readonly string[], words: readonly str
 /** What code refuses outright, whatever anyone says: a reason, or null. Nothing else is: your
  * secrets, what runs at login and the rest are the model's (`persistenceOf` tells it which run at
  * login). */
-export function hardLine(action: ReviewedAction, policy: FencePolicy = fencePolicy()): string | null {
+export function hardLine(action: ReviewedAction, policy: FencePolicy = fencePolicy(), given: readonly string[] = []): string | null {
+  const own = ownInside(given, policy);
   // (Room to write a folder that holds them, as a coding agent asks for, reaches them too.)
   if (action.kind === "file") {
     const where = realish(action.path);
-    return inKuvo(where, policy) || (action.access === "write" && policy.kuvo.some(wall => holds(where, wall))) ? KUVO : null;
+    return inKuvo(where, policy, own) || (action.access === "write" && policy.kuvo.some(wall => holds(where, wall))) ? KUVO : null;
   }
   if (action.kind === "tool") return null;
-  return commandLine(action.command, action.folder, policy, 0) ?? stoppedWrites(action).map(where => hardLine({ kind: "file", path: where, access: "write", folder: action.folder }, policy)).find(Boolean) ?? null;
+  return commandLine(action.command, action.folder, policy, own, 0) ?? stoppedWrites(action).map(where => hardLine({ kind: "file", path: where, access: "write", folder: action.folder }, policy, own)).find(Boolean) ?? null;
 }
 
 /** The files the sandbox stopped a command writing, as macOS's log names them. */
 const stoppedWrites = (action: ReviewedAction): string[] =>
   action.kind === "command" ? (action.stopped?.stops ?? []).filter(stop => stop.kind === "write" && stop.path).map(stop => stop.path!) : [];
 
-function commandLine(command: string, start: string, policy: FencePolicy, depth: number): string | null {
+function commandLine(command: string, start: string, policy: FencePolicy, own: readonly string[], depth: number): string | null {
   const line = readLine(command, true);
-  if ("unreadable" in line || depth > 3) return unreadLine(command, policy);
+  if ("unreadable" in line || depth > 3) return unreadLine(command, policy, own);
   let folder = start;
   for (const part of line.parts) {
     const at = programAt(part.words);
@@ -236,7 +248,7 @@ function commandLine(command: string, start: string, policy: FencePolicy, depth:
     }
     // A shell given a script on its line: that script, read as a line of its own.
     const inner = innerScript(program, part.words, at);
-    const found = inner ? commandLine(inner, folder, policy, depth + 1) : null;
+    const found = inner ? commandLine(inner, folder, policy, own, depth + 1) : null;
     if (found) return found;
     // Where it goes on from (cd, pushd).
     if (program === "cd" || program === "pushd") {
@@ -246,11 +258,11 @@ function commandLine(command: string, start: string, policy: FencePolicy, depth:
     }
     for (const word of part.words.slice(Math.max(at, 0))) {
       const where = pathOf(word, folder);
-      if (where && inKuvo(where, policy)) return KUVO;
+      if (where && inKuvo(where, policy, own)) return KUVO;
     }
     for (const word of [...part.writes, ...part.reads]) {
       const where = pathOf(word.startsWith("/") || word.startsWith("~") || word.startsWith(".") ? word : `./${word}`, folder);
-      if (where && inKuvo(where, policy)) return KUVO;
+      if (where && inKuvo(where, policy, own)) return KUVO;
     }
   }
   return null;
@@ -268,16 +280,19 @@ const WHOLE_HOME = String.raw`(\s|['"=])(\$HOME|\$\{HOME\}|~|/)/?\*?(?=$|[\s'";|
 
 /** A line that can't be read plainly (it has `$…`, a group, a here-document…), refused where its
  * text names what's never allowed: taking your home away as a whole, or Kuvo Code's folders by
- * their place in your home. */
-function unreadLine(command: string, policy: FencePolicy): string | null {
+ * their place in your home (but where it names the conversation's own in them, `own`). */
+function unreadLine(command: string, policy: FencePolicy, own: readonly string[] = []): string | null {
   if (new RegExp(String.raw`(^|[^A-Za-z0-9_.-])(${[...DELETERS, ...MOVERS].join("|")})\b[^;&|\n]*?${WHOLE_HOME}`).test(command)) return WRECKS_HOME;
   if (new RegExp(String.raw`(^|[^A-Za-z0-9_.-])(${[...LOCKERS].join("|")})\b[^;&|\n]*\s-[A-Za-z]*R[^;&|\n]*?${WHOLE_HOME}`).test(command)) return WRECKS_HOME;
   if (new RegExp(String.raw`\b(find|rsync)\b[^;&|\n]*?${WHOLE_HOME}`).test(command) && new RegExp(String.raw`\b(find|rsync)\b[^;&|\n]*\s(-delete|--delete[a-z-]*)\b`).test(command)) return WRECKS_HOME;
   const home = policy.home + "/";
+  // (Its own folders in them named, by their place in your home too, are no wall: but where it goes
+  // up out of one.)
+  const named = own.reduce((text, folder) => folder.startsWith(home) ? text.replace(new RegExp(`${escapeRegex(folder.slice(home.length))}(?=$|[\\s'"/;|&)])(?!/\\.\\.)`, "g"), " ") : text, command);
   for (const wall of policy.kuvo) {
     if (!wall.startsWith(home)) continue;
     const place = wall.slice(home.length).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    if (new RegExp(`(^|[\\s'"=/:])${place}(?=$|[\\s'"/;|&)])`).test(command)) return KUVO;
+    if (new RegExp(`(^|[\\s'"=/:])${place}(?=$|[\\s'"/;|&)])`).test(named)) return KUVO;
   }
   return null;
 }
@@ -893,6 +908,9 @@ export function actionWords(action: ReviewedAction): string {
 export interface ReviewWith {
   model: SmallModel;
   policy?: FencePolicy;
+  /** The folders the conversation works in as its own (its folder, its commands' temporary
+   * folder, a bot's own): inside Kuvo Code's folders, still its own. */
+  own?: readonly string[];
   fetch?: (url: string, signal: AbortSignal) => Promise<string>;
   pin?: boolean;
   folder?: string;
@@ -944,7 +962,8 @@ const heldBack = (reason: string, why: ReviewWhy): Verdict => ({ decision: "refu
 /** What's decided, and the key the action is matched by again (with the scripts it runs, as read). */
 async function judge(action: ReviewedAction, context: ReviewContext, given: ReviewWith, now: number, folder: string): Promise<{ verdict: Verdict; key: string }> {
   const policy = given.policy ?? fencePolicy();
-  const line = hardLine(action, policy);
+  const line = hardLine(action, policy, given.own);
+  const ours = ownInside(given.own ?? [], policy);
   if (line) return { verdict: { decision: "refuse", reason: line, by: "code", held: false }, key: actionKey(action) };
   // The agent's own tools read anywhere but your secrets, as Codex's sandbox does: no review.
   if (action.kind === "file" && action.access === "read" && !isSecret(realish(action.path), policy)) return { verdict: { decision: "allow", reason: "Reading outside its folder goes ahead.", by: "code" }, key: actionKey(action) };
@@ -959,7 +978,7 @@ async function judge(action: ReviewedAction, context: ReviewContext, given: Revi
     const { files, urls, unpinned } = scriptsOf(action.command, action.folder);
     if (unpinned) problem = heldBack(`${unpinned} Fetch it into the project first, then run it from there.`, "unpinned");
     for (const file of files) {
-      if (inKuvo(realish(file), policy)) return { verdict: { decision: "refuse", reason: "It runs a script in Kuvo Code's own folders, which is never allowed.", by: "code", held: false }, key: actionKey(action) };
+      if (inKuvo(realish(file), policy, ours)) return { verdict: { decision: "refuse", reason: "It runs a script in Kuvo Code's own folders, which is never allowed.", by: "code", held: false }, key: actionKey(action) };
       if (problem) continue;
       let text: string;
       try { text = fs.readFileSync(file, "utf8"); }
