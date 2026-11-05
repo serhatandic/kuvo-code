@@ -1915,18 +1915,16 @@ private struct AgentSentRow: View {
     }
 
     var body: some View {
-        // As it may have been named: "&Mira".
-        let to = input?["to"]?.string.map { $0.hasPrefix("&") ? String($0.dropFirst()) : $0 } ?? "another agent"
-        let address = AgentMail.shared.directory().first { $0.session == to || $0.name.caseInsensitiveCompare(to) == .orderedSame }
-            // One the list leaves out (untitled, older than the latest it names): as this Mac has it.
-            ?? app.workspace.session(to).map { AgentMail.Agent(session: $0.id, name: $0.title.flatMap { $0.isEmpty ? nil : $0 } ?? "New session", kind: "session") }
+        let to = input?["to"]?.string
+        let address = to.flatMap { AgentMail.shared.agent(named: $0) }
+        let name = AgentMail.shared.name(of: to)
         let text = input?["text"]?.string ?? ""
         let answer = said.flatMap { said in said.range(of: " answered:\n\n").map { String(said[$0.upperBound...]) } }
         FoldingCard(id: call.id, summary: text, startsOpen: FoldingCard<EmptyView, EmptyView, EmptyView>.isShort(text + (answer ?? "")), help: "A message this agent sent another") {
             Image(systemName: "paperplane.fill")
                 .foregroundStyle(.tint)
                 .frame(width: 16)
-            Text("To \(Text(address?.name ?? to).fontWeight(.semibold).foregroundStyle(.primary))")
+            Text("To \(Text(name).fontWeight(.semibold).foregroundStyle(.primary))")
                 .foregroundStyle(.secondary)
             if case .running = call.state, input?["wait"]?.bool == true {
                 StepActivity(symbol: nil, running: true, size: 12)
@@ -1944,7 +1942,7 @@ private struct AgentSentRow: View {
             if let session = address?.session, app.workspace.session(session) != nil {
                 Button("Open") { app.open(.session(session)) }
                     .buttonStyle(TextButtonStyle())
-                    .help("Open \(address?.name ?? to)'s conversation")
+                    .help("Open \(name)'s conversation")
             }
         } content: {
             if !text.isEmpty {
@@ -1954,7 +1952,7 @@ private struct AgentSentRow: View {
             // What it answered, when it was waited for.
             if let answer {
                 Divider().padding(.leading, 24)
-                Text("\(Text(address?.name ?? to).fontWeight(.semibold)) answered")
+                Text("\(Text(name).fontWeight(.semibold)) answered")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .padding(.leading, 24)
