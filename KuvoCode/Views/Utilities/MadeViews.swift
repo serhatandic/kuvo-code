@@ -1363,11 +1363,20 @@ private struct VersionBody: View {
                         ScrollView {
                             VStack(alignment: .leading, spacing: 10) {
                                 if let note { Text(note).font(.system(size: 11.5)).foregroundStyle(.secondary) }
-                                Text(text)
-                                    .font(artifact.kind == .code ? .system(size: 12, design: .monospaced) : nil)
-                                    .lineSpacing(3)
-                                    .textSelection(.enabled)
+                                if FileViewer.isMarkdown(named: artifact.name) {
+                                    // Drawn as the side panel's file view and replies are, not as its source.
+                                    ReplyView(markdown: text, parser: MathMarkdownParser(), diagrams: true) { link in
+                                        // A file's own links to its folder mean nothing here.
+                                        link.scheme == nil
+                                    }
                                     .frame(maxWidth: .infinity, alignment: .leading)
+                                } else {
+                                    Text(text)
+                                        .font(artifact.kind == .code ? .system(size: 12, design: .monospaced) : nil)
+                                        .lineSpacing(3)
+                                        .textSelection(.enabled)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
                                 if cut { Text("The rest is in the file.").font(.system(size: 11.5)).foregroundStyle(.secondary) }
                             }
                             .transcriptFont()
