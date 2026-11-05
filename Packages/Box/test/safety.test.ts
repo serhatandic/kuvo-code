@@ -6,7 +6,7 @@ import { execFileSync } from "node:child_process"
 import fs, { mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync, existsSync } from "node:fs"
 import { rm } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
-import { dirname, join, relative, resolve } from "node:path"
+import { dirname, join, relative, resolve, sep } from "node:path"
 
 const decoys: string[] = []
 afterAll(() => {
@@ -103,13 +103,16 @@ test("with the preload, the run's home is gone as the run ends", () => {
   rmSync(scratch, { recursive: true, force: true })
 })
 
+// (Every file `bun test` takes for a test, anywhere under the box: *.test, *_test, *.spec, *_spec, in
+// any of its script extensions, in test/'s subfolders and outside test/ too.)
 test("every box test file loads test/safety.ts before anything else", () => {
-  const here = import.meta.dir
-  const files = (readdirSync(here, { recursive: true }) as string[]).filter(name => name.endsWith(".test.ts"))
+  const box = resolve(import.meta.dir, "..")
+  const files = (readdirSync(box, { recursive: true }) as string[]).filter(name => !name.split(sep).includes("node_modules") && /[._](test|spec)\.[cm]?[jt]sx?$/.test(name))
   expect(files.length).toBeGreaterThan(50)
+  expect(files.some(name => name.split(sep).length > 2)).toBe(true)
   const missing = files.filter(name => {
-    const first = readFileSync(join(here, name), "utf8").split("\n").find(line => line.trim() && !line.startsWith("//"))
-    const safety = relative(dirname(join(here, name)), join(here, "safety"))
+    const first = readFileSync(join(box, name), "utf8").split("\n").find(line => line.trim() && !line.startsWith("//"))
+    const safety = relative(dirname(join(box, name)), join(box, "test", "safety"))
     return first !== `import "${safety.startsWith(".") ? safety : `./${safety}`}"`
   })
   expect(missing).toEqual([])
