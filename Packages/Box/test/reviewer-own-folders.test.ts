@@ -90,6 +90,9 @@ async function inBox(sessions: Record<string, string>, steps: string): Promise<{
       const read = (session, file) => fileAsk(session, "read", file);
       const write = (session, file) => fileAsk(session, "write", file);
       const ask = async (session, folder, command) => (await outside.callSandboxTool("sandbox_ask", { command, why: "To build the app." }, { session, root: session, sessionName: "LeafCheck", folder })).text.split("\\n")[0];
+      const conversation = (id, folder) => fetch("http://127.0.0.1:" + engine.port + "/test/session", { method: "POST", body: JSON.stringify({ id, folder }) });
+      fs.mkdirSync(home.BOX_KEYS, { recursive: true });
+      fs.writeFileSync(path.join(home.BOX_KEYS, "box.key"), "secret");
       const said = {};
       ${steps}
       console.log(JSON.stringify(said));
@@ -129,12 +132,26 @@ test.skipIf(!canFence)("in Auto, a conversation reads and writes its own tempora
       said.othersRead = await read("ses_shots", path.join(other, "theirs.txt"));
       said.othersAsk = await ask("ses_shots", ${JSON.stringify(project)}, "cat " + path.join(other, "theirs.txt"));
       said.keys = await write("ses_shots", path.join(home.BOX_KEYS, "box.key"));
-      said.keysAsk = await ask("ses_shots", ${JSON.stringify(project)}, "cat " + path.join(home.BOX_KEYS, "box.key"));`)
+      said.keysAsk = await ask("ses_shots", ${JSON.stringify(project)}, "cat " + path.join(home.BOX_KEYS, "box.key"));
+      // Nor does a conversation started in them make them its own.
+      await conversation("ses_keys", home.BOX_KEYS);
+      said.keysSession = await ask("ses_keys", home.BOX_KEYS, "cat ./box.key");
+      // Its commands can't trade their temporary folder for a link into Kuvo Code's folders...
+      said.swapped = run('t=\${TMPDIR%/}; cd / && rm -rf "$t" 2>/dev/null; [ -e "$t" ] || ln -s ' + home.BOX_KEYS + ' "$t" && [ -L "$t" ] && echo swapped', ${JSON.stringify(project)}).stdout.trim();
+      said.stillFolder = !fs.lstatSync(tmp).isSymbolicLink();
+      // ...and one put there before the sandbox kept them from it isn't theirs: the reviewer doesn't
+      // follow it, and the next command gets a folder of its own again.
+      fs.rmSync(tmp, { recursive: true, force: true });
+      fs.symlinkSync(home.BOX_KEYS, tmp);
+      said.linkedRead = await read("ses_shots", path.join(tmp, "box.key"));
+      said.next = run('[ -L "\${TMPDIR%/}" ] && echo link; cat "$TMPDIR/box.key" 2>/dev/null || echo unreadable', ${JSON.stringify(project)}).stdout.trim();`)
     const refused = "refuse: It reaches Kuvo Code's own folders, which is never allowed."
     expect(said).toEqual({
       inKuvo: true, read: "allow", written: "allow", ask: "Ran outside the sandbox · Allowed by Auto's reviewer: Builds the app, as asked.",
       different: true, othersRead: refused, othersAsk: expect.stringMatching(/^Auto's reviewer refused: It reaches Kuvo Code's own folders/),
       keys: refused, keysAsk: expect.stringMatching(/^Auto's reviewer refused: It reaches Kuvo Code's own folders/),
+      keysSession: expect.stringMatching(/^Auto's reviewer refused: It reaches Kuvo Code's own folders/),
+      swapped: "", stillFolder: true, linkedRead: refused, next: "unreadable",
     })
     // Only the command outside the sandbox went to the model.
     expect(prompts.length).toBe(1)
@@ -149,14 +166,12 @@ test.skipIf(!canFence)("in Auto, a conversation whose folder is in Kuvo Code's (
     fs.mkdirSync(path.join(home.ENGINE_DATA, "worktree", "leafcheck", "scripts"), { recursive: true });
     const tree = fs.realpathSync(path.join(home.ENGINE_DATA, "worktree", "leafcheck"));
     fs.writeFileSync(path.join(tree, "scripts", "build.sh"), "echo built\\n");
-    await fetch("http://127.0.0.1:" + engine.port + "/test/session", { method: "POST", body: JSON.stringify({ id: "ses_tree", folder: tree }) });
+    await conversation("ses_tree", tree);
     said.build = await ask("ses_tree", tree, "sh ./scripts/build.sh");
     said.named = await ask("ses_tree", tree, "ls " + tree);
+    // Out of it, Kuvo Code's own are refused by code.
     said.up = await ask("ses_tree", tree, "cat ../../../../box/keys/box.key");`)
-  expect(said).toEqual({
-    build: "Ran outside the sandbox · Allowed by Auto's reviewer: Builds the app, as asked.",
-    named: "Ran outside the sandbox · Allowed by Auto's reviewer: Builds the app, as asked.",
-    up: expect.stringMatching(/^Auto's reviewer refused: It reaches Kuvo Code's own folders/),
-  })
+  const allowed = "Ran outside the sandbox · Allowed by Auto's reviewer: Builds the app, as asked."
+  expect(said).toEqual({ build: allowed, named: allowed, up: expect.stringMatching(/^Auto's reviewer refused: It reaches Kuvo Code's own folders/) })
   expect(prompts.length).toBe(2)
 }, 60_000)

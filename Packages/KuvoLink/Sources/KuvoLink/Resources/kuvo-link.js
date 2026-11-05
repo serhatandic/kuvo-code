@@ -3463,7 +3463,7 @@ function seatbeltProfile(policy, options) {
   allow(HIDDEN, `(subpath (string-append (param "WAKES") "/inbox"))`);
   allow("file-read-data file-write-data", `(literal (param "MEMORY"))`);
   out.push(";; what runs outside the sandbox, or changes the engine");
-  deny("file-write-unlink file-write-create", `(literal (param "WORK"))`, `(literal (param "GIT"))`);
+  deny("file-write-unlink file-write-create", `(literal (param "WORK"))`, `(literal (param "GIT"))`, `(literal (param "TMP"))`);
   const holders = new Set;
   for (const kept of [...policy.secrets, ...policy.readOnly, ...policy.kuvo])
     for (let at = path14.dirname(kept);at !== path14.dirname(at); at = path14.dirname(at))
@@ -3599,6 +3599,7 @@ function launcherScript(places) {
     ] : [],
     ...Array.from({ length: MOST_FOLDERS }, (_, at) => `a${at}=$F/none r${at}=-`),
     `if [ -f "$allowed" ]; then i=0; while IFS= read -r line && [ $i -lt ${MOST_FOLDERS} ]; do case $line in /*) eval "a$i=\\$line"; ${places.platform === "darwin" ? `eval "r$i=\\$(escaped \\"\\$line\\")"; ` : ""}i=$((i + 1)) ;; esac; done <"$allowed"; else allowed=$F/none; fi`,
+    `if [ -L "$tmp" ]; then rm -f "$tmp" || exit 126; fi`,
     `(umask 077; mkdir -p "$tmp") && touch "$tmp" && export TMPDIR="$tmp/"`,
     `export PRE_COMMIT_HOME="$TMPDIR"pre-commit`,
     `(umask 077; mkdir -p ${[places.caches.npm, places.caches.pnpm, `${places.caches.uv}/cache`, `${places.caches.uv}/tools`, places.caches.corepack].map(sh).join(" ")})`,
@@ -4265,10 +4266,12 @@ function commandTemporary(work) {
   const sum = (text) => crypto7.createHash("sha256").update(text).digest("hex");
   const [root, key] = (textOf(path15.join(FOLDER, "temporary")) ?? "").split(`
 `);
-  if (root?.startsWith("/") && key?.length === 64)
-    return realish(path15.join(root, sum(`${key}
-${real}`).slice(0, 8)));
-  return realish(path15.join(FOLDER, "tmp", sum(real).slice(0, 32)));
+  const tmp = root?.startsWith("/") && key?.length === 64 ? path15.join(realish(root), sum(`${key}
+${real}`).slice(0, 8)) : path15.join(FOLDER, "tmp", sum(real).slice(0, 32));
+  return fs16.lstatSync(tmp, { throwIfNoEntry: false })?.isSymbolicLink() ? null : tmp;
+}
+function conversationPlaces() {
+  return { inside: [realish(BOTS), realish(path15.join(ENGINE_DATA, "worktree"))], shared: [realish(CHATS)] };
 }
 function setUpFence(found) {
   const can = able(found);
@@ -13808,8 +13811,15 @@ function inKuvo(where, policy, own = []) {
   return (policy.kuvo.some((wall) => inside2(where, wall)) || matching2(where, policy.kuvoPatterns)) && !own.some((folder) => inside2(where, folder));
 }
 function ownInside(own, policy) {
-  const whole = (folder) => matching2(folder, policy.kuvoPatterns) && !matching2(path54.dirname(folder), policy.kuvoPatterns);
-  return own.map(realish).filter((folder) => folder !== "/" && !policy.kuvo.some((wall) => inside2(wall, folder)) && !whole(folder));
+  const temporaries = new Set(own.map(commandTemporary).filter((each) => Boolean(each)));
+  const { inside: holders, shared } = conversationPlaces();
+  return own.flatMap((folder) => {
+    if (temporaries.has(folder))
+      return [folder];
+    const at = realish(folder);
+    const walled = policy.kuvo.some((wall) => inside2(at, wall) || inside2(wall, at)) || matching2(at, policy.kuvoPatterns);
+    return !walled || holders.some((each) => at.startsWith(each + "/")) || shared.some((each) => inside2(at, each)) ? [at] : [];
+  });
 }
 function deletesHome(where, home) {
   const target = where.endsWith("/*") ? where.slice(0, -2) || "/" : where;
@@ -13865,8 +13875,7 @@ function takenAway(program, args, words, at) {
     return named;
   return [];
 }
-function hardLine(action, policy = fencePolicy(), given = []) {
-  const own = ownInside(given, policy);
+function hardLine(action, policy = fencePolicy(), own = []) {
   if (action.kind === "file") {
     const where = realish(action.path);
     return inKuvo(where, policy, own) || action.access === "write" && policy.kuvo.some((wall) => holds(where, wall)) ? KUVO : null;
@@ -13927,7 +13936,7 @@ function unreadLine(command, policy, own = []) {
   if (new RegExp(String.raw`\b(find|rsync)\b[^;&|\n]*?${WHOLE_HOME}`).test(command) && new RegExp(String.raw`\b(find|rsync)\b[^;&|\n]*\s(-delete|--delete[a-z-]*)\b`).test(command))
     return WRECKS_HOME;
   const home = policy.home + "/";
-  const named = own.reduce((text, folder) => folder.startsWith(home) ? text.replace(new RegExp(`${escapeRegex(folder.slice(home.length))}(?=$|[\\s'"/;|&)])(?!/\\.\\.)`, "g"), " ") : text, command);
+  const named = own.reduce((text, folder) => folder.startsWith(home) ? text.replace(new RegExp(`${escapeRegex(folder.slice(home.length))}(?=$|[\\s'"/;|&)])(?![^\\s'";|&)]*/\\.\\.)`, "g"), " ") : text, command);
   for (const wall of policy.kuvo) {
     if (!wall.startsWith(home))
       continue;
@@ -14575,8 +14584,8 @@ async function review(action, context, given) {
 var heldBack = (reason, why) => ({ decision: "refuse", reason, by: "code", held: true, why });
 async function judge(action, context, given, now, folder) {
   const policy = given.policy ?? fencePolicy();
-  const line = hardLine(action, policy, given.own);
   const ours = ownInside(given.own ?? [], policy);
+  const line = hardLine(action, policy, ours);
   if (line)
     return { verdict: { decision: "refuse", reason: line, by: "code", held: false }, key: actionKey(action) };
   if (action.kind === "file" && action.access === "read" && !isSecret(realish(action.path), policy))

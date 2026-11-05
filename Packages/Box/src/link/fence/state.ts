@@ -15,7 +15,7 @@ import os from "node:os";
 import path from "node:path";
 import { listOf, textOf, writePrivate } from "../files";
 import { processRuns, sandboxGeneration } from "../../shared/platform";
-import { accountHome, BOTS, BRIDGE_FILE, CHATS, ENGINE_CONFIG, ENGINE_FILE, K, RUN, SANDBOX_NOTE, SESSION_WAKES, SOCKET_KEY_FILE, SSH_AGENTS, SSH_FOR } from "../home";
+import { accountHome, BOTS, BRIDGE_FILE, CHATS, ENGINE_CONFIG, ENGINE_DATA, ENGINE_FILE, K, RUN, SANDBOX_NOTE, SESSION_WAKES, SOCKET_KEY_FILE, SSH_AGENTS, SSH_FOR } from "../home";
 import { tellLauncher } from "./allowed";
 import { agentShellScript, agentsNote, launcherScript, pluginScript, type FencePlaces } from "./files";
 import { LANDLOCK_RUNNER, landlockPolicy, ownNamespace, ownNamespaceLater, UNSHARE } from "./landlock";
@@ -421,16 +421,24 @@ function writeTemporary(): void {
 /**
  * The temporary folder a conversation's commands are given (their TMPDIR), as the launcher names it
  * from the conversation's folder (`work`, through its links): in the folder `temporary` names, by
- * the key there; in the sandbox's own `tmp` where the box hasn't named one. Null for a folder
- * that isn't there.
+ * the key there; in the sandbox's own `tmp` where the box hasn't named one. Itself, never through a
+ * link: null for one that is a link (which the launcher takes away before a command runs), or for a
+ * folder that isn't there.
  */
 export function commandTemporary(work: string): string | null {
   let real: string;
   try { real = fs.realpathSync(work); } catch { return null; }
   const sum = (text: string) => crypto.createHash("sha256").update(text).digest("hex");
   const [root, key] = (textOf(path.join(FOLDER, "temporary")) ?? "").split("\n");
-  if (root?.startsWith("/") && key?.length === 64) return realish(path.join(root, sum(`${key}\n${real}`).slice(0, 8)));
-  return realish(path.join(FOLDER, "tmp", sum(real).slice(0, 32)));
+  const tmp = root?.startsWith("/") && key?.length === 64 ? path.join(realish(root), sum(`${key}\n${real}`).slice(0, 8)) : path.join(FOLDER, "tmp", sum(real).slice(0, 32));
+  return fs.lstatSync(tmp, { throwIfNoEntry: false })?.isSymbolicLink() ? null : tmp;
+}
+
+/** Where Kuvo Code keeps conversations' own folders inside its own, as their commands get them in
+ * the sandbox: bots' folders and the engine's worktrees, each folder in them (`inside`), and Chats',
+ * itself too (`shared`). (And their commands' temporary folders: `commandTemporary`.) */
+export function conversationPlaces(): { inside: string[]; shared: string[] } {
+  return { inside: [realish(BOTS), realish(path.join(ENGINE_DATA, "worktree"))], shared: [realish(CHATS)] };
 }
 
 /**
