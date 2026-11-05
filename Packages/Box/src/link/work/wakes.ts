@@ -18,6 +18,7 @@ import { tellMovedAway } from "../letters/outbox";
 import { frozen } from "../moves/records";
 import { isPutAway, type PutAwayable } from "../peers/directory";
 import { describeForm, describePermission } from "../notices/news";
+import { noteOversight } from "./oversight";
 import { noteWorkChanged, WORK_FOLDER } from "./changes";
 import { asksIn } from "./answers";
 import { awaitedBy } from "./awaited";
@@ -453,6 +454,8 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
       if (!session || (session.id !== id && event.type.startsWith("session.execution"))) return;
       const bot = worksFor(session)?.bot;
       if (bot) noteWorkChanged(bot);
+      // One of a bot's sessions done: for clients to show it seeing that.
+      if (bot && event.type === "session.execution.succeeded") noteOversight(bot, session.id, "finished");
       const starter = startedByOf(session);
       const wakes = wakesOf(session);
       // (One starting or stopped is its bot's work changing, for clients to read: nothing to tell.)

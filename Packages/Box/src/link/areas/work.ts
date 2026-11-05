@@ -17,6 +17,7 @@ import { targetsOf } from "../letters/tools";
 import { answersOn } from "../work/answers";
 import { noteWorkChanged, readWorkChanges, WORK_FOLDER, workFollowers } from "../work/changes";
 import { stopBotWork } from "../work/stop";
+import { oversightFollowers, readOversight } from "../work/oversight";
 import { botLimits } from "../work/limits";
 import { answerWork, askFollowers, workAsks } from "../work/asks";
 import { madeWords, makeProject } from "../work/projects";
@@ -32,7 +33,7 @@ import { botOfConversation, describeWork, ofBot, workingNow, workSessions } from
 import type { BotWork, WorkAnswer } from "../../shared/routes/work";
 import type { AnswerPiece, RouteContext } from "../server/context";
 
-export const WORK_ROUTE = /^kuvo\/(?:work(?:\/events)?|bots\/([^/]+)\/stop-all)$/;
+export const WORK_ROUTE = /^kuvo\/(?:work(?:\/events|\/oversight(?:\/events)?)?|bots\/([^/]+)\/stop-all)$/;
 export const WORK_ASKS_ROUTE = /^kuvo\/work\/(?:settings|unanswering|asks(?:\/([^/]+))?)$/;
 export const GOALS_ROUTE = /^kuvo\/work\/goals(?:\/([^/]+))?$/;
 export const APP_ICON_ROUTE = "kuvo/work/apps/icon";
@@ -77,6 +78,13 @@ export async function* workRoute(context: RouteContext, match: RegExpMatchArray)
     if (method !== "GET") return yield* json(405, {});
     yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
     return yield* followed(() => ({ changed: readWorkChanges() }), workFollowers, signal ?? undefined, { folders: [WORK_FOLDER], recursive: false });
+  }
+  // What bots just did to their sessions: a list now, and again with each mark.
+  if (route === "kuvo/work/oversight" || route === "kuvo/work/oversight/events") {
+    if (method !== "GET") return yield* json(405, {});
+    if (route === "kuvo/work/oversight") return yield* json(200, { marks: readOversight() });
+    yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
+    return yield* followed(() => ({ marks: readOversight() }), oversightFollowers, signal ?? undefined, { folders: [WORK_FOLDER], recursive: false });
   }
   if (route === "kuvo/work") {
     if (method !== "GET") return yield* json(405, {});
