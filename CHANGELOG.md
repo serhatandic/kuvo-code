@@ -16,6 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- A bot's steps that have nothing to do with the browser (checking its sessions, setting its job, looking up its vault) now say what they did, instead of "Used the browser", and the line over a turn's steps counts every step it opens to.
 - A step where an agent reads another agent's conversation, or writes to it, says whom by name, never by its address.
 - When updating or installing a coding agent fails, the alert shows the command in plain quotes, without the Markdown backticks it used to show.
 - With the sandbox on, your Claude Code hooks that run as a conversation starts, resumes or compacts start again, instead of a row saying each one failed with `EPERM`. A hook can't set environment variables with `CLAUDE_ENV_FILE` there, and if that fails the hook, its row says so; the hook for the moment of `/clear` still can't start. Several hooks failing the same way now show as one row.
