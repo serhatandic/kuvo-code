@@ -776,6 +776,21 @@ client shows it from the same routes.
 - **`GET kuvo/work/events`** (ndjson): `{"changed": {<bot>: <ms>}}` now and at each change to a
   bot's work (a session started, stopped, finished or asking, an ask answered, its limits); a
   client reads that bot's work again when its time moves. Kept in `run/work/changes.json`.
+- **`GET kuvo/work/oversight`** → `{marks: [{id, bot, session, kind, at}]}`, and
+  **`GET kuvo/work/oversight/events`** (ndjson, the same now and at each new mark): what bots just
+  did, from their own conversations, to their own sessions (`kuvo.by`), the oldest first. `kind`
+  is one of:
+  - `started`: started it with `start_session`;
+  - `told`: wrote to it with `send_message`;
+  - `read`: read it with `read_conversation`;
+  - `answered`: answered what it asked;
+  - `stopped`: stopped it;
+  - `finished`: it finished well. A failed or stopped one isn't marked.
+
+  Nothing is marked for a session that isn't the bot's own, or for what one of its sessions does to
+  another (its session that started one, say).
+
+  Clients show the bot looking after its sessions with these marks. The first line is what was there already; each new `id` after it plays once. Only the latest minute is kept, at most 50, in `run/work/oversight.json`. A box from before it answers 404.
 - **`POST kuvo/bots/<id>/stop-all`** → `{stopped}`: every session of its work that's working,
   stopped (held and paused, as the queue's Stop), and the bot's own turn too, with what it was
   still to hear of them dropped. 404 for no such bot here, 503 with no engine.

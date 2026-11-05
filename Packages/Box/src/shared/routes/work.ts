@@ -96,6 +96,13 @@ export const WORK = object({
   "projects?": list(PROJECT),
 });
 
+/** What a bot just did to one of its sessions (`kuvo/work/oversight`): started it, wrote to it
+ * (`told`), read it, answered what it asked, stopped it, or saw it finish. Each with an `id` of its
+ * own, so a client plays each once, and when (ms). */
+export const OVERSIGHT_MARK = object({ id: string, bot: string, session: string, kind: words("started", "told", "read", "answered", "stopped", "finished"), at: number });
+/** The marks of the latest minute, the oldest first. */
+export const OVERSIGHT = object({ marks: list(OVERSIGHT_MARK) });
+
 /** When each bot's work last changed (`kuvo/work/events`), in ms by its id: a client reads a bot's
  * work again when its time moves. */
 export const WORK_CHANGED = object({ changed: map(number) });
@@ -220,6 +227,8 @@ export type WorkSession = Infer<typeof WORK_SESSION>;
 export type BotWork = Infer<typeof WORK>;
 export type UnansweringList = Infer<typeof UNANSWERING_LIST>;
 export type WorkAskShape = Infer<typeof WORK_ASK>;
+export type OversightMark = Infer<typeof OVERSIGHT_MARK>;
+export type OversightKind = OversightMark["kind"];
 export type GoalPlanShape = Infer<typeof GOAL_PLAN>;
 export type GoalWaitingShape = Infer<typeof GOAL_WAITING>;
 export type GoalCheckShape = Infer<typeof GOAL_CHECK>;
@@ -231,6 +240,8 @@ export const WORK_ROUTES: RouteShape[] = [
   { route: "GET kuvo/work", answers: { 200: WORK, 400: REFUSED, 404: REFUSED, 503: REFUSED } },
   { route: "GET kuvo/work/events", answers: { 200: WORK_CHANGED } },
   { route: "POST kuvo/bots/:id/stop-all", answers: { 200: object({ stopped: number }), 404: REFUSED, 503: REFUSED } },
+  { route: "GET kuvo/work/oversight", answers: { 200: OVERSIGHT } },
+  { route: "GET kuvo/work/oversight/events", answers: { 200: OVERSIGHT } },
   { route: "GET kuvo/work/asks", answers: { 200: WORK_ASKS } },
   { route: "GET kuvo/work/asks/events", answers: { 200: WORK_ASKS } },
   { route: "POST kuvo/work/asks/:id", answers: { 200: WORK_ASK_ANSWERED, 400: REFUSED, 404: REFUSED } },

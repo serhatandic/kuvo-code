@@ -645,12 +645,78 @@ struct SidebarView: View {
         var errorDescription: String?
     }
 
-    @ViewBuilder private func projectSection(_ project: Workspace.Project) -> some View {
+    /// A project and its rows, with the lane of each bot overseeing sessions in it over them.
+    private func projectSection(_ project: Workspace.Project) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            projectRows(project)
+        }
+        .overlayPreferenceValue(OverseenRows.self) { rows in
+            if !collapsed.contains(project.directory), project.sessions.contains(where: { WorksFor($0) != nil }) {
+                GeometryReader { proxy in
+                    OverseerLanes(lanes: lanes(in: project, rows: rows, proxy: proxy), lights: lights(in: project))
+                }
+            }
+        }
+        // Each project's rows are its own lanes' alone.
+        .transformPreference(OverseenRows.self) { $0 = [:] }
+    }
+
+    /// What its bots just did to its sessions, each on the lane to its row: one under another
+    /// (a branch, a hand-off) lights the row it's under.
+    private func lights(in project: Workspace.Project) -> [OverseerLight] {
+        guard !app.botOversight.recent.isEmpty else { return [] }
+        let marks = app.botOversight.playing(in: Set(project.sessions.map(\.id)))
+        guard !marks.isEmpty else { return [] }
+        let tree = Branches.latestFirst(project.sessions)
+        var above: [String: String] = [:]
+        for (parent, children) in tree.under {
+            for child in children { above[child.id] = parent }
+        }
+        return marks.map { mark in
+            var session = mark.session
+            while let parent = above[session] { session = parent }
+            return OverseerLight(id: mark.id, bot: mark.bot, session: session)
+        }
+    }
+
+    /// Each bot's lane down `project`'s sessions shown: from under its folder, an elbow into each
+    /// of the bot's sessions, and on into Show More when some of them are among those not shown.
+    private func lanes(in project: Workspace.Project, rows: [String: Anchor<CGRect>], proxy: GeometryProxy) -> [OverseerLane] {
+        guard let folder = rows[OverseenRows.project].map({ proxy[$0] }) else { return [] }
+        let overseers = Oversight.overseers(of: Branches.latestFirst(project.sessions).top, ranked: bots.list.map(\.id)).compactMap { overseer in
+            bots.bot(overseer.bot).map { (overseer: overseer, bot: $0) }
+        }
+        let icon = SidebarMetrics.iconWidth(messageFont), half = SidebarMetrics.rowHeight(messageFont) / 2
+        let more = rows[OverseenRows.more].map { proxy[$0].midY }
+        // Just under the folder.
+        let top = folder.midY + (16 * messageFont.sidebarScale).rounded() / 2 + 1
+        return overseers.enumerated().compactMap { index, overseen in
+            let (overseer, bot) = overseen
+            var elbows: [String: CGFloat] = [:]
+            for session in overseer.sessions {
+                if let row = rows[session] { elbows[session] = proxy[row].minY + half }
+            }
+            // On into Show More while some of them are under it; otherwise into the last one's
+            // elbow, where the line turns.
+            let hidden = elbows.count < overseer.sessions.count
+            guard let bottom = hidden ? (more ?? elbows.values.max()) : elbows.values.max().map({ $0 - OverseerLanes.radius }) else { return nil }
+            // Side by side under the folder, 6 points apart, closer for more than three, so each
+            // turns into its rows before the title.
+            let gap = overseers.count > 3 ? 12 / CGFloat(overseers.count - 1) : 6
+            let x = 10 + icon / 2 + (CGFloat(index) - CGFloat(overseers.count - 1) / 2) * gap
+            return OverseerLane(bot: bot.id, look: bot.look, paused: bots.paused.contains(bot.id), x: x, top: top,
+                                bottom: bottom, elbows: elbows, reach: 10 + icon + 10 - 6)
+        }
+    }
+
+    @ViewBuilder private func projectRows(_ project: Workspace.Project) -> some View {
         let isOpen = !collapsed.contains(project.directory)
         ProjectRow(project: project, isOpen: isOpen) {
             withAnimation(.ui) { toggle(project.directory) }
         } newSession: {
             newSession(project.directory)
+        } openBot: { bot in
+            selection = bot.sessionID
         }
         .contextMenu {
             Button("New Session") { newSession(project.directory) }
@@ -675,6 +741,7 @@ struct SidebarView: View {
             Button("Remove Project…") { removingProject = project }
                 .disabled(!project.sessions.isEmpty && app.machines.engine(RemoteFolder.machine(of: project.directory)).map { !$0.isReady } ?? false)
         }
+        .anchorPreference(key: OverseenRows.self, value: .bounds) { [OverseenRows.project: $0] }
         if isOpen {
             if selection == Self.draftTag(project.directory) {
                 SidebarRow(isSelected: true, indented: true, action: {}) {
@@ -690,6 +757,7 @@ struct SidebarView: View {
             let sessions = tree.top
             ForEach(all ? sessions : Array(sessions.prefix(Self.sessionsPerProject))) { session in
                 sessionRow(session, in: .project, branches: tree.under)
+                    .anchorPreference(key: OverseenRows.self, value: .bounds) { WorksFor(session) == nil ? [:] : [session.id: $0] }
             }
             if sessions.count > Self.sessionsPerProject, !Self.demoShowsAll {
                 SidebarRow(isSelected: false, indented: true, action: {
@@ -702,6 +770,7 @@ struct SidebarView: View {
                     Text(all ? "Show Less" : "Show \(sessions.count - Self.sessionsPerProject) More")
                         .foregroundStyle(.secondary)
                 }
+                .anchorPreference(key: OverseenRows.self, value: .bounds) { [OverseenRows.more: $0] }
             }
         }
     }
@@ -950,8 +1019,9 @@ struct SidebarView: View {
                 }
             } else {
                 HStack(spacing: 6) {
-                    // A bot's work: its face, still, before the title.
-                    if let by = WorksFor(session), let bot = bots.bot(by.bot) {
+                    // A bot's work: its face, still, before the title; in a project, its lane shows
+                    // it instead, the session staying yours.
+                    if place != .project, let by = WorksFor(session), let bot = bots.bot(by.bot) {
                         BotAvatar(look: bot.look, size: 15, animates: false)
                             .help("Started by \(bot.name)")
                             .accessibilityLabel("\(bot.name)’s work")
@@ -961,6 +1031,7 @@ struct SidebarView: View {
                         .foregroundStyle(Workspace.isArchived(session) ? .secondary : .primary)
                         .lineLimit(1)
                         .truncationMode(.tail)
+                        .accessibilityValue(place == .project ? WorksFor(session).flatMap { bots.bot($0.bot) }.map { Oversight.overseenBy($0.name) } ?? "" : "")
                 }
             }
         } accessory: {
@@ -1334,6 +1405,8 @@ private struct ProjectRow: View {
     let isOpen: Bool
     let toggle: () -> Void
     let newSession: () -> Void
+    /// A bot's face clicked: its chat.
+    let openBot: (Bot) -> Void
     @State private var isHovering = false
     @Environment(AppModel.self) private var app
 
@@ -1344,34 +1417,62 @@ private struct ProjectRow: View {
         app.machines.engine(RemoteFolder.machine(of: project.directory))
     }
 
+    /// The bots overseeing sessions here, the first to show first.
+    private func overseers() -> [Bot] {
+        Oversight.overseers(of: Branches.latestFirst(project.sessions).top, ranked: app.bots.list.map(\.id)).compactMap { app.bots.bot($0.bot) }
+    }
+
+    /// The size of a bot's face here, and how far the next one overlaps it.
+    private var faceSize: CGFloat { (20 * messageFont.sidebarScale).rounded() }
+    private func facesWidth(_ count: Int) -> CGFloat {
+        let shown = CGFloat(min(count, 3))
+        return shown * (faceSize + 4) - (shown - 1) * (faceSize / 5 + 4) + (count > 3 ? 22 : 0)
+    }
+
+    /// Their faces, overlapping a little: bright while a session of theirs here needs you, asleep
+    /// while paused, pleased a moment as one finishes. Each opens its bot's chat.
+    private func faces(_ overseers: [Bot]) -> some View {
+        let size = faceSize
+        let finished = app.botOversight.recent.isEmpty ? []
+            : app.botOversight.playing(in: Set(project.sessions.map(\.id))).filter { $0.kind == .finished }
+        return HStack(spacing: 2) {
+            HStack(spacing: -(size / 5 + 4)) {
+                ForEach(overseers.prefix(3)) { bot in
+                    face(bot, size: size, pleased: finished.first { $0.bot == bot.id }?.id)
+                }
+            }
+            if overseers.count > 3 {
+                Text("+\(overseers.count - 3)")
+                    .sidebarFont(11, weight: .medium)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 20)
+                    .help(Oversight.overseenBy(overseers.dropFirst(3).map(\.name)))
+            }
+        }
+    }
+
+    private func face(_ bot: Bot, size: CGFloat, pleased: String?) -> some View {
+        // Any of its sessions here, under another one too.
+        let pose: OverseerFace.Pose = app.bots.paused.contains(bot.id) ? .paused
+            : project.sessions.contains(where: { WorksFor($0)?.bot == bot.id && app.workspace.needsAttention($0.id) }) ? .needsYou : .rest
+        return Button { openBot(bot) } label: {
+            OverseerFace(look: bot.look, size: size, pose: pose, pleased: pleased)
+        }
+        .buttonStyle(IconButtonStyle(width: size + 4, height: size + 4, cornerRadius: (size + 4) / 2))
+        .clickablePointer()
+        .help(Oversight.overseenBy(bot.name))
+        .accessibilityLabel(bot.name)
+        .accessibilityHint("Opens its conversation")
+    }
+
     var body: some View {
         // Worked out here, not by the sidebar, so only this row follows its sessions' states.
         let mark = isOpen ? nil : foldedMark(of: project.sessions, workspace: app.workspace, app: app)
+        let overseers = self.overseers()
         Button(action: toggle) {
             HStack(spacing: 10) {
-                Group {
-                    // One a bot made: its face, still, on the folder's corner, cut out of it.
-                    if let maker = app.workspace.madeBy[project.directory].flatMap({ app.bots.bot($0.bot) }) {
-                        FolderIcon(isOpen: isOpen, size: (16 * messageFont.sidebarScale).rounded())
-                            .foregroundStyle(.secondary)
-                            .mask {
-                                Rectangle()
-                                    .overlay(alignment: .bottomTrailing) {
-                                        Circle().frame(width: 15, height: 15).offset(x: 4.5, y: 4.5).blendMode(.destinationOut)
-                                    }
-                                    .compositingGroup()
-                            }
-                            .overlay(alignment: .bottomTrailing) {
-                                BotAvatar(look: maker.look, size: 12, animates: false)
-                                    .offset(x: 3, y: 3)
-                                    .help(WorkWords.madeBy(maker.name))
-                                    .accessibilityLabel(WorkWords.madeBy(maker.name))
-                            }
-                    } else {
-                        FolderIcon(isOpen: isOpen, size: (16 * messageFont.sidebarScale).rounded())
-                            .foregroundStyle(.secondary)
-                    }
-                }
+                FolderIcon(isOpen: isOpen, size: (16 * messageFont.sidebarScale).rounded())
+                    .foregroundStyle(.secondary)
                 .frame(width: SidebarMetrics.iconWidth(messageFont))
                 Text(project.name)
                     .sidebarFont(14)
@@ -1381,6 +1482,12 @@ private struct ProjectRow: View {
                     MachineLabel(engine: machine)
                 }
                 Spacer(minLength: 6)
+                // Room for the bots' faces (over the row, so each takes its own click), as far as
+                // they go under the pointer.
+                if !overseers.isEmpty {
+                    Color.clear.frame(width: facesWidth(overseers.count), height: 1)
+                        .padding(.trailing, mark == nil ? -10 : -2)
+                }
                 // Room for the compose button, so a long name never runs under it; folded, the
                 // mark of what's under it, where a session's sits, the button over it under the
                 // pointer.
@@ -1399,7 +1506,15 @@ private struct ProjectRow: View {
         }
         .buttonStyle(.plain)
         .clickablePointer()
-        .accessibilityValue(mark?.wordsFromUnder ?? "")
+        .accessibilityValue([mark?.wordsFromUnder, overseers.isEmpty ? nil : Oversight.overseenBy(overseers.map(\.name))].compactMap { $0 }.joined(separator: ", "))
+        .overlay(alignment: .trailing) {
+            // Beside the compose button, which shows under the pointer, so they stay put as you
+            // reach for one; before the mark of what's folded under it.
+            if !overseers.isEmpty {
+                faces(overseers)
+                    .padding(.trailing, mark != nil ? 40 : 32)
+            }
+        }
         .overlay(alignment: .trailing) {
             Button(action: newSession) {
                 Image(systemName: "square.and.pencil")
@@ -1621,9 +1736,9 @@ private struct BotRow: View {
             ShimmerText(text: "Working…")
         } else if case let helpers = workspace.helpersAtWork(in: bot.sessionID), helpers > 0 {
             ShimmerText(text: helpers == 1 ? "Working on a task…" : "Working on \(helpers) tasks…")
-        } else if case let work = workspace.work(of: bot.id), !work.isEmpty {
-            // Its sessions at it: where, and how many (one waiting on you shows on its own row).
-            ShimmerText(text: WorkWords.atWork(count: work.count, projects: work.map { workspace.projectName($0.location.directory) }))
+        } else if !bots.paused.contains(bot.id), case let overseen = workspace.overseen(by: bot.id), overseen.contains(where: { workspace.isWorking($0.id) }) {
+            // Every session it oversees, while one is at it (one waiting on you shows on its own row).
+            ShimmerText(text: Oversight.overseeing(count: overseen.count))
         } else if let place = bots.waitingFor(bot) {
             // What you changed while its machine was away, on its way once it's back.
             BotState(systemImage: "clock.arrow.circlepath", isSet: false) { Text("Changes waiting for \(place)") }
@@ -1646,6 +1761,9 @@ private struct BotRow: View {
             }
         } else if let watching = bots.watches[bot.id], !watching.isEmpty {
             BotState(systemImage: "eye") { Text(watching.count == 1 ? "Watching" : "Watching \(watching.count) things") }
+        } else if case let overseen = workspace.overseen(by: bot.id), !overseen.isEmpty {
+            // At rest: what it looks after, in place of its job.
+            Text(Oversight.overseeing(count: overseen.count))
         } else {
             // No job yet: it asks for one, until your message gives it.
             Text(bot.job.isEmpty ? EmptyConversationView.purposeQuestion : bot.job)
@@ -2091,6 +2209,17 @@ private struct BranchLine: View {
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+    }
+}
+
+/// Where a project's rows are, for its bots' lanes: its own, each of its bots' sessions shown (by
+/// id), and Show More's.
+private struct OverseenRows: PreferenceKey {
+    static let project = "project"
+    static let more = "more"
+    static let defaultValue: [String: Anchor<CGRect>] = [:]
+    static func reduce(value: inout [String: Anchor<CGRect>], nextValue: () -> [String: Anchor<CGRect>]) {
+        value.merge(nextValue()) { $1 }
     }
 }
 

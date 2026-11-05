@@ -111,11 +111,12 @@ struct QueueRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: isQueued ? "text.line.last.and.arrowtriangle.forward" : "arrow.turn.down.right")
-                .font(.system(size: 13))
-                .foregroundStyle(.tertiary)
-                .frame(width: 18)
-                .help(isOnBox ? "Came while it was stopped: goes once you resume, in this order" : isQueued ? "Sent after the current run, in this order" : "The agent gets this at its next step")
+            Group {
+                if isQueued { QueuedMark(size: 13) } else { Image(systemName: "arrow.turn.down.right").font(.system(size: 13)) }
+            }
+            .foregroundStyle(.tertiary)
+            .frame(width: 18)
+            .help(isOnBox ? "Came while it was stopped: goes once you resume, in this order" : isQueued ? "Sent after the current run, in this order" : "The agent gets this at its next step")
             if let picture = item.files.first(where: { AttachmentItem.local($0).isImage }) {
                 QueuePicture(url: picture)
             }

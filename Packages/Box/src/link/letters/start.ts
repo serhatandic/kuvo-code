@@ -20,6 +20,7 @@ import { composeLetter } from "./letter";
 import { allowed, noteStarting, startedAs, startsBefore, takeBack } from "./limits";
 import { answerTo } from "./take";
 import { noteWorkChanged } from "../work/changes";
+import { noteOversight } from "../work/oversight";
 import { botLimits, pastLimit } from "../work/limits";
 import { pickModel, usableModels } from "../work/models";
 import { failedOn, holdOf, holdWords, turnError, unansweringNow } from "../work/unanswering";
@@ -406,6 +407,9 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   // In Full Access, its commands outside the sandbox from the first.
   await noteFullAccess(session).catch(() => {});
   if (by?.place && bot) noteWorkChanged(bot.bot);
+  // Started by the bot itself, for clients to show it looking after its new session: now, before
+  // a wait for its answer, so it shows before the session finishes.
+  if (marked && by?.place && bot && botOfConversation(by.session)?.bot === bot.bot) noteOversight(bot.bot, session, "started");
   if (!marked || !by?.place) wakes = [];
   if (bot && goal && given.step !== undefined && given.step !== null) linkSession(bot.bot, given.step, session);
   const waits = given.wait === true;
