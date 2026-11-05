@@ -115,8 +115,9 @@ Every bridge test file starts with `import "./test-safety.js";` (a test fails if
 the box's tests load it first through their preload. It keeps a run away from the real Kuvo Code,
 whichever shell starts it: it drops the `KUVO_*`, `OPENCODE_*` and `XDG_*` variables that an agent's
 shell hands down (not `KUVO_TEST_*` or `OPENCODE_TEST_*`, which you set on purpose), gives the run a
-home and a temporary folder of its own, and throws on deleting or moving anything outside those or
-a folder the process made with `mkdtemp`. A test sets what it wants itself, for its own folders.
+home of its own, and throws on deleting or moving anything but a folder the process made with
+`mkdtemp` or a path it named with `ownPath` (what a test has to make in a real cache, under a name of
+its own). A test sets what it wants itself, for its own folders.
 
 `./scripts/test-app.sh` runs one at a time: a run started while another is going
 waits for it, since they share the test copy's settings and temporary folders.

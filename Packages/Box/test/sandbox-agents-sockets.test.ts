@@ -76,7 +76,7 @@ test.skipIf(!canFence || process.platform !== "darwin")("a command can't use you
     for (const server of servers) server.close()
     for (const folder of [root, system, started, yours]) rmSync(folder, { recursive: true, force: true })
     rmSync(ownPath(join(temporary, "moved.sock")), { force: true })
-    rmSync(`/private/tmp/ssh-${basename(root)}@example.com:22`, { force: true })
+    rmSync(ownPath(`/private/tmp/ssh-${basename(root)}@example.com:22`), { force: true })
   }
 })
 

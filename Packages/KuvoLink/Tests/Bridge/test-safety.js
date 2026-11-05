@@ -8,10 +8,10 @@
 //
 // - What Kuvo Code's shells hand down is dropped: a test sets what it wants, for its own folders.
 //   What you set on purpose to run tests stays (KUVO_TEST_*, OPENCODE_TEST_*, KUVO_CURSOR_SDK).
-// - The run gets a home of its own, removed as it ends, so whatever falls back on `~` lands there.
-//   (The real home stays named in KUVO_TEST_REAL_HOME, for what's really wanted there:
-//   ~/.kuvo-code-test, and reading a program.) A temporary folder that's Kuvo Code's is swapped for
-//   the system's; any other stays as it is, as the length of a socket's path in it counts.
+// - The run gets a home of its own in ~/.kuvo-code-test, removed as it ends, so whatever falls back
+//   on `~` lands there. (The real home stays named in KUVO_TEST_REAL_HOME, for what's really wanted
+//   there: ~/.kuvo-code-test, and reading a program.) A temporary folder that's Kuvo Code's is
+//   swapped for the system's; any other stays as it is, as the length of a socket's path in it counts.
 // - Nothing is deleted or moved away unless it's in a folder this process made with mkdtemp, or a
 //   path the test named as its own with `ownPath`. Anything else throws, naming the path.
 import { spawnSync } from "node:child_process";
@@ -30,26 +30,33 @@ for (const name of Object.keys(process.env)) {
 }
 
 // An agent's shell has a temporary folder of Kuvo Code's: long enough that a socket's path in a test
-// goes over the limit, and a box treats it as its own. A folder you chose yourself (as
-// scripts/test-linux.sh does, to keep a machine tidy) is kept.
-function homeFolder() {
-  if (/\/(run\.kuvo\.code[^/]*|\.kuvo-code)\//.test(`${givenTemporary}/`)) {
-    const system = process.platform === "darwin" ? spawnSync("getconf", ["DARWIN_USER_TEMP_DIR"], { encoding: "utf8" }).stdout?.trim() : "/tmp";
-    // (A sandboxed shell may be able to write only in the folder it was given.)
-    if (system) {
-      try {
-        const made = fs.mkdtempSync(path.join(system, "ku-"));
-        process.env.TMPDIR = system;
-        return made;
-      } catch {}
-    }
+// goes over the limit, and a box treats it as its own. Any other (as scripts/test-linux.sh chooses,
+// to keep a machine tidy) stays as it is.
+if (/\/(run\.kuvo\.code[^/]*|\.kuvo-code)\//.test(`${givenTemporary}/`)) {
+  const system = process.platform === "darwin" ? spawnSync("getconf", ["DARWIN_USER_TEMP_DIR"], { encoding: "utf8" }).stdout?.trim() : "/tmp";
+  // (A sandboxed shell may be able to write only in the folder it was given.)
+  if (system) {
+    try {
+      fs.rmdirSync(fs.mkdtempSync(path.join(system, "ku-")));
+      process.env.TMPDIR = system;
+    } catch {}
   }
-  return fs.mkdtempSync(path.join(givenTemporary, "ku-"));
+}
+
+// The run's home, in the folder tests keep in your home, as a home isn't in a temporary folder: what
+// a box judges by where it is (a command in your home, or in a scratch folder) comes out as it would.
+function ownHome() {
+  try {
+    fs.mkdirSync(path.join(realHome, ".kuvo-code-test"), { recursive: true });
+    return fs.mkdtempSync(path.join(realHome, ".kuvo-code-test", "ku-"));
+  } catch {
+    return fs.mkdtempSync(path.join(os.tmpdir(), "ku-"));
+  }
 }
 
 // What's the tests' own (each without links, as a path being asked about is compared with).
 const own = new Set();
-const ownRoot = fs.realpathSync(homeFolder());
+const ownRoot = fs.realpathSync(ownHome());
 own.add(ownRoot);
 process.env.KUVO_TEST_REAL_HOME = realHome;
 process.env.HOME = ownRoot;
