@@ -279,7 +279,7 @@ describe("what's waiting", () => {
     await settled(id, 1)
     expect(a.runs).toHaveLength(0)
     expect(idles(id)[0].outcome).toBe("failed")
-    expect(idles(id)[0].error).toEqual({ type: "provider.auth", message: "Alpha isn't signed in. Sign in to it in Settings › Accounts, or pick another model." })
+    expect(idles(id)[0].error).toEqual({ type: "signin", message: "Alpha isn't signed in. Sign in to it in Settings › Accounts, or pick another model." })
   })
 
   test("a message sent twice goes once", async () => {

@@ -39,6 +39,7 @@ import Testing
         window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(rootView: Page())
         window.orderBack(nil)
+        WindowServer.pointerIsOver(window)
         var turns = 0
         // Laid out, and the fields' rectangles given (AppKit asks for them once it has drawn).
         while !isReady, turns < 400 {
@@ -161,8 +162,6 @@ import Testing
         let bottom = try #require(field(under: beside))
         #expect(window.makeFirstResponder(bottom))
         let editor = try #require(window.firstResponder as? NSTextView, "typing in the field")
-        // The pointer over this window, as the window server tells AppKit's text it's edited in.
-        WindowServer.pointerIsOver(window)
         // Its tracking areas come once it's laid out in the field.
         var turns = 0
         while !editor.trackingAreas.contains(where: { $0.options.contains(.cursorUpdate) }), turns < 400 {
@@ -214,7 +213,9 @@ import Testing
         window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(rootView: Page(sheet: sheet))
         window.orderBack(nil)
+        WindowServer.pointerIsOver(window)
         defer {
+            WindowServer.pointerLeft(window)
             NSCursor.arrow.set()
             window.orderOut(nil)
             window.close()

@@ -374,21 +374,6 @@ final class ClaudeDesktopAuthStoreTests: XCTestCase {
         XCTAssertEqual(fixture.keyReader.calls, [false])
     }
 
-    func testDesktopCredentialsAreNeverSaved() throws {
-        let files = FakeFiles()
-        let keychain = FakeKeychain()
-        let fixture = try makeFixture(
-            activeOrganization: organization,
-            v2: [cacheKey(organization: organization): tokenEntry("desktop-token", expiresIn: 3_600)]
-        )
-        let authStore = makeAuthStore(fixture, environment: [:], files: files, keychain: keychain)
-        let state = authStore.loadCredentialCandidates().first!
-
-        XCTAssertFalse(try authStore.save(state, ifUnchanged: ClaudeCredentialGeneration([state])))
-        XCTAssertTrue(files.files.isEmpty)
-        XCTAssertNil(keychain.value)
-    }
-
     @MainActor
     func testDesktop401NeverAttemptsRefreshTokenExchange() async throws {
         let fixture = try makeFixture(

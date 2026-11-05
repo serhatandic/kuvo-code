@@ -42,6 +42,7 @@
       window.isReleasedWhenClosed = false
       window.contentView = NSHostingView(rootView: root)
       window.contentView?.layoutSubtreeIfNeeded()
+      WindowServer.over = window.windowNumber
     }
 
     private let underButton = NSPoint(x: 200, y: 100)
@@ -51,6 +52,22 @@
       #expect(text.convert(text.bounds, to: nil).contains(underButton))
       #expect(PointerClaim.isTopmost(text, at: bareText))
       #expect(!PointerClaim.isTopmost(text, at: underButton))
+      window.close()
+    }
+
+    /// A menu or a popover open over the text is a window of its own on top: under it the text
+    /// is nothing a click reaches, so it claims no pointer there.
+    @Test func textUnderAnotherWindowIsNotTopmost() {
+      let menu = NSPanel(
+        contentRect: window.convertToScreen(NSRect(x: 0, y: 0, width: 200, height: 200)),
+        styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+      menu.level = .popUpMenu
+      menu.isReleasedWhenClosed = false
+      WindowServer.over = menu.windowNumber
+      #expect(!PointerClaim.isTopmost(text, at: bareText))
+      WindowServer.over = window.windowNumber
+      #expect(PointerClaim.isTopmost(text, at: bareText))
+      menu.close()
       window.close()
     }
 
@@ -90,5 +107,33 @@
       #expect(NSCursor.current == .arrow)
       window.close()
     }
+  }
+
+  /// The window server's answer to which window is under a point on the screen: the test's
+  /// window, as the user's is under their pointer (the test's is off the screen, under nothing),
+  /// or a menu over it.
+  @MainActor enum WindowServer {
+    static var over: Int? {
+      didSet {
+        guard !isStubbed else { return }
+        isStubbed = true
+        let selector = #selector(NSWindow.windowNumber(at:belowWindowWithWindowNumber:))
+        let method = class_getClassMethod(NSWindow.self, selector)!
+        typealias Call = @convention(c) (AnyClass, Selector, NSPoint, Int) -> Int
+        let real = unsafeBitCast(method_getImplementation(method), to: Call.self)
+        // Only within the window: a point anywhere else gets the real answer, as one given in
+        // the wrong coordinates would.
+        let answer: @convention(block) (AnyClass, NSPoint, Int) -> Int = { type, point, below in
+          let window =
+            Thread.isMainThread
+            ? MainActor.assumeIsolated {
+              over.flatMap { NSApp.window(withWindowNumber: $0)?.frame.contains(point) == true ? $0 : nil }
+            } : nil
+          return window ?? real(type, selector, point, below)
+        }
+        method_setImplementation(method, imp_implementationWithBlock(answer))
+      }
+    }
+    private static var isStubbed = false
   }
 #endif

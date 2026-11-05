@@ -235,7 +235,7 @@ final class ClaudeResetClaimTests: XCTestCase {
         let state = try XCTUnwrap(authStore.loadCredentialSet().candidates.first {
             $0.hasUsableAccessToken && authStore.liveUsageAvailability($0) == .available
         }, "no usable Claude login")
-        if authStore.needsRefresh(state.oauth) { throw XCTSkip("token needs a refresh; open Claude Code first") }
+        if authStore.hasExpired(state.oauth) { throw XCTSkip("token expired; open Claude Code first") }
         let token = try XCTUnwrap(state.oauth.accessToken)
         let config = try authStore.oauthConfig()
         let profile = try ClaudeUsageClient.decodeProfile(try await client.fetchProfile(accessToken: token, config: config))

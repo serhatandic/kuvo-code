@@ -71,10 +71,13 @@ struct ProvidersView: View {
                 Text(removalFailure ?? "")
             }
         #if DEBUG
-        .task {
-            if let id = ProcessInfo.processInfo.environment["KUVO_DEMO_PROVIDERS"], let provider = catalog.providers.first(where: { $0.id == id }) {
+        // Once it's listed (a coding agent's comes after the engine's).
+        .task(id: catalog.providers.contains { $0.id == ProcessInfo.processInfo.environment["KUVO_DEMO_PROVIDERS"] }) {
+            if connecting == nil, let id = ProcessInfo.processInfo.environment["KUVO_DEMO_PROVIDERS"], let provider = catalog.providers.first(where: { $0.id == id }) {
                 connecting = Connecting(integration: provider, machine: box.machine)
             }
+        }
+        .task {
             // KUVO_DEMO_ACCOUNTS_MACHINE=<machine>: that machine's accounts.
             if let id = ProcessInfo.processInfo.environment["KUVO_DEMO_ACCOUNTS_MACHINE"], app.machines.engine(id) != nil, box.machine == nil {
                 app.settingsTabs.show(.accounts, on: .machine(id))
