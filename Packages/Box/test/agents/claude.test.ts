@@ -794,11 +794,27 @@ describe("Claude Code in the box's sandbox", () => {
       return idles(id)[before].error?.message
     }
 
+    /** Says this line as it stops, and what the failure makes of it. */
+    const saying = async (line: string) => {
+      launcher(`cat >&2 <<'SAID'\n${line}\nSAID\nexit 1`)
+      return (await stopsAsItStarts(newSession(), 1))?.slice(plain.length + 2)
+    }
+
     test("no secret an error line can hold is said back", async () => {
       turnOn()
-      const id = newSession()
-      launcher(`echo "cannot reach https://me:hunter2@proxy.test/v1 with Bearer abc.def-ghi and API_KEY=hunter3" >&2\nexit 1`)
-      expect(await stopsAsItStarts(id, 1)).toBe(`${plain}: cannot reach https://…@proxy.test/v1 with Bearer … and API_KEY=…`)
+      for (const [line, said] of [
+        ["cannot reach https://me:p@ss@proxy.test/v1", "cannot reach https://…@proxy.test/v1"],
+        ["sent Bearer abc.def-ghi, Authorization: Basic Zm9v", "sent Bearer …, Authorization: …"],
+        [`API_KEY="a b" TOKEN=k1 x-api-key: k2`, `API_KEY=… TOKEN=… x-api-key: …`],
+        [`{"apiKey":"k3","password": "k4"}`, `{"apiKey":…,"password": …}`],
+        ["password: k5 auth_token: k6", "password: … auth_token: …"],
+        ["ran it with --token k7 --api-key=k8", "ran it with --token … --api-key=…"],
+      ]) expect(await saying(line)).toBe(said)
+    })
+
+    test("a plain sentence keeps its words", async () => {
+      turnOn()
+      for (const line of ["Bearer token expired", "Invalid API key: not found", "Invalid token: expired", "max_tokens=4096 is too many", "Authorization failed for that account"]) expect(await saying(line)).toBe(line)
     })
 
     test("a line too long to keep whole is left out, so no piece of a token gets through", async () => {
@@ -881,36 +897,75 @@ describe("Claude Code in the box's sandbox", () => {
       expect(idles(id)[0].error?.message).toBe(`${plain}: Error: out of memory`)
     })
 
-    test("what comes after it exits still counts, as what's holding its error output finishes", async () => {
-      turnOn()
-      const go = join(root, "go")
-      launcher(`( while [ ! -e ${JSON.stringify(go)} ]; do sleep 0.01; done; echo "said as it went" >&2 ) &\nexit 1`)
-      const id = newSession()
-      fake.onServers = async () => {
-        const child = spawned()
-        await new Promise((resolve) => child.once("exit", resolve))
-        fake.crash(new Error(plain))
-        await new Promise((resolve) => setTimeout(resolve, 0))
-        writeFileSync(go, "")
+    describe("with its error output held open by what it left running", () => {
+      const within = ClaudeAgent.heardWithin
+      afterEach(() => {
+        ClaudeAgent.heardWithin = within
+      })
+      /** Says `before`, exits, and leaves a process holding its error output until `go` is there, which then says `after`. */
+      const holding = (go: string, before: string, after: string) => launcher(`printf '${before}' >&2\n( while [ ! -e ${JSON.stringify(go)} ]; do sleep 0.01; done; printf '${after}' >&2 ) &\nexit 1`)
+      const stops = () => {
+        fake.onServers = async () => {
+          const child = spawned()
+          await new Promise((resolve) => child.once("exit", resolve))
+          fake.crash(new Error(plain))
+          await new Promise((resolve) => setTimeout(resolve, 0))
+        }
       }
-      send(id, 1)
-      await until(() => idles(id).length === 1)
-      expect(idles(id)[0].error?.message).toBe(`${plain}: said as it went`)
-    })
 
-    test("a command it left running, holding its error output open, doesn't hold up the failure", async () => {
-      turnOn()
-      launcher("sleep 2 &\nexit 1")
-      const id = newSession()
-      fake.onServers = async () => {
-        const child = spawned()
-        await new Promise((resolve) => child.once("exit", resolve))
-        fake.crash(new Error(plain))
-        await new Promise((resolve) => setTimeout(resolve, 0))
-      }
-      send(id, 1)
-      await until(() => idles(id).length === 1)
-      expect(idles(id)[0].error?.message).toBe(plain)
+      test("what comes after it exits still counts", async () => {
+        turnOn()
+        ClaudeAgent.heardWithin = 60_000
+        const go = join(root, "go")
+        holding(go, "", "said as it went\\n")
+        const id = newSession()
+        fake.onServers = async () => {
+          const child = spawned()
+          await new Promise((resolve) => child.once("exit", resolve))
+          fake.crash(new Error(plain))
+          await new Promise((resolve) => setTimeout(resolve, 0))
+          writeFileSync(go, "")
+        }
+        send(id, 1)
+        await until(() => idles(id).length === 1, 30_000)
+        expect(idles(id)[0].error?.message).toBe(`${plain}: said as it went`)
+      }, 40_000)
+
+      test("the failure doesn't wait for long, and leaves out a line still coming", async () => {
+        turnOn()
+        const go = join(root, "go")
+        holding(go, "a whole line\\nhttps://me:hunt", "er2@proxy\\n")
+        const id = newSession()
+        stops()
+        try {
+          send(id, 1)
+          await until(() => idles(id).length === 1, 30_000)
+          expect(idles(id)[0].error?.message).toBe(`${plain}: a whole line`)
+        } finally {
+          writeFileSync(go, "")
+        }
+      }, 40_000)
+
+      test("you can stop the turn while it waits", async () => {
+        turnOn()
+        ClaudeAgent.heardWithin = 60_000
+        const go = join(root, "go")
+        holding(go, "", "")
+        const id = newSession()
+        try {
+          send(id, 1)
+          await until(() => fake.sent.length === 1)
+          const child = spawned()
+          await new Promise((resolve) => child.once("exit", resolve))
+          fake.crash(new Error(plain))
+          await new Promise((resolve) => setTimeout(resolve, 0))
+          await sessions.interrupt(id, false)
+          await until(() => idles(id).length === 1)
+          expect(idles(id)[0].outcome).toBe("interrupted")
+        } finally {
+          writeFileSync(go, "")
+        }
+      })
     })
   })
 

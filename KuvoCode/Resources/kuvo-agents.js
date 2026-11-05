@@ -9650,7 +9650,9 @@ var STATE_IN_HOME = [
 var KEPT_IN_HOME = ["settings*.json", "hooks", ".mcp.json"];
 var PRINTED_TOKEN = /sk-ant-oat\d+-[A-Za-z0-9_-]{60,}(?=[^A-Za-z0-9_-])/;
 var ANY_TOKEN = /sk-ant-[A-Za-z0-9_-]+/g;
-var withoutSecrets = (text) => text.replace(ANY_TOKEN, "sk-ant-\u2026").replace(/:\/\/[^\s/@]+@/g, "://\u2026@").replace(/\b(Bearer)\s+[A-Za-z0-9._~+/-]+=*/gi, "$1 \u2026").replace(/\b([A-Za-z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD)[A-Za-z0-9_]*)=\S+/gi, "$1=\u2026");
+var VALUE = `"[^"]*"|'[^']*'|[^\\s"',;]+`;
+var SECRET_NAME = "[A-Za-z0-9_-]*(?:key|token(?!s)|secret|password|passwd)[A-Za-z0-9_-]*";
+var withoutSecrets = (text) => text.replace(ANY_TOKEN, "sk-ant-\u2026").replace(/:\/\/[^\s/]*@/g, "://\u2026@").replace(new RegExp(`\\b((?:proxy-)?authorization)(["']?\\s*[:=]\\s*)(?:"[^"]*"|'[^']*'|(?:(?:bearer|basic|token)\\s+)?[^\\s"',;]+)`, "gi"), "$1$2\u2026").replace(/\bBearer\s+(?!tokens?\b)[A-Za-z0-9._~+/-]+=*/gi, "Bearer \u2026").replace(new RegExp(`\\b(${SECRET_NAME})(\\s*=\\s*)(?:${VALUE})`, "gi"), "$1$2\u2026").replace(new RegExp(`(["'])(${SECRET_NAME})\\1(\\s*:\\s*)(?:${VALUE})`, "gi"), "$1$2$1$3\u2026").replace(new RegExp(`\\b((?:[A-Za-z0-9_-]+[-_])?(?:api[-_]?key|token)|[A-Za-z0-9_-]*(?:password|passwd|secret))(?<!(?:^|[\\s(])token)(\\s*:\\s*)(?:${VALUE})`, "gi"), "$1$2\u2026").replace(new RegExp(`(--${SECRET_NAME})(\\s+|=)(?:${VALUE})`, "gi"), "$1$2\u2026");
 var told = (error) => {
   const said = failure(error);
   return { ...said, message: withoutSecrets(said.message) };
@@ -9659,6 +9661,7 @@ var told = (error) => {
 class Said {
   text = "";
   cut = false;
+  finished = false;
   add(chunk) {
     let text = this.text + chunk;
     if (this.cut) {
@@ -9676,6 +9679,9 @@ class Said {
     }
     this.text = text;
   }
+  finish() {
+    this.finished = true;
+  }
   forget() {
     if (this.text && !this.text.endsWith(`
 `))
@@ -9683,7 +9689,9 @@ class Said {
     this.text = "";
   }
   get last() {
-    const line = this.text.split(`
+    const whole = this.finished ? this.text : this.text.slice(0, this.text.lastIndexOf(`
+`) + 1);
+    const line = whole.split(`
 `).map((each) => each.trim()).filter((each) => each && !/^(at\s|Bun v\d|Node\.js v\d)/.test(each)).pop();
     return withoutSecrets(line ?? "").slice(0, 300);
   }
@@ -9692,6 +9700,7 @@ class Said {
 class ClaudeAgent {
   context;
   instance;
+  static heardWithin = 1000;
   static keychain = process.platform === "darwin";
   id = "claude";
   providerID;
@@ -10259,7 +10268,9 @@ class ClaudeThread {
     if (hooks.signal.aborted)
       return { outcome: "interrupted" };
     if (!this.query || !this.input) {
-      await this.heard();
+      await this.heard(this.lastEnd, hooks.signal);
+      if (hooks.signal.aborted)
+        return { outcome: "interrupted" };
       return { outcome: "failed", error: this.stoppedWhy(this.lastEnd) };
     }
     return new Promise((resolve) => {
@@ -10510,7 +10521,10 @@ class ClaudeThread {
         this.saidAll = new Promise((done) => {
           if (!child.stderr)
             return done();
-          child.stderr.once("close", () => done());
+          child.stderr.once("close", () => {
+            said.finish();
+            done();
+          });
         });
         child.stderr?.setEncoding("utf8");
         child.stderr?.on("data", (chunk) => said.add(chunk));
@@ -10558,19 +10572,30 @@ class ClaudeThread {
       active.resolve({ outcome: "failed", error: { type: "limit", message: active.problem ?? "You've reached a Claude usage limit." }, limit: active.limit });
     else {
       if (!active.problem)
-        await this.heard();
+        await this.heard(ended, active.hooks.signal);
+      if (active.hooks.signal.aborted)
+        return active.resolve({ outcome: "interrupted" });
       active.resolve({ outcome: "failed", error: this.failed(active, active.problem ? told(active.problem) : this.stoppedWhy(ended, "Claude Code stopped.")) });
     }
   }
   lastEnd;
   said;
   saidAll;
-  async heard() {
-    if (!this.said)
+  async heard(ended, stopped) {
+    if (ended === undefined || !this.said || stopped.aborted)
       return;
     let bound;
-    await Promise.race([this.saidAll, new Promise((done) => bound = setTimeout(done, 1000))]);
+    let stop = () => {};
+    await Promise.race([
+      this.saidAll,
+      new Promise((done) => {
+        bound = setTimeout(done, ClaudeAgent.heardWithin);
+        stop = done;
+        stopped.addEventListener("abort", stop, { once: true });
+      })
+    ]);
     clearTimeout(bound);
+    stopped.removeEventListener("abort", stop);
   }
   stoppedWhy(ended, otherwise = "Claude Code stopped before it took your message.") {
     const error = told(ended ?? otherwise);
@@ -23258,4 +23283,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents abc9212c5f0a126beeee31539322b838ebbd56d59a82901486046df434ad48f2
+// Built from Packages/Box/src/agents eca2a0c00259a3153e435e0c40ad6b8e3d837764547b990b6dc07688c56aadfd
