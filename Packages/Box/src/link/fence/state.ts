@@ -435,9 +435,10 @@ export function commandTemporary(work: string): string | null {
 
 /** Where Kuvo Code keeps conversations' own folders inside its own, which their commands get whole
  * in the sandbox: each folder in bots' and in the engine's worktrees (`inside`), and Chats', itself
- * too (`shared`). (And their commands' temporary folders: `commandTemporary`.) */
-export function conversationPlaces(): { inside: string[]; shared: string[] } {
-  return { inside: [realish(BOTS), realish(path.join(ENGINE_DATA, "worktree"))], shared: [realish(CHATS)] };
+ * too (`shared`). (And their commands' temporary folders: `commandTemporary`.) A test's own
+ * folders as `at` names them. */
+export function conversationPlaces(at = { bots: BOTS, engineData: ENGINE_DATA, chats: CHATS }): { inside: string[]; shared: string[] } {
+  return { inside: [realish(at.bots), realish(path.join(at.engineData, "worktree"))], shared: [realish(at.chats)] };
 }
 
 /**
