@@ -11,7 +11,7 @@
 # The sandbox runs on the machine's own engine (~/.kuvo-code/engine/<version>/opencode, as Kuvo
 # Code installed it; KUVO_TEST_BUN on the machine names another), as do the tests that run the
 # engine itself (OPENCODE_TEST_BINARY). Every folder the run uses
-# (TMPDIR, XDG_*, npm's and uv's caches) is inside that folder, which is removed afterwards. It
+# (TMPDIR, npm's and uv's caches) is inside that folder, which is removed afterwards. It
 # says what appeared in the machine's home folder, its ~/.kuvo-code-test and /tmp while it ran
 # (their own names, not what's inside them), which should be nothing.
 #
@@ -110,6 +110,10 @@ cd "$T/code/Packages/KuvoLink/Tests/Bridge" || exit 1
 if [ "$runner" = engine ]; then
     # (Bun's runner wants paths that start with ./, and gives each test 5 seconds unless told more.)
     BUN_BE_BUN=1 "$KUVO_TEST_BUN" test --timeout 120000 $(for file in "$@"; do printf './%s ' "$file"; done)
+    status=$?
+    # (Bun's runner ends without telling test-safety.js, whose next run clears what this one left.)
+    node --input-type=module -e 'await import("./test-safety.js")'
+    (exit $status)
 else
     node --test "$@"
 fi
