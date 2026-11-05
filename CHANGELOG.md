@@ -17,6 +17,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 ### All Changes
 
 - A bot oversees its sessions rather than owning them: in the sidebar, its face sits on each project it has sessions in, with a line in its color down to each one, and a click on the face opens its conversation. A light runs down the line as the bot starts, reads, writes to, answers or stops a session, and its face looks pleased when one finishes, bright while one needs you, and asleep while it's paused. Its row under Bots says how many sessions it oversees. The sessions keep their own titles, with no face in front, and a project a bot made no longer has its face on the folder.
+- A queued message's row starts with a new mark: an arrow turning in under two lines of text.
 - In **Auto**, an agent works with its own temporary files, like screenshots its build saved in `$TMPDIR`, and runs commands in its own worktree or bot folder, instead of being refused as "Kuvo Code's own folders" until Auto paused. Kuvo Code's keys and other conversations' files stay off limits.
 - On a Mac, a session in a worktree the engine made in Kuvo Code's own data folder can use its own files in the sandbox, where every command there failed with "Operation not permitted".
 - On a Mac, a command in the sandbox can no longer swap its temporary folder for a link that let the next command read Kuvo Code's own keys.
