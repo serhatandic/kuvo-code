@@ -65,6 +65,76 @@ interface Status {
 const PRINTED_TOKEN = /sk-ant-oat\d+-[A-Za-z0-9_-]{60,}(?=[^A-Za-z0-9_-])/
 /** Any of Claude's tokens, never said back in a failure's words. */
 const ANY_TOKEN = /sk-ant-[A-Za-z0-9_-]+/g
+/** A value after a name: quoted, or up to what ends it. */
+const VALUE = `"[^"]*"|'[^']*'|[^\\s"',;]+`
+/** A name that holds a secret (`max_tokens` holds a count). */
+const SECRET_NAME = "[A-Za-z0-9_-]*(?:key|token(?!s)|secret|password|passwd)[A-Za-z0-9_-]*"
+/** Words without Claude's tokens, or the other secrets an error line can hold: a URL's password (a
+ * proxy's), a header's or a bearer token, a value named as a secret (`NAME=…`, `"name": …`, a clear
+ * name with a colon, a command's flag). Not a plain sentence's words: "Invalid API key: …",
+ * "Invalid token: …", "Bearer token expired". */
+const withoutSecrets = (text: string) =>
+  text
+    .replace(ANY_TOKEN, "sk-ant-…")
+    .replace(/:\/\/[^\s/]*@/g, "://…@")
+    .replace(new RegExp(`\\b((?:proxy-)?authorization)(["']?\\s*[:=]\\s*)(?:"[^"]*"|'[^']*'|(?:(?:bearer|basic|token)\\s+)?[^\\s"',;]+)`, "gi"), "$1$2…")
+    .replace(/\bBearer\s+(?!tokens?\b)[A-Za-z0-9._~+/-]+=*/gi, "Bearer …")
+    .replace(new RegExp(`\\b(${SECRET_NAME})(\\s*=\\s*)(?:${VALUE})`, "gi"), "$1$2…")
+    .replace(new RegExp(`(["'])(${SECRET_NAME})\\1(\\s*:\\s*)(?:${VALUE})`, "gi"), "$1$2$1$3…")
+    .replace(new RegExp(`\\b((?:[A-Za-z0-9_-]+[-_])?(?:api[-_]?key|token)|[A-Za-z0-9_-]*(?:password|passwd|secret))(?<!(?:^|[\\s(])token)(\\s*:\\s*)(?:${VALUE})`, "gi"), "$1$2…")
+    .replace(new RegExp(`(--${SECRET_NAME})(\\s+|=)(?:${VALUE})`, "gi"), "$1$2…")
+/** A failure, in words without secrets. */
+const told = (error: unknown) => {
+  const said = failure(error)
+  return { ...said, message: withoutSecrets(said.message) }
+}
+
+/**
+ * What one Claude Code run whole in the sandbox has said on its error output since its last message:
+ * the end of it, in whole lines (the start of a line cut off could be the end of a token, which
+ * nothing would know to take out).
+ */
+class Said {
+  private text = ""
+  /** The line coming in was cut: what's left of it goes too. */
+  private cut = false
+  /** All of it is here: a last line with no end is whole. */
+  private finished = false
+
+  add(chunk: string) {
+    let text = this.text + chunk
+    if (this.cut) {
+      const end = text.indexOf("\n")
+      this.cut = end < 0
+      text = end < 0 ? "" : text.slice(end + 1)
+    }
+    if (text.length > 4000) {
+      text = text.slice(-4000)
+      const start = text.indexOf("\n")
+      this.cut = start < 0
+      text = start < 0 ? "" : text.slice(start + 1)
+    }
+    this.text = text
+  }
+
+  finish() {
+    this.finished = true
+  }
+
+  /** It went on working: what it said before isn't why it stops later. */
+  forget() {
+    if (this.text && !this.text.endsWith("\n")) this.cut = true
+    this.text = ""
+  }
+
+  /** Its last line that says something (not a stack frame, nor the runtime's name under a crash). */
+  get last() {
+    // (A line still coming could stop before what would show it's a secret.)
+    const whole = this.finished ? this.text : this.text.slice(0, this.text.lastIndexOf("\n") + 1)
+    const line = whole.split("\n").map((each) => each.trim()).filter((each) => each && !/^(at\s|Bun v\d|Node\.js v\d)/.test(each)).pop()
+    return withoutSecrets(line ?? "").slice(0, 300)
+  }
+}
 
 export class ClaudeAgent implements Agent {
   /**
@@ -75,6 +145,8 @@ export class ClaudeAgent implements Agent {
    * starts. On Linux, Claude Code's own sign-in is a file it renews itself, there in Kuvo Code's
    * folder, so it's used as it is.
    */
+  /** How long a failure waits for the rest of what Claude Code said as it stopped. */
+  static heardWithin = 1000
   static keychain = process.platform === "darwin"
 
   id = "claude"
@@ -830,7 +902,11 @@ class ClaudeThread implements Thread {
     }
     if (hooks.signal.aborted) return { outcome: "interrupted" }
     // Stopped while it was told what changed (it couldn't start, say): nothing to send it to.
-    if (!this.query || !this.input) return { outcome: "failed", error: this.stoppedWhy(this.lastEnd) }
+    if (!this.query || !this.input) {
+      await this.heard(this.lastEnd, hooks.signal)
+      if (hooks.signal.aborted) return { outcome: "interrupted" }
+      return { outcome: "failed", error: this.stoppedWhy(this.lastEnd) }
+    }
     return new Promise<RunResult>((resolve) => {
       this.lastHooks = hooks
       const message = userMessage(input, this.copies())
@@ -1024,6 +1100,7 @@ class ClaudeThread implements Thread {
     if (!this.agent.executable()) throw new Error(`Install Claude Code first: ${this.agent.install}`)
     // Why an earlier one ended is not this one's.
     this.lastEnd = undefined
+    this.said = undefined
     let id = this.state.claudeSession as string | undefined
     const resume = Boolean(id && this.state.claudeStarted)
     if (!id) {
@@ -1101,8 +1178,22 @@ class ClaudeThread implements Thread {
       spawn: (options: { command: string; args: string[]; cwd?: string; env: Record<string, string | undefined>; signal?: AbortSignal }) => {
         // (The program as the SDK names it.)
         const given = Object.fromEntries(Object.entries({ ...options.env, ...fence.env, KUVO_FENCE_SHELL: options.command, ...env }).filter((entry): entry is [string, string] => entry[1] !== undefined))
-        const child = spawn(fence.command, options.args, { cwd: options.cwd ?? directory, env: given, signal: options.signal, stdio: ["pipe", "pipe", "ignore"] })
+        const child = spawn(fence.command, options.args, { cwd: options.cwd ?? directory, env: given, signal: options.signal, stdio: ["pipe", "pipe", "pipe"] })
         child.once("exit", () => fence.ended())
+        // What it says as it stops, for why it did (the SDK keeps that only for a process it starts
+        // itself), this one's alone: one being replaced can still be writing.
+        const said = new Said()
+        this.said = said
+        this.saidAll = new Promise((done) => {
+          if (!child.stderr) return done()
+          child.stderr.once("close", () => {
+            said.finish()
+            done()
+          })
+        })
+        child.stderr?.setEncoding("utf8")
+        child.stderr?.on("data", (chunk: string) => said.add(chunk))
+        child.stderr?.on("error", () => {})
         return child
       },
     }
@@ -1149,15 +1240,44 @@ class ClaudeThread implements Thread {
     active.resolve = (value) => resolve(missed ? { ...value, missed } : value)
     if (active.stopping || active.hooks.signal.aborted) active.resolve({ outcome: "interrupted" })
     else if (active.limit) active.resolve({ outcome: "failed", error: { type: "limit", message: active.problem ?? "You've reached a Claude usage limit." }, limit: active.limit })
-    else active.resolve({ outcome: "failed", error: this.failed(active, failure(active.problem ?? ended ?? "Claude Code stopped.")) })
+    else {
+      if (!active.problem) await this.heard(ended, active.hooks.signal)
+      if (active.hooks.signal.aborted) return active.resolve({ outcome: "interrupted" })
+      active.resolve({ outcome: "failed", error: this.failed(active, active.problem ? told(active.problem) : this.stoppedWhy(ended, "Claude Code stopped.")) })
+    }
   }
 
   /** Why its last Claude Code stopped, when no turn was there to say. */
   private lastEnd?: unknown
 
-  /** A Claude Code that stopped before it took the turn's message: why, as it said. */
-  private stoppedWhy(ended: unknown) {
-    return failure(ended ?? "Claude Code stopped before it took your message.")
+  /** What the Claude Code run whole in the sandbox says on its error output, and when that's all there. */
+  private said?: Said
+  private saidAll?: Promise<void>
+
+  /** Until all it said has come for a failure (its exit can arrive first), but not for long: a
+   * command it left running can hold its error output open. Nor once you stop the turn. */
+  private async heard(ended: unknown, stopped: AbortSignal) {
+    if (ended === undefined || !this.said || stopped.aborted) return
+    let bound: ReturnType<typeof setTimeout> | undefined
+    let stop = () => {}
+    await Promise.race([
+      this.saidAll,
+      new Promise<void>((done) => {
+        bound = setTimeout(done, ClaudeAgent.heardWithin)
+        stop = done
+        stopped.addEventListener("abort", stop, { once: true })
+      }),
+    ])
+    clearTimeout(bound)
+    stopped.removeEventListener("abort", stop)
+  }
+
+  /** A Claude Code that stopped (before it took the turn's message, say): why, as it said, with the
+   * last line it wrote as it stopped ("Can't read the current directory…"). */
+  private stoppedWhy(ended: unknown, otherwise = "Claude Code stopped before it took your message.") {
+    const error = told(ended ?? otherwise)
+    const last = this.said?.last
+    return ended !== undefined && last && !error.message.includes(last) ? { ...error, message: `${error.message}: ${last}` } : error
   }
 
   /**
@@ -1172,6 +1292,7 @@ class ClaudeThread implements Thread {
   }
 
   private handle(message: any) {
+    this.said?.forget()
     if (message.type === "system" && message.subtype === "init") {
       if (!this.state.claudeStarted || this.state.claudeSession !== message.session_id) {
         this.state.claudeSession = message.session_id

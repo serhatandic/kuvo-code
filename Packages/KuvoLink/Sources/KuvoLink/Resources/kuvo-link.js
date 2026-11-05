@@ -4269,8 +4269,8 @@ function commandTemporary(work) {
 ${real}`).slice(0, 8)) : path15.join(FOLDER, "tmp", sum(real).slice(0, 32));
   return fs16.lstatSync(tmp, { throwIfNoEntry: false })?.isSymbolicLink() ? null : tmp;
 }
-function conversationPlaces() {
-  return { inside: [realish(BOTS), realish(path15.join(ENGINE_DATA, "worktree"))], shared: [realish(CHATS)] };
+function conversationPlaces(at = { bots: BOTS, engineData: ENGINE_DATA, chats: CHATS }) {
+  return { inside: [realish(at.bots), realish(path15.join(at.engineData, "worktree"))], shared: [realish(at.chats)] };
 }
 function setUpFence(found) {
   const can = able(found);
