@@ -8,11 +8,12 @@
 //
 // - What Kuvo Code's shells hand down is dropped: a test sets what it wants, for its own folders.
 //   What you set on purpose to run tests stays (KUVO_TEST_*, OPENCODE_TEST_*, KUVO_CURSOR_SDK).
-// - The run gets a home and a temporary folder of its own, in one folder removed as it ends, so
-//   whatever falls back on `~` or `os.tmpdir()` lands there. (The real home stays named in
-//   KUVO_TEST_REAL_HOME, for what's really wanted there: ~/.kuvo-code-test, and reading a program.)
-// - Nothing is deleted or moved away unless it's in that folder or one this process made with
-//   mkdtemp. Anything else throws, naming the path.
+// - The run gets a home of its own, removed as it ends, so whatever falls back on `~` lands there.
+//   (The real home stays named in KUVO_TEST_REAL_HOME, for what's really wanted there:
+//   ~/.kuvo-code-test, and reading a program.) A temporary folder that's Kuvo Code's is swapped for
+//   the system's; any other stays as it is, as the length of a socket's path in it counts.
+// - Nothing is deleted or moved away unless it's in a folder this process made with mkdtemp, or a
+//   path the test named as its own with `ownPath`. Anything else throws, naming the path.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
@@ -31,25 +32,27 @@ for (const name of Object.keys(process.env)) {
 // An agent's shell has a temporary folder of Kuvo Code's: long enough that a socket's path in a test
 // goes over the limit, and a box treats it as its own. A folder you chose yourself (as
 // scripts/test-linux.sh does, to keep a machine tidy) is kept.
-function ownFolderIn() {
-  const kuvos = /\/(run\.kuvo\.code[^/]*|\.kuvo-code)\//.test(`${givenTemporary}/`);
-  const system = process.platform === "darwin" ? spawnSync("getconf", ["DARWIN_USER_TEMP_DIR"], { encoding: "utf8" }).stdout?.trim() : "/tmp";
-  if (kuvos && system) {
+function homeFolder() {
+  if (/\/(run\.kuvo\.code[^/]*|\.kuvo-code)\//.test(`${givenTemporary}/`)) {
+    const system = process.platform === "darwin" ? spawnSync("getconf", ["DARWIN_USER_TEMP_DIR"], { encoding: "utf8" }).stdout?.trim() : "/tmp";
     // (A sandboxed shell may be able to write only in the folder it was given.)
-    try { return fs.mkdtempSync(path.join(system, "ku-")); } catch {}
+    if (system) {
+      try {
+        const made = fs.mkdtempSync(path.join(system, "ku-"));
+        process.env.TMPDIR = system;
+        return made;
+      } catch {}
+    }
   }
   return fs.mkdtempSync(path.join(givenTemporary, "ku-"));
 }
 
 // What's the tests' own (each without links, as a path being asked about is compared with).
 const own = new Set();
-const ownRoot = fs.realpathSync(ownFolderIn());
+const ownRoot = fs.realpathSync(homeFolder());
 own.add(ownRoot);
 process.env.KUVO_TEST_REAL_HOME = realHome;
-process.env.HOME = path.join(ownRoot, "h");
-process.env.TMPDIR = path.join(ownRoot, "t");
-fs.mkdirSync(process.env.HOME);
-fs.mkdirSync(process.env.TMPDIR);
+process.env.HOME = ownRoot;
 
 // `given` as the system would reach it: links on the way there followed, the last part not (it's the
 // link that's deleted, not what it points at), and whatever doesn't exist yet as it's named.
@@ -73,6 +76,21 @@ function refuseOutside(given, verb) {
   // (Also said here: code under test may catch what's thrown, and carry on.)
   console.error(message);
   throw new Error(message);
+}
+
+/**
+ * `given`, which a test makes under a name of its own somewhere a temporary folder won't do (a real
+ * cache, as a sandbox test needs): it may delete it too. Never the real Kuvo Code's, or a folder
+ * your home is in.
+ */
+export function ownPath(given) {
+  const where = resolved(given);
+  const home = resolved(realHome);
+  const real = [path.join(home, ".kuvo-code"), path.join(home, "Library", "Application Support", "run.kuvo.code")];
+  const inReal = real.some(folder => where === folder || where.startsWith(folder + path.sep) || where.startsWith(`${folder}.`));
+  if (inReal || home === where || home.startsWith(where + path.sep)) throw new Error(`${where} can't be a test's own (test-safety.js).`);
+  own.add(where);
+  return given;
 }
 
 const original = { rmSync: fs.rmSync };
@@ -117,6 +135,9 @@ if (process.versions.bun) {
   const named = holder => Object.fromEntries(Object.keys(holder).filter(name => name !== "default").map(name => [name, holder[name]]));
   for (const name of ["fs", "node:fs"]) mock.module(name, () => ({ ...named(fs), default: fs }));
   for (const name of ["fs/promises", "node:fs/promises"]) mock.module(name, () => ({ ...named(fsPromises), default: fsPromises }));
+  // And Bun's `os.homedir()` keeps the home it started with, however HOME changes: the real one.
+  os.homedir = () => process.env.HOME || realHome;
+  for (const name of ["os", "node:os"]) mock.module(name, () => ({ ...named(os), default: os }));
 }
 
 // The run's folder goes as it ends: once at-end.js is done with what it stopped, where a file uses

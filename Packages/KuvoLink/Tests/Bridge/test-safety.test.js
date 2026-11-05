@@ -1,4 +1,4 @@
-import "./test-safety.js";
+import { ownPath } from "./test-safety.js";
 // What keeps a test run away from the real Kuvo Code's folders (test-safety.js). A shell an agent
 // runs in names them in KUVO_WAKES and KUVO_BOTS, and a run of the bridge tests there once deleted
 // them, so these hand a run decoys named the same way, and look at the decoys afterwards.
@@ -17,8 +17,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 // A folder outside this file's own, with something in it. (`mktemp`, in another process: one made
 // here with mkdtemp would count as this file's own.)
 function decoy() {
-  const beside = path.dirname(path.dirname(os.tmpdir()));
-  const folder = execFileSync("mktemp", ["-d", path.join(beside, "kuvo-decoy.XXXXXX")], { encoding: "utf8" }).trim();
+  const folder = execFileSync("mktemp", ["-d", path.join(os.tmpdir(), "kuvo-decoy.XXXXXX")], { encoding: "utf8" }).trim();
   atEnd(() => void execFileSync("rm", ["-rf", folder]));
   for (const name of ["wakes", "bots", "home"]) {
     fs.mkdirSync(path.join(folder, name));
@@ -48,18 +47,18 @@ test("a run of the route scenarios leaves the folders its shell names alone, and
   }
 });
 
-test("a test's process has dropped what Kuvo Code's shells hand down, and has its own home and temporary folder", () => {
+test("a test's process has dropped what Kuvo Code's shells hand down, and has a home of its own", () => {
   const folder = decoy();
   const script = `import "${path.join(here, "test-safety.js")}"; import os from "node:os"; console.log(JSON.stringify({ env: process.env, tmp: os.tmpdir() }));`;
   const named = { KUVO_WAKES: path.join(folder, "wakes"), KUVO_BOTS: path.join(folder, "bots"), KUVO_HOME: path.join(folder, "home"), KUVO_BIN: folder, XDG_DATA_HOME: folder, OPENCODE_CONFIG: folder, KUVO_TEST_BUN: "/kept/bun", OPENCODE_TEST_BINARY: "/kept/engine", HOME: folder };
   if (process.versions.bun) return; // (Above: it needs a test of its own to load in, under Bun's runner.)
-  const { env, tmp } = JSON.parse(execFileSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8", env: { ...process.env, ...named } }));
+  const { env } = JSON.parse(execFileSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8", env: { ...process.env, ...named } }));
   for (const name of ["KUVO_WAKES", "KUVO_BOTS", "KUVO_HOME", "KUVO_BIN", "XDG_DATA_HOME", "OPENCODE_CONFIG"]) assert.equal(env[name], undefined, name);
   assert.equal(env.KUVO_TEST_BUN, "/kept/bun", "what you set to run tests stays");
   assert.equal(env.OPENCODE_TEST_BINARY, "/kept/engine");
   assert.ok(!env.HOME.startsWith(folder), env.HOME);
-  assert.equal(path.dirname(env.HOME), path.dirname(tmp), "side by side in the run's folder, the home never above the temporary one");
-  assert.equal(fs.existsSync(path.dirname(tmp)), false, "and it's gone once the process ends");
+  assert.equal(env.KUVO_TEST_REAL_HOME, process.env.KUVO_TEST_REAL_HOME, "the real one stays named, for what's really wanted there");
+  assert.equal(fs.existsSync(env.HOME), false, "and it's gone once the process ends");
 });
 
 test("deleting or moving anything outside the test's own folders throws, and leaves it", async () => {
@@ -92,21 +91,32 @@ test("what a test made it may delete, wherever it made it", () => {
   fs.mkdirSync(path.join(inTemporary, "sub"));
   fs.rmSync(inTemporary, { recursive: true });
   assert.equal(fs.existsSync(inTemporary), false);
-  const plain = path.join(os.tmpdir(), "plain");
-  fs.mkdirSync(plain);
-  fs.rmSync(plain, { recursive: true });
-  assert.equal(fs.existsSync(plain), false);
   const folder = decoy();
   const made = fs.mkdtempSync(path.join(folder, "made-"));
   fs.rmSync(made, { recursive: true });
   assert.equal(fs.existsSync(made), false);
   untouched(folder);
+  // Or named as its own, somewhere a temporary folder wouldn't do.
+  const named = ownPath(path.join(folder, "named"));
+  fs.mkdirSync(named);
+  fs.rmSync(named, { recursive: true });
+  assert.equal(fs.existsSync(named), false);
+  untouched(folder);
+});
+
+test("the real Kuvo Code's folders, and a folder your home is in, can't be named as a test's own", () => {
+  const home = process.env.KUVO_TEST_REAL_HOME;
+  for (const given of [path.join(home, ".kuvo-code"), path.join(home, ".kuvo-code", "bots"),
+    path.join(home, "Library", "Application Support", "run.kuvo.code", "wakes"), path.join(home, "Library", "Application Support", "run.kuvo.code.demo"),
+    home, path.dirname(home)]) {
+    assert.throws(() => ownPath(given), /can't be a test's own/, given);
+  }
 });
 
 test("every bridge test file loads test-safety.js before anything else", () => {
   const missing = fs.readdirSync(here).filter(name => name.endsWith(".test.js")).filter(name => {
     const first = fs.readFileSync(path.join(here, name), "utf8").split("\n").find(line => line.trim() && !line.startsWith("//"));
-    return first !== 'import "./test-safety.js";';
+    return !/^import (\{ ownPath \} from )?"\.\/test-safety\.js";$/.test(first);
   });
   assert.deepEqual(missing, [], "put `import \"./test-safety.js\";` first in these");
 });

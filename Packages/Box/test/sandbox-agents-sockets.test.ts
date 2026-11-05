@@ -1,3 +1,4 @@
+import { ownPath } from "../../KuvoLink/Tests/Bridge/test-safety.js"
 import { expect, test } from "bun:test"
 import { execFileSync } from "node:child_process"
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
@@ -74,7 +75,7 @@ test.skipIf(!canFence || process.platform !== "darwin")("a command can't use you
     else process.env.SSH_AUTH_SOCK = said
     for (const server of servers) server.close()
     for (const folder of [root, system, started, yours]) rmSync(folder, { recursive: true, force: true })
-    rmSync(join(temporary, "moved.sock"), { force: true })
+    rmSync(ownPath(join(temporary, "moved.sock")), { force: true })
     rmSync(`/private/tmp/ssh-${basename(root)}@example.com:22`, { force: true })
   }
 })
