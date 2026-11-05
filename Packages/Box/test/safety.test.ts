@@ -6,7 +6,7 @@ import { execFileSync } from "node:child_process"
 import fs, { mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync, existsSync } from "node:fs"
 import { rm } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
-import { dirname, join, relative, resolve } from "node:path"
+import { dirname, join, relative, resolve, sep } from "node:path"
 
 const decoys: string[] = []
 afterAll(() => {
@@ -93,6 +93,23 @@ test("run from another folder, a test is kept from what its shell names, and has
   rmSync(scratch, { recursive: true, force: true })
 })
 
+// Bun's own `os.userInfo()` follows HOME, so the guard asks the system (the box's lookup, home.ts, does the same).
+test("under Bun the account's own home is found from the system, whatever HOME says, and can't be a test's own", () => {
+  const scratch = mkdtempSync(join(tmpdir(), "account-"))
+  const entry = process.platform === "darwin"
+    ? execFileSync("/usr/bin/id", ["-P"], { encoding: "utf8" }).trim().split(":")[8]
+    : execFileSync("/usr/bin/getent", ["passwd", String(process.getuid!())], { encoding: "utf8" }).trim().split(":")[5]
+  const script = `import { accountHome, ownPath } from ${JSON.stringify(join(import.meta.dir, "../../KuvoLink/Tests/Bridge/test-safety.js"))}
+    let refused = false
+    try { ownPath(${JSON.stringify(join(entry, ".kuvo-code", "x"))}) } catch { refused = true }
+    console.log(JSON.stringify({ accountHome, refused }))`
+  const run = Bun.spawnSync([process.execPath, "-e", script], { cwd: scratch, env: { ...process.env, HOME: scratch, KUVO_TEST_REAL_HOME: scratch } })
+  expect(run.exitCode, run.stderr.toString()).toBe(0)
+  expect(JSON.parse(run.stdout.toString())).toEqual({ accountHome: entry, refused: true })
+  expect(entry).not.toBe(scratch)
+  rmSync(scratch, { recursive: true, force: true })
+})
+
 test("with the preload, the run's home is gone as the run ends", () => {
   const scratch = mkdtempSync(join(tmpdir(), "with-preload-"))
   const box = resolve(import.meta.dir, "..")
@@ -103,13 +120,16 @@ test("with the preload, the run's home is gone as the run ends", () => {
   rmSync(scratch, { recursive: true, force: true })
 })
 
+// (Every file `bun test` takes for a test, anywhere under the box: *.test, *_test, *.spec, *_spec, in
+// any of its script extensions, in test/'s subfolders and outside test/ too.)
 test("every box test file loads test/safety.ts before anything else", () => {
-  const here = import.meta.dir
-  const files = (readdirSync(here, { recursive: true }) as string[]).filter(name => name.endsWith(".test.ts"))
+  const box = resolve(import.meta.dir, "..")
+  const files = (readdirSync(box, { recursive: true }) as string[]).filter(name => !name.split(sep).includes("node_modules") && /[._](test|spec)\.[cm]?[jt]sx?$/.test(name))
   expect(files.length).toBeGreaterThan(50)
+  expect(files.some(name => name.split(sep).length > 2)).toBe(true)
   const missing = files.filter(name => {
-    const first = readFileSync(join(here, name), "utf8").split("\n").find(line => line.trim() && !line.startsWith("//"))
-    const safety = relative(dirname(join(here, name)), join(here, "safety"))
+    const first = readFileSync(join(box, name), "utf8").split("\n").find(line => line.trim() && !line.startsWith("//"))
+    const safety = relative(dirname(join(box, name)), join(box, "test", "safety"))
     return first !== `import "${safety.startsWith(".") ? safety : `./${safety}`}"`
   })
   expect(missing).toEqual([])

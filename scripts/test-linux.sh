@@ -10,8 +10,10 @@
 # pinned here by the checksum its maker published and kept in build/linux-test for next time.
 # The sandbox runs on the machine's own engine (~/.kuvo-code/engine/<version>/opencode, as Kuvo
 # Code installed it; KUVO_TEST_BUN on the machine names another), as do the tests that run the
-# engine itself (OPENCODE_TEST_BINARY). Every folder the run uses
-# (TMPDIR, npm's and uv's caches) is inside that folder, which is removed afterwards. It
+# engine itself (OPENCODE_TEST_BINARY). Every folder this script points the run at (TMPDIR, npm's
+# and uv's caches) is inside that folder, which is removed afterwards. (The XDG_* folders it sets
+# too don't reach the tests: their guard, test-safety.js, drops them, and gives the run a home of
+# its own in ~/.kuvo-code-test instead, which it removes as the run ends.) It
 # says what appeared in the machine's home folder, its ~/.kuvo-code-test and /tmp while it ran
 # (their own names, not what's inside them), which should be nothing.
 #
