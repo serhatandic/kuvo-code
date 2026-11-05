@@ -93,6 +93,23 @@ test("run from another folder, a test is kept from what its shell names, and has
   rmSync(scratch, { recursive: true, force: true })
 })
 
+// Bun's own `os.userInfo()` follows HOME, so the guard asks the system (the box's lookup, home.ts, does the same).
+test("under Bun the account's own home is found from the system, whatever HOME says, and can't be a test's own", () => {
+  const scratch = mkdtempSync(join(tmpdir(), "account-"))
+  const entry = process.platform === "darwin"
+    ? execFileSync("/usr/bin/id", ["-P"], { encoding: "utf8" }).trim().split(":")[8]
+    : execFileSync("/usr/bin/getent", ["passwd", String(process.getuid!())], { encoding: "utf8" }).trim().split(":")[5]
+  const script = `import { accountHome, ownPath } from ${JSON.stringify(join(import.meta.dir, "../../KuvoLink/Tests/Bridge/test-safety.js"))}
+    let refused = false
+    try { ownPath(${JSON.stringify(join(entry, ".kuvo-code", "x"))}) } catch { refused = true }
+    console.log(JSON.stringify({ accountHome, refused }))`
+  const run = Bun.spawnSync([process.execPath, "-e", script], { cwd: scratch, env: { ...process.env, HOME: scratch, KUVO_TEST_REAL_HOME: scratch } })
+  expect(run.exitCode, run.stderr.toString()).toBe(0)
+  expect(JSON.parse(run.stdout.toString())).toEqual({ accountHome: entry, refused: true })
+  expect(entry).not.toBe(scratch)
+  rmSync(scratch, { recursive: true, force: true })
+})
+
 test("with the preload, the run's home is gone as the run ends", () => {
   const scratch = mkdtempSync(join(tmpdir(), "with-preload-"))
   const box = resolve(import.meta.dir, "..")

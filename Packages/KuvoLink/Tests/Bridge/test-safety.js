@@ -8,7 +8,7 @@
 //
 // - What Kuvo Code's shells hand down is dropped: a test sets what it wants, for its own folders.
 //   That's its variables, the coding agents' folders (the real sign-ins) and their sockets and
-//   tokens (the user's SSH agent, Claude Code's messaging socket), and its own commands on the
+//   tokens (the user's SSH agent, Claude Code's variables, a tmux's), and its own commands on the
 //   PATH, as `kuvo-wake` writes in the real folders whatever a test sets. What you set on purpose to
 //   run tests stays (KUVO_TEST_*, OPENCODE_TEST_*, KUVO_CURSOR_SDK).
 // - The run gets a home of its own in ~/.kuvo-code-test, removed as it ends (one a killed run left
@@ -28,21 +28,28 @@ import { fileURLToPath } from "node:url";
 const realHome = process.env.KUVO_TEST_REAL_HOME || process.env.HOME || os.homedir();
 
 // The account's own home folder as the system has it, whatever HOME says (Bun's `os.userInfo()`
-// follows HOME, so it's asked of the system's own: `id -P` on macOS, the password file on Linux).
-const accountHome = (() => {
+// follows HOME, so it's asked of the system's own: `id -P` on macOS, `getent` and then the password
+// file on Linux).
+export const accountHome = (() => {
   try {
     let line;
     if (process.platform === "darwin") line = spawnSync("/usr/bin/id", ["-P"], { encoding: "utf8", timeout: 5000 }).stdout;
-    else line = fs.readFileSync("/etc/passwd", "utf8").split("\n").find(each => each.split(":")[2] === String(process.getuid?.()));
+    else {
+      const uid = String(process.getuid?.());
+      line = spawnSync("/usr/bin/getent", ["passwd", uid], { encoding: "utf8", timeout: 5000 }).stdout;
+      if (!line?.trim()) line = fs.readFileSync("/etc/passwd", "utf8").split("\n").find(each => each.split(":")[2] === uid);
+    }
     const home = line?.trim().split(":")[process.platform === "darwin" ? 8 : 5];
     if (home && path.isAbsolute(home)) return home;
   } catch {}
+  // (Under Bun that's HOME again, which is no help: said, so a run knows what it can't refuse.)
+  if (process.versions.bun) console.error("test-safety.js: couldn't find this account's home folder; ownPath refuses only what HOME names.");
   try { return os.userInfo().homedir; } catch { return undefined; }
 })();
 const givenTemporary = os.tmpdir();
 
 for (const name of Object.keys(process.env)) {
-  if (/^(KUVO_|OPENCODE_|XDG_)|^(CLAUDE_CONFIG_DIR|CODEX_HOME|GEMINI_HOME|CURSOR_DATA_DIR|CURSOR_SANDBOX_POLICY_DIR|CUA_APP_SUPPORT_DIR|GROK_HOME|SSH_AUTH_SOCK|CLAUDE_CODE_MESSAGING_SOCKET|CLAUDE_CODE_MESSAGING_TOKEN)$/.test(name) && !/^(KUVO_TEST_|OPENCODE_TEST_)|^KUVO_CURSOR_SDK$/.test(name)) delete process.env[name];
+  if (/^(KUVO_|OPENCODE_|XDG_)|^(CLAUDE_CONFIG_DIR|CODEX_HOME|GEMINI_HOME|CURSOR_DATA_DIR|CURSOR_SANDBOX_POLICY_DIR|CUA_APP_SUPPORT_DIR|GROK_HOME|SSH_AUTH_SOCK|CLAUDECODE|TMUX|TMUX_PANE)$|^CLAUDE_CODE_/.test(name) && !/^(KUVO_TEST_|OPENCODE_TEST_)|^KUVO_CURSOR_SDK$/.test(name)) delete process.env[name];
 }
 const kuvoCodes = /\/(run\.kuvo\.code[^/]*|\.kuvo-code)\//;
 if (process.env.PATH) process.env.PATH = process.env.PATH.split(path.delimiter).filter(folder => !kuvoCodes.test(`${folder}/`)).join(path.delimiter);
@@ -149,19 +156,44 @@ function refuseOutside(given, verb) {
 
 const isIn = (where, folder) => where === folder || where.startsWith(folder.endsWith(path.sep) ? folder : folder + path.sep);
 
+// What the system makes of these however they're spelled: the identity of what exists at `given` and
+// at each folder above it (a path in another case, or through /System/Volumes/Data, is the same one).
+function identities(given) {
+  const ids = new Set();
+  for (let at = path.resolve(given); ; at = path.dirname(at)) {
+    try {
+      const stat = fs.statSync(at);
+      ids.add(`${stat.dev}:${stat.ino}`);
+    } catch {}
+    if (at === path.dirname(at)) return ids;
+  }
+}
+const identity = given => { try { const stat = fs.statSync(given); return `${stat.dev}:${stat.ino}`; } catch {} };
+const fold = text => (process.platform === "darwin" ? text.toLowerCase() : text);
+const kuvoPlaces = new RegExp(kuvoCodes.source, "i");
+
 /**
  * `given`, which a test makes under a name of its own somewhere a temporary folder won't do (a real
- * cache, as a sandbox test needs): it may delete it too. Never the real Kuvo Code's, or a folder
- * they're in (your home, its Library).
+ * cache, as a sandbox test needs): it may delete it too. Never the real Kuvo Code's or the coding
+ * agents' and your sign-ins, wherever and however they're spelled, or a folder they're in (your
+ * home, its Library).
  */
 export function ownPath(given) {
   const where = resolved(given);
-  // (The account's own home too, as the system names it: HOME and KUVO_TEST_REAL_HOME are only what
-  // the environment says, and a test that changed HOME would otherwise move the real folders.)
-  const real = [...new Set([realHome, accountHome].filter(Boolean).map(given => resolved(given)))].flatMap(home =>
-    [".kuvo-code", ...["Application Support", "Caches", "WebKit", "HTTPStorages", "Preferences"].map(folder => path.join("Library", folder, "run.kuvo.code")), path.join("Library", "Logs", "Kuvo Code")]
+  const homes = [...new Set([realHome, accountHome].filter(Boolean).map(home => resolved(home)))];
+  const real = homes.flatMap(home =>
+    [".kuvo-code", ".ssh", ".gnupg", ".claude", ".codex", ".grok", ".cursor", path.join("Library", "Keychains"),
+      ...["Application Support", "Caches", "WebKit", "HTTPStorages", "Preferences"].map(folder => path.join("Library", folder, "run.kuvo.code")), path.join("Library", "Logs", "Kuvo Code")]
       .map(folder => path.join(home, folder)));
-  if (real.some(folder => isIn(where, folder) || where.startsWith(`${folder}.`) || isIn(folder, where))) throw new Error(`${where} can't be a test's own (test-safety.js).`);
+  const here = identities(where), self = identity(where);
+  const refused = kuvoPlaces.test(`${where}/`)
+    || real.some(folder => {
+      const [a, b] = [fold(where), fold(folder)];
+      if (isIn(a, b) || a.startsWith(`${b}.`) || isIn(b, a)) return true;
+      const mine = identity(folder);
+      return (mine && here.has(mine)) || (self && identities(folder).has(self));
+    });
+  if (refused) throw new Error(`${where} can't be a test's own (test-safety.js).`);
   own.add(where);
   return given;
 }
