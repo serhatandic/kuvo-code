@@ -23,10 +23,10 @@ public struct EngineRelease: Sendable, Equatable {
     /// The build this version of the app is written against.
     public static let pinned = EngineRelease(
         version: OpenCodeEngine.version,
-        tarball: URL(string: "https://registry.npmjs.org/@opencode/cli-darwin-arm64/-/cli-darwin-arm64-2.2.0.tgz")!,
-        integrity: "sha512-y3q/sghk/xCengTlv1pH2+5t9j0cuxXcEAY9yvyM7loKLQIYE1eSLEkDacCAVNyfnATd3D2JpueFSEB/i6A0Qg==",
+        tarball: URL(string: "https://registry.npmjs.org/@opencode/cli-darwin-arm64/-/cli-darwin-arm64-2.2.5.tgz")!,
+        integrity: "sha512-UwGb2MIJqLSh4wfrkvqNiAohG1Wf5t96Nx7113QvmtCn5LGimmXYN0Tb1chD0mMRRdPvnUguevKRdwM0txZY1Q==",
         teamIdentifier: "5NZ4Q7NXJ4",
-        binarySHA256: "0614b30fd17c27258b16cd6ea9ab03e1160fa9897e4cefd2d9a5d86f71a0af11"
+        binarySHA256: "abe4d88594bffb12b364375b8a6732d2d1f7a977195ed1a35c5c76f8e89c9e0e"
     )
 
     /// The same version for Linux machines reached over SSH, by `uname -m`. Linux builds carry no
@@ -36,15 +36,15 @@ public struct EngineRelease: Sendable, Equatable {
         case "x86_64", "amd64":
             EngineRelease(
                 version: OpenCodeEngine.version,
-                tarball: URL(string: "https://registry.npmjs.org/@opencode/cli-linux-x64/-/cli-linux-x64-2.2.0.tgz")!,
-                integrity: "sha512-XTGFTiZTgugps6rgTXp4mPjOM8klsa5uHn/Shcms2o3k1bjSA3Sgl6O4yJ48y18WWxn9My5Pxt7JKcLID7LOHg==",
+                tarball: URL(string: "https://registry.npmjs.org/@opencode/cli-linux-x64/-/cli-linux-x64-2.2.5.tgz")!,
+                integrity: "sha512-BkHAfTqNsg/qphyHNrnH+DGkOxZsGjamNpM5DvwoEvz7ZAPNw8mEbMXGTCDOAH+/+40Eqeie6KNZBZZQwPCjaA==",
                 teamIdentifier: ""
             )
         case "aarch64", "arm64":
             EngineRelease(
                 version: OpenCodeEngine.version,
-                tarball: URL(string: "https://registry.npmjs.org/@opencode/cli-linux-arm64/-/cli-linux-arm64-2.2.0.tgz")!,
-                integrity: "sha512-NCCltb8h/8WL30X9o2KTm3UFX0lmfk48lG8tglXJN9moscxeB7w2qOmfHVa32iFngk0iVAKH4xRPlBc88Y0qlw==",
+                tarball: URL(string: "https://registry.npmjs.org/@opencode/cli-linux-arm64/-/cli-linux-arm64-2.2.5.tgz")!,
+                integrity: "sha512-O4qOy/WRYQmhClMB/5qBaoYfzaDK1+PJRQOfU80ixyj5ruQbCxraH+VW2UyHb6RWOlUv41fec+isd62LvCuwuA==",
                 teamIdentifier: ""
             )
         default:
