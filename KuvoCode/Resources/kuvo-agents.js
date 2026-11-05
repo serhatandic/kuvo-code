@@ -9650,11 +9650,44 @@ var STATE_IN_HOME = [
 var KEPT_IN_HOME = ["settings*.json", "hooks", ".mcp.json"];
 var PRINTED_TOKEN = /sk-ant-oat\d+-[A-Za-z0-9_-]{60,}(?=[^A-Za-z0-9_-])/;
 var ANY_TOKEN = /sk-ant-[A-Za-z0-9_-]+/g;
-var untokened = (text) => text.replace(ANY_TOKEN, "sk-ant-\u2026");
+var withoutSecrets = (text) => text.replace(ANY_TOKEN, "sk-ant-\u2026").replace(/:\/\/[^\s/@]+@/g, "://\u2026@").replace(/\b(Bearer)\s+[A-Za-z0-9._~+/-]+=*/gi, "$1 \u2026").replace(/\b([A-Za-z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD)[A-Za-z0-9_]*)=\S+/gi, "$1=\u2026");
 var told = (error) => {
   const said = failure(error);
-  return { ...said, message: untokened(said.message) };
+  return { ...said, message: withoutSecrets(said.message) };
 };
+
+class Said {
+  text = "";
+  cut = false;
+  add(chunk) {
+    let text = this.text + chunk;
+    if (this.cut) {
+      const end = text.indexOf(`
+`);
+      this.cut = end < 0;
+      text = end < 0 ? "" : text.slice(end + 1);
+    }
+    if (text.length > 4000) {
+      text = text.slice(-4000);
+      const start = text.indexOf(`
+`);
+      this.cut = start < 0;
+      text = start < 0 ? "" : text.slice(start + 1);
+    }
+    this.text = text;
+  }
+  forget() {
+    if (this.text && !this.text.endsWith(`
+`))
+      this.cut = true;
+    this.text = "";
+  }
+  get last() {
+    const line = this.text.split(`
+`).map((each) => each.trim()).filter((each) => each && !/^(at\s|Bun v\d|Node\.js v\d)/.test(each)).pop();
+    return withoutSecrets(line ?? "").slice(0, 300);
+  }
+}
 
 class ClaudeAgent {
   context;
@@ -10225,8 +10258,10 @@ class ClaudeThread {
     }
     if (hooks.signal.aborted)
       return { outcome: "interrupted" };
-    if (!this.query || !this.input)
+    if (!this.query || !this.input) {
+      await this.heard();
       return { outcome: "failed", error: this.stoppedWhy(this.lastEnd) };
+    }
     return new Promise((resolve) => {
       this.lastHooks = hooks;
       const message = userMessage(input, this.copies());
@@ -10408,6 +10443,7 @@ class ClaudeThread {
     if (!this.agent.executable())
       throw new Error(`Install Claude Code first: ${this.agent.install}`);
     this.lastEnd = undefined;
+    this.said = undefined;
     let id = this.state.claudeSession;
     const resume = Boolean(id && this.state.claudeStarted);
     if (!id) {
@@ -10469,10 +10505,16 @@ class ClaudeThread {
         const given = Object.fromEntries(Object.entries({ ...options.env, ...fence.env, KUVO_FENCE_SHELL: options.command, ...env }).filter((entry) => entry[1] !== undefined));
         const child = spawn5(fence.command, options.args, { cwd: options.cwd ?? directory, env: given, signal: options.signal, stdio: ["pipe", "pipe", "pipe"] });
         child.once("exit", () => fence.ended());
-        this.said = "";
-        child.stderr?.on("data", (chunk) => {
-          this.said = (this.said + chunk.toString("utf8")).slice(-4000);
+        const said = new Said;
+        this.said = said;
+        this.saidAll = new Promise((done) => {
+          if (!child.stderr)
+            return done();
+          child.stderr.once("close", () => done());
         });
+        child.stderr?.setEncoding("utf8");
+        child.stderr?.on("data", (chunk) => said.add(chunk));
+        child.stderr?.on("error", () => {});
         return child;
       }
     };
@@ -10514,15 +10556,25 @@ class ClaudeThread {
       active.resolve({ outcome: "interrupted" });
     else if (active.limit)
       active.resolve({ outcome: "failed", error: { type: "limit", message: active.problem ?? "You've reached a Claude usage limit." }, limit: active.limit });
-    else
+    else {
+      if (!active.problem)
+        await this.heard();
       active.resolve({ outcome: "failed", error: this.failed(active, active.problem ? told(active.problem) : this.stoppedWhy(ended, "Claude Code stopped.")) });
+    }
   }
   lastEnd;
-  said = "";
+  said;
+  saidAll;
+  async heard() {
+    if (!this.said)
+      return;
+    let bound;
+    await Promise.race([this.saidAll, new Promise((done) => bound = setTimeout(done, 1000))]);
+    clearTimeout(bound);
+  }
   stoppedWhy(ended, otherwise = "Claude Code stopped before it took your message.") {
     const error = told(ended ?? otherwise);
-    const last = untokened(this.said.split(`
-`).map((line) => line.trim()).filter(Boolean).pop() ?? "").slice(0, 300);
+    const last = this.said?.last;
     return ended !== undefined && last && !error.message.includes(last) ? { ...error, message: `${error.message}: ${last}` } : error;
   }
   failed(active, error) {
@@ -10532,6 +10584,7 @@ class ClaudeThread {
     return { ...error, type: "signin" };
   }
   handle(message) {
+    this.said?.forget();
     if (message.type === "system" && message.subtype === "init") {
       if (!this.state.claudeStarted || this.state.claudeSession !== message.session_id) {
         this.state.claudeSession = message.session_id;
@@ -23205,4 +23258,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 2c2afe381b302852ee4efa836eb7bd1f94667070ca37fd8cbe8b7611f001e472
+// Built from Packages/Box/src/agents abc9212c5f0a126beeee31539322b838ebbd56d59a82901486046df434ad48f2

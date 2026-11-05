@@ -773,6 +773,147 @@ describe("Claude Code in the box's sandbox", () => {
     expect(fake.options).toBeUndefined()
   })
 
+  describe("what it says on its error output as it stops", () => {
+    const plain = "Claude Code process exited with code 1"
+    const launcher = (script: string) => writeFileSync(join(fence, "shell", "run"), `#!/bin/sh\n${script}\n`, { mode: 0o700 })
+    /** Claude Code started through the launcher, as the SDK starts it. */
+    const spawned = () => fake.options.spawnClaudeCodeProcess({ command: "/bin/echo", args: [], cwd: root, env: { PATH: process.env.PATH, OPENCODE_SESSION_ID: "ses_x" } })
+    const closed = (child: any) => new Promise((resolve) => child.once("close", resolve))
+    const newSession = () => sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
+    const send = (id: string, turn: number) => sessions.prompt(id, { id: `msg_claude_turn_000${turn}`, text: "go", files: [], delivery: "steer" })
+    /** Starts, says what the launcher says, and stops before it takes the message: what the failure says. */
+    const stopsAsItStarts = async (id: string, turn: number) => {
+      const before = idles(id).length
+      fake.onServers = async () => {
+        await closed(spawned())
+        fake.crash(new Error(plain))
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      }
+      send(id, turn)
+      await until(() => idles(id).length === before + 1)
+      return idles(id)[before].error?.message
+    }
+
+    test("no secret an error line can hold is said back", async () => {
+      turnOn()
+      const id = newSession()
+      launcher(`echo "cannot reach https://me:hunter2@proxy.test/v1 with Bearer abc.def-ghi and API_KEY=hunter3" >&2\nexit 1`)
+      expect(await stopsAsItStarts(id, 1)).toBe(`${plain}: cannot reach https://…@proxy.test/v1 with Bearer … and API_KEY=…`)
+    })
+
+    test("a line too long to keep whole is left out, so no piece of a token gets through", async () => {
+      turnOn()
+      launcher(`{ printf 'sk-ant-oat01-'; head -c 5000 /dev/zero | tr '\\0' a; echo; } >&2\nexit 1`)
+      expect(await stopsAsItStarts(newSession(), 1)).toBe(plain)
+    })
+
+    test("what an earlier Claude Code said isn't why a later one stopped", async () => {
+      turnOn()
+      const id = newSession()
+      launcher(`echo "the first one's reason" >&2\nexit 1`)
+      expect(await stopsAsItStarts(id, 1)).toBe(`${plain}: the first one's reason`)
+      launcher("exit 1")
+      expect(await stopsAsItStarts(id, 2)).toBe(plain)
+    })
+
+    test("with the sandbox turned off since, what the one in it said isn't why the next one stopped", async () => {
+      turnOn()
+      const id = newSession()
+      launcher(`echo "the sandboxed one's reason" >&2\nexit 1`)
+      expect(await stopsAsItStarts(id, 1)).toBe(`${plain}: the sandboxed one's reason`)
+      rmSync(join(fence, "on"))
+      fake.onServers = async () => {
+        fake.crash(new Error(plain))
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      }
+      send(id, 2)
+      await until(() => idles(id).length === 2)
+      expect(idles(id)[1].error?.message).toBe(plain)
+    })
+
+    test("one being replaced, still writing as it goes, doesn't speak for the new one", async () => {
+      turnOn()
+      const go = join(root, "go")
+      const id = newSession()
+      fake.onServers = async () => {
+        launcher(`( while [ ! -e ${JSON.stringify(go)} ]; do sleep 0.01; done; echo "the old one's last words" >&2 ) &\nexit 0`)
+        const old = spawned()
+        await new Promise((resolve) => old.once("exit", resolve))
+        launcher("exit 1")
+        await closed(spawned())
+        writeFileSync(go, "")
+        await closed(old)
+        fake.crash(new Error(plain))
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      }
+      send(id, 1)
+      await until(() => idles(id).length === 1)
+      expect(idles(id)[0].error?.message).toBe(plain)
+    })
+
+    test("a warning from when it was working isn't why it stops later", async () => {
+      turnOn()
+      launcher(`echo "warning: something old" >&2\nexit 0`)
+      const id = newSession()
+      send(id, 1)
+      await until(() => fake.sent.length === 1)
+      await closed(spawned())
+      fake.say("done", [fake.sent[0].uuid])
+      fake.result([fake.sent[0].uuid])
+      await until(() => idles(id).length === 1)
+      expect(idles(id)[0].outcome).toBe("succeeded")
+      send(id, 2)
+      await until(() => fake.sent.length === 2)
+      fake.crash(new Error(plain))
+      await until(() => idles(id).length === 2)
+      expect(idles(id)[1].error?.message).toBe(plain)
+    })
+
+    test("crashing in a turn, the failure says its error, not the stack under it", async () => {
+      turnOn()
+      launcher(`printf 'Error: out of memory\\n    at run (cli.js:1:1)\\n\\nBun v1.3.14 (macOS arm64)\\n' >&2\nexit 1`)
+      const id = newSession()
+      send(id, 1)
+      await until(() => fake.sent.length === 1)
+      await closed(spawned())
+      fake.crash(new Error(plain))
+      await until(() => idles(id).length === 1)
+      expect(idles(id)[0].error?.message).toBe(`${plain}: Error: out of memory`)
+    })
+
+    test("what comes after it exits still counts, as what's holding its error output finishes", async () => {
+      turnOn()
+      const go = join(root, "go")
+      launcher(`( while [ ! -e ${JSON.stringify(go)} ]; do sleep 0.01; done; echo "said as it went" >&2 ) &\nexit 1`)
+      const id = newSession()
+      fake.onServers = async () => {
+        const child = spawned()
+        await new Promise((resolve) => child.once("exit", resolve))
+        fake.crash(new Error(plain))
+        await new Promise((resolve) => setTimeout(resolve, 0))
+        writeFileSync(go, "")
+      }
+      send(id, 1)
+      await until(() => idles(id).length === 1)
+      expect(idles(id)[0].error?.message).toBe(`${plain}: said as it went`)
+    })
+
+    test("a command it left running, holding its error output open, doesn't hold up the failure", async () => {
+      turnOn()
+      launcher("sleep 2 &\nexit 1")
+      const id = newSession()
+      fake.onServers = async () => {
+        const child = spawned()
+        await new Promise((resolve) => child.once("exit", resolve))
+        fake.crash(new Error(plain))
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      }
+      send(id, 1)
+      await until(() => idles(id).length === 1)
+      expect(idles(id)[0].error?.message).toBe(plain)
+    })
+  })
+
   test("stopped as it starts there, the turn fails with what Claude Code said, never with a token in it", async () => {
     turnOn()
     // Claude Code quits as it starts in the sandbox, saying why on its error output (as 2.1.318 did in
