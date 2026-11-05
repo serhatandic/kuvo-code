@@ -16,6 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- A queued message's row starts with a new mark: an arrow turning in under two lines of text.
 - When a coding agent's sign-in has run out, like Claude Code's, the conversation says so at once and offers **Sign In** right on its card, in place of a **Try Again** that could only fail the same way after a long wait; once you're signed in, Try Again comes back. A message sent before you sign in stops at once with the same card, and Claude's own error line no longer shows up as part of the reply.
 - The composer keeps naming the model a conversation is on while that model's account needs a sign-in, instead of **Choose a Model**.
 - Signing in to a coding agent no longer sits at "Finish signing in with your browser" with nothing opened when the agent is slow to start: it says it's getting ready until the page is there, opens it once it comes, and **Copy Link** lets you open the page in any browser yourself.
