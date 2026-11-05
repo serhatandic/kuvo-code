@@ -15,7 +15,6 @@ import type { OversightKind, OversightMark } from "../../shared/routes/work";
 import type { EngineSession } from "../engine/sessions";
 
 export const OVERSIGHT = path.join(WORK_FOLDER, "oversight.json");
-const LOCK = path.join(WORK_FOLDER, ".oversight.lock");
 const KEPT_FOR = 60_000;
 const KEPT_AT_MOST = 50;
 const KINDS: readonly OversightKind[] = ["started", "told", "read", "answered", "stopped", "finished"];
@@ -39,7 +38,7 @@ export function readOversight(file = OVERSIGHT, now = Date.now()): OversightMark
 export function noteOversight(bot: string, session: string, kind: OversightKind, file = OVERSIGHT): void {
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    locked(LOCK, () => {
+    locked(path.join(path.dirname(file), ".oversight.lock"), () => {
       const now = Date.now();
       const marks = [...readOversight(file, now), { id: crypto.randomUUID(), bot, session, kind, at: now }];
       writePrivate(file, JSON.stringify(marks.slice(-KEPT_AT_MOST)));

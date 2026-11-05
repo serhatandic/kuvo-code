@@ -9913,7 +9913,6 @@ import crypto19 from "node:crypto";
 import fs38 from "node:fs";
 import path41 from "node:path";
 var OVERSIGHT2 = path41.join(WORK_FOLDER, "oversight.json");
-var LOCK5 = path41.join(WORK_FOLDER, ".oversight.lock");
 var KEPT_FOR = 60000;
 var KEPT_AT_MOST = 50;
 var KINDS = ["started", "told", "read", "answered", "stopped", "finished"];
@@ -9931,7 +9930,7 @@ function readOversight(file = OVERSIGHT2, now = Date.now()) {
 function noteOversight(bot, session, kind, file = OVERSIGHT2) {
   try {
     fs38.mkdirSync(path41.dirname(file), { recursive: true });
-    locked(LOCK5, () => {
+    locked(path41.join(path41.dirname(file), ".oversight.lock"), () => {
       const now = Date.now();
       const marks = [...readOversight(file, now), { id: crypto19.randomUUID(), bot, session, kind, at: now }];
       writePrivate(file, JSON.stringify(marks.slice(-KEPT_AT_MOST)));
@@ -10084,7 +10083,7 @@ async function followUnanswering(source, event, file = UNANSWERING2, now = Date.
 // Packages/Box/src/link/work/wakes.ts
 var WORK_WAKES = path43.join(WORK_FOLDER, "wakes.json");
 var WORK_TOLD = path43.join(WORK_FOLDER, "told.json");
-var LOCK6 = path43.join(WORK_FOLDER, ".wakes.lock");
+var LOCK5 = path43.join(WORK_FOLDER, ".wakes.lock");
 var GATHER = 4000;
 var readWaiting = (file) => {
   try {
@@ -10096,7 +10095,7 @@ var readWaiting = (file) => {
 };
 var changeWaiting = (file, change) => {
   fs40.mkdirSync(path43.dirname(file), { recursive: true });
-  return locked(LOCK6, () => {
+  return locked(LOCK5, () => {
     const waiting = readWaiting(file);
     const value = change(waiting);
     writePrivate(file, JSON.stringify(waiting));
@@ -10182,7 +10181,7 @@ var sinceOf = (told, from) => from === ENGINE ? told.since : told.sinces?.[from]
 var changeTold = (file, change, from, until) => {
   try {
     fs40.mkdirSync(path43.dirname(file), { recursive: true });
-    locked(LOCK6 + "-told", () => {
+    locked(LOCK5 + "-told", () => {
       const told = readTold(file) ?? { since: until, sessions: {} };
       change(told);
       if (from === ENGINE) {
@@ -10482,7 +10481,7 @@ async function stopBotWork(bot, targets, signal) {
 
 // Packages/Box/src/link/work/goals.ts
 var GOALS_FILE = path44.join(WORK_FOLDER, "goals.json");
-var LOCK7 = path44.join(WORK_FOLDER, ".goals.lock");
+var LOCK6 = path44.join(WORK_FOLDER, ".goals.lock");
 var HERE_FILE = path44.join(WORK_FOLDER, "here.json");
 var SHOWN = 24 * 3600000;
 var ASK_SETTLES = 2 * 60000;
@@ -10503,7 +10502,7 @@ var goalRuns = (bot, file = GOALS_FILE) => readKept2(file).some((goal) => goal.b
 function changeKept2(change, file = GOALS_FILE) {
   fs41.mkdirSync(WORK_FOLDER, { recursive: true });
   let changed = false;
-  const result = locked(LOCK7, () => {
+  const result = locked(LOCK6, () => {
     const goals = readKept2(file);
     const value = change(goals);
     const latest = new Map;
@@ -19942,7 +19941,7 @@ var GRANTS = path72.join(VAULT_FOLDER, "grants.json");
 var PAUSED2 = path72.join(VAULT_FOLDER, "paused.json");
 var KEY_FILE = path72.join(VAULT_FOLDER, "key.json");
 var VALUES = path72.join(VAULT_FOLDER, "values");
-var LOCK8 = path72.join(RUN, ".vault.lock");
+var LOCK7 = path72.join(RUN, ".vault.lock");
 var KEPT_DAYS2 = 365;
 
 class VaultRefusal extends Error {
@@ -20049,7 +20048,7 @@ var keepJSON = (file, value) => {
 };
 var vaultWork = (work) => {
   fs69.mkdirSync(RUN, { recursive: true, mode: 448 });
-  return locked(LOCK8, work);
+  return locked(LOCK7, work);
 };
 var onHost = () => KEYS_ON_HOST;
 var isMade = () => onHost() || fs69.existsSync(KEY_FILE);
@@ -21746,6 +21745,8 @@ async function startSession(given, by, place) {
   await noteFullAccess(session).catch(() => {});
   if (by?.place && bot)
     noteWorkChanged(bot.bot);
+  if (marked && by?.place && bot && botOfConversation(by.session)?.bot === bot.bot)
+    noteOversight(bot.bot, session, "started");
   if (!marked || !by?.place)
     wakes = [];
   if (bot && goal && given.step !== undefined && given.step !== null)
@@ -21810,7 +21811,7 @@ var changed = (data, did) => {
     return;
   noteWorkChanged(bot);
   if (did)
-    noteOversight(bot, data.id, did);
+    noteOversightBy(did.by.session, data, did.kind);
 };
 var mine = async (caller, targets, signal) => under(caller.session, await workSessions(targets, signal));
 async function oneOfMine(caller, session, targets, doing, signal) {
@@ -21863,7 +21864,7 @@ async function stopSessionTool(caller, args, targets, signal) {
   } catch (error) {
     return refused(`Couldn't stop "${data.title || "New Session"}": ${why(error)}`);
   }
-  changed(data, "stopped");
+  changed(data, { kind: "stopped", by: caller });
   if (args.archive === true) {
     await noteSession(target, data.id, (kuvo, metadata) => {
       metadata["kuvo.archived"] = true;
@@ -21911,7 +21912,7 @@ async function answerAskTool(caller, args, targets, signal) {
       return refused(`Couldn't answer it: ${why(error)}`);
     }
     await keepAnswer(target, data.id, { ask: ask.question.id, what: `Asks: ${ask.question.text}`, decision: "answer", reason: `${answer}${reason ? ` (${reason})` : ""}`, by, at: Date.now() }).catch(() => {});
-    changed(data, "answered");
+    changed(data, { kind: "answered", by: caller });
     return said(`Answered "${title}".`);
   }
   const { permission } = ask;
@@ -21942,7 +21943,7 @@ async function answerAskTool(caller, args, targets, signal) {
     return refused(`Couldn't answer it: ${why(error)}`);
   }
   await keepAnswer(target, data.id, { ask: permission.id, ...permission.call ? { call: permission.call } : {}, what, decision: args.decision, reason, by, at: Date.now() }).catch(() => {});
-  changed(data, "answered");
+  changed(data, { kind: "answered", by: caller });
   return said(args.decision === "allow" ? `Allowed: ${shown}.` : `Denied: ${shown}. "${title}" is told why.`);
 }
 async function listModelsTool(engine, bridge, signal) {
@@ -22266,9 +22267,6 @@ async function agentTool(name, args, session, place) {
     case "start_session": {
       const by = root ? { ...root, name: nameOf3(root.session, all) } : OUTSIDE;
       const outcome = await startSession(args, by, { readEngine: place.readEngine, bridge: place.bridge, step: place.step, signal: place.signal });
-      const bot = botOfConversation(root?.session)?.bot;
-      if (bot && "started" in outcome)
-        noteOversight(bot, outcome.started.session, "started");
       return startedWords(outcome, args.wait === true);
     }
     case "list_models": {

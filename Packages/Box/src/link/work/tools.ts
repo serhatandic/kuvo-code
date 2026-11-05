@@ -9,7 +9,7 @@ import { agentsCommandsInSandbox, engineCommandsInSandbox, fenceWhole } from "..
 import { stopSession } from "../engine/queue";
 import { holdArchived } from "../areas/wakes";
 import { noteWorkChanged } from "./changes";
-import { noteOversight } from "./oversight";
+import { noteOversightBy } from "./oversight";
 import { callOf, keepAnswer, noteSession, pendingAsk, permissionWords, ruleFor, rulesOf, type PendingPermission } from "./answers";
 import { allowRefusal } from "./policy";
 import { approvalOf } from "./approval";
@@ -42,13 +42,13 @@ export interface Caller {
 const said = (text: string): ToolAnswer => ({ text, isError: false });
 const refused = (text: string): ToolAnswer => ({ text, isError: true });
 const why = (error: unknown) => String((error as Error | null)?.message ?? error);
-// A change to the work of the bot a session works for, for clients to read it again.
-const changed = (data: Listed["data"], did?: "stopped" | "answered") => {
+// A change to the work of the bot a session works for, for clients to read it again; and, done by
+// the bot itself, what it did, for clients to show it looking after its sessions.
+const changed = (data: Listed["data"], did?: { kind: "stopped" | "answered"; by: Caller }) => {
   const bot = worksFor(data)?.bot;
   if (!bot) return;
   noteWorkChanged(bot);
-  // What it did to it, for clients to show it looking after its sessions.
-  if (did) noteOversight(bot, data.id, did);
+  if (did) noteOversightBy(did.by.session, data, did.kind);
 };
 
 // The caller's sessions (the ones it started, and theirs), the latest first.
@@ -102,7 +102,7 @@ export async function stopSessionTool(caller: Caller, args: Record<string, unkno
   } catch (error) {
     return refused(`Couldn't stop "${data.title || "New Session"}": ${why(error)}`);
   }
-  changed(data, "stopped");
+  changed(data, { kind: "stopped", by: caller });
   if (args.archive === true) {
     await noteSession(target, data.id, (kuvo, metadata) => {
       metadata["kuvo.archived"] = true;
@@ -151,7 +151,7 @@ export async function answerAskTool(caller: Caller, args: Record<string, unknown
       return refused(`Couldn't answer it: ${why(error)}`);
     }
     await keepAnswer(target, data.id, { ask: ask.question.id, what: `Asks: ${ask.question.text}`, decision: "answer", reason: `${answer}${reason ? ` (${reason})` : ""}`, by, at: Date.now() }).catch(() => {});
-    changed(data, "answered");
+    changed(data, { kind: "answered", by: caller });
     return said(`Answered "${title}".`);
   }
   const { permission } = ask;
@@ -176,7 +176,7 @@ export async function answerAskTool(caller: Caller, args: Record<string, unknown
     return refused(`Couldn't answer it: ${why(error)}`);
   }
   await keepAnswer(target, data.id, { ask: permission.id, ...(permission.call ? { call: permission.call } : {}), what, decision: args.decision, reason, by, at: Date.now() }).catch(() => {});
-  changed(data, "answered");
+  changed(data, { kind: "answered", by: caller });
   return said(args.decision === "allow" ? `Allowed: ${shown}.` : `Denied: ${shown}. "${title}" is told why.`);
 }
 

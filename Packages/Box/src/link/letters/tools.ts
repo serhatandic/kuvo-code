@@ -25,8 +25,7 @@ import { composeLetter, pausedNote, placeOfSession } from "./letter";
 import { allowed, takeBack } from "./limits";
 import { OUTSIDE, seatRefusal, startedWords, startSession } from "./start";
 import { answerTo } from "./take";
-import { noteOversight, noteOversightBy } from "../work/oversight";
-import { botOfConversation } from "../work/tree";
+import { noteOversightBy } from "../work/oversight";
 import { answerAskTool, finishGoalTool, goalProgressTool, listModelsTool, listProjectsTool, listSessionsTool, makeProjectTool, maySpendTool, proposeGoalTool, stopSessionTool } from "../work/tools";
 import type { ListedAgent, Target } from "../../shared/records";
 import type { SessionPlace } from "./letter";
@@ -281,9 +280,6 @@ export async function agentTool(name: AgentToolName, args: Record<string, unknow
       // one (`outside`).
       const by = root ? { ...root, name: nameOf(root.session, all) } : OUTSIDE;
       const outcome = await startSession(args, by, { readEngine: place.readEngine, bridge: place.bridge, step: place.step, signal: place.signal });
-      // A bot's new session: for clients to show it looking after it.
-      const bot = botOfConversation(root?.session)?.bot;
-      if (bot && "started" in outcome) noteOversight(bot, outcome.started.session, "started");
       return startedWords(outcome, args.wait === true);
     }
     case "list_models": {

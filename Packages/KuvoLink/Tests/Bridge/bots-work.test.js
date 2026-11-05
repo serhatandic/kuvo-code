@@ -363,7 +363,8 @@ test("a bot answers its sessions' asks as its own conversation could go ahead, r
 
 // What a bot does to its sessions, as every client sees it (`kuvo/work/oversight`), so the sidebar
 // can show the bot looking after them: each start, message, read, answer and stop, once, in order,
-// for its own sessions only. Your own session it reads is nobody's to show.
+// for its own sessions only. Your own session it reads is nobody's to show, and another bot reading
+// Pixel's isn't Pixel looking after it.
 test("a client sees what a bot does to each of its sessions, as it does it, and nothing for a session that isn't its", async () => {
   fs.rmSync(path.join(home, "run", "work", "oversight.json"), { force: true });
   const session = startedAddress(await tool("start_session", { task: "Add haptics.", title: "Haptics", project: "Tidepool" }, "ses_pixel"));
@@ -373,6 +374,7 @@ test("a client sees what a bot does to each of its sessions, as it does it, and 
   asked.set(session, [{ id: "per_1", sessionID: session, action: "shell", resources: ["git diff --stat"] }]);
   assert.equal((await tool("answer_ask", { session, ask: "per_1", decision: "allow", reason: "To see the change." }, "ses_pixel")).isError, false);
   assert.equal((await tool("read_conversation", { of: "ses_mine" }, "ses_pixel")).isError, false);
+  assert.equal((await tool("read_conversation", { of: session }, "ses_mira")).isError, false);
   assert.equal((await tool("stop_session", { session }, "ses_pixel")).isError, false);
 
   const seen = await route("GET", "kuvo/work/oversight");
