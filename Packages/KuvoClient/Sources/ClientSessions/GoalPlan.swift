@@ -283,6 +283,10 @@ public struct GoalPlan: Decodable, Sendable, Hashable, Identifiable {
 
     public enum Cadence: String, Codable, Sendable, CaseIterable { case day, week, milestones, none }
 
+    /// How it runs: asking you the calls that are yours, or on Autopilot, deciding what its research
+    /// settles and stopping only at what only you can do. One setting with its bot's conversation.
+    public enum Mode: String, Codable, Sendable { case interactive, autopilot }
+
     public let id: String
     public let bot: String
     /// The bot's name, and its conversation, where the card and the goal bar show.
@@ -321,8 +325,10 @@ public struct GoalPlan: Decodable, Sendable, Hashable, Identifiable {
     public let alone: Bool
     /// While it's proposed: where Start makes each of its projects.
     public let folders: [Folder]
+    /// How it runs (Interactive from a box before Autopilot).
+    public let mode: Mode
 
-    public init(id: String, bot: String, name: String, session: String, goal: String, title: String? = nil, state: State, steps: [Step], checks: [Check] = [], spend: [Spend] = [], public: [Public] = [], projects: [String] = [], wake: Bool = false, digest: Cadence = .none, ends: Double? = nil, proposed: Double, started: Double? = nil, ended: Double? = nil, waiting: [Waiting] = [], paused: [Paused] = [], waited: Double = 0, watching: [String] = [], next: Double? = nil, lastDigest: Digest? = nil, report: String? = nil, alone: Bool, folders: [Folder] = []) {
+    public init(id: String, bot: String, name: String, session: String, goal: String, title: String? = nil, state: State, steps: [Step], checks: [Check] = [], spend: [Spend] = [], public: [Public] = [], projects: [String] = [], wake: Bool = false, digest: Cadence = .none, ends: Double? = nil, proposed: Double, started: Double? = nil, ended: Double? = nil, waiting: [Waiting] = [], paused: [Paused] = [], waited: Double = 0, watching: [String] = [], next: Double? = nil, lastDigest: Digest? = nil, report: String? = nil, alone: Bool, folders: [Folder] = [], mode: Mode = .interactive) {
         self.id = id
         self.bot = bot
         self.name = name
@@ -350,9 +356,10 @@ public struct GoalPlan: Decodable, Sendable, Hashable, Identifiable {
         self.report = report
         self.alone = alone
         self.folders = folders
+        self.mode = mode
     }
 
-    private enum CodingKeys: String, CodingKey { case id, bot, name, session, goal, title, state, steps, checks, spend, `public`, projects, wake, digest, ends, proposed, started, ended, waiting, paused, waited, watching, next, lastDigest, report, alone, folders }
+    private enum CodingKeys: String, CodingKey { case id, bot, name, session, goal, title, state, steps, checks, spend, `public`, projects, wake, digest, ends, proposed, started, ended, waiting, paused, waited, watching, next, lastDigest, report, alone, folders, mode }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -383,6 +390,7 @@ public struct GoalPlan: Decodable, Sendable, Hashable, Identifiable {
         report = try container.decodeIfPresent(String.self, forKey: .report)
         alone = (try? container.decode(Bool.self, forKey: .alone)) ?? false
         folders = (try? container.decode([Lenient<Folder>].self, forKey: .folders))?.compactMap(\.value) ?? []
+        mode = (try? container.decode(Mode.self, forKey: .mode)) ?? .interactive
     }
 
     /// What only you can do, first on the card: the checks that need you.
@@ -436,11 +444,15 @@ public struct GoalPlanAnswer: Encodable, Sendable {
     public let waiting: String?
     /// A proposed goal's projects as you named or moved them (`projects`): names, or full paths.
     public var projects: [String]? = nil
+    /// How it runs, as you set it on Start or switch it while it runs.
+    public var mode: GoalPlan.Mode? = nil
 
     /// Start it. `ends`: the end you picked; `clearsEnd`: you picked none where the bot had
     /// proposed one, which takes it away (left out, the bot's stays).
-    public static func start(wake: Bool, digest: GoalPlan.Cadence? = nil, ends: Date? = nil, clearsEnd: Bool = false, spend: [SpendChange]? = nil) -> GoalPlanAnswer {
-        GoalPlanAnswer(action: .start, wake: wake, digest: digest, ends: ends.map { $0.timeIntervalSince1970 * 1000 }, clearsEnd: ends == nil && clearsEnd, spend: spend, waiting: nil)
+    public static func start(wake: Bool, digest: GoalPlan.Cadence? = nil, ends: Date? = nil, clearsEnd: Bool = false, spend: [SpendChange]? = nil, mode: GoalPlan.Mode? = nil) -> GoalPlanAnswer {
+        var answer = GoalPlanAnswer(action: .start, wake: wake, digest: digest, ends: ends.map { $0.timeIntervalSince1970 * 1000 }, clearsEnd: ends == nil && clearsEnd, spend: spend, waiting: nil)
+        answer.mode = mode
+        return answer
     }
     /// A running goal's limits changed: only what's given (`clearsEnd` takes its end away).
     public static func change(wake: Bool? = nil, digest: GoalPlan.Cadence? = nil, ends: Date? = nil, clearsEnd: Bool = false, spend: [SpendChange]? = nil) -> GoalPlanAnswer {
@@ -458,7 +470,7 @@ public struct GoalPlanAnswer: Encodable, Sendable {
     public static let decline = GoalPlanAnswer(action: .decline, wake: nil, digest: nil, ends: nil, clearsEnd: false, spend: nil, waiting: nil)
     public static let stop = GoalPlanAnswer(action: .stop, wake: nil, digest: nil, ends: nil, clearsEnd: false, spend: nil, waiting: nil)
 
-    private enum CodingKeys: String, CodingKey { case action, wake, digest, ends, spend, waiting, projects }
+    private enum CodingKeys: String, CodingKey { case action, wake, digest, ends, spend, waiting, projects, mode }
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
@@ -473,6 +485,7 @@ public struct GoalPlanAnswer: Encodable, Sendable {
         try container.encodeIfPresent(spend, forKey: .spend)
         try container.encodeIfPresent(waiting, forKey: .waiting)
         try container.encodeIfPresent(projects, forKey: .projects)
+        try container.encodeIfPresent(mode, forKey: .mode)
     }
 }
 
