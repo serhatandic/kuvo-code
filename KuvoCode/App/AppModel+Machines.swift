@@ -559,6 +559,8 @@ extension AppModel {
         // What its agents ask to run outside its sandbox, followed while it's connected.
         connection.run("sandbox-asks") { await Sandboxes.shared.follow(machine) }
         connection.run("goal-plans") { [weak self] in await self?.goalPlans.follow(machine) }
+        // What its bots do to the sessions they oversee, as they do it.
+        connection.run("oversight") { [weak self] in await self?.botOversight.follow(machine) }
         // Its projects as its box has them, changed from a phone too.
         connection.run("projects") { [weak self] in await self?.workspace.followProjects(on: machine) }
     }

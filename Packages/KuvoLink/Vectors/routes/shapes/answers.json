@@ -8125,6 +8125,88 @@
    }
   },
   {
+   "route": "GET kuvo/work/oversight",
+   "answers": {
+    "200": {
+     "object": {
+      "marks": {
+       "list": {
+        "object": {
+         "id": "string",
+         "bot": "string",
+         "session": "string",
+         "kind": {
+          "oneOf": [
+           {
+            "literal": "started"
+           },
+           {
+            "literal": "told"
+           },
+           {
+            "literal": "read"
+           },
+           {
+            "literal": "answered"
+           },
+           {
+            "literal": "stopped"
+           },
+           {
+            "literal": "finished"
+           }
+          ]
+         },
+         "at": "number"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/work/oversight/events",
+   "answers": {
+    "200": {
+     "object": {
+      "marks": {
+       "list": {
+        "object": {
+         "id": "string",
+         "bot": "string",
+         "session": "string",
+         "kind": {
+          "oneOf": [
+           {
+            "literal": "started"
+           },
+           {
+            "literal": "told"
+           },
+           {
+            "literal": "read"
+           },
+           {
+            "literal": "answered"
+           },
+           {
+            "literal": "stopped"
+           },
+           {
+            "literal": "finished"
+           }
+          ]
+         },
+         "at": "number"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
    "route": "GET kuvo/work/asks",
    "answers": {
     "200": {

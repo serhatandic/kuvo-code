@@ -25,6 +25,7 @@ import { composeLetter, pausedNote, placeOfSession } from "./letter";
 import { allowed, takeBack } from "./limits";
 import { OUTSIDE, seatRefusal, startedWords, startSession } from "./start";
 import { answerTo } from "./take";
+import { noteOversightBy } from "../work/oversight";
 import { answerAskTool, finishGoalTool, goalProgressTool, listModelsTool, listProjectsTool, listSessionsTool, makeProjectTool, maySpendTool, proposeGoalTool, stopSessionTool } from "../work/tools";
 import type { ListedAgent, Target } from "../../shared/records";
 import type { SessionPlace } from "./letter";
@@ -190,6 +191,8 @@ async function sendMessage(args: Record<string, unknown>, caller: string | null,
     } catch (error) {
       return failed(`It didn't reach ${target.name}: ${why(error)}`);
     }
+    // A bot writing to a session of its own: for clients to show it looking after it.
+    noteOversightBy(caller, { ...here.data, id: target.session }, "told");
     // Stopped by the user: it waits there for them, and nothing waits for its answer.
     if (went === "waits") return said(pausedNote(target.name));
     if (!waits) return said(`Sent to ${target.name}. Its answer, if it writes one, comes to you as a message.`);
@@ -230,7 +233,9 @@ async function readOne(args: Record<string, unknown>, caller: string | null, all
   const here = await placeOfSession(target.session, targets).catch(() => null);
   if (here) {
     try {
-      return said(intro + excerpt(await readConversation(here.target, target.session, here.data, target.name, place.signal), query, READ_LIMIT));
+      const read = excerpt(await readConversation(here.target, target.session, here.data, target.name, place.signal), query, READ_LIMIT);
+      noteOversightBy(caller, { ...here.data, id: target.session }, "read");
+      return said(intro + read);
     } catch (error) {
       return refused(`Couldn't read ${target.name}'s conversation: ${why(error)}`);
     }
@@ -274,7 +279,8 @@ export async function agentTool(name: AgentToolName, args: Record<string, unknow
       // From a conversation this box doesn't have: an agent all the same, counted and approved as
       // one (`outside`).
       const by = root ? { ...root, name: nameOf(root.session, all) } : OUTSIDE;
-      return startedWords(await startSession(args, by, { readEngine: place.readEngine, bridge: place.bridge, step: place.step, signal: place.signal }), args.wait === true);
+      const outcome = await startSession(args, by, { readEngine: place.readEngine, bridge: place.bridge, step: place.step, signal: place.signal });
+      return startedWords(outcome, args.wait === true);
     }
     case "list_models": {
       let engine: Target | null = null;

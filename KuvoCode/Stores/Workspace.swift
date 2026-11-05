@@ -3138,14 +3138,10 @@ final class Workspace {
         running.count { $0 != id && !hiddenRuns.contains($0) && !reviewParts.contains($0) && root(of: $0) == id }
     }
 
-    /// The sessions a bot runs (`kuvo.by`) that are at it now: working, or waiting on you. What
-    /// its row says it's doing ("At work in Tidepool: 3 sessions").
-    func work(of bot: String) -> [Session] {
-        #if DEBUG
-        // KUVO_DEMO_BOT_WORK: every session marked as a bot's counts as at work, for a look.
-        if ProcessInfo.processInfo.environment["KUVO_DEMO_BOT_WORK"] != nil { return sessions.filter { WorksFor($0)?.bot == bot && !Self.isArchived($0) } }
-        #endif
-        return sessions.filter { WorksFor($0)?.bot == bot && !Self.isArchived($0) && (isWorking($0.id) || needsAttention($0.id)) }
+    /// Every session a bot oversees (`kuvo.by`) and that you haven't archived, under another one
+    /// too: what its row in Bots counts ("Overseeing 4 sessions").
+    func overseen(by bot: String) -> [Session] {
+        sessions.filter { WorksFor($0)?.bot == bot && !Self.isArchived($0) }
     }
 
     /// Sessions under another that are kept out of sight (a review's parts, which their review
