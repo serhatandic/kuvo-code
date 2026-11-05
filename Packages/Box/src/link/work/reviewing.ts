@@ -24,6 +24,7 @@ import { review, type Decision, type ReviewedAction, type ReviewContext, type Sm
 import { botOfConversation, worksFor } from "./tree";
 import { botHere } from "../bots/here";
 import { readProjects } from "../areas/projects";
+import { commandTemporary } from "../fence/state";
 import type { EngineAnswer } from "../engine/client";
 import type { EngineSession } from "../engine/sessions";
 import type { Target } from "../../shared/records";
@@ -95,7 +96,9 @@ async function lookUp(session: string, engine: Target | null, bridge: Target | n
  * couldn't judge; never left waiting for you, whatever its mode turns out to be. */
 export async function heldUnreached(session: string, action: ReviewedAction, signal?: AbortSignal): Promise<Verdict & { paused?: boolean }> {
   const unanswered: SmallModel = async () => { throw new Error("the engine didn't answer"); };
-  return review(action, { session, said: [] }, { model: unanswered, signal });
+  // (Its folder, the one its command was asked from, and its commands' temporary folder are its own.)
+  const own = [action.folder, commandTemporary(action.folder)].filter((each): each is string => Boolean(each));
+  return review(action, { session, said: [] }, { model: unanswered, signal, own });
 }
 
 /** The bot whose conversation or work this is, and its goal while it has one running, with the
@@ -178,7 +181,7 @@ export async function reviewIn(session: string, action: ReviewedAction, signal?:
   const context: ReviewContext = { session: at.data.id, said, ...(bot ? { bot } : {}) };
   let verdict: Verdict & { paused?: boolean };
   try {
-    verdict = await review(action, context, { model: await reviewModelOf(at, signal), signal, pin });
+    verdict = await review(action, context, { model: await reviewModelOf(at, signal), signal, pin, own: ownFolders(at) });
   } catch (error) {
     // (Only when its log can't be kept, so there's nothing on it to approve.)
     return { decision: "refuse", reason: `Auto's reviewer couldn't review it (${oneLine(String((error as Error)?.message ?? error), 120)}).`, by: "code", held: false, why: "failed", conversation: at };
@@ -272,10 +275,12 @@ export async function reviewPermission(source: Target, event: { type?: string; d
   }
 }
 
-/** The folders a conversation works in as its own: its project's, and for a bot's conversation or
- * work, the bot's own folder, the projects it made and its running goal's. */
+/** The folders a conversation works in as its own: its project's, its commands' temporary folder
+ * (their TMPDIR, in Kuvo Code's), and for a bot's conversation or work, the bot's own folder, the
+ * projects it made and its running goal's. */
 function ownFolders(at: Conversation): string[] {
-  const folders = [at.data.location?.directory].filter((each): each is string => typeof each === "string");
+  const folder = at.data.location?.directory;
+  const folders = typeof folder === "string" ? [folder, commandTemporary(folder)].filter((each): each is string => Boolean(each)) : [];
   const bot = botOfConversation(at.data.id) ?? worksFor(at.data);
   if (!bot) return folders;
   const own = botHere(bot.bot)?.folder;
