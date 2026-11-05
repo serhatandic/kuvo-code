@@ -4,7 +4,7 @@
 
 import { spawn } from "node:child_process"
 import { createHash, randomUUID } from "node:crypto"
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, renameSync, rmdirSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
@@ -42,7 +42,8 @@ const outputLimit = 30_000
  * agents, commands or plugins, which run outside the sandbox when you use it yourself, nor what
  * your own Claude Code runs or reads from there later: the shells its commands source
  * (`shell-snapshots`), a session's environment (`session-env`), an editor's lock (`ide`) and its
- * settings' backups. Without them it still runs its commands, with no shell snapshot of its own.
+ * settings' backups. Without them it still runs its commands, with no shell snapshot of its own. (A
+ * session's environment it finds made, or its hooks wouldn't start, and can't write in: `environment`.)
  */
 const STATE_IN_HOME = [
   "projects", "sessions", "file-history", "todos", "tasks", "teams", "plans", "history.jsonl*",
@@ -1112,7 +1113,7 @@ class ClaudeThread implements Thread {
     if (!resume) delete this.state.claudeCost
     // While the box's sandbox is on, Claude Code runs whole in it, and so does all it starts: its
     // commands, its hooks and MCP servers (yours, and a project's).
-    const whole = this.whole(skills)
+    const whole = this.whole(skills, id)
     this.input = new Queue()
     const tools = fenceOn() ? relayedTools(this.session.id, this) : kuvoTools(this.session.id)
     this.opened = { model: modelID, effort, plan, append, program: this.agent.program, tools: tools?.key, skills, fence: fenceKey() + fullAccessMark(this.session.id) }
@@ -1151,9 +1152,11 @@ class ClaudeThread implements Thread {
    * Undefined while it's off; on, but with no launcher yet (a box from before it had one, until it
    * starts again), it doesn't start, rather than outside it.
    */
-  private whole(skills: string | undefined) {
+  private whole(skills: string | undefined, conversation: string) {
     this.sandboxedNow = fenceOn() || undefined
     if (!this.sandboxedNow) return undefined
+    this.environment(conversation)
+    const started = ++this.startsInSandbox
     const directory = this.session.location.directory
     const attached = fenceAttachments(directory)
     const settings = this.agent.configHome
@@ -1179,7 +1182,11 @@ class ClaudeThread implements Thread {
         // (The program as the SDK names it.)
         const given = Object.fromEntries(Object.entries({ ...options.env, ...fence.env, KUVO_FENCE_SHELL: options.command, ...env }).filter((entry): entry is [string, string] => entry[1] !== undefined))
         const child = spawn(fence.command, options.args, { cwd: options.cwd ?? directory, env: given, signal: options.signal, stdio: ["pipe", "pipe", "pipe"] })
-        child.once("exit", () => fence.ended())
+        child.once("exit", () => {
+          fence.ended()
+          // (Not as one being replaced stops: the new one needs them.)
+          if (started === this.startsInSandbox) this.environmentsEnded()
+        })
         // What it says as it stops, for why it did (the SDK keeps that only for a process it starts
         // itself), this one's alone: one being replaced can still be writing.
         const said = new Said()
@@ -1198,6 +1205,34 @@ class ClaudeThread implements Thread {
       },
     }
   }
+
+  /**
+   * A conversation's `session-env` folder, made here, outside the sandbox. Claude Code makes it before
+   * each SessionStart hook (and Setup, CwdChanged and FileChanged hook) to name it a file there, and
+   * the hook doesn't start if it can't. It stays closed to the sandbox, as it must: your own Claude
+   * Code runs what's in it before each command if you open this conversation yourself. So a hook's
+   * `CLAUDE_ENV_FILE` isn't written, and what it sets doesn't reach the commands here.
+   */
+  private environment(conversation: string) {
+    if (!/^[A-Za-z0-9-]+$/.test(conversation)) return
+    const folder = join(this.agent.configHome, "session-env", conversation)
+    try {
+      mkdirSync(folder, { recursive: true })
+      this.environments.add(folder)
+    } catch {}
+  }
+
+  /** As it stops, those it left empty: it can't clear out old ones itself in the sandbox. Yours, with your own hooks' files in them, stay. */
+  private environmentsEnded() {
+    for (const folder of this.environments)
+      try {
+        rmdirSync(folder)
+      } catch {}
+    this.environments.clear()
+  }
+
+  private environments = new Set<string>()
+  private startsInSandbox = 0
 
   /** How the files you attach reach this Claude Code: in the box's sandbox, copies it reads. */
   private copies(): ((path: string) => string) | undefined {
@@ -1295,6 +1330,8 @@ class ClaudeThread implements Thread {
     this.said?.forget()
     if (message.type === "system" && message.subtype === "init") {
       if (!this.state.claudeStarted || this.state.claudeSession !== message.session_id) {
+        // (Its /clear: a new name it chose, for its next hooks. The one for that moment ran already.)
+        if (this.sandboxedNow && typeof message.session_id === "string") this.environment(message.session_id)
         this.state.claudeSession = message.session_id
         this.state.claudeStarted = true
         this.active?.hooks.saveState()
@@ -1460,7 +1497,7 @@ class ClaudeThread implements Thread {
         if (message.status === "failed") turn.notice(`A Claude Code plugin didn't install${message.name ? ` (${message.name})` : ""}${message.error ? `: ${message.error}` : ""}.`)
         return
       case "hook_response":
-        if (message.outcome === "error" || message.exit_code) turn.notice(`Your ${message.hook_name ?? message.hook_event ?? ""} hook failed${message.stderr ? `: ${String(message.stderr).trim()}` : ""}.`)
+        if (message.outcome === "error" || message.exit_code) turn.notice(`Your ${message.hook_name ?? message.hook_event ?? ""} hook failed${this.hookWords(String(message.stderr ?? ""))}.`)
         return
       case "memory_recall": {
         const id = newID("call")
@@ -1471,6 +1508,16 @@ class ClaudeThread implements Thread {
       }
     }
     if (!claudeSystem.has(message.subtype)) this.unknownFrame(turn, `system:${message.subtype}`, message)
+  }
+
+  /** What a hook that failed said, for its row. Where the sandbox kept it from its session's
+   * environment (`environment`), that in words, not the folder's path. */
+  private hookWords(said: string): string {
+    const lines = said.trim().split("\n")
+    const about = lines.filter((line) => line.includes("session-env"))
+    if (!this.sandboxedNow || !about.length) return said.trim() ? `: ${said.trim()}` : ""
+    const why = about.some((line) => line.includes("mkdir")) ? "Claude Code can't start this one in the sandbox" : "the sandbox doesn't let a hook set environment variables with CLAUDE_ENV_FILE"
+    return `: ${[...lines.filter((line) => !line.includes("session-env") && line.trim()), why].join("\n")}`
   }
 
   /** A note now, or after the words being written (a notice ends the step under way). */

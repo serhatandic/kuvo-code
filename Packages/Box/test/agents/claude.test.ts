@@ -3,7 +3,7 @@
 import "../safety"
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { spawnSync } from "node:child_process"
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { ClaudeAgent } from "../../src/agents/agents/claude"
@@ -631,6 +631,13 @@ describe("Claude Code, nothing dropped", () => {
     ])
     expect(notices(id)).toEqual(["Claude Code summarized the conversation to make room.", "Claude's API is overloaded: trying again (2/10).", "Something new to read."])
   })
+
+  test("several hooks failing the same way at the same moment show as one row, and the same failure again later as another", async () => {
+    const failed = { type: "system", subtype: "hook_response", hook_name: "SessionStart:compact", hook_event: "SessionStart", outcome: "error", stderr: "Failed to run" }
+    const id = await turn(() => [failed, failed, failed, failed, { type: "system", subtype: "compact_boundary", compact_metadata: { trigger: "auto" } }, failed])
+    const row = "Your SessionStart:compact hook failed: Failed to run."
+    expect(notices(id)).toEqual([row, "Claude Code summarized the conversation to make room.", row])
+  })
 })
 
 describe("Claude Code's models", () => {
@@ -706,6 +713,7 @@ describe("Claude Code in the box's sandbox", () => {
   // The box's sandbox folder, as the box sets it up (link/fence/state.ts): its rules, and its
   // launcher for an agent run whole, which here notes what it was told and runs the program.
   let fence: string
+  let givenSettings: string | undefined
   const turnOn = () => {
     writeFileSync(join(fence, "policy.json"), JSON.stringify({ hidden: [], readable: [], writable: [], readOnly: [] }))
     writeFileSync(join(fence, "on"), "")
@@ -720,9 +728,14 @@ describe("Claude Code in the box's sandbox", () => {
       { mode: 0o700 },
     )
     process.env.KUVO_FENCE = fence
+    // (Its settings folder a test's own: it makes things in it as it starts here.)
+    givenSettings = process.env.CLAUDE_CONFIG_DIR
+    process.env.CLAUDE_CONFIG_DIR = join(root, "claude-settings")
   })
   afterEach(() => {
     delete process.env.KUVO_FENCE
+    if (givenSettings === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = givenSettings
     setToolServer(undefined)
   })
 
@@ -747,7 +760,7 @@ describe("Claude Code in the box's sandbox", () => {
     expect(launched).toMatchObject({ program: "/bin/echo", args: "--output-format stream-json", folder: work, work, git: join(work, ".git") })
     // Its settings folder its own: its conversations, sign-in and caches written; never its
     // settings or hooks, which run outside the sandbox when you use it yourself.
-    expect(launched.own).toBe(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"))
+    expect(launched.own).toBe(join(work, "claude-settings"))
     expect(launched.state.split(" ")).toEqual(expect.arrayContaining(["projects", "sessions", "todos", ".credentials.json*"]))
     // Never what your own Claude Code, outside, runs or reads later: its settings, the shells its
     // commands source, a session's environment, an editor's lock, a settings backup.
@@ -762,6 +775,69 @@ describe("Claude Code in the box's sandbox", () => {
     const tools = Object.values(servers)[0]
     expect(tools.url).toBe(`http://127.0.0.1:${launched.port}/mcp`)
     expect(tools.headers.Authorization).not.toBe("Bearer app-password")
+  })
+
+  test("its hooks can start: this conversation's environment is there before it starts, and for the new name after /clear, as plain folders outside what it writes", async () => {
+    turnOn()
+    await begin()
+    const environments = join(process.env.CLAUDE_CONFIG_DIR!, "session-env")
+    const mine = join(environments, fake.options.sessionId)
+    expect(lstatSync(mine).isDirectory()).toBe(true)
+    // A new name it chose.
+    fake.out.push({ type: "system", subtype: "init", session_id: "cleared-conversation" })
+    await until(() => existsSync(join(environments, "cleared-conversation")))
+    expect(lstatSync(join(environments, "cleared-conversation")).isDirectory()).toBe(true)
+    // Never a name that would lead out of there.
+    fake.out.push({ type: "system", subtype: "init", session_id: "../escaped" })
+    fake.out.push({ type: "system", subtype: "init", session_id: "cleared-again" })
+    await until(() => existsSync(join(environments, "cleared-again")))
+    expect(existsSync(join(process.env.CLAUDE_CONFIG_DIR!, "escaped"))).toBe(false)
+    // As it stops, what's empty goes; one with your own hook's file in it stays.
+    writeFileSync(join(environments, "cleared-again", "sessionstart-hook-0.sh"), "export YOURS=1\n")
+    const { launched } = await started()
+    expect(launched.state.split(" ")).not.toContain("session-env")
+    expect(readdirSync(environments)).toEqual(["cleared-again"])
+    expect(readFileSync(join(environments, "cleared-again", "sessionstart-hook-0.sh"), "utf8")).toBe("export YOURS=1\n")
+  })
+
+  test("one being replaced stopping leaves the new one's environment where it is", async () => {
+    turnOn()
+    const { id, first } = await begin()
+    const mine = join(process.env.CLAUDE_CONFIG_DIR!, "session-env", fake.options.sessionId)
+    const replaced = fake.options
+    fake.result([first])
+    await until(() => idles(id).length === 1)
+    // The conversation goes to Full Access: at its next message its Claude Code starts again.
+    mkdirSync(join(fence, "full"), { recursive: true })
+    writeFileSync(join(fence, "full", id), "")
+    sessions.prompt(id, { id: "msg_claude_turn_replaced", text: "again", files: [], delivery: "steer" })
+    await until(() => fake.options !== replaced)
+    const child = replaced.spawnClaudeCodeProcess({ command: "/bin/echo", args: [], cwd: root, env: { PATH: process.env.PATH, OPENCODE_SESSION_ID: "ses_x" } })
+    await new Promise((resolve) => child.once("exit", resolve))
+    expect(existsSync(mine)).toBe(true)
+  })
+
+  test("a hook the sandbox kept from its session's environment says so in words, and the same for each, once", async () => {
+    turnOn()
+    const { id } = await begin()
+    const environment = join(process.env.CLAUDE_CONFIG_DIR!, "session-env", fake.options.sessionId, "sessionstart-hook-0.sh")
+    const failed = (stderr: string) => ({ type: "system", subtype: "hook_response", hook_name: "SessionStart:compact", outcome: "error", exit_code: 1, stderr })
+    fake.out.push(failed(`/bin/sh: ${environment}: Operation not permitted`))
+    fake.out.push(failed(`/bin/sh: ${environment}: Operation not permitted`))
+    fake.out.push(failed(`Failed to run: EPERM: operation not permitted, mkdir '${join(process.env.CLAUDE_CONFIG_DIR!, "session-env", "new")}'`))
+    fake.out.push(failed("rate limited by the tool"))
+    const rows = () => sessions.messages(id).filter((message) => message.type === "synthetic").map((message: any) => message.text)
+    await until(() => rows().length === 3)
+    expect(rows()).toEqual([
+      "Your SessionStart:compact hook failed: the sandbox doesn't let a hook set environment variables with CLAUDE_ENV_FILE.",
+      "Your SessionStart:compact hook failed: Claude Code can't start this one in the sandbox.",
+      "Your SessionStart:compact hook failed: rate limited by the tool.",
+    ])
+  })
+
+  test("with the sandbox off, it makes its own as it always has", async () => {
+    await begin()
+    expect(existsSync(join(process.env.CLAUDE_CONFIG_DIR!, "session-env"))).toBe(false)
   })
 
   test("on, with no launcher of the box's yet (a box from before), Claude Code doesn't start, rather than outside the sandbox", async () => {

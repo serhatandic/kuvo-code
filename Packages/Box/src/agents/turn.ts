@@ -297,6 +297,9 @@ export class Turn {
   /** A note in the conversation from Kuvo Code, not the agent: "Going on with Codex…". */
   notice(text: string) {
     if (this.ended) return
+    // Said again with nothing since (each of your hooks failing the same way): once is enough.
+    const last = this.messages.at(-1)
+    if (last?.type === "synthetic" && last.text === text) return
     this.endBlock()
     if (this.step) this.endStep()
     const event = emit("session.synthetic", { sessionID: this.sessionID, text }, this.directory)
