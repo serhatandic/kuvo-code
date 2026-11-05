@@ -92,7 +92,7 @@ struct GoalPlanBar: View {
     // MARK: The line
 
     private func line(progress: String, switchOnLine: Bool) -> some View {
-        BarLine(mark: AnyView(mark), title: GoalPlanWords.name(plan), progress: progress, status: saying(progress), spoken: waitingWords,
+        BarLine(mark: AnyView(mark), title: GoalPlanWords.name(plan), progress: progress, status: status(progress), spoken: waitingWords, badge: waitingBadge,
                 accessory: AnyView(actions(switchOnLine: switchOnLine)), folded: AnyView(strip), showHelp: "Show the goal’s steps", hideHelp: "Hide them: this line stays",
                 isHidden: $isHidden, close: isOver ? putAway : nil, closeHelp: "Put the goal away", stacks: true)
     }
@@ -132,12 +132,11 @@ struct GoalPlanBar: View {
         return Text("Paused · ") + Text(GoalPlanWords.pausedBy(by)).fontWeight(.semibold).foregroundStyle(needsYou ? AnyShapeStyle(Color.orange) : AnyShapeStyle(.secondary)) + Text(rest)
     }
 
-    /// Where it stands, then how many things wait for you in orange, as the phone's line has it:
-    /// what the line says while a question folds the bar.
-    private func saying(_ progress: String) -> Text? {
+    /// How many things wait for you, in orange after where it stands, as the phone's line has it:
+    /// what the line says of them while a question folds the bar.
+    private var waitingBadge: Text? {
         let waiting = plan.waitingInItsConversation.count
-        guard waiting > 0 else { return status(progress) }
-        return (status(progress) ?? Text(progress).monospacedDigit()) + Text("  ") + Text(GoalPlanWords.waiting(waiting)).foregroundStyle(.orange)
+        return waiting == 0 ? nil : Text(GoalPlanWords.waiting(waiting)).foregroundStyle(.orange)
     }
 
     /// What waits for you among the steps, and how many things do, for VoiceOver on the line (the

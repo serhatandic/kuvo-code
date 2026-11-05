@@ -109,6 +109,9 @@ struct BarLine: View {
     /// What VoiceOver hears after it, which the line shows another way (a goal's steps waiting for
     /// you, in its strip).
     var spoken: String?
+    /// What needs you, after how far along it is and kept over it ("3 wait for you"), in a stacking
+    /// line: how far along is cut down first.
+    var badge: Text?
     var detail: Text?
     var accessory: AnyView?
     /// What stands for what's under it while that's hidden, after how far along it is (a goal's
@@ -222,37 +225,58 @@ struct BarLine: View {
             HStack(spacing: 10) {
                 titleText.fixedSize()
                 says.fixedSize()
+                badgeText
                 if isHidden, let folded { folded.fixedSize() }
             }
             // The strip goes first: folding the bar never moves its words to a second line.
             HStack(spacing: 10) {
                 titleText.fixedSize()
                 says.fixedSize()
+                badgeText
             }
             VStack(alignment: .leading, spacing: 2) {
                 titleText.truncationMode(.middle)
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: 8) {
                         says.fixedSize()
+                        badgeText
                         if isHidden, let folded { folded.fixedSize() }
                     }
-                    says.fixedSize()
+                    HStack(spacing: 8) {
+                        says.fixedSize()
+                        badgeText
+                    }
                     // Whole pieces off its end ("· due Fri, Nov 6", then the time), never one
                     // cut inside.
                     if status == nil, let progress {
                         let pieces = progress.components(separatedBy: " · ")
                         ForEach((1..<max(1, pieces.count)).reversed(), id: \.self) { count in
-                            Text(pieces.prefix(count).joined(separator: " · "))
-                                .font(.system(size: 13).monospacedDigit())
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                                .fixedSize()
+                            HStack(spacing: 8) {
+                                Text(pieces.prefix(count).joined(separator: " · "))
+                                    .font(.system(size: 13).monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .fixedSize()
+                                badgeText
+                            }
                         }
                     }
-                    says
+                    HStack(spacing: 8) {
+                        says
+                        badgeText
+                    }
                 }
             }
             .padding(.vertical, 6)
+        }
+    }
+
+    @ViewBuilder private var badgeText: some View {
+        if let badge {
+            badge
+                .font(.system(size: 13))
+                .lineLimit(1)
+                .fixedSize()
         }
     }
 

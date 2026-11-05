@@ -357,7 +357,8 @@ struct BottomStack: View {
                     var left = own.wrappedValue
                     folds.set(bar, hidden: hidden, among: bars, own: &left)
                     if left != own.wrappedValue { own.wrappedValue = left }
-                    if hidden, liveBars.count >= 2, allFolded { model.tuck.hide() }
+                    // (Not a look under a question: answering brings the card back as it was.)
+                    if hidden, !isAsking, liveBars.count >= 2, allFolded { model.tuck.hide() }
                 })
     }
 
@@ -697,14 +698,16 @@ struct BottomStack: View {
                 // Another conversation shown: what it had last time here (none yet: nothing came).
                 let old = was.conversation == now.conversation ? was.value : cards[now.conversation]?.news ?? now.value
                 cards[now.conversation, default: Card()].news = now.value
-                for bar in folds.news(from: old, to: now.value) { model.tuck.changed(bar) }
+                for bar in folds.news(from: old, to: now.value, asking: isAsking) { model.tuck.changed(bar) }
             }
             // Another side question shown (picked in the sidebar, or just asked): its bar opens, unless a card asks.
             .onChange(of: Seen(conversation: model.id, value: model.shownSideQuestion)) { old, shown in
                 if old.conversation == shown.conversation, shown.value != nil, bars.count >= BarFolds<ComposerBar>.full { folds.changed(.sideQuestion) }
             }
-            .onChange(of: isAsking) { _, asking in
-                if !asking { folds.askingEnded() }
+            // Nothing asks in the conversation shown (answered, or another one shown): a bar you
+            // opened over a question is just open, there.
+            .onChange(of: Seen(conversation: model.id, value: isAsking)) { _, now in
+                if !now.value { folds.askingEnded() }
             }
             // Two waiting or fewer: the next time there are more, they start on their line.
             .onChange(of: model.waiting.count > 2) { _, folds in

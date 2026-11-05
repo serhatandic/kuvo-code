@@ -79,6 +79,19 @@ import Testing
         #expect(open(folds, bars, asking: true, own: [.goal: own]).isEmpty, "the next question folds it")
     }
 
+    /// A bar you opened while a card asks stays open when something new comes in another, or another
+    /// bar comes.
+    @Test func whatYouOpenedOverAQuestionStaysOpenWhenAnotherBarHasNews() {
+        var folds = BarFolds()
+        let bars: [ComposerBar] = [.goal, .review, .sideQuestion]
+        var own = false
+        folds.set(.goal, hidden: false, among: bars, own: &own)
+        folds.news(from: [.review: false], to: [.review: true], asking: true)
+        #expect(open(folds, bars, asking: true) == [.goal])
+        folds.bars(from: bars, to: bars + [.wakes], asking: true, opens: { _ in true })
+        #expect(open(folds, bars + [.wakes], asking: true) == [.goal])
+    }
+
     /// The card going from full while it asks: each keeps what it showed past the question, so
     /// answering brings back the one that was open.
     @Test func aCardNoLongerFullWhileItAsksKeepsWhatItShowedPastTheQuestion() {

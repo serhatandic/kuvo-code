@@ -36,8 +36,10 @@ public struct BarFolds<Bar: Hashable>: Equatable {
         }
     }
 
-    /// Something changed in `bar` that you'd want to see: it opens, unless a card asks.
-    public mutating func changed(_ bar: Bar) {
+    /// Something changed in `bar` that you'd want to see: it opens, unless a card asks. While one
+    /// asks, a bar you opened stays the open one.
+    public mutating func changed(_ bar: Bar, asking: Bool = false) {
+        if asking, openedByYou, open != nil { return }
         open = bar
         openedByYou = false
     }
@@ -50,12 +52,12 @@ public struct BarFolds<Bar: Hashable>: Equatable {
 
     /// The bars went from `old` to `new`: one that went isn't open any more, and the newest that
     /// came opens where `opens` says it's worth seeing.
-    public mutating func bars(from old: [Bar], to new: [Bar], opens: (Bar) -> Bool) {
+    public mutating func bars(from old: [Bar], to new: [Bar], asking: Bool = false, opens: (Bar) -> Bool) {
         if let open, !new.contains(open) {
             self.open = nil
             openedByYou = false
         }
-        if let came = new.last(where: { !old.contains($0) && opens($0) }) { changed(came) }
+        if let came = new.last(where: { !old.contains($0) && opens($0) }) { changed(came, asking: asking) }
     }
 
     /// Nothing asks any more: a bar you opened while something did is just open, and the next card
@@ -77,15 +79,15 @@ public struct BarFolds<Bar: Hashable>: Equatable {
         if old == new {
             start(new, opens: news)
         } else {
-            bars(from: old, to: new, opens: opens)
+            bars(from: old, to: new, asking: asking, opens: opens)
         }
     }
 
     /// What has something to see in each bar changed: the one that just got something opens.
     /// Those that got something, for a tucked card to mark (`BarTuck`).
-    @discardableResult public mutating func news(from old: [Bar: Bool], to new: [Bar: Bool]) -> [Bar] {
+    @discardableResult public mutating func news(from old: [Bar: Bool], to new: [Bar: Bool], asking: Bool = false) -> [Bar] {
         let came = new.filter { $0.value && old[$0.key] != true }.map(\.key)
-        if let first = came.first { changed(first) }
+        if let first = came.first { changed(first, asking: asking) }
         return came
     }
 
