@@ -7893,9 +7893,16 @@ async function answerGoal(id, given, targets, file = GOALS_FILE) {
     await tellBot2(changed, "[Not now] The user didn't start this goal. Don't start its work: ask them in a line what they'd like instead, if anything.", "You said not now", targets);
   } else {
     await setGoalLoop(changed, loopCondition(changed), targets);
+    await followMode(changed, targets);
     await tellBot2(changed, startWords(changed), "Goal started", targets);
   }
   return { goal: shown(changed) };
+}
+async function followMode(goal, targets) {
+  const place = await placeOfSession(goal.session, targets()).catch(() => null);
+  const on = modeOf(goal) === "autopilot";
+  if (place?.data.id && isAutopilot(place.data) !== on)
+    await setAutopilot(place.target, { ...place.data, id: place.data.id }, on).catch(() => false);
 }
 function goalProjects(id, given, file) {
   const no = (message) => ({ refused: { status: 400, message } });
@@ -7977,6 +7984,8 @@ async function changeGoal(id, action, given, targets, file) {
   if (!("id" in changed))
     return { refused: changed };
   noteWorkChanged(changed.bot);
+  if (switched)
+    await followMode(changed, targets);
   const limitWords = `The user changed the goal's limits.${changed.spend.length ? ` What you may spend now: ${changed.spend.map((each) => `${each.what}, up to ${each.cap} ${each.currency}${each.per === "goal" ? "" : ` a ${each.per}`}`).join("; ")}.` : ""}${changed.ends ? ` It ends at ${resetTime(changed.ends)}.` : ""}`;
   const modeWords = `The user switched the goal to ${modeName(modeOf(changed))}. ${howItRuns(modeOf(changed))}`;
   if (action === "change" && (switched || limits))
@@ -24171,6 +24180,9 @@ async function* autopilotRoute(context) {
     const now = { ...at.data, metadata: { ...at.data.metadata, kuvo: { ...kuvo, autopilot: on } } };
     if (on)
       await goAheadOnWaiting(at.target, now, undefined, signal).catch(() => []);
+    const goal = runningGoalOf(id, null);
+    if (goal && goal.session === id)
+      await answerGoal(goal.id, { action: "change", mode: on ? "autopilot" : "interactive" }, peerTargets).catch(() => null);
     return yield* json(200, shown3(now));
   }
   if (method === "POST") {

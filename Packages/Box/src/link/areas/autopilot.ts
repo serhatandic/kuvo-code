@@ -3,8 +3,9 @@
 // reads it, turns it on or off, and confirms or changes a call.
 
 import { isObject, parsed } from "../../shared/json";
-import { engineGet } from "../engine/client";
+import { engineGet, peerTargets } from "../engine/client";
 import { decidedByYou, decidedIn, goAheadOnWaiting, isAutopilot, setAutopilot } from "../work/autopilot";
+import { answerGoal, runningGoalOf } from "../work/goals";
 import type { EngineAnswer } from "../engine/client";
 import type { EngineSession } from "../engine/sessions";
 import type { Target } from "../../shared/records";
@@ -50,6 +51,9 @@ export async function* autopilotRoute(context: RouteContext): AsyncGenerator<Ans
     const now = { ...at.data, metadata: { ...at.data.metadata, kuvo: { ...kuvo, autopilot: on } } };
     // What it asks already that recommends a choice goes ahead now, as what it asks from here will.
     if (on) await goAheadOnWaiting(at.target, now, undefined, signal).catch(() => []);
+    // A bot's conversation at a goal: the goal runs as it does now (its bot told so).
+    const goal = runningGoalOf(id, null);
+    if (goal && goal.session === id) await answerGoal(goal.id, { action: "change", mode: on ? "autopilot" : "interactive" }, peerTargets).catch(() => null);
     return yield* json(200, shown(now));
   }
   if (method === "POST") {

@@ -32,6 +32,7 @@ import { placeOfSession } from "../letters/letter";
 import { readWakes } from "../areas/wakes";
 import { periodEnd, periodOf, startOfDay, timeGiven } from "./clock";
 import { asksIn, permissionWords, type Recommendation } from "./answers";
+import { isAutopilot, setAutopilot } from "./autopilot";
 import { keepAwake, keepsAwake, onPower } from "./awake";
 import { noteWorkChanged, WORK_FOLDER } from "./changes";
 import { sandboxOn } from "./sandbox";
@@ -532,9 +533,18 @@ export async function answerGoal(id: string, given: Record<string, unknown>, tar
     await tellBot(changed, "[Not now] The user didn't start this goal. Don't start its work: ask them in a line what they'd like instead, if anything.", "You said not now", targets);
   } else {
     await setGoalLoop(changed, loopCondition(changed), targets);
+    await followMode(changed, targets);
     await tellBot(changed, startWords(changed), "Goal started", targets);
   }
   return { goal: shown(changed) };
+}
+
+// The bot's conversation runs Interactive or on Autopilot as its goal does: one setting, which
+// the goal card and the bot's composer both show and change.
+async function followMode(goal: KeptGoal, targets: () => Target[]): Promise<void> {
+  const place = await placeOfSession(goal.session, targets()).catch(() => null);
+  const on = modeOf(goal) === "autopilot";
+  if (place?.data.id && isAutopilot(place.data) !== on) await setAutopilot(place.target, { ...place.data, id: place.data.id }, on).catch(() => false);
 }
 
 // The projects a plan makes, as you set them on its card before it starts (renamed, or moved to
@@ -608,6 +618,7 @@ async function changeGoal(id: string, action: "change" | "clear", given: Record<
   }, file);
   if (!("id" in changed)) return { refused: changed };
   noteWorkChanged(changed.bot);
+  if (switched) await followMode(changed, targets);
   const limitWords = `The user changed the goal's limits.${changed.spend.length ? ` What you may spend now: ${changed.spend.map(each => `${each.what}, up to ${each.cap} ${each.currency}${each.per === "goal" ? "" : ` a ${each.per}`}`).join("; ")}.` : ""}${changed.ends ? ` It ends at ${resetTime(changed.ends)}.` : ""}`;
   const modeWords = `The user switched the goal to ${modeName(modeOf(changed))}. ${howItRuns(modeOf(changed))}`;
   if (action === "change" && (switched || limits)) await tellBot(changed, `[Goal changed] ${[switched ? modeWords : "", limits ? limitWords : ""].filter(Boolean).join("\n")}`, switched && !limits ? `Now ${modeName(modeOf(changed))}` : "You changed the goal's limits", targets);

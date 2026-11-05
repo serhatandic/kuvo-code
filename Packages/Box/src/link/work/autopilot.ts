@@ -72,7 +72,7 @@ export function decidedIn(session: string, file = DECIDED_FILE): DecidedShape[] 
  * how to work in its instructions (or no longer). Whether the engine took it: where it didn't, it
  * stays as it was. On, its agent is told before its questions go ahead; off, they stop going ahead
  * first. */
-export async function setAutopilot(target: Target, session: EngineSession, on: boolean, signal?: AbortSignal): Promise<boolean> {
+export async function setAutopilot(target: Target, session: Partial<EngineSession> & { id: string }, on: boolean, signal?: AbortSignal): Promise<boolean> {
   const metadata = isObject(session.metadata) ? session.metadata : {};
   const kuvo = isObject(metadata.kuvo) ? metadata.kuvo : {};
   const { autopilot: _, ...rest } = kuvo;

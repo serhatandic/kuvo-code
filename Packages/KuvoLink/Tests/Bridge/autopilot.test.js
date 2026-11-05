@@ -267,3 +267,16 @@ test("a call made in a goal's conversation shows on the goal too; while you have
   await watch({ type: "form.created", data: { form: QUESTION("frm_2", "ses_away", ROASTS) } });
   assert.deepEqual(answered.map(each => each.form), ["frm_1"]);
 });
+
+test("a goal and its bot's conversation are one setting: switched on either, the other follows", async () => {
+  goalIn("ses_mine");
+  const goalMode = () => JSON.parse(fs.readFileSync(path.join(home, "run", "work", "goals.json"), "utf8")).goals[0].mode ?? "interactive";
+  assert.equal((await route("PUT", "kuvo/sessions/ses_mine/autopilot", { autopilot: true })).status, 200);
+  assert.equal(goalMode(), "autopilot");
+  assert.match(prompts.at(-1).text, /^\[Goal changed\] The user switched the goal to Autopilot/);
+  const back = await route("POST", "kuvo/work/goals/goal_cafe", { action: "change", mode: "interactive" });
+  assert.equal(back.status, 200);
+  assert.equal(back.body.goal.mode, "interactive");
+  assert.equal((await route("GET", "kuvo/sessions/ses_mine/autopilot")).body.autopilot, false);
+  assert.equal(entries.has("ses_mine kuvo.autopilot"), false);
+});
