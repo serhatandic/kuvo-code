@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import KuvoLink
+import OpenCodeKit
 import os
 
 /// Agents writing to each other. Any session or bot, on this Mac or a machine, can ask who else
@@ -81,6 +82,24 @@ final class AgentMail {
 
     /// Everyone, as this Mac's box last said.
     func directory() -> [Agent] { agents }
+
+    /// The agent a step names, as the agent wrote it: its address, or its name, with or without
+    /// the "&" the user names it with. One the list leaves out (untitled, older than the latest it
+    /// names) is as this Mac has it.
+    func agent(named wanted: String) -> Agent? {
+        let wanted = wanted.hasPrefix("&") ? String(wanted.dropFirst()) : wanted
+        return agents.first { $0.session == wanted || $0.name.caseInsensitiveCompare(wanted) == .orderedSame }
+            ?? app?.workspace.session(wanted).map { Agent(session: $0.id, name: $0.title.flatMap { $0.isEmpty ? nil : $0 } ?? "New session", kind: "session") }
+    }
+
+    /// Whom a step is about, in words: the agent's name, or what the agent wrote when it named
+    /// one that isn't known here; an address nobody here has never shows (it says nothing).
+    func name(of wanted: String?) -> String {
+        guard let wanted else { return "another agent" }
+        if let agent = agent(named: wanted) { return agent.name }
+        let plain = wanted.hasPrefix("&") ? String(wanted.dropFirst()) : wanted
+        return plain.hasPrefix("ses_") ? "another agent" : plain
+    }
 
     /// Who there is now, as this Mac's box says (not waited for long, `within` seconds: as it was a
     /// minute ago otherwise).

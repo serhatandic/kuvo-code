@@ -96,6 +96,21 @@ import Testing
         #expect(try words("kuvo-browser_browser_tabs", ["action": "switch", "tab": -1e300]) == "Switched to tab")
     }
 
+    /// Reading or writing to another agent says whom by name, whichever way the agent addressed
+    /// it; an address the app can't place is never shown.
+    @Test func anotherAgentByNameNotByAddress() throws {
+        let before = AgentMail.shared.agents
+        AgentMail.shared.agents = [AgentMail.Agent(session: "ses_1ac7ff9cc001iiSrxcYn8C4tCV", name: "Finish Model roles", kind: "session")]
+        defer { AgentMail.shared.agents = before }
+        let read = "kuvo-browser_read_conversation"
+        #expect(try words(read, ["of": "ses_1ac7ff9cc001iiSrxcYn8C4tCV", "query": "tests"]) == "Read Finish Model roles’s conversation about “tests”")
+        #expect(try words(read, ["of": "&finish model roles"], running: true) == "Reading Finish Model roles’s conversation")
+        #expect(try words(read, ["of": "ses_unknown000"]) == "Read another agent’s conversation")
+        #expect(try words(read, ["of": "&Mira"]) == "Read Mira’s conversation")
+        #expect(try words("kuvo-browser_send_message", ["to": "ses_1ac7ff9cc001iiSrxcYn8C4tCV", "text": "hi"]) == "Wrote to Finish Model roles")
+        #expect(try words("kuvo-browser_send_message", ["to": "ses_unknown000", "text": "hi"]) == "Wrote to another agent")
+    }
+
     /// Something the agent makes to show (a widget) by its title, also when it couldn't make it
     /// or was stopped: never as the browser.
     @Test func aWidget() throws {

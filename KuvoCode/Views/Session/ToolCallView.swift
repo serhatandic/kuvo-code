@@ -298,11 +298,11 @@ struct ToolCallView: View {
         case "browser_ask_user": return isActive ? "Waiting for you on the page" : "Asked you to step in"
         case "list_agents": return isActive ? "Looking up the other agents" : "Looked up the other agents"
         case "send_message":
-            let to = string("to") ?? "another agent"
+            let to = AgentMail.shared.name(of: string("to"))
             if input?["wait"]?.bool == true { return (isActive ? "Asking " : "Asked ") + to }
             return (isActive ? "Writing to " : "Wrote to ") + to
         case "read_conversation":
-            let of = string("of").map { $0.hasPrefix("&") ? String($0.dropFirst()) : $0 } ?? "another agent"
+            let of = AgentMail.shared.name(of: string("of"))
             let about = string("query").map { " about “\($0)”" } ?? ""
             return (isActive ? "Reading " : "Read ") + of + "’s conversation" + about
         case "show_in_panel", "show_file": return (isActive ? "Showing " : "Showed ") + (relative(string("path")) ?? "a file")
