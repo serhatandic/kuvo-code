@@ -350,8 +350,9 @@ struct ConnectView: View {
                     }
                 } else {
                     HandoffWait("Waiting for you to finish…", to: .browser)
-                    if let note = ClaudeSignInNote.text(for: integrationID, on: catalog.machine) {
-                        Text(note)
+                    // On a Mac, Claude Code signs in to its own folder here, apart from the one you use.
+                    if catalog.machine == nil, OutsideAgents.base(integrationID) == "claude-code" {
+                        Text("Separate from Claude Code in Terminal")
                             .font(.callout)
                             .foregroundStyle(.tertiary)
                             .multilineTextAlignment(.center)
@@ -837,19 +838,5 @@ struct AnyPrimitiveButtonStyle: PrimitiveButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         make(configuration)
-    }
-}
-
-// DRAFTS (to pick from, then fold into the code): whether Claude Code's sign-in on a Mac says it's
-// Kuvo Code's own. KUVO_DEMO_CLAUDE_SIGNIN=note shows the line; otherwise nothing is added.
-enum ClaudeSignInNote {
-    static func text(for integrationID: String, on machine: String?) -> String? {
-        #if DEBUG
-        guard ProcessInfo.processInfo.environment["KUVO_DEMO_CLAUDE_SIGNIN"] == "note",
-              machine == nil, OutsideAgents.base(integrationID) == "claude-code" else { return nil }
-        return "Separate from Claude Code in Terminal"
-        #else
-        return nil
-        #endif
     }
 }
