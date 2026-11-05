@@ -4,7 +4,7 @@
 
 import { spawn } from "node:child_process"
 import { createHash, randomUUID } from "node:crypto"
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, renameSync, rmdirSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
@@ -1156,6 +1156,7 @@ class ClaudeThread implements Thread {
     this.sandboxedNow = fenceOn() || undefined
     if (!this.sandboxedNow) return undefined
     this.environment(conversation)
+    const started = ++this.startsInSandbox
     const directory = this.session.location.directory
     const attached = fenceAttachments(directory)
     const settings = this.agent.configHome
@@ -1181,7 +1182,11 @@ class ClaudeThread implements Thread {
         // (The program as the SDK names it.)
         const given = Object.fromEntries(Object.entries({ ...options.env, ...fence.env, KUVO_FENCE_SHELL: options.command, ...env }).filter((entry): entry is [string, string] => entry[1] !== undefined))
         const child = spawn(fence.command, options.args, { cwd: options.cwd ?? directory, env: given, signal: options.signal, stdio: ["pipe", "pipe", "pipe"] })
-        child.once("exit", () => fence.ended())
+        child.once("exit", () => {
+          fence.ended()
+          // (Not as one being replaced stops: the new one needs them.)
+          if (started === this.startsInSandbox) this.environmentsEnded()
+        })
         // What it says as it stops, for why it did (the SDK keeps that only for a process it starts
         // itself), this one's alone: one being replaced can still be writing.
         const said = new Said()
@@ -1210,10 +1215,24 @@ class ClaudeThread implements Thread {
    */
   private environment(conversation: string) {
     if (!/^[A-Za-z0-9-]+$/.test(conversation)) return
+    const folder = join(this.agent.configHome, "session-env", conversation)
     try {
-      mkdirSync(join(this.agent.configHome, "session-env", conversation), { recursive: true })
+      mkdirSync(folder, { recursive: true })
+      this.environments.add(folder)
     } catch {}
   }
+
+  /** As it stops, those it left empty: it can't clear out old ones itself in the sandbox. Yours, with your own hooks' files in them, stay. */
+  private environmentsEnded() {
+    for (const folder of this.environments)
+      try {
+        rmdirSync(folder)
+      } catch {}
+    this.environments.clear()
+  }
+
+  private environments = new Set<string>()
+  private startsInSandbox = 0
 
   /** How the files you attach reach this Claude Code: in the box's sandbox, copies it reads. */
   private copies(): ((path: string) => string) | undefined {
@@ -1478,7 +1497,7 @@ class ClaudeThread implements Thread {
         if (message.status === "failed") turn.notice(`A Claude Code plugin didn't install${message.name ? ` (${message.name})` : ""}${message.error ? `: ${message.error}` : ""}.`)
         return
       case "hook_response":
-        if (message.outcome === "error" || message.exit_code) turn.notice(`Your ${message.hook_name ?? message.hook_event ?? ""} hook failed${message.stderr ? `: ${String(message.stderr).trim()}` : ""}.`)
+        if (message.outcome === "error" || message.exit_code) turn.notice(`Your ${message.hook_name ?? message.hook_event ?? ""} hook failed${this.hookWords(String(message.stderr ?? ""))}.`)
         return
       case "memory_recall": {
         const id = newID("call")
@@ -1489,6 +1508,16 @@ class ClaudeThread implements Thread {
       }
     }
     if (!claudeSystem.has(message.subtype)) this.unknownFrame(turn, `system:${message.subtype}`, message)
+  }
+
+  /** What a hook that failed said, for its row. Where the sandbox kept it from its session's
+   * environment (`environment`), that in words, not the folder's path. */
+  private hookWords(said: string): string {
+    const lines = said.trim().split("\n")
+    const about = lines.filter((line) => line.includes("session-env"))
+    if (!this.sandboxedNow || !about.length) return said.trim() ? `: ${said.trim()}` : ""
+    const why = about.some((line) => line.includes("mkdir")) ? "Claude Code can't start this one in the sandbox" : "the sandbox doesn't let a hook set environment variables with CLAUDE_ENV_FILE"
+    return `: ${[...lines.filter((line) => !line.includes("session-env") && line.trim()), why].join("\n")}`
   }
 
   /** A note now, or after the words being written (a notice ends the step under way). */

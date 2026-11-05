@@ -9333,7 +9333,7 @@ function unzipper() {
 // Packages/Box/src/agents/agents/claude.ts
 import { spawn as spawn5 } from "child_process";
 import { createHash as createHash6, randomUUID } from "crypto";
-import { existsSync as existsSync13, mkdirSync as mkdirSync13, readFileSync as readFileSync18, renameSync as renameSync10, rmSync as rmSync10, statSync as statSync8, writeFileSync as writeFileSync15 } from "fs";
+import { existsSync as existsSync13, mkdirSync as mkdirSync13, readFileSync as readFileSync18, renameSync as renameSync10, rmdirSync as rmdirSync2, rmSync as rmSync10, statSync as statSync8, writeFileSync as writeFileSync15 } from "fs";
 import { homedir } from "os";
 import { dirname as dirname11, join as join21, resolve as resolve6 } from "path";
 import { pathToFileURL as pathToFileURL3 } from "url";
@@ -10495,6 +10495,7 @@ class ClaudeThread {
     if (!this.sandboxedNow)
       return;
     this.environment(conversation);
+    const started = ++this.startsInSandbox;
     const directory = this.session.location.directory;
     const attached = fenceAttachments(directory);
     const settings = this.agent.configHome;
@@ -10516,7 +10517,11 @@ class ClaudeThread {
       spawn: (options) => {
         const given = Object.fromEntries(Object.entries({ ...options.env, ...fence.env, KUVO_FENCE_SHELL: options.command, ...env }).filter((entry) => entry[1] !== undefined));
         const child = spawn5(fence.command, options.args, { cwd: options.cwd ?? directory, env: given, signal: options.signal, stdio: ["pipe", "pipe", "pipe"] });
-        child.once("exit", () => fence.ended());
+        child.once("exit", () => {
+          fence.ended();
+          if (started === this.startsInSandbox)
+            this.environmentsEnded();
+        });
         const said = new Said;
         this.said = said;
         this.saidAll = new Promise((done) => {
@@ -10537,10 +10542,21 @@ class ClaudeThread {
   environment(conversation) {
     if (!/^[A-Za-z0-9-]+$/.test(conversation))
       return;
+    const folder = join21(this.agent.configHome, "session-env", conversation);
     try {
-      mkdirSync13(join21(this.agent.configHome, "session-env", conversation), { recursive: true });
+      mkdirSync13(folder, { recursive: true });
+      this.environments.add(folder);
     } catch {}
   }
+  environmentsEnded() {
+    for (const folder of this.environments)
+      try {
+        rmdirSync2(folder);
+      } catch {}
+    this.environments.clear();
+  }
+  environments = new Set;
+  startsInSandbox = 0;
   copies() {
     const directory = this.session.location.directory;
     return this.sandboxedNow ? (path) => fenceCopy(directory, path) : undefined;
@@ -10801,7 +10817,7 @@ class ClaudeThread {
         return;
       case "hook_response":
         if (message.outcome === "error" || message.exit_code)
-          turn.notice(`Your ${message.hook_name ?? message.hook_event ?? ""} hook failed${message.stderr ? `: ${String(message.stderr).trim()}` : ""}.`);
+          turn.notice(`Your ${message.hook_name ?? message.hook_event ?? ""} hook failed${this.hookWords(String(message.stderr ?? ""))}.`);
         return;
       case "memory_recall": {
         const id = newID("call");
@@ -10814,6 +10830,16 @@ class ClaudeThread {
     }
     if (!claudeSystem.has(message.subtype))
       this.unknownFrame(turn, `system:${message.subtype}`, message);
+  }
+  hookWords(said) {
+    const lines = said.trim().split(`
+`);
+    const about = lines.filter((line) => line.includes("session-env"));
+    if (!this.sandboxedNow || !about.length)
+      return said.trim() ? `: ${said.trim()}` : "";
+    const why = about.some((line) => line.includes("mkdir")) ? "Claude Code can't start this one in the sandbox" : "the sandbox doesn't let a hook set environment variables with CLAUDE_ENV_FILE";
+    return `: ${[...lines.filter((line) => !line.includes("session-env") && line.trim()), why].join(`
+`)}`;
   }
   noticeLater(lane, text) {
     lane.turn.notice(text);
@@ -23296,4 +23322,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 000b7e70f440c5f5a2fc4f6a15c73561e268d26ee94393b1349fad1d73802ddb
+// Built from Packages/Box/src/agents f4fca7c6bb582e170c42eac35d945fff07305229827823b9d19fc24b534e7abb
