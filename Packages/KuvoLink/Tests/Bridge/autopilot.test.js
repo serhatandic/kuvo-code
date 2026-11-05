@@ -282,3 +282,11 @@ test("a goal and its bot's conversation are one setting: switched on either, the
   assert.equal((await route("GET", "kuvo/sessions/ses_mine/autopilot")).body.autopilot, false);
   assert.equal(entries.has("ses_mine kuvo.autopilot"), false);
 });
+
+test("a goal started without saying how it runs (from an app before Autopilot) runs as its conversation does, which stays on", async () => {
+  goalIn("ses_away", { state: "proposed", proposed: Date.now(), projects: [] });
+  const started = await route("POST", "kuvo/work/goals/goal_cafe", { action: "start", wake: false });
+  assert.equal(started.status, 200);
+  assert.equal(started.body.goal.mode, "autopilot");
+  assert.equal((await route("GET", "kuvo/sessions/ses_away/autopilot")).body.autopilot, true);
+});

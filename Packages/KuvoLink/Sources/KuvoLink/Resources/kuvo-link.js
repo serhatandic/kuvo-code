@@ -7847,6 +7847,7 @@ async function answerGoal(id, given, targets, file = GOALS_FILE) {
   const ends = action === "start" ? endGiven(given.ends) : undefined;
   if (ends === null)
     return { refused: { status: 400, message: "The end (ends) is a date and time to come." } };
+  const asItRuns = action === "start" && given.mode === undefined && before.mode === undefined && isAutopilot((await placeOfSession(before.session, targets()).catch(() => null))?.data ?? {}) ? "autopilot" : undefined;
   const changed = changeKept((all) => {
     const goal = all.find((each) => each.id === id);
     if (!goal)
@@ -7872,7 +7873,7 @@ async function answerGoal(id, given, targets, file = GOALS_FILE) {
     goal.state = "running";
     goal.started = Date.now();
     goal.wake = given.wake === true;
-    goal.mode = MODES.includes(given.mode) ? given.mode : modeOf(goal);
+    goal.mode = MODES.includes(given.mode) ? given.mode : asItRuns ?? modeOf(goal);
     if (DIGESTS.includes(given.digest))
       goal.digest = given.digest;
     if (ends !== undefined)

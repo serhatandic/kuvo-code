@@ -495,6 +495,10 @@ export async function answerGoal(id: string, given: Record<string, unknown>, tar
   if (action === "start" && frozen().has(before.bot)) return { refused: { status: 409, message: MOVING } };
   const ends = action === "start" ? endGiven(given.ends) : undefined;
   if (ends === null) return { refused: { status: 400, message: "The end (ends) is a date and time to come." } };
+  // Started without saying how it runs (a client from before Autopilot): as its conversation runs
+  // now, rather than turning the conversation's Autopilot off.
+  const asItRuns = action === "start" && given.mode === undefined && before.mode === undefined
+    && isAutopilot((await placeOfSession(before.session, targets()).catch(() => null))?.data ?? {}) ? "autopilot" as const : undefined;
   const changed = changeKept(all => {
     const goal = all.find(each => each.id === id);
     if (!goal) return { status: 404 as const, message: "There's no such goal here." };
@@ -515,7 +519,7 @@ export async function answerGoal(id: string, given: Record<string, unknown>, tar
     goal.state = "running";
     goal.started = Date.now();
     goal.wake = given.wake === true;
-    goal.mode = MODES.includes(given.mode as GoalMode) ? given.mode as GoalMode : modeOf(goal);
+    goal.mode = MODES.includes(given.mode as GoalMode) ? given.mode as GoalMode : asItRuns ?? modeOf(goal);
     if (DIGESTS.includes(given.digest as (typeof DIGESTS)[number])) goal.digest = given.digest as (typeof DIGESTS)[number];
     if (ends !== undefined) goal.ends = ends;
     // No end on the card (null): the bot's proposed one goes.
