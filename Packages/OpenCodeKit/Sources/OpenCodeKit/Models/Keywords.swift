@@ -1,10 +1,10 @@
 import Foundation
 
 /// The words that start a message and ask Kuvo Code, or the conversation's computer, for something
-/// other than a message to the agent: "/goal", "/loop", "/plan", "/review", "/handoff", "/btw" and
-/// "/compact". One list for every client, with what each says as you type it.
+/// other than a message to the agent: "/goal", "/loop", "/plan", "/autopilot", "/review",
+/// "/handoff", "/btw" and "/compact". One list for every client, with what each says as you type it.
 public enum Keyword: String, CaseIterable, Sendable, Hashable {
-    case goal, loop, plan, review, btw, handoff, compact
+    case goal, loop, plan, autopilot, review, btw, handoff, compact
 
     /// "/goal".
     public var typed: String { "/" + rawValue }
@@ -15,6 +15,7 @@ public enum Keyword: String, CaseIterable, Sendable, Hashable {
         case .goal: "Goal"
         case .loop: "Loop"
         case .plan: "Plan"
+        case .autopilot: "Autopilot"
         case .review: "Review"
         case .handoff: "Handoff"
         case .btw: "Side Question"
@@ -28,6 +29,7 @@ public enum Keyword: String, CaseIterable, Sendable, Hashable {
         case .goal: "Keep working until a condition is met"
         case .loop: "Repeat a message on a schedule"
         case .plan: "Explore and plan first, without changing files"
+        case .autopilot: "Decide for itself; stop only for what needs you"
         case .review: "A second model reviews your uncommitted changes"
         case .handoff: "Go on in a fresh conversation from a summary"
         case .btw: "A side question, kept out of this conversation"
@@ -41,6 +43,7 @@ public enum Keyword: String, CaseIterable, Sendable, Hashable {
         case .goal: "what should be true when it’s done, like “all tests pass”"
         case .loop: "what to do each time"
         case .plan: "what to plan (or nothing, to turn Plan on or off)"
+        case .autopilot: "what to do (or nothing, to turn Autopilot on or off)"
         case .review: nil
         case .handoff: "what to do next (or nothing)"
         case .btw: "your question"
@@ -54,6 +57,7 @@ public enum Keyword: String, CaseIterable, Sendable, Hashable {
         case .goal: "scope"
         case .loop: "arrow.clockwise"
         case .plan: "list.bullet.clipboard"
+        case .autopilot: "airplane"
         case .review: "text.magnifyingglass"
         case .handoff: "arrow.forward.square"
         case .btw: "bubble.left.and.bubble.right"
@@ -70,6 +74,7 @@ public enum Keyword: String, CaseIterable, Sendable, Hashable {
         case .handoff: "handoff"
         case .review: "reviews"
         case .loop: "wakes.edit"
+        case .autopilot: "autopilot"
         case .plan, .compact: nil
         }
     }
