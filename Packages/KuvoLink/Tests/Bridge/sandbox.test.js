@@ -9,6 +9,7 @@
 // `scripts/test-linux.sh <ssh-host> sandbox.test.js`, and with `--engine` on the engine's own runner,
 // which the box runs on there (Bun's: `BUN_BE_BUN=1 <engine> test --timeout 120000 ./sandbox.test.js`,
 // as its 5 seconds a test are too few for some).
+import "./test-safety.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
@@ -25,8 +26,8 @@ import { removeAtEnd } from "./at-end.js";
 
 // In the folder tests keep in your home (not the temporary folders, which commands may write), so
 // what a command mustn't write is somewhere it otherwise couldn't.
-fs.mkdirSync(path.join(os.homedir(), ".kuvo-code-test"), { recursive: true });
-const root = fs.realpathSync(fs.mkdtempSync(path.join(os.homedir(), ".kuvo-code-test", "sb-")));
+fs.mkdirSync(path.join(process.env.KUVO_TEST_REAL_HOME, ".kuvo-code-test"), { recursive: true });
+const root = fs.realpathSync(fs.mkdtempSync(path.join(process.env.KUVO_TEST_REAL_HOME, ".kuvo-code-test", "sb-")));
 removeAtEnd(root);
 const linux = process.platform === "linux";
 // This file's runtime, for the commands that run it: run on a machine's engine, that's in the

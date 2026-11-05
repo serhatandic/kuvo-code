@@ -1,6 +1,7 @@
 // A machine's bots and wake-ups, answered by its bridge from their folders as the Mac answers for
 // them (PROTOCOL.md, `kuvo/bots` and `kuvo/wakes`). Run with
 // `node --test Packages/KuvoLink/Tests/Bridge/*.test.js`.
+import "./test-safety.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import http from "node:http";

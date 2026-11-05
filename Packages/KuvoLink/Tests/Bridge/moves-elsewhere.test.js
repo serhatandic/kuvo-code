@@ -8,6 +8,7 @@
 // taken by the test, at the times it gives (`keepMoving`).
 //
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/moves-elsewhere.test.js`.
+import "./test-safety.js";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";

@@ -8,6 +8,7 @@
 //
 // Run with `OPENCODE_TEST_BINARY=<opencode> node --test Packages/KuvoLink/Tests/Bridge/goal-asks-live.test.js`,
 // with `KUVO_TEST_MODEL=<id>` for another of OpenCode's free models than the engine's default.
+import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import fs from "node:fs";

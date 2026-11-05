@@ -4,6 +4,7 @@
 // The watch is a stand-in that never tells anything: the system's, in its first moment.
 //
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/followed.test.js`.
+import "./test-safety.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";

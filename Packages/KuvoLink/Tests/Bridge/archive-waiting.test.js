@@ -2,6 +2,7 @@
 // stops its run on its box, from a phone (its metadata through the box) and from a Mac (its wake-ups
 // held by archiving), as a bot's Stop and Archive has it: nothing waits out of sight for an answer.
 // One that waits on nothing goes on working. The engine is a stand-in.
+import "./test-safety.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import http from "node:http";

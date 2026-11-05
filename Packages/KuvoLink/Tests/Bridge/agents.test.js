@@ -1,6 +1,7 @@
 // A machine's coding agents through its bridge (PROTOCOL.md, `kuvo/agents/api/…`): passed to the
 // agents' bridge beside its engine, as a Mac passes them to its own. Run with
 // `node --test Packages/KuvoLink/Tests/Bridge/*.test.js`.
+import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import fs from "node:fs";

@@ -2,6 +2,7 @@
 // follows something answers with what it says now (its first line) and ends, rather than never
 // answering; and a picture's bytes come back whole, not mangled as text, as do bytes that
 // aren't text, whatever kind they were sent as.
+import "./test-safety.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";

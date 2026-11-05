@@ -5,6 +5,7 @@
 // stand-ins, and the watcher's clock is the test's.
 //
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/work-catch-up.test.js`.
+import "./test-safety.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import http from "node:http";

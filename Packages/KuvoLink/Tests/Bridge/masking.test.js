@@ -3,6 +3,7 @@
 // write from those rules).
 //
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/masking.test.js`.
+import "./test-safety.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { test } from "node:test";

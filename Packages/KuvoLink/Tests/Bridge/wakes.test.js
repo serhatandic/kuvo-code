@@ -2,6 +2,7 @@
 // `kuvo/wakes/<session>`): through the machine's own kuvo-wake (the real one, as every box has it),
 // for a bot or a session, its folder made with the first; a pause of your own. The engine is a
 // stand-in.
+import "./test-safety.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import http from "node:http";

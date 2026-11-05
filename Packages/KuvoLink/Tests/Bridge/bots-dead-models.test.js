@@ -9,6 +9,7 @@
 // clock is the test's.
 //
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/bots-dead-models.test.js`.
+import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import fs from "node:fs";

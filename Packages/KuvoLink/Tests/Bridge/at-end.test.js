@@ -3,6 +3,7 @@
 // and fails it. Each case runs at-end-fixture.js on its own, as `node --test` runs a file.
 //
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/at-end.test.js`.
+import "./test-safety.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";

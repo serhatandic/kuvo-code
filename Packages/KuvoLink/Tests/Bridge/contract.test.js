@@ -2,6 +2,7 @@
 // its folder of its own, with the files a Mac leaves on a machine.
 //
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/contract.test.js`.
+import "./test-safety.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

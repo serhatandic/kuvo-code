@@ -2,6 +2,7 @@
 // phones each box pairs and removes, and your personalities. Several boxes in this process, each
 // with its own state, and a relay between them that drops what goes to a box that isn't connected.
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/*.test.js`.
+import "./test-safety.js";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";

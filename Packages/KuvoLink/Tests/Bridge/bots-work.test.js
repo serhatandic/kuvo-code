@@ -6,6 +6,7 @@
 // the engine is a stand-in.
 //
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/bots-work.test.js`.
+import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
