@@ -93,6 +93,42 @@ class HeavyTests(unittest.TestCase):
         inside = subprocess.run(["lockf", "-k", old, HEAVY, "mac", "true"], env=dict(transition, KUVO_HEAVY_WAIT="0"), timeout=30)
         self.assertEqual(inside.returncode, 0, "a job inside an old-style one runs at once")
 
+    def refused_ps(self):
+        """The environment of an Auto session, where the sandbox refuses `ps`: a stand-in that
+        fails, first on PATH."""
+        folder = tempfile.mkdtemp()
+        stand_in = os.path.join(folder, "ps")
+        with open(stand_in, "w") as f:
+            f.write("#!/bin/sh\nexit 1\n")
+        os.chmod(stand_in, 0o755)
+        return dict(self.env, PATH=folder + os.pathsep + os.environ["PATH"])
+
+    def test_without_ps_a_job_runs_and_still_knows_it_holds_its_turn(self):
+        env = self.refused_ps()
+        result = subprocess.run([HEAVY, "mac", "true"], env=dict(env, KUVO_HEAVY_WAIT="0"), timeout=30)
+        self.assertEqual(result.returncode, 0)
+        holds = lambda *command: subprocess.run(command, env=env, timeout=30).returncode
+        self.assertEqual(holds(HEAVY, "--holds", "mac"), 1)
+        self.assertEqual(holds(HEAVY, "mac", HEAVY, "--holds", "mac"), 0)
+        self.assertEqual(holds(HEAVY, "phone", HEAVY, "--holds", "mac"), 1)
+        nested = f'KUVO_HEAVY_WAIT=0 "{HEAVY}" mac true'
+        self.assertEqual(subprocess.run([HEAVY, "mac", "/bin/sh", "-c", nested], env=env, timeout=30).returncode, 0)
+
+    def test_without_ps_a_job_still_waits_for_another_holding_the_lock(self):
+        env = self.refused_ps()
+        mac = Held([HEAVY, "mac"], env)
+        try:
+            result = subprocess.run([HEAVY, "mac", "true"], env=dict(env, KUVO_HEAVY_WAIT="0"), capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, WAITS)
+            self.assertIn("Another mac job is running", result.stderr)
+            # A leftover claim in the environment doesn't get in.
+            claim = f"{os.path.join(self.locks, f'kuvo-code-heavy-mac-{os.getuid()}.lock')}:1"
+            result = subprocess.run([HEAVY, "mac", "true"], env=dict(env, KUVO_HEAVY_WAIT="0", KUVO_HEAVY_HELD=claim), timeout=30)
+            self.assertEqual(result.returncode, WAITS)
+        finally:
+            mac.let_go()
+        self.assertEqual(subprocess.run([HEAVY, "mac", "true"], env=dict(env, KUVO_HEAVY_WAIT="0"), timeout=30).returncode, 0)
+
     def test_a_busy_mac_holds_a_job_back(self):
         code, said = self.run_heavy("box", "true", KUVO_HEAVY_LOAD="-1")
         self.assertEqual(code, WAITS)

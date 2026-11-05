@@ -48,15 +48,38 @@ OLD="$DIR/kuvo-code-heavy-$(id -u).lock"
 MAX_LOAD="${KUVO_HEAVY_LOAD:-40}"
 WAITS="${KUVO_HEAVY_WAIT:-1}"
 
-# Whether a process this one runs under holds `lock` (a `lockf … <lock> …` above it). Saying so in
-# the environment doesn't count.
+# Whether `ps` answers. A sandbox can refuse it (Auto mode), and then no process can be asked what
+# it runs under.
+can_ps() { [ -n "$(ps -o command= -p $$ 2>/dev/null)" ]; }
+
+# Whether a process this one runs under holds `lock` (a `lockf … <lock> …` above it). Without `ps`,
+# the jobs this helper started tell who holds what (KUVO_HEAVY_HELD, "<lock>:<pid of its lockf>"
+# entries), and the claim counts only while that process still runs and the lock is held: a leftover
+# one doesn't.
 held() {
-    pid=$$
-    while [ "${pid:-1}" -gt 1 ]; do
-        case "$(ps -o command= -p "$pid" 2>/dev/null)" in "lockf "*" $1 "*) return 0 ;; esac
-        pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
+    if can_ps; then
+        pid=$$
+        while [ "${pid:-1}" -gt 1 ]; do
+            case "$(ps -o command= -p "$pid" 2>/dev/null)" in "lockf "*" $1 "*) return 0 ;; esac
+            pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
+        done
+        return 1
+    fi
+    for claim in ${KUVO_HEAVY_HELD:-}; do
+        [ "${claim%:*}" = "$1" ] || continue
+        kill -0 "${claim##*:}" 2>/dev/null && ! lockf -ks -t 0 "$1" true && return 0
     done
     return 1
+}
+
+# Whether this process is the one a job's `lockf` just started for its turn (below): `ps` says so
+# from the lock above it; without it, the job named its own process, which is lockf's parent now.
+just_taken() {
+    if can_ps; then
+        held "$LOCK"
+    else
+        [ "${KUVO_HEAVY_HOLDING:-}" = "$LOCK:$PPID" ] && ! lockf -ks -t 0 "$LOCK" true
+    fi
 }
 
 # Not waiting (KUVO_HEAVY_WAIT=0): says what for, and stops.
@@ -70,9 +93,11 @@ if [ -n "$holds" ]; then
     exit
 fi
 
-if [ "${KUVO_HEAVY_HOLDING:-}" = "$LOCK" ] && held "$LOCK"; then
+if case "${KUVO_HEAVY_HOLDING:-}" in "$LOCK" | "$LOCK":*) true ;; *) false ;; esac && just_taken; then
     # Its turn, just taken (below).
     unset KUVO_HEAVY_HOLDING
+    # What runs under this turn knows it holds the lock, for when `ps` can't say.
+    KUVO_HEAVY_HELD="${KUVO_HEAVY_HELD:-} $LOCK:$PPID"
     # While jobs were still started the old way, under one lock for every kind (older checkouts'
     # test-app.sh), one of these waited for them, and held that lock too as it ran.
     if [ "$(date +%Y%m%d)" -le "${KUVO_HEAVY_OLD_UNTIL:-20261026}" ]; then
@@ -81,7 +106,9 @@ if [ "${KUVO_HEAVY_HOLDING:-}" = "$LOCK" ] && held "$LOCK"; then
             echo "Waiting for a heavy job started the old way to finish…" >&2
         fi
         old_way=1
+        KUVO_HEAVY_HELD="$KUVO_HEAVY_HELD $OLD:$$"
     fi
+    export KUVO_HEAVY_HELD
 else
     # Inside a job that holds the lock already: on at once.
     if held "$LOCK" || held "$OLD"; then
@@ -92,7 +119,7 @@ else
         [ "$WAITS" = 0 ] && cannot_wait "Another $kind job is running."
         echo "Waiting for another $kind job to finish…" >&2
     fi
-    KUVO_HEAVY_HOLDING="$LOCK" exec lockf -k "$LOCK" /bin/sh "$0" "$kind" "$@"
+    KUVO_HEAVY_HOLDING="$LOCK:$$" exec lockf -k "$LOCK" /bin/sh "$0" "$kind" "$@"
 fi
 
 # The Mac busy: wait until it isn't.
