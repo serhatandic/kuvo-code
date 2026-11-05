@@ -9650,6 +9650,11 @@ var STATE_IN_HOME = [
 var KEPT_IN_HOME = ["settings*.json", "hooks", ".mcp.json"];
 var PRINTED_TOKEN = /sk-ant-oat\d+-[A-Za-z0-9_-]{60,}(?=[^A-Za-z0-9_-])/;
 var ANY_TOKEN = /sk-ant-[A-Za-z0-9_-]+/g;
+var untokened = (text) => text.replace(ANY_TOKEN, "sk-ant-\u2026");
+var told = (error) => {
+  const said = failure(error);
+  return { ...said, message: untokened(said.message) };
+};
 
 class ClaudeAgent {
   context;
@@ -10462,8 +10467,12 @@ class ClaudeThread {
       env,
       spawn: (options) => {
         const given = Object.fromEntries(Object.entries({ ...options.env, ...fence.env, KUVO_FENCE_SHELL: options.command, ...env }).filter((entry) => entry[1] !== undefined));
-        const child = spawn5(fence.command, options.args, { cwd: options.cwd ?? directory, env: given, signal: options.signal, stdio: ["pipe", "pipe", "ignore"] });
+        const child = spawn5(fence.command, options.args, { cwd: options.cwd ?? directory, env: given, signal: options.signal, stdio: ["pipe", "pipe", "pipe"] });
         child.once("exit", () => fence.ended());
+        this.said = "";
+        child.stderr?.on("data", (chunk) => {
+          this.said = (this.said + chunk.toString("utf8")).slice(-4000);
+        });
         return child;
       }
     };
@@ -10506,11 +10515,15 @@ class ClaudeThread {
     else if (active.limit)
       active.resolve({ outcome: "failed", error: { type: "limit", message: active.problem ?? "You've reached a Claude usage limit." }, limit: active.limit });
     else
-      active.resolve({ outcome: "failed", error: this.failed(active, failure(active.problem ?? ended ?? "Claude Code stopped.")) });
+      active.resolve({ outcome: "failed", error: this.failed(active, active.problem ? told(active.problem) : this.stoppedWhy(ended, "Claude Code stopped.")) });
   }
   lastEnd;
-  stoppedWhy(ended) {
-    return failure(ended ?? "Claude Code stopped before it took your message.");
+  said = "";
+  stoppedWhy(ended, otherwise = "Claude Code stopped before it took your message.") {
+    const error = told(ended ?? otherwise);
+    const last = untokened(this.said.split(`
+`).map((line) => line.trim()).filter(Boolean).pop() ?? "").slice(0, 300);
+    return ended !== undefined && last && !error.message.includes(last) ? { ...error, message: `${error.message}: ${last}` } : error;
   }
   failed(active, error) {
     if (!active.signInTurnedAway)
@@ -23192,4 +23205,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 159bac3ea41a20a59eda5c9c35b542761a054f218bc76180f4189e9f48138c20
+// Built from Packages/Box/src/agents 2c2afe381b302852ee4efa836eb7bd1f94667070ca37fd8cbe8b7611f001e472

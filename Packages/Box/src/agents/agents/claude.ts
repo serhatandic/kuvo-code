@@ -65,6 +65,12 @@ interface Status {
 const PRINTED_TOKEN = /sk-ant-oat\d+-[A-Za-z0-9_-]{60,}(?=[^A-Za-z0-9_-])/
 /** Any of Claude's tokens, never said back in a failure's words. */
 const ANY_TOKEN = /sk-ant-[A-Za-z0-9_-]+/g
+const untokened = (text: string) => text.replace(ANY_TOKEN, "sk-ant-…")
+/** A failure, in words with none of Claude's tokens. */
+const told = (error: unknown) => {
+  const said = failure(error)
+  return { ...said, message: untokened(said.message) }
+}
 
 export class ClaudeAgent implements Agent {
   /**
@@ -1101,8 +1107,14 @@ class ClaudeThread implements Thread {
       spawn: (options: { command: string; args: string[]; cwd?: string; env: Record<string, string | undefined>; signal?: AbortSignal }) => {
         // (The program as the SDK names it.)
         const given = Object.fromEntries(Object.entries({ ...options.env, ...fence.env, KUVO_FENCE_SHELL: options.command, ...env }).filter((entry): entry is [string, string] => entry[1] !== undefined))
-        const child = spawn(fence.command, options.args, { cwd: options.cwd ?? directory, env: given, signal: options.signal, stdio: ["pipe", "pipe", "ignore"] })
+        const child = spawn(fence.command, options.args, { cwd: options.cwd ?? directory, env: given, signal: options.signal, stdio: ["pipe", "pipe", "pipe"] })
         child.once("exit", () => fence.ended())
+        // What it says as it stops, for why it did (the SDK keeps that only for a process it starts
+        // itself): the end of it, from this one.
+        this.said = ""
+        child.stderr?.on("data", (chunk: Buffer) => {
+          this.said = (this.said + chunk.toString("utf8")).slice(-4000)
+        })
         return child
       },
     }
@@ -1149,15 +1161,21 @@ class ClaudeThread implements Thread {
     active.resolve = (value) => resolve(missed ? { ...value, missed } : value)
     if (active.stopping || active.hooks.signal.aborted) active.resolve({ outcome: "interrupted" })
     else if (active.limit) active.resolve({ outcome: "failed", error: { type: "limit", message: active.problem ?? "You've reached a Claude usage limit." }, limit: active.limit })
-    else active.resolve({ outcome: "failed", error: this.failed(active, failure(active.problem ?? ended ?? "Claude Code stopped.")) })
+    else active.resolve({ outcome: "failed", error: this.failed(active, active.problem ? told(active.problem) : this.stoppedWhy(ended, "Claude Code stopped.")) })
   }
 
   /** Why its last Claude Code stopped, when no turn was there to say. */
   private lastEnd?: unknown
 
-  /** A Claude Code that stopped before it took the turn's message: why, as it said. */
-  private stoppedWhy(ended: unknown) {
-    return failure(ended ?? "Claude Code stopped before it took your message.")
+  /** What the Claude Code run whole in the sandbox last said on its error output (the end of it). */
+  private said = ""
+
+  /** A Claude Code that stopped (before it took the turn's message, say): why, as it said, with the
+   * last line it wrote as it stopped ("Can't read the current directory…"). */
+  private stoppedWhy(ended: unknown, otherwise = "Claude Code stopped before it took your message.") {
+    const error = told(ended ?? otherwise)
+    const last = untokened(this.said.split("\n").map((line) => line.trim()).filter(Boolean).pop() ?? "").slice(0, 300)
+    return ended !== undefined && last && !error.message.includes(last) ? { ...error, message: `${error.message}: ${last}` } : error
   }
 
   /**

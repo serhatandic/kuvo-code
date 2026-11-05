@@ -773,6 +773,30 @@ describe("Claude Code in the box's sandbox", () => {
     expect(fake.options).toBeUndefined()
   })
 
+  test("stopped as it starts there, the turn fails with what Claude Code said, never with a token in it", async () => {
+    turnOn()
+    // Claude Code quits as it starts in the sandbox, saying why on its error output (as 2.1.318 did in
+    // a folder the sandbox hid from it).
+    writeFileSync(join(fence, "shell", "run"), `#!/bin/sh\necho "starting with sk-ant-oat01-abcdefghijklmnop" >&2\necho "Can't read the current directory (EPERM). Start Claude Code from a different directory." >&2\nexit 1\n`, { mode: 0o700 })
+    fake.onServers = async () => {
+      const child = fake.options.spawnClaudeCodeProcess({ command: "/bin/echo", args: [], cwd: root, env: { PATH: process.env.PATH, OPENCODE_SESSION_ID: "ses_x" } })
+      await new Promise((resolve) => child.once("close", resolve))
+      fake.crash(new Error("Claude Code process exited with code 1"))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    }
+    const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
+    sessions.prompt(id, { id: "msg_claude_turn_0001", text: "go", files: [], delivery: "steer" })
+    await until(() => idles(id).length === 1)
+    expect(idles(id)[0].outcome).toBe("failed")
+    expect(idles(id)[0].error?.message).toBe("Claude Code process exited with code 1: Can't read the current directory (EPERM). Start Claude Code from a different directory.")
+
+    // A token it printed as it stopped is never said back.
+    writeFileSync(join(fence, "shell", "run"), `#!/bin/sh\necho "Invalid token sk-ant-oat01-abcdefghijklmnop" >&2\nexit 1\n`, { mode: 0o700 })
+    sessions.prompt(id, { id: "msg_claude_turn_0002", text: "again", files: [], delivery: "steer" })
+    await until(() => idles(id).length === 2)
+    expect(idles(id)[1].error?.message).toBe("Claude Code process exited with code 1: Invalid token sk-ant-…")
+  })
+
   test("its own sandbox stays off while the box's is on, whatever your settings or a project's say (one can't run inside the other)", async () => {
     turnOn()
     await begin()
