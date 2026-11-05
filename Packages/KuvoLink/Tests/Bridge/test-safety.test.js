@@ -35,10 +35,12 @@ const scenarioName = JSON.parse(fs.readFileSync(path.join(here, "../../Vectors/r
 // (Bun's runner has no `--test` to start a run with, and shares one process.)
 test("a run of the route scenarios leaves the folders its shell names alone, and passes on its own", { skip: !!process.versions.bun }, () => {
   const folder = decoy();
+  // (A run of its own: this one's runner tells its files apart by this, and a file it finds set only reports to it.)
+  const { NODE_TEST_CONTEXT: _, ...given } = process.env;
   for (const file of ["contract.test.js", "contract-mac.test.js"]) {
     const run = spawnSync(process.execPath, ["--test", `--test-name-pattern=${scenarioName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, path.join(here, file)], {
       encoding: "utf8",
-      env: { ...process.env, KUVO_WAKES: path.join(folder, "wakes"), KUVO_BOTS: path.join(folder, "bots"), KUVO_HOME: path.join(folder, "home"), KUVO_WAKE_COMMAND: path.join(folder, "kuvo-wake"), KUVO_FENCE: path.join(folder, "fence") },
+      env: { ...given, KUVO_WAKES: path.join(folder, "wakes"), KUVO_BOTS: path.join(folder, "bots"), KUVO_HOME: path.join(folder, "home"), KUVO_WAKE_COMMAND: path.join(folder, "kuvo-wake"), KUVO_FENCE: path.join(folder, "fence") },
     });
     untouched(folder);
     assert.equal(run.status, 0, `${file}: ${run.stdout}${run.stderr}`);
