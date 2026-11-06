@@ -16,6 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- A Mac can be one of your machines now, like a Mac mini you reach with SSH: add it in Settings › Machines, and its sessions, bots, browser and coding agents work on it as on a Linux machine, with your Mac closed too.
 - Steps you open stay open as new ones come in, until you close them, and what you're reading stays where it is. Thinking you open as it's written stays open once it ends. Close them and you're back at the end.
 - A session waiting on a command or a subagent it left running now shows as at work, in its row and in the bar over its bot's composer, on your Mac and iPhone alike.
 - A bot or a session that started another hears "finished" once, when that session is really done, instead of after every turn: a timer of its own or a command ending no longer sends it again unless it has something new to say.

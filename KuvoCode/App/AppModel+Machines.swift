@@ -157,7 +157,7 @@ extension AppModel {
     }
 
     /// Adds the machine at `destination` as Add Machine does, here or from a phone: checked first
-    /// (reached with your SSH keys, a Linux its engine runs on), and one already here, at this
+    /// (reached with your SSH keys, a system its engine runs on), and one already here, at this
     /// address or at another that reaches the same computer, isn't added again: the address
     /// becomes one of its own. Answers its id, and whether it was one already here. Throws why it
     /// can't be added, and `CancellationError` when stopped meanwhile (nothing is added then).

@@ -175,8 +175,11 @@ engine. `python3 -m unittest discover -s Tests/Guard` checks each of them.
 Recorded engine responses in `Tests/OpenCodeKitTests/Fixtures` drive most of
 OpenCodeKit's tests. `LiveServerTests` run against a real binary when
 `OPENCODE_TEST_BINARY` points to one, and `LiveRemoteEngineTests` against a
-Linux machine when `KUVO_TEST_SSH_HOST` names one you reach with SSH (they
-install the engine in its `~/.kuvo-code-test`, and remove it after).
+Linux machine or a Mac when `KUVO_TEST_SSH_HOST` names one you reach with SSH
+(they install the engine in its `~/.kuvo-code-test`, and remove it after).
+`ThisMacAsAMachineTests`, with `KUVO_TEST_THIS_MAC=1`, runs a Mac machine's
+scripts, engine, keeper, link and bridge for real on this Mac, in a home of its
+own, without SSH.
 
 #### Route scenarios
 
@@ -251,7 +254,9 @@ README says how.
 
 A machine's browser is Chrome for Testing, the full browser run in Chrome's own headless mode
 (the separate headless shell is one sites take for a bot), with its libraries and fonts, in
-`~/.kuvo-code/browser` there (`scripts/browser-runtime.py` lists what it brings). One script,
+`~/.kuvo-code/browser` there (`scripts/browser-runtime.py` lists what it brings; on a Mac machine,
+Chrome for Testing as it comes, pinned in `browser-runtime-mac.json`, with a `chrome` launcher, as
+it won't run through a link). One script,
 `KuvoCode/Resources/kuvo-browser.js`, runs with the engine's own runtime in three ways:
 
 - **host**, the keeper: it starts Chromium, holds it over a pipe, and serves the DevTools
@@ -266,6 +271,10 @@ A machine's browser is Chrome for Testing, the full browser run in Chrome's own 
 
 What agents ask you for there also goes to `run/browser-asks.json`, for the machine's phone link,
 which answers it for a phone with the Mac closed (`Kuvo.answer` on the keeper's socket).
+
+On a Mac, Chrome's editing keys come from its window's key bindings, which a key sent over DevTools
+never reaches: the keeper names what each does (`keyForHere`), so clients send the same keys to
+every machine.
 
 `KEEPER` at its top goes up with every change to the host side, so a newer copy replaces one
 that's running; `BrowserAgent`'s page scripts are shared with this Mac's browser tools.
