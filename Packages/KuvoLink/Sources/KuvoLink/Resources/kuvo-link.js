@@ -8293,6 +8293,18 @@ function yoursOnGoal(conversation, form, choice, file = GOALS_FILE) {
   for (const bot of bots)
     noteWorkChanged(bot);
 }
+function carriedOnGoal(from, to, file = GOALS_FILE) {
+  changeKept((all) => {
+    for (const goal of all) {
+      for (const call of goal.decided ?? []) {
+        if (!call.id.startsWith(`ask:${from}:`))
+          continue;
+        call.id = `ask:${to}:${call.id.slice(`ask:${from}:`.length)}`;
+        call.session = to;
+      }
+    }
+  }, file);
+}
 async function decidedByYou2(id, given, targets, file) {
   const choice = line(given.choice, 200);
   if (!choice)
@@ -8918,6 +8930,35 @@ function changeAll(change, file) {
 function decidedIn(session, file = DECIDED_FILE) {
   const list = readAll(file)[session];
   return Array.isArray(list) ? list : [];
+}
+function decidedOf(sessions, file = DECIDED_FILE) {
+  const all = readAll(file);
+  return Object.fromEntries(sessions.flatMap((session) => Array.isArray(all[session]) && all[session].length ? [[session, all[session]]] : []));
+}
+function keepDecided(calls, sessions, file = DECIDED_FILE) {
+  if (!isObject(calls))
+    return;
+  const came = sessions.filter((session) => Array.isArray(calls[session]) && calls[session].length);
+  if (came.length)
+    changeAll((all) => {
+      for (const session of came)
+        all[session] = calls[session];
+    }, file);
+}
+function carryDecided(from, to, file = DECIDED_FILE) {
+  if (!decidedIn(from, file).length)
+    return;
+  changeAll((all) => {
+    all[to] = [...all[to] ?? [], ...all[from] ?? []].slice(-KEPT);
+    delete all[from];
+  }, file);
+  carriedOnGoal(from, to);
+}
+function forgetDecided(session, file = DECIDED_FILE) {
+  if (decidedIn(session, file).length)
+    changeAll((all) => {
+      delete all[session];
+    }, file);
 }
 async function setAutopilot(target, session, on, signal) {
   const metadata = isObject(session.metadata) ? session.metadata : {};
@@ -16552,8 +16593,8 @@ async function carryToAgents(id, model, readEngine, agents, signal) {
     }
     const renamed = Object.fromEntries(waiting.map((item) => [item.id, messageID()]));
     const kuvo = bot ? session.metadata?.kuvo ?? { bot: bot.described.id } : {};
-    const { approval, applied } = session.metadata?.kuvo ?? {};
-    const marks = { kuvo: { ...approval ? { approval } : {}, ...applied ? { applied } : {}, ...kuvo, carriedFrom: id } };
+    const { approval, applied, autopilot } = session.metadata?.kuvo ?? {};
+    const marks = { kuvo: { ...approval ? { approval } : {}, ...applied ? { applied } : {}, ...autopilot === true ? { autopilot } : {}, ...kuvo, carriedFrom: id } };
     const moved = await call(agents, "POST", "/api/session/import", {
       title: session.title,
       agent: session.agent,
@@ -16573,6 +16614,9 @@ async function carryToAgents(id, model, readEngine, agents, signal) {
     await tellWorktree(agents, moved.id).catch(() => {});
     await call(agents, "PATCH", `/api/session/${encodeURIComponent(moved.id)}`, { metadata: marks }).catch(() => {});
     await settleAgain(agents, moved.id, true, signal).catch(() => {});
+    if (autopilot === true)
+      await tellAutopilot(agents, moved.id, true, signal).catch(() => {});
+    carryDecided(id, moved.id);
     if (bot) {
       const kit = readKit();
       if (kit)
@@ -19434,6 +19478,9 @@ async function carryOn(id) {
     queues = await queuesOf(engine, record.sessions, record.name);
     if (Object.keys(queues).length)
       contents.queues = queues;
+    const decided = decidedOf(record.sessions);
+    if (Object.keys(decided).length)
+      contents.decided = decided;
     if (record.folder)
       contents.folder = path72.basename(record.folder);
     if (record.kind === "bot") {
@@ -19558,8 +19605,10 @@ async function finish(id) {
         }
       }
     }
-    for (const session of [...record.sessions].reverse())
+    for (const session of [...record.sessions].reverse()) {
       await deleteSession(engine, session);
+      forgetDecided(session);
+    }
     for (const session of record.sessions)
       forgetQueue(session);
     if (record.kind === "bot")
@@ -19844,6 +19893,12 @@ async function bringIn(record, signal) {
     changeMove(record.id, (each) => {
       each.queuesGoOn = goOn;
     });
+  keepDecided(contents.decided, idsOf(contents.exports));
+  for (const exported of contents.exports) {
+    const info = isObject(exported) && isObject(exported.info) ? exported.info : null;
+    if (info && isAutopilot(info))
+      await tellAutopilot(engine, info.id, true, signal).catch((error) => console.error(`kuvo-link: ${record.name} couldn't be told it's on Autopilot here: ${error}`));
+  }
   for (const [integration, keys] of Object.entries(contents.keys ?? {})) {
     const given = await answerBotKeys("PUT", `kuvo/bots/${record.thing}/keys/${encodeURIComponent(integration)}`, { keys }, null);
     if (given.status !== 200)
@@ -19897,8 +19952,10 @@ async function clearCopy(record) {
   } else {
     if (record.sessions.length) {
       const engine = readEngineFile();
-      for (const session of [...record.sessions].reverse())
+      for (const session of [...record.sessions].reverse()) {
         await deleteSession(engine, session);
+        forgetDecided(session);
+      }
     }
     for (const session of record.sessions)
       forgetQueue(session);
@@ -24359,6 +24416,9 @@ async function* autopilotRoute(context) {
   const at = await find2(id, [engine, agents]);
   if (!at)
     return yield* json(404, { message: "That conversation isn't here." });
+  const carried = at.data.metadata?.kuvo?.carriedFrom;
+  if (typeof carried === "string")
+    carryDecided(carried, id);
   if (method === "PUT") {
     const on = given.autopilot;
     if (!await setAutopilot(at.target, at.data, on, signal))

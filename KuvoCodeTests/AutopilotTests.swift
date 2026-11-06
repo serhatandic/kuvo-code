@@ -133,6 +133,40 @@ import Testing
         try await until { engine.requests("POST", "").contains { "\($0.body)".contains("the user picked Dark and smoky, not Warm and roasty") } }
     }
 
+    /// A conversation on Autopilot you pick a coding agent's model in, carried by this Mac: it stays
+    /// on Autopilot there, its new agent told, by its box.
+    @Test func aConversationCarriedOnWithACodingAgentStaysOnAutopilot() async throws {
+        let machine = try await lab()
+        defer { done(machine) }
+        let bridge = StubEngine(port: 48_028, alongside: true)
+        let agents = OutsideAgents()
+        defer { agents.disconnect() }
+        let workspace = Workspace()
+        workspace.api = engine.api
+        workspace.agents = agents
+        workspace.boxes = { _ in machine.client }
+        agents.connect(bridge.api.client.endpoint, folderPrefix: "")
+        let away = StubEngine.session("ses_away", directory: "/tmp/kuvo-tests-autopilot-carry", extra: ["metadata": ["kuvo": ["autopilot": true]]])
+        engine.list([away])
+        engine.conversation("ses_away", [])
+        engine.on("GET", "/api/session/ses_away", json: ["data": away])
+        engine.on("GET", "/api/session/ses_away/inbox", json: ["data": []])
+        engine.on("PATCH", "/api/session/ses_away", json: [:])
+        let carried = StubEngine.session("ses_carried", directory: "/tmp/kuvo-tests-autopilot-carry")
+        bridge.on("POST", "/api/session/import", json: ["data": carried])
+        bridge.on("PATCH", "/api/session/ses_carried", json: [:])
+        // (The box finds it on its engine here, which is told as its bridge would be.)
+        engine.on("GET", "/api/session/ses_carried", json: ["data": carried])
+        engine.on("PATCH", "/api/session/ses_carried", json: ["data": carried])
+        engine.on("PUT", "/api/experimental/session/ses_carried/instructions/entries/kuvo.autopilot", json: ["data": [:]])
+        await workspace.refresh()
+
+        _ = try await workspace.carryToAgents("ses_away", model: ModelRef(id: "sonnet", providerID: "claude-code"))
+
+        #expect(engine.requests("PUT", "/api/experimental/session/ses_carried/instructions/entries/kuvo.autopilot").count == 1)
+        #expect(workspace.model(for: "ses_carried")?.isAutopilot == true)
+    }
+
     /// A question that marks a choice, on Autopilot: nothing waits on the Dock while its box goes
     /// ahead; one that's still asked after that (its goal paused, or the engine didn't take it)
     /// waits on you, as any.

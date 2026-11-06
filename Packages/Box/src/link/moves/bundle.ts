@@ -45,6 +45,8 @@ export interface Contents {
   /** Its conversations' queues that are paused or have something waiting on the box, by session
    * (`packQueues`): a conversation you stopped stays stopped there, with what waits for it. */
   queues?: Record<string, unknown>;
+  /** The calls its conversations made on Autopilot, by session. */
+  decided?: Record<string, unknown>;
 }
 
 // A chat's folder here: conversations of no project (this Mac's app's own, a machine's in its box).

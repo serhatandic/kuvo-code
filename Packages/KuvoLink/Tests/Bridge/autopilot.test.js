@@ -278,6 +278,17 @@ test("a list of questions goes ahead as one call each, to change one at a time; 
   assert.equal((await route("GET", "kuvo/sessions/ses_away/autopilot")).body.decided.length, 2);
 });
 
+test("its calls come along with a conversation carried on elsewhere (a coding agent's model picked), and change there", async () => {
+  sessions.set("ses_was", session("ses_was", { metadata: { kuvo: { autopilot: true } } }));
+  fs.mkdirSync(path.join(home, "run", "work"), { recursive: true });
+  fs.writeFileSync(path.join(home, "run", "work", "decided.json"), JSON.stringify({ ses_was: [{ id: "frm_was", text: "Which roast?", choice: "Warm", options: ["Warm", "Dark"], call: "call_was", at: 1 }] }));
+  sessions.set("ses_now", session("ses_now", { metadata: { kuvo: { autopilot: true, carriedFrom: "ses_was" } } }));
+  assert.deepEqual((await route("GET", "kuvo/sessions/ses_now/autopilot")).body.decided.map(call => call.id), ["frm_was"]);
+  assert.deepEqual((await route("GET", "kuvo/sessions/ses_was/autopilot")).body.decided, []);
+  assert.equal((await route("POST", "kuvo/sessions/ses_now/autopilot", { decided: "frm_was", choice: "Dark" })).status, 200);
+  assert.equal(prompts.at(-1).to, "ses_now");
+});
+
 test("a change the engine didn't take isn't kept: it says so, and making it again reaches the agent", async () => {
   const { watch } = await watcher();
   await watch({ type: "form.created", data: { form: QUESTION("frm_1", "ses_away", ROASTS) } });

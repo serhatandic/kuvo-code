@@ -904,6 +904,20 @@ export function yoursOnGoal(conversation: string, form: string, choice: string, 
   for (const bot of bots) noteWorkChanged(bot);
 }
 
+/** The calls a question went ahead on in a conversation carried on as `to`, on the goal that shows
+ * them: its own from now on. */
+export function carriedOnGoal(from: string, to: string, file = GOALS_FILE): void {
+  changeKept(all => {
+    for (const goal of all) {
+      for (const call of goal.decided ?? []) {
+        if (!call.id.startsWith(`ask:${from}:`)) continue;
+        call.id = `ask:${to}:${call.id.slice(`ask:${from}:`.length)}`;
+        call.session = to;
+      }
+    }
+  }, file);
+}
+
 // Your choice on a call the bot made on its own: the same confirms it, quietly; another has the
 // bot go that way from here.
 async function decidedByYou(id: string, given: Record<string, unknown>, targets: () => Target[], file: string): Promise<{ goal: GoalPlanShape } | { refused: GoalRefusal }> {

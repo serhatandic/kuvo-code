@@ -1710,6 +1710,8 @@ final class Workspace {
         }
         upsert(moved)
         await WakeUps.carry(from: session, to: moved)
+        // On Autopilot, it stays so there, its agent told by its box (which brings its calls along).
+        if AutopilotShown.isOn(current) { await model(for: moved.id)?.switchAutopilot(true) }
         return moved
     }
 

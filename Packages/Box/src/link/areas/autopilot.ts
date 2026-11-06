@@ -4,7 +4,7 @@
 
 import { isObject, parsed } from "../../shared/json";
 import { engineGet, peerTargets } from "../engine/client";
-import { decidedByYou, decidedIn, goAheadOnWaiting, isAutopilot, setAutopilot } from "../work/autopilot";
+import { carryDecided, decidedByYou, decidedIn, goAheadOnWaiting, isAutopilot, setAutopilot } from "../work/autopilot";
 import { answerGoal, runningGoalOf } from "../work/goals";
 import type { EngineAnswer } from "../engine/client";
 import type { EngineSession } from "../engine/sessions";
@@ -44,6 +44,9 @@ export async function* autopilotRoute(context: RouteContext): AsyncGenerator<Ans
   if (!engine && !agents) return yield* json(503, { message: "The engine isn't running." });
   const at = await find(id, [engine, agents]);
   if (!at) return yield* json(404, { message: "That conversation isn't here." });
+  // Carried on from another of this box's (a Mac carries it itself): its calls come along.
+  const carried = at.data.metadata?.kuvo?.carriedFrom;
+  if (typeof carried === "string") carryDecided(carried, id);
   if (method === "PUT") {
     const on = given.autopilot as boolean;
     if (!await setAutopilot(at.target, at.data, on, signal)) return yield* json(502, { message: "It couldn't be changed: the engine didn't take it. Try again." });

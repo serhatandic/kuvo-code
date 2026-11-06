@@ -155,6 +155,21 @@ test("a bot's conversation becomes the new one, marked and told as its own, and 
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(folder, "bot.json"), "utf8")).model, sonnet);
 });
 
+test("a conversation on Autopilot stays on it with the coding agents, its agent told, and a bot's too", async () => {
+  const project = path.join(home, "pilot");
+  const engine = await engineFor({ id: "ses_pilot", title: "Cafe", agent: "build", location: { directory: project }, metadata: { kuvo: { approval: "auto", autopilot: true } } });
+  const agents = await agentsBridge();
+  assert.deepEqual(await link.carryToAgents("ses_pilot", sonnet, () => engine.at, agents.at, undefined), { status: 200, value: { session: "ses_theirs" } });
+  assert.equal(agents.asked.find(each => each.method === "PATCH" && each.url === "/api/session/ses_theirs").body.metadata.kuvo.autopilot, true);
+  assert.match(agents.asked.find(each => each.method === "PUT" && each.url.endsWith("/instructions/entries/kuvo.autopilot")).body.value, /Autopilot/);
+
+  // One that isn't: not told.
+  const plain = await engineFor({ id: "ses_plain", title: "Plain", agent: "build", location: { directory: project }, metadata: {} });
+  const others = await agentsBridge({ id: "ses_theirs2" });
+  await link.carryToAgents("ses_plain", sonnet, () => plain.at, others.at, undefined);
+  assert.equal(others.asked.some(each => each.url.endsWith("/instructions/entries/kuvo.autopilot")), false);
+});
+
 test("what can't be is said, and nothing moves", async () => {
   const engine = await engineFor({ id: "ses_mine", title: "Mine", location: { directory: home } });
   const signedOut = await agentsBridge({ signedIn: false });

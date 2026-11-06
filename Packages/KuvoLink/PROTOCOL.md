@@ -3532,6 +3532,9 @@ what may be decided without asking. Every conversation is Interactive until it's
   (`ask:<conversation>:<form>`), as one call: your choice on it, on the goal
   (`{action: decided, decided, choice}`) or here, shows on both and tells the conversation that
   asked. While you have the goal paused, nothing goes ahead.
+- It goes with a conversation: carried on with the coding agents (a model of theirs picked) or moved
+  to another computer, it stays on Autopilot there, its agent told, and its calls come along
+  (`run/work/decided.json`; `decided` in a move's bundle).
 - On the coding agents, Claude Code's, Codex's and Grok's questions go ahead the same way; Cursor
   can't ask, so Autopilot changes nothing there but what its agent is told.
 

@@ -13,7 +13,7 @@ import { call, engineGet } from "../engine/client";
 import { sendInto } from "../engine/queue";
 import { locked, textOf, writePrivate } from "../files";
 import { askedBy, asksIn, recommendationOf, type PendingQuestion, type Recommendation } from "./answers";
-import { addDecided, runningGoalOf, yoursOnGoal } from "./goals";
+import { addDecided, runningGoalOf, carriedOnGoal, yoursOnGoal } from "./goals";
 import { worksFor } from "./tree";
 import { WORK_FOLDER } from "./changes";
 import type { EngineSession } from "../engine/sessions";
@@ -66,6 +66,34 @@ function changeAll<T>(change: (all: Record<string, DecidedShape[]>) => T, file: 
 export function decidedIn(session: string, file = DECIDED_FILE): DecidedShape[] {
   const list = readAll(file)[session];
   return Array.isArray(list) ? list : [];
+}
+
+/** The calls kept for `sessions`, to go with them to another box (a move). */
+export function decidedOf(sessions: readonly string[], file = DECIDED_FILE): Record<string, DecidedShape[]> {
+  const all = readAll(file);
+  return Object.fromEntries(sessions.flatMap(session => (Array.isArray(all[session]) && all[session].length ? [[session, all[session]]] : [])));
+}
+
+/** Those that came with `sessions` to this box. */
+export function keepDecided(calls: unknown, sessions: readonly string[], file = DECIDED_FILE): void {
+  if (!isObject(calls)) return;
+  const came = sessions.filter(session => Array.isArray(calls[session]) && calls[session].length);
+  if (came.length) changeAll(all => { for (const session of came) all[session] = calls[session] as DecidedShape[]; }, file);
+}
+
+/** Those of a conversation carried on as `to`, under it from now on. */
+export function carryDecided(from: string, to: string, file = DECIDED_FILE): void {
+  if (!decidedIn(from, file).length) return;
+  changeAll(all => {
+    all[to] = [...(all[to] ?? []), ...(all[from] ?? [])].slice(-KEPT);
+    delete all[from];
+  }, file);
+  carriedOnGoal(from, to);
+}
+
+/** Those of a conversation that's gone from this box. */
+export function forgetDecided(session: string, file = DECIDED_FILE): void {
+  if (decidedIn(session, file).length) changeAll(all => { delete all[session]; }, file);
 }
 
 /** Turns Autopilot on or off for `session` (on `target`): kept in its notes, and its agent told
