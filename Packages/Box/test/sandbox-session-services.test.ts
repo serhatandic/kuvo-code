@@ -7,6 +7,7 @@ import { dirname, join } from "node:path"
 import { ownNamespace } from "../src/link/fence/landlock"
 import { fencePolicy } from "../src/link/fence/policy"
 import { canFence, realFence } from "./agents/support/fence"
+import { ownPath } from "../../KuvoLink/Tests/Bridge/test-safety.js"
 
 // On Linux, Landlock can't refuse a command a socket, and your session's services listen on them in
 // `/run/user/<uid>`: systemd's, which runs whatever it's asked outside the sandbox
@@ -107,6 +108,7 @@ test.skipIf(!namespaced)("a command can't use your SSH or GPG agent, or other ap
     else process.env.SSH_AUTH_SOCK = said
     for (const server of servers) server.close()
     for (const folder of [root, started]) rmSync(folder, { recursive: true, force: true })
-    rmSync(vscode, { force: true })
+    // (Named in /tmp, outside the test's own folders, so it's named as its own here.)
+    rmSync(ownPath(vscode), { force: true })
   }
 })

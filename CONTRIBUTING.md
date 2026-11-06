@@ -160,8 +160,9 @@ script won't run the tests otherwise.
 happen, with the app's real parts; leave out what only restates the code.
 Some run the agents bridge the app ships for real (`RealBridge`, with a stand-in
 engine that listens on a loopback port): the script gives them a Bun
-(`KUVO_TEST_BUN`: `bun` on your PATH, else the engine a demo, perf or e2e copy
-downloaded).
+(`KUVO_TEST_BUN`: `bun` on your PATH, else `~/.bun/bin/bun`, else the engine a demo,
+perf or e2e copy downloaded). A Bun in your Desktop or Documents is skipped, and refused
+when you name it: the test copy would wait on macOS's privacy prompt for those folders.
 
 Nothing that starts a copy of the app or its engine for a test, a demo or a
 measurement may use the real Kuvo Code: its bundle ID (`run.kuvo.code`), its
