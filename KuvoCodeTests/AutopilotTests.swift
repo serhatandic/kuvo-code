@@ -197,6 +197,42 @@ import Testing
     /// A question in a conversation on Autopilot counts, and tells you, as its box says it waits on
     /// you, whatever it marks; one its box can't say about tells you, as any question. A conversation
     /// that isn't on Autopilot asks its box nothing.
+    @Test func aSignInACodeOrAStepOnAutopilotComesBackAtOnceWithNoCard() async throws {
+        defer { engine.stop() }
+        let workspace = Workspace()
+        workspace.api = engine.api
+        engine.list([StubEngine.session("ses_a", directory: "/tmp/kuvo-tests-autopilot", extra: ["metadata": ["kuvo": ["autopilot": true]]]),
+                     StubEngine.session("ses_i", directory: "/tmp/kuvo-tests-autopilot")])
+        await workspace.refresh()
+        let asks = BrowserAsks()
+        asks.isOnAutopilot = workspace.isOnAutopilot
+        guard case .leftOnAutopilot = await asks.ask(.action(instruction: "Solve the CAPTCHA."), host: "example.com", session: "ses_a") else {
+            Issue.record("It went on to ask")
+            return
+        }
+        #expect(asks.asks.isEmpty)
+        #expect(BrowserAgent.leftOnAutopilot.contains("This is on Autopilot:"))
+        // An Interactive conversation's still shows its card.
+        let asking = Task { await asks.ask(.action(instruction: "Solve the CAPTCHA."), host: "example.com", session: "ses_i") }
+        try await until { !asks.asks.isEmpty }
+        asking.cancel()
+        _ = await asking.value
+    }
+
+    @Test func aQuestionSetAsideOnAutopilotReadsSoAndDoesntCountAsFailed() throws {
+        func step(_ message: String) throws -> Message.Content {
+            let call: [String: Any] = ["type": "tool", "id": "call_1", "name": "question", "executed": true,
+                                       "state": ["status": "error", "input": [String: Any](), "error": ["type": "unknown", "message": message]]]
+            return try JSONDecoder().decode(Message.Content.self, from: JSONSerialization.data(withJSONObject: call))
+        }
+        let setAside = try step("This is on Autopilot: nothing was put to the user.")
+        #expect(StepsRow.outcomes(of: [setAside]) == "")
+        #expect(StepsRow.outcomes(of: [try step("Something broke.")]) == " (1 failed)")
+        guard case .tool(let call) = setAside else { return }
+        #expect(StepsSummary.summary(of: [call]) == "Set a question aside")
+        #expect(ToolCallView.summary(of: call, in: "/tmp") == "Set a question aside on Autopilot")
+    }
+
     @Test func aQuestionOnAutopilotWaitsOnYouAsItsBoxSays() async throws {
         defer { engine.stop() }
         let workspace = Workspace()
@@ -261,6 +297,10 @@ import Testing
         try await heard("frm_sub_goes")
         #expect(workspace.asking["frm_sub_goes"] == nil)
         #expect(asks.withLock { $0.contains("kuvo/sessions/ses_a/autopilot/asked frm_sub_goes") })
+        // Known by now as its conversation's: not counted first, as the Dock would show it.
+        try ask("frm_sub_again", in: "ses_sub", marked: false)
+        #expect(workspace.asking["frm_sub_again"] == nil)
+        try await heard("frm_sub_again")
 
         // Answered: off the count.
         workspace.handle(try engine.event("form.replied", session: "ses_a", ["id": "frm_marked_waits", "sessionID": "ses_a"]))

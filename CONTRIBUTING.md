@@ -385,7 +385,7 @@ env -i HOME="$HOME" USER="$USER" LOGNAME="$USER" PATH=/usr/bin:/bin:/usr/sbin:/s
 | `KUVO_DEMO_KEYS_UNREAD` | The app's host interface not started as this Mac's box starts, so the box can't reach its keys: how Settings › Integrations shows it, until its Try Again starts it |
 | `KUVO_DEMO_REMOVE_PROJECT` | Remove Project…'s dialog for the project of this name, open (nothing's removed unless you click) |
 | `KUVO_DEMO_PALETTE` | Open the command palette with this typed in it (empty for none) |
-| `KUVO_DEMO_MENU` | Open the `mode` menu, the `model` picker (`list` on the model list, `models` with every model shown), or `location` in the New Project sheet |
+| `KUVO_DEMO_MENU` | Open the `mode` menu, the `model` picker (`list` on the model list, `models` with every model shown), or `location` in the New Project sheet (`KUVO_DEMO_MENU_AFTER`: that many seconds after the window shows, for what's read from the box first) |
 | `KUVO_DEMO_EFFORT` | With the model picker open, pick this effort level |
 | `KUVO_DEMO_RAIL` | With the model picker open on its list: show this entry of its rail (`★`, `auto`, or a provider's ID such as `claude-code`) |
 | `KUVO_DEMO_PICK` | With the model picker open: pick this model (`provider/model`) a moment later, as a click would |

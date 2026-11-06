@@ -2751,7 +2751,7 @@ final class Workspace {
         case "form.created":
             guard let form = try? event.payload(as: EventPayload.FormCreated.self).form else { return }
             // (On Autopilot it counts once its box says it waits on you: `notifyAsk`.)
-            if session(form.sessionID).map(AutopilotShown.isOn) != true { asking[form.id] = form.sessionID }
+            if !isOnAutopilot(form.sessionID) { asking[form.id] = form.sessionID }
             let question = Self.question(in: form)
             notifyAsk(form.sessionID, body: question?.text ?? (form.isQuestion ? "Has a question for you." : "Needs your answer."), request: form.id, question: question)
         case "form.replied", "form.cancelled":
@@ -3295,6 +3295,11 @@ final class Workspace {
         }
         try? await engine?.removeShell(job.id, directory: directory)
         return "removed"
+    }
+
+    /// Whether the conversation `id` is part of (a subagent's, the one that started it) is on Autopilot.
+    func isOnAutopilot(_ id: String) -> Bool {
+        session(root(of: id)).map(AutopilotShown.isOn) == true
     }
 
     /// The session a subagent's shows in (through subagents of subagents): the root one that

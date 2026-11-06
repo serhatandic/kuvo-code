@@ -157,7 +157,7 @@ struct ToolCallView: View {
             } else if case .failed(_, let error, _, _) = call.state, !(isSandboxAsk && Self.sandboxOutcome(outputText) != nil) {
                 if error.isInterruption {
                     Text("Stopped")
-                } else {
+                } else if !error.isSetAsideOnAutopilot {
                     Text(error.message)
                         .lineLimit(1)
                         .foregroundStyle(.red)
@@ -180,6 +180,8 @@ struct ToolCallView: View {
         switch call.state {
         case .failed(_, let error, _, _) where error.isInterruption:
             Image(systemName: "stop.circle")
+        case .failed(_, let error, _, _) where error.isSetAsideOnAutopilot:
+            Image(systemName: AutopilotShown.symbol)
         case .failed:
             Image(systemName: "xmark.circle.fill").foregroundStyle(.red)
         default:
@@ -245,6 +247,7 @@ struct ToolCallView: View {
         case "webfetch": return (isActive ? "Fetching " : "Fetched ") + (string("url") ?? "a page")
         case "websearch": return "Searched the web for “\(string("query") ?? "")”"
         case "question" where autopilotCalls[call.id] != nil: return "Decided a question on Autopilot"
+        case "question" where call.isSetAsideOnAutopilot: return "Set a question aside on Autopilot"
         case "question": return isActive ? "Asking you a question" : "Asked you a question"
         case _ where isSandboxAsk:
             let command = string("command").flatMap(InlineCode.command) ?? "a command"
@@ -576,7 +579,7 @@ struct ToolCallView: View {
     }
 
     private var hasDetails: Bool {
-        subagentSession != nil || !diffs.isEmpty || ((call.name == "shell" || isSandboxAsk) && !outputText.isEmpty) || code != nil || call.state.isFailure || !pictures.isEmpty
+        subagentSession != nil || !diffs.isEmpty || ((call.name == "shell" || isSandboxAsk) && !outputText.isEmpty) || code != nil || (call.state.isFailure && !call.isSetAsideOnAutopilot) || !pictures.isEmpty
     }
 
     /// Pictures the step brought back, like a screenshot of the page.

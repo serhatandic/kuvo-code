@@ -372,6 +372,11 @@ extension Message {
         /// True when the provider ran it on its side (like hosted web search).
         public var executed: Bool?
         public var state: ToolState
+
+        /// A question its box set aside on Autopilot.
+        public var isSetAsideOnAutopilot: Bool {
+            if case .failed(_, let error, _, _) = state { error.isSetAsideOnAutopilot } else { false }
+        }
         public var time: Time?
 
         public init(id: String, name: String, state: ToolState, time: Time? = nil) {

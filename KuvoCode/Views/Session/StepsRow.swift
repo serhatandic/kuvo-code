@@ -178,7 +178,7 @@ struct StepsRow: View {
     /// " (1 failed)", or "(1 stopped)" for one you stopped (or that quitting cut off), as its own
     /// row says; nothing when they all went through.
     static func outcomes(of blocks: [Message.Content]) -> String {
-        let ended = blocks.compactMap { if case .tool(let call) = $0, case .failed(_, let error, _, _) = call.state { error } else { nil } }
+        let ended = blocks.compactMap { if case .tool(let call) = $0, !call.isSetAsideOnAutopilot, case .failed(_, let error, _, _) = call.state { error } else { nil } }
         let stopped = ended.count(where: \.isInterruption)
         let outcomes = [(ended.count - stopped, "failed"), (stopped, "stopped")].filter { $0.0 > 0 }.map { "\($0.0) \($0.1)" }
         return outcomes.isEmpty ? "" : " (" + outcomes.joined(separator: ", ") + ")"
@@ -192,7 +192,7 @@ enum StepsSummary {
         var order: [String] = []
         var counts: [String: Int] = [:]
         for step in steps {
-            let kind = kind(of: step.name)
+            let kind = step.isSetAsideOnAutopilot ? "setAside" : kind(of: step.name)
             if counts[kind] == nil { order.append(kind) }
             counts[kind, default: 0] += 1
         }
@@ -283,6 +283,7 @@ enum StepsSummary {
         case "browser": return many ? "used the browser (\(count) steps)" : "used the browser"
         case "subagent": return many ? "handed off \(count) tasks" : "handed off a task"
         case "question": return many ? "asked you \(count) questions" : "asked you a question"
+        case "setAside": return many ? "set \(count) questions aside" : "set a question aside"
         case "show": return many ? "showed you \(count) things" : "showed you something"
         case "message": return many ? "wrote to other agents \(count) times" : "wrote to another agent"
         case "agents": return "looked up the other agents"

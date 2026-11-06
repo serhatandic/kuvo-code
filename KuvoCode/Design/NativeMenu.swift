@@ -30,7 +30,7 @@ struct NativeMenuButton<Label: View>: View {
         .task {
             // KUVO_DEMO_MENU=<name> opens this menu (its first submenu with "<name>s") after launch.
             guard let wanted = ProcessInfo.processInfo.environment["KUVO_DEMO_MENU"], !name.isEmpty, wanted == name || wanted == name + "s" else { return }
-            try? await Task.sleep(for: .seconds(3))
+            try? await Task.sleep(for: .seconds(Double(ProcessInfo.processInfo.environment["KUVO_DEMO_MENU_AFTER"] ?? "") ?? 3))
             let menu = menu()
             // Outside this task: a menu's loop run inside one holds up every other until it closes.
             Modal.later { anchor.popUp(wanted == name ? menu : menu.items.first { $0.submenu != nil }?.submenu ?? menu, below: opensBelow) }
