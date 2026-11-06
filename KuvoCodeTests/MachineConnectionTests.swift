@@ -327,13 +327,15 @@ import Testing
         let id = Self.name()
         let engine = add(id, at: machine)
         await app.connect(engine).value
-        // What starting it over sends there, held until it's removed.
+        // What starting it over sends there, held until it's removed. Only that: the follows it
+        // began as it connected send their first reads about now too, and one of those isn't it
+        // beginning to start over.
         let gate = Gate()
         let sending = Gate()
         defer { gate.open() }
         SSHConnection.standIn = { [ssh] address, script in
             ssh.note(script, to: address)
-            if address == id {
+            if address == id, script.hasPrefix("cat ") {
                 sending.open()
                 gate.wait()
             }
@@ -348,7 +350,8 @@ import Testing
         gate.open()
         await restart.value
         #expect(!engine.isReady, "it didn't connect again")
-        #expect(Array(ssh.scripts(to: id).dropFirst(sent)) == [], "nothing went to it over SSH once it was removed")
+        // (Besides a follow's read on its way as its connection closed.)
+        #expect(ssh.scripts(to: id).dropFirst(sent).filter { !$0.contains(" box route") } == [], "nothing went to it over SSH once it was removed")
         #expect(Array(machine.asked.dropFirst(asked)) == [], "nor to its engine")
         #expect(clock.waits == [], "no syncs run for it")
     }
