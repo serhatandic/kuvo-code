@@ -61,7 +61,7 @@ nonisolated enum IntegrationKeys {
     }
 
     /// How a computer's engine settings name a key: this Mac's (nil) as above; a machine's, in its
-    /// own keys' folder there (`MachineBox.setKey`).
+    /// own keys' folder there.
     static func reference(_ variable: String, on machine: String?) -> String {
         guard machine != nil else { return reference(variable) }
         return "{file:~/\(RemoteEngineInstaller.root)/box/keys/\(variable)}"

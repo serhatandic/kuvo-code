@@ -569,13 +569,6 @@ final class MachineEngine {
             // COMPAT(0.7 settings): the settings an older Mac's start left, made the box's own. Goes 3 months after 0.8.0.
             let box = try await MachineBox.adopt(on: connection, seed: launch.seed)
             config.took(box.settings)
-            // As Kuvo Code brings this Mac's up to date as its engine starts: its integrations as
-            // they're set up now, its servers' tools plain tools (not a newer box's, which knows
-            // newer ones).
-            if !boxIsNewer {
-                Integrations.upgrade(config, on: machine.id)
-                MCPSettings.upgrade(config)
-            }
             launch.boxEnvironment = launch.fromBox(config.settings)
             if box.seeded { seededNow = true }
             try check()

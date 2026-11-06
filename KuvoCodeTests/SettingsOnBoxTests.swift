@@ -348,10 +348,6 @@ import Testing
         #expect(AlsoApply.net(config.changes).isEmpty)
         config.set(.string("anthropic/sonnet"), at: ["model"])
         #expect(AlsoApply.net(config.changes).map(\.path) == [["model"]])
-        // What's applied there isn't a change of its own, to offer back.
-        let there = EngineConfig.inMemory()
-        there.set([(["model"], .string("anthropic/sonnet"))], noted: false)
-        #expect(there.changes.isEmpty)
     }
 
     /// Where a change couldn't be made, said once per reason, with the computers it's the reason

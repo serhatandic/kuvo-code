@@ -210,21 +210,19 @@ final class EngineConfig {
 
     /// Sets the value at a path of keys, or removes it with nil (and any object it leaves
     /// empty), then saves.
-    /// `noted`: false for what Kuvo Code changes itself (bringing settings up to date), rather
-    /// than you.
-    func set(_ value: JSONValue?, at path: [String], noted: Bool = true) {
+    func set(_ value: JSONValue?, at path: [String]) {
         guard problem == nil, isLoaded, !path.isEmpty else { return }
-        if noted { note(path, from: self.value(at: path), to: value) }
+        note(path, from: self.value(at: path), to: value)
         settings = Self.setting(value, at: path[...], in: settings)
         save([(path, value)])
     }
 
     /// Several changes at once, in one write: the engine reloads its settings once, not after
-    /// each of them. `noted`: false for those Kuvo Code makes itself.
-    func set(_ changes: [(path: [String], value: JSONValue?)], noted: Bool = true) {
+    /// each of them.
+    func set(_ changes: [(path: [String], value: JSONValue?)]) {
         guard problem == nil, isLoaded else { return }
         for change in changes where !change.path.isEmpty {
-            if noted { note(change.path, from: value(at: change.path), to: change.value) }
+            note(change.path, from: value(at: change.path), to: change.value)
             settings = Self.setting(change.value, at: change.path[...], in: settings)
         }
         save(changes.filter { !$0.path.isEmpty })

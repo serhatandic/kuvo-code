@@ -145,14 +145,22 @@ export const KEY_NAME = /^KUVO_KEY_[A-Za-z0-9_]+$/;
 // writes its Keychain's keys to (KUVO_KEYS).
 const KEYS_NAMED = IS_MAC && APP_KEY_FILES ? APP_KEY_FILES : `${shownRoot}/box/keys`;
 
+// `value` with each key that `named` finds named where this box keeps them.
+const namingKeysHere = (named: RegExp) => {
+  const rename = (value: unknown): unknown => {
+    if (typeof value === "string") return value.replace(named, (_, name) => `{file:${KEYS_NAMED}/${name}}`);
+    if (Array.isArray(value)) return value.map(rename);
+    if (isObject(value)) return Object.fromEntries(Object.entries(value).map(([key, inner]) => [key, rename(inner)]));
+    return value;
+  };
+  return rename;
+};
+
 // A key named where another computer keeps its keys (`{file:<its folder>/KUVO_KEY_…}`, from Also
 // Apply), named where this box keeps them.
-export function keysNamedHere(value: unknown): unknown {
-  if (typeof value === "string") return value.replace(/\{file:[^{}]*?(KUVO_KEY_[A-Za-z0-9_]+)\}/g, (_, name) => `{file:${KEYS_NAMED}/${name}}`);
-  if (Array.isArray(value)) return value.map(keysNamedHere);
-  if (isObject(value)) return Object.fromEntries(Object.entries(value).map(([key, inner]) => [key, keysNamedHere(inner)]));
-  return value;
-}
+export const keysNamedHere = namingKeysHere(/\{file:[^{}]*?(KUVO_KEY_[A-Za-z0-9_]+)\}/g);
+// The same, and one an earlier version named in the engine's environment (`{env:KUVO_KEY_…}`).
+export const olderKeysNamedHere = namingKeysHere(/\{(?:env|file):[^{}]*?(KUVO_KEY_[A-Za-z0-9_]+)\}/g);
 
 
 // What a box starts its engine with, unless its settings set it, each once (`defaults-added` names

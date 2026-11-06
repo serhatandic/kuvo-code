@@ -20,19 +20,6 @@ struct MCPSettings: View {
     /// The app's own browser tools: not yours to change.
     static let builtIn: Set = ["kuvo-browser"]
 
-    /// Servers start with their tools as plain tools, as integrations' do: the agent sees each one,
-    /// where behind Code Mode a smaller model often doesn't find them. One that never had a say
-    /// (added before, from the catalog or opencode's settings, or in the file) gets the same; one
-    /// you turned Code Mode on for keeps it.
-    @MainActor static func upgrade(_ config: EngineConfig) {
-        guard case .object(let servers) = config.value(at: path) else { return }
-        let changes: [(path: [String], value: JSONValue?)] = servers.compactMap { id, server in
-            guard !builtIn.contains(id), case .object(let settings) = server, settings["codemode"] == nil else { return nil }
-            return (path + [id, "codemode"], .bool(false))
-        }
-        if !changes.isEmpty { config.set(changes, noted: false) }
-    }
-
     /// Your servers: not Kuvo Code's own, nor integrations', which their page adds and removes
     /// (with their keys and sign-ins, which removing one here would leave), where it has one.
     private var names: [String] {
