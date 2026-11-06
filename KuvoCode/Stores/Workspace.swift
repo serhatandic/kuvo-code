@@ -898,13 +898,17 @@ final class Workspace {
     func readApprovalHere(for directory: String) async {
         let id = Self.box(of: directory)
         guard let box = boxes?(id) else { return }
-        if autopilotHere[id] == nil {
-            struct Info: Decodable { var features: [String]? }
-            let has = id == BoxClient.mac ? true : (try? await box.value(Info.self, "GET", "kuvo/info")).map { $0.features?.contains("autopilot") == true }
-            if let has { autopilotHere[id] = has }
-        }
+        await readAutopilotHere(on: id)
         guard let here = try? await box.value(ApprovalHere.self, "GET", "kuvo/approval") else { return }
         if approvalsHere[id] != here { approvalsHere[id] = here }
+    }
+
+    /// Reads whether the computer `id` has Autopilot, unless that's known.
+    func readAutopilotHere(on id: String) async {
+        guard autopilotHere[id] == nil, let box = boxes?(id) else { return }
+        struct Info: Decodable { var features: [String]? }
+        let has = id == BoxClient.mac ? true : (try? await box.value(Info.self, "GET", "kuvo/info")).map { $0.features?.contains("autopilot") == true }
+        if let has { autopilotHere[id] = has }
     }
 
     /// Confirms Full Access on the computer `directory` is on (asked the first time it's picked there).

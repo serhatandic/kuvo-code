@@ -935,7 +935,7 @@ beside it.
   it) is where it's done, and its mark is that site's own icon, which each client loads from the
   site itself; a step done on the computer has none, so no mark. `phase` is still kept from older
   bots, and the apps don't show it.
-- **Interactive or Autopilot** (bridge 0.9.199, feature `work.goals.modes`): how the bot runs it,
+- **Interactive or Autopilot** (bridge 0.9.199, feature `autopilot`): how the bot runs it,
   `mode`, set as you start it (`interactive` unless you say) and changed while it runs (`{action:
   change, mode}`); a goal kept from before runs Interactive. It never changes what the goal's
   conversations may do (their own modes, Auto or Full Access), nor what it may spend (the plan's
@@ -2535,8 +2535,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `work.goals` | a bot's goal ("Work", Goals): `kuvo/work/goals…`, and its tools (bridge 0.9.122) |
 | `work.goals.apps` | `app` on a goal's steps and what waits, and `GET kuvo/work/apps/icon` ("Work", Goals, Apps; bridge 0.9.196) |
 | `work.goals.projects` | `{action: projects}` on a proposed goal ("Work", Goals, Its projects; bridge 0.9.196) |
-| `work.goals.modes` | a goal's `mode` and `decided`, `mode` on start and change, `{action: decided}` ("Work", Goals, Interactive or Autopilot; bridge 0.9.199) |
-| `autopilot` | `kuvo/sessions/<id>/autopilot`, `autopilot` in `POST kuvo/sessions`: a conversation on Autopilot, its questions with a recommendation going ahead ("Autopilot"; bridge 0.9.200) |
+| `autopilot` | `kuvo/sessions/<id>/autopilot`, `autopilot` in `POST kuvo/sessions`: a conversation on Autopilot, its questions with a recommendation going ahead ("Autopilot"; bridge 0.9.200); a goal's `mode` and `decided`, `mode` on start and change, `{action: decided}` ("Work", Goals, Interactive or Autopilot) |
 | `work.projects` | a bot's projects ("Work", Projects): `make_project`, `list_projects`, `kuvo/work/asks`, `…/events`, `POST kuvo/work/asks/<id>`, `kuvo/work/settings`, `POST kuvo/projects/new`, `madeBy` on projects, `allowed` in `kuvo/bots` (bridge 0.9.107) |
 | `work.unanswering` | `GET kuvo/work/unanswering`: models that can't answer now ("Work", Models that can't answer; bridge 0.9.198) |
 | `search` | `kuvo/search` |

@@ -1679,7 +1679,6 @@ var FEATURES = [
   "work.goals",
   "work.goals.apps",
   "work.goals.projects",
-  "work.goals.modes",
   "work.unanswering",
   "autopilot",
   "vault",

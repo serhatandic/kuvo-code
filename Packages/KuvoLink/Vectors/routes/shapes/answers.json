@@ -3192,9 +3192,6 @@
             "literal": "work.goals.projects"
            },
            {
-            "literal": "work.goals.modes"
-           },
-           {
             "literal": "work.unanswering"
            },
            {
@@ -3510,9 +3507,6 @@
            },
            {
             "literal": "work.goals.projects"
-           },
-           {
-            "literal": "work.goals.modes"
            },
            {
             "literal": "work.unanswering"

@@ -167,6 +167,25 @@ import Testing
         #expect(workspace.model(for: "ses_carried")?.isAutopilot == true)
     }
 
+    /// Whether a computer offers Autopilot (a goal's card, a new conversation) is what its box says:
+    /// not until it has, none on one from before it, and this Mac's always.
+    @Test func aComputerOffersAutopilotOnlyWhereItsBoxHasIt() async throws {
+        func box(_ features: [String]) -> BoxClient {
+            BoxClient(box: "lab", transport: LocalBox { _ in
+                AsyncThrowingStream { $0.yield(.head(status: 200, headers: [:])); $0.yield(.body(try! JSONSerialization.data(withJSONObject: ["features": features]))); $0.finish() }
+            })
+        }
+        let workspace = Workspace()
+        workspace.boxes = { id in id == "old" ? box(["work.goals"]) : box(["work.goals", "autopilot"]) }
+        #expect(workspace.autopilotHere["old"] == nil)
+        await workspace.readAutopilotHere(on: "old")
+        await workspace.readAutopilotHere(on: "new")
+        await workspace.readAutopilotHere(on: BoxClient.mac)
+        #expect(workspace.autopilotHere["old"] == false)
+        #expect(workspace.autopilotHere["new"] == true)
+        #expect(workspace.autopilotHere[BoxClient.mac] == true)
+    }
+
     /// A question that marks a choice, on Autopilot: nothing waits on the Dock while its box goes
     /// ahead; one that's still asked after that (its goal paused, or the engine didn't take it)
     /// waits on you, as any.
