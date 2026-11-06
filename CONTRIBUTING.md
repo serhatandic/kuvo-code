@@ -317,6 +317,20 @@ with where it was asked from (`log show --predicate 'subsystem == "run.kuvo.code
 category == "prompts"'`). `KUVO_DEMO_NO_PROMPTS=0` lets a background copy ask after all,
 when you're there to answer.
 
+Those skips can't cover files: macOS asks when any process of the copy opens a file on your
+Desktop or in Documents, and holds that process until it's answered. So keep the copy and what
+it opens off them. Copy the app out of a checkout that's there, start it from an empty
+environment (`open` hands it your shell's, `KUVO_*` included), and where its data lists a project
+there, give it a home of its own, with the engine copied into it:
+
+```sh
+ditto "<build>/Kuvo Code.app" "$scratch/Kuvo Code.app"
+ditto "$HOME/Library/Application Support/run.kuvo.code.demo/engine" "$scratch/home/Library/Application Support/run.kuvo.code.demo/engine"
+env -i HOME="$HOME" USER="$USER" LOGNAME="$USER" PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+  /usr/bin/open -g -n --env KUVO_DEMO_BACKGROUND=1 --env KUVO_DEMO_USAGE=off --env KUVO_DEMO_NAME=<name> \
+  --env CFFIXED_USER_HOME="$scratch/home" --env HOME="$scratch/home" "$scratch/Kuvo Code.app"
+```
+
 | Variable | Effect |
 | --- | --- |
 | `KUVO_OPENCODE_BINARY` | Use this opencode binary instead of the pinned download |
