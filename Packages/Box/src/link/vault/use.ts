@@ -9,7 +9,7 @@ import type { Notice } from "../notices/notice";
 import { note } from "./activity";
 import { ask } from "./asks";
 import { pausedFor, setGrant, setPaused } from "./store";
-import { type Caller, grantFor } from "./who";
+import { type Caller, grantFor, untilOnAutopilot } from "./who";
 
 /** Where the use goes, and why the agent says it needs it. */
 export interface Use {
@@ -19,9 +19,14 @@ export interface Use {
   /** Whether it asks you when it may not use it at all (an item it named), rather than just saying no. */
   askWithout?: boolean;
   signal?: AbortSignal;
+  /** The conversation to watch while you're asked, where the caller goes unnamed (a shared SSH agent). */
+  watch?: string;
 }
 
-export type Allowed = { ok: true; how: "own" | "once" | "always" } | { ok: false; message: string };
+export type Allowed = { ok: true; how: "own" | "once" | "always" } | { ok: false; message: string; leftUndone?: boolean };
+
+/** How a use Autopilot left undone is noted: nobody was asked, and nothing's wrong. */
+export const AUTOPILOT_HOW = "autopilot";
 
 // Your phones, told what needs you (a bot paused by the tripwire): set by the process that holds the vault.
 let tell: (notice: Notice) => boolean = () => false;
@@ -86,9 +91,15 @@ export async function mayUse(item: VaultItem, caller: Caller, use: Use): Promise
     note({ what: "refused", ...itemOf(item), ...whoOf(caller), ...where, how: "no grant" });
     return { ok: false, message: `You may not use “${item.name}”. Ask the user for it with vault_ask.` };
   }
-  if (caller.autopilot) return { ok: false, message: LEFT_UNDONE_WORDS };
+  const leftUndone = (): Allowed => {
+    note({ what: "refused", ...itemOf(item), ...whoOf(caller), ...where, how: AUTOPILOT_HOW });
+    return { ok: false, message: LEFT_UNDONE_WORDS, leftUndone: true };
+  };
+  if (caller.autopilot) return leftUndone();
   note({ what: "asked", ...itemOf(item), ...whoOf(caller), ...where });
-  const answered = await ask({ kind: "use", ...whoOf(caller), ...(caller.group ? { group: caller.group } : {}), item: item.id, itemName: item.name, ...(use.site ? { site: use.site } : {}), ...(use.why ? { why: use.why } : {}), ...(machineName() ? { machine: machineName() } : {}) }, use.signal);
+  const { value: answered, onAutopilot } = await untilOnAutopilot(use.watch ?? caller.session, use.signal, signal =>
+    ask({ kind: "use", ...whoOf(caller), ...(caller.group ? { group: caller.group } : {}), item: item.id, itemName: item.name, ...(use.site ? { site: use.site } : {}), ...(use.why ? { why: use.why } : {}), ...(machineName() ? { machine: machineName() } : {}) }, signal));
+  if (onAutopilot) return leftUndone();
   if (answered.answer === "no") {
     note({ what: "declined", ...itemOf(item), ...whoOf(caller), ...where, ...(answered.client ? { client: answered.client, by: answered.by } : {}) });
     return { ok: false, message: `The user didn't let you use “${item.name}”.` };

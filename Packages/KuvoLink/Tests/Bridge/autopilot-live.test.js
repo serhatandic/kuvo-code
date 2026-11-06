@@ -1,7 +1,7 @@
 // A conversation on Autopilot, on the real engine with a real model: what it asks marking a choice
 // goes ahead on it, keeping the call under the step that asked; changed, its agent hears and goes
 // that way; what's left unmarked comes back declined, and its turn goes on to the end with nobody
-// told and nothing chosen; and off, even a marked one waits.
+// told and nothing chosen; what an MCP server asks is declined too; and off, even a marked one waits.
 // The real box script and a real engine on a free model, in folders of the test's own. Skipped
 // unless OPENCODE_TEST_BINARY names the engine.
 //
@@ -36,12 +36,31 @@ test("Autopilot on a real engine: a marked question goes ahead and can be change
     }
   };
 
+  // An MCP server with a tool that asks you something (an elicitation), and says what it heard.
+  const probe = path.join(home, "probe.mjs");
+  fs.writeFileSync(probe, `
+    import readline from "node:readline";
+    const send = message => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\\n");
+    let calling;
+    readline.createInterface({ input: process.stdin }).on("line", line => {
+      const message = JSON.parse(line);
+      if (message.method === "initialize") return send({ id: message.id, result: { protocolVersion: message.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "probe", version: "1" } } });
+      if (message.method === "tools/list") return send({ id: message.id, result: { tools: [{ name: "pick_repository", description: "Picks the repository to work on.", inputSchema: { type: "object", properties: {} } }] } });
+      if (message.method === "tools/call") {
+        calling = message.id;
+        return send({ id: "ask", method: "elicitation/create", params: { message: "Which repository?", requestedSchema: { type: "object", properties: { repo: { type: "string" } }, required: ["repo"] } } });
+      }
+      if (message.id === "ask") return send({ id: calling, result: { content: [{ type: "text", text: "probe heard: " + (message.result?.action ?? "an error") }] } });
+      if (message.id !== undefined && message.method) send({ id: message.id, result: {} });
+    });
+  `);
+
   // The engine, as the box starts it, with no accounts: its default model is a free one.
   const workspace = path.join(home, "work");
   const env = {
     PATH: process.env.PATH, HOME: home, TMPDIR: `${home}/tmp/`, XDG_CONFIG_HOME: `${home}/xdg/config`, XDG_DATA_HOME: `${home}/xdg/data`,
     XDG_STATE_HOME: `${home}/xdg/state`, XDG_CACHE_HOME: `${home}/xdg/cache`, OPENCODE_PASSWORD: "pw",
-    OPENCODE_CONFIG_CONTENT: link.engineConfigContent(undefined),
+    OPENCODE_CONFIG_CONTENT: JSON.stringify({ ...JSON.parse(link.engineConfigContent(undefined)), mcp: { servers: { probe: { type: "local", command: [process.execPath, probe] } } } }),
   };
   const child = spawn(binary, ["serve", "--stdio", "--port", "0"], { env, cwd: workspace, stdio: ["pipe", "pipe", "pipe"] });
   atEnd(() => new Promise(resolve => { if (child.exitCode !== null) return resolve(); child.on("exit", resolve); child.stdin.end(); child.kill(); }));
@@ -142,6 +161,16 @@ test("Autopilot on a real engine: a marked question goes ahead and can be change
   assert.deepEqual(told.slice(before).filter(each => each.data?.request), [], "nobody's told");
   assert.ok(asking.some(each => each.state?.status === "error" && /This is on Autopilot:/.test(JSON.stringify(each.state.error))), `its step shows it was set aside, as both apps read it: ${JSON.stringify(asking.map(each => each.state))}`);
   assert.match(JSON.stringify(left), /monday|friday/i, "it says what it settled on");
+
+  // What an MCP server asks, filed under no session: its box declines it, the tool hears, and nobody's told.
+  const beforeServer = told.length;
+  await send("msg_autopilotlive00004", "Call your tool probe_pick_repository now, once. Then reply with one short line saying what it returned.");
+  await turnAfter("msg_autopilotlive00004", "its turn to end, with the server's form declined");
+  // (Its step may be its own, or Code Mode's, which calls the tool for it.)
+  const steps = (await page()).flatMap(each => each.content ?? []).filter(block => block.type === "tool");
+  assert.match(JSON.stringify(steps), /probe heard: (decline|cancel)/, `the server heard no: ${JSON.stringify(steps.slice(0, 2).concat(steps.filter(each => !/question/.test(each.name ?? ""))).map(each => [each.name, each.state?.status, each.state?.error, JSON.stringify(each.state?.content ?? "").slice(0, 300)]))}`);
+  assert.deepEqual((await api("GET", "api/session/global/form")).json?.data ?? [], [], "nothing's left asked");
+  assert.deepEqual(told.slice(beforeServer).filter(each => each.data?.request), [], "nobody's told");
 
   // Off: a marked question waits like any other. (Only its label says so: what Autopilot told it
   // is gone, so this says it itself.)

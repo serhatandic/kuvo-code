@@ -22677,11 +22677,15 @@ async function callerOf(session, readEngine, readBridge) {
     if (bridge?.port && bridge?.password && processRuns(bridge.pid, "kuvo-agents"))
       targets.push(bridge);
   } catch {}
+  const above = (each) => {
+    const runsFor = each?.metadata?.kuvo?.engineFor;
+    return each?.parentID ?? (typeof runsFor === "string" ? runsFor : null);
+  };
   let current = await sessionAt(targets, session);
-  for (let step = 0;step < 5 && current?.parentID; step++)
-    current = await sessionAt(targets, current.parentID) ?? current;
+  for (let step = 0;step < 5 && above(current); step++)
+    current = await sessionAt(targets, above(current)) ?? current;
   const root = current?.id ?? session;
-  const unsure = !!current?.parentID;
+  const unsure = !!above(current);
   const seat = current?.metadata?.kuvo?.seat;
   const bots = listBots();
   const works = worksFor(current);
@@ -22696,6 +22700,31 @@ async function callerOf(session, readEngine, readBridge) {
     ...bot ? { bot: bot.id, botName: bot.name } : {},
     ...seat || unsure ? { seat: true, ...typeof seat?.group === "string" && seat.group ? { group: seat.group } : {} } : {}
   };
+}
+var AUTOPILOT_LOOK = 5000;
+async function untilOnAutopilot(session, signal, ask) {
+  if (!session)
+    return { value: await ask(signal), onAutopilot: false };
+  const stop = new AbortController;
+  let onAutopilot = false;
+  let looking = false;
+  const look = setInterval(async () => {
+    if (looking)
+      return;
+    looking = true;
+    const who = await callerOf(session, readEngineFile, readBridgeFile).catch(() => ({}));
+    looking = false;
+    if (who.autopilot) {
+      onAutopilot = true;
+      stop.abort();
+    }
+  }, AUTOPILOT_LOOK);
+  try {
+    const value = await ask(signal ? AbortSignal.any([signal, stop.signal]) : stop.signal);
+    return { value, onAutopilot };
+  } finally {
+    clearInterval(look);
+  }
 }
 var ordered = (value) => Array.isArray(value) ? value.map(ordered) : value && typeof value === "object" ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, ordered(value[key])])) : value;
 async function isCalling(session, tools, args, readEngine, readBridge) {
@@ -22935,7 +22964,7 @@ async function makeProjectTool(caller, args, { signal, wait, every } = {}) {
   }
   const ask = askWork(asker, action, given);
   const away = (await callerOf(caller.session, readEngineFile, readBridgeFile)).autopilot === true;
-  const answer = await answerOf(ask.id, { wait: away ? 0 : wait ?? (Number(process.env.KUVO_WORK_ASK_WAIT) || undefined), every, signal });
+  const { value: answer } = await untilOnAutopilot(away ? undefined : caller.session, signal, (stops) => answerOf(ask.id, { wait: away ? 0 : wait ?? (Number(process.env.KUVO_WORK_ASK_WAIT) || undefined), every, signal: stops }));
   if (!answer)
     return said(`The user hasn't answered yet: it stays asked on ${HERE}, and you'll hear when they answer. Carry on with what you can meanwhile.`);
   return answer.isError ? refused(answer.text) : said(answer.text);
@@ -25721,6 +25750,7 @@ function watchVaultAsks(tell, answered = () => {}, after = 2000) {
 }
 
 // Packages/Box/src/link/vault/use.ts
+var AUTOPILOT_HOW = "autopilot";
 var tell2 = () => false;
 var setVaultTell = (to) => {
   tell2 = to;
@@ -25775,10 +25805,16 @@ async function mayUse(item, caller, use) {
     note2({ what: "refused", ...itemOf(item), ...whoOf(caller), ...where, how: "no grant" });
     return { ok: false, message: `You may not use “${item.name}”. Ask the user for it with vault_ask.` };
   }
+  const leftUndone = () => {
+    note2({ what: "refused", ...itemOf(item), ...whoOf(caller), ...where, how: AUTOPILOT_HOW });
+    return { ok: false, message: LEFT_UNDONE_WORDS, leftUndone: true };
+  };
   if (caller.autopilot)
-    return { ok: false, message: LEFT_UNDONE_WORDS };
+    return leftUndone();
   note2({ what: "asked", ...itemOf(item), ...whoOf(caller), ...where });
-  const answered = await ask({ kind: "use", ...whoOf(caller), ...caller.group ? { group: caller.group } : {}, item: item.id, itemName: item.name, ...use.site ? { site: use.site } : {}, ...use.why ? { why: use.why } : {}, ...machineName() ? { machine: machineName() } : {} }, use.signal);
+  const { value: answered, onAutopilot } = await untilOnAutopilot(use.watch ?? caller.session, use.signal, (signal) => ask({ kind: "use", ...whoOf(caller), ...caller.group ? { group: caller.group } : {}, item: item.id, itemName: item.name, ...use.site ? { site: use.site } : {}, ...use.why ? { why: use.why } : {}, ...machineName() ? { machine: machineName() } : {} }, signal));
+  if (onAutopilot)
+    return leftUndone();
   if (answered.answer === "no") {
     note2({ what: "declined", ...itemOf(item), ...whoOf(caller), ...where, ...answered.client ? { client: answered.client, by: answered.by } : {} });
     return { ok: false, message: `The user didn't let you use “${item.name}”.` };
@@ -25846,7 +25882,10 @@ function sourceFor(caller) {
   const read = new Map;
   const asking = new Map;
   const refused = new Map;
-  const asked = async () => EVERYONE_ONLY ? {} : await caller();
+  const asked = async () => {
+    const said = await caller();
+    return { who: EVERYONE_ONLY ? said?.autopilot ? { autopilot: true } : {} : said, ...said?.session ? { watch: said.session } : {} };
+  };
   return {
     keys: async () => {
       const who = agentsUseVault() && !isLocked() ? await caller() : null;
@@ -25881,10 +25920,10 @@ function sourceFor(caller) {
         const stop = new AbortController;
         const answer = (async () => {
           const item = itemByID(key.id);
-          const who = await asked();
+          const { who, watch } = await asked();
           if (!item || !who || !agentsUseVault())
             return false;
-          const allowed = await mayUse(item, who, { program: "ssh", signal: stop.signal });
+          const allowed = await mayUse(item, who, { program: "ssh", signal: stop.signal, watch });
           if (allowed.ok)
             noteUse(item, who, { program: "ssh" }, allowed.how);
           else if (!stop.signal.aborted)
@@ -27249,20 +27288,26 @@ async function askForItem(caller, args, signal) {
   const why = oneLine(typeof args.why === "string" ? args.why : "", 300).trim();
   if (!need || !why)
     return failed2("Say what you need and why.");
-  if (caller.autopilot)
-    return { text: LEFT_UNDONE_WORDS, isError: false };
   const site = siteOf2(args.site) ?? undefined;
-  note2({ what: "asked", ...caller.bot ? { bot: caller.bot, botName: caller.botName } : {}, ...caller.root ? { session: caller.root, sessionName: caller.sessionName } : {}, why: `${need}: ${why}`, ...site ? { site } : {} });
-  const answered = await ask({
+  const asker = { ...caller.bot ? { bot: caller.bot, botName: caller.botName } : {}, ...caller.root ? { session: caller.root, sessionName: caller.sessionName } : {} };
+  const leftUndone = () => {
+    note2({ what: "refused", ...asker, why: `${need}: ${why}`, ...site ? { site } : {}, how: AUTOPILOT_HOW });
+    return { text: LEFT_UNDONE_WORDS, isError: false };
+  };
+  if (caller.autopilot)
+    return leftUndone();
+  note2({ what: "asked", ...asker, why: `${need}: ${why}`, ...site ? { site } : {} });
+  const { value: answered, onAutopilot } = await untilOnAutopilot(caller.session, signal, (stops) => ask({
     kind: "item",
     need,
     why,
     ...caller.group ? { group: caller.group } : {},
     ...site ? { site } : {},
-    ...caller.bot ? { bot: caller.bot, botName: caller.botName } : {},
-    ...caller.root ? { session: caller.root, sessionName: caller.sessionName } : {},
+    ...asker,
     ...IS_MAC ? {} : { machine: os11.hostname() }
-  }, signal);
+  }, stops));
+  if (onAutopilot)
+    return leftUndone();
   const item = answered.item ? readItems().find((each) => each.id === answered.item) : undefined;
   if (answered.answer === "no" || !item)
     return { text: "The user didn't give you anything for this. Go on without it, or say what's missing in your report.", isError: false };
@@ -27331,7 +27376,7 @@ async function runWith(caller, args, signal) {
       continue;
     const may = await mayUse(item, caller, { program, why, askWithout: true, signal });
     if (!may.ok)
-      return failed2(may.message);
+      return may.leftUndone ? { text: may.message, isError: false } : failed2(may.message);
     allowed.set(item.id, may.how);
   }
   const scratch = path94.join(RUN_FOLDER, crypto36.randomBytes(8).toString("hex"));

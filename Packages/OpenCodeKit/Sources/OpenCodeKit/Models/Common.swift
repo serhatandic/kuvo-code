@@ -122,10 +122,6 @@ public struct StructuredError: Codable, Sendable, Hashable, LocalizedError {
 
     /// The step or tool was stopped (Stop, or a message sent right away), not broken.
     public var isInterruption: Bool { type == "aborted" }
-
-    /// A question its box turned down on Autopilot, with its words (`LEFT_UNDONE_WORDS`): nobody was
-    /// asked and nothing broke.
-    public var isSetAsideOnAutopilot: Bool { message.contains("This is on Autopilot:") }
 }
 
 /// Times on the wire are milliseconds since 1970.

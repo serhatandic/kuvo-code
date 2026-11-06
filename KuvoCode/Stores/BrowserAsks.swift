@@ -136,6 +136,12 @@ final class BrowserAsks {
         for ask in asks where (ask.asking ?? ask.session) == session && ask.machine == nil { end(ask.id) }
     }
 
+    /// A conversation went on Autopilot: what it has asked on this Mac no longer waits for you. (A
+    /// machine's browser sees to its own, and closes its card here.)
+    func leaveUndone(_ conversation: String) {
+        for ask in asks where ask.session == conversation && ask.machine == nil { answer(ask.id, .leftOnAutopilot) }
+    }
+
     /// An ask on this Mac whose tool call has ended: its card goes, and the call hears no.
     private func end(_ id: String) {
         guard let respond = responders.removeValue(forKey: id) else { return }

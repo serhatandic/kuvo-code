@@ -157,7 +157,7 @@ struct ToolCallView: View {
             } else if case .failed(_, let error, _, _) = call.state, !(isSandboxAsk && Self.sandboxOutcome(outputText) != nil) {
                 if error.isInterruption {
                     Text("Stopped")
-                } else if !error.isSetAsideOnAutopilot {
+                } else if !call.isSetAsideOnAutopilot {
                     Text(error.message)
                         .lineLimit(1)
                         .foregroundStyle(.red)
@@ -180,7 +180,7 @@ struct ToolCallView: View {
         switch call.state {
         case .failed(_, let error, _, _) where error.isInterruption:
             Image(systemName: "stop.circle")
-        case .failed(_, let error, _, _) where error.isSetAsideOnAutopilot:
+        case .failed where call.isSetAsideOnAutopilot:
             Image(systemName: AutopilotShown.symbol)
         case .failed:
             Image(systemName: "xmark.circle.fill").foregroundStyle(.red)
@@ -540,8 +540,12 @@ struct ToolCallView: View {
         return (diffs.reduce(0) { $0 + $1.additions }, diffs.reduce(0) { $0 + $1.deletions })
     }
 
+    /// What a question set aside on Autopilot asked.
+    private var setAside: String { call.isSetAsideOnAutopilot ? call.questionsAsked : "" }
+
     private var outputText: String {
-        switch call.state {
+        if call.isSetAsideOnAutopilot { return setAside }
+        return switch call.state {
         case .completed(_, let output, _): output.compactMap(\.text).joined(separator: "\n")
         case .failed(_, let error, let output, _): ([error.message] + (output ?? []).compactMap(\.text)).joined(separator: "\n")
         default: ""
@@ -579,7 +583,7 @@ struct ToolCallView: View {
     }
 
     private var hasDetails: Bool {
-        subagentSession != nil || !diffs.isEmpty || ((call.name == "shell" || isSandboxAsk) && !outputText.isEmpty) || code != nil || (call.state.isFailure && !call.isSetAsideOnAutopilot) || !pictures.isEmpty
+        subagentSession != nil || !diffs.isEmpty || ((call.name == "shell" || isSandboxAsk) && !outputText.isEmpty) || code != nil || (call.state.isFailure && !call.isSetAsideOnAutopilot) || !setAside.isEmpty || !pictures.isEmpty
     }
 
     /// Pictures the step brought back, like a screenshot of the page.

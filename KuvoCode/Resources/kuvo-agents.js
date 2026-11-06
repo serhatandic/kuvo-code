@@ -3343,14 +3343,17 @@ class EngineThread {
     };
     const answerForm = async (form) => {
       let answer = null;
+      let words;
       try {
-        answer = await hooks.question({ title: form.title ?? "A question", fields: form.fields ?? [], metadata: { kind: "form", ...form.metadata } });
+        answer = await hooks.question({ title: form.title ?? "A question", fields: form.fields ?? [], metadata: { kind: "form", ...form.metadata }, declined: (said) => {
+          words = said;
+        } });
       } catch {}
       const formPath = `/api/session/${encodeURIComponent(form.sessionID)}/form/${encodeURIComponent(form.id)}`;
       if (answer)
         await this.link.request("POST", `${formPath}/reply`, { answer }).catch(() => {});
       else
-        await this.link.request("DELETE", formPath).catch(() => {});
+        await this.link.request("DELETE", words ? `${formPath}?message=${encodeURIComponent(words)}` : formPath).catch(() => {});
     };
     const followShell = (tool, shellID) => {
       if (shells.has(tool))
@@ -7997,7 +8000,10 @@ ${others.map((path) => `- ${path}`).join(`
           const answer = await active.hooks.question({
             title: "Question",
             toolCallID: call.toolCallId,
-            fields: [{ key: "answer", title: "Question", description: call.title ?? "", required: true, type: "string", options: options.map((option) => ({ value: option.optionId, label: option.name ?? option.optionId })) }]
+            fields: [{ key: "answer", title: "Question", description: call.title ?? "", required: true, type: "string", options: options.map((option) => ({ value: option.optionId, label: option.name ?? option.optionId })) }],
+            declined: (words) => {
+              (active.declined ??= new Map).set(call.toolCallId, words);
+            }
           });
           const chosen = answer?.answer;
           return chosen ? { outcome: { outcome: "selected", optionId: String(chosen) } } : { outcome: { outcome: "cancelled" } };
@@ -12484,9 +12490,14 @@ class CodexThread {
         options: (question.options ?? []).map((option) => ({ value: option, label: option })),
         custom: true
       }));
-      const answer = await hooks.question({ title: questions.length === 1 ? "Question" : "Questions", fields, signal: waiting.abort.signal });
+      let declined;
+      const answer = await hooks.question({ title: questions.length === 1 ? "Question" : "Questions", fields, signal: waiting.abort.signal, declined: (words) => {
+        declined = words;
+      } });
       if (waiting.typed)
         return { text: waiting.typed.text, files: waiting.typed.files };
+      if (!answer && declined)
+        return { text: declined, files: [] };
       if (!answer)
         return;
       const said = (index) => {
@@ -13251,10 +13262,13 @@ From memory: ${cited.join("; ")}`);
           custom: question.isOther ?? !question.options?.length,
           ...question.isSecret ? { format: "password" } : {}
         }));
-        const answer = await hooks.question({ title: questions.length === 1 ? questions[0].header ?? "Question" : "Questions", fields, toolCallID: params.itemId });
+        let declined;
+        const answer = await hooks.question({ title: questions.length === 1 ? questions[0].header ?? "Question" : "Questions", fields, toolCallID: params.itemId, declined: (words) => {
+          declined = words;
+        } });
         const answers = {};
         for (const question of questions) {
-          const value = answer?.[question.id];
+          const value = answer?.[question.id] ?? declined;
           answers[question.id] = { answers: value === undefined || value === null ? [] : Array.isArray(value) ? value.map(String) : [String(value)] };
         }
         return { answers };
@@ -14683,12 +14697,15 @@ class GrokAgent {
         if (name === "x.ai/ask_user_question") {
           return (async () => {
             const questions = call?.questions ?? [];
-            const answer = context.hooks ? await context.hooks.question({ title: "Question", fields: questionFields(questions), toolCallID: call?.toolCallId }) : null;
-            if (!answer)
+            let declined;
+            const answer = context.hooks ? await context.hooks.question({ title: "Question", fields: questionFields(questions), toolCallID: call?.toolCallId, declined: (words) => {
+              declined = words;
+            } }) : null;
+            if (!answer && !declined)
               return { outcome: "cancelled" };
             const answers = {};
             questions.forEach((question, index) => {
-              const value = answer[question.id ?? `q${index}`];
+              const value = answer?.[question.id ?? `q${index}`] ?? declined;
               answers[question.question] = Array.isArray(value) ? value.map(String) : value === undefined ? [] : [String(value)];
             });
             return { outcome: "accepted", answers };
@@ -23330,4 +23347,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 896dc010b435c5cf871d52f3f96ef62f9923b46d12ab3f3e0badce5a2a303375
+// Built from Packages/Box/src/agents f8404ff8905562e4e50f12ee98ccdd2f53dc35b8bb4143b853d172c912ea98e0

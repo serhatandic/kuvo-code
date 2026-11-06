@@ -47,6 +47,7 @@ final class AppModel {
     /// The panel's browser as MCP tools for the agent.
     @ObservationIgnored private(set) lazy var browserTools: BrowserToolServer = {
         browserAsks.isOnAutopilot = { [weak workspace] id in workspace?.isOnAutopilot(id) == true }
+        workspace.autopilotTurnedOn = { [weak browserAsks] id in browserAsks?.leaveUndone(id) }
         return BrowserToolServer(agent: BrowserAgent(utilities: utilities, asks: browserAsks))
     }()
     let workspace = Workspace()

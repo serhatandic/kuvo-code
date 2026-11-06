@@ -448,6 +448,28 @@ describe("ACP agents, nothing dropped", () => {
     await started
   })
 
+  test("Antigravity's question turned down by its box with words (Autopilot): its step says them, as it can only hear cancelled", async () => {
+    sessions = undefined as unknown as Sessions
+    const update = { sessionUpdate: "tool_call", toolCallId: "interaction_8", title: "Which roast?", status: "pending" }
+    const agent = agentSaying([["s1", update]], [], { method: "session/request_permission", params: { toolCall: { toolCallId: "interaction_8", title: "Which roast?" }, options: [{ optionId: "warm", name: "Warm" }] } })
+    const started = run(agent)
+    await until(() => Boolean(sessions?.list(root).length && sessions.forms(sessions.list(root)[0].id).length))
+    const session = sessions.list(root)[0].id
+    sessions.replyForm(session, sessions.forms(session)[0].id, null, "This is on Autopilot: leave it.")
+    await started
+    expect(answers()).toEqual([{ outcome: "cancelled" }])
+    expect(tools(session)[0]).toMatchObject({ id: "interaction_8", state: { status: "error", error: { message: "This is on Autopilot: leave it." } } })
+  })
+
+  test("Grok's question turned down by its box with words (Autopilot): they're the answer it hears", async () => {
+    const ask = { method: "_x.ai/ask_user_question", params: { toolCallId: "q1", questions: [{ id: "which", question: "Which roast?", options: [{ label: "Warm" }] }] } }
+    const id = start(new TestGrok(program(fakeAcp([], [], ask), join(root, "grok")), root))
+    await until(() => sessions.forms(id).length === 1)
+    sessions.replyForm(id, sessions.forms(id)[0].id, null, "This is on Autopilot: leave it.")
+    await settled(id)
+    expect(received().find((message) => message.id >= 900 && message.id < 1000 && !message.method).result).toEqual({ outcome: "accepted", answers: { "Which roast?": ["This is on Autopilot: leave it."] } })
+  })
+
   test("a form it asks you to fill in", async () => {
     sessions = undefined as unknown as Sessions
     const agent = agentSaying([], [], { method: "elicitation/create", params: { message: "Which branch?", requestedSchema: { type: "object", properties: { branch: { type: "string", enum: ["main", "dev"] } }, required: ["branch"] } } })

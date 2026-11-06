@@ -72,8 +72,12 @@ function sourceFor(caller: () => Promise<Caller | null>) {
   const asking = new Map<string, { answer: Promise<boolean>; waiting: number; stop: AbortController }>();
   const refused = new Map<string, number>();
   // Where any conversation's commands could reach this agent, it's asked as no one: only what you
-  // keep for everyone, never a bot's or a project's.
-  const asked = async (): Promise<Caller | null> => (EVERYONE_ONLY ? {} : await caller());
+  // keep for everyone, never a bot's or a project's. Only whether it's on Autopilot is taken from what
+  // it says it is, as that can only leave a use undone. And that's the conversation to watch meanwhile.
+  const asked = async (): Promise<{ who: Caller | null; watch?: string }> => {
+    const said = await caller();
+    return { who: EVERYONE_ONLY ? (said?.autopilot ? { autopilot: true } : {}) : said, ...(said?.session ? { watch: said.session } : {}) };
+  };
   return {
     keys: async (): Promise<AgentKey[]> => {
       const who = agentsUseVault() && !isLocked() ? await caller() : null;
@@ -108,9 +112,9 @@ function sourceFor(caller: () => Promise<Caller | null>) {
         const stop = new AbortController();
         const answer = (async () => {
           const item = itemByID(key.id);
-          const who = await asked();
+          const { who, watch } = await asked();
           if (!item || !who || !agentsUseVault()) return false;
-          const allowed = await mayUse(item, who, { program: "ssh", signal: stop.signal });
+          const allowed = await mayUse(item, who, { program: "ssh", signal: stop.signal, watch });
           if (allowed.ok) noteUse(item, who, { program: "ssh" }, allowed.how);
           else if (!stop.signal.aborted) refused.set(key.id, Date.now() + REFUSED_FOR);
           return allowed.ok;

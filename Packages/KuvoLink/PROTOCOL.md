@@ -3522,16 +3522,19 @@ what may be decided without asking. Every conversation is Interactive until it's
   aren't told of it, and a session that started it isn't woken for it. Nothing waits for you: one
   that marks none, asks for a secret (a field with `format: "password"`) or isn't the question tool's
   (an MCP server's form) comes back declined (`DELETE …/form/<id>?message=`), with nothing chosen or
-  filled in and words telling its agent to leave that step undone and go on; a coding agent's hears it
-  was dismissed. One that's still asked once the box has looked (the engine didn't take it, or you
+  filled in and words telling its agent to leave that step undone and go on; a coding agent hears those
+  words (Claude Code as why it was denied, Codex and Grok as its answer, an engine model as the engine's
+  decline), except Antigravity, which can only hear it was cancelled, though its step keeps the words. One that's still asked once the box has looked (the engine didn't take it, or you
   have its goal paused) waits for you, and they're told. What its conversations asked while the box
   couldn't hear (it started again, or its engine did) is dealt with as it catches up. What an MCP
   server asks in a folder, filed under no session (`global`), is declined only where it holds nothing
   but conversations on Autopilot (a tool of that server at work in them, and in no other there). So
   is a sign-in, a code or a step the browser would ask you for, or anything the vault would: each comes
-  back at once, left undone, and a project it would ask you about stays asked while it carries on. A
-  sign-in the vault lets it use on its own still goes ahead. Its permissions are its approval's, and
-  wait as ever.
+  back at once, left undone, and a project it would ask you about stays asked while it carries on.
+  What it was already waiting on when Autopilot is turned on stops waiting the same way, within a few
+  seconds. A coding agent's engine run (Auto's, `kuvo.engineFor`) counts as the conversation it runs for.
+  The vault's activity keeps a use left undone as `refused`, `how: "autopilot"`. A sign-in the vault lets
+  it use on its own still goes ahead. Its permissions are its approval's, and wait as ever.
 - `POST kuvo/sessions/<id>/autopilot/asked` `{form}`: whether a question asked in the conversation
   or by one of its subagents waits on you: `{waiting: bool}`. A client that hears a question asked in
   a conversation on Autopilot asks this before it counts or notifies, and goes by the answer: it

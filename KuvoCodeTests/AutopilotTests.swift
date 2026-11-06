@@ -194,29 +194,85 @@ import Testing
         #expect(workspace.autopilotHere[BoxClient.mac] == true)
     }
 
-    /// A question in a conversation on Autopilot counts, and tells you, as its box says it waits on
-    /// you, whatever it marks; one its box can't say about tells you, as any question. A conversation
-    /// that isn't on Autopilot asks its box nothing.
+    /// What the agent's browser asks of you, with the app's own wiring, through the tool it calls.
     @Test func aSignInACodeOrAStepOnAutopilotComesBackAtOnceWithNoCard() async throws {
         defer { engine.stop() }
-        let workspace = Workspace()
-        workspace.api = engine.api
+        let app = AppModel()
+        app.workspace.api = engine.api
         engine.list([StubEngine.session("ses_a", directory: "/tmp/kuvo-tests-autopilot", extra: ["metadata": ["kuvo": ["autopilot": true]]]),
                      StubEngine.session("ses_i", directory: "/tmp/kuvo-tests-autopilot")])
-        await workspace.refresh()
-        let asks = BrowserAsks()
-        asks.isOnAutopilot = workspace.isOnAutopilot
-        guard case .leftOnAutopilot = await asks.ask(.action(instruction: "Solve the CAPTCHA."), host: "example.com", session: "ses_a") else {
-            Issue.record("It went on to ask")
-            return
-        }
-        #expect(asks.asks.isEmpty)
-        #expect(BrowserAgent.leftOnAutopilot.contains("This is on Autopilot:"))
+        await app.workspace.refresh()
+        _ = app.browserTools
+        let agent = BrowserAgent(utilities: app.utilities, asks: app.browserAsks)
+        #expect(await agent.askUser("Solve the CAPTCHA.", for: "ses_a").contains("This is on Autopilot:"))
+        #expect(app.browserAsks.asks.isEmpty)
         // An Interactive conversation's still shows its card.
-        let asking = Task { await asks.ask(.action(instruction: "Solve the CAPTCHA."), host: "example.com", session: "ses_i") }
-        try await until { !asks.asks.isEmpty }
+        let asking = Task { await app.browserAsks.ask(.action(instruction: "Solve the CAPTCHA."), host: "example.com", session: "ses_i") }
+        try await until { !app.browserAsks.asks.isEmpty }
         asking.cancel()
         _ = await asking.value
+    }
+
+    /// Turned on while a card is up (from the phone, say), the agent stops waiting and the card goes.
+    @Test func goingOnAutopilotReleasesACardAlreadyUp() async throws {
+        defer { engine.stop() }
+        let app = AppModel()
+        app.workspace.api = engine.api
+        engine.list([StubEngine.session("ses_i", directory: "/tmp/kuvo-tests-autopilot"), StubEngine.session("ses_o", directory: "/tmp/kuvo-tests-autopilot")])
+        await app.workspace.refresh()
+        _ = app.browserTools
+        let asking = Task { await app.browserAsks.ask(.action(instruction: "Solve the CAPTCHA."), host: "example.com", session: "ses_i") }
+        let other = Task { await app.browserAsks.ask(.action(instruction: "Approve it."), host: "example.com", session: "ses_o") }
+        try await until { app.browserAsks.asks.count == 2 }
+        engine.on("GET", "/api/session/ses_i", json: ["data": StubEngine.session("ses_i", directory: "/tmp/kuvo-tests-autopilot", extra: ["metadata": ["kuvo": ["autopilot": true]]])])
+        app.workspace.handle(try engine.event("session.metadata.updated", session: "ses_i"))
+        guard case .leftOnAutopilot = await asking.value else {
+            Issue.record("It went on waiting")
+            return
+        }
+        #expect(app.browserAsks.asks.map(\.session) == ["ses_o"], "another conversation's stays")
+        other.cancel()
+        _ = await other.value
+    }
+
+    /// What an MCP server asks a conversation on Autopilot counts, and tells you, only as its box says.
+    @Test func anMCPServersFormOnAutopilotCountsOnlyAsItsBoxSays() async throws {
+        defer { engine.stop() }
+        let project = "/tmp/kuvo-tests-autopilot"
+        let workspace = Workspace()
+        workspace.api = engine.api
+        engine.list([StubEngine.session("ses_a", directory: project, extra: ["metadata": ["kuvo": ["autopilot": true]]])], running: ["ses_a"])
+        engine.conversation("ses_a", [["id": "msg_02", "type": "assistant", "agent": "build", "time": ["created": 2], "model": ["id": "m", "providerID": "p"],
+                                       "content": [["type": "tool", "id": "call_1", "name": "github_create_issue", "executed": true,
+                                                    "state": ["status": "running", "input": ["title": "Crash"]]]]]])
+        await workspace.refresh()
+        let asked = Guarded<[String]>([])
+        workspace.boxes = { _ in
+            BoxClient(box: "lab", transport: LocalBox { request in
+                AsyncThrowingStream { out in
+                    let form = (try? JSONSerialization.jsonObject(with: request.body) as? [String: Any])?["form"] as? String ?? ""
+                    asked.withLock { $0.append("\(request.path) \(form)") }
+                    out.yield(.head(status: 200, headers: [:]))
+                    out.yield(.body(Data(#"{"waiting":\#(form.hasSuffix("waits"))}"#.utf8)))
+                    out.finish()
+                }
+            })
+        }
+        func ask(_ id: String) throws {
+            let form: [String: Any] = ["id": id, "sessionID": FormRequest.anySession, "title": "github is requesting input",
+                                       "metadata": ["kind": "mcp-elicitation", "server": "github", "message": "Which repository?"],
+                                       "fields": [["key": "repo", "type": "string"]]]
+            workspace.handle(try ServerEvent(json: JSONSerialization.data(withJSONObject: [
+                "id": "evt_" + Identifier.message().dropFirst(4), "type": "form.created", "created": Date().timeIntervalSince1970 * 1000,
+                "location": ["directory": project], "data": ["form": form],
+            ])))
+        }
+        try ask("frm_goes")
+        #expect(workspace.waitingCount == 0, "not until its box has said")
+        try await until { asked.withLock { $0.contains("kuvo/sessions/ses_a/autopilot/asked frm_goes") } && !workspace.notifying.contains("frm_goes") }
+        #expect(workspace.waitingCount == 0)
+        try ask("frm_waits")
+        try await until { workspace.waitingCount == 1 }
     }
 
     @Test func aQuestionSetAsideOnAutopilotReadsSoAndDoesntCountAsFailed() throws {
@@ -231,8 +287,25 @@ import Testing
         guard case .tool(let call) = setAside else { return }
         #expect(StepsSummary.summary(of: [call]) == "Set a question aside")
         #expect(ToolCallView.summary(of: call, in: "/tmp") == "Set a question aside on Autopilot")
+        // It still says what it asked, when it opens.
+        let asking: [String: Any] = ["type": "tool", "id": "call_2", "name": "question", "executed": true,
+                                     "state": ["status": "error", "input": ["questions": [["question": "Which card should it pay with?"]]],
+                                               "error": ["type": "unknown", "message": "This is on Autopilot: nothing was put to the user."]]]
+        guard case .tool(let asked) = try JSONDecoder().decode(Message.Content.self, from: JSONSerialization.data(withJSONObject: asking)) else { return }
+        #expect(asked.questionsAsked == "Which card should it pay with?")
+        // Any other step that quotes those words (a test's output, a command's) failed as any does.
+        let quoting: [String: Any] = ["type": "tool", "id": "call_3", "name": "shell", "executed": true,
+                                      "state": ["status": "error", "input": ["command": "npm test"], "error": ["type": "unknown", "message": "expected “This is on Autopilot: …”"]]]
+        let shell = try JSONDecoder().decode(Message.Content.self, from: JSONSerialization.data(withJSONObject: quoting))
+        #expect(StepsRow.outcomes(of: [shell]) == " (1 failed)")
+        guard case .tool(let ran) = shell else { return }
+        #expect(!ran.isSetAsideOnAutopilot)
+        #expect(StepsSummary.summary(of: [ran]) != "Set a question aside")
     }
 
+    /// A question in a conversation on Autopilot counts, and tells you, as its box says it waits on
+    /// you, whatever it marks; one its box can't say about tells you, as any question. A conversation
+    /// that isn't on Autopilot asks its box nothing.
     @Test func aQuestionOnAutopilotWaitsOnYouAsItsBoxSays() async throws {
         defer { engine.stop() }
         let workspace = Workspace()

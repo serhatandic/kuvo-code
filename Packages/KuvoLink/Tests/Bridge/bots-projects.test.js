@@ -178,12 +178,25 @@ test("what would fail anyway isn't asked: a folder with files in it, a project t
   assert.deepEqual((await route("GET", "kuvo/work/asks")).body.asks, []);
 });
 
+test("turned on Autopilot while a project waits on you, it stays asked and the agent carries on", { timeout: 60_000 }, async () => {
+  try {
+    const making = tool("make_project", { name: "Lagoon" }, { KUVO_WORK_ASK_WAIT: "3600000" });
+    const [ask] = await asked();
+    assert.equal(ask.project, "Lagoon");
+    pixelOnAutopilot = true;
+    const said = await making;
+    assert.match(said.text, /The user hasn't answered yet: it stays asked/);
+    assert.equal((await route("POST", `kuvo/work/asks/${ask.id}`, { answer: "deny" })).status, 200);
+  } finally {
+    pixelOnAutopilot = false;
+  }
+});
+
 test("on Autopilot a project it can't make on its own stays asked, and it carries on at once", async () => {
   pixelOnAutopilot = true;
-  const began = Date.now();
-  const said = await tool("make_project", { name: "Reef" }, { KUVO_WORK_ASK_WAIT: "20000" });
+  // (Left waiting, it would wait out the test.)
+  const said = await tool("make_project", { name: "Reef" }, { KUVO_WORK_ASK_WAIT: "3600000" });
   pixelOnAutopilot = false;
-  assert.ok(Date.now() - began < 15000, "it didn't wait for you");
   assert.equal(said.isError, false);
   assert.match(said.text, /The user hasn't answered yet: it stays asked/);
   const [ask] = (await route("GET", "kuvo/work/asks")).body.asks;

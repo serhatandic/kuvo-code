@@ -910,6 +910,8 @@ export class AcpThread implements Thread {
             title: "Question",
             toolCallID: call.toolCallId,
             fields: [{ key: "answer", title: "Question", description: call.title ?? "", required: true, type: "string", options: options.map((option) => ({ value: option.optionId, label: option.name ?? option.optionId })) }],
+            // (It can only hear cancelled, so its step says what became of it.)
+            declined: (words) => { (active.declined ??= new Map()).set(call.toolCallId, words) },
           })
           const chosen = answer?.answer
           return chosen ? { outcome: { outcome: "selected", optionId: String(chosen) } } : { outcome: { outcome: "cancelled" } }

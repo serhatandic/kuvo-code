@@ -1077,8 +1077,11 @@ class CodexThread implements Thread {
         options: (question.options ?? []).map((option) => ({ value: option, label: option })),
         custom: true,
       }))
-      const answer = await hooks.question({ title: questions.length === 1 ? "Question" : "Questions", fields, signal: waiting.abort.signal })
+      let declined: string | undefined
+      const answer = await hooks.question({ title: questions.length === 1 ? "Question" : "Questions", fields, signal: waiting.abort.signal, declined: (words) => { declined = words } })
       if (waiting.typed) return { text: waiting.typed.text, files: waiting.typed.files }
+      // Turned down by its box with words: it hears them and carries on.
+      if (!answer && declined) return { text: declined, files: [] }
       if (!answer) return undefined
       const said = (index: number) => {
         const value = answer[`q${index}`]
@@ -1831,10 +1834,12 @@ class CodexThread implements Thread {
           // A secret (a password, a key): hidden as it's typed.
           ...(question.isSecret ? { format: "password" } : {}),
         }))
-        const answer = await hooks.question({ title: questions.length === 1 ? questions[0].header ?? "Question" : "Questions", fields, toolCallID: params.itemId })
+        let declined: string | undefined
+        const answer = await hooks.question({ title: questions.length === 1 ? questions[0].header ?? "Question" : "Questions", fields, toolCallID: params.itemId, declined: (words) => { declined = words } })
         const answers: Record<string, { answers: string[] }> = {}
         for (const question of questions) {
-          const value = answer?.[question.id]
+          // (Turned down by its box with words: that's what it hears.)
+          const value = answer?.[question.id] ?? declined
           answers[question.id] = { answers: value === undefined || value === null ? [] : Array.isArray(value) ? value.map(String) : [String(value)] }
         }
         return { answers }

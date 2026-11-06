@@ -83,7 +83,7 @@ async function turn() {
       send({ method: "item/completed", params: inTurn({ item: { type: "agentMessage", id: "m1", text: done.join(" ") } }) })
       continue
     }
-    if (!/requestApproval$|elicitation\\/request$/.test(method)) {
+    if (!/requestApproval$|elicitation\\/request$|requestUserInput$/.test(method)) {
       send({ method, params: inTurn(params) })
       continue
     }
@@ -594,6 +594,22 @@ describe("A question Codex asks as it ends its turn (request_user_input_async)",
     await until(() => ended(id))
     expect(starts()).toEqual(["go", "Turkish"])
     expect(steps(id).flatMap((step) => step.content.filter((part: any) => part.type === "text").map((part: any) => part.text)).join("\n")).toContain("Writing it in Turkish.")
+  })
+
+  test("turned down by its box with words (Autopilot): Codex hears them and goes on", async () => {
+    const id = start(asking, {}, answered)
+    await until(() => sessions.forms(id).length === 1)
+    sessions.replyForm(id, sessions.forms(id)[0].id, null, "This is on Autopilot: leave it.")
+    await until(() => ended(id))
+    expect(starts()).toEqual(["go", "This is on Autopilot: leave it."])
+  })
+
+  test("what it asks in Plan, turned down by its box with words, gets those words as its answer", async () => {
+    const id = start([["item/tool/requestUserInput", { itemId: "q1", questions: [{ id: "which", header: "Which", question: "Which one?", options: [{ label: "A" }] }] }]])
+    await until(() => sessions.forms(id).length === 1)
+    sessions.replyForm(id, sessions.forms(id)[0].id, null, "This is on Autopilot: leave it.")
+    await until(() => ended(id))
+    expect(answers()).toEqual([{ answers: { which: { answers: ["This is on Autopilot: leave it."] } } }])
   })
 
   test("a message you type instead answers it: the card goes and Codex gets your words", async () => {

@@ -59,6 +59,9 @@ import Testing
         #expect(VaultActivity(id: "a_3", at: 0, what: "added", itemName: "GitHub", client: "Mac").sentence == "You, on your Mac, added “GitHub”")
         #expect(VaultActivity(id: "a_4", at: 0, what: "shown", itemName: "GitHub", client: "Alex’s iPhone").sentence == "You, on Alex’s iPhone, looked at “GitHub”")
         #expect(!VaultActivity(id: "a_4", at: 0, what: "refused", itemName: "GitHub", botName: "Scout", how: "no grant").isWarning)
+        let left = VaultActivity(id: "a_9", at: 0, what: "refused", itemName: "GitHub", botName: "Scout", how: "autopilot")
+        #expect(!left.isWarning, "Autopilot left it for you: nothing's wrong")
+        #expect(left.sentence == "Scout left “GitHub” for you, on Autopilot")
     }
 
     /// What you did from the client you're reading it on leads with what happened; who and where

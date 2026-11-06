@@ -1714,6 +1714,7 @@ async function askUser(params) {
   link.notify("Kuvo.ask", { id, ...params, ...(session ? { session } : {}) });
   const started = Date.now();
   let alone = viewerCount || phoneCanAnswer() ? null : started;
+  let looking = false;
   return outOfLine((call) => new Promise((resolve) => {
     const finish = (answer) => {
       clearInterval(check);
@@ -1736,6 +1737,16 @@ async function askUser(params) {
         return finish({ type: nobody ? "nobody" : "timedOut" });
       }
       if (session && params.targetId) link?.notify("Kuvo.claim", { targetId: params.targetId, session });
+      // Autopilot turned on meanwhile: this no longer waits for the user.
+      if (session && !looking) {
+        looking = true;
+        onAutopilot(session).catch(() => false).then((on) => {
+          looking = false;
+          if (!on || !waiting.has(id)) return;
+          link?.notify("Kuvo.cancelAsk", { id });
+          finish({ type: "autopilot" });
+        });
+      }
     }, 5_000);
     if (call.cancelled) stop();
   }));
@@ -2047,7 +2058,9 @@ async function findSession(id) {
 /// Whether the conversation `id` is part of (a subagent's, the one that started it) is on Autopilot.
 async function onAutopilot(id) {
   let found = await findSession(id);
-  for (let step = 0; found?.data?.parentID && step < 5; step++) found = await findSession(found.data.parentID);
+  // (Through a coding agent's engine run, Auto's, to the conversation it runs for.)
+  const above = (data) => data?.parentID ?? data?.metadata?.kuvo?.engineFor;
+  for (let step = 0; above(found?.data) && step < 5; step++) found = await findSession(above(found.data));
   return found?.data?.metadata?.kuvo?.autopilot === true;
 }
 

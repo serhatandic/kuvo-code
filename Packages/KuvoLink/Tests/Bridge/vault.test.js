@@ -45,6 +45,7 @@ const sessions = {
   ses_sub: { id: "ses_sub", parentID: "ses_ship", title: "A subagent", location: { directory: path.join(home, "bots", "bot_ship", "workspace") } },
   ses_scout: { id: "ses_scout", title: "Scout", location: { directory: path.join(home, "bots", "bot_scout", "workspace") } },
   ses_shop: { id: "ses_shop", title: "Fix checkout", location: { directory: project } },
+  ses_away: { id: "ses_away", title: "On Autopilot", location: { directory: project }, metadata: { kuvo: { autopilot: true } } },
 };
 let engine;
 // The tool calls each session's engine says are running now: a vault call is answered only as one
@@ -667,6 +668,17 @@ test("an SSH key you keep for a project signs through its conversations' own age
     noteConversation(wrong, project);
     await sshAgentFor(folderNote(path.join(project, "api")), path.join(project, "api"));
     assert.equal(socketOf(wrong), null);
+    // On Autopilot a key it may use only by asking signs nothing, at once, and you aren't asked.
+    const askFirst = path.join(root, "ask-first");
+    assert.equal((await sshTool("ssh-keygen", ["-q", "-N", "", "-t", "ed25519", "-C", "ask-first", "-f", askFirst])).status, 0);
+    const kept = await fromMac("POST", "kuvo/vault/items", { name: "Ask-first key", kind: "key", values: { private_key: fs.readFileSync(askFirst, "utf8") } }, key);
+    fs.rmSync(askFirst);
+    await fromMac("POST", "kuvo/vault/grants", { item: kept.value.item.id, who: { everyone: true }, how: "ask" }, key);
+    fs.writeFileSync(path.join(root, "commit"), "a commit\n");
+    const undone = await sshTool("ssh-keygen", ["-Y", "sign", "-n", "git", "-f", `${askFirst}.pub`, path.join(root, "commit")], await sshAgentFor("ses_away", project));
+    assert.notEqual(undone.status, 0, "nothing signed");
+    assert.deepEqual((await fromMac("GET", "kuvo/vault/asks", undefined, key)).value.asks ?? [], []);
+    assert.equal((await fromMac("DELETE", `kuvo/vault/items/${kept.value.item.id}`, undefined, key)).status, 200);
     // Paused, the conversation's agent offers nothing either.
     await fromMac("POST", "kuvo/vault/pause", { paused: true, bot: "ses_shop" }, key);
     assert.equal((await sshTool("ssh-add", ["-l"], await sshAgentFor("ses_shop", project))).status, 1, "paused");

@@ -373,9 +373,20 @@ extension Message {
         public var executed: Bool?
         public var state: ToolState
 
-        /// A question its box set aside on Autopilot.
+        /// A question its box turned down on Autopilot, with its words (`LEFT_UNDONE_WORDS`): nobody
+        /// was asked and nothing broke. Only a question: any other step that quotes those words failed.
         public var isSetAsideOnAutopilot: Bool {
-            if case .failed(_, let error, _, _) = state { error.isSetAsideOnAutopilot } else { false }
+            guard name == "question", case .failed(_, let error, _, _) = state else { return false }
+            return error.message.contains("This is on Autopilot:")
+        }
+
+        /// What a question step asks, a line each.
+        public var questionsAsked: String {
+            let input: JSONValue? = switch state {
+            case .running(let input, _), .completed(let input, _, _), .failed(let input, _, _, _): input
+            case .streaming: nil
+            }
+            return (input?["questions"]?.array ?? []).compactMap { $0["question"]?.string }.joined(separator: "\n")
         }
         public var time: Time?
 

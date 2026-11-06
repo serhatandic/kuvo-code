@@ -3297,6 +3297,9 @@ final class Workspace {
         return "removed"
     }
 
+    /// Hears a conversation go on Autopilot, from any client: what it has waiting on you here stops waiting.
+    @ObservationIgnored var autopilotTurnedOn: ((String) -> Void)?
+
     /// Whether the conversation `id` is part of (a subagent's, the one that started it) is on Autopilot.
     func isOnAutopilot(_ id: String) -> Bool {
         session(root(of: id)).map(AutopilotShown.isOn) == true
@@ -3357,6 +3360,7 @@ final class Workspace {
             // the later look.
             if let seen = sessions[index].time.viewed, seen > (session.time.viewed ?? 0) { session.time.viewed = seen }
             sessions[index] = session
+            if AutopilotShown.isOn(session), !AutopilotShown.isOn(earlier) { autopilotTurnedOn?(session.id) }
             // Archived or brought back elsewhere (from a phone): its wake-ups wait, or come back,
             // as with Archive here. (Archive here notes it first, so it isn't told twice.)
             noteArchiving(session, was: earlier)
@@ -3402,7 +3406,8 @@ final class Workspace {
                           let api = api(forSession: id), let page = try? await api.messages(session: id, limit: 8),
                           Transcript.isWaiting(on: server, in: page.data) else { continue }
                     sharedForms[form.id] = directory
-                    asking[form.id] = id
+                    // (On Autopilot it counts once its box says it waits on you: `notifyAsk`.)
+                    if !isOnAutopilot(id) { asking[form.id] = id }
                     notifyAsk(id, body: form.message ?? "Needs your answer.", request: form.id, question: nil)
                     return
                 }
@@ -3420,8 +3425,10 @@ final class Workspace {
     private func note(_ form: FormRequest, in model: SessionModel) {
         // Told once, not again with each read after a reconnect.
         let isNew = sharedForms[form.id] == nil
-        asking[form.id] = model.id
-        guard form.sessionID == FormRequest.anySession else { return }
+        let isShared = form.sessionID == FormRequest.anySession
+        // (Shared, on Autopilot, it counts once its box says it waits on you: `notifyAsk`.)
+        if !(isShared && isNew && isOnAutopilot(model.id)) { asking[form.id] = model.id }
+        guard isShared else { return }
         sharedForms[form.id] = model.session.location.directory
         if isNew { notifyAsk(model.id, body: form.message ?? "Needs your answer.", request: form.id, question: nil) }
     }
