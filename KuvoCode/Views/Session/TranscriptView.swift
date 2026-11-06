@@ -69,7 +69,7 @@ struct TranscriptView: View {
         // More of a reply, in a row of its own, carries on from the row before rather than coming in.
         let added = rows.filter { !$0.continues }
         ConversationScroll(scroller: scroller, animation: rowCache.isBulk ? nil : Self.rowAnimation, change: RowCache.Change(count: added.count, last: added.last?.id), thinking: Self.thinking(in: rows),
-                           nearTop: model.hasEarlier ? { loadEarlier() } : nil, quote: { model.addQuote($0, how: "selection") }) {
+                           nearTop: model.hasEarlier ? { loadEarlier() } : nil, isWorking: { model.isRunning }, quote: { model.addQuote($0, how: "selection") }) {
             // Its top in view: the messages before, read and put ahead, the view staying put.
             if model.hasEarlier, !rows.isEmpty {
                 HStack(spacing: 8) {
@@ -875,8 +875,8 @@ private struct RowView: View, Equatable {
             AssistantStepView(message: message, directory: directory, folders: folders, showsError: showsError)
         case .more(let message, _):
             AssistantStepView(message: message, directory: directory, folders: folders, showsError: false)
-        case .steps(_, let blocks, let isLive):
-            StepsRow(blocks: blocks, isLive: isLive, directory: directory)
+        case .steps(let id, let blocks, let isLive):
+            StepsRow(id: id, blocks: blocks, isLive: isLive, directory: directory)
         case .widget(let call):
             WidgetCard(call: call, send: answerAgent)
         case .picture(let call):
@@ -1198,9 +1198,9 @@ private struct AssistantStepView: View {
                         WritingText(row: message.id, part: index, text: text.text, folders: folders,
                                     isWriting: message.time.completed == nil && index == message.content.count - 1)
                     case .reasoning(let reasoning):
-                        ReasoningView(block: reasoning)
+                        ReasoningView(block: reasoning, foldKey: message.id + "#\(index)")
                     case .tool(let call):
-                        ToolCallView(call: call, directory: directory)
+                        ToolCallView(call: call, directory: directory, foldKey: message.id + "#" + call.id)
                     case .other:
                         EmptyView()
                     }
@@ -1364,12 +1364,21 @@ private struct MarkdownPiece: View, Equatable {
 /// The model's thinking: one quiet line, open it to read.
 struct ReasoningView: View {
     let block: Message.Content.Text
-    @State private var isExpanded = false
+    /// What your opening it is kept by, where its view may not last (see `CardFolds`).
+    var foldKey: String? = nil
+    @State private var opened = false
+    @Environment(\.scrollAnchor) private var scrollAnchor
+
+    private var isExpanded: Bool { foldKey.map { CardFolds.shared.isOpen($0, otherwise: opened) } ?? opened }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
-                withAnimation(.ui) { isExpanded.toggle() }
+                if let foldKey {
+                    CardFolds.shared.toggle(foldKey, open: !isExpanded, in: scrollAnchor)
+                } else {
+                    withAnimation(.ui) { opened.toggle() }
+                }
             } label: {
                 HStack(spacing: 8) {
                     Image(systemName: "brain")
@@ -1406,7 +1415,7 @@ struct ReasoningView: View {
         }
         #if DEBUG
         // KUVO_DEMO_OPEN_STEPS: the thinking shows, opened.
-        .onAppear { if ProcessInfo.processInfo.environment["KUVO_DEMO_OPEN_STEPS"] != nil { isExpanded = true } }
+        .onAppear { if ProcessInfo.processInfo.environment["KUVO_DEMO_OPEN_STEPS"] != nil { opened = true } }
         #endif
     }
 
@@ -1973,6 +1982,20 @@ final class CardFolds {
 
     func isOpen(_ id: String, otherwise open: Bool) -> Bool { choices[id] ?? open }
     func set(_ id: String, open: Bool) { choices[id] = open }
+    func forget(_ id: String) { choices[id] = nil }
+
+    /// Steps you opened or closed, in their conversation: opened while the agent works, once they
+    /// have, the end is no longer followed, so what comes in next doesn't move what you read;
+    /// closing them goes back to it (see `ScrollAnchor.reading`).
+    func toggle(_ id: String, open: Bool, in anchor: ScrollAnchor?, also: () -> Void = {}) {
+        withAnimation(.ui) {
+            set(id, open: open)
+            also()
+        } completion: { [weak anchor] in
+            guard self.isOpen(id, otherwise: !open) == open else { return }
+            anchor?.reading?(id, open)
+        }
+    }
 }
 
 /// Words between agents, in a well: a header (what it is, from or to whom) whose click folds the

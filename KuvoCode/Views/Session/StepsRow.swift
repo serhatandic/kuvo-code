@@ -24,11 +24,17 @@ enum StepsDetail: String, CaseIterable, Identifiable {
 /// works), opening to what they were ("Thought for 40s, ran 6 commands, read 3 files") and each.
 /// While it works, the step under way shows under the line.
 struct StepsRow: View {
+    /// The row it is: what you opened in it is kept by this, as the row's view doesn't last.
+    let id: String
     let blocks: [Message.Content]
     let isLive: Bool
     let directory: String
     @AppStorage(StepsDetail.key) private var detail = StepsDetail.summary
-    @State private var isExpanded = false
+    /// Open by itself rather than by you (the demo's screenshots).
+    @State private var opened = false
+    @Environment(\.scrollAnchor) private var scrollAnchor
+
+    private var isExpanded: Bool { CardFolds.shared.isOpen(id, otherwise: opened) }
 
     var body: some View {
         // The one under way, as it is; those before it in the line.
@@ -38,7 +44,7 @@ struct StepsRow: View {
                 // The line and what it opens to, with no space between them but the fold's own.
                 VStack(alignment: .leading, spacing: 0) {
                     Button {
-                        withAnimation(.ui) { isExpanded.toggle() }
+                        toggle(done)
                     } label: {
                         HStack(spacing: 8) {
                             Text(line(done))
@@ -63,19 +69,20 @@ struct StepsRow: View {
                                     .font(.callout)
                                     .foregroundStyle(.tertiary)
                             }
-                            ForEach(Array(done.enumerated()), id: \.offset) { _, block in step(block) }
+                            ForEach(Array(done.enumerated()), id: \.offset) { offset, block in step(block, at: offset) }
                         }
                         .padding(.top, 10)
                         .transition(.fold)
                     }
                 }
             }
-            if let current { step(current) }
+            // The same view through ending, so what you read in it isn't made again.
+            ForEach(under(done, current), id: \.offset) { offset, block in step(block, at: offset) }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         #if DEBUG
         // KUVO_DEMO_OPEN_STEPS: each step shows, opened.
-        .onAppear { if ProcessInfo.processInfo.environment["KUVO_DEMO_OPEN_STEPS"] != nil { isExpanded = true } }
+        .onAppear { if ProcessInfo.processInfo.environment["KUVO_DEMO_OPEN_STEPS"] != nil { opened = true } }
         // KUVO_DEMO_FOLDS=<seconds>: the steps open and fold a few times, that far apart.
         .task {
             guard let wait = ProcessInfo.processInfo.environment["KUVO_DEMO_FOLDS"].flatMap(Double.init) else { return }
@@ -83,10 +90,37 @@ struct StepsRow: View {
                 // Not stopped when the task is: the conversation's rows make their views anew as
                 // they're laid out, which cancels it each time (eight toggles end where they began).
                 await DemoWait.pause(.asked(wait))
-                withAnimation(.ui) { isExpanded.toggle() }
+                toggle(Self.split(blocks, isLive: isLive).done)
             }
         }
         #endif
+    }
+
+    /// What shows under the line: the step under way, and, while the line's closed, those you
+    /// opened as they were under way, which don't fold into it for having ended.
+    private func under(_ done: [Message.Content], _ current: Message.Content?) -> [(offset: Int, block: Message.Content)] {
+        var steps: [(offset: Int, block: Message.Content)] = []
+        if !isExpanded {
+            for (offset, block) in done.enumerated() where CardFolds.shared.isOpen(key(offset, block), otherwise: false) {
+                steps.append((offset, block))
+            }
+        }
+        if let current { steps.append((done.count, current)) }
+        return steps
+    }
+
+    /// The line opened or closed by you. Closing it closes the steps in it, as they were found.
+    private func toggle(_ done: [Message.Content]) {
+        let open = !isExpanded
+        CardFolds.shared.toggle(id, open: open, in: scrollAnchor) {
+            if !open { for (offset, block) in done.enumerated() { CardFolds.shared.forget(key(offset, block)) } }
+        }
+    }
+
+    /// What a step's fold is kept by, in this row: a tool call's own id, or thinking's place.
+    private func key(_ offset: Int, _ block: Message.Content) -> String {
+        if case .tool(let call) = block { return id + "#" + call.id }
+        return id + "#\(offset)"
     }
 
     /// "Worked for 40s" once they're done (what they were, if they don't say when they ran), how
@@ -105,10 +139,10 @@ struct StepsRow: View {
         detail == .summary && StepTime.seconds(of: blocks) != nil
     }
 
-    @ViewBuilder private func step(_ block: Message.Content) -> some View {
+    @ViewBuilder private func step(_ block: Message.Content, at offset: Int) -> some View {
         switch block {
-        case .reasoning(let reasoning): ReasoningView(block: reasoning)
-        case .tool(let call): ToolCallView(call: call, directory: directory)
+        case .reasoning(let reasoning): ReasoningView(block: reasoning, foldKey: key(offset, block))
+        case .tool(let call): ToolCallView(call: call, directory: directory, foldKey: key(offset, block))
         default: EmptyView()
         }
     }

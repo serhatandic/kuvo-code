@@ -52,7 +52,23 @@ final class ConversationScroller {
     }
 
     fileprivate func follow(_ follows: Bool) {
+        heldFor = nil
         if followsEnd != follows { followsEnd = follows }
+    }
+
+    /// The steps you opened while following the end, which you left it to read. Going anywhere
+    /// yourself since (each way goes through `follow`) means you left it for good.
+    @ObservationIgnored private var heldFor: String?
+
+    /// `id` opened or closed by you (see `ScrollAnchor.reading`).
+    fileprivate func reading(_ id: String, isOpen: Bool, isWorking: Bool) {
+        if isOpen {
+            guard followsEnd, isWorking else { return }
+            follow(false)
+            heldFor = id
+        } else if heldFor == id {
+            toEnd(animated: true)
+        }
     }
 
     private func ask(_ request: Request) {
@@ -84,6 +100,8 @@ struct ConversationScroll<Rows: View>: View {
     /// Called as you scroll within a couple of screens of the top: earlier rows can come in
     /// then, above what you're reading, which stays where it is (see `ScrollAnchor`).
     var nearTop: (() -> Void)? = nil
+    /// Whether the agent is at work now, adding to the end.
+    var isWorking: () -> Bool = { false }
     /// Text you selected, to answer in the composer.
     let quote: (String) -> Void
     @ViewBuilder let rows: Rows
@@ -124,6 +142,11 @@ struct ConversationScroll<Rows: View>: View {
             .environment(\.scrollAnchor, anchor)
             .onAppear {
                 anchor.stopFollowing = { [scroller] in scroller.follow(false) }
+                anchor.reading = { [scroller, weak anchor, isWorking] id, isOpen in
+                    scroller.reading(id, isOpen: isOpen, isWorking: isWorking())
+                    // At once: the next row to come mustn't count as followed.
+                    anchor?.isFollowingEnd = scroller.followsEnd
+                }
                 anchor.quote = quote
             }
             .padding(.horizontal, Metrics.gutter)
@@ -587,6 +610,8 @@ final class ScrollAnchor {
     /// Stops keeping the end in view, as scrolling up does: a selection dragged up past the top
     /// scrolls the conversation, which would otherwise go back to the end.
     var stopFollowing: () -> Void = {}
+    /// Steps opened (true) or closed by you, by what their fold is kept by.
+    var reading: ((String, Bool) -> Void)?
 
     /// The rows laid out, where they are in the conversation, and those shown now. A row that
     /// goes and comes back where it was (the whole conversation hidden a moment) isn't told its

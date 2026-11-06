@@ -44,7 +44,7 @@ struct GroupChatView: View {
         // Where it lives can't be reached now: what needs it (undo, the work, Keep Going) waits.
         let reachable = groups.reach(group.id) == .ready
         // What you select, to reply to (over the composer) or copy.
-        ConversationScroll(scroller: scroller, spacing: 18, change: [messages.last?.id, speaker?.id, String(messages.count)], quote: { text in
+        ConversationScroll(scroller: scroller, spacing: 18, change: [messages.last?.id, speaker?.id, String(messages.count)], isWorking: { groups.speaker(in: group.id) != nil }, quote: { text in
             addQuote(text, how: "selection")
         }) {
             // Laid out by a stack of their own, as a session's rows are (see `RowStack`).
@@ -338,7 +338,7 @@ private struct GroupMessageRow: View, Equatable {
                     // its words.
                     let steps = (message.steps ?? []).filter { !GroupChatView.isDrawn($0) }
                     if !steps.isEmpty {
-                        StepsRow(blocks: steps.map(Message.Content.tool), isLive: false, directory: author?.directory ?? "")
+                        StepsRow(id: "steps-" + message.id, blocks: steps.map(Message.Content.tool), isLive: false, directory: author?.directory ?? "")
                             .padding(.bottom, 2)
                     }
                     MarkdownText(text: message.text, agents: MarkdownText.agents(namedIn: message.text))

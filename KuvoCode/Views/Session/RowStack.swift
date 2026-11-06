@@ -266,7 +266,9 @@ final class RowStackView: NSView, NSUserInterfaceValidations {
         }
         guard let known = heights[id], abs(known.value - height) > 0.5, width > 0, hosts[id]?.isShown == true,
               let index = rowIndex[id] else { return }
-        keepInPlace(changedAt: tops[index], by: height - known.value) {
+        // Only a row wholly above the view moves what you read: one you're reading part of grows
+        // or folds under its own top, and what you see of it stays.
+        keepInPlace(changedAt: tops[index] + known.value, by: height - known.value) {
             heights[id] = Height(value: height, width: width)
             place()
         }

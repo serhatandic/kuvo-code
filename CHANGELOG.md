@@ -16,6 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- Steps you open stay open as new ones come in, until you close them, and what you're reading stays where it is. Thinking you open as it's written stays open once it ends. Close them and you're back at the end.
 - The coding agents' bridge, this Mac's box or the engine, if stuck, no longer keeps running after it's stopped or after Kuvo Code crashes: it's ended within seconds.
 - Integrations on a machine stay up to date with your Mac closed: when the machine updates itself, the ones you added move to the versions that update brings, rather than waiting for your Mac to connect.
 - An integration you turned off stays off when it moves to its maker's own server, and keeps the Code Mode setting you chose. Keys you or a bot brought for its old server go with the move.

@@ -11,8 +11,14 @@ import SwiftUI
 struct ToolCallView: View {
     let call: Message.ToolCall
     let directory: String
+    /// What your opening it is kept by, where its view may not last (see `CardFolds`).
+    var foldKey: String? = nil
     @Environment(AppModel.self) private var app
-    @State private var isExpanded = false
+    /// Open by itself rather than by you: a subagent at work.
+    @State private var opened = false
+    @Environment(\.scrollAnchor) private var scrollAnchor
+
+    private var isExpanded: Bool { foldKey.map { CardFolds.shared.isOpen($0, otherwise: opened) } ?? opened }
 
     /// The icon's column, and the gap after it: the details line up with the title.
     private static let iconWidth: CGFloat = 16
@@ -53,7 +59,11 @@ struct ToolCallView: View {
             Group {
                 if hasDetails {
                     Button {
-                        withAnimation(.ui) { isExpanded.toggle() }
+                        if let foldKey {
+                            CardFolds.shared.toggle(foldKey, open: !isExpanded, in: scrollAnchor)
+                        } else {
+                            withAnimation(.ui) { opened.toggle() }
+                        }
                     } label: {
                         header
                     }
@@ -116,10 +126,10 @@ struct ToolCallView: View {
         }
         // A subagent at work shows what it's doing; opened later, its steps stay folded.
         .onAppear {
-            if call.name == "subagent", !call.state.isFinished { isExpanded = true }
+            if call.name == "subagent", !call.state.isFinished { opened = true }
             #if DEBUG
             // KUVO_DEMO_OPEN_STEPS: every step shows its details, for screenshots.
-            if ProcessInfo.processInfo.environment["KUVO_DEMO_OPEN_STEPS"] != nil { isExpanded = true }
+            if ProcessInfo.processInfo.environment["KUVO_DEMO_OPEN_STEPS"] != nil { opened = true }
             #endif
         }
     }
