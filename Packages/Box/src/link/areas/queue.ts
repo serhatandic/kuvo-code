@@ -9,7 +9,8 @@ import { followed } from "../follow";
 import { placeOfSession } from "../letters/letter";
 import { targetsOf } from "../letters/tools";
 import { asked } from "../engine/client";
-import { dropWaiting, holdQueue, inboxFor, keepWaitingBefore, queueFollowers, queueOf, readQueues, resumeQueue, sendNow, showsQueue, shownQueue, stopSession } from "../engine/queue";
+import { dropWaiting, holdQueue, inboxFor, keepWaitingBefore, queueFollowers, queueOf, readQueues, resumeQueue, sendNow, showsQueue, shownQueue } from "../engine/queue";
+import { stopConversation } from "../work/background";
 import { messageID } from "../engine/sessions";
 import { attachedIn } from "../server/attached";
 import { fromPhone, modelInput } from "../server/forward";
@@ -61,7 +62,7 @@ export async function* queueRoute(context: RouteContext, match: RegExpMatchArray
   if (place === undefined) return yield* json(503, { message: "The engine isn't running." });
   if (!place) return yield* json(404, { message: "There's no such conversation here." });
   try {
-    if (action === "stop") return yield* json(200, shownQueue(await stopSession(place.target, session)));
+    if (action === "stop") return yield* json(200, shownQueue(await stopConversation(place.target, { ...place.data, id: session })));
     if (step === "hold") {
       // (`{items}`: messages a client held as they went, first.)
       const given = parsed(request.body);

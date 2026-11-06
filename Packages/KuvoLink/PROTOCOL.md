@@ -785,12 +785,50 @@ client shows it from the same routes.
   - `read`: read it with `read_conversation`;
   - `answered`: answered what it asked;
   - `stopped`: stopped it;
-  - `finished`: it finished well. A failed or stopped one isn't marked.
+  - `finished`: it finished well, marked once it's really done (see Background work). A failed or
+    stopped one isn't marked.
 
   Nothing is marked for a session that isn't the bot's own, or for what one of its sessions does to
   another (its session that started one, say).
 
   Clients show the bot looking after its sessions with these marks. The first line is what was there already; each new `id` after it plays once. Only the latest minute is kept, at most 50, in `run/work/oversight.json`. A box from before it answers 404.
+- **Background work** (`work/background.ts`): what still runs for a session once its own turn is
+  over. One fact, worked out on the box, that clients show and never work out themselves.
+  - **`GET kuvo/work/background`** → `{sessions: {<session>: {commands, subagents, tasks, since}}}`,
+    and **`GET kuvo/work/background/events`** (ndjson, the same now and at each change). Counts, and
+    `since` in ms; a session with nothing running isn't listed. `commands`: commands it left running.
+    `subagents`: subagents at work under it, a review's parts and other hidden runs left out.
+    `tasks`: anything else its agent keeps going. A client shows a session at work when its own turn
+    runs or it's listed here. Kept in `run/work/background.json`, per place (engine, bridge).
+  - **Counting at work**: `kuvo/work`'s `state` and `today.working`, a bot's limits and
+    `list_sessions` all go by the same fact. One running 6 hours (a dev server) stops counting, though
+    it may still run, and a client's list of commands still shows it.
+  - **Telling a lead**: `[Session finished]` waits while any of it runs, and looks again 10 seconds
+    after it ends, since the end wakes its agent. At 30 minutes it's told anyway, saying what still
+    runs. After that a turn someone asked for is always told. A turn that began on its own (what it
+    left running ended, its own wake-up) is told only if it has something to say: 200 characters or
+    more, and not the same again. The exception is what follows a finish told before the work was
+    over, told however short, unless its own wake-up began it. The same failure again in a turn
+    that began on its own is told once. Oversight's `finished` mark goes with the telling.
+  - **Stopping**: `stop_session`, Stop on a session someone started, and `stop-all` end its turn,
+    what it left running, and its wake-ups and watches, and mark it in `run/work/stopped.json`. Until
+    someone writes to it, nothing it does is told, and a turn it begins on its own is interrupted at
+    once; the same goes for one that's archived. Stop in your own conversation or in a bot's own
+    ends the turn only, and keeps its background commands and wake-ups.
+  - **The box restarting**: what it was holding is in `run/work/told.json` (`waiting`) and looked at
+    again as it starts: told once if it's over, held if it still runs. The engine's connection
+    dropping clears that place's list until it's looked at again: its commands go with its engine.
+  - **Which agents can say**: the engine's own agents say all of it (`GET api/shell` one folder at
+    a time, `shell.created`, `shell.exited`, and child sessions in `/api/session/active`). Only
+    folders with something at work are asked, because asking starts a folder's tools. Claude Code:
+    commands, subagents and tasks. Codex: subagents, not background terminals. Antigravity:
+    subagents, which is how its own timers run. Grok and Cursor: subagents only within a turn. What
+    an agent can't report doesn't count: the session shows as not at work, and its lead is told at
+    the end of its turn, so nothing hangs on it.
+  - **The bridge's side**: `GET api/session/background` → `{data: {<session>: {commands: [{id,
+    command, started}], subagents: [{id, since}], tasks: [{id, since}]}}}`, `DELETE
+    api/session/<id>/background` ends them all, and the event `session.background.updated` says to
+    look again.
 - **`POST kuvo/bots/<id>/stop-all`** → `{stopped}`: every session of its work that's working,
   stopped (held and paused, as the queue's Stop), and the bot's own turn too, with what it was
   still to hear of them dropped. 404 for no such bot here, 503 with no engine.

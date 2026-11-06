@@ -119,9 +119,13 @@ export async function* loadSignInReturn(body: Buffer | undefined, signal: AbortS
 
 /** A command an agent runs, as the engine (or the coding agents' bridge) lists it: whether it's
  * running, and its process. */
-interface ShellJob {
+export interface ShellJob {
+  id: string;
   status: string;
+  command?: string;
   pid?: number;
+  metadata?: unknown;
+  time?: { started?: number };
 }
 
 // Stops a command an agent runs (the engine's, or a coding agent's through their bridge: the first
@@ -144,17 +148,24 @@ export async function* stopShell(id: string, runners: Target[], headers: Record<
     }
   }
   if (!job || job.status !== "running") return yield* json(404, {});
+  const stopped = await endShellJob(job, url!, headers, signal);
+  return stopped ? yield* json(200, { stopped }) : yield* json(404, {});
+}
+
+/** A running command ended (`url`: where it's kept, `headers`: how it's reached): its signal, else
+ * the engine's own remove; how, or null when neither could be done. */
+export async function endShellJob(job: ShellJob, url: string, headers: Record<string, string>, signal?: AbortSignal): Promise<"signal" | "removed" | null> {
   if (Number.isInteger(job.pid) && job.pid! > 1) {
     try {
       process.kill(-job.pid!, "SIGTERM");
-      return yield* json(200, { stopped: "signal" });
+      return "signal";
     } catch {}
   }
   try {
-    const response = await fetch(url!, { method: "DELETE", headers, signal });
-    if (response.ok) return yield* json(200, { stopped: "removed" });
+    const response = await fetch(url, { method: "DELETE", headers, signal });
+    if (response.ok) return "removed";
   } catch {}
-  return yield* json(404, {});
+  return null;
 }
 
 // What LinkHost runs to open a socket: the engine's WebSocket at that path, with its password.

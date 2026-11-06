@@ -29,11 +29,12 @@ import { call } from "../engine/client";
 import { appIcon, isAppID } from "../work/apps";
 import { readProjects } from "./projects";
 import { HERE } from "../home";
-import { botOfConversation, describeWork, ofBot, workingNow, workSessions } from "../work/tree";
+import { atWorkNow, backgroundFollowers, readBackground } from "../work/background";
+import { botOfConversation, describeWork, ofBot, workSessions } from "../work/tree";
 import type { BotWork, WorkAnswer } from "../../shared/routes/work";
 import type { AnswerPiece, RouteContext } from "../server/context";
 
-export const WORK_ROUTE = /^kuvo\/(?:work(?:\/events|\/oversight(?:\/events)?)?|bots\/([^/]+)\/stop-all)$/;
+export const WORK_ROUTE = /^kuvo\/(?:work(?:\/events|\/oversight(?:\/events)?|\/background(?:\/events)?)?|bots\/([^/]+)\/stop-all)$/;
 export const WORK_ASKS_ROUTE = /^kuvo\/work\/(?:settings|unanswering|asks(?:\/([^/]+))?)$/;
 export const GOALS_ROUTE = /^kuvo\/work\/goals(?:\/([^/]+))?$/;
 export const APP_ICON_ROUTE = "kuvo/work/apps/icon";
@@ -43,7 +44,7 @@ async function botWork(bot: string, context: RouteContext): Promise<BotWork> {
   const { readEngine, bridge, signal } = context;
   const targets = targetsOf({ readEngine, bridge });
   const work = ofBot(bot, await workSessions(targets, signal ?? undefined));
-  const working = await workingNow(targets, signal ?? undefined);
+  const working = await atWorkNow(targets, signal ?? undefined);
   // A few at a time: each asks the engine what it asks and said.
   const sessions: Awaited<ReturnType<typeof describeWork>>[] = [];
   const shown = work.slice(0, 60);
@@ -78,6 +79,13 @@ export async function* workRoute(context: RouteContext, match: RegExpMatchArray)
     if (method !== "GET") return yield* json(405, {});
     yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
     return yield* followed(() => ({ changed: readWorkChanges() }), workFollowers, signal ?? undefined, { folders: [WORK_FOLDER], recursive: false });
+  }
+  // What still runs for each session besides its turn: a list now, and again as it changes.
+  if (route === "kuvo/work/background" || route === "kuvo/work/background/events") {
+    if (method !== "GET") return yield* json(405, {});
+    if (route === "kuvo/work/background") return yield* json(200, { sessions: readBackground() });
+    yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
+    return yield* followed(() => ({ sessions: readBackground() }), backgroundFollowers, signal ?? undefined, { folders: [WORK_FOLDER], recursive: false });
   }
   // What bots just did to their sessions: a list now, and again with each mark.
   if (route === "kuvo/work/oversight" || route === "kuvo/work/oversight/events") {

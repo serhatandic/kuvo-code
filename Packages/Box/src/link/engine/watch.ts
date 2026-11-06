@@ -289,6 +289,7 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
     const connection = new AbortController();
     const stop = () => connection.abort();
     signal?.addEventListener("abort", stop, { once: true });
+    let workGone: (() => void) | null = null;
     try {
       const source = read();
       const steer = steers ? steering(session => backgroundTools(source, session).catch(() => {}), { after: steerAfter, signal: connection.signal }) : null;
@@ -296,6 +297,7 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
       const found: ScanFound = new Map();
       const queue = queues ? queueWatcher(source, { found }) : null;
       const followWork = work ? workWatcher(source, peerTargets, { signal: connection.signal, from: work }) : null;
+      workGone = followWork?.gone ?? null;
       // A goal paused or resumed (the agents' bridge says so): its conversation held or let go.
       const goalHeld = goals ? goalHolds(peerTargets) : null;
       const response = await fetch(`http://127.0.0.1:${source.port}/api/event`, {
@@ -375,6 +377,8 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
           .catch(() => {});
       }
     } catch {}
+    // (Before it's aborted, so what ran there isn't said to run while it can't be heard.)
+    workGone?.();
     stop();
     signal?.removeEventListener("abort", stop);
     attempt += 1;

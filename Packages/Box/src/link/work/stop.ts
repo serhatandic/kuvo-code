@@ -5,19 +5,21 @@
 import { stopSession } from "../engine/queue";
 import { botHere } from "../bots/here";
 import { noteWorkChanged } from "./changes";
-import { askingNow, ofBot, workingNow, workSessions } from "./tree";
+import { atWorkNow, stopWork } from "./background";
+import { askingNow, ofBot, workSessions } from "./tree";
 import { forgetWakes } from "./wakes";
 import type { Target } from "../../shared/records";
 
 /** How many of `bot`'s sessions were stopped. */
 export async function stopBotWork(bot: string, targets: Target[], signal?: AbortSignal): Promise<number> {
   const work = ofBot(bot, await workSessions(targets, signal));
-  const working = await workingNow(targets, signal);
-  // Those working, and those waiting on an answer (which may not count as working).
+  const working = await atWorkNow(targets, signal);
+  // Those working (what they left running too), and those waiting on an answer (which may not count
+  // as working): nothing comes of them, then, until they're written to.
   let stopped = 0;
   for (const each of work) {
     if (!working.has(each.data.id) && !(await askingNow(each, signal))) continue;
-    if (await stopSession(each.target, each.data.id).then(() => true, () => false)) stopped += 1;
+    if (await stopWork(each.target, each.data.id, true).then(() => true, () => false)) stopped += 1;
   }
   const own = botHere(bot)?.session;
   if (own) {

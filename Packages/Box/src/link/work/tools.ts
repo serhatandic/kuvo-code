@@ -6,7 +6,6 @@
 
 import { call, readEngineFile } from "../engine/client";
 import { agentsCommandsInSandbox, engineCommandsInSandbox, fenceWhole } from "../fence/state";
-import { stopSession } from "../engine/queue";
 import { holdArchived } from "../areas/wakes";
 import { noteWorkChanged } from "./changes";
 import { noteOversightBy } from "./oversight";
@@ -25,7 +24,8 @@ import { answerOf, askWork, botAllows, doWork } from "./asks";
 import { cloneable, folderName, isEmptyFolder, namedPlace, projectPlace, shownPath } from "./projects";
 import { projectsFolder } from "./settings";
 import { describeModels, usableModels } from "./models";
-import { botOfConversation, describeWork, placeWords, under, workingNow, workSessions, worksFor } from "./tree";
+import { atWorkNow, stopWork } from "./background";
+import { botOfConversation, describeWork, placeWords, under, workSessions, worksFor } from "./tree";
 import type { Target } from "../../shared/records";
 import type { KitRule } from "../bots/kit";
 import type { SessionPlace } from "../letters/letter";
@@ -78,7 +78,7 @@ async function oneOfMine(caller: Caller, session: unknown, targets: Target[], do
 export async function listSessionsTool(caller: Caller, targets: Target[], signal?: AbortSignal): Promise<ToolAnswer> {
   const listed = await mine(caller, targets, signal);
   if (!listed.length) return said("You haven't started any sessions (or they're archived). Start one with start_session.");
-  const working = await workingNow(targets, signal);
+  const working = await atWorkNow(targets, signal);
   const lines: string[] = [];
   for (const each of listed.slice(0, 40)) {
     const work = await describeWork(each, working, { replies: true, signal });
@@ -98,7 +98,7 @@ export async function stopSessionTool(caller: Caller, args: Record<string, unkno
   if ("error" in found) return found.error;
   const { target, data } = found.listed;
   try {
-    await stopSession(target, data.id, false);
+    await stopWork(target, data.id);
   } catch (error) {
     return refused(`Couldn't stop "${data.title || "New Session"}": ${why(error)}`);
   }

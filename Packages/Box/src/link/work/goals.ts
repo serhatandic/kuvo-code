@@ -39,7 +39,8 @@ import { appNamed, appNameGiven } from "./apps";
 import { folderName, isEmptyFolder, namedPlace, projectPlace, shownPath } from "./projects";
 import { projectsFolder } from "./settings";
 import { stopBotWork } from "./stop";
-import { ofBot, workingNow, workSessions } from "./tree";
+import { atWorkNow, stopWork } from "./background";
+import { ofBot, workSessions } from "./tree";
 import type { Listed } from "./tree";
 import type { Target } from "../../shared/records";
 import type { GoalAppShape, GoalCheckShape, GoalFolderShape, GoalPlanShape, GoalStepShape, GoalWaitingShape } from "../../shared/routes/work";
@@ -706,9 +707,9 @@ async function holdForGoal(session: string, targets: () => Target[], file: strin
     return kept ?? null;
   }, file);
   if (!goal) return;
-  const [sessions, working] = await Promise.all([workSessions(targets()).catch((): Listed[] => []), workingNow(targets()).catch(() => new Set<string>())]);
+  const [sessions, working] = await Promise.all([workSessions(targets()).catch((): Listed[] => []), atWorkNow(targets()).catch(() => new Set<string>())]);
   for (const each of goalWork(goal, sessions)) {
-    if (working.has(each.data.id)) await stopSession(each.target, each.data.id, false).catch(() => {});
+    if (working.has(each.data.id)) await stopWork(each.target, each.data.id).catch(() => {});
   }
   noteWorkChanged(goal.bot);
 }
@@ -1143,7 +1144,7 @@ export async function lookAtGoals(tell: (notice: Notice) => boolean, targets: ()
   }
   const running = readKept(file).filter(goal => goal.state === "running" && botHere(goal.bot));
   const sessions = running.length ? await workSessions(targets(), signal).catch((): Listed[] => []) : [];
-  const working = running.length ? await workingNow(targets(), signal).catch(() => new Set<string>()) : new Set<string>();
+  const working = running.length ? await atWorkNow(targets(), signal).catch(() => new Set<string>()) : new Set<string>();
   const workOf = (goal: KeptGoal) => goalWork(goal, sessions);
   // Awake only while some goal's work is at it: the bot, or one of its sessions.
   keepAwake(running.some(goal => working.has(goal.session) || workOf(goal).some(each => working.has(each.data.id))));

@@ -31,7 +31,8 @@ import { keptFromSessions } from "../work/reviewer";
 import type { Approval } from "../work/approval";
 import { linkSession, pauseGoal, runningGoal } from "../work/goals";
 import { nextMidnight, startOfDay } from "../work/clock";
-import { botOfConversation, depthOf, ofBot, workingNow, workSessions, worksFor } from "../work/tree";
+import { atWorkNow } from "../work/background";
+import { botOfConversation, depthOf, ofBot, workSessions, worksFor } from "../work/tree";
 import type { WorksFor } from "../../shared/routes/work";
 import type { Target } from "../../shared/records";
 import type { KitRule } from "../bots/kit";
@@ -302,7 +303,7 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   if (bot && limits && noted) {
     const targets = [engine, bridge].filter((each): each is Target => Boolean(each));
     const work = ofBot(bot.bot, await workSessions(targets, place.signal, { archived: true }));
-    const working = await workingNow(targets, place.signal);
+    const working = await atWorkNow(targets, place.signal);
     const midnight = startOfDay(Date.now());
     const today = work.filter(each => (each.data.time?.created ?? 0) >= midnight);
     const tokens = today.reduce((sum, each) => sum + (each.data.tokens?.input ?? 0) + (each.data.tokens?.output ?? 0) + (each.data.tokens?.reasoning ?? 0), 0);
