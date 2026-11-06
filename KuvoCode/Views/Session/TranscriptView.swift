@@ -1980,7 +1980,7 @@ private struct AgentSentRow: View {
         } accessory: {
             if let session = address?.session, app.workspace.session(session) != nil {
                 Button("Open") { app.open(.session(session)) }
-                    .buttonStyle(TextButtonStyle())
+                    .buttonStyle(TextButtonStyle(outset: true))
                     .help("Open \(name)'s conversation")
             }
         } content: {
@@ -2028,6 +2028,11 @@ private struct FoldingCard<Header: View, Accessory: View, Content: View>: View {
     @ViewBuilder var content: Content
     @State private var isHoveringHeader = false
 
+    private static var radius: CGFloat { 10 }
+    private static var padding: CGSize { CGSize(width: 10, height: 9) }
+    /// How far the header's fill under the pointer sits from the card's edge.
+    private static var chipInset: CGFloat { 4 }
+
     /// A few lines at most: shown open from the start.
     static func isShort(_ text: String) -> Bool {
         text.count <= 320 && text.split(whereSeparator: \.isNewline).count <= 4
@@ -2049,7 +2054,9 @@ private struct FoldingCard<Header: View, Accessory: View, Content: View>: View {
                 Button {
                     withAnimation(.ui) { folds.set(id, open: !open) }
                 } label: {
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    // Centered, not on the first baseline: the first line leaving as it opens would
+                    // slide up out of line with the header while it fades.
+                    HStack(alignment: .center, spacing: 8) {
                         header
                         Image(systemName: "chevron.right")
                             .font(.caption2.weight(.semibold))
@@ -2062,13 +2069,15 @@ private struct FoldingCard<Header: View, Accessory: View, Content: View>: View {
                                 .truncationMode(.tail)
                         }
                     }
-                    // A fill under the pointer that reaches past the words without moving them.
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 3)
-                    .background(isHoveringHeader ? Pressable.hoverFill : .clear, in: .rect(cornerRadius: 6))
+                    // A fill under the pointer that reaches past the words without moving them,
+                    // as far as the card's padding allows less `Self.chipInset` on every side, so
+                    // its corners sit concentric with the card's (the card's radius less that inset).
+                    .padding(.horizontal, Self.padding.width - Self.chipInset)
+                    .padding(.vertical, Self.padding.height - Self.chipInset)
+                    .background(isHoveringHeader ? Pressable.hoverFill : .clear, in: .rect(cornerRadius: Self.radius - Self.chipInset))
                     .background(HoverTracker { isHoveringHeader = $0 })
-                    .padding(.horizontal, -6)
-                    .padding(.vertical, -3)
+                    .padding(.horizontal, -(Self.padding.width - Self.chipInset))
+                    .padding(.vertical, -(Self.padding.height - Self.chipInset))
                     .contentShape(.rect)
                     .animation(.easeOut(duration: 0.12), value: isHoveringHeader)
                 }
@@ -2086,9 +2095,9 @@ private struct FoldingCard<Header: View, Accessory: View, Content: View>: View {
                     .transition(.fold)
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 9)
-        .recessedWell(RoundedRectangle(cornerRadius: 10))
+        .padding(.horizontal, Self.padding.width)
+        .padding(.vertical, Self.padding.height)
+        .recessedWell(RoundedRectangle(cornerRadius: Self.radius))
         .help(help)
     }
 }
@@ -2115,7 +2124,7 @@ private struct AgentMessageRow: View {
                 .foregroundStyle(.tertiary)
             if app.workspace.session(session) != nil {
                 Button("Open") { app.open(.session(session)) }
-                    .buttonStyle(TextButtonStyle())
+                    .buttonStyle(TextButtonStyle(outset: true))
                     .help("Open \(from)'s conversation")
             }
         } content: {
@@ -2149,7 +2158,7 @@ private struct GroupWorkRow: View {
                 .foregroundStyle(.tertiary)
             if app.chats.group(chatID) != nil {
                 Button("Open") { app.open(.session(BotGroups.tabKey(chatID))) }
-                    .buttonStyle(TextButtonStyle())
+                    .buttonStyle(TextButtonStyle(outset: true))
                     .help("Open \(chat)")
             }
         } content: {

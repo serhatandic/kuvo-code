@@ -129,6 +129,8 @@ import Testing
         engine.stop()
         window.orderOut(nil)
         window.close()
+        // The conversation's own tasks (it follows the vault's asks) end with its views, not with the process.
+        window.contentView = nil
         try? FileManager.default.removeItem(at: Bots.file)
         AXElement.reading(false)
     }

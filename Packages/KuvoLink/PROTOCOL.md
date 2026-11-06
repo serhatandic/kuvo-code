@@ -3250,7 +3250,7 @@ and as a box starts.
 ### Working outside the project
 
 Settings › Permissions shows "Work outside the project: Ask" as the default, and every box keeps
-to it, sandbox or not: opencode 2.2.0's agents allow `external_directory` on their own, so each box
+to it, sandbox or not: opencode 2.2.5's agents allow `external_directory` on their own, so each box
 writes the engine a plugin, `kuvo-defaults.js` in its settings' `opencode/plugins` (as it starts,
 and back each minute if it's gone or changed), that gives the engine's agents
 `{external_directory, "*", ask}`. The engine sets up plugins before it adds the rules in your

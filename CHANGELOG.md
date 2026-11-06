@@ -17,6 +17,9 @@ release, Unreleased is renamed to the version; the release notes come from that 
 ### All Changes
 
 - **Autopilot**, in the Mode menu or with **/autopilot**: a conversation, a chat or a bot's conversation decides for itself and stops only for what needs you, like a sign-in or a payment. Where it would have asked you to choose, it goes with the choice it recommends and says so in the conversation (**Went with Warm and roasty · best reviewed**); **Change** picks another, and the agent goes that way from there. While it's on, an **✈ Autopilot** chip sits before the mode, and its **×** turns it off. Conversations start Interactive, asking you as before. A goal's card sets it too, as one setting with its bot's conversation. <!-- new: keyword/autopilot -->
+- A password the browser saves, or a saved sign-in it looks for, is no longer missed when a conversation is reading the vault at the same moment.
+- A bot whose sessions are at work no longer looks asleep (or idle) in the sidebar, its tab and its header: it looks at work while any session it oversees works, as its row's "Overseeing" line already said.
+- The header of an agent's message card ("From …") has a highlight under the pointer whose corners now sit evenly inside the card's, and its one-line preview no longer slides out of line with the header as the card opens.
 - A Markdown file in the Artifacts popover shows drawn (headings, bold, code, lists, diagrams), as in the panel's Files, instead of its raw `#` and backticks.
 - A bot's steps that have nothing to do with the browser (checking its sessions, setting its job, looking up its vault) now say what they did, instead of "Used the browser", and the line over a turn's steps counts every step it opens to.
 - A step where an agent reads another agent's conversation, or writes to it, says whom by name, never by its address.
@@ -387,8 +390,8 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - Popovers, like a session's wake-ups (All), list their rows on the popover itself, without a card inside it.
 - With VoiceOver, removing a message or putting a goal away takes you to its Undo line, which undoes it; stopping a goal says the messages waiting stay paused.
 - The servers behind Outlook and Microsoft 365, Todoist, CalDAV calendars, Apple Calendar and Reminders, and Chrome DevTools are updated to their latest versions, with their makers' fixes.
-- Kuvo Code runs opencode 2.2.0: long conversations load and compact better, a busy provider is tried again instead of being reported as a full conversation, and HEIC, AVIF and QuickTime attachments are recognized.
-- Diagrams in replies and in a Markdown file's preview have a new look, with tidier layouts, square-cornered lines and soft shadows (Mermaid 12).
+- Kuvo Code runs opencode 2.2.5: long conversations load and compact better, a busy provider is tried again instead of being reported as a full conversation, HEIC, AVIF and QuickTime attachments are recognized, a tool server that sends very large messages is no longer disconnected, and switching models or resuming an interrupted reply no longer makes some providers refuse the conversation.
+- Diagrams in replies and in a Markdown file's preview have a new look, with tidier layouts, square-cornered lines and soft shadows (Mermaid 12.3), and can use the new open-arrow and hollow-circle line ends.
 - The conversation fades out more softly above the composer and the bars over it, rather than at a sharp edge.
 - The line above a reply says how long the agent's steps took, like "Worked for 40s" (how many while it works); click it to see what they were and each one. The time under the reply isn't said twice.
 - Fewer icons beside words in the conversation and the composer: buttons like Pause, Stop, Steer, Send Now, Build It and Try Again, the mode and Local/Worktree chips, notices and code blocks' Copy show their words alone. Icons stay where they say something the words don't, like a goal's state or a failed step.

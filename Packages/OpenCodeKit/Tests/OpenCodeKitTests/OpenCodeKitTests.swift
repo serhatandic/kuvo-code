@@ -262,3 +262,15 @@ import Testing
     #expect(after.map(\.status) == ["completed", "failed"])
     #expect(after.first?.summary == "What happened so far.")
 }
+
+/// A command the engine recorded as `bash` (an older conversation, or a call by that name) reads
+/// as a `shell` call like any other, so its row shows the command and its output.
+@Test func aBashCallReadsAsAShellCall() throws {
+    func call(_ name: String) throws -> Message.ToolCall {
+        let json = #"{"type":"tool","id":"call_1","name":"\#(name)","state":{"status":"completed","input":{"command":"ls"},"content":[{"type":"text","text":"a"}]}}"#
+        return try JSONDecoder().decode(Message.ToolCall.self, from: Data(json.utf8))
+    }
+    #expect(try call("bash").name == "shell")
+    #expect(try call("shell").name == "shell")
+    #expect(try call("read").name == "read")
+}

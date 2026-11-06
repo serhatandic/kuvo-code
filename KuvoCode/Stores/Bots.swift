@@ -214,8 +214,15 @@ final class Bots {
         return bot(app?.chats.group(seat: id)?.seats.first { $0.value == id }?.key)
     }
 
-    /// What the bot is up to, for how its avatar moves: waiting for you comes first, then working,
-    /// then news you haven't seen, then asleep until a wake-up.
+    /// A session the bot oversees is at work (its own conversation may be still), unless its
+    /// wake-ups are paused: what its row says ("Overseeing 3 sessions", shimmering) and its face shows.
+    func isOverseeingWork(_ bot: Bot, in workspace: Workspace) -> Bool {
+        !paused.contains(bot.id) && workspace.overseen(by: bot.id).contains { workspace.isWorking($0.id) }
+    }
+
+    /// What the bot is up to, for how its avatar moves: waiting for you comes first, then working
+    /// (in its own conversation, or in the sessions it oversees), then news you haven't seen, then
+    /// asleep until a wake-up.
     func mood(of bot: Bot, in workspace: Workspace) -> BotMood {
         #if DEBUG
         // KUVO_DEMO_BOT_MOODS=<name>=<mood>,…: bots shown in a mood, for screenshots and videos.
@@ -236,7 +243,7 @@ final class Bots {
         }
         #endif
         if workspace.needsAttention(bot.sessionID) { return .waiting }
-        if workspace.isWorking(bot.sessionID) { return .working }
+        if workspace.isWorking(bot.sessionID) || isOverseeingWork(bot, in: workspace) { return .working }
         if workspace.session(bot.sessionID)?.isUnread == true { return .news }
         if wakes[bot.id]?.isEmpty == false { return .sleeping }
         if watches[bot.id]?.isEmpty == false { return .watching }

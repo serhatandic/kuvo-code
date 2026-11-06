@@ -32,9 +32,14 @@ final class Vaults {
     @ObservationIgnored var proof: (String) -> [String: Any]? = { _ in nil }
     /// The Mac's proof for one request to a machine's vault (`PhoneLink.vaultRequestProof`).
     @ObservationIgnored var requestProof: (_ machine: String, _ method: String, _ path: String, _ body: Data) -> String? = { _, _, _, _ in nil }
-    /// Goes up with each read of a box, and as it's forgotten: a read that comes back after a
-    /// later one, or after the box was forgotten, is dropped.
+    /// Goes up with each read of a box, and as it's forgotten.
     @ObservationIgnored private var reads: [String: Int] = [:]
+    /// The latest read whose answer shows, and the read the box was forgotten at: a read that
+    /// comes back after a later one's answer, or from before the box was forgotten, is dropped. One
+    /// that only a later read began over (another reader's) still shows when it comes, until the
+    /// later one's replaces it: its caller finds the vault it read, not nothing.
+    @ObservationIgnored private var shownRead: [String: Int] = [:]
+    @ObservationIgnored private var forgottenAt: [String: Int] = [:]
 
     subscript(box: String) -> Shown { shown[box] ?? Shown() }
 
@@ -107,7 +112,8 @@ final class Vaults {
             now.failure = error.localizedDescription
             now.locked = (error as? BoxRefusal)?.status == 423
         }
-        guard reads[box] == read else { return }
+        guard read > (forgottenAt[box] ?? 0), read > (shownRead[box] ?? 0) else { return }
+        shownRead[box] = read
         shown[box] = now
     }
 
@@ -144,7 +150,7 @@ final class Vaults {
     /// Forgets what's shown of `box`'s vault (a read still on its way is dropped); a machine's
     /// unlock key too (the machine removed from this Mac).
     func forget(_ box: String) {
-        _ = nextRead(box)
+        forgottenAt[box] = nextRead(box)
         shown[box] = nil
         if box != BoxClient.mac { VaultKeys.forget(box) }
     }

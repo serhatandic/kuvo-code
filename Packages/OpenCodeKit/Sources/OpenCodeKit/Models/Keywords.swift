@@ -86,9 +86,12 @@ public enum Keyword: String, CaseIterable, Sendable, Hashable {
     public static let quickReview = "review-quick"
 
     /// What "/" offers besides `keywords`: the engine's commands and yours, its own /review as
-    /// /review-quick where the keyword has the name, and none a keyword hides.
+    /// /review-quick where the keyword has the name, and none a keyword hides. The engine's own
+    /// /goal (since 2.2.1) is never offered: a message that starts with "/goal" is always the
+    /// composer's, which runs goals on the conversation's computer, so the engine's couldn't run.
     public static func commands(_ own: [Command], keywords: [Keyword]) -> [Command] {
         own.compactMap { command in
+            if command.name == Keyword.goal.rawValue { return nil }
             guard keywords.contains(where: { $0.rawValue == command.name }) else { return command }
             return command.name == Keyword.review.rawValue ? Command(name: quickReview, description: "The engine’s own review, in this conversation") : nil
         }
