@@ -13,7 +13,7 @@ import { call, engineGet } from "../engine/client";
 import { sendInto } from "../engine/queue";
 import { locked, textOf, writePrivate } from "../files";
 import { askedBy, asksIn, decisionChanged, recommendationOf, type PendingQuestion, type Recommendation } from "./answers";
-import { addDecided, runningGoalOf, carriedOnGoal, yoursOnGoal } from "./goals";
+import { addDecided, runningGoalOf, carriedOnGoal, forgottenOnGoal, yoursOnGoal } from "./goals";
 import { worksFor } from "./tree";
 import { WORK_FOLDER } from "./changes";
 import type { EngineSession } from "../engine/sessions";
@@ -94,6 +94,7 @@ export function carryDecided(from: string, to: string, file = DECIDED_FILE): voi
 /** Those of a conversation that's gone from this box. */
 export function forgetDecided(session: string, file = DECIDED_FILE): void {
   if (decidedIn(session, file).length) changeAll(all => { delete all[session]; }, file);
+  forgottenOnGoal(session);
 }
 
 /** Turns Autopilot on or off for `session` (on `target`): kept in its notes, and its agent told

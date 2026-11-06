@@ -8311,6 +8311,16 @@ function carriedOnGoal(from, to, file = GOALS_FILE) {
     }
   }, file);
 }
+function forgottenOnGoal(session, file = GOALS_FILE) {
+  const mine = (call) => call.id.startsWith(`ask:${session}:`);
+  if (!readKept(file).some((goal) => goal.decided?.some(mine)))
+    return;
+  changeKept((all) => {
+    for (const goal of all)
+      if (goal.decided?.some(mine))
+        goal.decided = goal.decided.filter((call) => !mine(call));
+  }, file);
+}
 async function decidedByYou2(id, given, targets, file) {
   const choice = line(given.choice, CHOICE_MOST);
   if (!choice)
@@ -8969,6 +8979,7 @@ function forgetDecided(session, file = DECIDED_FILE) {
     changeAll((all) => {
       delete all[session];
     }, file);
+  forgottenOnGoal(session);
 }
 async function setAutopilot(target, session, on, signal) {
   const metadata = isObject(session.metadata) ? session.metadata : {};

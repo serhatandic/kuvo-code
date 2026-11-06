@@ -926,6 +926,15 @@ export function carriedOnGoal(from: string, to: string, file = GOALS_FILE): void
   }, file);
 }
 
+/** A conversation gone from this box: the calls made in it go from its goal too. */
+export function forgottenOnGoal(session: string, file = GOALS_FILE): void {
+  const mine = (call: GoalDecidedShape) => call.id.startsWith(`ask:${session}:`);
+  if (!readKept(file).some(goal => goal.decided?.some(mine))) return;
+  changeKept(all => {
+    for (const goal of all) if (goal.decided?.some(mine)) goal.decided = goal.decided.filter(call => !mine(call));
+  }, file);
+}
+
 // Your choice on a call the bot made on its own: the same confirms it, quietly; another has the
 // bot go that way from here.
 async function decidedByYou(id: string, given: Record<string, unknown>, targets: () => Target[], file: string): Promise<{ goal: GoalPlanShape } | { refused: GoalRefusal }> {

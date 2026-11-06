@@ -409,6 +409,20 @@ test("a change to a question with several long answers reaches the agent whole, 
   assert.ok(prompts.at(-1).text.includes(JSON.stringify(fewer)), prompts.at(-1).text);
 });
 
+test("a deleted conversation's calls go from its goal too", async () => {
+  goalIn("ses_away");
+  const { ask, told, heard, done } = await telling();
+  ask(QUESTION("frm_goalcall", "ses_away", ROASTS));
+  while (!goalDecided().length) await new Promise(setImmediate);
+  for (const each of followers) each.write(`data: ${JSON.stringify({ id: "evt_gone2", type: "session.deleted", data: { sessionID: "ses_away" } })}\n\n`);
+  // (Events go in order: told of this one, the box has heard that it's gone.)
+  ask(QUESTION("frm_goalafter", "ses_away", ["Light", "Dark"]));
+  await heard(1);
+  assert.equal(told[0].data.request, "frm_goalafter");
+  assert.deepEqual(goalDecided(), []);
+  done();
+});
+
 test("a deleted conversation's calls go with it, and what's kept of a long question is one short line", async () => {
   const { ask, told, heard, done } = await telling();
   const long = "Which roast\n\n  for the whole  menu? " + "x".repeat(5000);
