@@ -8312,7 +8312,7 @@ function carriedOnGoal(from, to, file = GOALS_FILE) {
   }, file);
 }
 async function decidedByYou2(id, given, targets, file) {
-  const choice = line(given.choice, 200);
+  const choice = line(given.choice, CHOICE_MOST);
   if (!choice)
     return { refused: { status: 400, message: "Say your choice (choice)." } };
   const goal = readKept(file).find((each) => each.id === id);
@@ -9422,6 +9422,7 @@ async function callOf(target, permission, signal) {
   }
   return null;
 }
+var CHOICE_MOST = 2000;
 var RECOMMENDED = /\s*\(recommended\)\s*/i;
 var short = (words, most) => words.replace(/\s+/g, " ").trim().slice(0, most);
 var unmarked = (label) => short(label.replace(RECOMMENDED, " "), 200);
@@ -9460,7 +9461,7 @@ function recommendationOf(form) {
 }
 function decisionChanged(call) {
   const quoted = (words, most) => JSON.stringify(short(words, most));
-  const picked = `${call.again ? "now picked" : "picked"} ${quoted(call.yours, 200)}, not ${quoted(call.was, 200)}${call.again ? "" : " as you decided"}`;
+  const picked = `${call.again ? "now picked" : "picked"} ${quoted(call.yours, CHOICE_MOST)}, not ${quoted(call.was, CHOICE_MOST)}${call.again ? "" : " as you decided"}`;
   return `[Decision changed] For ${quoted(call.text, 300)} the user ${picked}. Go that way from here: redo what depends on it, and say in a line what changes.`;
 }
 var askedBy = (form) => {
@@ -24450,7 +24451,7 @@ async function* autopilotRoute(context) {
     return yield* json(200, shown3(now));
   }
   if (method === "POST") {
-    const changed = await decidedByYou(at.target, id, given.decided, given.choice.trim().slice(0, 200));
+    const changed = await decidedByYou(at.target, id, given.decided, given.choice.trim().slice(0, CHOICE_MOST));
     if ("status" in changed)
       return yield* json(changed.status, { message: changed.message });
     return yield* json(200, shown3(at.data));

@@ -4,6 +4,7 @@
 
 import { isObject, parsed } from "../../shared/json";
 import { engineGet, peerTargets } from "../engine/client";
+import { CHOICE_MOST } from "../work/answers";
 import { carryDecided, decidedByYou, decidedIn, goAheadOnWaiting, isAutopilot, setAutopilot } from "../work/autopilot";
 import { answerGoal, runningGoalOf } from "../work/goals";
 import type { EngineAnswer } from "../engine/client";
@@ -60,7 +61,7 @@ export async function* autopilotRoute(context: RouteContext): AsyncGenerator<Ans
     return yield* json(200, shown(now));
   }
   if (method === "POST") {
-    const changed = await decidedByYou(at.target, id, given.decided as string, (given.choice as string).trim().slice(0, 200));
+    const changed = await decidedByYou(at.target, id, given.decided as string, (given.choice as string).trim().slice(0, CHOICE_MOST));
     if ("status" in changed) return yield* json(changed.status, { message: changed.message });
     return yield* json(200, shown(at.data));
   }

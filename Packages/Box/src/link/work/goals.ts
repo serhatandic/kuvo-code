@@ -31,7 +31,7 @@ import { BOTS, HERE } from "../home";
 import { placeOfSession } from "../letters/letter";
 import { readWakes } from "../areas/wakes";
 import { periodEnd, periodOf, startOfDay, timeGiven } from "./clock";
-import { asksIn, decisionChanged, permissionWords, type PendingQuestion } from "./answers";
+import { asksIn, CHOICE_MOST, decisionChanged, permissionWords, type PendingQuestion } from "./answers";
 import { decidedByYou as decidedInConversation, goAheadOnQuestion, isAutopilot, setAutopilot } from "./autopilot";
 import type { EngineSession } from "../engine/sessions";
 import { keepAwake, keepsAwake, onPower } from "./awake";
@@ -929,7 +929,7 @@ export function carriedOnGoal(from: string, to: string, file = GOALS_FILE): void
 // Your choice on a call the bot made on its own: the same confirms it, quietly; another has the
 // bot go that way from here.
 async function decidedByYou(id: string, given: Record<string, unknown>, targets: () => Target[], file: string): Promise<{ goal: GoalPlanShape } | { refused: GoalRefusal }> {
-  const choice = line(given.choice, 200);
+  const choice = line(given.choice, CHOICE_MOST);
   if (!choice) return { refused: { status: 400, message: "Say your choice (choice)." } };
   const goal = readKept(file).find(each => each.id === id);
   if (!goal || !botHere(goal.bot)) return { refused: { status: 404, message: "There's no such goal here." } };

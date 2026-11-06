@@ -115,6 +115,9 @@ export interface Recommendation {
   calls: RecommendedCall[];
 }
 
+/** The most a choice you make on a call can say: several answers are joined in it. */
+export const CHOICE_MOST = 2000;
+
 const RECOMMENDED = /\s*\(recommended\)\s*/i;
 // One short line, as a call is kept and shown: what a question says is the agent's to make any length.
 const short = (words: string, most: number) => words.replace(/\s+/g, " ").trim().slice(0, most);
@@ -157,7 +160,7 @@ export function recommendationOf(form: Record<string, unknown>): Recommendation 
  * `again`: you had chosen before. */
 export function decisionChanged(call: { text: string; was: string; yours: string; again?: boolean }): string {
   const quoted = (words: string, most: number) => JSON.stringify(short(words, most));
-  const picked = `${call.again ? "now picked" : "picked"} ${quoted(call.yours, 200)}, not ${quoted(call.was, 200)}${call.again ? "" : " as you decided"}`;
+  const picked = `${call.again ? "now picked" : "picked"} ${quoted(call.yours, CHOICE_MOST)}, not ${quoted(call.was, CHOICE_MOST)}${call.again ? "" : " as you decided"}`;
   return `[Decision changed] For ${quoted(call.text, 300)} the user ${picked}. Go that way from here: redo what depends on it, and say in a line what changes.`;
 }
 
