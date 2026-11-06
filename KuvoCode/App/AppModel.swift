@@ -234,6 +234,20 @@ final class AppModel {
         workspace.tabs = tabs
         utilities.addToMessage = { [weak self] in self?.tabs.addToMessage($0) }
         utilities.attachToMessage = { [weak self] in self?.tabs.attachToMessage($0) }
+        // Before the window can show a conversation, which it does at launch before this Mac's
+        // sessions are read: a subagent shows in the session that started it, a group chat's seat
+        // in its chat, and each conversation has its own panel (a bot's session's is the bot's, and
+        // a seat's or a subagent's is where it shows).
+        utilities.shownIn = { [weak self] session in
+            guard let self else { return session }
+            if let group = chats.group(seat: session) { return BotGroups.tabKey(group.id) }
+            return workspace.root(of: session)
+        }
+        utilities.panelOf = { [weak self] session in
+            guard let self else { return session }
+            let shown = utilities.shownIn(session)
+            return bots.bot(forSession: shown)?.id ?? shown
+        }
         // This Mac's box up (at the engine's start, late, or again): its settings read, and
         // brought up to date.
         box.onStarted = { [weak self] in Task { await self?.prepareSettings() } }

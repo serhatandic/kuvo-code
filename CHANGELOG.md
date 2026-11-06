@@ -490,6 +490,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - With no GitHub Copilot account, a conversation started without picking a model (one an agent or a bot started, say) no longer fails every message with "missing required Authorization header": the engine's default model had become one of Copilot's. It's one of OpenCode's free models again: on a new install from the start, and on one that had the problem once its engine has started again after its first run with this update.
 - A short message of yours in a narrow window shows all of its lines, instead of being cut at twelve with no Show More.
 - A long message of yours comes into view with room for its Show More already made, so what's under it no longer slides down as the button appears, and a click on the next message's first line reaches that message.
+- The side panel of a bot's conversation no longer opens with only its + and expand arrows floating in the middle: it has its tab, and its bar stays at the top. That could happen when the conversation was open as the app started, or when a bot moved to another computer.
 
 ## 0.7.2
 

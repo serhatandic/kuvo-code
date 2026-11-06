@@ -124,19 +124,6 @@ extension AppModel {
             let body = JSONValue.object(["path": .string(file.path), "session": .string(session), "via": .string("download")])
             Task { _ = try? await api.client.send(try api.client.request("POST", "api/kuvo/artifacts/noted", body: body), as: JSONValue.self) }
         }
-        // A subagent shows in the session that started it, a group chat's seat in its chat.
-        utilities.shownIn = { [weak self] session in
-            guard let self else { return session }
-            if let group = chats.group(seat: session) { return BotGroups.tabKey(group.id) }
-            return workspace.root(of: session)
-        }
-        // Each conversation has its own panel: a bot's session's is the bot's, and a seat's or a
-        // subagent's is where it shows.
-        utilities.panelOf = { [weak self] session in
-            guard let self else { return session }
-            let shown = utilities.shownIn(session)
-            return bots.bot(forSession: shown)?.id ?? shown
-        }
         // A machine whose connection dropped while the Mac slept, and that gave up trying, gets
         // another go once it's awake and the network is back. (NSWorkspace says so on its own
         // notification center; watched once, though this runs with each start of the engine.)

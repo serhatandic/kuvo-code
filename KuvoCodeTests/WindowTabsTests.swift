@@ -1,4 +1,5 @@
 import AppKit
+import ClientDesign
 import Foundation
 import OpenCodeKit
 import SwiftTerm
@@ -270,6 +271,54 @@ import Testing
         tabs.room.width = 600
         panelFollows()
         #expect(app.utilities.panelKey == "ses_a", "out of room, it gave way: the tab's again")
+    }
+
+    // MARK: The panel always has a tab
+
+    /// A bot on this Mac, as its box lists it.
+    private func listBot(session: String) {
+        let look = BotLook(color: .sky, shape: .round, face: .happy)
+        app.bots.take([ListedBot(id: "bot_ada", session: session, name: "Ada", look: look, folder: "/bots/bot_ada")], from: BoxClient.mac)
+    }
+
+    private func forgetBots() {
+        try? FileManager.default.removeItem(at: AppInfo.supportDirectory.appending(path: "bots.json"))
+    }
+
+    /// A bot's conversation that comes back with the window at launch, before this Mac's sessions
+    /// are read: its panel has its tab from the first, and still does once they're read. It lost
+    /// it there, leaving only the tab bar's + and expand arrows in the middle of the panel.
+    @Test func aBotsConversationBackAtLaunchKeepsItsPanelsTab() async {
+        defer { done(); forgetBots() }
+        listBot(session: "ses_bot")
+        tabs.restore(WindowTabs.Saved(tabs: [.session("ses_bot")], selection: .session("ses_bot"), showsPanel: true).text, older: .init())
+        panelFollows()
+        #expect(app.utilities.visibleTabs.count == 1)
+
+        await sessions(["ses_bot"])
+        for start in app.startMachines() { await start.value }
+        panelFollows()
+        #expect(app.utilities.selected?.kind == .changes, "the tab it opened on")
+        #expect(app.utilities.visibleTabs.count == 1)
+        #expect(app.utilities.panelKey == "bot_ada", "the bot's panel, as any time after")
+    }
+
+    /// A conversation in view that turns out to be a bot's (its box listed it just now): its panel
+    /// is the bot's from then on, with the tabs you had, on the one you were looking at.
+    @Test func aConversationFoundToBeABotsKeepsItsTabs() async {
+        defer { done(); forgetBots() }
+        await sessions(["ses_bot"])
+        tabs.open(.session("ses_bot"))
+        panelFollows()
+        let notes = URL(filePath: folder + "/notes.md")
+        app.utilities.open(notes)
+        let tabsBefore = app.utilities.visibleTabs.map(\.id)
+
+        listBot(session: "ses_bot")
+        panelFollows()
+        #expect(app.utilities.panelKey == "bot_ada")
+        #expect(app.utilities.visibleTabs.map(\.id) == tabsBefore, "the same tabs")
+        #expect(app.utilities.selected?.kind == .file(notes), "on the one in view")
     }
 
     /// Short of room, only the split you opened last keeps its place: another tab's, met again,

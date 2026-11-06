@@ -49,6 +49,18 @@ import Testing
         #expect(panel.visibleTabs.count == 1)
     }
 
+    /// A group chat showing only a bot's tab (you closed its own), when that bot leaves: the panel
+    /// starts over rather than having nothing to show.
+    @Test func aGroupChatsPanelStartsOverWhenItsLastBotsTabGoes() throws {
+        panel.inView = .init(group: "group:grp_team", bots: ["bot_a"])
+        let own = panel.visibleTabs
+        panel.newBrowser(owner: "bot_a")
+        for tab in own { panel.close(tab.id) }
+        #expect(panel.visibleTabs.map(\.owner) == ["bot_a"])
+        panel.inView = .init(group: "group:grp_team")
+        #expect(panel.selected?.owner == "group:grp_team")
+    }
+
     /// A group chat has no project: its panel opens on a new tab (browser and tools), never on a
     /// Changes tab saying "No Project", and Show Changes and Show Files don't add one there.
     @Test func aGroupChatsPanelHasNoChangesOrFiles() {
