@@ -169,11 +169,6 @@ enum MachineBox {
         return Personalities.Library(personalities: answer.personalities ?? [], removed: answer.removed ?? [])
     }
 
-    /// Sets one of the machine's own keys (an integration's), or removes it (nil).
-    static func setKey(_ name: String, _ value: String?, on connection: SSHConnection) async throws {
-        _ = try await run("key \(SSHConnection.quoted(name))", input: Data((value ?? "").utf8), on: connection)
-    }
-
     /// `kuvo-link.js box <arguments>` there, with `input` on its standard input, with whichever
     /// engine runtime the machine has (this version's, or the one at work there).
     /// Its bots' folders' settings made right, as a bridge older than `kuvo/bots/keys/refresh` does it.

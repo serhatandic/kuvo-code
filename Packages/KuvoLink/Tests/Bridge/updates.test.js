@@ -5,7 +5,7 @@
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/*.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
@@ -353,4 +353,28 @@ test("kuvo/update says how the box stands, and only reads and starts one", async
   const now = await ask("POST", { now: true });
   assert.equal(now.status, 409, "a test's folder, not a machine's own");
   assert.match(now.json.message, /own Kuvo Code folder/);
+});
+
+test("a machine with no bridge, updated by its `update` command: confirmed, and its integrations brought up to date", async () => {
+  await machine();
+  release();
+  const key = "KUVO_KEY_FIGMA_FIGMA_API_KEY";
+  const catalog = fileURLToPath(new URL("../../Vectors/routes/box/integrations.json", import.meta.url));
+  write(path.join(home, "bin", "integrations.json"), fs.readFileSync(catalog));
+  write(path.join(home, "box", "keys", key), "tok");
+  write(path.join(home, "box", "opencode.json"), JSON.stringify({ mcp: { servers: {
+    figma: { type: "local", command: ["kuvo-npx", "figma-developer-mcp@0.6.0", "--stdio"], environment: { FIGMA_API_KEY: `{file:${home}/box/keys/${key}}` } },
+  } } }));
+  const updating = spawn(process.execPath, [script, "update", "--now", "--url", `${base}/boxes.json`, "--key", pinned], { env: process.env, stdio: ["ignore", "pipe", "inherit"] });
+  let said = "";
+  updating.stdout.setEncoding("utf8");
+  updating.stdout.on("data", chunk => { said += chunk; });
+  // (Once its output has all come.)
+  await new Promise(resolve => updating.once("close", resolve));
+  assert.equal(JSON.parse(said).result, "updated", said);
+  engines.add(read(engineFile).pid);
+  assert.equal(fs.existsSync(path.join(home, "run", "update-trial")), false, "confirmed");
+  const figma = read(catalog).integrations.find(entry => entry.id === "figma").settings;
+  assert.deepEqual(read(path.join(home, "box", "opencode.json")).mcp.servers.figma, figma);
+  assert.equal(fs.existsSync(path.join(home, "box", "keys", key)), false);
 });
