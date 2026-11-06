@@ -1172,7 +1172,7 @@ test("on Autopilot, a question asked with a recommendation goes ahead on it at o
   assert.equal(told.filter(each => each.category === "blocked").length, 0, "nothing to tell your phones: it went on");
 
   // A session's question goes the same way once the bot has had its moment to answer it; one with
-  // no recommendation, and any permission, still waits for you, never answered for you.
+  // no recommendation comes back declined, never answered for you, and a permission still waits.
   forms.set("ses_site", [{ ...QUESTION, id: "frm_site" }, { id: "frm_open", title: "Name", metadata: { kind: "question" }, fields: [{ key: "name", type: "string", description: "What should the newsletter be called?" }] }]);
   asked.set("ses_site", [{ id: "per_deploy", action: "shell", resources: ["vercel deploy --prod"] }]);
   await look(now);
@@ -1181,8 +1181,9 @@ test("on Autopilot, a question asked with a recommendation goes ahead on it at o
   assert.deepEqual(answeredForms.at(-1), { session: "ses_site", form: "frm_site", answer: { direction: "warm" } });
   assert.deepEqual(replied, [], "a permission is never answered for you: the conversation's mode decides those");
   [goal] = await goals();
-  assert.deepEqual(goal.waiting.map(each => each.kind), ["ask", "ask"]);
-  assert.ok(goal.waiting.some(each => each.text === "Build the site asks: What should the newsletter be called?"));
+  assert.deepEqual(forms.get("ses_site"), [], "nothing's left holding it");
+  assert.equal(answeredForms.filter(each => each.form === "frm_open").length, 0, "nothing chosen for you");
+  assert.deepEqual(goal.waiting.map(each => each.kind), ["ask"]);
   assert.ok(goal.waiting.some(each => /vercel deploy --prod/.test(each.text)));
   assert.equal(goal.decided.length, 2);
 
