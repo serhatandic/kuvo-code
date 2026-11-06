@@ -321,23 +321,35 @@ import Testing
     }
 
     /// Removed while its engine starts over (its Settings › Engine), before it connects again: it
-    /// doesn't connect again, and nothing more goes there.
+    /// doesn't connect again, and nothing more goes there, on a machine that answers what it sent.
+    /// Here, as what's there is read. (Not connected first, as nothing else then goes there: a
+    /// connection's follows may still send a read as it closes, which can't be told from a step
+    /// of starting over sent the same way.)
     @Test func removedWhileItsEngineStartsOverItDoesntConnectAgain() async throws {
+        try await removedWhileStartingOver(at: #".kuvo-boot" 2>/dev/null"#)
+    }
+
+    /// And as its keeper goes there, which comes before the start itself.
+    @Test func removedAsItsKeeperGoesThereItsEngineDoesntStartOver() async throws {
+        try await removedWhileStartingOver(at: "$name.new")
+    }
+
+    /// Removed while the step of starting over that has `step` in its script is under way there.
+    private func removedWhileStartingOver(at step: String) async throws {
         defer { done() }
         let id = Self.name()
         let engine = add(id, at: machine)
-        await app.connect(engine).value
-        // What starting it over sends there, held until it's removed.
+        // That step, held until it's removed; the rest answered.
         let gate = Gate()
         let sending = Gate()
         defer { gate.open() }
         SSHConnection.standIn = { [ssh] address, script in
             ssh.note(script, to: address)
-            if address == id {
+            if address == id, script.contains(step) {
                 sending.open()
                 gate.wait()
             }
-            return nil
+            return ""
         }
         let restart = app.restartEngine(engine)
         try await until { sending.isOpen }

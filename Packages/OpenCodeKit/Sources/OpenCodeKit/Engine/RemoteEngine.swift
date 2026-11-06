@@ -964,10 +964,11 @@ public final class RemoteServer: @unchecked Sendable {
         return (files, SHA256.hash(data: Data(files.map { $0.0 + "\n" + $0.1 }.joined(separator: "\n").utf8)).map { String(format: "%02x", $0) }.joined())
     }
 
-    public static func installBoot(on connection: SSHConnection) async throws {
+    public static func installBoot(on connection: SSHConnection, while wanted: @Sendable () async -> Bool = { true }) async throws {
         let (files, hash) = bootFiles
         let marker = "\"$HOME/\(RemoteEngineInstaller.root)/bin/.kuvo-boot\""
         if try await connection.run("cat \(marker) 2>/dev/null || true").trimmingCharacters(in: .whitespacesAndNewlines) == hash { return }
+        guard await wanted() else { throw CancellationError() }
         let input = FileManager.default.temporaryDirectory.appending(path: "kuvo-boot-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: input) }
         try Data((files.map { $0.0 + "\t" + Data($0.1.utf8).base64EncodedString() }.joined(separator: "\n") + "\n").utf8).write(to: input)
@@ -1277,10 +1278,12 @@ public final class RemoteServer: @unchecked Sendable {
     }
 
     /// Starts the machine's engine over, as it was last started there (Restart). False when it
-    /// didn't come up.
+    /// didn't come up. `wanted`, asked before each step after the first: no longer (the machine
+    /// removed meanwhile), and nothing more goes there.
     @discardableResult
-    public static func restartEngine(on connection: SSHConnection) async throws -> Bool {
-        try await installBoot(on: connection)
+    public static func restartEngine(on connection: SSHConnection, while wanted: @Sendable () async -> Bool) async throws -> Bool {
+        try await installBoot(on: connection, while: wanted)
+        guard await wanted() else { return false }
         return (try? await connection.run("sh \"$HOME/\(RemoteEngineInstaller.root)/bin/kuvo-start\" restart")) != nil
     }
 

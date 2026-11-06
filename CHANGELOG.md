@@ -502,6 +502,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - A short message of yours in a narrow window shows all of its lines, instead of being cut at twelve with no Show More.
 - A long message of yours comes into view with room for its Show More already made, so what's under it no longer slides down as the button appears, and a click on the next message's first line reaches that message.
 - The side panel of a bot's conversation no longer opens with only its + and expand arrows floating in the middle: it has its tab, and its bar stays at the top. That could happen when the conversation was open as the app started, or when a bot moved to another computer.
+- A machine you remove while its engine is restarting gets nothing more from this Mac: the remaining steps of the restart don't go to it.
 
 ## 0.7.2
 
