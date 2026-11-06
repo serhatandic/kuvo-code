@@ -1047,13 +1047,16 @@ class CodexThread implements Thread {
     this.inTurn = true
     try {
       let result = await this.runTurn(input, turn, hooks)
+      let turnedDown = 0
       // Codex asked you something as it ended (outside Plan its question doesn't wait for you, the
       // way the engine's and Claude's do): its card asks it in this turn, and Codex goes on with
       // your answer.
       while (result.outcome === "succeeded" && this.asked?.length && !hooks.signal.aborted) {
         const answer = await this.answer(this.asked, hooks)
         if (!answer) break
-        result = await this.runTurn({ ...input, ...answer, adopt: false }, turn, hooks)
+        // (Turned down by its box and asking again and again: its turn ends, rather than run up its tokens with nobody there.)
+        if (answer.declined && ++turnedDown > 2) break
+        result = await this.runTurn({ ...input, text: answer.text, files: answer.files, adopt: false }, turn, hooks)
       }
       return hooks.signal.aborted && result.outcome === "succeeded" ? { outcome: "interrupted" } : result
     } finally {
@@ -1063,7 +1066,7 @@ class CodexThread implements Thread {
   }
 
   /** What you answered Codex's question with (the card, or a message you sent meanwhile), or nothing (dismissed). */
-  private async answer(questions: NonNullable<CodexThread["asked"]>, hooks: TurnHooks): Promise<{ text: string; files: PromptFile[] } | undefined> {
+  private async answer(questions: NonNullable<CodexThread["asked"]>, hooks: TurnHooks): Promise<{ text: string; files: PromptFile[]; declined?: boolean } | undefined> {
     this.asked = undefined
     const waiting: NonNullable<CodexThread["waiting"]> = { abort: new AbortController() }
     this.waiting = waiting
@@ -1081,7 +1084,7 @@ class CodexThread implements Thread {
       const answer = await hooks.question({ title: questions.length === 1 ? "Question" : "Questions", fields, signal: waiting.abort.signal, declined: (words) => { declined = words } })
       if (waiting.typed) return { text: waiting.typed.text, files: waiting.typed.files }
       // Turned down by its box with words: it hears them and carries on.
-      if (!answer && declined) return { text: declined, files: [] }
+      if (!answer && declined) return { text: declined, files: [], declined: true }
       if (!answer) return undefined
       const said = (index: number) => {
         const value = answer[`q${index}`]
@@ -1838,8 +1841,8 @@ class CodexThread implements Thread {
         const answer = await hooks.question({ title: questions.length === 1 ? questions[0].header ?? "Question" : "Questions", fields, toolCallID: params.itemId, declined: (words) => { declined = words } })
         const answers: Record<string, { answers: string[] }> = {}
         for (const question of questions) {
-          // (Turned down by its box with words: that's what it hears.)
-          const value = answer?.[question.id] ?? declined
+          // (Turned down by its box with words: that's what it hears, never as a secret.)
+          const value = answer?.[question.id] ?? (question.isSecret ? undefined : declined)
           answers[question.id] = { answers: value === undefined || value === null ? [] : Array.isArray(value) ? value.map(String) : [String(value)] }
         }
         return { answers }

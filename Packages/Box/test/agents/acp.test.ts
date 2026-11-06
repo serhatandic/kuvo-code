@@ -458,7 +458,7 @@ describe("ACP agents, nothing dropped", () => {
     sessions.replyForm(session, sessions.forms(session)[0].id, null, "This is on Autopilot: leave it.")
     await started
     expect(answers()).toEqual([{ outcome: "cancelled" }])
-    expect(tools(session)[0]).toMatchObject({ id: "interaction_8", state: { status: "error", error: { message: "This is on Autopilot: leave it." } } })
+    expect(tools(session)[0]).toMatchObject({ id: "interaction_8", name: "question", state: { input: { questions: [{ question: "Which roast?" }] }, status: "error", error: { message: "This is on Autopilot: leave it." } } })
   })
 
   test("Grok's question turned down by its box with words (Autopilot): they're the answer it hears", async () => {

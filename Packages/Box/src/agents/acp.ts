@@ -1026,6 +1026,8 @@ export class AcpThread implements Thread {
 // MARK: Tools, as the app knows them
 
 function kuvoTool(call: any): { name: string; input: Record<string, unknown> } {
+  // Antigravity's question (`interaction_…`), which it names only by its title: a question, as any agent's.
+  if (String(call.toolCallId ?? "").startsWith("interaction_")) return { name: "question", input: { questions: [{ question: call.title ?? "" }] } }
   const raw = call.rawInput ?? {}
   const path = call.locations?.[0]?.path ?? raw.path ?? raw.file_path ?? raw.filePath
   const command = Array.isArray(raw.command) ? raw.command.join(" ") : raw.command ?? raw.CommandLine ?? raw.command_line ?? raw.commandLine

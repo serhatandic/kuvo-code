@@ -8118,6 +8118,8 @@ ${others.map((path) => `- ${path}`).join(`
   }
 }
 function kuvoTool(call) {
+  if (String(call.toolCallId ?? "").startsWith("interaction_"))
+    return { name: "question", input: { questions: [{ question: call.title ?? "" }] } };
   const raw = call.rawInput ?? {};
   const path = call.locations?.[0]?.path ?? raw.path ?? raw.file_path ?? raw.filePath;
   const command = Array.isArray(raw.command) ? raw.command.join(" ") : raw.command ?? raw.CommandLine ?? raw.command_line ?? raw.commandLine;
@@ -12464,11 +12466,14 @@ class CodexThread {
     this.inTurn = true;
     try {
       let result = await this.runTurn(input, turn, hooks);
+      let turnedDown = 0;
       while (result.outcome === "succeeded" && this.asked?.length && !hooks.signal.aborted) {
         const answer = await this.answer(this.asked, hooks);
         if (!answer)
           break;
-        result = await this.runTurn({ ...input, ...answer, adopt: false }, turn, hooks);
+        if (answer.declined && ++turnedDown > 2)
+          break;
+        result = await this.runTurn({ ...input, text: answer.text, files: answer.files, adopt: false }, turn, hooks);
       }
       return hooks.signal.aborted && result.outcome === "succeeded" ? { outcome: "interrupted" } : result;
     } finally {
@@ -12497,7 +12502,7 @@ class CodexThread {
       if (waiting.typed)
         return { text: waiting.typed.text, files: waiting.typed.files };
       if (!answer && declined)
-        return { text: declined, files: [] };
+        return { text: declined, files: [], declined: true };
       if (!answer)
         return;
       const said = (index) => {
@@ -13268,7 +13273,7 @@ From memory: ${cited.join("; ")}`);
         } });
         const answers = {};
         for (const question of questions) {
-          const value = answer?.[question.id] ?? declined;
+          const value = answer?.[question.id] ?? (question.isSecret ? undefined : declined);
           answers[question.id] = { answers: value === undefined || value === null ? [] : Array.isArray(value) ? value.map(String) : [String(value)] };
         }
         return { answers };
@@ -23347,4 +23352,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents f8404ff8905562e4e50f12ee98ccdd2f53dc35b8bb4143b853d172c912ea98e0
+// Built from Packages/Box/src/agents 95a5d87407b7661877fe46e08025355c7b2bef4c6dd702eb68a51964e6d47db3
