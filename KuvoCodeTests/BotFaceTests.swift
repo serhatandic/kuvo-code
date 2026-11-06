@@ -75,6 +75,13 @@ import Testing
         #expect(app.bots.mood(of: bot, in: app.workspace) == .working, "its session runs: it looks at work, not asleep")
         #expect(app.bots.isOverseeingWork(bot, in: app.workspace), "and its row says so")
 
+        // Its wake-ups paused, the session still running: not at work, as its row says.
+        try await app.wakeUps.setPaused(true, bot.wakeOwner, stops: false)
+        #expect(app.wakeUps.paused.contains(bot.id))
+        #expect(!app.bots.isOverseeingWork(bot, in: app.workspace))
+        #expect(app.bots.mood(of: bot, in: app.workspace) == .sleeping)
+        try await app.wakeUps.setPaused(false, bot.wakeOwner, stops: false)
+
         // The session ends: it sleeps again.
         sessions(running: [])
         await app.workspace.refresh()

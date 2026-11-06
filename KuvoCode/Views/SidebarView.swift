@@ -1721,7 +1721,7 @@ private struct BotRow: View {
     }
 
     /// It said something you haven't read.
-    private var hasNews: Bool { bots.mood(of: bot, in: workspace) == .news }
+    private var hasNews: Bool { session?.isUnread == true }
 
     /// What it's up to: working, waiting for you, what it said that you haven't read, when it
     /// wakes next, or its job. What it's set to do (wake up, watch) and how it's set (paused)
