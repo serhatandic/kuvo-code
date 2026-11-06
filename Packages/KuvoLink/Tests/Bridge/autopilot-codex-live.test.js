@@ -273,6 +273,7 @@ test("Autopilot in the Codex lane on a real Codex", { skip, timeout: 900_000 }, 
     // drop the first test shows, leaves everything else here looking right).
     const question = questionOf(session);
     assert.ok(question.asked, `the question reached its box: ${await describe()}`);
+    assert.match(JSON.stringify(question.asked.fields), /ship/, "and it was the one this test asked");
     assert.equal(question.settled, "cancelled", "and it was declined there");
     assert.deepEqual(await forms(session), [], "nothing's left asked");
     assert.deepEqual(await calls(session), [], `it made no call on it (the model marked a choice anyway? ${JSON.stringify(question.asked?.fields?.map(field => field.options?.map(option => option.label)))})`);
@@ -286,7 +287,7 @@ test("Autopilot in the Codex lane on a real Codex", { skip, timeout: 900_000 }, 
     await send(session, "msg_autopilotcodex0003", "Call the pick_repository tool of your probe MCP server now, once. Then reply with one short line saying exactly what it returned.");
     const messages = await turnsDone(session, "its turn to end, with the server's form declined", undefined, /probe/);
     const steps = assistants(messages).flatMap(each => each.content ?? []).filter(block => block.type === "tool");
-    assert.match(JSON.stringify(steps), /probe heard: (decline|cancel)/, `the server heard no: ${JSON.stringify(steps.map(each => [each.name, each.state?.status, JSON.stringify(each.state?.content ?? each.state?.error ?? "").slice(0, 300)]))}`);
+    assert.match(JSON.stringify(steps), /probe heard: decline/, `the server heard no: ${JSON.stringify(steps.map(each => [each.name, each.state?.status, JSON.stringify(each.state?.content ?? each.state?.error ?? "").slice(0, 300)]))}`);
     const question = questionOf(session, "mcp-elicitation");
     assert.ok(question.asked, "the server's question reached its box");
     assert.equal(question.settled, "cancelled", "and it was declined there, not by the bridge's own fallback");
