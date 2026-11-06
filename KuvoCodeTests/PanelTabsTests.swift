@@ -90,8 +90,22 @@ import Testing
         panel.inView = .init(session: "ses_root", panel: "ses_root")
         panel.inView = .init(session: "ses_sub", panel: "ses_sub")
         panel.open(a)
+        panel.panelOf = { _ in "ses_root" }
         panel.inView = .init(session: "ses_sub", panel: "ses_root")
         #expect(startTabs.count == 1)
+        #expect(panel.visibleTabs.contains { $0.kind == .file(a) })
+    }
+
+    /// A subagent of a subagent: the sessions above it arrive one at a time, so its panel is
+    /// found to be another's twice over, and its tabs follow both times.
+    @Test func aPanelFoundToBeAnothersInTwoStepsKeepsItsTabs() {
+        panel.inView = .init(session: "ses_deep", panel: "ses_deep")
+        panel.open(a)
+        panel.panelOf = { $0 == "ses_deep" ? "ses_find" : $0 }
+        panel.inView = .init(session: "ses_deep", panel: "ses_find")
+        #expect(panel.visibleTabs.contains { $0.kind == .file(a) })
+        panel.panelOf = { _ in "ses_root" }
+        panel.inView = .init(session: "ses_deep", panel: "ses_root")
         #expect(panel.visibleTabs.contains { $0.kind == .file(a) })
     }
 

@@ -158,7 +158,7 @@ final class Utilities {
             // that started it): its tabs go along. Not the other way: a bot carrying on in a new
             // session keeps its panel, while the old session it's leaving is still in view.
             if oldPanel != panelKey, old.group == nil, inView.group == nil, let working = old.worksBeside ?? old.session,
-               oldPanel == working, working == inView.worksBeside ?? inView.session {
+               panelOf(oldPanel) == panelKey, working == inView.worksBeside ?? inView.session {
                 movePanel(from: oldPanel, to: panelKey)
             }
             if movedPlace {
