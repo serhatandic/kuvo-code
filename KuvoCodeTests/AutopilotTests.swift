@@ -135,14 +135,16 @@ import Testing
     /// A question that marks the choice it recommends is what Autopilot goes ahead on: the Mac
     /// doesn't notify you of one in a conversation on Autopilot, as the box answers it.
     @Test func aQuestionAutopilotGoesAheadOnIsOneThatMarksItsRecommendation() throws {
-        func form(_ labels: [String], required: Bool? = nil) throws -> FormRequest {
+        func form(_ labels: [String], required: Bool? = nil, format: String? = nil) throws -> FormRequest {
             var field: [String: Any] = ["key": "roast", "type": "string", "options": labels.enumerated().map { ["value": "r\($0.offset)", "label": $0.element] }]
             if let required { field["required"] = required }
+            if let format { field["format"] = format }
             return try JSONDecoder().decode(FormRequest.self, from: JSONSerialization.data(withJSONObject: ["id": "frm_1", "sessionID": "ses_one", "title": "Roast", "metadata": ["kind": "question"], "fields": [field]]))
         }
         #expect(try form(["Light", "Warm (Recommended)"]).recommendsAnswer)
         #expect(try !form(["Light", "Warm"]).recommendsAnswer, "none marked: it waits for you")
         #expect(try !form(["Light (Recommended)", "Warm (recommended)"]).recommendsAnswer, "two marked in one choice: it waits")
+        #expect(try !form(["Use this key (Recommended)", "Skip"], format: "password").recommendsAnswer, "a secret is yours to hand over, whatever it marks")
         #expect(AutopilotShown.isOn(try JSONDecoder().decode(Session.self, from: JSONSerialization.data(withJSONObject: StubEngine.session("ses_two", directory: "/srv", extra: ["metadata": ["kuvo": ["autopilot": true]]])))))
     }
 }

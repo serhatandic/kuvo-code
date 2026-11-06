@@ -111,11 +111,13 @@ const RECOMMENDED = /\s*\(recommended\)\s*/i;
 const unmarked = (label: string) => label.replace(RECOMMENDED, " ").trim();
 
 /** What a question tool's form recommends: in each field it shows, the one choice it marked
- * "(Recommended)" (or those it marked, of several); null when a field it needs has none, or for a
- * form that isn't the question tool's (an MCP server's, a sign-in's). */
+ * "(Recommended)" (or those it marked, of several); null when a field it needs has none, for a form
+ * that asks for a secret (a field written as a password: only you hand those over), or for a form
+ * that isn't the question tool's (an MCP server's, a sign-in's). */
 export function recommendationOf(form: Record<string, unknown>): Recommendation | null {
   if (!isObject(form.metadata) || form.metadata.kind !== "question") return null;
   const fields = (Array.isArray(form.fields) ? form.fields : []).filter((field): field is Record<string, unknown> => isObject(field) && !field.hidden && !(Array.isArray(field.when) && field.when.length));
+  if (fields.some(field => field.format === "password")) return null;
   const answer: Record<string, unknown> = {};
   const chosen: { label: string; why?: string }[] = [];
   for (const field of fields) {

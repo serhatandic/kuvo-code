@@ -181,6 +181,22 @@ test("a question without a recommendation, and any in an Interactive conversatio
   assert.match(prompts[0].text, /\[Session asks\] "ses_copy"/);
 });
 
+test("what only you can do goes to you: its agent is told to ask it with no mark, and a form asking for a secret waits, whatever it marks", async () => {
+  await route("PUT", "kuvo/sessions/ses_mine/autopilot", { autopilot: true });
+  const told = entries.get("ses_mine kuvo.autopilot");
+  for (const word of [/paying/, /signing in/, /making an account/, /handing over a key/, /destructive/]) assert.match(told, word);
+  assert.match(told, /no choice marked: that one waits for them, and they're notified/);
+  const { watch } = await watcher();
+  const key = QUESTION("frm_key", "ses_away", ["Use this key (Recommended)", "Skip"]);
+  key.fields[0].format = "password";
+  const optional = QUESTION("frm_keyed", "ses_away", ROASTS);
+  optional.fields.push({ key: "token", type: "string", title: "Your token", required: false, format: "password" });
+  const paying = QUESTION("frm_pay", "ses_away", ["I'll pay", "Skip"]);
+  for (const form of [key, optional, paying]) await watch({ type: "form.created", data: { form } });
+  assert.deepEqual(answered, []);
+  assert.deepEqual((await route("GET", "kuvo/sessions/ses_away/autopilot")).body.decided, []);
+});
+
 test("one a session on Autopilot went ahead on isn't put to its starter", async () => {
   const { watch, tellAll } = await watcher();
   await watch({ type: "form.created", data: { form: QUESTION("frm_6", "ses_menu", ROASTS) } });

@@ -3497,8 +3497,9 @@ what may be decided without asking. Every conversation is Interactive until it's
 - `PUT kuvo/sessions/<id>/autopilot` `{autopilot: bool}`: on or off; the answer as `GET`'s. It's
   kept with the conversation (`metadata.kuvo.autopilot`, false once off), and its agent is told how
   to work in its instructions (`kuvo.autopilot`), taken out again when it's turned off: decide what
-  its own research settles, stop only for what only you can do (paying on your own account, signing
-  in, making an account, handing over a key), and mark the choice it recommends when it does ask.
+  its own research settles, ask what only you can do (paying, signing in, making an account, handing
+  over a key, anything destructive that can't be undone) with no choice marked, so it waits and
+  you're told, and mark the choice it recommends in anything else it asks.
   Its agent is told before it's marked on, and it's marked off before its agent is told: 502 where
   the engine didn't take it, and the conversation stays as it was. Turned on, what it asks already
   that recommends a choice goes ahead then.
@@ -3507,7 +3508,8 @@ what may be decided without asking. Every conversation is Interactive until it's
   once: the box answers the form (`POST …/form/<id>/reply`) and keeps it in `decided`; your phones
   aren't told of it, and a session that started it isn't woken for it. What its conversations asked
   while the box couldn't hear (it started again, or its engine did) goes ahead as it catches up. One
-  that marks none waits for you as ever, and so do its permissions, which are its approval's.
+  that marks none, or asks for a secret (a field with `format: "password"`), waits for you as ever,
+  and so do its permissions, which are its approval's.
 - `POST kuvo/sessions/<id>/autopilot` `{decided: <form id>, choice}`: your choice on a call it
   made, kept as `yours`. The one it goes by now (your last, else its own) confirms it quietly;
   another tells the conversation `[Decision changed] For "…" the user picked …, not … as you

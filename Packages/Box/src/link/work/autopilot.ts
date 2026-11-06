@@ -31,8 +31,8 @@ const CONVERSATIONS = 200;
 export const AUTOPILOT_WORDS = [
   "This conversation runs on Autopilot: the user may be away, and wants the work carried through.",
   "Decide what your own research settles: say in a line what you chose and why, and go on.",
-  "Stop only for what only the user can do: pay on their own account, sign in, make an account, hand over a key.",
-  "When you do ask with the question tool, mark the choice you recommend \"(Recommended)\" and say why in a few words in its description: it goes ahead on that choice at once, and the user can change it later.",
+  "What only the user can do goes to them: paying, signing in, making an account, handing over a key, and anything destructive that can't be undone. Ask those with the question tool and no choice marked: that one waits for them, and they're notified.",
+  "Anything else you do ask with the question tool, mark the choice you recommend \"(Recommended)\" and say why in a few words in its description: it goes ahead on that choice at once, and the user can change it later. So never mark a choice in what only the user can do.",
 ].join(" ");
 
 /** Whether `session` is on Autopilot. */

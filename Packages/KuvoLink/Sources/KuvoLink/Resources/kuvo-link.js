@@ -8095,8 +8095,8 @@ function howItRuns(mode) {
     return [
       "How it runs: Autopilot. The user wants it done without being asked. Make every call your research settles yourself, taste and close options too, by what serves the goal best: keep each with goal_progress (decided: what, your choice, why), say it in a line, and go on.",
       "Take the plan's steps all the way, publishing, submitting, posting and sending included: the user's Start approved them.",
-      "Stop only at a real blocker, what only the user can do: pay for something on their own account (a membership, a subscription), sign in, make an account, hand over a key or a code. Keep it as waiting, and carry on with everything that doesn't depend on it.",
-      "If you do ask, mark your recommendation (Recommended): you go ahead on it at once, and the user's later answer confirms or redirects it. What's outside the plan still waits for the user, and you spend only what the plan names."
+      "Stop only at a real blocker, what only the user can do: pay for something on their own account (a membership, a subscription), sign in, make an account, hand over a key or a code, or anything destructive that can't be undone. Keep it as waiting, and carry on with everything that doesn't depend on it; asked with the question tool, it has no choice marked, so it waits for them and they're notified.",
+      "Anything else you do ask, mark your recommendation (Recommended): you go ahead on it at once, and the user's later answer confirms or redirects it. What's outside the plan still waits for the user, and you spend only what the plan names."
     ].join(" ");
   return [
     "How it runs: Interactive. The user wants a say in the calls that are theirs: taste and brand, options your research leaves close, a change of scope.",
@@ -8851,8 +8851,8 @@ var CONVERSATIONS = 200;
 var AUTOPILOT_WORDS = [
   "This conversation runs on Autopilot: the user may be away, and wants the work carried through.",
   "Decide what your own research settles: say in a line what you chose and why, and go on.",
-  "Stop only for what only the user can do: pay on their own account, sign in, make an account, hand over a key.",
-  'When you do ask with the question tool, mark the choice you recommend "(Recommended)" and say why in a few words in its description: it goes ahead on that choice at once, and the user can change it later.'
+  "What only the user can do goes to them: paying, signing in, making an account, handing over a key, and anything destructive that can't be undone. Ask those with the question tool and no choice marked: that one waits for them, and they're notified.",
+  'Anything else you do ask with the question tool, mark the choice you recommend "(Recommended)" and say why in a few words in its description: it goes ahead on that choice at once, and the user can change it later. So never mark a choice in what only the user can do.'
 ].join(" ");
 var isAutopilot = (session) => isObject(session?.metadata?.kuvo) && session.metadata.kuvo.autopilot === true;
 function readAll(file) {
@@ -9341,6 +9341,8 @@ function recommendationOf(form) {
   if (!isObject(form.metadata) || form.metadata.kind !== "question")
     return null;
   const fields = (Array.isArray(form.fields) ? form.fields : []).filter((field) => isObject(field) && !field.hidden && !(Array.isArray(field.when) && field.when.length));
+  if (fields.some((field) => field.format === "password"))
+    return null;
   const answer = {};
   const chosen = [];
   for (const field of fields) {
