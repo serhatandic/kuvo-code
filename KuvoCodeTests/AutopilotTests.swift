@@ -299,6 +299,10 @@ import Testing
     }
 
     @Test func aQuestionSetAsideOnAutopilotReadsSoAndDoesntCountAsFailed() throws {
+        func asked(_ id: String) throws -> Message.Content {
+            let call: [String: Any] = ["type": "tool", "id": id, "name": "question", "executed": true, "state": ["status": "completed", "input": [String: Any](), "content": [[String: Any]]()]]
+            return try JSONDecoder().decode(Message.Content.self, from: JSONSerialization.data(withJSONObject: call))
+        }
         func step(_ message: String) throws -> Message.Content {
             let call: [String: Any] = ["type": "tool", "id": "call_1", "name": "question", "executed": true,
                                        "state": ["status": "error", "input": [String: Any](), "error": ["type": "unknown", "message": message]]]
@@ -309,6 +313,8 @@ import Testing
         #expect(StepsRow.outcomes(of: [try step("Something broke.")]) == " (1 failed)")
         guard case .tool(let call) = setAside else { return }
         #expect(StepsSummary.summary(of: [call]) == "Set a question aside")
+        // One it decided asked nobody.
+        #expect(StepsRow.summary(of: [try asked("call_2")], decided: ["call_2"]) == "Decided a question")
         #expect(ToolCallView.summary(of: call, in: "/tmp") == "Set a question aside on Autopilot")
         // It still says what it asked, when it opens.
         let asking: [String: Any] = ["type": "tool", "id": "call_2", "name": "question", "executed": true,
