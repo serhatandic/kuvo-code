@@ -322,14 +322,16 @@ import Testing
 
     /// Removed while its engine starts over (its Settings › Engine), before it connects again: it
     /// doesn't connect again, and nothing more goes there, on a machine that answers what it sent.
-    /// Here, as what's there is read.
+    /// Here, as what's there is read. (Not connected first, as nothing else then goes there: a
+    /// connection's follows may still send a read as it closes, which can't be told from a step
+    /// of starting over sent the same way.)
     @Test func removedWhileItsEngineStartsOverItDoesntConnectAgain() async throws {
         try await removedWhileStartingOver(at: #".kuvo-boot" 2>/dev/null"#)
     }
 
     /// And as its keeper goes there, which comes before the start itself.
     @Test func removedAsItsKeeperGoesThereItsEngineDoesntStartOver() async throws {
-        try await removedWhileStartingOver(at: "base64 -d")
+        try await removedWhileStartingOver(at: "$name.new")
     }
 
     /// Removed while the step of starting over that has `step` in its script is under way there.
@@ -337,16 +339,12 @@ import Testing
         defer { done() }
         let id = Self.name()
         let engine = add(id, at: machine)
-        await app.connect(engine).value
-        // That step, held until it's removed. Only that: the follows it began as it connected send
-        // their first reads about now too, and one of those isn't it starting over. (Those go
-        // unanswered, as in the rest of this suite; what starting over sends is answered.)
+        // That step, held until it's removed; the rest answered.
         let gate = Gate()
         let sending = Gate()
         defer { gate.open() }
         SSHConnection.standIn = { [ssh] address, script in
             ssh.note(script, to: address)
-            if script.contains(" box route") { return nil }
             if address == id, script.contains(step) {
                 sending.open()
                 gate.wait()
@@ -362,8 +360,7 @@ import Testing
         gate.open()
         await restart.value
         #expect(!engine.isReady, "it didn't connect again")
-        // (Besides a follow's read on its way as its connection closed.)
-        #expect(ssh.scripts(to: id).dropFirst(sent).filter { !$0.contains(" box route") } == [], "nothing went to it over SSH once it was removed")
+        #expect(Array(ssh.scripts(to: id).dropFirst(sent)) == [], "nothing went to it over SSH once it was removed")
         #expect(Array(machine.asked.dropFirst(asked)) == [], "nor to its engine")
         #expect(clock.waits == [], "no syncs run for it")
     }
