@@ -136,8 +136,8 @@ final class BrowserAsks {
         for ask in asks where (ask.asking ?? ask.session) == session && ask.machine == nil { end(ask.id) }
     }
 
-    /// A conversation went on Autopilot: what it or its subagents asked on this Mac no longer waits
-    /// for you. (A machine's browser sees to its own, and closes its card here.)
+    /// A conversation went on Autopilot, or a subagent turned out to be one's: what it asked on this
+    /// Mac no longer waits for you. (A machine's browser sees to its own, and closes its card here.)
     func leaveUndone() {
         for ask in asks where ask.machine == nil {
             if let session = ask.asking ?? ask.session, isOnAutopilot?(session) == true { answer(ask.id, .leftOnAutopilot) }

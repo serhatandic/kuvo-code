@@ -21,6 +21,8 @@ export interface Use {
   signal?: AbortSignal;
   /** The conversation to watch while you're asked, where the caller goes unnamed (a shared SSH agent). */
   watch?: string;
+  /** Left undone, it's been noted in the activity already. */
+  leftUndoneNoted?: boolean;
 }
 
 export type Allowed = { ok: true; how: "own" | "once" | "always" } | { ok: false; message: string; leftUndone?: boolean };
@@ -92,7 +94,7 @@ export async function mayUse(item: VaultItem, caller: Caller, use: Use): Promise
     return { ok: false, message: `You may not use “${item.name}”. Ask the user for it with vault_ask.` };
   }
   const leftUndone = (): Allowed => {
-    note({ what: "refused", ...itemOf(item), ...whoOf(caller), ...where, how: AUTOPILOT_HOW });
+    if (!use.leftUndoneNoted) note({ what: "refused", ...itemOf(item), ...whoOf(caller), ...where, how: AUTOPILOT_HOW });
     return { ok: false, message: LEFT_UNDONE_WORDS, leftUndone: true };
   };
   if (caller.autopilot) return leftUndone();

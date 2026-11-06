@@ -25806,7 +25806,8 @@ async function mayUse(item, caller, use) {
     return { ok: false, message: `You may not use “${item.name}”. Ask the user for it with vault_ask.` };
   }
   const leftUndone = () => {
-    note2({ what: "refused", ...itemOf(item), ...whoOf(caller), ...where, how: AUTOPILOT_HOW });
+    if (!use.leftUndoneNoted)
+      note2({ what: "refused", ...itemOf(item), ...whoOf(caller), ...where, how: AUTOPILOT_HOW });
     return { ok: false, message: LEFT_UNDONE_WORDS, leftUndone: true };
   };
   if (caller.autopilot)
@@ -25882,6 +25883,7 @@ function sourceFor(caller) {
   const read = new Map;
   const asking = new Map;
   const refused = new Map;
+  const leftUndone = new Map;
   const asked = async () => {
     const said = await caller();
     return { who: EVERYONE_ONLY ? said?.autopilot ? { autopilot: true } : {} : said, ...said?.session && !said.yours ? { watch: said.session } : {} };
@@ -25923,10 +25925,12 @@ function sourceFor(caller) {
           const { who, watch } = await asked();
           if (!item || !who || !agentsUseVault())
             return false;
-          const allowed = await mayUse(item, who, { program: "ssh", signal: stop.signal, watch });
+          const allowed = await mayUse(item, who, { program: "ssh", signal: stop.signal, watch, leftUndoneNoted: Date.now() < (leftUndone.get(key.id) ?? 0) });
           if (allowed.ok)
             noteUse(item, who, { program: "ssh" }, allowed.how);
-          else if (!stop.signal.aborted && !allowed.leftUndone)
+          else if (allowed.leftUndone)
+            leftUndone.set(key.id, Date.now() + REFUSED_FOR);
+          else if (!stop.signal.aborted)
             refused.set(key.id, Date.now() + REFUSED_FOR);
           return allowed.ok;
         })().catch(() => false).finally(() => asking.delete(key.id));

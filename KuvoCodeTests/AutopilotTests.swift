@@ -241,6 +241,16 @@ import Testing
             return
         }
         #expect(app.browserAsks.asks.map(\.session) == ["ses_o"], "another conversation's stays")
+        // Already on, one that asked before it was known whose it is goes as soon as it's known.
+        let late = Task { await app.browserAsks.ask(.action(instruction: "Solve this too."), host: "example.com", session: "ses_late") }
+        try await until { app.browserAsks.asks.count == 2 }
+        engine.on("GET", "/api/session/ses_late", json: ["data": StubEngine.session("ses_late", directory: "/tmp/kuvo-tests-autopilot", extra: ["parentID": "ses_i"])])
+        let lateQuestion: [String: Any] = ["id": "frm_late", "sessionID": "ses_late", "title": "Roast", "metadata": ["kind": "question"], "fields": [[String: Any]]()]
+        app.workspace.handle(try engine.event("form.created", session: "ses_late", ["form": lateQuestion]))
+        guard case .leftOnAutopilot = await late.value else {
+            Issue.record("A subagent of a conversation already on Autopilot went on waiting")
+            return
+        }
         other.cancel()
         _ = await other.value
     }

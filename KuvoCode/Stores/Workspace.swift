@@ -3060,7 +3060,11 @@ final class Workspace {
             // Each written only when it changes (a subagent at work is read again on each update):
             // the sidebar reads them, and a write that changes nothing works it out again.
             if isHidden(session), !hiddenRuns.contains(session.id) { hiddenRuns.insert(session.id) }
-            if parents[session.id] != parent { parents[session.id] = parent }
+            if parents[session.id] != parent {
+                parents[session.id] = parent
+                // (What it asked before it was known whose it is may be a conversation's on Autopilot.)
+                autopilotMayHaveChanged?()
+            }
             if !isHidden(session) { keepSubSession(session, of: parent) }
             // A subagent's subagent: whose that one is, up to the session with a row.
             if self.session(parent) == nil, parents[parent] == nil, depth < 8 { await reload(parent, depth: depth + 1) }
@@ -3298,7 +3302,7 @@ final class Workspace {
     }
 
     /// Hears a conversation go on Autopilot, from any client: what it has waiting on you here stops waiting.
-    @ObservationIgnored var autopilotTurnedOn: ((String) -> Void)?
+    @ObservationIgnored var autopilotMayHaveChanged: (() -> Void)?
 
     /// Whether the conversation `id` is part of (a subagent's, the one that started it) is on Autopilot.
     func isOnAutopilot(_ id: String) -> Bool {
@@ -3360,7 +3364,7 @@ final class Workspace {
             // the later look.
             if let seen = sessions[index].time.viewed, seen > (session.time.viewed ?? 0) { session.time.viewed = seen }
             sessions[index] = session
-            if AutopilotShown.isOn(session), !AutopilotShown.isOn(earlier) { autopilotTurnedOn?(session.id) }
+            if AutopilotShown.isOn(session), !AutopilotShown.isOn(earlier) { autopilotMayHaveChanged?() }
             // Archived or brought back elsewhere (from a phone): its wake-ups wait, or come back,
             // as with Archive here. (Archive here notes it first, so it isn't told twice.)
             noteArchiving(session, was: earlier)

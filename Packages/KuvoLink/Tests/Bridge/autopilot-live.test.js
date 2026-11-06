@@ -190,8 +190,9 @@ test("Autopilot on a real engine: a marked question goes ahead and can be change
   assert.equal((await forms()).length, 1);
 });
 
-// No model in this one: the server asks as soon as the engine connects to it.
-test("what an MCP server asks, filed under no session on a real engine, comes back declined to that server with the box's way of turning it down", { skip: !binary && "OPENCODE_TEST_BINARY isn't set" }, async () => {
+// No model in this one, and so no box: the server asks as soon as the engine connects to it, and this
+// is the engine's part of what the box does (for an engine update to catch).
+test("a real engine takes the way the box turns down what an MCP server asks, filed under no session: that server hears no", { skip: !binary && "OPENCODE_TEST_BINARY isn't set" }, async () => {
   const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-autopilot-live-")));
   removeAtEnd(home);
   for (const folder of ["tmp", "work", "xdg/config", "xdg/data", "xdg/state", "xdg/cache"]) fs.mkdirSync(path.join(home, folder), { recursive: true });
