@@ -274,10 +274,29 @@ test("Autopilot in the Codex lane on a real Codex", { skip, timeout: 900_000 }, 
     const question = questionOf(session);
     assert.ok(question.asked, `the question reached its box: ${await describe()}`);
     assert.match(JSON.stringify(question.asked.fields), /ship/, "and it was the one this test asked");
-    assert.equal(question.settled, "cancelled", "and it was declined there");
+    assert.equal(question.settled, "cancelled", `and it was declined there (it asked with the choices ${JSON.stringify(question.asked.fields?.map(field => field.options?.map(option => option.label)))}: one marked means the model marked it anyway)`);
     assert.deepEqual(await forms(session), [], "nothing's left asked");
     assert.deepEqual(await calls(session), [], `it made no call on it (the model marked a choice anyway? ${JSON.stringify(question.asked?.fields?.map(field => field.options?.map(option => option.label)))})`);
     assert.deepEqual(told.slice(before).filter(each => each.data?.request), [], "nobody's told");
+  });
+
+  // A model that sleeps for an hour on its question, as Codex tells it it may: the question goes ahead,
+  // and the sleep doesn't hold the turn, whichever comes first.
+  await t.test("a model asleep for an hour on its question doesn't hold its turn", async () => {
+    const session = await onAutopilot("Grind");
+    const started = Date.now();
+    await send(session, "msg_autopilotcodex0004", "Ask me one question now with your user-input question tool (request_user_input_async), \"Which grind for the house blend?\", with the choices Fine (Recommended) and Coarse. Straight after asking, wait for my answer with clock.sleep for 3600 seconds. When my answer comes, reply with only the name of the grind and how many seconds you slept.");
+    const wentOn = messages => {
+      const mine = assistants(messages);
+      const asking = mine.findIndex(each => /house blend/i.test(textOf(each)));
+      return asking < 0 ? [] : mine.slice(0, asking);
+    };
+    const messages = await turnsDone(session, "its turn to go on with the choice and end, not after an hour", all => wentOn(all).some(each => /fine/i.test(textOf(each))));
+    assert.ok(Date.now() - started < 240_000, "it didn't sleep the hour");
+    assert.equal(questionOf(session).settled, "replied", "the question reached its box and went ahead there");
+    const slept = assistants(messages).flatMap(each => each.content ?? []).filter(block => block.type === "tool" && block.name === "sleep");
+    console.log(`The model slept ${slept.length} time(s) on its question.`);
+    assert.ok(slept.every(each => each.state?.status === "completed"), "no sleep is left going");
   });
 
   // What an MCP server asks mid-tool: its box declines it and the server hears no.

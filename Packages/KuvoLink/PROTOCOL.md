@@ -3623,7 +3623,11 @@ what may be decided without asking. Every conversation is Interactive until it's
   to another computer, it stays on Autopilot there, its agent told, and its calls come along
   (`run/work/decided.json`; `decided` in a move's bundle).
 - On the coding agents, Claude Code's, Codex's and Grok's questions go ahead the same way; Cursor
-  can't ask, so Autopilot changes nothing there but what its agent is told.
+  can't ask, so Autopilot changes nothing there but what its agent is told. Codex's own question
+  tool (`request_user_input_async`) doesn't wait, so its turn goes on or ends while its form is up:
+  the form goes up as it's asked, on Autopilot and off, and stays up after its turn ends; its answer
+  goes into the turn under way (`turn/steer`), which ends a sleep the model is in, or starts its next
+  turn.
 
 ### Sandbox
 

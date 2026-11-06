@@ -12258,6 +12258,7 @@ function citationsOf(lane, item) {
     (lane.citations ??= new Map).set(item, citations = new CodexCitations);
   return citations;
 }
+var ASKING_WORDS = "Outside Plan mode, ask the user with request_user_input_async: request_user_input refuses there, which doesn't mean you can't ask. It returns at once, and the answer comes as a new user message, which also ends a sleep you're in.";
 
 class CodexThread {
   agent;
@@ -12269,8 +12270,11 @@ class CodexThread {
   active;
   inTurn = false;
   startedOver = false;
-  asked;
-  waiting;
+  waiting = new Set;
+  asking = new Set;
+  answers = [];
+  answered = [];
+  turnedDown = 0;
   toolsKey;
   serversKey;
   skillsKey;
@@ -12355,7 +12359,9 @@ class CodexThread {
       this.loaded = false;
     }
     const fenced = this.agent.isFenced(rpc);
-    const instructions = hooks.instructions() || null;
+    const instructions = [hooks.instructions(), ASKING_WORDS].filter(Boolean).join(`
+
+`);
     const tools = fenced ? relayedTools(this.session.id, this.agent) : kuvoTools(this.session.id);
     const directory = this.session.location.directory;
     const own = this.agent.ownSkillFolders(directory);
@@ -12415,10 +12421,11 @@ class CodexThread {
     return this.backgroundLanes.size > 0;
   }
   async steer(input) {
-    const waiting = this.waiting;
-    if (waiting && !waiting.typed && !input.synthetic) {
+    const [waiting] = this.waiting;
+    if (waiting && !input.synthetic) {
       waiting.typed = input;
-      waiting.abort.abort();
+      for (const card of this.waiting)
+        card.abort.abort();
       return true;
     }
     const active = this.active;
@@ -12483,27 +12490,37 @@ class CodexThread {
   }
   async run(input, turn, hooks) {
     this.inTurn = true;
+    this.turnedDown = 0;
     try {
       let result = await this.runTurn(input, turn, hooks);
-      let turnedDown = 0;
-      while (result.outcome === "succeeded" && this.asked?.length && !hooks.signal.aborted) {
-        const answer = await this.answer(this.asked, hooks);
-        if (!answer)
+      while (result.outcome === "succeeded" && !hooks.signal.aborted) {
+        while (this.asking.size)
+          await Promise.all(this.asking);
+        const said = this.answers;
+        this.answers = [];
+        if (!said.length || hooks.signal.aborted)
           break;
-        if (answer.declined && ++turnedDown > 2)
-          break;
-        result = await this.runTurn({ ...input, text: answer.text, files: answer.files, adopt: false }, turn, hooks);
+        result = await this.runTurn({ ...input, text: said.map((answer) => answer.text).join(`
+
+`), files: said.flatMap((answer) => answer.files), adopt: false }, turn, hooks);
       }
       return hooks.signal.aborted && result.outcome === "succeeded" ? { outcome: "interrupted" } : result;
     } finally {
-      this.asked = undefined;
+      for (const card of this.waiting)
+        card.abort.abort();
+      while (this.asking.size)
+        await Promise.all(this.asking);
+      this.answers = [];
       this.inTurn = false;
     }
   }
+  ask(questions, hooks) {
+    const job = this.answer(questions, hooks).then((answer) => this.deliver(answer)).catch(() => {}).finally(() => this.asking.delete(job));
+    this.asking.add(job);
+  }
   async answer(questions, hooks) {
-    this.asked = undefined;
-    const waiting = { abort: new AbortController };
-    this.waiting = waiting;
+    const card = { abort: new AbortController };
+    this.waiting.add(card);
     try {
       const fields = questions.map((question, index) => ({
         key: `q${index}`,
@@ -12515,11 +12532,11 @@ class CodexThread {
         custom: true
       }));
       let declined;
-      const answer = await hooks.question({ title: questions.length === 1 ? "Question" : "Questions", fields, signal: waiting.abort.signal, declined: (words) => {
+      const answer = await hooks.question({ title: questions.length === 1 ? "Question" : "Questions", fields, signal: card.abort.signal, declined: (words) => {
         declined = words;
       } });
-      if (waiting.typed)
-        return { text: waiting.typed.text, files: waiting.typed.files };
+      if (card.typed)
+        return { text: card.typed.text, files: card.typed.files };
       if (!answer && declined)
         return { text: declined, files: [], declined: true };
       if (!answer)
@@ -12533,11 +12550,41 @@ ${said(index)}`).join(`
 
 `), files: [] };
     } finally {
-      this.waiting = undefined;
+      this.waiting.delete(card);
+    }
+  }
+  async deliver(answer) {
+    const active = this.active;
+    if (!answer && (!active || active.stopping || active.hooks.signal.aborted))
+      return;
+    if (answer?.declined && ++this.turnedDown > 2) {
+      if (active) {
+        active.stoppedAsking = true;
+        await this.stopTurn(active);
+      }
+      return;
+    }
+    const text = answer?.text ?? "The user dismissed this question without answering it. Don't wait for an answer.";
+    const files = answer?.files ?? [];
+    if (active?.turnID && this.nativeID) {
+      this.answered.push(text);
+      if (await this.steerIn(active, { text, files }))
+        return;
+      this.answered = this.answered.filter((each) => each !== text);
+    }
+    if (answer)
+      this.answers.push(answer);
+  }
+  async steerIn(active, input) {
+    try {
+      const rpc = await this.agent.rpc(this);
+      await rpc.request("turn/steer", { threadId: this.nativeID, input: codexInput(input, this.fencedIn(rpc)), expectedTurnId: active.turnID }, 30000);
+      return true;
+    } catch {
+      return false;
     }
   }
   async runTurn(input, turn, hooks) {
-    this.asked = undefined;
     const rpc = await this.ensureThread(input, hooks);
     if (hooks.signal.aborted)
       return { outcome: "interrupted" };
@@ -12574,6 +12621,7 @@ ${others.map((path) => `- ${path}`).join(`
       collaborationMode: { mode: input.plan ? "plan" : "default", settings: { model: input.model.id, reasoning_effort: effort ?? null, developer_instructions: null } }
     };
     return new Promise((resolve) => {
+      this.answered = [];
       const active = { turn, hooks, resolve, streamed: new Set, changes: new Map, output: new Map, toolsSinceText: false, subagents: new Map, spawning: [], auto: input.auto, model: input.model.id, planning: input.plan };
       active.resolve = (result) => {
         for (const [threadID, lane] of active.subagents) {
@@ -12615,10 +12663,19 @@ ${others.map((path) => `- ${path}`).join(`
     const turnID = params?.turnId ?? params?.turn?.id;
     if (active.turnID && turnID && turnID !== active.turnID)
       return;
-    if (method === "item/completed" && params?.item?.type === "agentMessage" && Array.isArray(params.item.questions) && params.item.questions.length) {
-      this.asked = params.item.questions.filter((question) => typeof question?.title === "string" && question.title);
-    } else if (method === "item/started" && params?.item?.type !== "agentMessage" || method === "item/completed" && params?.item?.type === "agentMessage" && params.item.text) {
-      this.asked = undefined;
+    if (method === "item/completed" && params?.item?.type === "agentMessage" && Array.isArray(params.item.questions)) {
+      const questions = params.item.questions.filter((question) => typeof question?.title === "string" && question.title);
+      if (questions.length)
+        this.ask(questions, active.hooks);
+    }
+    if (method === "item/started" && params?.item?.type === "sleep" && this.answered.length) {
+      const said = this.answered;
+      this.answered = [];
+      this.steerIn(active, { text: `Your question has its answer, so there's nothing to wait for on it:
+
+${said.join(`
+
+`)}`, files: [] });
     }
     switch (method) {
       case "turn/started":
@@ -12660,7 +12717,9 @@ ${others.map((path) => `- ${path}`).join(`
         const limit = status === "failed" ? active.limit ?? this.limitOf(params.turn?.error, active.model) : status === "interrupted" && active.stoppedForLimit ? active.limit : undefined;
         if (limit && !active.stopping && !active.hooks.signal.aborted) {
           active.resolve({ outcome: "failed", error: { type: "limit", message: active.problem ?? params.turn?.error?.message ?? "You've reached your Codex usage limit for now." }, limit, taken: true });
-        } else if (active.hooks.signal.aborted || status === "interrupted")
+        } else if (active.stoppedAsking && !active.hooks.signal.aborted)
+          active.resolve({ outcome: "succeeded" });
+        else if (active.hooks.signal.aborted || status === "interrupted")
           active.resolve({ outcome: "interrupted" });
         else if (status === "failed")
           active.resolve({ outcome: "failed", error: failure(params.turn?.error?.message ?? active.problem ?? "Codex stopped with an error."), taken: true });
@@ -23399,4 +23458,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 849690298841f8e13612fe90c6319d691da38ff0678e508a9668ad4bdd109b78
+// Built from Packages/Box/src/agents 52c4ec04b8ad3b1c64b79e1472131128f848357fea26c5a94bdbd9a9bc12ddb0
