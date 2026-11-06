@@ -53,6 +53,25 @@ test("without /proc (a Mac): a program's own command line says, so another progr
   expect(processRuns(gone, "kuvo-agents", none)).toBe(false)
 })
 
+test("the agents' bridge: beside this Mac's app it takes a process that's alive as its program, and on a Mac machine goes by what ps says", () => {
+  const none = join(root, "no-proc")
+  const other = Bun.spawn(["sleep", "30"], { stdout: "ignore", stderr: "ignore" })
+  const before = { home: process.env.KUVO_AGENTS_HOME, remote: process.env.KUVO_AGENTS_REMOTE }
+  process.env.KUVO_AGENTS_HOME = root
+  try {
+    delete process.env.KUVO_AGENTS_REMOTE
+    expect(processRuns(other.pid, "kuvo-link", none)).toBe(true)
+    process.env.KUVO_AGENTS_REMOTE = "1"
+    expect(processRuns(other.pid, "kuvo-link", none)).toBe(false)
+  } finally {
+    other.kill()
+    for (const [name, value] of [["KUVO_AGENTS_HOME", before.home], ["KUVO_AGENTS_REMOTE", before.remote]] as const) {
+      if (value === undefined) delete process.env[name]
+      else process.env[name] = value
+    }
+  }
+})
+
 test("this Mac's app's box: a process that's alive is taken as the program it's said to be", () => {
   const none = join(root, "no-proc")
   const before = process.env.KUVO_BOX

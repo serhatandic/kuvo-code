@@ -24,8 +24,8 @@ export function alive(pid: number): boolean {
  * Whether `pid` runs `name` (a program's file, `kuvo-agents`, `kuvo-link.js`), not whatever took
  * its number after a crash or a restart: its command line says so. Linux: in /proc. A Mac, which has
  * no /proc: `ps` (kept a moment, as this is asked often), or if that doesn't answer, that it's alive.
- * This Mac's app's box takes its being alive anyway: the app removes the records that name its
- * processes as they stop. `proc`: where /proc is (a test's own).
+ * This Mac's app's box and its bridge take its being alive anyway: the app removes the records that
+ * name its processes as they stop. `proc`: where /proc is (a test's own).
  */
 export function processRuns(pid: unknown, name: string, proc = "/proc"): boolean {
   if (!Number.isInteger(pid) || (pid as number) <= 1 || !alive(pid as number)) return false;
@@ -33,7 +33,7 @@ export function processRuns(pid: unknown, name: string, proc = "/proc"): boolean
     return fs.readFileSync(`${proc}/${pid}/cmdline`, "utf8").includes(name);
   } catch {
     if (fs.existsSync(proc)) return false;
-    if (process.env.KUVO_BOX === "mac") return true;
+    if (process.env.KUVO_BOX === "mac" || (process.env.KUVO_AGENTS_HOME && !process.env.KUVO_AGENTS_REMOTE)) return true;
     return commandLine(pid as number)?.includes(name) ?? true;
   }
 }

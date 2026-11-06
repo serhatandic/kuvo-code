@@ -80,7 +80,7 @@ function processRuns(pid, name, proc = "/proc") {
   } catch {
     if (fs.existsSync(proc))
       return false;
-    if (process.env.KUVO_BOX === "mac")
+    if (process.env.KUVO_BOX === "mac" || process.env.KUVO_AGENTS_HOME && !process.env.KUVO_AGENTS_REMOTE)
       return true;
     return commandLine(pid)?.includes(name) ?? true;
   }

@@ -632,7 +632,7 @@ function processRuns(pid, name, proc = "/proc") {
   } catch {
     if (fs.existsSync(proc))
       return false;
-    if (process.env.KUVO_BOX === "mac")
+    if (process.env.KUVO_BOX === "mac" || process.env.KUVO_AGENTS_HOME && !process.env.KUVO_AGENTS_REMOTE)
       return true;
     return commandLine(pid)?.includes(name) ?? true;
   }
@@ -23419,4 +23419,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 299e8878ae98603d76f4610aaba5cb389051da20be9b9648bae4c0d212fe3eaf
+// Built from Packages/Box/src/agents 895e9c0b4deea05464e2d201a624f84fbb6a0fb7538f8bf0152f7252aa756e5d
