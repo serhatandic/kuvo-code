@@ -321,7 +321,8 @@ Those skips can't cover files: macOS asks when any process of the copy opens a f
 Desktop or in Documents, and holds that process until it's answered. So keep the copy and what
 it opens off them. Copy the app out of a checkout that's there, start it from an empty
 environment (`open` hands it your shell's, `KUVO_*` included), and where its data lists a project
-there, give it a home of its own, with the engine copied into it:
+there, give it a home of its own, with the engine copied into it (`$scratch` is any folder off
+them; delete it when you're done):
 
 ```sh
 ditto "<build>/Kuvo Code.app" "$scratch/Kuvo Code.app"

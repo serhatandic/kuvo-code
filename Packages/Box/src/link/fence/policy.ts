@@ -256,7 +256,7 @@ export function sshSockets(home: string, system = "/etc/ssh/ssh_config"): { path
 function globPattern(glob: string): string {
   const parts = glob.split("/");
   const first = parts.findIndex(part => part.includes("*"));
-  const plain = realish(parts.slice(0, first).join("/") || "/");
+  const plain = throughLinks(parts.slice(0, first).join("/") || "/");
   const rest = parts.slice(first).map(part => escapeRegex(part).replace(/\\\*/g, "[^/]*")).join("/");
   return `^${plain === "/" ? "" : escapeRegex(plain)}/${rest}$`;
 }
@@ -363,8 +363,8 @@ function macFolders(home: string): { kuvo: string[]; readable: string[] } {
  * `allowed.ts` has it: Bun's `os.userInfo()` follows HOME) and your SSH keys are now: this Mac's app's
  * folders on this Mac's box, a machine's folder on a machine's; the system's own paths and secrets
  * as the computer it runs on has them.
- * Each named place goes through `throughLinks`, which opens nothing: this runs as the box starts and
- * every few seconds after, for folders of yours nobody asked to be read.
+ * Each named place goes through `throughLinks`: this runs as the box starts and every few seconds
+ * after, for folders of yours nobody asked to be read.
  */
 export function fencePolicy(ports: number[] = []): FencePolicy {
   const home = realish(accountHome());
@@ -387,7 +387,8 @@ export function fencePolicy(ports: number[] = []): FencePolicy {
   // own is in Kuvo Code's folder), with the tools' caches in it.
   const ownCache = "KUVO_OWN_XDG_CACHE_HOME" in process.env ? process.env.KUVO_OWN_XDG_CACHE_HOME : process.env.XDG_CACHE_HOME;
   const yourCaches = [throughLinks(path.join(home, ".cache"))];
-  if (ownCache && path.isAbsolute(ownCache) && !kuvo.some(folder => realish(ownCache) === folder || realish(ownCache).startsWith(folder + "/"))) yourCaches.push(throughLinks(ownCache));
+  const ownCacheAt = ownCache && path.isAbsolute(ownCache) ? throughLinks(ownCache) : null;
+  if (ownCacheAt && !kuvo.some(folder => ownCacheAt === folder || ownCacheAt.startsWith(folder + "/"))) yourCaches.push(ownCacheAt);
   const runsLater = [...inHomes(RUNS_LATER), ...new Set(yourCaches.flatMap(folder => [...TOOL_CACHES, ...SHELL_CACHES(accountName())].map(name => path.join(folder, name))))];
   // And the folders on your PATH in a home, whatever they're named (but a home itself, or Kuvo
   // Code's own folders), each that's there.
@@ -514,16 +515,26 @@ export function realish(where: string): string {
 }
 
 /**
- * As `realish`, for the places the sandbox's walls name, without opening any of them. Bun's
- * `fs.realpathSync` opens what it's given, and macOS holds a process that opens your Desktop,
- * Documents, iCloud Drive or another app's data until you answer its prompt, so a box would wait
- * there, answering no one, on folders it only needs the name of. Asking about each name and reading
- * links opens nothing, on Linux too. (It keeps the letters as named, where `realish` takes a Mac
- * disk's own: the names here are the ones their folders are made with. For a path someone gave, use
- * `realish`.)
+ * As `realish`, for the places the sandbox's walls name, without opening those macOS asks about.
+ * Bun's `fs.realpathSync` opens what it's given, and macOS holds a process that opens your Desktop,
+ * iCloud Drive or another app's data until you answer its prompt, so a box would wait there,
+ * answering no one, on folders it only needs the name of. Asking about each name and reading links
+ * opens nothing. (Those keep the letters as named, where `realish` has a Mac disk's own: the walls
+ * name them as macOS and their apps do.)
  */
 export function throughLinks(where: string): string {
-  return deepestThere(where, followLinks);
+  const found = deepestThere(where, followLinks);
+  return macAsksAbout(found) ? found : realish(found);
+}
+
+// What macOS holds a process for as it opens it: those folders in your account's home, and other
+// drives. (Not its secrets, as Mail's or Safari's, which it refuses at once.)
+const MAC_ASKS = [...MAC_PERSONAL, "Library/CloudStorage", "Library/Containers", "Library/Group Containers"];
+let macAsks: RegExp | undefined;
+function macAsksAbout(at: string): boolean {
+  if (process.platform !== "darwin") return false;
+  macAsks ??= new RegExp(`^(/system/volumes/data)?(/volumes/|${escapeRegex(accountHome().toLowerCase())}/(${MAC_ASKS.map(each => escapeRegex(each.toLowerCase())).join("|")})(/|$))`);
+  return macAsks.test(at.toLowerCase());
 }
 
 function deepestThere(where: string, resolve: (at: string) => string): string {
@@ -536,17 +547,24 @@ function deepestThere(where: string, resolve: (at: string) => string): string {
 
 /** A whole path through its links, a name at a time; it throws where a name isn't there. */
 function followLinks(where: string): string {
-  let names = where.split("/").filter(Boolean);
+  let names = where.split("/");
   let at = "/";
   for (let links = 0; names.length;) {
-    const next = path.join(at, names.shift()!);
+    const name = names.shift()!;
+    if (!name || name === ".") continue;
+    if (name === "..") {
+      at = path.dirname(at);
+      continue;
+    }
+    const next = path.join(at, name);
     if (!fs.lstatSync(next).isSymbolicLink()) {
       at = next;
       continue;
     }
     if (++links > 40) throw new Error(`Too many links: ${where}`);
-    names = [...path.resolve(at, fs.readlinkSync(next)).split("/").filter(Boolean), ...names];
-    at = "/";
+    const target = fs.readlinkSync(next);
+    if (target.startsWith("/")) at = "/";
+    names = [...target.split("/"), ...names];
   }
   return at;
 }

@@ -4,6 +4,7 @@ import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, w
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { FencePolicy } from "../src/link/fence/policy"
+import { accountHome } from "../src/link/home"
 
 // Setting up the sandbox's walls is the first thing a box does, and it answers no one until that's
 // done, so it must never wait on anything. On a Mac, opening your Desktop, Documents, iCloud Drive or
@@ -25,7 +26,36 @@ const scratch = () => {
 }
 const environment = (home: string) => ({ HOME: home, PATH: "/usr/bin:/bin", TMPDIR: tmpdir(), BUN_BE_BUN: "1", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" })
 
-test("a personal folder that can't be opened keeps its wall where its link leads", () => {
+/** Loaded before the box's code: what would open a folder macOS asks about in your account's home is
+ * noted in `noted`, and never reaches the system, so these tests can't ask either, whatever the code does. */
+function guard(root: string): { preload: string; noted: string } {
+  const preload = join(root, "note-opens.cjs")
+  const noted = join(root, "opened")
+  writeFileSync(noted, "")
+  const names = "Desktop|Documents|Downloads|Pictures|Movies|Music|Library/Mobile Documents|Library/CloudStorage|Library/Containers|Library/Group Containers"
+  writeFileSync(preload, `
+const fs = require("fs")
+const guarded = where => typeof where === "string" && new RegExp(${JSON.stringify(`^${accountHome()}/(${names})(/|$)`)}, "i").test(where)
+const stop = (name, where) => {
+  fs.appendFileSync(${JSON.stringify(noted)}, name + " " + where + "\\n")
+  return Object.assign(new Error("ENOENT: " + where), { code: "ENOENT" })
+}
+const wrap = (on, name, label) => {
+  const real = on[name]
+  on[name] = Object.assign(function (where, ...rest) {
+    if (guarded(where)) throw stop(label + name, where)
+    return real.call(this, where, ...rest)
+  }, real)
+}
+for (const name of ["openSync", "readFileSync", "readdirSync", "opendirSync", "watch"]) wrap(fs, name, "")
+wrap(fs.realpathSync, "native", "realpathSync.")
+wrap(fs, "realpathSync", "")
+for (const name of ["open", "readFile", "readdir", "opendir", "realpath"]) wrap(fs.promises, name, "promises.")
+`)
+  return { preload, noted }
+}
+
+test("a personal folder that can't be opened keeps its wall where its link leads", async () => {
   const root = scratch()
   const home = join(root, "home")
   const desk = join(root, "elsewhere", "desk")
@@ -34,50 +64,34 @@ test("a personal folder that can't be opened keeps its wall where its link leads
   symlinkSync(desk, join(home, "Desktop"))
   // As macOS has it for a process it hasn't asked you about yet: there, and refused if it's opened.
   chmodSync(desk, 0)
-  const ran = Bun.spawnSync([process.execPath, "-e", `import { fencePolicy } from ${JSON.stringify(join(import.meta.dir, "..", "src", "link", "fence", "policy.ts"))}; console.log(JSON.stringify(fencePolicy()))`],
+  // And one reached as a dotfiles manager links them: relative, through a link, with `..` after it.
+  const docs = join(root, "elsewhere", "deep", "docs")
+  mkdirSync(join(root, "elsewhere", "deep", "inner"), { recursive: true })
+  mkdirSync(docs)
+  symlinkSync(join("deep", "inner"), join(root, "elsewhere", "through"))
+  symlinkSync("../elsewhere/through/../docs", join(home, "Documents"))
+  const { preload, noted } = guard(root)
+  const ran = Bun.spawnSync([process.execPath, "--preload", preload, "-e", `import { fencePolicy } from ${JSON.stringify(join(import.meta.dir, "..", "src", "link", "fence", "policy.ts"))}; console.log(JSON.stringify(fencePolicy()))`],
     { env: { ...environment(home), KUVO_HOME: join(root, "kuvo") }, cwd: root })
   expect(ran.exitCode, ran.stderr.toString()).toBe(0)
   const policy = JSON.parse(ran.stdout.toString()) as FencePolicy
   expect(policy.personal).toContain(desk)
+  expect(policy.personal).toContain(docs)
+  if (process.platform === "darwin") expect(await Bun.file(noted).text()).toBe("")
 })
 
-test("a box says where it is without opening a personal folder, iCloud Drive or another app's data", async () => {
+test.skipIf(process.platform !== "darwin")("a box says where it is without opening a personal folder, iCloud Drive or another app's data", async () => {
   const root = scratch()
   const home = join(root, "home")
   const kuvo = join(root, "kuvo")
   mkdirSync(home, { recursive: true })
-  mkdirSync(kuvo, { recursive: true })
-  const opened = join(root, "opened")
-  // What a Mac would stop for, in your account's home and the box's (never let through to the system:
-  // this test mustn't ask either), noted as the box's own code asks to open it.
-  const preload = join(root, "note-opens.cjs")
-  writeFileSync(preload, `
-const fs = require("fs")
-const noted = ${JSON.stringify(opened)}
-const guarded = /\\/(Desktop|Documents|Downloads|Pictures|Movies|Music|Library\\/Mobile Documents|Library\\/Containers\\/|Library\\/Group Containers\\/)/
-for (const name of ["realpathSync", "openSync", "readFileSync", "readdirSync", "opendirSync"]) {
-  const real = fs[name]
-  const stopped = function (where, ...rest) {
-    if (typeof where === "string" && guarded.test(where)) {
-      fs.appendFileSync(noted, name + " " + where + "\\n")
-      throw Object.assign(new Error("ENOENT: " + where), { code: "ENOENT" })
-    }
-    return real.call(this, where, ...rest)
-  }
-  fs[name] = Object.assign(stopped, real)
-}
-const native = fs.realpathSync.native
-fs.realpathSync.native = function (where, ...rest) {
-  if (typeof where === "string" && guarded.test(where)) {
-    fs.appendFileSync(noted, "realpathSync.native " + where + "\\n")
-    throw Object.assign(new Error("ENOENT: " + where), { code: "ENOENT" })
-  }
-  return native.call(this, where, ...rest)
-}
-`)
-  writeFileSync(opened, "")
+  mkdirSync(join(kuvo, "box"), { recursive: true })
+  // With a project there that has a folder of its own allowed, whose rule the box tells its launcher.
+  const project = join(accountHome(), "Documents", "kuvo-asks-nothing-test")
+  writeFileSync(join(kuvo, "box", "sandbox-allowed.json"), JSON.stringify({ allowed: [{ id: "al_1", project, kind: "write", path: join(project, "more"), at: 1 }] }))
+  const { preload, noted } = guard(root)
   const box = Bun.spawn([process.execPath, "run", "--config=/dev/null", "--no-env-file", "--preload", preload, join(import.meta.dir, "..", "src", "link", "main.ts"), "serve"], {
-    env: { ...environment(home), KUVO_HOME: kuvo, KUVO_BOX: "mac", KUVO_TEST_NO_PEERS: "1", KUVO_ENGINE_CONFIG: join(root, "config"), KUVO_ENGINE_DATA: join(root, "data"), KUVO_INTEGRATIONS: join(root, "integrations"), KUVO_BOTS: join(root, "bots"), KUVO_WAKES: join(root, "wakes"), KUVO_CHATS: join(root, "chats") },
+    env: { ...environment(home), KUVO_HOME: kuvo, KUVO_BOX: "mac", KUVO_TEST_NO_PEERS: "1", KUVO_ENGINE_CONFIG: join(root, "config") },
     cwd: kuvo, stdin: "pipe", stdout: "pipe", stderr: "pipe",
   })
   try {
@@ -91,7 +105,7 @@ fs.realpathSync.native = function (where, ...rest) {
       said += new TextDecoder().decode(value)
     }
     expect(said).toContain('"url"')
-    expect(await Bun.file(opened).text()).toBe("")
+    expect(await Bun.file(noted).text()).toBe("")
   } finally {
     box.kill(9)
     await box.exited

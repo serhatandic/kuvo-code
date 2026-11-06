@@ -2680,7 +2680,7 @@ function sshSockets(home, system = "/etc/ssh/ssh_config") {
 function globPattern(glob) {
   const parts = glob.split("/");
   const first = parts.findIndex((part) => part.includes("*"));
-  const plain = realish(parts.slice(0, first).join("/") || "/");
+  const plain = throughLinks(parts.slice(0, first).join("/") || "/");
   const rest = parts.slice(first).map((part) => escapeRegex(part).replace(/\\\*/g, "[^/]*")).join("/");
   return `^${plain === "/" ? "" : escapeRegex(plain)}/${rest}$`;
 }
@@ -2820,8 +2820,9 @@ function fencePolicy(ports = []) {
   const commandCaches = Object.values(sandboxCaches());
   const ownCache = "KUVO_OWN_XDG_CACHE_HOME" in process.env ? process.env.KUVO_OWN_XDG_CACHE_HOME : process.env.XDG_CACHE_HOME;
   const yourCaches = [throughLinks(path12.join(home, ".cache"))];
-  if (ownCache && path12.isAbsolute(ownCache) && !kuvo.some((folder) => realish(ownCache) === folder || realish(ownCache).startsWith(folder + "/")))
-    yourCaches.push(throughLinks(ownCache));
+  const ownCacheAt = ownCache && path12.isAbsolute(ownCache) ? throughLinks(ownCache) : null;
+  if (ownCacheAt && !kuvo.some((folder) => ownCacheAt === folder || ownCacheAt.startsWith(folder + "/")))
+    yourCaches.push(ownCacheAt);
   const runsLater = [...inHomes(RUNS_LATER), ...new Set(yourCaches.flatMap((folder) => [...TOOL_CACHES, ...SHELL_CACHES(accountName())].map((name) => path12.join(folder, name))))];
   const onPath = [...new Set((process.env.PATH ?? "").split(":").filter((each) => path12.isAbsolute(each)).map(throughLinks))].filter((folder) => homes.some((each) => folder.startsWith(each + "/")) && !kuvo.some((each) => folder === each || folder.startsWith(each + "/"))).filter((folder) => {
     try {
@@ -2974,7 +2975,16 @@ function realish(where) {
   return deepestThere(where, fs13.realpathSync);
 }
 function throughLinks(where) {
-  return deepestThere(where, followLinks);
+  const found = deepestThere(where, followLinks);
+  return macAsksAbout(found) ? found : realish(found);
+}
+var MAC_ASKS = [...MAC_PERSONAL, "Library/CloudStorage", "Library/Containers", "Library/Group Containers"];
+var macAsks;
+function macAsksAbout(at) {
+  if (process.platform !== "darwin")
+    return false;
+  macAsks ??= new RegExp(`^(/system/volumes/data)?(/volumes/|${escapeRegex(accountHome().toLowerCase())}/(${MAC_ASKS.map((each) => escapeRegex(each.toLowerCase())).join("|")})(/|$))`);
+  return macAsks.test(at.toLowerCase());
 }
 function deepestThere(where, resolve) {
   const full = path12.resolve(where);
@@ -2987,18 +2997,27 @@ function deepestThere(where, resolve) {
   }
 }
 function followLinks(where) {
-  let names = where.split("/").filter(Boolean);
+  let names = where.split("/");
   let at = "/";
   for (let links = 0;names.length; ) {
-    const next = path12.join(at, names.shift());
+    const name = names.shift();
+    if (!name || name === ".")
+      continue;
+    if (name === "..") {
+      at = path12.dirname(at);
+      continue;
+    }
+    const next = path12.join(at, name);
     if (!fs13.lstatSync(next).isSymbolicLink()) {
       at = next;
       continue;
     }
     if (++links > 40)
       throw new Error(`Too many links: ${where}`);
-    names = [...path12.resolve(at, fs13.readlinkSync(next)).split("/").filter(Boolean), ...names];
-    at = "/";
+    const target = fs13.readlinkSync(next);
+    if (target.startsWith("/"))
+      at = "/";
+    names = [...target.split("/"), ...names];
   }
   return at;
 }
@@ -3033,7 +3052,7 @@ var realProject = (project) => {
     return real;
   }
 };
-var projectSum = (project) => crypto6.createHash("sha256").update(realProject(project)).digest("hex").slice(0, 32);
+var sumOf = (real) => crypto6.createHash("sha256").update(real).digest("hex").slice(0, 32);
 function readAllowed() {
   try {
     const kept = JSON.parse(fs14.readFileSync(FILE, "utf8"));
@@ -3106,7 +3125,7 @@ function keep(rules) {
 function tellLauncher(rules = readAllowed()) {
   const byProject = new Map;
   for (const rule of rules)
-    byProject.set(projectSum(rule.project), [...byProject.get(projectSum(rule.project)) ?? [], rule.path]);
+    byProject.set(sumOf(rule.project), [...byProject.get(sumOf(rule.project)) ?? [], rule.path]);
   fs14.mkdirSync(FOR_LAUNCHER, { recursive: true, mode: 448 });
   for (const name of fs14.readdirSync(FOR_LAUNCHER))
     if (!byProject.has(name))
@@ -24982,7 +25001,7 @@ var noteUse = (item, caller, use, how) => note2({ what: "used", ...itemOf(item),
 
 // Packages/Box/src/link/vault/ssh.ts
 var isSshKey = (item) => item.kind === "key" && item.fields.includes("private_key");
-var sumOf = (text) => crypto34.createHash("sha256").update(text).digest("hex").slice(0, 32);
+var sumOf2 = (text) => crypto34.createHash("sha256").update(text).digest("hex").slice(0, 32);
 var REFUSED_FOR = 30000;
 var NOTE_KEPT = 30 * 24 * 60 * 60000;
 var IDLE = 60 * 60000;
@@ -25122,12 +25141,12 @@ function keepSshAgents() {
       } catch {
         continue;
       }
-      if (!path89.isAbsolute(folder) || note.startsWith("dir-") && note !== `dir-${sumOf(folder)}`)
+      if (!path89.isAbsolute(folder) || note.startsWith("dir-") && note !== `dir-${sumOf2(folder)}`)
         continue;
       if (agents.get(note)?.folder === folder)
         continue;
       close(note);
-      const prefix = sumOf(note).slice(0, 16);
+      const prefix = sumOf2(note).slice(0, 16);
       for (const old of fs86.readdirSync(SSH_AGENTS))
         if (old.startsWith(prefix))
           fs86.rmSync(path89.join(SSH_AGENTS, old), { force: true });

@@ -49,7 +49,8 @@ export const realProject = (project: string) => {
 };
 
 /** The launcher's name for a project's folder (its real path), as `sha256sum | cut -c 1-32` makes it. */
-export const projectSum = (project: string) => crypto.createHash("sha256").update(realProject(project)).digest("hex").slice(0, 32);
+export const projectSum = (project: string) => sumOf(realProject(project));
+const sumOf = (real: string) => crypto.createHash("sha256").update(real).digest("hex").slice(0, 32);
 
 export function readAllowed(): SandboxRule[] {
   try {
@@ -129,7 +130,9 @@ function keep(rules: SandboxRule[]): void {
 /** Each project's folders, where the launcher reads them; the files of projects with none gone. */
 export function tellLauncher(rules: SandboxRule[] = readAllowed()): void {
   const byProject = new Map<string, string[]>();
-  for (const rule of rules) byProject.set(projectSum(rule.project), [...(byProject.get(projectSum(rule.project)) ?? []), rule.path]);
+  // (By the real path each rule keeps, never opening its project: this runs as the box starts, and
+  // macOS holds a process that opens one on your Desktop until you answer it.)
+  for (const rule of rules) byProject.set(sumOf(rule.project), [...(byProject.get(sumOf(rule.project)) ?? []), rule.path]);
   fs.mkdirSync(FOR_LAUNCHER, { recursive: true, mode: 0o700 });
   for (const name of fs.readdirSync(FOR_LAUNCHER)) if (!byProject.has(name)) fs.rmSync(path.join(FOR_LAUNCHER, name), { force: true });
   for (const [sum, folders] of byProject) writePrivate(path.join(FOR_LAUNCHER, sum), folders.slice(0, MOST_FOLDERS).join("\n") + "\n");
