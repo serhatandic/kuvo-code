@@ -12,22 +12,31 @@ import Testing
 
     @Test func oneHeldUpAsItStartsIsGoneOnceItsStartIsGivenUp() async throws {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let running = folder.appending(path: "running")
-        #expect(mkfifo(running.path(percentEncoded: false), 0o600) == 0)
+        let said = folder.appending(path: "pid")
         let standIn = folder.appending(path: "bun")
-        try "#!/bin/sh\ntrap '' TERM\necho $$ > '\(running.path(percentEncoded: false))'\nexec /bin/sleep 600\n".write(to: standIn, atomically: true, encoding: .utf8)
+        try """
+            #!/bin/sh
+            trap '' TERM
+            echo $$ > '\(said.path(percentEncoded: false)).new'
+            mv '\(said.path(percentEncoded: false)).new' '\(said.path(percentEncoded: false))'
+            exec /bin/sleep 600
+            """.write(to: standIn, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: standIn.path(percentEncoded: false))
 
         let agents = OutsideAgents()
         agents.home = folder.appending(path: "agents")
         let starting = Task { await agents.start(engine: standIn, environment: ["PATH": "/usr/bin:/bin", "HOME": folder.path(percentEncoded: false)]) }
-        let path = running.path(percentEncoded: false)
-        let told = await Task.detached { FileHandle(forReadingAtPath: path)?.readDataToEndOfFile() }.value
-        let bridge = try #require(Int32(String(decoding: told ?? Data(), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)))
+        var bridge: Int32?
         defer {
-            kill(bridge, SIGKILL)
+            starting.cancel()
+            if let bridge { kill(bridge, SIGKILL) }
             try? FileManager.default.removeItem(at: folder)
         }
+        for _ in 0..<300 where bridge == nil {
+            bridge = (try? String(contentsOf: said, encoding: .utf8)).flatMap { Int32($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+            if bridge == nil { try await Task.sleep(for: .milliseconds(100)) }
+        }
+        let process = try #require(bridge, "It never started.")
 
         starting.cancel()
         await starting.value
@@ -36,11 +45,9 @@ import Testing
         // As RealBridge goes on, for a start that failed.
         agents.stop()
 
-        var gone = false
-        for _ in 0..<300 where !gone {
-            gone = kill(bridge, 0) != 0
-            if !gone { try await Task.sleep(for: .milliseconds(100)) }
+        for _ in 0..<300 where bridge != nil {
+            if kill(process, 0) != 0 { bridge = nil } else { try await Task.sleep(for: .milliseconds(100)) }
         }
-        #expect(gone)
+        #expect(bridge == nil, "It's still running.")
     }
 }

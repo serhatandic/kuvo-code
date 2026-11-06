@@ -184,6 +184,9 @@ public final class ServerProcess: @unchecked Sendable {
         // Its own: a terminal's shell started meanwhile mustn't hold stdin open after the app
         // has gone.
         let stdin = Pipe.unshared()
+        // A server gone before it reads what it's sent: that write fails, rather than the signal
+        // for it ending this process too.
+        _ = fcntl(stdin.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
         let stdout = Pipe.unshared()
         let stderr = Pipe.unshared()
         process.standardInput = stdin
@@ -201,21 +204,21 @@ public final class ServerProcess: @unchecked Sendable {
             }
         }
         let exit = Arrival<Int32>()
-        let watcher = ServerWatcher()
+        // First: never a server nothing would stop.
+        let watcher = try ServerWatcher()
         process.terminationHandler = { process in
             watcher.letGo()
             exit.deliver(process.terminationStatus)
             onExit(process.terminationStatus)
         }
         let firstLine = FirstLine(stdout.fileHandleForReading)
-        try process.run()
         do {
-            try watcher.watch(process.processIdentifier)
+            try process.run()
         } catch {
-            // Never one nothing would stop.
-            kill(process.processIdentifier, SIGKILL)
+            watcher.letGo()
             throw error
         }
+        watcher.watch(process.processIdentifier)
         if let firstInput { try? stdin.fileHandleForWriting.write(contentsOf: firstInput) }
 
         let url: URL
@@ -288,32 +291,35 @@ public final class ServerProcess: @unchecked Sendable {
 final class ServerWatcher: @unchecked Sendable {
     private static let script = """
         trap '' HUP INT TERM
+        read server || exit 0
         read line
         wait_for_it() {
             i=0
             while [ "$i" -lt 50 ]; do
-                kill -0 "$1" 2>/dev/null || exit 0
+                kill -0 "$server" 2>/dev/null || exit 0
                 /bin/sleep 0.1
                 i=$((i + 1))
             done
         }
-        wait_for_it "$1"
-        kill -TERM "$1" 2>/dev/null
-        wait_for_it "$1"
-        kill -KILL "$1" 2>/dev/null
+        wait_for_it
+        kill -TERM "$server" 2>/dev/null
+        wait_for_it
+        kill -KILL "$server" 2>/dev/null
         """
 
     private let held = Pipe.unshared()
     private let lock = NSLock()
     private var isHolding = true
-    private(set) var processID: Int32?
+    let processID: Int32
 
-    /// Started for `server`. It starts in `/` with nothing in its environment and reads no file,
-    /// so it never brings up a prompt of macOS's.
-    func watch(_ server: Int32) throws {
+    /// Started before its server: told which that is by `watch`, it ends if it's never told. It
+    /// starts in `/` with nothing in its environment and reads no file, so it never brings up a
+    /// prompt of macOS's.
+    init() throws {
+        _ = fcntl(held.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
         let process = Process()
         process.executableURL = URL(filePath: "/bin/sh")
-        process.arguments = ["-c", Self.script, "kuvo-server-watcher", String(server)]
+        process.arguments = ["-c", Self.script, "kuvo-server-watcher"]
         process.environment = [:]
         process.currentDirectoryURL = URL(filePath: "/")
         process.standardInput = held
@@ -323,13 +329,21 @@ final class ServerWatcher: @unchecked Sendable {
         processID = process.processIdentifier
     }
 
+    /// Its server, unless that has gone already.
+    func watch(_ server: Int32) {
+        lock.withLock {
+            guard isHolding else { return }
+            try? held.fileHandleForWriting.write(contentsOf: Data("\(server)\n".utf8))
+        }
+    }
+
     /// The server has gone or is to go.
     func letGo() {
-        let wasHolding = lock.withLock {
-            defer { isHolding = false }
-            return isHolding
+        lock.withLock {
+            guard isHolding else { return }
+            isHolding = false
+            try? held.fileHandleForWriting.close()
         }
-        if wasHolding { try? held.fileHandleForWriting.close() }
     }
 }
 
