@@ -43,7 +43,7 @@ export const FINISH_HOLD_LIMIT = 30 * 60_000;
 // As the box starts: the sessions updated this recently have their folders' tools running still.
 const RECENT = 3_600_000;
 
-export interface BackgroundCommand { id: string; command: string; started: number }
+export interface BackgroundCommand { id: string; command: string; started: number; folder?: string }
 export interface BackgroundHelper { id: string; since: number }
 /** What runs for a session besides its own turn. `tasks`: what else its agent keeps going. */
 export interface BackgroundWork { commands: BackgroundCommand[]; subagents: BackgroundHelper[]; tasks: BackgroundHelper[] }
@@ -103,6 +103,9 @@ export async function atWorkNow(targets: Target[], signal?: AbortSignal, file = 
   return working;
 }
 
+/** Whether any of `work` started at `at` (ms) or since. */
+export const startedSince = (work: BackgroundWork, at: number) => [...work.commands.map(each => each.started), ...work.subagents.map(each => each.since), ...work.tasks.map(each => each.since)].some(started => started >= at);
+
 /** What's running for `session` in words, for a lead told it finished all the same. */
 export function backgroundWords(work: BackgroundWork): string {
   const commands = work.commands.slice(0, 3).map(each => `\`${each.command.split("\n")[0]!.slice(0, 80)}\``);
@@ -137,8 +140,8 @@ export interface BackgroundWatch {
   of: (session: string, folder?: string) => Promise<BackgroundWork | null>;
   /** What's known of it as of the last look. */
   known: (session: string) => BackgroundWork | null;
-  /** Each event, looked at again if it says something changed. */
-  noted: (event: BackgroundEvent) => Promise<void>;
+  /** Each event, looked at again if it says something changed; whether it was. */
+  noted: (event: BackgroundEvent) => Promise<boolean>;
   /** Its source gone: what ran there went with it. */
   gone: () => void;
   /** Looks at what runs as it starts (again, if it couldn't then); done once it has. */
@@ -192,19 +195,20 @@ export function backgroundWatcher(source: Target, from: string, { file = WORK_BA
       for (const id of ids) {
         const top = await topOf(id);
         if (!top || top === id || hidden.has(id)) continue;
-        const data = await call(source, "GET", `/api/session/${encodeURIComponent(id)}`, undefined, signal).catch(() => null) as Partial<EngineSession> | null;
-        found.set(top, [...(found.get(top) ?? []), { id, since: data?.time?.updated ?? now() }]);
+        // (Since it was first found: kept as the box starts again.)
+        const since = sessions[top]?.subagents?.find(each => each.id === id)?.since ?? now();
+        found.set(top, [...(found.get(top) ?? []), { id, since }]);
       }
       helpers = found;
     }
     const all: Record<string, BackgroundWork> = {};
     const of = (id: string) => (all[id] ??= { commands: [], subagents: [], tasks: [] });
     for (const [top, each] of helpers) of(top).subagents.push(...each);
-    for (const jobs of commandsIn.values()) {
+    for (const [folder, jobs] of commandsIn) {
       for (const job of jobs) {
         const session = isObject(job.metadata) && typeof job.metadata.sessionID === "string" ? job.metadata.sessionID : null;
         const top = session ? await topOf(session) : null;
-        if (top) of(top).commands.push({ id: job.id, command: String(job.command ?? ""), started: job.time?.started ?? now() });
+        if (top) of(top).commands.push({ id: job.id, command: String(job.command ?? ""), started: job.time?.started ?? now(), folder });
       }
     }
     return all;
@@ -228,9 +232,13 @@ export function backgroundWatcher(source: Target, from: string, { file = WORK_BA
     (timer as { unref?: () => void } | undefined)?.unref?.();
   };
 
-  // Clients read a bot's work again when one of its sessions starts or stops counting.
-  const tellBots = async (before: Record<string, BackgroundWork>, after: Record<string, BackgroundWork>) => {
-    const changed = [...Object.keys(before), ...Object.keys(after)].filter(id => Boolean(counting(before[id], now())) !== Boolean(counting(after[id], now())));
+  // Clients read a bot's work again when one of its sessions starts or stops counting (running out
+  // of its time too, so as of the last look, not as it would count now).
+  let counted = new Set(Object.keys(sessions).filter(id => counting(sessions[id], now())));
+  const tellBots = async (after: Record<string, BackgroundWork>) => {
+    const counts = new Set(Object.keys(after).filter(id => counting(after[id], now())));
+    const changed = [...counted, ...counts].filter(id => counted.has(id) !== counts.has(id));
+    counted = counts;
     for (const id of new Set(changed)) {
       const data = await call(source, "GET", `/api/session/${encodeURIComponent(id)}`, undefined, signal).catch(() => null) as Partial<EngineSession> | null;
       const bot = worksFor(data)?.bot;
@@ -239,18 +247,19 @@ export function backgroundWatcher(source: Target, from: string, { file = WORK_BA
   };
 
   let lookedLast = "";
+  // Its source gone: a look under way says nothing of it after that.
+  let ended = false;
   const lookNow = async (looked: string[]) => {
-    if (signal?.aborted) return;
+    if (signal?.aborted || ended) return;
     const found = from === "bridge" ? await readBridge() : await readEngine(looked);
-    if (!found) return;
-    const before = sessions;
+    if (!found || signal?.aborted || ended) return;
     sessions = found;
     const line = JSON.stringify([found, [...folders]]);
     if (line !== lookedLast) {
       lookedLast = line;
       write(file, from, () => ({ sessions: found, folders: [...folders] }));
     }
-    await tellBots(before, found);
+    await tellBots(found);
     lookWhenOneRunsOut();
   };
 
@@ -280,11 +289,15 @@ export function backgroundWatcher(source: Target, from: string, { file = WORK_BA
       const folder = event.location?.directory ?? event.data?.info?.cwd;
       if (event.type === "shell.created" || event.type === "shell.exited" || event.type === "shell.deleted") {
         if (folder && from !== "bridge") folders.add(folder);
-        return look(folder && from !== "bridge" ? [folder] : [...folders]);
+        await look(folder && from !== "bridge" ? [folder] : [...folders]);
+        return true;
       }
-      if (event.type === "session.background.updated" || event.type === "session.deleted" || event.type.startsWith("session.execution.")) return look([]);
+      if (event.type !== "session.background.updated" && event.type !== "session.deleted" && !event.type.startsWith("session.execution.")) return false;
+      await look([]);
+      return true;
     },
     gone: () => {
+      ended = true;
       sessions = {};
       lookedLast = "";
       // (Nothing to say of a place that isn't running: looked at often, until it does.)
@@ -332,6 +345,18 @@ export function forgetStopped(session: string, file = WORK_STOPPED): void {
   if (readStopped(file)[session] !== undefined) changeStopped(stopped => { delete stopped[session]; }, file);
 }
 
+/** Whether a session has wake-ups or watches of its own waiting. */
+export function hasWakeUps(session: string): boolean {
+  if (!/^[A-Za-z0-9_-]{1,100}$/.test(session)) return false;
+  return ["wakes", "watches"].some(kind => {
+    try {
+      return fs.readdirSync(path.join(SESSION_WAKES, session, kind)).length > 0;
+    } catch {
+      return false;
+    }
+  });
+}
+
 // The wake-ups and watches a session keeps of its own (not a bot's, whose are its bot's).
 function endWakeUps(session: string): void {
   if (!/^[A-Za-z0-9_-]{1,100}$/.test(session)) return;
@@ -347,8 +372,9 @@ async function endBackground(target: Target, session: string, file = WORK_BACKGR
   if (answered) return;
   const work = readKept(file).engine?.sessions?.[session];
   for (const command of work?.commands ?? []) {
-    const job = await call(target, "GET", `/api/shell/${encodeURIComponent(command.id)}`).catch(() => null) as ShellJob | null;
-    if (job?.status === "running") await endShellJob(job, `http://127.0.0.1:${target.port}/api/shell/${encodeURIComponent(job.id)}`, { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}` }).catch(() => {});
+    // (The engine knows a command only in its own folder.)
+    const job = await call(target, "GET", `/api/shell/${encodeURIComponent(command.id)}`, undefined, undefined, command.folder).catch(() => null) as ShellJob | null;
+    if (job?.status === "running") await endShellJob(job, `http://127.0.0.1:${target.port}/api/shell/${encodeURIComponent(job.id)}`, { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}`, ...(command.folder ? { "x-opencode-directory": encodeURIComponent(command.folder) } : {}) }).catch(() => {});
   }
   for (const helper of work?.subagents ?? []) await call(target, "POST", `/api/session/${encodeURIComponent(helper.id)}/interrupt`).catch(() => {});
 }

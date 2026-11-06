@@ -57,6 +57,12 @@ const engine = http.createServer((request, response) => {
     const reply = (value, status = 200) => { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value)); };
     const url = request.url;
     if (url.startsWith("/api/session?")) return reply({ data: Object.values(state.sessions).filter(each => !each.parentID) });
+    if (url === "/api/session/active" && state.hold) {
+      const { asked, until } = state.hold;
+      state.hold = null;
+      asked();
+      return until.then(() => reply({ data: {} }));
+    }
     if (url === "/api/session/active") return reply({ data: Object.fromEntries([...state.active].map(id => [id, { type: "busy" }])) });
     if (url === "/api/shell") {
       const folder = decodeURIComponent(request.headers["x-opencode-directory"] ?? "");
@@ -65,7 +71,8 @@ const engine = http.createServer((request, response) => {
     }
     const shell = url.match(/^\/api\/shell\/([^/?]+)$/);
     if (shell) {
-      const job = [...state.shells.values()].flat().find(each => each.id === shell[1]);
+      // (As the engine's: a command is known only in its own folder.)
+      const job = state.shells.get(decodeURIComponent(request.headers["x-opencode-directory"] ?? ""))?.find(each => each.id === shell[1]);
       if (!job) return reply({ message: "No such command." }, 404);
       if (request.method === "DELETE") {
         state.removedShells.push(job.id);
@@ -77,6 +84,7 @@ const engine = http.createServer((request, response) => {
     if (/\/(permission|form)$/.test(url)) return reply({ data: [] });
     const one = url.match(/^\/api\/session\/([^/?]+)(\/[^?]*)?/);
     const id = one && decodeURIComponent(one[1]);
+    if (one && !one[2] && state.unreachable) return reply({ message: "Busy." }, 500);
     if (one && !one[2]) return state.sessions[id] ? reply({ data: state.sessions[id] }) : reply({ message: "No such session." }, 404);
     if (one?.[2] === "/message") return reply({ data: (state.messages[id] ?? []).slice(0, Number(new URL(url, "http://engine").searchParams.get("limit") ?? 100)) });
     if (one?.[2] === "/prompt") {
@@ -96,26 +104,30 @@ await new Promise(resolve => engine.listen(0, "127.0.0.1", resolve));
 atEnd(() => { engine.closeAllConnections(); engine.close(); });
 const source = { port: engine.address().port, password: "p" };
 
+// What a session said and when, as the engine keeps it: newest first, each later than the last.
+const at = () => (state.counter += 1, Date.now() + state.counter);
 const endJob = id => { for (const [folder, jobs] of state.shells) state.shells.set(folder, jobs.filter(each => each.id !== id)); };
-const startJob = (id, command = "npm test", at = Date.now(), session = "ses_tests", folder = tidepool) => {
-  const job = { id, status: "running", command, cwd: folder, metadata: { sessionID: session }, time: { started: at } };
+const startJob = (id, command = "npm test", when = at(), session = "ses_tests", folder = tidepool) => {
+  const job = { id, status: "running", command, cwd: folder, metadata: { sessionID: session }, time: { started: when } };
   state.shells.set(folder, [...(state.shells.get(folder) ?? []), job]);
   return { type: "shell.created", location: { directory: folder }, data: { info: job } };
 };
 const exited = (id, folder = tidepool) => { endJob(id); return { type: "shell.exited", location: { directory: folder }, data: { id, exit: 0, status: "exited" } }; };
-const ended = (session = "ses_tests") => ({ type: "session.execution.succeeded", data: { sessionID: session } });
+// A run's end writes its idle message, whichever way it ended.
+const idle = session => state.messages[session]?.unshift({ id: `msg_${state.counter + 1}`, type: "idle", time: { created: at() } });
+const ended = (session = "ses_tests") => (idle(session), { type: "session.execution.succeeded", data: { sessionID: session } });
 const started = (session = "ses_tests") => ({ type: "session.execution.started", data: { sessionID: session } });
+const delivered = (session = "ses_tests") => ({ type: "session.inbox.delivered", data: { sessionID: session, inboxID: `inb_${state.counter}` } });
 
-// What a session said and what began it, as the engine keeps them, newest first.
-const at = () => (state.counter += 1, Date.now() + state.counter);
 const said = (text, session = "ses_tests") => state.messages[session].unshift({ id: `msg_${state.counter + 1}`, type: "assistant", time: { created: at() }, content: text ? [{ type: "text", text }] : [] });
 const asked = (text = "Run the tests.", session = "ses_tests") => state.messages[session].unshift({ id: `msg_${state.counter + 1}`, type: "user", text, time: { created: at() } });
 const ownWord = (session = "ses_tests") => state.messages[session].unshift({ id: `msg_${state.counter + 1}`, type: "synthetic", text: "<shell>done</shell>", metadata: { source: "shell" }, time: { created: at() } });
+const notice = (text = "Going on with another account.", session = "ses_tests") => state.messages[session].unshift({ id: `msg_${state.counter + 1}`, type: "synthetic", text, time: { created: at() } });
 const wokenUp = (session = "ses_tests") => state.messages[session].unshift({ id: `msg_${state.counter + 1}`, type: "user", text: "[Wake-up] Look again.", time: { created: at() } });
 const long = text => `${text} ${"It went on to say a good deal more about what it found and what it changed. ".repeat(4)}`;
 
 // The watcher's clock: its time, and what it would run later, run when the test says, when it's due.
-function clock(start = Date.now()) {
+function clock(start = Date.now() + 60 * 1000) {
   const later = [];
   const kept = { at: start };
   return Object.assign(kept, {
@@ -309,9 +321,10 @@ test("stopping a session someone started ends what it left running and its wake-
   state.active.delete("ses_helper");
   await watch(exited("sh_1"));
   // The engine wakes its agent for the command's end all the same: it stops there, and says nothing.
-  ownWord();
   state.active.add("ses_tests");
   await watch(started());
+  ownWord();
+  await watch(delivered());
   assert.ok(state.interrupted.includes("ses_tests"), "the turn it began on its own stops");
   said("The tests ended.");
   await watch(ended());
@@ -320,10 +333,11 @@ test("stopping a session someone started ends what it left running and its wake-
   assert.deepEqual(finished(), [], "nothing told, at once or at the limit");
   assert.deepEqual(await atWork(), []);
   // Written to again, it's as any other.
-  asked("[Message from Pixel · ses_pixel] (…)\n\nCarry on.");
   state.active.add("ses_tests");
   const before = state.interrupted.length;
   await watch(started());
+  asked("[Message from Pixel · ses_pixel] (…)\n\nCarry on.");
+  await watch(delivered());
   assert.equal(state.interrupted.length, before, "not stopped: someone asked");
   state.active.delete("ses_tests");
   said("Carried on, all done.");
@@ -355,9 +369,11 @@ test("an archived session tells nothing and begins nothing on its own", async ()
   await watch(ended());
   await time.pass(5 * SECONDS);
   assert.deepEqual(finished(), []);
-  ownWord();
   state.active.add("ses_tests");
   await watch(started());
+  assert.deepEqual(state.interrupted, [], "nothing's known of what began it yet");
+  ownWord();
+  await watch(delivered());
   assert.deepEqual(state.interrupted, ["ses_tests"]);
 });
 
@@ -521,7 +537,7 @@ test("the same failure again in a turn nobody asked for is told once; a differen
   const time = clock();
   const watch = watcher(time);
   await watch.caughtUp;
-  const failed = message => ({ type: "session.execution.failed", data: { sessionID: "ses_tests", error: { type: "provider", message } } });
+  const failed = message => (idle("ses_tests"), { type: "session.execution.failed", data: { sessionID: "ses_tests", error: { type: "provider", message } } });
   asked();
   await watch(failed("Over its limit."));
   await time.pass(5 * SECONDS);
@@ -558,4 +574,216 @@ test("clients show a bot seeing a session finish once it's told, not at each tur
   await time.pass(5 * SECONDS);
   assert.equal(await marks(), 1, "not again for that");
   assert.equal(finished().length, 1, "nor told");
+});
+
+test("a word of the box's or its agent's landing in a turn, or after its reply, loses neither what it said nor who asked", async () => {
+  const time = clock();
+  const watch = watcher(time);
+  await watch.caughtUp;
+  asked();
+  said("Looking into it.");
+  notice();
+  said("All 120 tests pass.");
+  await watch(ended());
+  await time.pass(5 * SECONDS);
+  assert.equal(finished().length, 1);
+  assert.match(finished()[0], /All 120 tests pass/);
+  // After its reply (a coding agent's "used more tools"): the reply is what it said.
+  asked("[Message from Pixel · ses_pixel] (…)\n\nAnything else?");
+  said("Nothing else.");
+  notice("Used 3 more tools.");
+  await watch(ended());
+  await time.pass(5 * SECONDS);
+  assert.equal(finished().length, 2, "someone asked, and a word after the reply doesn't change that");
+  assert.match(finished()[1], /Nothing else\./);
+  // A command's end written in a turn someone asked for: still theirs, however short the answer.
+  asked("[Message from Pixel · ses_pixel] (…)\n\nDid you push?");
+  said("Checking.");
+  ownWord();
+  said("No.");
+  await watch(ended());
+  await time.pass(5 * SECONDS);
+  assert.equal(finished().length, 3);
+  assert.match(finished()[2], /\nNo\.$/);
+});
+
+test("what's written to a stopped session decides, once it's in its conversation: what it left running ending stops there, anything else goes on", async () => {
+  const time = clock();
+  const watch = watcher(time);
+  await watch.caughtUp;
+  asked();
+  said("Started.");
+  await watch(ended());
+  await time.pass(5 * SECONDS);
+  // Stopped, then a goal given to it: the engine's order, the turn first and what began it after.
+  link.noteStopped("ses_tests");
+  state.active.add("ses_tests");
+  await watch(started());
+  assert.deepEqual(state.interrupted, [], "nothing's known yet of what began it");
+  notice("Keep going until the goal is met.");
+  await watch(delivered());
+  assert.deepEqual(state.interrupted, [], "you set it going");
+  assert.equal(link.readStopped().ses_tests, undefined, "so it's no longer stopped");
+  said(long("Working towards the goal."));
+  state.active.delete("ses_tests");
+  await watch(ended());
+  await time.pass(5 * SECONDS);
+  assert.equal(finished().length, 2, "and it's told");
+  // Stopped, then a wake-up you added fires: goes on too.
+  link.noteStopped("ses_tests");
+  await watch(started());
+  wokenUp();
+  await watch(delivered());
+  assert.deepEqual(state.interrupted, []);
+  assert.equal(link.readStopped().ses_tests, undefined);
+  // Stopped, then what it left running ends: stops there, and stays stopped.
+  said("Looked.");
+  await watch(ended());
+  link.noteStopped("ses_tests");
+  await watch(started());
+  ownWord();
+  await watch(delivered());
+  assert.deepEqual(state.interrupted, ["ses_tests"]);
+  assert.notEqual(link.readStopped().ses_tests, undefined);
+});
+
+test("a question isn't held up by what ran before it was asked; a turn on its own still is", async () => {
+  const time = clock();
+  const watch = watcher(time);
+  await watch.caughtUp;
+  asked("Start the dev server.");
+  await watch(startJob("sh_dev", "npm run dev"));
+  said("The dev server is up.");
+  await watch(ended());
+  await time.pass(10 * SECONDS);
+  assert.deepEqual(finished(), [], "it's what it was asked to start: held");
+  asked("[Message from Pixel · ses_pixel] (…)\n\nWhich port?");
+  said("Port 3000.");
+  await watch(ended());
+  await time.pass(5 * SECONDS);
+  assert.equal(finished().length, 1, "told at once, the server still up");
+  assert.match(finished()[0], /Port 3000/);
+  assert.match(finished()[0], /Still running in the background: the command `npm run dev`/);
+  // Its own timer's turn, with something to say: waits for what runs.
+  wokenUp();
+  said(long("The server logged something new."));
+  await watch(ended());
+  await time.pass(5 * SECONDS);
+  assert.equal(finished().length, 1);
+  await watch(exited("sh_dev"));
+  await time.pass(11 * SECONDS);
+  await time.pass(5 * SECONDS);
+  assert.equal(finished().length, 2);
+  assert.match(finished()[1], /The server logged something new/);
+});
+
+test("Stop All stops a session that's only waiting on its own timer; nothing fires from it after", async () => {
+  const wakes = path.join(home, "wakes", "ses_tests", "wakes");
+  fs.mkdirSync(wakes, { recursive: true });
+  const wake = path.join(wakes, `${Math.floor(Date.now() / 1000) + 3600}-abc`);
+  fs.writeFileSync(wake, "Look again.");
+  const { status } = await route("POST", `kuvo/bots/${bot}/stop-all`);
+  assert.equal(status, 200);
+  assert.equal(fs.existsSync(wake), false, "its wake-up gone");
+  assert.notEqual(link.readStopped().ses_tests, undefined);
+});
+
+test("a session deleted while its finish waits: nothing's told, and nothing waits for it any more", async () => {
+  const time = clock();
+  const watch = watcher(time);
+  await watch.caughtUp;
+  const waiting = () => Object.keys(JSON.parse(fs.readFileSync(path.join(home, "run", "work", "told.json"), "utf8")).waiting ?? {});
+  asked();
+  await watch(startJob("sh_1"));
+  said("Started.");
+  await watch(ended());
+  assert.deepEqual(waiting(), ["ses_tests"]);
+  delete state.sessions.ses_tests;
+  await watch(exited("sh_1"));
+  await time.pass(11 * SECONDS);
+  await time.pass(5 * SECONDS);
+  assert.deepEqual(finished(), []);
+  assert.deepEqual(waiting(), []);
+});
+
+test("one deleted while the box was down: found as it starts again, and let go of", async () => {
+  const time = clock();
+  const first = watcher(time);
+  await first.caughtUp;
+  const waiting = () => Object.keys(JSON.parse(fs.readFileSync(path.join(home, "run", "work", "told.json"), "utf8")).waiting ?? {});
+  asked();
+  await first(startJob("sh_1"));
+  said("Started.");
+  await first(ended());
+  assert.deepEqual(waiting(), ["ses_tests"]);
+  first.gone();
+  delete state.sessions.ses_tests;
+  endJob("sh_1");
+  const next = clock(time.at);
+  await watcher(next).caughtUp;
+  assert.deepEqual(waiting(), []);
+  assert.deepEqual(finished(), []);
+});
+
+test("not reachable at its limit: looked at again, so a command that never ends is still told", async () => {
+  const time = clock();
+  const watch = watcher(time);
+  await watch.caughtUp;
+  asked();
+  await watch(startJob("sh_1", "npm run dev", time.at));
+  said("The dev server is up.");
+  await watch(ended());
+  state.unreachable = true;
+  await time.pass(link.FINISH_HOLD_LIMIT + 1 * SECONDS);
+  assert.deepEqual(finished(), []);
+  state.unreachable = false;
+  await time.pass(61 * SECONDS);
+  await time.pass(5 * SECONDS);
+  assert.equal(finished().length, 1);
+  assert.match(finished()[0], /Still running in the background/);
+});
+
+test("a session running past the at-work limit: its bot's clients hear it no longer counts", async () => {
+  const time = clock();
+  const watch = watcher(time);
+  await watch.caughtUp;
+  asked();
+  await watch(startJob("sh_1", "npm run dev", time.at));
+  const changes = path.join(home, "run", "work", "changes.json");
+  const marked = JSON.parse(fs.readFileSync(changes, "utf8"))[bot];
+  await new Promise(resolve => setImmediate(resolve));
+  await time.pass(link.AT_WORK_LIMIT + 1 * SECONDS);
+  assert.ok(JSON.parse(fs.readFileSync(changes, "utf8"))[bot] > marked, "a client reads its work again");
+});
+
+test("a look under way as the engine goes says nothing of it after", async () => {
+  const time = clock();
+  const watch = watcher(time);
+  await watch.caughtUp;
+  asked();
+  let release;
+  const until = new Promise(resolve => { release = resolve; });
+  const reached = new Promise(asked => { state.hold = { asked, until }; });
+  const looking = watch(startJob("sh_1"));
+  await reached;
+  watch.gone();
+  release();
+  await looking;
+  assert.deepEqual((await route("GET", "kuvo/work/background")).body.sessions, {}, "what it can't hear isn't said to run");
+});
+
+test("a bot's session nobody's told of: the bot sees it finish once what it left running ends, not at its turn's end", async () => {
+  const time = clock();
+  const watch = watcher(time);
+  await watch.caughtUp;
+  state.sessions.ses_tests.metadata.kuvo.wake = [];
+  const marks = async () => (await route("GET", "kuvo/work/oversight")).body.marks.filter(mark => mark.kind === "finished").length;
+  asked();
+  await watch(startJob("sh_1"));
+  said("Started.");
+  await watch(ended());
+  assert.equal(await marks(), 0);
+  await watch(exited("sh_1"));
+  assert.equal(await marks(), 1);
+  assert.deepEqual(finished(), []);
 });

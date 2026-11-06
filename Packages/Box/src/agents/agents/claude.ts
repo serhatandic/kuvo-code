@@ -1279,6 +1279,7 @@ class ClaudeThread implements Thread {
       this.lastEnd = ended
       // Claude Code stopped (or crashed): what it left running went with it.
       this.leftRunning()
+      emit("session.background.updated", { sessionID: this.session.id }, this.session.location.directory)
     }
     // Ended under a turn of this Claude Code (not one started since on a new one).
     const active = this.active

@@ -10827,6 +10827,7 @@ async function atWorkNow(targets, signal, file = WORK_BACKGROUND) {
     working.add(id);
   return working;
 }
+var startedSince = (work, at) => [...work.commands.map((each) => each.started), ...work.subagents.map((each) => each.since), ...work.tasks.map((each) => each.since)].some((started) => started >= at);
 function backgroundWords(work) {
   const commands = work.commands.slice(0, 3).map((each) => `\`${each.command.split(`
 `)[0].slice(0, 80)}\``);
@@ -10895,8 +10896,8 @@ function backgroundWatcher(source, from, { file = WORK_BACKGROUND, now = Date.no
         const top = await topOf(id);
         if (!top || top === id || hidden.has(id))
           continue;
-        const data = await call(source, "GET", `/api/session/${encodeURIComponent(id)}`, undefined, signal).catch(() => null);
-        found.set(top, [...found.get(top) ?? [], { id, since: data?.time?.updated ?? now() }]);
+        const since = sessions[top]?.subagents?.find((each) => each.id === id)?.since ?? now();
+        found.set(top, [...found.get(top) ?? [], { id, since }]);
       }
       helpers = found;
     }
@@ -10904,12 +10905,12 @@ function backgroundWatcher(source, from, { file = WORK_BACKGROUND, now = Date.no
     const of = (id) => all[id] ??= { commands: [], subagents: [], tasks: [] };
     for (const [top, each] of helpers)
       of(top).subagents.push(...each);
-    for (const jobs of commandsIn.values()) {
+    for (const [folder, jobs] of commandsIn) {
       for (const job of jobs) {
         const session = isObject(job.metadata) && typeof job.metadata.sessionID === "string" ? job.metadata.sessionID : null;
         const top = session ? await topOf(session) : null;
         if (top)
-          of(top).commands.push({ id: job.id, command: String(job.command ?? ""), started: job.time?.started ?? now() });
+          of(top).commands.push({ id: job.id, command: String(job.command ?? ""), started: job.time?.started ?? now(), folder });
       }
     }
     return all;
@@ -10930,8 +10931,11 @@ function backgroundWatcher(source, from, { file = WORK_BACKGROUND, now = Date.no
     }, Math.min(...times) - now() + 1000);
     timer?.unref?.();
   };
-  const tellBots = async (before, after) => {
-    const changed = [...Object.keys(before), ...Object.keys(after)].filter((id) => Boolean(counting(before[id], now())) !== Boolean(counting(after[id], now())));
+  let counted = new Set(Object.keys(sessions).filter((id) => counting(sessions[id], now())));
+  const tellBots = async (after) => {
+    const counts = new Set(Object.keys(after).filter((id) => counting(after[id], now())));
+    const changed = [...counted, ...counts].filter((id) => counted.has(id) !== counts.has(id));
+    counted = counts;
     for (const id of new Set(changed)) {
       const data = await call(source, "GET", `/api/session/${encodeURIComponent(id)}`, undefined, signal).catch(() => null);
       const bot = worksFor(data)?.bot;
@@ -10940,20 +10944,20 @@ function backgroundWatcher(source, from, { file = WORK_BACKGROUND, now = Date.no
     }
   };
   let lookedLast = "";
+  let ended = false;
   const lookNow = async (looked) => {
-    if (signal?.aborted)
+    if (signal?.aborted || ended)
       return;
     const found = from === "bridge" ? await readBridge() : await readEngine(looked);
-    if (!found)
+    if (!found || signal?.aborted || ended)
       return;
-    const before = sessions;
     sessions = found;
     const line = JSON.stringify([found, [...folders]]);
     if (line !== lookedLast) {
       lookedLast = line;
       write(file, from, () => ({ sessions: found, folders: [...folders] }));
     }
-    await tellBots(before, found);
+    await tellBots(found);
     lookWhenOneRunsOut();
   };
   let going = Promise.resolve();
@@ -10983,12 +10987,16 @@ function backgroundWatcher(source, from, { file = WORK_BACKGROUND, now = Date.no
       if (event.type === "shell.created" || event.type === "shell.exited" || event.type === "shell.deleted") {
         if (folder && from !== "bridge")
           folders.add(folder);
-        return look(folder && from !== "bridge" ? [folder] : [...folders]);
+        await look(folder && from !== "bridge" ? [folder] : [...folders]);
+        return true;
       }
-      if (event.type === "session.background.updated" || event.type === "session.deleted" || event.type.startsWith("session.execution."))
-        return look([]);
+      if (event.type !== "session.background.updated" && event.type !== "session.deleted" && !event.type.startsWith("session.execution."))
+        return false;
+      await look([]);
+      return true;
     },
     gone: () => {
+      ended = true;
       sessions = {};
       lookedLast = "";
       if (Object.keys(readKept2(file)[from]?.sessions ?? {}).length)
@@ -11030,6 +11038,17 @@ function forgetStopped(session, file = WORK_STOPPED) {
       delete stopped[session];
     }, file);
 }
+function hasWakeUps(session) {
+  if (!/^[A-Za-z0-9_-]{1,100}$/.test(session))
+    return false;
+  return ["wakes", "watches"].some((kind) => {
+    try {
+      return fs41.readdirSync(path44.join(SESSION_WAKES, session, kind)).length > 0;
+    } catch {
+      return false;
+    }
+  });
+}
 function endWakeUps(session) {
   if (!/^[A-Za-z0-9_-]{1,100}$/.test(session))
     return;
@@ -11044,9 +11063,9 @@ async function endBackground(target, session, file = WORK_BACKGROUND) {
     return;
   const work = readKept2(file).engine?.sessions?.[session];
   for (const command of work?.commands ?? []) {
-    const job = await call(target, "GET", `/api/shell/${encodeURIComponent(command.id)}`).catch(() => null);
+    const job = await call(target, "GET", `/api/shell/${encodeURIComponent(command.id)}`, undefined, undefined, command.folder).catch(() => null);
     if (job?.status === "running")
-      await endShellJob(job, `http://127.0.0.1:${target.port}/api/shell/${encodeURIComponent(job.id)}`, { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}` }).catch(() => {});
+      await endShellJob(job, `http://127.0.0.1:${target.port}/api/shell/${encodeURIComponent(job.id)}`, { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}`, ...command.folder ? { "x-opencode-directory": encodeURIComponent(command.folder) } : {} }).catch(() => {});
   }
   for (const helper of work?.subagents ?? [])
     await call(target, "POST", `/api/session/${encodeURIComponent(helper.id)}/interrupt`).catch(() => {});
@@ -11363,35 +11382,46 @@ var changeTold = (file, change, from, until) => {
   } catch {}
 };
 var hashed = (text) => crypto21.createHash("sha256").update(text).digest("hex").slice(0, 16);
-var beganOnItsOwn = (message) => message.type === "synthetic" || message.type === "user" && String(message.text ?? "").startsWith("[Wake-up] ");
+var WAKE_UP = "[Wake-up] ";
+var messageTime = (message) => isObject(message?.time) && typeof message.time.created === "number" ? message.time.created : null;
+function beganBy(turn) {
+  const starters = turn.filter((message) => message.type === "user" || message.type === "synthetic");
+  const asked = starters.find((message) => message.type === "user" && !String(message.text ?? "").startsWith(WAKE_UP));
+  if (asked || !starters.length)
+    return { kind: "asked", at: messageTime(asked) };
+  const first = starters.at(-1);
+  const source = isObject(first.metadata) ? first.metadata.source : undefined;
+  return { kind: first.type === "user" ? "timer" : source === "shell" || source === "subagent" ? "left" : "other", at: messageTime(first) };
+}
 async function lastReply(target, session) {
   const page = await call(target, "GET", `/api/session/${encodeURIComponent(session)}/message?limit=20&order=desc`);
   const messages = (Array.isArray(page) ? page : []).filter((message) => isObject(message) && typeof message.id === "string");
-  const at = (message) => isObject(message?.time) && typeof message.time.created === "number" ? message.time.created : null;
+  const at = messageTime;
   const newest = (type) => {
     const index = messages.findIndex((message) => message.type === type);
     return index < 0 ? Infinity : index;
   };
   const reply = messages[newest("assistant")];
-  const started = Math.min(newest("user"), newest("synthetic"));
-  const ended = newest("idle") < started && started < newest("assistant") ? messages[newest("idle")] : undefined;
-  const began = messages[started];
+  const from = messages[0]?.type === "idle" ? 1 : 0;
+  const before = messages.findIndex((message, index) => index >= from && message.type === "idle");
+  const turn = messages.slice(from, before < 0 ? undefined : before);
+  const ended = from === 1 && turn.length > 0 && !turn.some((message) => message.type === "assistant") ? messages[0] : undefined;
   let text = "";
-  for (const message of messages.slice(0, Number.isFinite(started) ? started : undefined)) {
+  for (const message of turn) {
     if (message.type !== "assistant" || !Array.isArray(message.content))
       continue;
     text = message.content.filter((part) => isObject(part) && part.type === "text").map((part) => String(part.text ?? "")).join(" ").replace(/\s+/g, " ").trim();
     if (text)
       break;
   }
-  return { id: reply?.id ?? null, at: at(reply), turn: ended?.id ?? null, turnAt: at(ended), text, own: began ? beganOnItsOwn(began) : false, timer: began?.type === "user" && beganOnItsOwn(began), startedAt: at(began) };
+  return { id: reply?.id ?? null, at: at(reply), turn: ended?.id ?? null, turnAt: at(ended), text, began: beganBy(turn), underWay: from === 0 && turn.length > 0 };
 }
 function isNews(was, last) {
   if (last.id && last.id === was.reply)
     return false;
-  if (!was.at && !was.reply || was.early && !last.timer)
+  if (!was.at && !was.reply || was.early && last.began.kind !== "timer")
     return true;
-  if (!last.own)
+  if (last.began.kind === "asked")
     return true;
   return last.text.length >= SUBSTANCE && hashed(last.text) !== was.said;
 }
@@ -11528,7 +11558,7 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
     const at = readStopped(stoppedFile)[session];
     if (at === undefined)
       return false;
-    if (!last || last.own || (last.startedAt ?? 0) <= at)
+    if (!last || last.began.kind === "left" || (last.began.at ?? 0) <= at)
       return true;
     forgetStopped(session, stoppedFile);
     return false;
@@ -11538,7 +11568,10 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
   const lookAgain = (session, after) => {
     const timer = schedule(async () => {
       settling.delete(session);
-      await settle(session).catch(() => {});
+      await settle(session).catch(() => {
+        if (!signal?.aborted)
+          lookAgain(session, CATCH_UP_AGAIN);
+      });
     }, after);
     timer?.unref?.();
   };
@@ -11562,7 +11595,8 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
     const folder = session.location?.directory ?? session.directory;
     const still = await background.of(session.id, folder).catch(() => null);
     const waitedSince = readTold(toldFile)?.waiting?.[session.id]?.at;
-    if (still && now() - (waitedSince ?? at) < FINISH_HOLD_LIMIT)
+    const askedAt = last?.began.kind === "asked" ? last.began.at : null;
+    if (still && (askedAt === null || startedSince(still, askedAt)) && now() - (waitedSince ?? at) < FINISH_HOLD_LIMIT)
       return waitFor(session.id, waitedSince ?? at);
     const was = readTold(toldFile)?.sessions[session.id] ?? {};
     letGoOf(session.id);
@@ -11579,7 +11613,11 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
     const waited = readTold(toldFile)?.waiting?.[id];
     if (!waited || waited.from !== from)
       return;
-    const session = await sessionOf(id);
+    const session = await sessionOf(id).catch((error) => {
+      if (error.status === 404)
+        return null;
+      throw error;
+    });
     const starter = startedByOf(session);
     if (!session || !starter)
       return letGoOf(id);
@@ -11588,6 +11626,7 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
       return;
     await finish(session, starter);
   };
+  const markLater = new Map;
   const backgroundEnded = async () => {
     const waiting = readTold(toldFile)?.waiting ?? {};
     for (const [id, each] of Object.entries(waiting)) {
@@ -11595,6 +11634,13 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
         continue;
       settling.add(id);
       lookAgain(id, SETTLE);
+    }
+    for (const [id, bot] of markLater) {
+      if (background.known(id))
+        continue;
+      markLater.delete(id);
+      if (!readStopped(stoppedFile)[id])
+        noteOversight(bot, id, "finished");
     }
   };
   const before = readTold(toldFile);
@@ -11615,6 +11661,10 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
     const working = new Set(Array.isArray(active) ? active : isObject(active) ? Object.keys(active) : []);
     const wasHeld = [...Object.keys(before.held ?? {}).filter((id) => before.held[id].from === from), ...Object.keys(before.waiting ?? {}).filter((id) => before.waiting[id].from === from)];
     const followed = listed.filter((each) => startedByOf(each.data) && wakesOf(each.data).length && ((each.data.time?.updated ?? 0) > since || wasHeld.includes(each.data.id)));
+    for (const id of Object.keys(before.waiting ?? {})) {
+      if (before.waiting[id].from === from && !listed.some((each) => each.data.id === id))
+        await settle(id).catch(() => {});
+    }
     const unread = [];
     for (const { data } of followed) {
       if (signal?.aborted)
@@ -11709,7 +11759,7 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
     timer?.unref?.();
   };
   caughtUp.then(lateAgain);
-  const watch = (event) => Promise.all([followUnanswering(source, event).catch(() => {}), told(event), settled(event), background.noted(event).then(backgroundEnded).catch(() => {})]).then(() => {});
+  const watch = (event) => Promise.all([followUnanswering(source, event).catch(() => {}), told(event), settled(event), background.noted(event).then((looked) => looked ? backgroundEnded() : undefined).catch(() => {})]).then(() => {});
   const settled = async (event) => {
     if (!ANSWERED2.has(event.type))
       return;
@@ -11719,32 +11769,40 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
   };
   const told = (event) => {
     const id = event.data?.sessionID ?? event.data?.form?.sessionID;
-    if (typeof id !== "string" || !["session.execution.started", "session.execution.succeeded", "session.execution.failed", "session.execution.interrupted", "permission.asked", "form.created", "permission.replied", "form.replied"].includes(event.type))
+    if (typeof id !== "string" || !["session.inbox.delivered", "session.execution.started", "session.execution.succeeded", "session.execution.failed", "session.execution.interrupted", "permission.asked", "form.created", "permission.replied", "form.replied"].includes(event.type))
       return Promise.resolve();
     return (async () => {
       let session = await sessionOf(id);
       for (let step = 0;session?.parentID && step < 5; step++)
         session = await sessionOf(session.parentID);
-      if (!session || session.id !== id && event.type.startsWith("session.execution"))
+      if (!session || session.id !== id && (event.type.startsWith("session.execution") || event.type === "session.inbox.delivered"))
         return;
-      const bot = worksFor(session)?.bot;
-      if (bot)
-        noteWorkChanged(bot);
       const starter = startedByOf(session);
       const wakes = wakesOf(session);
-      const stoppedAt = readStopped(stoppedFile)[session.id];
-      if (event.type === "session.execution.started" && starter && (isArchived(session) || stoppedAt !== undefined)) {
-        const began = await lastReply(source, session.id).catch(() => null);
-        if (!began || stoppedAt !== undefined && !staysStopped(session.id, began))
+      if (event.type === "session.inbox.delivered") {
+        const stopped = readStopped(stoppedFile)[session.id] !== undefined;
+        if (!starter || !stopped && !isArchived(session))
           return;
-        if (began.own && (began.startedAt ?? 0) >= (stoppedAt ?? 0))
+        const began = await lastReply(source, session.id).catch(() => null);
+        if (!began?.underWay)
+          return;
+        if (stopped && !staysStopped(session.id, began))
+          return;
+        if (began.began.kind === "left")
           await call(source, "POST", `/api/session/${encodeURIComponent(session.id)}/interrupt`).catch(() => {});
         return;
       }
+      const bot = worksFor(session)?.bot;
+      if (bot)
+        noteWorkChanged(bot);
       const kind = event.type === "session.execution.succeeded" || event.type === "session.execution.failed" ? "finished" : event.type.endsWith(".asked") || event.type === "form.created" ? "asks" : null;
       if (event.type === "session.execution.succeeded" && (!starter || !wakes.includes("finished"))) {
         const folder = session.location?.directory ?? session.directory;
-        if (bot && !isArchived(session) && !readStopped(stoppedFile)[session.id] && !await background.of(session.id, folder).catch(() => null))
+        if (!bot || isArchived(session) || readStopped(stoppedFile)[session.id])
+          return;
+        if (await background.of(session.id, folder).catch(() => null))
+          markLater.set(session.id, bot);
+        else
           noteOversight(bot, session.id, "finished");
         return;
       }
@@ -11752,27 +11810,32 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
         return;
       if (event.type === "session.execution.succeeded")
         return finish(session, starter);
-      const at = now();
-      const last = kind === "finished" ? await lastReply(source, session.id).catch(() => null) : null;
-      if (isArchived(session) || (kind === "asks" ? readStopped(stoppedFile)[session.id] !== undefined : staysStopped(session.id, last))) {
-        if (kind === "finished") {
-          letGoOf(session.id);
-          noteTold(session.id, { reply: last?.id, turn: last?.turn });
-        }
-        return;
+      if (kind === "asks") {
+        if (isArchived(session) || readStopped(stoppedFile)[session.id] !== undefined)
+          return;
+        const line = await wakeLine(event, session, source);
+        if (!line)
+          return;
+        tell(starter, line, true);
+        const ask = event.data?.id ?? event.data?.form?.id;
+        return noteTold(session.id, { ask: typeof ask === "string" ? ask : undefined });
       }
+      const at = now();
+      const last = await lastReply(source, session.id).catch(() => null);
       const reply = last?.id ?? undefined;
-      const failure = kind === "finished" ? errorOf(event.data.error)?.message ?? "" : undefined;
-      if (failure && last?.own && readTold(toldFile)?.sessions[session.id]?.failure === failure)
+      if (isArchived(session) || staysStopped(session.id, last)) {
+        letGoOf(session.id);
         return noteTold(session.id, { reply, turn: last?.turn });
+      }
+      const failure = errorOf(event.data.error)?.message ?? "";
+      if (failure && last && last.began.kind !== "asked" && readTold(toldFile)?.sessions[session.id]?.failure === failure)
+        return noteTold(session.id, { reply, turn: last.turn });
       const line = await wakeLine(event, session, source);
       if (!line)
         return;
-      tell(starter, line, kind === "asks");
-      const ask = event.data?.id ?? event.data?.form?.id;
-      if (kind === "finished")
-        letGoOf(session.id);
-      noteTold(session.id, kind === "asks" ? { ask: typeof ask === "string" ? ask : undefined } : { reply, at, turn: last?.turn, ...failure !== undefined ? { failure } : {} });
+      tell(starter, line, false);
+      letGoOf(session.id);
+      noteTold(session.id, { reply, at, turn: last?.turn, failure });
     })().catch(() => {});
   };
   return Object.assign(watch, { caughtUp, gone: background.gone });
@@ -11784,7 +11847,7 @@ async function stopBotWork(bot, targets, signal) {
   const working = await atWorkNow(targets, signal);
   let stopped = 0;
   for (const each of work) {
-    if (!working.has(each.data.id) && !await askingNow(each, signal))
+    if (!working.has(each.data.id) && !hasWakeUps(each.data.id) && !await askingNow(each, signal))
       continue;
     if (await stopWork(each.target, each.data.id, true).then(() => true, () => false))
       stopped += 1;
@@ -12326,10 +12389,10 @@ async function holdForGoal(session, targets, file) {
   }, file);
   if (!goal)
     return;
-  const [sessions, working] = await Promise.all([workSessions(targets()).catch(() => []), atWorkNow(targets()).catch(() => new Set)]);
+  const [sessions, working] = await Promise.all([workSessions(targets()).catch(() => []), workingNow(targets()).catch(() => new Set)]);
   for (const each of goalWork(goal, sessions)) {
     if (working.has(each.data.id))
-      await stopWork(each.target, each.data.id).catch(() => {});
+      await stopSession(each.target, each.data.id, false).catch(() => {});
   }
   noteWorkChanged(goal.bot);
 }
@@ -22464,7 +22527,7 @@ async function startSession(given, by, place) {
     const earlier = startsBefore(bot.bot, noted.before);
     const past = pastLimit(limits, {
       depth,
-      working: work.filter((each) => working.has(each.data.id)).length + earlier.filter((each) => !each.session || !each.prompted || !workIDs.has(each.session)).length,
+      working: work.filter((each) => working.has(each.data.id) && !isArchived(each.data)).length + earlier.filter((each) => !each.session || !each.prompted || !workIDs.has(each.session)).length,
       started: todayIDs.size + earlier.filter((each) => !each.session || !todayIDs.has(each.session)).length,
       tokens
     });

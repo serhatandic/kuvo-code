@@ -39,8 +39,8 @@ import { appNamed, appNameGiven } from "./apps";
 import { folderName, isEmptyFolder, namedPlace, projectPlace, shownPath } from "./projects";
 import { projectsFolder } from "./settings";
 import { stopBotWork } from "./stop";
-import { atWorkNow, stopWork } from "./background";
-import { ofBot, workSessions } from "./tree";
+import { atWorkNow } from "./background";
+import { ofBot, workingNow, workSessions } from "./tree";
 import type { Listed } from "./tree";
 import type { Target } from "../../shared/records";
 import type { GoalAppShape, GoalCheckShape, GoalFolderShape, GoalPlanShape, GoalStepShape, GoalWaitingShape } from "../../shared/routes/work";
@@ -707,9 +707,10 @@ async function holdForGoal(session: string, targets: () => Target[], file: strin
     return kept ?? null;
   }, file);
   if (!goal) return;
-  const [sessions, working] = await Promise.all([workSessions(targets()).catch((): Listed[] => []), atWorkNow(targets()).catch(() => new Set<string>())]);
+  // (Turns only: a pause goes on from where it was, so what they left running and set stays.)
+  const [sessions, working] = await Promise.all([workSessions(targets()).catch((): Listed[] => []), workingNow(targets()).catch(() => new Set<string>())]);
   for (const each of goalWork(goal, sessions)) {
-    if (working.has(each.data.id)) await stopWork(each.target, each.data.id).catch(() => {});
+    if (working.has(each.data.id)) await stopSession(each.target, each.data.id, false).catch(() => {});
   }
   noteWorkChanged(goal.bot);
 }

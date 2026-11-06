@@ -32,7 +32,7 @@ import type { Approval } from "../work/approval";
 import { linkSession, pauseGoal, runningGoal } from "../work/goals";
 import { nextMidnight, startOfDay } from "../work/clock";
 import { atWorkNow } from "../work/background";
-import { botOfConversation, depthOf, ofBot, workSessions, worksFor } from "../work/tree";
+import { botOfConversation, depthOf, isArchived, ofBot, workSessions, worksFor } from "../work/tree";
 import type { WorksFor } from "../../shared/routes/work";
 import type { Target } from "../../shared/records";
 import type { KitRule } from "../bots/kit";
@@ -313,7 +313,8 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
     const earlier = startsBefore(bot.bot, noted.before);
     const past = pastLimit(limits, {
       depth,
-      working: work.filter(each => working.has(each.data.id)).length + earlier.filter(each => !each.session || !each.prompted || !workIDs.has(each.session)).length,
+      // (One put away doesn't take a place for what it left running.)
+      working: work.filter(each => working.has(each.data.id) && !isArchived(each.data)).length + earlier.filter(each => !each.session || !each.prompted || !workIDs.has(each.session)).length,
       started: todayIDs.size + earlier.filter(each => !each.session || !todayIDs.has(each.session)).length,
       tokens,
     });

@@ -519,6 +519,30 @@ describe("what Claude Code left running, as the box reads it", () => {
   })
 })
 
+describe("Claude Code stopping with work left running", () => {
+  test("what it left running went with it, and whoever follows the session hears so", async () => {
+    const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
+    sessions.prompt(id, { id: "msg_claude_exit_001", text: "start it", files: [], delivery: "steer" })
+    await until(() => fake.sent.length === 1)
+    const [first] = fake.sent.map((message) => message.uuid)
+    fake.out.push({ type: "assistant", message: { id: "m1", content: [{ type: "tool_use", id: "tool1", name: "Bash", input: { command: "npm run dev", run_in_background: true } }] }, parent_tool_use_id: null, user_message_uuids: [first] })
+    fake.out.push({ type: "system", subtype: "task_started", task_id: "t1", task_type: "local_bash", description: "Start the dev server", tool_use_id: "tool1", is_backgrounded: true })
+    fake.out.push({ type: "system", subtype: "background_tasks_changed", tasks: [{ task_id: "t1", task_type: "local_bash", description: "Start the dev server" }] })
+    fake.say("It's up.", [first])
+    fake.result([first])
+    await until(() => idles(id).length === 1)
+    await until(() => (sessions.background()[id]?.commands.length ?? 0) === 1)
+    const heard: unknown[] = []
+    const unsubscribe = subscribe((event) => {
+      if (event.type === "session.background.updated") heard.push(event.data.sessionID)
+    })
+    fake.crash(new Error("Claude Code process exited with code 1"))
+    await until(() => heard.includes(id))
+    unsubscribe()
+    expect(sessions.background()[id]).toBeUndefined()
+  })
+})
+
 describe("Writing to a Claude Code subagent", () => {
   /** A conversation whose subagent (call1, Claude Code's ag1) went off in the background; `done`, it has finished since. */
   async function sendOff(done: boolean) {

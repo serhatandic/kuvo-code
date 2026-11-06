@@ -10599,6 +10599,7 @@ class ClaudeThread {
       this.input = undefined;
       this.lastEnd = ended;
       this.leftRunning();
+      emit("session.background.updated", { sessionID: this.session.id }, this.session.location.directory);
     }
     const active = this.active;
     if (!active || this.query)
@@ -23368,4 +23369,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents f814a1dcdce2c4106945a57fd341eeb354773f378a0d5be5c7272cc54bf52c8e
+// Built from Packages/Box/src/agents b27f125ced29124b77cf2ca728e336b791044304e5b363d5ae4fc3883cc552e5

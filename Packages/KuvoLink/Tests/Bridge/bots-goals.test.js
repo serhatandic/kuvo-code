@@ -709,6 +709,21 @@ test("Pause on a conversation's own goal stops its turn and holds it until Resum
   assert.deepEqual(prompts, []);
 });
 
+// A pause goes on from where it was: unlike Stop, what's waiting on its timers stays, and isn't stopped.
+test("pausing a goal stops its sessions' turns and leaves their wake-ups, and nothing marks them stopped", async () => {
+  await startedGoal();
+  active.add("ses_site");
+  const wakes = path.join(home, "wakes", "ses_site", "wakes");
+  fs.mkdirSync(wakes, { recursive: true });
+  const wake = path.join(wakes, `${Math.floor(Date.now() / 1000) + 3600}-abc`);
+  fs.writeFileSync(wake, "Look again.");
+  await link.goalHolds(target)(goalEvent("ses_pixel", "paused", "you"));
+  assert.ok(interrupted.includes("ses_site"), "its turn stops");
+  assert.equal(fs.existsSync(wake), true, "its wake-up stays");
+  assert.equal(link.readStopped().ses_site, undefined);
+  fs.rmSync(path.join(home, "wakes", "ses_site"), { recursive: true, force: true });
+});
+
 // The box restarting (or its stream from the bridge dropping) while a goal is paused: what it held
 // stays held, and once it's found the bridge again, a goal resumed meanwhile goes on.
 test("a goal paused before the box restarted stays held, and goes on once it finds the goal resumed meanwhile", async () => {
