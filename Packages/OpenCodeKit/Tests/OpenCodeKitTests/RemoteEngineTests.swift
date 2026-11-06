@@ -196,6 +196,15 @@ struct RemoteEngineTests {
         #expect(try installer().checked("Darwin arm64\ntools\nmacos 26.1\ncomputer ANOTHER-MAC 501\n\(OpenCodeEngine.version)\n").isInstalled)
     }
 
+    @Test func aMacTooOldAndWithoutGitHearsFirstThatItsTooOld() {
+        do {
+            _ = try installer().checked("Darwin x86_64\nno-tools\nmacos 12.7.6\ncomputer ANOTHER-MAC 501\n")
+            Issue.record("it's refused")
+        } catch {
+            #expect(error.localizedDescription.contains("macOS 13 or later"))
+        }
+    }
+
     @Test func linuxStillGetsItsOwnAndOthersAreRefusedSayingWhy() throws {
         #expect(try installer().checked("Linux x86_64\nglibc\n").release == EngineRelease.linux(machine: "x86_64"))
         #expect(try installer().checked("Linux aarch64\nglibc\n\(OpenCodeEngine.version)\n").isInstalled)

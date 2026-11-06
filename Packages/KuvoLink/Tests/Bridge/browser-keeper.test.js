@@ -123,6 +123,7 @@ test("a key sent to the machine's browser reaches Chrome as that system's Chrome
     { type: "keyDown", key: "a", modifiers: CONTROL },
     { type: "keyDown", key: "z", modifiers: CONTROL | SHIFT },
     { type: "keyDown", key: "v", modifiers: CONTROL },
+    { type: "keyDown", key: "v", modifiers: CONTROL | SHIFT },
     { type: "keyDown", key: "q", text: "q" },
     { type: "keyUp", key: "a", modifiers: CONTROL },
   ];
@@ -151,6 +152,7 @@ test("a key sent to the machine's browser reaches Chrome as that system's Chrome
     { key: "a", modifiers: META, commands: ["selectAll"] },
     { key: "z", modifiers: META | SHIFT, commands: ["redo"] },
     { key: "v", modifiers: META, commands: ["paste"] },
+    { key: "v", modifiers: META | SHIFT, commands: undefined },
     { key: "q", modifiers: 0, commands: undefined },
     { key: "a", modifiers: META, commands: undefined },
   ]);

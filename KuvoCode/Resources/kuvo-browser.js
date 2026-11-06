@@ -426,7 +426,7 @@ function keyForHere(params, platform = process.platform) {
   const key = String(params.key ?? "");
   const move = (control ? MAC_WORD_MOVES : MAC_MOVES)[key];
   let command = move ? move + (shift ? "AndModifySelection" : "") : (control ? MAC_WORD_DELETES : MAC_DELETES)[key];
-  if (control && !command) command = key.toLowerCase() === "z" && shift ? "redo" : MAC_LETTERS[key.toLowerCase()];
+  if (control && !command) command = key.toLowerCase() === "z" && shift ? "redo" : shift ? undefined : MAC_LETTERS[key.toLowerCase()];
   return command ? { ...mac, commands: [command] } : mac;
 }
 

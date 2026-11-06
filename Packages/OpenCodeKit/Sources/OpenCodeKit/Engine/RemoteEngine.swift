@@ -326,15 +326,15 @@ public struct RemoteEngineInstaller: Sendable {
         switch parts.first {
         case "Linux": release = second == "glibc" ? EngineRelease.linux(machine: machine) : nil
         case "Darwin":
+            if let version = lines.first(where: { $0.hasPrefix("macos ") })?.dropFirst(6), let major = Int(version.prefix { $0.isNumber }), major < Self.oldestMacOS {
+                throw RemoteEngineError.needsNewerMacOS(String(version))
+            }
             if second == "no-tools" { throw RemoteEngineError.needsDeveloperTools }
             release = EngineRelease.darwin(machine: machine)
         default: release = nil
         }
         guard let release else { throw RemoteEngineError.unsupportedPlatform(platform + (second == "musl" ? " (musl)" : "")) }
         let rest = lines.dropFirst(2)
-        if let version = rest.first(where: { $0.hasPrefix("macos ") })?.dropFirst(6), let major = Int(version.prefix { $0.isNumber }), major < Self.oldestMacOS {
-            throw RemoteEngineError.needsNewerMacOS(String(version))
-        }
         if let computer = rest.first(where: { $0.hasPrefix("computer ") }), Self.isThisAccount(computer) { throw RemoteEngineError.thisMac }
         return (release, rest.contains { !$0.hasPrefix("computer ") && !$0.hasPrefix("macos ") && $0.hasSuffix(OpenCodeEngine.version) })
     }
@@ -1198,16 +1198,18 @@ public final class RemoteServer: @unchecked Sendable {
         """
     }
 
+    /// `cron_tab`, `crontab` given a while, where `perl` can see to it: what runs it waits, and all that
+    /// waits on that, should macOS ask something on a screen nobody's at.
+    private static let limitedCrontab = #"cron_tab() { if command -v perl >/dev/null 2>&1; then perl -e 'alarm 15; exec @ARGV' crontab "$@"; else crontab "$@"; fi; }"#
+
     /// Adds `rebootLine` to the machine's crontab, once, keeping what's there; a crontab that
     /// can't be read (for another reason than there being none) is left alone. On a Mac, cron can
     /// write it only where Remote Login has full disk access; it's what starts the box there with
-    /// nobody logged in, and where it can't, the launch agent starts it once someone is. Given a few
-    /// seconds, where `perl` can see to it: the start waits for this, holding up all that waits on it,
-    /// should macOS ask something on a screen nobody's at.
+    /// nobody logged in, and where it can't, the launch agent starts it once someone is.
     static var rebootCrontabScript: String {
         """
         if command -v crontab >/dev/null 2>&1; then
-          cron_tab() { if command -v perl >/dev/null 2>&1; then perl -e 'alarm 5; exec @ARGV' crontab "$@"; else crontab "$@"; fi; }
+          \(limitedCrontab)
           cron_now=$(cron_tab -l 2>"$R/.crontab.err"); cron_read=$?
           if [ $cron_read -eq 0 ] || grep -qi 'no crontab' "$R/.crontab.err" 2>/dev/null; then
             case "$cron_now" in
@@ -1269,8 +1271,9 @@ public final class RemoteServer: @unchecked Sendable {
 
     static var crontabRemovalScript: String {
         """
-        if command -v crontab >/dev/null 2>&1 && cron_now=$(crontab -l 2>/dev/null); then
-          case "$cron_now" in *"\(rebootTag)"*) printf '%s\\n' "$cron_now" | grep -vF \(SSHConnection.quoted(rebootTag)) | crontab - >/dev/null 2>&1 ;; esac
+        \(limitedCrontab)
+        if command -v crontab >/dev/null 2>&1 && cron_now=$(cron_tab -l 2>/dev/null); then
+          case "$cron_now" in *"\(rebootTag)"*) printf '%s\\n' "$cron_now" | grep -vF \(SSHConnection.quoted(rebootTag)) | cron_tab - >/dev/null 2>&1 ;; esac
         fi
         """
     }

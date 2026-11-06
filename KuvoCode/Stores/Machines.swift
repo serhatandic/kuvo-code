@@ -1148,7 +1148,7 @@ final class Machines {
     static let agentsSignOut = """
         [ -d "$K/agents" ] && find "$K/agents" -path "$K/agents/runtime" -prune -o \\( -name .credentials.json -o -name auth.json -o -name 'auth.json.*' -o -name acp_token.json -o -name 'acp_token.json.*' -o -name 'oauth-token.json*' -o -path "$K/agents/claude/tokens/*" \\) -type f -exec rm -f {} + 2>/dev/null
         if [ "$(uname -s)" = Darwin ]; then
-          for d in "$K/agents/claude/console" "$K"/agents/claude/accounts/*; do
+          for d in "$K/agents/claude/home" "$K/agents/claude/console" "$K"/agents/claude/accounts/*; do
             [ -d "$d" ] && security delete-generic-password -s "Claude Code-credentials-$(printf %s "$d" | shasum -a 256 | cut -c1-8)" >/dev/null 2>&1 </dev/null
           done
         fi

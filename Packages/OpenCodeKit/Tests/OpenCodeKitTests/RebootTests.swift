@@ -625,10 +625,23 @@ import Testing
     /// the start, and all that waits on it.
     @Test func aCrontabThatHangsDoesntHoldUpTheStart() throws {
         defer { cleanUp() }
-        try tool("crontab", "exec /bin/sleep 60")
-        let started = Date()
+        // (Not `exec`: what it goes on to do is how the test tells it wasn't waited for.)
+        try tool("crontab", "/bin/sleep 30; touch \"$HOME/crontab-answered\"")
         #expect(try macLaunch() == 0)
-        #expect(Date().timeIntervalSince(started) < 30)
+        #expect(!FileManager.default.fileExists(atPath: home.appending(path: "crontab-answered").path))
+    }
+
+    /// Nor a removal: the rest of it goes on.
+    @Test func aCrontabThatHangsDoesntHoldUpARemoval() throws {
+        defer { cleanUp() }
+        try tool("crontab", "/bin/sleep 30; touch \"$HOME/crontab-answered\"")
+        let process = Process()
+        process.executableURL = URL(filePath: "/bin/sh")
+        process.arguments = ["-c", RemoteServer.crontabRemovalScript]
+        process.environment = ["HOME": home.path, "PATH": "\(tools.path):/usr/bin:/bin"]
+        try process.run()
+        process.waitUntilExit()
+        #expect(!FileManager.default.fileExists(atPath: home.appending(path: "crontab-answered").path))
     }
 
     /// A start from the Mac leaves what starts it again after a restart, in what these tests stand

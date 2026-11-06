@@ -87,7 +87,7 @@ export const SOCKET_KEY_FILE = path.join(RUN, "socket.key");
  * are those of a box on a Mac whose folder is too deep for them (a test's). */
 export const SSH_FOR = path.join(RUN, "ssh-for");
 const OWN_SSH_AGENTS = path.join(RUN, "ssh-agents");
-// (68 bytes: what a socket's path leaves for its folder, with a slash and a name of 34, vault/ssh.ts.)
+// (68 bytes, to be safe: what a socket's path leaves for its folder, with a slash and its name, vault/ssh.ts.)
 export const SSH_AGENTS = process.platform === "darwin" && (process.env.KUVO_BOX === "mac" || Buffer.byteLength(OWN_SSH_AGENTS) > 68)
   ? path.join("/private/tmp", `kuvo-ssh-${os.userInfo().uid}`, `agents-${crypto.createHash("sha256").update(K).digest("hex").slice(0, 8)}`)
   : OWN_SSH_AGENTS;

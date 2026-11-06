@@ -83,9 +83,9 @@ clean
 # The whole log in the build folder; here, each test's result, and what went wrong.
 # What belongs to the account whatever a test's $HOME says: a run that changes it fails.
 account_state() {
-    crontab -l 2>/dev/null
-    launchctl print "gui/$(id -u)/run.kuvo.code.machine" >/dev/null 2>&1; echo "login agent loaded: $?"
-    [ -e "$HOME/Library/LaunchAgents/run.kuvo.code.machine.plist" ]; echo "login agent file: $?"
+    crontab -l 2>/dev/null || true
+    if launchctl print "gui/$(id -u)/run.kuvo.code.machine" >/dev/null 2>&1; then echo "login agent loaded"; fi
+    if [ -e "$HOME/Library/LaunchAgents/run.kuvo.code.machine.plist" ]; then echo "login agent file"; fi
 }
 
 mkdir -p "$BUILD"

@@ -77,7 +77,7 @@ import Testing
         let home = AppInfo.testRoot.appending(path: "MachineHome/\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: home) }
         let agents = home.appending(path: "machine/agents/claude")
-        for folder in ["console", "accounts/work"] {
+        for folder in ["home", "accounts/work"] {
             try FileManager.default.createDirectory(at: agents.appending(path: folder), withIntermediateDirectories: true)
         }
         let tools = home.appending(path: "tools")
@@ -98,7 +98,7 @@ import Testing
             return "delete-generic-password -s Claude Code-credentials-\(hash)"
         }
         let asked = try String(contentsOf: home.appending(path: "security"), encoding: .utf8).split(separator: "\n").map(String.init)
-        #expect(Set(asked) == [item(agents.appending(path: "console")), item(agents.appending(path: "accounts/work"))])
+        #expect(Set(asked) == [item(agents.appending(path: "home")), item(agents.appending(path: "accounts/work"))])
     }
 
     /// The build of the browser a machine gets, by what it says it is, never a guess: a system it
