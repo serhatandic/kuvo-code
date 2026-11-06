@@ -62,7 +62,7 @@ struct AutopilotShown: Decodable, Equatable {
     var decided: [Call]
 
     static let symbol = "airplane"
-    static let detail = "Decides for itself; stops only for what needs you"
+    static let detail = "Decides for itself; leaves what needs you for the end"
 
     /// Whether a conversation is kept on Autopilot (`metadata.kuvo.autopilot`), until its box says.
     static func isOn(_ session: Session) -> Bool {

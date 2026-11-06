@@ -289,7 +289,7 @@ struct AgentChip: View {
 }
 
 /// In the composer's row while its conversation is on Autopilot, before the mode chip: it decides
-/// for itself and stops only for what needs you; ✕ goes back to Interactive.
+/// for itself and leaves what needs you for the end; ✕ goes back to Interactive.
 struct AutopilotChip: View {
     let onLeave: () -> Void
 
