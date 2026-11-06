@@ -64,7 +64,11 @@ final class ConversationScroller {
     fileprivate func reading(_ id: String, isOpen: Bool) {
         if isOpen {
             guard followsEnd || !heldFor.isEmpty else { return }
-            if followsEnd { follow(false) }
+            if followsEnd {
+                // All of what opened in view first: following would have got there in a moment.
+                follow(false)
+                ask(.end(animated: true))
+            }
             heldFor.insert(id)
         } else if heldFor.remove(id) != nil, heldFor.isEmpty {
             toEnd(animated: true)
