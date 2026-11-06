@@ -16,6 +16,9 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- A session waiting on a command or a subagent it left running now shows as at work, in its row and in the bar over its bot's composer, on your Mac and iPhone alike.
+- A bot or a session that started another hears "finished" once, when that session is really done, instead of after every turn: a timer of its own or a command ending no longer sends it again unless it has something new to say.
+- Stopping a session a bot or another session started also ends the commands and subagents it left running and its wake-ups, and nothing more comes of it until someone writes to it. Nothing comes of an archived one either.
 - The coding agents' bridge, this Mac's box or the engine, if stuck, no longer keeps running after it's stopped or after Kuvo Code crashes: it's ended within seconds.
 - Integrations on a machine stay up to date with your Mac closed: when the machine updates itself, the ones you added move to the versions that update brings, rather than waiting for your Mac to connect.
 - An integration you turned off stays off when it moves to its maker's own server, and keeps the Code Mode setting you chose. Keys you or a bot brought for its old server go with the move.

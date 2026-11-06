@@ -1249,6 +1249,30 @@ final class Workspace {
         }
     }
 
+    /// What still runs for `box`'s sessions besides their own turns, as it says (PROTOCOL.md, "Work ›
+    /// Background work"), from now on, until the task following it ends (a machine disconnecting). What
+    /// it said is gone once it can't be heard: this Mac doesn't say what it can't know runs.
+    func followBackground(_ box: String) async {
+        while !Task.isCancelled {
+            var older = false
+            if let client = boxes?(box) {
+                do {
+                    for try await line in client.follow("kuvo/work/background/events") {
+                        guard let list = try? JSONDecoder().decode(BackgroundList.self, from: line), background[box] != list.sessions else { continue }
+                        background[box] = list.sessions
+                    }
+                } catch let refusal as BoxRefusal {
+                    older = refusal.status == 404 || refusal.status == 403
+                } catch {}
+                if background[box] != nil { background[box] = nil }
+            }
+            // The box restarted, or the machine went away: followed again in a moment. One from before
+            // it told this, only now and then.
+            try? await Task.sleep(for: .seconds(older ? 300 : box == BoxClient.mac ? 2 : 30))
+        }
+        if background[box] != nil { background[box] = nil }
+    }
+
     /// A worktree as a machine keeps it (its bridge's `kuvo/worktrees`), in its own paths; as it
     /// lists them for its Worktrees page, its root is `path` and `size` the room it takes.
     struct BoxWorktree: Decodable {
@@ -3014,7 +3038,6 @@ final class Workspace {
         if let parent = session.parentID {
             // Each written only when it changes (a subagent at work is read again on each update):
             // the sidebar reads them, and a write that changes nothing works it out again.
-            if isHidden(session), !hiddenRuns.contains(session.id) { hiddenRuns.insert(session.id) }
             if parents[session.id] != parent { parents[session.id] = parent }
             if !isHidden(session) { keepSubSession(session, of: parent) }
             // A subagent's subagent: whose that one is, up to the session with a row.
@@ -3124,18 +3147,29 @@ final class Workspace {
     }
 
     /// Sessions found at work without a row (a subagent, maybe one sent off in the background,
-    /// whose start came while the app wasn't there to hear it): whose they are, so the session
-    /// they work for shows working.
+    /// whose start came while the app wasn't there to hear it): whose they are, so its asks and
+    /// its place under the session they work for are known.
     private func findParents(of active: Set<String>) {
         for id in active where session(id) == nil && parents[id] == nil {
             Task { await reload(id) }
         }
     }
 
+    /// What still runs for each session besides its own turn, by box, as each box says (never
+    /// worked out here: every client shows the same).
+    private(set) var background: [String: [String: SessionBackground]] = [:]
+
+    private func leftRunning(by id: String) -> SessionBackground? {
+        for list in background.values {
+            if let work = list[id] { return work }
+        }
+        return nil
+    }
+
     /// Subagents a session handed work to that are at it now (through subagents of subagents),
     /// such as those it sent off in the background, which go on after its own turn ends.
     func helpersAtWork(in id: String) -> Int {
-        running.count { $0 != id && !hiddenRuns.contains($0) && !reviewParts.contains($0) && root(of: $0) == id }
+        leftRunning(by: id)?.subagents ?? 0
     }
 
     /// Every session a bot oversees (`kuvo.by`) and that you haven't archived, under another one
@@ -3144,21 +3178,17 @@ final class Workspace {
         sessions.filter { WorksFor($0)?.bot == bot && !Self.isArchived($0) }
     }
 
-    /// Sessions under another that are kept out of sight (a review's parts, which their review
-    /// shows): never counted as its subagents at work.
-    private var hiddenRuns: Set<String> = []
-
-    /// The session works, itself, through subagents still at it, or with a command it left
-    /// running in the background: what its row, tab and bot show.
+    /// The session works, itself, or its box says something it left running still does (a subagent,
+    /// a command in the background): what its row, tab and bot show.
     func isWorking(_ id: String) -> Bool {
-        running.contains(id) || helpersAtWork(in: id) > 0 || shellJobs[id] != nil
+        running.contains(id) || leftRunning(by: id) != nil
     }
 
     // MARK: Commands running for agents
 
     /// The shell commands the engine runs for each session's agent, while they run: one left
-    /// running in the background after its turn ended keeps the session working, and shows over
-    /// its composer.
+    /// running in the background after its turn ended shows over its composer. (Whether the session
+    /// counts as working is the box's to say: `background`.)
     private(set) var shellJobs: [String: [ShellJob]] = [:]
     /// The commands that have run a moment, which the bar over the composer may show: the step
     /// that waits on a command claims it only once it has started, so for its first moment each

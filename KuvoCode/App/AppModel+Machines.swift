@@ -548,6 +548,8 @@ extension AppModel {
         connection.run("goal-plans") { [weak self] in await self?.goalPlans.follow(machine) }
         // What its bots do to the sessions they oversee, as they do it.
         connection.run("oversight") { [weak self] in await self?.botOversight.follow(machine) }
+        // What its sessions left running, as its box says.
+        connection.run("background") { [weak self] in await self?.workspace.followBackground(machine) }
         // Its projects as its box has them, changed from a phone too.
         connection.run("projects") { [weak self] in await self?.workspace.followProjects(on: machine) }
     }
