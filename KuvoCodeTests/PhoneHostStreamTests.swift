@@ -145,7 +145,8 @@ import Testing
     }
 
     /// What the real box's code (`macFront`, in `kuvo-link.js`, on Node) gives a phone asking
-    /// `path`, line by line as it comes: first its status, then the answer's lines.
+    /// `path`, as it comes: first its status, then each piece of the answer as a JSON string. (What
+    /// it says if it can't load shows here too.)
     private final class AskedOfTheBox: @unchecked Sendable {
         let process = Process()
         let said = OSAllocatedUnfairLock<[String]>(initialState: [])
@@ -159,8 +160,7 @@ import Testing
                 import { pathToFileURL } from "node:url";
                 const { macFront } = await import(pathToFileURL(\(String(reflecting: try #require(Bridge.scriptURL).path))).href);
                 for await (const piece of macFront()({ method: "GET", path: \(String(reflecting: path)), headers: {}, body: null }, { key: Buffer.alloc(32) })) {
-                  if (piece.head) console.log(piece.head.status);
-                  else process.stdout.write(Buffer.from(piece.body));
+                  console.log(piece.head ? piece.head.status : JSON.stringify(Buffer.from(piece.body).toString()));
                 }
                 """]
             process.environment = environment.merging(["KUVO_HOME": folder.path, "KUVO_BOX": "mac", "KUVO_BOTS": folder.appending(path: "bots").path,
@@ -168,10 +168,10 @@ import Testing
                                                        "KUVO_KEYS": folder.appending(path: "keys").path]) { given, _ in given }
             let out = Pipe()
             process.standardOutput = out
-            process.standardError = FileHandle.nullDevice
+            process.standardError = out
             try process.run()
             Task.detached { [said] in
-                for try await line in out.fileHandleForReading.bytes.lines where !line.isEmpty {
+                for try await line in out.fileHandleForReading.bytes.lines {
                     said.withLock { $0.append(line) }
                     TestPulse.beat()
                 }
@@ -204,12 +204,36 @@ import Testing
         keeper.host.useApp(address)
         let opened = try AskedOfTheBox("kuvo/usage/events", keeper: keeper.environment)
         defer { opened.stop() }
-        try await until { !opened.said.withLock { $0 }.isEmpty }
-        #expect(opened.said.withLock { $0 } == ["200"])
+        // At once, with the panel not up: an empty line, or what's on the way holds the head back.
+        try await until { opened.said.withLock { $0.count >= 2 } }
+        #expect(opened.said.withLock { $0 } == ["200", #""\n""#])
 
         panel.report = Data(#"{"providers":[],"refreshing":false}"#.utf8)
-        try await until { opened.said.withLock { $0.count == 2 } }
-        #expect(opened.said.withLock { $0.last } == #"{"providers":[],"refreshing":false}"#)
+        try await until { opened.said.withLock { $0.count >= 3 } }
+        #expect(opened.said.withLock { $0.last } == #""{\"providers\":[],\"refreshing\":false}\n""#)
+    }
+
+    /// Each stream a phone follows through the keeper holds a connection to the app: two phones'
+    /// worth of them, and the next thing a phone asks is still answered, not left waiting behind them.
+    @Test func manyFollowedStreamsDontHoldUpTheNextRequest() async throws {
+        let (engine, _) = try await engine { _ in HTTPResponse(status: 200) }
+        defer { done(engine) }
+        let keeper = try await keeper(of: host)
+        defer { keeper.host.stop() }
+
+        var streams: [(URLSession, URLSession.AsyncBytes)] = []
+        defer { for (session, _) in streams { session.invalidateAndCancel() } }
+        for _ in 0..<8 {
+            let session = URLSession(configuration: .ephemeral)
+            let (bytes, _) = try await session.bytes(for: try asked("kuvo/asks/events", at: keeper.environment))
+            var lines = bytes.lines.makeAsyncIterator()
+            #expect(try await lines.next() != nil)
+            streams.append((session, bytes))
+        }
+        let session = URLSession(configuration: .ephemeral)
+        defer { session.invalidateAndCancel() }
+        let (_, read) = try await session.data(for: try asked("kuvo/usage", at: keeper.environment))
+        #expect((read as? HTTPURLResponse)?.value(forHTTPHeaderField: "X-Kuvo-Answer") == "1")
     }
 
     @Test func aPhoneThatGoesStopsWhatItAskedBeforeAnyAnswer() async throws {
