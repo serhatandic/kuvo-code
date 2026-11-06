@@ -280,7 +280,7 @@ enum BrowserTools {
                   "url": ["type": "string", "description": "An https page where the user does it."],
                   "button": ["type": "string", "description": "The button's word for that page, like Add or Open Stripe."],
                   "site": ["type": "string", "description": "The service it's about, by its site, when there's no url."]], "required": ["text"]],
-                 "description": "What you checked the goal needs: tools, keys, sign-ins, services."],
+                 "description": "What you checked the goal needs: tools, keys, sign-ins, services, and what only the user can do (pay on their own account, sign in, make an account, hand over a key). Never a check to approve your work or to make a choice your research can settle: Start approves the plan."],
               "spend": ["type": "array", "items": ["type": "object", "properties": [
                   "what": ["type": "string"], "cap": ["type": "number"], "currency": ["type": "string", "description": "USD by default."],
                   "per": ["type": "string", "enum": ["day", "week", "month", "goal"], "description": "The period the cap is for: goal (the whole goal) by default."]], "required": ["what", "cap"]],
@@ -288,7 +288,7 @@ enum BrowserTools {
               "projects": ["type": "array", "items": ["type": "string"], "description": "New projects the plan makes, by name, or by the folder the user named for one, as a full path (~/Desktop/tidepool): made with make_project, without asking, once the goal starts."],
               "ends": ["type": "string", "description": "An end the user named, as a date and time (2026-11-30T18:00). Leave it out otherwise."],
               "digest": ["type": "string", "enum": ["day", "week", "none"], "description": "How often the user hears how it goes: by the plan's size unless they said."]], required: ["goal", "steps"]),
-        tool("goal_progress", "During your goal: mark its steps as they start, move and end (with progress where you can measure it), add steps as the plan changes, keep what only the user can fix (or a judgment call, or something outside the plan) as waiting, report what you spent, and say what you're still watching. It tells you whether the user is here.",
+        tool("goal_progress", "During your goal: mark its steps as they start, move and end (with progress where you can measure it), add steps as the plan changes, keep what only the user can fix (or a judgment call, or something outside the plan) as waiting, keep a call you made yourself (decided), report what you spent, and say what you're still watching. It tells you whether the user is here.",
              ["steps": ["type": "array", "items": ["type": "object", "properties": [
                   "step": ["type": "integer", "description": "The step's number, from 1."],
                   "state": ["type": "string", "enum": ["todo", "doing", "done", "waiting", "paused", "skipped"]],
@@ -311,6 +311,12 @@ enum BrowserTools {
                   "site": ["type": "string", "description": "The service it's about, by its site, when there's no url."],
                   "app": ["type": "string", "description": "The app on the computer it's done in, by its own name, like Xcode."],
                   "step": ["type": "integer", "description": "The step it holds up, by number: it's settled once you go on with that step."]], "required": ["kind", "text"]],
+              "decided": ["type": "object", "properties": [
+                  "text": ["type": "string", "description": "The call, as a question, like \"Which hosting?\"."],
+                  "choice": ["type": "string", "description": "What you chose, in a few words."],
+                  "why": ["type": "string", "description": "Why, in a few words, like \"free tier covers it\"."],
+                  "options": ["type": "array", "items": ["type": "string"], "description": "The choices there were, yours among them: the user picks another from these."]], "required": ["text", "choice"],
+                 "description": "A call you made yourself, kept for the user to see; they may change it later."],
               "spent": ["type": "array", "items": ["type": "object", "properties": ["what": ["type": "string"], "amount": ["type": "number"]], "required": ["what", "amount"]], "description": "What you spent, by the plan's spend line."],
               "watching": ["type": "array", "items": ["type": "string"], "description": "What you're still watching, like \"DNS for driftwood.coffee\": all of it, as it is now."]]),
         tool("may_spend", "During your goal: whether a purchase fits the plan's cap for it, in its period now. Ask before every purchase.",

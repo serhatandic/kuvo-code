@@ -7,7 +7,7 @@ import { processRuns as runs } from "../../shared/platform";
 import type { BridgeRecord, EngineRecord, Target } from "../../shared/records";
 import type { VaultGrant, VaultItem } from "../../shared/routes/vault";
 import { listBots } from "../bots/list";
-import { engineGet, type EngineAnswer } from "../engine/client";
+import { engineGet, readBridgeFile, readEngineFile, type EngineAnswer } from "../engine/client";
 import type { EngineSession } from "../engine/sessions";
 import { worksFor } from "../work/tree";
 import { readGrants } from "./store";
@@ -28,6 +28,10 @@ export interface Caller {
   seat?: boolean;
   /** That seat's group chat, where its asks show. */
   group?: string;
+  /** Its conversation is on Autopilot: nothing asks you for it. */
+  autopilot?: boolean;
+  /** A command of yours, not an agent's (by the folder it's in): Autopilot has no say in it. */
+  yours?: boolean;
 }
 
 async function sessionAt(targets: Target[], id: string): Promise<EngineSession | null> {
@@ -50,11 +54,16 @@ export async function callerOf(session: unknown, readEngine: () => EngineRecord,
     const bridge = readBridge();
     if (bridge?.port && bridge?.password && runs(bridge.pid, "kuvo-agents")) targets.push(bridge);
   } catch {}
+  // (Up through its subagents, and a coding agent's engine run, Auto's, to the conversation it runs for.)
+  const above = (each: EngineSession | null) => {
+    const runsFor = each?.metadata?.kuvo?.engineFor;
+    return each?.parentID ?? (typeof runsFor === "string" ? runsFor : null);
+  };
   let current = await sessionAt(targets, session);
-  for (let step = 0; step < 5 && current?.parentID; step++) current = (await sessionAt(targets, current.parentID)) ?? current;
+  for (let step = 0; step < 5 && above(current); step++) current = (await sessionAt(targets, above(current)!)) ?? current;
   const root = current?.id ?? session;
   // (A conversation whose root the engine didn't say may be a seat's: it asks you, as one does.)
-  const unsure = !!current?.parentID;
+  const unsure = !!above(current);
   // (A seat is its bot's, by the chat's mark on it: its asks name the bot, and its pause holds.
   // So is a session the bot started for its work, by the box's mark on it.)
   const seat = current?.metadata?.kuvo?.seat as { bot?: unknown; group?: unknown } | undefined;
@@ -66,11 +75,37 @@ export async function callerOf(session: unknown, readEngine: () => EngineRecord,
   return {
     session,
     root,
+    ...(current?.metadata?.kuvo?.autopilot === true ? { autopilot: true } : {}),
     ...(current?.title ? { sessionName: current.title } : {}),
     ...(folder ? { folder: path.resolve(folder) } : {}),
     ...(bot ? { bot: bot.id, botName: bot.name } : {}),
     ...(seat || unsure ? { seat: true, ...(typeof seat?.group === "string" && seat.group ? { group: seat.group } : {}) } : {}),
   };
+}
+
+/** How often an ask that's waiting looks whether its conversation went on Autopilot meanwhile. */
+const AUTOPILOT_LOOK = 5_000;
+
+/** `ask`, waiting on you, handed a signal that also goes once the conversation `session` is part of
+ * goes on Autopilot (from any client), where nothing waits for you; and whether it did. */
+export async function untilOnAutopilot<T>(session: string | undefined, signal: AbortSignal | undefined, ask: (signal?: AbortSignal) => Promise<T>): Promise<{ value: T; onAutopilot: boolean }> {
+  if (!session) return { value: await ask(signal), onAutopilot: false };
+  const stop = new AbortController();
+  let onAutopilot = false;
+  let looking = false;
+  const look = setInterval(async () => {
+    if (looking) return;
+    looking = true;
+    const who = await callerOf(session, readEngineFile, readBridgeFile).catch((): Caller => ({}));
+    looking = false;
+    if (who.autopilot) { onAutopilot = true; stop.abort(); }
+  }, AUTOPILOT_LOOK);
+  try {
+    const value = await ask(signal ? AbortSignal.any([signal, stop.signal]) : stop.signal);
+    return { value, onAutopilot };
+  } finally {
+    clearInterval(look);
+  }
 }
 
 /** A JSON value with its keys in order, to compare two. */

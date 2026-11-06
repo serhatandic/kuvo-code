@@ -55,6 +55,16 @@ import Testing
         #expect(stepLines(rows) == 1)
     }
 
+    @Test func autopilotsInstructionsLeaveNoLineInTheConversation() async throws {
+        defer { engine.stop() }
+        let told: [String: Any] = ["id": "msg_03", "type": "system", "time": ["created": 3], "text": "This conversation runs on Autopilot.",
+                                   "description": "Instructions updated: api/kuvo.autopilot, core/instructions",
+                                   "metadata": ["notice": "instructions", "instructionSources": ["api/kuvo.autopilot", "core/instructions"]]]
+        let rows = try await rows(between: told)
+        #expect(stepLines(rows) == 1)
+        #expect(!rows.contains { if case .notice = $0 { true } else { false } })
+    }
+
     @Test func aNoticeThatShowsStillSplitsThem() async throws {
         defer { engine.stop() }
         let ended: [String: Any] = ["id": "msg_03", "type": "synthetic", "time": ["created": 3], "text": "npm run dev exited with code 0",

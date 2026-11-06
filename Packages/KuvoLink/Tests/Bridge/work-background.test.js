@@ -81,7 +81,13 @@ const engine = http.createServer((request, response) => {
       }
       return reply({ data: job });
     }
-    if (/\/(permission|form)$/.test(url)) return reply({ data: [] });
+    if (/\/(permission|form)$/.test(url)) return reply({ data: state.forms ?? [] });
+    const answered = url.match(/^\/api\/session\/[^/]+\/form\/([^/]+)\/reply$/);
+    if (answered) {
+      (state.answered ??= []).push(answered[1]);
+      state.forms = (state.forms ?? []).filter(each => each.id !== answered[1]);
+      return reply({});
+    }
     const one = url.match(/^\/api\/session\/([^/?]+)(\/[^?]*)?/);
     const id = one && decodeURIComponent(one[1]);
     if (one && !one[2] && state.unreachable) return reply({ message: "Busy." }, 500);
@@ -922,5 +928,47 @@ test("what you approved or answered is someone asking: it sets a stopped session
   boxWord();
   await watch(delivered());
   assert.deepEqual(state.interrupted, [], "an archived one is stopped only for what it did on its own");
+});
+
+test("on Autopilot: a question that goes ahead isn't told up, what it ends with is, once; a choice you change sets it going and is told", async () => {
+  const time = clock();
+  const watch = watcher(time);
+  await watch.caughtUp;
+  state.sessions.ses_tests.metadata.kuvo.autopilot = true;
+  const prompted = () => state.prompts.filter(each => each.to === "ses_pixel").map(each => each.text);
+  const form = {
+    id: "frm_1",
+    sessionID: "ses_tests",
+    title: "House blend",
+    metadata: { kind: "question" },
+    fields: [{ key: "roast", type: "string", title: "Which roast?", required: true, options: [{ value: "r0", label: "Light" }, { value: "r1", label: "Warm (Recommended)", description: "Suits the pastries" }] }],
+  };
+  asked();
+  state.active.add("ses_tests");
+  await watch(started());
+  await watch(delivered());
+  state.forms = [form];
+  await watch({ type: "form.created", data: { form } });
+  await time.pass(5 * SECONDS);
+  assert.deepEqual(state.answered, ["frm_1"], "the box went ahead on what it marked");
+  assert.deepEqual(prompted(), [], "and its starter isn't woken for that");
+  said("Went with the warm roast. Left undone: paying.");
+  state.active.delete("ses_tests");
+  await watch(ended());
+  await time.pass(5 * SECONDS);
+  assert.equal(finished().length, 1);
+  assert.match(finished()[0], /Left undone: paying/);
+  // You change its call: the box writes to it. That's you, not it: told however short, even if stopped.
+  link.noteStopped("ses_tests");
+  await watch(started());
+  state.messages.ses_tests.unshift({ id: `msg_${state.counter + 1}`, type: "user", text: '[Decision changed] For "Which roast?" the user picked "Light", not "Warm" as you decided.', metadata: { kuvo: { note: { from: "Autopilot", line: "You picked Light" } } }, time: { created: at() } });
+  await watch(delivered());
+  assert.deepEqual(state.interrupted, []);
+  assert.equal(link.readStopped().ses_tests, undefined);
+  said("Light it is.");
+  await watch(ended());
+  await time.pass(5 * SECONDS);
+  assert.equal(finished().length, 2);
+  assert.match(finished()[1], /Light it is/);
 });
 

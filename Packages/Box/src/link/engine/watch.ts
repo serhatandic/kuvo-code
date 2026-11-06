@@ -15,6 +15,7 @@ import { goalHolds, settleGoalHolds } from "../work/goals";
 import { workWatcher } from "../work/wakes";
 import { reviewPermission } from "../work/reviewing";
 import { forgetReviews } from "../work/reviewer";
+import { forgetDecided } from "../work/autopilot";
 import { backUpSession } from "../work/backups";
 import { markConversation, noteFullAccess, noteFullAccessAtWork } from "../work/full";
 import { queueWatcher, scanQueues, type ScanFound } from "./queue";
@@ -343,11 +344,12 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
         if (event.type === "session.deleted" && typeof event.data?.sessionID === "string") {
           letSessionFilesGo(attachmentsLooked, event.data.sessionID);
           forgetReviews(event.data.sessionID);
+          forgetDecided(event.data.sessionID);
         }
         learn(source);
         steer?.(event);
         queue?.(event as QueueEvent);
-        followWork?.(event);
+        const followed = followWork?.(event);
         // A conversation in Auto: what its agent's file tools ask outside its folder, reviewed (and
         // told to your phones below only where it isn't: the reviewer never leaves one for you).
         const reviewed = work && event.type === "permission.asked" ? reviewPermission(source, event, connection.signal).catch(() => null) : null;
@@ -371,8 +373,9 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
           if (notice) tell(notice);
           continue;
         }
-        (reviewed ?? Promise.resolve(null))
-          .then(verdict => (verdict ? null : noticeFor(event, route => engineGet(source, route))))
+        // (What it asks, once the box has looked: on Autopilot it may have gone ahead.)
+        Promise.all([reviewed, event.type === "form.created" ? followed : null])
+          .then(([verdict]) => (verdict ? null : noticeFor(event, (route, folder) => engineGet(source, route, folder))))
           .then(notice => notice && tell(notice))
           .catch(() => {});
       }

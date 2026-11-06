@@ -29,6 +29,7 @@ import { pluginSearchRoute } from "../areas/plugins";
 import { programsRoute } from "../areas/programs";
 import { backupsRoute } from "../areas/backups";
 import { approvalRoute, SESSION_APPROVAL_ROUTE, SESSION_DECISIONS_ROUTE } from "../areas/approval";
+import { autopilotRoute, SESSION_AUTOPILOT_ROUTE } from "../areas/autopilot";
 import { sandboxRoute } from "../areas/sandbox";
 import { providerModelsRoute } from "../areas/providers";
 import { answerProjects } from "../areas/projects";
@@ -83,6 +84,7 @@ const ROUTES: (Route | Route<RegExpMatchArray>)[] = [
   { when: route => route === "kuvo/agent-tools", answer: agentToolsRoute },
   { when: route => route === "kuvo/sessions", answer: startRoute },
   { when: route => route === "kuvo/approval" || SESSION_APPROVAL_ROUTE.test(route) || SESSION_DECISIONS_ROUTE.test(route), answer: approvalRoute },
+  { when: route => SESSION_AUTOPILOT_ROUTE.test(route), answer: autopilotRoute },
   { when: route => route.match(QUEUE_ROUTE), answer: queueRoute },
   { when: route => route === "kuvo/search", answer: searchRoute },
   { when: route => route === "kuvo/git/backups" || route === "kuvo/git/backups/restore", answer: backupsRoute },

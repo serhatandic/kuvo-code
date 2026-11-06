@@ -193,6 +193,11 @@ export interface QuestionAsk {
   title: string
   fields: FormField[]
   toolCallID?: string
+  /** Told what its agent should hear, where its box turns the question down with words. */
+  declined?: (words: string) => void
+  /** What it is, where it isn't the agent's own question (an MCP server's form, say): clients and
+   * Autopilot go by `kind`, and a form that isn't a question never goes ahead on its own. */
+  metadata?: Record<string, unknown>
   /** The agent settled it itself (it timed out there): it's taken back, unanswered. */
   signal?: AbortSignal
 }

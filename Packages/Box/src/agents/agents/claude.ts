@@ -1847,8 +1847,9 @@ class ClaudeThread implements Thread {
         options: (question.options ?? []).map((option) => ({ value: option.label, label: option.label, description: option.description })),
         custom: true,
       }))
-      const answer = await hooks.question({ title: questions.length === 1 ? questions[0].header ?? "Question" : "Questions", fields, toolCallID: toolUseID })
-      if (!answer) return { behavior: "deny", message: "The user dismissed the question.", toolUseID }
+      let declinedWords: string | undefined
+      const answer = await hooks.question({ title: questions.length === 1 ? questions[0].header ?? "Question" : "Questions", fields, toolCallID: toolUseID , declined: (words) => { declinedWords = words } })
+      if (!answer) return { behavior: "deny", message: declinedWords ?? "The user dismissed the question.", toolUseID }
       const answers: Record<string, string> = {}
       questions.forEach((question, index) => {
         const value = answer[`q${index}`]

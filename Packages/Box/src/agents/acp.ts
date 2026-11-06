@@ -908,7 +908,10 @@ export class AcpThread implements Thread {
         if (String(call.toolCallId ?? "").startsWith("interaction_")) {
           const answer = await active.hooks.question({
             title: "Question",
+            toolCallID: call.toolCallId,
             fields: [{ key: "answer", title: "Question", description: call.title ?? "", required: true, type: "string", options: options.map((option) => ({ value: option.optionId, label: option.name ?? option.optionId })) }],
+            // (It can only hear cancelled, so its step says what became of it.)
+            declined: (words) => { (active.declined ??= new Map()).set(call.toolCallId, words) },
           })
           const chosen = answer?.answer
           return chosen ? { outcome: { outcome: "selected", optionId: String(chosen) } } : { outcome: { outcome: "cancelled" } }
@@ -972,15 +975,16 @@ export class AcpThread implements Thread {
       case "elicitation/create": {
         // A form the agent (or a tool of its) asks you to fill in, or a page to open.
         if (!active) return { action: "decline" }
+        const metadata = { kind: "mcp-elicitation", server: this.name }
         if (params?.mode === "url" && params.url) {
-          const answer = await active.hooks.question({ title: `${this.name} asks`, fields: [{ key: "open", title: params.message ?? "Open this page to go on.", type: "external", url: params.url }] })
+          const answer = await active.hooks.question({ title: `${this.name} asks`, metadata, fields: [{ key: "open", title: params.message ?? "Open this page to go on.", type: "external", url: params.url }] })
           return { action: answer ? "accept" : "decline" }
         }
         const schema = params?.requestedSchema ?? {}
         const required = new Set<string>(Array.isArray(schema.required) ? schema.required : [])
         const fields = Object.entries((schema.properties ?? {}) as Record<string, any>).map(([key, field]) => elicitationField(key, field, required.has(key)))
         if (fields[0] && params?.message) fields[0] = { ...fields[0], description: [params.message, fields[0].description].filter(Boolean).join("\n\n") }
-        const answer = await active.hooks.question({ title: `${this.name} asks`, fields: fields.length ? fields : [{ key: "ok", title: params?.message ?? "Go on?", type: "boolean", required: true }] })
+        const answer = await active.hooks.question({ title: `${this.name} asks`, metadata, fields: fields.length ? fields : [{ key: "ok", title: params?.message ?? "Go on?", type: "boolean", required: true }] })
         if (!answer) return { action: "decline" }
         const content: Record<string, unknown> = {}
         for (const [key, field] of Object.entries((schema.properties ?? {}) as Record<string, any>)) {
@@ -1022,6 +1026,8 @@ export class AcpThread implements Thread {
 // MARK: Tools, as the app knows them
 
 function kuvoTool(call: any): { name: string; input: Record<string, unknown> } {
+  // Antigravity's question (`interaction_…`), which it names only by its title: a question, as any agent's.
+  if (String(call.toolCallId ?? "").startsWith("interaction_")) return { name: "question", input: { questions: [{ question: call.title ?? "" }] } }
   const raw = call.rawInput ?? {}
   const path = call.locations?.[0]?.path ?? raw.path ?? raw.file_path ?? raw.filePath
   const command = Array.isArray(raw.command) ? raw.command.join(" ") : raw.command ?? raw.CommandLine ?? raw.command_line ?? raw.commandLine

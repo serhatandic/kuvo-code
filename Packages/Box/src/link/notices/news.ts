@@ -8,6 +8,8 @@ import { readProjects } from "../areas/projects";
 import { readRemovedWorktrees, readWorktrees } from "../areas/worktree-records";
 import { engineGet } from "../engine/client";
 import { isHiddenRun } from "../engine/sessions";
+import { sessionsWaitingOnServer } from "../work/answers";
+import { isAutopilot } from "../work/autopilot";
 import { IS_MAC, K } from "../home";
 import { masked, showsAll } from "./mask";
 import type { Fields } from "../../shared/json";
@@ -44,7 +46,7 @@ export interface EngineForm {
   id: string;
   sessionID: string;
   title?: string;
-  metadata?: { kind?: string; message?: string; server?: string };
+  metadata?: { kind?: string; message?: string; server?: string; tool?: { messageID?: string; id?: string } };
   fields?: FormField[];
 }
 
@@ -79,7 +81,7 @@ interface EngineMessage {
 }
 
 /** Asks the engine `route`: its JSON, whatever came. */
-export type EngineAsk = (route: string) => Promise<unknown>;
+export type EngineAsk = (route: string, folder?: string) => Promise<unknown>;
 
 // Markdown's marks taken off, not the words (as ReplyPreview does on the Mac): headings and
 // quotes at a line's start, emphasis around words, code ticks, a link's address.
@@ -155,7 +157,7 @@ const singleQuestion = (form: EngineForm): FormField | null => {
 // What a form asks, as the Mac's notification says it.
 export function describeForm(form: EngineForm): string {
   const kind = form.metadata?.kind;
-  if (kind === "mcp-elicitation") return form.metadata?.message || "Needs your answer.";
+  if (kind === "mcp-elicitation") return form.metadata?.message || form.fields?.[0]?.description || form.fields?.[0]?.title || "Needs your answer.";
   if (kind !== "question") return "Needs your answer.";
   const fields = (form.fields ?? []).filter(field => !field.hidden && !field.when?.length);
   if (fields.length === 1 && fields[0].type === "string") return fields[0].description || fields[0].title || form.title || "Has a question for you.";
@@ -179,6 +181,13 @@ export function projectNameOf(directory: string | undefined): string | undefined
 
 // The notification for an engine event, or null for one that isn't news. `get(route)` asks the
 // engine.
+/** Whether the engine still lists `form` as asked: when it can't say, it's taken as asked. */
+export const stillAsked = (form: EngineForm, get: EngineAsk, folder?: string): Promise<boolean> =>
+  get(`api/session/${encodeURIComponent(form.sessionID)}/form`, folder).then(answer => {
+    const forms = (answer as EngineAnswer<EngineForm[]> | null)?.data;
+    return !Array.isArray(forms) || forms.some(each => each?.id === form.id);
+  }, () => true);
+
 export async function noticeFor(event: EngineEvent, get: EngineAsk): Promise<Notice | null> {
   const data = event.data ?? {};
   // (As the engine answers it: a session it has, whole; one it hasn't is an error.)
@@ -191,20 +200,8 @@ export async function noticeFor(event: EngineEvent, get: EngineAsk): Promise<Not
   };
   // A form an MCP server asks for is filed under no session ("global"): it's the running session
   // of its folder with a tool of that server under way, as the Mac finds it; null for none.
-  const waitingOn = async (server: string | undefined, folder: string | undefined): Promise<string | null> => {
-    if (!server) return null;
-    const active = (await get("api/session/active").catch(() => null) as EngineAnswer<string[] | Record<string, unknown>> | null)?.data ?? {};
-    const name = String(server).replace(/[^\p{L}\p{N}_-]/gu, "_");
-    for (const id of Array.isArray(active) ? active : Object.keys(active)) {
-      const candidate = await session(id).catch(() => null);
-      if (!candidate || (folder && candidate.location?.directory !== folder)) continue;
-      const page = await get(`api/session/${encodeURIComponent(id)}/message?limit=8&order=desc`).catch(() => null) as EngineAnswer<EngineMessage[]> | null;
-      const steps = (page?.data ?? []).filter(message => message.type === "assistant").flatMap(message => message.content ?? []);
-      if (steps.some(block => block.type === "tool" && block.state?.status === "running"
-        && (block.name?.startsWith(name + "_") || (block.name === "execute" && String(block.state.input?.code ?? "").includes(server))))) return id;
-    }
-    return null;
-  };
+  const waitingOn = async (server: string | undefined, folder: string | undefined): Promise<string | null> =>
+    server ? (await sessionsWaitingOnServer(String(server), folder, get))[0] ?? null : null;
   // `answerable` false: its buttons would answer what it can't show, so it has none, and you
   // answer in the conversation. `untitled`: what one without a title is called.
   const about = (shown: EngineSession, category: NoticeCategory, body: string, extra: NoticeData = {}, { answerable = true, untitled = "New Session" }: { answerable?: boolean; untitled?: string } = {}): Notice => {
@@ -233,6 +230,9 @@ export async function noticeFor(event: EngineEvent, get: EngineAsk): Promise<Not
       if (!asker) return null;
       const where = await shown(asker);
       if (isHiddenRun(where)) return null;
+      // On Autopilot nothing waits for you, unless it's still asked once the box has looked (its goal
+      // paused, or the engine didn't take the answer).
+      if (isAutopilot(where) && !await stillAsked(form, get, event.location?.directory)) return null;
       const body = describeForm(form);
       const choices = (singleQuestion(form)?.options ?? []).map(option => String(option?.label ?? ""));
       return about(where, "question", body, { request: form.id, ...(where.id !== form.sessionID ? { requestSession: form.sessionID } : {}) },

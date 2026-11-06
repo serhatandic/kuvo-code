@@ -65,6 +65,9 @@ struct Composer: View {
     var approvalShown: ApprovalShown?
     /// Opens Auto's Decisions here (nil: none to open, as for a new conversation).
     var onDecisions: (() -> Void)?
+    /// Autopilot, as the Mode menu offers it (nil: not here); on, its chip shows before Mode's.
+    var autopilot: AutopilotChoice?
+    var onSelectAutopilot: (Bool) -> Void = { _ in }
     /// Auto's Decisions, open over the mode chip.
     var showsDecisions: Binding<Bool> = .constant(false)
     var decisions: AnyView?
@@ -351,8 +354,13 @@ struct Composer: View {
                                         .disabled(isOffline)
                                         .transition(.opacity)
                                 }
+                                if showsMode && autopilot?.on == true {
+                                    AutopilotChip { onSelectAutopilot(false) }
+                                        .disabled(isOffline)
+                                        .transition(.opacity)
+                                }
                                 if showsMode {
-                                    ModeChip(approval: approval, shown: approvalShown, onDecisions: onDecisions, onSelectApproval: onSelectApproval)
+                                    ModeChip(approval: approval, shown: approvalShown, onDecisions: onDecisions, autopilot: autopilot, onSelectAutopilot: onSelectAutopilot, onSelectApproval: onSelectApproval)
                                         .disabled(isOffline)
                                 }
                                 if showsModel {

@@ -434,7 +434,7 @@ export function handler(context: Context) {
               return json({})
             }
             if (method === "DELETE") {
-              sessions.replyForm(id, c, null)
+              sessions.replyForm(id, c, null, url.searchParams.get("message") ?? undefined)
               return json({})
             }
             break

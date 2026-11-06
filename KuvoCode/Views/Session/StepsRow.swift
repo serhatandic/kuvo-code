@@ -29,6 +29,16 @@ struct StepsRow: View {
     let directory: String
     @AppStorage(StepsDetail.key) private var detail = StepsDetail.summary
     @State private var isExpanded = false
+    @Environment(\.autopilotCalls) private var autopilotCalls
+
+    /// The calls Autopilot made where these steps asked: shown under their line, folded or not.
+    private func decided(_ done: [Message.Content]) -> [AutopilotShown.Call] {
+        guard !autopilotCalls.isEmpty else { return [] }
+        return done.flatMap { block -> [AutopilotShown.Call] in
+            guard case .tool(let call) = block else { return [] }
+            return autopilotCalls[call.id] ?? []
+        }
+    }
 
     var body: some View {
         // The one under way, as it is; those before it in the line.
@@ -53,18 +63,28 @@ struct StepsRow: View {
                     .buttonStyle(TextButtonStyle(outset: true))
                     .help(isExpanded ? "Hide the steps" : "Show each step")
                     // What they were, read with how long they took.
-                    .accessibilityLabel(timed(done) ? line(done) + ": " + Self.summary(of: done) : line(done))
+                    .accessibilityLabel(timed(done) ? line(done) + ": " + Self.summary(of: done, decided: Set(autopilotCalls.keys)) : line(done))
+                    // What it decided on Autopilot meanwhile: not folded away with the rest.
+                    let decided = decided(done)
+                    if !decided.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            // (Several of a list of questions say which is which.)
+                            ForEach(decided) { call in DecidedLine(call: call, saysQuestion: decided.count > 1) }
+                        }
+                        .padding(.top, 8)
+                    }
                     if isExpanded {
                         // Together, so they fold as one, the space above them too.
                         VStack(alignment: .leading, spacing: 10) {
                             // What they were, when the line says only how long they took.
                             if timed(done) {
-                                Text(Self.summary(of: done))
+                                Text(Self.summary(of: done, decided: Set(autopilotCalls.keys)))
                                     .font(.callout)
                                     .foregroundStyle(.tertiary)
                             }
                             ForEach(Array(done.enumerated()), id: \.offset) { _, block in step(block) }
                         }
+                        .environment(\.autopilotCallsShownAbove, !decided.isEmpty)
                         .padding(.top, 10)
                         .transition(.fold)
                     }
@@ -93,7 +113,7 @@ struct StepsRow: View {
     /// many while it works, and only how many in Minimal.
     private func line(_ done: [Message.Content]) -> String {
         if detail == .minimal || isLive { return Self.count(done) }
-        return StepTime.seconds(of: done).map { "Worked for " + MessageTime.duration($0) + Self.outcomes(of: done) } ?? Self.summary(of: done)
+        return StepTime.seconds(of: done).map { "Worked for " + MessageTime.duration($0) + Self.outcomes(of: done) } ?? Self.summary(of: done, decided: Set(autopilotCalls.keys))
     }
 
     private func timed(_ done: [Message.Content]) -> Bool {
@@ -140,7 +160,7 @@ struct StepsRow: View {
     }
 
     /// "Thought for 40s, ran 6 commands, read 3 files (1 failed)", or "(1 stopped)".
-    static func summary(of blocks: [Message.Content]) -> String {
+    static func summary(of blocks: [Message.Content], decided: Set<String> = []) -> String {
         let calls = blocks.compactMap { if case .tool(let call) = $0 { call } else { nil } }
         let thought = blocks.reduce(0.0) { total, block in
             guard case .reasoning(let text) = block, let start = text.time?.created, let end = text.time?.completed else { return total }
@@ -150,7 +170,7 @@ struct StepsRow: View {
         if blocks.contains(where: { if case .reasoning = $0 { true } else { false } }) {
             parts.append("thought for " + MessageTime.duration(max(1, Int(thought))))
         }
-        if !calls.isEmpty { parts.append(StepsSummary.summary(of: calls, capitalized: false)) }
+        if !calls.isEmpty { parts.append(StepsSummary.summary(of: calls, capitalized: false, decided: decided)) }
         let text = parts.joined(separator: ", ") + outcomes(of: blocks)
         return text.prefix(1).uppercased() + text.dropFirst()
     }
@@ -158,7 +178,7 @@ struct StepsRow: View {
     /// " (1 failed)", or "(1 stopped)" for one you stopped (or that quitting cut off), as its own
     /// row says; nothing when they all went through.
     static func outcomes(of blocks: [Message.Content]) -> String {
-        let ended = blocks.compactMap { if case .tool(let call) = $0, case .failed(_, let error, _, _) = call.state { error } else { nil } }
+        let ended = blocks.compactMap { if case .tool(let call) = $0, !call.isSetAsideOnAutopilot, case .failed(_, let error, _, _) = call.state { error } else { nil } }
         let stopped = ended.count(where: \.isInterruption)
         let outcomes = [(ended.count - stopped, "failed"), (stopped, "stopped")].filter { $0.0 > 0 }.map { "\($0.0) \($0.1)" }
         return outcomes.isEmpty ? "" : " (" + outcomes.joined(separator: ", ") + ")"
@@ -168,11 +188,12 @@ struct StepsRow: View {
 /// Tool calls in words, each kind once, in the order first done: "Searched the web 4 times,
 /// fetched a page".
 enum StepsSummary {
-    static func summary(of steps: [Message.ToolCall], capitalized: Bool = true) -> String {
+    /// `decided`: the calls Autopilot decided, which asked nobody.
+    static func summary(of steps: [Message.ToolCall], capitalized: Bool = true, decided: Set<String> = []) -> String {
         var order: [String] = []
         var counts: [String: Int] = [:]
         for step in steps {
-            let kind = kind(of: step.name)
+            let kind = step.isSetAsideOnAutopilot ? "setAside" : decided.contains(step.id) ? "decided" : kind(of: step.name)
             if counts[kind] == nil { order.append(kind) }
             counts[kind, default: 0] += 1
         }
@@ -263,6 +284,8 @@ enum StepsSummary {
         case "browser": return many ? "used the browser (\(count) steps)" : "used the browser"
         case "subagent": return many ? "handed off \(count) tasks" : "handed off a task"
         case "question": return many ? "asked you \(count) questions" : "asked you a question"
+        case "setAside": return many ? "set \(count) questions aside" : "set a question aside"
+        case "decided": return many ? "decided \(count) questions" : "decided a question"
         case "show": return many ? "showed you \(count) things" : "showed you something"
         case "message": return many ? "wrote to other agents \(count) times" : "wrote to another agent"
         case "agents": return "looked up the other agents"

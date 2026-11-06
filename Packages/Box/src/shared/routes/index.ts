@@ -5,6 +5,7 @@
 import { object, type RouteShape, string } from "../shape";
 import { APPROVAL_ROUTES } from "./approval";
 import { ARTIFACT_ROUTES } from "./artifacts";
+import { AUTOPILOT_ROUTES } from "./autopilot";
 import { ASK_ROUTES } from "./asks";
 import { BOT_ROUTES } from "./bots";
 import { BOX_ROUTES } from "./box";
@@ -37,6 +38,7 @@ export const PASSED_ON = ["api/", "kuvo/agents/"];
 export const ROUTES: RouteShape[] = [
   ...APPROVAL_ROUTES,
   ...ARTIFACT_ROUTES,
+  ...AUTOPILOT_ROUTES,
   ...ASK_ROUTES,
   ...BOT_ROUTES,
   ...BOX_ROUTES,

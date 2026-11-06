@@ -45,7 +45,11 @@ final class AppModel {
     /// What the agent asks you for while it browses: sign-ins, codes, steps only you can do.
     let browserAsks = BrowserAsks()
     /// The panel's browser as MCP tools for the agent.
-    @ObservationIgnored private(set) lazy var browserTools = BrowserToolServer(agent: BrowserAgent(utilities: utilities, asks: browserAsks))
+    @ObservationIgnored private(set) lazy var browserTools: BrowserToolServer = {
+        browserAsks.isOnAutopilot = { [weak workspace] id in workspace?.isOnAutopilot(id) == true }
+        workspace.autopilotMayHaveChanged = { [weak browserAsks] in browserAsks?.leaveUndone() }
+        return BrowserToolServer(agent: BrowserAgent(utilities: utilities, asks: browserAsks))
+    }()
     let workspace = Workspace()
     /// The main window's tabs; one window, so one set. Stores open tabs in it, also while the
     /// window is closed.

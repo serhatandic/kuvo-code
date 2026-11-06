@@ -66,13 +66,18 @@ function body(request) {
 // An engine with its conversations (`{id, title, directory, messages}`), as its API exports, imports
 // and deletes them.
 async function engineWith(sessions) {
-  const engine = { sessions: new Map(sessions.map(each => [each.id, each])), prompts: [], cursors: new Map(), active: new Set() };
+  const engine = { sessions: new Map(sessions.map(each => [each.id, each])), prompts: [], entries: [], cursors: new Map(), active: new Set() };
   const server = http.createServer(async (request, response) => {
     const given = await body(request);
     const url = new URL(request.url, "http://x");
     const send = (status, data) => response.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify({ data }));
     if (!authorized(request)) return response.writeHead(401).end();
-    const listed = each => ({ id: each.id, title: each.title, directory: each.directory, location: { directory: each.directory }, time: { updated: 1 } });
+    const listed = each => ({ id: each.id, title: each.title, directory: each.directory, location: { directory: each.directory }, time: { updated: 1 }, ...(each.metadata ? { metadata: each.metadata } : {}) });
+    const entry = url.pathname.match(/^\/api\/experimental\/session\/([^/]+)\/instructions\/entries\/([^/]+)$/);
+    if (entry) {
+      if (request.method === "PUT") engine.entries.push({ session: entry[1], key: entry[2], value: given.value });
+      return send(200, true);
+    }
     if (url.pathname === "/api/session" && request.method === "GET") {
       // A conversation's subagents', a hundred at a time, as the engine pages them; or the latest.
       const parent = url.searchParams.get("parentID") ?? engine.cursors.get(url.searchParams.get("cursor"));
@@ -90,13 +95,13 @@ async function engineWith(sessions) {
     if (url.pathname === "/api/model") return send(200, []);
     if (url.pathname === "/api/experimental/session/import" && request.method === "POST") {
       if (engine.sessions.has(given.info?.id)) return response.writeHead(409, { "content-type": "application/json" }).end(JSON.stringify({ message: "It's there already." }));
-      engine.sessions.set(given.info.id, { id: given.info.id, title: given.info.title, directory: given.location.directory, messages: given.messages, parent: given.info.parentID });
+      engine.sessions.set(given.info.id, { id: given.info.id, title: given.info.title, directory: given.location.directory, messages: given.messages, ...(given.info.metadata ? { metadata: given.info.metadata } : {}), parent: given.info.parentID });
       return send(200, listed(engine.sessions.get(given.info.id)));
     }
     const exported = url.pathname.match(/^\/api\/experimental\/session\/([^/]+)\/export$/);
     if (exported) {
       const session = engine.sessions.get(exported[1]);
-      return session ? send(200, { info: { id: session.id, title: session.title, ...(session.parent ? { parentID: session.parent } : {}) }, messages: session.messages }) : send(404, null);
+      return session ? send(200, { info: { id: session.id, title: session.title, ...(session.parent ? { parentID: session.parent } : {}), ...(session.metadata ? { metadata: session.metadata } : {}) }, messages: session.messages }) : send(404, null);
     }
     const match = url.pathname.match(/^\/api\/session\/([^/]+)(\/inbox(?:\/([^/]+))?|\/prompt|\/instructions\/entries|\/interrupt|\/message)?$/);
     const session = match && engine.sessions.get(match[1]);
@@ -426,6 +431,19 @@ test("a bot you paused moves paused, as you paused it", { timeout: 60_000 }, asy
   assert.equal(moved.status, 200, JSON.stringify(moved.json));
   assert.equal(fs.readFileSync(path.join(macBots, "bot_rest", "paused"), "utf8"), "Back on Monday");
   assert.ok(macEngine.sessions.has("ses_rest") && !fs.existsSync(path.join(labBots, "bot_rest")));
+});
+
+test("a chat on Autopilot moves on Autopilot, its agent told there, with the calls it made", { timeout: 60_000 }, async t => {
+  signal = t.signal;
+  macEngine.sessions.set("ses_pilot", { id: "ses_pilot", title: "Cafe", directory: macChats, messages: messages("Build the menu"), metadata: { kuvo: { autopilot: true } } });
+  write(path.join(macHome, "run", "work", "decided.json"), { ses_pilot: [{ id: "frm_pilot", text: "Which roast?", choice: "Warm", options: ["Warm", "Dark"], call: "call_pilot", at: 1 }] });
+  const moved = await ask("POST", "kuvo/moves", { kind: "chat", id: "ses_pilot", to: lab.key });
+  assert.equal(moved.status, 200, JSON.stringify(moved.json));
+  assert.ok(labEngine.entries.some(each => each.session === "ses_pilot" && each.key === "kuvo.autopilot" && /Autopilot/.test(each.value)));
+  const there = await askMachine("GET", "kuvo/sessions/ses_pilot/autopilot");
+  assert.equal(there.json.autopilot, true);
+  assert.deepEqual(there.json.decided.map(call => call.id), ["frm_pilot"]);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(macHome, "run", "work", "decided.json"), "utf8")).ses_pilot, undefined, "gone with it from the box it left");
 });
 
 test("a chat you stopped moves stopped, with what waits for it in the same order; nothing of it stays here", { timeout: 60_000 }, async t => {

@@ -83,7 +83,7 @@ async function turn() {
       send({ method: "item/completed", params: inTurn({ item: { type: "agentMessage", id: "m1", text: done.join(" ") } }) })
       continue
     }
-    if (!/requestApproval$|elicitation\\/request$/.test(method)) {
+    if (!/requestApproval$|elicitation\\/request$|requestUserInput$/.test(method)) {
       send({ method, params: inTurn(params) })
       continue
     }
@@ -596,6 +596,32 @@ describe("A question Codex asks as it ends its turn (request_user_input_async)",
     expect(steps(id).flatMap((step) => step.content.filter((part: any) => part.type === "text").map((part: any) => part.text)).join("\n")).toContain("Writing it in Turkish.")
   })
 
+  test("turned down by its box with words (Autopilot): Codex hears them and goes on", async () => {
+    const id = start(asking, {}, answered)
+    await until(() => sessions.forms(id).length === 1)
+    sessions.replyForm(id, sessions.forms(id)[0].id, null, "This is on Autopilot: leave it.")
+    await until(() => ended(id))
+    expect(starts()).toEqual(["go", "This is on Autopilot: leave it."])
+  })
+
+  test("asking again and again, each turned down by its box with words, its turn ends", async () => {
+    const id = start(asking, {}, asking)
+    while (!ended(id)) {
+      const [form] = sessions.forms(id)
+      if (form) sessions.replyForm(id, form.id, null, "This is on Autopilot: leave it.")
+      await Bun.sleep(5)
+    }
+    expect(starts()).toEqual(["go", "This is on Autopilot: leave it.", "This is on Autopilot: leave it."])
+  })
+
+  test("what it asks in Plan, turned down by its box with words, gets those words as its answer", async () => {
+    const id = start([["item/tool/requestUserInput", { itemId: "q1", questions: [{ id: "which", header: "Which", question: "Which one?", options: [{ label: "A" }] }, { id: "key", header: "Key", question: "Your key?", isSecret: true }] }]])
+    await until(() => sessions.forms(id).length === 1)
+    sessions.replyForm(id, sessions.forms(id)[0].id, null, "This is on Autopilot: leave it.")
+    await until(() => ended(id))
+    expect(answers()).toEqual([{ answers: { which: { answers: ["This is on Autopilot: leave it."] }, key: { answers: [] } } }])
+  })
+
   test("a message you type instead answers it: the card goes and Codex gets your words", async () => {
     const id = start(asking, {}, answered)
     await until(() => sessions.forms(id).length === 1)
@@ -683,6 +709,14 @@ describe("Codex in the session's modes", () => {
     sessions.replyForm(id, sessions.forms(id)[0].id, null)
     await until(() => ended(id))
     expect(answers()).toEqual([{ action: "accept", content: null }, { action: "decline" }])
+  })
+
+  test("what an MCP server asks in Plan is its form, not the agent's question, so it never counts as one", async () => {
+    const id = start([mcpAsk("probe", "erase_everything"), ...reply], { agent: "plan" })
+    await until(() => sessions.forms(id).length === 1)
+    expect(sessions.forms(id)[0].metadata).toEqual({ kind: "mcp-elicitation", server: "probe" })
+    sessions.replyForm(id, sessions.forms(id)[0].id, null)
+    await until(() => ended(id))
   })
 
   test("Ask First: it asks before commands and changes, and what it runs can write in the project and reach the network", async () => {

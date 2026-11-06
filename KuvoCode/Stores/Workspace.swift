@@ -890,11 +890,25 @@ final class Workspace {
     /// conversation's composer starts with there.
     var approvalsHere: [String: ApprovalHere] = [:]
 
-    /// Reads the approvals of the computer `directory` is on.
+    /// Whether each computer's box has Autopilot, by box, as last read: a new conversation's Mode
+    /// menu offers it there, or says it needs a newer Kuvo Code.
+    var autopilotHere: [String: Bool] = [:]
+
+    /// Reads the approvals of the computer `directory` is on, and whether it has Autopilot.
     func readApprovalHere(for directory: String) async {
         let id = Self.box(of: directory)
-        guard let box = boxes?(id), let here = try? await box.value(ApprovalHere.self, "GET", "kuvo/approval") else { return }
+        guard let box = boxes?(id) else { return }
+        await readAutopilotHere(on: id)
+        guard let here = try? await box.value(ApprovalHere.self, "GET", "kuvo/approval") else { return }
         if approvalsHere[id] != here { approvalsHere[id] = here }
+    }
+
+    /// Reads whether the computer `id` has Autopilot, unless that's known.
+    func readAutopilotHere(on id: String) async {
+        guard autopilotHere[id] == nil, let box = boxes?(id) else { return }
+        struct Info: Decodable { var features: [String]? }
+        let has = id == BoxClient.mac ? true : (try? await box.value(Info.self, "GET", "kuvo/info")).map { $0.features?.contains("autopilot") == true }
+        if let has { autopilotHere[id] = has }
     }
 
     /// Confirms Full Access on the computer `directory` is on (asked the first time it's picked there).
@@ -906,7 +920,8 @@ final class Workspace {
 
     /// A new session in the project at `directory`, or with `worktree`, in a new worktree of it.
     /// `approval`: what it starts with, kept with it on its box (nil: that computer's default).
-    func createSession(in directory: String, model: ModelRef?, agent: String?, approval: ToolApproval? = nil, worktree: Bool = false) async throws -> Session {
+    /// `autopilot`: it starts on Autopilot, set on its box before its first message goes.
+    func createSession(in directory: String, model: ModelRef?, agent: String?, approval: ToolApproval? = nil, autopilot: Bool = false, worktree: Bool = false) async throws -> Session {
         // A model of an outside agent (Claude Code, Codex…), or Auto: the session is the agents
         // bridge's, here.
         let isAgents = OutsideAgents.runsInBridge(model?.providerID)
@@ -932,6 +947,17 @@ final class Workspace {
             // A worktree made for it goes too, with its branch (nothing's on it yet).
             if worktree { await discardWorktree(folder) }
             throw error
+        }
+        if autopilot {
+            do {
+                guard let box = boxes?(Self.box(of: directory)) else { throw CancellationError() }
+                _ = try await box.value(AutopilotShown.self, "PUT", "kuvo/sessions/\(session.id)/autopilot", body: ["autopilot": true])
+            } catch {
+                // Not to start Interactive when you picked Autopilot: it goes, and the message comes back.
+                try? await api.deleteSession(session.id)
+                if worktree { await discardWorktree(folder) }
+                throw error
+            }
         }
         if !extra.isEmpty {
             try? await api.setInstruction(session: session.id, key: ProjectFolders.instructionKey, text: ProjectFolders.instructions(primary: api.enginePath(folder), folders: extra))
@@ -1715,6 +1741,8 @@ final class Workspace {
         }
         upsert(moved)
         await WakeUps.carry(from: session, to: moved)
+        // On Autopilot, it stays so there, its agent told by its box (which brings its calls along).
+        if AutopilotShown.isOn(current) { await self.model(for: moved.id)?.switchAutopilot(true) }
         return moved
     }
 
@@ -2749,7 +2777,8 @@ final class Workspace {
             if let reply = try? event.payload(as: EventPayload.PermissionReplied.self) { settled(reply.requestID) }
         case "form.created":
             guard let form = try? event.payload(as: EventPayload.FormCreated.self).form else { return }
-            asking[form.id] = form.sessionID
+            // (On Autopilot it counts once its box says it waits on you: `notifyAsk`.)
+            if !isOnAutopilot(form.sessionID) { asking[form.id] = form.sessionID }
             let question = Self.question(in: form)
             notifyAsk(form.sessionID, body: question?.text ?? (form.isQuestion ? "Has a question for you." : "Needs your answer."), request: form.id, question: question)
         case "form.replied", "form.cancelled":
@@ -2833,7 +2862,7 @@ final class Workspace {
     /// `answerable`: its buttons answer it (not when the notification can't show all it covers).
     /// Asks whose notification is being made (its session read first), and those of them
     /// answered or gone meanwhile.
-    @ObservationIgnored private var notifying: Set<String> = []
+    private(set) var notifying: Set<String> = []
     @ObservationIgnored private var settledWhileNotifying: Set<String> = []
 
     /// An ask answered (here or elsewhere) or gone with its run: off the Dock's count, and its
@@ -2868,9 +2897,11 @@ final class Workspace {
         tellYours(request)
     }
 
+    /// A question in a conversation on Autopilot counts and tells you only if its box says it waits
+    /// on you: the box decides what goes ahead, and this judges nothing.
     private func notifyAsk(_ id: String, body: String, request: String, isPermission: Bool = false, answerable: Bool = true, always: String? = nil, question: Notifier.Question? = nil) {
         // A seat's requests are answered by its group chat.
-        guard !seats.contains(id) else { return }
+        guard !seats.contains(id), !notifying.contains(request) else { return }
         notifying.insert(request)
         Task {
             defer {
@@ -2897,6 +2928,11 @@ final class Workspace {
                 asking[request] = nil
                 return
             }
+            if !isPermission, let conversation = session, AutopilotShown.isOn(conversation) {
+                asking[request] = nil
+                guard await waitsOnYou(request, in: conversation), !settledWhileNotifying.contains(request) else { return }
+                asking[request] = id
+            }
             // Answered (or gone) while its session was read: no notification for it.
             guard settledWhileNotifying.remove(request) == nil else { return }
             // Buttons only when the notification hides none of what they'd answer.
@@ -2908,6 +2944,15 @@ final class Workspace {
                                    push: .init(isPermission ? .permission : .question, request: (session: id, id: request),
                                                machine: sessionMachines[id] ?? session.flatMap { RemoteFolder.machine(of: $0.location.directory) }, answerable: answerable && shown))
         }
+    }
+
+    /// Whether its box says this question waits on you (PROTOCOL.md, "Autopilot"). One that can't say
+    /// (unreachable, or from before this) has it tell you, as any question.
+    private func waitsOnYou(_ form: String, in conversation: Session) async -> Bool {
+        struct Said: Decodable { var waiting: Bool }
+        guard let box = boxes?(Self.box(of: conversation.location.directory)) else { return true }
+        let said = try? await box.value(Said.self, "POST", "kuvo/sessions/\(conversation.id)/autopilot/asked", body: ["form": form])
+        return said?.waiting ?? true
     }
 
     /// Whether a notification shows all a permission covers: Allow there would allow what it
@@ -3041,7 +3086,11 @@ final class Workspace {
         if let parent = session.parentID {
             // Each written only when it changes (a subagent at work is read again on each update):
             // the sidebar reads them, and a write that changes nothing works it out again.
-            if parents[session.id] != parent { parents[session.id] = parent }
+            if parents[session.id] != parent {
+                parents[session.id] = parent
+                // (What it asked before it was known whose it is may be a conversation's on Autopilot.)
+                autopilotMayHaveChanged?()
+            }
             if !isHidden(session) { keepSubSession(session, of: parent) }
             // A subagent's subagent: whose that one is, up to the session with a row.
             if self.session(parent) == nil, parents[parent] == nil, depth < 8 { await reload(parent, depth: depth + 1) }
@@ -3285,6 +3334,14 @@ final class Workspace {
         return "removed"
     }
 
+    /// Hears a conversation go on Autopilot, from any client: what it has waiting on you here stops waiting.
+    @ObservationIgnored var autopilotMayHaveChanged: (() -> Void)?
+
+    /// Whether the conversation `id` is part of (a subagent's, the one that started it) is on Autopilot.
+    func isOnAutopilot(_ id: String) -> Bool {
+        session(root(of: id)).map(AutopilotShown.isOn) == true
+    }
+
     /// The session a subagent's shows in (through subagents of subagents): the root one that
     /// started it; any other, itself.
     func root(of id: String) -> String {
@@ -3340,6 +3397,7 @@ final class Workspace {
             // the later look.
             if let seen = sessions[index].time.viewed, seen > (session.time.viewed ?? 0) { session.time.viewed = seen }
             sessions[index] = session
+            if AutopilotShown.isOn(session), !AutopilotShown.isOn(earlier) { autopilotMayHaveChanged?() }
             // Archived or brought back elsewhere (from a phone): its wake-ups wait, or come back,
             // as with Archive here. (Archive here notes it first, so it isn't told twice.)
             noteArchiving(session, was: earlier)
@@ -3385,7 +3443,8 @@ final class Workspace {
                           let api = api(forSession: id), let page = try? await api.messages(session: id, limit: 8),
                           Transcript.isWaiting(on: server, in: page.data) else { continue }
                     sharedForms[form.id] = directory
-                    asking[form.id] = id
+                    // (On Autopilot it counts once its box says it waits on you: `notifyAsk`.)
+                    if !isOnAutopilot(id) { asking[form.id] = id }
                     notifyAsk(id, body: form.message ?? "Needs your answer.", request: form.id, question: nil)
                     return
                 }
@@ -3403,8 +3462,10 @@ final class Workspace {
     private func note(_ form: FormRequest, in model: SessionModel) {
         // Told once, not again with each read after a reconnect.
         let isNew = sharedForms[form.id] == nil
-        asking[form.id] = model.id
-        guard form.sessionID == FormRequest.anySession else { return }
+        let isShared = form.sessionID == FormRequest.anySession
+        // (Shared, on Autopilot, it counts once its box says it waits on you: `notifyAsk`.)
+        if !(isShared && isOnAutopilot(model.id)) { asking[form.id] = model.id }
+        guard isShared else { return }
         sharedForms[form.id] = model.session.location.directory
         if isNew { notifyAsk(model.id, body: form.message ?? "Needs your answer.", request: form.id, question: nil) }
     }

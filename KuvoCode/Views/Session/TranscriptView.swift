@@ -64,8 +64,36 @@ struct TranscriptView: View {
         return own.merging(WorkAnswer.byCall(above)) { mine, _ in mine }
     }
 
+    /// The conversation that keeps its Autopilot: this one, or the one a subagent works for.
+    private var autopilotModel: SessionModel {
+        let root = workspace.root(of: model.id)
+        return root == model.id ? model : workspace.model(for: root) ?? model
+    }
+
+    /// The calls Autopilot made here, by the tool call that asked.
+    private var autopilotCalls: [String: [AutopilotShown.Call]] { autopilotModel.autopilotShown?.byCall ?? [:] }
+
+    /// Where its calls show, of those with no step of their own in `rows`.
+    private func autopilotPlaces(in rows: [Row]) -> AutopilotShown.Places {
+        guard let shown = autopilotModel.autopilotShown, !shown.decided.isEmpty else { return .init() }
+        var steps = Set<String>()
+        var subagents = Set<String>()
+        for row in rows {
+            switch row {
+            case .steps(_, let blocks, _):
+                for case .tool(let call) in blocks { steps.insert(call.id) }
+            case .subagent(let call):
+                if let session = call.state.metadata?["sessionID"]?.string ?? workspace.subagent(forStep: call.id)?.subagent.id { subagents.insert(session) }
+            default:
+                break
+            }
+        }
+        return shown.places(steps: steps, subagents: subagents, whole: !rows.isEmpty && !model.hasEarlier, subagent: workspace.root(of: model.id) == model.id ? nil : model.id)
+    }
+
     var body: some View {
         let rows = rows
+        let places = autopilotPlaces(in: rows)
         // More of a reply, in a row of its own, carries on from the row before rather than coming in.
         let added = rows.filter { !$0.continues }
         ConversationScroll(scroller: scroller, animation: rowCache.isBulk ? nil : Self.rowAnimation, change: RowCache.Change(count: added.count, last: added.last?.id), thinking: Self.thinking(in: rows),
@@ -92,6 +120,13 @@ struct TranscriptView: View {
             #else
             rowStack(rows)
             #endif
+            // Calls it made with no step here to show at, with what they asked.
+            if !places.alone.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(places.alone) { DecidedLine(call: $0, saysQuestion: true) }
+                }
+                .padding(.top, 10)
+            }
         }
         // The reply being written draws its words from it.
         .environment(model.writing)
@@ -102,6 +137,10 @@ struct TranscriptView: View {
         // What the bot that runs it answered for it, on the steps that asked; a subagent's are kept
         // on the session it works for.
         .environment(\.workAnswers, workAnswers)
+        // The calls it made on Autopilot, where its questions would have waited.
+        .environment(\.autopilotCalls, autopilotCalls)
+        .environment(\.autopilotCallsOfSubagents, places.bySubagent)
+        .environment(\.chooseOnAutopilot) { [autopilotModel] choice, call in autopilotModel.choose(choice, on: call) }
         // The commands its agent asks to run outside the sandbox, whose rows say they were stopped
         // (by the conversation they ask as: the one at the top of its chain).
         .environment(\.sandboxStopped, Sandboxes.shared.stoppedCommands(for: workspace.root(of: model.id), on: Workspace.box(of: model.session.location.directory)))
@@ -491,9 +530,9 @@ struct TranscriptView: View {
                 var shown: Row?
                 if !sources.isEmpty, sources.allSatisfy({ $0.contains(ProjectFolders.instructionKey) }) {
                     shown = .notice(notice.id, "folder", "Project folders updated")
-                } else if !sources.isEmpty, sources.allSatisfy({ $0.hasPrefix("core/") || $0.contains(Workspace.worktreeInstructionKey) || $0.contains(Bots.instructionKey) }) {
+                } else if !sources.isEmpty, sources.allSatisfy({ $0.hasPrefix("core/") || $0.contains(Workspace.worktreeInstructionKey) || $0.contains(Bots.instructionKey) || $0.contains(AutopilotShown.instructionKey) }) {
                     // The engine's own guidance (for the browser tools, say), or what Kuvo Code
-                    // adds for a worktree or a bot: nothing you set.
+                    // adds for a worktree, a bot or Autopilot: nothing you set.
                     break
                 } else if notice.metadata?["source"]?.string == "shell" {
                     // A command the agent left running in the background ended, which wakes it.

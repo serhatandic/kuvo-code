@@ -25,6 +25,8 @@ final class BrowserAsks {
         case done
         case declined
         case timedOut
+        /// On Autopilot nothing waits for you: left undone at once.
+        case leftOnAutopilot
     }
 
     struct Ask: Identifiable, Equatable {
@@ -49,6 +51,8 @@ final class BrowserAsks {
 
     /// Waiting for you, the oldest first.
     private(set) var asks: [Ask] = []
+    /// Whether a conversation is on Autopilot, where nothing here waits for you.
+    @ObservationIgnored var isOnAutopilot: ((String) -> Bool)?
 
     @ObservationIgnored private var responders: [String: (Answer) -> Void] = [:]
     /// Sign-ins you gave in the last few minutes, by machine and site, with the conversation they
@@ -110,6 +114,7 @@ final class BrowserAsks {
     /// For this Mac's browser: waits for your answer (or the agent's patience to run out). When
     /// the tool call that asks ends first (stopped, timed out), its card goes.
     func ask(_ kind: Kind, host: String, session: String? = nil, page: String? = nil) async -> Answer {
+        if let session, isOnAutopilot?(session) == true { return .leftOnAutopilot }
         let id = UUID().uuidString
         guard !Task.isCancelled else { return .declined }
         return await withTaskCancellationHandler {
@@ -129,6 +134,14 @@ final class BrowserAsks {
     /// this Mac any more, so its cards here go.
     func runEnded(_ session: String) {
         for ask in asks where (ask.asking ?? ask.session) == session && ask.machine == nil { end(ask.id) }
+    }
+
+    /// A conversation went on Autopilot, or a subagent turned out to be one's: what it asked on this
+    /// Mac no longer waits for you. (A machine's browser sees to its own, and closes its card here.)
+    func leaveUndone() {
+        for ask in asks where ask.machine == nil {
+            if let session = ask.asking ?? ask.session, isOnAutopilot?(session) == true { answer(ask.id, .leftOnAutopilot) }
+        }
     }
 
     /// An ask on this Mac whose tool call has ended: its card goes, and the call hears no.

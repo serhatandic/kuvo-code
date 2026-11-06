@@ -40,7 +40,7 @@ const by = { bot: "bot_pixel00001", name: "Pixel" };
 
 // The engine: Pixel's conversation and a session of its work; what each was sent, what each asks,
 // and how each ask was answered.
-let sessions, prompts, made, asked, replied, interrupted, active, forms, dismissed, failures, written, stepsSince;
+let sessions, prompts, made, asked, replied, interrupted, active, forms, dismissed, answeredForms, failures, written, stepsSince;
 const tokens = () => ({ input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } });
 function resetEngine() {
   sessions = new Map([
@@ -55,6 +55,7 @@ function resetEngine() {
   active = new Set();
   forms = new Map();
   dismissed = [];
+  answeredForms = [];
   failures = new Map();
   written = new Map();
   stepsSince = new Map();
@@ -121,6 +122,12 @@ const engine = http.createServer((request, response) => {
     if (form && request.method === "DELETE") {
       dismissed.push({ session: id, form: decodeURIComponent(form[1]), message: url.searchParams.get("message") });
       forms.set(id, (forms.get(id) ?? []).filter(each => each.id !== decodeURIComponent(form[1])));
+      return reply({});
+    }
+    const formReply = one?.[2]?.match(/^\/form\/([^/]+)\/reply$/);
+    if (formReply) {
+      answeredForms.push({ session: id, form: decodeURIComponent(formReply[1]), ...JSON.parse(body) });
+      forms.set(id, (forms.get(id) ?? []).filter(each => each.id !== decodeURIComponent(formReply[1])));
       return reply({});
     }
     const answer = one?.[2]?.match(/^\/permission\/([^/]+)\/reply$/);
@@ -1149,6 +1156,111 @@ test("what waits for you goes once it's dealt with, by the bot or by you, and yo
   await tool("goal_progress", { spent: { what: "a logo", amount: 50 } });
   [current] = await goals();
   assert.ok(current.waiting.some(each => each.kind === "outside" && /a logo/.test(each.text)));
+});
+
+// ——— Interactive and Autopilot: how the bot runs it ———
+
+// A question the bot (or a session of its work) asks with the question tool: which of three, one
+// marked as its recommendation.
+const QUESTION = { id: "frm_pick", title: "Direction", metadata: { kind: "question" }, fields: [{ key: "direction", type: "string", description: "Which direction should the site take?", options: [{ value: "warm", label: "Warm and roasty (Recommended)", description: "Scored best with the coffee crowd" }, { value: "minimal", label: "Minimal" }, { value: "playful", label: "Playful" }] }] };
+
+test("a goal runs Interactive unless you start it on Autopilot, and you can switch while it runs: the bot is told how to run it each time, and nothing else about the goal changes", async () => {
+  const interactive = await startedGoal();
+  assert.equal(interactive.mode, "interactive", "Start as it was: Interactive");
+  assert.deepEqual(interactive.decided, []);
+  const started = prompts.at(-1).text;
+  assert.match(started, /Interactive/);
+  assert.match(started, /never .*approve your work/i, "never asks the user to approve its work");
+  assert.equal((await route("POST", `kuvo/work/goals/${interactive.id}`, { action: "stop" })).status, 200);
+
+  await tool("propose_goal", PLAN);
+  const [card] = (await goals()).filter(each => each.state === "proposed");
+  assert.equal(card.mode, "interactive", "a card shows the mode Start would use");
+  assert.equal((await route("POST", `kuvo/work/goals/${card.id}`, { action: "start", mode: "solo" })).status, 400, "only interactive or autopilot");
+  const autopilot = (await route("POST", `kuvo/work/goals/${card.id}`, { action: "start", mode: "autopilot" })).body.goal;
+  assert.equal(autopilot.mode, "autopilot");
+  const words = prompts.at(-1).text;
+  assert.match(words, /Autopilot/);
+  assert.match(words, /publish/i, "the plan's public steps are its to take: Start approved them");
+  assert.match(words, /sign in/i, "it stops only at what only the user can do");
+  assert.match(words, /\(Recommended\)/, "it marks its recommendation, which goes ahead at once");
+  assert.match(words, /ads, up to 20 USD a day/, "what it may spend is the plan's, as on Interactive");
+  assert.doesNotMatch(words, /Full Access|permission mode/i, "how it runs doesn't touch what its conversations may do");
+
+  const count = prompts.length;
+  const switched = await route("POST", `kuvo/work/goals/${autopilot.id}`, { action: "change", mode: "interactive" });
+  assert.equal(switched.status, 200, JSON.stringify(switched.body));
+  assert.equal(switched.body.goal.mode, "interactive");
+  assert.deepEqual(switched.body.goal.spend.map(each => each.cap), [15, 20], "switching changes nothing else");
+  assert.equal(prompts.length, count + 1);
+  assert.match(prompts.at(-1).text, /^\[Goal changed\] .*Interactive/s);
+  assert.deepEqual(prompts.at(-1).metadata, { kuvo: { note: { from: "Goal", line: "Now Interactive" } } });
+  await route("POST", `kuvo/work/goals/${autopilot.id}`, { action: "change", mode: "interactive" });
+  assert.equal(prompts.length, count + 1, "the same mode again tells it nothing");
+  assert.equal((await route("POST", `kuvo/work/goals/${autopilot.id}`, { action: "change", mode: "autopilot" })).body.goal.mode, "autopilot");
+  assert.match(prompts.at(-1).text, /^\[Goal changed\] .*Autopilot/s);
+  assert.match((await tool("goal_progress", { steps: [{ step: 1, state: "doing" }] })).text, /Autopilot/, "goal_progress says how it runs, with whether you're here");
+});
+
+test("on Autopilot, a question asked with a recommendation goes ahead on it at once and is kept as a call the bot made, which you can confirm or change later; on Interactive it waits for you, and a question with no recommendation, or a permission, always does", async () => {
+  // Interactive: the bot's own question waits for you, recommendation or not.
+  const first = await startedGoal();
+  forms.set("ses_pixel", [QUESTION]);
+  await look();
+  assert.deepEqual(answeredForms, []);
+  assert.deepEqual((await goals())[0].waiting.map(each => each.kind), ["ask"]);
+  await route("POST", `kuvo/work/goals/${first.id}`, { action: "change", mode: "autopilot" });
+
+  // Switched to Autopilot: answered with its recommendation on the box's next look.
+  const now = Date.now();
+  await look(now);
+  assert.deepEqual(answeredForms, [{ session: "ses_pixel", form: "frm_pick", answer: { direction: "warm" } }]);
+  let [goal] = await goals();
+  assert.deepEqual(goal.waiting, [], "it isn't waiting for you any more");
+  assert.equal(goal.decided.length, 1);
+  const [decided] = goal.decided;
+  assert.deepEqual([decided.text, decided.choice, decided.why, decided.options, decided.session], ["Which direction should the site take?", "Warm and roasty", "Scored best with the coffee crowd", ["Warm and roasty", "Minimal", "Playful"], "ses_pixel"]);
+  assert.equal(told.filter(each => each.category === "blocked").length, 0, "nothing to tell your phones: it went on");
+
+  // A session's question goes the same way once the bot has had its moment to answer it; one with
+  // no recommendation comes back declined, never answered for you, and a permission still waits.
+  forms.set("ses_site", [{ ...QUESTION, id: "frm_site" }, { id: "frm_open", title: "Name", metadata: { kind: "question" }, fields: [{ key: "name", type: "string", description: "What should the newsletter be called?" }] }]);
+  asked.set("ses_site", [{ id: "per_deploy", action: "shell", resources: ["vercel deploy --prod"] }]);
+  await look(now);
+  assert.equal(answeredForms.length, 1, "the bot answers its sessions first");
+  await look(now + 5 * 60_000);
+  assert.deepEqual(answeredForms.at(-1), { session: "ses_site", form: "frm_site", answer: { direction: "warm" } });
+  assert.deepEqual(replied, [], "a permission is never answered for you: the conversation's mode decides those");
+  [goal] = await goals();
+  assert.deepEqual(forms.get("ses_site"), [], "nothing's left holding it");
+  assert.equal(answeredForms.filter(each => each.form === "frm_open").length, 0, "nothing chosen for you");
+  assert.deepEqual(goal.waiting.map(each => each.kind), ["ask"]);
+  assert.ok(goal.waiting.some(each => /vercel deploy --prod/.test(each.text)));
+  assert.equal(goal.decided.length, 2);
+
+  // You confirm one (the bot isn't told), and change the other (it is, and redirects).
+  const before = prompts.length;
+  const confirmed = await route("POST", `kuvo/work/goals/${first.id}`, { action: "decided", decided: goal.decided[0].id, choice: "Warm and roasty" });
+  assert.equal(confirmed.status, 200, JSON.stringify(confirmed.body));
+  assert.equal(confirmed.body.goal.decided[0].yours.choice, "Warm and roasty");
+  assert.equal(prompts.length, before, "a call you confirm needs no word to the bot");
+  const changed = await route("POST", `kuvo/work/goals/${first.id}`, { action: "decided", decided: goal.decided[1].id, choice: "Minimal" });
+  assert.equal(changed.body.goal.decided[1].yours.choice, "Minimal");
+  assert.match(prompts.at(-1).text, /^\[Decision changed\] .*Which direction should the site take\?.*Minimal.*Warm and roasty/s);
+  assert.deepEqual(prompts.at(-1).metadata, { kuvo: { note: { from: "Autopilot", line: "You picked Minimal" } } }, "told in the session that asked");
+  assert.equal((await route("POST", `kuvo/work/goals/${first.id}`, { action: "decided", decided: "dec_none", choice: "Minimal" })).status, 404);
+  assert.equal((await route("POST", `kuvo/work/goals/${first.id}`, { action: "decided", decided: goal.decided[1].id })).status, 400, "say which choice");
+});
+
+test("the bot keeps a call it made itself with goal_progress (what, its choice, why), shown with the goal as the box's are", async () => {
+  await startedGoal({ mode: "autopilot" });
+  const said = await tool("goal_progress", { decided: { text: "Which hosting?", choice: "Cloudflare Pages", why: "free tier covers it, and the domain's there", options: ["Cloudflare Pages", "Vercel", "Netlify"] } });
+  assert.equal(said.isError, false, said.text);
+  assert.match(said.text, /decided/i);
+  const [goal] = await goals();
+  assert.deepEqual(goal.decided.map(each => [each.text, each.choice, each.why, each.options]), [["Which hosting?", "Cloudflare Pages", "free tier covers it, and the domain's there", ["Cloudflare Pages", "Vercel", "Netlify"]]]);
+  assert.equal(goal.decided[0].session, undefined);
+  assert.equal((await tool("goal_progress", { decided: { text: "Which hosting?" } })).isError, true, "a call needs its choice");
 });
 
 // ——— Where it's done: the app's own icon, and the folders Start makes ———

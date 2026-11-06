@@ -30,6 +30,8 @@ import type { MailSender, Peer } from "../peers/known";
 import type { LinkHost } from "../relay/host";
 import { readLink } from "../state";
 import { goalRuns } from "../work/goals";
+import { decidedOf, forgetDecided, isAutopilot, keepDecided, tellAutopilot } from "../work/autopilot";
+import type { EngineSession } from "../engine/sessions";
 import { CHATS, engineWait, MOST_BUNDLE, NotTaken, TooBig, deleteSession, directoryOf, exportAll, folderOf, groupAction, conversationHash, hashOf, idsOf, importAll, keysOf, ownTree, pack, toTrash, unpack } from "./bundle";
 import type { Contents } from "./bundle";
 import { forgetQuiet, tellMoving } from "./elsewhere";
@@ -439,6 +441,8 @@ async function carryOn(id: string): Promise<void> {
     // A conversation you stopped goes stopped, with what waits for it, here and in the engine.
     queues = await queuesOf(engine, record.sessions, record.name);
     if (Object.keys(queues).length) contents.queues = queues;
+    const decided = decidedOf(record.sessions);
+    if (Object.keys(decided).length) contents.decided = decided;
     if (record.folder) contents.folder = path.basename(record.folder);
     if (record.kind === "bot") {
       // A goal started as it was asked to move (goals stay where they started): it stays.
@@ -544,7 +548,10 @@ async function finish(id: string): Promise<void> {
         }
       }
     }
-    for (const session of [...record.sessions].reverse()) await deleteSession(engine, session);
+    for (const session of [...record.sessions].reverse()) {
+      await deleteSession(engine, session);
+      forgetDecided(session);
+    }
     // What waited for them here went with them.
     for (const session of record.sessions) forgetQueue(session);
     if (record.kind === "bot") await answerBotKeys("DELETE", `kuvo/bots/${record.thing}/keys`, null, null).catch(() => {});
@@ -788,6 +795,12 @@ async function bringIn(record: MoveRecord, signal: AbortSignal): Promise<string[
   // What waited for them, kept here paused until the switch.
   const goOn = unpackQueues(contents.queues, idsOf(contents.exports));
   if (goOn.length) changeMove(record.id, each => { each.queuesGoOn = goOn; });
+  // The calls it made on Autopilot; on it (its flag came with it), its agent is told so here.
+  keepDecided(contents.decided, idsOf(contents.exports));
+  for (const exported of contents.exports) {
+    const info = isObject(exported) && isObject(exported.info) ? exported.info as Partial<EngineSession> & { id: string } : null;
+    if (info && isAutopilot(info)) await tellAutopilot(engine, info.id, true, signal).catch(error => console.error(`kuvo-link: ${record.name} couldn't be told it's on Autopilot here: ${error}`));
+  }
   for (const [integration, keys] of Object.entries(contents.keys ?? {})) {
     const given = await answerBotKeys("PUT", `kuvo/bots/${record.thing}/keys/${encodeURIComponent(integration)}`, { keys }, null);
     if (given.status !== 200) console.error(`kuvo-link: a moved bot's own key for ${integration} didn't come with it (${given.status}).`);
@@ -841,7 +854,10 @@ async function clearCopy(record: MoveRecord): Promise<void> {
     // (None brought in yet: its engine needn't be running.)
     if (record.sessions.length) {
       const engine = readEngineFile();
-      for (const session of [...record.sessions].reverse()) await deleteSession(engine, session);
+      for (const session of [...record.sessions].reverse()) {
+      await deleteSession(engine, session);
+      forgetDecided(session);
+    }
     }
     for (const session of record.sessions) forgetQueue(session);
     const place = folderOf(record.kind, record.thing);

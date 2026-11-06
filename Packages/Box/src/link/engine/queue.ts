@@ -458,8 +458,8 @@ export interface QueueEvent {
 const NOT_YOURS = ["[Message from ", "[Wake-up]", "[Work from ", "[Session ", "[Goal started]", "[Goal changed]", "[Goal's end]", "[Goal resumed]", "[Not now]", "[Limit reset]", "[The user answered]"];
 export const writtenByYou = (text: unknown, metadata: unknown) => !isBoxNote(metadata) && !NOT_YOURS.some(start => String(text ?? "").startsWith(start));
 // What the box says of its own accord (what another session did, a limit that reset), rather than
-// passes on from someone: a letter or work from an agent, or what you answered or approved.
-const FROM_SOMEONE = ["[Message from ", "[Work from ", "[The user "];
+// passes on from someone: a letter or work from an agent, or what you answered, approved or picked.
+const FROM_SOMEONE = ["[Message from ", "[Work from ", "[The user ", "[Decision changed]"];
 export const isBoxsOwnWord = (text: unknown, metadata: unknown) => !writtenByYou(text, metadata) && !FROM_SOMEONE.some(start => String(text ?? "").startsWith(start));
 const isYours = (item: NonNullable<NonNullable<QueueEvent["data"]>["item"]>) => item.type === "user" && writtenByYou(item.payload?.text, item.payload?.metadata);
 
