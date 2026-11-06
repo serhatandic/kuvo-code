@@ -11,8 +11,15 @@ import SwiftUI
 struct ToolCallView: View {
     let call: Message.ToolCall
     let directory: String
+    /// What your opening it is kept by, as its view may not last (see `CardFolds`).
+    var foldKey: String? = nil
     @Environment(AppModel.self) private var app
-    @State private var isExpanded = false
+    /// Open by itself rather than by you: a subagent at work.
+    @State private var opened = false
+    @Environment(\.scrollAnchor) private var scrollAnchor
+
+    private var key: String { foldKey ?? call.id }
+    private var isExpanded: Bool { CardFolds.shared.isOpen(key, otherwise: opened) }
 
     /// The icon's column, and the gap after it: the details line up with the title.
     private static let iconWidth: CGFloat = 16
@@ -60,7 +67,8 @@ struct ToolCallView: View {
             Group {
                 if hasDetails {
                     Button {
-                        withAnimation(.ui) { isExpanded.toggle() }
+                        // Under way, it's kept in view as it grows.
+                        CardFolds.shared.toggle(key, open: !isExpanded, in: scrollAnchor, holds: call.state.isFinished)
                     } label: {
                         header
                     }
@@ -121,12 +129,17 @@ struct ToolCallView: View {
                     .transition(.fold)
             }
         }
+        .foldOpen(isExpanded)
+        // Opened under way and kept in view as it grew, it stays where it is from when it ends.
+        .onChange(of: call.state.isFinished) { _, finished in
+            if finished, CardFolds.shared.isOpen(key, otherwise: false) { scrollAnchor?.reading?(key, true) }
+        }
         // A subagent at work shows what it's doing; opened later, its steps stay folded.
         .onAppear {
-            if call.name == "subagent", !call.state.isFinished { isExpanded = true }
+            if call.name == "subagent", !call.state.isFinished { opened = true }
             #if DEBUG
             // KUVO_DEMO_OPEN_STEPS: every step shows its details, for screenshots.
-            if ProcessInfo.processInfo.environment["KUVO_DEMO_OPEN_STEPS"] != nil { isExpanded = true }
+            if ProcessInfo.processInfo.environment["KUVO_DEMO_OPEN_STEPS"] != nil { opened = true }
             #endif
         }
     }
@@ -723,7 +736,7 @@ struct SubagentSteps: View {
                                 WritingText(row: assistant.id, part: index, text: text.text, folders: { [directory] },
                                             isWriting: assistant.time.completed == nil && index == assistant.content.count - 1)
                             case .tool(let call):
-                                ToolCallView(call: call, directory: directory)
+                                ToolCallView(call: call, directory: directory, foldKey: id + "#" + call.id)
                             default:
                                 EmptyView()
                             }

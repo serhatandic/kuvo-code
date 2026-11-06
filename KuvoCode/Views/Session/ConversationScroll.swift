@@ -52,7 +52,38 @@ final class ConversationScroller {
     }
 
     fileprivate func follow(_ follows: Bool) {
+        heldFor = []
         if followsEnd != follows { followsEnd = follows }
+    }
+
+    /// The steps you opened while following the end, which you left it to read. Going anywhere
+    /// yourself since (each way goes through `follow`) means you left it for good.
+    @ObservationIgnored private var heldFor: Set<String> = []
+
+    /// You're scrolling, and this is where it's taken you. While you read what you opened, where
+    /// it stops decides.
+    fileprivate func scrolled(atEnd: Bool) {
+        if heldFor.isEmpty { follow(atEnd) }
+    }
+
+    /// Your scroll stopped. A nudge is still reading; moved further, you went somewhere else.
+    fileprivate func stopped(atEnd: Bool, moved: CGFloat) {
+        if !heldFor.isEmpty, moved >= 40 { follow(atEnd) }
+    }
+
+    /// `id` opened or closed by you: back to the end once the last you left it for is closed.
+    fileprivate func reading(_ id: String, isOpen: Bool) {
+        if isOpen {
+            guard followsEnd || !heldFor.isEmpty else { return }
+            if followsEnd {
+                // All of what opened in view first: following would have got there in a moment.
+                follow(false)
+                ask(.end(animated: true))
+            }
+            heldFor.insert(id)
+        } else if heldFor.remove(id) != nil, heldFor.isEmpty {
+            toEnd(animated: true)
+        }
     }
 
     private func ask(_ request: Request) {
@@ -124,6 +155,11 @@ struct ConversationScroll<Rows: View>: View {
             .environment(\.scrollAnchor, anchor)
             .onAppear {
                 anchor.stopFollowing = { [scroller] in scroller.follow(false) }
+                anchor.reading = { [scroller, weak anchor] id, isOpen in
+                    scroller.reading(id, isOpen: isOpen)
+                    // At once: the next row to come mustn't count as followed.
+                    anchor?.isFollowingEnd = scroller.followsEnd
+                }
                 anchor.quote = quote
             }
             .padding(.horizontal, Metrics.gutter)
@@ -163,7 +199,15 @@ struct ConversationScroll<Rows: View>: View {
         .onScrollPhaseChange { _, phase, context in
             scrolling.isOn = phase != .idle
             // Taken in hand on the way to the end: where it goes is yours again.
-            if phase == .tracking || phase == .interacting { scrolling.goesToEnd = false }
+            if phase == .tracking || phase == .interacting {
+                scrolling.goesToEnd = false
+                if scrolling.from == nil { scrolling.from = context.geometry.contentOffset.y }
+            }
+            if phase == .idle, let from = scrolling.from {
+                scrolling.from = nil
+                let geometry = context.geometry
+                scroller.stopped(atEnd: geometry.visibleRect.maxY >= geometry.contentSize.height - 40, moved: abs(geometry.contentOffset.y - from))
+            }
             // Its button's way to the end is over, with the glide it stopped: at the end, wherever
             // the rows measured on the way moved it.
             if phase == .idle, scrolling.goesToEnd {
@@ -216,7 +260,7 @@ struct ConversationScroll<Rows: View>: View {
             let resizing = new.width != old.width && (anchor.scrollView?.window?.inLiveResize ?? false)
             if new.width != old.width, !resizing { makeSureOfRows(proxy) }
             // Past the end, with nothing there to see, and you're not the one scrolling: to it.
-            if new.isPastEnd, !scrolling.isYours {
+            if new.isPastEnd, !scrolling.isYours, anchor.stack?.isAboutToGrow != true {
                 if resizing {
                     anchor.scroll(to: nil)
                     endFollower.follow { settled in if settled { toEnd(proxy) } }
@@ -228,7 +272,7 @@ struct ConversationScroll<Rows: View>: View {
             // Your scrolling decides; growth below the fold doesn't. Set only when it changes: each
             // setting draws the conversation again, and this runs on every frame of a scroll.
             // (Not on its way to the end from its button: the rest of a glide doesn't decide.)
-            if scrolling.isYours { scroller.follow(new.atEnd) }
+            if scrolling.isYours { scroller.scrolled(atEnd: new.atEnd) }
             // Shrinking too: the lazy stack's first guess at the height can be too big, and a
             // conversation would then open part of the way up.
             guard scroller.followsEnd, !scrolling.isYours, new.height != old.height else { return }
@@ -460,6 +504,8 @@ final class ScrollingFlag {
     var isOn = false
     /// Sent to the end by its button while it scrolled: the scroll that's left is its, not yours.
     var goesToEnd = false
+    /// Where your scroll started.
+    var from: CGFloat?
     /// You're scrolling: not the end's button finishing a scroll you'd started.
     var isYours: Bool { isOn && !goesToEnd }
 }
@@ -587,6 +633,8 @@ final class ScrollAnchor {
     /// Stops keeping the end in view, as scrolling up does: a selection dragged up past the top
     /// scrolls the conversation, which would otherwise go back to the end.
     var stopFollowing: () -> Void = {}
+    /// Steps opened (true) or closed by you, by what their fold is kept by.
+    var reading: ((String, Bool) -> Void)?
 
     /// The rows laid out, where they are in the conversation, and those shown now. A row that
     /// goes and comes back where it was (the whole conversation hidden a moment) isn't told its

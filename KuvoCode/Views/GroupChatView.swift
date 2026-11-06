@@ -338,7 +338,7 @@ private struct GroupMessageRow: View, Equatable {
                     // its words.
                     let steps = (message.steps ?? []).filter { !GroupChatView.isDrawn($0) }
                     if !steps.isEmpty {
-                        StepsRow(blocks: steps.map(Message.Content.tool), isLive: false, directory: author?.directory ?? "")
+                        StepsRow(scope: message.id, blocks: steps.map(Message.Content.tool), keys: steps.map(\.id), isLive: false, directory: author?.directory ?? "")
                             .padding(.bottom, 2)
                     }
                     MarkdownText(text: message.text, agents: MarkdownText.agents(namedIn: message.text))

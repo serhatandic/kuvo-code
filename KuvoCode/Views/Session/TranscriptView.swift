@@ -48,7 +48,7 @@ struct TranscriptView: View {
     /// The thinking under way at the end, if any.
     private static func thinking(in rows: [Row]) -> Thinking? {
         for row in rows.reversed() {
-            guard case .steps(let id, let blocks, let isLive) = row else { continue }
+            guard case .steps(let id, let blocks, _, let isLive) = row else { continue }
             guard isLive, case .reasoning = blocks.last else { return nil }
             return Thinking(row: id, step: blocks.count)
         }
@@ -80,7 +80,7 @@ struct TranscriptView: View {
         var subagents = Set<String>()
         for row in rows {
             switch row {
-            case .steps(_, let blocks, _):
+            case .steps(_, let blocks, _, _):
                 for case .tool(let call) in blocks { steps.insert(call.id) }
             case .subagent(let call):
                 if let session = call.state.metadata?["sessionID"]?.string ?? workspace.subagent(forStep: call.id)?.subagent.id { subagents.insert(session) }
@@ -289,7 +289,7 @@ struct TranscriptView: View {
                  whole: \.copiesWhole,
                  space: { row, index in index == 0 ? 0 : row.spacing(after: rows[index - 1]) },
                  pointer: { [hover] in hover.point(at: $0) }) { row, index in
-            RowView(row: row, directory: model.session.location.directory, folders: model.folders, heard: model.heard, cancel: model.cancelPending, undo: model.undo(from:), redo: model.redo, fork: fork(_:), retry: model.retry(_:), switchModel: switchModel, buildPlan: model.agent == "plan" && !isOffline ? { model.buildPlan() } as () -> Void : nil, reply: model.reply(to:))
+            RowView(row: row, scope: model.session.id, directory: model.session.location.directory, folders: model.folders, heard: model.heard, cancel: model.cancelPending, undo: model.undo(from:), redo: model.redo, fork: fork(_:), retry: model.retry(_:), switchModel: switchModel, buildPlan: model.agent == "plan" && !isOffline ? { model.buildPlan() } as () -> Void : nil, reply: model.reply(to:))
                 .equatable()
                 .environment(\.findHighlight, find.highlight(for: row.id))
                 .padding(.top, index == 0 ? 0 : row.spacing(after: rows[index - 1]))
@@ -301,7 +301,7 @@ struct TranscriptView: View {
     /// The rows, in the lazy stack (KUVO_PERF_LAZY).
     @ViewBuilder private func stackRows(_ rows: [Row]) -> some View {
         ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
-            RowView(row: row, directory: model.session.location.directory, folders: model.folders, heard: model.heard, cancel: model.cancelPending, undo: model.undo(from:), redo: model.redo, fork: fork(_:), retry: model.retry(_:), switchModel: switchModel, buildPlan: model.agent == "plan" && !isOffline ? { model.buildPlan() } as () -> Void : nil, reply: model.reply(to:))
+            RowView(row: row, scope: model.session.id, directory: model.session.location.directory, folders: model.folders, heard: model.heard, cancel: model.cancelPending, undo: model.undo(from:), redo: model.redo, fork: fork(_:), retry: model.retry(_:), switchModel: switchModel, buildPlan: model.agent == "plan" && !isOffline ? { model.buildPlan() } as () -> Void : nil, reply: model.reply(to:))
                 .equatable()
                 .environment(\.findHighlight, find.highlight(for: row.id))
                 .conversationRow(row.id)
@@ -410,6 +410,7 @@ struct TranscriptView: View {
         var current = firstSwitch.map(\.previous) ?? model.session.model
         // Summed up: the agent's steps between its replies, gathered into one row.
         var steps: [Message.Content] = []
+        var stepKeys: [String] = []
         var stepsID = ""
         // The end of each message's turn, found in one pass rather than looked for from each.
         var turnEnds: [Message.Idle?] = Array(repeating: nil, count: messages.count)
@@ -430,8 +431,9 @@ struct TranscriptView: View {
         func flushSteps(live: Bool) {
             guard !steps.isEmpty else { return }
             if !live, StepsRow.saysTime(steps, detail: stepsDetail) { turn.stepsSayTime = true }
-            rows.append(.steps(stepsID, steps, isLive: live))
+            rows.append(.steps(stepsID, steps, keys: stepKeys, isLive: live))
             steps = []
+            stepKeys = []
         }
         for (index, message) in messages.enumerated() {
             // Only what shows ends the run of steps: guidance the engine adds partway through a
@@ -493,6 +495,13 @@ struct TranscriptView: View {
                     case .reasoning, .tool:
                         if steps.isEmpty { stepsID = "steps-" + assistant.id + "#\(part)" }
                         steps.append(block)
+                        // Where it is in its message: a read says the same, and a tool call's id
+                        // is the provider's, which some use again from one reply to the next.
+                        if case .tool(let call) = block {
+                            stepKeys.append(assistant.id + "#" + call.id)
+                        } else {
+                            stepKeys.append(assistant.id + "#\(part)")
+                        }
                     case .other:
                         break
                     }
@@ -691,7 +700,7 @@ enum Row: Identifiable, Hashable {
     case more(Message.Assistant, gap: CGFloat)
     /// The agent's steps between its replies, summed up (`StepsDetail`); `isLive`, the last of
     /// them is under way.
-    case steps(String, [Message.Content], isLive: Bool)
+    case steps(String, [Message.Content], keys: [String], isLive: Bool)
     /// Something the agent made with show_widget, drawn in the conversation.
     case widget(Message.ToolCall)
     /// An image it made.
@@ -769,7 +778,7 @@ enum Row: Identifiable, Hashable {
     /// as shown), a line of steps as its summary.
     func copiedText(folders: [String]) -> String {
         switch self {
-        case .steps(_, let blocks, _):
+        case .steps(_, let blocks, _, _):
             return StepsRow.summary(of: blocks)
         default:
             return findParts.map { part in
@@ -810,7 +819,7 @@ enum Row: Identifiable, Hashable {
         switch self {
         case .user(let m): m.id
         case .assistant(let m, _), .more(let m, _): m.id
-        case .steps(let id, _, _): id
+        case .steps(let id, _, _, _): id
         case .widget(let call): call.id
         case .picture(let call): call.id
         case .sent(let call): call.id
@@ -834,6 +843,8 @@ private struct RowView: View, Equatable {
 
     let row: Row
     @Environment(\.bot) private var bot
+    /// The conversation it's in, which what you open in it is kept under.
+    let scope: String
     let directory: String
     let folders: () -> [String]
     /// When the model was last heard, and how far this Mac's clock is ahead of the engine's, as of
@@ -914,8 +925,8 @@ private struct RowView: View, Equatable {
             AssistantStepView(message: message, directory: directory, folders: folders, showsError: showsError)
         case .more(let message, _):
             AssistantStepView(message: message, directory: directory, folders: folders, showsError: false)
-        case .steps(_, let blocks, let isLive):
-            StepsRow(blocks: blocks, isLive: isLive, directory: directory)
+        case .steps(_, let blocks, let keys, let isLive):
+            StepsRow(scope: scope, blocks: blocks, keys: keys, isLive: isLive, directory: directory)
         case .widget(let call):
             WidgetCard(call: call, send: answerAgent)
         case .picture(let call):
@@ -923,7 +934,7 @@ private struct RowView: View, Equatable {
         case .sent(let call):
             AgentSentRow(call: call)
         case .subagent(let call):
-            SubagentRow(call: call, directory: directory)
+            SubagentRow(call: call, directory: directory, scope: scope)
         case .turnEnd(let idle, let stats, let isLast, let isLatest):
             TurnEndView(idle: idle, stats: stats, directory: directory, retry: isLast && !isOffline && !takesNoMessages ? stats.message.map { message in { retry(message) } } : nil,
                         switchModel: isLast && !isOffline && !takesNoMessages ? switchModel : nil,
@@ -1237,9 +1248,9 @@ private struct AssistantStepView: View {
                         WritingText(row: message.id, part: index, text: text.text, folders: folders,
                                     isWriting: message.time.completed == nil && index == message.content.count - 1)
                     case .reasoning(let reasoning):
-                        ReasoningView(block: reasoning)
+                        ReasoningView(block: reasoning, foldKey: message.id + "#\(index)")
                     case .tool(let call):
-                        ToolCallView(call: call, directory: directory)
+                        ToolCallView(call: call, directory: directory, foldKey: message.id + "#" + call.id)
                     case .other:
                         EmptyView()
                     }
@@ -1403,12 +1414,18 @@ private struct MarkdownPiece: View, Equatable {
 /// The model's thinking: one quiet line, open it to read.
 struct ReasoningView: View {
     let block: Message.Content.Text
-    @State private var isExpanded = false
+    /// What your opening it is kept by, as its view may not last (see `CardFolds`).
+    let foldKey: String
+    @State private var opened = false
+    @Environment(\.scrollAnchor) private var scrollAnchor
+
+    private var isExpanded: Bool { CardFolds.shared.isOpen(foldKey, otherwise: opened) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
-                withAnimation(.ui) { isExpanded.toggle() }
+                // Under way, it's kept in view as it grows, and stays where it is once it ends.
+                CardFolds.shared.toggle(foldKey, open: !isExpanded, in: scrollAnchor, holds: block.isComplete)
             } label: {
                 HStack(spacing: 8) {
                     Image(systemName: "brain")
@@ -1443,9 +1460,14 @@ struct ReasoningView: View {
                     .transition(.fold)
             }
         }
+        .foldOpen(isExpanded)
+        // Stays where it is from when it ends, as what's next comes in under it.
+        .onChange(of: block.isComplete) { _, ended in
+            if ended, CardFolds.shared.isOpen(foldKey, otherwise: false) { scrollAnchor?.reading?(foldKey, true) }
+        }
         #if DEBUG
         // KUVO_DEMO_OPEN_STEPS: the thinking shows, opened.
-        .onAppear { if ProcessInfo.processInfo.environment["KUVO_DEMO_OPEN_STEPS"] != nil { isExpanded = true } }
+        .onAppear { if ProcessInfo.processInfo.environment["KUVO_DEMO_OPEN_STEPS"] != nil { opened = true } }
         #endif
     }
 
@@ -2012,6 +2034,25 @@ final class CardFolds {
 
     func isOpen(_ id: String, otherwise open: Bool) -> Bool { choices[id] ?? open }
     func set(_ id: String, open: Bool) { choices[id] = open }
+    func forget(_ id: String) { choices[id] = nil }
+    /// What was opened or closed among those kept under this, closed with what they're in.
+    func kept(under prefix: String) -> [String] { choices.keys.filter { $0.hasPrefix(prefix) } }
+
+    /// Steps you opened or closed, in their conversation: opened, once they have, the end is no
+    /// longer followed, so what comes in next doesn't move what you read (`holds` false: a step
+    /// under way, kept in view until it ends); closing what you opened goes back to it (see
+    /// `ConversationScroller.reading`). `closes`: what goes with it.
+    func toggle(_ id: String, open: Bool, in anchor: ScrollAnchor?, holds: Bool = true, closes: [String] = []) {
+        withAnimation(.ui) {
+            set(id, open: open)
+            closes.forEach(forget)
+        } completion: { [weak anchor] in
+            // Not if you've changed your mind since. (What's closed with others is forgotten.)
+            guard self.isOpen(id, otherwise: closes.contains(id) ? false : !open) == open else { return }
+            for closed in closes { anchor?.reading?(closed, false) }
+            if !open || holds { anchor?.reading?(id, open) }
+        }
+    }
 }
 
 /// Words between agents, in a well: a header (what it is, from or to whom) whose click folds the
