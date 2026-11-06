@@ -1047,13 +1047,16 @@ class CodexThread implements Thread {
     this.inTurn = true
     try {
       let result = await this.runTurn(input, turn, hooks)
+      let turnedDown = 0
       // Codex asked you something as it ended (outside Plan its question doesn't wait for you, the
       // way the engine's and Claude's do): its card asks it in this turn, and Codex goes on with
       // your answer.
       while (result.outcome === "succeeded" && this.asked?.length && !hooks.signal.aborted) {
         const answer = await this.answer(this.asked, hooks)
         if (!answer) break
-        result = await this.runTurn({ ...input, ...answer, adopt: false }, turn, hooks)
+        // (Turned down by its box and asking again and again: its turn ends, rather than run up its tokens with nobody there.)
+        if (answer.declined && ++turnedDown > 2) break
+        result = await this.runTurn({ ...input, text: answer.text, files: answer.files, adopt: false }, turn, hooks)
       }
       return hooks.signal.aborted && result.outcome === "succeeded" ? { outcome: "interrupted" } : result
     } finally {
@@ -1063,7 +1066,7 @@ class CodexThread implements Thread {
   }
 
   /** What you answered Codex's question with (the card, or a message you sent meanwhile), or nothing (dismissed). */
-  private async answer(questions: NonNullable<CodexThread["asked"]>, hooks: TurnHooks): Promise<{ text: string; files: PromptFile[] } | undefined> {
+  private async answer(questions: NonNullable<CodexThread["asked"]>, hooks: TurnHooks): Promise<{ text: string; files: PromptFile[]; declined?: boolean } | undefined> {
     this.asked = undefined
     const waiting: NonNullable<CodexThread["waiting"]> = { abort: new AbortController() }
     this.waiting = waiting
@@ -1077,8 +1080,11 @@ class CodexThread implements Thread {
         options: (question.options ?? []).map((option) => ({ value: option, label: option })),
         custom: true,
       }))
-      const answer = await hooks.question({ title: questions.length === 1 ? "Question" : "Questions", fields, signal: waiting.abort.signal })
+      let declined: string | undefined
+      const answer = await hooks.question({ title: questions.length === 1 ? "Question" : "Questions", fields, signal: waiting.abort.signal, declined: (words) => { declined = words } })
       if (waiting.typed) return { text: waiting.typed.text, files: waiting.typed.files }
+      // Turned down by its box with words: it hears them and carries on.
+      if (!answer && declined) return { text: declined, files: [], declined: true }
       if (!answer) return undefined
       const said = (index: number) => {
         const value = answer[`q${index}`]
@@ -1831,10 +1837,12 @@ class CodexThread implements Thread {
           // A secret (a password, a key): hidden as it's typed.
           ...(question.isSecret ? { format: "password" } : {}),
         }))
-        const answer = await hooks.question({ title: questions.length === 1 ? questions[0].header ?? "Question" : "Questions", fields, toolCallID: params.itemId })
+        let declined: string | undefined
+        const answer = await hooks.question({ title: questions.length === 1 ? questions[0].header ?? "Question" : "Questions", fields, toolCallID: params.itemId, declined: (words) => { declined = words } })
         const answers: Record<string, { answers: string[] }> = {}
         for (const question of questions) {
-          const value = answer?.[question.id]
+          // (Turned down by its box with words: that's what it hears, never as a secret.)
+          const value = answer?.[question.id] ?? (question.isSecret ? undefined : declined)
           answers[question.id] = { answers: value === undefined || value === null ? [] : Array.isArray(value) ? value.map(String) : [String(value)] }
         }
         return { answers }
@@ -1851,8 +1859,9 @@ class CodexThread implements Thread {
         }
         // An MCP server asks you something (a form), or to open a page (a sign-in).
         const title = `${params.serverName ?? "A tool"} asks`
+        const metadata = { kind: "mcp-elicitation", server: String(params.serverName ?? "A tool") }
         if (params.mode === "url") {
-          const answer = await hooks.question({ title, fields: [{ key: "open", title: params.message ?? "Open this page to go on.", type: "external", url: params.url }] })
+          const answer = await hooks.question({ title, metadata, fields: [{ key: "open", title: params.message ?? "Open this page to go on.", type: "external", url: params.url }] })
           return { action: answer ? "accept" : "decline" }
         }
         const schema = params.requestedSchema ?? {}
@@ -1860,7 +1869,7 @@ class CodexThread implements Thread {
         const fields: FormField[] = Object.entries((schema.properties ?? {}) as Record<string, any>).map(([key, field]) => elicitationField(key, field, required.has(key)))
         // Its message goes with the form's first field; a form with no fields is a yes or no.
         if (fields[0] && params.message) fields[0] = { ...fields[0], description: [params.message, fields[0].description].filter(Boolean).join("\n\n") }
-        const answer = await hooks.question({ title, fields: fields.length ? fields : [{ key: "ok", title: params.message ?? "Go on?", type: "boolean", required: true }] })
+        const answer = await hooks.question({ title, metadata, fields: fields.length ? fields : [{ key: "ok", title: params.message ?? "Go on?", type: "boolean", required: true }] })
         if (!answer) return { action: "decline" }
         const content: Record<string, unknown> = {}
         for (const [key, field] of Object.entries((schema.properties ?? {}) as Record<string, any>)) {

@@ -6,6 +6,7 @@ import { spawnSync } from "node:child_process"
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
 import { dirname, join } from "node:path"
+import { handler } from "../../src/agents/server"
 import { ClaudeAgent } from "../../src/agents/agents/claude"
 import { subscribe } from "../../src/agents/events"
 import { repositoryOf } from "../../src/agents/fence"
@@ -1340,12 +1341,21 @@ describe("Claude Code's permissions", () => {
     await until(() => sessions.forms(id).length === 1)
     const [form] = sessions.forms(id)
     expect(form.fields[0]).toMatchObject({ title: "Database", description: "Which database?", options: [{ value: "Postgres" }, { value: "SQLite", description: "One file" }] })
+    expect(form.metadata).toMatchObject({ kind: "question", tool: { id: "toolu_1" } })
     sessions.replyForm(id, form.id, { q0: "SQLite" })
     expect(await asked).toMatchObject({ behavior: "allow", updatedInput: { questions, answers: { "Which database?": "SQLite" } } })
     const again = fake.canUse("AskUserQuestion", { questions }, "toolu_2")
     await until(() => sessions.forms(id).length === 1)
     sessions.replyForm(id, sessions.forms(id)[0].id, null)
     expect(await again).toMatchObject({ behavior: "deny" })
+    // Turned down by its box, with words: those are what it hears, not that you dismissed it.
+    const left = fake.canUse("AskUserQuestion", { questions }, "toolu_3")
+    await until(() => sessions.forms(id).length === 1)
+    // (As the box does: the bridge's own route.)
+    const answer = handler({ sessions, password: "pw" } as any)
+    const route = `http://box/api/session/${id}/form/${sessions.forms(id)[0].id}?message=${encodeURIComponent("This is on Autopilot: leave it.")}`
+    expect((await answer(new Request(route, { method: "DELETE", headers: { authorization: "Basic " + btoa("opencode:pw") } }))).status).toBe(200)
+    expect(await left).toMatchObject({ behavior: "deny", message: "This is on Autopilot: leave it." })
   })
 })
 

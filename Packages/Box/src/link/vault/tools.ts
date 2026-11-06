@@ -13,8 +13,9 @@ import { homeFolder, IS_MAC, RUN } from "../home";
 import { ask } from "./asks";
 import { type Hidden, maskValues } from "./mask";
 import { itemNamed, noteUsed, readItems, setGrant, siteOf, valuesOf, VaultRefusal } from "./store";
-import { type Caller, grantFor } from "./who";
-import { allowOnce, alwaysFor, mayUse, noteUse } from "./use";
+import { LEFT_UNDONE_WORDS } from "../work/autopilot";
+import { type Caller, grantFor, untilOnAutopilot } from "./who";
+import { allowOnce, AUTOPILOT_HOW, alwaysFor, mayUse, noteUse } from "./use";
 import { note } from "./activity";
 import { commandEnv, runCommand } from "../run-command";
 
@@ -100,17 +101,23 @@ async function askForItem(caller: Caller, args: Record<string, unknown>, signal?
   const why = oneLine(typeof args.why === "string" ? args.why : "", 300).trim();
   if (!need || !why) return failed("Say what you need and why.");
   const site = siteOf(args.site) ?? undefined;
-  note({ what: "asked", ...(caller.bot ? { bot: caller.bot, botName: caller.botName } : {}), ...(caller.root ? { session: caller.root, sessionName: caller.sessionName } : {}), why: `${need}: ${why}`, ...(site ? { site } : {}) });
-  const answered = await ask({
+  const asker = { ...(caller.bot ? { bot: caller.bot, botName: caller.botName } : {}), ...(caller.root ? { session: caller.root, sessionName: caller.sessionName } : {}) };
+  const leftUndone = (): ToolAnswer => {
+    note({ what: "refused", ...asker, why: `${need}: ${why}`, ...(site ? { site } : {}), how: AUTOPILOT_HOW });
+    return { text: LEFT_UNDONE_WORDS, isError: false };
+  };
+  if (caller.autopilot) return leftUndone();
+  note({ what: "asked", ...asker, why: `${need}: ${why}`, ...(site ? { site } : {}) });
+  const { value: answered, onAutopilot } = await untilOnAutopilot(caller.session, signal, stops => ask({
     kind: "item",
     need,
     why,
     ...(caller.group ? { group: caller.group } : {}),
     ...(site ? { site } : {}),
-    ...(caller.bot ? { bot: caller.bot, botName: caller.botName } : {}),
-    ...(caller.root ? { session: caller.root, sessionName: caller.sessionName } : {}),
+    ...asker,
     ...(IS_MAC ? {} : { machine: os.hostname() }),
-  }, signal);
+  }, stops));
+  if (onAutopilot) return leftUndone();
   const item = answered.item ? readItems().find(each => each.id === answered.item) : undefined;
   if (answered.answer === "no" || !item) return { text: "The user didn't give you anything for this. Go on without it, or say what's missing in your report.", isError: false };
   // Given always: this bot's (or project's) to use on its own; given once: its next use goes ahead.
@@ -177,7 +184,8 @@ async function runWith(caller: Caller, args: Record<string, unknown>, signal?: A
   for (const { item } of wanted) {
     if (allowed.has(item.id)) continue;
     const may = await mayUse(item, caller, { program, why, askWithout: true, signal });
-    if (!may.ok) return failed(may.message);
+    // (What Autopilot leaves undone isn't a failed command.)
+    if (!may.ok) return may.leftUndone ? { text: may.message, isError: false } : failed(may.message);
     allowed.set(item.id, may.how);
   }
   const scratch = path.join(RUN_FOLDER, crypto.randomBytes(8).toString("hex"));

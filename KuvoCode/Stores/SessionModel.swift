@@ -441,6 +441,13 @@ final class SessionModel {
     /// Reads and changes of Auto's decisions asked for so far (`readDecisions`).
     @ObservationIgnored var decisionsAsked = 0
     @ObservationIgnored var approvalChanges = 0
+    /// Its Autopilot as its box shows it (`readAutopilot`); nil until read.
+    var autopilotShown: AutopilotShown?
+    /// Its box is from before Autopilot: the Mode menu says so instead of offering it.
+    var autopilotUnavailable = false
+    /// Switches of Autopilot asked for so far, and still on their way to its box.
+    @ObservationIgnored var autopilotChanges = 0
+    @ObservationIgnored var autopilotPending = 0
     /// Picks of its approval still on their way to its box, and how many were made since none was.
     @ObservationIgnored var approvalsPending = 0
     @ObservationIgnored var approvalBurst = 0
@@ -874,8 +881,13 @@ final class SessionModel {
         switch event.type {
         case "session.tool.success", "session.tool.failed", "session.execution.succeeded", "session.execution.interrupted", "session.execution.failed":
             if approval == .auto || decisions?.paused != nil { readDecisions() }
+            // A question it went ahead on, on Autopilot, ends as a tool call: its line shows there.
+            if event.type == "session.tool.success", isAutopilot { Task { await readAutopilot() } }
         case "session.updated", "session.metadata.updated":
-            Task { await readApproval() }
+            Task {
+                await readApproval()
+                await readAutopilot()
+            }
         default:
             break
         }
@@ -1221,6 +1233,8 @@ final class SessionModel {
             case .goal: takesGoals
             case .review, .btw, .handoff: keywordsRun
             case .loop, .plan: true
+            // Where its box has it.
+            case .autopilot: autopilotShown != nil
             // Summarizing is the engine's: the coding agents keep their own context.
             case .compact: !OutsideAgents.isAgentSession(session)
             }
@@ -1253,7 +1267,7 @@ final class SessionModel {
     /// goes back to the composer as `written`, and says why. Only /plan and /loop's messages take
     /// files: the others leave them in the composer.
     private func runKeyword(_ keyword: Keyword, rest: String, written: String, files: [URL], for model: Model?, queue: Bool) {
-        if !files.isEmpty, keyword != .plan, keyword != .loop { restore(text: "", files: files) }
+        if !files.isEmpty, keyword != .plan, keyword != .loop, keyword != .autopilot { restore(text: "", files: files) }
         switch keyword {
         case .goal:
             break
@@ -1261,6 +1275,17 @@ final class SessionModel {
             // Alone, it turns Plan on or off; with words, it plans them.
             if rest.isEmpty && files.isEmpty { togglePlan() } else { selectAgent("plan") }
             if !rest.isEmpty { send(rest, files: files, for: model, queue: queue, typed: Keyword.plan.typed) } else if !files.isEmpty { restore(text: "", files: files) }
+        case .autopilot:
+            // Alone, it turns Autopilot on or off; with words, it does them on Autopilot (set on
+            // its box first, so its agent works that way from the first word).
+            if rest.isEmpty && files.isEmpty {
+                setAutopilot(!isAutopilot)
+            } else {
+                Task {
+                    guard await switchAutopilot(true) else { return restore(text: written, files: files) }
+                    if rest.isEmpty { restore(text: "", files: files) } else { send(rest, files: files, for: model, queue: queue, typed: Keyword.autopilot.typed) }
+                }
+            }
         case .compact:
             compact()
         case .loop:
@@ -1989,6 +2014,13 @@ final class SessionModel {
 
     /// What its box answers (`kuvo/info`'s `features`), once read; this Mac's has all of them.
     @ObservationIgnored private var readFeatures: Set<String>?
+    /// Whether its box answers `feature` (`kuvo/info`'s `features`); this Mac's answers them all.
+    func boxHas(_ feature: String) async -> Bool {
+        guard let box = box() else { return false }
+        guard box.box != BoxClient.mac else { return true }
+        return await boxFeatures().contains(feature)
+    }
+
     private func boxFeatures() async -> Set<String> {
         if let readFeatures { return readFeatures }
         guard let box = box() else { return [] }

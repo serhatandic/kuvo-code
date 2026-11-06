@@ -45,6 +45,7 @@ const TOKEN = "glpat-very-secret-token-0001";
 const work = path.join(home, "work", "app");
 const conversations = {
   ses_ship: { id: "ses_ship", title: "Ship", location: { directory: home } },
+  ses_away: { id: "ses_away", title: "On Autopilot", location: { directory: home }, metadata: { kuvo: { autopilot: true } } },
   ses_seat: { id: "ses_seat", title: "Release chat", location: { directory: home }, metadata: { kuvo: { seat: { group: "grp_release", bot: "bot_ship" } } } },
   ses_sub: { id: "ses_sub", parentID: "ses_lost", title: "A subagent", location: { directory: home } },
   ses_work: { id: "ses_work", title: "Fix the release build", location: { directory: work }, metadata: { kuvo: { startedBy: "ses_ship", by: { bot: "bot_ship", name: "Ship" }, depth: 1 } } },
@@ -247,6 +248,16 @@ test("its seat signs in with a sign-in it could use on its own only once you say
   const filled = await filling;
   assert.equal(filled.status, 200, JSON.stringify(filled.value));
   assert.equal(filled.value.values.password, "staging-pw-0004");
+});
+
+test("on Autopilot a command needing an item it can't use on its own isn't a failed step: it runs nothing, asks nothing and says what's left", async () => {
+  assert.equal((await client("POST", "kuvo/vault/items", { kind: "key", name: "Release key", sites: [], values: { token: "release-secret-0009" } })).status, 200);
+  const ran = await call("vault_run", { command: "echo \"using $T\"", variables: { T: "Release key" }, why: "To upload." }, "ses_away");
+  assert.equal(ran.isError, false, ran.content[0].text);
+  assert.match(ran.content[0].text, /This is on Autopilot: nothing was put to the user/);
+  assert.deepEqual((await client("GET", "kuvo/vault/asks")).value.asks ?? [], []);
+  const activity = (await client("GET", "kuvo/vault/activity")).value.entries;
+  assert.ok(activity.some(each => each.what === "refused" && each.itemName === "Release key" && each.how === "autopilot"), JSON.stringify(activity.slice(-3)));
 });
 
 test("a conversation whose root the engine can't say just then asks you, whatever everyone may use", async () => {

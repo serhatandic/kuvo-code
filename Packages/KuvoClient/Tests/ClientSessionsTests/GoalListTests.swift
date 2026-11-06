@@ -149,3 +149,25 @@ struct GoalListTests {
         #expect(shown.waiting.count == 3, "elsewhere, all three")
     }
 }
+
+/// A goal's calls, as a box sends them and a client answers one.
+@Suite struct GoalCallsTests {
+    @Test func aGoalsCallsDecodeAndYourChoiceOnOneGoesAsItsBoxReadsIt() throws {
+        let json = #"{"id":"g","bot":"b","name":"Ada","session":"s","goal":"Ship","state":"running","steps":[],"proposed":1,"mode":"autopilot","decided":[{"id":"ask:s:frm","text":"Which roast?","choice":"Warm","why":"best reviewed","options":["Warm","Dark"],"session":"s","at":2,"yours":{"choice":"Dark","at":3}}]}"#
+        let plan = try JSONDecoder().decode(GoalPlan.self, from: Data(json.utf8))
+        let call = try #require(plan.decided.first)
+        #expect(call.choice == "Warm")
+        #expect(call.options == ["Warm", "Dark"])
+        #expect(call.yours?.choice == "Dark")
+
+        let sent = try JSONSerialization.jsonObject(with: JSONEncoder().encode(GoalPlanAnswer.decided(call.id, choice: "Warm"))) as? [String: Any]
+        #expect(sent?["action"] as? String == "decided")
+        #expect(sent?["decided"] as? String == "ask:s:frm")
+        #expect(sent?["choice"] as? String == "Warm")
+    }
+
+    @Test func aBoxFromBeforeItsCallsHasNone() throws {
+        let json = #"{"id":"g","bot":"b","name":"Ada","session":"s","goal":"Ship","state":"running","steps":[],"proposed":1}"#
+        #expect(try JSONDecoder().decode(GoalPlan.self, from: Data(json.utf8)).decided.isEmpty)
+    }
+}

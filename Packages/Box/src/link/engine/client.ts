@@ -53,8 +53,8 @@ export interface EngineAnswer<T> {
 }
 
 // Asks the engine for `route` (a path under its API), as JSON.
-export function engineGet(engine: Target, route: string): Promise<unknown> {
-  return fetch(`http://127.0.0.1:${engine.port}/${route}`, { headers: { authorization: `Basic ${Buffer.from(`opencode:${engine.password}`).toString("base64")}` }, signal: AbortSignal.timeout(10_000) })
+export function engineGet(engine: Target, route: string, folder?: string): Promise<unknown> {
+  return fetch(`http://127.0.0.1:${engine.port}/${route}`, { headers: { authorization: `Basic ${Buffer.from(`opencode:${engine.password}`).toString("base64")}`, ...(folder ? { "x-opencode-directory": encodeURIComponent(folder) } : {}) }, signal: AbortSignal.timeout(10_000) })
     .then(response => response.ok ? response.json() : Promise.reject(new Error(`${response.status}`)));
 }
 

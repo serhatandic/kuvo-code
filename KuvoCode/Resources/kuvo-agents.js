@@ -3343,14 +3343,17 @@ class EngineThread {
     };
     const answerForm = async (form) => {
       let answer = null;
+      let words;
       try {
-        answer = await hooks.question({ title: form.title ?? "A question", fields: form.fields ?? [] });
+        answer = await hooks.question({ title: form.title ?? "A question", fields: form.fields ?? [], metadata: { kind: "form", ...form.metadata }, declined: (said) => {
+          words = said;
+        } });
       } catch {}
       const formPath = `/api/session/${encodeURIComponent(form.sessionID)}/form/${encodeURIComponent(form.id)}`;
       if (answer)
         await this.link.request("POST", `${formPath}/reply`, { answer }).catch(() => {});
       else
-        await this.link.request("DELETE", formPath).catch(() => {});
+        await this.link.request("DELETE", words ? `${formPath}?message=${encodeURIComponent(words)}` : formPath).catch(() => {});
     };
     const followShell = (tool, shellID) => {
       if (shells.has(tool))
@@ -7996,7 +7999,11 @@ ${others.map((path) => `- ${path}`).join(`
         if (String(call.toolCallId ?? "").startsWith("interaction_")) {
           const answer = await active.hooks.question({
             title: "Question",
-            fields: [{ key: "answer", title: "Question", description: call.title ?? "", required: true, type: "string", options: options.map((option) => ({ value: option.optionId, label: option.name ?? option.optionId })) }]
+            toolCallID: call.toolCallId,
+            fields: [{ key: "answer", title: "Question", description: call.title ?? "", required: true, type: "string", options: options.map((option) => ({ value: option.optionId, label: option.name ?? option.optionId })) }],
+            declined: (words) => {
+              (active.declined ??= new Map).set(call.toolCallId, words);
+            }
           });
           const chosen = answer?.answer;
           return chosen ? { outcome: { outcome: "selected", optionId: String(chosen) } } : { outcome: { outcome: "cancelled" } };
@@ -8058,8 +8065,9 @@ ${others.map((path) => `- ${path}`).join(`
       case "elicitation/create": {
         if (!active)
           return { action: "decline" };
+        const metadata = { kind: "mcp-elicitation", server: this.name };
         if (params?.mode === "url" && params.url) {
-          const answer = await active.hooks.question({ title: `${this.name} asks`, fields: [{ key: "open", title: params.message ?? "Open this page to go on.", type: "external", url: params.url }] });
+          const answer = await active.hooks.question({ title: `${this.name} asks`, metadata, fields: [{ key: "open", title: params.message ?? "Open this page to go on.", type: "external", url: params.url }] });
           return { action: answer ? "accept" : "decline" };
         }
         const schema = params?.requestedSchema ?? {};
@@ -8069,7 +8077,7 @@ ${others.map((path) => `- ${path}`).join(`
           fields[0] = { ...fields[0], description: [params.message, fields[0].description].filter(Boolean).join(`
 
 `) };
-        const answer = await active.hooks.question({ title: `${this.name} asks`, fields: fields.length ? fields : [{ key: "ok", title: params?.message ?? "Go on?", type: "boolean", required: true }] });
+        const answer = await active.hooks.question({ title: `${this.name} asks`, metadata, fields: fields.length ? fields : [{ key: "ok", title: params?.message ?? "Go on?", type: "boolean", required: true }] });
         if (!answer)
           return { action: "decline" };
         const content = {};
@@ -8110,6 +8118,8 @@ ${others.map((path) => `- ${path}`).join(`
   }
 }
 function kuvoTool(call) {
+  if (String(call.toolCallId ?? "").startsWith("interaction_"))
+    return { name: "question", input: { questions: [{ question: call.title ?? "" }] } };
   const raw = call.rawInput ?? {};
   const path = call.locations?.[0]?.path ?? raw.path ?? raw.file_path ?? raw.filePath;
   const command = Array.isArray(raw.command) ? raw.command.join(" ") : raw.command ?? raw.CommandLine ?? raw.command_line ?? raw.commandLine;
@@ -11140,9 +11150,12 @@ class ClaudeThread {
         options: (question.options ?? []).map((option) => ({ value: option.label, label: option.label, description: option.description })),
         custom: true
       }));
-      const answer = await hooks.question({ title: questions.length === 1 ? questions[0].header ?? "Question" : "Questions", fields, toolCallID: toolUseID });
+      let declinedWords;
+      const answer = await hooks.question({ title: questions.length === 1 ? questions[0].header ?? "Question" : "Questions", fields, toolCallID: toolUseID, declined: (words) => {
+        declinedWords = words;
+      } });
       if (!answer)
-        return { behavior: "deny", message: "The user dismissed the question.", toolUseID };
+        return { behavior: "deny", message: declinedWords ?? "The user dismissed the question.", toolUseID };
       const answers = {};
       questions.forEach((question, index) => {
         const value = answer[`q${index}`];
@@ -12453,11 +12466,14 @@ class CodexThread {
     this.inTurn = true;
     try {
       let result = await this.runTurn(input, turn, hooks);
+      let turnedDown = 0;
       while (result.outcome === "succeeded" && this.asked?.length && !hooks.signal.aborted) {
         const answer = await this.answer(this.asked, hooks);
         if (!answer)
           break;
-        result = await this.runTurn({ ...input, ...answer, adopt: false }, turn, hooks);
+        if (answer.declined && ++turnedDown > 2)
+          break;
+        result = await this.runTurn({ ...input, text: answer.text, files: answer.files, adopt: false }, turn, hooks);
       }
       return hooks.signal.aborted && result.outcome === "succeeded" ? { outcome: "interrupted" } : result;
     } finally {
@@ -12479,9 +12495,14 @@ class CodexThread {
         options: (question.options ?? []).map((option) => ({ value: option, label: option })),
         custom: true
       }));
-      const answer = await hooks.question({ title: questions.length === 1 ? "Question" : "Questions", fields, signal: waiting.abort.signal });
+      let declined;
+      const answer = await hooks.question({ title: questions.length === 1 ? "Question" : "Questions", fields, signal: waiting.abort.signal, declined: (words) => {
+        declined = words;
+      } });
       if (waiting.typed)
         return { text: waiting.typed.text, files: waiting.typed.files };
+      if (!answer && declined)
+        return { text: declined, files: [], declined: true };
       if (!answer)
         return;
       const said = (index) => {
@@ -13246,10 +13267,13 @@ From memory: ${cited.join("; ")}`);
           custom: question.isOther ?? !question.options?.length,
           ...question.isSecret ? { format: "password" } : {}
         }));
-        const answer = await hooks.question({ title: questions.length === 1 ? questions[0].header ?? "Question" : "Questions", fields, toolCallID: params.itemId });
+        let declined;
+        const answer = await hooks.question({ title: questions.length === 1 ? questions[0].header ?? "Question" : "Questions", fields, toolCallID: params.itemId, declined: (words) => {
+          declined = words;
+        } });
         const answers = {};
         for (const question of questions) {
-          const value = answer?.[question.id];
+          const value = answer?.[question.id] ?? (question.isSecret ? undefined : declined);
           answers[question.id] = { answers: value === undefined || value === null ? [] : Array.isArray(value) ? value.map(String) : [String(value)] };
         }
         return { answers };
@@ -13262,8 +13286,9 @@ From memory: ${cited.join("; ")}`);
           return decision === "reject" ? { action: "decline", content: null } : { action: "accept", content: null };
         }
         const title = `${params.serverName ?? "A tool"} asks`;
+        const metadata = { kind: "mcp-elicitation", server: String(params.serverName ?? "A tool") };
         if (params.mode === "url") {
-          const answer = await hooks.question({ title, fields: [{ key: "open", title: params.message ?? "Open this page to go on.", type: "external", url: params.url }] });
+          const answer = await hooks.question({ title, metadata, fields: [{ key: "open", title: params.message ?? "Open this page to go on.", type: "external", url: params.url }] });
           return { action: answer ? "accept" : "decline" };
         }
         const schema = params.requestedSchema ?? {};
@@ -13273,7 +13298,7 @@ From memory: ${cited.join("; ")}`);
           fields[0] = { ...fields[0], description: [params.message, fields[0].description].filter(Boolean).join(`
 
 `) };
-        const answer = await hooks.question({ title, fields: fields.length ? fields : [{ key: "ok", title: params.message ?? "Go on?", type: "boolean", required: true }] });
+        const answer = await hooks.question({ title, metadata, fields: fields.length ? fields : [{ key: "ok", title: params.message ?? "Go on?", type: "boolean", required: true }] });
         if (!answer)
           return { action: "decline" };
         const content = {};
@@ -14677,12 +14702,15 @@ class GrokAgent {
         if (name === "x.ai/ask_user_question") {
           return (async () => {
             const questions = call?.questions ?? [];
-            const answer = context.hooks ? await context.hooks.question({ title: "Question", fields: questionFields(questions), toolCallID: call?.toolCallId }) : null;
-            if (!answer)
+            let declined;
+            const answer = context.hooks ? await context.hooks.question({ title: "Question", fields: questionFields(questions), toolCallID: call?.toolCallId, declined: (words) => {
+              declined = words;
+            } }) : null;
+            if (!answer && !declined)
               return { outcome: "cancelled" };
             const answers = {};
             questions.forEach((question, index) => {
-              const value = answer[question.id ?? `q${index}`];
+              const value = answer?.[question.id ?? `q${index}`] ?? declined;
               answers[question.question] = Array.isArray(value) ? value.map(String) : value === undefined ? [] : [String(value)];
             });
             return { outcome: "accepted", answers };
@@ -17589,9 +17617,9 @@ ${live.agentPrompt}` : ""
     const session = this.record(id).session;
     if (turn.isEnded || refusesAsks(live.doing))
       return Promise.resolve(null);
-    const form = { id: newID("frm"), sessionID: id, title: ask.title, metadata: { kind: "question" }, fields: ask.fields };
+    const form = { id: newID("frm"), sessionID: id, title: ask.title, metadata: { kind: "question", ...ask.metadata, ...ask.toolCallID ? { tool: { id: ask.toolCallID } } : {} }, fields: ask.fields };
     return new Promise((resolve) => {
-      live.forms.set(form.id, { form, resolve });
+      live.forms.set(form.id, { form, resolve, declined: ask.declined });
       emit("form.created", { form }, session.location.directory);
       ask.signal?.addEventListener("abort", () => {
         if (!live.forms.delete(form.id))
@@ -17605,12 +17633,14 @@ ${live.agentPrompt}` : ""
     this.record(id);
     return [...this.live.get(id)?.forms.values() ?? []].map((pending) => pending.form);
   }
-  replyForm(id, formID, answer) {
+  replyForm(id, formID, answer, declined) {
     const live = this.live.get(id);
     const pending = live?.forms.get(formID);
     if (!live || !pending)
       throw new NotFound("That question was answered already.");
     live.forms.delete(formID);
+    if (answer === null && declined)
+      pending.declined?.(declined);
     pending.resolve(answer);
     emit(answer ? "form.replied" : "form.cancelled", { id: formID, sessionID: id }, this.record(id).session.location.directory);
   }
@@ -22831,7 +22861,7 @@ function handler(context) {
               return json11({});
             }
             if (method === "DELETE") {
-              sessions.replyForm(id, c, null);
+              sessions.replyForm(id, c, null, url.searchParams.get("message") ?? undefined);
               return json11({});
             }
             break;
@@ -23322,4 +23352,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 7361915996bdc0454e0c7eccd80840d3f0b640615d4010ec6ccaf6083275f887
+// Built from Packages/Box/src/agents 95a5d87407b7661877fe46e08025355c7b2bef4c6dd702eb68a51964e6d47db3

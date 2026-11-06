@@ -1962,6 +1962,180 @@
    }
   },
   {
+   "route": "GET kuvo/sessions/:id/autopilot",
+   "answers": {
+    "200": {
+     "object": {
+      "autopilot": "bool",
+      "decided": {
+       "list": {
+        "object": {
+         "id": "string",
+         "text": "string",
+         "choice": "string",
+         "why?": "string",
+         "options?": {
+          "list": "string"
+         },
+         "multiple?": "bool",
+         "session?": "string",
+         "call?": "string",
+         "at": "number",
+         "yours?": {
+          "object": {
+           "choice": "string",
+           "at": "number"
+          }
+         }
+        }
+       }
+      }
+     }
+    },
+    "404": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "503": {
+     "object": {
+      "message": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "PUT kuvo/sessions/:id/autopilot",
+   "answers": {
+    "200": {
+     "object": {
+      "autopilot": "bool",
+      "decided": {
+       "list": {
+        "object": {
+         "id": "string",
+         "text": "string",
+         "choice": "string",
+         "why?": "string",
+         "options?": {
+          "list": "string"
+         },
+         "multiple?": "bool",
+         "session?": "string",
+         "call?": "string",
+         "at": "number",
+         "yours?": {
+          "object": {
+           "choice": "string",
+           "at": "number"
+          }
+         }
+        }
+       }
+      }
+     }
+    },
+    "400": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "404": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "502": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "503": {
+     "object": {
+      "message": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/sessions/:id/autopilot",
+   "answers": {
+    "200": {
+     "object": {
+      "autopilot": "bool",
+      "decided": {
+       "list": {
+        "object": {
+         "id": "string",
+         "text": "string",
+         "choice": "string",
+         "why?": "string",
+         "options?": {
+          "list": "string"
+         },
+         "multiple?": "bool",
+         "session?": "string",
+         "call?": "string",
+         "at": "number",
+         "yours?": {
+          "object": {
+           "choice": "string",
+           "at": "number"
+          }
+         }
+        }
+       }
+      }
+     }
+    },
+    "400": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "404": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "502": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "503": {
+     "object": {
+      "message": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/sessions/:id/autopilot/asked",
+   "answers": {
+    "200": {
+     "object": {
+      "waiting": "bool"
+     }
+    },
+    "400": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "404": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "503": {
+     "object": {
+      "message": "string"
+     }
+    }
+   }
+  },
+  {
    "route": "GET kuvo/asks",
    "answers": {
     "200": {
@@ -3046,6 +3220,9 @@
             "literal": "work.unanswering"
            },
            {
+            "literal": "autopilot"
+           },
+           {
             "literal": "vault"
            },
            {
@@ -3358,6 +3535,9 @@
            },
            {
             "literal": "work.unanswering"
+           },
+           {
+            "literal": "autopilot"
            },
            {
             "literal": "vault"
@@ -8614,6 +8794,7 @@
              }
             },
             "session?": "string",
+            "step?": "string",
             "at": "number"
            }
           }
@@ -8639,6 +8820,38 @@
           }
          },
          "report?": "string",
+         "mode": {
+          "oneOf": [
+           {
+            "literal": "interactive"
+           },
+           {
+            "literal": "autopilot"
+           }
+          ]
+         },
+         "decided": {
+          "list": {
+           "object": {
+            "id": "string",
+            "text": "string",
+            "choice": "string",
+            "why?": "string",
+            "options?": {
+             "list": "string"
+            },
+            "multiple?": "bool",
+            "session?": "string",
+            "at": "number",
+            "yours?": {
+             "object": {
+              "choice": "string",
+              "at": "number"
+             }
+            }
+           }
+          }
+         },
          "alone": "bool",
          "folders?": {
           "list": {
@@ -8891,6 +9104,7 @@
              }
             },
             "session?": "string",
+            "step?": "string",
             "at": "number"
            }
           }
@@ -8916,6 +9130,38 @@
           }
          },
          "report?": "string",
+         "mode": {
+          "oneOf": [
+           {
+            "literal": "interactive"
+           },
+           {
+            "literal": "autopilot"
+           }
+          ]
+         },
+         "decided": {
+          "list": {
+           "object": {
+            "id": "string",
+            "text": "string",
+            "choice": "string",
+            "why?": "string",
+            "options?": {
+             "list": "string"
+            },
+            "multiple?": "bool",
+            "session?": "string",
+            "at": "number",
+            "yours?": {
+             "object": {
+              "choice": "string",
+              "at": "number"
+             }
+            }
+           }
+          }
+         },
          "alone": "bool",
          "folders?": {
           "list": {
@@ -9192,6 +9438,7 @@
             }
            },
            "session?": "string",
+           "step?": "string",
            "at": "number"
           }
          }
@@ -9217,6 +9464,38 @@
          }
         },
         "report?": "string",
+        "mode": {
+         "oneOf": [
+          {
+           "literal": "interactive"
+          },
+          {
+           "literal": "autopilot"
+          }
+         ]
+        },
+        "decided": {
+         "list": {
+          "object": {
+           "id": "string",
+           "text": "string",
+           "choice": "string",
+           "why?": "string",
+           "options?": {
+            "list": "string"
+           },
+           "multiple?": "bool",
+           "session?": "string",
+           "at": "number",
+           "yours?": {
+            "object": {
+             "choice": "string",
+             "at": "number"
+            }
+           }
+          }
+         }
+        },
         "alone": "bool",
         "folders?": {
          "list": {
@@ -9253,6 +9532,11 @@
      }
     },
     "409": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "502": {
      "object": {
       "message": "string"
      }

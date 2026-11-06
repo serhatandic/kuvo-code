@@ -60,7 +60,7 @@ const TAB_IDLE = Number(process.env.KUVO_BROWSER_TAB_IDLE || 3600) * 1000;
 
 // Goes up with every change to the keeper (host mode): a newer one replaces one that's running
 // (its pages close, its sign-ins stay), and an older one never replaces a newer.
-const KEEPER = 43;
+const KEEPER = 44;
 // Passkeys: none yet, as in the panel's browser on the Mac (Passkeys.swift, the same script).
 const NO_PASSKEYS = "(() => {\n  try {\n    // Says a passkey was asked for with an event only this launch's listener, in a world of its\n    // own, knows the name of: nothing of it is left in the page's world. (Taken before the page\n    // can change them.)\n    const dispatch = EventTarget.prototype.dispatchEvent, Made = Event;\n    const tell = () => {\n      try {\n        dispatch.call(window, new Made(\"KUVO_PASSKEY_EVENT\"));\n      } catch {}\n    };\n    const none = (options) => {\n      // Asked of you, not looked for quietly as the page loads.\n      if (options.mediation !== \"conditional\") tell();\n      return Promise.reject(new DOMException(\"Passkeys can't be used in this browser.\", \"NotAllowedError\"));\n    };\n    const Container = window.CredentialsContainer;\n    if (Container && Container.prototype) {\n      const prototype = Container.prototype, get = prototype.get, create = prototype.create;\n      if (get) prototype.get = function (options) { return options && options.publicKey ? none(options) : get.call(this, options); };\n      if (create) prototype.create = function (options) { return options && options.publicKey ? none(options) : create.call(this, options); };\n    }\n    const Credential = window.PublicKeyCredential;\n    if (Credential) {\n      Credential.isUserVerifyingPlatformAuthenticatorAvailable = () => Promise.resolve(false);\n      if (Credential.isConditionalMediationAvailable) Credential.isConditionalMediationAvailable = () => Promise.resolve(false);\n    }\n  } catch {}\n})();";
 // The event it fires when a passkey is asked for (a name of this keeper's, which only the
@@ -1705,13 +1705,16 @@ async function point(p, index, action) {
 /// With no Mac connected and no phone to answer it, it waits a few minutes for one (Kuvo Code
 /// opening) rather than the whole while. Meanwhile its page stays this conversation's; the engine
 /// giving up on the call closes the ask.
-function askUser(params) {
+async function askUser(params) {
   if (current.cancelled) throw new Cancelled();
   const id = crypto.randomUUID();
   const session = caller;
+  // On Autopilot nothing waits for the user: it's left undone at once.
+  if (session && await onAutopilot(session)) return { type: "autopilot" };
   link.notify("Kuvo.ask", { id, ...params, ...(session ? { session } : {}) });
   const started = Date.now();
   let alone = viewerCount || phoneCanAnswer() ? null : started;
+  let looking = false;
   return outOfLine((call) => new Promise((resolve) => {
     const finish = (answer) => {
       clearInterval(check);
@@ -1734,6 +1737,16 @@ function askUser(params) {
         return finish({ type: nobody ? "nobody" : "timedOut" });
       }
       if (session && params.targetId) link?.notify("Kuvo.claim", { targetId: params.targetId, session });
+      // Autopilot turned on meanwhile: this no longer waits for the user.
+      if (session && !looking) {
+        looking = true;
+        onAutopilot(session).catch(() => false).then((on) => {
+          looking = false;
+          if (!on || !waiting.has(id)) return;
+          link?.notify("Kuvo.cancelAsk", { id });
+          finish({ type: "autopilot" });
+        });
+      }
     }, 5_000);
     if (call.cancelled) stop();
   }));
@@ -1977,8 +1990,12 @@ async function checkField(p, index, wanted) {
   return null;
 }
 
+// What's told of an ask left undone on Autopilot (LEFT_UNDONE_WORDS on the box).
+const LEFT_UNDONE = "This is on Autopilot: nothing was put to the user, and nothing was chosen for you. If only the user can do it, don't do it or ask again: leave that step undone, keep it as waiting if you're at a goal (goal_progress), carry on with everything else, and list what's left for them in your final reply.";
+
 const noAnswer = (answer, what) =>
-  answer.type === "nobody" ? "No one has Kuvo Code open to answer now. Carry on with what you can without it, and say in your reply what you need; if you work on your own (a bot), schedule a wake-up to try again later."
+  answer.type === "autopilot" ? LEFT_UNDONE
+    : answer.type === "nobody" ? "No one has Kuvo Code open to answer now. Carry on with what you can without it, and say in your reply what you need; if you work on your own (a bot), schedule a wake-up to try again later."
     : answer.type === "timedOut" ? "The user didn't answer in time. Carry on with what you can without it, and say in your reply what you need; if you work on your own (a bot), schedule a wake-up to try again later."
     : answer.type === "lost" ? "The connection to the browser closed while the user was answering. Try again."
     : `The user didn't ${what}. Ask them in the chat how to go on.`;
@@ -2036,6 +2053,15 @@ async function findSession(id) {
     return { place, data };
   }
   return null;
+}
+
+/// Whether the conversation `id` is part of (a subagent's, the one that started it) is on Autopilot.
+async function onAutopilot(id) {
+  let found = await findSession(id);
+  // (Through a coding agent's engine run, Auto's, to the conversation it runs for.)
+  const above = (data) => data?.parentID ?? data?.metadata?.kuvo?.engineFor;
+  for (let step = 0; above(found?.data) && step < 5; step++) found = await findSession(above(found.data));
+  return found?.data?.metadata?.kuvo?.autopilot === true;
 }
 
 // A conversation's wake-ups (WakeUps.call on the Mac): through this machine's kuvo-wake, for the

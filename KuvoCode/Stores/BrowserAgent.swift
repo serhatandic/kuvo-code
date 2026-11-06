@@ -154,6 +154,8 @@ final class BrowserAgent {
         return notes.isEmpty ? "" : notes.joined(separator: "\n") + "\n\n"
     }
 
+    /// What's told of an ask left undone on Autopilot (LEFT_UNDONE_WORDS on the box).
+    static let leftOnAutopilot = "This is on Autopilot: nothing was put to the user, and nothing was chosen for you. If only the user can do it, don't do it or ask again: leave that step undone, keep it as waiting if you're at a goal (goal_progress), carry on with everything else, and list what's left for them in your final reply."
     static let unanswered = "The user didn't answer in time. Carry on with what you can without it, and say in your reply what you need; if you work on your own (a bot), schedule a wake-up to try again later."
 
     /// This call said to accept confirmations and prompts its page shows, rather than decline them.
@@ -407,6 +409,8 @@ final class BrowserAgent {
             return "Filled \(filled.joined(separator: " and ")) for \(host) (you can't see them). Submit the form to sign in.\n\n" + (await snapshot())
         case .timedOut:
             return Self.unanswered
+        case .leftOnAutopilot:
+            return Self.leftOnAutopilot
         default:
             return "The user didn't sign in. Ask them in the chat how to go on."
         }
@@ -494,6 +498,8 @@ final class BrowserAgent {
             return "Filled the code (you can't see it). Submit it if the page doesn't on its own.\n\n" + (await snapshot())
         case .timedOut:
             return Self.unanswered
+        case .leftOnAutopilot:
+            return Self.leftOnAutopilot
         default:
             return "The user didn't give a code. Ask them in the chat how to go on."
         }
@@ -510,6 +516,8 @@ final class BrowserAgent {
             return "The user says it's done.\n\n" + (await snapshot())
         case .timedOut:
             return Self.unanswered
+        case .leftOnAutopilot:
+            return Self.leftOnAutopilot
         default:
             return "The user couldn't do it. Ask them in the chat how to go on."
         }

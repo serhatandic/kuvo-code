@@ -214,6 +214,9 @@ import Testing
         #expect(answer.action == .start)
         let sent = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(answer)) as? [String: Any])
         #expect(!sent.keys.contains("public"), "no switch for anything public: the conversation's mode decides")
+        #expect(!sent.keys.contains("mode"), "with no Autopilot row showing, it leaves how the conversation runs alone")
+        #expect(GoalCard.start(plan, wake: false, digest: .none, deadline: .none, caps: [], periods: [], autopilot: true).mode == .autopilot)
+        #expect(GoalCard.start(plan, wake: false, digest: .none, deadline: .none, caps: [], periods: [], autopilot: false).mode == .interactive)
         #expect(answer.spend == [.init(cap: 30, per: .week)])
         #expect(answer.wake == true && answer.digest == .week)
         let tomorrow = calendar.date(bySettingHour: 23, minute: 59, second: 0, of: calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now))!)!

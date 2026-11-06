@@ -285,11 +285,13 @@ export class GrokAgent implements Agent {
           if (name === "x.ai/ask_user_question") {
             return (async () => {
               const questions = call?.questions ?? []
-              const answer = context.hooks ? await context.hooks.question({ title: "Question", fields: questionFields(questions), toolCallID: call?.toolCallId }) : null
-              if (!answer) return { outcome: "cancelled" }
+              let declined: string | undefined
+              const answer = context.hooks ? await context.hooks.question({ title: "Question", fields: questionFields(questions), toolCallID: call?.toolCallId, declined: (words) => { declined = words } }) : null
+              if (!answer && !declined) return { outcome: "cancelled" }
               const answers: Record<string, string[]> = {}
               questions.forEach((question: any, index: number) => {
-                const value = answer[question.id ?? `q${index}`]
+                // (Turned down by its box with words: that's what it hears.)
+                const value = answer?.[question.id ?? `q${index}`] ?? declined
                 answers[question.question] = Array.isArray(value) ? value.map(String) : value === undefined ? [] : [String(value)]
               })
               return { outcome: "accepted", answers }

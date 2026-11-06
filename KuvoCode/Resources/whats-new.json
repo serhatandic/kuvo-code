@@ -31,6 +31,7 @@
         }
       ],
       "marks": [
+        "keyword/autopilot",
         "settings/vault",
         "keyword/loop",
         "keyword/plan",

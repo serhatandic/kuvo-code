@@ -230,6 +230,12 @@ struct GoalPlanBar: View {
                 }
                 .padding(.leading, GoalSteps.nameInset - 24)
             }
+            if !plan.decided.isEmpty {
+                GoalDecidedRows(plan: plan)
+                    .environment(\.chooseOnAutopilot) { choice, call in change(call, to: choice) }
+                    .disabled(isBusy)
+                    .padding(.leading, GoalSteps.nameInset - 21)
+            }
             if isOver, let report = plan.report {
                 Text(report)
                     .font(.callout)
@@ -237,6 +243,18 @@ struct GoalPlanBar: View {
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.leading, GoalSteps.nameInset)
+            }
+        }
+    }
+
+    /// Your choice on one of its calls; the conversation that asked shows it at its step too.
+    private func change(_ call: AutopilotShown.Call, to choice: String) {
+        Task {
+            do {
+                try await app.goalPlans.answer(plan, on: box, .decided(call.id, choice: choice))
+                await app.workspace.model(for: call.session ?? plan.session)?.readAutopilot()
+            } catch {
+                failed(error.localizedDescription)
             }
         }
     }

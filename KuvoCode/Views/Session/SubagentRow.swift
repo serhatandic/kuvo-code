@@ -20,6 +20,7 @@ struct SubagentRow: View {
     /// Open as you left it, as its view may not last (see `CardFolds`).
     private var key: String { "subagent#" + scope + "#" + call.id }
     private var isExpanded: Bool { CardFolds.shared.isOpen(key, otherwise: false) }
+    @Environment(\.autopilotCallsOfSubagents) private var autopilotCalls
 
     private static let iconWidth: CGFloat = 16
     private static let iconGap: CGFloat = 8
@@ -71,9 +72,20 @@ struct SubagentRow: View {
                 }
             }
 
+            // What it decided on Autopilot: not folded away with its steps.
+            let decided = session.flatMap { autopilotCalls[$0] } ?? []
+            if !decided.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(decided) { DecidedLine(call: $0, saysQuestion: true) }
+                }
+                .padding(.leading, Self.iconWidth + Self.iconGap)
+                .padding(.top, 8)
+            }
+
             if isExpanded, let session {
                 VStack(alignment: .leading, spacing: 8) {
                     SubagentSteps(id: session, task: input?["prompt"]?.string, directory: directory)
+                        .environment(\.autopilotCallsShownAbove, !decided.isEmpty)
                     Button("Open Conversation") { app.tabs.openInPlace(session) }
                         .buttonStyle(TextButtonStyle(outset: true))
                         .font(.callout)

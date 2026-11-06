@@ -34,7 +34,12 @@ struct ToolCallView: View {
     var body: some View {
         // Something the agent made: drawn, not described. A widget that failed is a step (the
         // card shows one so, through this view).
-        if WidgetCard.isWidget(call), !call.state.isFailure {
+        if let decided = autopilotCalls[call.id], !autopilotCallsShownAbove {
+            // A question Autopilot went ahead on: the call it made, where it was asked.
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(decided) { each in DecidedLine(call: each, saysQuestion: decided.count > 1) }
+            }
+        } else if WidgetCard.isWidget(call), !call.state.isFailure {
             WidgetCard(call: call, send: answerAgent)
         } else if MadePictureRow.isMade(call) {
             MadePictureRow(call: call, directory: directory)
@@ -45,6 +50,8 @@ struct ToolCallView: View {
 
     @Environment(\.answerAgent) private var answerAgent
     @Environment(\.workAnswers) private var workAnswers
+    @Environment(\.autopilotCalls) private var autopilotCalls
+    @Environment(\.autopilotCallsShownAbove) private var autopilotCallsShownAbove
     @Environment(\.sandboxStopped) private var heardStopped
     /// What its box asks, where it's given rather than heard (a summary outside the transcript).
     private(set) var givenStopped: Set<String>?
@@ -163,7 +170,7 @@ struct ToolCallView: View {
             } else if case .failed(_, let error, _, _) = call.state, !(isSandboxAsk && Self.sandboxOutcome(outputText) != nil) {
                 if error.isInterruption {
                     Text("Stopped")
-                } else {
+                } else if !call.isSetAsideOnAutopilot {
                     Text(error.message)
                         .lineLimit(1)
                         .foregroundStyle(.red)
@@ -186,6 +193,8 @@ struct ToolCallView: View {
         switch call.state {
         case .failed(_, let error, _, _) where error.isInterruption:
             Image(systemName: "stop.circle")
+        case .failed where call.isSetAsideOnAutopilot:
+            Image(systemName: AutopilotShown.symbol)
         case .failed:
             Image(systemName: "xmark.circle.fill").foregroundStyle(.red)
         default:
@@ -250,6 +259,8 @@ struct ToolCallView: View {
         case "glob": return "Found files matching \(string("pattern") ?? "")"
         case "webfetch": return (isActive ? "Fetching " : "Fetched ") + (string("url") ?? "a page")
         case "websearch": return "Searched the web for “\(string("query") ?? "")”"
+        case "question" where autopilotCalls[call.id] != nil: return "Decided a question on Autopilot"
+        case "question" where call.isSetAsideOnAutopilot: return "Set a question aside on Autopilot"
         case "question": return isActive ? "Asking you a question" : "Asked you a question"
         case _ where isSandboxAsk:
             let command = string("command").flatMap(InlineCode.command) ?? "a command"
@@ -543,7 +554,9 @@ struct ToolCallView: View {
     }
 
     private var outputText: String {
-        switch call.state {
+        // (What a question set aside on Autopilot asked: its turning down is said by its title.)
+        if call.isSetAsideOnAutopilot { return call.questionsAsked }
+        return switch call.state {
         case .completed(_, let output, _): output.compactMap(\.text).joined(separator: "\n")
         case .failed(_, let error, let output, _): ([error.message] + (output ?? []).compactMap(\.text)).joined(separator: "\n")
         default: ""
@@ -581,7 +594,7 @@ struct ToolCallView: View {
     }
 
     private var hasDetails: Bool {
-        subagentSession != nil || !diffs.isEmpty || ((call.name == "shell" || isSandboxAsk) && !outputText.isEmpty) || code != nil || call.state.isFailure || !pictures.isEmpty
+        subagentSession != nil || !diffs.isEmpty || ((call.name == "shell" || isSandboxAsk) && !outputText.isEmpty) || code != nil || (call.isSetAsideOnAutopilot ? !outputText.isEmpty : call.state.isFailure) || !pictures.isEmpty
     }
 
     /// Pictures the step brought back, like a screenshot of the page.
