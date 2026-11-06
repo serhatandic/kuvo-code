@@ -117,6 +117,8 @@ public struct SSHConnection: Sendable, Hashable, Codable {
     /// SSH to an unreachable one does), in place of `ssh`. Only `run` and the app's short
     /// commands (`RemoteShell`) go to it.
     nonisolated(unsafe) public static var standIn: (@Sendable (_ address: String, _ script: String) -> String?)?
+    /// The same, and what's sent to it: a test that runs what's said on this Mac for real.
+    nonisolated(unsafe) public static var fedStandIn: (@Sendable (_ address: String, _ script: String, _ input: URL?) -> String?)?
     #endif
 
     /// Runs `script` on the machine and returns what it printed. `input` is sent to it. It runs as
@@ -128,6 +130,10 @@ public struct SSHConnection: Sendable, Hashable, Codable {
     @discardableResult
     public func run(_ script: String, input: URL? = nil, cancellable: Bool = false, sent: (@Sendable (Int64) -> Void)? = nil) async throws -> String {
         #if DEBUG
+        if let fedStandIn = Self.fedStandIn {
+            guard let output = fedStandIn(address, script, input) else { throw RemoteEngineError.ssh(status: 255, message: "That failed on \(address)") }
+            return output
+        }
         if let standIn = Self.standIn {
             guard let output = standIn(address, script) else { throw RemoteEngineError.ssh(status: 255, message: "Couldn't reach \(address)") }
             // All of it, at once.
