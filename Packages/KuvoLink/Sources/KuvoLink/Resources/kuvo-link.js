@@ -396,8 +396,8 @@ function peerPlaces() {
   return { targets, bridge: bridge !== null };
 }
 var peerTargets = () => peerPlaces().targets;
-function engineGet(engine, route) {
-  return fetch(`http://127.0.0.1:${engine.port}/${route}`, { headers: { authorization: `Basic ${Buffer.from(`opencode:${engine.password}`).toString("base64")}` }, signal: AbortSignal.timeout(1e4) }).then((response) => response.ok ? response.json() : Promise.reject(new Error(`${response.status}`)));
+function engineGet(engine, route, folder) {
+  return fetch(`http://127.0.0.1:${engine.port}/${route}`, { headers: { authorization: `Basic ${Buffer.from(`opencode:${engine.password}`).toString("base64")}`, ...folder ? { "x-opencode-directory": encodeURIComponent(folder) } : {} }, signal: AbortSignal.timeout(1e4) }).then((response) => response.ok ? response.json() : Promise.reject(new Error(`${response.status}`)));
 }
 async function asked(target, method, route, body) {
   const response = await fetch(`http://127.0.0.1:${target.port}/${route}`, {
@@ -7537,6 +7537,8 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
     const id = event.data?.sessionID ?? event.data?.form?.sessionID;
     if (typeof id !== "string" || !["session.execution.started", "session.execution.succeeded", "session.execution.failed", "session.execution.interrupted", "permission.asked", "form.created", "permission.replied", "form.replied"].includes(event.type))
       return Promise.resolve();
+    if (id === "global")
+      return event.data?.form ? declineSharedOnAutopilot(source, event.data.form, event.location?.directory).then(() => {}, () => {}) : undefined;
     return (async () => {
       let session = await sessionOf(id);
       for (let step = 0;session?.parentID && step < 5; step++)
@@ -8123,8 +8125,8 @@ function howItRuns(mode) {
     return [
       "How it runs: Autopilot. The user wants it done without being asked. Make every call your research settles yourself, taste and close options too, by what serves the goal best: keep each with goal_progress (decided: what, your choice, why, the choices there were), say it in a line, and go on.",
       "Take the plan's steps all the way, publishing, submitting, posting and sending included: the user's Start approved them.",
-      "Stop only at a real blocker, what only the user can do: pay for something on their own account (a membership, a subscription), sign in, make an account, hand over a key or a code, or anything destructive that can't be undone. Keep it as waiting, and carry on with everything that doesn't depend on it; asked with the question tool, it has no choice marked, so it waits for them and they're notified.",
-      "Anything else you do ask, mark your recommendation (Recommended): you go ahead on it at once, and the user's later answer confirms or redirects it. What's outside the plan still waits for the user, and you spend only what the plan names."
+      "Nothing waits for the user. Never ask for what only they can do: pay for something on their own account (a membership, a subscription), sign in, make an account, hand over a key or a code, or anything destructive that can't be undone. Don't ask it with any tool, and don't decide it or do it for them: leave that step undone, keep it as waiting (goal_progress waiting, kind you), carry on with everything that doesn't depend on it, and list what's left in your report at the end.",
+      "Anything else you do ask, mark your recommendation (Recommended): you go ahead on it at once, and the user's later answer confirms or redirects it. A question with no choice marked isn't put to them: it comes back declined. What's outside the plan is kept as waiting too, for the user to take up, and you spend only what the plan names."
     ].join(" ");
   return [
     "How it runs: Interactive. The user wants a say in the calls that are theirs: taste and brand, options your research leaves close, a change of scope.",
@@ -8421,7 +8423,7 @@ function linkSession(bot, step, session, file = GOALS_FILE) {
     noteWorkChanged(bot);
   return linked;
 }
-var presence = (mode = "interactive") => `${isHere() ? "The user is here now." : "The user is away now: carry on with what doesn't need them."} ${mode === "autopilot" ? "On Autopilot: decide what your research settles, and stop only at what only the user can do." : "Interactive: ask the user only the calls that are theirs."}`;
+var presence = (mode = "interactive") => `${isHere() ? "The user is here now." : "The user is away now: carry on with what doesn't need them."} ${mode === "autopilot" ? "On Autopilot: decide what your research settles, and leave what only the user can do undone, kept as waiting, while the rest goes on." : "Interactive: ask the user only the calls that are theirs."}`;
 function untilOf(value) {
   const at = typeof value === "number" ? value < 1000000000000 ? value * 1000 : value : typeof value === "string" && /^\d{4}-\d{2}-\d{2}/.test(value.trim()) ? Date.parse(value.trim()) : NaN;
   return Number.isFinite(at) && at > 0 ? at : null;
@@ -8763,7 +8765,7 @@ async function lookAtGoals(tell, targets, { file = GOALS_FILE, here, now = Date.
         asksSeen[key] = kept?.asksSeen?.[key] ?? now;
         if (each.id !== goal.session && now - asksSeen[key] < ASK_SETTLES)
           continue;
-        if (ask.question?.recommended && isAutopilot(each.data) && await goAheadOnQuestion(each.target, each.data, ask.question, undefined, signal)) {
+        if (ask.question && isAutopilot(each.data) && await goAheadOnQuestion(each.target, each.data, ask.question, undefined, signal)) {
           open.delete(key);
           continue;
         }
@@ -8920,15 +8922,17 @@ async function watchGoals(tell, targets, { signal, every = 30000, here } = {}) {
 
 // Packages/Box/src/link/work/autopilot.ts
 var DECIDED_FILE = path35.join(WORK_FOLDER, "decided.json");
+var SHARED = "global";
 var AUTOPILOT_ENTRY = "kuvo.autopilot";
 var KEPT = 60;
 var CONVERSATIONS = 200;
 var AUTOPILOT_WORDS = [
-  "This conversation runs on Autopilot: the user may be away, and wants the work carried through.",
+  "This conversation runs on Autopilot: the user may be away, nothing waits for them, and they want the work carried through.",
   "Decide what your own research settles: say in a line what you chose and why, and go on.",
-  "What only the user can do goes to them: paying, signing in, making an account, handing over a key, and anything destructive that can't be undone. Ask those with the question tool and no choice marked: that one waits for them, and they're notified.",
-  'Anything else you do ask with the question tool, mark the choice you recommend "(Recommended)" and say why in a few words in its description: it goes ahead on that choice at once, and the user can change it later. So never mark a choice in what only the user can do.'
+  "Never ask for what only the user can do: paying, signing in, making an account, handing over a key, and anything destructive that can't be undone. Don't ask it with any tool, and don't decide it or do it for them: leave that step undone, carry on with everything else, and list what's left for them in your final reply.",
+  `Anything else you do ask with the question tool, mark the choice you recommend "(Recommended)" and say why in a few words in its description: it goes ahead on that choice at once, and the user can change it later. A question with no choice marked isn't put to them: it comes back declined.`
 ].join(" ");
+var LEFT_UNDONE_WORDS = "This is on Autopilot: nothing was put to the user, and nothing was chosen for you. If your own research settles it, decide it, say in a line what you chose and why, and go on. If only the user can do it (paying, signing in, making an account, handing over a key, or anything destructive that can't be undone), don't decide it, do it or ask again: leave that step undone, keep it as waiting if you're at a goal (goal_progress), carry on with everything else, and list what's left for them in your final reply.";
 var isAutopilot = (session) => isObject(session?.metadata?.kuvo) && session.metadata.kuvo.autopilot === true;
 function readAll(file) {
   try {
@@ -9015,11 +9019,10 @@ async function tellAutopilot(target, session, on, signal) {
     await call(target, "DELETE", entry, undefined, signal);
 }
 async function goAheadOnAutopilot(target, conversation, form, file = DECIDED_FILE, signal) {
-  const recommended = recommendationOf(form);
   const asker = typeof form.sessionID === "string" ? form.sessionID : null;
-  if (!recommended || !asker || typeof form.id !== "string")
+  if (!asker || typeof form.id !== "string")
     return null;
-  return goAhead(target, conversation, asker, form.id, recommended, file, signal, askedBy(form));
+  return goAhead(target, conversation, asker, form.id, recommendationOf(form), file, signal, askedBy(form));
 }
 async function goAheadOnWaiting(target, conversation, file = DECIDED_FILE, signal) {
   const { questions } = await asksIn(target, conversation.id, signal);
@@ -9031,7 +9034,7 @@ async function goAheadOnWaiting(target, conversation, file = DECIDED_FILE, signa
   }
   return made;
 }
-var goAheadOnQuestion = (target, conversation, question, file = DECIDED_FILE, signal) => question.recommended ? goAhead(target, conversation, question.asker, question.id, question.recommended, file, signal, question.call) : Promise.resolve(null);
+var goAheadOnQuestion = (target, conversation, question, file = DECIDED_FILE, signal) => goAhead(target, conversation, question.asker, question.id, question.recommended ?? null, file, signal, question.call);
 async function catchUpAutopilot(target, file = DECIDED_FILE, signal) {
   const page = await engineGet(target, "api/session?limit=200&order=desc&parentID=null");
   for (const data of Array.isArray(page?.data) ? page.data : []) {
@@ -9045,8 +9048,14 @@ async function catchUpAutopilot(target, file = DECIDED_FILE, signal) {
 async function waitsOnYou(target, conversation, form, file = DECIDED_FILE, signal) {
   const before = await asksIn(target, conversation.id, signal);
   const asked = before.questions.find((each) => each.id === form);
-  if (!asked)
-    return !before.whole;
+  if (!asked) {
+    if (!before.whole)
+      return true;
+    const folder = conversation.location?.directory;
+    const shared = await call(target, "GET", `/api/session/${SHARED}/form`, undefined, signal, folder);
+    const one = Array.isArray(shared) ? shared.find((each) => each?.id === form) : null;
+    return one ? !await declineSharedOnAutopilot(target, one, folder, signal) : false;
+  }
   if (!isAutopilot(conversation))
     return true;
   if (await goAheadOnQuestion(target, conversation, asked, file, signal))
@@ -9054,10 +9063,30 @@ async function waitsOnYou(target, conversation, form, file = DECIDED_FILE, signa
   const after = await asksIn(target, conversation.id, signal);
   return !after.whole || after.questions.some((each) => each.id === form);
 }
+async function declineSharedOnAutopilot(target, form, folder, signal) {
+  const server = isObject(form.metadata) && form.metadata.kind === "mcp-elicitation" ? form.metadata.server : null;
+  if (typeof server !== "string" || !folder || typeof form.id !== "string")
+    return false;
+  const get = (route) => engineGet(target, route);
+  const waiting = await sessionsWaitingOnServer(server, folder, get);
+  if (!waiting.length)
+    return false;
+  for (const id of waiting) {
+    let conversation = (await get(`api/session/${encodeURIComponent(id)}`))?.data;
+    for (let step = 0;conversation?.parentID && step < 5; step++)
+      conversation = (await get(`api/session/${encodeURIComponent(conversation.parentID)}`))?.data;
+    if (!conversation || !isAutopilot(conversation) || runningGoalOf(conversation.id, worksFor(conversation)?.bot ?? null)?.heldByYou)
+      return false;
+  }
+  return decline(target, SHARED, form.id, signal, folder);
+}
+var decline = (target, asker, id, signal, folder) => call(target, "DELETE", `/api/session/${encodeURIComponent(asker)}/form/${encodeURIComponent(id)}?message=${encodeURIComponent(LEFT_UNDONE_WORDS)}`, undefined, signal, folder).then(() => true, () => false);
 async function goAhead(target, conversation, asker, id, recommended, file, signal, asked) {
   const goal = runningGoalOf(conversation.id, worksFor(conversation)?.bot ?? null);
   if (goal?.heldByYou)
     return null;
+  if (!recommended)
+    return await decline(target, asker, id, signal) ? [] : null;
   const went = await call(target, "POST", `/api/session/${encodeURIComponent(asker)}/form/${encodeURIComponent(id)}/reply`, { answer: recommended.answer }, signal).then(() => true, () => false);
   if (!went)
     return null;
@@ -9293,7 +9322,7 @@ function projectNameOf(directory) {
   const project = readWorktrees().find((each) => (each.folder ?? each.root) === directory || each.root === directory)?.project ?? readRemovedWorktrees()[directory] ?? directory;
   return readProjects().find((each) => each.directory === project)?.name || path36.basename(project) || undefined;
 }
-var stillAsked = (form, get) => get(`api/session/${encodeURIComponent(form.sessionID)}/form`).then((answer) => {
+var stillAsked = (form, get, folder) => get(`api/session/${encodeURIComponent(form.sessionID)}/form`, folder).then((answer) => {
   const forms = answer?.data;
   return !Array.isArray(forms) || forms.some((each) => each?.id === form.id);
 }, () => true);
@@ -9306,22 +9335,7 @@ async function noticeFor(event, get) {
       current = await session(current.parentID);
     return current;
   };
-  const waitingOn = async (server, folder) => {
-    if (!server)
-      return null;
-    const active = (await get("api/session/active").catch(() => null))?.data ?? {};
-    const name = String(server).replace(/[^\p{L}\p{N}_-]/gu, "_");
-    for (const id of Array.isArray(active) ? active : Object.keys(active)) {
-      const candidate = await session(id).catch(() => null);
-      if (!candidate || folder && candidate.location?.directory !== folder)
-        continue;
-      const page = await get(`api/session/${encodeURIComponent(id)}/message?limit=8&order=desc`).catch(() => null);
-      const steps = (page?.data ?? []).filter((message) => message.type === "assistant").flatMap((message) => message.content ?? []);
-      if (steps.some((block) => block.type === "tool" && block.state?.status === "running" && (block.name?.startsWith(name + "_") || block.name === "execute" && String(block.state.input?.code ?? "").includes(server))))
-        return id;
-    }
-    return null;
-  };
+  const waitingOn = async (server, folder) => server ? (await sessionsWaitingOnServer(String(server), folder, get))[0] ?? null : null;
   const about = (shown, category, body, extra = {}, { answerable = true, untitled = "New Session" } = {}) => {
     const bot = isBot(shown);
     return {
@@ -9349,7 +9363,7 @@ async function noticeFor(event, get) {
       const where = await shown(asker);
       if (isHiddenRun(where))
         return null;
-      if (isAutopilot(where) && recommendationOf(form) && !await stillAsked(form, get))
+      if (isAutopilot(where) && !await stillAsked(form, get, event.location?.directory))
         return null;
       const body = describeForm(form);
       const choices = (singleQuestion(form)?.options ?? []).map((option) => String(option?.label ?? ""));
@@ -9493,6 +9507,22 @@ var askedBy = (form) => {
   const tool = isObject(form.metadata) && isObject(form.metadata.tool) ? form.metadata.tool : null;
   return typeof tool?.id === "string" && tool.id ? tool.id : null;
 };
+async function sessionsWaitingOnServer(server, folder, get) {
+  const active = (await get("api/session/active").catch(() => null))?.data ?? {};
+  const name = server.replace(/[^\p{L}\p{N}_-]/gu, "_");
+  const found = [];
+  for (const id of Array.isArray(active) ? active : Object.keys(active)) {
+    const at = `api/session/${encodeURIComponent(id)}`;
+    const candidate = (await get(at).catch(() => null))?.data;
+    if (!candidate || folder && candidate.location?.directory !== folder)
+      continue;
+    const page = await get(`${at}/message?limit=8&order=desc`).catch(() => null);
+    const steps = (page?.data ?? []).filter((message) => message.type === "assistant").flatMap((message) => message.content ?? []);
+    if (steps.some((block) => block.type === "tool" && block.state?.status === "running" && (block.name?.startsWith(name + "_") || block.name === "execute" && String(block.state.input?.code ?? "").includes(server))))
+      found.push(id);
+  }
+  return found;
+}
 async function askersOf(target, session, signal) {
   const found = [session];
   for (let at = 0;at < found.length && at < 40; at++) {
@@ -18802,7 +18832,7 @@ async function watchEvents(read, tell, signal, answered = () => {}, { bots = fal
             tell(notice);
           continue;
         }
-        Promise.all([reviewed, event.type === "form.created" ? followed : null]).then(([verdict]) => verdict ? null : noticeFor(event, (route) => engineGet(source, route))).then((notice) => notice && tell(notice)).catch(() => {});
+        Promise.all([reviewed, event.type === "form.created" ? followed : null]).then(([verdict]) => verdict ? null : noticeFor(event, (route, folder) => engineGet(source, route, folder))).then((notice) => notice && tell(notice)).catch(() => {});
       }
     } catch {}
     stop();

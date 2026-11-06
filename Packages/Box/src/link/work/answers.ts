@@ -170,6 +170,24 @@ export const askedBy = (form: Record<string, unknown>): string | null => {
   return typeof tool?.id === "string" && tool.id ? tool.id : null;
 };
 
+/** The running sessions of `folder` with a tool of the MCP server `server` under way: who a form it
+ * asks is holding, since the engine files that under no session. As the Mac finds them. */
+export async function sessionsWaitingOnServer(server: string, folder: string | undefined, get: (route: string) => Promise<unknown>): Promise<string[]> {
+  const active = (await get("api/session/active").catch(() => null) as { data?: string[] | Record<string, unknown> } | null)?.data ?? {};
+  const name = server.replace(/[^\p{L}\p{N}_-]/gu, "_");
+  const found: string[] = [];
+  for (const id of Array.isArray(active) ? active : Object.keys(active)) {
+    const at = `api/session/${encodeURIComponent(id)}`;
+    const candidate = (await get(at).catch(() => null) as { data?: { location?: { directory?: string } } } | null)?.data;
+    if (!candidate || (folder && candidate.location?.directory !== folder)) continue;
+    const page = await get(`${at}/message?limit=8&order=desc`).catch(() => null) as { data?: { type?: string; content?: { type?: string; name?: string; state?: { status?: string; input?: { code?: unknown } } }[] }[] } | null;
+    const steps = (page?.data ?? []).filter(message => message.type === "assistant").flatMap(message => message.content ?? []);
+    if (steps.some(block => block.type === "tool" && block.state?.status === "running"
+      && (block.name?.startsWith(name + "_") || (block.name === "execute" && String(block.state.input?.code ?? "").includes(server))))) found.push(id);
+  }
+  return found;
+}
+
 /** The session and its subagents (theirs too, a few levels down), which ask in its name. */
 export async function askersOf(target: Target, session: string, signal?: AbortSignal): Promise<string[]> {
   const found = [session];

@@ -1,6 +1,7 @@
 // A conversation on Autopilot, on the real engine with a real model: what it asks marking a choice
 // goes ahead on it, keeping the call under the step that asked; changed, its agent hears and goes
-// that way; what's left unmarked waits for you and you're told; and off, even a marked one waits.
+// that way; what's left unmarked comes back declined, and its turn goes on to the end with nobody
+// told and nothing chosen; and off, even a marked one waits.
 // The real box script and a real engine on a free model, in folders of the test's own. Skipped
 // unless OPENCODE_TEST_BINARY names the engine.
 //
@@ -18,7 +19,7 @@ import { atEnd, removeAtEnd } from "./at-end.js";
 
 const binary = process.env.OPENCODE_TEST_BINARY;
 
-test("Autopilot on a real engine: a marked question goes ahead and can be changed; an unmarked one waits and tells you; off, a marked one waits too", { skip: !binary && "OPENCODE_TEST_BINARY isn't set" }, async () => {
+test("Autopilot on a real engine: a marked question goes ahead and can be changed; an unmarked one holds nothing and its turn goes on; off, a marked one waits", { skip: !binary && "OPENCODE_TEST_BINARY isn't set" }, async () => {
   const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-autopilot-live-")));
   removeAtEnd(home);
   for (const folder of ["tmp", "work", "xdg/config", "xdg/data", "xdg/state", "xdg/cache", "bin", "run"]) fs.mkdirSync(path.join(home, folder), { recursive: true });
@@ -129,16 +130,17 @@ test("Autopilot on a real engine: a marked question goes ahead and can be change
     return heard >= 0 && ended >= 0 && ended < heard && /Dark/.test(JSON.stringify(messages.slice(0, heard)));
   }, "its agent to go with your choice");
 
-  // What only you can do, asked with no mark: it waits, and you're told.
-  await send("msg_autopilotlive00002", "Use your question tool now to ask me one question, \"Pay $29 for the domain?\", with the choices \"I paid\" and \"Skip\", no choice marked. Write nothing else.");
-  const [paying] = await waitFor(async () => { const asked = await forms(); return asked.length ? asked : null; }, "the question that waits");
-  await toldOf(paying.id);
-  assert.equal(await says(paying.id), true, "its box says it's waiting on you");
+  // Asked with no mark: declined by its box. Its turn goes on to the end, what it asked is told to
+  // nobody and no call is kept, and it says what it left.
+  const before = told.length;
+  await send("msg_autopilotlive00002", "Use your question tool now to ask me one question, \"Pay $29 for the domain?\", with the choices \"I paid\" and \"Skip\", no choice marked. Then, whatever comes back, reply with one short line saying what's left for me to do.");
+  const left = await turnAfter("msg_autopilotlive00002", "its turn to end, with nobody answering");
+  const asking = (await page()).flatMap(each => each.content ?? []).filter(block => block.type === "tool" && /question/i.test(block.name ?? ""));
+  assert.ok(asking.length >= 2, `it asked with its question tool: ${JSON.stringify(asking.map(each => each.state?.status))}`);
+  assert.deepEqual(await forms(), [], "nothing's left asked");
   assert.equal((await calls()).length, 1, "it made no call on it");
-  assert.equal((await forms()).length, 1);
-  const paid = await api("POST", `api/session/${session}/form/${paying.id}/reply`, { answer: { [paying.fields[0].key]: "Skip" } });
-  assert.ok(paid.status < 300, JSON.stringify(paid.json));
-  await turnAfter("msg_autopilotlive00002", "its turn to end");
+  assert.deepEqual(told.slice(before).filter(each => each.data?.request), [], "nobody's told");
+  assert.match(JSON.stringify(left), /domain|\$29|pay/i, "it says what's left");
 
   // Off: a marked question waits like any other. (Only its label says so: what Autopilot told it
   // is gone, so this says it itself.)

@@ -698,8 +698,8 @@ function howItRuns(mode: GoalMode): string {
   if (mode === "autopilot") return [
     "How it runs: Autopilot. The user wants it done without being asked. Make every call your research settles yourself, taste and close options too, by what serves the goal best: keep each with goal_progress (decided: what, your choice, why, the choices there were), say it in a line, and go on.",
     "Take the plan's steps all the way, publishing, submitting, posting and sending included: the user's Start approved them.",
-    "Stop only at a real blocker, what only the user can do: pay for something on their own account (a membership, a subscription), sign in, make an account, hand over a key or a code, or anything destructive that can't be undone. Keep it as waiting, and carry on with everything that doesn't depend on it; asked with the question tool, it has no choice marked, so it waits for them and they're notified.",
-    "Anything else you do ask, mark your recommendation (Recommended): you go ahead on it at once, and the user's later answer confirms or redirects it. What's outside the plan still waits for the user, and you spend only what the plan names.",
+    "Nothing waits for the user. Never ask for what only they can do: pay for something on their own account (a membership, a subscription), sign in, make an account, hand over a key or a code, or anything destructive that can't be undone. Don't ask it with any tool, and don't decide it or do it for them: leave that step undone, keep it as waiting (goal_progress waiting, kind you), carry on with everything that doesn't depend on it, and list what's left in your report at the end.",
+    "Anything else you do ask, mark your recommendation (Recommended): you go ahead on it at once, and the user's later answer confirms or redirects it. A question with no choice marked isn't put to them: it comes back declined. What's outside the plan is kept as waiting too, for the user to take up, and you spend only what the plan names.",
   ].join(" ");
   return [
     "How it runs: Interactive. The user wants a say in the calls that are theirs: taste and brand, options your research leaves close, a change of scope.",
@@ -1040,7 +1040,7 @@ export function linkSession(bot: string, step: unknown, session: string, file = 
 }
 
 // Where you are, in a line, for what the bot does next, and how it runs.
-const presence = (mode: GoalMode = "interactive") => `${isHere() ? "The user is here now." : "The user is away now: carry on with what doesn't need them."} ${mode === "autopilot" ? "On Autopilot: decide what your research settles, and stop only at what only the user can do." : "Interactive: ask the user only the calls that are theirs."}`;
+const presence = (mode: GoalMode = "interactive") => `${isHere() ? "The user is here now." : "The user is away now: carry on with what doesn't need them."} ${mode === "autopilot" ? "On Autopilot: decide what your research settles, and leave what only the user can do undone, kept as waiting, while the rest goes on." : "Interactive: ask the user only the calls that are theirs."}`;
 
 // A time a step waits for, as goal_progress takes it (ISO words, or ms; seconds, as wake-ups give
 // it, read as such): null for one it can't read.
@@ -1385,7 +1385,7 @@ export async function lookAtGoals(tell: (notice: Notice) => boolean, targets: ()
         // (The bot's own: yours at once; its sessions': once the bot has had a moment.)
         if (each.id !== goal.session && now - asksSeen[key] < ASK_SETTLES) continue;
         // (Already followed, or missed as the event went by: as the box does as they come.)
-        if (ask.question?.recommended && isAutopilot(each.data) && await goAheadOnQuestion(each.target, each.data, ask.question, undefined, signal)) {
+        if (ask.question && isAutopilot(each.data) && await goAheadOnQuestion(each.target, each.data, ask.question, undefined, signal)) {
           open.delete(key);
           continue;
         }

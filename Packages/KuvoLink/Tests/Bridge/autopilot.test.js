@@ -1,7 +1,8 @@
 // A conversation on Autopilot (PROTOCOL.md, "Autopilot"): turned on and off on its box
 // (`kuvo/sessions/<id>/autopilot`), its agent told how to work there; a question it asks with a
 // choice marked "(Recommended)" goes ahead on that choice at once, kept as a call it made, which you
-// can change; one without a mark, and any in an Interactive conversation, waits for you as ever.
+// can change; any other form comes back declined, with nothing chosen, so nothing holds it. Any in an
+// Interactive conversation waits for you as ever.
 // The real box script, its routes each asked by a process of their own as a machine's tools ask
 // them; only the engine is a stand-in.
 //
@@ -37,6 +38,9 @@ const ROASTS = ["Light and fruity", "Warm and roasty (Recommended)", "Dark and s
 let sessions;
 let waiting;
 let answered;
+let declined;
+let shared;
+let atWorkOn;
 let entries;
 let refusesEntries;
 let prompts;
@@ -57,7 +61,9 @@ const engine = http.createServer((request, response) => {
       const parent = url.searchParams.get("parentID");
       return reply({ data: [...sessions.values()].filter(each => (parent && parent !== "null" ? each.parentID === parent : !each.parentID)) });
     }
-    if (url.pathname === "/api/session/active") return reply({ data: {} });
+    if (url.pathname === "/api/session/active") return reply({ data: Object.fromEntries(Object.keys(atWorkOn).map(id => [id, {}])) });
+    const pageOf = url.pathname.match(/^\/api\/session\/([^/]+)\/message$/);
+    if (pageOf && atWorkOn[decodeURIComponent(pageOf[1])]) return reply({ data: [{ type: "assistant", content: [{ type: "tool", name: `${atWorkOn[decodeURIComponent(pageOf[1])]}_search`, state: { status: "running" } }] }] });
     if (url.pathname === "/api/event") {
       response.writeHead(200, { "content-type": "text/event-stream" });
       response.write(": hello\n\n");
@@ -81,6 +87,25 @@ const engine = http.createServer((request, response) => {
       if (followed.has(decodeURIComponent(form[2])) && !waiting.get(asker)?.some(each => each.id === decodeURIComponent(form[2]))) return reply({ message: "No such form." }, 404);
       answered.push({ session: asker, form: decodeURIComponent(form[2]), answer: given.answer });
       waiting.set(asker, (waiting.get(asker) ?? []).filter(each => each.id !== decodeURIComponent(form[2])));
+      return reply({ data: true });
+    }
+    const sharedOne = url.pathname.match(/^\/api\/session\/global\/form\/([^/]+)$/);
+    if (sharedOne && request.method === "DELETE") {
+      if (refusesAnswers) return reply({ message: "Not now." }, 500);
+      const id = decodeURIComponent(sharedOne[1]);
+      declined.push({ session: "global", form: id, folder: decodeURIComponent(request.headers["x-opencode-directory"] ?? ""), message: url.searchParams.get("message") });
+      shared = shared.filter(each => each.id !== id);
+      return reply({ data: true });
+    }
+    if (url.pathname === "/api/session/global/form") return reply({ data: decodeURIComponent(request.headers["x-opencode-directory"] ?? "") === project ? shared : [] });
+    const formOne = url.pathname.match(/^\/api\/session\/([^/]+)\/form\/([^/]+)$/);
+    if (formOne && request.method === "DELETE") {
+      if (refusesAnswers) return reply({ message: "Not now." }, 500);
+      const asker = decodeURIComponent(formOne[1]);
+      const id = decodeURIComponent(formOne[2]);
+      if (followed.has(id) && !waiting.get(asker)?.some(each => each.id === id)) return reply({ message: "No such form." }, 404);
+      declined.push({ session: asker, form: id, message: url.searchParams.get("message") });
+      waiting.set(asker, (waiting.get(asker) ?? []).filter(each => each.id !== id));
       return reply({ data: true });
     }
     const forms = url.pathname.match(/^\/api\/session\/([^/]+)\/form$/);
@@ -128,6 +153,9 @@ beforeEach(() => {
   refusesAnswers = false;
   refusesReading = false;
   refusesForms = false;
+  declined = [];
+  shared = [];
+  atWorkOn = {};
   fs.rmSync(path.join(home, "run", "work"), { recursive: true, force: true });
 });
 
@@ -192,23 +220,31 @@ test("on Autopilot, a question that marks the choice it recommends goes ahead on
   assert.equal(decided[1].session, "ses_helper", "a subagent's says which asked");
 });
 
-test("a question without a recommendation, and any in an Interactive conversation, waits for you, and its starter hears of it as ever", async () => {
+test("on Autopilot, a question with no choice marked comes back declined, telling its agent to leave it and go on; in an Interactive conversation it waits for you, and its starter hears of it as ever", async () => {
   const { watch, tellAll } = await watcher();
-  await watch({ type: "form.created", data: { form: QUESTION("frm_3", "ses_away", ["Light and fruity", "Warm and roasty"]) } });
+  const unmarked = QUESTION("frm_3", "ses_away", ["Light and fruity", "Warm and roasty"]);
+  waiting.set("ses_away", [unmarked]);
+  await watch({ type: "form.created", data: { form: unmarked } });
   await watch({ type: "form.created", data: { form: QUESTION("frm_4", "ses_mine", ROASTS) } });
   await watch({ type: "form.created", data: { form: QUESTION("frm_5", "ses_copy", ROASTS) } });
-  assert.deepEqual(answered, []);
+  assert.deepEqual(answered, [], "nothing chosen for it");
+  assert.deepEqual(declined.map(each => [each.session, each.form]), [["ses_away", "frm_3"]]);
+  assert.match(declined[0].message, /leave that step undone/);
+  assert.match(declined[0].message, /what's left for them in your final reply/);
+  assert.deepEqual(waiting.get("ses_away"), [], "nothing holds it");
+  assert.deepEqual((await route("GET", "kuvo/sessions/ses_away/autopilot")).body.decided, [], "it's no call it made");
   await tellAll();
   assert.equal(prompts.length, 1);
   assert.equal(prompts[0].to, "ses_lead");
   assert.match(prompts[0].text, /\[Session asks\] "ses_copy"/);
 });
 
-test("what only you can do goes to you: its agent is told to ask it with no mark, and a form asking for a secret waits, whatever it marks", async () => {
+test("what only you can do is left undone: its agent is told never to ask it, and a form asking for a secret comes back declined with nothing filled in, whatever it marks", async () => {
   await route("PUT", "kuvo/sessions/ses_mine/autopilot", { autopilot: true });
   const told = entries.get("ses_mine kuvo.autopilot");
   for (const word of [/paying/, /signing in/, /making an account/, /handing over a key/, /destructive/]) assert.match(told, word);
-  assert.match(told, /no choice marked: that one waits for them, and they're notified/);
+  assert.match(told, /Never ask for what only the user can do/);
+  assert.match(told, /leave that step undone, carry on with everything else, and list what's left for them in your final reply/);
   const { watch } = await watcher();
   const key = QUESTION("frm_key", "ses_away", ["Use this key (Recommended)", "Skip"]);
   key.fields[0].format = "password";
@@ -216,16 +252,52 @@ test("what only you can do goes to you: its agent is told to ask it with no mark
   optional.fields.push({ key: "token", type: "string", title: "Your token", required: false, format: "password" });
   const paying = QUESTION("frm_pay", "ses_away", ["I'll pay", "Skip"]);
   for (const form of [key, optional, paying]) await watch({ type: "form.created", data: { form } });
-  assert.deepEqual(answered, []);
+  assert.deepEqual(answered, [], "no secret filled in, nothing chosen");
+  assert.deepEqual(declined.map(each => each.form), ["frm_key", "frm_keyed", "frm_pay"]);
   assert.deepEqual((await route("GET", "kuvo/sessions/ses_away/autopilot")).body.decided, []);
 });
 
-test("an MCP server's form never goes ahead, whatever it marks, here or from a coding agent's conversation", async () => {
+test("an MCP server's form never goes ahead, whatever it marks, here or from a coding agent's conversation: it comes back declined", async () => {
   const { watch } = await watcher();
   const server = { ...QUESTION("frm_server", "ses_away", ROASTS), metadata: { kind: "mcp-elicitation", server: "probe" } };
   await watch({ type: "form.created", data: { form: server } });
   assert.deepEqual(answered, []);
+  assert.deepEqual(declined.map(each => each.form), ["frm_server"]);
   assert.deepEqual((await route("GET", "kuvo/sessions/ses_away/autopilot")).body.decided, []);
+});
+
+test("what an MCP server asks in a folder, filed under no session, comes back declined only where it holds nothing but conversations on Autopilot", async () => {
+  const { watch } = await watcher();
+  const asked = id => ({ id, sessionID: "global", title: "Log in", metadata: { kind: "mcp-elicitation", server: "probe" }, fields: [] });
+  const hears = async form => { shared = [form]; await watch({ type: "form.created", location: { directory: project }, data: { form } }); };
+  // A tool of that server at work in a conversation on Autopilot.
+  atWorkOn = { ses_away: "probe" };
+  await hears(asked("frm_a"));
+  assert.deepEqual(declined.map(each => [each.session, each.form, each.folder]), [["global", "frm_a", project]]);
+  assert.match(declined[0].message, /leave that step undone/);
+  // Also at work in one that isn't: it may be that one's, so it waits.
+  atWorkOn = { ses_away: "probe", ses_mine: "probe" };
+  await hears(asked("frm_b"));
+  // No conversation of it at work: nothing to say whose it is.
+  atWorkOn = {};
+  await hears(asked("frm_c"));
+  // At work in one on Autopilot whose goal you have paused.
+  goalIn("ses_away", { heldByYou: true });
+  atWorkOn = { ses_away: "probe" };
+  await hears(asked("frm_d"));
+  assert.deepEqual(declined.map(each => each.form), ["frm_a"]);
+  assert.deepEqual(answered, []);
+});
+
+test("the box says the same of what an MCP server asks, whichever comes first", async () => {
+  const says = async form => (await route("POST", "kuvo/sessions/ses_away/autopilot/asked", { form })).body;
+  shared = [{ id: "frm_a", sessionID: "global", metadata: { kind: "mcp-elicitation", server: "probe" }, fields: [] }];
+  atWorkOn = { ses_away: "probe" };
+  assert.deepEqual(await says("frm_a"), { waiting: false });
+  assert.deepEqual(declined.map(each => each.form), ["frm_a"]);
+  shared = [{ id: "frm_b", sessionID: "global", metadata: { kind: "mcp-elicitation", server: "probe" }, fields: [] }];
+  atWorkOn = { ses_away: "probe", ses_mine: "probe" };
+  assert.deepEqual(await says("frm_b"), { waiting: true });
 });
 
 test("one a session on Autopilot went ahead on isn't put to its starter", async () => {
@@ -334,12 +406,13 @@ test("the engine doesn't take it: the conversation stays as it was, and says so"
   assert.equal((await route("PUT", "kuvo/sessions/ses_away/autopilot", { autopilot: false })).status, 502, "nor taken off while its agent is still told it's on");
 });
 
-test("turned on with a question waiting, it goes ahead on its recommendation then; one without waits", async () => {
+test("turned on with a question waiting, it goes ahead on its recommendation then; one without comes back declined", async () => {
   waiting.set("ses_mine", [QUESTION("frm_7", "ses_mine", ROASTS), QUESTION("frm_8", "ses_mine", ["Pickup", "Delivery"])]);
   const on = await route("PUT", "kuvo/sessions/ses_mine/autopilot", { autopilot: true });
   assert.deepEqual(answered, [{ session: "ses_mine", form: "frm_7", answer: { roast: "r1" } }]);
   assert.deepEqual(on.body.decided.map(each => each.choice), ["Warm and roasty"]);
-  assert.deepEqual(waiting.get("ses_mine").map(each => each.id), ["frm_8"]);
+  assert.deepEqual(declined.map(each => each.form), ["frm_8"]);
+  assert.deepEqual(waiting.get("ses_mine"), []);
 });
 
 test("asked while the box wasn't listening: it goes ahead as the box starts again, a subagent's too", async () => {
@@ -351,7 +424,7 @@ test("asked while the box wasn't listening: it goes ahead as the box starts agai
   assert.equal((await route("GET", "kuvo/sessions/ses_away/autopilot")).body.decided.length, 2);
 });
 
-test("your phone isn't told of a question that goes ahead on Autopilot; of one that waits, as ever", async () => {
+test("your phone isn't told of a question gone from a conversation on Autopilot; of one still asked there, or in an Interactive one, as ever", async () => {
   const get = async at => {
     const forms = at.match(/^api\/session\/([^/?]+)\/form$/);
     if (forms) return { data: waiting.get(decodeURIComponent(forms[1])) ?? [] };
@@ -360,7 +433,9 @@ test("your phone isn't told of a question that goes ahead on Autopilot; of one t
   };
   assert.equal(await link.noticeFor({ type: "form.created", data: { form: QUESTION("frm_1", "ses_away", ROASTS) } }, get), null);
   assert.equal(await link.noticeFor({ type: "form.created", data: { form: QUESTION("frm_2", "ses_helper", ROASTS) } }, get), null);
-  assert.notEqual(await link.noticeFor({ type: "form.created", data: { form: QUESTION("frm_3", "ses_away", ["Light", "Dark"]) } }, get), null);
+  assert.equal(await link.noticeFor({ type: "form.created", data: { form: QUESTION("frm_3", "ses_away", ["Light", "Dark"]) } }, get), null);
+  waiting.set("ses_away", [QUESTION("frm_held", "ses_away", ["Light", "Dark"])]);
+  assert.notEqual(await link.noticeFor({ type: "form.created", data: { form: QUESTION("frm_held", "ses_away", ["Light", "Dark"]) } }, get), null);
   assert.notEqual(await link.noticeFor({ type: "form.created", data: { form: QUESTION("frm_4", "ses_mine", ROASTS) } }, get), null);
 });
 
@@ -418,8 +493,8 @@ test("a deleted conversation's calls go from its goal too", async () => {
   ask(QUESTION("frm_goalcall", "ses_away", ROASTS));
   while (!goalDecided().length) await new Promise(setImmediate);
   for (const each of followers) each.write(`data: ${JSON.stringify({ id: "evt_gone2", type: "session.deleted", data: { sessionID: "ses_away" } })}\n\n`);
-  // (Events go in order: told of this one, the box has heard that it's gone.)
-  ask(QUESTION("frm_goalafter", "ses_away", ["Light", "Dark"]));
+  // (Events go in order: told of this one, an Interactive conversation's, the box has heard that it's gone.)
+  ask(QUESTION("frm_goalafter", "ses_mine", ["Light", "Dark"]));
   await heard(1);
   assert.equal(told[0].data.request, "frm_goalafter");
   assert.deepEqual(goalDecided(), []);
@@ -442,8 +517,8 @@ test("a deleted conversation's calls go with it, and what's kept of a long quest
   assert.deepEqual(kept.options, [kept.choice, "Dark"], "so the choice is still among them");
 
   for (const each of followers) each.write(`data: ${JSON.stringify({ id: "evt_gone", type: "session.deleted", data: { sessionID: "ses_away" } })}\n\n`);
-  // (Events go in order: told of this one, the box has heard that it's gone.)
-  ask(QUESTION("frm_after", "ses_away", ["Light", "Dark"]));
+  // (Events go in order: told of this one, an Interactive conversation's, the box has heard that it's gone.)
+  ask(QUESTION("frm_after", "ses_mine", ["Light", "Dark"]));
   await heard(1);
   assert.equal(told[0].data.request, "frm_after");
   assert.deepEqual(await calls(), []);
@@ -474,7 +549,7 @@ test("your phone is told of a question that marks a choice while you have its go
   done();
 });
 
-test("the box says whether a question waits on you, so a client judges nothing: what goes ahead doesn't, whenever the client asks; what can't, does", async () => {
+test("the box says whether a question waits on you, so a client judges nothing: on Autopilot none does, whenever the client asks, unless the engine won't take it or you have its goal paused", async () => {
   const asked = async (conversation, form) => (await route("POST", `kuvo/sessions/${conversation}/autopilot/asked`, { form })).body;
   // Marked, on Autopilot: gone ahead by the time it answers, with nothing else having run.
   waiting.set("ses_away", [QUESTION("frm_went", "ses_away", ROASTS)]);
@@ -484,10 +559,11 @@ test("the box says whether a question waits on you, so a client judges nothing: 
   // And asked again, once it's gone.
   assert.deepEqual(await asked("ses_away", "frm_went"), { waiting: false });
   assert.equal(answered.length, 1);
-  // What marks none, or two in one choice, or asks for a secret.
+  // What marks none, or two in one choice, or asks for a secret: declined, with nothing chosen.
   waiting.set("ses_away", [QUESTION("frm_none", "ses_away", ["Pickup", "Delivery"]), QUESTION("frm_two", "ses_away", ["Light (Recommended)", "Warm (recommended)"]),
     { ...QUESTION("frm_key", "ses_away", ["Use this key (Recommended)", "Skip"]), fields: [{ ...QUESTION("frm_key", "ses_away", ["Use this key (Recommended)", "Skip"]).fields[0], format: "password" }] }]);
-  for (const form of ["frm_none", "frm_two", "frm_key"]) assert.deepEqual(await asked("ses_away", form), { waiting: true }, form);
+  for (const form of ["frm_none", "frm_two", "frm_key"]) assert.deepEqual(await asked("ses_away", form), { waiting: false }, form);
+  assert.deepEqual(declined.map(each => each.form), ["frm_none", "frm_two", "frm_key"]);
   assert.equal(answered.length, 1);
   // Marked, but the engine doesn't take the answer: it waits.
   refusesAnswers = true;
@@ -680,6 +756,29 @@ test("switching a goal reaches its running sessions: off, their questions wait a
   await link.lookAtGoals(() => true, () => [source], { now: Date.now() });
   assert.equal(sessions.get("ses_work").metadata.kuvo.autopilot, true);
   assert.match(entries.get("ses_work kuvo.autopilot"), /Autopilot/);
+});
+
+test("a goal on Autopilot tells its bot what only you can do is kept as waiting while the rest goes on; a question left in a session comes back declined, and while you have it paused it's kept as waiting", async () => {
+  goalIn("ses_mine", { mode: "interactive", started: Date.now() - 1000 });
+  assert.equal((await route("POST", "kuvo/work/goals/goal_cafe", { action: "change", mode: "autopilot" })).status, 200);
+  assert.match(prompts.at(-1).text, /keep it as waiting \(goal_progress waiting, kind you\), carry on with everything that doesn't depend on it, and list what's left in your report/);
+  assert.doesNotMatch(prompts.at(-1).text, /waits for them and they're notified/);
+
+  sessions.set("ses_work", atWork("ses_work", true));
+  waiting.set("ses_work", [QUESTION("frm_left", "ses_work", ["I paid", "Skip"])]);
+  const now = Date.now();
+  await link.lookAtGoals(() => true, () => [source], { now });
+  await link.lookAtGoals(() => true, () => [source], { now: now + 5 * 60_000 });
+  assert.deepEqual(declined.map(each => each.form), ["frm_left"]);
+  const goal = () => JSON.parse(fs.readFileSync(path.join(home, "run", "work", "goals.json"), "utf8")).goals[0];
+  assert.deepEqual(goal().waiting.filter(each => each.kind === "ask"), []);
+  assert.deepEqual(answered, []);
+
+  goalIn("ses_mine", { mode: "autopilot", started: now - 1000, heldByYou: true });
+  waiting.set("ses_work", [QUESTION("frm_held", "ses_work", ["I paid", "Skip"])]);
+  await link.lookAtGoals(() => true, () => [source], { now: now + 10 * 60_000 });
+  await link.lookAtGoals(() => true, () => [source], { now: now + 15 * 60_000 });
+  assert.deepEqual(declined.map(each => each.form), ["frm_left"], "paused: it waits");
 });
 
 test("the box's look at a goal goes by each session's own switch, and what it goes ahead on shows at its step as one heard as it's asked does", async () => {

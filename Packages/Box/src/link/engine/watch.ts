@@ -373,7 +373,7 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
         }
         // (What it asks, once the box has looked: on Autopilot it may have gone ahead.)
         Promise.all([reviewed, event.type === "form.created" ? followed : null])
-          .then(([verdict]) => (verdict ? null : noticeFor(event, route => engineGet(source, route))))
+          .then(([verdict]) => (verdict ? null : noticeFor(event, (route, folder) => engineGet(source, route, folder))))
           .then(notice => notice && tell(notice))
           .catch(() => {});
       }

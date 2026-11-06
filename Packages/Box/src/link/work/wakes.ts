@@ -21,7 +21,7 @@ import { ANSWERED, describeForm, describePermission } from "../notices/news";
 import { noteOversight } from "./oversight";
 import { noteWorkChanged, WORK_FOLDER } from "./changes";
 import { asksIn } from "./answers";
-import { catchUpAutopilot, goAheadOnAutopilot, isAutopilot } from "./autopilot";
+import { catchUpAutopilot, declineSharedOnAutopilot, goAheadOnAutopilot, isAutopilot } from "./autopilot";
 import { settleAsk } from "./goals";
 import { awaitedBy } from "./awaited";
 import { tellLateAnswers } from "./asks";
@@ -53,6 +53,7 @@ interface Waiting {
 export interface WorkEvent {
   type: string;
   data?: Partial<PermissionAsked> & { sessionID?: string; form?: EngineForm; requestID?: string };
+  location?: { directory?: string };
 }
 
 const readWaiting = (file: string): Record<string, Waiting> => {
@@ -458,6 +459,8 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
   const told = (event: WorkEvent) => {
     const id = event.data?.sessionID ?? event.data?.form?.sessionID;
     if (typeof id !== "string" || !["session.execution.started", "session.execution.succeeded", "session.execution.failed", "session.execution.interrupted", "permission.asked", "form.created", "permission.replied", "form.replied"].includes(event.type)) return Promise.resolve();
+    // What an MCP server asks is filed under no session.
+    if (id === "global") return event.data?.form ? declineSharedOnAutopilot(source, event.data.form as unknown as Record<string, unknown>, event.location?.directory).then(() => {}, () => {}) : undefined;
     return (async () => {
       // A subagent's ask is its conversation's.
       let session = await sessionOf(id);
@@ -465,7 +468,7 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
       if (!session || (session.id !== id && event.type.startsWith("session.execution"))) return;
       const bot = worksFor(session)?.bot;
       if (bot) noteWorkChanged(bot);
-      // On Autopilot, a question that marks the choice it recommends goes ahead on it: nothing waits.
+      // On Autopilot nothing waits: a question goes ahead on the choice it marks, or comes back declined.
       const form = event.type === "form.created" ? event.data?.form ?? event.data as unknown as EngineForm : null;
       if (form && isAutopilot(session) && await goAheadOnAutopilot(source, session, { ...form, sessionID: form.sessionID ?? id }).catch(() => null)) return;
       // One of a bot's sessions done: for clients to show it seeing that.

@@ -3500,28 +3500,32 @@ what may be decided without asking. Every conversation is Interactive until it's
   kept with the conversation (`metadata.kuvo.autopilot`, false once off), and its agent is told how
   to work in its instructions (`kuvo.autopilot`), taken out again when it's turned off: decide what
   its own research settles, ask what only you can do (paying, signing in, making an account, handing
-  over a key, anything destructive that can't be undone) with no choice marked, so it waits and
-  you're told, and mark the choice it recommends in anything else it asks.
+  over a key, anything destructive that can't be undone) never gets asked: it leaves that step undone,
+  carries on and lists what's left in its final reply. It marks the choice it recommends in anything
+  else it asks.
   Its agent is told before it's marked on, and it's marked off before its agent is told: 502 where
   the engine didn't take it, and the conversation stays as it was. Turned on, what it asks already
-  that recommends a choice goes ahead then.
+  goes ahead or comes back declined then.
 - On Autopilot, a question the conversation's agent or one of its subagents asks with the question
   tool that marks a choice `(Recommended)` in each field it needs goes ahead on that choice at
   once: the box answers the form (`POST …/form/<id>/reply`) and keeps it in `decided`; your phones
-  aren't told of it, and a session that started it isn't woken for it. One that's still asked once
-  the box has looked (the engine didn't take the answer, or you have its goal paused) waits for you,
-  and they're told. What its conversations asked
-  while the box couldn't hear (it started again, or its engine did) goes ahead as it catches up. One
-  that marks none, asks for a secret (a field with `format: "password"`) or isn't the question
-  tool's (an MCP server's form), waits for you as ever, and so do its permissions, which are its
-  approval's.
+  aren't told of it, and a session that started it isn't woken for it. Nothing waits for you: one
+  that marks none, asks for a secret (a field with `format: "password"`) or isn't the question tool's
+  (an MCP server's form) comes back declined (`DELETE …/form/<id>?message=`), with nothing chosen or
+  filled in and words telling its agent to leave that step undone and go on; a coding agent's hears it
+  was dismissed. One that's still asked once the box has looked (the engine didn't take it, or you
+  have its goal paused) waits for you, and they're told. What its conversations asked while the box
+  couldn't hear (it started again, or its engine did) is dealt with as it catches up. What an MCP
+  server asks in a folder, filed under no session (`global`), is declined only where it holds nothing
+  but conversations on Autopilot (a tool of that server at work in them, and in no other there). Its
+  permissions are its approval's, and wait as ever.
 - `POST kuvo/sessions/<id>/autopilot/asked` `{form}`: whether a question asked in the conversation
   or by one of its subagents waits on you: `{waiting: bool}`. A client that hears a question asked in
   a conversation on Autopilot asks this before it counts or notifies, and goes by the answer: it
-  doesn't read the question's marks. The box goes ahead first where it can, whichever comes first,
-  so the answer needs no waiting. False once it's gone; true for what can't go ahead or what the
-  engine won't list. A client that gets no answer (the box is unreachable, or from before this) treats it
-  as waiting, like any question.
+  doesn't read the question's marks. The box deals with it first, whichever comes first, so the answer
+  needs no waiting. False once it's gone; true for what your paused goal or the engine leaves asked, or
+  what the engine won't list. A client that gets no answer (the box is unreachable, or from before
+  this) treats it as waiting, like any question.
 - `POST kuvo/sessions/<id>/autopilot` `{decided: <its id>, choice}`: your choice on a call it
   made, kept as `yours`. The one it goes by now (your last, else its own) confirms it quietly;
   another tells the conversation `[Decision changed] For "…" the user picked "…", not "…" as you
