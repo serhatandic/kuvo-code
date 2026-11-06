@@ -60,6 +60,13 @@ final class ConversationScroller {
     /// yourself since (each way goes through `follow`) means you left it for good.
     @ObservationIgnored private var heldFor: Set<String> = []
 
+    /// You scrolled, and this is where it took you. Opening a step leaves you at the end, so a
+    /// nudge there is still reading: only leaving the end is going somewhere else.
+    fileprivate func scrolled(atEnd: Bool) {
+        if atEnd, !heldFor.isEmpty { return }
+        follow(atEnd)
+    }
+
     /// `id` opened or closed by you: back to the end once the last you left it for is closed.
     fileprivate func reading(_ id: String, isOpen: Bool) {
         if isOpen {
@@ -241,7 +248,7 @@ struct ConversationScroll<Rows: View>: View {
             let resizing = new.width != old.width && (anchor.scrollView?.window?.inLiveResize ?? false)
             if new.width != old.width, !resizing { makeSureOfRows(proxy) }
             // Past the end, with nothing there to see, and you're not the one scrolling: to it.
-            if new.isPastEnd, !scrolling.isYours {
+            if new.isPastEnd, !scrolling.isYours, anchor.stack?.isAboutToGrow != true {
                 if resizing {
                     anchor.scroll(to: nil)
                     endFollower.follow { settled in if settled { toEnd(proxy) } }
@@ -253,7 +260,7 @@ struct ConversationScroll<Rows: View>: View {
             // Your scrolling decides; growth below the fold doesn't. Set only when it changes: each
             // setting draws the conversation again, and this runs on every frame of a scroll.
             // (Not on its way to the end from its button: the rest of a glide doesn't decide.)
-            if scrolling.isYours { scroller.follow(new.atEnd) }
+            if scrolling.isYours { scroller.scrolled(atEnd: new.atEnd) }
             // Shrinking too: the lazy stack's first guess at the height can be too big, and a
             // conversation would then open part of the way up.
             guard scroller.followsEnd, !scrolling.isYours, new.height != old.height else { return }
@@ -614,6 +621,8 @@ final class ScrollAnchor {
     var stopFollowing: () -> Void = {}
     /// Steps opened (true) or closed by you, by what their fold is kept by.
     var reading: ((String, Bool) -> Void)?
+    /// You've opened or closed steps in this conversation: `RowStackView.rowResized`.
+    var hasFolds = false
 
     /// The rows laid out, where they are in the conversation, and those shown now. A row that
     /// goes and comes back where it was (the whole conversation hidden a moment) isn't told its

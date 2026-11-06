@@ -48,7 +48,7 @@ struct TranscriptView: View {
     /// The thinking under way at the end, if any.
     private static func thinking(in rows: [Row]) -> Thinking? {
         for row in rows.reversed() {
-            guard case .steps(let id, let blocks, let isLive) = row else { continue }
+            guard case .steps(let id, let blocks, _, let isLive) = row else { continue }
             guard isLive, case .reasoning = blocks.last else { return nil }
             return Thinking(row: id, step: blocks.count)
         }
@@ -371,6 +371,7 @@ struct TranscriptView: View {
         var current = firstSwitch.map(\.previous) ?? model.session.model
         // Summed up: the agent's steps between its replies, gathered into one row.
         var steps: [Message.Content] = []
+        var stepKeys: [String] = []
         var stepsID = ""
         // The end of each message's turn, found in one pass rather than looked for from each.
         var turnEnds: [Message.Idle?] = Array(repeating: nil, count: messages.count)
@@ -391,8 +392,9 @@ struct TranscriptView: View {
         func flushSteps(live: Bool) {
             guard !steps.isEmpty else { return }
             if !live, StepsRow.saysTime(steps, detail: stepsDetail) { turn.stepsSayTime = true }
-            rows.append(.steps(stepsID, steps, isLive: live))
+            rows.append(.steps(stepsID, steps, keys: stepKeys, isLive: live))
             steps = []
+            stepKeys = []
         }
         for (index, message) in messages.enumerated() {
             // Only what shows ends the run of steps: guidance the engine adds partway through a
@@ -454,6 +456,13 @@ struct TranscriptView: View {
                     case .reasoning, .tool:
                         if steps.isEmpty { stepsID = "steps-" + assistant.id + "#\(part)" }
                         steps.append(block)
+                        // Where it is in its message: a read says the same, and a tool call's id
+                        // is the provider's, which some use again from one reply to the next.
+                        if case .tool(let call) = block {
+                            stepKeys.append(assistant.id + "#" + call.id)
+                        } else {
+                            stepKeys.append(assistant.id + "#\(part)")
+                        }
                     case .other:
                         break
                     }
@@ -652,7 +661,7 @@ enum Row: Identifiable, Hashable {
     case more(Message.Assistant, gap: CGFloat)
     /// The agent's steps between its replies, summed up (`StepsDetail`); `isLive`, the last of
     /// them is under way.
-    case steps(String, [Message.Content], isLive: Bool)
+    case steps(String, [Message.Content], keys: [String], isLive: Bool)
     /// Something the agent made with show_widget, drawn in the conversation.
     case widget(Message.ToolCall)
     /// An image it made.
@@ -730,7 +739,7 @@ enum Row: Identifiable, Hashable {
     /// as shown), a line of steps as its summary.
     func copiedText(folders: [String]) -> String {
         switch self {
-        case .steps(_, let blocks, _):
+        case .steps(_, let blocks, _, _):
             return StepsRow.summary(of: blocks)
         default:
             return findParts.map { part in
@@ -771,7 +780,7 @@ enum Row: Identifiable, Hashable {
         switch self {
         case .user(let m): m.id
         case .assistant(let m, _), .more(let m, _): m.id
-        case .steps(let id, _, _): id
+        case .steps(let id, _, _, _): id
         case .widget(let call): call.id
         case .picture(let call): call.id
         case .sent(let call): call.id
@@ -877,8 +886,8 @@ private struct RowView: View, Equatable {
             AssistantStepView(message: message, directory: directory, folders: folders, showsError: showsError)
         case .more(let message, _):
             AssistantStepView(message: message, directory: directory, folders: folders, showsError: false)
-        case .steps(_, let blocks, let isLive):
-            StepsRow(scope: scope, blocks: blocks, isLive: isLive, directory: directory)
+        case .steps(_, let blocks, let keys, let isLive):
+            StepsRow(scope: scope, blocks: blocks, keys: keys, isLive: isLive, directory: directory)
         case .widget(let call):
             WidgetCard(call: call, send: answerAgent)
         case .picture(let call):
@@ -886,7 +895,7 @@ private struct RowView: View, Equatable {
         case .sent(let call):
             AgentSentRow(call: call)
         case .subagent(let call):
-            SubagentRow(call: call, directory: directory)
+            SubagentRow(call: call, directory: directory, scope: scope)
         case .turnEnd(let idle, let stats, let isLast, let isLatest):
             TurnEndView(idle: idle, stats: stats, directory: directory, retry: isLast && !isOffline && !takesNoMessages ? stats.message.map { message in { retry(message) } } : nil,
                         switchModel: isLast && !isOffline && !takesNoMessages ? switchModel : nil,
@@ -1376,7 +1385,7 @@ struct ReasoningView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
-                // Under way, it's kept in view as it grows.
+                // Under way, it's kept in view as it grows, and stays where it is once it ends.
                 CardFolds.shared.toggle(foldKey, open: !isExpanded, in: scrollAnchor, holds: block.isComplete)
             } label: {
                 HStack(spacing: 8) {
@@ -1411,6 +1420,10 @@ struct ReasoningView: View {
                     .padding(.top, 6)
                     .transition(.fold)
             }
+        }
+        // Stays where it is from when it ends, as what's next comes in under it.
+        .onChange(of: block.isComplete) { _, ended in
+            if ended, CardFolds.shared.isOpen(foldKey, otherwise: false) { scrollAnchor?.reading?(foldKey, true) }
         }
         #if DEBUG
         // KUVO_DEMO_OPEN_STEPS: the thinking shows, opened.
@@ -1982,17 +1995,21 @@ final class CardFolds {
     func isOpen(_ id: String, otherwise open: Bool) -> Bool { choices[id] ?? open }
     func set(_ id: String, open: Bool) { choices[id] = open }
     func forget(_ id: String) { choices[id] = nil }
+    /// What was opened or closed among those kept under this, closed with what they're in.
+    func kept(under prefix: String) -> [String] { choices.keys.filter { $0.hasPrefix(prefix) } }
 
     /// Steps you opened or closed, in their conversation: opened, once they have, the end is no
     /// longer followed, so what comes in next doesn't move what you read (`holds` false: a step
     /// under way, kept in view until it ends); closing what you opened goes back to it (see
     /// `ConversationScroller.reading`). `closes`: what goes with it.
     func toggle(_ id: String, open: Bool, in anchor: ScrollAnchor?, holds: Bool = true, closes: [String] = []) {
+        anchor?.hasFolds = true
         withAnimation(.ui) {
             set(id, open: open)
             closes.forEach(forget)
         } completion: { [weak anchor] in
-            guard closes.contains(id) || self.isOpen(id, otherwise: !open) == open else { return }
+            // Not if you've changed your mind since. (What's closed with others is forgotten.)
+            guard self.isOpen(id, otherwise: closes.contains(id) ? false : !open) == open else { return }
             for closed in closes { anchor?.reading?(closed, false) }
             if !open || holds { anchor?.reading?(id, open) }
         }

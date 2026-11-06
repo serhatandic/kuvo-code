@@ -178,9 +178,19 @@ final class RowStackView: NSView, NSUserInterfaceValidations {
         self.make = make
         // What you're reading stays where it is (earlier messages coming in above, rows above
         // changing), unless the end is followed.
-        let kept = isFollowingEnd ? nil : rowAtTop()
+        var kept = isFollowingEnd ? nil : rowAtTop()
         if newIDs != ids {
             let before = Set(ids)
+            // The row you're reading is another by id now (steps before it came in, and it starts
+            // with them): it's still what's before the rows that were after it, as tall as you
+            // knew it until it's measured, when what it gained goes above you.
+            if let read = kept, !newIDs.contains(read.id), let index = ids.firstIndex(of: read.id) {
+                let next = ids[(index + 1)...].lazy.compactMap { newIDs.firstIndex(of: $0) }.first ?? newIDs.count
+                if next > 0, !before.contains(newIDs[next - 1]) {
+                    kept = (newIDs[next - 1], read.offset)
+                    heights[newIDs[next - 1]] = heights[read.id].map { Height(value: $0.value, width: 0) }
+                }
+            }
             ids = newIDs
             rowIndex = Dictionary(newIDs.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
             for (id, host) in hosts where rowIndex[id] == nil {
@@ -266,9 +276,11 @@ final class RowStackView: NSView, NSUserInterfaceValidations {
         }
         guard let known = heights[id], abs(known.value - height) > 0.5, width > 0, hosts[id]?.isShown == true,
               let index = rowIndex[id] else { return }
-        // Only a row wholly above the view moves what you read: one you're reading part of grows
-        // or folds under its own top, and what you see of it stays.
-        keepInPlace(changedAt: tops[index] + known.value, by: height - known.value) {
+        // A row whose top is above the view (coming in as you scroll up, a picture or widget
+        // growing as it draws) grows up out of view, so what's below it stays. Except once you
+        // open steps here, as a row can then grow where you read: only one wholly above moves it.
+        let changedAt = scrollAnchor?.hasFolds == true ? tops[index] + known.value : tops[index]
+        keepInPlace(changedAt: changedAt, by: height - known.value) {
             heights[id] = Height(value: height, width: width)
             place()
         }
@@ -469,6 +481,10 @@ final class RowStackView: NSView, NSUserInterfaceValidations {
             NotificationCenter.default.post(name: NSView.boundsDidChangeNotification, object: clip)
         }
     }
+
+    /// The rows are taller than the conversation has been told yet: where the view is may be past
+    /// its end only until it has.
+    var isAboutToGrow: Bool { total > frame.height + 0.5 }
 
     // MARK: Going to a row
 
