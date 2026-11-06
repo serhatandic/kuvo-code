@@ -317,6 +317,83 @@ import WebKit
         #expect(VaultValues.generations()?.generations == ["items": 4])
     }
 
+    /// This Mac's box's answers, some held until the test lets them go: the second time a route is
+    /// asked, and the first time of the asks (so a read can be stopped half way, and another begun).
+    nonisolated private final class HeldRoutes: @unchecked Sendable {
+        private let lock = NSLock()
+        private var asked: [String: Int] = [:]
+        private var held: [(route: String, count: Int, resume: CheckedContinuation<Void, Never>)] = []
+        private var open = false
+
+        func pass(_ route: String) async {
+            let hold = lock.withLock { () -> Bool in
+                asked[route, default: 0] += 1
+                return !open && (asked[route]! > 1 || route == VaultRoutes.asks)
+            }
+            guard hold else { return }
+            await withCheckedContinuation { resume in
+                lock.withLock { held.append((route, asked[route] ?? 0, resume)) }
+                TestPulse.beat()
+            }
+        }
+
+        func isHolding(_ route: String, _ count: Int) -> Bool {
+            lock.withLock { held.contains { $0.route == route && $0.count == count } }
+        }
+
+        func release(_ route: String, _ count: Int) {
+            let resume = lock.withLock { () -> CheckedContinuation<Void, Never>? in
+                guard let index = held.firstIndex(where: { $0.route == route && $0.count == count }) else { return nil }
+                return held.remove(at: index).resume
+            }
+            resume?.resume()
+        }
+
+        func releaseAll() {
+            let resumes = lock.withLock { () -> [CheckedContinuation<Void, Never>] in
+                open = true
+                defer { held = [] }
+                return held.map(\.resume)
+            }
+            for resume in resumes { resume.resume() }
+        }
+    }
+
+    /// Another reader (a conversation's, every few seconds) begins a read of the vault while this
+    /// one is half way: this one's answer is still what shows once it's in, rather than nothing
+    /// (the browser's sign-ins and a saved password found no vault, as though its box hadn't
+    /// answered), and the later read's replaces it when it comes.
+    @Test func aReadAnotherOvertookStillShowsWhatItRead() async throws {
+        defer { done() }
+        let routes = HeldRoutes()
+        let base = try #require(URL(string: engine.url + "/"))
+        Vaults.shared.client = { $0 == BoxClient.mac ? BoxClient(box: BoxClient.mac, transport: LocalBox { request in
+            AsyncThrowingStream { answer in
+                let task = Task {
+                    await routes.pass(request.path)
+                    do {
+                        for try await part in PhoneLink.respond(to: request, link: nil, engine: base, password: "test", agents: nil) { answer.yield(part) }
+                        answer.finish()
+                    } catch { answer.finish(throwing: error) }
+                }
+                answer.onTermination = { _ in task.cancel() }
+            }
+        }) : nil }
+        Vaults.shared.forget(BoxClient.mac)
+
+        let first = Task { await Vaults.shared.refresh(BoxClient.mac) }
+        try await until { routes.isHolding(VaultRoutes.asks, 1) }
+        let later = Task { await Vaults.shared.refresh(BoxClient.mac) }
+        try await until { routes.isHolding(VaultRoutes.vault, 2) }
+        routes.release(VaultRoutes.asks, 1)
+        await first.value
+        #expect(Vaults.shared[BoxClient.mac].vault != nil, "what the first read found shows while the later one is on its way")
+
+        routes.releaseAll()
+        await later.value
+        #expect(Vaults.shared[BoxClient.mac].vault != nil)
+    }
+
     @Test func aMacWithNothingSavedBeforeHasAnEmptyVault() async throws {
         defer { done() }
         #expect(await Passwords.ready())
