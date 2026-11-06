@@ -10,6 +10,7 @@ import { placeOfSession } from "../letters/letter";
 import { targetsOf } from "../letters/tools";
 import { asked } from "../engine/client";
 import { dropWaiting, holdQueue, inboxFor, keepWaitingBefore, queueFollowers, queueOf, readQueues, resumeQueue, sendNow, showsQueue, shownQueue } from "../engine/queue";
+import { forgetStopped } from "../work/background";
 import { stopConversation } from "../work/background";
 import { messageID } from "../engine/sessions";
 import { attachedIn } from "../server/attached";
@@ -70,6 +71,8 @@ export async function* queueRoute(context: RouteContext, match: RegExpMatchArray
       return yield* json(200, shownQueue(await holdQueue(place.target, session, undefined, items)));
     }
     if (step === "add") return yield* add(context, place.target, session);
+    // (You set it going: if it was stopped, what comes of it is news again.)
+    forgetStopped(session);
     if (step === "resume") return yield* json(200, shownQueue(await resumeQueue(place.target, session)));
     if (!(await sendNow(place.target, session, decodeURIComponent(item)))) return yield* json(404, { message: "That message isn't waiting any more." });
     return yield* json(200, shownQueue(queueOf(session)));

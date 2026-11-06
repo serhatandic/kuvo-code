@@ -1253,7 +1253,7 @@ async function sendNow(target, session, item) {
 }
 var NOT_YOURS = ["[Message from ", "[Wake-up]", "[Work from ", "[Session ", "[Goal started]", "[Goal changed]", "[Goal's end]", "[Goal resumed]", "[Not now]", "[Limit reset]", "[The user answered]"];
 var writtenByYou = (text, metadata) => !isBoxNote(metadata) && !NOT_YOURS.some((start) => String(text ?? "").startsWith(start));
-var FROM_SOMEONE = ["[Message from ", "[Work from ", "[The user answered]"];
+var FROM_SOMEONE = ["[Message from ", "[Work from ", "[The user "];
 var isBoxsOwnWord = (text, metadata) => !writtenByYou(text, metadata) && !FROM_SOMEONE.some((start) => String(text ?? "").startsWith(start));
 var isYours = (item) => item.type === "user" && writtenByYou(item.payload?.text, item.payload?.metadata);
 function queueWatcher(target, { after = DRAIN_AFTER, schedule = setTimeout, cancel = clearTimeout, found } = {}) {
@@ -11393,7 +11393,7 @@ function beganBy(turn) {
   const first = starters.at(-1);
   const at = messageTime(first);
   if (first.type === "user")
-    return { kind: String(first.text ?? "").startsWith(WAKE_MARKER) ? "timer" : "left", at };
+    return { kind: String(first.text ?? "").startsWith(WAKE_MARKER) ? "timer" : "word", at };
   const source = isObject(first.metadata) ? first.metadata.source : undefined;
   return { kind: source === "shell" || source === "subagent" || source === "agent" ? "left" : "other", at };
 }
@@ -11450,7 +11450,7 @@ function isNews(was, last) {
     return false;
   if (!was.at && !was.reply || was.early && last.began.kind !== "timer")
     return true;
-  if (last.began.kind === "asked")
+  if (last.began.kind === "asked" || last.began.kind === "word")
     return true;
   return last.text.length >= SUBSTANCE && hashed(last.text) !== was.said;
 }
@@ -11587,7 +11587,7 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
     const at = readStopped(stoppedFile)[session];
     if (at === undefined)
       return false;
-    if (!last || last.began.kind === "left" || (last.began.at ?? 0) <= at)
+    if (!last || last.began.kind === "left" || last.began.kind === "word" || (last.began.at ?? 0) <= at)
       return true;
     forgetStopped(session, stoppedFile);
     return false;
@@ -11817,7 +11817,7 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
           return;
         if (stopped && !staysStopped(session.id, began))
           return;
-        if (began.began.kind === "left")
+        if (began.began.kind === "left" || stopped && began.began.kind === "word")
           await call(source, "POST", `/api/session/${encodeURIComponent(session.id)}/interrupt`).catch(() => {});
         return;
       }
@@ -24617,6 +24617,7 @@ async function* queueRoute(context, match) {
     }
     if (step === "add")
       return yield* add(context, place.target, session);
+    forgetStopped(session);
     if (step === "resume")
       return yield* json(200, shownQueue(await resumeQueue(place.target, session)));
     if (!await sendNow(place.target, session, decodeURIComponent(item)))

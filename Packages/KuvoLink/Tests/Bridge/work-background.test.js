@@ -822,7 +822,7 @@ test("a long turn is read whole: who asked is known past its many steps", async 
   assert.equal(finished().length, 1);
 });
 
-test("the box's own word to a session isn't anyone asking: a short answer isn't told up, and it doesn't undo a stop", async () => {
+test("the box's own word to a session: what comes of it is told, however short (it may be the result), and it doesn't undo a stop", async () => {
   const time = clock();
   const watch = watcher(time);
   await watch.caughtUp;
@@ -831,12 +831,13 @@ test("the box's own word to a session isn't anyone asking: a short answer isn't 
   await watch(ended());
   await time.pass(5 * SECONDS);
   assert.equal(finished().length, 1);
-  // A session it started finished, and the box told it: its short answer stays with it.
+  // A session it started finished, and the box told it: what it concludes is what its lead waits for.
   boxWord();
-  said("Noted.");
+  said("All tests pass.");
   await watch(ended());
   await time.pass(5 * SECONDS);
-  assert.equal(finished().length, 1);
+  assert.equal(finished().length, 2);
+  assert.match(finished()[1], /All tests pass/);
   // Stopped: the same word doesn't set it going.
   link.noteStopped("ses_tests");
   state.active.add("ses_tests");
@@ -877,3 +878,49 @@ test("Stop All leaves nothing waiting for Resume where no turn ran; one that ran
   assert.equal((await route("POST", `kuvo/bots/${bot}/stop-all`)).status, 200);
   assert.equal(link.queueOf("ses_second").paused, true);
 });
+
+test("Resume on a stopped session sets it going: what waited on the box isn't interrupted, and what comes of it is told", async () => {
+  const time = clock();
+  const watch = watcher(time);
+  await watch.caughtUp;
+  asked();
+  said("Started.");
+  await watch(ended());
+  await time.pass(5 * SECONDS);
+  link.noteStopped("ses_tests");
+  assert.equal((await route("POST", "kuvo/sessions/ses_tests/queue/resume")).status, 200);
+  assert.equal(link.readStopped().ses_tests, undefined);
+  state.active.add("ses_tests");
+  await watch(started());
+  boxWord();
+  await watch(delivered());
+  assert.deepEqual(state.interrupted, []);
+  said("All done.");
+  state.active.delete("ses_tests");
+  await watch(ended());
+  await time.pass(5 * SECONDS);
+  assert.equal(finished().length, 2);
+});
+
+test("what you approved or answered is someone asking: it sets a stopped session going, and an archived one isn't interrupted for it", async () => {
+  const time = clock();
+  const watch = watcher(time);
+  await watch.caughtUp;
+  asked();
+  said("Waiting.");
+  await watch(ended());
+  link.noteStopped("ses_tests");
+  await watch(started());
+  state.messages.ses_tests.unshift({ id: `msg_${state.counter + 1}`, type: "user", text: "[The user approved what Auto's reviewer held back] Go on.", metadata: { kuvo: { note: { from: "Auto", line: "Approved" } } }, time: { created: at() } });
+  await watch(delivered());
+  assert.deepEqual(state.interrupted, []);
+  assert.equal(link.readStopped().ses_tests, undefined);
+  said("Done.");
+  await watch(ended());
+  state.sessions.ses_tests.metadata["kuvo.archived"] = true;
+  await watch(started());
+  boxWord();
+  await watch(delivered());
+  assert.deepEqual(state.interrupted, [], "an archived one is stopped only for what it did on its own");
+});
+

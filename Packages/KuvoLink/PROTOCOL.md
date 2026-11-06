@@ -809,7 +809,8 @@ client shows it from the same routes.
     after it ends, since the end wakes its agent. At 30 minutes it's told anyway, saying what still
     runs. A turn someone asked for doesn't wait on what was running before they asked (a dev server):
     it's told at once, saying what still runs. After that a turn someone asked for is always told. A
-    turn that began on its own (what it
+    turn following the box's own word (what a session it started did, a limit that reset) is too, as
+    what comes of it may be the result. A turn that began on its own (what it
     left running ended, its own wake-up) is told only if it has something to say: 200 characters or
     more, and not the same again. The exception is what follows a finish told before the work was
     over, told however short, unless its own wake-up began it. The same failure again in a turn
@@ -822,7 +823,7 @@ client shows it from the same routes.
     what it left running ending or its agent carrying on by itself (a `synthetic` with
     `metadata.source` `shell`, `subagent` or `agent`), or the box's own word (what a session it
     started did), is interrupted at once; anything else written since the stop, a message, a goal or
-    a wake-up, sets it going and clears the mark. An archived session is
+    a wake-up, sets it going and clears the mark, as Resume and Send Now do. An archived session is
     interrupted the same way, and never told of. Stop in your own conversation or in a bot's own ends
     the turn only, and keeps its background commands and wake-ups. So does a goal's Pause, for each
     of its sessions, since it goes on from where it was.

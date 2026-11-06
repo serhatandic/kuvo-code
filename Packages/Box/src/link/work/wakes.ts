@@ -224,8 +224,9 @@ const changeTold = (file: string, change: (told: Told) => void, from: string | n
 const hashed = (text: string) => crypto.createHash("sha256").update(text).digest("hex").slice(0, 16);
 /** What began a turn: someone's message (any in it counts, however it began), what the session left
  * running ending or its agent carrying on by itself, the box's own word (what a session it started
- * did), its own wake-up, or another word of the box's (a goal given to it). */
-interface Began { kind: "asked" | "left" | "timer" | "other"; at: number | null }
+ * did, a limit that reset: what comes of it may be the result a lead waits for, so it's told, but it
+ * doesn't set a stopped session going), its own wake-up, or a word of another kind (a goal given to it). */
+interface Began { kind: "asked" | "left" | "word" | "timer" | "other"; at: number | null }
 const messageTime = (message: { time?: unknown } | undefined) => isObject(message?.time) && typeof message.time.created === "number" ? message.time.created : null;
 // From a turn's messages, newest first; a turn with no starter in reach counts as asked for.
 function beganBy(turn: { type?: unknown; text?: unknown; metadata?: unknown; time?: unknown }[]): Began {
@@ -234,7 +235,7 @@ function beganBy(turn: { type?: unknown; text?: unknown; metadata?: unknown; tim
   if (asked || !starters.length) return { kind: "asked", at: messageTime(asked) };
   const first = starters.at(-1)!;
   const at = messageTime(first);
-  if (first.type === "user") return { kind: String(first.text ?? "").startsWith(WAKE_MARKER) ? "timer" : "left", at };
+  if (first.type === "user") return { kind: String(first.text ?? "").startsWith(WAKE_MARKER) ? "timer" : "word", at };
   const source = isObject(first.metadata) ? first.metadata.source : undefined;
   return { kind: source === "shell" || source === "subagent" || source === "agent" ? "left" : "other", at };
 }
@@ -307,7 +308,7 @@ async function lastReply(target: Target, session: string): Promise<LastReply> {
 function isNews(was: Told["sessions"][string], last: LastReply): boolean {
   if (last.id && last.id === was.reply) return false;
   if ((!was.at && !was.reply) || (was.early && last.began.kind !== "timer")) return true;
-  if (last.began.kind === "asked") return true;
+  if (last.began.kind === "asked" || last.began.kind === "word") return true;
   return last.text.length >= SUBSTANCE && hashed(last.text) !== was.said;
 }
 
@@ -458,12 +459,12 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
     }, null, now());
   };
   // Whether a session stopped hasn't been set going since, so nothing of it is news. What it left
-  // running ending doesn't set it going; anything else written since does (your message, a goal you
-  // gave it, a wake-up you added), and it's noted that it isn't stopped any more.
+  // running ending, or the box's own word, doesn't set it going; anything else written since does
+  // (your message, a goal you gave it, a wake-up you added), and it's noted that it isn't stopped any more.
   const staysStopped = (session: string, last: LastReply | null): boolean => {
     const at = readStopped(stoppedFile)[session];
     if (at === undefined) return false;
-    if (!last || last.began.kind === "left" || (last.began.at ?? 0) <= at) return true;
+    if (!last || last.began.kind === "left" || last.began.kind === "word" || (last.began.at ?? 0) <= at) return true;
     forgetStopped(session, stoppedFile);
     return false;
   };
@@ -677,7 +678,7 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
         const began = await lastReply(source, session.id).catch(() => null);
         if (!began?.underWay) return;
         if (stopped && !staysStopped(session.id, began)) return;
-        if (began.began.kind === "left") await call(source, "POST", `/api/session/${encodeURIComponent(session.id)}/interrupt`).catch(() => {});
+        if (began.began.kind === "left" || (stopped && began.began.kind === "word")) await call(source, "POST", `/api/session/${encodeURIComponent(session.id)}/interrupt`).catch(() => {});
         return;
       }
       const bot = worksFor(session)?.bot;
