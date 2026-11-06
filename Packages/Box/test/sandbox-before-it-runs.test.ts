@@ -1,6 +1,6 @@
 import "./safety"
 import { ownPath } from "../../KuvoLink/Tests/Bridge/test-safety.js"
-import { expect, test } from "bun:test"
+import { expect, setDefaultTimeout, test } from "bun:test"
 import { createHash } from "node:crypto"
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -12,6 +12,12 @@ import { canFence, realFence } from "./agents/support/fence"
 // system's programs, never one a command put on your PATH in a folder it writes (yarn's installer
 // puts `~/.yarn/bin` first, and commands write `~/.yarn`), which would run there, outside it. The
 // command itself still has your PATH.
+
+// Each test sets a whole sandbox up and runs programs in it (Bun, the sandbox, tmux) in processes of
+// its own, waiting on them: about 1 to 2 s on a quiet machine, and over Bun's 5 s when it is busy,
+// where Bun then stops the process being waited on and the test sees nothing. So a busy machine
+// gets as long as the work takes, not 5 s.
+setDefaultTimeout(30_000)
 
 const SYSTEM = ["/usr/sbin", "/usr/bin", "/sbin", "/bin"]
 const TOOLS = ["cat", "cut", "id", "mkdir", "mkfifo", "mount", "sed", "sha256sum", "shasum", "sleep", "stat", "timeout", "touch", "unshare"]

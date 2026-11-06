@@ -1,5 +1,5 @@
 import "./safety"
-import { expect, test } from "bun:test"
+import { expect, setDefaultTimeout, test } from "bun:test"
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -10,6 +10,12 @@ import { canFence } from "./agents/support/fence"
 // takes longer): the engine's plugin put back once it's gone, commands' temporary folders cleared a
 // week after their conversation's last command, and on Linux, commands given a namespace of their
 // own once the machine lets them after all. Each round here is run by hand, in a box of its own.
+
+// Each test sets a whole sandbox up and runs programs in it (Bun, the sandbox, tmux) in processes of
+// its own, waiting on them: about 1 to 2 s on a quiet machine, and over Bun's 5 s when it is busy,
+// where Bun then stops the process being waited on and the test sees nothing. So a busy machine
+// gets as long as the work takes, not 5 s.
+setDefaultTimeout(30_000)
 
 const box = join(import.meta.dir, "..", "src", "link", "fence", "state.ts")
 
