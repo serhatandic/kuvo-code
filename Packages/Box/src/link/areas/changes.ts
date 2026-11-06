@@ -11,7 +11,7 @@ import path from "node:path";
 import { askedArgs, ownArgsLater } from "../../shared/git";
 import { parsed } from "../../shared/json";
 import type { GitChanges, PullRequestDraft } from "../../shared/routes/changes";
-import { K } from "../home";
+import { IS_MAC, K } from "../home";
 import type { AnswerPiece, RouteContext } from "../server/context";
 import { FILE_LIMIT } from "./file";
 import { readWorktrees } from "./worktree-records";
@@ -146,12 +146,12 @@ export async function changesIn(directory: string, scope: Scope, base?: string):
   return { repository: true, root, against, patch, untracked, hashes, uncommitted: status === null || status.length > 0 };
 }
 
-/** To the Trash: on a Mac its own, elsewhere (no Trash) Kuvo Code's on this box, where it can
- * still be found (`KUVO_CHANGES_TRASH`, a test's own). */
+/** To the Trash: on this Mac its own, elsewhere (a machine, whoever's at it or not) Kuvo Code's on
+ * this box, where it can still be found (`KUVO_CHANGES_TRASH`, a test's own). */
 function trash(file: string) {
   const name = path.basename(file);
   let into: string;
-  if (process.platform === "darwin" && !process.env.KUVO_CHANGES_TRASH) {
+  if (IS_MAC && process.platform === "darwin" && !process.env.KUVO_CHANGES_TRASH) {
     // The Finder’s own way, so Put Back works (macOS 15 and later have it); `file` is a full path, never an option.
     if (fs.existsSync("/usr/bin/trash")) return void execFileSync("/usr/bin/trash", [file], { stdio: "ignore" });
     const bin = path.join(os.homedir(), ".Trash");

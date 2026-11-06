@@ -1,7 +1,8 @@
 // Keep-awake (PROTOCOL.md, "Work › A night"): while a night runs on this Mac's box, the Mac doesn't
 // sleep, on power only (`caffeinate -s`, which macOS honors only on power), and sleeps again once
-// the night ends or the box stops (`-w`, the box's own process). A machine doesn't sleep: nothing to
-// do there.
+// the night ends or the box stops (`-w`, the box's own process). A machine has nothing to do here:
+// a Linux server doesn't sleep, and a Mac's keeper holds it awake while the box runs
+// (`RemoteServer`'s `kuvo-start`).
 
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import { IS_MAC } from "../home";

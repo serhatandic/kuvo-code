@@ -78,8 +78,28 @@ function processRuns(pid, name, proc = "/proc") {
   try {
     return fs.readFileSync(`${proc}/${pid}/cmdline`, "utf8").includes(name);
   } catch {
-    return !fs.existsSync(proc);
+    if (fs.existsSync(proc))
+      return false;
+    if (process.env.KUVO_BOX === "mac")
+      return true;
+    return commandLine(pid)?.includes(name) ?? true;
   }
+}
+var commandLines = new Map;
+var COMMAND_LINE_KEPT = 2000;
+function commandLine(pid) {
+  const now = performance.now();
+  const kept = commandLines.get(pid);
+  if (kept && now - kept.at < COMMAND_LINE_KEPT)
+    return kept.line;
+  let line;
+  try {
+    line = execFileSync("/bin/ps", ["-ww", "-o", "command=", "-p", String(pid)], { encoding: "utf8", timeout: 2000, stdio: ["ignore", "pipe", "ignore"] });
+  } catch {}
+  if (commandLines.size > 200)
+    commandLines.clear();
+  commandLines.set(pid, { line, at: now });
+  return line;
 }
 function promptedFolders(platform = process.platform) {
   return platform === "darwin" ? new Set(["Desktop", "Documents", "Downloads", "Library", "Movies", "Music", "Pictures"]) : new Set;
@@ -281,7 +301,8 @@ var NEEDED_FILE = path2.join(RUN, "link.needed");
 var VERSION_FILE = path2.join(RUN, "link.version");
 var SOCKET_KEY_FILE = path2.join(RUN, "socket.key");
 var SSH_FOR = path2.join(RUN, "ssh-for");
-var SSH_AGENTS = process.platform === "darwin" ? path2.join("/private/tmp", `kuvo-ssh-${os.userInfo().uid}`, `agents-${crypto2.createHash("sha256").update(K).digest("hex").slice(0, 8)}`) : path2.join(RUN, "ssh-agents");
+var OWN_SSH_AGENTS = path2.join(RUN, "ssh-agents");
+var SSH_AGENTS = process.platform === "darwin" && (process.env.KUVO_BOX === "mac" || OWN_SSH_AGENTS.length > 69) ? path2.join("/private/tmp", `kuvo-ssh-${os.userInfo().uid}`, `agents-${crypto2.createHash("sha256").update(K).digest("hex").slice(0, 8)}`) : OWN_SSH_AGENTS;
 var SANDBOX_NOTE = path2.join(RUN, "fence", "agents.md");
 var KEY_SHAPE = /^[0-9a-f]{64}$/;
 var madeKey = () => crypto2.randomBytes(32).toString("hex") + `
@@ -2808,7 +2829,8 @@ function macFolders(home) {
     path12.join(home, "Library", "WebKit", bundle),
     path12.join(home, "Library", "HTTPStorages", bundle),
     path12.join(home, "Library", "Preferences", `${bundle}.plist`),
-    `/private/tmp/kuvo-ssh-${os3.userInfo().uid}`
+    `/private/tmp/kuvo-ssh-${os3.userInfo().uid}`,
+    path12.join(home, ".kuvo-code")
   ];
   if (tmp)
     kuvo.push(tmp, path12.dirname(sandboxCaches().npm));
@@ -2822,7 +2844,7 @@ function fencePolicy(ports = []) {
   const homes = named === home ? [home] : [home, named];
   const inHomes = (names) => homes.flatMap((each) => names.map((name) => throughLinks(path12.join(each, name))));
   const opencodes = homes.map((each) => throughLinks(opencodeAuthFile(each))).filter((each) => !inHomes([".local/share/opencode/auth.json"]).includes(each));
-  const own = IS_MAC ? macFolders(home) : { kuvo: [K, path12.join(home, ".kuvo-code")], readable: [path12.join(K, "bin")] };
+  const own = IS_MAC ? macFolders(home) : { kuvo: [K, path12.join(home, ".kuvo-code"), ...process.platform === "darwin" ? [`/private/tmp/kuvo-ssh-${os3.userInfo().uid}`, path12.join(home, "Library", "Logs", "Kuvo Code")] : []], readable: [path12.join(K, "bin")] };
   const kuvo = [...new Set(own.kuvo.map(throughLinks))];
   const kuvoReadable = own.readable.map(throughLinks);
   const commandCaches = Object.values(sandboxCaches());
@@ -6391,7 +6413,7 @@ function keepForRollback(files, withData) {
     "#!/bin/sh",
     `K=${quote(K)}; B=${quote(ROLLBACK)}`,
     `p=$(cat "$K/run/.updating/pid" 2>/dev/null)`,
-    `if [ -n "$p" ] && [ "$p" != "\${KUVO_UPDATER:-}" ] && kill -0 "$p" 2>/dev/null && { [ ! -d /proc ] || grep -q kuvo-link "/proc/$p/cmdline" 2>/dev/null; }; then exit 0; fi`,
+    `if [ -n "$p" ] && [ "$p" != "\${KUVO_UPDATER:-}" ] && kill -0 "$p" 2>/dev/null && { if [ -d /proc ]; then grep -q kuvo-link "/proc/$p/cmdline" 2>/dev/null; else ps -ww -o command= -p "$p" 2>/dev/null | grep -q kuvo-link; fi; }; then exit 0; fi`,
     `sh "$K/bin/kuvo-start" stop >/dev/null 2>&1 || exit 1`
   ];
   for (const file of files) {
@@ -6525,7 +6547,7 @@ async function update({ now = false, keys = UPDATE_KEYS, url = UPDATE_URL, block
     let staged = null;
     if (!fs27.existsSync(path28.join(engineFolder, "opencode"))) {
       const kind = { x64: "x86_64", arm64: "aarch64" }[os6.arch()];
-      const build = manifest.linux?.[kind];
+      const build = (process.platform === "darwin" ? manifest.darwin : manifest.linux)?.[kind];
       if (!build?.url || !/^sha512-/.test(build.integrity ?? ""))
         throw new Error("The release has no engine for this machine.");
       step("downloading the engine");
@@ -15276,10 +15298,10 @@ function hardLine(action, policy = fencePolicy(), own = []) {
   }
   if (action.kind === "tool")
     return null;
-  return commandLine(action.command, action.folder, policy, own, 0) ?? stoppedWrites(action).map((where) => hardLine({ kind: "file", path: where, access: "write", folder: action.folder }, policy, own)).find(Boolean) ?? null;
+  return commandLine2(action.command, action.folder, policy, own, 0) ?? stoppedWrites(action).map((where) => hardLine({ kind: "file", path: where, access: "write", folder: action.folder }, policy, own)).find(Boolean) ?? null;
 }
 var stoppedWrites = (action) => action.kind === "command" ? (action.stopped?.stops ?? []).filter((stop) => stop.kind === "write" && stop.path).map((stop) => stop.path) : [];
-function commandLine(command, start, policy, own, depth) {
+function commandLine2(command, start, policy, own, depth) {
   const line = readLine(command, true);
   if ("unreadable" in line || depth > 3)
     return unreadLine(command, policy, own);
@@ -15294,7 +15316,7 @@ function commandLine(command, start, policy, own, depth) {
         return WRECKS_HOME;
     }
     const inner = innerScript(program, part.words, at);
-    const found = inner ? commandLine(inner, folder, policy, own, depth + 1) : null;
+    const found = inner ? commandLine2(inner, folder, policy, own, depth + 1) : null;
     if (found)
       return found;
     if (program === "cd" || program === "pushd") {
@@ -24413,7 +24435,7 @@ async function changesIn(directory, scope, base) {
 function trash(file) {
   const name = path84.basename(file);
   let into;
-  if (process.platform === "darwin" && !process.env.KUVO_CHANGES_TRASH) {
+  if (IS_MAC && process.platform === "darwin" && !process.env.KUVO_CHANGES_TRASH) {
     if (fs80.existsSync("/usr/bin/trash"))
       return void execFileSync3("/usr/bin/trash", [file], { stdio: "ignore" });
     const bin = path84.join(os8.homedir(), ".Trash");
