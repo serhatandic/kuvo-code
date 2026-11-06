@@ -9,8 +9,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { isObject } from "../../shared/json";
 import { cut } from "../../shared/text";
-import { asked, call, peerPlaces } from "../engine/client";
-import { sendInto } from "../engine/queue";
+import { asked, call, engineGet, peerPlaces } from "../engine/client";
+import { isBoxsOwnWord, sendInto } from "../engine/queue";
+import { WAKE_MARKER } from "../areas/wakes";
 import { boxNote } from "../../shared/queues";
 import { messageID } from "../engine/sessions";
 import { locked, writePrivate } from "../files";
@@ -222,18 +223,20 @@ const changeTold = (file: string, change: (told: Told) => void, from: string | n
 // What said it, as a hash: whether a reply says the same again, whitespace aside.
 const hashed = (text: string) => crypto.createHash("sha256").update(text).digest("hex").slice(0, 16);
 /** What began a turn: someone's message (any in it counts, however it began), what the session left
- * running ending, its own wake-up, or another word of the box's or its agent's (a goal's nudge). */
+ * running ending or its agent carrying on by itself, the box's own word (what a session it started
+ * did), its own wake-up, or another word of the box's (a goal given to it). */
 interface Began { kind: "asked" | "left" | "timer" | "other"; at: number | null }
-const WAKE_UP = "[Wake-up] ";
 const messageTime = (message: { time?: unknown } | undefined) => isObject(message?.time) && typeof message.time.created === "number" ? message.time.created : null;
 // From a turn's messages, newest first; a turn with no starter in reach counts as asked for.
 function beganBy(turn: { type?: unknown; text?: unknown; metadata?: unknown; time?: unknown }[]): Began {
   const starters = turn.filter(message => message.type === "user" || message.type === "synthetic");
-  const asked = starters.find(message => message.type === "user" && !String(message.text ?? "").startsWith(WAKE_UP));
+  const asked = starters.find(message => message.type === "user" && !isBoxsOwnWord(message.text, message.metadata));
   if (asked || !starters.length) return { kind: "asked", at: messageTime(asked) };
   const first = starters.at(-1)!;
+  const at = messageTime(first);
+  if (first.type === "user") return { kind: String(first.text ?? "").startsWith(WAKE_MARKER) ? "timer" : "left", at };
   const source = isObject(first.metadata) ? first.metadata.source : undefined;
-  return { kind: first.type === "user" ? "timer" : source === "shell" || source === "subagent" ? "left" : "other", at: messageTime(first) };
+  return { kind: source === "shell" || source === "subagent" || source === "agent" ? "left" : "other", at };
 }
 
 interface LastReply {
@@ -252,19 +255,39 @@ interface LastReply {
 // A session's last reply (its id, and when it was written; null for none), the end of a turn
 // started after it that wrote none (`turn`, its idle message, and when: a turn that failed
 // before it replied), and what began its latest turn; it throws when it can't be read.
+// A session's messages, newest first, back as far as its latest turn begins (a long one is many
+// steps, each a message). Where that turn lies in them: `from` up to, not including, `before`.
+const ofTurn = (message: { type?: unknown }) => message.type === "user" || message.type === "synthetic" || message.type === "assistant";
+function turnIn(messages: { type?: unknown }[]): { from: number; before: number } {
+  // (Commands you ran after it, above where it ended, are no part of it.)
+  const lastEnd = messages.findIndex(message => message.type === "idle");
+  const from = lastEnd >= 0 && !messages.slice(0, lastEnd).some(ofTurn) ? lastEnd + 1 : 0;
+  return { from, before: messages.findIndex((message, index) => index >= from && message.type === "idle") };
+}
+async function latestMessages(target: Target, session: string) {
+  const address = encodeURIComponent(session);
+  const messages: { id: string; type?: unknown; text?: unknown; metadata?: unknown; time?: unknown; content?: unknown }[] = [];
+  let query = "limit=50&order=desc";
+  for (let pages = 0; pages < 20; pages++) {
+    // (A later page not read: as far as it got.)
+    const page = await engineGet(target, `api/session/${address}/message?${query}`).catch(error => { if (pages === 0) throw error; return null; }) as { data?: unknown; cursor?: { next?: string; previous?: string } | null } | null;
+    const data: unknown[] = Array.isArray(page?.data) ? page.data : [];
+    for (const message of data) if (isObject(message) && typeof message.id === "string") messages.push(message as typeof messages[number]);
+    const next = page?.cursor?.next ?? page?.cursor?.previous;
+    if (!data.length || !next || turnIn(messages).before >= 0) break;
+    query = `limit=100&cursor=${encodeURIComponent(next)}`;
+  }
+  return messages;
+}
+
 async function lastReply(target: Target, session: string): Promise<LastReply> {
-  const page = await call(target, "GET", `/api/session/${encodeURIComponent(session)}/message?limit=20&order=desc`);
-  const messages = (Array.isArray(page) ? page : []).filter(message => isObject(message) && typeof message.id === "string");
+  const messages = await latestMessages(target, session);
   const at = messageTime;
   const newest = (type: string) => { const index = messages.findIndex(message => message.type === type); return index < 0 ? Infinity : index; };
   const reply = messages[newest("assistant")];
   // Its latest turn, newest first: back to where the one before it ended (read as it runs too, not
-  // ended yet). Words of the box's or its agent's can land anywhere in it; commands you ran after
-  // it, above it, are no part of it.
-  const ofTurn = (message: { type?: unknown }) => message.type === "user" || message.type === "synthetic" || message.type === "assistant";
-  const lastEnd = messages.findIndex(message => message.type === "idle");
-  const from = lastEnd >= 0 && !messages.slice(0, lastEnd).some(ofTurn) ? lastEnd + 1 : 0;
-  const before = messages.findIndex((message, index) => index >= from && message.type === "idle");
+  // ended yet). Words of the box's or its agent's can land anywhere in it.
+  const { from, before } = turnIn(messages);
   const turn = messages.slice(from, before < 0 ? undefined : before);
   const ended = from > 0 && turn.length > 0 && !turn.some(message => message.type === "assistant") ? messages[from - 1] : undefined;
   // What it said in it, the latest first (a step of tools alone says nothing).

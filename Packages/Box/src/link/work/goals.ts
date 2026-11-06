@@ -39,7 +39,7 @@ import { appNamed, appNameGiven } from "./apps";
 import { folderName, isEmptyFolder, namedPlace, projectPlace, shownPath } from "./projects";
 import { projectsFolder } from "./settings";
 import { stopBotWork } from "./stop";
-import { atWorkNow } from "./background";
+import { FINISH_HOLD_LIMIT, readBackground } from "./background";
 import { ofBot, workingNow, workSessions } from "./tree";
 import type { Listed } from "./tree";
 import type { Target } from "../../shared/records";
@@ -1145,7 +1145,12 @@ export async function lookAtGoals(tell: (notice: Notice) => boolean, targets: ()
   }
   const running = readKept(file).filter(goal => goal.state === "running" && botHere(goal.bot));
   const sessions = running.length ? await workSessions(targets(), signal).catch((): Listed[] => []) : [];
-  const working = running.length ? await atWorkNow(targets(), signal).catch(() => new Set<string>()) : new Set<string>();
+  // Turns under way, and what's left running besides: that keeps the Mac awake, but only for a time
+  // does it hold off a nudge (a dev server would stall the goal), and it never hides a failed turn.
+  const turns = running.length ? await workingNow(targets(), signal).catch(() => new Set<string>()) : new Set<string>();
+  const left = running.length ? readBackground() : {};
+  const working = new Set([...turns, ...Object.keys(left)]);
+  const busy = new Set([...turns, ...Object.keys(left).filter(id => now - left[id]!.since < FINISH_HOLD_LIMIT)]);
   const workOf = (goal: KeptGoal) => goalWork(goal, sessions);
   // Awake only while some goal's work is at it: the bot, or one of its sessions.
   keepAwake(running.some(goal => working.has(goal.session) || workOf(goal).some(each => working.has(each.data.id))));
@@ -1155,7 +1160,7 @@ export async function lookAtGoals(tell: (notice: Notice) => boolean, targets: ()
     // A session whose turn failed at a model's limit: paused until it resets.
     const limitsSeen = { ...(goal.limitsSeen ?? {}) };
     for (const each of work) {
-      if (working.has(each.data.id)) continue;
+      if (turns.has(each.data.id)) continue;
       const failed = await failedTurn(each.target, each.data.id, signal);
       if (!failed || limitsSeen[each.data.id] === failed.idle || !isLimit(failed.error)) continue;
       limitsSeen[each.data.id] = failed.idle;
@@ -1201,7 +1206,7 @@ export async function lookAtGoals(tell: (notice: Notice) => boolean, targets: ()
     // steps it put off until then): the goal says when it goes on next, and the wait for a nudge
     // starts from that time, so one comes only if what came then started nothing.
     const live = readKept(file).find(each => each.id === goal.id);
-    const atWork = working.has(goal.session) || work.some(each => working.has(each.data.id));
+    const atWork = busy.has(goal.session) || work.some(each => busy.has(each.data.id));
     const left = (live?.steps ?? []).filter(step => step.state !== "done" && step.state !== "skipped");
     const pausedSessions = new Set((live?.paused ?? []).map(each => each.session).filter(Boolean));
     const doable = left.filter(step => (step.state === "todo" || step.state === "doing") && !(step.sessions?.length && step.sessions.every(id => pausedSessions.has(id))));

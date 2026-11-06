@@ -541,6 +541,21 @@ describe("Claude Code stopping with work left running", () => {
     unsubscribe()
     expect(sessions.background()[id]).toBeUndefined()
   })
+
+  test("a turn it begins on its own says so, whatever began it", async () => {
+    const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
+    sessions.prompt(id, { id: "msg_claude_own_0001", text: "start it", files: [], delivery: "steer" })
+    await until(() => fake.sent.length === 1)
+    const [first] = fake.sent.map((message) => message.uuid)
+    fake.say("Sent it off.", [first])
+    fake.result([first])
+    await until(() => idles(id).length === 1)
+    // Nothing of yours is in it: it goes on with something it had going.
+    fake.say("Carrying on.", [])
+    await until(() => texts(id).includes("Carrying on."))
+    const own = sessions.messages(id).find((message) => message.type === "synthetic")
+    expect((own as { metadata?: { source?: string } } | undefined)?.metadata?.source).toBe("agent")
+  })
 })
 
 describe("Writing to a Claude Code subagent", () => {

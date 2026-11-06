@@ -2030,7 +2030,7 @@ export class Sessions {
     const now = doing.kind === "idle"
     const later = onFiles(doing) || (doing.kind === "running" && doing.run.agent?.provider === provider)
     if (!now && !later) return false
-    live.own = { id: newID("msg"), text: note.text, files: [], delivery: "steer", synthetic: { description: note.description, metadata: note.metadata }, adopt: model }
+    live.own = { id: newID("msg"), text: note.text, files: [], delivery: "steer", synthetic: { description: note.description, metadata: { source: "agent", ...note.metadata } }, adopt: model }
     this.advance(id, live)
     return true
   }

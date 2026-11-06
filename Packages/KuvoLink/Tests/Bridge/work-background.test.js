@@ -86,7 +86,13 @@ const engine = http.createServer((request, response) => {
     const id = one && decodeURIComponent(one[1]);
     if (one && !one[2] && state.unreachable) return reply({ message: "Busy." }, 500);
     if (one && !one[2]) return state.sessions[id] ? reply({ data: state.sessions[id] }) : reply({ message: "No such session." }, 404);
-    if (one?.[2] === "/message") return reply({ data: (state.messages[id] ?? []).slice(0, Number(new URL(url, "http://engine").searchParams.get("limit") ?? 100)) });
+    if (one?.[2] === "/message") {
+      const asks = new URL(url, "http://engine").searchParams;
+      const limit = Number(asks.get("limit") ?? 100);
+      const offset = Number(asks.get("cursor") ?? 0);
+      const all = state.messages[id] ?? [];
+      return reply({ data: all.slice(offset, offset + limit), cursor: offset + limit < all.length ? { next: String(offset + limit) } : null });
+    }
     if (one?.[2] === "/prompt") {
       state.prompts.push({ to: id, ...JSON.parse(body) });
       return reply({});
@@ -123,6 +129,7 @@ const said = (text, session = "ses_tests") => state.messages[session].unshift({ 
 const asked = (text = "Run the tests.", session = "ses_tests") => state.messages[session].unshift({ id: `msg_${state.counter + 1}`, type: "user", text, time: { created: at() } });
 const ownWord = (session = "ses_tests") => state.messages[session].unshift({ id: `msg_${state.counter + 1}`, type: "synthetic", text: "<shell>done</shell>", metadata: { source: "shell" }, time: { created: at() } });
 const notice = (text = "Going on with another account.", session = "ses_tests") => state.messages[session].unshift({ id: `msg_${state.counter + 1}`, type: "synthetic", text, time: { created: at() } });
+const boxWord = (text = '[Session finished] "Part" in tidepool (address ses_part)\n\nDone.', session = "ses_tests") => state.messages[session].unshift({ id: `msg_${state.counter + 1}`, type: "user", text, time: { created: at() } });
 const wokenUp = (session = "ses_tests") => state.messages[session].unshift({ id: `msg_${state.counter + 1}`, type: "user", text: "[Wake-up] Look again.", time: { created: at() } });
 const long = text => `${text} ${"It went on to say a good deal more about what it found and what it changed. ".repeat(4)}`;
 
@@ -786,4 +793,87 @@ test("a bot's session nobody's told of: the bot sees it finish once what it left
   await watch(exited("sh_1"));
   assert.equal(await marks(), 1);
   assert.deepEqual(finished(), []);
+});
+
+test("a long turn is read whole: who asked is known past its many steps", async () => {
+  const time = clock();
+  const watch = watcher(time);
+  await watch.caughtUp;
+  asked("Start the dev server.");
+  await watch(startJob("sh_dev", "npm run dev"));
+  said("Up.");
+  await watch(ended());
+  // A question, a turn of many steps, with what ran from before still up: told at once.
+  asked("[Message from Pixel · ses_pixel] (…)\n\nFix the login.");
+  for (let step = 0; step < 120; step++) said("");
+  said("Fixed it.");
+  await watch(ended());
+  await time.pass(5 * SECONDS);
+  assert.equal(finished().length, 1);
+  assert.match(finished()[0], /Fixed it/);
+  // Told: its own timer, as long, with little to say.
+  wokenUp();
+  for (let step = 0; step < 120; step++) said("");
+  said("Nothing new.");
+  await watch(exited("sh_dev"));
+  await watch(ended());
+  await time.pass(11 * SECONDS);
+  await time.pass(5 * SECONDS);
+  assert.equal(finished().length, 1);
+});
+
+test("the box's own word to a session isn't anyone asking: a short answer isn't told up, and it doesn't undo a stop", async () => {
+  const time = clock();
+  const watch = watcher(time);
+  await watch.caughtUp;
+  asked();
+  said("Started a helper session.");
+  await watch(ended());
+  await time.pass(5 * SECONDS);
+  assert.equal(finished().length, 1);
+  // A session it started finished, and the box told it: its short answer stays with it.
+  boxWord();
+  said("Noted.");
+  await watch(ended());
+  await time.pass(5 * SECONDS);
+  assert.equal(finished().length, 1);
+  // Stopped: the same word doesn't set it going.
+  link.noteStopped("ses_tests");
+  state.active.add("ses_tests");
+  await watch(started());
+  boxWord();
+  await watch(delivered());
+  assert.deepEqual(state.interrupted, ["ses_tests"]);
+  assert.notEqual(link.readStopped().ses_tests, undefined);
+});
+
+test("its agent carrying on by itself after a stop stops there too", async () => {
+  const time = clock();
+  const watch = link.workWatcher(source, () => [source], { schedule: time.schedule, now: time.now, from: "bridge" });
+  await watch.caughtUp;
+  asked();
+  said("Started.");
+  await watch(ended());
+  link.noteStopped("ses_tests");
+  await watch(started());
+  state.messages.ses_tests.unshift({ id: `msg_${state.counter + 1}`, type: "synthetic", text: "A task it had going finished.", metadata: { source: "agent" }, time: { created: at() } });
+  await watch(delivered());
+  assert.deepEqual(state.interrupted, ["ses_tests"]);
+  assert.notEqual(link.readStopped().ses_tests, undefined);
+});
+
+test("Stop All leaves nothing waiting for Resume where no turn ran; one that ran holds what waits, as Stop does", async () => {
+  fs.mkdirSync(path.join(home, "wakes", "ses_tests", "wakes"), { recursive: true });
+  fs.writeFileSync(path.join(home, "wakes", "ses_tests", "wakes", `${Math.floor(Date.now() / 1000) + 3600}-abc`), "Look again.");
+  // Its bot's own conversation: only a dev server left running.
+  startJob("sh_dev", "npm run dev", at(), "ses_pixel", tidepool);
+  await watcher(clock()).caughtUp;
+  assert.equal((await route("POST", `kuvo/bots/${bot}/stop-all`)).status, 200);
+  assert.equal(link.queueOf("ses_tests").paused, false, "an idle session's next message just goes");
+  assert.equal(link.queueOf("ses_pixel").paused, false);
+  assert.ok(!state.interrupted.includes("ses_pixel"));
+  state.sessions.ses_second = work("ses_second", "Second");
+  state.active.add("ses_second");
+  assert.equal((await route("POST", `kuvo/bots/${bot}/stop-all`)).status, 200);
+  assert.equal(link.queueOf("ses_second").paused, true);
 });

@@ -457,6 +457,10 @@ export interface QueueEvent {
 // (Those marked as the box's own, and the ones a box sent before it marked them.)
 const NOT_YOURS = ["[Message from ", "[Wake-up]", "[Work from ", "[Session ", "[Goal started]", "[Goal changed]", "[Goal's end]", "[Goal resumed]", "[Not now]", "[Limit reset]", "[The user answered]"];
 export const writtenByYou = (text: unknown, metadata: unknown) => !isBoxNote(metadata) && !NOT_YOURS.some(start => String(text ?? "").startsWith(start));
+// What the box says of its own accord (what another session did, a limit that reset), rather than
+// passes on from someone: a letter or work from an agent, or an answer of yours.
+const FROM_SOMEONE = ["[Message from ", "[Work from ", "[The user answered]"];
+export const isBoxsOwnWord = (text: unknown, metadata: unknown) => !writtenByYou(text, metadata) && !FROM_SOMEONE.some(start => String(text ?? "").startsWith(start));
 const isYours = (item: NonNullable<NonNullable<QueueEvent["data"]>["item"]>) => item.type === "user" && writtenByYou(item.payload?.text, item.payload?.metadata);
 
 /** How the queue's watcher waits (a test's clock). */

@@ -802,7 +802,9 @@ client shows it from the same routes.
     runs or it's listed here. Kept in `run/work/background.json`, per place (engine, bridge).
   - **Counting at work**: `kuvo/work`'s `state` and `today.working`, a bot's limits and
     `list_sessions` all go by the same fact. One running 6 hours (a dev server) stops counting, though
-    it may still run, and a client's list of commands still shows it.
+    it may still run, and a client's list of commands still shows it. A goal's Mac stays awake for it
+    too, but it holds off a goal's nudge only for 30 minutes, and never hides a turn that failed at a
+    limit.
   - **Telling a lead**: `[Session finished]` waits while any of it runs, and looks again 10 seconds
     after it ends, since the end wakes its agent. At 30 minutes it's told anyway, saying what still
     runs. A turn someone asked for doesn't wait on what was running before they asked (a dev server):
@@ -814,11 +816,13 @@ client shows it from the same routes.
     that began on its own is told once. Oversight's `finished` mark goes with the telling.
   - **Stopping**: `stop_session`, Stop on a session someone started, and `stop-all` end its turn,
     what it left running, and its wake-ups and watches, and mark it in `run/work/stopped.json`.
-    `stop-all` takes those waiting on a timer of their own too. Until it's set going again, nothing
-    it does is told. What's written to it decides, read at `session.inbox.delivered` (the turn starts
-    before the message is in its conversation): what it left running ending (a `synthetic` with
-    `metadata.source` `shell` or `subagent`) is interrupted at once; anything else written since the
-    stop, a message, a goal or a wake-up, sets it going and clears the mark. An archived session is
+    `stop-all` takes those waiting on a timer of their own too, and holds what waits only where a
+    turn stopped. Until it's set going again, nothing it does is told. What's written to it decides,
+    read at `session.inbox.delivered` (the turn starts before the message is in its conversation):
+    what it left running ending or its agent carrying on by itself (a `synthetic` with
+    `metadata.source` `shell`, `subagent` or `agent`), or the box's own word (what a session it
+    started did), is interrupted at once; anything else written since the stop, a message, a goal or
+    a wake-up, sets it going and clears the mark. An archived session is
     interrupted the same way, and never told of. Stop in your own conversation or in a bot's own ends
     the turn only, and keeps its background commands and wake-ups. So does a goal's Pause, for each
     of its sessions, since it goes on from where it was.

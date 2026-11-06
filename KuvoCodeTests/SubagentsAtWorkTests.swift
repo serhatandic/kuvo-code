@@ -1,4 +1,5 @@
 import Foundation
+import KuvoLink
 import OpenCodeKit
 import Testing
 @testable import KuvoCode
@@ -93,13 +94,7 @@ import Testing
     /// while it's followed again, and goes only once the box can't be reached.
     @Test func aDroppedStreamLeavesASessionAtWork() async throws {
         defer { engine.stop() }
-        final class Answers: @unchecked Sendable {
-            private let lock = NSLock()
-            private var count = 0
-            var asked: Int { lock.withLock { count } }
-            func next() -> Int { lock.withLock { count += 1; return count } }
-        }
-        let answers = Answers()
+        let answers = BoxAnswers()
         engine.list([StubEngine.session(parent, title: "Lead", directory: "/tmp/kuvo-tests-subagents")])
         await workspace.refresh()
         let list = Data(#"{"sessions": {"\#(parent)": {"commands": 1, "subagents": 0, "tasks": 0, "since": 1}}}"#.utf8) + Data("\n".utf8)
@@ -162,5 +157,16 @@ import Testing
         workspace.handle(try engine.event("permission.asked", ["id": "per_2", "sessionID": second, "action": "shell", "resources": ["npm test"]]))
         #expect(workspace.needsAttention(parent))
         #expect(workspace.waitingCount == 1, "one session waits for you, not one for each of its subagents")
+    }
+}
+
+/// How many times a box was asked, from its transport's own thread.
+private nonisolated final class BoxAnswers: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    var asked: Int { lock.withLock { count } }
+    func next() -> Int {
+        defer { TestPulse.beat() }
+        return lock.withLock { count += 1; return count }
     }
 }

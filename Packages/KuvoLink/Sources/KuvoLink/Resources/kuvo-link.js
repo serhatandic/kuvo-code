@@ -1253,6 +1253,8 @@ async function sendNow(target, session, item) {
 }
 var NOT_YOURS = ["[Message from ", "[Wake-up]", "[Work from ", "[Session ", "[Goal started]", "[Goal changed]", "[Goal's end]", "[Goal resumed]", "[Not now]", "[Limit reset]", "[The user answered]"];
 var writtenByYou = (text, metadata) => !isBoxNote(metadata) && !NOT_YOURS.some((start) => String(text ?? "").startsWith(start));
+var FROM_SOMEONE = ["[Message from ", "[Work from ", "[The user answered]"];
+var isBoxsOwnWord = (text, metadata) => !writtenByYou(text, metadata) && !FROM_SOMEONE.some((start) => String(text ?? "").startsWith(start));
 var isYours = (item) => item.type === "user" && writtenByYou(item.payload?.text, item.payload?.metadata);
 function queueWatcher(target, { after = DRAIN_AFTER, schedule = setTimeout, cancel = clearTimeout, found } = {}) {
   const drains = new Map;
@@ -11382,30 +11384,55 @@ var changeTold = (file, change, from, until) => {
   } catch {}
 };
 var hashed = (text) => crypto21.createHash("sha256").update(text).digest("hex").slice(0, 16);
-var WAKE_UP = "[Wake-up] ";
 var messageTime = (message) => isObject(message?.time) && typeof message.time.created === "number" ? message.time.created : null;
 function beganBy(turn) {
   const starters = turn.filter((message) => message.type === "user" || message.type === "synthetic");
-  const asked = starters.find((message) => message.type === "user" && !String(message.text ?? "").startsWith(WAKE_UP));
+  const asked = starters.find((message) => message.type === "user" && !isBoxsOwnWord(message.text, message.metadata));
   if (asked || !starters.length)
     return { kind: "asked", at: messageTime(asked) };
   const first = starters.at(-1);
+  const at = messageTime(first);
+  if (first.type === "user")
+    return { kind: String(first.text ?? "").startsWith(WAKE_MARKER) ? "timer" : "left", at };
   const source = isObject(first.metadata) ? first.metadata.source : undefined;
-  return { kind: first.type === "user" ? "timer" : source === "shell" || source === "subagent" ? "left" : "other", at: messageTime(first) };
+  return { kind: source === "shell" || source === "subagent" || source === "agent" ? "left" : "other", at };
+}
+var ofTurn = (message) => message.type === "user" || message.type === "synthetic" || message.type === "assistant";
+function turnIn(messages) {
+  const lastEnd = messages.findIndex((message) => message.type === "idle");
+  const from = lastEnd >= 0 && !messages.slice(0, lastEnd).some(ofTurn) ? lastEnd + 1 : 0;
+  return { from, before: messages.findIndex((message, index) => index >= from && message.type === "idle") };
+}
+async function latestMessages(target, session) {
+  const address = encodeURIComponent(session);
+  const messages = [];
+  let query = "limit=50&order=desc";
+  for (let pages = 0;pages < 20; pages++) {
+    const page = await engineGet(target, `api/session/${address}/message?${query}`).catch((error) => {
+      if (pages === 0)
+        throw error;
+      return null;
+    });
+    const data = Array.isArray(page?.data) ? page.data : [];
+    for (const message of data)
+      if (isObject(message) && typeof message.id === "string")
+        messages.push(message);
+    const next = page?.cursor?.next ?? page?.cursor?.previous;
+    if (!data.length || !next || turnIn(messages).before >= 0)
+      break;
+    query = `limit=100&cursor=${encodeURIComponent(next)}`;
+  }
+  return messages;
 }
 async function lastReply(target, session) {
-  const page = await call(target, "GET", `/api/session/${encodeURIComponent(session)}/message?limit=20&order=desc`);
-  const messages = (Array.isArray(page) ? page : []).filter((message) => isObject(message) && typeof message.id === "string");
+  const messages = await latestMessages(target, session);
   const at = messageTime;
   const newest = (type) => {
     const index = messages.findIndex((message) => message.type === type);
     return index < 0 ? Infinity : index;
   };
   const reply = messages[newest("assistant")];
-  const ofTurn = (message) => message.type === "user" || message.type === "synthetic" || message.type === "assistant";
-  const lastEnd = messages.findIndex((message) => message.type === "idle");
-  const from = lastEnd >= 0 && !messages.slice(0, lastEnd).some(ofTurn) ? lastEnd + 1 : 0;
-  const before = messages.findIndex((message, index) => index >= from && message.type === "idle");
+  const { from, before } = turnIn(messages);
   const turn = messages.slice(from, before < 0 ? undefined : before);
   const ended = from > 0 && turn.length > 0 && !turn.some((message) => message.type === "assistant") ? messages[from - 1] : undefined;
   let text = "";
@@ -11846,18 +11873,19 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
 // Packages/Box/src/link/work/stop.ts
 async function stopBotWork(bot, targets, signal) {
   const work = ofBot(bot, await workSessions(targets, signal));
-  const working = await atWorkNow(targets, signal);
+  const [working, turns] = await Promise.all([atWorkNow(targets, signal), workingNow(targets, signal)]);
   let stopped = 0;
   for (const each of work) {
-    if (!working.has(each.data.id) && !hasWakeUps(each.data.id) && !await askingNow(each, signal))
+    const asking = !turns.has(each.data.id) && await askingNow(each, signal);
+    if (!working.has(each.data.id) && !hasWakeUps(each.data.id) && !asking)
       continue;
-    if (await stopWork(each.target, each.data.id, true).then(() => true, () => false))
+    if (await stopWork(each.target, each.data.id, turns.has(each.data.id) || Boolean(asking)).then(() => true, () => false))
       stopped += 1;
   }
   const own = botHere(bot)?.session;
   if (own) {
     forgetWakes(own);
-    if (working.has(own)) {
+    if (turns.has(own)) {
       for (const target of targets)
         if (await stopSession(target, own).then(() => true, () => false))
           break;
@@ -12805,7 +12833,10 @@ async function lookAtGoals(tell, targets, { file = GOALS_FILE, here, now = Date.
   }
   const running = readKept3(file).filter((goal) => goal.state === "running" && botHere(goal.bot));
   const sessions = running.length ? await workSessions(targets(), signal).catch(() => []) : [];
-  const working = running.length ? await atWorkNow(targets(), signal).catch(() => new Set) : new Set;
+  const turns = running.length ? await workingNow(targets(), signal).catch(() => new Set) : new Set;
+  const left = running.length ? readBackground() : {};
+  const working = new Set([...turns, ...Object.keys(left)]);
+  const busy = new Set([...turns, ...Object.keys(left).filter((id) => now - left[id].since < FINISH_HOLD_LIMIT)]);
   const workOf = (goal) => goalWork(goal, sessions);
   keepAwake(running.some((goal) => working.has(goal.session) || workOf(goal).some((each) => working.has(each.data.id))));
   for (const goal of running) {
@@ -12813,7 +12844,7 @@ async function lookAtGoals(tell, targets, { file = GOALS_FILE, here, now = Date.
     const own = await placeOfSession(goal.session, targets()).catch(() => null);
     const limitsSeen = { ...goal.limitsSeen ?? {} };
     for (const each of work) {
-      if (working.has(each.data.id))
+      if (turns.has(each.data.id))
         continue;
       const failed = await failedTurn(each.target, each.data.id, signal);
       if (!failed || limitsSeen[each.data.id] === failed.idle || !isLimit(failed.error))
@@ -12861,7 +12892,7 @@ async function lookAtGoals(tell, targets, { file = GOALS_FILE, here, now = Date.
       }
     }
     const live = readKept3(file).find((each) => each.id === goal.id);
-    const atWork = working.has(goal.session) || work.some((each) => working.has(each.data.id));
+    const atWork = busy.has(goal.session) || work.some((each) => busy.has(each.data.id));
     const left = (live?.steps ?? []).filter((step) => step.state !== "done" && step.state !== "skipped");
     const pausedSessions = new Set((live?.paused ?? []).map((each) => each.session).filter(Boolean));
     const doable = left.filter((step) => (step.state === "todo" || step.state === "doing") && !(step.sessions?.length && step.sessions.every((id) => pausedSessions.has(id))));

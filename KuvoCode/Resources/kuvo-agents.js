@@ -17016,7 +17016,7 @@ ${text.slice(0, 4000)}
     const later = onFiles(doing) || doing.kind === "running" && doing.run.agent?.provider === provider;
     if (!now && !later)
       return false;
-    live.own = { id: newID("msg"), text: note.text, files: [], delivery: "steer", synthetic: { description: note.description, metadata: note.metadata }, adopt: model };
+    live.own = { id: newID("msg"), text: note.text, files: [], delivery: "steer", synthetic: { description: note.description, metadata: { source: "agent", ...note.metadata } }, adopt: model };
     this.advance(id, live);
     return true;
   }
@@ -23369,4 +23369,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents b27f125ced29124b77cf2ca728e336b791044304e5b363d5ae4fc3883cc552e5
+// Built from Packages/Box/src/agents 1f730ec020aee229358af773442fa3c17201915e8c1d9512157bb59983ddd4f2
