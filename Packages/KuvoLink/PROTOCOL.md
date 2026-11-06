@@ -1588,10 +1588,15 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     file that can't be changed, `503 {"message"}` when its bots' keys can't be taken away (nothing
     removed) or its own can't (removed, with its key still kept, which Remove again takes). A
     Mac's Remove… is its box's, through `BoxClient` (a machine's through `box route`).
-  - Not on the box yet: bringing added integrations up to date as the engine starts (a package's
-    pinned version, Code Mode off, keys named where the computer reads them) is the Mac app's
-    (`Integrations.upgrade`), through `kuvo/config`, for its own box and each machine as it
-    connects; a machine whose Mac doesn't connect keeps them as they were.
+  - Brought up to date as the box starts, from the catalog it has, with no client there (a
+    machine's as its bridge starts, this Mac's as its box does): a package's pinned version, Code
+    Mode off, keys named where the computer reads them, and a package whose maker now runs its own
+    server replaced by that server, its key taken away first (where it can't be, this Mac's app not
+    answering, that one waits for the next start). Every other MCP server gets Code Mode off too,
+    unless it says, but for Kuvo Code's own. A Mac does the same through `kuvo/config`
+    (`Integrations.upgrade`, `MCPSettings.upgrade`), for its own box and each machine not newer
+    than it as it connects: whichever goes first, the settings come out the same, and there's no
+    write once they're up to date.
 - Bots' own keys, as Edit Bot shows and changes them: a key a bot has of its own for an
   integration you bring a key for, used only in its conversation, kept on the computer the bot
   lives on (a Mac's bots' in its Keychain, which its box reaches through the app: "Host

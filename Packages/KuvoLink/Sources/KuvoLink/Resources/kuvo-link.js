@@ -1887,15 +1887,20 @@ function deepMerged(under, over) {
 }
 var KEY_NAME = /^KUVO_KEY_[A-Za-z0-9_]+$/;
 var KEYS_NAMED = IS_MAC && APP_KEY_FILES ? APP_KEY_FILES : `${shownRoot}/box/keys`;
-function keysNamedHere(value) {
-  if (typeof value === "string")
-    return value.replace(/\{file:[^{}]*?(KUVO_KEY_[A-Za-z0-9_]+)\}/g, (_, name) => `{file:${KEYS_NAMED}/${name}}`);
-  if (Array.isArray(value))
-    return value.map(keysNamedHere);
-  if (isObject(value))
-    return Object.fromEntries(Object.entries(value).map(([key, inner]) => [key, keysNamedHere(inner)]));
-  return value;
-}
+var namingKeysHere = (named) => {
+  const rename = (value) => {
+    if (typeof value === "string")
+      return value.replace(named, (_, name) => `{file:${KEYS_NAMED}/${name}}`);
+    if (Array.isArray(value))
+      return value.map(rename);
+    if (isObject(value))
+      return Object.fromEntries(Object.entries(value).map(([key, inner]) => [key, rename(inner)]));
+    return value;
+  };
+  return rename;
+};
+var keysNamedHere = namingKeysHere(/\{file:[^{}]*?(KUVO_KEY_[A-Za-z0-9_]+)\}/g);
+var olderKeysNamedHere = namingKeysHere(/\{(?:env|file):[^{}]*?(KUVO_KEY_[A-Za-z0-9_]+)\}/g);
 var BOT_MEMORY_RULE = { action: "edit", resource: "*/bots/bot_*/MEMORY.md", effect: "allow" };
 var DEFAULTS_ADDED = path10.join(BOX, "defaults-added");
 function addDefaultRules(mac = IS_MAC, file = CONFIG_FILE, marks = DEFAULTS_ADDED) {
@@ -11875,6 +11880,77 @@ function integrationCatalog(file = INTEGRATIONS_FILE) {
   } catch {
     return [];
   }
+}
+var LAUNCHER = "kuvo-npx";
+var APART = "KUVO_NPX_APART";
+var OWN_SERVER = "kuvo-browser";
+function packageName(spec) {
+  const at = spec.lastIndexOf("@");
+  return at > 0 ? spec.slice(0, at) : spec;
+}
+var leftForItsMaker = (entry, server) => entry.way === "official" && isObject(entry.settings) && Array.isArray(server.command) && server.command[0] === LAUNCHER;
+function broughtUpToDate(entry, server) {
+  if (leftForItsMaker(entry, server))
+    return entry.settings;
+  const next = { ...server };
+  if (next.codemode === undefined)
+    next.codemode = false;
+  const pinned = isObject(entry.settings) ? entry.settings.command : undefined;
+  const old = server.command;
+  if (entry.way === "package" && Array.isArray(pinned) && typeof pinned[1] === "string" && Array.isArray(old) && old[0] === LAUNCHER && typeof old[1] === "string" && packageName(old[1]) === packageName(pinned[1])) {
+    next.command = pinned;
+    const environment = server.environment === undefined ? {} : server.environment;
+    if (isObject(environment) && environment[APART] === undefined)
+      next.environment = { ...environment, [APART]: "1" };
+  }
+  return olderKeysNamedHere(next);
+}
+function upgradeChanges(settings, catalog, keysGone) {
+  const servers = valueAt(settings, SERVERS);
+  if (!isObject(servers))
+    return [];
+  const changes = [];
+  for (const [id, server] of Object.entries(servers)) {
+    if (!isObject(server))
+      continue;
+    const entry = catalog.find((each) => each.id === id);
+    if (!entry) {
+      if (id !== OWN_SERVER && server.codemode === undefined)
+        changes.push({ path: [...SERVERS, id, "codemode"], value: false });
+      continue;
+    }
+    if (leftForItsMaker(entry, server) && !keysGone.has(id))
+      continue;
+    const next = broughtUpToDate(entry, server);
+    if (!sameJSON(next, server))
+      changes.push({ path: [...SERVERS, id], value: next });
+  }
+  return changes;
+}
+function upgradeIntegrations(catalogFile = INTEGRATIONS_FILE, file = CONFIG_FILE, lock = CONFIG_LOCK) {
+  return keyWork(async () => {
+    const catalog = integrationCatalog(catalogFile);
+    const { settings: before } = readSettings(file);
+    const keysGone = new Set;
+    for (const entry of catalog) {
+      const server = valueAt(before ?? {}, [...SERVERS, entry.id]);
+      if (!isObject(server) || !leftForItsMaker(entry, server))
+        continue;
+      try {
+        for (const name of new Set(JSON.stringify(server).match(/KUVO_KEY_[A-Z0-9_]+/g) ?? []))
+          await deleteKey(name);
+        keysGone.add(entry.id);
+      } catch {}
+    }
+    locked(lock, () => {
+      const { settings, problem } = readSettings(file);
+      if (problem)
+        return;
+      const changes = upgradeChanges(settings, catalog, keysGone);
+      if (changes.length)
+        writeSettings(settings, changes, file);
+    });
+  });
 }
 function integrationHealth(entry, server, off, signedIn) {
   if (off)
@@ -27268,6 +27344,7 @@ async function run3() {
     keepJobs();
   } catch {}
   forgetOldKit();
+  await upgradeIntegrations().catch(() => {});
   await refreshBotsKeys().catch(() => {});
   updateLink((link) => {
     if (!link)
@@ -27612,6 +27689,7 @@ async function serve() {
     watchVaultAsks(macTell, (id) => macLink.hold?.resolve(id));
     watchSandboxAsks(macTell, (id) => macLink.hold?.resolve(id));
   }
+  upgradeIntegrations().catch(() => {});
   refreshBotsKeys().catch(() => {});
   forgetLeftKeys().catch(() => {});
   finishDeletes(readEngineFile, bridgeTarget).catch(() => {});
@@ -28101,6 +28179,7 @@ export {
   updateNight,
   updateStatus,
   updatesBlocked,
+  upgradeIntegrations,
   verifyBoxes,
   versionOrder,
   wakeFolder,

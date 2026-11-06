@@ -3,18 +3,19 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { parsed } from "../../shared/json";
+import { isObject, parsed, sameJSON } from "../../shared/json";
 import type { Body } from "../../shared/json";
 import type { EngineRecord, Target } from "../../shared/records";
 import type { Integration, IntegrationAdded, IntegrationHealth, Integrations } from "../../shared/routes/integrations";
 import { soon } from "../../shared/wait";
 import { call } from "../engine/client";
-import { listOf, writePrivate } from "../files";
-import { BOTS, INTEGRATION_DATA, IS_MAC, K, OWN_RUNTIME, SCRIPT } from "../home";
+import { listOf, locked, writePrivate } from "../files";
+import { BOTS, CONFIG_LOCK, INTEGRATION_DATA, IS_MAC, K, OWN_RUNTIME, SCRIPT } from "../home";
 import { KeysUnavailable, siteSignIns } from "../host-interface";
 import { deleteKey, keyNames, keyWork, STORED_KEY, writeKey } from "../keys";
 import type { AnswerPiece, JSONAnswer, RouteContext } from "../server/context";
-import { changeSettings, ownsSettings, readSettings, SERVERS, valueAt } from "./config";
+import { changeSettings, CONFIG_FILE, olderKeysNamedHere, ownsSettings, readSettings, SERVERS, valueAt, writeSettings } from "./config";
+import type { SettingChange, Settings } from "./config";
 import type { EngineCredential } from "./accounts";
 
 export const INTEGRATIONS_FILE = path.join(K, "bin", "integrations.json");
@@ -44,6 +45,91 @@ export type IntegrationsAnswer = JSONAnswer<Integrations | IntegrationAdded | { 
  * starts its box): on a machine, not those that use a Mac's own apps. */
 export function integrationCatalog(file = INTEGRATIONS_FILE): CatalogIntegration[] {
   try { return (JSON.parse(fs.readFileSync(file, "utf8")).integrations ?? []).filter((each: CatalogIntegration) => typeof each?.id === "string" && (IS_MAC || !each.macOnly)); } catch { return []; }
+}
+
+// What runs a package's server, and what tells it to run apart from the project (the Mac's
+// `Launcher.name` and `Integrations.apart`).
+const LAUNCHER = "kuvo-npx";
+const APART = "KUVO_NPX_APART";
+// Kuvo Code's own browser tools: not yours to change (the Mac's `MCPSettings.builtIn`).
+const OWN_SERVER = "kuvo-browser";
+
+/** "@scope/name" of "@scope/name@1.2.3", "name" of "name@1.2.3". */
+function packageName(spec: string): string {
+  const at = spec.lastIndexOf("@");
+  return at > 0 ? spec.slice(0, at) : spec;
+}
+
+/** Whether its settings still run the package of one whose maker now has its own server (Figma's). */
+const leftForItsMaker = (entry: CatalogIntegration, server: Record<string, unknown>): boolean =>
+  entry.way === "official" && isObject(entry.settings) && Array.isArray(server.command) && server.command[0] === LAUNCHER;
+
+/** An added integration's settings as `entry` has them now: the maker's server, for one it left a
+ * package for; else its tools plain tools, its package started as it's pinned now, and its keys named
+ * where this box reads them. Whatever else you set on it stays. */
+function broughtUpToDate(entry: CatalogIntegration, server: Record<string, unknown>): unknown {
+  if (leftForItsMaker(entry, server)) return entry.settings;
+  const next = { ...server };
+  if (next.codemode === undefined) next.codemode = false;
+  const pinned = isObject(entry.settings) ? entry.settings.command : undefined;
+  const old = server.command;
+  if (entry.way === "package" && Array.isArray(pinned) && typeof pinned[1] === "string" && Array.isArray(old) && old[0] === LAUNCHER
+    && typeof old[1] === "string" && packageName(old[1]) === packageName(pinned[1])) {
+    next.command = pinned;
+    const environment = server.environment === undefined ? {} : server.environment;
+    if (isObject(environment) && environment[APART] === undefined) next.environment = { ...environment, [APART]: "1" };
+  }
+  return olderKeysNamedHere(next);
+}
+
+/** What bringing `settings` up to date changes; nothing when they are. One left for its maker only
+ * among `keysGone`. Other servers get what integrations do: their tools plain tools, unless they say. */
+function upgradeChanges(settings: Settings, catalog: CatalogIntegration[], keysGone: Set<string>): SettingChange[] {
+  const servers = valueAt(settings, SERVERS);
+  if (!isObject(servers)) return [];
+  const changes: SettingChange[] = [];
+  for (const [id, server] of Object.entries(servers)) {
+    if (!isObject(server)) continue;
+    const entry = catalog.find(each => each.id === id);
+    if (!entry) {
+      if (id !== OWN_SERVER && server.codemode === undefined) changes.push({ path: [...SERVERS, id, "codemode"], value: false });
+      continue;
+    }
+    if (leftForItsMaker(entry, server) && !keysGone.has(id)) continue;
+    const next = broughtUpToDate(entry, server);
+    if (!sameJSON(next, server)) changes.push({ path: [...SERVERS, id], value: next });
+  }
+  return changes;
+}
+
+/** Added integrations and MCP servers brought up to date as the box starts, from the catalog it has
+ * now (after an update, say), with no client there: what a Mac does as it connects
+ * (`Integrations.upgrade`, `MCPSettings.upgrade`), which comes to the same settings whichever goes
+ * first, and to no write at all once they're up to date.
+ *
+ * A package's key goes before its maker's server takes its place, as nothing names the key after:
+ * where it can't be taken away now (this Mac's app not answering), that one waits for the next start.
+ * The changes are worked out again under the settings' lock, so a client's change meanwhile stays. */
+export function upgradeIntegrations(catalogFile = INTEGRATIONS_FILE, file = CONFIG_FILE, lock = CONFIG_LOCK): Promise<void> {
+  return keyWork(async () => {
+    const catalog = integrationCatalog(catalogFile);
+    const { settings: before } = readSettings(file);
+    const keysGone = new Set<string>();
+    for (const entry of catalog) {
+      const server = valueAt(before ?? {}, [...SERVERS, entry.id]);
+      if (!isObject(server) || !leftForItsMaker(entry, server)) continue;
+      try {
+        for (const name of new Set(JSON.stringify(server).match(/KUVO_KEY_[A-Z0-9_]+/g) ?? [])) await deleteKey(name);
+        keysGone.add(entry.id);
+      } catch {}
+    }
+    locked(lock, () => {
+      const { settings, problem } = readSettings(file);
+      if (problem) return;
+      const changes = upgradeChanges(settings!, catalog, keysGone);
+      if (changes.length) writeSettings(settings!, changes, file);
+    });
+  });
 }
 
 /** How it's doing here, as Settings › Integrations says it: `off`, turned off in MCP Servers, so it

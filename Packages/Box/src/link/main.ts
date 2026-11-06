@@ -31,7 +31,7 @@ import { refreshBotsKeys } from "./areas/bot-keys";
 import { setBoxKey } from "./areas/box-keys";
 import { addMacDefaults, changeSettings, ownsSettings, readSettings } from "./areas/config";
 import { engineConnect } from "./areas/engine";
-import { answerOnce, reconnectEverywhere } from "./areas/integrations";
+import { answerOnce, reconnectEverywhere, upgradeIntegrations } from "./areas/integrations";
 import { keepSkillTrashClear } from "./areas/skills";
 import { sendWakes } from "./areas/wakes";
 import { finishDeletes, forgetLeftKeys } from "./bots/edit";
@@ -124,7 +124,7 @@ export { applySettings, translateSettings } from "./areas/apply";
 export { NOTICE_LIMIT, noticeJSON, pushTo } from "./notices/notice";
 export { LinkHost } from "./relay/host";
 export { followed } from "./follow";
-export { answerIntegrations, reconnectEverywhere } from "./areas/integrations";
+export { answerIntegrations, reconnectEverywhere, upgradeIntegrations } from "./areas/integrations";
 export { allWakes, holdArchived, listWakes, nextWake, readWakes, repeatText, sendWakes, wakeFolder, wakeOf } from "./areas/wakes";
 export { readRemovedWorktrees, readWorktrees } from "./areas/worktree-records";
 export { answerProjects, boxProjects, changeProjects, readProjects } from "./areas/projects";
@@ -234,7 +234,9 @@ async function run(): Promise<void> {
   // Its bots' jobs kept in their folders, taken once from where they were before.
   try { keepJobs(); } catch {}
   forgetOldKit();
-  // Its bots' folders' settings, as its integrations are now (after an update, say).
+  // Its integrations and servers as its catalog has them now (after an update, say), and its bots'
+  // folders' settings as its integrations are.
+  await upgradeIntegrations().catch(() => {});
   await refreshBotsKeys().catch(() => {});
   // A link from an earlier bridge: its signing key made, and kept as this one keeps it.
   updateLink(link => {
@@ -579,8 +581,10 @@ async function serve(): Promise<void> {
     watchVaultAsks(macTell, id => macLink.hold?.resolve(id));
     watchSandboxAsks(macTell, id => macLink.hold?.resolve(id));
   }
-  // Its bots' folders' settings, as its keys and integrations are now (after an update, say), as a
-  // machine's bridge does as it starts; where its keys can't be reached yet, they stay as they were.
+  // Its integrations and servers as its catalog has them now, and its bots' folders' settings as its
+  // keys and integrations are (after an update, say), as a machine's bridge does as it starts; where
+  // its keys can't be reached yet, they stay as they were.
+  upgradeIntegrations().catch(() => {});
   refreshBotsKeys().catch(() => {});
   // Keys of bots deleted while they couldn't be reached.
   forgetLeftKeys().catch(() => {});
