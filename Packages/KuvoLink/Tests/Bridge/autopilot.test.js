@@ -43,6 +43,7 @@ let prompts;
 let refusesPrompts;
 let refusesAnswers;
 let refusesReading;
+let refusesForms;
 let followers = [];
 const followed = new Set();
 const engine = http.createServer((request, response) => {
@@ -83,6 +84,7 @@ const engine = http.createServer((request, response) => {
       return reply({ data: true });
     }
     const forms = url.pathname.match(/^\/api\/session\/([^/]+)\/form$/);
+    if (forms && refusesForms) return reply({ message: "Not now." }, 500);
     if (forms) return reply({ data: waiting.get(decodeURIComponent(forms[1])) ?? [] });
     const prompt = url.pathname.match(/^\/api\/session\/([^/]+)\/prompt$/);
     if (prompt && request.method === "POST" && refusesPrompts) return reply({ message: "Not now." }, 500);
@@ -125,6 +127,7 @@ beforeEach(() => {
   refusesPrompts = false;
   refusesAnswers = false;
   refusesReading = false;
+  refusesForms = false;
   fs.rmSync(path.join(home, "run", "work"), { recursive: true, force: true });
 });
 
@@ -469,6 +472,50 @@ test("your phone is told of a question that marks a choice while you have its go
   assert.deepEqual(told.map(each => each.data.request), ["frm_paused"]);
   assert.deepEqual(answered, []);
   done();
+});
+
+test("the box says whether a question waits on you, so a client judges nothing: what goes ahead doesn't, whenever the client asks; what can't, does", async () => {
+  const asked = async (conversation, form) => (await route("POST", `kuvo/sessions/${conversation}/autopilot/asked`, { form })).body;
+  // Marked, on Autopilot: gone ahead by the time it answers, with nothing else having run.
+  waiting.set("ses_away", [QUESTION("frm_went", "ses_away", ROASTS)]);
+  assert.deepEqual(await asked("ses_away", "frm_went"), { waiting: false });
+  assert.deepEqual(answered.map(each => each.form), ["frm_went"]);
+  assert.equal((await route("GET", "kuvo/sessions/ses_away/autopilot")).body.decided[0].choice, "Warm and roasty");
+  // And asked again, once it's gone.
+  assert.deepEqual(await asked("ses_away", "frm_went"), { waiting: false });
+  assert.equal(answered.length, 1);
+  // What marks none, or two in one choice, or asks for a secret.
+  waiting.set("ses_away", [QUESTION("frm_none", "ses_away", ["Pickup", "Delivery"]), QUESTION("frm_two", "ses_away", ["Light (Recommended)", "Warm (recommended)"]),
+    { ...QUESTION("frm_key", "ses_away", ["Use this key (Recommended)", "Skip"]), fields: [{ ...QUESTION("frm_key", "ses_away", ["Use this key (Recommended)", "Skip"]).fields[0], format: "password" }] }]);
+  for (const form of ["frm_none", "frm_two", "frm_key"]) assert.deepEqual(await asked("ses_away", form), { waiting: true }, form);
+  assert.equal(answered.length, 1);
+  // Marked, but the engine doesn't take the answer: it waits.
+  refusesAnswers = true;
+  waiting.set("ses_away", [QUESTION("frm_refused", "ses_away", ROASTS)]);
+  assert.deepEqual(await asked("ses_away", "frm_refused"), { waiting: true });
+  refusesAnswers = false;
+  // Marked, while you have its goal paused: it waits.
+  goalIn("ses_away", { heldByYou: true });
+  waiting.set("ses_away", [QUESTION("frm_paused", "ses_away", ROASTS)]);
+  assert.deepEqual(await asked("ses_away", "frm_paused"), { waiting: true });
+  assert.equal(answered.length, 1);
+  // A conversation that isn't on Autopilot: marked or not, it's yours.
+  waiting.set("ses_mine", [QUESTION("frm_mine", "ses_mine", ROASTS)]);
+  assert.deepEqual(await asked("ses_mine", "frm_mine"), { waiting: true });
+  assert.equal(answered.length, 1);
+  // Where there's no such conversation, the client tells you, as any question.
+  assert.equal((await route("POST", "kuvo/sessions/ses_nobody/autopilot/asked", { form: "frm_mine" })).status, 404);
+  assert.equal((await route("GET", "kuvo/sessions/ses_mine/autopilot/asked")).status, 405);
+  assert.equal((await route("POST", "kuvo/sessions/ses_mine/autopilot/asked", {})).status, 400);
+});
+
+test("a subagent's question is its conversation's to say about; and where the engine won't list what's asked, it's taken as waiting", async () => {
+  const asked = async form => (await route("POST", "kuvo/sessions/ses_away/autopilot/asked", { form })).body;
+  waiting.set("ses_helper", [QUESTION("frm_helper", "ses_helper", ["Pickup only (Recommended)", "Delivery too"])]);
+  assert.deepEqual(await asked("frm_helper"), { waiting: false });
+  assert.deepEqual(answered.map(each => each.form), ["frm_helper"]);
+  refusesForms = true;
+  assert.deepEqual(await asked("frm_unread"), { waiting: true });
 });
 
 // A bot's goal running in the conversation (its bot's own), as the box keeps it.

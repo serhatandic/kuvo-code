@@ -9042,6 +9042,18 @@ async function catchUpAutopilot(target, file = DECIDED_FILE, signal) {
     await goAheadOnWaiting(target, data, file, signal).catch(() => {});
   }
 }
+async function waitsOnYou(target, conversation, form, file = DECIDED_FILE, signal) {
+  const before = await asksIn(target, conversation.id, signal);
+  const asked = before.questions.find((each) => each.id === form);
+  if (!asked)
+    return !before.whole;
+  if (!isAutopilot(conversation))
+    return true;
+  if (await goAheadOnQuestion(target, conversation, asked, file, signal))
+    return false;
+  const after = await asksIn(target, conversation.id, signal);
+  return !after.whole || after.questions.some((each) => each.id === form);
+}
 async function goAhead(target, conversation, asker, id, recommended, file, signal, asked) {
   const goal = runningGoalOf(conversation.id, worksFor(conversation)?.bot ?? null);
   if (goal?.heldByYou)
@@ -9496,6 +9508,7 @@ async function askersOf(target, session, signal) {
 async function asksIn(target, session, signal) {
   const permissions = [];
   const questions = [];
+  let whole = true;
   for (const asker of await askersOf(target, session, signal)) {
     const at = `/api/session/${encodeURIComponent(asker)}`;
     const listed = await call(target, "GET", `${at}/permission`, undefined, signal).catch(() => null);
@@ -9507,6 +9520,8 @@ async function asksIn(target, session, signal) {
       permissions.push({ id: each.id, asker, action: String(each.action ?? ""), resources, ...typeof source?.id === "string" ? { call: source.id } : {}, ...typeof source?.messageID === "string" ? { message: source.messageID } : {}, ...each.sandboxed === true ? { sandboxed: true } : {} });
     }
     const forms = await call(target, "GET", `${at}/form`, undefined, signal).catch(() => null);
+    if (!Array.isArray(forms))
+      whole = false;
     for (const form of Array.isArray(forms) ? forms : []) {
       if (!isObject(form) || typeof form.id !== "string")
         continue;
@@ -9517,7 +9532,7 @@ async function asksIn(target, session, signal) {
       questions.push({ id: form.id, asker, key: typeof one?.key === "string" ? one.key : null, text: String(one?.description || one?.title || form.title || "a question"), ...recommended ? { recommended } : {}, ...call ? { call } : {} });
     }
   }
-  return { permissions, questions };
+  return { permissions, questions, whole };
 }
 async function stopIfWaiting(target, session) {
   const { permissions, questions } = await asksIn(target, session).catch(() => ({ permissions: [], questions: [] }));
@@ -24406,7 +24421,7 @@ async function* backupsRoute(context) {
 }
 
 // Packages/Box/src/link/areas/autopilot.ts
-var SESSION_AUTOPILOT_ROUTE = /^kuvo\/sessions\/([^/]+)\/autopilot$/;
+var SESSION_AUTOPILOT_ROUTE = /^kuvo\/sessions\/([^/]+)\/autopilot(\/asked)?$/;
 async function find2(id, targets) {
   for (const target of targets) {
     if (!target)
@@ -24429,11 +24444,16 @@ async function* autopilotRoute(context) {
   } catch {}
   if (!id)
     return yield* json(404, { message: "That conversation isn't here." });
+  const asked = Boolean(route.match(SESSION_AUTOPILOT_ROUTE)?.[2]);
+  if (asked && method !== "POST")
+    return yield* json(405, { message: "Ask with POST." });
+  if (asked && typeof given.form !== "string")
+    return yield* json(400, { message: "Say which question (form)." });
   if (method !== "GET" && method !== "PUT" && method !== "POST")
     return yield* json(405, { message: "Read it with GET, turn it on or off with PUT, or change a call with POST." });
   if (method === "PUT" && typeof given.autopilot !== "boolean")
     return yield* json(400, { message: "Say whether it runs on Autopilot (autopilot, true or false)." });
-  if (method === "POST" && (typeof given.decided !== "string" || typeof given.choice !== "string" || !given.choice.trim()))
+  if (method === "POST" && !asked && (typeof given.decided !== "string" || typeof given.choice !== "string" || !given.choice.trim()))
     return yield* json(400, { message: "Say which call (decided) and your choice (choice)." });
   let engine = null;
   try {
@@ -24450,6 +24470,8 @@ async function* autopilotRoute(context) {
   const carried = at.data.metadata?.kuvo?.carriedFrom;
   if (typeof carried === "string")
     carryDecided(carried, id);
+  if (asked)
+    return yield* json(200, { waiting: await waitsOnYou(at.target, at.data, given.form, undefined, signal).catch(() => true) });
   if (method === "PUT") {
     const on = given.autopilot;
     if (!await setAutopilot(at.target, at.data, on, signal))

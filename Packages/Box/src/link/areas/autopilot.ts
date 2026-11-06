@@ -1,11 +1,11 @@
 // `kuvo/sessions/<id>/autopilot`: whether a conversation runs Interactive or on Autopilot, and the
 // calls it made there (PROTOCOL.md, "Autopilot"; the rest in `../work/autopilot.ts`). A client
-// reads it, turns it on or off, and confirms or changes a call.
+// reads it, turns it on or off, confirms or changes a call, and asks whether a question waits on you.
 
 import { isObject, parsed } from "../../shared/json";
 import { engineGet, peerTargets } from "../engine/client";
 import { CHOICE_MOST } from "../work/answers";
-import { carryDecided, decidedByYou, decidedIn, goAheadOnWaiting, isAutopilot, setAutopilot } from "../work/autopilot";
+import { carryDecided, decidedByYou, decidedIn, goAheadOnWaiting, isAutopilot, setAutopilot, waitsOnYou } from "../work/autopilot";
 import { answerGoal, runningGoalOf } from "../work/goals";
 import type { EngineAnswer } from "../engine/client";
 import type { EngineSession } from "../engine/sessions";
@@ -13,7 +13,7 @@ import type { Target } from "../../shared/records";
 import type { SessionAutopilot } from "../../shared/routes/autopilot";
 import type { AnswerPiece, RouteContext } from "../server/context";
 
-export const SESSION_AUTOPILOT_ROUTE = /^kuvo\/sessions\/([^/]+)\/autopilot$/;
+export const SESSION_AUTOPILOT_ROUTE = /^kuvo\/sessions\/([^/]+)\/autopilot(\/asked)?$/;
 
 /** A conversation where it is: on the engine, or the coding agents' bridge. */
 async function find(id: string, targets: (Target | null)[]): Promise<{ target: Target; data: EngineSession } | null> {
@@ -35,9 +35,12 @@ export async function* autopilotRoute(context: RouteContext): AsyncGenerator<Ans
   let id = "";
   try { id = decodeURIComponent(route.match(SESSION_AUTOPILOT_ROUTE)?.[1] ?? ""); } catch {}
   if (!id) return yield* json(404, { message: "That conversation isn't here." });
+  const asked = Boolean(route.match(SESSION_AUTOPILOT_ROUTE)?.[2]);
+  if (asked && method !== "POST") return yield* json(405, { message: "Ask with POST." });
+  if (asked && typeof given.form !== "string") return yield* json(400, { message: "Say which question (form)." });
   if (method !== "GET" && method !== "PUT" && method !== "POST") return yield* json(405, { message: "Read it with GET, turn it on or off with PUT, or change a call with POST." });
   if (method === "PUT" && typeof given.autopilot !== "boolean") return yield* json(400, { message: "Say whether it runs on Autopilot (autopilot, true or false)." });
-  if (method === "POST" && (typeof given.decided !== "string" || typeof given.choice !== "string" || !given.choice.trim())) return yield* json(400, { message: "Say which call (decided) and your choice (choice)." });
+  if (method === "POST" && !asked && (typeof given.decided !== "string" || typeof given.choice !== "string" || !given.choice.trim())) return yield* json(400, { message: "Say which call (decided) and your choice (choice)." });
   let engine: Target | null = null;
   try { engine = readEngine(); } catch {}
   if (!engine?.port) engine = null;
@@ -48,6 +51,7 @@ export async function* autopilotRoute(context: RouteContext): AsyncGenerator<Ans
   // Carried on from another of this box's (a Mac carries it itself): its calls come along.
   const carried = at.data.metadata?.kuvo?.carriedFrom;
   if (typeof carried === "string") carryDecided(carried, id);
+  if (asked) return yield* json(200, { waiting: await waitsOnYou(at.target, at.data, given.form as string, undefined, signal).catch(() => true) });
   if (method === "PUT") {
     const on = given.autopilot as boolean;
     if (!await setAutopilot(at.target, at.data, on, signal)) return yield* json(502, { message: "It couldn't be changed: the engine didn't take it. Try again." });

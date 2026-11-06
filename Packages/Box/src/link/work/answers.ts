@@ -182,9 +182,10 @@ export async function askersOf(target: Target, session: string, signal?: AbortSi
 }
 
 /** What `session` (or one of its subagents) asks now: its permissions and questions. */
-export async function asksIn(target: Target, session: string, signal?: AbortSignal): Promise<{ permissions: PendingPermission[]; questions: PendingQuestion[] }> {
+export async function asksIn(target: Target, session: string, signal?: AbortSignal): Promise<{ permissions: PendingPermission[]; questions: PendingQuestion[]; whole: boolean }> {
   const permissions: PendingPermission[] = [];
   const questions: PendingQuestion[] = [];
+  let whole = true;
   for (const asker of await askersOf(target, session, signal)) {
     const at = `/api/session/${encodeURIComponent(asker)}`;
     const listed = await call(target, "GET", `${at}/permission`, undefined, signal).catch(() => null);
@@ -195,6 +196,7 @@ export async function asksIn(target: Target, session: string, signal?: AbortSign
       permissions.push({ id: each.id, asker, action: String(each.action ?? ""), resources, ...(typeof source?.id === "string" ? { call: source.id } : {}), ...(typeof source?.messageID === "string" ? { message: source.messageID } : {}), ...(each.sandboxed === true ? { sandboxed: true } : {}) });
     }
     const forms = await call(target, "GET", `${at}/form`, undefined, signal).catch(() => null);
+    if (!Array.isArray(forms)) whole = false;
     for (const form of Array.isArray(forms) ? forms : []) {
       if (!isObject(form) || typeof form.id !== "string") continue;
       const fields = (Array.isArray(form.fields) ? form.fields : []).filter((field: unknown) => isObject(field) && !field.hidden && !(Array.isArray(field.when) && field.when.length));
@@ -204,7 +206,7 @@ export async function asksIn(target: Target, session: string, signal?: AbortSign
       questions.push({ id: form.id, asker, key: typeof one?.key === "string" ? one.key : null, text: String(one?.description || one?.title || form.title || "a question"), ...(recommended ? { recommended } : {}), ...(call ? { call } : {}) });
     }
   }
-  return { permissions, questions };
+  return { permissions, questions, whole };
 }
 
 /** Archived while it waits on you (a permission or a question, its subagents' too): its run stops,

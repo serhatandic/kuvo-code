@@ -17,6 +17,9 @@ export const DECIDED = object({
 /** A conversation's: on Autopilot or not, and the calls it made (the latest last). */
 export const SESSION_AUTOPILOT = object({ autopilot: bool, decided: list(DECIDED) });
 
+/** Whether a question a client heard asked waits on you, once the box has looked. */
+export const ASK_WAITING = object({ waiting: bool });
+
 export type DecidedShape = Infer<typeof DECIDED>;
 export type SessionAutopilot = Infer<typeof SESSION_AUTOPILOT>;
 
@@ -26,4 +29,5 @@ export const AUTOPILOT_ROUTES: RouteShape[] = [
   { route: "GET kuvo/sessions/:id/autopilot", answers: { 200: SESSION_AUTOPILOT, 404: REFUSED, 503: REFUSED } },
   { route: "PUT kuvo/sessions/:id/autopilot", answers: { 200: SESSION_AUTOPILOT, 400: REFUSED, 404: REFUSED, 502: REFUSED, 503: REFUSED } },
   { route: "POST kuvo/sessions/:id/autopilot", answers: { 200: SESSION_AUTOPILOT, 400: REFUSED, 404: REFUSED, 502: REFUSED, 503: REFUSED } },
+  { route: "POST kuvo/sessions/:id/autopilot/asked", answers: { 200: ASK_WAITING, 400: REFUSED, 404: REFUSED, 503: REFUSED } },
 ];

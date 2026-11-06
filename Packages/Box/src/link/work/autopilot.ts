@@ -173,6 +173,20 @@ export async function catchUpAutopilot(target: Target, file = DECIDED_FILE, sign
   }
 }
 
+/** Whether the question `form`, asked in `conversation` (on `target`) or by a subagent of it, waits
+ * on you: the box's word to its clients, who show that and judge nothing. On Autopilot it goes ahead
+ * first where it can, as when the box hears it asked, whichever comes first; so the answer needs no
+ * waiting on anything. What's gone doesn't wait, and what the engine won't list is taken as waiting. */
+export async function waitsOnYou(target: Target, conversation: Pick<EngineSession, "id" | "metadata">, form: string, file = DECIDED_FILE, signal?: AbortSignal): Promise<boolean> {
+  const before = await asksIn(target, conversation.id, signal);
+  const asked = before.questions.find(each => each.id === form);
+  if (!asked) return !before.whole;
+  if (!isAutopilot(conversation)) return true;
+  if (await goAheadOnQuestion(target, conversation, asked, file, signal)) return false;
+  const after = await asksIn(target, conversation.id, signal);
+  return !after.whole || after.questions.some(each => each.id === form);
+}
+
 // Answered with what it recommends, and kept: with the conversation, and on its bot's running goal
 // (as the goal's own Autopilot keeps it), so the goal shows it too. Not while you have that goal
 // paused: it waits for you.

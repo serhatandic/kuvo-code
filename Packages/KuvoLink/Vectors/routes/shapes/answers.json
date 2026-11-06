@@ -2111,6 +2111,31 @@
    }
   },
   {
+   "route": "POST kuvo/sessions/:id/autopilot/asked",
+   "answers": {
+    "200": {
+     "object": {
+      "waiting": "bool"
+     }
+    },
+    "400": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "404": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "503": {
+     "object": {
+      "message": "string"
+     }
+    }
+   }
+  },
+  {
    "route": "GET kuvo/asks",
    "answers": {
     "200": {

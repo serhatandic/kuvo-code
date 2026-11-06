@@ -3515,6 +3515,13 @@ what may be decided without asking. Every conversation is Interactive until it's
   that marks none, asks for a secret (a field with `format: "password"`) or isn't the question
   tool's (an MCP server's form), waits for you as ever, and so do its permissions, which are its
   approval's.
+- `POST kuvo/sessions/<id>/autopilot/asked` `{form}`: whether a question asked in the conversation
+  or by one of its subagents waits on you: `{waiting: bool}`. A client that hears a question asked in
+  a conversation on Autopilot asks this before it counts or notifies, and goes by the answer: it
+  doesn't read the question's marks. The box goes ahead first where it can, whichever comes first,
+  so the answer needs no waiting. False once it's gone; true for what can't go ahead or what the
+  engine won't list. A client that gets no answer (the box is unreachable, or from before this) treats it
+  as waiting, like any question.
 - `POST kuvo/sessions/<id>/autopilot` `{decided: <its id>, choice}`: your choice on a call it
   made, kept as `yours`. The one it goes by now (your last, else its own) confirms it quietly;
   another tells the conversation `[Decision changed] For "…" the user picked "…", not "…" as you

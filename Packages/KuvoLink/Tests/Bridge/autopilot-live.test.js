@@ -115,6 +115,8 @@ test("Autopilot on a real engine: a marked question goes ahead and can be change
   assert.ok(JSON.stringify(await page()).includes(call.call), "that step is in the conversation");
   assert.match(JSON.stringify(said), /Warm/, "its agent had its answer");
   assert.deepEqual(told.filter(each => each.data?.request === call.id), [], "nobody is told of what went ahead");
+  const says = async form => (await route("POST", `kuvo/sessions/${session}/autopilot/asked`, { form })).body.waiting;
+  assert.equal(await says(call.id), false, "its box says it isn't waiting on you");
 
   // Changed: its agent hears, and goes that way.
   const changed = await route("POST", `kuvo/sessions/${session}/autopilot`, { decided: call.id, choice: "Dark" });
@@ -131,6 +133,7 @@ test("Autopilot on a real engine: a marked question goes ahead and can be change
   await send("msg_autopilotlive00002", "Use your question tool now to ask me one question, \"Pay $29 for the domain?\", with the choices \"I paid\" and \"Skip\", no choice marked. Write nothing else.");
   const [paying] = await waitFor(async () => { const asked = await forms(); return asked.length ? asked : null; }, "the question that waits");
   await toldOf(paying.id);
+  assert.equal(await says(paying.id), true, "its box says it's waiting on you");
   assert.equal((await calls()).length, 1, "it made no call on it");
   assert.equal((await forms()).length, 1);
   const paid = await api("POST", `api/session/${session}/form/${paying.id}/reply`, { answer: { [paying.fields[0].key]: "Skip" } });
@@ -143,6 +146,7 @@ test("Autopilot on a real engine: a marked question goes ahead and can be change
   await send("msg_autopilotlive00003", "Use your question tool now to ask me one question, \"Which cup size?\", with the choices \"Small\" and \"Large (Recommended)\", labelled exactly so. Write nothing else.");
   const [cup] = await waitFor(async () => { const asked = await forms(); return asked.length ? asked : null; }, "the question off Autopilot");
   await toldOf(cup.id);
+  assert.equal(await says(cup.id), true, "off Autopilot, its box says so of a marked one too");
   assert.equal((await calls()).length, 1, "it made no call on it");
   assert.equal((await forms()).length, 1);
 });
