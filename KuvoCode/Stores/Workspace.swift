@@ -2830,6 +2830,8 @@ final class Workspace {
     /// answered or gone meanwhile.
     @ObservationIgnored private var notifying: Set<String> = []
     @ObservationIgnored private var settledWhileNotifying: Set<String> = []
+    /// How long a question that recommends a choice, on Autopilot, is given for its box to go ahead.
+    @ObservationIgnored var autopilotGrace: Duration = .seconds(5)
 
     /// An ask answered (here or elsewhere) or gone with its run: off the Dock's count, and its
     /// notification goes, or isn't posted if it's still being made.
@@ -2864,10 +2866,11 @@ final class Workspace {
     }
 
     /// `recommends`: a question that marks the choice it recommends, which a conversation on
-    /// Autopilot goes ahead on without you (its box answers it): no notification for it there.
+    /// Autopilot goes ahead on without you (its box answers it): no notification for it there, unless
+    /// it's still waiting after `autopilotGrace` (its goal paused, or the engine didn't take it).
     private func notifyAsk(_ id: String, body: String, request: String, isPermission: Bool = false, answerable: Bool = true, always: String? = nil, question: Notifier.Question? = nil, recommends: Bool = false) {
         // A seat's requests are answered by its group chat.
-        guard !seats.contains(id) else { return }
+        guard !seats.contains(id), !notifying.contains(request) else { return }
         notifying.insert(request)
         Task {
             defer {
@@ -2890,9 +2893,15 @@ final class Workspace {
             }
             // The engine's run for a session with the coding agents, or a subagent of it: that
             // session asks you itself, and counts once on the Dock.
-            if isEngineRun || (recommends && session.map(AutopilotShown.isOn) == true) {
+            if isEngineRun {
                 asking[request] = nil
                 return
+            }
+            if recommends, session.map(AutopilotShown.isOn) == true {
+                asking[request] = nil
+                try? await Task.sleep(for: autopilotGrace)
+                guard !settledWhileNotifying.contains(request) else { return }
+                asking[request] = id
             }
             // Answered (or gone) while its session was read: no notification for it.
             guard settledWhileNotifying.remove(request) == nil else { return }

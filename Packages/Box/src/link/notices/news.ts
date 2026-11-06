@@ -181,6 +181,13 @@ export function projectNameOf(directory: string | undefined): string | undefined
 
 // The notification for an engine event, or null for one that isn't news. `get(route)` asks the
 // engine.
+/** Whether the engine still lists `form` as asked: when it can't say, it's taken as asked. */
+const stillAsked = (form: EngineForm, get: EngineAsk): Promise<boolean> =>
+  get(`api/session/${encodeURIComponent(form.sessionID)}/form`).then(answer => {
+    const forms = (answer as EngineAnswer<EngineForm[]> | null)?.data;
+    return !Array.isArray(forms) || forms.some(each => each?.id === form.id);
+  }, () => true);
+
 export async function noticeFor(event: EngineEvent, get: EngineAsk): Promise<Notice | null> {
   const data = event.data ?? {};
   // (As the engine answers it: a session it has, whole; one it hasn't is an error.)
@@ -235,8 +242,9 @@ export async function noticeFor(event: EngineEvent, get: EngineAsk): Promise<Not
       if (!asker) return null;
       const where = await shown(asker);
       if (isHiddenRun(where)) return null;
-      // On Autopilot, one that recommends a choice goes ahead on it: nothing waits for you.
-      if (isAutopilot(where) && recommendationOf(form as unknown as Record<string, unknown>)) return null;
+      // On Autopilot, one that recommends a choice goes ahead on it: nothing waits for you, unless
+      // it's still asked once the box has looked (its goal paused, or the engine didn't take it).
+      if (isAutopilot(where) && recommendationOf(form as unknown as Record<string, unknown>) && !await stillAsked(form, get)) return null;
       const body = describeForm(form);
       const choices = (singleQuestion(form)?.options ?? []).map(option => String(option?.label ?? ""));
       return about(where, "question", body, { request: form.id, ...(where.id !== form.sessionID ? { requestSession: form.sessionID } : {}) },

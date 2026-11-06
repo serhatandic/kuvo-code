@@ -41,6 +41,8 @@ let entries;
 let refusesEntries;
 let prompts;
 let refusesPrompts;
+let refusesAnswers;
+let followers = [];
 const engine = http.createServer((request, response) => {
   let body = "";
   request.on("data", chunk => { body += chunk; });
@@ -53,6 +55,12 @@ const engine = http.createServer((request, response) => {
       return reply({ data: [...sessions.values()].filter(each => (parent && parent !== "null" ? each.parentID === parent : !each.parentID)) });
     }
     if (url.pathname === "/api/session/active") return reply({ data: {} });
+    if (url.pathname === "/api/event") {
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.write(": hello\n\n");
+      followers.push(response);
+      return;
+    }
     const entry = url.pathname.match(/^\/api\/experimental\/session\/([^/]+)\/instructions\/entries\/([^/]+)$/);
     if (entry) {
       const key = `${decodeURIComponent(entry[1])} ${decodeURIComponent(entry[2])}`;
@@ -63,6 +71,7 @@ const engine = http.createServer((request, response) => {
     }
     const form = url.pathname.match(/^\/api\/session\/([^/]+)\/form\/([^/]+)\/reply$/);
     if (form && request.method === "POST") {
+      if (refusesAnswers) return reply({ message: "Not now." }, 500);
       const asker = decodeURIComponent(form[1]);
       answered.push({ session: asker, form: decodeURIComponent(form[2]), answer: given.answer });
       waiting.set(asker, (waiting.get(asker) ?? []).filter(each => each.id !== decodeURIComponent(form[2])));
@@ -108,6 +117,7 @@ beforeEach(() => {
   refusesEntries = false;
   prompts = [];
   refusesPrompts = false;
+  refusesAnswers = false;
   fs.rmSync(path.join(home, "run", "work"), { recursive: true, force: true });
 });
 
@@ -322,6 +332,8 @@ test("asked while the box wasn't listening: it goes ahead as the box starts agai
 
 test("your phone isn't told of a question that goes ahead on Autopilot; of one that waits, as ever", async () => {
   const get = async at => {
+    const forms = at.match(/^api\/session\/([^/?]+)\/form$/);
+    if (forms) return { data: waiting.get(decodeURIComponent(forms[1])) ?? [] };
     const id = decodeURIComponent(at.match(/^api\/session\/([^/?]+)$/)?.[1] ?? "");
     return { data: sessions.get(id) };
   };
@@ -329,6 +341,39 @@ test("your phone isn't told of a question that goes ahead on Autopilot; of one t
   assert.equal(await link.noticeFor({ type: "form.created", data: { form: QUESTION("frm_2", "ses_helper", ROASTS) } }, get), null);
   assert.notEqual(await link.noticeFor({ type: "form.created", data: { form: QUESTION("frm_3", "ses_away", ["Light", "Dark"]) } }, get), null);
   assert.notEqual(await link.noticeFor({ type: "form.created", data: { form: QUESTION("frm_4", "ses_mine", ROASTS) } }, get), null);
+});
+
+// The box's watch on its engine, as it runs: what it tells your phones, for a question as the engine
+// says it's asked (and lists it, until it's answered).
+async function telling() {
+  const told = [];
+  const stop = new AbortController();
+  atEnd(() => stop.abort());
+  link.watchEvents(() => source, notice => { told.push(notice); return true; }, stop.signal, () => {}, { work: "engine" });
+  while (!followers.length) await new Promise(setImmediate);
+  const ask = form => {
+    waiting.set(form.sessionID, [...(waiting.get(form.sessionID) ?? []), form]);
+    for (const each of followers) each.write(`data: ${JSON.stringify({ id: `evt_${form.id}`, type: "form.created", data: { form } })}\n\n`);
+  };
+  return { told, ask, heard: async count => { while (told.length < count) await new Promise(setImmediate); } };
+}
+
+test("your phone is told of a question that marks a choice but waits after all: the engine didn't take the answer, or you have its goal paused", async () => {
+  const { told, ask, heard } = await telling();
+  ask(QUESTION("frm_went", "ses_away", ROASTS));
+  while (!answered.length) await new Promise(setImmediate);
+  refusesAnswers = true;
+  ask(QUESTION("frm_refused", "ses_away", ROASTS));
+  await heard(1);
+  assert.equal(told[0].data.request, "frm_refused");
+  refusesAnswers = false;
+
+  goalIn("ses_away", { heldByYou: true });
+  ask(QUESTION("frm_paused", "ses_away", ROASTS));
+  await heard(2);
+  assert.equal(told[1].data.request, "frm_paused");
+  assert.deepEqual(answered.map(each => each.form), ["frm_went"]);
+  assert.deepEqual(told.map(each => each.data.request), ["frm_refused", "frm_paused"], "not of the one that went ahead");
 });
 
 // A bot's goal running in the conversation (its bot's own), as the box keeps it.

@@ -345,7 +345,7 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
         learn(source);
         steer?.(event);
         queue?.(event as QueueEvent);
-        followWork?.(event);
+        const followed = followWork?.(event);
         // A conversation in Auto: what its agent's file tools ask outside its folder, reviewed (and
         // told to your phones below only where it isn't: the reviewer never leaves one for you).
         const reviewed = work && event.type === "permission.asked" ? reviewPermission(source, event, connection.signal).catch(() => null) : null;
@@ -369,8 +369,9 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
           if (notice) tell(notice);
           continue;
         }
-        (reviewed ?? Promise.resolve(null))
-          .then(verdict => (verdict ? null : noticeFor(event, route => engineGet(source, route))))
+        // (What it asks, once the box has looked: on Autopilot it may have gone ahead.)
+        Promise.all([reviewed, event.type === "form.created" ? followed : null])
+          .then(([verdict]) => (verdict ? null : noticeFor(event, route => engineGet(source, route))))
           .then(notice => notice && tell(notice))
           .catch(() => {});
       }

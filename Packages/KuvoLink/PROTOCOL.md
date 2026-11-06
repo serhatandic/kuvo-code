@@ -3509,7 +3509,9 @@ what may be decided without asking. Every conversation is Interactive until it's
 - On Autopilot, a question the conversation's agent or one of its subagents asks with the question
   tool that marks a choice `(Recommended)` in each field it needs goes ahead on that choice at
   once: the box answers the form (`POST …/form/<id>/reply`) and keeps it in `decided`; your phones
-  aren't told of it, and a session that started it isn't woken for it. What its conversations asked
+  aren't told of it, and a session that started it isn't woken for it. One that's still asked once
+  the box has looked (the engine didn't take the answer, or you have its goal paused) waits for you,
+  and they're told. What its conversations asked
   while the box couldn't hear (it started again, or its engine did) goes ahead as it catches up. One
   that marks none, asks for a secret (a field with `format: "password"`) or isn't the question
   tool's (an MCP server's form), waits for you as ever, and so do its permissions, which are its

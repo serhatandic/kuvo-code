@@ -133,6 +133,35 @@ import Testing
         try await until { engine.requests("POST", "").contains { "\($0.body)".contains("the user picked Dark and smoky, not Warm and roasty") } }
     }
 
+    /// A question that marks a choice, on Autopilot: nothing waits on the Dock while its box goes
+    /// ahead; one that's still asked after that (its goal paused, or the engine didn't take it)
+    /// waits on you, as any.
+    @Test func aQuestionThatMarksAChoiceWaitsOnYouOnlyIfItStillWaits() async throws {
+        defer { engine.stop() }
+        let workspace = Workspace()
+        workspace.api = engine.api
+        engine.list([StubEngine.session("ses_a", directory: "/tmp/kuvo-tests-autopilot", extra: ["metadata": ["kuvo": ["autopilot": true]]])], running: ["ses_a"])
+        engine.conversation("ses_a", [])
+        await workspace.refresh()
+        func question(_ id: String) -> [String: Any] {
+            ["id": id, "sessionID": "ses_a", "title": "Roast", "metadata": ["kind": "question"],
+             "fields": [["key": "q0", "title": "Roast", "description": "Which roast?", "type": "string", "required": true,
+                         "options": [["value": "w", "label": "Warm (Recommended)"], ["value": "d", "label": "Dark"]]]]]
+        }
+
+        // Its box takes a while, then goes ahead.
+        workspace.autopilotGrace = .seconds(60 * 60)
+        workspace.handle(try engine.event("form.created", session: "ses_a", ["form": question("frm_went")]))
+        #expect(workspace.waitingCount == 0)
+        workspace.handle(try engine.event("form.replied", session: "ses_a", ["id": "frm_went", "sessionID": "ses_a"]))
+        #expect(workspace.waitingCount == 0)
+
+        // Still asked once its box has had its chance.
+        workspace.autopilotGrace = .zero
+        workspace.handle(try engine.event("form.created", session: "ses_a", ["form": question("frm_waits")]))
+        try await until { workspace.waitingCount == 1 }
+    }
+
     /// A list of questions shows as a call each at its step; one that takes several answers changes
     /// one at a time, keeping one at least.
     @Test func aListOfQuestionsShowsACallEachAndSeveralAnswersChangeOneAtATime() throws {

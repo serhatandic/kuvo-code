@@ -9217,6 +9217,10 @@ function projectNameOf(directory) {
   const project = readWorktrees().find((each) => (each.folder ?? each.root) === directory || each.root === directory)?.project ?? readRemovedWorktrees()[directory] ?? directory;
   return readProjects().find((each) => each.directory === project)?.name || path36.basename(project) || undefined;
 }
+var stillAsked = (form, get) => get(`api/session/${encodeURIComponent(form.sessionID)}/form`).then((answer) => {
+  const forms = answer?.data;
+  return !Array.isArray(forms) || forms.some((each) => each?.id === form.id);
+}, () => true);
 async function noticeFor(event, get) {
   const data = event.data ?? {};
   const session = async (id) => (await get(`api/session/${encodeURIComponent(id)}`)).data;
@@ -9269,7 +9273,7 @@ async function noticeFor(event, get) {
       const where = await shown(asker);
       if (isHiddenRun(where))
         return null;
-      if (isAutopilot(where) && recommendationOf(form))
+      if (isAutopilot(where) && recommendationOf(form) && !await stillAsked(form, get))
         return null;
       const body = describeForm(form);
       const choices = (singleQuestion(form)?.options ?? []).map((option) => String(option?.label ?? ""));
@@ -18681,7 +18685,7 @@ async function watchEvents(read, tell, signal, answered = () => {}, { bots = fal
         learn(source);
         steer?.(event);
         queue?.(event);
-        followWork?.(event);
+        const followed = followWork?.(event);
         const reviewed = work && event.type === "permission.asked" ? reviewPermission(source, event, connection.signal).catch(() => null) : null;
         goalHeld?.(event).catch(() => {});
         if (signIns)
@@ -18708,7 +18712,7 @@ async function watchEvents(read, tell, signal, answered = () => {}, { bots = fal
             tell(notice);
           continue;
         }
-        (reviewed ?? Promise.resolve(null)).then((verdict) => verdict ? null : noticeFor(event, (route) => engineGet(source, route))).then((notice) => notice && tell(notice)).catch(() => {});
+        Promise.all([reviewed, event.type === "form.created" ? followed : null]).then(([verdict]) => verdict ? null : noticeFor(event, (route) => engineGet(source, route))).then((notice) => notice && tell(notice)).catch(() => {});
       }
     } catch {}
     stop();
