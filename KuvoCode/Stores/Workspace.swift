@@ -3427,7 +3427,7 @@ final class Workspace {
         let isNew = sharedForms[form.id] == nil
         let isShared = form.sessionID == FormRequest.anySession
         // (Shared, on Autopilot, it counts once its box says it waits on you: `notifyAsk`.)
-        if !(isShared && isNew && isOnAutopilot(model.id)) { asking[form.id] = model.id }
+        if !(isShared && isOnAutopilot(model.id)) { asking[form.id] = model.id }
         guard isShared else { return }
         sharedForms[form.id] = model.session.location.directory
         if isNew { notifyAsk(model.id, body: form.message ?? "Needs your answer.", request: form.id, question: nil) }

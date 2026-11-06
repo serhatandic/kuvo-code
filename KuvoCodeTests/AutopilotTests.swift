@@ -223,11 +223,21 @@ import Testing
         _ = app.browserTools
         let asking = Task { await app.browserAsks.ask(.action(instruction: "Solve the CAPTCHA."), host: "example.com", session: "ses_i") }
         let other = Task { await app.browserAsks.ask(.action(instruction: "Approve it."), host: "example.com", session: "ses_o") }
-        try await until { app.browserAsks.asks.count == 2 }
+        // And a subagent's, which asked before it was known whose it is.
+        let subagent = Task { await app.browserAsks.ask(.action(instruction: "Solve it too."), host: "example.com", session: "ses_sub") }
+        try await until { app.browserAsks.asks.count == 3 }
+        engine.on("GET", "/api/session/ses_sub", json: ["data": StubEngine.session("ses_sub", directory: "/tmp/kuvo-tests-autopilot", extra: ["parentID": "ses_i"])])
+        let question: [String: Any] = ["id": "frm_sub", "sessionID": "ses_sub", "title": "Roast", "metadata": ["kind": "question"], "fields": [[String: Any]]()]
+        app.workspace.handle(try engine.event("form.created", session: "ses_sub", ["form": question]))
+        try await until { app.workspace.root(of: "ses_sub") == "ses_i" }
         engine.on("GET", "/api/session/ses_i", json: ["data": StubEngine.session("ses_i", directory: "/tmp/kuvo-tests-autopilot", extra: ["metadata": ["kuvo": ["autopilot": true]]])])
         app.workspace.handle(try engine.event("session.metadata.updated", session: "ses_i"))
         guard case .leftOnAutopilot = await asking.value else {
             Issue.record("It went on waiting")
+            return
+        }
+        guard case .leftOnAutopilot = await subagent.value else {
+            Issue.record("Its subagent went on waiting")
             return
         }
         #expect(app.browserAsks.asks.map(\.session) == ["ses_o"], "another conversation's stays")
@@ -269,10 +279,23 @@ import Testing
         }
         try ask("frm_goes")
         #expect(workspace.waitingCount == 0, "not until its box has said")
-        try await until { asked.withLock { $0.contains("kuvo/sessions/ses_a/autopilot/asked frm_goes") } && !workspace.notifying.contains("frm_goes") }
+        // (`notifying` first: it's what wakes this wait, which the stand-in's list doesn't.)
+        try await until { !workspace.notifying.contains("frm_goes") && asked.withLock { $0.contains("kuvo/sessions/ses_a/autopilot/asked frm_goes") } }
         #expect(workspace.waitingCount == 0)
         try ask("frm_waits")
         try await until { workspace.waitingCount == 1 }
+
+        // Read again after each reconnect, in the conversation that's open: still only as its box says.
+        let again: [String: Any] = ["id": "frm_again", "sessionID": FormRequest.anySession, "title": "github is requesting input",
+                                    "metadata": ["kind": "mcp-elicitation", "server": "github", "message": "Which branch?"],
+                                    "fields": [["key": "branch", "type": "string"]]]
+        engine.on("GET", "/api/session/global/form", json: ["data": [again]])
+        engine.on("GET", "/api/session/ses_a/form", json: ["data": [[String: Any]]()])
+        _ = try #require(workspace.model(for: "ses_a"))
+        await workspace.resync()
+        try await until { !workspace.notifying.contains("frm_again") && asked.withLock { $0.contains("kuvo/sessions/ses_a/autopilot/asked frm_again") } }
+        await workspace.resync()
+        #expect(workspace.asking["frm_again"] == nil)
     }
 
     @Test func aQuestionSetAsideOnAutopilotReadsSoAndDoesntCountAsFailed() throws {

@@ -540,11 +540,9 @@ struct ToolCallView: View {
         return (diffs.reduce(0) { $0 + $1.additions }, diffs.reduce(0) { $0 + $1.deletions })
     }
 
-    /// What a question set aside on Autopilot asked.
-    private var setAside: String { call.isSetAsideOnAutopilot ? call.questionsAsked : "" }
-
     private var outputText: String {
-        if call.isSetAsideOnAutopilot { return setAside }
+        // (What a question set aside on Autopilot asked: its turning down is said by its title.)
+        if call.isSetAsideOnAutopilot { return call.questionsAsked }
         return switch call.state {
         case .completed(_, let output, _): output.compactMap(\.text).joined(separator: "\n")
         case .failed(_, let error, let output, _): ([error.message] + (output ?? []).compactMap(\.text)).joined(separator: "\n")
@@ -583,7 +581,7 @@ struct ToolCallView: View {
     }
 
     private var hasDetails: Bool {
-        subagentSession != nil || !diffs.isEmpty || ((call.name == "shell" || isSandboxAsk) && !outputText.isEmpty) || code != nil || (call.state.isFailure && !call.isSetAsideOnAutopilot) || !setAside.isEmpty || !pictures.isEmpty
+        subagentSession != nil || !diffs.isEmpty || ((call.name == "shell" || isSandboxAsk) && !outputText.isEmpty) || code != nil || (call.isSetAsideOnAutopilot ? !outputText.isEmpty : call.state.isFailure) || !pictures.isEmpty
     }
 
     /// Pictures the step brought back, like a screenshot of the page.
