@@ -14,6 +14,7 @@ import { BOTS, CONFIG_LOCK, INTEGRATION_DATA, IS_MAC, K, OWN_RUNTIME, SCRIPT } f
 import { KeysUnavailable, siteSignIns } from "../host-interface";
 import { deleteKey, keyNames, keyWork, STORED_KEY, writeKey } from "../keys";
 import type { AnswerPiece, JSONAnswer, RouteContext } from "../server/context";
+import { updateOnTrial } from "../updates/update";
 import { changeSettings, CONFIG_FILE, olderKeysNamedHere, ownsSettings, readSettings, SERVERS, valueAt, writeSettings } from "./config";
 import type { SettingChange, Settings } from "./config";
 import type { EngineCredential } from "./accounts";
@@ -109,14 +110,17 @@ function upgradeChanges(settings: Settings, catalog: CatalogIntegration[], keysG
  *
  * A package's key goes before its maker's server takes its place, as nothing names the key after:
  * where it can't be taken away now (this Mac's app not answering), that one waits for the next start.
+ * So does it while an update is on trial, as a key can't come back if the keeper puts the version
+ * before back (the box does this again once its update is confirmed). What's left can be undone: that
+ * version's catalog puts it back as its bridge starts.
  * The changes are worked out again under the settings' lock, so a client's change meanwhile stays. */
 export function upgradeIntegrations(catalogFile = INTEGRATIONS_FILE, file = CONFIG_FILE, lock = CONFIG_LOCK): Promise<void> {
   return keyWork(async () => {
     const catalog = integrationCatalog(catalogFile);
     const { settings: before } = readSettings(file);
     const keysGone = new Set<string>();
-    for (const entry of catalog) {
-      const server = valueAt(before ?? {}, [...SERVERS, entry.id]);
+    for (const entry of updateOnTrial() ? [] : catalog) {
+      const server = valueAt(before, [...SERVERS, entry.id]);
       if (!isObject(server) || !leftForItsMaker(entry, server)) continue;
       try {
         for (const name of new Set(JSON.stringify(server).match(/KUVO_KEY_[A-Z0-9_]+/g) ?? [])) await deleteKey(name);
@@ -125,9 +129,11 @@ export function upgradeIntegrations(catalogFile = INTEGRATIONS_FILE, file = CONF
     }
     locked(lock, () => {
       const { settings, problem } = readSettings(file);
-      if (problem) return;
-      const changes = upgradeChanges(settings!, catalog, keysGone);
-      if (changes.length) writeSettings(settings!, changes, file);
+      const changes = settings ? upgradeChanges(settings, catalog, keysGone) : [];
+      const written = changes.length ? writeSettings(settings!, changes, file) : null;
+      // Not a word from here otherwise, and the settings may name a key that's gone until the next start.
+      const trouble = problem ?? (written?.status === 200 ? undefined : written?.message);
+      if (trouble && (keysGone.size || written)) console.error(`Integrations couldn't be brought up to date: ${trouble}`);
     });
   });
 }

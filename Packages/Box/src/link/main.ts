@@ -210,7 +210,12 @@ onLinkWritten(link => {
 function machineWelcomed(host: LinkHost): void {
   announce(host, readEngineFile, undefined, undefined, true).catch(() => {});
   try { docsChanged(host, { greet: true }); } catch {}
-  try { confirmUpdate(); } catch {}
+  updateIsWell();
+}
+
+// An update on trial is here to stay, if it's well: what waited for that goes on.
+function updateIsWell(): void {
+  try { if (confirmUpdate()) upgradeIntegrations().catch(() => {}); } catch {}
 }
 
 async function run(): Promise<void> {
@@ -234,8 +239,8 @@ async function run(): Promise<void> {
   // Its bots' jobs kept in their folders, taken once from where they were before.
   try { keepJobs(); } catch {}
   forgetOldKit();
-  // Its integrations and servers as its catalog has them now (after an update, say), and its bots'
-  // folders' settings as its integrations are.
+  // Its integrations and servers as its catalog has them now, and its bots' folders' settings as its
+  // catalog and keys are (after an update, say).
   await upgradeIntegrations().catch(() => {});
   await refreshBotsKeys().catch(() => {});
   // A link from an earlier bridge: its signing key made, and kept as this one keeps it.
@@ -339,7 +344,7 @@ async function run(): Promise<void> {
   refreshOwn(readEngineFile).catch(() => {});
   // Updates: the new bridge, once one put it here, says it's well (after the relay's welcome, or
   // three minutes); each night's window, one, when nothing runs (PROTOCOL.md, "Updates").
-  setTimeout(() => { try { confirmUpdate(); } catch {} }, 180_000);
+  setTimeout(updateIsWell, 180_000);
   const nightly = () => {
     noteLauncher();
     noteOlderMacs();
@@ -582,8 +587,8 @@ async function serve(): Promise<void> {
     watchSandboxAsks(macTell, id => macLink.hold?.resolve(id));
   }
   // Its integrations and servers as its catalog has them now, and its bots' folders' settings as its
-  // keys and integrations are (after an update, say), as a machine's bridge does as it starts; where
-  // its keys can't be reached yet, they stay as they were.
+  // catalog and keys are (after an update, say), as a machine's bridge does as it starts; where its
+  // keys can't be reached yet, they stay as they were.
   upgradeIntegrations().catch(() => {});
   refreshBotsKeys().catch(() => {});
   // Keys of bots deleted while they couldn't be reached.
@@ -832,7 +837,10 @@ if (main) {
       const pid = runningBridge();
       if (pid) process.kill(pid, "SIGTERM");
       // No bridge to start again (nothing for it to answer): the new version came up, so it's done.
-      if (!needed(readLink())) confirmUpdate();
+      if (!needed(readLink())) {
+        confirmUpdate();
+        await upgradeIntegrations().catch(() => {});
+      }
     }
     console.log(JSON.stringify(outcome));
   }

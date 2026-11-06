@@ -1590,13 +1590,15 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     Mac's Remove… is its box's, through `BoxClient` (a machine's through `box route`).
   - Brought up to date as the box starts, from the catalog it has, with no client there (a
     machine's as its bridge starts, this Mac's as its box does): a package's pinned version, Code
-    Mode off, keys named where the computer reads them, and a package whose maker now runs its own
-    server replaced by that server, its key taken away first (where it can't be, this Mac's app not
-    answering, that one waits for the next start). Every other MCP server gets Code Mode off too,
-    unless it says, but for Kuvo Code's own. A Mac does the same through `kuvo/config`
-    (`Integrations.upgrade`, `MCPSettings.upgrade`), for its own box and each machine not newer
-    than it as it connects: whichever goes first, the settings come out the same, and there's no
-    write once they're up to date.
+    Mode off unless it says otherwise, keys named where the computer reads them, and a package whose
+    maker now runs its own server replaced by that server, whole, its key taken away first. That one
+    waits where its key can't be taken away now (this Mac's app not answering), and while an update
+    is on trial, as a key can't come back with the version before: the box does it once the update
+    is confirmed, or at its next start. Every other MCP server gets Code Mode off too, unless it
+    says, but for Kuvo Code's own. A machine with no bridge does it as its update is confirmed. A Mac
+    does the same through `kuvo/config` (`Integrations.upgrade`, `MCPSettings.upgrade`), for its own
+    box and each machine not newer than it as it connects: whichever goes first, the settings come
+    out the same, and there's no write once they're up to date.
 - Bots' own keys, as Edit Bot shows and changes them: a key a bot has of its own for an
   integration you bring a key for, used only in its conversation, kept on the computer the bot
   lives on (a Mac's bots' in its Keychain, which its box reaches through the app: "Host

@@ -5,15 +5,15 @@
 // writes (Vectors/routes/box, scripts/route-vectors.sh), and a Mac's writes are what its
 // `EngineConfig` sends: each server's whole value at its path.
 import "./safety"
-import { afterAll, beforeEach, expect, test } from "bun:test"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { afterAll, beforeEach, expect, spyOn, test } from "bun:test"
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, watch, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import crypto from "node:crypto"
 import { changeSettings, SERVERS } from "../src/link/areas/config"
 import { upgradeIntegrations } from "../src/link/areas/integrations"
 import { addressOf, newKey, publicOf } from "../src/link/crypto/keys"
-import { BOX_KEYS, shownRoot } from "../src/link/home"
+import { BOX_KEYS, RUN, shownRoot } from "../src/link/home"
 import { keyWork } from "../src/link/keys"
 // @ts-expect-error (The bridge tests' stand-in, in plain JavaScript.)
 import { relayStandIn } from "../../KuvoLink/Tests/Bridge/relay-stand-in.js"
@@ -27,6 +27,9 @@ const pinned = (id: string) => catalog.find(each => each.id === id)!.settings
 // whichever test file that was.
 const MACHINE = "~/.kuvo-code"
 const named = (key: string, root: string) => `{file:${root}/box/keys/${key}}`
+
+// Those that start real processes, however busy the computer.
+const SPAWNS = 60_000
 
 const TODOIST = "KUVO_KEY_TODOIST_TODOIST_API_KEY"
 const FIGMA = "KUVO_KEY_FIGMA_FIGMA_API_KEY"
@@ -144,7 +147,7 @@ test("the box first: a Mac that read them before it writes the same, and one tha
   expect(written()).toBe(was)
 })
 
-test("both at once: a Mac's changes land around the box's, and another client's change between them stays", async () => {
+test("both at once: a Mac's changes land as the box waits its turn and after its write, and a phone's among them stays", async () => {
   write(oldServers())
   let open = () => {}
   const gate = new Promise<void>(resolve => { open = resolve })
@@ -175,6 +178,25 @@ test("settings that can't be used are left alone, and a machine whose settings a
   expect(existsSync(file)).toBe(false)
 })
 
+test("settings that can't be written after a key went: it says so, and the next start finishes", async () => {
+  write(oldServers())
+  const said = spyOn(console, "error").mockImplementation(() => {})
+  chmodSync(dirname(file), 0o500)
+  try {
+    // (Its lock elsewhere: only the settings can't be written.)
+    await upgradeIntegrations(catalogFile, file, join(root, `lock-${tests}`))
+    expect(String(said.mock.calls[0]?.[0])).toContain("couldn't be brought up to date")
+  } finally {
+    chmodSync(dirname(file), 0o700)
+    said.mockRestore()
+  }
+  expect(read().mcp.servers).toEqual(oldServers())
+  expect(kept(FIGMA)).toBe(false)
+
+  await upgrade()
+  expect(read().mcp.servers).toEqual(upToDate())
+})
+
 test("with no catalog yet, integrations stay as they are but for their tools", async () => {
   const { todoist, figma } = oldServers()
   write({ todoist, figma })
@@ -183,9 +205,14 @@ test("with no catalog yet, integrations stay as they are but for their tools", a
   expect(kept(FIGMA)).toBe(true)
 })
 
-/** A machine with `servers` in its settings and a phone paired, so it runs a bridge; `alsoAtStart`
- * goes along with its start. Answers with its settings once it's on the relay. */
-async function machineStarts(servers: unknown, alsoAtStart: (env: Record<string, string>) => Promise<unknown> = async () => {}) {
+/** A machine with `servers` in its settings and a phone paired, so it runs a bridge; `before` sets up
+ * what else it starts with, and `alsoAtStart` goes along with its start. Answers with its settings once
+ * it's on the relay (with `until`, once they're as it says). */
+async function machineStarts(servers: unknown, { before = () => {}, alsoAtStart = async () => {}, until }: {
+  before?: (home: string) => void
+  alsoAtStart?: (env: Record<string, string>) => Promise<unknown>
+  until?: (settings: any) => boolean
+} = {}) {
   const machineRoot = realpathSync(mkdtempSync(join(root, "m-")))
   const home = join(machineRoot, ".kuvo-code")
   const settings = join(home, "box", "opencode.json")
@@ -195,6 +222,7 @@ async function machineStarts(servers: unknown, alsoAtStart: (env: Record<string,
   writeFileSync(join(home, "bin", "integrations.json"), readFileSync(catalogFile))
   writeFileSync(settings, JSON.stringify({ mcp: { servers } }))
   writeFileSync(join(home, "box", "keys", FIGMA), "tok")
+  before(home)
 
   let poke = () => {}
   const relay = await relayStandIn({ addressOf }, { changed: () => poke() })
@@ -203,7 +231,8 @@ async function machineStarts(servers: unknown, alsoAtStart: (env: Record<string,
     id: "lab", name: "lab", relay: relay.url, secret: secret.toString("base64url"), key: newKey().toString("base64url"),
     phones: [{ key: publicOf(newKey()).toString("base64url"), name: "iPhone", added: Math.floor(Date.now() / 1000), from: "pair", pairing: crypto.randomBytes(16).toString("base64url") }],
   }), { mode: 0o600 })
-  const env = { PATH: process.env.PATH!, HOME: machineRoot, KUVO_HOME: home, TMPDIR: tmpdir() }
+  // (On this test's runtime: the engine's Bun is one only with BUN_BE_BUN.)
+  const env = { PATH: process.env.PATH!, HOME: machineRoot, KUVO_HOME: home, TMPDIR: tmpdir(), ...(process.env.BUN_BE_BUN ? { BUN_BE_BUN: "1" } : {}) }
   const bridge = Bun.spawn([process.execPath, main, "run"], { env, stdio: ["ignore", "ignore", "pipe"] })
   try {
     const also = alsoAtStart(env)
@@ -212,7 +241,16 @@ async function machineStarts(servers: unknown, alsoAtStart: (env: Record<string,
     while (!relay.has(addressOf(secret)) && !ended) await new Promise<void>(resolve => { poke = resolve })
     if (ended) throw new Error(`the bridge ended: ${await new Response(bridge.stderr).text()}`)
     await also
-    return { settings: JSON.parse(readFileSync(settings, "utf8")), figmaKept: existsSync(join(home, "box", "keys", FIGMA)) }
+    const now = () => JSON.parse(readFileSync(settings, "utf8"))
+    if (until) {
+      const watcher = watch(join(home, "box"), () => poke())
+      try {
+        while (!until(now()) && !ended) await new Promise<void>(resolve => { poke = resolve })
+      } finally {
+        watcher.close()
+      }
+    }
+    return { settings: now(), figmaKept: existsSync(join(home, "box", "keys", FIGMA)) }
   } finally {
     bridge.kill("SIGTERM")
     await bridge.exited
@@ -224,16 +262,47 @@ test("a machine's bridge starting, with no Mac: the running box does it, before 
   const { settings, figmaKept } = await machineStarts(oldServers(MACHINE))
   expect(settings.mcp.servers).toEqual(upToDate(MACHINE))
   expect(figmaKept).toBe(false)
-})
+}, SPAWNS)
 
 test("a Mac's change over SSH as the bridge starts, each its own process: the same settings whichever gets there first", async () => {
   const phone = { path: [...SERVERS, "notion", "disabled"], value: true }
-  const { settings } = await machineStarts(oldServers(MACHINE), async env => {
+  const { settings } = await machineStarts(oldServers(MACHINE), { alsoAtStart: async env => {
     const change = Bun.spawn([process.execPath, main, "box", "change"], { env, stdin: "pipe", stdout: "pipe", stderr: "pipe" })
     change.stdin.write(JSON.stringify({ changes: [...macChanges(["todoist", "mine"], MACHINE), phone] }))
     await change.stdin.end()
     expect(JSON.parse(await new Response(change.stdout).text()).status).toBe(200)
     await change.exited
-  })
+  } })
   expect(settings.mcp.servers).toEqual({ ...upToDate(MACHINE), notion: { ...pinned("notion"), disabled: true } })
+}, SPAWNS)
+
+test("while an update is on trial a key stays, as the version before may come back; only that waits, and the next start takes it", async () => {
+  write(oldServers())
+  const trial = join(RUN, "update-trial")
+  mkdirSync(RUN, { recursive: true })
+  writeFileSync(trial, "9.9.9")
+  try {
+    await upgrade()
+  } finally {
+    rmSync(trial)
+  }
+  expect(read().mcp.servers).toEqual({ ...upToDate(), figma: oldServers().figma })
+  expect(kept(FIGMA)).toBe(true)
+
+  await upgrade()
+  expect(read().mcp.servers).toEqual(upToDate())
+  expect(kept(FIGMA)).toBe(false)
 })
+
+test("an update on trial, its bridge welcomed by the relay: confirmed, and what waited for that is done", async () => {
+  const { settings, figmaKept } = await machineStarts(oldServers(MACHINE), {
+    before: home => {
+      writeFileSync(join(home, "run", "update-trial"), "9.9.9")
+      writeFileSync(join(home, "bin", "box-version"), "9.9.9")
+      writeFileSync(join(home, "run", "update.json"), JSON.stringify({ trial: { from: "9.9.8", to: "9.9.9", healthy: true } }))
+    },
+    until: now => now.mcp.servers.figma.url !== undefined,
+  })
+  expect(settings.mcp.servers).toEqual(upToDate(MACHINE))
+  expect(figmaKept).toBe(false)
+}, SPAWNS)

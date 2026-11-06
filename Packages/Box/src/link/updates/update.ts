@@ -33,6 +33,8 @@ export const UPDATE_KEYS = ["iLSFoygG8wg+r2yj+/qnoMHpZIhPKRNLlf9vpEKmx0A="];
 const UPDATE_URL = "https://github.com/serhatandic/kuvo-code/releases/latest/download/boxes.json";
 const UPDATE_STATE = path.join(RUN, "update.json");
 const UPDATE_TRIAL = path.join(RUN, "update-trial");
+/** An update is here on trial: until it's confirmed, the keeper may yet put the version before back. */
+export const updateOnTrial = (): boolean => fs.existsSync(UPDATE_TRIAL);
 const UPDATE_LOCK = path.join(RUN, ".updating");
 const ROLLBACK = path.join(UPDATES, "rollback");
 const LAUNCHERS = path.join(RUN, "launchers.json");

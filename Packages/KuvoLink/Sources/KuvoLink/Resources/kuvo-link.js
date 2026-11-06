@@ -11651,8 +11651,8 @@ async function watchGoals(tell, targets, { signal, every = 30000, here } = {}) {
 }
 
 // Packages/Box/src/link/areas/bot-keys.ts
-import fs45 from "node:fs";
-import path48 from "node:path";
+import fs46 from "node:fs";
+import path49 from "node:path";
 
 // Packages/Box/src/link/host-interface.ts
 import crypto21 from "node:crypto";
@@ -11871,12 +11871,547 @@ var botVariable = (variable, bot) => `${variable}__${String(bot).toUpperCase().r
 
 // Packages/Box/src/link/areas/integrations.ts
 import { spawn as spawn4 } from "node:child_process";
+import fs45 from "node:fs";
+import path48 from "node:path";
+
+// Packages/Box/src/link/updates/update.ts
+import { spawnSync as spawnSync6 } from "node:child_process";
+import crypto22 from "node:crypto";
 import fs44 from "node:fs";
+import os7 from "node:os";
 import path47 from "node:path";
-var INTEGRATIONS_FILE = path47.join(K, "bin", "integrations.json");
+var UPDATE_KEYS = ["iLSFoygG8wg+r2yj+/qnoMHpZIhPKRNLlf9vpEKmx0A="];
+var UPDATE_URL = "https://github.com/serhatandic/kuvo-code/releases/latest/download/boxes.json";
+var UPDATE_STATE = path47.join(RUN, "update.json");
+var UPDATE_TRIAL = path47.join(RUN, "update-trial");
+var updateOnTrial = () => fs44.existsSync(UPDATE_TRIAL);
+var UPDATE_LOCK = path47.join(RUN, ".updating");
+var ROLLBACK = path47.join(UPDATES, "rollback");
+var LAUNCHERS = path47.join(RUN, "launchers.json");
+var ED25519_SPKI = Buffer.from("302a300506032b6570032100", "hex");
+var RELEASE_AGE = 3 * 86400000;
+var MAC_MEMORY = 30 * 86400000;
+var BOX_FILE = /^(bin\/[A-Za-z0-9._-]+|bin\/runtime\/[A-Za-z0-9._-]+|config\/opencode\/plugins\/[A-Za-z0-9._-]+)$/;
+var RELEASE_VERSION = /^\d+\.\d+\.\d+(-beta\.\d+)?$/;
+function versionOrder(version) {
+  const found = /^(\d+)\.(\d+)\.(\d+)(?:-beta\.(\d+))?$/.exec(version ?? "");
+  return found ? [+found[1], +found[2], +found[3], found[4] == null ? Infinity : +found[4]] : null;
+}
+function newerVersion(version, than) {
+  const a = versionOrder(version), b = versionOrder(than);
+  if (!a)
+    return false;
+  if (!b)
+    return true;
+  for (let i = 0;i < 4; i++)
+    if (a[i] !== b[i])
+      return a[i] > b[i];
+  return false;
+}
+function verifyBoxes(text, keys = UPDATE_KEYS) {
+  let given;
+  try {
+    given = JSON.parse(text);
+  } catch {
+    throw new Error("That isn't a release.");
+  }
+  if (typeof given?.manifest !== "string" || typeof given.signature !== "string" || typeof given.key !== "string")
+    throw new Error("That isn't a release.");
+  const key = keys.map((each) => Buffer.from(each, "base64")).find((each) => each.length === 32 && each.equals(Buffer.from(given.key, "base64")));
+  if (!key)
+    throw new Error("It isn't signed with a key this machine trusts.");
+  const bytes = Buffer.from(given.manifest, "base64");
+  const publicKey = crypto22.createPublicKey({ key: Buffer.concat([ED25519_SPKI, key]), format: "der", type: "spki" });
+  if (!crypto22.verify(null, Buffer.concat([Buffer.from(`kuvo-box v1
+`), bytes]), publicKey, Buffer.from(given.signature, "base64")))
+    throw new Error("Its signature doesn't match.");
+  const manifest = JSON.parse(bytes.toString("utf8"));
+  if (manifest?.kuvo !== "box/1" || !RELEASE_VERSION.test(manifest.version ?? "") || typeof manifest.engine !== "string" || !/^[0-9][0-9A-Za-z.-]*$/.test(manifest.engine) || !isObject(manifest.pack) || typeof manifest.pack.url !== "string" || !/^[0-9a-f]{64}$/.test(manifest.pack.sha256 ?? ""))
+    throw new Error("That isn't a release.");
+  return manifest;
+}
+var boxVersion = () => {
+  const version = textOf(path47.join(K, "bin", "box-version"))?.trim();
+  return versionOrder(version) ? version : null;
+};
+var updateState = () => {
+  try {
+    return JSON.parse(fs44.readFileSync(UPDATE_STATE, "utf8")) ?? {};
+  } catch {
+    return {};
+  }
+};
+function noteUpdate(change) {
+  const state = { ...updateState(), ...change };
+  for (const [key, value] of Object.entries(change))
+    if (value == null)
+      delete state[key];
+  try {
+    writePrivate(UPDATE_STATE, JSON.stringify(state));
+  } catch {}
+  return state;
+}
+function noteLauncher(readEngine = readEngineFile, now = Date.now()) {
+  let mac = null;
+  try {
+    mac = readEngine()?.notes?.mac;
+  } catch {}
+  if (typeof mac !== "string" || !mac || mac.length > 100)
+    return;
+  let all = {};
+  try {
+    all = JSON.parse(fs44.readFileSync(LAUNCHERS, "utf8")) ?? {};
+  } catch {}
+  if (now - (all[mac] ?? 0) < 3600000)
+    return;
+  all[mac] = now;
+  for (const [key, at] of Object.entries(all))
+    if (now - at > MAC_MEMORY)
+      delete all[key];
+  try {
+    writePrivate(LAUNCHERS, JSON.stringify(all));
+  } catch {}
+}
+function updatesBlocked(link = readLink(), now = Date.now(), root = K) {
+  if (path47.resolve(root) !== path47.join(homeFolder(), ".kuvo-code"))
+    return "Only a machine's own Kuvo Code folder updates itself.";
+  let launchers = {};
+  try {
+    launchers = JSON.parse(fs44.readFileSync(LAUNCHERS, "utf8")) ?? {};
+  } catch {}
+  const behind = Object.entries(launchers).filter(([mac, at]) => now - at < MAC_MEMORY && link?.tolerantIDs?.[mac] !== true);
+  if (behind.length)
+    return "A Mac that connects to this machine has an older Kuvo Code, which would put back older versions: update Kuvo Code there first.";
+  return null;
+}
+async function boxBusy(readEngine = readEngineFile, readBridge = readBridgeFile) {
+  for (const read of [readEngine, readBridge]) {
+    let target = null;
+    try {
+      target = read();
+    } catch {}
+    if (!target?.port || !target?.password)
+      continue;
+    const active = (await asked(target, "GET", "api/session/active").catch(() => null))?.data;
+    if (Array.isArray(active) ? active.length : isObject(active) && Object.keys(active).length)
+      return true;
+  }
+  return readAsks().length > 0;
+}
+var hexSHA256 = (data) => crypto22.createHash("sha256").update(data).digest("hex");
+function ran(command, args, env = {}, timeout = 120000) {
+  const result = spawnSync6(command, args, { cwd: K, env: { ...process.env, ...env }, encoding: "utf8", timeout });
+  return { status: result.status, output: `${result.stdout ?? ""}${result.stderr ?? ""}`.trim() };
+}
+function isUpdating() {
+  if (!fs44.existsSync(UPDATE_LOCK))
+    return false;
+  let pid = null;
+  try {
+    pid = Number(fs44.readFileSync(path47.join(UPDATE_LOCK, "pid"), "utf8"));
+  } catch {}
+  if (pid)
+    return processRuns(pid, "kuvo-link");
+  try {
+    return Date.now() - fs44.statSync(UPDATE_LOCK).mtimeMs < 60000;
+  } catch {
+    return false;
+  }
+}
+function takeUpdateLock() {
+  try {
+    fs44.mkdirSync(UPDATE_LOCK);
+  } catch {
+    if (isUpdating())
+      return false;
+    fs44.rmSync(UPDATE_LOCK, { recursive: true, force: true });
+    try {
+      fs44.mkdirSync(UPDATE_LOCK);
+    } catch {
+      return false;
+    }
+  }
+  fs44.writeFileSync(path47.join(UPDATE_LOCK, "pid"), String(process.pid), { mode: 384 });
+  return true;
+}
+function keepForRollback(files, withData) {
+  fs44.rmSync(ROLLBACK, { recursive: true, force: true });
+  fs44.mkdirSync(path47.join(ROLLBACK, "files"), { recursive: true, mode: 448 });
+  const lines = [
+    "#!/bin/sh",
+    `K=${quote(K)}; B=${quote(ROLLBACK)}`,
+    `p=$(cat "$K/run/.updating/pid" 2>/dev/null)`,
+    `if [ -n "$p" ] && [ "$p" != "\${KUVO_UPDATER:-}" ] && kill -0 "$p" 2>/dev/null && { [ ! -d /proc ] || grep -q kuvo-link "/proc/$p/cmdline" 2>/dev/null; }; then exit 0; fi`,
+    `sh "$K/bin/kuvo-start" stop >/dev/null 2>&1 || exit 1`
+  ];
+  for (const file of files) {
+    const from = path47.join(K, file);
+    if (fs44.existsSync(from)) {
+      fs44.mkdirSync(path47.dirname(path47.join(ROLLBACK, "files", file)), { recursive: true, mode: 448 });
+      fs44.copyFileSync(from, path47.join(ROLLBACK, "files", file));
+      fs44.chmodSync(path47.join(ROLLBACK, "files", file), fs44.statSync(from).mode & 511);
+      lines.push(`cp -p "$B/files/"${quote(file)} "$K/"${quote(file)}.new && mv -f "$K/"${quote(file)}.new "$K/"${quote(file)} || exit 1`);
+    } else {
+      lines.push(`rm -f "$K/"${quote(file)} || exit 1`);
+    }
+  }
+  if (withData) {
+    lines.push(`D="$K/data/opencode"`, `if [ -f "$B/data/opencode.db" ]; then`, `  rm -f "$D/opencode.db-wal" "$D/opencode.db-shm" || exit 1`, `  for n in opencode.db opencode.db-wal opencode.db-shm; do if [ -f "$B/data/$n" ]; then mv -f "$B/data/$n" "$D/$n" || exit 1; fi; done`, `fi`);
+  }
+  lines.push(`sh "$K/bin/kuvo-start" start >/dev/null 2>&1`, `rm -f "$K/run/update-trial" "$K/run/update-restore"`, `rm -rf "$B"`);
+  writePrivate(path47.join(ROLLBACK, "restore.sh"), lines.join(`
+`) + `
+`);
+}
+function keepData() {
+  const folder = path47.join(K, "data", "opencode"), partial = path47.join(ROLLBACK, "data.partial");
+  fs44.rmSync(partial, { recursive: true, force: true });
+  fs44.mkdirSync(partial, { recursive: true, mode: 448 });
+  for (const name of ["opencode.db", "opencode.db-wal", "opencode.db-shm"]) {
+    if (fs44.existsSync(path47.join(folder, name)))
+      fs44.copyFileSync(path47.join(folder, name), path47.join(partial, name));
+  }
+  fs44.renameSync(partial, path47.join(ROLLBACK, "data"));
+}
+function roomForData() {
+  let size = 0;
+  for (const name of ["opencode.db", "opencode.db-wal"])
+    try {
+      size += fs44.statSync(path47.join(K, "data", "opencode", name)).size;
+    } catch {}
+  const free = ran("df", ["-Pk", K]).output.split(`
+`).pop()?.trim().split(/\s+/)[3];
+  return !free || Number(free) * 1024 > size * 1.1 + 200000000;
+}
+async function cameUp(version, withAgents, timeout = 120000, readEngine = readEngineFile, readBridge = readBridgeFile) {
+  const began = Date.now();
+  while (Date.now() - began < timeout) {
+    await sleep(Math.min(2000, timeout / 10));
+    let engine = null;
+    try {
+      engine = readEngine();
+    } catch {}
+    if (engine?.version !== version)
+      continue;
+    if (!await asked(engine, "GET", "api/session?limit=1").then(() => true, () => false))
+      continue;
+    if (!withAgents)
+      return true;
+    let bridge = null;
+    try {
+      bridge = readBridge();
+    } catch {}
+    if (bridge?.port && await asked(bridge, "GET", "api/session/active").then(() => true, () => false))
+      return true;
+  }
+  return false;
+}
+var OWN_TOOLS = ["kuvo-agents.js", "kuvo-browser.js", "kuvo-wake", "kuvo-npx"];
+var installOrder = (files) => [...files].sort((a, b) => a === "bin/box-version" ? -1 : b === "bin/box-version" ? 1 : a === "bin/.kuvo-boot" ? 1 : b === "bin/.kuvo-boot" ? -1 : a < b ? -1 : 1);
+async function update({ now = false, keys = UPDATE_KEYS, url = UPDATE_URL, blocked = updatesBlocked(), clock = Date.now, step = () => {}, upWithin = 120000 } = {}) {
+  if (!keys.length)
+    return { result: "off", message: "Updates aren't set up for this machine yet." };
+  if (blocked)
+    return { result: "blocked", message: blocked };
+  if (fs44.existsSync(path47.join(RUN, "stopped")))
+    return { result: "blocked", message: "Its engine is stopped: start it to update it." };
+  const before = boxVersion();
+  if (!before)
+    return { result: "blocked", message: "This machine's version isn't known: connect to it from Kuvo Code on your Mac once." };
+  if (!takeUpdateLock())
+    return { result: "busy", message: "It's updating already." };
+  let trial = false, stopped = false, swapped = false, stage = null;
+  try {
+    step("checking");
+    let released;
+    try {
+      released = await fetched(url, 1e6, 30000);
+    } catch (error) {
+      if (/answered 404/.test(String(error?.message)))
+        return { result: "current", version: before };
+      throw error;
+    }
+    const manifest = verifyBoxes(released.toString("utf8"), keys);
+    noteUpdate({ latest: manifest.version, checked: clock() });
+    if (!newerVersion(manifest.version, before))
+      return { result: "current", version: before };
+    if (!now && clock() - (Date.parse(manifest.released) || clock()) < RELEASE_AGE)
+      return { result: "waiting", version: manifest.version, message: "It takes a release a few days after it's out." };
+    if (await boxBusy())
+      return { result: "busy", message: "Something is running there now." };
+    step("downloading");
+    stage = path47.join(UPDATES, manifest.version);
+    fs44.rmSync(stage, { recursive: true, force: true });
+    fs44.mkdirSync(path47.join(stage, "files"), { recursive: true, mode: 448 });
+    const pack = await fetched(manifest.pack.url, 1e8, 300000);
+    if (hexSHA256(pack) !== manifest.pack.sha256)
+      throw new Error("The release's files aren't what it says.");
+    fs44.writeFileSync(path47.join(stage, "pack.tgz"), pack, { mode: 384 });
+    if (ran("tar", ["xzf", path47.join(stage, "pack.tgz"), "-C", path47.join(stage, "files")]).status !== 0)
+      throw new Error("The release's files couldn't be unpacked.");
+    const box = JSON.parse(fs44.readFileSync(path47.join(stage, "files", "box.json"), "utf8"));
+    if (box?.version !== manifest.version || box.engine !== manifest.engine || !isObject(box.files))
+      throw new Error("The release's files aren't what it says.");
+    const files = installOrder(Object.keys(box.files));
+    for (const file of files) {
+      if (!BOX_FILE.test(file) || file.split("/").includes(".."))
+        throw new Error("The release names a file outside the box.");
+      if (hexSHA256(fs44.readFileSync(path47.join(stage, "files", file))) !== box.files[file])
+        throw new Error("The release's files aren't what it says.");
+    }
+    if (!files.includes("bin/box-version") || fs44.readFileSync(path47.join(stage, "files", "bin", "box-version"), "utf8").trim() !== manifest.version)
+      throw new Error("The release's files aren't what it says.");
+    for (const tool of OWN_TOOLS) {
+      if (!files.includes(`bin/${tool}`))
+        continue;
+      const from = path47.join(stage, "files", "bin", tool), own = path47.join(stage, "files", "bin", ".own", tool);
+      fs44.mkdirSync(path47.dirname(own), { recursive: true, mode: 448 });
+      fs44.copyFileSync(from, own);
+      fs44.chmodSync(own, fs44.statSync(from).mode & 511);
+      files.push(`bin/.own/${tool}`);
+    }
+    files.splice(0, files.length, ...installOrder(files));
+    const engineFolder = path47.join(K, "engine", manifest.engine);
+    let staged = null;
+    if (!fs44.existsSync(path47.join(engineFolder, "opencode"))) {
+      const kind = { x64: "x86_64", arm64: "aarch64" }[os7.arch()];
+      const build = manifest.linux?.[kind];
+      if (!build?.url || !/^sha512-/.test(build.integrity ?? ""))
+        throw new Error("The release has no engine for this machine.");
+      step("downloading the engine");
+      const tarball = await fetched(build.url, 400000000, 900000);
+      if (crypto22.createHash("sha512").update(tarball).digest("base64") !== build.integrity.slice(7))
+        throw new Error("The engine isn't what the release says.");
+      fs44.writeFileSync(path47.join(stage, "engine.tgz"), tarball, { mode: 384 });
+      fs44.mkdirSync(path47.join(stage, "engine"), { mode: 448 });
+      if (ran("tar", ["xzf", path47.join(stage, "engine.tgz"), "-C", path47.join(stage, "engine"), "package/bin/opencode"]).status !== 0)
+        throw new Error("The engine couldn't be unpacked.");
+      staged = path47.join(stage, "engine", "package", "bin", "opencode");
+      fs44.chmodSync(staged, 493);
+    }
+    step("checking it");
+    const engine = staged ?? path47.join(engineFolder, "opencode");
+    if (ran(engine, ["--version"]).status !== 0)
+      throw new Error("The new engine doesn't run here.");
+    const tried = ran(engine, ["--config=/dev/null", "--no-env-file", path47.join(stage, "files", "bin", "kuvo-link.js"), "selftest"], { BUN_BE_BUN: "1", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0", KUVO_HOME: K });
+    if (tried.status !== 0 || !tried.output.includes("ok"))
+      throw new Error("The new link doesn't work with it here.");
+    if (ran("sh", ["-n", path47.join(stage, "files", "bin", "kuvo-start")]).status !== 0)
+      throw new Error("The new keeper doesn't read.");
+    if (!now && await boxBusy())
+      return { result: "busy", message: "Something is running there now." };
+    step("installing");
+    let previous = {};
+    try {
+      previous = readEngineFile();
+    } catch {}
+    const withAgents = Boolean(previous?.agentsPort) && fs44.existsSync(path47.join(stage, "files", "bin", "kuvo-agents.js"));
+    const otherEngine = previous?.version !== manifest.engine;
+    if (otherEngine && !roomForData())
+      throw new Error("There isn't room on it to keep its data while it updates.");
+    keepForRollback(files, otherEngine);
+    noteUpdate({ trial: { from: before, to: manifest.version, at: clock() }, running: null });
+    fs44.writeFileSync(UPDATE_TRIAL, manifest.version, { mode: 384 });
+    trial = true;
+    stopped = true;
+    const stop = ran("sh", [path47.join(K, "bin", "kuvo-start"), "stop"], {}, 300000);
+    if (stop.status !== 0 || previous?.pid && alive(previous.pid))
+      throw new Error("Its engine couldn't be stopped to update it.");
+    if (otherEngine)
+      keepData();
+    swapped = true;
+    if (staged) {
+      fs44.mkdirSync(engineFolder, { recursive: true, mode: 448 });
+      fs44.renameSync(staged, path47.join(engineFolder, "opencode"));
+    }
+    for (const file of files) {
+      const from = path47.join(stage, "files", file), to = path47.join(K, file);
+      fs44.mkdirSync(path47.dirname(to), { recursive: true, mode: 448 });
+      fs44.copyFileSync(from, `${to}.new`);
+      fs44.chmodSync(`${to}.new`, fs44.statSync(from).mode & 511);
+      fs44.renameSync(`${to}.new`, to);
+    }
+    ran("sh", [path47.join(K, "bin", "kuvo-start"), "start"]);
+    step("starting");
+    if (!await cameUp(manifest.engine, withAgents, upWithin))
+      throw new Error("The new version didn't come up.");
+    writePrivate(path47.join(UPDATES, "installed.json"), JSON.stringify({ version: box.version, files: box.files }));
+    noteUpdate({ trial: { from: before, to: manifest.version, at: clock(), healthy: true } });
+    return { result: "updated", version: manifest.version };
+  } catch (error) {
+    const message = String(error?.message ?? error).slice(0, 300);
+    if (stage)
+      fs44.rmSync(stage, { recursive: true, force: true });
+    if (swapped) {
+      ran("sh", [path47.join(ROLLBACK, "restore.sh")], { KUVO_UPDATER: String(process.pid) }, 600000);
+    } else {
+      if (trial) {
+        fs44.rmSync(UPDATE_TRIAL, { force: true });
+        fs44.rmSync(ROLLBACK, { recursive: true, force: true });
+      }
+      if (stopped)
+        ran("sh", [path47.join(K, "bin", "kuvo-start"), "start"]);
+    }
+    if (trial)
+      noteUpdate({ trial: null });
+    noteUpdate({ last: { at: clock(), result: "failed", message, from: before } });
+    return { result: "failed", message };
+  } finally {
+    for (const name of listOf(UPDATES))
+      if (name !== "rollback" && name !== "installed.json")
+        fs44.rmSync(path47.join(UPDATES, name), { recursive: true, force: true });
+    fs44.rmSync(UPDATE_LOCK, { recursive: true, force: true });
+  }
+}
+function confirmUpdate(clock = Date.now) {
+  const state = updateState();
+  if (!state.trial?.healthy || boxVersion() !== state.trial.to || isUpdating())
+    return false;
+  let engine = null;
+  try {
+    engine = readEngineFile()?.version;
+  } catch {}
+  fs44.rmSync(UPDATE_TRIAL, { force: true });
+  fs44.rmSync(ROLLBACK, { recursive: true, force: true });
+  if (engine) {
+    for (const name of listOf(path47.join(K, "engine")))
+      if (name !== engine && !name.startsWith("."))
+        fs44.rmSync(path47.join(K, "engine", name), { recursive: true, force: true });
+  }
+  noteUpdate({ trial: null, last: { at: clock(), result: "updated", from: state.trial.from, to: state.trial.to } });
+  return true;
+}
+function noteOlderMac(at) {
+  let launchers = {};
+  try {
+    launchers = JSON.parse(fs44.readFileSync(LAUNCHERS, "utf8")) ?? {};
+  } catch {}
+  if ((launchers["an older Mac"] ?? 0) >= at)
+    return;
+  launchers["an older Mac"] = at;
+  try {
+    writePrivate(LAUNCHERS, JSON.stringify(launchers));
+  } catch {}
+}
+function noteOlderMacs() {
+  let at = 0, marked = 0;
+  try {
+    at = fs44.statSync(path47.join(RUN, "attached")).mtimeMs;
+    marked = fs44.statSync(path47.join(K, "bin", "box-version")).mtimeMs;
+  } catch {}
+  if (at <= marked)
+    at = 0;
+  try {
+    at = Math.max(at, fs44.statSync(path47.join(RUN, "older-mac")).mtimeMs);
+  } catch {}
+  if (!at || Date.now() - at > MAC_MEMORY)
+    return false;
+  noteOlderMac(at);
+  return true;
+}
+function checkDrift(now = Date.now()) {
+  const record = path47.join(UPDATES, "installed.json"), pending = path47.join(RUN, "update-drift");
+  if (isUpdating() || fs44.existsSync(UPDATE_TRIAL))
+    return false;
+  let installed = null;
+  try {
+    installed = JSON.parse(fs44.readFileSync(record, "utf8"));
+  } catch {
+    return false;
+  }
+  if (installed?.version !== boxVersion() || !isObject(installed.files)) {
+    fs44.rmSync(record, { force: true });
+    fs44.rmSync(pending, { force: true });
+    return false;
+  }
+  const changed = Object.entries(installed.files).some(([file, sha]) => {
+    try {
+      return hexSHA256(fs44.readFileSync(path47.join(K, file))) !== sha;
+    } catch {
+      return true;
+    }
+  });
+  let installing = 0;
+  try {
+    installing = fs44.statSync(path47.join(RUN, "mac-installing")).mtimeMs;
+  } catch {}
+  if (!changed || isUpdating() || now - installing < 3600000) {
+    fs44.rmSync(pending, { force: true });
+    return false;
+  }
+  if (textOf(pending)?.trim() !== installed.version) {
+    try {
+      writePrivate(pending, installed.version);
+    } catch {}
+    return false;
+  }
+  noteOlderMac(now);
+  noteUpdate({ last: { at: now, result: "failed", message: "An older Kuvo Code on a Mac put its own files back here: update Kuvo Code on your Macs." } });
+  return true;
+}
+function updateNight(date = new Date, zone = process.env.KUVO_TZ) {
+  let parts;
+  try {
+    parts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", { timeZone: zone || undefined, year: "numeric", month: "2-digit", day: "2-digit", hour: "numeric", hourCycle: "h23" }).formatToParts(date).map((part) => [part.type, part.value]));
+  } catch {
+    return null;
+  }
+  const hour = Number(parts.hour);
+  return hour >= 2 && hour < 5 ? `${parts.year}-${parts.month}-${parts.day}` : null;
+}
+function updateStatus() {
+  const state = updateState();
+  let engine = null;
+  try {
+    engine = readEngineFile()?.version ?? null;
+  } catch {}
+  return {
+    setUp: UPDATE_KEYS.length > 0,
+    version: boxVersion(),
+    engine,
+    latest: state.latest ?? null,
+    last: state.last ?? null,
+    updating: isUpdating() ? state.running ?? "checking" : null,
+    blocked: updatesBlocked()
+  };
+}
+var updating = null;
+function startUpdate(options = {}) {
+  if (updating || isUpdating())
+    return null;
+  updating = update({ ...options, step: (running) => noteUpdate({ running }) }).then((outcome) => {
+    noteUpdate({ running: null, ...outcome.result === "updated" ? {} : { last: { at: Date.now(), ...outcome } } });
+    if (outcome.result === "updated")
+      setTimeout(() => process.exit(0), 1000);
+    return outcome;
+  }, () => null).finally(() => {
+    updating = null;
+  });
+  return updating;
+}
+async function* updateRoute(context) {
+  const { request, json } = context;
+  const method = request.method.toUpperCase();
+  if (method === "GET")
+    return yield* json(200, updateStatus());
+  if (method === "POST") {
+    if (parsed(request.body)?.now !== true)
+      return yield* json(400, { message: "Say to update now (now)." });
+    if (!UPDATE_KEYS.length)
+      return yield* json(409, { message: "Updates aren't set up for this machine yet." });
+    const blocked = updatesBlocked();
+    if (blocked)
+      return yield* json(409, { message: blocked });
+    return yield* startUpdate({ now: true }) ? json(202, updateStatus()) : json(409, { message: "It's updating already." });
+  }
+  return yield* json(405, {});
+}
+
+// Packages/Box/src/link/areas/integrations.ts
+var INTEGRATIONS_FILE = path48.join(K, "bin", "integrations.json");
 function integrationCatalog(file = INTEGRATIONS_FILE) {
   try {
-    return (JSON.parse(fs44.readFileSync(file, "utf8")).integrations ?? []).filter((each) => typeof each?.id === "string" && (IS_MAC || !each.macOnly));
+    return (JSON.parse(fs45.readFileSync(file, "utf8")).integrations ?? []).filter((each) => typeof each?.id === "string" && (IS_MAC || !each.macOnly));
   } catch {
     return [];
   }
@@ -11932,8 +12467,8 @@ function upgradeIntegrations(catalogFile = INTEGRATIONS_FILE, file = CONFIG_FILE
     const catalog = integrationCatalog(catalogFile);
     const { settings: before } = readSettings(file);
     const keysGone = new Set;
-    for (const entry of catalog) {
-      const server = valueAt(before ?? {}, [...SERVERS, entry.id]);
+    for (const entry of updateOnTrial() ? [] : catalog) {
+      const server = valueAt(before, [...SERVERS, entry.id]);
       if (!isObject(server) || !leftForItsMaker(entry, server))
         continue;
       try {
@@ -11944,11 +12479,11 @@ function upgradeIntegrations(catalogFile = INTEGRATIONS_FILE, file = CONFIG_FILE
     }
     locked(lock, () => {
       const { settings, problem } = readSettings(file);
-      if (problem)
-        return;
-      const changes = upgradeChanges(settings, catalog, keysGone);
-      if (changes.length)
-        writeSettings(settings, changes, file);
+      const changes = settings ? upgradeChanges(settings, catalog, keysGone) : [];
+      const written = changes.length ? writeSettings(settings, changes, file) : null;
+      const trouble = problem ?? (written?.status === 200 ? undefined : written?.message);
+      if (trouble && (keysGone.size || written))
+        console.error(`Integrations couldn't be brought up to date: ${trouble}`);
     });
   });
 }
@@ -11958,7 +12493,7 @@ function integrationHealth(entry, server, off, signedIn) {
   let health = { connected: "connected", needs_auth: "needsSignIn", failed: "failed" }[server?.status?.status] ?? "starting";
   if (health === "connected" && server?.integrationID && signedIn && !signedIn.has(server.integrationID) && ["official", "app"].includes(entry.way))
     health = "needsSignIn";
-  if (health === "connected" && typeof entry.signInFile === "string" && !fs44.existsSync(path47.join(INTEGRATION_DATA, entry.id, path47.basename(entry.signInFile))))
+  if (health === "connected" && typeof entry.signInFile === "string" && !fs45.existsSync(path48.join(INTEGRATION_DATA, entry.id, path48.basename(entry.signInFile))))
     health = "waitsForCode";
   return health;
 }
@@ -12013,11 +12548,11 @@ async function droppingBotsIntegration(entry) {
   for (const variable of own)
     named.push(...await keyNames({ prefix: `${variable}__` }));
   for (const bot of listOf(BOTS)) {
-    const folder = path47.join(BOTS, bot, "workspace", ".opencode");
-    const file = path47.join(folder, "opencode.json");
+    const folder = path48.join(BOTS, bot, "workspace", ".opencode");
+    const file = path48.join(folder, "opencode.json");
     let settings;
     try {
-      settings = JSON.parse(fs44.readFileSync(file, "utf8"));
+      settings = JSON.parse(fs45.readFileSync(file, "utf8"));
     } catch {
       continue;
     }
@@ -12032,9 +12567,9 @@ async function droppingBotsIntegration(entry) {
     if (Object.keys(settings).length)
       writePrivate(file, JSON.stringify(settings));
     else {
-      fs44.rmSync(file, { force: true });
+      fs45.rmSync(file, { force: true });
       try {
-        fs44.rmdirSync(folder);
+        fs45.rmdirSync(folder);
       } catch {}
     }
   }
@@ -12169,7 +12704,7 @@ async function integrationsAnswer(method, requestPath, body, engine, signal, fil
       }
     }
     for (const name of [entry.id, `${entry.id}.json`])
-      fs44.rmSync(path47.join(INTEGRATION_DATA, name), { recursive: true, force: true });
+      fs45.rmSync(path48.join(INTEGRATION_DATA, name), { recursive: true, force: true });
     try {
       await keyWork(async () => {
         for (const variable of Object.values(entry.variables ?? {}))
@@ -12217,8 +12752,8 @@ function botServer(entry, bot) {
   return swapped(entry.settings);
 }
 function botSettings(bot) {
-  const folder = path48.join(BOTS, bot, "workspace", ".opencode");
-  const file = path48.join(folder, "opencode.json");
+  const folder = path49.join(BOTS, bot, "workspace", ".opencode");
+  const file = path49.join(folder, "opencode.json");
   const text = textOf(file);
   if (text === null || !text.trim())
     return { folder, file, settings: {} };
@@ -12258,9 +12793,9 @@ function writeBotSettings(bot, catalog, names) {
     writePrivate(file, JSON.stringify(next, null, 2) + `
 `);
   } else {
-    fs45.rmSync(file, { force: true });
+    fs46.rmSync(file, { force: true });
     try {
-      fs45.rmdirSync(folder);
+      fs46.rmdirSync(folder);
     } catch {}
   }
   return { status: 200 };
@@ -12283,7 +12818,7 @@ async function refreshingBotsKeys(file) {
 function reconnectForBot(engine, id, bot, later) {
   if (!engine?.port)
     return;
-  const folder = path48.join(BOTS, bot, "workspace");
+  const folder = path49.join(BOTS, bot, "workspace");
   later(() => fetch(`http://127.0.0.1:${engine.port}/api/experimental/mcp/${encodeURIComponent(id)}/connect`, {
     method: "POST",
     headers: { authorization: `Basic ${Buffer.from(`opencode:${engine.password}`).toString("base64")}`, "x-opencode-directory": encodeURIComponent(folder) }
@@ -12412,8 +12947,8 @@ async function* botKeysRoute(context) {
 }
 
 // Packages/Box/src/link/areas/box-keys.ts
-import fs46 from "node:fs";
-import path49 from "node:path";
+import fs47 from "node:fs";
+import path50 from "node:path";
 async function answerKeys(method, route, body) {
   try {
     if (route === "kuvo/keys")
@@ -12454,9 +12989,9 @@ function setBoxKey(name, value) {
     return { status: 400, message: "That isn't a key's name." };
   return locked(CONFIG_LOCK, () => {
     if (value == null)
-      fs46.rmSync(path49.join(BOX_KEYS, name), { force: true });
+      fs47.rmSync(path50.join(BOX_KEYS, name), { force: true });
     else
-      writePrivate(path49.join(BOX_KEYS, name), String(value));
+      writePrivate(path50.join(BOX_KEYS, name), String(value));
     return { status: 200 };
   });
 }
@@ -12521,9 +13056,9 @@ var signInReturn = (url) => {
 };
 
 // Packages/Box/src/link/compat/leave-running.ts
-import fs47 from "node:fs";
-import path50 from "node:path";
-var SEEN_FILE = path50.join(RUN, "link.seen");
+import fs48 from "node:fs";
+import path51 from "node:path";
+var SEEN_FILE = path51.join(RUN, "link.seen");
 var KEEP_FOR = 7 * 24 * 60 * 60000;
 var seen = 0;
 function phoneHere() {
@@ -12532,558 +13067,26 @@ function phoneHere() {
   seen = Date.now();
   try {
     const now = new Date;
-    if (fs47.existsSync(SEEN_FILE)) {
-      fs47.utimesSync(SEEN_FILE, now, now);
+    if (fs48.existsSync(SEEN_FILE)) {
+      fs48.utimesSync(SEEN_FILE, now, now);
     } else {
-      fs47.mkdirSync(RUN, { recursive: true, mode: 448 });
-      fs47.writeFileSync(SEEN_FILE, "", { mode: 384 });
+      fs48.mkdirSync(RUN, { recursive: true, mode: 448 });
+      fs48.writeFileSync(SEEN_FILE, "", { mode: 384 });
     }
   } catch {}
 }
 function forgetPhones() {
   seen = 0;
   try {
-    fs47.rmSync(SEEN_FILE, { force: true });
+    fs48.rmSync(SEEN_FILE, { force: true });
   } catch {}
 }
 function phoneSeenLately(file = SEEN_FILE, now = Date.now()) {
   try {
-    return now - fs47.statSync(file).mtimeMs < KEEP_FOR;
+    return now - fs48.statSync(file).mtimeMs < KEEP_FOR;
   } catch {
     return false;
   }
-}
-
-// Packages/Box/src/link/updates/update.ts
-import { spawnSync as spawnSync6 } from "node:child_process";
-import crypto22 from "node:crypto";
-import fs48 from "node:fs";
-import os7 from "node:os";
-import path51 from "node:path";
-var UPDATE_KEYS = ["iLSFoygG8wg+r2yj+/qnoMHpZIhPKRNLlf9vpEKmx0A="];
-var UPDATE_URL = "https://github.com/serhatandic/kuvo-code/releases/latest/download/boxes.json";
-var UPDATE_STATE = path51.join(RUN, "update.json");
-var UPDATE_TRIAL = path51.join(RUN, "update-trial");
-var UPDATE_LOCK = path51.join(RUN, ".updating");
-var ROLLBACK = path51.join(UPDATES, "rollback");
-var LAUNCHERS = path51.join(RUN, "launchers.json");
-var ED25519_SPKI = Buffer.from("302a300506032b6570032100", "hex");
-var RELEASE_AGE = 3 * 86400000;
-var MAC_MEMORY = 30 * 86400000;
-var BOX_FILE = /^(bin\/[A-Za-z0-9._-]+|bin\/runtime\/[A-Za-z0-9._-]+|config\/opencode\/plugins\/[A-Za-z0-9._-]+)$/;
-var RELEASE_VERSION = /^\d+\.\d+\.\d+(-beta\.\d+)?$/;
-function versionOrder(version) {
-  const found = /^(\d+)\.(\d+)\.(\d+)(?:-beta\.(\d+))?$/.exec(version ?? "");
-  return found ? [+found[1], +found[2], +found[3], found[4] == null ? Infinity : +found[4]] : null;
-}
-function newerVersion(version, than) {
-  const a = versionOrder(version), b = versionOrder(than);
-  if (!a)
-    return false;
-  if (!b)
-    return true;
-  for (let i = 0;i < 4; i++)
-    if (a[i] !== b[i])
-      return a[i] > b[i];
-  return false;
-}
-function verifyBoxes(text, keys = UPDATE_KEYS) {
-  let given;
-  try {
-    given = JSON.parse(text);
-  } catch {
-    throw new Error("That isn't a release.");
-  }
-  if (typeof given?.manifest !== "string" || typeof given.signature !== "string" || typeof given.key !== "string")
-    throw new Error("That isn't a release.");
-  const key = keys.map((each) => Buffer.from(each, "base64")).find((each) => each.length === 32 && each.equals(Buffer.from(given.key, "base64")));
-  if (!key)
-    throw new Error("It isn't signed with a key this machine trusts.");
-  const bytes = Buffer.from(given.manifest, "base64");
-  const publicKey = crypto22.createPublicKey({ key: Buffer.concat([ED25519_SPKI, key]), format: "der", type: "spki" });
-  if (!crypto22.verify(null, Buffer.concat([Buffer.from(`kuvo-box v1
-`), bytes]), publicKey, Buffer.from(given.signature, "base64")))
-    throw new Error("Its signature doesn't match.");
-  const manifest = JSON.parse(bytes.toString("utf8"));
-  if (manifest?.kuvo !== "box/1" || !RELEASE_VERSION.test(manifest.version ?? "") || typeof manifest.engine !== "string" || !/^[0-9][0-9A-Za-z.-]*$/.test(manifest.engine) || !isObject(manifest.pack) || typeof manifest.pack.url !== "string" || !/^[0-9a-f]{64}$/.test(manifest.pack.sha256 ?? ""))
-    throw new Error("That isn't a release.");
-  return manifest;
-}
-var boxVersion = () => {
-  const version = textOf(path51.join(K, "bin", "box-version"))?.trim();
-  return versionOrder(version) ? version : null;
-};
-var updateState = () => {
-  try {
-    return JSON.parse(fs48.readFileSync(UPDATE_STATE, "utf8")) ?? {};
-  } catch {
-    return {};
-  }
-};
-function noteUpdate(change) {
-  const state = { ...updateState(), ...change };
-  for (const [key, value] of Object.entries(change))
-    if (value == null)
-      delete state[key];
-  try {
-    writePrivate(UPDATE_STATE, JSON.stringify(state));
-  } catch {}
-  return state;
-}
-function noteLauncher(readEngine = readEngineFile, now = Date.now()) {
-  let mac = null;
-  try {
-    mac = readEngine()?.notes?.mac;
-  } catch {}
-  if (typeof mac !== "string" || !mac || mac.length > 100)
-    return;
-  let all = {};
-  try {
-    all = JSON.parse(fs48.readFileSync(LAUNCHERS, "utf8")) ?? {};
-  } catch {}
-  if (now - (all[mac] ?? 0) < 3600000)
-    return;
-  all[mac] = now;
-  for (const [key, at] of Object.entries(all))
-    if (now - at > MAC_MEMORY)
-      delete all[key];
-  try {
-    writePrivate(LAUNCHERS, JSON.stringify(all));
-  } catch {}
-}
-function updatesBlocked(link = readLink(), now = Date.now(), root = K) {
-  if (path51.resolve(root) !== path51.join(homeFolder(), ".kuvo-code"))
-    return "Only a machine's own Kuvo Code folder updates itself.";
-  let launchers = {};
-  try {
-    launchers = JSON.parse(fs48.readFileSync(LAUNCHERS, "utf8")) ?? {};
-  } catch {}
-  const behind = Object.entries(launchers).filter(([mac, at]) => now - at < MAC_MEMORY && link?.tolerantIDs?.[mac] !== true);
-  if (behind.length)
-    return "A Mac that connects to this machine has an older Kuvo Code, which would put back older versions: update Kuvo Code there first.";
-  return null;
-}
-async function boxBusy(readEngine = readEngineFile, readBridge = readBridgeFile) {
-  for (const read of [readEngine, readBridge]) {
-    let target = null;
-    try {
-      target = read();
-    } catch {}
-    if (!target?.port || !target?.password)
-      continue;
-    const active = (await asked(target, "GET", "api/session/active").catch(() => null))?.data;
-    if (Array.isArray(active) ? active.length : isObject(active) && Object.keys(active).length)
-      return true;
-  }
-  return readAsks().length > 0;
-}
-var hexSHA256 = (data) => crypto22.createHash("sha256").update(data).digest("hex");
-function ran(command, args, env = {}, timeout = 120000) {
-  const result = spawnSync6(command, args, { cwd: K, env: { ...process.env, ...env }, encoding: "utf8", timeout });
-  return { status: result.status, output: `${result.stdout ?? ""}${result.stderr ?? ""}`.trim() };
-}
-function isUpdating() {
-  if (!fs48.existsSync(UPDATE_LOCK))
-    return false;
-  let pid = null;
-  try {
-    pid = Number(fs48.readFileSync(path51.join(UPDATE_LOCK, "pid"), "utf8"));
-  } catch {}
-  if (pid)
-    return processRuns(pid, "kuvo-link");
-  try {
-    return Date.now() - fs48.statSync(UPDATE_LOCK).mtimeMs < 60000;
-  } catch {
-    return false;
-  }
-}
-function takeUpdateLock() {
-  try {
-    fs48.mkdirSync(UPDATE_LOCK);
-  } catch {
-    if (isUpdating())
-      return false;
-    fs48.rmSync(UPDATE_LOCK, { recursive: true, force: true });
-    try {
-      fs48.mkdirSync(UPDATE_LOCK);
-    } catch {
-      return false;
-    }
-  }
-  fs48.writeFileSync(path51.join(UPDATE_LOCK, "pid"), String(process.pid), { mode: 384 });
-  return true;
-}
-function keepForRollback(files, withData) {
-  fs48.rmSync(ROLLBACK, { recursive: true, force: true });
-  fs48.mkdirSync(path51.join(ROLLBACK, "files"), { recursive: true, mode: 448 });
-  const lines = [
-    "#!/bin/sh",
-    `K=${quote(K)}; B=${quote(ROLLBACK)}`,
-    `p=$(cat "$K/run/.updating/pid" 2>/dev/null)`,
-    `if [ -n "$p" ] && [ "$p" != "\${KUVO_UPDATER:-}" ] && kill -0 "$p" 2>/dev/null && { [ ! -d /proc ] || grep -q kuvo-link "/proc/$p/cmdline" 2>/dev/null; }; then exit 0; fi`,
-    `sh "$K/bin/kuvo-start" stop >/dev/null 2>&1 || exit 1`
-  ];
-  for (const file of files) {
-    const from = path51.join(K, file);
-    if (fs48.existsSync(from)) {
-      fs48.mkdirSync(path51.dirname(path51.join(ROLLBACK, "files", file)), { recursive: true, mode: 448 });
-      fs48.copyFileSync(from, path51.join(ROLLBACK, "files", file));
-      fs48.chmodSync(path51.join(ROLLBACK, "files", file), fs48.statSync(from).mode & 511);
-      lines.push(`cp -p "$B/files/"${quote(file)} "$K/"${quote(file)}.new && mv -f "$K/"${quote(file)}.new "$K/"${quote(file)} || exit 1`);
-    } else {
-      lines.push(`rm -f "$K/"${quote(file)} || exit 1`);
-    }
-  }
-  if (withData) {
-    lines.push(`D="$K/data/opencode"`, `if [ -f "$B/data/opencode.db" ]; then`, `  rm -f "$D/opencode.db-wal" "$D/opencode.db-shm" || exit 1`, `  for n in opencode.db opencode.db-wal opencode.db-shm; do if [ -f "$B/data/$n" ]; then mv -f "$B/data/$n" "$D/$n" || exit 1; fi; done`, `fi`);
-  }
-  lines.push(`sh "$K/bin/kuvo-start" start >/dev/null 2>&1`, `rm -f "$K/run/update-trial" "$K/run/update-restore"`, `rm -rf "$B"`);
-  writePrivate(path51.join(ROLLBACK, "restore.sh"), lines.join(`
-`) + `
-`);
-}
-function keepData() {
-  const folder = path51.join(K, "data", "opencode"), partial = path51.join(ROLLBACK, "data.partial");
-  fs48.rmSync(partial, { recursive: true, force: true });
-  fs48.mkdirSync(partial, { recursive: true, mode: 448 });
-  for (const name of ["opencode.db", "opencode.db-wal", "opencode.db-shm"]) {
-    if (fs48.existsSync(path51.join(folder, name)))
-      fs48.copyFileSync(path51.join(folder, name), path51.join(partial, name));
-  }
-  fs48.renameSync(partial, path51.join(ROLLBACK, "data"));
-}
-function roomForData() {
-  let size = 0;
-  for (const name of ["opencode.db", "opencode.db-wal"])
-    try {
-      size += fs48.statSync(path51.join(K, "data", "opencode", name)).size;
-    } catch {}
-  const free = ran("df", ["-Pk", K]).output.split(`
-`).pop()?.trim().split(/\s+/)[3];
-  return !free || Number(free) * 1024 > size * 1.1 + 200000000;
-}
-async function cameUp(version, withAgents, timeout = 120000, readEngine = readEngineFile, readBridge = readBridgeFile) {
-  const began = Date.now();
-  while (Date.now() - began < timeout) {
-    await sleep(Math.min(2000, timeout / 10));
-    let engine = null;
-    try {
-      engine = readEngine();
-    } catch {}
-    if (engine?.version !== version)
-      continue;
-    if (!await asked(engine, "GET", "api/session?limit=1").then(() => true, () => false))
-      continue;
-    if (!withAgents)
-      return true;
-    let bridge = null;
-    try {
-      bridge = readBridge();
-    } catch {}
-    if (bridge?.port && await asked(bridge, "GET", "api/session/active").then(() => true, () => false))
-      return true;
-  }
-  return false;
-}
-var OWN_TOOLS = ["kuvo-agents.js", "kuvo-browser.js", "kuvo-wake", "kuvo-npx"];
-var installOrder = (files) => [...files].sort((a, b) => a === "bin/box-version" ? -1 : b === "bin/box-version" ? 1 : a === "bin/.kuvo-boot" ? 1 : b === "bin/.kuvo-boot" ? -1 : a < b ? -1 : 1);
-async function update({ now = false, keys = UPDATE_KEYS, url = UPDATE_URL, blocked = updatesBlocked(), clock = Date.now, step = () => {}, upWithin = 120000 } = {}) {
-  if (!keys.length)
-    return { result: "off", message: "Updates aren't set up for this machine yet." };
-  if (blocked)
-    return { result: "blocked", message: blocked };
-  if (fs48.existsSync(path51.join(RUN, "stopped")))
-    return { result: "blocked", message: "Its engine is stopped: start it to update it." };
-  const before = boxVersion();
-  if (!before)
-    return { result: "blocked", message: "This machine's version isn't known: connect to it from Kuvo Code on your Mac once." };
-  if (!takeUpdateLock())
-    return { result: "busy", message: "It's updating already." };
-  let trial = false, stopped = false, swapped = false, stage = null;
-  try {
-    step("checking");
-    let released;
-    try {
-      released = await fetched(url, 1e6, 30000);
-    } catch (error) {
-      if (/answered 404/.test(String(error?.message)))
-        return { result: "current", version: before };
-      throw error;
-    }
-    const manifest = verifyBoxes(released.toString("utf8"), keys);
-    noteUpdate({ latest: manifest.version, checked: clock() });
-    if (!newerVersion(manifest.version, before))
-      return { result: "current", version: before };
-    if (!now && clock() - (Date.parse(manifest.released) || clock()) < RELEASE_AGE)
-      return { result: "waiting", version: manifest.version, message: "It takes a release a few days after it's out." };
-    if (await boxBusy())
-      return { result: "busy", message: "Something is running there now." };
-    step("downloading");
-    stage = path51.join(UPDATES, manifest.version);
-    fs48.rmSync(stage, { recursive: true, force: true });
-    fs48.mkdirSync(path51.join(stage, "files"), { recursive: true, mode: 448 });
-    const pack = await fetched(manifest.pack.url, 1e8, 300000);
-    if (hexSHA256(pack) !== manifest.pack.sha256)
-      throw new Error("The release's files aren't what it says.");
-    fs48.writeFileSync(path51.join(stage, "pack.tgz"), pack, { mode: 384 });
-    if (ran("tar", ["xzf", path51.join(stage, "pack.tgz"), "-C", path51.join(stage, "files")]).status !== 0)
-      throw new Error("The release's files couldn't be unpacked.");
-    const box = JSON.parse(fs48.readFileSync(path51.join(stage, "files", "box.json"), "utf8"));
-    if (box?.version !== manifest.version || box.engine !== manifest.engine || !isObject(box.files))
-      throw new Error("The release's files aren't what it says.");
-    const files = installOrder(Object.keys(box.files));
-    for (const file of files) {
-      if (!BOX_FILE.test(file) || file.split("/").includes(".."))
-        throw new Error("The release names a file outside the box.");
-      if (hexSHA256(fs48.readFileSync(path51.join(stage, "files", file))) !== box.files[file])
-        throw new Error("The release's files aren't what it says.");
-    }
-    if (!files.includes("bin/box-version") || fs48.readFileSync(path51.join(stage, "files", "bin", "box-version"), "utf8").trim() !== manifest.version)
-      throw new Error("The release's files aren't what it says.");
-    for (const tool of OWN_TOOLS) {
-      if (!files.includes(`bin/${tool}`))
-        continue;
-      const from = path51.join(stage, "files", "bin", tool), own = path51.join(stage, "files", "bin", ".own", tool);
-      fs48.mkdirSync(path51.dirname(own), { recursive: true, mode: 448 });
-      fs48.copyFileSync(from, own);
-      fs48.chmodSync(own, fs48.statSync(from).mode & 511);
-      files.push(`bin/.own/${tool}`);
-    }
-    files.splice(0, files.length, ...installOrder(files));
-    const engineFolder = path51.join(K, "engine", manifest.engine);
-    let staged = null;
-    if (!fs48.existsSync(path51.join(engineFolder, "opencode"))) {
-      const kind = { x64: "x86_64", arm64: "aarch64" }[os7.arch()];
-      const build = manifest.linux?.[kind];
-      if (!build?.url || !/^sha512-/.test(build.integrity ?? ""))
-        throw new Error("The release has no engine for this machine.");
-      step("downloading the engine");
-      const tarball = await fetched(build.url, 400000000, 900000);
-      if (crypto22.createHash("sha512").update(tarball).digest("base64") !== build.integrity.slice(7))
-        throw new Error("The engine isn't what the release says.");
-      fs48.writeFileSync(path51.join(stage, "engine.tgz"), tarball, { mode: 384 });
-      fs48.mkdirSync(path51.join(stage, "engine"), { mode: 448 });
-      if (ran("tar", ["xzf", path51.join(stage, "engine.tgz"), "-C", path51.join(stage, "engine"), "package/bin/opencode"]).status !== 0)
-        throw new Error("The engine couldn't be unpacked.");
-      staged = path51.join(stage, "engine", "package", "bin", "opencode");
-      fs48.chmodSync(staged, 493);
-    }
-    step("checking it");
-    const engine = staged ?? path51.join(engineFolder, "opencode");
-    if (ran(engine, ["--version"]).status !== 0)
-      throw new Error("The new engine doesn't run here.");
-    const tried = ran(engine, ["--config=/dev/null", "--no-env-file", path51.join(stage, "files", "bin", "kuvo-link.js"), "selftest"], { BUN_BE_BUN: "1", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0", KUVO_HOME: K });
-    if (tried.status !== 0 || !tried.output.includes("ok"))
-      throw new Error("The new link doesn't work with it here.");
-    if (ran("sh", ["-n", path51.join(stage, "files", "bin", "kuvo-start")]).status !== 0)
-      throw new Error("The new keeper doesn't read.");
-    if (!now && await boxBusy())
-      return { result: "busy", message: "Something is running there now." };
-    step("installing");
-    let previous = {};
-    try {
-      previous = readEngineFile();
-    } catch {}
-    const withAgents = Boolean(previous?.agentsPort) && fs48.existsSync(path51.join(stage, "files", "bin", "kuvo-agents.js"));
-    const otherEngine = previous?.version !== manifest.engine;
-    if (otherEngine && !roomForData())
-      throw new Error("There isn't room on it to keep its data while it updates.");
-    keepForRollback(files, otherEngine);
-    noteUpdate({ trial: { from: before, to: manifest.version, at: clock() }, running: null });
-    fs48.writeFileSync(UPDATE_TRIAL, manifest.version, { mode: 384 });
-    trial = true;
-    stopped = true;
-    const stop = ran("sh", [path51.join(K, "bin", "kuvo-start"), "stop"], {}, 300000);
-    if (stop.status !== 0 || previous?.pid && alive(previous.pid))
-      throw new Error("Its engine couldn't be stopped to update it.");
-    if (otherEngine)
-      keepData();
-    swapped = true;
-    if (staged) {
-      fs48.mkdirSync(engineFolder, { recursive: true, mode: 448 });
-      fs48.renameSync(staged, path51.join(engineFolder, "opencode"));
-    }
-    for (const file of files) {
-      const from = path51.join(stage, "files", file), to = path51.join(K, file);
-      fs48.mkdirSync(path51.dirname(to), { recursive: true, mode: 448 });
-      fs48.copyFileSync(from, `${to}.new`);
-      fs48.chmodSync(`${to}.new`, fs48.statSync(from).mode & 511);
-      fs48.renameSync(`${to}.new`, to);
-    }
-    ran("sh", [path51.join(K, "bin", "kuvo-start"), "start"]);
-    step("starting");
-    if (!await cameUp(manifest.engine, withAgents, upWithin))
-      throw new Error("The new version didn't come up.");
-    writePrivate(path51.join(UPDATES, "installed.json"), JSON.stringify({ version: box.version, files: box.files }));
-    noteUpdate({ trial: { from: before, to: manifest.version, at: clock(), healthy: true } });
-    return { result: "updated", version: manifest.version };
-  } catch (error) {
-    const message = String(error?.message ?? error).slice(0, 300);
-    if (stage)
-      fs48.rmSync(stage, { recursive: true, force: true });
-    if (swapped) {
-      ran("sh", [path51.join(ROLLBACK, "restore.sh")], { KUVO_UPDATER: String(process.pid) }, 600000);
-    } else {
-      if (trial) {
-        fs48.rmSync(UPDATE_TRIAL, { force: true });
-        fs48.rmSync(ROLLBACK, { recursive: true, force: true });
-      }
-      if (stopped)
-        ran("sh", [path51.join(K, "bin", "kuvo-start"), "start"]);
-    }
-    if (trial)
-      noteUpdate({ trial: null });
-    noteUpdate({ last: { at: clock(), result: "failed", message, from: before } });
-    return { result: "failed", message };
-  } finally {
-    for (const name of listOf(UPDATES))
-      if (name !== "rollback" && name !== "installed.json")
-        fs48.rmSync(path51.join(UPDATES, name), { recursive: true, force: true });
-    fs48.rmSync(UPDATE_LOCK, { recursive: true, force: true });
-  }
-}
-function confirmUpdate(clock = Date.now) {
-  const state = updateState();
-  if (!state.trial?.healthy || boxVersion() !== state.trial.to || isUpdating())
-    return false;
-  let engine = null;
-  try {
-    engine = readEngineFile()?.version;
-  } catch {}
-  fs48.rmSync(UPDATE_TRIAL, { force: true });
-  fs48.rmSync(ROLLBACK, { recursive: true, force: true });
-  if (engine) {
-    for (const name of listOf(path51.join(K, "engine")))
-      if (name !== engine && !name.startsWith("."))
-        fs48.rmSync(path51.join(K, "engine", name), { recursive: true, force: true });
-  }
-  noteUpdate({ trial: null, last: { at: clock(), result: "updated", from: state.trial.from, to: state.trial.to } });
-  return true;
-}
-function noteOlderMac(at) {
-  let launchers = {};
-  try {
-    launchers = JSON.parse(fs48.readFileSync(LAUNCHERS, "utf8")) ?? {};
-  } catch {}
-  if ((launchers["an older Mac"] ?? 0) >= at)
-    return;
-  launchers["an older Mac"] = at;
-  try {
-    writePrivate(LAUNCHERS, JSON.stringify(launchers));
-  } catch {}
-}
-function noteOlderMacs() {
-  let at = 0, marked = 0;
-  try {
-    at = fs48.statSync(path51.join(RUN, "attached")).mtimeMs;
-    marked = fs48.statSync(path51.join(K, "bin", "box-version")).mtimeMs;
-  } catch {}
-  if (at <= marked)
-    at = 0;
-  try {
-    at = Math.max(at, fs48.statSync(path51.join(RUN, "older-mac")).mtimeMs);
-  } catch {}
-  if (!at || Date.now() - at > MAC_MEMORY)
-    return false;
-  noteOlderMac(at);
-  return true;
-}
-function checkDrift(now = Date.now()) {
-  const record = path51.join(UPDATES, "installed.json"), pending = path51.join(RUN, "update-drift");
-  if (isUpdating() || fs48.existsSync(UPDATE_TRIAL))
-    return false;
-  let installed = null;
-  try {
-    installed = JSON.parse(fs48.readFileSync(record, "utf8"));
-  } catch {
-    return false;
-  }
-  if (installed?.version !== boxVersion() || !isObject(installed.files)) {
-    fs48.rmSync(record, { force: true });
-    fs48.rmSync(pending, { force: true });
-    return false;
-  }
-  const changed = Object.entries(installed.files).some(([file, sha]) => {
-    try {
-      return hexSHA256(fs48.readFileSync(path51.join(K, file))) !== sha;
-    } catch {
-      return true;
-    }
-  });
-  let installing = 0;
-  try {
-    installing = fs48.statSync(path51.join(RUN, "mac-installing")).mtimeMs;
-  } catch {}
-  if (!changed || isUpdating() || now - installing < 3600000) {
-    fs48.rmSync(pending, { force: true });
-    return false;
-  }
-  if (textOf(pending)?.trim() !== installed.version) {
-    try {
-      writePrivate(pending, installed.version);
-    } catch {}
-    return false;
-  }
-  noteOlderMac(now);
-  noteUpdate({ last: { at: now, result: "failed", message: "An older Kuvo Code on a Mac put its own files back here: update Kuvo Code on your Macs." } });
-  return true;
-}
-function updateNight(date = new Date, zone = process.env.KUVO_TZ) {
-  let parts;
-  try {
-    parts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", { timeZone: zone || undefined, year: "numeric", month: "2-digit", day: "2-digit", hour: "numeric", hourCycle: "h23" }).formatToParts(date).map((part) => [part.type, part.value]));
-  } catch {
-    return null;
-  }
-  const hour = Number(parts.hour);
-  return hour >= 2 && hour < 5 ? `${parts.year}-${parts.month}-${parts.day}` : null;
-}
-function updateStatus() {
-  const state = updateState();
-  let engine = null;
-  try {
-    engine = readEngineFile()?.version ?? null;
-  } catch {}
-  return {
-    setUp: UPDATE_KEYS.length > 0,
-    version: boxVersion(),
-    engine,
-    latest: state.latest ?? null,
-    last: state.last ?? null,
-    updating: isUpdating() ? state.running ?? "checking" : null,
-    blocked: updatesBlocked()
-  };
-}
-var updating = null;
-function startUpdate(options = {}) {
-  if (updating || isUpdating())
-    return null;
-  updating = update({ ...options, step: (running) => noteUpdate({ running }) }).then((outcome) => {
-    noteUpdate({ running: null, ...outcome.result === "updated" ? {} : { last: { at: Date.now(), ...outcome } } });
-    if (outcome.result === "updated")
-      setTimeout(() => process.exit(0), 1000);
-    return outcome;
-  }, () => null).finally(() => {
-    updating = null;
-  });
-  return updating;
-}
-async function* updateRoute(context) {
-  const { request, json } = context;
-  const method = request.method.toUpperCase();
-  if (method === "GET")
-    return yield* json(200, updateStatus());
-  if (method === "POST") {
-    if (parsed(request.body)?.now !== true)
-      return yield* json(400, { message: "Say to update now (now)." });
-    if (!UPDATE_KEYS.length)
-      return yield* json(409, { message: "Updates aren't set up for this machine yet." });
-    const blocked = updatesBlocked();
-    if (blocked)
-      return yield* json(409, { message: blocked });
-    return yield* startUpdate({ now: true }) ? json(202, updateStatus()) : json(409, { message: "It's updating already." });
-  }
-  return yield* json(405, {});
 }
 
 // Packages/Box/src/link/areas/engine.ts
@@ -27321,8 +27324,12 @@ function machineWelcomed(host) {
   try {
     docsChanged(host, { greet: true });
   } catch {}
+  updateIsWell();
+}
+function updateIsWell() {
   try {
-    confirmUpdate();
+    if (confirmUpdate())
+      upgradeIntegrations().catch(() => {});
   } catch {}
 }
 async function run3() {
@@ -27431,11 +27438,7 @@ async function run3() {
   watchGoals(tell, peerTargets, { here: () => hold.inUse });
   let lastWelcomed = Date.now();
   refreshOwn(readEngineFile).catch(() => {});
-  setTimeout(() => {
-    try {
-      confirmUpdate();
-    } catch {}
-  }, 180000);
+  setTimeout(updateIsWell, 180000);
   const nightly = () => {
     noteLauncher();
     noteOlderMacs();
@@ -27888,8 +27891,10 @@ if (main) {
       const pid = runningBridge();
       if (pid)
         process.kill(pid, "SIGTERM");
-      if (!needed(readLink()))
+      if (!needed(readLink())) {
         confirmUpdate();
+        await upgradeIntegrations().catch(() => {});
+      }
     }
     console.log(JSON.stringify(outcome));
   } else if (mode === "selftest") {
