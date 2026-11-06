@@ -20,6 +20,12 @@ final class PhoneUsageTests: XCTestCase {
         }
     }
 
+    func testALineJSONCantCarryLeavesTheOthers() {
+        let good = MetricLine.progress(label: "Weekly", used: 62, limit: 100, format: .percent)
+        let bad = MetricLine.progress(label: "Session", used: .infinity, limit: 0, format: .percent)
+        XCTAssertEqual(UsageMenuBar.phoneLines([bad, good, .values(label: "Spend", values: [MetricValue(number: .nan, kind: .dollars)])]), [good])
+    }
+
     func testNoUsageBeforeThePanelIsUp() {
         XCTAssertNil(UsageMenuBar.shared.phoneUsage())
         XCTAssertFalse(UsageMenuBar.shared.refreshAll())
