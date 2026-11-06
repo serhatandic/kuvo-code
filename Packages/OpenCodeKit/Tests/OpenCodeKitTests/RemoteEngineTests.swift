@@ -161,6 +161,67 @@ struct RemoteEngineTests {
         #expect(EngineRelease.linux(machine: "riscv64") == nil)
     }
 
+    private func installer() -> RemoteEngineInstaller {
+        RemoteEngineInstaller(connection: SSHConnection(destination: "a-mac.invalid"), cache: FileManager.default.temporaryDirectory)
+    }
+
+    @Test func aMacGetsTheEngineBuiltForIt() throws {
+        let apple = try installer().checked("Darwin arm64\ntools\ncomputer ANOTHER-MAC 501\n")
+        #expect(apple.release == EngineRelease.pinned)
+        #expect(!apple.isInstalled)
+        let intel = try installer().checked("Darwin x86_64\ntools\ncomputer ANOTHER-MAC 501\n")
+        #expect(intel.release.tarball.lastPathComponent == "cli-darwin-x64-\(OpenCodeEngine.version).tgz")
+        #expect(intel.release.version == OpenCodeEngine.version)
+        let there = try installer().checked("Darwin arm64\ntools\ncomputer ANOTHER-MAC 501\n\(OpenCodeEngine.version)\n")
+        #expect(there.isInstalled)
+    }
+
+    @Test func aMacWithoutGitIsToldWhatItNeeds() {
+        #expect(throws: RemoteEngineError.self) { try installer().checked("Darwin arm64\nno-tools\ncomputer ANOTHER-MAC 501\n") }
+        do {
+            _ = try installer().checked("Darwin arm64\nno-tools\ncomputer ANOTHER-MAC 501\n")
+        } catch {
+            #expect(error.localizedDescription.contains("xcode-select --install"))
+        }
+    }
+
+    @Test func linuxStillGetsItsOwnAndOthersAreRefusedSayingWhy() throws {
+        #expect(try installer().checked("Linux x86_64\nglibc\n").release == EngineRelease.linux(machine: "x86_64"))
+        #expect(try installer().checked("Linux aarch64\nglibc\n\(OpenCodeEngine.version)\n").isInstalled)
+        for answer in ["Linux x86_64\nmusl\n", "FreeBSD amd64\nglibc\n", "Darwin ppc\ntools\ncomputer A 501\n"] {
+            do {
+                _ = try installer().checked(answer)
+                Issue.record("\(answer) should be refused")
+            } catch {
+                #expect(error.localizedDescription.contains("macOS"))
+                #expect(error.localizedDescription.contains("Linux"))
+            }
+        }
+    }
+
+    /// The question as this Mac itself answers it, with its own tools: the build for what it is, and
+    /// in its own account, that this is the Mac whose box is already here.
+    @Test func thisMacAnswersAsAMacAndIsToldApart() throws {
+        let process = Process()
+        process.executableURL = URL(filePath: "/bin/sh")
+        process.arguments = ["-c", installer().probe]
+        // (A home without an engine in it, and nothing else of this environment's.)
+        process.environment = ["HOME": FileManager.default.temporaryDirectory.appending(path: "no-such-home").path, "PATH": "/usr/bin:/bin:/usr/sbin:/sbin"]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        let answer = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        process.waitUntilExit()
+        #expect(answer.hasPrefix("Darwin "))
+        let lines = answer.split(separator: "\n").map(String.init)
+        #expect(["tools", "no-tools"].contains(lines[1]))
+        #expect(lines[2] == "computer \(ThisMac.identifier) \(getuid())")
+        #expect(RemoteEngineInstaller.isThisAccount(lines[2]) == (RemoteEngineInstaller.root == ".kuvo-code"))
+        #expect(!RemoteEngineInstaller.isThisAccount("computer \(ThisMac.identifier) \(getuid() + 1)"), "another account on it is a box of its own")
+        #expect(!RemoteEngineInstaller.isThisAccount("computer ANOTHER-MAC \(getuid())"))
+    }
+
     @Test func aMachinesFoldersAreKeyedApartAndSentPlain() {
         let api = OpenCodeAPI(endpoint: ServerEndpoint(url: URL(string: "http://127.0.0.1:1")!, password: nil), folderPrefix: "ssh://box")
         #expect(api.enginePath("ssh://box/home/me/app") == "/home/me/app")

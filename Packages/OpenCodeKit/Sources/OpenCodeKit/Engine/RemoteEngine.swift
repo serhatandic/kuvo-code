@@ -162,6 +162,10 @@ public struct SSHConnection: Sendable, Hashable, Codable {
 public enum RemoteEngineError: LocalizedError {
     case ssh(status: Int32, message: String)
     case unsupportedPlatform(String)
+    /// A Mac without Apple's Command Line Tools, where `git` only asks to install them.
+    case needsDeveloperTools
+    /// The Mac this copy of the app runs on, in the account it runs in: its own box is already here.
+    case thisMac
     case exited(status: Int32, output: String)
     case unreadableHandshake(String)
     case timedOut
@@ -192,7 +196,11 @@ public enum RemoteEngineError: LocalizedError {
             }
             return message.isEmpty ? "SSH stopped (exit code \(status))." : message
         case .unsupportedPlatform(let platform):
-            return "The engine runs on Linux on x86-64 or ARM64 with glibc; this machine is \(platform)."
+            return "The engine runs on macOS, and on Linux with glibc, on x86-64 or ARM64; this machine is \(platform)."
+        case .needsDeveloperTools:
+            return "This Mac needs Apple’s Command Line Tools first, for git. Run xcode-select --install on it, then try again."
+        case .thisMac:
+            return "That’s this Mac, whose box is already here. Add another computer."
         case .exited(let status, let output):
             return "The engine on the machine stopped (exit code \(status)).\(output.isEmpty ? "" : "\n\n\(output)")"
         case .unreadableHandshake(let line):
@@ -268,23 +276,57 @@ public struct RemoteEngineInstaller: Sendable {
         """
     }
 
+    /// The SHA-256 of file `$f` on the machine, as a shell expression, in hex (empty when it isn't
+    /// there): `sha256sum` where it has one, `shasum`, which every Mac has, elsewhere.
+    public static let sumOfFile = #"$( (sha256sum "$f" || shasum -a 256 "$f") 2>/dev/null | cut -c1-64)"#
+
     /// Connects and checks that the machine can run the engine: the build it needs, and whether
-    /// it's there already.
+    /// it's there already. On a Mac, also what it can't work without (git, from Apple's Command
+    /// Line Tools, which without them only asks on its screen each time it runs), and that it isn't
+    /// the Mac this runs on, in this account, whose own box is already here.
     @discardableResult
     public func check() async throws -> (release: EngineRelease, isInstalled: Bool) {
-        let probe = try await connection.run("""
-            uname -sm
-            if ldd --version 2>&1 | grep -qi musl; then echo musl; else echo glibc; fi
-            test -x "\(remoteExecutable)" && (\(Self.folders.replacingOccurrences(of: "\n", with: "; ")); "\(remoteExecutable)" --version) 2>/dev/null || true
-            """)
-        let lines = probe.split(separator: "\n").map(String.init)
+        try checked(try await connection.run(probe))
+    }
+
+    /// What `check` asks the machine.
+    var probe: String {
+        """
+        uname -sm
+        if [ "$(uname -s)" = Darwin ]; then
+          if xcode-select -p >/dev/null 2>&1; then echo tools; else echo no-tools; fi
+          echo "computer $(ioreg -rd1 -c IOPlatformExpertDevice 2>/dev/null | sed -n 's/.*"IOPlatformUUID" = "\\(.*\\)".*/\\1/p') $(id -u)"
+        elif ldd --version 2>&1 | grep -qi musl; then echo musl; else echo glibc; fi
+        test -x "\(remoteExecutable)" && (\(Self.folders.replacingOccurrences(of: "\n", with: "; ")); "\(remoteExecutable)" --version) 2>/dev/null || true
+        """
+    }
+
+    /// What a machine's answer to `probe` means.
+    func checked(_ answer: String) throws -> (release: EngineRelease, isInstalled: Bool) {
+        let lines = answer.split(separator: "\n").map(String.init)
         let platform = lines.first ?? ""
         let parts = platform.split(separator: " ")
-        guard parts.first == "Linux", lines.dropFirst().first == "glibc", let machine = parts.last,
-              let release = EngineRelease.linux(machine: String(machine)) else {
-            throw RemoteEngineError.unsupportedPlatform(platform + (lines.dropFirst().first == "musl" ? " (musl)" : ""))
+        let second = lines.dropFirst().first
+        let machine = parts.last.map(String.init) ?? ""
+        let release: EngineRelease?
+        switch parts.first {
+        case "Linux": release = second == "glibc" ? EngineRelease.linux(machine: machine) : nil
+        case "Darwin":
+            if second == "no-tools" { throw RemoteEngineError.needsDeveloperTools }
+            release = EngineRelease.darwin(machine: machine)
+        default: release = nil
         }
-        return (release, lines.count > 2 && lines[2].hasSuffix(OpenCodeEngine.version))
+        guard let release else { throw RemoteEngineError.unsupportedPlatform(platform + (second == "musl" ? " (musl)" : "")) }
+        let rest = lines.dropFirst(2)
+        if let computer = rest.first(where: { $0.hasPrefix("computer ") }), Self.isThisAccount(computer) { throw RemoteEngineError.thisMac }
+        return (release, rest.contains { !$0.hasPrefix("computer ") && $0.hasSuffix(OpenCodeEngine.version) })
+    }
+
+    /// Whether a Mac's `computer <its id> <account>` is this Mac, in the account this runs in. (Another
+    /// account on it is a box of its own, in its own home; so is a test's or a demo copy's own folder.)
+    static func isThisAccount(_ computer: String) -> Bool {
+        let words = computer.split(separator: " ").map(String.init)
+        return words.count == 3 && root == ".kuvo-code" && words[1] == ThisMac.identifier && words[2] == String(getuid())
     }
 
     /// How far an install has come: the package downloading to this Mac (a share of it), then
@@ -338,6 +380,31 @@ public struct RemoteEngineInstaller: Sendable {
 /// Which Kuvo Code put a box's files there (`bin/box-version`): a Mac as it set the box up, or the
 /// box as it updated itself. A Mac never puts its own over a newer one's: it uses what's there as
 /// it is, so a box that updated itself, or another Mac's, isn't taken back to an older version.
+/// Whether a process there is what a script takes it for, after a crash or a restart may have given
+/// its number to something else.
+public enum RemoteProcess {
+    /// Shell for `kuvo_runs <pid> <pattern>`: it's alive and its command line has the pattern. Linux's
+    /// /proc, or on a Mac, which has none, `ps`.
+    public static let check = #"""
+        kuvo_runs() { [ -n "$1" ] && kill -0 "$1" 2>/dev/null || return 1; if [ -d /proc/self ]; then grep -q -- "$2" "/proc/$1/cmdline" 2>/dev/null; else ps -ww -o command= -p "$1" 2>/dev/null | grep -q -- "$2"; fi; }
+        """#
+
+    /// Shell that makes `$S` what starts a command in a session of its own, as a process that stays
+    /// the one started (needs `$K`). Linux's `setsid`; a Mac has none, and its `bin/kuvo-setsid` does it.
+    public static let session = #"S=setsid; command -v setsid >/dev/null 2>&1 || S="$K/bin/kuvo-setsid""#
+
+    /// `bin/kuvo-setsid`, for a computer without `setsid`: the command in a session of its own, by
+    /// the Perl every Mac has. Without Perl, the command on its own, which at least outlives its
+    /// connection (its group can't be stopped as one then, so what stops it stops it by its process).
+    static let setsidScript = #"""
+        #!/bin/sh
+        # Kuvo Code: starts a command in a session of its own, as Linux's setsid does.
+        if [ -x /usr/bin/perl ]; then exec /usr/bin/perl -e 'use POSIX (); POSIX::setsid(); exec { $ARGV[0] } @ARGV; die "$ARGV[0]: $!\n"' -- "$@"; fi
+        trap '' HUP
+        exec "$@"
+        """#
+}
+
 public enum BoxVersion {
     /// This app's version: X.Y.Z, or X.Y.Z-beta.N for a beta (which comes before X.Y.Z). Set by
     /// the app before connecting; anything else is "0".
@@ -568,9 +635,10 @@ public final class RemoteServer: @unchecked Sendable {
     public static func find(on connection: SSHConnection) async throws -> Found {
         let text = try await connection.run("""
             K="$HOME/\(RemoteEngineInstaller.root)"; R="\(run)"
+            \(RemoteProcess.check)
             [ -f "$K/bin/kuvo-start" ] && sh "$K/bin/kuvo-start" box >/dev/null 2>&1
             pid=$(sed -n 's/^{"pid":\\([0-9]*\\),.*/\\1/p' "$R/engine.json" 2>/dev/null)
-            if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && grep -q opencode "/proc/$pid/cmdline" 2>/dev/null; then
+            if kuvo_runs "$pid" opencode; then
               cat "$R/engine.json"
             # COMPAT(0.7 engine-stop): an engine an older Mac stopped. Goes 3 months after 0.8.0.
             elif [ -f "$R/stopped" ]; then
@@ -734,7 +802,9 @@ public final class RemoteServer: @unchecked Sendable {
         K="$HOME/\#(RemoteEngineInstaller.root)"; R="$K/run"
         mkdir -p "$R" 2>/dev/null && chmod 700 "$R" 2>/dev/null
         # Whether process $1 runs and is $2 (in its command line).
-        is() { [ -n "$1" ] && kill -0 "$1" 2>/dev/null && grep -q -- "$2" "/proc/$1/cmdline" 2>/dev/null; }
+        \#(RemoteProcess.check)
+        is() { kuvo_runs "$1" "$2"; }
+        \#(RemoteProcess.session)
         engine() { sed -n 's/^{"pid":\([0-9]*\),.*/\1/p' "$R/engine.json" 2>/dev/null; }
         up() { is "$(engine)" "$K/engine/"; }
         # The engine's version to start: this one's, or while that isn't there (Kuvo Code updated
@@ -779,10 +849,16 @@ public final class RemoteServer: @unchecked Sendable {
           is "$(cat "$R/box.pid" 2>/dev/null)" kuvo-start && exit 0
           cd "$K" || exit 0
           # This script (kuvo-start, or the copy below), as the keeper.
-          env -i HOME="$HOME" PATH="$PATH" setsid sh "$0" keep </dev/null >/dev/null 2>&1 &
+          env -i HOME="$HOME" PATH="$PATH" "$S" sh "$0" keep </dev/null >/dev/null 2>&1 &
           ;;
         keep)
           echo $$ >"$R/box.pid"
+          # A Mac sleeps by itself, and a box works with nobody there: awake while it's on power,
+          # for as long as this keeper runs (its display still sleeps). No setting of yours changes.
+          if command -v caffeinate >/dev/null 2>&1 && ! is "$(cat "$R/awake.pid" 2>/dev/null)" caffeinate; then
+            caffeinate -s -w $$ </dev/null >/dev/null 2>&1 &
+            echo $! >"$R/awake.pid"
+          fi
           boot=$(cat "$K/bin/.kuvo-boot" 2>/dev/null)
           # COMPAT(0.7 keeper): its own copies, bin/.kuvo-start-keeper and bin/.kuvo-launch-keeper. Goes 3 months after 0.8.0.
           # A copy of itself and of its launcher, which it runs its starts from and puts back when an
@@ -862,8 +938,8 @@ public final class RemoteServer: @unchecked Sendable {
             # down halfway): after twenty minutes, back to what was there (PROTOCOL.md, "Updates").
             # Five minutes between tries; after six, it gives up and starts what's there.
             if [ -f "$R/update-trial" ] && [ -f "$K/updates/rollback/restore.sh" ]; then
-              tried=$(stat -c %Y "$R/update-trial" 2>/dev/null || echo "$now")
-              last=$(stat -c %Y "$R/update-restore" 2>/dev/null || echo 0)
+              tried=$(stat -c %Y "$R/update-trial" 2>/dev/null || stat -f %m "$R/update-trial" 2>/dev/null || echo "$now")
+              last=$(stat -c %Y "$R/update-restore" 2>/dev/null || stat -f %m "$R/update-restore" 2>/dev/null || echo 0)
               tries=$(cat "$R/update-restore" 2>/dev/null || echo 0)
               if [ $((now - tried)) -gt 1200 ] && [ $((now - last)) -gt 300 ]; then
                 if [ "$tries" -lt 6 ]; then
@@ -876,7 +952,7 @@ public final class RemoteServer: @unchecked Sendable {
             fi
             # The phone link, while a phone is paired with it or a pairing's open.
             if [ -f "$R/link.needed" ] && [ -f "$K/bin/kuvo-link.js" ] && [ -n "$V" ] && ! is "$(cat "$R/link.pid" 2>/dev/null)" kuvo-link; then
-              (environment; cd "$K/workspace" 2>/dev/null || cd "$K"; KUVO_HOME="$K" BUN_BE_BUN=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 setsid "$K/engine/$V/opencode" --config=/dev/null --no-env-file "$K/bin/kuvo-link.js" run >"$R/link.log" 2>&1 </dev/null &)
+              (environment; cd "$K/workspace" 2>/dev/null || cd "$K"; KUVO_HOME="$K" BUN_BE_BUN=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 "$S" "$K/engine/$V/opencode" --config=/dev/null --no-env-file "$K/bin/kuvo-link.js" run >"$R/link.log" 2>&1 </dev/null &)
             fi
             # Wake-ups that are due, each minute, while the engine's up, as the engine was started:
             # beside this loop, which a slow watch never holds up, one round at a time.
@@ -958,9 +1034,10 @@ public final class RemoteServer: @unchecked Sendable {
 
     /// Puts `kuvo-launch` and `kuvo-start` in the machine's `bin` (unless it has these ones
     /// already), apart from the launch, whose command line has a size limit.
-    /// The keeper and its launcher, by their names in `bin`, and what `.kuvo-boot` says of them.
+    /// The keeper, its launcher and what starts them in a session of their own (a Mac has no
+    /// `setsid`), by their names in `bin`, and what `.kuvo-boot` says of them.
     static var bootFiles: (files: [(name: String, text: String)], hash: String) {
-        let files = [("kuvo-launch", bootLaunchScript), ("kuvo-start", bootScript)]
+        let files = [("kuvo-launch", bootLaunchScript), ("kuvo-start", bootScript), ("kuvo-setsid", RemoteProcess.setsidScript)]
         return (files, SHA256.hash(data: Data(files.map { $0.0 + "\n" + $0.1 }.joined(separator: "\n").utf8)).map { String(format: "%02x", $0) }.joined())
     }
 
@@ -995,6 +1072,8 @@ public final class RemoteServer: @unchecked Sendable {
         \(boot ? "V=${KUVO_VERSION:-\(OpenCodeEngine.version)}; unset KUVO_VERSION" : "V=\(OpenCodeEngine.version)")
         \(RemoteEngineInstaller.folders)
         R="$K/run"; mkdir -p "$R"; chmod 700 "$R"
+        \(RemoteProcess.check)
+        \(RemoteProcess.session)
         # One launch at a time; one left by a launch that was cut off goes after five minutes (a
         # launch takes three at most). Never one without it.
         i=0
@@ -1017,7 +1096,7 @@ public final class RemoteServer: @unchecked Sendable {
         # the Mac, the one it found to replace (another version, other settings), and only that
         # one, is stopped here, under the lock, so nothing starts one in between.
         old=$(sed -n 's/^{"pid":\\([0-9]*\\),.*/\\1/p' "$R/engine.json" 2>/dev/null)
-        if [ -n "$old" ] && kill -0 "$old" 2>/dev/null && grep -q "$K/engine/" "/proc/$old/cmdline" 2>/dev/null; then
+        if kuvo_runs "$old" "$K/engine/"; then
           \(boot ? "exit 0" : "[ \"$replace\" = \"$old\" ] || { echo \"An engine runs there now.\" >&2; exit 5; }")
           \(boot ? "" : stopAgentsScript)
           \(boot ? "" : "kill \"$old\"; n=0; while kill -0 \"$old\" 2>/dev/null && [ $n -lt 100 ]; do sleep 0.1; n=$((n + 1)); done; kill -0 \"$old\" 2>/dev/null && kill -9 \"$old\" 2>/dev/null; rm -f \"$R/engine.json\"")
@@ -1068,7 +1147,7 @@ public final class RemoteServer: @unchecked Sendable {
         # Bots' and sessions' folders under this root, for `kuvo-wake` (its default is the app's own root).
         export KUVO_BOTS="$K/bots" KUVO_WAKES="$K/wakes"
         cd "$K/workspace"
-        env -u KUVO_AGENTS_PASSWORD -u BUN_BE_BUN setsid "$K/engine/$V/opencode" serve --port "$port" --hostname 127.0.0.1 >"$R/engine.log" 2>&1 </dev/null &
+        env -u KUVO_AGENTS_PASSWORD -u BUN_BE_BUN "$S" "$K/engine/$V/opencode" serve --port "$port" --hostname 127.0.0.1 >"$R/engine.log" 2>&1 </dev/null &
         pid=$!
         i=0
         until grep -q "server listening" "$R/engine.log" 2>/dev/null; do
@@ -1089,21 +1168,24 @@ public final class RemoteServer: @unchecked Sendable {
 
     /// After a start from the Mac: how it started (but its port, passwords and keys), for
     /// `kuvo-start`, with the session's PATH, shell and language, which cron doesn't give it; and,
-    /// for Kuvo Code's own folder on a Linux machine, the crontab line that runs it after a
-    /// restart, added once. A crontab that can't be read is left as it is, never written over.
+    /// for Kuvo Code's own folder, what runs it after a restart, added once: the crontab line,
+    /// and on a Mac its launch agent too. A crontab that can't be read is left as it is, never
+    /// written over.
     private static var startAgainScript: String {
         """
         (umask 077; { printf '%s\\n' "$kuvo_env"; printf '%s' "$lines" | grep -v -E '^(OPENCODE_PASSWORD|KUVO_PORT|KUVO_RECORD|KUVO_AGENTS_PORT|KUVO_AGENTS_PASSWORD|KUVO_BOOT|KUVO_VERSION|KUVO_REPLACE|KUVO_START|KUVO_SETTINGS|\(privateSettingsVariable)|KUVO_KEY_[A-Za-z0-9_]*)='; } | grep -v '^$' >"$R/launch.env.new"; mv -f "$R/launch.env.new" "$R/launch.env")
         (umask 077; printf '%s' "$record" | sed -n 's/.*"notes":\\({[^}]*}\\).*/\\1/p' >"$R/launch.notes")
-        \(RemoteEngineInstaller.root == ".kuvo-code" ? rebootCrontabScript : "")
+        \(RemoteEngineInstaller.root == ".kuvo-code" ? rebootCrontabScript + "\n" + launchAgentScript : "")
         """
     }
 
     /// Adds `rebootLine` to the machine's crontab, once, keeping what's there; a crontab that
-    /// can't be read (for another reason than there being none) is left alone. Only on Linux.
+    /// can't be read (for another reason than there being none) is left alone. On a Mac, cron can
+    /// write it only where Remote Login has full disk access; it's what starts the box there with
+    /// nobody logged in, and where it can't, the launch agent starts it once someone is.
     static var rebootCrontabScript: String {
         """
-        if [ "$(uname -s)" = Linux ] && command -v crontab >/dev/null 2>&1; then
+        if command -v crontab >/dev/null 2>&1; then
           cron_now=$(crontab -l 2>"$R/.crontab.err"); cron_read=$?
           if [ $cron_read -eq 0 ] || grep -qi 'no crontab' "$R/.crontab.err" 2>/dev/null; then
             case "$cron_now" in
@@ -1116,11 +1198,50 @@ public final class RemoteServer: @unchecked Sendable {
         """
     }
 
+    /// The launch agent that starts the box as you log in to a Mac (automatically, on one set to):
+    /// its one file outside `~/.kuvo-code`, as the crontab line is on Linux. launchd reads it by itself.
+    static let launchAgent = "run.kuvo.code.machine"
+
+    /// The agent's file.
+    static var launchAgentPlist: String {
+        """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+        <key>Label</key><string>\(launchAgent)</string>
+        <key>ProgramArguments</key><array><string>/bin/sh</string><string>-c</string><string>exec sh "$HOME/\(RemoteEngineInstaller.root)/bin/kuvo-start"</string></array>
+        <key>RunAtLoad</key><true/>
+        <key>AbandonProcessGroup</key><true/>
+        </dict>
+        </plist>
+        """
+    }
+
+    /// Puts the launch agent in place on a Mac, once.
+    static var launchAgentScript: String {
+        """
+        if [ "$(uname -s)" = Darwin ] && [ ! -f "$HOME/Library/LaunchAgents/\(launchAgent).plist" ]; then
+          mkdir -p "$HOME/Library/LaunchAgents" && printf '%s\\n' \(SSHConnection.quoted(launchAgentPlist)) >"$HOME/Library/LaunchAgents/\(launchAgent).plist"
+        fi
+        """
+    }
+
+    /// Takes the launch agent away again.
+    static var launchAgentRemovalScript: String {
+        """
+        if [ "$(uname -s)" = Darwin ]; then
+          launchctl bootout "gui/$(id -u)/\(launchAgent)" >/dev/null 2>&1
+          rm -f "$HOME/Library/LaunchAgents/\(launchAgent).plist"
+        fi
+        """
+    }
+
     /// Takes `rebootLine` out of the machine's crontab as the machine is removed, keeping the
     /// rest: only from Kuvo Code's own folder (a test's or a demo copy's never added it, and
     /// leaves the app's).
     public static var rebootCrontabRemoval: String {
-        RemoteEngineInstaller.root == ".kuvo-code" ? crontabRemovalScript : ""
+        RemoteEngineInstaller.root == ".kuvo-code" ? crontabRemovalScript + "\n" + launchAgentRemovalScript : ""
     }
 
     static var crontabRemovalScript: String {
@@ -1218,14 +1339,14 @@ public final class RemoteServer: @unchecked Sendable {
           try=0
           while :; do
             : >"$R/agents.log"
-            KUVO_AGENTS_REMOTE=1 KUVO_AGENTS_HOME="$K/agents" KUVO_HOME="$K" KUVO_AGENTS_PORT="$aport" KUVO_ENGINE_PORT="$port" KUVO_ENGINE_PID="$pid" BUN_BE_BUN=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 setsid sh -c 'n=0; while kill -0 "$1" 2>/dev/null && [ $n -lt 5 ]; do s=$(date +%s); "$2" --config=/dev/null --no-env-file "$3" >>"$4" 2>&1 </dev/null; e=$?; [ $e -eq 98 ] && exit 98; [ $(($(date +%s) - s)) -ge 600 ] && n=0; n=$((n + 1)); sleep 5; done' kuvo-agents "$pid" "$K/engine/$V/opencode" "$K/bin/kuvo-agents.js" "$R/agents.log" </dev/null >/dev/null 2>&1 &
+            KUVO_AGENTS_REMOTE=1 KUVO_AGENTS_HOME="$K/agents" KUVO_HOME="$K" KUVO_AGENTS_PORT="$aport" KUVO_ENGINE_PORT="$port" KUVO_ENGINE_PID="$pid" BUN_BE_BUN=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 "$S" sh -c 'n=0; while kill -0 "$1" 2>/dev/null && [ $n -lt 5 ]; do s=$(date +%s); "$2" --config=/dev/null --no-env-file "$3" >>"$4" 2>&1 </dev/null; e=$?; [ $e -eq 98 ] && exit 98; [ $(($(date +%s) - s)) -ge 600 ] && n=0; n=$((n + 1)); sleep 5; done' kuvo-agents "$pid" "$K/engine/$V/opencode" "$K/bin/kuvo-agents.js" "$R/agents.log" </dev/null >/dev/null 2>&1 &
             apid=$!
             echo "$apid" >"$R/agents.pid"
             i=0; until grep -q '"url"' "$R/agents.log" 2>/dev/null || ! kill -0 "$apid" 2>/dev/null || [ $i -ge 100 ]; do sleep 0.1; i=$((i + 1)); done
             kill -0 "$apid" 2>/dev/null && break
             try=$((try + 1)); [ $try -ge 3 ] && break
             old=$aport; aport=$(( $(od -An -N2 -tu2 /dev/urandom | tr -d ' ') % 40000 + 20000 ))
-            sed -i "s/\\"agentsPort\\":$old\\([,}]\\)/\\"agentsPort\\":$aport\\1/" "$R/engine.json"
+            (umask 077; sed "s/\\"agentsPort\\":$old\\([,}]\\)/\\"agentsPort\\":$aport\\1/" "$R/engine.json" >"$R/engine.json.new" && mv -f "$R/engine.json.new" "$R/engine.json")
           done
         fi
         unset KUVO_AGENTS_PASSWORD
@@ -1237,7 +1358,7 @@ public final class RemoteServer: @unchecked Sendable {
     static var stopAgentsScript: String {
         """
         apid=$(cat "$R/agents.pid" 2>/dev/null)
-        if [ -n "$apid" ] && grep -q kuvo-agents "/proc/$apid/cmdline" 2>/dev/null; then kill -- "-$apid" 2>/dev/null || kill "$apid" 2>/dev/null; i=0; while kill -0 "$apid" 2>/dev/null && [ $i -lt 30 ]; do sleep 0.1; i=$((i + 1)); done; fi
+        if kuvo_runs "$apid" kuvo-agents; then kill -- "-$apid" 2>/dev/null || kill "$apid" 2>/dev/null; i=0; while kill -0 "$apid" 2>/dev/null && [ $i -lt 30 ]; do sleep 0.1; i=$((i + 1)); done; fi
         rm -f "$R/agents.pid"
         """
     }
@@ -1248,13 +1369,14 @@ public final class RemoteServer: @unchecked Sendable {
     static var stopScript: String {
         """
         K="$HOME/\(RemoteEngineInstaller.root)"; R="\(run)"
+        \(RemoteProcess.check)
         # COMPAT(0.7 keeper): a box whose kuvo-start has no off case, stopped the old way. Goes 3 months after 0.8.0.
         # Its keeper's script, if it's one that knows `off` (an older one would start the engine).
         if grep -q '^off)' "$K/bin/kuvo-start" 2>/dev/null; then sh "$K/bin/kuvo-start" off; exit 0; fi
         \(stopAgentsScript)
         [ -f "$R/engine.json" ] || exit 0
         pid=$(sed -n 's/^{"pid":\\([0-9]*\\),.*/\\1/p' "$R/engine.json")
-        [ -n "$pid" ] && grep -q opencode "/proc/$pid/cmdline" 2>/dev/null && kill "$pid"
+        kuvo_runs "$pid" opencode && kill "$pid"
         rm -f "$R/engine.json"
         """
     }

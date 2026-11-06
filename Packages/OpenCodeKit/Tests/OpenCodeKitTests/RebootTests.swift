@@ -8,8 +8,9 @@ import Testing
 /// day without the app too. Only a Stop stops it, until a Start. It keeps the phone link up while a
 /// phone is paired, sends wake-ups each minute, and goes when its script does. A start from the Mac
 /// keeps a stopped engine stopped, unless it's Start, and replaces one in the same start. Run
-/// here, in a home folder of the test's own, with a stand-in engine, and stand-ins for what Linux
-/// has that a Mac doesn't (`setsid`, `/proc`). The live suite does the same on a real machine.
+/// here, in a home folder of the test's own, with a stand-in engine, with what this computer has
+/// (on a Mac, no `setsid` and no `/proc`, as on a Mac you add as a machine). The live suite does
+/// the same on a real machine.
 @Suite(.serialized) struct RebootTests {
     let home: URL
     let tools: URL
@@ -20,18 +21,6 @@ import Testing
         home = FileManager.default.temporaryDirectory.appending(path: "opencodekit-reboot-\(UUID().uuidString)")
         tools = home.appending(path: "tools")
         try FileManager.default.createDirectory(at: tools, withIntermediateDirectories: true)
-        // `setsid` starts what it's given (a Mac has none); `grep` reads `/proc/<pid>/cmdline` as
-        // Linux has it, from `ps`.
-        try tool("setsid", #"exec "$@""#)
-        try tool("grep", """
-            n=$#; i=0; file=
-            for a in "$@"; do i=$((i + 1)); if [ $i -lt $n ]; then set -- "$@" "$a"; else file=$a; fi; done
-            shift $n
-            case "$file" in
-              /proc/[0-9]*/cmdline) pid=${file#/proc/}; pid=${pid%/cmdline}; ps -p "$pid" -o args= 2>/dev/null | /usr/bin/grep "$@" ;;
-              *) exec /usr/bin/grep "$@" "$file" ;;
-            esac
-            """)
         // The engine: says it's listening, notes how it was started, and runs until stopped. Run
         // with the phone link's script, it's the phone link: it notes its process, as that does;
         // asked for the engine's settings layer (`engine-config`), it gives one, around what it was
@@ -64,8 +53,7 @@ import Testing
         try write(run.appending(path: "launch.notes"), #"{"mac":"test-mac","settings":"abc"}"#)
         let bin = root.appending(path: "bin")
         try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
-        try write(bin.appending(path: "kuvo-start"), RemoteServer.bootScript, executable: true)
-        try write(bin.appending(path: "kuvo-launch"), RemoteServer.bootLaunchScript, executable: true)
+        for (name, text) in RemoteServer.bootFiles.files { try write(bin.appending(path: name), text, executable: true) }
         try write(bin.appending(path: ".kuvo-boot"), "1")
         // Its keys, which a restart keeps.
         let keys = root.appending(path: "keys")
@@ -74,6 +62,8 @@ import Testing
         try write(keys.appending(path: "settings.json"), #"{"mcp":{}}"#)
         // The keeper's rounds made quick (15 seconds each on a machine), each wake-up round counted.
         try tool("sleep", "exec /bin/sleep 0.02")
+        // Held awake, the way it can be seen: not this test's Mac for real.
+        try tool("caffeinate", "echo \"$*\" >>\"$HOME/awake\"; while :; do /bin/sleep 1; done")
         try write(bin.appending(path: "kuvo-wake"), "#!/bin/sh\necho >>\"$HOME/rounds\"\n", executable: true)
     }
 
@@ -489,6 +479,66 @@ import Testing
     }
 
     /// Removed: the keeper first, then the phone link and the engine, nothing started again.
+    /// On a Mac, whatever else is set: the box's running keeps it from sleeping, one hold at a time,
+    /// tied to the keeper (Linux has no `caffeinate`).
+    @Test func aRunningBoxHoldsItsMacAwakeOnce() throws {
+        defer { cleanUp() }
+        try ranBefore()
+        try start()
+        try until { running() != nil && keeper != nil && FileManager.default.fileExists(atPath: home.appending(path: "awake").path) }
+        let keeping = try #require(keeper)
+        try start("box")
+        // (A round or two of the keeper's, each quick here.)
+        let rounds = rounds()
+        until { self.rounds() > rounds + 2 }
+        let held = try String(contentsOf: home.appending(path: "awake"), encoding: .utf8).split(separator: "\n")
+        #expect(held == ["-s -w \(keeping)"])
+    }
+
+    /// What it starts leaves the connection that started it: a session of its own, so closing SSH
+    /// doesn't end it, on a Mac too, which has no `setsid` to run.
+    @Test func whatItStartsIsInASessionOfItsOwn() throws {
+        defer { cleanUp() }
+        try ranBefore()
+        try start()
+        until { running() != nil && keeper != nil }
+        let engine = try #require(running())
+        let keeping = try #require(keeper)
+        for pid in [engine.pid, keeping] {
+            #expect(getsid(pid_t(pid)) != getsid(0))
+            #expect(getsid(pid_t(pid)) == pid_t(pid))
+        }
+    }
+
+    /// A Mac starts it again at login with an agent of its own, in a form `launchd` reads, added once
+    /// and left as it is; and takes it out with the machine.
+    @Test func aMacsLaunchAgentIsAddedOnceAndTakenOut() throws {
+        defer { cleanUp() }
+        try tool("launchctl", "echo \"$*\" >>\"$HOME/launchctl\"")
+        func run(_ script: String) throws {
+            let process = Process()
+            process.executableURL = URL(filePath: "/bin/sh")
+            process.arguments = ["-c", script]
+            process.environment = ["HOME": home.path, "PATH": "\(tools.path):/usr/bin:/bin:/usr/sbin:/sbin"]
+            try process.run()
+            process.waitUntilExit()
+            #expect(process.terminationStatus == 0)
+        }
+        let plist = home.appending(path: "Library/LaunchAgents/\(RemoteServer.launchAgent).plist")
+        try run(RemoteServer.launchAgentScript)
+        try run("plutil -lint \(SSHConnection.quoted(plist.path)) >/dev/null")
+        let written = try #require(NSDictionary(contentsOf: plist))
+        #expect(written["Label"] as? String == RemoteServer.launchAgent)
+        #expect(written["RunAtLoad"] as? Bool == true)
+        #expect((written["ProgramArguments"] as? [String])?.last?.contains("bin/kuvo-start") == true)
+        try Data("kept".utf8).write(to: plist)
+        try run(RemoteServer.launchAgentScript)
+        #expect(try String(contentsOf: plist, encoding: .utf8) == "kept", "once")
+        try run(RemoteServer.launchAgentRemovalScript)
+        #expect(!FileManager.default.fileExists(atPath: plist.path))
+        #expect(try String(contentsOf: home.appending(path: "launchctl"), encoding: .utf8) == "bootout gui/\(getuid())/\(RemoteServer.launchAgent)\n")
+    }
+
     @Test func offStopsEverything() throws {
         defer { cleanUp() }
         try write(root.appending(path: "bin/kuvo-link.js"), "// the phone link\n")
