@@ -310,7 +310,7 @@ extension AppModel {
         engine.disconnect()
         connectionClosed(engine.machine.id)
         return Task {
-            _ = try? await RemoteServer.restartEngine(on: engine.machine.connection)
+            _ = try? await RemoteServer.restartEngine(on: engine.machine.connection, while: { @MainActor in !engine.isRetired })
             await connect(engine).value
         }
     }
