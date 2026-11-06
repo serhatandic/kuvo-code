@@ -272,6 +272,16 @@ test("start_session starts one where its conversation works, on its model and ap
   assert.equal(prompts[0].text, "[Message from Lead · ses_lead] (To answer, use send_message to ses_lead.)\n\nReview the docs.");
 });
 
+test("an agent the box can't place can't start a session on Autopilot by saying so; a client can", async () => {
+  const said = await tool("start_session", { task: "Spend it all.", autopilot: true, folder: project }, "ses_nowhere");
+  assert.equal(said.isError, false, said.text);
+  assert.equal(made.length, 1);
+  assert.equal(marked.get("ses_new1")?.kuvo?.autopilot, undefined);
+
+  assert.equal((await route("POST", "kuvo/sessions", { task: "Build it.", folder: project, title: "Asked", autopilot: true })).status, 200);
+  assert.equal(marked.get("ses_new2")?.kuvo?.autopilot, true);
+});
+
 test("a session started from a conversation in Plan mode plans too; one from a conversation that builds builds", async () => {
   sessions.get("ses_lead").agent = "plan";
   try {

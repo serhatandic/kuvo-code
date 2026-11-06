@@ -642,7 +642,7 @@ final class MachineBrowser {
         case .signIn(let username, let password): ["type": "signIn", "username": username ?? NSNull(), "password": password ?? NSNull()]
         case .code(let code): ["type": "code", "code": code]
         case .done: ["type": "done"]
-        case .declined, .timedOut: ["type": "declined"]
+        case .declined, .timedOut, .leftOnAutopilot: ["type": "declined"]
         }
         link?.fire("Kuvo.answer", ["id": id, "answer": value])
     }

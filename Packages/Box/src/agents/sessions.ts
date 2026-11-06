@@ -90,7 +90,7 @@ interface Live {
   /** Your messages being handed to the turn under way: not started meanwhile, and cancelled only once it's known the agent didn't take one. */
   steering: Map<string, { cancelled: boolean }>
   permissions: Map<string, { request: PermissionRequest; resolve: (decision: Decision) => void; turn?: Turn }>
-  forms: Map<string, { form: FormRequest; resolve: (answer: FormAnswer | null) => void }>
+  forms: Map<string, { form: FormRequest; resolve: (answer: FormAnswer | null) => void; declined?: (words: string) => void }>
   /** "Always allow" answers given in this session: an action, on these patterns. */
   always: { action: string; patterns: string[] }[]
   /** Closes its agents' processes once it has been idle a while. */
@@ -2663,9 +2663,10 @@ export class Sessions {
   private askQuestion(id: string, live: Live, turn: Turn, ask: QuestionAsk): Promise<FormAnswer | null> {
     const session = this.record(id).session
     if (turn.isEnded || refusesAsks(live.doing)) return Promise.resolve(null)
-    const form: FormRequest = { id: newID("frm"), sessionID: id, title: ask.title, metadata: { kind: "question" }, fields: ask.fields }
+    // (Its tool call, as the engine names a question's: a client finds its step by it.)
+    const form: FormRequest = { id: newID("frm"), sessionID: id, title: ask.title, metadata: { kind: "question", ...ask.metadata, ...(ask.toolCallID ? { tool: { id: ask.toolCallID } } : {}) }, fields: ask.fields }
     return new Promise((resolve) => {
-      live.forms.set(form.id, { form, resolve })
+      live.forms.set(form.id, { form, resolve, declined: ask.declined })
       emit("form.created", { form }, session.location.directory)
       ask.signal?.addEventListener("abort", () => {
         if (!live.forms.delete(form.id)) return
@@ -2680,11 +2681,13 @@ export class Sessions {
     return [...(this.live.get(id)?.forms.values() ?? [])].map((pending) => pending.form)
   }
 
-  replyForm(id: string, formID: string, answer: FormAnswer | null) {
+  /** Its answer, or null to turn it down; with `declined`, what the agent is told of that. */
+  replyForm(id: string, formID: string, answer: FormAnswer | null, declined?: string) {
     const live = this.live.get(id)
     const pending = live?.forms.get(formID)
     if (!live || !pending) throw new NotFound("That question was answered already.")
     live.forms.delete(formID)
+    if (answer === null && declined) pending.declined?.(declined)
     pending.resolve(answer)
     emit(answer ? "form.replied" : "form.cancelled", { id: formID, sessionID: id }, this.record(id).session.location.directory)
   }

@@ -8,7 +8,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isObject } from "../../shared/json";
 import { cut } from "../../shared/text";
-import { asked, call, peerPlaces } from "../engine/client";
+import { asked, call, engineGet, peerPlaces } from "../engine/client";
 import { sendInto } from "../engine/queue";
 import { boxNote } from "../../shared/queues";
 import { messageID } from "../engine/sessions";
@@ -17,10 +17,11 @@ import { LETTER_LIFE, placeOfSession } from "../letters/letter";
 import { tellMovedAway } from "../letters/outbox";
 import { frozen } from "../moves/records";
 import { isPutAway, type PutAwayable } from "../peers/directory";
-import { ANSWERED, describeForm, describePermission } from "../notices/news";
+import { ANSWERED, describeForm, describePermission, stillAsked } from "../notices/news";
 import { noteOversight } from "./oversight";
 import { noteWorkChanged, WORK_FOLDER } from "./changes";
 import { asksIn } from "./answers";
+import { catchUpAutopilot, declineSharedOnAutopilot, goAheadOnAutopilot, isAutopilot } from "./autopilot";
 import { settleAsk } from "./goals";
 import { awaitedBy } from "./awaited";
 import { tellLateAnswers } from "./asks";
@@ -52,6 +53,7 @@ interface Waiting {
 export interface WorkEvent {
   type: string;
   data?: Partial<PermissionAsked> & { sessionID?: string; form?: EngineForm; requestID?: string };
+  location?: { directory?: string };
 }
 
 const readWaiting = (file: string): Record<string, Waiting> => {
@@ -429,7 +431,10 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
     const timer = schedule(() => catchingUp(), CATCH_UP_AGAIN);
     (timer as { unref?: () => void } | undefined)?.unref?.();
   });
-  const caughtUp = Promise.all([catchingUp(), tellLateAnswers(targets, undefined, bridgeRuns).catch(() => {})]).then(() => {});
+  // (Questions its conversations on Autopilot asked meanwhile go ahead first: no one is told of
+  // those.)
+  const caughtUp = catchUpAutopilot(source, undefined, signal).catch(() => {})
+    .then(() => Promise.all([catchingUp(), tellLateAnswers(targets, undefined, bridgeRuns).catch(() => {})])).then(() => {});
   // Answers given late that waited (the coding agents' bridge not running), tried again every few
   // minutes while the box runs.
   const lateAgain = () => {
@@ -454,6 +459,8 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
   const told = (event: WorkEvent) => {
     const id = event.data?.sessionID ?? event.data?.form?.sessionID;
     if (typeof id !== "string" || !["session.execution.started", "session.execution.succeeded", "session.execution.failed", "session.execution.interrupted", "permission.asked", "form.created", "permission.replied", "form.replied"].includes(event.type)) return Promise.resolve();
+    // What an MCP server asks is filed under no session.
+    if (id === "global") return event.data?.form ? declineSharedOnAutopilot(source, event.data.form as unknown as Record<string, unknown>, event.location?.directory).then(() => {}, () => {}) : undefined;
     return (async () => {
       // A subagent's ask is its conversation's.
       let session = await sessionOf(id);
@@ -461,6 +468,14 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
       if (!session || (session.id !== id && event.type.startsWith("session.execution"))) return;
       const bot = worksFor(session)?.bot;
       if (bot) noteWorkChanged(bot);
+      // On Autopilot nothing waits: a question goes ahead on the choice it marks, or comes back declined.
+      const form = event.type === "form.created" ? event.data?.form ?? event.data as unknown as EngineForm : null;
+      if (form && isAutopilot(session)) {
+        const asked = { ...form, sessionID: form.sessionID ?? id };
+        if (await goAheadOnAutopilot(source, session, asked).catch(() => null)) return;
+        // Gone before it could be answered (you got there first): nothing to put to anyone.
+        if (!await stillAsked(asked, route => engineGet(source, route))) return;
+      }
       // One of a bot's sessions done: for clients to show it seeing that.
       if (bot && event.type === "session.execution.succeeded") noteOversight(bot, session.id, "finished");
       const starter = startedByOf(session);

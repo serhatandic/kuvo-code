@@ -45,6 +45,7 @@ const sessions = {
   ses_sub: { id: "ses_sub", parentID: "ses_ship", title: "A subagent", location: { directory: path.join(home, "bots", "bot_ship", "workspace") } },
   ses_scout: { id: "ses_scout", title: "Scout", location: { directory: path.join(home, "bots", "bot_scout", "workspace") } },
   ses_shop: { id: "ses_shop", title: "Fix checkout", location: { directory: project } },
+  ses_away: { id: "ses_away", title: "On Autopilot", location: { directory: project }, metadata: { kuvo: { autopilot: true } } },
 };
 let engine;
 // The tool calls each session's engine says are running now: a vault call is answered only as one
@@ -667,6 +668,46 @@ test("an SSH key you keep for a project signs through its conversations' own age
     noteConversation(wrong, project);
     await sshAgentFor(folderNote(path.join(project, "api")), path.join(project, "api"));
     assert.equal(socketOf(wrong), null);
+    // On Autopilot a key it may use only by asking signs nothing, at once, and you aren't asked.
+    const askFirst = path.join(root, "ask-first");
+    assert.equal((await sshTool("ssh-keygen", ["-q", "-N", "", "-t", "ed25519", "-C", "ask-first", "-f", askFirst])).status, 0);
+    const kept = await fromMac("POST", "kuvo/vault/items", { name: "Ask-first key", kind: "key", values: { private_key: fs.readFileSync(askFirst, "utf8") } }, key);
+    fs.rmSync(askFirst);
+    await fromMac("POST", "kuvo/vault/grants", { item: kept.value.item.id, who: { everyone: true }, how: "ask" }, key);
+    fs.writeFileSync(path.join(root, "commit"), "a commit\n");
+    const undone = await sshTool("ssh-keygen", ["-Y", "sign", "-n", "git", "-f", `${askFirst}.pub`, path.join(root, "commit")], await sshAgentFor("ses_away", project));
+    assert.notEqual(undone.status, 0, "nothing signed");
+    assert.deepEqual((await fromMac("GET", "kuvo/vault/asks", undefined, key)).value.asks ?? [], []);
+    // Signing again and again is one thing left, in your vault's activity.
+    assert.notEqual((await sshTool("ssh-keygen", ["-Y", "sign", "-n", "git", "-f", `${askFirst}.pub`, path.join(root, "commit")], await sshAgentFor("ses_away", project))).status, 0);
+    const noted = (await fromMac("GET", "kuvo/vault/activity", undefined, key)).value.entries.filter(each => each.how === "autopilot" && each.itemName === "Ask-first key");
+    assert.equal(noted.length, 1);
+    // Turned back to Interactive, it asks you again at once: being left undone wasn't your no.
+    const metadata = sessions.ses_away.metadata;
+    delete sessions.ses_away.metadata;
+    const again = sshTool("ssh-keygen", ["-Y", "sign", "-n", "git", "-f", `${askFirst}.pub`, path.join(root, "commit")], await sshAgentFor("ses_away", project));
+    const [card] = await box.asks();
+    assert.equal((await fromMac("POST", `kuvo/vault/asks/${card.id}`, { answer: "once" }, key)).status, 200);
+    assert.equal((await again).status, 0);
+    fs.rmSync(path.join(root, "commit.sig"));
+    sessions.ses_away.metadata = metadata;
+    // A command of yours in a bot's folder is yours: its bot on Autopilot doesn't leave it undone,
+    // though that bot's own, started after it and watched the same way, is.
+    const inScout = path.join(home, "bots", "bot_scout", "workspace");
+    const sign = (file, socket) => sshTool("ssh-keygen", ["-Y", "sign", "-n", "git", "-f", `${askFirst}.pub`, path.join(root, file)], socket);
+    fs.writeFileSync(path.join(root, "commit-agent"), "a commit\n");
+    const yours = sign("commit", await sshAgentFor(folderNote(inScout), inScout));
+    const [mine] = await box.asks();
+    const scoutsOwn = sign("commit-agent", await sshAgentFor("ses_scout", inScout));
+    while ((await box.asks()).length < 2);
+    sessions.ses_scout.metadata = { kuvo: { autopilot: true } };
+    assert.notEqual((await scoutsOwn).status, 0, "its bot's is left undone");
+    delete sessions.ses_scout.metadata;
+    assert.equal((await fromMac("POST", `kuvo/vault/asks/${mine.id}`, { answer: "once" }, key)).status, 200, "it still waits for you");
+    assert.equal((await yours).status, 0);
+    fs.rmSync(path.join(root, "commit.sig"));
+    fs.rmSync(path.join(root, "commit-agent"));
+    assert.equal((await fromMac("DELETE", `kuvo/vault/items/${kept.value.item.id}`, undefined, key)).status, 200);
     // Paused, the conversation's agent offers nothing either.
     await fromMac("POST", "kuvo/vault/pause", { paused: true, bot: "ses_shop" }, key);
     assert.equal((await sshTool("ssh-add", ["-l"], await sshAgentFor("ses_shop", project))).status, 1, "paused");

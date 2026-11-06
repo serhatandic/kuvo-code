@@ -16,6 +16,9 @@ struct NativeMenuButton<Label: View>: View {
     @State private var anchor = NativeMenuAnchor()
 
     var body: some View {
+        #if DEBUG
+        let _ = anchor.demoMenu = menu
+        #endif
         Button {
             // After the press: a menu's loop run inside it would hold up VoiceOver's press until it closed.
             Modal.later { anchor.popUp(menu(), below: opensBelow) }
@@ -30,8 +33,9 @@ struct NativeMenuButton<Label: View>: View {
         .task {
             // KUVO_DEMO_MENU=<name> opens this menu (its first submenu with "<name>s") after launch.
             guard let wanted = ProcessInfo.processInfo.environment["KUVO_DEMO_MENU"], !name.isEmpty, wanted == name || wanted == name + "s" else { return }
-            try? await Task.sleep(for: .seconds(3))
-            let menu = menu()
+            try? await Task.sleep(for: .seconds(Double(ProcessInfo.processInfo.environment["KUVO_DEMO_MENU_AFTER"] ?? "") ?? 3))
+            // (As it is by then, as a click would build it: what this task caught is from the first draw.)
+            let menu = (anchor.demoMenu ?? menu)()
             // Outside this task: a menu's loop run inside one holds up every other until it closes.
             Modal.later { anchor.popUp(wanted == name ? menu : menu.items.first { $0.submenu != nil }?.submenu ?? menu, below: opensBelow) }
         }
@@ -46,6 +50,10 @@ final class NativeMenuAnchor {
     /// The value a row shows on its right ("No limit ⌄"): its menu opens there, as a pop-up
     /// button's does, with the chosen item over it, wherever on the row you clicked.
     weak var value: NSView?
+    #if DEBUG
+    /// The button's menu as last drawn, for the KUVO_DEMO_MENU debug hook.
+    var demoMenu: (() -> NSMenu)?
+    #endif
 
     /// Opens the menu over the label's value, with its chosen item there (one is checked); else
     /// just above the button (the composer sits at the bottom of the window), or just below it.

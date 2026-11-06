@@ -877,8 +877,9 @@ beside it.
   takes it away; taken up, it goes; `app: null` takes the step's away), `add?: [text | {text, detail?, site?, app?, after?}]`, `waiting?: {kind: you|judgment|outside, text,
   detail?, url?, app?, step?}` (`step`, the step it holds up by number: it goes once the bot takes
   that step up or ends it, marking it doing, done or skipped), `resolved?: [id or words]` (what waited and is dealt with), `spent?: [{what,
-  amount}]` (one on no spend line is kept as waiting, kind `outside`), `watching?: [text]}`; all
-  checked before any is kept; it says whether you're here); `may_spend` (`{what,
+  amount}]` (one on no spend line is kept as waiting, kind `outside`), `watching?: [text]`,
+  `decided?: {text, choice, why?, options?: [text]}` (a call the bot made on its own, bridge
+  0.9.199)}; all checked before any is kept; it says whether you're here, and how the goal runs); `may_spend` (`{what,
   amount}`: whether it fits the line's cap in its period now); `finish_goal` (`{report, watching?}`).
   `start_session` takes `step` (its number or id), and that step's track lists the session.
 - **Asked for**: `POST kuvo/work/goals/ask` `{session, goal}` (`/goal` in a bot's chat, from a
@@ -888,11 +889,13 @@ beside it.
   reads as you typed it, then (bridge 0.9.191) lines on how to plan it as a lead whose sessions do
   the work, which clients leave out with the block. One a box sent before 0.9.143 is `[Goal] <words>` then a note in
   parentheses; `SentWithKeyword.split` reads it the same way.
-- **Only you start it**: `POST kuvo/work/goals/<id>` from a client, `{action: start, wake?, digest?, ends?, spend?: [{cap?, per?}] (by line)}`, `{action: decline}` or `{action:
+- **Only you start it**: `POST kuvo/work/goals/<id>` from a client, `{action: start, mode?, wake?, digest?, ends?, spend?: [{cap?, per?}] (by line)}`, `{action: decline}` or `{action:
   stop}` (and `{action: projects}`, below) → `{goal}` (`ends: null` starts it with no end, taking away the one the bot proposed; left
   out, the bot's stands); while it runs, `{action: change, …the same but start's}` (a cap raised past what's
-  spent lets what spends go on; the bot is told `[Goal changed] …`) and `{action: clear, waiting:
-  <id>}` (what waited, put away). An end written without a zone (`2026-11-30T18:00`) is in yours
+  spent lets what spends go on; the bot is told `[Goal changed] …` once a limit is given, or the
+  mode is another than it was), `{action: clear, waiting:
+  <id>}` (what waited, put away) and `{action: decided, decided: <id>, choice}` ("Interactive or
+  Autopilot", below). An end written without a zone (`2026-11-30T18:00`) is in yours
   (`KUVO_TZ`, else the computer's). Never a tool, an agent's message or another computer's mail. 400 for one in the
   wrong state or a card from more than a day ago; 404 for none; 409 for starting one (or asking
   for one) while its bot moves to another computer (a goal stays on the box it started on, and a
@@ -917,7 +920,8 @@ beside it.
   draft until you switched it on), projects, wake, digest,
   ends?, proposed, started?, ended?, waiting: [{id, kind: you|judgment|outside|ask, text, detail?,
   url?, site?, app?: {name, id?}, session?, step?, at}], paused: [{why, until?, session?}], waited, watching, next?, lastDigest?: {at, text},
-  report?, alone, folders?: [{project, folder: path|null, shown: path|null, there?}]}]}` (`next`: when it goes on next, while nothing of it is at work and nothing can be
+  report?, mode: interactive|autopilot, decided: [{id, text, choice, why?, options?, multiple?, session?, at,
+  yours?: {choice, at}}], alone, folders?: [{project, folder: path|null, shown: path|null, there?}]}]}` (`next`: when it goes on next, while nothing of it is at work and nothing can be
   before a time: the bot's soonest wake-up, or the steps it put off; clients say "Next: Mon 09:00"): each bot's latest, while it's proposed or running, or ended within a day. Kept
   in `run/work/goals.json`; `kuvo/work/events` moves too. While it's proposed, the box's own checks
   come first: `alone` (failed where this box can't work on it alone yet), `power` (a Mac on battery),
@@ -931,6 +935,33 @@ beside it.
   it) is where it's done, and its mark is that site's own icon, which each client loads from the
   site itself; a step done on the computer has none, so no mark. `phase` is still kept from older
   bots, and the apps don't show it.
+- **Interactive or Autopilot** (bridge 0.9.199, feature `autopilot`): how the bot runs it,
+  `mode`, set as you start it (`interactive` unless you say) and changed while it runs (`{action:
+  change, mode}`); a goal kept from before runs Interactive. It never changes what the goal's
+  conversations may do (their own modes, Auto or Full Access), nor what it may spend (the plan's
+  lines). The bot is told how to run it in `[Goal started] …`, and again in `[Goal changed] The user
+  switched the goal to …` (a box note, `Now Autopilot`), and each `goal_progress` says it:
+  - **Interactive**: it asks you the calls that are yours (taste and brand, options its research
+    leaves close, a change of scope), gathered into one with its recommendation, keeping them as
+    waiting (kind `judgment`) while other steps can go on; it decides the rest itself, and never
+    asks you to approve its work;
+  - **Autopilot**: it decides whatever its research settles, keeps each call with `goal_progress`
+    `decided`, and goes on; it takes the plan's steps all the way, publishing, submitting, posting
+    and sending included (your Start approved them); it stops only at what only you can do (paying
+    on your own account, signing in, making an account, handing over a key), kept as waiting while
+    it carries on with the rest. A question the bot asks with the question tool (`metadata.kind:
+    question`) that marks a choice `(Recommended)` in each field it needs (one of a list; any of a
+    multiselect) goes ahead on it on the box's next look instead of waiting for you: the bot's own
+    at once, its sessions' once the bot has had its couple of minutes; the box answers the form
+    with it (`POST …/form/<id>/reply`) and keeps it in `decided` (with `session`, the choice's
+    description as `why`, and the choices there were as `options`). A question with none, and any
+    permission, waits for you as on Interactive; nothing is answered while you have the goal
+    paused.
+  - `decided` lists the calls it made on its own, the newest 60. `{action: decided, decided: <id>,
+    choice}` is your choice on one (`yours`): the same as the bot's confirms it, and the bot isn't
+    told; another tells it `[Decision changed] For "<call>" the user picked "<yours>", not "<its>" …`
+    (a box note, `You picked <yours>`), to go that way from there. 404 for a call it doesn't have,
+    400 without a choice or once the goal isn't running.
 - **Apps** (bridge 0.9.196, feature `work.goals.apps`, `work/apps.ts`): a step, or what waits, done
   in an app on the computer names it (`app`, "Xcode"). The box looks for it on its own computer as
   the tool is called, once the call has passed its own checks (a call that's refused has nothing
@@ -994,7 +1025,8 @@ beside it.
     to; it leaves the list as soon as it's answered or skipped (the engine's `form.replied`,
     `form.cancelled` or `permission.replied`), and clients are told the work changed; a client
     leaves the bot's own question out of the bar in the bot's own conversation, where it's the
-    question card (`GoalPlan.waitingInItsConversation`);
+    question card (`GoalPlan.waitingInItsConversation`) (on Autopilot, a question that recommends
+    a choice goes ahead on it instead: "Interactive or Autopilot");
   - a session the bot starts for a goal is told you may not be watching: what it asks can wait,
     so it carries on with what doesn't depend on it (before bridge 0.9.189 it was also told not to
     publish, deploy, send or pay, and publishing and deploying asked in the bot's conversation and
@@ -2513,6 +2545,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `work.goals` | a bot's goal ("Work", Goals): `kuvo/work/goals…`, and its tools (bridge 0.9.122) |
 | `work.goals.apps` | `app` on a goal's steps and what waits, and `GET kuvo/work/apps/icon` ("Work", Goals, Apps; bridge 0.9.196) |
 | `work.goals.projects` | `{action: projects}` on a proposed goal ("Work", Goals, Its projects; bridge 0.9.196) |
+| `autopilot` | `kuvo/sessions/<id>/autopilot`, `autopilot` in `POST kuvo/sessions`: a conversation on Autopilot, its questions with a recommendation going ahead ("Autopilot"; bridge 0.9.200); a goal's `mode` and `decided`, `mode` on start and change, `{action: decided}` ("Work", Goals, Interactive or Autopilot) |
 | `work.projects` | a bot's projects ("Work", Projects): `make_project`, `list_projects`, `kuvo/work/asks`, `…/events`, `POST kuvo/work/asks/<id>`, `kuvo/work/settings`, `POST kuvo/projects/new`, `madeBy` on projects, `allowed` in `kuvo/bots` (bridge 0.9.107) |
 | `work.unanswering` | `GET kuvo/work/unanswering`: models that can't answer now ("Work", Models that can't answer; bridge 0.9.198) |
 | `search` | `kuvo/search` |
@@ -3456,6 +3489,87 @@ one the box marked as in Full Access, which runs (bridge 0.9.187).
   by now as seen there and on every other client (`approval.seen`). 400 without any of these, 500
   where it couldn't be kept. Kept in the box's folder
   (`box/reviews/<session>.json`), for any client, and deleted with the session.
+
+### Autopilot
+
+Whether a conversation's agent decides for itself or asks you (`autopilot` in `features`, bridge
+0.9.200): a conversation, a chat or a bot's conversation and the sessions it starts. It's beside
+the conversation's approval, never part of it: approval says what may run without asking, Autopilot
+what may be decided without asking. Every conversation is Interactive until it's turned on.
+
+- `GET kuvo/sessions/<id>/autopilot`: `{autopilot, decided}`, the calls it made, the latest last
+  (each `{id, text, choice, why?, options?, multiple?, session?, call?, at, yours?}`: the question's
+  form (`<form>/<field>` where a form asks several, each a call of its own), what it asked, the choice
+  it went with and why, the choices it had (`multiple`: it takes several, joined with ", "), the session that asked where it's
+  a subagent's, the tool call that asked it (the form's `metadata.tool.id`, where it has one: a
+  client shows the call at that step; a subagent's at the subagent, and one with no step here under
+  the conversation), and your choice since). 404 where there's no such
+  conversation. The agents bridge's questions carry `metadata.tool.id` too, as the engine's do, and
+  what isn't its agent's question keeps its kind there (an MCP server's form, `mcp-elicitation`).
+- `PUT kuvo/sessions/<id>/autopilot` `{autopilot: bool}`: on or off; the answer as `GET`'s. It's
+  kept with the conversation (`metadata.kuvo.autopilot`, false once off), and its agent is told how
+  to work in its instructions (`kuvo.autopilot`), taken out again when it's turned off: decide what
+  its own research settles; what only you can do (paying, signing in, making an account, handing
+  over a key, anything destructive that can't be undone) never gets asked: it leaves that step undone,
+  carries on and lists what's left in its final reply. It marks the choice it recommends in anything
+  else it asks.
+  Its agent is told before it's marked on, and it's marked off before its agent is told: 502 where
+  the engine didn't take it, and the conversation stays as it was. Turned on, what it asks already
+  goes ahead or comes back declined then.
+- On Autopilot, a question the conversation's agent or one of its subagents asks with the question
+  tool that marks a choice `(Recommended)` in each field it needs goes ahead on that choice at
+  once: the box answers the form (`POST …/form/<id>/reply`) and keeps it in `decided`; your phones
+  aren't told of it, and a session that started it isn't woken for it. Nothing waits for you: one
+  that marks none, asks for a secret (a field with `format: "password"`) or isn't the question tool's
+  (an MCP server's form) comes back declined (`DELETE …/form/<id>?message=`), with nothing chosen or
+  filled in and words telling its agent to leave that step undone and go on; a coding agent hears those
+  words (Claude Code as why it was denied, Codex and Grok as its answer, an engine model as the engine's
+  decline), except Antigravity, which can only hear it was cancelled, though its step keeps the words. One that's still asked once the box has looked (the engine didn't take it, or you
+  have its goal paused) waits for you, and they're told. What its conversations asked while the box
+  couldn't hear (it started again, or its engine did) is dealt with as it catches up. What an MCP
+  server asks in a folder, filed under no session (`global`), is declined only where it holds nothing
+  but conversations on Autopilot (a tool of that server at work in them, and in no other there). So
+  is a sign-in, a code or a step the browser would ask you for, or anything the vault would: each comes
+  back at once, left undone, and a project it would ask you about stays asked while it carries on.
+  What it was already waiting on when Autopilot is turned on stops waiting the same way, within a few
+  seconds. A coding agent's engine run (Auto's, `kuvo.engineFor`) counts as the conversation it runs for.
+  The vault's activity keeps a use left undone as `refused`, `how: "autopilot"`, and an SSH command of
+  yours (by its folder, not an agent's) isn't left undone, even in a bot's folder. A sign-in the vault
+  lets it use on its own still goes ahead. Its permissions are its approval's, and wait as ever. A step
+  turned down this way is a failed `question` tool with those words, which clients show as set aside;
+  Grok's completes under its own name, with the words as its answer, and Codex's `requestUserInput` is
+  no step at all, so neither shows it. Codex asking again and again, turned down each time, ends its
+  turn on the third; a question of its for a secret is answered with nothing, not the words.
+- `POST kuvo/sessions/<id>/autopilot/asked` `{form}`: whether a question asked in the conversation
+  or by one of its subagents waits on you: `{waiting: bool}`. A client that hears a question asked in
+  a conversation on Autopilot asks this before it counts or notifies, and goes by the answer: it
+  doesn't read the question's marks. The box deals with it first, whichever comes first, so the answer
+  needs no waiting. False once it's gone; true for what your paused goal or the engine leaves asked, or
+  what the engine won't list. A client that gets no answer (the box is unreachable, or from before
+  this) treats it as waiting, like any question.
+- `POST kuvo/sessions/<id>/autopilot` `{decided: <its id>, choice}`: your choice on a call it
+  made, kept as `yours`. The one it goes by now (your last, else its own) confirms it quietly;
+  another tells the conversation `[Decision changed] For "…" the user picked "…", not "…" as you
+  decided. …` (`… the user now picked "…", not "…".` after a choice of yours; a box note, `You picked
+  …`). The agent's words are quoted on one line, so they can't pass for the box's. 404 where there's no such call, 502 where the engine didn't take it (your choice isn't kept: make it again).
+- A session a conversation starts (`start_session`) takes its Autopilot, and a client can start one
+  on it with `autopilot: true` in `POST kuvo/sessions`.
+- A bot's goal and its bot's conversation are one setting: a goal started or switched to a `mode`
+  ("Work", Goals, Interactive or Autopilot) puts the conversation and the sessions at the goal on
+  it (what the switch can't reach, the box's next look does), and the conversation turned on or off
+  here switches its running goal (the bot told as for `{action: change, mode}`). One of those
+  sessions turned on or off by itself stays so until the goal's next switch. When the goal ends
+  (stopped, finished, or its end come), they go back to Interactive, unless the conversation was on
+  Autopilot before it started. A call
+  made in its conversation, or its work's, shows in the goal's `decided` too
+  (`ask:<conversation>:<form>`), as one call: your choice on it, on the goal
+  (`{action: decided, decided, choice}`) or here, shows on both and tells the conversation that
+  asked. While you have the goal paused, nothing goes ahead.
+- It goes with a conversation: carried on with the coding agents (a model of theirs picked) or moved
+  to another computer, it stays on Autopilot there, its agent told, and its calls come along
+  (`run/work/decided.json`; `decided` in a move's bundle).
+- On the coding agents, Claude Code's, Codex's and Grok's questions go ahead the same way; Cursor
+  can't ask, so Autopilot changes nothing there but what its agent is told.
 
 ### Sandbox
 
