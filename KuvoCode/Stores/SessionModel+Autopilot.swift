@@ -62,6 +62,8 @@ struct AutopilotShown: Decodable, Equatable {
     var decided: [Call]
 
     static let symbol = "airplane"
+    /// Its entry in a conversation's instructions, as its box sets it (`AUTOPILOT_ENTRY`).
+    static let instructionKey = "kuvo.autopilot"
     static let detail = "Decides for itself; leaves what needs you for the end"
 
     /// Whether a conversation is kept on Autopilot (`metadata.kuvo.autopilot`), until its box says.

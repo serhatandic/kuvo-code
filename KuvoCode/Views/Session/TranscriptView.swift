@@ -530,9 +530,9 @@ struct TranscriptView: View {
                 var shown: Row?
                 if !sources.isEmpty, sources.allSatisfy({ $0.contains(ProjectFolders.instructionKey) }) {
                     shown = .notice(notice.id, "folder", "Project folders updated")
-                } else if !sources.isEmpty, sources.allSatisfy({ $0.hasPrefix("core/") || $0.contains(Workspace.worktreeInstructionKey) || $0.contains(Bots.instructionKey) }) {
+                } else if !sources.isEmpty, sources.allSatisfy({ $0.hasPrefix("core/") || $0.contains(Workspace.worktreeInstructionKey) || $0.contains(Bots.instructionKey) || $0.contains(AutopilotShown.instructionKey) }) {
                     // The engine's own guidance (for the browser tools, say), or what Kuvo Code
-                    // adds for a worktree or a bot: nothing you set.
+                    // adds for a worktree, a bot or Autopilot: nothing you set.
                     break
                 } else if notice.metadata?["source"]?.string == "shell" {
                     // A command the agent left running in the background ended, which wakes it.
