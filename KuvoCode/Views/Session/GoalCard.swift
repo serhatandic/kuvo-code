@@ -332,7 +332,7 @@ struct GoalCard: View {
                 // How it runs first: its one setting with the bot's conversation, where its
                 // computer has Autopilot.
                 if offersAutopilot {
-                    GoalSettingRow(symbol: AutopilotShown.symbol, title: "Autopilot", subtitle: AutopilotShown.detail) {
+                    GoalSettingRow(symbol: AutopilotShown.symbol, title: "Autopilot") {
                         Toggle("Autopilot", isOn: $autopilot)
                             .toggleStyle(.switch)
                             .controlSize(.small)

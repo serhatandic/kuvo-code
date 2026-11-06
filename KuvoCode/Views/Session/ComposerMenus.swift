@@ -313,7 +313,7 @@ struct AutopilotChip: View {
         }
         .buttonStyle(.plain)
         .clickablePointer()
-        .help("Autopilot: it decides for itself and stops only for what needs you. Click to ask you again, or type /autopilot.")
+        .help("Autopilot")
         .accessibilityLabel("Autopilot")
         .accessibilityHint("Goes back to Interactive")
         .accessibilityAddTraits(.isButton)
