@@ -22214,7 +22214,7 @@ async function startSession(given, by, place) {
   const title = typeof given.title === "string" && given.title.trim() ? given.title.trim() : null;
   const rules = rulesFor(applied, parent, project?.folders ?? []);
   const agent = given.mode === "plan" || given.mode === "build" ? given.mode : parent?.agent ?? null;
-  const autopilot = by?.place ? isAutopilot(by.place.data) : given.autopilot === true;
+  const autopilot = by ? Boolean(by.place && isAutopilot(by.place.data)) : given.autopilot === true;
   const marks = { ...by?.place ? { startedBy: by.session } : {}, ...asBefore ? {} : { approval: wanted, applied }, ...autopilot ? { autopilot: true } : {} };
   let session;
   try {

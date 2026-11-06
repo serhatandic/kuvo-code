@@ -380,8 +380,9 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   const rules = rulesFor(applied, parent, project?.folders ?? []);
   // Its mode: the one asked for, else the conversation's (one that plans starts sessions that plan).
   const agent = given.mode === "plan" || given.mode === "build" ? given.mode : parent?.agent ?? null;
-  // On Autopilot where its starter is (or a client asked for it): it decides as its starter does.
-  const autopilot = by?.place ? isAutopilot(by.place.data) : given.autopilot === true;
+  // On Autopilot where its starter is, or where a client asked. An agent's word isn't enough: one
+  // the box can't place starts it asking.
+  const autopilot = by ? Boolean(by.place && isAutopilot(by.place.data)) : given.autopilot === true;
   // (Kept with it as it's made, so the box never takes it for one a client made without saying.)
   const marks = { ...(by?.place ? { startedBy: by.session } : {}), ...(asBefore ? {} : { approval: wanted, applied }), ...(autopilot ? { autopilot: true } : {}) };
   let session: string;
