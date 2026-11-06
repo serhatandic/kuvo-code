@@ -228,6 +228,7 @@ test("while the vault asks you about a sign-in, other conversations keep browsin
 });
 
 test("on Autopilot nothing asks you while it browses: a sign-in, a code, a step or an item from the vault come back at once, left undone, a subagent's too", async () => {
+  pages.login.filled = [];
   const leftUndone = answer => {
     assert.equal(answer.isError, false, answer.content[0].text);
     assert.match(answer.content[0].text, /This is on Autopilot: nothing was put to the user/);
