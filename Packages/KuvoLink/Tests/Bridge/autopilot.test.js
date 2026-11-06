@@ -43,6 +43,7 @@ let prompts;
 let refusesPrompts;
 let refusesAnswers;
 let followers = [];
+const followed = new Set();
 const engine = http.createServer((request, response) => {
   let body = "";
   request.on("data", chunk => { body += chunk; });
@@ -73,6 +74,9 @@ const engine = http.createServer((request, response) => {
     if (form && request.method === "POST") {
       if (refusesAnswers) return reply({ message: "Not now." }, 500);
       const asker = decodeURIComponent(form[1]);
+      // As the engine does: what's no longer asked can't be answered. (The box looks at what waits
+      // as it connects too, and a look begun in one test can arrive in the next.)
+      if (followed.has(decodeURIComponent(form[2])) && !waiting.get(asker)?.some(each => each.id === decodeURIComponent(form[2]))) return reply({ message: "No such form." }, 404);
       answered.push({ session: asker, form: decodeURIComponent(form[2]), answer: given.answer });
       waiting.set(asker, (waiting.get(asker) ?? []).filter(each => each.id !== decodeURIComponent(form[2])));
       return reply({ data: true });
@@ -363,6 +367,7 @@ async function telling() {
   link.watchEvents(() => source, notice => { told.push(notice); return true; }, stop.signal, () => {}, { work: "engine" });
   while (!followers.length) await new Promise(setImmediate);
   const ask = form => {
+    followed.add(form.id);
     waiting.set(form.sessionID, [...(waiting.get(form.sessionID) ?? []), form]);
     for (const each of followers) each.write(`data: ${JSON.stringify({ id: `evt_${form.id}`, type: "form.created", data: { form } })}\n\n`);
   };
@@ -407,22 +412,27 @@ test("a deleted conversation's calls go with it, and what's kept of a long quest
   done();
 });
 
-test("your phone is told of a question that marks a choice but waits after all: the engine didn't take the answer, or you have its goal paused", async () => {
-  const { told, ask, heard } = await telling();
+test("your phone is told of a question that marks a choice when the engine doesn't take the answer; not of one that went ahead", async () => {
+  const { told, ask, heard, done } = await telling();
   ask(QUESTION("frm_went", "ses_away", ROASTS));
   while (!answered.length) await new Promise(setImmediate);
+  // (It stays refused: the box may well try what still waits again, and that would be right.)
   refusesAnswers = true;
   ask(QUESTION("frm_refused", "ses_away", ROASTS));
   await heard(1);
-  assert.equal(told[0].data.request, "frm_refused");
-  refusesAnswers = false;
+  assert.deepEqual(told.map(each => each.data.request), ["frm_refused"]);
+  assert.deepEqual(answered.map(each => each.form), ["frm_went"]);
+  done();
+});
 
+test("your phone is told of a question that marks a choice while you have its goal paused, and it waits", async () => {
+  const { told, ask, heard, done } = await telling();
   goalIn("ses_away", { heldByYou: true });
   ask(QUESTION("frm_paused", "ses_away", ROASTS));
-  await heard(2);
-  assert.equal(told[1].data.request, "frm_paused");
-  assert.deepEqual(answered.map(each => each.form), ["frm_went"]);
-  assert.deepEqual(told.map(each => each.data.request), ["frm_refused", "frm_paused"], "not of the one that went ahead");
+  await heard(1);
+  assert.deepEqual(told.map(each => each.data.request), ["frm_paused"]);
+  assert.deepEqual(answered, []);
+  done();
 });
 
 // A bot's goal running in the conversation (its bot's own), as the box keeps it.
