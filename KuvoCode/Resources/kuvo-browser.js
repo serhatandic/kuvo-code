@@ -13,7 +13,7 @@
 //
 // The app writes this file to the machine, with the browsing scripts and tools filled in below.
 
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import net from "node:net";
@@ -60,7 +60,7 @@ const TAB_IDLE = Number(process.env.KUVO_BROWSER_TAB_IDLE || 3600) * 1000;
 
 // Goes up with every change to the keeper (host mode): a newer one replaces one that's running
 // (its pages close, its sign-ins stay), and an older one never replaces a newer.
-const KEEPER = 44;
+const KEEPER = 45;
 // Passkeys: none yet, as in the panel's browser on the Mac (Passkeys.swift, the same script).
 const NO_PASSKEYS = "(() => {\n  try {\n    // Says a passkey was asked for with an event only this launch's listener, in a world of its\n    // own, knows the name of: nothing of it is left in the page's world. (Taken before the page\n    // can change them.)\n    const dispatch = EventTarget.prototype.dispatchEvent, Made = Event;\n    const tell = () => {\n      try {\n        dispatch.call(window, new Made(\"KUVO_PASSKEY_EVENT\"));\n      } catch {}\n    };\n    const none = (options) => {\n      // Asked of you, not looked for quietly as the page loads.\n      if (options.mediation !== \"conditional\") tell();\n      return Promise.reject(new DOMException(\"Passkeys can't be used in this browser.\", \"NotAllowedError\"));\n    };\n    const Container = window.CredentialsContainer;\n    if (Container && Container.prototype) {\n      const prototype = Container.prototype, get = prototype.get, create = prototype.create;\n      if (get) prototype.get = function (options) { return options && options.publicKey ? none(options) : get.call(this, options); };\n      if (create) prototype.create = function (options) { return options && options.publicKey ? none(options) : create.call(this, options); };\n    }\n    const Credential = window.PublicKeyCredential;\n    if (Credential) {\n      Credential.isUserVerifyingPlatformAuthenticatorAvailable = () => Promise.resolve(false);\n      if (Credential.isConditionalMediationAvailable) Credential.isConditionalMediationAvailable = () => Promise.resolve(false);\n    }\n  } catch {}\n})();";
 // The event it fires when a passkey is asked for (a name of this keeper's, which only the
@@ -249,10 +249,17 @@ function alive(pid) {
   } catch {
     return false;
   }
+  // (Alive and not to be asked: taken as it.)
+  return commandLine(pid)?.includes("kuvo-browser") ?? true;
+}
+
+/// A process's command line: in /proc on Linux, from `ps` on a Mac; undefined if it can't be read.
+function commandLine(pid) {
   try {
-    return fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").includes("kuvo-browser");
+    if (fs.existsSync("/proc/self")) return fs.readFileSync(`/proc/${pid}/cmdline`, "utf8");
+    return execFileSync("/bin/ps", ["-ww", "-o", "command=", "-p", String(pid)], { encoding: "utf8", timeout: 2000, stdio: ["ignore", "pipe", "ignore"] });
   } catch {
-    return true;
+    return undefined;
   }
 }
 
@@ -299,11 +306,13 @@ function chromiumVersion() {
   }
 }
 
-// What the browser says it is: Chromium on Linux. Sites serve a reduced page, or none, to one that
+// What the browser says it is: Chromium on what it runs on (Linux, or a Mac, which every Mac's
+// browser says it is on Intel's). Sites serve a reduced page, or none, to one that
 // says "HeadlessChrome" (x.com answers 403), and it says so in two places: the user agent, and
 // the brand hints (Sec-CH-UA) pages send and read.
 function userAgent() {
   const major = chromiumVersion().split(".")[0];
+  if (process.platform === "darwin") return `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major}.0.0.0 Safari/537.36`;
   const platform = process.arch === "arm64" ? "aarch64" : "x86_64";
   return `Mozilla/5.0 (X11; Linux ${platform}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major}.0.0.0 Safari/537.36`;
 }
@@ -317,7 +326,7 @@ function identity() {
     userAgentMetadata: {
       brands: [{ brand: "Chromium", version: major }, { brand: "Not-A.Brand", version: "24" }],
       fullVersionList: [{ brand: "Chromium", version }, { brand: "Not-A.Brand", version: "24.0.0.0" }],
-      platform: "Linux",
+      platform: process.platform === "darwin" ? "macOS" : "Linux",
       platformVersion: "",
       architecture: process.arch === "arm64" ? "arm" : "x86",
       bitness: "64",
@@ -396,6 +405,31 @@ function removeStaleLock() {
   } catch {}
 }
 
+/// What each editing key does on a Mac, by what clients and tools send (as on Linux: Control for ⌘,
+/// Home and End for ⌘← and ⌘→). Chrome on a Mac gets these from its window's key bindings, which a
+/// key sent over DevTools never reaches: without them a key sent to a field does nothing.
+const MAC_MOVES = { ArrowLeft: "moveLeft", ArrowRight: "moveRight", ArrowUp: "moveUp", ArrowDown: "moveDown", Home: "moveToLeftEndOfLine", End: "moveToRightEndOfLine" };
+const MAC_WORD_MOVES = { ArrowLeft: "moveWordLeft", ArrowRight: "moveWordRight", Home: "moveToBeginningOfDocument", End: "moveToEndOfDocument" };
+const MAC_DELETES = { Backspace: "deleteBackward", Delete: "deleteForward" };
+const MAC_WORD_DELETES = { Backspace: "deleteWordBackward", Delete: "deleteWordForward" };
+const MAC_LETTERS = { a: "selectAll", z: "undo" };
+
+/// A key as Chrome here takes it: on Linux as it's sent; on a Mac with ⌘ for Control, as pages there
+/// expect, and what it does named.
+function keyForHere(params, platform = process.platform) {
+  if (platform !== "darwin") return params;
+  const CONTROL = 2, META = 4, SHIFT = 8;
+  const modifiers = params.modifiers ?? 0;
+  const control = (modifiers & CONTROL) !== 0, shift = (modifiers & SHIFT) !== 0;
+  const mac = { ...params, modifiers: control ? (modifiers & ~CONTROL) | META : modifiers };
+  if (params.type === "keyUp" || params.commands?.length) return mac;
+  const key = String(params.key ?? "");
+  const move = (control ? MAC_WORD_MOVES : MAC_MOVES)[key];
+  let command = move ? move + (shift ? "AndModifySelection" : "") : (control ? MAC_WORD_DELETES : MAC_DELETES)[key];
+  if (control && !command) command = key.toLowerCase() === "z" && shift ? "redo" : MAC_LETTERS[key.toLowerCase()];
+  return command ? { ...mac, commands: [command] } : mac;
+}
+
 /// Starts Chromium and waits until it answers on its pipe.
 async function launchChrome(sandbox) {
   const binary = browserBinary(fs.realpathSync(CURRENT)) ?? "chrome-headless-shell";
@@ -404,6 +438,9 @@ async function launchChrome(sandbox) {
     // shell is one Google won't sign anyone in from ("This browser or app may not be secure").
     // Its passwords in its profile, not a desktop keyring the server doesn't have.
     ...(binary === "chrome" ? ["--headless", "--enable-unsafe-swiftshader", "--password-store=basic"] : []),
+    // On a Mac, nobody's there to answer what it would ask: its passwords' key from the login
+    // keychain, and looking for devices on the local network (casting, which nothing here uses).
+    ...(process.platform === "darwin" ? ["--use-mock-keychain", "--disable-features=MediaRouter,DialMediaRouteProvider"] : []),
     // A page nobody's looking at keeps going at full speed, as a bot's work in it needs.
     "--disable-background-timer-throttling",
     "--disable-renderer-backgrounding",
@@ -460,16 +497,21 @@ async function launchChrome(sandbox) {
     "",
   ].join("\n"));
   // Its temporary files in its own folder, never the machine's /tmp, where one stopped hard would
-  // leave them. Unless that's too far down for its lock's socket (a path of 107 bytes at most):
+  // leave them. Unless that's too far down for its lock's socket (a path of 107 bytes at most, 103
+  // on a Mac):
   // then wherever its temporary files would go otherwise.
   removeStaleLock();
   fs.rmSync(TMP, { recursive: true, force: true });
   fs.mkdirSync(TMP, { recursive: true, mode: 0o700 });
-  const fits = Buffer.byteLength(path.join(TMP, "org.chromium.Chromium.XXXXXX", "SingletonSocket")) <= 107;
+  const fits = Buffer.byteLength(path.join(TMP, "org.chromium.Chromium.XXXXXX", "SingletonSocket")) <= (process.platform === "darwin" ? 103 : 107);
   const env = {
     ...process.env,
     ...(fits ? { TMPDIR: TMP } : {}),
     HOME: home,
+    // (A Mac's programs find your home by your account, and this is what they take it from instead;
+    // and their preferences, written by the system's own process in the real one, without it.)
+    CFFIXED_USER_HOME: home,
+    __CFPREFERENCES_AVOID_DAEMON: "1",
     XDG_CONFIG_HOME: path.join(home, ".config"),
     XDG_CACHE_HOME: path.join(home, ".cache"),
     XDG_DATA_HOME: path.join(home, ".local", "share"),
@@ -1028,7 +1070,7 @@ async function host() {
       if (message.id === undefined || typeof message.method !== "string") return;
       const id = next++;
       pending.set(id, { client, id: message.id, method: message.method, targetId: message.params?.targetId });
-      const forward = { id, method: message.method, params: message.params ?? {} };
+      const forward = { id, method: message.method, params: message.method === "Input.dispatchKeyEvent" ? keyForHere(message.params ?? {}) : message.params ?? {} };
       if (message.sessionId) forward.sessionId = message.sessionId;
       toChrome(forward);
     }, "\n", (held) => !client.keyed && held > 4096 && (refuse(), true));
@@ -1759,7 +1801,7 @@ function phoneCanAnswer() {
     if (!fs.existsSync(path.join(RUN, "link.needed"))) return false;
     if (!(JSON.parse(fs.readFileSync(path.join(RUN, "link.json"), "utf8")).phones?.length > 0)) return false;
     const pid = Number(fs.readFileSync(path.join(RUN, "link.pid"), "utf8"));
-    return pid > 0 && fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").includes("kuvo-link");
+    return pid > 0 && Boolean(commandLine(pid)?.includes("kuvo-link"));
   } catch {
     return false;
   }

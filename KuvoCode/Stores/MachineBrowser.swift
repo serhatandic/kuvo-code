@@ -300,11 +300,12 @@ final class MachineBrowser {
             #endif
             return
         }
-        guard let runtime = BrowserRuntime.pinned else {
+        let connection = machine.connection
+        let system = (try? await MachineBrowserInstaller.system(on: connection)) ?? ""
+        guard let runtime = BrowserRuntime.pinned(for: system) else {
             setup = .failed(MachineBrowserError.notPinned.localizedDescription)
             return
         }
-        let connection = machine.connection
         // A connection that drops on the way (sending a couple of hundred megabytes takes a
         // while) is tried twice more, rather than leaving the machine without its browser until
         // the next launch.

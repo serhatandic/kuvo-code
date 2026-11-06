@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Pins the browser Kuvo Code runs on Linux machines, in KuvoCode/Resources/browser-runtime.json.
+"""Pins the browser Kuvo Code runs on machines: on Linux in KuvoCode/Resources/browser-runtime.json,
+on Macs in browser-runtime-mac.json.
 
 The browser is Google's Chrome for Testing, the full browser, run headless (Chrome's own headless
 mode, not the separate headless shell, which sites take for a bot: Google won't sign anyone in from
@@ -37,9 +38,13 @@ import xml.etree.ElementTree as ElementTree
 import zipfile
 
 OUT = os.path.join(os.path.dirname(__file__), "..", "KuvoCode", "Resources", "browser-runtime.json")
+# Macs that are machines run Chrome for Testing as it comes: nothing else to bring. In a file of its
+# own, as a machine is sent a new build whenever its system's file changes.
+MAC_OUT = os.path.join(os.path.dirname(__file__), "..", "KuvoCode", "Resources", "browser-runtime-mac.json")
 
 CFT = "https://storage.googleapis.com/chrome-for-testing-public"
 CHROMIUM_ZIPS = {"x86_64": "linux64/chrome-linux64.zip", "aarch64": "linux-arm64/chrome-linux-arm64.zip"}
+MAC_CHROMIUM_ZIPS = {"x86_64": "mac-x64/chrome-mac-x64.zip", "aarch64": "mac-arm64/chrome-mac-arm64.zip"}
 ROCKY = "https://dl.rockylinux.org/pub/rocky/8"
 REPOS = ["BaseOS", "AppStream"]
 
@@ -159,12 +164,26 @@ def closure(sonames, packages, found, provides, arch):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--chromium", help="Chrome for Testing version (default: latest Stable)")
+    parser.add_argument("--mac-only", action="store_true", help="Only the Macs' pin, leaving Linux's as it is")
     args = parser.parse_args()
 
     version = args.chromium
     if not version:
         channels = json.loads(fetch("https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions.json"))
         version = channels["channels"]["Stable"]["version"]
+
+    mac = {"chromium": {"version": version}}
+    for arch, path in MAC_CHROMIUM_ZIPS.items():
+        url = f"{CFT}/{version}/{path}"
+        print(f"  downloading {url}", file=sys.stderr)
+        data = fetch(url)
+        mac["chromium"][arch] = {"url": url, "sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}
+    with open(MAC_OUT, "w") as file:
+        json.dump(mac, file, indent=1)
+        file.write("\n")
+    print(f"Wrote {os.path.relpath(MAC_OUT)}", file=sys.stderr)
+    if args.mac_only:
+        return
 
     print(f"Chromium {version}, libraries from Rocky Linux 8", file=sys.stderr)
     runtime = {"chromium": {"version": version}, "packages": {}}

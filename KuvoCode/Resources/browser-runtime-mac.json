@@ -1,0 +1,15 @@
+{
+ "chromium": {
+  "version": "155.0.8059.79",
+  "x86_64": {
+   "url": "https://storage.googleapis.com/chrome-for-testing-public/155.0.8059.79/mac-x64/chrome-mac-x64.zip",
+   "sha256": "11c407e24d7d98cacaec055a4d9ab2f33023db2478d30544c24e829d81022096",
+   "size": 203545619
+  },
+  "aarch64": {
+   "url": "https://storage.googleapis.com/chrome-for-testing-public/155.0.8059.79/mac-arm64/chrome-mac-arm64.zip",
+   "sha256": "e141a7cbf948780bb7d381860bd5a7944c6736f79b9918b9826fccb199d28ea4",
+   "size": 192617424
+  }
+ }
+}

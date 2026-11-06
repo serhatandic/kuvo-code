@@ -4,9 +4,10 @@ import Foundation
 import OpenCodeKit
 import Sparkle
 
-/// The browser machines run, as `browser-runtime.json` pins it (`scripts/browser-runtime.py`):
-/// Chrome for Testing for each Linux architecture, run headless, and the Enterprise Linux 8
-/// packages that hold the libraries and fonts it needs, each with its checksum.
+/// The browser machines run, as `browser-runtime.json` and `browser-runtime-mac.json` pin it
+/// (`scripts/browser-runtime.py`): Chrome for Testing for each system and architecture, run headless,
+/// and on Linux the Enterprise Linux 8 packages that hold the libraries and fonts it needs, each with
+/// its checksum.
 nonisolated struct BrowserRuntime: Decodable, Sendable {
     struct Download: Decodable, Sendable {
         var url: URL
@@ -30,6 +31,7 @@ nonisolated struct BrowserRuntime: Decodable, Sendable {
     }
 
     var chromium: Chromium
+    /// By architecture. A Mac's has none: it has what Chrome needs.
     var packages: [String: [Package]]
     /// Names this build on a machine: the Chromium version, and a hash of everything in it, so
     /// newer libraries make a new folder too.
@@ -40,17 +42,36 @@ nonisolated struct BrowserRuntime: Decodable, Sendable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         chromium = try container.decode(Chromium.self, forKey: .chromium)
-        packages = try container.decode([String: [Package]].self, forKey: .packages)
+        packages = try container.decodeIfPresent([String: [Package]].self, forKey: .packages) ?? [:]
         id = chromium.version
     }
 
-    static let pinned: BrowserRuntime? = {
-        guard let url = Bundle.main.url(forResource: "browser-runtime", withExtension: "json"),
+    static let pinned: BrowserRuntime? = load("browser-runtime", idPart: "")
+    static let mac: BrowserRuntime? = load("browser-runtime-mac", idPart: "mac-")
+
+    private static func load(_ resource: String, idPart: String) -> BrowserRuntime? {
+        guard let url = Bundle.main.url(forResource: resource, withExtension: "json"),
               let data = try? Data(contentsOf: url),
               var runtime = try? JSONDecoder().decode(BrowserRuntime.self, from: data) else { return nil }
-        runtime.id = runtime.chromium.version + "-" + SHA256.hash(data: data).prefix(4).map { String(format: "%02x", $0) }.joined()
+        runtime.id = runtime.chromium.version + "-" + idPart + SHA256.hash(data: data).prefix(4).map { String(format: "%02x", $0) }.joined()
         return runtime
-    }()
+    }
+
+    /// The build for a system, by `uname -s` on the machine.
+    static func pinned(for system: String) -> BrowserRuntime? {
+        system == "Darwin" ? mac : pinned
+    }
+
+    /// Whether this is a Mac's build, Chrome's own app and nothing else.
+    var isMac: Bool { packages.isEmpty }
+
+    /// A Mac's Chrome for Testing, by the name its program has on Linux, as a machine's scripts and
+    /// browser look for it. (Not a link: it finds what it needs beside the path it's started by.)
+    static let macLauncher = """
+        #!/bin/sh
+        exec "$(dirname "$0")/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing" "$@"
+
+        """
 
     /// The architecture's name here, from `uname -m` on the machine.
     static func architecture(_ machine: String) -> String? {
@@ -89,7 +110,7 @@ nonisolated enum MachineBrowserError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .notPinned: "This build of Kuvo Code has no browser for machines."
-        case .unsupported(let machine): "The browser runs on Linux machines with x86-64 or ARM64 processors; this one is \(machine)."
+        case .unsupported(let machine): "The browser runs on machines with x86-64 or ARM64 processors; this one is \(machine)."
         case .checksum(let name): "The download of \(name) didn't match its checksum."
         case .download(let name, let error): "Couldn't download \(name)\(error.map { ": \($0.localizedDescription)" } ?? ".")"
         case .unpack(let output): "Couldn't put the browser together. \(output)"
@@ -107,6 +128,11 @@ nonisolated enum MachineBrowserError: LocalizedError {
 nonisolated enum MachineBrowserInstaller {
     static var folder: String { "$HOME/\(RemoteEngineInstaller.root)/browser" }
     static var helperPath: String { "$HOME/\(RemoteEngineInstaller.root)/bin/kuvo-browser.js" }
+
+    /// The machine's system, as `uname -s` names it.
+    static func system(on connection: SSHConnection) async throws -> String {
+        try await connection.run("uname -s").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 
     /// The machine's processor, as the runtime names it.
     static func architecture(on connection: SSHConnection) async throws -> String {
@@ -194,7 +220,10 @@ nonisolated enum MachineBrowserInstaller {
     /// the way is a link (a home moved to another disk, say).
     private static let builds = """
         R=$(cd "$B" && pwd -P)
-        running() { grep -qsF -e "$B/$1/" -e "$R/$1/" /proc/[0-9]*/cmdline 2>/dev/null; }
+        running() {
+          if [ -d /proc/self ]; then grep -qsF -e "$B/$1/" -e "$R/$1/" /proc/[0-9]*/cmdline 2>/dev/null
+          else ps -axww -o command= 2>/dev/null | grep -qF -e "$B/$1/" -e "$R/$1/"; fi
+        }
         """
 
     /// Shell that removes the builds in `$B` other than `id`, unless a browser still runs from one.
@@ -226,7 +255,7 @@ nonisolated enum MachineBrowserInstaller {
            (try? sha256(of: file)) == expected.trimmingCharacters(in: .whitespacesAndNewlines) {
             return file
         }
-        guard let chromium = runtime.chromium(for: architecture), let packages = runtime.packages[architecture] else {
+        guard let chromium = runtime.chromium(for: architecture), let packages = runtime.isMac ? [] : runtime.packages[architecture] else {
             throw MachineBrowserError.unsupported(architecture)
         }
         try fm.createDirectory(at: cache, withIntermediateDirectories: true)
@@ -257,6 +286,11 @@ nonisolated enum MachineBrowserInstaller {
         }
         for item in try fm.contentsOfDirectory(at: unpacked, includingPropertiesForKeys: nil) {
             try fm.moveItem(at: item, to: bundle.appending(path: item.lastPathComponent))
+        }
+        if runtime.isMac {
+            let launcher = bundle.appending(path: "chrome")
+            try Data(BrowserRuntime.macLauncher.utf8).write(to: launcher)
+            try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: launcher.path)
         }
 
         // The packages, a few at a time, unpacked into one tree.
@@ -296,8 +330,9 @@ nonisolated enum MachineBrowserInstaller {
         try? fm.removeItem(at: file)
         try fm.moveItem(at: packed, to: file)
         try Data(try sha256(of: file).utf8).write(to: checksum)
-        // Older builds aren't needed again.
-        for entry in (try? fm.contentsOfDirectory(atPath: cache.path)) ?? [] where !entry.hasPrefix(runtime.id) && !entry.hasPrefix(".staging") {
+        // Older builds aren't needed again; the other system's, for the next machine, is.
+        let kept = [runtime.id, BrowserRuntime.pinned?.id, BrowserRuntime.mac?.id].compactMap { $0 }
+        for entry in (try? fm.contentsOfDirectory(atPath: cache.path)) ?? [] where !kept.contains(where: entry.hasPrefix) && !entry.hasPrefix(".staging") {
             try? fm.removeItem(at: cache.appending(path: entry))
         }
         progress(1)
