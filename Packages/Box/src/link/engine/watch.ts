@@ -15,6 +15,7 @@ import { goalHolds, settleGoalHolds } from "../work/goals";
 import { workWatcher } from "../work/wakes";
 import { reviewPermission } from "../work/reviewing";
 import { forgetReviews } from "../work/reviewer";
+import { forgetDecided } from "../work/autopilot";
 import { backUpSession } from "../work/backups";
 import { markConversation, noteFullAccess, noteFullAccessAtWork } from "../work/full";
 import { queueWatcher, scanQueues, type ScanFound } from "./queue";
@@ -341,6 +342,7 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
         if (event.type === "session.deleted" && typeof event.data?.sessionID === "string") {
           letSessionFilesGo(attachmentsLooked, event.data.sessionID);
           forgetReviews(event.data.sessionID);
+          forgetDecided(event.data.sessionID);
         }
         learn(source);
         steer?.(event);

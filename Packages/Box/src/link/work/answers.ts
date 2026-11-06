@@ -116,7 +116,9 @@ export interface Recommendation {
 }
 
 const RECOMMENDED = /\s*\(recommended\)\s*/i;
-const unmarked = (label: string) => label.replace(RECOMMENDED, " ").trim();
+// One short line, as a call is kept and shown: what a question says is the agent's to make any length.
+const short = (words: string, most: number) => words.replace(/\s+/g, " ").trim().slice(0, most);
+const unmarked = (label: string) => short(label.replace(RECOMMENDED, " "), 200);
 
 /** What a question tool's form recommends: in each field it shows, the one choice it marked
  * "(Recommended)" (or those it marked, of several); null when a field it needs has none, for a form
@@ -136,11 +138,11 @@ export function recommendationOf(form: Record<string, unknown>): Recommendation 
     else if (typeof field.key === "string" && multiple && marked.length) answer[field.key] = marked.map(option => option.value);
     else if (field.required === false) continue;
     else return null;
-    const why = marked.length === 1 && typeof marked[0].description === "string" ? marked[0].description.trim() : "";
+    const why = marked.length === 1 && typeof marked[0].description === "string" ? short(marked[0].description, 300) : "";
     const labels = options.map(option => unmarked(option.label as string)).filter(Boolean);
     calls.push({
       key: field.key as string,
-      text: String(field.description || field.title || form.title || "A question"),
+      text: short(String(field.description || field.title || form.title || "A question"), 300),
       choice: marked.map(option => unmarked(option.label as string)).join(", "),
       ...(why ? { why } : {}),
       ...(labels.length ? { options: labels } : {}),

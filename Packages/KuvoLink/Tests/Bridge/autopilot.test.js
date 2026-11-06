@@ -366,8 +366,34 @@ async function telling() {
     waiting.set(form.sessionID, [...(waiting.get(form.sessionID) ?? []), form]);
     for (const each of followers) each.write(`data: ${JSON.stringify({ id: `evt_${form.id}`, type: "form.created", data: { form } })}\n\n`);
   };
-  return { told, ask, heard: async count => { while (told.length < count) await new Promise(setImmediate); } };
+  const done = () => { stop.abort(); followers.length = 0; };
+  return { told, ask, done, heard: async count => { while (told.length < count) await new Promise(setImmediate); } };
 }
+
+test("a deleted conversation's calls go with it, and what's kept of a long question is one short line", async () => {
+  const { ask, told, heard, done } = await telling();
+  const long = "Which roast\n\n  for the whole  menu? " + "x".repeat(5000);
+  const label = "Warm and roasty, " + "y".repeat(5000);
+  const form = QUESTION("frm_long", "ses_away", [`${label} (Recommended)`, "Dark"]);
+  form.fields[0].description = long;
+  ask(form);
+  const calls = async () => (await route("GET", "kuvo/sessions/ses_away/autopilot")).body.decided ?? [];
+  while (!(await calls()).length) await new Promise(setImmediate);
+  const [kept] = await calls();
+  assert.equal(kept.text, ("Which roast for the whole menu? " + "x".repeat(5000)).slice(0, 300));
+  assert.equal(kept.choice.length, 200);
+  assert.ok(kept.choice.startsWith("Warm and roasty, "));
+  assert.deepEqual(kept.options, [kept.choice, "Dark"], "so the choice is still among them");
+
+  for (const each of followers) each.write(`data: ${JSON.stringify({ id: "evt_gone", type: "session.deleted", data: { sessionID: "ses_away" } })}\n\n`);
+  // (Events go in order: told of this one, the box has heard that it's gone.)
+  ask(QUESTION("frm_after", "ses_away", ["Light", "Dark"]));
+  await heard(1);
+  assert.equal(told[0].data.request, "frm_after");
+  assert.deepEqual(await calls(), []);
+  assert.doesNotMatch(fs.readFileSync(path.join(home, "run", "work", "decided.json"), "utf8"), /Which roast/);
+  done();
+});
 
 test("your phone is told of a question that marks a choice but waits after all: the engine didn't take the answer, or you have its goal paused", async () => {
   const { told, ask, heard } = await telling();

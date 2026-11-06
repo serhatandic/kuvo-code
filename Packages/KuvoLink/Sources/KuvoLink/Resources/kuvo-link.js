@@ -9412,7 +9412,8 @@ async function callOf(target, permission, signal) {
   return null;
 }
 var RECOMMENDED = /\s*\(recommended\)\s*/i;
-var unmarked = (label) => label.replace(RECOMMENDED, " ").trim();
+var short = (words, most) => words.replace(/\s+/g, " ").trim().slice(0, most);
+var unmarked = (label) => short(label.replace(RECOMMENDED, " "), 200);
 function recommendationOf(form) {
   if (!isObject(form.metadata) || form.metadata.kind !== "question")
     return null;
@@ -9433,11 +9434,11 @@ function recommendationOf(form) {
       continue;
     else
       return null;
-    const why = marked.length === 1 && typeof marked[0].description === "string" ? marked[0].description.trim() : "";
+    const why = marked.length === 1 && typeof marked[0].description === "string" ? short(marked[0].description, 300) : "";
     const labels = options.map((option) => unmarked(option.label)).filter(Boolean);
     calls.push({
       key: field.key,
-      text: String(field.description || field.title || form.title || "A question"),
+      text: short(String(field.description || field.title || form.title || "A question"), 300),
       choice: marked.map((option) => unmarked(option.label)).join(", "),
       ...why ? { why } : {},
       ...labels.length ? { options: labels } : {},
@@ -18724,6 +18725,7 @@ async function watchEvents(read, tell, signal, answered = () => {}, { bots = fal
         if (event.type === "session.deleted" && typeof event.data?.sessionID === "string") {
           letSessionFilesGo(attachmentsLooked, event.data.sessionID);
           forgetReviews(event.data.sessionID);
+          forgetDecided(event.data.sessionID);
         }
         learn(source);
         steer?.(event);
@@ -19042,7 +19044,7 @@ function readSaid() {
   }
 }
 var fresh = (one, now) => isObject(one) && typeof one.at === "number" && Array.isArray(one.moves) && now - one.at < KEPT4;
-var short = (text, most) => text.slice(0, most);
+var short2 = (text, most) => text.slice(0, most);
 function takenMove(given) {
   if (!isObject(given))
     return null;
@@ -19052,15 +19054,15 @@ function takenMove(given) {
   if (!KINDS2.has(kind) || role !== "from" && role !== "to" || !STAGES.has(stage) || !Array.isArray(sessions))
     return null;
   return {
-    id: short(id, 100),
+    id: short2(id, 100),
     kind,
-    thing: short(thing, 200),
-    name: short(plainName(name), 200),
-    from: short(from, 100),
-    to: short(to, 100),
+    thing: short2(thing, 200),
+    name: short2(plainName(name), 200),
+    from: short2(from, 100),
+    to: short2(to, 100),
     role,
     stage,
-    sessions: sessions.filter((session) => typeof session === "string").slice(0, MOST_SESSIONS).map((session) => short(session, 100)),
+    sessions: sessions.filter((session) => typeof session === "string").slice(0, MOST_SESSIONS).map((session) => short2(session, 100)),
     ...typeof sent === "number" && Number.isFinite(sent) ? { sent } : {},
     ...typeof size === "number" && Number.isFinite(size) ? { size } : {},
     ...waiting === true ? { waiting } : {}
