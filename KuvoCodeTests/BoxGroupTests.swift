@@ -1,6 +1,8 @@
+import AppKit
 import Foundation
 import KuvoLink
 import OpenCodeKit
+import SwiftUI
 import Testing
 @testable import KuvoCode
 
@@ -183,6 +185,90 @@ import Testing
         // Gone there: gone here.
         app.boxGroups.handle(try machineBridge.event("kuvo.group.deleted", ["id": "grp_box0000001"]), machine: "box")
         #expect(app.chats.list.map(\.id) == ["grp_mac0000001"])
+    }
+
+    /// A bot's steps you open stay open as the chat goes on, with what you read where it is, and
+    /// after they've gone far out of view and come back. A chat's steps come with the bot's message,
+    /// so what comes in meanwhile is more messages.
+    @Test func stepsOpenInAChatStayOpenAsItGoesOn() async throws {
+        TestEnvironment.prepare()
+        defer { Self.clean(); mac.stop(); AXElement.reading(false) }
+        try saveBots([("bot_ada", "Ada", nil), ("bot_ben", "Ben", nil)])
+        let id = "grp_mac0000002"
+        let steps: [[String: Any]] = (1...3).map {
+            ["id": "call_\($0)", "name": "shell", "executed": true,
+             "state": ["status": "completed", "input": ["command": "echo step\($0)"], "content": [["type": "text", "text": "step\($0)"]]]]
+        }
+        func said(_ number: Int, steps: [[String: Any]]? = nil) -> [String: Any] {
+            var message: [String: Any] = ["id": "gm_\(number)", "author": "bot_ada", "text": "Message \(number).", "time": "2026-10-22T08:00:00Z", "kind": "message"]
+            if let steps { message["steps"] = steps }
+            return message
+        }
+        here.add(Self.group(id, members: ["bot_ada", "bot_ben"]), messages: (1...30).map { said($0) } + [said(31, steps: steps)])
+        let app = app()
+        await app.boxGroups.connected(nil)
+        let group = try #require(app.chats.group(id))
+
+        AXElement.reading(true)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 560), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView: AnyView(GroupChatView(group: group)
+            .environment(app)
+            .environment(app.catalog)
+            .environment(app.workspace)
+            .environment(app.bots)
+            .environment(app.chats)
+            .frame(width: 760, height: 560)))
+        window.orderBack(nil)
+        defer { window.orderOut(nil); window.close(); window.contentView = nil }
+        var labels: [String] {
+            window.contentView?.layoutSubtreeIfNeeded()
+            DispatchQueue.main.async { TestPulse.beat() }
+            return AXElement.all(in: window.contentView).compactMap(\.label)
+        }
+        var isOpen: Bool { labels.contains { $0.contains("echo step1") } }
+        try await until { labels.contains("Ran 3 commands") }
+        let line = try #require(AXElement.all(in: window.contentView).first { $0.label == "Ran 3 commands" })
+        #expect(line.press())
+        try await until { isOpen }
+        func stacks(_ view: NSView?) -> [RowStackView] {
+            guard let view else { return [] }
+            return (view as? RowStackView).map { [$0] } ?? view.subviews.flatMap(stacks)
+        }
+        let stack = try #require(stacks(window.contentView).first)
+        let clip = try #require(stack.enclosingScrollView?.contentView)
+        func go(to y: CGFloat) {
+            clip.scroll(to: NSPoint(x: 0, y: y))
+            stack.enclosingScrollView?.reflectScrolledClipView(clip)
+            window.contentView?.layoutSubtreeIfNeeded()
+        }
+        // Opened, it shows all of it, and then lets go of the end; what comes in leaves it be.
+        try await until {
+            DispatchQueue.main.async { TestPulse.beat() }
+            return stack.scrollAnchor?.isFollowingEnd == false
+        }
+        let before = clip.bounds.minY
+        #expect(before > 0, "it can scroll")
+        for number in 32...34 {
+            app.boxGroups.handle(try macBridge.event("kuvo.group.message", ["id": id, "message": said(number)]), machine: nil)
+            try await until { labels.contains { $0.contains("Message \(number).") } || app.chats.messages(in: id).count == number }
+            #expect(isOpen)
+        }
+        window.contentView?.layoutSubtreeIfNeeded()
+        #expect(abs(clip.bounds.minY - before) < 1, "moved from \(before) to \(clip.bounds.minY)")
+        // Far from it, more comes in, and back.
+        for number in 35...90 {
+            app.boxGroups.handle(try macBridge.event("kuvo.group.message", ["id": id, "message": said(number)]), machine: nil)
+        }
+        var y = before
+        while y > 0 {
+            y = max(0, y - 300)
+            go(to: y)
+        }
+        try await until { !labels.contains("Ran 3 commands") }
+        go(to: before)
+        try await until { labels.contains("Ran 3 commands") }
+        #expect(isOpen)
     }
 
     /// New Group Chat from a machine's page: the chat is made by that machine's box and lives
