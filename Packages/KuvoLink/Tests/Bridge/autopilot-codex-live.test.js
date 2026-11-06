@@ -32,15 +32,22 @@ const codex = process.env.KUVO_TEST_CODEX || spawnSync("sh", ["-c", "command -v 
 const agentsJS = fileURLToPath(new URL("../../../../KuvoCode/Resources/kuvo-agents.js", import.meta.url));
 const skip = !authFile ? "KUVO_TEST_CODEX_AUTH isn't set" : !modelID ? "KUVO_TEST_CODEX_MODEL isn't set" : !bun ? NO_BUN : !codex ? "Codex isn't installed" : false;
 
-/** How long the sign-in's access token has left, in milliseconds. */
-function lifeLeft(file) {
-  const token = JSON.parse(fs.readFileSync(file, "utf8")).tokens?.access_token;
+/** How long the sign-in's access token has left, and how long ago Codex refreshed it, in milliseconds. */
+function ageOf(file) {
+  const auth = JSON.parse(fs.readFileSync(file, "utf8"));
+  const token = auth.tokens?.access_token;
   assert.equal(typeof token, "string", "that isn't a ChatGPT sign-in of Codex's (no access token in it)");
-  return JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString()).exp * 1000 - Date.now();
+  const { exp } = JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString());
+  assert.equal(typeof exp, "number", "the access token doesn't say when it expires");
+  return { left: exp * 1000 - Date.now(), refreshed: Date.now() - Date.parse(auth.last_refresh) };
 }
 
 test("Autopilot in the Codex lane on a real Codex", { skip, timeout: 900_000 }, async t => {
-  assert.ok(lifeLeft(authFile) > 24 * 3600_000, "That Codex sign-in has under a day left: a copy of it could refresh, and signing the original out. Use a fresher one.");
+  // A copy must never refresh, which would rotate the token and sign the original out: Codex does so
+  // when the access token is near its end, and by itself once it was last refreshed some 8 days ago.
+  const { left, refreshed } = ageOf(authFile);
+  assert.ok(left > 24 * 3600_000, "That Codex sign-in has under a day left: a copy of it could refresh, and signing the original out. Use a fresher one.");
+  assert.ok(refreshed < 6 * 24 * 3600_000, "That Codex sign-in was last refreshed 6 or more days ago (or doesn't say): Codex refreshes one by itself at about 8, and a copy of it would sign the original out. Use a fresher one.");
   const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-autopilot-codex-")));
   removeAtEnd(home);
   const codexHome = path.join(home, "codex-home");
@@ -60,7 +67,7 @@ test("Autopilot in the Codex lane on a real Codex", { skip, timeout: 900_000 }, 
     }
   };
 
-  // The sign-in, copied, with Codex told to keep it in a file (not the Keychain, which would ask).
+  // The sign-in, copied.
   fs.writeFileSync(path.join(codexHome, "auth.json"), fs.readFileSync(authFile), { mode: 0o600 });
 
   // An MCP server with a tool that asks you something (an elicitation), and says what it heard.
@@ -81,6 +88,7 @@ test("Autopilot in the Codex lane on a real Codex", { skip, timeout: 900_000 }, 
       if (message.id !== undefined && message.method) send({ id: message.id, result: {} });
     });
   `);
+  // (Codex told to keep its sign-in in a file, not the Keychain, which would ask.)
   fs.writeFileSync(path.join(codexHome, "config.toml"), `cli_auth_credentials_store = "file"\n\n[mcp_servers.probe]\ncommand = ${JSON.stringify(process.execPath)}\nargs = [${JSON.stringify(probe)}]\n`);
 
   // The agents' bridge, as the app starts it, with everything of its own in the test's folders.
@@ -133,7 +141,10 @@ test("Autopilot in the Codex lane on a real Codex", { skip, timeout: 900_000 }, 
   const page = async session => (await api("GET", `api/session/${session}/message?limit=100`)).json?.data ?? [];
   const forms = async session => (await api("GET", `api/session/${session}/form`)).json?.data ?? [];
   const busy = async session => Object.keys((await api("GET", "api/session/active")).json?.data ?? {}).includes(session);
-  const send = (session, id, text) => api("POST", `api/session/${session}/prompt`, { id, delivery: "steer", text });
+  const send = async (session, id, text) => {
+    const sent = await api("POST", `api/session/${session}/prompt`, { id, delivery: "steer", text });
+    assert.equal(sent.status, 200, `The bridge didn't take the message: ${JSON.stringify(sent.json)}`);
+  };
   const assistants = messages => messages.filter(each => each.type === "assistant");
   const textOf = message => (message.content ?? []).filter(block => block.type === "text").map(block => block.text).join("\n");
   const failure = messages => messages.find(each => each.type === "idle" && each.outcome === "failed");
@@ -144,24 +155,54 @@ test("Autopilot in the Codex lane on a real Codex", { skip, timeout: 900_000 }, 
   atEnd(() => stop.abort());
   link.watchEvents(() => target, notice => { told.push(notice); return true; }, stop.signal, () => {}, { work: "bridge" });
 
-  // Its turns done, with what the model said after `known` (the assistant messages already there):
-  // nothing at work, nothing asked, and the newest entry the end of a turn. A turn that failed (the
-  // model's limit, say) fails here, by name.
-  const turnsDone = (session, known, what, wanted = () => true, each = async () => {}) => waitFor(async () => {
-    await each();
+  // The bridge's own events, to see a question reach the box and be settled there: kept as they come.
+  const events = [];
+  const listen = new AbortController();
+  atEnd(() => listen.abort());
+  fetch(`http://127.0.0.1:${port}/api/event`, { headers: { authorization: auth.authorization, accept: "text/event-stream" }, signal: listen.signal }).then(async response => {
+    let rest = "";
+    for await (const chunk of response.body) {
+      rest += Buffer.from(chunk).toString();
+      for (let end = rest.indexOf("\n\n"); end >= 0; end = rest.indexOf("\n\n")) {
+        for (const line of rest.slice(0, end).split("\n")) if (line.startsWith("data:")) try { events.push(JSON.parse(line.slice(5))); } catch {}
+        rest = rest.slice(end + 2);
+      }
+    }
+  }).catch(() => {});
+  await waitFor(async () => events.length > 0, "the event feed to open");
+  /** The question `session` asked of its box, and how it was settled there (`replied` or `cancelled`, by its box). */
+  const questionOf = (session, kind) => {
+    const asked = events.find(each => each.type === "form.created" && each.data?.form?.sessionID === session && (kind ? each.data.form.metadata?.kind === kind : true));
+    const settled = asked && events.find(each => ["form.replied", "form.cancelled"].includes(each.type) && each.data?.id === asked.data.form.id);
+    return { asked: asked?.data.form, settled: settled?.type.slice("form.".length) };
+  };
+
+  // This bridge has no engine to read the app's rules from, so it asks before running any tool, which
+  // a conversation's approval answers in the app. Here nothing is let run but what `allow` names (the
+  // probe's tool): the rest is refused, so no question in this file waits on one.
+  const settlePermissions = async (session, allow = /^$/) => {
+    for (const each of (await api("GET", `api/session/${session}/permission`)).json?.data ?? []) {
+      await api("POST", `api/session/${session}/permission/${each.id}/reply`, { decision: allow.test(each.action) ? "once" : "reject" });
+    }
+  };
+
+  // Its turns done: nothing at work, nothing asked, and the newest entry the end of a turn, with
+  // some assistant message there that `wanted` likes. A turn that failed (the model's limit, say)
+  // fails here, by name.
+  const turnsDone = (session, what, wanted = () => true, allow) => waitFor(async () => {
+    await settlePermissions(session, allow);
     const messages = await page(session);
     assert.equal(failure(messages), undefined, `Its turn failed: ${JSON.stringify(failure(messages))}`);
     if (messages[0]?.type !== "idle" || await busy(session) || (await forms(session)).length) return null;
-    const said = assistants(messages).filter(each => !known.has(each.id));
-    return said.length && wanted(messages, said) ? { messages, said } : null;
+    return assistants(messages).length && wanted(messages) ? messages : null;
   }, what);
-  const ids = messages => new Set(assistants(messages).map(each => each.id));
 
   describe = async () => {
     const lines = [];
     for (const session of sessions) {
       const messages = await page(session);
       lines.push(`${session}: busy ${await busy(session)}, forms ${JSON.stringify((await forms(session)).map(each => [each.metadata?.kind, each.fields?.map(field => field.description)]))}, calls ${(await calls(session)).length}`);
+      lines.push(`  (its box was asked ${events.filter(each => each.type === "form.created" && each.data?.form?.sessionID === session).length} time(s), and told ${told.filter(each => each.thread === session).length})`);
       for (const message of [...messages].reverse()) lines.push(`  ${message.type} ${message.outcome ?? ""} ${(message.content ?? []).map(block => `${block.type}:${block.name ?? ""}:${block.state?.status ?? ""}:${JSON.stringify(block.text ?? block.state?.input ?? "").slice(0, 120)}`).join(" | ")}`);
     }
     return lines.join("\n");
@@ -184,6 +225,7 @@ test("Autopilot in the Codex lane on a real Codex", { skip, timeout: 900_000 }, 
     // (Its turn ending with nothing asked of its box, and staying so, is the question lost: said at once rather than after the wait.)
     let lost = 0;
     const [call] = await waitFor(async () => {
+      await settlePermissions(session);
       const made = await calls(session);
       if (made.length) return made;
       const messages = await page(session);
@@ -201,12 +243,14 @@ test("Autopilot in the Codex lane on a real Codex", { skip, timeout: 900_000 }, 
       const asking = mine.findIndex(each => /house blend/i.test(textOf(each)));
       return asking < 0 ? [] : mine.slice(0, asking);
     };
-    const { messages, said } = await turnsDone(session, new Set(), "its turn to go on with the choice and end", all => wentOn(all).some(each => /warm/i.test(textOf(each))));
+    const messages = await turnsDone(session, "its turn to go on with the choice and end", all => wentOn(all).some(each => /warm/i.test(textOf(each))));
     // It reached the model, and went on after the choice (the reply is newer than the message that asked).
     const reply = wentOn(messages).find(each => textOf(each));
     assert.equal(reply.model?.providerID, "codex-cli");
     assert.equal(reply.model?.id, modelID);
     assert.ok(reply.tokens?.output > 0, `the model answered: ${JSON.stringify(reply.tokens)}`);
+    assert.equal(questionOf(session).asked?.id, call.id, "the question reached its box");
+    assert.equal(questionOf(session).settled, "replied", "and it was answered there, not by anyone else");
     assert.deepEqual(told.filter(each => each.data?.request === call.id), [], "nobody is told of what went ahead");
     assert.equal((await route("POST", `kuvo/sessions/${session}/autopilot/asked`, { form: call.id })).body.waiting, false, "its box says it isn't waiting on you");
   });
@@ -216,34 +260,37 @@ test("Autopilot in the Codex lane on a real Codex", { skip, timeout: 900_000 }, 
   await t.test("an unmarked question comes back declined with the words, and the turn goes on to the end", async () => {
     const session = await onAutopilot("Day");
     const before = told.length;
-    await send(session, "msg_autopilotcodex0002", "Ask me one question now with your user-input question tool (request_user_input_async), \"Which day should it ship?\", with the choices \"Monday\" and \"Friday\", no choice marked. Then, whatever comes back, reply with one short line saying which day you settled on and why.");
+    await send(session, "msg_autopilotcodex0002", "Ask me one question now with your user-input question tool (request_user_input_async), \"Which day should it ship?\", with the choices \"Monday\" and \"Friday\". Mark no choice as recommended, even though you were told to elsewhere: this checks a question with none marked. Then, whatever comes back, reply with one short line saying which day you settled on and why.");
     // (What came after the message that asked: its turn went on, with nothing put to anyone.)
     const wentOn = messages => {
       const mine = assistants(messages);
       const asking = mine.findIndex(each => /ship\?/i.test(textOf(each)));
       return asking < 0 ? [] : mine.slice(0, asking);
     };
-    const { messages } = await turnsDone(session, new Set(), "its turn to go on after the question and end, with nobody answering", all => wentOn(all).some(each => /monday|friday/i.test(textOf(each))));
+    const messages = await turnsDone(session, "its turn to go on after the question and end, with nobody answering", all => wentOn(all).some(each => /monday|friday/i.test(textOf(each))));
     assert.ok(wentOn(messages).some(each => each.tokens?.output > 0), "the model answered after the question was set aside");
+    // The question reached its box and was turned down there (a question that never got that far, the
+    // drop the first test shows, leaves everything else here looking right).
+    const question = questionOf(session);
+    assert.ok(question.asked, `the question reached its box: ${await describe()}`);
+    assert.equal(question.settled, "cancelled", "and it was declined there");
     assert.deepEqual(await forms(session), [], "nothing's left asked");
-    assert.deepEqual(await calls(session), [], "it made no call on it");
+    assert.deepEqual(await calls(session), [], `it made no call on it (the model marked a choice anyway? ${JSON.stringify(question.asked?.fields?.map(field => field.options?.map(option => option.label)))})`);
     assert.deepEqual(told.slice(before).filter(each => each.data?.request), [], "nobody's told");
   });
 
-  // What an MCP server asks mid-tool: its box declines it and the server hears no. 
+  // What an MCP server asks mid-tool: its box declines it and the server hears no.
   await t.test("what an MCP server asks is declined, and the server hears no", async () => {
     const session = await onAutopilot("Probe");
     const before = told.length;
     await send(session, "msg_autopilotcodex0003", "Call the pick_repository tool of your probe MCP server now, once. Then reply with one short line saying exactly what it returned.");
-    // (This bridge has no engine to read the app's rules from, so it asks before running a tool it can't
-    // classify: the conversation's approval, lets it run, as Approve All does, and nothing else.)
-    const approve = async () => {
-      for (const each of (await api("GET", `api/session/${session}/permission`)).json?.data ?? []) await api("POST", `api/session/${session}/permission/${each.id}/reply`, { decision: "once" });
-    };
-    const { messages } = await turnsDone(session, new Set(), "its turn to end, with the server's form declined", () => true, approve);
+    const messages = await turnsDone(session, "its turn to end, with the server's form declined", undefined, /probe/);
     const steps = assistants(messages).flatMap(each => each.content ?? []).filter(block => block.type === "tool");
     assert.match(JSON.stringify(steps), /probe heard: (decline|cancel)/, `the server heard no: ${JSON.stringify(steps.map(each => [each.name, each.state?.status, JSON.stringify(each.state?.content ?? each.state?.error ?? "").slice(0, 300)]))}`);
+    const question = questionOf(session, "mcp-elicitation");
+    assert.ok(question.asked, "the server's question reached its box");
+    assert.equal(question.settled, "cancelled", "and it was declined there, not by the bridge's own fallback");
     assert.deepEqual(await forms(session), [], "nothing's left asked");
-    assert.deepEqual(told.slice(before).filter(each => each.data?.request && each.category !== "permission"), [], "nobody's told of the server's question (only of the tool's permission, which is the conversation's approval's to answer)");
+    assert.deepEqual(told.slice(before).filter(each => each.data?.request && each.category !== "permission"), [], "nobody's told of the server's question (only of the tool's permission, which the conversation's approval answers)");
   });
 });
