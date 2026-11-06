@@ -1,4 +1,5 @@
 import AppKit
+import ClientSessions
 import SwiftUI
 
 extension EnvironmentValues {
@@ -16,6 +17,8 @@ extension EnvironmentValues {
 /// yours.
 struct DecidedLine: View {
     let call: AutopilotShown.Call
+    /// Away from the step that asked (a goal's list): the question comes first.
+    var saysQuestion = false
     @Environment(\.chooseOnAutopilot) private var choose
 
     var body: some View {
@@ -53,10 +56,11 @@ struct DecidedLine: View {
     }
 
     private var line: Text {
+        let asked = saysQuestion ? Text(call.text + "  ").foregroundStyle(.tertiary) : Text("")
         if call.changed {
-            return Text("You picked \(Text(call.current).fontWeight(.medium))\(Text(", not \(call.choice)").foregroundStyle(.tertiary))").foregroundStyle(.secondary)
+            return Text("\(asked)You picked \(Text(call.current).fontWeight(.medium))\(Text(", not \(call.choice)").foregroundStyle(.tertiary))").foregroundStyle(.secondary)
         }
-        return Text("Went with \(Text(call.choice).fontWeight(.medium).foregroundStyle(.primary))\(Text(call.why.map { " · " + $0 } ?? ""))").foregroundStyle(.secondary)
+        return Text("\(asked)Went with \(Text(call.choice).fontWeight(.medium).foregroundStyle(.primary))\(Text(call.why.map { " · " + $0 } ?? ""))").foregroundStyle(.secondary)
     }
 
     private func menu(_ options: [String]) -> NSMenu {
@@ -70,5 +74,34 @@ struct DecidedLine: View {
         }
         menu.checksOnTrailingSide(checked)
         return menu
+    }
+}
+
+/// A goal's calls, the latest first, in the goal bar under what waits for you: a few, and the rest
+/// on Show More. While it runs, each can be changed.
+struct GoalDecidedRows: View {
+    let plan: GoalPlan
+    /// How many show until Show More.
+    static let few = 3
+    @State private var showsAll = false
+
+    /// The calls it shows, as `DecidedLine`s.
+    static func calls(_ plan: GoalPlan, all: Bool = false) -> [AutopilotShown.Call] {
+        let latest = plan.decided.reversed().map { AutopilotShown.Call(goal: $0, changeable: plan.state == .running) }
+        return all ? latest : Array(latest.prefix(few))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(Self.calls(plan, all: showsAll)) { DecidedLine(call: $0, saysQuestion: true) }
+            if plan.decided.count > Self.few {
+                Button(showsAll ? "Show Less" : "Show More") {
+                    withAnimation(.ui) { showsAll.toggle() }
+                }
+                .buttonStyle(TextButtonStyle(outset: true, dimsAtRest: false))
+                .foregroundStyle(.tint)
+                .font(.system(size: 12, weight: .medium))
+            }
+        }
     }
 }

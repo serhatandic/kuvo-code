@@ -13,7 +13,7 @@ import { call, engineGet } from "../engine/client";
 import { sendInto } from "../engine/queue";
 import { locked, textOf, writePrivate } from "../files";
 import { askedBy, asksIn, recommendationOf, type PendingQuestion, type Recommendation } from "./answers";
-import { addDecided, runningGoalOf } from "./goals";
+import { addDecided, runningGoalOf, yoursOnGoal } from "./goals";
 import { worksFor } from "./tree";
 import { WORK_FOLDER } from "./changes";
 import type { EngineSession } from "../engine/sessions";
@@ -195,5 +195,6 @@ export async function decidedByYou(target: Target, conversation: string, id: str
     const kept = all[conversation]?.find(each => each.id === id);
     if (kept) kept.yours = { choice, at: Date.now() };
   }, file);
+  yoursOnGoal(conversation, id, choice);
   return { decided: decidedIn(conversation, file) };
 }

@@ -317,6 +317,22 @@ test("a call made in a goal's conversation shows on the goal too; while you have
   assert.deepEqual(answered.map(each => each.form), ["frm_1"]);
 });
 
+test("a call a question went ahead on is one call: changed on the goal, its conversation's agent hears and both show it; changed at its step, the goal shows it", async () => {
+  goalIn("ses_away");
+  const { watch } = await watcher();
+  await watch({ type: "form.created", data: { form: QUESTION("frm_1", "ses_away", ROASTS) } });
+  await watch({ type: "form.created", data: { form: QUESTION("frm_2", "ses_away", ROASTS) } });
+  const onGoal = await route("POST", "kuvo/work/goals/goal_cafe", { action: "decided", decided: "ask:ses_away:frm_1", choice: "Dark and smoky" });
+  assert.equal(onGoal.status, 200, JSON.stringify(onGoal.body));
+  assert.equal(onGoal.body.goal.decided[0].yours.choice, "Dark and smoky");
+  assert.deepEqual(prompts.map(each => each.to), ["ses_away"], "told once, in the conversation that asked");
+  let { decided } = (await route("GET", "kuvo/sessions/ses_away/autopilot")).body;
+  assert.equal(decided[0].yours.choice, "Dark and smoky");
+  await route("POST", "kuvo/sessions/ses_away/autopilot", { decided: "frm_2", choice: "Light and fruity" });
+  assert.equal(goalDecided()[1].yours.choice, "Light and fruity");
+  assert.equal(prompts.length, 2);
+});
+
 test("a goal and its bot's conversation are one setting: switched on either, the other follows", async () => {
   goalIn("ses_mine");
   const goalMode = () => JSON.parse(fs.readFileSync(path.join(home, "run", "work", "goals.json"), "utf8")).goals[0].mode ?? "interactive";

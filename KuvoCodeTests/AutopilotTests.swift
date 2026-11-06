@@ -1,6 +1,7 @@
 import Foundation
 import KuvoLink
 import OpenCodeKit
+import ClientSessions
 import Testing
 @testable import KuvoCode
 
@@ -130,6 +131,22 @@ import Testing
         try await until { model.autopilotShown?.decided(at: "call_roast")?.changed == true }
         #expect(model.autopilotShown?.decided(at: "call_roast")?.current == "Dark and smoky")
         try await until { engine.requests("POST", "").contains { "\($0.body)".contains("the user picked Dark and smoky, not Warm and roasty") } }
+    }
+
+    /// A goal's calls in its bar, as its box sends them: the latest first, a few until Show More, and
+    /// each to change only while it runs.
+    @Test func aGoalsCallsShowInItsBarTheLatestFirstAndChangeableWhileItRuns() throws {
+        func goal(state: String) throws -> GoalPlan {
+            let calls = (1...5).map { ["id": "dec_\($0)", "text": "Which \($0)?", "choice": "Pick \($0)", "options": ["Pick \($0)", "Other"], "at": $0] as [String: Any] }
+            let json: [String: Any] = ["id": "goal_1", "bot": "bot_ada", "name": "Ada", "session": "ses_one", "goal": "Ship it", "state": state, "steps": [], "proposed": 1, "mode": "autopilot", "decided": calls]
+            return try JSONDecoder().decode(GoalPlan.self, from: JSONSerialization.data(withJSONObject: json))
+        }
+        let running = try goal(state: "running")
+        #expect(running.decided.count == 5)
+        #expect(GoalDecidedRows.calls(running).map(\.choice) == ["Pick 5", "Pick 4", "Pick 3"])
+        #expect(GoalDecidedRows.calls(running, all: true).count == 5)
+        #expect(GoalDecidedRows.calls(running).allSatisfy { $0.options != nil })
+        #expect(GoalDecidedRows.calls(try goal(state: "done")).allSatisfy { $0.options == nil }, "over, there's nothing left to redirect")
     }
 
     /// A question that marks the choice it recommends is what Autopilot goes ahead on: the Mac

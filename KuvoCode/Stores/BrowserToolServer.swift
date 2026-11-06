@@ -315,7 +315,7 @@ enum BrowserTools {
                   "text": ["type": "string", "description": "The call, as a question, like \"Which hosting?\"."],
                   "choice": ["type": "string", "description": "What you chose, in a few words."],
                   "why": ["type": "string", "description": "Why, in a few words, like \"free tier covers it\"."],
-                  "options": ["type": "array", "items": ["type": "string"], "description": "The choices there were, yours among them."]], "required": ["text", "choice"],
+                  "options": ["type": "array", "items": ["type": "string"], "description": "The choices there were, yours among them: the user picks another from these."]], "required": ["text", "choice"],
                  "description": "A call you made yourself, kept for the user to see; they may change it later."],
               "spent": ["type": "array", "items": ["type": "object", "properties": ["what": ["type": "string"], "amount": ["type": "number"]], "required": ["what", "amount"]], "description": "What you spent, by the plan's spend line."],
               "watching": ["type": "array", "items": ["type": "string"], "description": "What you're still watching, like \"DNS for driftwood.coffee\": all of it, as it is now."]]),

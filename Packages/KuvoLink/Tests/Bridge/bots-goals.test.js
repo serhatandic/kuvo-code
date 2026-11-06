@@ -1195,7 +1195,7 @@ test("on Autopilot, a question asked with a recommendation goes ahead on it at o
   const changed = await route("POST", `kuvo/work/goals/${first.id}`, { action: "decided", decided: goal.decided[1].id, choice: "Minimal" });
   assert.equal(changed.body.goal.decided[1].yours.choice, "Minimal");
   assert.match(prompts.at(-1).text, /^\[Decision changed\] .*Which direction should the site take\?.*Minimal.*Warm and roasty/s);
-  assert.deepEqual(prompts.at(-1).metadata, { kuvo: { note: { from: "Goal", line: "You picked Minimal" } } });
+  assert.deepEqual(prompts.at(-1).metadata, { kuvo: { note: { from: "Autopilot", line: "You picked Minimal" } } }, "told in the session that asked");
   assert.equal((await route("POST", `kuvo/work/goals/${first.id}`, { action: "decided", decided: "dec_none", choice: "Minimal" })).status, 404);
   assert.equal((await route("POST", `kuvo/work/goals/${first.id}`, { action: "decided", decided: goal.decided[1].id })).status, 400, "say which choice");
 });

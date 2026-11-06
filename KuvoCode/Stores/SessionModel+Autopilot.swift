@@ -24,6 +24,18 @@ struct AutopilotShown: Decodable, Equatable {
         /// Your choice since.
         var yours: Yours?
 
+        /// One of a goal's, as its card shows it.
+        init(goal call: GoalPlan.Decided, changeable: Bool) {
+            id = call.id
+            text = call.text
+            choice = call.choice
+            why = call.why
+            options = changeable ? call.options : nil
+            session = call.session
+            at = call.at
+            yours = call.yours.map { Yours(choice: $0.choice, at: $0.at) }
+        }
+
         /// What it goes with now: yours, once you've picked.
         var current: String { yours?.choice ?? choice }
         /// You picked another than it went with.

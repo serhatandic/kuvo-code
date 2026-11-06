@@ -283,6 +283,38 @@ public struct GoalPlan: Decodable, Sendable, Hashable, Identifiable {
 
     public enum Cadence: String, Codable, Sendable, CaseIterable { case day, week, milestones, none }
 
+    /// A call the bot made on its own, or a question that went ahead on what it recommended: what
+    /// it was, what it went with and why, the choices there were, the session that asked, and your
+    /// choice since.
+    public struct Decided: Codable, Sendable, Equatable, Identifiable {
+        public struct Yours: Codable, Sendable, Equatable {
+            public let choice: String
+            public let at: Double
+            public init(choice: String, at: Double) {
+                self.choice = choice
+                self.at = at
+            }
+        }
+        public let id: String
+        public let text: String
+        public let choice: String
+        public let why: String?
+        public let options: [String]?
+        public let session: String?
+        public let at: Double
+        public let yours: Yours?
+        public init(id: String, text: String, choice: String, why: String? = nil, options: [String]? = nil, session: String? = nil, at: Double, yours: Yours? = nil) {
+            self.id = id
+            self.text = text
+            self.choice = choice
+            self.why = why
+            self.options = options
+            self.session = session
+            self.at = at
+            self.yours = yours
+        }
+    }
+
     /// How it runs: asking you the calls that are yours, or on Autopilot, deciding what its research
     /// settles and stopping only at what only you can do. One setting with its bot's conversation.
     public enum Mode: String, Codable, Sendable { case interactive, autopilot }
@@ -327,8 +359,10 @@ public struct GoalPlan: Decodable, Sendable, Hashable, Identifiable {
     public let folders: [Folder]
     /// How it runs (Interactive from a box before Autopilot).
     public let mode: Mode
+    /// The calls made on its way, the latest last.
+    public let decided: [Decided]
 
-    public init(id: String, bot: String, name: String, session: String, goal: String, title: String? = nil, state: State, steps: [Step], checks: [Check] = [], spend: [Spend] = [], public: [Public] = [], projects: [String] = [], wake: Bool = false, digest: Cadence = .none, ends: Double? = nil, proposed: Double, started: Double? = nil, ended: Double? = nil, waiting: [Waiting] = [], paused: [Paused] = [], waited: Double = 0, watching: [String] = [], next: Double? = nil, lastDigest: Digest? = nil, report: String? = nil, alone: Bool, folders: [Folder] = [], mode: Mode = .interactive) {
+    public init(id: String, bot: String, name: String, session: String, goal: String, title: String? = nil, state: State, steps: [Step], checks: [Check] = [], spend: [Spend] = [], public: [Public] = [], projects: [String] = [], wake: Bool = false, digest: Cadence = .none, ends: Double? = nil, proposed: Double, started: Double? = nil, ended: Double? = nil, waiting: [Waiting] = [], paused: [Paused] = [], waited: Double = 0, watching: [String] = [], next: Double? = nil, lastDigest: Digest? = nil, report: String? = nil, alone: Bool, folders: [Folder] = [], mode: Mode = .interactive, decided: [Decided] = []) {
         self.id = id
         self.bot = bot
         self.name = name
@@ -357,9 +391,10 @@ public struct GoalPlan: Decodable, Sendable, Hashable, Identifiable {
         self.alone = alone
         self.folders = folders
         self.mode = mode
+        self.decided = decided
     }
 
-    private enum CodingKeys: String, CodingKey { case id, bot, name, session, goal, title, state, steps, checks, spend, `public`, projects, wake, digest, ends, proposed, started, ended, waiting, paused, waited, watching, next, lastDigest, report, alone, folders, mode }
+    private enum CodingKeys: String, CodingKey { case id, bot, name, session, goal, title, state, steps, checks, spend, `public`, projects, wake, digest, ends, proposed, started, ended, waiting, paused, waited, watching, next, lastDigest, report, alone, folders, mode, decided }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -391,6 +426,7 @@ public struct GoalPlan: Decodable, Sendable, Hashable, Identifiable {
         alone = (try? container.decode(Bool.self, forKey: .alone)) ?? false
         folders = (try? container.decode([Lenient<Folder>].self, forKey: .folders))?.compactMap(\.value) ?? []
         mode = (try? container.decode(Mode.self, forKey: .mode)) ?? .interactive
+        decided = (try? container.decode([Lenient<Decided>].self, forKey: .decided))?.compactMap(\.value) ?? []
     }
 
     /// What only you can do, first on the card: the checks that need you.
@@ -424,7 +460,7 @@ public struct GoalPlanList: Decodable, Sendable, Equatable {
 /// Your answer to a goal (`POST kuvo/work/goals/<id>`): start it with your limits, not
 /// now, or stop it; while it runs, change its limits, or put away what waits for you.
 public struct GoalPlanAnswer: Encodable, Sendable {
-    public enum Action: String, Encodable, Sendable { case start, decline, stop, change, clear, projects }
+    public enum Action: String, Encodable, Sendable { case start, decline, stop, change, clear, projects, decided }
     /// A spend line's cap and period, as you set them on the card.
     public struct SpendChange: Encodable, Sendable, Equatable {
         public var cap: Double?
@@ -449,6 +485,9 @@ public struct GoalPlanAnswer: Encodable, Sendable {
     public var projects: [String]? = nil
     /// How it runs, as you set it on Start or switch it while it runs.
     public var mode: GoalPlan.Mode? = nil
+    /// A call it made, and your choice on it (`decided`).
+    public var call: String? = nil
+    public var choice: String? = nil
 
     /// Start it. `ends`: the end you picked; `clearsEnd`: you picked none where the bot had
     /// proposed one, which takes it away (left out, the bot's stays).
@@ -470,10 +509,19 @@ public struct GoalPlanAnswer: Encodable, Sendable {
         answer.projects = projects
         return answer
     }
+    /// Your choice on a call it made: the same confirms it, another has it go that way.
+    public static func decided(_ call: String, choice: String) -> GoalPlanAnswer {
+        var answer = GoalPlanAnswer(action: .decided, wake: nil, digest: nil, ends: nil, clearsEnd: false, spend: nil, waiting: nil)
+        answer.call = call
+        answer.choice = choice
+        return answer
+    }
     public static let decline = GoalPlanAnswer(action: .decline, wake: nil, digest: nil, ends: nil, clearsEnd: false, spend: nil, waiting: nil)
     public static let stop = GoalPlanAnswer(action: .stop, wake: nil, digest: nil, ends: nil, clearsEnd: false, spend: nil, waiting: nil)
 
-    private enum CodingKeys: String, CodingKey { case action, wake, digest, ends, spend, waiting, projects, mode }
+    private enum CodingKeys: String, CodingKey { case action, wake, digest, ends, spend, waiting, projects, mode, choice
+        case call = "decided"
+    }
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
@@ -489,6 +537,8 @@ public struct GoalPlanAnswer: Encodable, Sendable {
         try container.encodeIfPresent(waiting, forKey: .waiting)
         try container.encodeIfPresent(projects, forKey: .projects)
         try container.encodeIfPresent(mode, forKey: .mode)
+        try container.encodeIfPresent(call, forKey: .call)
+        try container.encodeIfPresent(choice, forKey: .choice)
     }
 }
 

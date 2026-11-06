@@ -32,7 +32,7 @@ import { placeOfSession } from "../letters/letter";
 import { readWakes } from "../areas/wakes";
 import { periodEnd, periodOf, startOfDay, timeGiven } from "./clock";
 import { asksIn, permissionWords, type PendingQuestion } from "./answers";
-import { goAheadOnQuestion, isAutopilot, setAutopilot } from "./autopilot";
+import { decidedByYou as decidedInConversation, goAheadOnQuestion, isAutopilot, setAutopilot } from "./autopilot";
 import type { EngineSession } from "../engine/sessions";
 import { keepAwake, keepsAwake, onPower } from "./awake";
 import { noteWorkChanged, WORK_FOLDER } from "./changes";
@@ -686,7 +686,7 @@ const modeName = (mode: GoalMode) => (mode === "autopilot" ? "Autopilot" : "Inte
 // plan's spending caps what it spends, and its conversations' modes what they may do.
 function howItRuns(mode: GoalMode): string {
   if (mode === "autopilot") return [
-    "How it runs: Autopilot. The user wants it done without being asked. Make every call your research settles yourself, taste and close options too, by what serves the goal best: keep each with goal_progress (decided: what, your choice, why), say it in a line, and go on.",
+    "How it runs: Autopilot. The user wants it done without being asked. Make every call your research settles yourself, taste and close options too, by what serves the goal best: keep each with goal_progress (decided: what, your choice, why, the choices there were), say it in a line, and go on.",
     "Take the plan's steps all the way, publishing, submitting, posting and sending included: the user's Start approved them.",
     "Stop only at a real blocker, what only the user can do: pay for something on their own account (a membership, a subscription), sign in, make an account, hand over a key or a code, or anything destructive that can't be undone. Keep it as waiting, and carry on with everything that doesn't depend on it; asked with the question tool, it has no choice marked, so it waits for them and they're notified.",
     "Anything else you do ask, mark your recommendation (Recommended): you go ahead on it at once, and the user's later answer confirms or redirects it. What's outside the plan still waits for the user, and you spend only what the plan names.",
@@ -893,6 +893,17 @@ export function addDecided(bot: string, item: Omit<GoalDecidedShape, "id" | "at"
   return added;
 }
 
+/** Your choice on a call a question went ahead on, on the goal that shows it too. */
+export function yoursOnGoal(conversation: string, form: string, choice: string, file = GOALS_FILE): void {
+  const bots = changeKept(all => all.flatMap(goal => {
+    const call = goal.state === "running" ? goal.decided?.find(each => each.id === `ask:${conversation}:${form}`) : undefined;
+    if (!call) return [];
+    call.yours = { choice, at: Date.now() };
+    return [goal.bot];
+  }), file);
+  for (const bot of bots) noteWorkChanged(bot);
+}
+
 // Your choice on a call the bot made on its own: the same confirms it, quietly; another has the
 // bot go that way from here.
 async function decidedByYou(id: string, given: Record<string, unknown>, targets: () => Target[], file: string): Promise<{ goal: GoalPlanShape } | { refused: GoalRefusal }> {
@@ -903,6 +914,15 @@ async function decidedByYou(id: string, given: Record<string, unknown>, targets:
   if (goal.state !== "running") return { refused: { status: 400, message: "That goal isn't running." } };
   const decided = goal.decided?.find(each => each.id === given.decided);
   if (!decided) return { refused: { status: 404, message: "There's no such call on it." } };
+  // One a question went ahead on: its conversation's, which it tells (and which keeps it here too).
+  const asked = decided.id.match(/^ask:([^:]+):(.+)$/);
+  if (asked) {
+    const place = await placeOfSession(asked[1], targets()).catch(() => null);
+    if (!place) return { refused: { status: 404, message: "That conversation isn't here." } };
+    const answered = await decidedInConversation(place.target, asked[1], asked[2], choice);
+    if ("status" in answered) return { refused: { status: answered.status, message: answered.message } };
+    return { goal: shown(readKept(file).find(each => each.id === id) ?? goal) };
+  }
   const was = decided.yours?.choice ?? decided.choice;
   // Kept once the bot is told, so a choice that didn't reach it can be made again.
   if (choice.toLowerCase() !== was.toLowerCase() && !await tellBot(goal, `[Decision changed] For "${decided.text}" the user picked ${choice}, not ${was} as you decided. Go that way from here: redo what depends on it, and say in a line what changes.`, `You picked ${choice}`, targets)) {

@@ -7902,7 +7902,7 @@ async function answerGoal(id, given, targets, file = GOALS_FILE) {
   if (action === "projects")
     return goalProjects(id, given.projects, file);
   if (action === "decided")
-    return decidedByYou(id, given, targets, file);
+    return decidedByYou2(id, given, targets, file);
   if (action !== "start" && action !== "decline" && action !== "stop")
     return { refused: { status: 400, message: "Say start, change, clear, decided, projects, decline or stop (action)." } };
   if (given.mode !== undefined && !MODES.includes(given.mode))
@@ -8111,7 +8111,7 @@ var modeName = (mode) => mode === "autopilot" ? "Autopilot" : "Interactive";
 function howItRuns(mode) {
   if (mode === "autopilot")
     return [
-      "How it runs: Autopilot. The user wants it done without being asked. Make every call your research settles yourself, taste and close options too, by what serves the goal best: keep each with goal_progress (decided: what, your choice, why), say it in a line, and go on.",
+      "How it runs: Autopilot. The user wants it done without being asked. Make every call your research settles yourself, taste and close options too, by what serves the goal best: keep each with goal_progress (decided: what, your choice, why, the choices there were), say it in a line, and go on.",
       "Take the plan's steps all the way, publishing, submitting, posting and sending included: the user's Start approved them.",
       "Stop only at a real blocker, what only the user can do: pay for something on their own account (a membership, a subscription), sign in, make an account, hand over a key or a code, or anything destructive that can't be undone. Keep it as waiting, and carry on with everything that doesn't depend on it; asked with the question tool, it has no choice marked, so it waits for them and they're notified.",
       "Anything else you do ask, mark your recommendation (Recommended): you go ahead on it at once, and the user's later answer confirms or redirects it. What's outside the plan still waits for the user, and you spend only what the plan names."
@@ -8281,7 +8281,18 @@ function addDecided(bot, item, file = GOALS_FILE, key) {
     noteWorkChanged(bot);
   return added;
 }
-async function decidedByYou(id, given, targets, file) {
+function yoursOnGoal(conversation, form, choice, file = GOALS_FILE) {
+  const bots = changeKept((all) => all.flatMap((goal) => {
+    const call = goal.state === "running" ? goal.decided?.find((each) => each.id === `ask:${conversation}:${form}`) : undefined;
+    if (!call)
+      return [];
+    call.yours = { choice, at: Date.now() };
+    return [goal.bot];
+  }), file);
+  for (const bot of bots)
+    noteWorkChanged(bot);
+}
+async function decidedByYou2(id, given, targets, file) {
   const choice = line(given.choice, 200);
   if (!choice)
     return { refused: { status: 400, message: "Say your choice (choice)." } };
@@ -8293,6 +8304,16 @@ async function decidedByYou(id, given, targets, file) {
   const decided = goal.decided?.find((each) => each.id === given.decided);
   if (!decided)
     return { refused: { status: 404, message: "There's no such call on it." } };
+  const asked = decided.id.match(/^ask:([^:]+):(.+)$/);
+  if (asked) {
+    const place = await placeOfSession(asked[1], targets()).catch(() => null);
+    if (!place)
+      return { refused: { status: 404, message: "That conversation isn't here." } };
+    const answered = await decidedByYou(place.target, asked[1], asked[2], choice);
+    if ("status" in answered)
+      return { refused: { status: answered.status, message: answered.message } };
+    return { goal: shown(readKept(file).find((each) => each.id === id) ?? goal) };
+  }
   const was = decided.yours?.choice ?? decided.choice;
   if (choice.toLowerCase() !== was.toLowerCase() && !await tellBot2(goal, `[Decision changed] For "${decided.text}" the user picked ${choice}, not ${was} as you decided. Go that way from here: redo what depends on it, and say in a line what changes.`, `You picked ${choice}`, targets)) {
     return { refused: { status: 502, message: "The bot couldn't be told: try again." } };
@@ -8993,7 +9014,7 @@ async function goAhead(target, conversation, asker, id, recommended, file, signa
     }, undefined, `ask:${conversation.id}:${id}`);
   return kept;
 }
-async function decidedByYou2(target, conversation, id, choice, file = DECIDED_FILE) {
+async function decidedByYou(target, conversation, id, choice, file = DECIDED_FILE) {
   const made = decidedIn(conversation, file).find((each) => each.id === id);
   if (!made)
     return { status: 404, message: "There's no such call in that conversation." };
@@ -9009,6 +9030,7 @@ async function decidedByYou2(target, conversation, id, choice, file = DECIDED_FI
     if (kept)
       kept.yours = { choice, at: Date.now() };
   }, file);
+  yoursOnGoal(conversation, id, choice);
   return { decided: decidedIn(conversation, file) };
 }
 
@@ -24350,7 +24372,7 @@ async function* autopilotRoute(context) {
     return yield* json(200, shown3(now));
   }
   if (method === "POST") {
-    const changed = await decidedByYou2(at.target, id, given.decided, given.choice.trim().slice(0, 200));
+    const changed = await decidedByYou(at.target, id, given.decided, given.choice.trim().slice(0, 200));
     if ("status" in changed)
       return yield* json(changed.status, { message: changed.message });
     return yield* json(200, shown3(at.data));
