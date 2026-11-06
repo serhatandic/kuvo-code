@@ -1736,9 +1736,9 @@ private struct BotRow: View {
             ShimmerText(text: "Working…")
         } else if case let helpers = workspace.helpersAtWork(in: bot.sessionID), helpers > 0 {
             ShimmerText(text: helpers == 1 ? "Working on a task…" : "Working on \(helpers) tasks…")
-        } else if !bots.paused.contains(bot.id), case let overseen = workspace.overseen(by: bot.id), overseen.contains(where: { workspace.isWorking($0.id) }) {
+        } else if bots.isOverseeingWork(bot, in: workspace) {
             // Every session it oversees, while one is at it (one waiting on you shows on its own row).
-            ShimmerText(text: Oversight.overseeing(count: overseen.count))
+            ShimmerText(text: Oversight.overseeing(count: workspace.overseen(by: bot.id).count))
         } else if let place = bots.waitingFor(bot) {
             // What you changed while its machine was away, on its way once it's back.
             BotState(systemImage: "clock.arrow.circlepath", isSet: false) { Text("Changes waiting for \(place)") }

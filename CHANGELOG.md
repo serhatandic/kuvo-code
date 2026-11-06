@@ -16,6 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- A bot whose sessions are at work no longer looks asleep (or idle) in the sidebar, its tab and its header: its face works while any session it oversees does, as its row's "Overseeing" line already said.
 - A Markdown file in the Artifacts popover shows drawn (headings, bold, code, lists, diagrams), as in the panel's Files, instead of its raw `#` and backticks.
 - A bot's steps that have nothing to do with the browser (checking its sessions, setting its job, looking up its vault) now say what they did, instead of "Used the browser", and the line over a turn's steps counts every step it opens to.
 - A step where an agent reads another agent's conversation, or writes to it, says whom by name, never by its address.
