@@ -366,7 +366,13 @@ extension HostInterface {
             }
             continuation.onTermination = { _ in reading.cancel() }
         }
-        return HTTPResponse(status: response.statusCode, headers: ["Content-Type": response.value(forHTTPHeaderField: "Content-Type") ?? "application/json"], stream: stream)
+        // As the app said it: its type, how it may be kept, and that it's the app's own (`passed`),
+        // without which the box takes this for the app not being there.
+        var headers = ["Content-Type": response.value(forHTTPHeaderField: "Content-Type") ?? "application/json"]
+        for name in ["X-Kuvo-Answer", "Cache-Control"] {
+            if let value = response.value(forHTTPHeaderField: name) { headers[name] = value }
+        }
+        return HTTPResponse(status: response.statusCode, headers: headers, stream: stream)
     }
 
     /// What only the open app answers, asked while it isn't.

@@ -16,6 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- Kuvo Code for iPhone finds your Mac's usage, browser sign-ins, machines and other things only the open app answers again, with this Mac's work running in the background: they'd stopped reaching your phone. What your accounts have used also reaches it by itself when Kuvo Code has just started, and one reading that can't be sent no longer loses them all.
 - **Autopilot**, in the Mode menu or with **/autopilot**: a conversation, a chat or a bot's conversation decides for itself and nothing waits for you: what only you can do, like a sign-in or a payment, it leaves undone and lists at the end. Where it would have asked you to choose, it goes with the choice it recommends and says so in the conversation (**Went with Warm and roasty · best reviewed**); **Change** picks another, and the agent goes that way from there. While it's on, an **✈ Autopilot** chip sits before the mode, and its **×** turns it off. Conversations start Interactive, asking you as before. A goal's card sets it too, as one setting with its bot's conversation. <!-- new: keyword/autopilot -->
 - The coding agents' bridge, this Mac's box or the engine, if stuck, no longer keeps running after it's stopped or after Kuvo Code crashes: it's ended within seconds.
 - Integrations on a machine stay up to date with your Mac closed: when the machine updates itself, the ones you added move to the versions that update brings, rather than waiting for your Mac to connect.

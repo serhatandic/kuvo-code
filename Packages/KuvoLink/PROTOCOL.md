@@ -2274,7 +2274,9 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   name, plan, brand color, mark as a PNG to tint, notice, whether it's outdated, and its lines as
   UsageKit writes them), whether a refresh is under way and when the last one ended;
   `kuvo/usage/events` streams it as it changes, and `POST kuvo/usage/refresh` refreshes it all.
-  A Mac without the usage panel answers 404. Times are seconds since 1970.
+  While the usage panel isn't up, `kuvo/usage` and the refresh answer 404; the stream answers 200
+  with an empty line and stays open, saying nothing more until it's up. Lines that JSON can't carry are left out. Times are
+  seconds since 1970.
 
 ### Goals
 
@@ -2800,7 +2802,9 @@ machine's, while its keeper's next start is more than half a minute away (`run/e
 in seconds since 1970), "This machine's engine keeps stopping. It's started again in about N
 minutes." The rest, the Mac's own routes (`kuvo/info`,
 usage, machines, hosts, `kuvo/mac`, `kuvo/claude-code`, asks, the engine starting over), it hands
-the app (`link/route`), as it comes, `503 {"message"}` at once when the app isn't answering. Mail your
+the app (`link/route`), as it comes, whether its app or its keeper runs the box (the keeper's host
+passes on the app's answer as it came, `x-kuvo-answer` with it), `503 {"message"}` at once when the
+app isn't answering. Mail your
 machines send it, it takes itself, as a machine's bridge does ("Peers"): their documents (from
 0.9.62), and their agents, letters and group chats' mail (from 0.9.63).
 What it asks the app goes through the app's `hello` proof first (the host interface, above), and

@@ -825,7 +825,9 @@ final class PhoneLink {
                 }
             }
         }
-        if route == "kuvo/usage/events" { return Self.following { link?.usageJSON() } }
+        // Open while the panel comes up (it takes a moment after the app starts), so the phone hears
+        // it the moment it's there.
+        if route == "kuvo/usage/events" { return Self.following(waits: true) { link?.usageJSON() } }
         return AsyncThrowingStream { [routed] continuation in
             Task { @MainActor in
                 let (status, body) = link?.answer(routed) ?? (503, Data())
@@ -1217,8 +1219,11 @@ final class PhoneLink {
         #if DEBUG
         if Self.usageSample { return Data(Self.sampleUsage.utf8) }
         #endif
-        return UsageMenuBar.shared.phoneUsage()
+        return usagePanel()
     }
+
+    /// What the panel reports (a test's panel in its place: the real one puts an item in the menu bar).
+    var usagePanel: @MainActor () -> Data? = { UsageMenuBar.shared.phoneUsage() }
 
     #if DEBUG
     /// KUVO_DEMO_USAGE=sample: the usage tracker stays out (as with `off`), and phones get these
@@ -1320,21 +1325,26 @@ final class PhoneLink {
     }
 
     /// A response that doesn't end: `current()` now, as a line of JSON, and again each time it
-    /// changes, until the phone stops reading. 404 when there's nothing to follow (no usage panel,
-    /// no such chat), as reading it once answers.
-    nonisolated private static func following(_ current: @escaping @MainActor () -> Data?) -> AsyncThrowingStream<LinkResponsePart, Error> {
+    /// changes, until the phone stops reading. 404 when there's nothing to follow (no such chat), as
+    /// reading it once answers; `waits`, it's something that comes later: open meanwhile, with
+    /// an empty line and then nothing until it does.
+    nonisolated private static func following(waits: Bool = false, _ current: @escaping @MainActor () -> Data?) -> AsyncThrowingStream<LinkResponsePart, Error> {
         AsyncThrowingStream { continuation in
             let task = Task { @MainActor in
-                guard current() != nil else {
+                guard waits || current() != nil else {
                     continuation.yield(.head(status: 404, headers: [:]))
                     continuation.finish()
                     return
                 }
                 continuation.yield(.head(status: 200, headers: ["content-type": "application/x-ndjson"]))
+                // An empty line when it has nothing yet: what passes it on holds the head back
+                // until the first bytes, and the phone hears the app's there.
+                if waits, current() == nil { continuation.yield(.body(Data("\n".utf8))) }
                 var last: Data?
                 while !Task.isCancelled {
-                    guard let now = current() else { break }
-                    if now != last {
+                    let now = current()
+                    guard now != nil || waits else { break }
+                    if let now, now != last {
                         continuation.yield(.body(now + Data("\n".utf8)))
                         last = now
                     }
