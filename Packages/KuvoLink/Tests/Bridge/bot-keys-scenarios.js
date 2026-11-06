@@ -114,7 +114,7 @@ export async function standInHost(password) {
       case "/keys/delete":
         host.keys.delete(given.name);
         // What happens elsewhere while the box waits for its answer.
-        host.onDelete?.();
+        await host.onDelete?.();
         return answer(200, {});
       // The vault's values, kept by id as the Keychain would (vault-host.test.js): only to the box,
       // with the secret the app started it with (`vaultSecret`), never to what read its folder.

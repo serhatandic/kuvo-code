@@ -84,18 +84,37 @@ test("its app not answering: that one waits, still naming its key, the rest go o
   assert.equal(host.keys.has(FIGMA), false);
 });
 
-test("this Mac's box starting, as its app or keeper starts it: its settings come up to date with no client asking", { timeout: 60_000 }, async () => {
+test("this Mac's box starting, as its app or keeper starts it: up to date before it says where it is, so before its engine starts; a key to take away after", { timeout: 60_000 }, async () => {
   start();
+  // Chrome DevTools, as an older version added it, on this Mac.
+  const catalog = path.join(home, "bin", "mcp-catalog.json");
+  const pin = "chrome-devtools-mcp@1.12.0";
+  fs.writeFileSync(catalog, JSON.stringify({ macOnly: ["chrome-devtools"], servers: [{ id: "chrome-devtools", title: "Chrome DevTools", summary: "", access: "local", macOnly: true,
+    settings: { type: "local", command: ["kuvo-npx", pin, "--isolated", "--no-usage-statistics"], environment: { KUVO_NPX_APART: "fetch" } } }] }));
+  fs.writeFileSync(settingsFile, JSON.stringify({ mcp: { servers: { ...older(), "chrome-devtools": { type: "local", command: ["npx", "-y", "chrome-devtools-mcp@latest"] } } } }));
+  // Its app takes its time over the key, as it may while it's starting.
+  let letGo = () => {};
+  const held = new Promise(resolve => { letGo = resolve; });
+  host.onDelete = () => { host.onDelete = null; return held; };
   let poke = () => {};
   const watcher = fs.watch(path.dirname(settingsFile), () => poke());
   // (Its password, which the box took out of this process's environment as it loaded here.)
   const box = await served({ ...process.env, KUVO_HOST_PASSWORD: PASSWORD, KUVO_TEST_NO_PEERS: "1" });
   try {
+    const atItsAddress = servers();
+    assert.deepEqual(atItsAddress.todoist, todoistNow);
+    assert.deepEqual(atItsAddress.mine, { type: "remote", url: "https://mine.example", codemode: false });
+    assert.deepEqual(atItsAddress["chrome-devtools"].command, ["kuvo-npx", pin, "--isolated", "--no-usage-statistics"]);
+    assert.deepEqual(atItsAddress.figma, older().figma, "not while its key is its app's to take away");
+
+    letGo();
     while (servers().figma.url === undefined) await new Promise(resolve => { poke = resolve; });
-    assert.deepEqual(servers(), { figma: figmaNow, todoist: todoistNow, mine: { type: "remote", url: "https://mine.example", codemode: false } });
+    assert.deepEqual(servers().figma, figmaNow);
     assert.equal(host.keys.has(FIGMA), false);
   } finally {
+    letGo();
     watcher.close();
     await box.stop();
+    fs.rmSync(catalog, { force: true });
   }
 });

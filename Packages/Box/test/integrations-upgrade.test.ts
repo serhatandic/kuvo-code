@@ -1,7 +1,7 @@
-// A machine's integrations brought up to date with no Mac there: as its bridge starts, from the
-// catalog it has (a Mac's, or the one its own update brought). A Mac still does the same as it
-// connects (`Integrations.upgrade`, `MCPSettings.upgrade`), so each order of the two has to come to the
-// same settings, with nothing anyone else changed lost. The catalog is the one the Mac's own code
+// A box's integrations brought up to date by the box, with no client there: from the catalogs it has
+// (a Mac's, or the ones its own update brought). An older Kuvo Code on a Mac still does the same as
+// it connects to a box not newer than it, so each order of the two has to come to the same settings,
+// with nothing anyone else changed lost. The catalog is the one the Mac's own code
 // writes (Vectors/routes/box, scripts/route-vectors.sh), and a Mac's writes are what its
 // `EngineConfig` sends: each server's whole value at its path.
 import "./safety"
@@ -13,7 +13,7 @@ import crypto from "node:crypto"
 import { changeSettings, SERVERS } from "../src/link/areas/config"
 import { upgradeIntegrations } from "../src/link/areas/integrations"
 import { addressOf, newKey, publicOf } from "../src/link/crypto/keys"
-import { BOX_KEYS, RUN, shownRoot } from "../src/link/home"
+import { BOT_KEYS, BOTS, BOX_KEYS, RUN, shownRoot } from "../src/link/home"
 import { keyWork } from "../src/link/keys"
 // @ts-expect-error (The bridge tests' stand-in, in plain JavaScript.)
 import { relayStandIn } from "../../KuvoLink/Tests/Bridge/relay-stand-in.js"
@@ -205,14 +205,8 @@ test("with no catalog yet, integrations stay as they are but for their tools", a
   expect(kept(FIGMA)).toBe(true)
 })
 
-/** A machine with `servers` in its settings and a phone paired, so it runs a bridge; `before` sets up
- * what else it starts with, and `alsoAtStart` goes along with its start. Answers with its settings once
- * it's on the relay (with `until`, once they're as it says). */
-async function machineStarts(servers: unknown, { before = () => {}, alsoAtStart = async () => {}, until }: {
-  before?: (home: string) => void
-  alsoAtStart?: (env: Record<string, string>) => Promise<unknown>
-  until?: (settings: any) => boolean
-} = {}) {
+/** A machine's folder, with `servers` in its settings, a catalog and a key; no Mac, no bridge. */
+function machineFolder(servers: unknown) {
   const machineRoot = realpathSync(mkdtempSync(join(root, "m-")))
   const home = join(machineRoot, ".kuvo-code")
   const settings = join(home, "box", "opencode.json")
@@ -222,6 +216,20 @@ async function machineStarts(servers: unknown, { before = () => {}, alsoAtStart 
   writeFileSync(join(home, "bin", "integrations.json"), readFileSync(catalogFile))
   writeFileSync(settings, JSON.stringify({ mcp: { servers } }))
   writeFileSync(join(home, "box", "keys", FIGMA), "tok")
+  // (On this test's runtime: the engine's Bun is one only with BUN_BE_BUN.)
+  const env = { PATH: process.env.PATH!, HOME: machineRoot, KUVO_HOME: home, TMPDIR: tmpdir(), ...(process.env.BUN_BE_BUN ? { BUN_BE_BUN: "1" } : {}) }
+  return { home, settings, env }
+}
+
+/** A machine with `servers` in its settings and a phone paired, so it runs a bridge; `before` sets up
+ * what else it starts with, and `alsoAtStart` goes along with its start. Answers with its settings once
+ * it's on the relay (with `until`, once they're as it says). */
+async function machineStarts(servers: unknown, { before = () => {}, alsoAtStart = async () => {}, until }: {
+  before?: (home: string) => void
+  alsoAtStart?: (env: Record<string, string>) => Promise<unknown>
+  until?: (settings: any) => boolean
+} = {}) {
+  const { home, settings, env } = machineFolder(servers)
   before(home)
 
   let poke = () => {}
@@ -231,8 +239,6 @@ async function machineStarts(servers: unknown, { before = () => {}, alsoAtStart 
     id: "lab", name: "lab", relay: relay.url, secret: secret.toString("base64url"), key: newKey().toString("base64url"),
     phones: [{ key: publicOf(newKey()).toString("base64url"), name: "iPhone", added: Math.floor(Date.now() / 1000), from: "pair", pairing: crypto.randomBytes(16).toString("base64url") }],
   }), { mode: 0o600 })
-  // (On this test's runtime: the engine's Bun is one only with BUN_BE_BUN.)
-  const env = { PATH: process.env.PATH!, HOME: machineRoot, KUVO_HOME: home, TMPDIR: tmpdir(), ...(process.env.BUN_BE_BUN ? { BUN_BE_BUN: "1" } : {}) }
   const bridge = Bun.spawn([process.execPath, main, "run"], { env, stdio: ["ignore", "ignore", "pipe"] })
   try {
     const also = alsoAtStart(env)
@@ -306,3 +312,117 @@ test("an update on trial, its bridge welcomed by the relay: confirmed, and what 
   expect(settings.mcp.servers).toEqual(upToDate(MACHINE))
   expect(figmaKept).toBe(false)
 }, SPAWNS)
+
+test("a machine's engine about to start, with no bridge and no Mac: its settings are up to date before it reads them", async () => {
+  const { settings, home, env } = machineFolder(oldServers(MACHINE))
+  const start = Bun.spawn([process.execPath, main, "engine-config"], { env, stdout: "pipe", stderr: "pipe" })
+  const printed = await new Response(start.stdout).text()
+  expect(await start.exited).toBe(0)
+  expect(JSON.parse(printed)).toBeObject()
+  expect(JSON.parse(readFileSync(settings, "utf8")).mcp.servers).toEqual(upToDate(MACHINE))
+  expect(existsSync(join(home, "box", "keys", FIGMA))).toBe(false)
+}, SPAWNS)
+
+test("that command with no settings file there, as this Mac's app runs it: it prints what it prints and makes none", async () => {
+  const { settings, env } = machineFolder({})
+  rmSync(settings)
+  const start = Bun.spawn([process.execPath, main, "engine-config"], { env, stdout: "pipe", stderr: "pipe" })
+  expect(JSON.parse(await new Response(start.stdout).text())).toBeObject()
+  expect(await start.exited).toBe(0)
+  expect(existsSync(settings)).toBe(false)
+}, SPAWNS)
+
+test("a Mac connecting to a machine with no bridge, having put its newer catalogs there: what it reads back is up to date", async () => {
+  const { settings, env } = machineFolder(oldServers(MACHINE))
+  const adopt = Bun.spawn([process.execPath, main, "box", "adopt"], { env, stdin: "ignore", stdout: "pipe", stderr: "pipe" })
+  const answer = JSON.parse(await new Response(adopt.stdout).text())
+  expect(await adopt.exited).toBe(0)
+  expect(answer.status).toBe("own")
+  expect(answer.settings.mcp.servers).toEqual(upToDate(MACHINE))
+  expect(JSON.parse(readFileSync(settings, "utf8")).mcp.servers).toEqual(upToDate(MACHINE))
+}, SPAWNS)
+
+const popularFile = join(here, "../../KuvoLink/Vectors/routes/box/mcp-catalog.json")
+const popular: { id: string; settings: { command: string[]; environment: Record<string, string> } }[] = JSON.parse(readFileSync(popularFile, "utf8")).servers
+const devTools = popular.find(each => each.id === "chrome-devtools")!.settings
+const devToolsPin = devTools.command[1]
+const devToolsAdded = (command: string[], environment?: Record<string, string>) => write({ "chrome-devtools": { type: "local", command, ...(environment ? { environment } : {}) } })
+const onMac = () => upgradeIntegrations(catalogFile, file, lock, popularFile, true)
+const devToolsNow = () => read().mcp.servers["chrome-devtools"]
+
+test("Chrome DevTools as an older version added it, on a Mac: pinned, run apart, its own profile, no usage statistics", async () => {
+  devToolsAdded(["npx", "-y", "chrome-devtools-mcp@latest"])
+  await onMac()
+  expect(devToolsNow()).toEqual({ type: "local", codemode: false, command: devTools.command, environment: devTools.environment })
+})
+
+test("Chrome DevTools' version, by number: 1.9.9 moves up, one newer than Kuvo Code's stays", async () => {
+  devToolsAdded(["npx", "-y", "chrome-devtools-mcp@1.9.9"])
+  await onMac()
+  expect(devToolsNow().command[1]).toBe(devToolsPin)
+
+  const newer = `chrome-devtools-mcp@${devToolsPin.split("@")[1]}9`
+  devToolsAdded(["npx", "-y", newer])
+  await onMac()
+  expect(devToolsNow().command[1]).toBe(newer)
+})
+
+test("Chrome DevTools keeps your options and environment, and doing it again writes nothing", async () => {
+  devToolsAdded(["npx", "-y", "chrome-devtools-mcp@latest", "--no-isolated", "--headless", "--usage-statistics=true"], { MY_VAR: "x", KUVO_NPX_APART: "1" })
+  await onMac()
+  const now = devToolsNow()
+  expect(now.command).toEqual(["kuvo-npx", devToolsPin, "--no-isolated", "--headless", "--usage-statistics=true"])
+  expect(now.environment).toEqual({ ...devTools.environment, MY_VAR: "x" })
+
+  const was = written()
+  await onMac()
+  expect(written()).toBe(was)
+})
+
+test("another server named chrome-devtools is yours, and on a machine, where it isn't offered, one stays as it is", async () => {
+  devToolsAdded(["node", "my-chrome-server.js"])
+  await onMac()
+  expect(devToolsNow().command).toEqual(["node", "my-chrome-server.js"])
+
+  devToolsAdded(["npx", "-y", "chrome-devtools-mcp@latest"])
+  await upgradeIntegrations(catalogFile, file, lock, popularFile, false)
+  expect(devToolsNow()).toEqual({ type: "local", command: ["npx", "-y", "chrome-devtools-mcp@latest"], codemode: false })
+})
+
+test("a package its maker's server replaces stays off if you turned it off, with the Code Mode you chose", async () => {
+  const { figma } = oldServers()
+  write({ figma: { ...figma, disabled: true, codemode: true } })
+  await upgrade()
+  expect(read().mcp.servers.figma).toEqual({ ...pinned("figma"), disabled: true, codemode: true })
+  expect(kept(FIGMA)).toBe(false)
+
+  const was = written()
+  await upgrade()
+  expect(written()).toBe(was)
+})
+
+test("a bot's own key for a package its maker's server replaces goes with it, and its folder's copy of the server; its others stay", async () => {
+  const folder = join(BOTS, "mira", "workspace", ".opencode")
+  const own = `${FIGMA}__MIRA`, other = `${TODOIST}__MIRA`
+  const botSettings = join(folder, "opencode.json")
+  mkdirSync(folder, { recursive: true })
+  mkdirSync(BOT_KEYS, { recursive: true })
+  writeFileSync(join(BOT_KEYS, own), "bot-tok")
+  writeFileSync(join(BOT_KEYS, other), "bot-tok")
+  const todoistHers = { type: "local", environment: { TODOIST_API_KEY: `{file:${BOT_KEYS}/${other}}` } }
+  writeFileSync(botSettings, JSON.stringify({ mcp: { servers: {
+    figma: { type: "local", environment: { FIGMA_API_KEY: `{file:${BOT_KEYS}/${own}}` } },
+    todoist: todoistHers,
+  } } }))
+  try {
+    write(oldServers())
+    await upgrade()
+    expect(existsSync(join(BOT_KEYS, own))).toBe(false)
+    expect(existsSync(join(BOT_KEYS, other))).toBe(true)
+    expect(JSON.parse(readFileSync(botSettings, "utf8")).mcp.servers).toEqual({ todoist: todoistHers })
+    expect(read().mcp.servers.figma).toEqual(pinned("figma"))
+  } finally {
+    rmSync(join(BOTS, "mira"), { recursive: true, force: true })
+    rmSync(join(BOT_KEYS, other), { force: true })
+  }
+})

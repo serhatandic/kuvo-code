@@ -31,7 +31,7 @@ import { refreshBotsKeys } from "./areas/bot-keys";
 import { setBoxKey } from "./areas/box-keys";
 import { addMacDefaults, changeSettings, ownsSettings, readSettings } from "./areas/config";
 import { engineConnect } from "./areas/engine";
-import { answerOnce, reconnectEverywhere, upgradeIntegrations } from "./areas/integrations";
+import { answerOnce, reconnectEverywhere, upgradeBeforeEngine, upgradeIntegrations } from "./areas/integrations";
 import { keepSkillTrashClear } from "./areas/skills";
 import { sendWakes } from "./areas/wakes";
 import { finishDeletes, forgetLeftKeys } from "./bots/edit";
@@ -416,7 +416,11 @@ async function box(command: string): Promise<void> {
     case "adopt": {
       let seed: { settings?: unknown; keys?: unknown } | null = null;
       try { seed = JSON.parse((await input()) || "null"); } catch {}
-      return say(adoptBox(seed));
+      const adopted = adoptBox(seed);
+      // As its catalogs have them now: a Mac runs this as it connects, having just put newer ones here,
+      // whether or not this box has a bridge or starts its engine again. (Stays when adopting goes.)
+      await upgradeIntegrations().catch(() => {});
+      return say({ ...adopted, settings: readSettings().settings ?? adopted.settings });
     }
     // COMPAT(beta.1 box-read-change): `box read` and `box change`, which beta.1 runs over SSH (`box route` took their place). Goes when 0.8.0 ships.
     case "read": {
@@ -555,6 +559,10 @@ async function serve(): Promise<void> {
   fs.mkdirSync(RUN, { recursive: true, mode: 0o700 });
   // This Mac's settings with what its engine starts with, before a client reads them.
   if (IS_MAC) addMacDefaults();
+  // And as its catalogs have them now, before it says where it is: this Mac's engine starts only after
+  // that. (Any key to take away comes after, below: its app may not answer yet, and an engine
+  // running takes settings as they change.)
+  try { upgradeBeforeEngine(); } catch {}
   // This Mac's notices for your phones, held while you're at a computer, as a machine's are.
   if (IS_MAC) macLink.hold = macNoticeHold();
   const server = serveBox(password, engineHandler(readEngineFile, { name: os.hostname() }, readBridgeFile, () => {}, macLink.hold));
@@ -586,9 +594,9 @@ async function serve(): Promise<void> {
     watchVaultAsks(macTell, id => macLink.hold?.resolve(id));
     watchSandboxAsks(macTell, id => macLink.hold?.resolve(id));
   }
-  // Its integrations and servers as its catalog has them now, and its bots' folders' settings as its
-  // catalog and keys are (after an update, say), as a machine's bridge does as it starts; where its
-  // keys can't be reached yet, they stay as they were.
+  // Any integration's key to take away for its maker's server (the rest is done, above), and its bots'
+  // folders' settings as its catalog and keys are (after an update, say), as a machine's bridge does
+  // as it starts; where its keys can't be reached yet, they stay as they were.
   upgradeIntegrations().catch(() => {});
   refreshBotsKeys().catch(() => {});
   // Keys of bots deleted while they couldn't be reached.
@@ -814,7 +822,13 @@ if (main) {
   else if (mode === "leave") leave(argument);
   // A machine's start scripts' (`kuvo-launch`): what its engine starts with, its OPENCODE_CONFIG_CONTENT
   // with what some providers need on top, as this box last learned it (PROTOCOL.md, "Settings per box").
-  else if (mode === "engine-config") process.stdout.write(engineConfigContent(process.env.OPENCODE_CONFIG_CONTENT));
+  else if (mode === "engine-config") {
+    // A machine's start runs this before each start of its engine, with or without a bridge or a Mac:
+    // its settings as its catalogs have them, before the engine reads them. (This Mac's app runs it
+    // too, for what it prints, not as its box: `serve` did this, and there's no settings file here.)
+    await upgradeIntegrations().catch(() => {});
+    process.stdout.write(engineConfigContent(process.env.OPENCODE_CONFIG_CONTENT));
+  }
   // A machine's start scripts' too: the PATH your login shell sets up there (`~/.local/bin`, nvm's
   // node), then the folders of the one it was run with, for the engine and what it starts, which a
   // start over SSH or from cron doesn't get. Nothing when the shell doesn't give it, for the start
