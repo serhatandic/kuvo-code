@@ -366,6 +366,8 @@ import WebKit
     @Test func aReadAnotherOvertookStillShowsWhatItRead() async throws {
         defer { done() }
         let routes = HeldRoutes()
+        // Whatever stays held when an expectation fails midway is let go, not left suspended.
+        defer { routes.releaseAll() }
         let base = try #require(URL(string: engine.url + "/"))
         Vaults.shared.client = { $0 == BoxClient.mac ? BoxClient(box: BoxClient.mac, transport: LocalBox { request in
             AsyncThrowingStream { answer in
