@@ -83,20 +83,26 @@ public enum ServerProcessError: LocalizedError {
 /// A private opencode server that lives exactly as long as this object.
 ///
 /// Started as `opencode serve --stdio --port 0`: the server picks a free port,
-/// prints `{"url": …}` as its first line, and exits when its stdin closes, so
-/// it can't outlive the app even if the app crashes.
+/// prints `{"url": …}` as its first line, and exits when its stdin closes. One that can't hear
+/// that (held up as it starts, or stuck) is stopped by its `ServerWatcher`, so it can't outlive
+/// the app even if the app crashes.
 public final class ServerProcess: @unchecked Sendable {
     public let endpoint: ServerEndpoint
     private let process: Process
     private let stdin: Pipe
+    private let watcher: ServerWatcher
     private let log: LogTail
 
-    private init(endpoint: ServerEndpoint, process: Process, stdin: Pipe, log: LogTail) {
+    private init(endpoint: ServerEndpoint, process: Process, stdin: Pipe, watcher: ServerWatcher, log: LogTail) {
         self.endpoint = endpoint
         self.process = process
         self.stdin = stdin
+        self.watcher = watcher
         self.log = log
     }
+
+    /// The process seeing it gone.
+    var watcherID: Int32? { watcher.processID }
 
     public var isRunning: Bool { process.isRunning }
 
@@ -195,12 +201,21 @@ public final class ServerProcess: @unchecked Sendable {
             }
         }
         let exit = Arrival<Int32>()
+        let watcher = ServerWatcher()
         process.terminationHandler = { process in
+            watcher.letGo()
             exit.deliver(process.terminationStatus)
             onExit(process.terminationStatus)
         }
         let firstLine = FirstLine(stdout.fileHandleForReading)
         try process.run()
+        do {
+            try watcher.watch(process.processIdentifier)
+        } catch {
+            // Never one nothing would stop.
+            kill(process.processIdentifier, SIGKILL)
+            throw error
+        }
         if let firstInput { try? stdin.fileHandleForWriting.write(contentsOf: firstInput) }
 
         let url: URL
@@ -216,22 +231,21 @@ public final class ServerProcess: @unchecked Sendable {
                 return try await group.next()!
             }
         } catch {
-            // As `stop` does: its stdin closed (a server's signal to go), and it's stopped.
+            // As `stop` does (its stdin closed, a server's signal to go, and seen gone), and told
+            // at once: it has had its time.
             try? stdin.fileHandleForWriting.close()
             process.terminate()
+            watcher.letGo()
             throw error
         }
-        return ServerProcess(endpoint: ServerEndpoint(url: url, password: password), process: process, stdin: stdin, log: log)
+        return ServerProcess(endpoint: ServerEndpoint(url: url, password: password), process: process, stdin: stdin, watcher: watcher, log: log)
     }
 
-    /// Closing stdin is the server's signal to shut down cleanly.
+    /// Closing stdin is the server's signal to shut down cleanly; one that doesn't is stopped
+    /// (`ServerWatcher`), whether or not this process is still here by then.
     public func stop() {
         try? stdin.fileHandleForWriting.close()
-        let process = process
-        Task.detached {
-            try? await Task.sleep(for: .seconds(5))
-            if process.isRunning { process.terminate() }
-        }
+        watcher.letGo()
     }
 
     deinit { stop() }
@@ -261,6 +275,61 @@ public final class ServerProcess: @unchecked Sendable {
             .replacingOccurrences(of: "+", with: "-")
             .replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: "=", with: "")
+    }
+}
+
+/// Sees a server gone, however what started it goes. macOS stops nothing when a process's parent
+/// dies, and a server can only hear that by running: one held up before its code runs (at a privacy
+/// prompt nobody can answer) or stuck in it would stay for good. So a small process of its own
+/// waits on a pipe only this one holds, which the system closes as this process goes, even in a
+/// crash, and `letGo` closes when the server is to stop. The server then has its time to go, is
+/// told to, has that time again, and is killed, by its own process number. One that has gone ends
+/// it at once.
+final class ServerWatcher: @unchecked Sendable {
+    private static let script = """
+        trap '' HUP INT TERM
+        read line
+        wait_for_it() {
+            i=0
+            while [ "$i" -lt 50 ]; do
+                kill -0 "$1" 2>/dev/null || exit 0
+                /bin/sleep 0.1
+                i=$((i + 1))
+            done
+        }
+        wait_for_it "$1"
+        kill -TERM "$1" 2>/dev/null
+        wait_for_it "$1"
+        kill -KILL "$1" 2>/dev/null
+        """
+
+    private let held = Pipe.unshared()
+    private let lock = NSLock()
+    private var isHolding = true
+    private(set) var processID: Int32?
+
+    /// Started for `server`. It starts in `/` with nothing in its environment and reads no file,
+    /// so it never brings up a prompt of macOS's.
+    func watch(_ server: Int32) throws {
+        let process = Process()
+        process.executableURL = URL(filePath: "/bin/sh")
+        process.arguments = ["-c", Self.script, "kuvo-server-watcher", String(server)]
+        process.environment = [:]
+        process.currentDirectoryURL = URL(filePath: "/")
+        process.standardInput = held
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        processID = process.processIdentifier
+    }
+
+    /// The server has gone or is to go.
+    func letGo() {
+        let wasHolding = lock.withLock {
+            defer { isHolding = false }
+            return isHolding
+        }
+        if wasHolding { try? held.fileHandleForWriting.close() }
     }
 }
 
