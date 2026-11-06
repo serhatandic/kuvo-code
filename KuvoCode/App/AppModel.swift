@@ -113,7 +113,7 @@ final class AppModel {
     @ObservationIgnored private(set) lazy var engineConfig = EngineConfig(remote: BoxSettings(client: box(BoxClient.mac)), file: engineFolders.configFile)
     /// Machines taking settings changed here, a moment after the last change (`settingsSaved`).
     @ObservationIgnored var settingsSync: Task<Void, Never>?
-    /// This Mac's settings being read and brought up to date (`prepareSettings`).
+    /// This Mac's settings being read (`prepareSettings`).
     @ObservationIgnored private var settingsPreparation: Task<Void, Never>?
     /// Engines to start again with new settings once nothing's at work in them: "" for this Mac's,
     /// else a machine's ID (see `renewEngines`).
@@ -234,8 +234,7 @@ final class AppModel {
         workspace.tabs = tabs
         utilities.addToMessage = { [weak self] in self?.tabs.addToMessage($0) }
         utilities.attachToMessage = { [weak self] in self?.tabs.attachToMessage($0) }
-        // This Mac's box up (at the engine's start, late, or again): its settings read, and
-        // brought up to date.
+        // This Mac's box up (at the engine's start, late, or again): its settings read.
         box.onStarted = { [weak self] in Task { await self?.prepareSettings() } }
         // Hold ⇧⌘Space to talk instead of typing; Whisper, once it's downloaded, kept with the app's data.
         if !AppInfo.isHostingTests { dictation.installShortcut() }
@@ -470,9 +469,7 @@ final class AppModel {
             followAgents()
             let endpoint = try await boxEngine()
             guard launch == self.launch else { return }
-            // The settings as they are now, brought up to date (integrations' and servers' upgrades,
-            // after an update); a box slow to answer holds this up a few seconds at most, and the
-            // engine takes them as they change.
+            // The settings as they are now; a box slow to answer holds this up a few seconds at most.
             await Self.atMost(.seconds(10)) { [weak self] in await self?.prepareSettings() }
             guard launch == self.launch else { return }
             // COMPAT(0.7 provider-compatibility): what the app learned before its box did, gone. Goes 3 months after 0.8.0.
@@ -766,17 +763,13 @@ final class AppModel {
         Awake.shared.keeper = nil
     }
 
-    /// This Mac's settings read from its box and brought up to date (integrations' and servers'
-    /// upgrades), saved there: one at a time, whoever asks (the engine's start, the box up late or
-    /// again, a new machine's copy).
+    /// This Mac's settings read from its box, which keeps them up to date itself: one at a time,
+    /// whoever asks (the engine's start, the box up late or again, a new machine's copy).
     func prepareSettings() async {
         if let settingsPreparation { return await settingsPreparation.value }
         let config = engineConfig
         let preparing = Task { @MainActor in
             await config.refresh()
-            Integrations.upgrade(config)
-            MCPCatalog.upgrade(config)
-            MCPSettings.upgrade(config)
             _ = await config.settled()
         }
         settingsPreparation = preparing

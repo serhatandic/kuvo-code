@@ -5,8 +5,8 @@ import Testing
 
 /// Settings › Integrations: a key you bring never goes into the engine's settings file, only the
 /// file the engine reads it from (a bot's own key, its own file; on a machine, a file in its
-/// folder there); an integration added by an older version is brought up to date; and the agent,
-/// going to an integration's site in the browser, is pointed to its tools.
+/// folder there); and the agent, going to an integration's site in the browser, is pointed to its
+/// tools.
 @MainActor
 @Suite struct IntegrationsTests {
     let config: EngineConfig
@@ -69,39 +69,6 @@ import Testing
             }
         }
         #expect(!Integrations.macOnly.isEmpty)
-    }
-
-    /// A machine's integrations brought up to date as it starts: their keys named where that
-    /// machine keeps them, whatever named them before; and that isn't a change of yours to offer
-    /// to other computers.
-    @Test func aMachinesAreBroughtUpToDateWhereItKeepsItsKeys() throws {
-        for old in ["{env:KUVO_KEY_GITHUB_TOKEN}", "{file:~/.kuvo-code/keys/KUVO_KEY_GITHUB_TOKEN}", "{file:\(IntegrationKeys.folder.path)/KUVO_KEY_GITHUB_TOKEN}"] {
-            #expect(Integrations.keyFiles(in: .string("Bearer " + old), on: "lab") == .string("Bearer {file:~/.kuvo-code/box/keys/KUVO_KEY_GITHUB_TOKEN}"), "\(old)")
-        }
-        config.set(.object(["servers": .object(["x": .object(["url": .string("https://x.example")])])]), at: ["mcp"])
-        let before = config.changes.count
-        MCPSettings.upgrade(config)
-        #expect(config.value(at: ["mcp", "servers", "x", "codemode"]) == .bool(false))
-        #expect(config.changes.count == before)
-    }
-
-    /// One added when keys were named in the engine's environment: named by their files now, and
-    /// bringing it up to date again changes nothing.
-    @Test func anOlderOneIsBroughtUpToDate() throws {
-        let service = try #require(withKeys.first { if case .package = $0.way { true } else { false } })
-        var settings = try #require(Integrations.settings(for: service)?.object)
-        let name = try #require(Integrations.keyNames(in: .object(settings)).first)
-        settings["codemode"] = nil
-        let old = text(.object(settings)).replacingOccurrences(of: IntegrationKeys.reference(name).replacingOccurrences(of: "/", with: "\\/"), with: "{env:\(name)}")
-            .replacingOccurrences(of: IntegrationKeys.reference(name), with: "{env:\(name)}")
-        config.set(try JSONDecoder().decode(JSONValue.self, from: Data(old.utf8)), at: MCPSettings.path + [service.id])
-        #expect(text(config.value(at: MCPSettings.path + [service.id])).contains("{env:"))
-        Integrations.upgrade(config)
-        let now = config.value(at: MCPSettings.path + [service.id])
-        #expect(!text(now).contains("{env:"))
-        #expect(now?["codemode"] == .bool(false))
-        Integrations.upgrade(config)
-        #expect(config.value(at: MCPSettings.path + [service.id]) == now)
     }
 
     /// The agent asking the browser for an integration's site is pointed to its tools; another

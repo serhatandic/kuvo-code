@@ -66,44 +66,6 @@ nonisolated enum MCPCatalog {
     /// Servers that use this Mac's own apps (its Chrome), left out of machines' settings.
     static let macOnly = ["chrome-devtools"]
 
-    /// Chrome DevTools as an older version added it (through npx, unpinned, an older version), as
-    /// it's offered now: a newer version you chose stays, and so do your options (--no-isolated
-    /// keeps a profile of its own) and anything else set on it.
-    @MainActor static func upgrade(_ config: EngineConfig) {
-        guard case .object(var server)? = config.value(at: MCPSettings.path + ["chrome-devtools"]),
-              case .array(let old)? = server["command"] else { return }
-        let words = old.compactMap(\.string)
-        guard let at = words.firstIndex(where: { $0 == "chrome-devtools-mcp" || $0.hasPrefix("chrome-devtools-mcp@") }) else { return }
-        let version = words[at].split(separator: "@", maxSplits: 1).dropFirst().first.map(String.init)
-        let package = isOlder(version, than: chromeDevTools[0]) ? chromeDevTools[0] : words[at]
-        var options = Array(words[(at + 1)...])
-        for (flag, opposite) in [("--no-usage-statistics", "--usage-statistics"), ("--isolated", "--no-isolated")]
-        where !options.contains(where: { $0 == flag || $0 == opposite || $0.hasPrefix(opposite + "=") }) {
-            options.insert(flag, at: 0)
-        }
-        let command = [Launcher.name, package] + options
-        var environment = server["environment"]?.object ?? [:]
-        for (name, value) in chromeDevToolsEnvironment where environment[name] == nil || name == Integrations.apart {
-            environment[name] = .string(value)
-        }
-        guard command != words || environment != (server["environment"]?.object ?? [:]) else { return }
-        server["command"] = .array(command.map(JSONValue.string))
-        server["environment"] = .object(environment)
-        config.set(.object(server), at: MCPSettings.path + ["chrome-devtools"], noted: false)
-    }
-
-    /// Whether `version` ("1.10.2"; nil or "latest", as unpinned) is before `pinned`'s.
-    private static func isOlder(_ version: String?, than pinned: String) -> Bool {
-        guard let version, version != "latest", let wanted = pinned.split(separator: "@").last else { return true }
-        func numbers(_ text: Substring) -> [Int] { text.split(separator: ".").map { Int($0.prefix { $0.isNumber }) ?? 0 } }
-        let mine = numbers(Substring(version)), theirs = numbers(wanted)
-        for index in 0..<max(mine.count, theirs.count) {
-            let a = index < mine.count ? mine[index] : 0, b = index < theirs.count ? theirs[index] : 0
-            if a != b { return a < b }
-        }
-        return false
-    }
-
     static let servers: [Server] = [
         Server(id: "linear", title: "Linear", summary: "Issues, projects and cycles", access: .signIn, settings: remote("https://mcp.linear.app/mcp")),
         Server(id: "sentry", title: "Sentry", summary: "Errors and performance problems in your apps", access: .signIn, settings: remote("https://mcp.sentry.dev/mcp")),
