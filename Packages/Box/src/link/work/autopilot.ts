@@ -164,7 +164,7 @@ async function lookAtWaiting(target: Target, conversation: Pick<EngineSession, "
     if (signal?.aborted) break;
     const calls = await goAheadOnQuestion(target, conversation, question, file, signal);
     if (calls) made.push(...calls);
-    else settled = false;
+    else if (!pausedByYou(conversation)) settled = false;
   }
   await declineSharedIn(target, conversation, signal);
   return { made, settled };
@@ -243,6 +243,7 @@ const decline = (target: Target, asker: string, id: string, signal?: AbortSignal
 // Answered with what it recommends, and kept: with the conversation, and on its bot's running goal
 // (as the goal's own Autopilot keeps it), so the goal shows it too; declined where it recommends
 // nothing. Not while you have that goal paused: it waits for you.
+const pausedByYou = (conversation: Pick<EngineSession, "id" | "metadata">) => !!runningGoalOf(conversation.id, worksFor(conversation)?.bot ?? null)?.heldByYou;
 async function goAhead(target: Target, conversation: Pick<EngineSession, "id" | "metadata">, asker: string, id: string, recommended: Recommendation | null, file: string, signal?: AbortSignal, asked?: string | null): Promise<DecidedShape[] | null> {
   const goal = runningGoalOf(conversation.id, worksFor(conversation)?.bot ?? null);
   if (goal?.heldByYou) return null;

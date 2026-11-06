@@ -51,6 +51,8 @@ let refusesForms;
 let refusesList;
 const refusesFormsOnce = new Set();
 const refusesFormsOf = new Set();
+const repliesOf = new Set();
+let formLooks = 0;
 let followers = [];
 const followed = new Set();
 const engine = http.createServer((request, response) => {
@@ -68,6 +70,7 @@ const engine = http.createServer((request, response) => {
     if (url.pathname === "/api/session/active") return reply({ data: Object.fromEntries(Object.keys(atWorkOn).map(id => [id, {}])) });
     const pageOf = url.pathname.match(/^\/api\/session\/([^/]+)\/message$/);
     if (pageOf && atWorkOn[decodeURIComponent(pageOf[1])]) return reply({ data: [{ type: "assistant", content: [{ type: "tool", name: `${atWorkOn[decodeURIComponent(pageOf[1])]}_search`, state: { status: "running" } }] }] });
+    if (pageOf && repliesOf.has(decodeURIComponent(pageOf[1]))) return reply({ data: [{ type: "assistant", id: "msg_done", time: { created: 2 }, content: [{ type: "text", text: "All done." }] }] });
     if (url.pathname === "/api/event") {
       response.writeHead(200, { "content-type": "text/event-stream" });
       response.write(": hello\n\n");
@@ -113,6 +116,7 @@ const engine = http.createServer((request, response) => {
       return reply({ data: true });
     }
     const forms = url.pathname.match(/^\/api\/session\/([^/]+)\/form$/);
+    if (forms) formLooks++;
     if (forms && refusesForms) return reply({ message: "Not now." }, 500);
     if (forms && refusesFormsOnce.delete(decodeURIComponent(forms[1]))) return reply({ message: "Not now." }, 500);
     if (forms && refusesFormsOf.has(decodeURIComponent(forms[1]))) return reply({ message: "Not now." }, 500);
@@ -161,6 +165,8 @@ beforeEach(() => {
   refusesForms = false;
   refusesList = false;
   refusesFormsOnce.clear();
+  repliesOf.clear();
+  formLooks = 0;
   refusesFormsOf.clear();
   declined = [];
   shared = [];
@@ -492,17 +498,39 @@ test("a conversation on Autopilot whose forms can't be read as the box connects,
   assert.deepEqual(answered.map(each => each.form).sort(), ["frm_read", "frm_unread"]);
 });
 
-test("a question its starter follows that can't be read on either look: the box isn't past it, and it's seen to when it can be", async () => {
+test("a question its starter follows that can't be read as the box connects: the box isn't past it, and the starter is told when it can be", async () => {
   fs.mkdirSync(path.join(home, "run", "work"), { recursive: true });
   fs.writeFileSync(path.join(home, "run", "work", "told.json"), JSON.stringify({ since: 0, sessions: {} }));
-  waiting.set("ses_menu", [QUESTION("frm_both", "ses_menu", ROASTS)]);
-  refusesFormsOf.add("ses_menu");
+  waiting.set("ses_copy", [QUESTION("frm_both", "ses_copy", ROASTS)]);
+  refusesFormsOf.add("ses_copy");
   const { tellAll } = await watcher();
-  assert.deepEqual(answered, []);
+  assert.deepEqual(prompts, []);
   refusesFormsOf.clear();
   await tellAll();
-  assert.deepEqual(answered.map(each => each.form), ["frm_both"]);
-  assert.deepEqual(prompts, [], "its starter isn't told of what went ahead");
+  await tellAll();
+  assert.match(JSON.stringify(prompts.filter(each => each.to === "ses_lead")), /frm_both/);
+});
+
+test("what's asked can't be read, and the session finished: its starter is still told it finished", async () => {
+  fs.mkdirSync(path.join(home, "run", "work"), { recursive: true });
+  fs.writeFileSync(path.join(home, "run", "work", "told.json"), JSON.stringify({ since: 0, sessions: {} }));
+  sessions.set("ses_done", session("ses_done", { metadata: { kuvo: { startedBy: "ses_lead", wake: ["asks", "finished"] } } }));
+  repliesOf.add("ses_done");
+  refusesFormsOf.add("ses_done");
+  const { tellAll } = await watcher();
+  await tellAll();
+  assert.match(JSON.stringify(prompts.filter(each => each.to === "ses_lead")), /All done|ses_done/);
+});
+
+test("a conversation on Autopilot that can't be read at all: looked at a few times, not forever", async () => {
+  waiting.set("ses_away", [QUESTION("frm_never", "ses_away", ROASTS)]);
+  refusesFormsOf.add("ses_away");
+  const { tellAll } = await watcher();
+  for (let round = 0; round < 12; round++) await tellAll();
+  const looks = formLooks;
+  assert.ok(looks > 1, "it looked again");
+  for (let round = 0; round < 12; round++) await tellAll();
+  assert.equal(formLooks, looks, "and then stopped");
 });
 
 test("the box stopped before it looks again: a watcher that's gone doesn't move on what's been told", async () => {

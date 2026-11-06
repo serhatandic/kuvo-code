@@ -8817,10 +8817,11 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
   };
   const tellWhatHappened = async (data, working) => {
     const starter = startedByOf(data);
-    const wakes = wakesOf(data);
     const was = readTold(toldFile)?.sessions[data.id] ?? {};
-    if (wakes.includes("asks")) {
+    let unreadAsks = false;
+    if (wakesOf(data).includes("asks")) {
       const { permissions, questions, whole } = await asksIn(source, data.id);
+      unreadAsks = !whole;
       for (const permission of permissions.filter((each) => !was.asks?.includes(each.id))) {
         const line = await wakeLine({ type: "permission.asked", data: { id: permission.id, sessionID: data.id, action: permission.action, resources: permission.resources } }, data, source);
         if (line)
@@ -8833,11 +8834,16 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
         tell(starter, `[Session asks] "${data.title || "New Session"}" (address ${data.id}) asks: ${question.text} (ask ${question.id}). Answer with answer_ask (answer), or tell the user in a line and carry on.`, true);
         noteTold(data.id, { ask: question.id });
       }
-      if (!whole)
-        throw new Error("Its questions couldn't be read.");
     }
-    if (!wakes.includes("finished") || working.has(data.id))
+    await tellIfFinished(data, working);
+    if (unreadAsks)
+      throw new Error("Its questions couldn't be read.");
+  };
+  const tellIfFinished = async (data, working) => {
+    if (!wakesOf(data).includes("finished") || working.has(data.id))
       return;
+    const starter = startedByOf(data);
+    const was = readTold(toldFile)?.sessions[data.id] ?? {};
     const at = now();
     const last = await lastReply(source, data.id);
     const waited = readTold(toldFile)?.waiting?.[data.id];
@@ -8862,34 +8868,26 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
       tell(starter, line, false);
     noteTold(data.id, { reply, turn: last.turn });
   };
-  let lookingAgain = false;
+  let startersTold = false;
   let looksAgain = 0;
-  const lookAtAutopilotAgain = () => {
-    if (signal?.aborted || lookingAgain || ++looksAgain >= CATCH_UP_TRIES)
-      return;
-    lookingAgain = true;
-    const timer = schedule(async () => {
-      lookingAgain = false;
-      if (signal?.aborted)
-        return;
-      if (!await catchUpAutopilot(source, undefined, signal).catch(() => false))
-        lookAtAutopilotAgain();
-    }, CATCH_UP_AGAIN);
-    timer?.unref?.();
-  };
   const catchingUp = async () => {
     if (signal?.aborted)
       return;
+    let again = false;
     try {
-      if (!await catchUpAutopilot(source, undefined, signal))
-        lookAtAutopilotAgain();
-      await catchUp();
-    } catch {
+      again = !await catchUpAutopilot(source, undefined, signal) && ++looksAgain < CATCH_UP_TRIES;
       if (signal?.aborted)
         return;
-      const timer = schedule(() => catchingUp(), CATCH_UP_AGAIN);
-      timer?.unref?.();
+      if (!startersTold)
+        await catchUp();
+      startersTold = true;
+    } catch {
+      again = true;
     }
+    if (!again || signal?.aborted)
+      return;
+    const timer = schedule(() => catchingUp(), CATCH_UP_AGAIN);
+    timer?.unref?.();
   };
   const caughtUp = Promise.all([catchingUp(), tellLateAnswers(targets, undefined, bridgeRuns).catch(() => {})]).then(() => {});
   const lateAgain = () => {
@@ -10465,7 +10463,7 @@ async function lookAtWaiting(target, conversation, file, signal) {
     const calls = await goAheadOnQuestion(target, conversation, question, file, signal);
     if (calls)
       made.push(...calls);
-    else
+    else if (!pausedByYou2(conversation))
       settled = false;
   }
   await declineSharedIn(target, conversation, signal);
@@ -10529,6 +10527,7 @@ async function declineSharedOnAutopilot(target, form, folder, signal) {
   return decline(target, SHARED, form.id, signal, folder);
 }
 var decline = (target, asker, id, signal, folder) => call(target, "DELETE", `/api/session/${encodeURIComponent(asker)}/form/${encodeURIComponent(id)}?message=${encodeURIComponent(LEFT_UNDONE_WORDS)}`, undefined, signal, folder).then(() => true, () => false);
+var pausedByYou2 = (conversation) => !!runningGoalOf(conversation.id, worksFor(conversation)?.bot ?? null)?.heldByYou;
 async function goAhead(target, conversation, asker, id, recommended, file, signal, asked) {
   const goal = runningGoalOf(conversation.id, worksFor(conversation)?.bot ?? null);
   if (goal?.heldByYou)
