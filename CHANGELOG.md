@@ -16,6 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- The coding agents' bridge, this Mac's box or the engine, if stuck, no longer keeps running after it's stopped or after Kuvo Code crashes: it's ended within seconds.
 - A password the browser saves, or a saved sign-in it looks for, is no longer missed when a conversation is reading the vault at the same moment.
 - A bot whose sessions are at work no longer looks asleep (or idle) in the sidebar, its tab and its header: it looks at work while any session it oversees works, as its row's "Overseeing" line already said.
 - The header of an agent's message card ("From …") has a highlight under the pointer whose corners now sit evenly inside the card's, and its one-line preview no longer slides out of line with the header as the card opens.
