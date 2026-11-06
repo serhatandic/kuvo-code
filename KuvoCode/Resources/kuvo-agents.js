@@ -7996,6 +7996,7 @@ ${others.map((path) => `- ${path}`).join(`
         if (String(call.toolCallId ?? "").startsWith("interaction_")) {
           const answer = await active.hooks.question({
             title: "Question",
+            toolCallID: call.toolCallId,
             fields: [{ key: "answer", title: "Question", description: call.title ?? "", required: true, type: "string", options: options.map((option) => ({ value: option.optionId, label: option.name ?? option.optionId })) }]
           });
           const chosen = answer?.answer;
@@ -23324,4 +23325,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 3179a17f56453036d5eed0a03a05dbfca632f657c21c1ca4ccc48bc0e66400ee
+// Built from Packages/Box/src/agents ac77f28ec576d7cbee1e6266896dc61c8fa7a4e302dc2b5c756eb3b7f6564c43

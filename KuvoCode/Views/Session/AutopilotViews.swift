@@ -6,6 +6,8 @@ extension EnvironmentValues {
     /// The calls Autopilot made in this conversation (or, a subagent's, the one it works for), by
     /// the tool call that asked.
     @Entry var autopilotCalls: [String: AutopilotShown.Call] = [:]
+    /// Those its subagents made, by the subagent's session: shown at its row.
+    @Entry var autopilotCallsOfSubagents: [String: [AutopilotShown.Call]] = [:]
     /// Your choice on one of them.
     @Entry var chooseOnAutopilot: (String, AutopilotShown.Call) -> Void = { _, _ in }
     /// Its steps' line shows their decided calls already: the steps themselves show as asked.

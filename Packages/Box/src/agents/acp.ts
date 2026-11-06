@@ -908,6 +908,7 @@ export class AcpThread implements Thread {
         if (String(call.toolCallId ?? "").startsWith("interaction_")) {
           const answer = await active.hooks.question({
             title: "Question",
+            toolCallID: call.toolCallId,
             fields: [{ key: "answer", title: "Question", description: call.title ?? "", required: true, type: "string", options: options.map((option) => ({ value: option.optionId, label: option.name ?? option.optionId })) }],
           })
           const chosen = answer?.answer

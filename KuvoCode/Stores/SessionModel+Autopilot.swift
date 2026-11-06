@@ -56,6 +56,30 @@ struct AutopilotShown: Decodable, Equatable {
     func decided(at call: String) -> Call? {
         decided.last { $0.call == call }
     }
+
+    /// Where its calls show in a conversation's rows: most at the step that asked (`byCall`, as
+    /// ever); a subagent's at the subagent's own row or step, with what it asked; and what has no
+    /// step here, under the rows.
+    struct Places: Equatable {
+        var bySubagent: [String: [Call]] = [:]
+        var alone: [Call] = []
+    }
+
+    /// `steps`, the tool calls in the rows; `subagents`, the sessions of the subagents among them;
+    /// `whole`, the rows go back to its start, so one not among them won't come in with earlier
+    /// ones; `subagent`, the conversation shown where it's a subagent, which shows only its own.
+    func places(steps: Set<String>, subagents: Set<String>, whole: Bool, subagent: String? = nil) -> Places {
+        var places = Places()
+        for call in decided {
+            if let asked = call.call, steps.contains(asked) { continue }
+            if subagent == nil, let session = call.session, subagents.contains(session) {
+                places.bySubagent[session, default: []].append(call)
+            } else if subagent == nil || call.session == subagent, whole || (call.call == nil && call.session == nil) {
+                places.alone.append(call)
+            }
+        }
+        return places
+    }
 }
 
 /// Autopilot in a conversation's Mode menu: on or off, or why it isn't to be had there.

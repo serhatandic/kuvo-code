@@ -3492,7 +3492,8 @@ what may be decided without asking. Every conversation is Interactive until it's
   (each `{id, text, choice, why?, options?, session?, call?, at, yours?}`: the question's form, what
   it asked, the choice it went with and why, the choices it had, the session that asked where it's
   a subagent's, the tool call that asked it (the form's `metadata.tool.id`, where it has one: a
-  client shows the call at that step), and your choice since). 404 where there's no such
+  client shows the call at that step; a subagent's at the subagent, and one with no step here under
+  the conversation), and your choice since). 404 where there's no such
   conversation. The agents bridge's questions carry `metadata.tool.id` too, as the engine's do, and
   what isn't its agent's question keeps its kind there (an MCP server's form, `mcp-elicitation`).
 - `PUT kuvo/sessions/<id>/autopilot` `{autopilot: bool}`: on or off; the answer as `GET`'s. It's

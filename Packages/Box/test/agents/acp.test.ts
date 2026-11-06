@@ -436,6 +436,18 @@ describe("ACP agents, nothing dropped", () => {
     expect(words(child)).toBe("There are 3.")
   })
 
+  test("Antigravity's question names its call, for a client to show what went ahead on it there", async () => {
+    sessions = undefined as unknown as Sessions
+    const agent = agentSaying([], [], { method: "session/request_permission", params: { toolCall: { toolCallId: "interaction_7", title: "Which roast?" }, options: [{ optionId: "warm", name: "Warm (Recommended)", kind: "allow_once" }, { optionId: "dark", name: "Dark", kind: "allow_once" }] } })
+    const started = run(agent)
+    await until(() => Boolean(sessions?.list(root).length && sessions.forms(sessions.list(root)[0].id).length))
+    const session = sessions.list(root)[0].id
+    const [form] = sessions.forms(session)
+    expect(form.metadata).toEqual({ kind: "question", tool: { id: "interaction_7" } })
+    sessions.replyForm(session, form.id, { answer: "warm" })
+    await started
+  })
+
   test("a form it asks you to fill in", async () => {
     sessions = undefined as unknown as Sessions
     const agent = agentSaying([], [], { method: "elicitation/create", params: { message: "Which branch?", requestedSchema: { type: "object", properties: { branch: { type: "string", enum: ["main", "dev"] } }, required: ["branch"] } } })

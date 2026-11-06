@@ -133,6 +133,38 @@ import Testing
         try await until { engine.requests("POST", "").contains { "\($0.body)".contains("the user picked Dark and smoky, not Warm and roasty") } }
     }
 
+    /// A call with no step of its own still shows, with what it asked: at its subagent's row, or
+    /// under the conversation. One whose step may be among earlier messages waits for them.
+    @Test func aCallWithNoStepOfItsOwnShowsAtItsSubagentOrUnderTheConversation() throws {
+        func call(_ id: String, asked: String? = nil, session: String? = nil) -> [String: Any] {
+            var call: [String: Any] = ["id": id, "text": "Which?", "choice": "A", "at": 1]
+            if let asked { call["call"] = asked }
+            if let session { call["session"] = session }
+            return call
+        }
+        let data = try JSONSerialization.data(withJSONObject: ["autopilot": true, "decided": [
+            call("at_step", asked: "call_seen"),
+            call("sub", asked: "call_inside", session: "ses_sub"),
+            call("deep", asked: "call_deep", session: "ses_deep"),
+            call("no_tool"),
+            call("gone", asked: "call_gone"),
+        ]])
+        let shown = try JSONDecoder().decode(AutopilotShown.self, from: data)
+        func ids(_ calls: [AutopilotShown.Call]) -> [String] { calls.map(\.id) }
+
+        let whole = shown.places(steps: ["call_seen"], subagents: ["ses_sub"], whole: true)
+        #expect(ids(whole.bySubagent["ses_sub"] ?? []) == ["sub"])
+        #expect(ids(whole.alone) == ["deep", "no_tool", "gone"])
+
+        // Earlier messages not read yet: only what has no step anywhere shows there.
+        #expect(ids(shown.places(steps: ["call_seen"], subagents: ["ses_sub"], whole: false).alone) == ["no_tool"])
+
+        // A subagent's own conversation: its own, at its steps or under them.
+        let own = shown.places(steps: [], subagents: [], whole: true, subagent: "ses_sub")
+        #expect(ids(own.alone) == ["sub"])
+        #expect(ids(shown.places(steps: ["call_inside"], subagents: [], whole: true, subagent: "ses_sub").alone).isEmpty)
+    }
+
     /// A goal's calls in its bar, as its box sends them: the latest first, a few until Show More, and
     /// each to change only while it runs.
     @Test func aGoalsCallsShowInItsBarTheLatestFirstAndChangeableWhileItRuns() throws {

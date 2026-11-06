@@ -75,8 +75,27 @@ struct TranscriptView: View {
         Dictionary((autopilotModel.autopilotShown?.decided ?? []).compactMap { call in call.call.map { ($0, call) } }) { _, latest in latest }
     }
 
+    /// Where its calls show, of those with no step of their own in `rows`.
+    private func autopilotPlaces(in rows: [Row]) -> AutopilotShown.Places {
+        guard let shown = autopilotModel.autopilotShown, !shown.decided.isEmpty else { return .init() }
+        var steps = Set<String>()
+        var subagents = Set<String>()
+        for row in rows {
+            switch row {
+            case .steps(_, let blocks, _):
+                for case .tool(let call) in blocks { steps.insert(call.id) }
+            case .subagent(let call):
+                if let session = call.state.metadata?["sessionID"]?.string ?? workspace.subagent(forStep: call.id)?.subagent.id { subagents.insert(session) }
+            default:
+                break
+            }
+        }
+        return shown.places(steps: steps, subagents: subagents, whole: !rows.isEmpty && !model.hasEarlier, subagent: workspace.root(of: model.id) == model.id ? nil : model.id)
+    }
+
     var body: some View {
         let rows = rows
+        let places = autopilotPlaces(in: rows)
         // More of a reply, in a row of its own, carries on from the row before rather than coming in.
         let added = rows.filter { !$0.continues }
         ConversationScroll(scroller: scroller, animation: rowCache.isBulk ? nil : Self.rowAnimation, change: RowCache.Change(count: added.count, last: added.last?.id), thinking: Self.thinking(in: rows),
@@ -103,6 +122,13 @@ struct TranscriptView: View {
             #else
             rowStack(rows)
             #endif
+            // Calls it made with no step here to show at, with what they asked.
+            if !places.alone.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(places.alone) { DecidedLine(call: $0, saysQuestion: true) }
+                }
+                .padding(.top, 10)
+            }
         }
         // The reply being written draws its words from it.
         .environment(model.writing)
@@ -115,6 +141,7 @@ struct TranscriptView: View {
         .environment(\.workAnswers, workAnswers)
         // The calls it made on Autopilot, where its questions would have waited.
         .environment(\.autopilotCalls, autopilotCalls)
+        .environment(\.autopilotCallsOfSubagents, places.bySubagent)
         .environment(\.chooseOnAutopilot) { [autopilotModel] choice, call in autopilotModel.choose(choice, on: call) }
         // The commands its agent asks to run outside the sandbox, whose rows say they were stopped
         // (by the conversation they ask as: the one at the top of its chain).
