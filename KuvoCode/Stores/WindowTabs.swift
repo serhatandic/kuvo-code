@@ -262,7 +262,8 @@ final class WindowTabs {
             worksBeside: workedBesideID,
             place: focusedDirectory.flatMap(RemoteFolder.machine(of:)),
             bots: Set(botsInView.filter { $0.machine == nil }.map(\.id)),
-            draft: sessionID == nil && groupID == nil ? selection?.text : nil
+            draft: sessionID == nil && groupID == nil ? selection?.text : nil,
+            panel: (workedBesideID ?? sessionID).map(app.utilities.panelOf)
         )
     }
 
