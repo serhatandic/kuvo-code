@@ -185,6 +185,9 @@ test("one held back that you approve: the agent is told, and it runs the next ti
   expect((await sandboxAsk("ses_approve", `echo approved > ${target}`)).text).toMatch(/held this back/)
 })
 
+// (On a Mac the ask goes up only once the box has read macOS's log for what the sandbox refused
+// (`log show`): about 2 s on a quiet Mac, 5 to 10 s on a busy one, and the box itself gives up on it
+// at 20 s. So this waits as long as that does, not the usual 5 s.)
 test("a conversation not in Auto asks you as before, without a review", async () => {
   conversation("ses_first", "askFirst", "Build it")
   const before = prompts.length
@@ -195,7 +198,7 @@ test("a conversation not in Auto asks you as before, without a review", async ()
   await call
   expect(prompts.length).toBe(before)
   expect(reviewer.reviewLog("ses_first").decisions).toEqual([])
-})
+}, 30_000)
 
 test("three refusals in a row pause Auto there: its run is stopped and what follows is held back, never asked", async () => {
   conversation("ses_pause", "auto", "Tidy")
