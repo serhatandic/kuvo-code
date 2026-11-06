@@ -69,7 +69,7 @@ struct TranscriptView: View {
         // More of a reply, in a row of its own, carries on from the row before rather than coming in.
         let added = rows.filter { !$0.continues }
         ConversationScroll(scroller: scroller, animation: rowCache.isBulk ? nil : Self.rowAnimation, change: RowCache.Change(count: added.count, last: added.last?.id), thinking: Self.thinking(in: rows),
-                           nearTop: model.hasEarlier ? { loadEarlier() } : nil, isWorking: { model.isRunning }, quote: { model.addQuote($0, how: "selection") }) {
+                           nearTop: model.hasEarlier ? { loadEarlier() } : nil, quote: { model.addQuote($0, how: "selection") }) {
             // Its top in view: the messages before, read and put ahead, the view staying put.
             if model.hasEarlier, !rows.isEmpty {
                 HStack(spacing: 8) {
@@ -250,7 +250,7 @@ struct TranscriptView: View {
                  whole: \.copiesWhole,
                  space: { row, index in index == 0 ? 0 : row.spacing(after: rows[index - 1]) },
                  pointer: { [hover] in hover.point(at: $0) }) { row, index in
-            RowView(row: row, directory: model.session.location.directory, folders: model.folders, heard: model.heard, cancel: model.cancelPending, undo: model.undo(from:), redo: model.redo, fork: fork(_:), retry: model.retry(_:), switchModel: switchModel, buildPlan: model.agent == "plan" && !isOffline ? { model.buildPlan() } as () -> Void : nil, reply: model.reply(to:))
+            RowView(row: row, scope: model.session.id, directory: model.session.location.directory, folders: model.folders, heard: model.heard, cancel: model.cancelPending, undo: model.undo(from:), redo: model.redo, fork: fork(_:), retry: model.retry(_:), switchModel: switchModel, buildPlan: model.agent == "plan" && !isOffline ? { model.buildPlan() } as () -> Void : nil, reply: model.reply(to:))
                 .equatable()
                 .environment(\.findHighlight, find.highlight(for: row.id))
                 .padding(.top, index == 0 ? 0 : row.spacing(after: rows[index - 1]))
@@ -262,7 +262,7 @@ struct TranscriptView: View {
     /// The rows, in the lazy stack (KUVO_PERF_LAZY).
     @ViewBuilder private func stackRows(_ rows: [Row]) -> some View {
         ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
-            RowView(row: row, directory: model.session.location.directory, folders: model.folders, heard: model.heard, cancel: model.cancelPending, undo: model.undo(from:), redo: model.redo, fork: fork(_:), retry: model.retry(_:), switchModel: switchModel, buildPlan: model.agent == "plan" && !isOffline ? { model.buildPlan() } as () -> Void : nil, reply: model.reply(to:))
+            RowView(row: row, scope: model.session.id, directory: model.session.location.directory, folders: model.folders, heard: model.heard, cancel: model.cancelPending, undo: model.undo(from:), redo: model.redo, fork: fork(_:), retry: model.retry(_:), switchModel: switchModel, buildPlan: model.agent == "plan" && !isOffline ? { model.buildPlan() } as () -> Void : nil, reply: model.reply(to:))
                 .equatable()
                 .environment(\.findHighlight, find.highlight(for: row.id))
                 .conversationRow(row.id)
@@ -795,6 +795,8 @@ private struct RowView: View, Equatable {
 
     let row: Row
     @Environment(\.bot) private var bot
+    /// The conversation it's in, which what you open in it is kept under.
+    let scope: String
     let directory: String
     let folders: () -> [String]
     /// When the model was last heard, and how far this Mac's clock is ahead of the engine's, as of
@@ -875,8 +877,8 @@ private struct RowView: View, Equatable {
             AssistantStepView(message: message, directory: directory, folders: folders, showsError: showsError)
         case .more(let message, _):
             AssistantStepView(message: message, directory: directory, folders: folders, showsError: false)
-        case .steps(let id, let blocks, let isLive):
-            StepsRow(id: id, blocks: blocks, isLive: isLive, directory: directory)
+        case .steps(_, let blocks, let isLive):
+            StepsRow(scope: scope, blocks: blocks, isLive: isLive, directory: directory)
         case .widget(let call):
             WidgetCard(call: call, send: answerAgent)
         case .picture(let call):
@@ -1364,21 +1366,18 @@ private struct MarkdownPiece: View, Equatable {
 /// The model's thinking: one quiet line, open it to read.
 struct ReasoningView: View {
     let block: Message.Content.Text
-    /// What your opening it is kept by, where its view may not last (see `CardFolds`).
-    var foldKey: String? = nil
+    /// What your opening it is kept by, as its view may not last (see `CardFolds`).
+    let foldKey: String
     @State private var opened = false
     @Environment(\.scrollAnchor) private var scrollAnchor
 
-    private var isExpanded: Bool { foldKey.map { CardFolds.shared.isOpen($0, otherwise: opened) } ?? opened }
+    private var isExpanded: Bool { CardFolds.shared.isOpen(foldKey, otherwise: opened) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
-                if let foldKey {
-                    CardFolds.shared.toggle(foldKey, open: !isExpanded, in: scrollAnchor)
-                } else {
-                    withAnimation(.ui) { opened.toggle() }
-                }
+                // Under way, it's kept in view as it grows.
+                CardFolds.shared.toggle(foldKey, open: !isExpanded, in: scrollAnchor, holds: block.isComplete)
             } label: {
                 HStack(spacing: 8) {
                     Image(systemName: "brain")
@@ -1984,16 +1983,18 @@ final class CardFolds {
     func set(_ id: String, open: Bool) { choices[id] = open }
     func forget(_ id: String) { choices[id] = nil }
 
-    /// Steps you opened or closed, in their conversation: opened while the agent works, once they
-    /// have, the end is no longer followed, so what comes in next doesn't move what you read;
-    /// closing them goes back to it (see `ScrollAnchor.reading`).
-    func toggle(_ id: String, open: Bool, in anchor: ScrollAnchor?, also: () -> Void = {}) {
+    /// Steps you opened or closed, in their conversation: opened, once they have, the end is no
+    /// longer followed, so what comes in next doesn't move what you read (`holds` false: a step
+    /// under way, kept in view until it ends); closing what you opened goes back to it (see
+    /// `ConversationScroller.reading`). `closes`: what goes with it.
+    func toggle(_ id: String, open: Bool, in anchor: ScrollAnchor?, holds: Bool = true, closes: [String] = []) {
         withAnimation(.ui) {
             set(id, open: open)
-            also()
+            closes.forEach(forget)
         } completion: { [weak anchor] in
-            guard self.isOpen(id, otherwise: !open) == open else { return }
-            anchor?.reading?(id, open)
+            guard closes.contains(id) || self.isOpen(id, otherwise: !open) == open else { return }
+            for closed in closes { anchor?.reading?(closed, false) }
+            if !open || holds { anchor?.reading?(id, open) }
         }
     }
 }

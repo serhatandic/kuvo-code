@@ -13,7 +13,11 @@ struct SubagentRow: View {
     @Environment(AppModel.self) private var app
     @Environment(Catalog.self) private var catalog
     @State private var model: SessionModel?
-    @State private var isExpanded = false
+    @Environment(\.scrollAnchor) private var scrollAnchor
+
+    /// Open as you left it, as its view may not last (see `CardFolds`).
+    private var key: String { "subagent#" + call.id }
+    private var isExpanded: Bool { CardFolds.shared.isOpen(key, otherwise: false) }
 
     private static let iconWidth: CGFloat = 16
     private static let iconGap: CGFloat = 8
@@ -50,7 +54,7 @@ struct SubagentRow: View {
             // The whole row opens to its steps, the chevron at its end saying so; its conversation
             // opens from under them, or from its menu.
             Button {
-                withAnimation(.ui) { isExpanded.toggle() }
+                CardFolds.shared.toggle(key, open: !isExpanded, in: scrollAnchor)
             } label: {
                 header
             }

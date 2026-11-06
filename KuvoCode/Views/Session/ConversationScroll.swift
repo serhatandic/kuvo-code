@@ -52,21 +52,21 @@ final class ConversationScroller {
     }
 
     fileprivate func follow(_ follows: Bool) {
-        heldFor = nil
+        heldFor = []
         if followsEnd != follows { followsEnd = follows }
     }
 
     /// The steps you opened while following the end, which you left it to read. Going anywhere
     /// yourself since (each way goes through `follow`) means you left it for good.
-    @ObservationIgnored private var heldFor: String?
+    @ObservationIgnored private var heldFor: Set<String> = []
 
-    /// `id` opened or closed by you (see `ScrollAnchor.reading`).
-    fileprivate func reading(_ id: String, isOpen: Bool, isWorking: Bool) {
+    /// `id` opened or closed by you: back to the end once the last you left it for is closed.
+    fileprivate func reading(_ id: String, isOpen: Bool) {
         if isOpen {
-            guard followsEnd, isWorking else { return }
-            follow(false)
-            heldFor = id
-        } else if heldFor == id {
+            guard followsEnd || !heldFor.isEmpty else { return }
+            if followsEnd { follow(false) }
+            heldFor.insert(id)
+        } else if heldFor.remove(id) != nil, heldFor.isEmpty {
             toEnd(animated: true)
         }
     }
@@ -100,8 +100,6 @@ struct ConversationScroll<Rows: View>: View {
     /// Called as you scroll within a couple of screens of the top: earlier rows can come in
     /// then, above what you're reading, which stays where it is (see `ScrollAnchor`).
     var nearTop: (() -> Void)? = nil
-    /// Whether the agent is at work now, adding to the end.
-    var isWorking: () -> Bool = { false }
     /// Text you selected, to answer in the composer.
     let quote: (String) -> Void
     @ViewBuilder let rows: Rows
@@ -142,8 +140,8 @@ struct ConversationScroll<Rows: View>: View {
             .environment(\.scrollAnchor, anchor)
             .onAppear {
                 anchor.stopFollowing = { [scroller] in scroller.follow(false) }
-                anchor.reading = { [scroller, weak anchor, isWorking] id, isOpen in
-                    scroller.reading(id, isOpen: isOpen, isWorking: isWorking())
+                anchor.reading = { [scroller, weak anchor] id, isOpen in
+                    scroller.reading(id, isOpen: isOpen)
                     // At once: the next row to come mustn't count as followed.
                     anchor?.isFollowingEnd = scroller.followsEnd
                 }

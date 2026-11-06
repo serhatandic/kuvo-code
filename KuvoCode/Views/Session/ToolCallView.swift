@@ -11,14 +11,15 @@ import SwiftUI
 struct ToolCallView: View {
     let call: Message.ToolCall
     let directory: String
-    /// What your opening it is kept by, where its view may not last (see `CardFolds`).
+    /// What your opening it is kept by, as its view may not last (see `CardFolds`).
     var foldKey: String? = nil
     @Environment(AppModel.self) private var app
     /// Open by itself rather than by you: a subagent at work.
     @State private var opened = false
     @Environment(\.scrollAnchor) private var scrollAnchor
 
-    private var isExpanded: Bool { foldKey.map { CardFolds.shared.isOpen($0, otherwise: opened) } ?? opened }
+    private var key: String { foldKey ?? call.id }
+    private var isExpanded: Bool { CardFolds.shared.isOpen(key, otherwise: opened) }
 
     /// The icon's column, and the gap after it: the details line up with the title.
     private static let iconWidth: CGFloat = 16
@@ -59,11 +60,8 @@ struct ToolCallView: View {
             Group {
                 if hasDetails {
                     Button {
-                        if let foldKey {
-                            CardFolds.shared.toggle(foldKey, open: !isExpanded, in: scrollAnchor)
-                        } else {
-                            withAnimation(.ui) { opened.toggle() }
-                        }
+                        // Under way, it's kept in view as it grows.
+                        CardFolds.shared.toggle(key, open: !isExpanded, in: scrollAnchor, holds: call.state.isFinished)
                     } label: {
                         header
                     }
@@ -720,7 +718,7 @@ struct SubagentSteps: View {
                                 WritingText(row: assistant.id, part: index, text: text.text, folders: { [directory] },
                                             isWriting: assistant.time.completed == nil && index == assistant.content.count - 1)
                             case .tool(let call):
-                                ToolCallView(call: call, directory: directory)
+                                ToolCallView(call: call, directory: directory, foldKey: id + "#" + call.id)
                             default:
                                 EmptyView()
                             }

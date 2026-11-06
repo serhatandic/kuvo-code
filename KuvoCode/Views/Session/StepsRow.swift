@@ -24,8 +24,9 @@ enum StepsDetail: String, CaseIterable, Identifiable {
 /// works), opening to what they were ("Thought for 40s, ran 6 commands, read 3 files") and each.
 /// While it works, the step under way shows under the line.
 struct StepsRow: View {
-    /// The row it is: what you opened in it is kept by this, as the row's view doesn't last.
-    let id: String
+    /// The conversation it's in: what you opened is kept by this and the step (see `CardFolds`),
+    /// as a row's view doesn't last, nor its id once the messages before come in.
+    let scope: String
     let blocks: [Message.Content]
     let isLive: Bool
     let directory: String
@@ -34,7 +35,9 @@ struct StepsRow: View {
     @State private var opened = false
     @Environment(\.scrollAnchor) private var scrollAnchor
 
-    private var isExpanded: Bool { CardFolds.shared.isOpen(id, otherwise: opened) }
+    private var isExpanded: Bool {
+        opened || blocks.enumerated().contains { CardFolds.shared.isOpen(lineKey($0.offset, $0.element), otherwise: false) }
+    }
 
     var body: some View {
         // The one under way, as it is; those before it in the line.
@@ -80,6 +83,11 @@ struct StepsRow: View {
             ForEach(under(done, current), id: \.offset) { offset, block in step(block, at: offset) }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        // The one you opened as it came, kept in view as it grew, has ended: it stays where it is
+        // from here, as what's next comes in under it.
+        .onChange(of: current.map { key(done.count, $0) }) { ended, _ in
+            if let ended, CardFolds.shared.isOpen(ended, otherwise: false) { scrollAnchor?.reading?(ended, true) }
+        }
         #if DEBUG
         // KUVO_DEMO_OPEN_STEPS: each step shows, opened.
         .onAppear { if ProcessInfo.processInfo.environment["KUVO_DEMO_OPEN_STEPS"] != nil { opened = true } }
@@ -90,7 +98,7 @@ struct StepsRow: View {
                 // Not stopped when the task is: the conversation's rows make their views anew as
                 // they're laid out, which cancels it each time (eight toggles end where they began).
                 await DemoWait.pause(.asked(wait))
-                toggle(Self.split(blocks, isLive: isLive).done)
+                withAnimation(.ui) { opened.toggle() }
             }
         }
         #endif
@@ -111,16 +119,29 @@ struct StepsRow: View {
 
     /// The line opened or closed by you. Closing it closes the steps in it, as they were found.
     private func toggle(_ done: [Message.Content]) {
-        let open = !isExpanded
-        CardFolds.shared.toggle(id, open: open, in: scrollAnchor) {
-            if !open { for (offset, block) in done.enumerated() { CardFolds.shared.forget(key(offset, block)) } }
+        guard !isExpanded else {
+            opened = false
+            let lines = blocks.enumerated().map { lineKey($0.offset, $0.element) }
+            let steps = done.enumerated().map { key($0.offset, $0.element) }
+            CardFolds.shared.toggle(lines.first ?? scope, open: false, in: scrollAnchor, closes: lines + steps)
+            return
+        }
+        CardFolds.shared.toggle(blocks.first.map { lineKey(0, $0) } ?? scope, open: true, in: scrollAnchor)
+    }
+
+    /// What a step's fold is kept by: a tool call's own id, or when the thinking began.
+    private func key(_ offset: Int, _ block: Message.Content) -> String {
+        switch block {
+        case .tool(let call): scope + "#" + call.id
+        case .reasoning(let text): scope + "#thought" + (text.time.map { "\($0.created)" } ?? "\(offset)")
+        default: scope + "#\(offset)"
         }
     }
 
-    /// What a step's fold is kept by, in this row: a tool call's own id, or thinking's place.
-    private func key(_ offset: Int, _ block: Message.Content) -> String {
-        if case .tool(let call) = block { return id + "#" + call.id }
-        return id + "#\(offset)"
+    /// What the line being open is kept by: its first step when you opened it, which is still among
+    /// them when the steps before it come in.
+    private func lineKey(_ offset: Int, _ block: Message.Content) -> String {
+        "line#" + key(offset, block)
     }
 
     /// "Worked for 40s" once they're done (what they were, if they don't say when they ran), how
