@@ -2786,7 +2786,7 @@ function appTemporary() {
 }
 function sandboxCaches() {
   const tmp = appTemporary();
-  const root = realish(tmp ? path12.join(homeFolder(), "Library", "Caches", path12.basename(tmp)) : path12.join(K, "cache"));
+  const root = throughLinks(tmp ? path12.join(homeFolder(), "Library", "Caches", path12.basename(tmp)) : path12.join(K, "cache"));
   return { npm: path12.join(root, "sandbox-npm"), pnpm: path12.join(root, "sandbox-pnpm"), uv: path12.join(root, "sandbox-uv"), corepack: path12.join(root, "sandbox-corepack") };
 }
 function macFolders(home) {
@@ -2975,15 +2975,18 @@ function realish(where) {
   return deepestThere(where, fs13.realpathSync);
 }
 function throughLinks(where) {
+  if (process.platform !== "darwin")
+    return realish(where);
   const found = deepestThere(where, followLinks);
   return macAsksAbout(found) ? found : realish(found);
 }
 var MAC_ASKS = [...MAC_PERSONAL, "Library"];
 var macAsks;
 function macAsksAbout(at) {
-  if (process.platform !== "darwin")
-    return false;
-  macAsks ??= new RegExp(`^(/system/volumes/data)?(/volumes/|${escapeRegex(accountHome().toLowerCase())}/(${MAC_ASKS.map((each) => escapeRegex(each.toLowerCase())).join("|")})(/|$))`);
+  if (!macAsks) {
+    const homes = [accountHome(), realish(accountHome())].map((each) => escapeRegex(each.toLowerCase())).join("|");
+    macAsks = new RegExp(`^(/system/volumes/data)?(/volumes/|(${homes})/(${MAC_ASKS.map((each) => escapeRegex(each.toLowerCase())).join("|")})(/|$))`);
+  }
   return macAsks.test(at.toLowerCase());
 }
 function deepestThere(where, resolve) {

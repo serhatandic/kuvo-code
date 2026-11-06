@@ -49,7 +49,6 @@ export const realProject = (project: string) => {
 };
 
 /** The launcher's name for a project's folder (its real path), as `sha256sum | cut -c 1-32` makes it. */
-export const projectSum = (project: string) => sumOf(realProject(project));
 const sumOf = (real: string) => crypto.createHash("sha256").update(real).digest("hex").slice(0, 32);
 
 export function readAllowed(): SandboxRule[] {

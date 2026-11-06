@@ -1,6 +1,7 @@
 import "./safety"
 import { afterEach, expect, test } from "bun:test"
-import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { createHash } from "node:crypto"
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { FencePolicy } from "../src/link/fence/policy"
@@ -27,8 +28,9 @@ const scratch = () => {
 const environment = (home: string) => ({ HOME: home, PATH: "/usr/bin:/bin", TMPDIR: tmpdir(), BUN_BE_BUN: "1", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" })
 
 /** Loaded before the box's code: what would open a folder macOS guards in your account's home (all of
- * ~/Library: it guards more of it than it says) is noted in `noted`, and never reaches the system, so
- * these tests can't ask either, whatever the code does. This checkout is its own, wherever it is. */
+ * ~/Library: it guards more of it than it says) by that name is noted in `noted`, and doesn't reach the
+ * system. This checkout is its own, wherever it is. The box also reads your SSH and GitHub settings in
+ * your real home, which may link to or name a guarded folder: those it finds empty here. */
 function guard(root: string): { preload: string; noted: string } {
   const preload = join(root, "note-opens.cjs")
   const noted = join(root, "opened")
@@ -36,8 +38,10 @@ function guard(root: string): { preload: string; noted: string } {
   // (But for listing your Keychain's folder, to wall off the system's keychains in it: macOS doesn't guard that.)
   const names = "Desktop|Documents|Downloads|Pictures|Movies|Music|Library(?!/Keychains$)"
   const checkout = join(import.meta.dir, "..", "..", "..")
+  const yours = `^${accountHome()}/(\\.ssh|\\.config/gh)(/|$)`
   writeFileSync(preload, `
 const fs = require("fs")
+const empty = where => typeof where === "string" && new RegExp(${JSON.stringify(yours)}).test(where)
 const guarded = where => typeof where === "string" && !where.startsWith(${JSON.stringify(checkout + "/")}) && new RegExp(${JSON.stringify(`^${accountHome()}/(${names})(/|$)`)}, "i").test(where)
 const stop = (name, where) => {
   fs.appendFileSync(${JSON.stringify(noted)}, name + " " + where + "\\n")
@@ -47,6 +51,7 @@ const wrap = (on, name, label) => {
   const real = on[name]
   on[name] = Object.assign(function (where, ...rest) {
     if (guarded(where)) throw stop(label + name, where)
+    if (empty(where)) throw Object.assign(new Error("ENOENT: " + where), { code: "ENOENT" })
     return real.call(this, where, ...rest)
   }, real)
 }
@@ -109,6 +114,9 @@ test.skipIf(process.platform !== "darwin")("a box says where it is without openi
     }
     expect(said).toContain('"url"')
     expect(await Bun.file(noted).text()).toBe("")
+    // And its rule reached the launcher, named for the project as the launcher names it.
+    const sum = createHash("sha256").update(project).digest("hex").slice(0, 32)
+    expect(existsSync(join(kuvo, "run", "fence", "allowed", sum))).toBe(true)
   } finally {
     box.kill(9)
     await box.exited

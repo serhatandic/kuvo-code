@@ -340,7 +340,7 @@ export function appTemporary(): string | null {
  */
 export function sandboxCaches(): { npm: string; pnpm: string; uv: string; corepack: string } {
   const tmp = appTemporary();
-  const root = realish(tmp ? path.join(homeFolder(), "Library", "Caches", path.basename(tmp)) : path.join(K, "cache"));
+  const root = throughLinks(tmp ? path.join(homeFolder(), "Library", "Caches", path.basename(tmp)) : path.join(K, "cache"));
   return { npm: path.join(root, "sandbox-npm"), pnpm: path.join(root, "sandbox-pnpm"), uv: path.join(root, "sandbox-uv"), corepack: path.join(root, "sandbox-corepack") };
 }
 
@@ -523,6 +523,7 @@ export function realish(where: string): string {
  * name them as macOS and their apps do.)
  */
 export function throughLinks(where: string): string {
+  if (process.platform !== "darwin") return realish(where);
   const found = deepestThere(where, followLinks);
   return macAsksAbout(found) ? found : realish(found);
 }
@@ -533,8 +534,11 @@ export function throughLinks(where: string): string {
 const MAC_ASKS = [...MAC_PERSONAL, "Library"];
 let macAsks: RegExp | undefined;
 function macAsksAbout(at: string): boolean {
-  if (process.platform !== "darwin") return false;
-  macAsks ??= new RegExp(`^(/system/volumes/data)?(/volumes/|${escapeRegex(accountHome().toLowerCase())}/(${MAC_ASKS.map(each => escapeRegex(each.toLowerCase())).join("|")})(/|$))`);
+  if (!macAsks) {
+    // (Your home by the name your account has for it, and by where it is if that's a link.)
+    const homes = [accountHome(), realish(accountHome())].map(each => escapeRegex(each.toLowerCase())).join("|");
+    macAsks = new RegExp(`^(/system/volumes/data)?(/volumes/|(${homes})/(${MAC_ASKS.map(each => escapeRegex(each.toLowerCase())).join("|")})(/|$))`);
+  }
   return macAsks.test(at.toLowerCase());
 }
 
