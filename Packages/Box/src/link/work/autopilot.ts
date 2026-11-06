@@ -12,7 +12,7 @@ import { boxNote } from "../../shared/queues";
 import { call, engineGet } from "../engine/client";
 import { sendInto } from "../engine/queue";
 import { locked, textOf, writePrivate } from "../files";
-import { askedBy, asksIn, recommendationOf, type PendingQuestion, type Recommendation } from "./answers";
+import { askedBy, asksIn, decisionChanged, recommendationOf, type PendingQuestion, type Recommendation } from "./answers";
 import { addDecided, runningGoalOf, carriedOnGoal, yoursOnGoal } from "./goals";
 import { worksFor } from "./tree";
 import { WORK_FOLDER } from "./changes";
@@ -209,9 +209,7 @@ export async function decidedByYou(target: Target, conversation: string, id: str
   // (What it goes by now: your last choice, else its own.)
   const was = made.yours?.choice ?? made.choice;
   if (choice.toLowerCase() !== was.toLowerCase()) {
-    const said = made.yours
-      ? `[Decision changed] For "${made.text}" the user now picked ${choice}, not ${was}. Go that way from here: redo what depends on it, and say in a line what changes.`
-      : `[Decision changed] For "${made.text}" the user picked ${choice}, not ${was} as you decided. Go that way from here: redo what depends on it, and say in a line what changes.`;
+    const said = decisionChanged({ text: made.text, was, yours: choice, again: Boolean(made.yours) });
     const told = await sendInto(target, conversation, { text: said, delivery: "queue", metadata: boxNote("Autopilot", `You picked ${choice}`) }, { from: "Autopilot", words: `You picked ${choice}` }).then(() => true, () => false);
     if (!told) return { status: 502, message: "The conversation couldn't be told: the engine didn't take it. Try again." };
   }

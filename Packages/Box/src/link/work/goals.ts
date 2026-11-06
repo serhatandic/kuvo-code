@@ -31,7 +31,7 @@ import { BOTS, HERE } from "../home";
 import { placeOfSession } from "../letters/letter";
 import { readWakes } from "../areas/wakes";
 import { periodEnd, periodOf, startOfDay, timeGiven } from "./clock";
-import { asksIn, permissionWords, type PendingQuestion } from "./answers";
+import { asksIn, decisionChanged, permissionWords, type PendingQuestion } from "./answers";
 import { decidedByYou as decidedInConversation, goAheadOnQuestion, isAutopilot, setAutopilot } from "./autopilot";
 import type { EngineSession } from "../engine/sessions";
 import { keepAwake, keepsAwake, onPower } from "./awake";
@@ -939,7 +939,7 @@ async function decidedByYou(id: string, given: Record<string, unknown>, targets:
   }
   const was = decided.yours?.choice ?? decided.choice;
   // Kept once the bot is told, so a choice that didn't reach it can be made again.
-  if (choice.toLowerCase() !== was.toLowerCase() && !await tellBot(goal, `[Decision changed] For "${decided.text}" the user picked ${choice}, not ${was} as you decided. Go that way from here: redo what depends on it, and say in a line what changes.`, `You picked ${choice}`, targets)) {
+  if (choice.toLowerCase() !== was.toLowerCase() && !await tellBot(goal, decisionChanged({ text: decided.text, was, yours: choice, again: Boolean(decided.yours) }), `You picked ${choice}`, targets)) {
     return { refused: { status: 502, message: "The bot couldn't be told: try again." } };
   }
   const changed = changeKept(all => {

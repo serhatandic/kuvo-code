@@ -8327,7 +8327,7 @@ async function decidedByYou2(id, given, targets, file) {
     return { goal: shown(readKept(file).find((each) => each.id === id) ?? goal) };
   }
   const was = decided.yours?.choice ?? decided.choice;
-  if (choice.toLowerCase() !== was.toLowerCase() && !await tellBot2(goal, `[Decision changed] For "${decided.text}" the user picked ${choice}, not ${was} as you decided. Go that way from here: redo what depends on it, and say in a line what changes.`, `You picked ${choice}`, targets)) {
+  if (choice.toLowerCase() !== was.toLowerCase() && !await tellBot2(goal, decisionChanged({ text: decided.text, was, yours: choice, again: Boolean(decided.yours) }), `You picked ${choice}`, targets)) {
     return { refused: { status: 502, message: "The bot couldn't be told: try again." } };
   }
   const changed = changeKept((all) => {
@@ -9052,7 +9052,7 @@ async function decidedByYou(target, conversation, id, choice, file = DECIDED_FIL
     return { status: 404, message: "There's no such call in that conversation." };
   const was = made.yours?.choice ?? made.choice;
   if (choice.toLowerCase() !== was.toLowerCase()) {
-    const said = made.yours ? `[Decision changed] For "${made.text}" the user now picked ${choice}, not ${was}. Go that way from here: redo what depends on it, and say in a line what changes.` : `[Decision changed] For "${made.text}" the user picked ${choice}, not ${was} as you decided. Go that way from here: redo what depends on it, and say in a line what changes.`;
+    const said = decisionChanged({ text: made.text, was, yours: choice, again: Boolean(made.yours) });
     const told = await sendInto(target, conversation, { text: said, delivery: "queue", metadata: boxNote("Autopilot", `You picked ${choice}`) }, { from: "Autopilot", words: `You picked ${choice}` }).then(() => true, () => false);
     if (!told)
       return { status: 502, message: "The conversation couldn't be told: the engine didn't take it. Try again." };
@@ -9446,6 +9446,11 @@ function recommendationOf(form) {
     });
   }
   return calls.length ? { answer, calls } : null;
+}
+function decisionChanged(call) {
+  const quoted = (words, most) => JSON.stringify(short(words, most));
+  const picked = `${call.again ? "now picked" : "picked"} ${quoted(call.yours, 200)}, not ${quoted(call.was, 200)}${call.again ? "" : " as you decided"}`;
+  return `[Decision changed] For ${quoted(call.text, 300)} the user ${picked}. Go that way from here: redo what depends on it, and say in a line what changes.`;
 }
 var askedBy = (form) => {
   const tool = isObject(form.metadata) && isObject(form.metadata.tool) ? form.metadata.tool : null;

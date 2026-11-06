@@ -152,6 +152,15 @@ export function recommendationOf(form: Record<string, unknown>): Recommendation 
   return calls.length ? { answer, calls } : null;
 }
 
+/** What the box tells an agent when you change a call it made. The call's words are the agent's own
+ * (a work session's, say), so each is quoted on one line and can't pass for what the box or you say.
+ * `again`: you had chosen before. */
+export function decisionChanged(call: { text: string; was: string; yours: string; again?: boolean }): string {
+  const quoted = (words: string, most: number) => JSON.stringify(short(words, most));
+  const picked = `${call.again ? "now picked" : "picked"} ${quoted(call.yours, 200)}, not ${quoted(call.was, 200)}${call.again ? "" : " as you decided"}`;
+  return `[Decision changed] For ${quoted(call.text, 300)} the user ${picked}. Go that way from here: redo what depends on it, and say in a line what changes.`;
+}
+
 /** The tool call that asked a form (`metadata.tool.id`, the engine's and the agents bridge's). */
 export const askedBy = (form: Record<string, unknown>): string | null => {
   const tool = isObject(form.metadata) && isObject(form.metadata.tool) ? form.metadata.tool : null;

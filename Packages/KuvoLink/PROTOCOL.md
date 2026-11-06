@@ -959,7 +959,7 @@ beside it.
     paused.
   - `decided` lists the calls it made on its own, the newest 60. `{action: decided, decided: <id>,
     choice}` is your choice on one (`yours`): the same as the bot's confirms it, and the bot isn't
-    told; another tells it `[Decision changed] For "<call>" the user picked <yours>, not <its> …`
+    told; another tells it `[Decision changed] For "<call>" the user picked "<yours>", not "<its>" …`
     (a box note, `You picked <yours>`), to go that way from there. 404 for a call it doesn't have,
     400 without a choice or once the goal isn't running.
 - **Apps** (bridge 0.9.196, feature `work.goals.apps`, `work/apps.ts`): a step, or what waits, done
@@ -3517,9 +3517,9 @@ what may be decided without asking. Every conversation is Interactive until it's
   approval's.
 - `POST kuvo/sessions/<id>/autopilot` `{decided: <its id>, choice}`: your choice on a call it
   made, kept as `yours`. The one it goes by now (your last, else its own) confirms it quietly;
-  another tells the conversation `[Decision changed] For "…" the user picked …, not … as you
-  decided. …` (`… the user now picked …, not ….` after a choice of yours; a box note, `You picked
-  …`). 404 where there's no such call, 502 where the engine didn't take it (your choice isn't kept: make it again).
+  another tells the conversation `[Decision changed] For "…" the user picked "…", not "…" as you
+  decided. …` (`… the user now picked "…", not "…".` after a choice of yours; a box note, `You picked
+  …`). The agent's words are quoted on one line, so they can't pass for the box's. 404 where there's no such call, 502 where the engine didn't take it (your choice isn't kept: make it again).
 - A session a conversation starts (`start_session`) takes its Autopilot, and a client can start one
   on it with `autopilot: true` in `POST kuvo/sessions`.
 - A bot's goal and its bot's conversation are one setting: a goal started or switched to a `mode`
