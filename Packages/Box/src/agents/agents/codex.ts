@@ -761,7 +761,10 @@ type AskedCard = { abort: AbortController; typed?: MessageInput | null }
 /** An answer in the turn under way that Codex may yet sleep past: one it's `heard` and worked on from isn't what it's sleeping on. */
 type Answered = { text: string; heard?: boolean }
 /** What it does that's more than asking and thinking. */
-const WORK_ITEMS = new Set(["commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall", "webSearch", "imageGeneration", "collabAgentToolCall"])
+const WORK_ITEMS = new Set(["commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall", "webSearch", "imageGeneration", "imageView", "collabAgentToolCall"])
+/** Trying again to reach a sleep that turned it down: after this long, then twice that, up to the last. */
+const STEER_AGAIN = 1_000
+const STEER_AGAIN_LAST = 64_000
 /** Its box turning down this many with no work in between: no further turn is started for it. */
 const TURNED_DOWN_TURNS = 2
 /** And this many: its turn is stopped, as asking is all it's doing (a few at the start of a task isn't that). */
@@ -811,8 +814,8 @@ class CodexThread implements Thread {
   private answers: Answer[] = []
   /** Answers gone into the turn under way, for the first sleep that starts after them. */
   private answered: Answered[] = []
-  /** It's in a sleep, which what goes in now ends. */
-  private sleeping = false
+  /** The sleep it's in, which what goes in now ends. */
+  private sleep?: AbortController
   /** How many of its questions its box turned down with words, this message. */
   private turnedDown = 0
   /** Where Kuvo Code's tools were when it was loaded. */
@@ -1079,6 +1082,7 @@ class CodexThread implements Thread {
       // Its questions outlive the turn that asked them: one still open is waited for here, and an
       // answer no turn took starts one, so Codex goes on with it.
       while (result.outcome === "succeeded" && !hooks.signal.aborted) {
+        this.wokeUp()
         while (this.asking.size) await Promise.all(this.asking)
         const said = this.answers
         this.answers = []
@@ -1087,6 +1091,7 @@ class CodexThread implements Thread {
       }
       return hooks.signal.aborted && result.outcome === "succeeded" ? { outcome: "interrupted" } : result
     } finally {
+      this.wokeUp()
       for (const card of this.waiting) card.abort.abort()
       while (this.asking.size) await Promise.all(this.asking)
       this.answers = []
@@ -1150,6 +1155,7 @@ class CodexThread implements Thread {
     if (answer?.declined && ++this.turnedDown > (active ? TURNED_DOWN_IN_TURN : TURNED_DOWN_TURNS)) {
       if (active) {
         active.stoppedAsking = true
+        this.answers = []
         await this.stopTurn(active)
       }
       return
@@ -1162,10 +1168,13 @@ class CodexThread implements Thread {
     const files = answer?.files ?? []
     if (active?.turnID && this.nativeID) {
       // (Noted first: a sleep can start before Codex says it took this. One under way, this ends.)
-      const noted: Answered | undefined = this.sleeping ? undefined : { text }
+      const noted: Answered | undefined = this.sleep ? undefined : { text }
       if (noted) this.answered.push(noted)
       if (await this.steerIn(active, { text, files })) return
+      // (Turned down with a sleep starting: telling it again as that started is seeing to it.)
+      if (noted && !this.answered.includes(noted)) return
       this.answered = this.answered.filter((each) => each !== noted)
+      if (await this.steerIntoSleep(active, { text, files })) return
     }
     if (answer) this.answers.push(answer)
   }
@@ -1179,6 +1188,31 @@ class CodexThread implements Thread {
     } catch {
       return false
     }
+  }
+
+  /** Turned down while it sleeps: nothing else would reach it, as it says nothing that could set off another try, so tried again for a while. */
+  private async steerIntoSleep(active: Active, input: { text: string; files: PromptFile[] }): Promise<boolean> {
+    for (let wait = STEER_AGAIN; wait <= STEER_AGAIN_LAST; wait *= 2) {
+      const sleep = this.sleep
+      if (!sleep || active.stopping || active.hooks.signal.aborted) return false
+      await new Promise<void>((resolve) => {
+        const done = AbortSignal.any([sleep.signal, active.hooks.signal])
+        const timer = setTimeout(resolve, wait)
+        done.addEventListener("abort", () => {
+          clearTimeout(timer)
+          resolve()
+        })
+      })
+      if (this.sleep !== sleep || active.stopping || active.hooks.signal.aborted) return false
+      if (await this.steerIn(active, input)) return true
+    }
+    return false
+  }
+
+  /** Its sleep is over (or its turn, whichever way). */
+  private wokeUp() {
+    this.sleep?.abort()
+    this.sleep = undefined
   }
 
   private async runTurn(input: RunInput, turn: Turn, hooks: TurnHooks): Promise<RunResult> {
@@ -1213,7 +1247,7 @@ class CodexThread implements Thread {
     }
     return new Promise<RunResult>((resolve) => {
       this.answered = []
-      this.sleeping = false
+      this.wokeUp()
       const active: Active = { turn, hooks, resolve, streamed: new Set(), changes: new Map(), output: new Map(), toolsSinceText: false, subagents: new Map(), spawning: [], auto: input.auto, model: input.model.id, planning: input.plan }
       // As it ends, the agents it spawned that are still at work go on in their sessions (a turn
       // stopped or failed stops them: the session ends them with it).
@@ -1248,22 +1282,26 @@ class CodexThread implements Thread {
 
   /** What an item says of the answers in its turn. */
   private answersOnItem(active: Active, method: string, item: any) {
-    if (item?.type === "sleep" && method === "item/completed") this.sleeping = false
+    if (item?.type === "sleep" && method === "item/completed") this.wokeUp()
     if (method !== "item/started") return
+    const stopped = active.stopping || active.hooks.signal.aborted
     if (item?.type === "sleep") {
-      this.sleeping = true
+      this.sleep = new AbortController()
       // One that starts after its answer went in isn't cut short by it, as one under way is, and the
       // model may be sleeping on that question: told again once, which ends the sleep. (Past that,
       // it's a sleep of its own.)
       const said = this.answered
       this.answered = []
-      if (said.length) {
-        const again = this.steerIn(active, { text: `Your question has its answer, so there's nothing to wait for on it:\n\n${said.map((each) => each.text).join("\n\n")}`, files: [] })
-        this.keep(again.then((took) => { if (!took) this.answered.push(...said) }))
+      if (said.length && !stopped) {
+        const words = { text: `Your question has its answer, so there's nothing to wait for on it:\n\n${said.map((each) => each.text).join("\n\n")}`, files: [] }
+        this.keep(this.steerIn(active, words).then(async (took) => {
+          if (!took && !await this.steerIntoSleep(active, words)) this.answered.push(...said)
+        }))
       }
     } else if (item?.type === "userMessage") {
-      const text = (item.content ?? []).find((part: any) => part?.type === "text")?.text
-      const heard = this.answered.find((each) => !each.heard && each.text === text)
+      // (Its words first: what it attached, Codex may be told of after them.)
+      const text: unknown = (item.content ?? []).find((part: any) => part?.type === "text")?.text
+      const heard = typeof text === "string" ? this.answered.find((each) => !each.heard && text.startsWith(each.text)) : undefined
       if (heard) heard.heard = true
     } else if (WORK_ITEMS.has(item?.type)) {
       this.turnedDown = 0
@@ -1271,7 +1309,7 @@ class CodexThread implements Thread {
       this.answered = this.answered.filter((each) => !each.heard)
     }
     // One its turn turned down a moment ago (as it compacted, say) goes in as it goes on.
-    if (this.answers.length) {
+    if (this.answers.length && !stopped) {
       const waiting = this.answers
       this.answers = []
       for (const answer of waiting) this.keep(this.steerAnswer(active, answer))
@@ -1296,7 +1334,11 @@ class CodexThread implements Thread {
     // A question for you, its words shown as they are: asked now, whatever it does next.
     if (method === "item/completed" && params?.item?.type === "agentMessage" && Array.isArray(params.item.questions)) {
       const questions: AskedQuestion[] = params.item.questions.filter((question: any) => typeof question?.title === "string" && question.title)
-      if (questions.length) this.ask(questions, active.hooks)
+      if (questions.length) {
+        // (What it heard before asking this isn't what a sleep from here on is about.)
+        this.answered = this.answered.filter((each) => !each.heard)
+        this.ask(questions, active.hooks)
+      }
     }
     if (method === "item/started" || method === "item/completed") this.answersOnItem(active, method, params?.item)
     switch (method) {

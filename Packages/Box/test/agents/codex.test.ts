@@ -35,6 +35,8 @@ const untilTold: [string, any] = ["(works until told)", {}]
 const refusesSteers: [string, any] = ["(refuses steers)", {}]
 /** In a turn's events: Codex turns down the next thing steered, and takes what comes after it. */
 const refusesNextSteer: [string, any] = ["(refuses the next steer)", {}]
+/** In a turn's events: Codex turns down the next thing steered, and says a sleep's started in the same breath. */
+const refusesAsItSleeps: [string, any] = ["(refuses as it starts to sleep)", {}]
 /** In a turn's events: Codex takes what's steered, and says its turn is over in the same breath. */
 const endsAsTold: [string, any] = ["(ends as told)", {}]
 
@@ -62,6 +64,8 @@ let asleep
 let sleeps = 0
 let refusing = false
 let refusingNext = false
+let refusingAsItSleeps = false
+let sleptInBreath
 let turning = false
 let endsAsTold = false
 const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n")
@@ -85,14 +89,19 @@ async function turn() {
       refusingNext = true
       continue
     }
+    if (method === ${JSON.stringify(refusesAsItSleeps[0])}) {
+      refusingAsItSleeps = true
+      continue
+    }
     if (method === ${JSON.stringify(untilTold[0])}) {
       if (!steers) await new Promise((resolve) => (wake = resolve))
       steers = 0
       continue
     }
     if (method === ${JSON.stringify(sleepsUntilTold[0])}) {
-      const sleep = { type: "sleep", id: "sleep" + ++sleeps, durationMs: 43200000 }
-      send({ method: "item/started", params: inTurn({ item: sleep }) })
+      const sleep = sleptInBreath ?? { type: "sleep", id: "sleep" + ++sleeps, durationMs: 43200000 }
+      if (!sleptInBreath) send({ method: "item/started", params: inTurn({ item: sleep }) })
+      sleptInBreath = undefined
       await new Promise((resolve) => (asleep = resolve))
       send({ method: "item/completed", params: inTurn({ item: sleep }) })
       continue
@@ -158,6 +167,15 @@ process.stdin.on("data", (chunk) => {
       if (endsAsTold) {
         endsAsTold = turning = false
         process.stdout.write(JSON.stringify({ id: message.id, result: { turnId: "u1" } }) + "\\n" + JSON.stringify({ method: "turn/completed", params: { threadId: thread, turn: { id: "u1", status: "completed" } } }) + "\\n")
+        continue
+      }
+      if (refusingAsItSleeps) {
+        refusingAsItSleeps = false
+        sleptInBreath = { type: "sleep", id: "sleep" + ++sleeps, durationMs: 43200000 }
+        process.stdout.write(JSON.stringify({ id: message.id, error: { code: -32600, message: "not now" } }) + "\\n" + JSON.stringify({ method: "item/started", params: inTurn({ item: sleptInBreath }) }) + "\\n")
+        steers++
+        wake?.()
+        wake = undefined
         continue
       }
       const refused = !turning || refusing || refusingNext
@@ -795,26 +813,70 @@ describe("A question Codex asks (request_user_input_async)", () => {
     expect(steered()).toEqual(["Turkish", "carry on"])
   })
 
-  test("telling it again as it starts to sleep doesn't go through: it's told at the next one it starts", async () => {
-    const id = start([...asking, untilTold, refusesNextSteer, sleepsUntilTold, sleepsUntilTold, ...answered])
+  test("telling it again as it starts to sleep doesn't go through: it's tried again, and the sleep ends with nobody typing", async () => {
+    const id = start([...asking, untilTold, refusesNextSteer, sleepsUntilTold, ...answered])
     await until(() => sessions.forms(id).length === 1)
     sessions.replyForm(id, sessions.forms(id)[0].id, { [sessions.forms(id)[0].fields[0].key]: "Turkish" })
-    await until(() => steered().length === 2)
-    sessions.prompt(id, { id: "msg_codex_test_008", text: "carry on", files: [], delivery: "steer" })
     await until(() => ended(id))
-    expect(steered().slice(0, 3)).toEqual(["Turkish", expect.stringContaining("Turkish"), "carry on"])
-    expect(steered()).toHaveLength(4)
-    expect(steered()[3]).toContain("Turkish")
+    expect(steered()).toHaveLength(3)
+    expect(steered()[0]).toBe("Turkish")
+    expect(steered()[1]).toContain("Turkish")
+    expect(steered()[2]).toBe(steered()[1])
+    expect(starts()).toEqual(["go"])
   })
 
-  test("an answer its turn turned down a moment ago goes in as it goes on, and ends the sleep it starts", async () => {
-    const id = start([refusesNextSteer, ...asking, untilTold, sleepsUntilTold, ...answered])
+  test("an answer turned down while it sleeps: it's tried again, and the sleep ends with nobody typing", async () => {
+    const id = start([refusesNextSteer, ...asking, sleepsUntilTold, ...answered])
     await until(() => sessions.forms(id).length === 1)
+    await until(() => tools(id).some((tool) => tool.name === "sleep"))
     sessions.replyForm(id, sessions.forms(id)[0].id, { [sessions.forms(id)[0].fields[0].key]: "Turkish" })
     await until(() => ended(id))
     expect(steered()).toEqual(["Turkish", "Turkish"])
     expect(starts()).toEqual(["go"])
+  })
+
+  test("Stop while it's trying again to reach a sleep: the turn ends at once, with nothing more sent", async () => {
+    const id = start([refusesSteers, ...asking, sleepsUntilTold])
+    await until(() => sessions.forms(id).length === 1)
+    await until(() => tools(id).some((tool) => tool.name === "sleep"))
+    sessions.replyForm(id, sessions.forms(id)[0].id, { [sessions.forms(id)[0].fields[0].key]: "Turkish" })
+    await until(() => steered().length === 1 && sessions.forms(id).length === 0)
+    sessions.interrupt(id)
+    await until(() => ended(id))
+    expect(steered()).toEqual(["Turkish"])
+    expect(starts()).toEqual(["go"])
+  })
+
+  test("an answer its turn turned down a moment ago goes in as it goes on, and ends the sleep it starts", async () => {
+    const id = start([refusesNextSteer, ...asking, untilTold, ["item/started", { item: command("c1", "ls") }], sleepsUntilTold, ...answered])
+    await until(() => sessions.forms(id).length === 1)
+    sessions.replyForm(id, sessions.forms(id)[0].id, { [sessions.forms(id)[0].fields[0].key]: "Turkish" })
+    await until(() => ended(id))
+    expect(steered().every((text) => text.includes("Turkish"))).toBe(true)
+    expect(steered().length).toBeGreaterThanOrEqual(2)
+    expect(starts()).toEqual(["go"])
     expect(said(id)).toContain("Writing it in Turkish.")
+  })
+
+  test("turned down in the same breath a sleep starts: it's told once more, and no further turn starts for it", async () => {
+    const id = start([refusesAsItSleeps, ...asking, untilTold, sleepsUntilTold, ...answered])
+    await until(() => sessions.forms(id).length === 1)
+    sessions.replyForm(id, sessions.forms(id)[0].id, { [sessions.forms(id)[0].fields[0].key]: "Turkish" })
+    await until(() => ended(id))
+    expect(steered()).toHaveLength(2)
+    expect(steered()[1]).toContain("Turkish")
+    expect(starts()).toEqual(["go"])
+  })
+
+  test("what it heard before asking another isn't told again as it sleeps on the new one: that's yours to answer", async () => {
+    const second: [string, any] = ["item/completed", { item: { type: "agentMessage", id: "m3", text: "Which tone?", delivery: "async", questions: [{ title: "Which tone?", options: ["Plain", "Warm"] }] } }]
+    const id = start([...asking, untilTold, second, sleepsUntilTold, ...answered])
+    await until(() => sessions.forms(id).length === 1)
+    sessions.replyForm(id, sessions.forms(id)[0].id, { [sessions.forms(id)[0].fields[0].key]: "Turkish" })
+    await until(() => sessions.forms(id).some((form: any) => form.fields[0].description === "Which tone?") && tools(id).some((tool) => tool.name === "sleep"))
+    sessions.replyForm(id, sessions.forms(id)[0].id, { [sessions.forms(id)[0].fields[0].key]: "Plain" })
+    await until(() => ended(id))
+    expect(steered()).toEqual(["Turkish", "Plain"])
   })
 
   test("still open as its turn ends: the session waits, and your answer starts its next turn", async () => {
