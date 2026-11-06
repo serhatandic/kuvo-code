@@ -286,8 +286,8 @@ public struct GoalPlan: Decodable, Sendable, Hashable, Identifiable {
     /// A call the bot made on its own, or a question that went ahead on what it recommended: what
     /// it was, what it went with and why, the choices there were, the session that asked, and your
     /// choice since.
-    public struct Decided: Codable, Sendable, Equatable, Identifiable {
-        public struct Yours: Codable, Sendable, Equatable {
+    public struct Decided: Codable, Sendable, Hashable, Identifiable {
+        public struct Yours: Codable, Sendable, Hashable {
             public let choice: String
             public let at: Double
             public init(choice: String, at: Double) {
