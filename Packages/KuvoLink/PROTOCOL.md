@@ -3518,8 +3518,10 @@ what may be decided without asking. Every conversation is Interactive until it's
 - A session a conversation starts (`start_session`) takes its Autopilot, and a client can start one
   on it with `autopilot: true` in `POST kuvo/sessions`.
 - A bot's goal and its bot's conversation are one setting: a goal started or switched to a `mode`
-  ("Work", Goals, Interactive or Autopilot) puts the conversation on it, and the conversation turned
-  on or off here switches its running goal (the bot told as for `{action: change, mode}`). A call
+  ("Work", Goals, Interactive or Autopilot) puts the conversation and the sessions at the goal on
+  it (what the switch can't reach, the box's next look does), and the conversation turned on or off
+  here switches its running goal (the bot told as for `{action: change, mode}`). One of those
+  sessions turned on or off by itself stays so until the goal's next switch. A call
   made in its conversation, or its work's, shows in the goal's `decided` too
   (`ask:<conversation>:<form>`); while you have the goal paused, nothing goes ahead.
 - On the coding agents, Claude Code's, Codex's and Grok's questions go ahead the same way; Cursor

@@ -7672,7 +7672,7 @@ function boxChecks(goal) {
   return checks;
 }
 var shown = (goal) => {
-  const { periods: _, asksSeen: __, limitsSeen: ___, told: ____, reportTold: _____, endTold: ______, phasesDone: _______, doneAtDigest: ________, pausedSince: _________, idleSince: __________, nudges: ___________, loop: ____________, heldByYou: _____________, nudgedPlan: ______________, botProjects: _______________, ...rest } = goal;
+  const { following: _following, periods: _, asksSeen: __, limitsSeen: ___, told: ____, reportTold: _____, endTold: ______, phasesDone: _______, doneAtDigest: ________, pausedSince: _________, idleSince: __________, nudges: ___________, loop: ____________, heldByYou: _____________, nudgedPlan: ______________, botProjects: _______________, ...rest } = goal;
   const steps = goal.steps.map((step) => {
     const paused = goal.state === "running" && step.state !== "done" && step.state !== "skipped" ? goal.paused.find((each) => each.session && step.sessions?.includes(each.session)) : undefined;
     return paused ? { ...step, state: "paused", ...paused.until ? { resumes: paused.until } : {} } : step;
@@ -7967,11 +7967,29 @@ async function answerGoal(id, given, targets, file = GOALS_FILE) {
   }
   return { goal: shown(changed) };
 }
-async function followMode(goal, targets) {
-  const place = await placeOfSession(goal.session, targets()).catch(() => null);
+async function followMode(goal, targets, file = GOALS_FILE) {
   const on = modeOf(goal) === "autopilot";
-  if (place?.data.id && isAutopilot(place.data) !== on)
-    await setAutopilot(place.target, { ...place.data, id: place.data.id }, on).catch(() => false);
+  const own = await placeOfSession(goal.session, targets()).catch(() => null);
+  let reached = Boolean(own?.data.id);
+  const listed = await workSessions(targets(), undefined, { whole: true }).catch(() => {
+    reached = false;
+    return workSessions(targets()).catch(() => []);
+  });
+  for (const each of [...own ? [own] : [], ...goalWork(goal, listed)]) {
+    if (!each.data.id || isAutopilot(each.data) === on)
+      continue;
+    if (!await setAutopilot(each.target, { ...each.data, id: each.data.id }, on).catch(() => false))
+      reached = false;
+  }
+  changeKept((all) => {
+    const kept = all.find((one) => one.id === goal.id);
+    if (!kept || Boolean(kept.following) === !reached)
+      return;
+    if (reached)
+      delete kept.following;
+    else
+      kept.following = true;
+  }, file);
 }
 function goalProjects(id, given, file) {
   const no = (message) => ({ refused: { status: 400, message } });
@@ -8556,7 +8574,6 @@ async function failedTurn(target, session, signal) {
   }
   return null;
 }
-var goAhead = (target, asker, form, recommended, signal) => call(target, "POST", `/api/session/${encodeURIComponent(asker)}/form/${encodeURIComponent(form)}/reply`, { answer: recommended.answer }, signal).then(() => true, () => false);
 function digestWords(goal, now) {
   const done = goal.steps.filter((step) => step.state === "done" || step.state === "skipped").length;
   const since = Math.max(0, done - (goal.doneAtDigest ?? 0));
@@ -8672,13 +8689,14 @@ async function lookAtGoals(tell, targets, { file = GOALS_FILE, here, now = Date.
       if (await tellBot2(goal, `[Limit reset] ${paused.why} has reset. Carry on with the goal.`, resetLine(paused.why), targets))
         unpause(goal.id, undefined, now, file);
     }
+    if (kept?.following)
+      await followMode(kept, targets, file);
     const asksSeen = {};
     const open = new Set;
-    const autopilot = modeOf(kept ?? goal) === "autopilot";
-    const askers = [...work.map((each) => ({ target: each.target, id: each.data.id, title: each.data.title || "New Session" })), ...own ? [{ target: own.target, id: goal.session, title: goal.name }] : []];
+    const askers = [...work.map((each) => ({ target: each.target, id: each.data.id, title: each.data.title || "New Session", data: each.data })), ...own ? [{ target: own.target, id: goal.session, title: goal.name, data: { ...own.data, id: goal.session } }] : []];
     for (const each of askers) {
       const { permissions, questions } = await asksIn(each.target, each.id, signal).catch(() => ({ permissions: [], questions: [] }));
-      const asks = [...permissions.map((one) => ({ id: one.id, text: `${each.title}: ${permissionWords(one).replace(/\.$/, "")}` })), ...questions.map((one) => ({ id: one.id, text: `${each.title} asks: ${one.text}`, asker: one.asker, recommended: one.recommended }))];
+      const asks = [...permissions.map((one) => ({ id: one.id, text: `${each.title}: ${permissionWords(one).replace(/\.$/, "")}` })), ...questions.map((one) => ({ id: one.id, text: `${each.title} asks: ${one.text}`, question: one }))];
       for (const ask of asks) {
         const key = `${each.id}:${ask.id}`;
         if (settledAsks.has(ask.id))
@@ -8687,9 +8705,8 @@ async function lookAtGoals(tell, targets, { file = GOALS_FILE, here, now = Date.
         asksSeen[key] = kept?.asksSeen?.[key] ?? now;
         if (each.id !== goal.session && now - asksSeen[key] < ASK_SETTLES)
           continue;
-        if (autopilot && ask.recommended && ask.asker && !kept?.heldByYou && await goAhead(each.target, ask.asker, ask.id, ask.recommended, signal)) {
+        if (ask.question?.recommended && isAutopilot(each.data) && await goAheadOnQuestion(each.target, each.data, ask.question, undefined, signal)) {
           open.delete(key);
-          addDecided(goal.bot, { text: ask.recommended.text, choice: ask.recommended.choice, ...ask.recommended.why ? { why: ask.recommended.why } : {}, ...ask.recommended.options ? { options: ask.recommended.options } : {}, session: each.id }, file, `ask:${key}`);
           continue;
         }
         addWaiting(goal.bot, { kind: "ask", text: ask.text, session: each.id }, file, `ask:${key}`);
@@ -8915,20 +8932,21 @@ async function goAheadOnAutopilot(target, conversation, form, file = DECIDED_FIL
   const asker = typeof form.sessionID === "string" ? form.sessionID : null;
   if (!recommended || !asker || typeof form.id !== "string")
     return null;
-  return goAhead2(target, conversation, asker, form.id, recommended, file, signal, askedBy(form));
+  return goAhead(target, conversation, asker, form.id, recommended, file, signal, askedBy(form));
 }
 async function goAheadOnWaiting(target, conversation, file = DECIDED_FILE, signal) {
   const { questions } = await asksIn(target, conversation.id, signal);
   const made = [];
   for (const question of questions) {
-    if (!question.recommended || signal?.aborted)
-      continue;
-    const one = await goAhead2(target, conversation, question.asker, question.id, question.recommended, file, signal, question.call);
+    if (signal?.aborted)
+      break;
+    const one = await goAheadOnQuestion(target, conversation, question, file, signal);
     if (one)
       made.push(one);
   }
   return made;
 }
+var goAheadOnQuestion = (target, conversation, question, file = DECIDED_FILE, signal) => question.recommended ? goAhead(target, conversation, question.asker, question.id, question.recommended, file, signal, question.call) : Promise.resolve(null);
 async function catchUpAutopilot(target, file = DECIDED_FILE, signal) {
   const page = await engineGet(target, "api/session?limit=200&order=desc&parentID=null");
   for (const data of Array.isArray(page?.data) ? page.data : []) {
@@ -8939,7 +8957,7 @@ async function catchUpAutopilot(target, file = DECIDED_FILE, signal) {
     await goAheadOnWaiting(target, data, file, signal).catch(() => {});
   }
 }
-async function goAhead2(target, conversation, asker, id, recommended, file, signal, asked) {
+async function goAhead(target, conversation, asker, id, recommended, file, signal, asked) {
   const goal = runningGoalOf(conversation.id, worksFor(conversation)?.bot ?? null);
   if (goal?.heldByYou)
     return null;

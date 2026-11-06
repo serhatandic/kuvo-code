@@ -31,8 +31,9 @@ import { BOTS, HERE } from "../home";
 import { placeOfSession } from "../letters/letter";
 import { readWakes } from "../areas/wakes";
 import { periodEnd, periodOf, startOfDay, timeGiven } from "./clock";
-import { asksIn, permissionWords, type Recommendation } from "./answers";
-import { isAutopilot, setAutopilot } from "./autopilot";
+import { asksIn, permissionWords, type PendingQuestion } from "./answers";
+import { goAheadOnQuestion, isAutopilot, setAutopilot } from "./autopilot";
+import type { EngineSession } from "../engine/sessions";
 import { keepAwake, keepsAwake, onPower } from "./awake";
 import { noteWorkChanged, WORK_FOLDER } from "./changes";
 import { sandboxOn } from "./sandbox";
@@ -108,6 +109,8 @@ export interface KeptGoal extends Omit<GoalPlanShape, "alone" | "folders" | "ste
   /** Since when you've had it paused (its conversation's goal, from any app): nothing of it goes
    * on, not even at a limit's reset, until you resume it. */
   heldByYou?: number;
+  /** A switch of its mode hasn't reached all of its sessions yet (`followMode`). */
+  following?: boolean;
   /** The projects the bot proposed, while you've set others on its card (`projects`): a proposal
    * again with these keeps yours. */
   botProjects?: readonly string[];
@@ -199,7 +202,7 @@ export function boxChecks(goal: Pick<KeptGoal, "projects" | "name" | "bot">): Go
 }
 
 const shown = (goal: KeptGoal): GoalPlanShape => {
-  const { periods: _, asksSeen: __, limitsSeen: ___, told: ____, reportTold: _____, endTold: ______, phasesDone: _______, doneAtDigest: ________, pausedSince: _________, idleSince: __________, nudges: ___________, loop: ____________, heldByYou: _____________, nudgedPlan: ______________, botProjects: _______________, ...rest } = goal;
+  const { following: _following, periods: _, asksSeen: __, limitsSeen: ___, told: ____, reportTold: _____, endTold: ______, phasesDone: _______, doneAtDigest: ________, pausedSince: _________, idleSince: __________, nudges: ___________, loop: ____________, heldByYou: _____________, nudgedPlan: ______________, botProjects: _______________, ...rest } = goal;
   // A step whose session waits for a limit to reset is paused, until then.
   const steps = goal.steps.map(step => {
     const paused = goal.state === "running" && step.state !== "done" && step.state !== "skipped" ? goal.paused.find(each => each.session && step.sessions?.includes(each.session)) : undefined;
@@ -543,12 +546,27 @@ export async function answerGoal(id: string, given: Record<string, unknown>, tar
   return { goal: shown(changed) };
 }
 
-// The bot's conversation runs Interactive or on Autopilot as its goal does: one setting, which
-// the goal card and the bot's composer both show and change.
-async function followMode(goal: KeptGoal, targets: () => Target[]): Promise<void> {
-  const place = await placeOfSession(goal.session, targets()).catch(() => null);
+// The bot's conversation and the sessions at its goal run Interactive or on Autopilot as the goal
+// does: one setting, which the goal card and the bot's composer both show and change, and a switch
+// reaches what's running. What it couldn't reach, it tries again on the box's next look.
+async function followMode(goal: KeptGoal, targets: () => Target[], file = GOALS_FILE): Promise<void> {
   const on = modeOf(goal) === "autopilot";
-  if (place?.data.id && isAutopilot(place.data) !== on) await setAutopilot(place.target, { ...place.data, id: place.data.id }, on).catch(() => false);
+  const own = await placeOfSession(goal.session, targets()).catch(() => null);
+  let reached = Boolean(own?.data.id);
+  const listed = await workSessions(targets(), undefined, { whole: true }).catch(() => {
+    reached = false;
+    return workSessions(targets()).catch((): Listed[] => []);
+  });
+  for (const each of [...(own ? [own] : []), ...goalWork(goal, listed)]) {
+    if (!each.data.id || isAutopilot(each.data) === on) continue;
+    if (!await setAutopilot(each.target, { ...each.data, id: each.data.id }, on).catch(() => false)) reached = false;
+  }
+  changeKept(all => {
+    const kept = all.find(one => one.id === goal.id);
+    if (!kept || Boolean(kept.following) === !reached) return;
+    if (reached) delete kept.following;
+    else kept.following = true;
+  }, file);
 }
 
 // The projects a plan makes, as you set them on its card before it starts (renamed, or moved to
@@ -1163,9 +1181,6 @@ async function failedTurn(target: Target, session: string, signal?: AbortSignal)
 }
 
 // A question answered with what it recommends; whether it went.
-const goAhead = (target: Target, asker: string, form: string, recommended: Recommendation, signal?: AbortSignal): Promise<boolean> =>
-  call(target, "POST", `/api/session/${encodeURIComponent(asker)}/form/${encodeURIComponent(form)}/reply`, { answer: recommended.answer }, signal).then(() => true, () => false);
-
 // A digest of the goal since the last: steps done since, what waits, how long it waited at limits.
 function digestWords(goal: KeptGoal, now: number): string {
   const done = goal.steps.filter(step => step.state === "done" || step.state === "skipped").length;
@@ -1296,13 +1311,13 @@ export async function lookAtGoals(tell: (notice: Notice) => boolean, targets: ()
     // What its sessions, and the bot itself, ask that the bot hasn't answered: waiting for you,
     // never a no. On Autopilot, a question that recommends a choice goes ahead on it instead, kept
     // as a call the bot made (a permission never: its conversation's mode decides those).
+    if (kept?.following) await followMode(kept, targets, file);
     const asksSeen: Record<string, number> = {};
     const open = new Set<string>();
-    const autopilot = modeOf(kept ?? goal) === "autopilot";
-    const askers = [...work.map(each => ({ target: each.target, id: each.data.id, title: each.data.title || "New Session" })), ...(own ? [{ target: own.target, id: goal.session, title: goal.name }] : [])];
+    const askers = [...work.map(each => ({ target: each.target, id: each.data.id, title: each.data.title || "New Session", data: each.data as Pick<EngineSession, "id" | "metadata"> })), ...(own ? [{ target: own.target, id: goal.session, title: goal.name, data: { ...own.data, id: goal.session } as Pick<EngineSession, "id" | "metadata"> }] : [])];
     for (const each of askers) {
       const { permissions, questions } = await asksIn(each.target, each.id, signal).catch(() => ({ permissions: [], questions: [] }));
-      const asks: { id: string; text: string; asker?: string; recommended?: Recommendation }[] = [...permissions.map(one => ({ id: one.id, text: `${each.title}: ${permissionWords(one).replace(/\.$/, "")}` })), ...questions.map(one => ({ id: one.id, text: `${each.title} asks: ${one.text}`, asker: one.asker, recommended: one.recommended }))];
+      const asks: { id: string; text: string; question?: PendingQuestion }[] = [...permissions.map(one => ({ id: one.id, text: `${each.title}: ${permissionWords(one).replace(/\.$/, "")}` })), ...questions.map(one => ({ id: one.id, text: `${each.title} asks: ${one.text}`, question: one }))];
       for (const ask of asks) {
         const key = `${each.id}:${ask.id}`;
         if (settledAsks.has(ask.id)) continue;
@@ -1310,9 +1325,9 @@ export async function lookAtGoals(tell: (notice: Notice) => boolean, targets: ()
         asksSeen[key] = kept?.asksSeen?.[key] ?? now;
         // (The bot's own: yours at once; its sessions': once the bot has had a moment.)
         if (each.id !== goal.session && now - asksSeen[key] < ASK_SETTLES) continue;
-        if (autopilot && ask.recommended && ask.asker && !kept?.heldByYou && await goAhead(each.target, ask.asker, ask.id, ask.recommended, signal)) {
+        // (Already followed, or missed as the event went by: as the box does as they come.)
+        if (ask.question?.recommended && isAutopilot(each.data) && await goAheadOnQuestion(each.target, each.data, ask.question, undefined, signal)) {
           open.delete(key);
-          addDecided(goal.bot, { text: ask.recommended.text, choice: ask.recommended.choice, ...(ask.recommended.why ? { why: ask.recommended.why } : {}), ...(ask.recommended.options ? { options: ask.recommended.options } : {}), session: each.id }, file, `ask:${key}`);
           continue;
         }
         addWaiting(goal.bot, { kind: "ask", text: ask.text, session: each.id }, file, `ask:${key}`);

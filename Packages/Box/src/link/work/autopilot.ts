@@ -12,7 +12,7 @@ import { boxNote } from "../../shared/queues";
 import { call, engineGet } from "../engine/client";
 import { sendInto } from "../engine/queue";
 import { locked, textOf, writePrivate } from "../files";
-import { askedBy, asksIn, recommendationOf, type Recommendation } from "./answers";
+import { askedBy, asksIn, recommendationOf, type PendingQuestion, type Recommendation } from "./answers";
 import { addDecided, runningGoalOf } from "./goals";
 import { worksFor } from "./tree";
 import { WORK_FOLDER } from "./changes";
@@ -122,12 +122,18 @@ export async function goAheadOnWaiting(target: Target, conversation: Pick<Engine
   const { questions } = await asksIn(target, conversation.id, signal);
   const made: DecidedShape[] = [];
   for (const question of questions) {
-    if (!question.recommended || signal?.aborted) continue;
-    const one = await goAhead(target, conversation, question.asker, question.id, question.recommended, file, signal, question.call);
+    if (signal?.aborted) break;
+    const one = await goAheadOnQuestion(target, conversation, question, file, signal);
     if (one) made.push(one);
   }
   return made;
 }
+
+/** A question `conversation` (on Autopilot) or a subagent asks, as the engine lists it: answered
+ * with what it recommends and kept, as one heard as it's asked is. Null where it recommends nothing,
+ * or the answer didn't go. */
+export const goAheadOnQuestion = (target: Target, conversation: Pick<EngineSession, "id" | "metadata">, question: PendingQuestion, file = DECIDED_FILE, signal?: AbortSignal): Promise<DecidedShape | null> =>
+  question.recommended ? goAhead(target, conversation, question.asker, question.id, question.recommended, file, signal, question.call) : Promise.resolve(null);
 
 /** As the box starts, or hears `target` again: what its conversations on Autopilot (the latest
  * few hundred) ask that recommends a choice, answered with it. */

@@ -307,3 +307,43 @@ test("a goal started without saying how it runs (from an app before Autopilot) r
   assert.equal(started.body.goal.mode, "autopilot");
   assert.equal((await route("GET", "kuvo/sessions/ses_away/autopilot")).body.autopilot, true);
 });
+
+// A session at the goal running in ses_mine.
+const atWork = (id, autopilot) => session(id, { time: { created: Date.now(), updated: 1 }, metadata: { kuvo: { by: { bot: "bot_ada", name: "Ada" }, startedBy: "ses_mine", ...(autopilot ? { autopilot: true } : {}) } } });
+
+test("switching a goal reaches its running sessions: off, their questions wait and their agents are told no longer; on, they go ahead again; one the engine turned away follows on the box's next look", async () => {
+  goalIn("ses_mine", { mode: "autopilot", started: Date.now() - 1000 });
+  sessions.set("ses_work", atWork("ses_work", true));
+  entries.set("ses_work kuvo.autopilot", "On Autopilot");
+  const off = await route("POST", "kuvo/work/goals/goal_cafe", { action: "change", mode: "interactive" });
+  assert.equal(off.status, 200);
+  assert.equal(off.body.goal.following, undefined, "nothing of how it follows goes to a client");
+  assert.equal(sessions.get("ses_work").metadata.kuvo.autopilot, false);
+  assert.equal(entries.has("ses_work kuvo.autopilot"), false);
+  const { watch } = await watcher();
+  await watch({ type: "form.created", data: { form: QUESTION("frm_1", "ses_work", ROASTS) } });
+  assert.deepEqual(answered, [], "it waits for you");
+
+  refusesEntries = true;
+  assert.equal((await route("POST", "kuvo/work/goals/goal_cafe", { action: "change", mode: "autopilot" })).status, 200);
+  assert.equal(sessions.get("ses_work").metadata.kuvo.autopilot === true, false, "turned away: as it was");
+  refusesEntries = false;
+  await link.lookAtGoals(() => true, () => [source], { now: Date.now() });
+  assert.equal(sessions.get("ses_work").metadata.kuvo.autopilot, true);
+  assert.match(entries.get("ses_work kuvo.autopilot"), /Autopilot/);
+});
+
+test("the box's look at a goal goes by each session's own switch, and what it goes ahead on shows at its step as one heard as it's asked does", async () => {
+  goalIn("ses_mine", { mode: "autopilot", started: Date.now() - 1000 });
+  sessions.set("ses_on", atWork("ses_on", true));
+  sessions.set("ses_off", atWork("ses_off", false));
+  const asked = (id, session) => ({ ...QUESTION(id, session, ROASTS), metadata: { kind: "question", tool: { id: `call_${id}` } } });
+  waiting.set("ses_on", [asked("frm_on", "ses_on")]);
+  waiting.set("ses_off", [asked("frm_off", "ses_off")]);
+  const now = Date.now();
+  await link.lookAtGoals(() => true, () => [source], { now });
+  await link.lookAtGoals(() => true, () => [source], { now: now + 5 * 60_000 });
+  assert.deepEqual(answered.map(each => each.form), ["frm_on"], "you turned the other off yourself");
+  assert.deepEqual((await route("GET", "kuvo/sessions/ses_on/autopilot")).body.decided.map(each => [each.choice, each.call]), [["Warm and roasty", "call_frm_on"]]);
+  assert.deepEqual(goalDecided().map(each => each.id), ["ask:ses_on:frm_on"]);
+});

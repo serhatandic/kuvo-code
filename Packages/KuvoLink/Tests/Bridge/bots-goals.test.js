@@ -1182,7 +1182,7 @@ test("on Autopilot, a question asked with a recommendation goes ahead on it at o
   assert.deepEqual(replied, [], "a permission is never answered for you: the conversation's mode decides those");
   [goal] = await goals();
   assert.deepEqual(goal.waiting.map(each => each.kind), ["ask", "ask"]);
-  assert.ok(goal.waiting.some(each => each.text === "Build the site: Asks: What should the newsletter be called?"));
+  assert.ok(goal.waiting.some(each => each.text === "Build the site asks: What should the newsletter be called?"));
   assert.ok(goal.waiting.some(each => /vercel deploy --prod/.test(each.text)));
   assert.equal(goal.decided.length, 2);
 
