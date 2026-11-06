@@ -130,7 +130,12 @@ import Testing
         model.choose("Dark and smoky", on: made)
         try await until { model.autopilotShown?.decided(at: "call_roast")?.changed == true }
         #expect(model.autopilotShown?.decided(at: "call_roast")?.current == "Dark and smoky")
-        try await until { engine.requests("POST", "").contains { "\($0.body)".contains("the user picked Dark and smoky, not Warm and roasty") } }
+        try await until {
+            engine.requests("POST", "").contains { request in
+                let text = "\(request.body)"
+                return text.contains("[Decision changed]") && text.contains("Dark and smoky") && text.contains("Warm and roasty")
+            }
+        }
     }
 
     /// A conversation on Autopilot you pick a coding agent's model in, carried by this Mac: it stays
@@ -202,15 +207,15 @@ import Testing
                          "options": [["value": "w", "label": "Warm (Recommended)"], ["value": "d", "label": "Dark"]]]]]
         }
 
-        // Its box takes a while, then goes ahead.
-        workspace.autopilotGrace = .seconds(60 * 60)
+        // Its box goes ahead within its time.
+        workspace.autopilotGrace = .zero
         workspace.handle(try engine.event("form.created", session: "ses_a", ["form": question("frm_went")]))
         #expect(workspace.waitingCount == 0)
         workspace.handle(try engine.event("form.replied", session: "ses_a", ["id": "frm_went", "sessionID": "ses_a"]))
+        try await until { !workspace.notifying.contains("frm_went") }
         #expect(workspace.waitingCount == 0)
 
         // Still asked once its box has had its chance.
-        workspace.autopilotGrace = .zero
         workspace.handle(try engine.event("form.created", session: "ses_a", ["form": question("frm_waits")]))
         try await until { workspace.waitingCount == 1 }
     }

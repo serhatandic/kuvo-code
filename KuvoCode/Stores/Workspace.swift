@@ -2750,7 +2750,8 @@ final class Workspace {
             if let reply = try? event.payload(as: EventPayload.PermissionReplied.self) { settled(reply.requestID) }
         case "form.created":
             guard let form = try? event.payload(as: EventPayload.FormCreated.self).form else { return }
-            asking[form.id] = form.sessionID
+            // (One its box is going ahead on doesn't count on the Dock, even for a moment.)
+            if !form.recommendsAnswer || session(form.sessionID).map(AutopilotShown.isOn) != true { asking[form.id] = form.sessionID }
             let question = Self.question(in: form)
             notifyAsk(form.sessionID, body: question?.text ?? (form.isQuestion ? "Has a question for you." : "Needs your answer."), request: form.id, question: question, recommends: form.recommendsAnswer)
         case "form.replied", "form.cancelled":
@@ -2834,7 +2835,7 @@ final class Workspace {
     /// `answerable`: its buttons answer it (not when the notification can't show all it covers).
     /// Asks whose notification is being made (its session read first), and those of them
     /// answered or gone meanwhile.
-    @ObservationIgnored private var notifying: Set<String> = []
+    @ObservationIgnored private(set) var notifying: Set<String> = []
     @ObservationIgnored private var settledWhileNotifying: Set<String> = []
     /// How long a question that recommends a choice, on Autopilot, is given for its box to go ahead.
     @ObservationIgnored var autopilotGrace: Duration = .seconds(5)
