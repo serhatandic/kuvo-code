@@ -134,7 +134,9 @@ describe("keeping an agent's program current", () => {
       expect(process.env.PATH).toBe(first)
       expect(first?.split(":").filter((entry) => entry === "/home/me/.local/bin").length).toBe(1)
     } finally {
-      process.env.SHELL = saved.SHELL
+      // (Not assigned when there was none: that would make it the word "undefined", the shell every later test in the run starts.)
+      if (saved.SHELL === undefined) delete process.env.SHELL
+      else process.env.SHELL = saved.SHELL
       process.env.PATH = saved.PATH
       rmSync(folder, { recursive: true, force: true })
     }
