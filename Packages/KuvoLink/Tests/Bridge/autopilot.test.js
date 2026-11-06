@@ -600,6 +600,19 @@ test("a goal started while its conversation can't be read leaves it as it is whe
   assert.equal(sessions.get("ses_away").metadata.kuvo.autopilot, true);
 });
 
+test("a bot's conversation carried on with a coding agent keeps its goal: switched there, the goal follows, and it ends with it", async () => {
+  goalIn("ses_mine", { mode: "autopilot" });
+  sessions.set("ses_carried", session("ses_carried", { metadata: { kuvo: { carriedFrom: "ses_mine", autopilot: true } } }));
+  fs.writeFileSync(path.join(home, "bots", "bot_ada", "session"), "ses_carried");
+  assert.equal((await route("PUT", "kuvo/sessions/ses_carried/autopilot", { autopilot: false })).status, 200);
+  const [goal] = JSON.parse(fs.readFileSync(path.join(home, "run", "work", "goals.json"), "utf8")).goals;
+  assert.equal(goal.session, "ses_carried");
+  assert.equal(goal.mode, "interactive");
+  assert.equal((await route("PUT", "kuvo/sessions/ses_carried/autopilot", { autopilot: true })).status, 200);
+  await route("POST", "kuvo/work/goals/goal_cafe", { action: "stop" });
+  assert.equal(sessions.get("ses_carried").metadata.kuvo.autopilot, false);
+});
+
 test("switching a goal reaches its running sessions: off, their questions wait and their agents are told no longer; on, they go ahead again; one the engine turned away follows on the box's next look", async () => {
   goalIn("ses_mine", { mode: "autopilot", started: Date.now() - 1000 });
   sessions.set("ses_work", atWork("ses_work", true));

@@ -8305,6 +8305,8 @@ function yoursOnGoal(conversation, form, choice, file = GOALS_FILE) {
 function carriedOnGoal(from, to, file = GOALS_FILE) {
   changeKept((all) => {
     for (const goal of all) {
+      if (goal.state === "running" && goal.session === from)
+        goal.session = to;
       for (const call of goal.decided ?? []) {
         if (!call.id.startsWith(`ask:${from}:`))
           continue;
@@ -8967,12 +8969,11 @@ function keepDecided(calls, sessions, file = DECIDED_FILE) {
     }, file);
 }
 function carryDecided(from, to, file = DECIDED_FILE) {
-  if (!decidedIn(from, file).length)
-    return;
-  changeAll((all) => {
-    all[to] = [...all[to] ?? [], ...all[from] ?? []].slice(-KEPT);
-    delete all[from];
-  }, file);
+  if (decidedIn(from, file).length)
+    changeAll((all) => {
+      all[to] = [...all[to] ?? [], ...all[from] ?? []].slice(-KEPT);
+      delete all[from];
+    }, file);
   carriedOnGoal(from, to);
 }
 function forgetDecided(session, file = DECIDED_FILE) {

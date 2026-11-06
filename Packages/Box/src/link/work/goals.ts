@@ -919,6 +919,8 @@ export function yoursOnGoal(conversation: string, form: string, choice: string, 
 export function carriedOnGoal(from: string, to: string, file = GOALS_FILE): void {
   changeKept(all => {
     for (const goal of all) {
+      // A bot's conversation carried on: its goal goes on there.
+      if (goal.state === "running" && goal.session === from) goal.session = to;
       for (const call of goal.decided ?? []) {
         if (!call.id.startsWith(`ask:${from}:`)) continue;
         call.id = `ask:${to}:${call.id.slice(`ask:${from}:`.length)}`;

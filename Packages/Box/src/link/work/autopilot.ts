@@ -83,8 +83,7 @@ export function keepDecided(calls: unknown, sessions: readonly string[], file = 
 
 /** Those of a conversation carried on as `to`, under it from now on. */
 export function carryDecided(from: string, to: string, file = DECIDED_FILE): void {
-  if (!decidedIn(from, file).length) return;
-  changeAll(all => {
+  if (decidedIn(from, file).length) changeAll(all => {
     all[to] = [...(all[to] ?? []), ...(all[from] ?? [])].slice(-KEPT);
     delete all[from];
   }, file);
