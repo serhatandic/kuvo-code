@@ -32,8 +32,7 @@ struct StepsRow: View {
 
     var body: some View {
         // The one under way, as it is; those before it in the line.
-        let current = isLive ? blocks.last : nil
-        let done = isLive ? Array(blocks.dropLast()) : blocks
+        let (done, current) = Self.split(blocks, isLive: isLive)
         VStack(alignment: .leading, spacing: 10) {
             if !done.isEmpty {
                 // The line and what it opens to, with no space between them but the fold's own.
@@ -112,6 +111,14 @@ struct StepsRow: View {
         case .tool(let call): ToolCallView(call: call, directory: directory)
         default: EmptyView()
         }
+    }
+
+    /// The step under way, shown by itself under the line, and those before it, which the line
+    /// counts and opens to. A last step that has ended isn't under way (it's waiting for the model
+    /// to go on): it counts with the rest, so the line's number is the rows it opens to.
+    static func split(_ blocks: [Message.Content], isLive: Bool) -> (done: [Message.Content], current: Message.Content?) {
+        guard isLive, let last = blocks.last, isUnfinished(last) else { return (blocks, nil) }
+        return (Array(blocks.dropLast()), last)
     }
 
     /// A step still going: thinking that hasn't ended, a tool still being written or run.
@@ -198,6 +205,20 @@ enum StepsSummary {
         case "skill": return "Using a skill"
         case "start_session": return "Starting a session"
         case "mark_final": return "Marking a file final"
+        case "list_sessions": return "Checking its sessions"
+        case "stop_session": return "Stopping a session"
+        case "answer_ask": return "Answering a session"
+        case "list_models": return "Looking up the models"
+        case "list_projects": return "Looking up the projects"
+        case "make_project": return "Making a project"
+        case "set_job": return "Setting its job"
+        case "propose_goal": return "Proposing a goal"
+        case "goal_progress": return "Updating its goal’s progress"
+        case "may_spend": return "Checking a purchase against its budget"
+        case "finish_goal": return "Finishing its goal"
+        case "vault_items": return "Looking up its vault items"
+        case "vault_ask": return "Asking you for something from the vault"
+        case "vault_run": return "Running a command with the vault’s values"
         case "sleep": return "Sleeping"
         case let kind where kind.hasPrefix("mcp:"):
             let server = String(kind.dropFirst(4))
@@ -254,6 +275,20 @@ enum StepsSummary {
         case "skill": return many ? "used \(count) skills" : "used a skill"
         case "start_session": return many ? "started \(count) sessions" : "started a session"
         case "mark_final": return many ? "marked \(count) files final" : "marked a file final"
+        case "list_sessions": return "checked its sessions"
+        case "stop_session": return many ? "stopped \(count) sessions" : "stopped a session"
+        case "answer_ask": return many ? "answered \(count) sessions" : "answered a session"
+        case "list_models": return "looked up the models"
+        case "list_projects": return "looked up the projects"
+        case "make_project": return many ? "made \(count) projects" : "made a project"
+        case "set_job": return "set its job"
+        case "propose_goal": return "proposed a goal"
+        case "goal_progress": return "updated its goal’s progress"
+        case "may_spend": return many ? "checked \(count) purchases against its budget" : "checked a purchase against its budget"
+        case "finish_goal": return "finished its goal"
+        case "vault_items": return "looked up its vault items"
+        case "vault_ask": return many ? "asked you for \(count) things from the vault" : "asked you for something from the vault"
+        case "vault_run": return many ? "ran \(count) commands with the vault’s values" : "ran a command with the vault’s values"
         case "sleep": return many ? "slept \(count) times" : "slept"
         case let kind where kind.hasPrefix("mcp:"):
             let server = String(kind.dropFirst(4))
