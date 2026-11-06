@@ -7672,7 +7672,7 @@ function boxChecks(goal) {
   return checks;
 }
 var shown = (goal) => {
-  const { following: _following, periods: _, asksSeen: __, limitsSeen: ___, told: ____, reportTold: _____, endTold: ______, phasesDone: _______, doneAtDigest: ________, pausedSince: _________, idleSince: __________, nudges: ___________, loop: ____________, heldByYou: _____________, nudgedPlan: ______________, botProjects: _______________, ...rest } = goal;
+  const { following: _following, wasAutopilot: _wasAutopilot, periods: _, asksSeen: __, limitsSeen: ___, told: ____, reportTold: _____, endTold: ______, phasesDone: _______, doneAtDigest: ________, pausedSince: _________, idleSince: __________, nudges: ___________, loop: ____________, heldByYou: _____________, nudgedPlan: ______________, botProjects: _______________, ...rest } = goal;
   const steps = goal.steps.map((step) => {
     const paused = goal.state === "running" && step.state !== "done" && step.state !== "skipped" ? goal.paused.find((each) => each.session && step.sessions?.includes(each.session)) : undefined;
     return paused ? { ...step, state: "paused", ...paused.until ? { resumes: paused.until } : {} } : step;
@@ -7915,7 +7915,8 @@ async function answerGoal(id, given, targets, file = GOALS_FILE) {
   const ends = action === "start" ? endGiven(given.ends) : undefined;
   if (ends === null)
     return { refused: { status: 400, message: "The end (ends) is a date and time to come." } };
-  const asItRuns = action === "start" && given.mode === undefined && before.mode === undefined && isAutopilot((await placeOfSession(before.session, targets()).catch(() => null))?.data ?? {}) ? "autopilot" : undefined;
+  const wasAutopilot = action === "start" && isAutopilot((await placeOfSession(before.session, targets()).catch(() => null))?.data ?? {});
+  const asItRuns = wasAutopilot && given.mode === undefined && before.mode === undefined ? "autopilot" : undefined;
   const changed = changeKept((all) => {
     const goal = all.find((each) => each.id === id);
     if (!goal)
@@ -7942,6 +7943,8 @@ async function answerGoal(id, given, targets, file = GOALS_FILE) {
     goal.started = Date.now();
     goal.wake = given.wake === true;
     goal.mode = MODES.includes(given.mode) ? given.mode : asItRuns ?? modeOf(goal);
+    if (wasAutopilot)
+      goal.wasAutopilot = true;
     if (DIGESTS.includes(given.digest))
       goal.digest = given.digest;
     if (ends !== undefined)
@@ -7958,6 +7961,7 @@ async function answerGoal(id, given, targets, file = GOALS_FILE) {
   if (action === "stop") {
     await stopBotWork(changed.bot, targets()).catch(() => 0);
     await setGoalLoop(changed, null, targets);
+    await followMode(changed, targets, file);
   } else if (action === "decline") {
     await tellBot2(changed, "[Not now] The user didn't start this goal. Don't start its work: ask them in a line what they'd like instead, if anything.", "You said not now", targets);
   } else {
@@ -7968,9 +7972,12 @@ async function answerGoal(id, given, targets, file = GOALS_FILE) {
   return { goal: shown(changed) };
 }
 async function followMode(goal, targets, file = GOALS_FILE) {
-  const on = modeOf(goal) === "autopilot";
+  const ended = goal.state !== "running";
+  if (ended && goal.wasAutopilot)
+    return;
+  const on = !ended && modeOf(goal) === "autopilot";
   const own = await placeOfSession(goal.session, targets()).catch(() => null);
-  let reached = Boolean(own?.data.id);
+  let reached = ended || Boolean(own?.data.id);
   const listed = await workSessions(targets(), undefined, { whole: true }).catch(() => {
     reached = false;
     return workSessions(targets()).catch(() => []);
@@ -8588,6 +8595,7 @@ async function finishGoal(bot, given, targets, file = GOALS_FILE) {
     return { refused: "No goal is running." };
   noteWorkChanged(bot);
   await setGoalLoop(done, null, targets);
+  await followMode(done, targets, file);
   return { said: "The goal is done. Say the report in your reply too, briefly." };
 }
 var limitName = (model) => {
@@ -8644,15 +8652,16 @@ async function lookAtGoals(tell, targets, { file = GOALS_FILE, here, now = Date.
       const ended = changeKept((all) => {
         const kept = all.find((each) => each.id === goal.id && each.state === "running");
         if (!kept)
-          return false;
+          return null;
         kept.state = "stopped";
         kept.ended = now;
         kept.report = `${kept.name} reached the end you set: ${kept.steps.filter((step) => step.state === "done" || step.state === "skipped").length} of ${kept.steps.length} steps done. Ask it where things stand.`;
-        return true;
+        return kept;
       }, file);
       if (ended) {
         noteWorkChanged(goal.bot);
         await stopBotWork(goal.bot, targets(), signal).catch(() => 0);
+        await followMode(ended, targets, file);
       }
     }
   }
@@ -8661,6 +8670,8 @@ async function lookAtGoals(tell, targets, { file = GOALS_FILE, here, now = Date.
     if (goal.state !== "running") {
       if (goal.loop)
         await setGoalLoop(goal, null, targets, file);
+      if (goal.following)
+        await followMode(goal, targets, file);
       continue;
     }
     if (!bridge)

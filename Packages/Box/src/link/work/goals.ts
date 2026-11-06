@@ -111,6 +111,8 @@ export interface KeptGoal extends Omit<GoalPlanShape, "alone" | "folders" | "ste
   heldByYou?: number;
   /** A switch of its mode hasn't reached all of its sessions yet (`followMode`). */
   following?: boolean;
+  /** Its conversation was on Autopilot before it started, and stays so after it ends. */
+  wasAutopilot?: boolean;
   /** The projects the bot proposed, while you've set others on its card (`projects`): a proposal
    * again with these keeps yours. */
   botProjects?: readonly string[];
@@ -202,7 +204,7 @@ export function boxChecks(goal: Pick<KeptGoal, "projects" | "name" | "bot">): Go
 }
 
 const shown = (goal: KeptGoal): GoalPlanShape => {
-  const { following: _following, periods: _, asksSeen: __, limitsSeen: ___, told: ____, reportTold: _____, endTold: ______, phasesDone: _______, doneAtDigest: ________, pausedSince: _________, idleSince: __________, nudges: ___________, loop: ____________, heldByYou: _____________, nudgedPlan: ______________, botProjects: _______________, ...rest } = goal;
+  const { following: _following, wasAutopilot: _wasAutopilot, periods: _, asksSeen: __, limitsSeen: ___, told: ____, reportTold: _____, endTold: ______, phasesDone: _______, doneAtDigest: ________, pausedSince: _________, idleSince: __________, nudges: ___________, loop: ____________, heldByYou: _____________, nudgedPlan: ______________, botProjects: _______________, ...rest } = goal;
   // A step whose session waits for a limit to reset is paused, until then.
   const steps = goal.steps.map(step => {
     const paused = goal.state === "running" && step.state !== "done" && step.state !== "skipped" ? goal.paused.find(each => each.session && step.sessions?.includes(each.session)) : undefined;
@@ -500,8 +502,8 @@ export async function answerGoal(id: string, given: Record<string, unknown>, tar
   if (ends === null) return { refused: { status: 400, message: "The end (ends) is a date and time to come." } };
   // Started without saying how it runs (a client from before Autopilot): as its conversation runs
   // now, rather than turning the conversation's Autopilot off.
-  const asItRuns = action === "start" && given.mode === undefined && before.mode === undefined
-    && isAutopilot((await placeOfSession(before.session, targets()).catch(() => null))?.data ?? {}) ? "autopilot" as const : undefined;
+  const wasAutopilot = action === "start" && isAutopilot((await placeOfSession(before.session, targets()).catch(() => null))?.data ?? {});
+  const asItRuns = wasAutopilot && given.mode === undefined && before.mode === undefined ? "autopilot" as const : undefined;
   const changed = changeKept(all => {
     const goal = all.find(each => each.id === id);
     if (!goal) return { status: 404 as const, message: "There's no such goal here." };
@@ -523,6 +525,7 @@ export async function answerGoal(id: string, given: Record<string, unknown>, tar
     goal.started = Date.now();
     goal.wake = given.wake === true;
     goal.mode = MODES.includes(given.mode as GoalMode) ? given.mode as GoalMode : asItRuns ?? modeOf(goal);
+    if (wasAutopilot) goal.wasAutopilot = true;
     if (DIGESTS.includes(given.digest as (typeof DIGESTS)[number])) goal.digest = given.digest as (typeof DIGESTS)[number];
     if (ends !== undefined) goal.ends = ends;
     // No end on the card (null): the bot's proposed one goes.
@@ -536,6 +539,7 @@ export async function answerGoal(id: string, given: Record<string, unknown>, tar
   if (action === "stop") {
     await stopBotWork(changed.bot, targets()).catch(() => 0);
     await setGoalLoop(changed, null, targets);
+    await followMode(changed, targets, file);
   } else if (action === "decline") {
     await tellBot(changed, "[Not now] The user didn't start this goal. Don't start its work: ask them in a line what they'd like instead, if anything.", "You said not now", targets);
   } else {
@@ -548,11 +552,15 @@ export async function answerGoal(id: string, given: Record<string, unknown>, tar
 
 // The bot's conversation and the sessions at its goal run Interactive or on Autopilot as the goal
 // does: one setting, which the goal card and the bot's composer both show and change, and a switch
-// reaches what's running. What it couldn't reach, it tries again on the box's next look.
+// reaches what's running. What it couldn't reach, it tries again on the box's next look. A goal's
+// end takes them back to Interactive, unless its conversation was on Autopilot before it.
 async function followMode(goal: KeptGoal, targets: () => Target[], file = GOALS_FILE): Promise<void> {
-  const on = modeOf(goal) === "autopilot";
+  const ended = goal.state !== "running";
+  if (ended && goal.wasAutopilot) return;
+  const on = !ended && modeOf(goal) === "autopilot";
   const own = await placeOfSession(goal.session, targets()).catch(() => null);
-  let reached = Boolean(own?.data.id);
+  // (Ended, a conversation that's gone has nothing left to follow.)
+  let reached = ended || Boolean(own?.data.id);
   const listed = await workSessions(targets(), undefined, { whole: true }).catch(() => {
     reached = false;
     return workSessions(targets()).catch((): Listed[] => []);
@@ -1191,6 +1199,7 @@ export async function finishGoal(bot: string, given: Record<string, unknown>, ta
   if (!done) return { refused: "No goal is running." };
   noteWorkChanged(bot);
   await setGoalLoop(done, null, targets);
+  await followMode(done, targets, file);
   return { said: "The goal is done. Say the report in your reply too, briefly." };
 }
 
@@ -1267,17 +1276,18 @@ export async function lookAtGoals(tell: (notice: Notice) => boolean, targets: ()
       }, file);
       await tellBot(goal, "[Goal's end] The end the user set has come. Finish the step under way, start nothing new, and end with finish_goal and your report.", "The goal's end came", targets);
     } else if (now - goal.endTold >= WRAP_UP) {
-      const ended = changeKept(all => {
+      const ended = changeKept((all): KeptGoal | null => {
         const kept = all.find(each => each.id === goal.id && each.state === "running");
-        if (!kept) return false;
+        if (!kept) return null;
         kept.state = "stopped";
         kept.ended = now;
         kept.report = `${kept.name} reached the end you set: ${kept.steps.filter(step => step.state === "done" || step.state === "skipped").length} of ${kept.steps.length} steps done. Ask it where things stand.`;
-        return true;
+        return kept;
       }, file);
       if (ended) {
         noteWorkChanged(goal.bot);
         await stopBotWork(goal.bot, targets(), signal).catch(() => 0);
+        await followMode(ended, targets, file);
       }
     }
   }
@@ -1286,6 +1296,7 @@ export async function lookAtGoals(tell: (notice: Notice) => boolean, targets: ()
   for (const goal of readKept(file).filter(each => botHere(each.bot) && each.state !== "proposed" && each.state !== "declined")) {
     if (goal.state !== "running") {
       if (goal.loop) await setGoalLoop(goal, null, targets, file);
+      if (goal.following) await followMode(goal, targets, file);
       continue;
     }
     if (!bridge) continue;

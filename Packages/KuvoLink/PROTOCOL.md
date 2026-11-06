@@ -3526,7 +3526,9 @@ what may be decided without asking. Every conversation is Interactive until it's
   ("Work", Goals, Interactive or Autopilot) puts the conversation and the sessions at the goal on
   it (what the switch can't reach, the box's next look does), and the conversation turned on or off
   here switches its running goal (the bot told as for `{action: change, mode}`). One of those
-  sessions turned on or off by itself stays so until the goal's next switch. A call
+  sessions turned on or off by itself stays so until the goal's next switch. When the goal ends
+  (stopped, finished, or its end come), they go back to Interactive, unless the conversation was on
+  Autopilot before it started. A call
   made in its conversation, or its work's, shows in the goal's `decided` too
   (`ask:<conversation>:<form>`), as one call: your choice on it, on the goal
   (`{action: decided, decided, choice}`) or here, shows on both and tells the conversation that

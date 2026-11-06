@@ -496,6 +496,54 @@ test("a goal started without saying how it runs (from an app before Autopilot) r
 // A session at the goal running in ses_mine.
 const atWork = (id, autopilot) => session(id, { time: { created: Date.now(), updated: 1 }, metadata: { kuvo: { by: { bot: "bot_ada", name: "Ada" }, startedBy: "ses_mine", ...(autopilot ? { autopilot: true } : {}) } } });
 
+test("a goal's end takes its conversation and sessions back to Interactive, whichever way it ends, unless the conversation was on Autopilot before it", async () => {
+  const proposed = () => ({ state: "proposed", proposed: Date.now(), projects: [] });
+  const on = id => sessions.get(id).metadata?.kuvo?.autopilot === true;
+  const look = at => link.lookAtGoals(() => true, () => [source], { now: at });
+
+  // You stop it.
+  goalIn("ses_mine", proposed());
+  const started = await route("POST", "kuvo/work/goals/goal_cafe", { action: "start", mode: "autopilot", wake: false });
+  assert.equal(started.status, 200);
+  assert.equal(started.body.goal.wasAutopilot, undefined, "nothing of it goes to a client");
+  sessions.set("ses_work", atWork("ses_work", true));
+  entries.set("ses_work kuvo.autopilot", "On Autopilot");
+  assert.equal(on("ses_mine"), true);
+  assert.equal((await route("POST", "kuvo/work/goals/goal_cafe", { action: "stop" })).status, 200);
+  assert.equal(on("ses_mine"), false);
+  assert.equal(entries.has("ses_mine kuvo.autopilot"), false);
+  assert.equal(on("ses_work"), false);
+  assert.equal(entries.has("ses_work kuvo.autopilot"), false);
+
+  // The bot finishes it.
+  fs.rmSync(path.join(home, "run", "work"), { recursive: true, force: true });
+  goalIn("ses_mine", proposed());
+  await route("POST", "kuvo/work/goals/goal_cafe", { action: "start", mode: "autopilot", wake: false });
+  const finished = await route("POST", "kuvo/agent-tools", { name: "finish_goal", arguments: { report: "Done." }, session: "ses_mine" });
+  assert.equal(finished.body.isError, false, finished.body.text);
+  assert.equal(on("ses_mine"), false);
+
+  // The end you set comes and goes: the box ends it.
+  fs.rmSync(path.join(home, "run", "work"), { recursive: true, force: true });
+  goalIn("ses_mine", proposed());
+  await route("POST", "kuvo/work/goals/goal_cafe", { action: "start", mode: "autopilot", wake: false });
+  const goals = path.join(home, "run", "work", "goals.json");
+  const kept = JSON.parse(fs.readFileSync(goals, "utf8"));
+  kept.goals[0].ends = 1;
+  kept.goals[0].endTold = 1;
+  fs.writeFileSync(goals, JSON.stringify(kept));
+  await look(Date.now());
+  assert.equal(JSON.parse(fs.readFileSync(goals, "utf8")).goals[0].state, "stopped");
+  assert.equal(on("ses_mine"), false);
+
+  // On Autopilot before the goal: it stays so.
+  fs.rmSync(path.join(home, "run", "work"), { recursive: true, force: true });
+  goalIn("ses_away", proposed());
+  await route("POST", "kuvo/work/goals/goal_cafe", { action: "start", mode: "autopilot", wake: false });
+  await route("POST", "kuvo/work/goals/goal_cafe", { action: "stop" });
+  assert.equal(on("ses_away"), true);
+});
+
 test("switching a goal reaches its running sessions: off, their questions wait and their agents are told no longer; on, they go ahead again; one the engine turned away follows on the box's next look", async () => {
   goalIn("ses_mine", { mode: "autopilot", started: Date.now() - 1000 });
   sessions.set("ses_work", atWork("ses_work", true));
