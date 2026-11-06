@@ -16,6 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- A question from Codex always reaches you now, whatever its model does after asking. Before, one it went on from, by thinking, running a step or sleeping, was lost, so nothing showed and Autopilot had nothing to go ahead on. Your answer goes straight into its turn, and wakes it if it was sleeping on it.
 - Steps you open stay open as new ones come in, until you close them, and what you're reading stays where it is. Thinking you open as it's written stays open once it ends. Close them and you're back at the end.
 - A session waiting on a command or a subagent it left running now shows as at work, in its row and in the bar over its bot's composer, on your Mac and iPhone alike.
 - A bot or a session that started another hears "finished" once, when that session is really done, instead of after every turn: a timer of its own or a command ending no longer sends it again unless it has something new to say.

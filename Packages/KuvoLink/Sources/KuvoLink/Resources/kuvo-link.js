@@ -8817,10 +8817,11 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
   };
   const tellWhatHappened = async (data, working) => {
     const starter = startedByOf(data);
-    const wakes = wakesOf(data);
     const was = readTold(toldFile)?.sessions[data.id] ?? {};
-    if (wakes.includes("asks")) {
-      const { permissions, questions } = await asksIn(source, data.id);
+    let unreadAsks = false;
+    if (wakesOf(data).includes("asks")) {
+      const { permissions, questions, whole } = await asksIn(source, data.id);
+      unreadAsks = !whole;
       for (const permission of permissions.filter((each) => !was.asks?.includes(each.id))) {
         const line = await wakeLine({ type: "permission.asked", data: { id: permission.id, sessionID: data.id, action: permission.action, resources: permission.resources } }, data, source);
         if (line)
@@ -8828,12 +8829,21 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
         noteTold(data.id, { ask: permission.id });
       }
       for (const question of questions.filter((each) => !was.asks?.includes(each.id))) {
+        if (isAutopilot(data) && await goAheadOnQuestion(source, data, question).catch(() => null))
+          continue;
         tell(starter, `[Session asks] "${data.title || "New Session"}" (address ${data.id}) asks: ${question.text} (ask ${question.id}). Answer with answer_ask (answer), or tell the user in a line and carry on.`, true);
         noteTold(data.id, { ask: question.id });
       }
     }
-    if (!wakes.includes("finished") || working.has(data.id))
+    await tellIfFinished(data, working);
+    if (unreadAsks)
+      throw new Error("Its questions couldn't be read.");
+  };
+  const tellIfFinished = async (data, working) => {
+    if (!wakesOf(data).includes("finished") || working.has(data.id))
       return;
+    const starter = startedByOf(data);
+    const was = readTold(toldFile)?.sessions[data.id] ?? {};
     const at = now();
     const last = await lastReply(source, data.id);
     const waited = readTold(toldFile)?.waiting?.[data.id];
@@ -8858,13 +8868,28 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
       tell(starter, line, false);
     noteTold(data.id, { reply, turn: last.turn });
   };
-  const catchingUp = () => catchUp().catch(() => {
+  let startersTold = false;
+  let looksAgain = 0;
+  const catchingUp = async () => {
     if (signal?.aborted)
+      return;
+    let again = false;
+    try {
+      again = !await catchUpAutopilot(source, undefined, signal) && ++looksAgain < CATCH_UP_TRIES;
+      if (signal?.aborted)
+        return;
+      if (!startersTold)
+        await catchUp();
+      startersTold = true;
+    } catch {
+      again = true;
+    }
+    if (!again || signal?.aborted)
       return;
     const timer = schedule(() => catchingUp(), CATCH_UP_AGAIN);
     timer?.unref?.();
-  });
-  const caughtUp = catchUpAutopilot(source, undefined, signal).catch(() => {}).then(() => Promise.all([catchingUp(), tellLateAnswers(targets, undefined, bridgeRuns).catch(() => {})])).then(() => {});
+  };
+  const caughtUp = Promise.all([catchingUp(), tellLateAnswers(targets, undefined, bridgeRuns).catch(() => {})]).then(() => {});
   const lateAgain = () => {
     if (signal?.aborted)
       return;
@@ -10426,15 +10451,23 @@ async function goAheadOnAutopilot(target, conversation, form, file = DECIDED_FIL
   return goAhead(target, conversation, asker, form.id, recommendationOf(form), file, signal, askedBy(form));
 }
 async function goAheadOnWaiting(target, conversation, file = DECIDED_FILE, signal) {
-  const { questions } = await asksIn(target, conversation.id, signal);
+  return (await lookAtWaiting(target, conversation, file, signal)).made;
+}
+async function lookAtWaiting(target, conversation, file, signal) {
+  const { questions, whole } = await asksIn(target, conversation.id, signal);
   const made = [];
+  let settled = whole;
   for (const question of questions) {
     if (signal?.aborted)
       break;
-    made.push(...await goAheadOnQuestion(target, conversation, question, file, signal) ?? []);
+    const calls = await goAheadOnQuestion(target, conversation, question, file, signal);
+    if (calls)
+      made.push(...calls);
+    else if (!pausedByYou2(conversation))
+      settled = false;
   }
   await declineSharedIn(target, conversation, signal);
-  return made;
+  return { made, settled };
 }
 async function declineSharedIn(target, conversation, signal) {
   const folder = conversation.location?.directory;
@@ -10447,13 +10480,16 @@ async function declineSharedIn(target, conversation, signal) {
 var goAheadOnQuestion = (target, conversation, question, file = DECIDED_FILE, signal) => goAhead(target, conversation, question.asker, question.id, question.recommended ?? null, file, signal, question.call);
 async function catchUpAutopilot(target, file = DECIDED_FILE, signal) {
   const page = await engineGet(target, "api/session?limit=200&order=desc&parentID=null");
+  let settled = true;
   for (const data of Array.isArray(page?.data) ? page.data : []) {
     if (signal?.aborted)
-      return;
+      break;
     if (!data?.id || data.parentID || data.time?.archived || data.metadata?.kuvo?.archived === true || !isAutopilot(data))
       continue;
-    await goAheadOnWaiting(target, data, file, signal).catch(() => {});
+    if (!(await lookAtWaiting(target, data, file, signal).catch(() => null))?.settled)
+      settled = false;
   }
+  return settled;
 }
 async function waitsOnYou(target, conversation, form, file = DECIDED_FILE, signal) {
   const before = await asksIn(target, conversation.id, signal);
@@ -10491,6 +10527,7 @@ async function declineSharedOnAutopilot(target, form, folder, signal) {
   return decline(target, SHARED, form.id, signal, folder);
 }
 var decline = (target, asker, id, signal, folder) => call(target, "DELETE", `/api/session/${encodeURIComponent(asker)}/form/${encodeURIComponent(id)}?message=${encodeURIComponent(LEFT_UNDONE_WORDS)}`, undefined, signal, folder).then(() => true, () => false);
+var pausedByYou2 = (conversation) => !!runningGoalOf(conversation.id, worksFor(conversation)?.bot ?? null)?.heldByYou;
 async function goAhead(target, conversation, asker, id, recommended, file, signal, asked) {
   const goal = runningGoalOf(conversation.id, worksFor(conversation)?.bot ?? null);
   if (goal?.heldByYou)

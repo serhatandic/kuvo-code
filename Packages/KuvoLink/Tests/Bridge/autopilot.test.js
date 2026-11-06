@@ -48,6 +48,11 @@ let refusesPrompts;
 let refusesAnswers;
 let refusesReading;
 let refusesForms;
+let refusesList;
+const refusesFormsOnce = new Set();
+const refusesFormsOf = new Set();
+const repliesOf = new Set();
+let formLooks = 0;
 let followers = [];
 const followed = new Set();
 const engine = http.createServer((request, response) => {
@@ -58,12 +63,14 @@ const engine = http.createServer((request, response) => {
     const url = new URL(request.url, "http://x");
     const given = body ? JSON.parse(body) : undefined;
     if (url.pathname === "/api/session" && request.method === "GET") {
+      if (refusesList) return reply({ message: "Not now." }, 500);
       const parent = url.searchParams.get("parentID");
       return reply({ data: [...sessions.values()].filter(each => (parent && parent !== "null" ? each.parentID === parent : !each.parentID)) });
     }
     if (url.pathname === "/api/session/active") return reply({ data: Object.fromEntries(Object.keys(atWorkOn).map(id => [id, {}])) });
     const pageOf = url.pathname.match(/^\/api\/session\/([^/]+)\/message$/);
     if (pageOf && atWorkOn[decodeURIComponent(pageOf[1])]) return reply({ data: [{ type: "assistant", content: [{ type: "tool", name: `${atWorkOn[decodeURIComponent(pageOf[1])]}_search`, state: { status: "running" } }] }] });
+    if (pageOf && repliesOf.has(decodeURIComponent(pageOf[1]))) return reply({ data: [{ type: "assistant", id: "msg_done", time: { created: 2 }, content: [{ type: "text", text: "All done." }] }] });
     if (url.pathname === "/api/event") {
       response.writeHead(200, { "content-type": "text/event-stream" });
       response.write(": hello\n\n");
@@ -109,7 +116,10 @@ const engine = http.createServer((request, response) => {
       return reply({ data: true });
     }
     const forms = url.pathname.match(/^\/api\/session\/([^/]+)\/form$/);
+    if (forms) formLooks++;
     if (forms && refusesForms) return reply({ message: "Not now." }, 500);
+    if (forms && refusesFormsOnce.delete(decodeURIComponent(forms[1]))) return reply({ message: "Not now." }, 500);
+    if (forms && refusesFormsOf.has(decodeURIComponent(forms[1]))) return reply({ message: "Not now." }, 500);
     if (forms) return reply({ data: waiting.get(decodeURIComponent(forms[1])) ?? [] });
     const prompt = url.pathname.match(/^\/api\/session\/([^/]+)\/prompt$/);
     if (prompt && request.method === "POST" && refusesPrompts) return reply({ message: "Not now." }, 500);
@@ -153,6 +163,11 @@ beforeEach(() => {
   refusesAnswers = false;
   refusesReading = false;
   refusesForms = false;
+  refusesList = false;
+  refusesFormsOnce.clear();
+  repliesOf.clear();
+  formLooks = 0;
+  refusesFormsOf.clear();
   declined = [];
   shared = [];
   atWorkOn = {};
@@ -182,7 +197,7 @@ async function watcher() {
   atEnd(() => stop.abort());
   const watch = link.workWatcher(source, () => [source], { schedule: run => { later.push(run); }, signal: stop.signal });
   await watch.caughtUp;
-  return { watch, tellAll: async () => { for (const run of later.splice(0)) await run(); } };
+  return { watch, stop: () => stop.abort(), tellAll: async () => { for (const run of later.splice(0)) await run(); } };
 }
 
 test("a conversation is Interactive until it's turned on; on, it's kept with it and its agent is told how to work; off again, it's told no longer", async () => {
@@ -444,6 +459,97 @@ test("asked while the box wasn't listening: it goes ahead as the box starts agai
   await watcher();
   assert.deepEqual(answered.map(each => each.form).sort(), ["frm_10", "frm_9"], "an Interactive conversation's still waits");
   assert.equal((await route("GET", "kuvo/sessions/ses_away/autopilot")).body.decided.length, 2);
+});
+
+test("asked while the box wasn't listening, and the engine couldn't list its sessions as the box connected: it goes ahead when the box looks again, with no one told", async () => {
+  waiting.set("ses_away", [QUESTION("frm_late", "ses_away", ROASTS)]);
+  waiting.set("ses_menu", [QUESTION("frm_late2", "ses_menu", ROASTS)]);
+  // (Not the box's first start: it has looked before, so it catches up on what its starters missed.)
+  fs.mkdirSync(path.join(home, "run", "work"), { recursive: true });
+  fs.writeFileSync(path.join(home, "run", "work", "told.json"), JSON.stringify({ since: 0, sessions: {} }));
+  refusesList = true;
+  const { tellAll } = await watcher();
+  assert.deepEqual(answered, [], "nothing it could read yet");
+  refusesList = false;
+  await tellAll();
+  assert.deepEqual(answered.map(each => each.form).sort(), ["frm_late", "frm_late2"]);
+  assert.deepEqual(prompts, [], "its starter isn't told of what went ahead");
+});
+
+test("a question on Autopilot its look at the conversations missed, there when its starter would be told: it goes ahead instead", async () => {
+  fs.mkdirSync(path.join(home, "run", "work"), { recursive: true });
+  fs.writeFileSync(path.join(home, "run", "work", "told.json"), JSON.stringify({ since: 0, sessions: {} }));
+  // (Its forms can't be read for the first look, Autopilot's, and can for the next, what its starter missed.)
+  waiting.set("ses_menu", [QUESTION("frm_missed", "ses_menu", ROASTS)]);
+  refusesFormsOnce.add("ses_menu");
+  await watcher();
+  assert.deepEqual(answered.map(each => each.form), ["frm_missed"]);
+  assert.deepEqual(prompts, [], "its starter isn't told of what went ahead");
+});
+
+test("a conversation on Autopilot whose forms can't be read as the box connects, with no one to tell: it goes ahead when the box looks again, and the others don't wait for it", async () => {
+  waiting.set("ses_away", [QUESTION("frm_unread", "ses_away", ROASTS)]);
+  waiting.set("ses_menu", [QUESTION("frm_read", "ses_menu", ROASTS)]);
+  refusesFormsOf.add("ses_away");
+  const { tellAll } = await watcher();
+  assert.deepEqual(answered.map(each => each.form), ["frm_read"]);
+  refusesFormsOf.clear();
+  await tellAll();
+  assert.deepEqual(answered.map(each => each.form).sort(), ["frm_read", "frm_unread"]);
+});
+
+test("a question its starter follows that can't be read as the box connects: the box isn't past it, and the starter is told when it can be", async () => {
+  fs.mkdirSync(path.join(home, "run", "work"), { recursive: true });
+  fs.writeFileSync(path.join(home, "run", "work", "told.json"), JSON.stringify({ since: 0, sessions: {} }));
+  waiting.set("ses_copy", [QUESTION("frm_both", "ses_copy", ROASTS)]);
+  refusesFormsOf.add("ses_copy");
+  const { tellAll } = await watcher();
+  assert.deepEqual(prompts, []);
+  refusesFormsOf.clear();
+  await tellAll();
+  await tellAll();
+  assert.match(JSON.stringify(prompts.filter(each => each.to === "ses_lead")), /frm_both/);
+});
+
+test("what's asked can't be read, and the session finished: its starter is still told it finished", async () => {
+  fs.mkdirSync(path.join(home, "run", "work"), { recursive: true });
+  fs.writeFileSync(path.join(home, "run", "work", "told.json"), JSON.stringify({ since: 0, sessions: {} }));
+  sessions.set("ses_done", session("ses_done", { metadata: { kuvo: { startedBy: "ses_lead", wake: ["asks", "finished"] } } }));
+  repliesOf.add("ses_done");
+  refusesFormsOf.add("ses_done");
+  const { tellAll } = await watcher();
+  await tellAll();
+  assert.match(JSON.stringify(prompts.filter(each => each.to === "ses_lead")), /All done|ses_done/);
+});
+
+test("a conversation on Autopilot that can't be read at all: looked at a few times, not forever", async () => {
+  waiting.set("ses_away", [QUESTION("frm_never", "ses_away", ROASTS)]);
+  refusesFormsOf.add("ses_away");
+  const { tellAll } = await watcher();
+  for (let round = 0; round < 12; round++) await tellAll();
+  const looks = formLooks;
+  assert.ok(looks > 1, "it looked again");
+  for (let round = 0; round < 12; round++) await tellAll();
+  assert.equal(formLooks, looks, "and then stopped");
+});
+
+test("a question in a conversation whose goal you have paused waits for you, and the box doesn't keep looking at it", async () => {
+  goalIn("ses_away", { heldByYou: true });
+  waiting.set("ses_away", [QUESTION("frm_paused", "ses_away", ROASTS)]);
+  const { tellAll } = await watcher();
+  const looks = formLooks;
+  for (let round = 0; round < 3; round++) await tellAll();
+  assert.deepEqual(answered, []);
+  assert.equal(formLooks, looks);
+});
+
+test("the box stopped before it looks again: a watcher that's gone doesn't move on what's been told", async () => {
+  refusesList = true;
+  const { tellAll, stop } = await watcher();
+  refusesList = false;
+  stop();
+  await tellAll();
+  assert.equal(fs.existsSync(path.join(home, "run", "work", "told.json")), false);
 });
 
 test("your phone isn't told of a question gone from a conversation on Autopilot; of one still asked there, or in an Interactive one, as ever", async () => {

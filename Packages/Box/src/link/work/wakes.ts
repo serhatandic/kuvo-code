@@ -23,7 +23,7 @@ import { ANSWERED, describeForm, describePermission, stillAsked } from "../notic
 import { noteOversight } from "./oversight";
 import { noteWorkChanged, WORK_FOLDER } from "./changes";
 import { asksIn } from "./answers";
-import { catchUpAutopilot, declineSharedOnAutopilot, goAheadOnAutopilot, isAutopilot } from "./autopilot";
+import { catchUpAutopilot, declineSharedOnAutopilot, goAheadOnAutopilot, goAheadOnQuestion, isAutopilot } from "./autopilot";
 import { settleAsk } from "./goals";
 import { awaitedBy } from "./awaited";
 import { tellLateAnswers } from "./asks";
@@ -595,22 +595,32 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
   // What one followed session did that its starter hasn't been told; it throws when it can't be read.
   const tellWhatHappened = async (data: Listed["data"], working: Set<string>) => {
     const starter = startedByOf(data)!;
-    const wakes = wakesOf(data);
     // (As told by now: one heard of meanwhile isn't told twice.)
     const was = readTold(toldFile)?.sessions[data.id] ?? {};
-    if (wakes.includes("asks")) {
-      const { permissions, questions } = await asksIn(source, data.id);
+    let unreadAsks = false;
+    if (wakesOf(data).includes("asks")) {
+      const { permissions, questions, whole } = await asksIn(source, data.id);
+      unreadAsks = !whole;
       for (const permission of permissions.filter(each => !was.asks?.includes(each.id))) {
         const line = await wakeLine({ type: "permission.asked", data: { id: permission.id, sessionID: data.id, action: permission.action, resources: permission.resources } as WorkEvent["data"] }, data, source);
         if (line) tell(starter, line, true);
         noteTold(data.id, { ask: permission.id });
       }
       for (const question of questions.filter(each => !was.asks?.includes(each.id))) {
+        // On Autopilot nothing waits: it goes ahead here, as one heard as it's asked does.
+        if (isAutopilot(data) && await goAheadOnQuestion(source, data, question).catch(() => null)) continue;
         tell(starter, `[Session asks] "${data.title || "New Session"}" (address ${data.id}) asks: ${question.text} (ask ${question.id}). Answer with answer_ask (answer), or tell the user in a line and carry on.`, true);
         noteTold(data.id, { ask: question.id });
       }
     }
-    if (!wakes.includes("finished") || working.has(data.id)) return;
+    await tellIfFinished(data, working);
+    // (Questions it couldn't read: it isn't past them, though it's told of the rest.)
+    if (unreadAsks) throw new Error("Its questions couldn't be read.");
+  };
+  const tellIfFinished = async (data: Listed["data"], working: Set<string>) => {
+    if (!wakesOf(data).includes("finished") || working.has(data.id)) return;
+    const starter = startedByOf(data)!;
+    const was = readTold(toldFile)?.sessions[data.id] ?? {};
     const at = now();
     const last = await lastReply(source, data.id);
     const waited = readTold(toldFile)?.waiting?.[data.id];
@@ -633,15 +643,28 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
     if (line) tell(starter, line, false);
     noteTold(data.id, { reply, turn: last.turn });
   };
-  const catchingUp = (): Promise<void> => catchUp().catch(() => {
+  // (Questions its conversations on Autopilot asked meanwhile go ahead first, however many tries it
+  // takes to list them: no one is told of those. One it can't get through doesn't hold up telling
+  // starters of the rest: it's looked at again a few times, and the box's next start looks again
+  // after that.)
+  let startersTold = false;
+  let looksAgain = 0;
+  const catchingUp = async (): Promise<void> => {
     if (signal?.aborted) return;
+    let again = false;
+    try {
+      again = !await catchUpAutopilot(source, undefined, signal) && ++looksAgain < CATCH_UP_TRIES;
+      if (signal?.aborted) return;
+      if (!startersTold) await catchUp();
+      startersTold = true;
+    } catch {
+      again = true;
+    }
+    if (!again || signal?.aborted) return;
     const timer = schedule(() => catchingUp(), CATCH_UP_AGAIN);
     (timer as { unref?: () => void } | undefined)?.unref?.();
-  });
-  // (Questions its conversations on Autopilot asked meanwhile go ahead first: no one is told of
-  // those.)
-  const caughtUp = catchUpAutopilot(source, undefined, signal).catch(() => {})
-    .then(() => Promise.all([catchingUp(), tellLateAnswers(targets, undefined, bridgeRuns).catch(() => {})])).then(() => {});
+  };
+  const caughtUp = Promise.all([catchingUp(), tellLateAnswers(targets, undefined, bridgeRuns).catch(() => {})]).then(() => {});
   // Answers given late that waited (the coding agents' bridge not running), tried again every few
   // minutes while the box runs.
   const lateAgain = () => {

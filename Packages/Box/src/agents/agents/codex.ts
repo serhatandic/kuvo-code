@@ -747,6 +747,31 @@ interface SubagentLane extends Lane {
   ended: boolean
 }
 
+/**
+ * What Codex's models are told of asking you. They list request_user_input outside Plan too, where it
+ * refuses them ("unavailable in Default mode"), and a model that reached for it said it couldn't ask.
+ */
+const ASKING_WORDS = "Outside Plan mode, ask the user with request_user_input_async: request_user_input refuses there, which doesn't mean you can't ask. It returns at once, and the answer comes as a new user message, which also ends a sleep you're in."
+
+/** What Codex asks you with its request_user_input_async. */
+type AskedQuestion = { title: string; options?: string[] | null }
+/** A question's card as it waits: a message you send meanwhile stops it, and is the answer. */
+/** `typed`: what you sent meanwhile, which answers this card (null: it answered another of those open, and covers this one). */
+type AskedCard = { abort: AbortController; typed?: MessageInput | null }
+/** An answer in the turn under way that Codex may yet sleep past: one it's `heard` and worked on from isn't what it's sleeping on. */
+type Answered = { text: string; heard?: boolean }
+/** What it does that's more than asking and thinking. */
+const WORK_ITEMS = new Set(["commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall", "webSearch", "imageGeneration", "imageView", "collabAgentToolCall"])
+/** Trying again to reach a sleep that turned it down: after this long, then twice that, up to the last. */
+const STEER_AGAIN = 1_000
+const STEER_AGAIN_LAST = 64_000
+/** Its box turning down this many with no work in between: no further turn is started for it. */
+const TURNED_DOWN_TURNS = 2
+/** And this many: its turn is stopped, as asking is all it's doing (a few at the start of a task isn't that). */
+const TURNED_DOWN_IN_TURN = 5
+/** What Codex hears of a question. */
+type Answer = { text: string; files: PromptFile[]; declined?: boolean }
+
 interface Active extends Lane {
   hooks: TurnHooks
   /** The agents it spawned, by their thread. */
@@ -761,6 +786,8 @@ interface Active extends Lane {
   limit?: Limit
   /** You pressed Stop. */
   stopping?: boolean
+  /** It kept asking, and its box kept turning it down: stopped there, which is its turn's end. */
+  stoppedAsking?: boolean
   /** Auto stopped it at a limit, to go on with the next model. */
   stoppedForLimit?: boolean
   model: string
@@ -779,10 +806,18 @@ class CodexThread implements Thread {
   private inTurn = false
   /** The thread it had was gone: a new one took its place. */
   private startedOver = false
-  /** What Codex asked as its turn ended (its request_user_input_async): your next message answers it. */
-  private asked?: { title: string; options?: string[] | null }[]
-  /** Its card, while it waits: a message you send meanwhile answers it instead. */
-  private waiting?: { abort: AbortController; typed?: MessageInput }
+  /** Its questions' cards (its request_user_input_async), up until they're answered: a message you send meanwhile answers them instead. */
+  private waiting = new Set<AskedCard>()
+  /** Each question on its way to an answer that Codex hears, from its card going up. */
+  private asking = new Set<Promise<void>>()
+  /** Answers no turn could take as they came (its turn had ended): the next turn starts with them. */
+  private answers: Answer[] = []
+  /** Answers gone into the turn under way, for the first sleep that starts after them. */
+  private answered: Answered[] = []
+  /** The sleep it's in, which what goes in now ends. */
+  private sleep?: AbortController
+  /** How many of its questions its box turned down with words, this message. */
+  private turnedDown = 0
   /** Where Kuvo Code's tools were when it was loaded. */
   private toolsKey?: string
   /** The computer's servers it was loaded with (their names). */
@@ -889,7 +924,7 @@ class CodexThread implements Thread {
       this.loaded = false
     }
     const fenced = this.agent.isFenced(rpc)
-    const instructions = hooks.instructions() || null
+    const instructions = [hooks.instructions(), ASKING_WORDS].filter(Boolean).join("\n\n")
     // Loaded again with what the app adds to its instructions, when that changed. (In the box's
     // sandbox, through the bridge's relay: the sandbox hides where they are.)
     const tools = fenced ? relayedTools(this.session.id, this.agent) : kuvoTools(this.session.id)
@@ -966,22 +1001,18 @@ class CodexThread implements Thread {
 
   /** Your message, into the turn under way (Codex's turn/steer). */
   async steer(input: MessageInput): Promise<boolean> {
-    // Codex's question waits for your answer: this is it (a note of the app's isn't).
-    const waiting = this.waiting
-    if (waiting && !waiting.typed && !input.synthetic) {
-      waiting.typed = input
-      waiting.abort.abort()
+    // Codex's question waits for your answer: this is it (a note of the app's isn't), for all it has open.
+    const [first] = this.waiting
+    if (first && !input.synthetic) {
+      for (const card of this.waiting) {
+        card.typed = card === first ? input : null
+        card.abort.abort()
+      }
       return true
     }
     const active = this.active
     if (!active?.turnID || !this.nativeID) return false
-    try {
-      const rpc = await this.agent.rpc(this)
-      await rpc.request("turn/steer", { threadId: this.nativeID, input: codexInput(input, this.fencedIn(rpc)), expectedTurnId: active.turnID }, 30_000)
-      return this.active === active
-    } catch {
-      return false
-    }
+    return this.steerIn(active, input)
   }
 
   /**
@@ -1045,31 +1076,49 @@ class CodexThread implements Thread {
 
   async run(input: RunInput, turn: Turn, hooks: TurnHooks): Promise<RunResult> {
     this.inTurn = true
+    this.turnedDown = 0
     try {
       let result = await this.runTurn(input, turn, hooks)
-      let turnedDown = 0
-      // Codex asked you something as it ended (outside Plan its question doesn't wait for you, the
-      // way the engine's and Claude's do): its card asks it in this turn, and Codex goes on with
-      // your answer.
-      while (result.outcome === "succeeded" && this.asked?.length && !hooks.signal.aborted) {
-        const answer = await this.answer(this.asked, hooks)
-        if (!answer) break
-        // (Turned down by its box and asking again and again: its turn ends, rather than run up its tokens with nobody there.)
-        if (answer.declined && ++turnedDown > 2) break
-        result = await this.runTurn({ ...input, text: answer.text, files: answer.files, adopt: false }, turn, hooks)
+      // Its questions outlive the turn that asked them: one still open is waited for here, and an
+      // answer no turn took starts one, so Codex goes on with it.
+      while (result.outcome === "succeeded" && !hooks.signal.aborted) {
+        this.wokeUp()
+        while (this.asking.size) await Promise.all(this.asking)
+        const said = this.answers
+        this.answers = []
+        if (!said.length || hooks.signal.aborted) break
+        result = await this.runTurn({ ...input, text: said.map((answer) => answer.text).join("\n\n"), files: said.flatMap((answer) => answer.files), adopt: false }, turn, hooks)
       }
       return hooks.signal.aborted && result.outcome === "succeeded" ? { outcome: "interrupted" } : result
     } finally {
-      this.asked = undefined
+      this.wokeUp()
+      for (const card of this.waiting) card.abort.abort()
+      while (this.asking.size) await Promise.all(this.asking)
+      this.answers = []
       this.inTurn = false
     }
   }
 
-  /** What you answered Codex's question with (the card, or a message you sent meanwhile), or nothing (dismissed). */
-  private async answer(questions: NonNullable<CodexThread["asked"]>, hooks: TurnHooks): Promise<{ text: string; files: PromptFile[]; declined?: boolean } | undefined> {
-    this.asked = undefined
-    const waiting: NonNullable<CodexThread["waiting"]> = { abort: new AbortController() }
-    this.waiting = waiting
+  /**
+   * A question Codex asked (its request_user_input_async), put to you as it's asked. Its tool returns
+   * at once and the turn goes on, reasoning, working or sleeping until "any reply arrives
+   * asynchronously as a new user message", so what it does next says nothing of whether it still
+   * wants the answer: the answer goes into its turn, or starts the next one if that's over.
+   */
+  private ask(questions: AskedQuestion[], hooks: TurnHooks) {
+    this.keep(this.answer(questions, hooks).then((answer) => this.deliver(answer)))
+  }
+
+  /** Something on its way to Codex, that its turn's end waits for. */
+  private keep(work: Promise<void>) {
+    const job: Promise<void> = work.catch(() => {}).finally(() => this.asking.delete(job))
+    this.asking.add(job)
+  }
+
+  /** What you answered Codex's question with (the card, or a message you sent meanwhile); nothing (dismissed), or null (a message answering another that's open covers it). */
+  private async answer(questions: AskedQuestion[], hooks: TurnHooks): Promise<Answer | undefined | null> {
+    const card: AskedCard = { abort: new AbortController() }
+    this.waiting.add(card)
     try {
       const fields: FormField[] = questions.map((question, index) => ({
         key: `q${index}`,
@@ -1081,8 +1130,8 @@ class CodexThread implements Thread {
         custom: true,
       }))
       let declined: string | undefined
-      const answer = await hooks.question({ title: questions.length === 1 ? "Question" : "Questions", fields, signal: waiting.abort.signal, declined: (words) => { declined = words } })
-      if (waiting.typed) return { text: waiting.typed.text, files: waiting.typed.files }
+      const answer = await hooks.question({ title: questions.length === 1 ? "Question" : "Questions", fields, signal: card.abort.signal, declined: (words) => { declined = words } })
+      if (card.typed !== undefined) return card.typed && { text: card.typed.text, files: card.typed.files }
       // Turned down by its box with words: it hears them and carries on.
       if (!answer && declined) return { text: declined, files: [], declined: true }
       if (!answer) return undefined
@@ -1092,12 +1141,81 @@ class CodexThread implements Thread {
       }
       return { text: questions.length === 1 ? said(0) : questions.map((question, index) => `${question.title}\n${said(index)}`).join("\n\n"), files: [] }
     } finally {
-      this.waiting = undefined
+      this.waiting.delete(card)
     }
   }
 
+  /** What Codex hears of a question settled: into the turn under way, which ends a sleep it's in, or kept for the next turn. */
+  private async deliver(answer: Answer | undefined | null) {
+    if (answer === null) return
+    const active = this.active
+    // Dismissed: a turn at work hears so rather than wait on it; one that's over just ends.
+    if (!answer && (!active || active.stopping || active.hooks.signal.aborted)) return
+    // (Turned down by its box and asking again and again, with no work in between: no more of it, rather than run up its tokens with nobody there.)
+    if (answer?.declined && ++this.turnedDown > (active ? TURNED_DOWN_IN_TURN : TURNED_DOWN_TURNS)) {
+      if (active) {
+        active.stoppedAsking = true
+        this.answers = []
+        await this.stopTurn(active)
+      }
+      return
+    }
+    await this.steerAnswer(active, answer)
+  }
+
+  private async steerAnswer(active: Active | undefined, answer: Answer | undefined) {
+    const text = answer?.text ?? "The user dismissed this question without answering it. Don't wait for an answer."
+    const files = answer?.files ?? []
+    if (active?.turnID && this.nativeID) {
+      // (Noted first: a sleep can start before Codex says it took this. One under way, this ends.)
+      const noted: Answered | undefined = this.sleep ? undefined : { text }
+      if (noted) this.answered.push(noted)
+      if (await this.steerIn(active, { text, files })) return
+      // (Turned down with a sleep starting: telling it again as that started is seeing to it.)
+      if (noted && !this.answered.includes(noted)) return
+      this.answered = this.answered.filter((each) => each !== noted)
+      if (await this.steerIntoSleep(active, { text, files })) return
+    }
+    if (answer) this.answers.push(answer)
+  }
+
+  /** `input` into `active`'s turn. Whether Codex took it: what it takes it hears and acts on, even with its final message said and its turn ending just then. */
+  private async steerIn(active: Active, input: { text: string; files: PromptFile[] }): Promise<boolean> {
+    try {
+      const rpc = await this.agent.rpc(this)
+      await rpc.request("turn/steer", { threadId: this.nativeID, input: codexInput(input, this.fencedIn(rpc)), expectedTurnId: active.turnID }, 30_000)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  /** Turned down while it sleeps: nothing else would reach it, as it says nothing that could set off another try, so tried again for a while. */
+  private async steerIntoSleep(active: Active, input: { text: string; files: PromptFile[] }): Promise<boolean> {
+    for (let wait = STEER_AGAIN; wait <= STEER_AGAIN_LAST; wait *= 2) {
+      const sleep = this.sleep
+      if (!sleep || active.stopping || active.hooks.signal.aborted) return false
+      await new Promise<void>((resolve) => {
+        const done = AbortSignal.any([sleep.signal, active.hooks.signal])
+        const timer = setTimeout(resolve, wait)
+        done.addEventListener("abort", () => {
+          clearTimeout(timer)
+          resolve()
+        })
+      })
+      if (this.sleep !== sleep || active.stopping || active.hooks.signal.aborted) return false
+      if (await this.steerIn(active, input)) return true
+    }
+    return false
+  }
+
+  /** Its sleep is over (or its turn, whichever way). */
+  private wokeUp() {
+    this.sleep?.abort()
+    this.sleep = undefined
+  }
+
   private async runTurn(input: RunInput, turn: Turn, hooks: TurnHooks): Promise<RunResult> {
-    this.asked = undefined
     const rpc = await this.ensureThread(input, hooks)
     // Stopped while Codex was starting.
     if (hooks.signal.aborted) return { outcome: "interrupted" }
@@ -1128,6 +1246,8 @@ class CodexThread implements Thread {
       collaborationMode: { mode: input.plan ? "plan" : "default", settings: { model: input.model.id, reasoning_effort: effort ?? null, developer_instructions: null } },
     }
     return new Promise<RunResult>((resolve) => {
+      this.answered = []
+      this.wokeUp()
       const active: Active = { turn, hooks, resolve, streamed: new Set(), changes: new Map(), output: new Map(), toolsSinceText: false, subagents: new Map(), spawning: [], auto: input.auto, model: input.model.id, planning: input.plan }
       // As it ends, the agents it spawned that are still at work go on in their sessions (a turn
       // stopped or failed stops them: the session ends them with it).
@@ -1160,6 +1280,42 @@ class CodexThread implements Thread {
     })
   }
 
+  /** What an item says of the answers in its turn. */
+  private answersOnItem(active: Active, method: string, item: any) {
+    if (item?.type === "sleep" && method === "item/completed") this.wokeUp()
+    if (method !== "item/started") return
+    const stopped = active.stopping || active.hooks.signal.aborted
+    if (item?.type === "sleep") {
+      this.sleep = new AbortController()
+      // One that starts after its answer went in isn't cut short by it, as one under way is, and the
+      // model may be sleeping on that question: told again once, which ends the sleep. (Past that,
+      // it's a sleep of its own.)
+      const said = this.answered
+      this.answered = []
+      if (said.length && !stopped) {
+        const words = { text: `Your question has its answer, so there's nothing to wait for on it:\n\n${said.map((each) => each.text).join("\n\n")}`, files: [] }
+        this.keep(this.steerIn(active, words).then(async (took) => {
+          if (!took && !await this.steerIntoSleep(active, words)) this.answered.push(...said)
+        }))
+      }
+    } else if (item?.type === "userMessage") {
+      // (Its words first: what it attached, Codex may be told of after them.)
+      const text: unknown = (item.content ?? []).find((part: any) => part?.type === "text")?.text
+      const heard = typeof text === "string" ? this.answered.find((each) => !each.heard && text.startsWith(each.text)) : undefined
+      if (heard) heard.heard = true
+    } else if (WORK_ITEMS.has(item?.type)) {
+      this.turnedDown = 0
+      // (Reasoning doesn't let it go: it's what comes before the sleep that needs ending.)
+      this.answered = this.answered.filter((each) => !each.heard)
+    }
+    // One its turn turned down a moment ago (as it compacted, say) goes in as it goes on.
+    if (this.answers.length && !stopped) {
+      const waiting = this.answers
+      this.answers = []
+      for (const answer of waiting) this.keep(this.steerAnswer(active, answer))
+    }
+  }
+
   /** What Codex says (`from`: the app-server that said it). */
   notification(method: string, params: any, from?: RPC) {
     const active = this.active
@@ -1175,13 +1331,16 @@ class CodexThread implements Thread {
     // Another turn's (one stopped before, ending late).
     const turnID = params?.turnId ?? params?.turn?.id
     if (active.turnID && turnID && turnID !== active.turnID) return
-    // A question for you at its end, its words shown as they are: asked once the turn's done. One
-    // it went on from (a step after it, more words) isn't asked.
-    if (method === "item/completed" && params?.item?.type === "agentMessage" && Array.isArray(params.item.questions) && params.item.questions.length) {
-      this.asked = params.item.questions.filter((question: any) => typeof question?.title === "string" && question.title)
-    } else if ((method === "item/started" && params?.item?.type !== "agentMessage") || (method === "item/completed" && params?.item?.type === "agentMessage" && params.item.text)) {
-      this.asked = undefined
+    // A question for you, its words shown as they are: asked now, whatever it does next.
+    if (method === "item/completed" && params?.item?.type === "agentMessage" && Array.isArray(params.item.questions)) {
+      const questions: AskedQuestion[] = params.item.questions.filter((question: any) => typeof question?.title === "string" && question.title)
+      if (questions.length) {
+        // (What it heard before asking this isn't what a sleep from here on is about.)
+        this.answered = this.answered.filter((each) => !each.heard)
+        this.ask(questions, active.hooks)
+      }
     }
+    if (method === "item/started" || method === "item/completed") this.answersOnItem(active, method, params?.item)
     switch (method) {
       case "turn/started":
         active.turnID ??= params.turn?.id
@@ -1224,7 +1383,8 @@ class CodexThread implements Thread {
         const limit = status === "failed" ? (active.limit ?? this.limitOf(params.turn?.error, active.model)) : status === "interrupted" && active.stoppedForLimit ? active.limit : undefined
         if (limit && !active.stopping && !active.hooks.signal.aborted) {
           active.resolve({ outcome: "failed", error: { type: "limit", message: active.problem ?? params.turn?.error?.message ?? "You've reached your Codex usage limit for now." }, limit, taken: true })
-        } else if (active.hooks.signal.aborted || status === "interrupted") active.resolve({ outcome: "interrupted" })
+        } else if (active.stoppedAsking && !active.hooks.signal.aborted) active.resolve({ outcome: "succeeded" })
+        else if (active.hooks.signal.aborted || status === "interrupted") active.resolve({ outcome: "interrupted" })
         else if (status === "failed") active.resolve({ outcome: "failed", error: failure(params.turn?.error?.message ?? active.problem ?? "Codex stopped with an error."), taken: true })
         else active.resolve({ outcome: "succeeded" })
         return
