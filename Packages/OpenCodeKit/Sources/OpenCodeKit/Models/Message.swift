@@ -381,6 +381,21 @@ extension Message {
             self.time = time
         }
 
+        private enum CodingKeys: String, CodingKey { case id, name, executed, state, time }
+
+        /// A command's call as the engine recorded it: `shell`, as the engine has named the tool
+        /// since the rename, and `bash` in a conversation it recorded before (or a call by that
+        /// name, which 2.2.5 runs as `shell`). Every row reads it as `shell`.
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            id = try c.decode(String.self, forKey: .id)
+            let recorded = try c.decode(String.self, forKey: .name)
+            name = recorded == "bash" ? "shell" : recorded
+            executed = try c.decodeIfPresent(Bool.self, forKey: .executed)
+            state = try c.decode(ToolState.self, forKey: .state)
+            time = try c.decodeIfPresent(Time.self, forKey: .time)
+        }
+
         public struct Time: Codable, Sendable, Hashable {
             public var created: Milliseconds?
             public var ran: Milliseconds?

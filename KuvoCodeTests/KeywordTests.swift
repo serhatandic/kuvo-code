@@ -457,6 +457,15 @@ import Testing
         #expect(asked.contains("security holes"))
     }
 
+    /// The engine has a /goal of its own (since 2.2.1). The composer takes "/goal" itself wherever
+    /// it's typed, so the engine's would be a row in "/" that can't run: it isn't offered, with goals
+    /// on (a conversation's keywords) or off (a subagent's, or a project with none yet).
+    @Test func theEnginesOwnGoalIsNeverOffered() throws {
+        let engineCommands = try JSONDecoder().decode([Command].self, from: Data(#"[{"name": "init", "description": "Create AGENTS.md"}, {"name": "goal", "description": "Keep working until done"}]"#.utf8))
+        #expect(Keyword.commands(engineCommands, keywords: []).map(\.name) == ["init"])
+        #expect(Keyword.commands(engineCommands, keywords: Keyword.allCases).map(\.name) == ["init"])
+    }
+
     @Test func theEnginesOwnReviewStaysReachableAsReviewQuick() async throws {
         defer { clean() }
         serve(directory: "/tmp", answers: [])
