@@ -1,32 +1,33 @@
 // The bars in the card over a conversation's composer, folding once it's full: the same rule on
 // the Mac and the phone, whose bars differ.
 
-/// Which bar in the card is open once the card is full: with three bars or more, each folds to
-/// its line but the one that most needs you. While a card asks something over it, that's the
-/// card, so they all fold; otherwise it's the newest change (a bar that came, a review that found
-/// something, a side question answered). Opening one folds the others, so the card stays a few
-/// lines tall. With fewer bars, each opens and folds on its own, as you left it.
+/// Which bar in the card is open. While a card asks something over it, that's what needs you, so
+/// every bar folds to its line, however many there are, but one you open yourself; answering
+/// brings them back as they were. Otherwise, once the card is full (three bars or more), each
+/// folds to its line but the newest change (a bar that came, a review that found something, a
+/// side question answered), and opening one folds the others, so the card stays a few lines
+/// tall. With fewer bars, each opens and folds on its own, as you left it.
 public struct BarFolds<Bar: Hashable>: Equatable {
     public init() {}
 
     /// How many bars fill the card.
     public static var full: Int { 3 }
 
-    /// The one open while the card is full.
+    /// The one open while the card is full; with fewer bars, the last one you opened.
     public private(set) var open: Bar?
     /// Opened by you, so it stays open while a card asks.
     public private(set) var openedByYou = false
 
     /// Whether `bar` is folded, among `bars`; `own` is how it was left with fewer bars.
     public func isHidden(_ bar: Bar, among bars: [Bar], asking: Bool, own: Bool) -> Bool {
+        if asking { return !(openedByYou && open == bar) }
         guard bars.count >= Self.full else { return own }
-        let shown = asking && !openedByYou ? nil : open
-        return shown != bar
+        return open != bar
     }
 
     /// Opened or folded by you.
     public mutating func set(_ bar: Bar, hidden: Bool, among bars: [Bar], own: inout Bool) {
-        guard bars.count >= Self.full else { return own = hidden }
+        if bars.count < Self.full { own = hidden }
         if hidden {
             if open == bar { open = nil }
         } else {
@@ -35,8 +36,10 @@ public struct BarFolds<Bar: Hashable>: Equatable {
         }
     }
 
-    /// Something changed in `bar` that you'd want to see: it opens, unless a card asks.
-    public mutating func changed(_ bar: Bar) {
+    /// Something changed in `bar` that you'd want to see: it opens, unless a card asks. While one
+    /// asks, a bar you opened stays the open one.
+    public mutating func changed(_ bar: Bar, asking: Bool = false) {
+        if asking, openedByYou, open != nil { return }
         open = bar
         openedByYou = false
     }
@@ -49,12 +52,12 @@ public struct BarFolds<Bar: Hashable>: Equatable {
 
     /// The bars went from `old` to `new`: one that went isn't open any more, and the newest that
     /// came opens where `opens` says it's worth seeing.
-    public mutating func bars(from old: [Bar], to new: [Bar], opens: (Bar) -> Bool) {
+    public mutating func bars(from old: [Bar], to new: [Bar], asking: Bool = false, opens: (Bar) -> Bool) {
         if let open, !new.contains(open) {
             self.open = nil
             openedByYou = false
         }
-        if let came = new.last(where: { !old.contains($0) && opens($0) }) { changed(came) }
+        if let came = new.last(where: { !old.contains($0) && opens($0) }) { changed(came, asking: asking) }
     }
 
     /// Nothing asks any more: a bar you opened while something did is just open, and the next card
@@ -69,21 +72,22 @@ public struct BarFolds<Bar: Hashable>: Equatable {
     /// see (`news`) opens; changed, the newest that came, where `opens` says it's worth seeing.
     public mutating func update(from old: [Bar], to new: [Bar], asking: Bool, own: (Bar) -> Bool, keep: (Bar, Bool) -> Void,
                                 news: (Bar) -> Bool, opens: (Bar) -> Bool) {
+        // (As the card had them past what asks: answering brings them back so.)
         if old.count >= Self.full, new.count < Self.full {
-            for bar in new { keep(bar, isHidden(bar, among: old, asking: asking, own: own(bar))) }
+            for bar in new { keep(bar, isHidden(bar, among: old, asking: false, own: own(bar))) }
         }
         if old == new {
             start(new, opens: news)
         } else {
-            bars(from: old, to: new, opens: opens)
+            bars(from: old, to: new, asking: asking, opens: opens)
         }
     }
 
     /// What has something to see in each bar changed: the one that just got something opens.
     /// Those that got something, for a tucked card to mark (`BarTuck`).
-    @discardableResult public mutating func news(from old: [Bar: Bool], to new: [Bar: Bool]) -> [Bar] {
+    @discardableResult public mutating func news(from old: [Bar: Bool], to new: [Bar: Bool], asking: Bool = false) -> [Bar] {
         let came = new.filter { $0.value && old[$0.key] != true }.map(\.key)
-        if let first = came.first { changed(first) }
+        if let first = came.first { changed(first, asking: asking) }
         return came
     }
 

@@ -1,6 +1,7 @@
 // Sessions with scripted agents: what's waiting and when it goes, Stop, moving between agents,
 // Auto down its list, and what a session keeps. Each test has a folder of its own, removed after.
 
+import "../safety"
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
@@ -272,14 +273,14 @@ describe("what's waiting", () => {
     expect(idles(id)[0].error?.message).toBe("broke")
   })
 
-  test("a model whose account you signed out of, where it'd be dropped without a word, says so and keeps nothing waiting", async () => {
+  test("a model whose account you signed out of, where it'd be dropped without a word, says so and keeps nothing waiting (its card's Sign In and Switch Model say the rest)", async () => {
     a.dropsSignedOut = true
     const id = create()
     send(id, "hello")
     await settled(id, 1)
     expect(a.runs).toHaveLength(0)
     expect(idles(id)[0].outcome).toBe("failed")
-    expect(idles(id)[0].error).toEqual({ type: "signin", message: "Alpha isn't signed in. Sign in to it in Settings › Accounts, or pick another model." })
+    expect(idles(id)[0].error).toEqual({ type: "signin", message: "Alpha isn't signed in." })
   })
 
   test("a message sent twice goes once", async () => {

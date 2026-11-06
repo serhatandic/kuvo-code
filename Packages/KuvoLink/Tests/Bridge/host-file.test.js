@@ -2,6 +2,7 @@
 // PROTOCOL.md, "Host interface"), read again for each call: while the app isn't answering, its keys
 // can't be reached and that's said; once the app's host interface is back, at another address, the
 // box reaches it at once, without starting again.
+import "./test-safety.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";

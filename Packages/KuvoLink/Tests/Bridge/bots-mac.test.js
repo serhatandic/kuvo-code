@@ -4,6 +4,7 @@
 // machine does with the Mac closed. Only the engine is a stand-in.
 //
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/bots-mac.test.js`.
+import "./test-safety.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import http from "node:http";

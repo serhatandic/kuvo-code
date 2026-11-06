@@ -2,6 +2,7 @@
 // also when that file is killed (a run stopped, or timed out), so none is left running.
 //
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/running-as.test.js`.
+import "./test-safety.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";

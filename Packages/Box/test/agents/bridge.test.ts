@@ -1,3 +1,4 @@
+import "../safety"
 import { describe, expect, test } from "bun:test"
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -133,7 +134,9 @@ describe("keeping an agent's program current", () => {
       expect(process.env.PATH).toBe(first)
       expect(first?.split(":").filter((entry) => entry === "/home/me/.local/bin").length).toBe(1)
     } finally {
-      process.env.SHELL = saved.SHELL
+      // (Not assigned when there was none: that would make it the word "undefined", the shell every later test in the run starts.)
+      if (saved.SHELL === undefined) delete process.env.SHELL
+      else process.env.SHELL = saved.SHELL
       process.env.PATH = saved.PATH
       rmSync(folder, { recursive: true, force: true })
     }
@@ -169,6 +172,8 @@ describe("keeping an agent's program current", () => {
       expect(failed.installed).toBe(false)
       expect(failed.message).toContain("Other isn't installed after")
       expect(failed.message).toContain("Could not resolve host")
+      // Shown as plain text in an alert: no Markdown ticks around the command.
+      expect(failed.message).not.toContain("`")
     } finally {
       rmSync(folder, { recursive: true, force: true })
     }
@@ -195,7 +200,8 @@ describe("updating an agent", () => {
       expect(await update(program("known"), folder)).toEqual({ updated: false, version: "1.0.0" })
       const unknown = await update(program("unknown"), folder)
       expect(unknown.updated).toBe(false)
-      expect(unknown.message).toContain("unknown is still 1.0.0 after `unknown update`")
+      expect(unknown.message).toContain("unknown is still 1.0.0 after “unknown update”")
+      expect(unknown.message).not.toContain("`")
     } finally {
       globalThis.fetch = original
       rmSync(folder, { recursive: true, force: true })

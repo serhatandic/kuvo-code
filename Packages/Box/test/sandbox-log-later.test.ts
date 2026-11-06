@@ -1,3 +1,4 @@
+import "./safety"
 import { afterAll, expect, jest, mock, test } from "bun:test"
 import * as childProcess from "node:child_process"
 import { EventEmitter } from "node:events"

@@ -4,6 +4,7 @@
 // a scenario expects of a Mac (`mac`) is what this box answers, as the Mac's PhoneLink did.
 //
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/contract-mac.test.js`.
+import "./test-safety.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

@@ -5,6 +5,7 @@
 // watcher's clock is the test's.
 //
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/bots-work-wakes.test.js`.
+import "./test-safety.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import http from "node:http";
@@ -119,6 +120,17 @@ test("a session of a bot's starting to work, or stopped, changes its bot's work,
   await runAll();
   assert.ok(JSON.parse(fs.readFileSync(changesFile, "utf8")).bot_pixel00001 > started, "and again as it was stopped");
   assert.equal(prompts.length, 0, "a session starting or stopped isn't news for its bot, even one that wakes it as it finishes");
+});
+
+// Clients show the bot seeing one of its sessions finish (`kuvo/work/oversight`): one that finished
+// well is marked, whether or not it wakes the bot; one that failed or was stopped isn't.
+test("a bot's session that finishes is marked for clients to show the bot seeing it; one that fails or is stopped isn't", async () => {
+  const watch = link.workWatcher(source, () => [source], { schedule: () => {} });
+  await watch({ type: "session.execution.failed", data: { sessionID: "ses_haptics" } });
+  await watch({ type: "session.execution.interrupted", data: { sessionID: "ses_signin" } });
+  await watch({ type: "session.execution.succeeded", data: { sessionID: "ses_tests" } });
+  const marks = JSON.parse(fs.readFileSync(path.join(home, "run", "work", "oversight.json"), "utf8"));
+  assert.deepEqual(marks.map(mark => [mark.bot, mark.session, mark.kind]), [["bot_pixel00001", "ses_tests", "finished"]]);
 });
 
 test("what a box had gathered as it stopped still reaches the bot", async () => {

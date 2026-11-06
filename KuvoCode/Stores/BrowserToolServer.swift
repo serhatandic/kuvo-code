@@ -309,7 +309,8 @@ enum BrowserTools {
                   "detail": ["type": "string"],
                   "url": ["type": "string", "description": "An https page where the user does it."],
                   "site": ["type": "string", "description": "The service it's about, by its site, when there's no url."],
-                  "app": ["type": "string", "description": "The app on the computer it's done in, by its own name, like Xcode."]], "required": ["kind", "text"]],
+                  "app": ["type": "string", "description": "The app on the computer it's done in, by its own name, like Xcode."],
+                  "step": ["type": "integer", "description": "The step it holds up, by number: it's settled once you go on with that step."]], "required": ["kind", "text"]],
               "decided": ["type": "object", "properties": [
                   "text": ["type": "string", "description": "The call, as a question, like \"Which hosting?\"."],
                   "choice": ["type": "string", "description": "What you chose, in a few words."],

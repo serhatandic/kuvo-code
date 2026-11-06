@@ -5,6 +5,7 @@
 // test moves; only the engine is a stand-in, keeping each session's inbox as the engine does.
 //
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/queue.test.js`.
+import "./test-safety.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import http from "node:http";

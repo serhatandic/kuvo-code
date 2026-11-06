@@ -100,7 +100,7 @@ export function update(definition: MaintenanceDefinition, temporary: string): Pr
     return {
       updated: false,
       version: after.installed,
-      message: `${definition.name} is still ${after.installed ?? "the same version"} after \`${before.shown}\`.${output ? `\n\n${output}` : ""}`,
+      message: `${definition.name} is still ${after.installed ?? "the same version"} after “${before.shown}”.${output ? `\n\n${output}` : ""}`,
     }
   })
 }
@@ -131,7 +131,7 @@ export function install(name: string, command: string, temporary: string, found:
     const executable = found()
     if (executable) return { installed: true, version: await installedVersion(executable) }
     const output = plain(ran.stderr + "\n" + ran.stdout).trim().split("\n").slice(-6).join("\n").trim()
-    return { installed: false, message: `${name} isn't installed after \`${command}\`.${output ? `\n\n${output}` : ""}` }
+    return { installed: false, message: `${name} isn't installed after “${command}”.${output ? `\n\n${output}` : ""}` }
   })
 }
 

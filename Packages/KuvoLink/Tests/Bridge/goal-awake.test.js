@@ -4,6 +4,7 @@
 // sleep: nothing runs there. The real box code, as a Mac's box; only the engine is a stand-in.
 //
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/goal-awake.test.js`.
+import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";

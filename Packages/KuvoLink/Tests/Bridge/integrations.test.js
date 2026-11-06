@@ -1,6 +1,7 @@
 // Settings › Integrations on a machine, from a phone or a Mac with the Mac closed: from the catalog
 // the Mac leaves there, its keys in files only you can read (`box/keys`, a bot's own in
 // `box/bot-keys`), all on the machine itself. The scenarios are in integrations-scenarios.js.
+import "./test-safety.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";

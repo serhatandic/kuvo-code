@@ -1,3 +1,4 @@
+import "./safety"
 import { afterAll, beforeAll, expect, test } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
@@ -55,7 +56,11 @@ let engineFile: string
 let engineBefore: string | null = null
 const sandboxOnBefore = process.env.KUVO_TEST_SANDBOX_ON
 
+// (What's judged here is your account's own home, as the code finds it, so HOME names it for these:
+// what they write and run stays in their own folders, and test-safety.js still refuses a delete.)
+const runsHome = process.env.HOME
 beforeAll(async () => {
+  process.env.HOME = process.env.KUVO_TEST_REAL_HOME
   box = mkdtempSync(join(tmpdir(), "kuvo-auto-"))
   process.env.KUVO_TEST_SANDBOX_ON = "1"
   process.env.KUVO_TEST_LOCAL_SCRIPTS = "1"
@@ -98,6 +103,7 @@ beforeAll(async () => {
   reviewer = await import("../src/link/work/reviewer")
 })
 afterAll(() => {
+  process.env.HOME = runsHome
   engine.stop(true)
   if (engineBefore === null) rmSync(engineFile, { force: true })
   else writeFileSync(engineFile, engineBefore)
@@ -179,6 +185,9 @@ test("one held back that you approve: the agent is told, and it runs the next ti
   expect((await sandboxAsk("ses_approve", `echo approved > ${target}`)).text).toMatch(/held this back/)
 })
 
+// (On a Mac the ask goes up only once the box has read macOS's log for what the sandbox refused
+// (`log show`): about 2 s on a quiet Mac, 5 to 10 s on a busy one, and the box itself gives up on it
+// at 20 s. So this waits as long as that does, not the usual 5 s.)
 test("a conversation not in Auto asks you as before, without a review", async () => {
   conversation("ses_first", "askFirst", "Build it")
   const before = prompts.length
@@ -189,7 +198,7 @@ test("a conversation not in Auto asks you as before, without a review", async ()
   await call
   expect(prompts.length).toBe(before)
   expect(reviewer.reviewLog("ses_first").decisions).toEqual([])
-})
+}, 30_000)
 
 test("three refusals in a row pause Auto there: its run is stopped and what follows is held back, never asked", async () => {
   conversation("ses_pause", "auto", "Tidy")

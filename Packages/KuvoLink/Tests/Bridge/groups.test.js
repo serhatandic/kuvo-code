@@ -2,6 +2,7 @@
 // agents' bridge there, which runs them and answers in the shapes a client takes, with every rule
 // of what can be (Agents' groups-link tests hold those). Run with
 // `node --test Packages/KuvoLink/Tests/Bridge/*.test.js`.
+import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import fs from "node:fs";

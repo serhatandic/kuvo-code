@@ -2,6 +2,7 @@
 // in it does, by the machine itself with the Mac closed (PROTOCOL.md, `kuvo/sessions/<id>/agents`):
 // the whole conversation and what was waiting go to a session of theirs, the engine's is archived,
 // and a bot's conversation becomes the new one. The engine and the agents' bridge are stand-ins.
+import "./test-safety.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import http from "node:http";

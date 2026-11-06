@@ -304,11 +304,11 @@ struct ToolCallView: View {
         case "browser_ask_user": return isActive ? "Waiting for you on the page" : "Asked you to step in"
         case "list_agents": return isActive ? "Looking up the other agents" : "Looked up the other agents"
         case "send_message":
-            let to = string("to") ?? "another agent"
+            let to = AgentMail.shared.name(of: string("to"))
             if input?["wait"]?.bool == true { return (isActive ? "Asking " : "Asked ") + to }
             return (isActive ? "Writing to " : "Wrote to ") + to
         case "read_conversation":
-            let of = string("of").map { $0.hasPrefix("&") ? String($0.dropFirst()) : $0 } ?? "another agent"
+            let of = AgentMail.shared.name(of: string("of"))
             let about = string("query").map { " about “\($0)”" } ?? ""
             return (isActive ? "Reading " : "Read ") + of + "’s conversation" + about
         case "show_in_panel", "show_file": return (isActive ? "Showing " : "Showed ") + (relative(string("path")) ?? "a file")
@@ -329,7 +329,26 @@ struct ToolCallView: View {
             return Self.summary(of: Wakes.Command(verb: .list, when: nil, note: nil), isActive: isActive, failed: call.state.isFailure)
         case "cancel_wake_up":
             return Self.summary(of: Wakes.Command(verb: .cancel, when: nil, note: nil), isActive: isActive, failed: call.state.isFailure)
-        default: return "Used the browser"
+        case "browser_fill": return (isActive ? "Filling " : "Filled ") + index + " from your vault"
+        case "browser_save_pdf": return isActive ? "Saving the page as a PDF" : "Saved the page as a PDF"
+        // Kuvo Code's other tools, which the same server serves: what they do, not where they're from.
+        case "list_sessions": return isActive ? "Checking its sessions" : "Checked its sessions"
+        case "stop_session": return isActive ? "Stopping a session" : "Stopped a session"
+        case "answer_ask": return isActive ? "Answering a session" : "Answered a session"
+        case "list_models": return isActive ? "Looking up the models" : "Looked up the models"
+        case "list_projects": return isActive ? "Looking up the projects" : "Looked up the projects"
+        case "make_project": return (isActive ? "Making " : "Made ") + (string("name").map { "the project “\($0)”" } ?? "a project")
+        case "set_job": return (isActive ? "Setting its job" : "Set its job") + (string("summary").map { ": \($0)" } ?? "")
+        case "propose_goal": return (isActive ? "Proposing " : "Proposed ") + (string("title").map { "the goal “\($0)”" } ?? "a goal")
+        case "goal_progress": return isActive ? "Updating its goal’s progress" : "Updated its goal’s progress"
+        case "may_spend": return isActive ? "Checking a purchase against its budget" : "Checked a purchase against its budget"
+        case "finish_goal": return isActive ? "Finishing its goal" : "Finished its goal"
+        case "vault_items": return isActive ? "Looking up its vault items" : "Looked up its vault items"
+        case "vault_ask": return isActive ? "Asking you for something from the vault" : "Asked you for something from the vault"
+        case "vault_run": return isActive ? "Running a command with the vault’s values" : "Ran a command with the vault’s values"
+        case let name where name.hasPrefix("browser_"): return "Used the browser"
+        // One this list doesn't know yet: by its own name, never as the browser.
+        case let name: return "Used " + name.replacingOccurrences(of: "_", with: " ")
         }
     }
 
@@ -431,7 +450,19 @@ struct ToolCallView: View {
         case "show_in_panel": "sidebar.right"
         case "show_file": "doc.richtext"
         case "show_widget": "macwindow"
-        default: "safari"
+        case "browser_fill", "vault_items", "vault_ask", "vault_run": "lock.shield"
+        case "browser_save_pdf": "arrow.down.doc"
+        case "list_sessions": "rectangle.stack"
+        case "stop_session": "stop.circle"
+        case "answer_ask": "checkmark.bubble"
+        case "list_models": "cpu"
+        case "list_projects": "folder"
+        case "make_project": "folder.badge.plus"
+        case "set_job": "person.text.rectangle"
+        case "propose_goal", "goal_progress", "finish_goal": "scope"
+        case "may_spend": "creditcard"
+        case let name where name.hasPrefix("browser_"): "safari"
+        default: nil
         }
     }
 

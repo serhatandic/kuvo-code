@@ -5,6 +5,7 @@
 // and the browser's keeper (Chromium behind it) are stand-ins.
 //
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/vault-fill-wait.test.js`.
+import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";

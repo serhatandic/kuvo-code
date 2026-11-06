@@ -15,7 +15,7 @@ import os from "node:os";
 import path from "node:path";
 import { listOf, textOf, writePrivate } from "../files";
 import { processRuns, sandboxGeneration } from "../../shared/platform";
-import { accountHome, BOTS, BRIDGE_FILE, CHATS, ENGINE_CONFIG, ENGINE_FILE, K, RUN, SANDBOX_NOTE, SESSION_WAKES, SOCKET_KEY_FILE, SSH_AGENTS, SSH_FOR } from "../home";
+import { accountHome, BOTS, BRIDGE_FILE, CHATS, ENGINE_CONFIG, ENGINE_DATA, ENGINE_FILE, K, RUN, SANDBOX_NOTE, SESSION_WAKES, SOCKET_KEY_FILE, SSH_AGENTS, SSH_FOR } from "../home";
 import { tellLauncher } from "./allowed";
 import { agentShellScript, agentsNote, launcherScript, pluginScript, type FencePlaces } from "./files";
 import { LANDLOCK_RUNNER, landlockPolicy, ownNamespace, ownNamespaceLater, UNSHARE } from "./landlock";
@@ -83,8 +83,7 @@ const places: FencePlaces = {
   folder: FOLDER,
   launcher: path.join(K, "bin", "kuvo-fence"),
   runner: path.join(K, "bin", "kuvo-fence.js"),
-  inside: [realish(BOTS)],
-  shared: [realish(CHATS)],
+  ...conversationPlaces(),
   probe: PROBE,
   bots: BOTS,
   wakes: SESSION_WAKES,
@@ -416,6 +415,30 @@ function writeTemporary(): void {
   // (Those from before, in the sandbox's own folder, stay for what a command may still have running
   // in one, as a build or a tmux server, and go a week after their last command: sweepWakeFolders.)
   writePrivate(file, `${root}\n${crypto.randomBytes(32).toString("hex")}\n`);
+}
+
+/**
+ * The temporary folder a conversation's commands are given (their TMPDIR), as the launcher names it
+ * from the conversation's folder (`work`, through its links): in the folder `temporary` names, by
+ * the key there; in the sandbox's own `tmp` where the box hasn't named one. Itself, never through a
+ * link: null for one that is a link (which the launcher takes away before a command runs), or for a
+ * folder that isn't there.
+ */
+export function commandTemporary(work: string): string | null {
+  let real: string;
+  try { real = fs.realpathSync(work); } catch { return null; }
+  const sum = (text: string) => crypto.createHash("sha256").update(text).digest("hex");
+  const [root, key] = (textOf(path.join(FOLDER, "temporary")) ?? "").split("\n");
+  const tmp = root?.startsWith("/") && key?.length === 64 ? path.join(realish(root), sum(`${key}\n${real}`).slice(0, 8)) : path.join(FOLDER, "tmp", sum(real).slice(0, 32));
+  return fs.lstatSync(tmp, { throwIfNoEntry: false })?.isSymbolicLink() ? null : tmp;
+}
+
+/** Where Kuvo Code keeps conversations' own folders inside its own, which their commands get whole
+ * in the sandbox: each folder in bots' and in the engine's worktrees (`inside`), and Chats', itself
+ * too (`shared`). (And their commands' temporary folders: `commandTemporary`.) A test's own
+ * folders as `at` names them. */
+export function conversationPlaces(at = { bots: BOTS, engineData: ENGINE_DATA, chats: CHATS }): { inside: string[]; shared: string[] } {
+  return { inside: [realish(at.bots), realish(path.join(at.engineData, "worktree"))], shared: [realish(at.chats)] };
 }
 
 /**

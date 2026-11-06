@@ -2030,9 +2030,10 @@ export class Sessions {
       // The apps may still take it for signed in (one Claude turned away as it ran): shown now.
       if (agent.id !== "engine") emit("integration.updated", { integrationID: agent.providerID })
       const machine = onMachine ? process.env.KUVO_MACHINE_NAME || "this machine" : undefined
+      // Only what the card's Sign In and Switch Model don't say.
       const message = machine
-        ? `${agent.name} isn't signed in on ${machine}, where this conversation runs (each machine signs in on its own). Sign in to it there in Settings › Accounts, with ${machine} picked, or pick another model.`
-        : `${agent.name} isn't signed in. Sign in to it in Settings › Accounts, or pick another model.`
+        ? `${agent.name} isn't signed in on ${machine}, where this conversation runs: each machine signs in on its own.`
+        : `${agent.name} isn't signed in.`
       return { outcome: "failed", error: { type: agent.id === "engine" ? "provider.auth" : "signin", message } }
     }
     if (signal.aborted) {

@@ -4,6 +4,7 @@
 // an agent makes them, and kuvo-wake's own refusals come back as they're said. The engine is a
 // stand-in, and so is the system's word that a folder changed (below); kuvo-wake is the real one.
 // Each test has conversations of its own, gone when it ends, so each runs alone too.
+import "./test-safety.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import http from "node:http";

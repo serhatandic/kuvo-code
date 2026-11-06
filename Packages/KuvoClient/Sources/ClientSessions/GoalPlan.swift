@@ -403,6 +403,9 @@ public struct GoalPlan: Decodable, Sendable, Hashable, Identifiable {
     public var underWay: [Step] { steps.filter { $0.state == .doing } }
     /// Whether its card waits for you.
     public var isProposed: Bool { state == .proposed }
+    /// What waits for you, as the bot's own conversation shows it: what the bot asks there is its
+    /// question in the composer's place, so it isn't a row as well. (Elsewhere, it's one of them.)
+    public var waitingInItsConversation: [Waiting] { waiting.filter { $0.kind != .ask || $0.session != session } }
 }
 
 /// The goals on a box (`GET kuvo/work/goals`, and each line of its events).

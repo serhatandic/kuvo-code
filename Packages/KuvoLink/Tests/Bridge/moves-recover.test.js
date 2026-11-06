@@ -6,6 +6,7 @@
 // engine and its group chats' bridge are stand-ins.
 //
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/moves-recover.test.js`.
+import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";

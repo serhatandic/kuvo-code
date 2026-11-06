@@ -1,3 +1,4 @@
+import "./safety"
 import { afterAll, beforeAll, expect, test } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
@@ -15,14 +16,21 @@ let project: string
 let reviewer: typeof import("../src/link/work/reviewer")
 let fencePolicy: typeof import("../src/link/fence/policy").fencePolicy
 
+// (What's judged here is your account's own home, as the code finds it, so HOME names it for these:
+// what they write and run stays in their own folders, and test-safety.js still refuses a delete.)
+const runsHome = process.env.HOME
 beforeAll(async () => {
+  process.env.HOME = process.env.KUVO_TEST_REAL_HOME
   box = mkdtempSync(join(tmpdir(), "kuvo-reviewer-"))
   project = join(box, "project")
   mkdirSync(project, { recursive: true })
   reviewer = await import("../src/link/work/reviewer")
   fencePolicy = (await import("../src/link/fence/policy")).fencePolicy
 })
-afterAll(() => rmSync(box, { recursive: true, force: true }))
+afterAll(() => {
+  process.env.HOME = runsHome
+  rmSync(box, { recursive: true, force: true })
+})
 
 let sessions = 0
 // A conversation of its own per test, with what you said in it.
@@ -60,6 +68,30 @@ test("only Kuvo Code's own folders and wrecking your home are refused by code, a
   // Deleting inside the project or your caches isn't deleting your home: the model's.
   for (const line of ["rm -rf build node_modules", "rm -rf ~/Library/Caches/my-tool", "grep -r token ~"]) {
     expect({ line, decision: (await reviewer.review(command(line), yours("Clean up and rebuild"), given(ask))).decision }).toEqual({ line, decision: "allow" })
+  }
+})
+
+// (A machine's: Kuvo Code's folder in your home, so a line names it by its place there too.)
+test("a conversation's own folder inside Kuvo Code's is its own however a line names it, but never a path that goes up out of it", async () => {
+  const ask = model(allows)
+  const { K, ENGINE_DATA } = await import("../src/link/home")
+  const { realish } = await import("../src/link/fence/policy")
+  const tree = join(realish(ENGINE_DATA), "worktree", "leaf")
+  mkdirSync(join(tree, "scripts"), { recursive: true })
+  const kuvo = realish(K)
+  const home = join(kuvo, "..")
+  const policy = { ...fencePolicy(), home, homeWrites: [home], kuvo: [kuvo], kuvoPatterns: [] }
+  const inTree = (line: string) => ({ kind: "command" as const, command: line, folder: tree })
+  const named = `"$HOME/${tree.slice(home.length + 1)}`
+  const judged = async (line: string) => {
+    const verdict = await reviewer.review(inTree(line), yours("Build it"), { ...given(ask), policy, own: [tree] })
+    return { line, decision: verdict.decision, by: verdict.by }
+  }
+  for (const line of [`cd "$X"; ls ${named}/scripts"`, `cd "$X"; ls ${named}"`]) expect(await judged(line)).toEqual({ line, decision: "allow", by: "model" })
+  for (const line of [`cd "$X"; cat ${named}/scripts/../../../../../box/keys/box.key"`, `cd "$X"; cat ${named}/../../../box/keys/box.key"`, `cd "$X"; cat "$HOME/${kuvo.slice(home.length + 1)}/box/keys/box.key"`,
+    // (However the way up is quoted, escaped or put in a step of its own.)
+    `cd "$X"; cat ${named}/".."/../../../box/keys/box.key"`, `cd "$X"; cat ${named}/.\\./.\\./.\\./box/keys/box.key"`, `cd ${named}" && cd ../../.. && cat box/keys/box.key`]) {
+    expect(await judged(line)).toEqual({ line, decision: "refuse", by: "code" })
   }
 })
 

@@ -4,6 +4,7 @@
 // Accounts does it, for your plans alone, never an integration's server. The engine is a stand-in.
 //
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/accounts.test.js`.
+import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import fs from "node:fs";

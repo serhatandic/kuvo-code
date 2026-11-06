@@ -2,6 +2,7 @@
 // engine's own folder for each project, one beside the projects, one in your home folder, and one
 // in the repository that git would list as new files until it's ignored. Real git; the engine is a
 // stand-in that says which project a folder is, as the real one does.
+import "./test-safety.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";

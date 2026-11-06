@@ -2,6 +2,7 @@
 // from a phone with the Mac closed or from the Mac (through `box route`): the scenarios in
 // bot-keys-scenarios.js, then what's a machine's own: its settings naming them as they always have,
 // and its bots' settings refreshed as its box starts. (This Mac's app's keys: bot-keys-host.test.js.)
+import "./test-safety.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";

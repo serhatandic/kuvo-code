@@ -9,6 +9,7 @@
 //
 // Run with `OPENCODE_TEST_BINARY=<opencode> node --test Packages/KuvoLink/Tests/Bridge/outside-asks-live.test.js`;
 // on Linux, on the engine's Bun (`OPENCODE_TEST_BINARY=<opencode> BUN_BE_BUN=1 <opencode> test outside-asks-live.test.js`).
+import { testsFolder } from "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
@@ -23,8 +24,7 @@ const skip = !binary && "OPENCODE_TEST_BINARY isn't set";
 
 let root;
 if (!skip) {
-  fs.mkdirSync(path.join(os.homedir(), ".kuvo-code-test"), { recursive: true });
-  root = fs.realpathSync(fs.mkdtempSync(path.join(os.homedir(), ".kuvo-code-test", "outside-")));
+  root = fs.realpathSync(testsFolder("outside"));
   removeAtEnd(root);
 }
 

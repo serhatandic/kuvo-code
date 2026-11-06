@@ -756,6 +756,8 @@ extension EnvironmentValues {
     /// How tall what's in a card over the composer can be before it scrolls, so the card, the
     /// composer and some of the conversation fit in the window.
     @Entry var cardRoom: CGFloat = 360
+    /// The height of the conversation a stack over its composer is in (none: as tall as it is).
+    @Entry var stackRoom: CGFloat = .infinity
     /// Its cards answer Return, Esc and number keys: false in the half of a split you're not
     /// working in, so the keys go to the one you are.
     @Entry var takesCardKeys = true

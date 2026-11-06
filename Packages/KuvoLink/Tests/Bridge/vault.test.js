@@ -4,6 +4,7 @@
 // ever seeing a value. (This Mac's vault, in its Keychain: vault-host.test.js.)
 //
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/vault.test.js`.
+import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";

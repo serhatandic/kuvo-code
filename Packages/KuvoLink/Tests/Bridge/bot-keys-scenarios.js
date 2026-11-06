@@ -1,6 +1,7 @@
 // What a bot's keys of its own do on a box, whichever way it keeps them: run by bot-keys.test.js
 // (a machine's files) and bot-keys-host.test.js (this Mac's app, through its host interface). Also
 // the stand-in for that app, and this Mac's box started as the app starts it.
+import { ownPath } from "./test-safety.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -16,7 +17,7 @@ export const script = fileURLToPath(new URL("../../Sources/KuvoLink/Resources/ku
  * where a socket's path is short, outside it, so a test clears it itself (a box it stops with SIGTERM
  * can't). */
 export const sshAgentsOf = home => process.platform === "darwin"
-  ? path.join("/private/tmp", `kuvo-ssh-${process.getuid()}`, `agents-${crypto.createHash("sha256").update(home).digest("hex").slice(0, 8)}`)
+  ? ownPath(path.join("/private/tmp", `kuvo-ssh-${process.getuid()}`, `agents-${crypto.createHash("sha256").update(home).digest("hex").slice(0, 8)}`))
   : path.join(home, "run", "ssh-agents");
 export const own = "KUVO_KEY_TODOIST_API_KEY__BOT_SCOUT";
 

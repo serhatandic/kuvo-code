@@ -1,6 +1,7 @@
 // A box's projects (PROTOCOL.md, "Projects"): its own list, kept on the box, which every client
 // reads and changes; Remove Project archives every session of one, its worktrees' too, page after
 // page. Run with `node --test Packages/KuvoLink/Tests/Bridge/*.test.js`.
+import "./test-safety.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import http from "node:http";

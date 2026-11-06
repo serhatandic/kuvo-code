@@ -4,6 +4,7 @@
 // client that connects later, until the page leaves the site. Chrome here is a stand-in that
 // speaks its DevTools protocol over the keeper's pipe, as Chrome does.
 
+import "./test-safety.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";

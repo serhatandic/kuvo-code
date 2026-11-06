@@ -9333,7 +9333,7 @@ function unzipper() {
 // Packages/Box/src/agents/agents/claude.ts
 import { spawn as spawn5 } from "child_process";
 import { createHash as createHash6, randomUUID } from "crypto";
-import { existsSync as existsSync13, mkdirSync as mkdirSync13, readFileSync as readFileSync18, renameSync as renameSync10, rmSync as rmSync10, statSync as statSync8, writeFileSync as writeFileSync15 } from "fs";
+import { existsSync as existsSync13, mkdirSync as mkdirSync13, readFileSync as readFileSync18, renameSync as renameSync10, rmdirSync as rmdirSync2, rmSync as rmSync10, statSync as statSync8, writeFileSync as writeFileSync15 } from "fs";
 import { homedir } from "os";
 import { dirname as dirname11, join as join21, resolve as resolve6 } from "path";
 import { pathToFileURL as pathToFileURL3 } from "url";
@@ -9390,7 +9390,7 @@ function update(definition, temporary) {
     return {
       updated: false,
       version: after.installed,
-      message: `${definition.name} is still ${after.installed ?? "the same version"} after \`${before.shown}\`.${output ? `
+      message: `${definition.name} is still ${after.installed ?? "the same version"} after \u201C${before.shown}\u201D.${output ? `
 
 ${output}` : ""}`
     };
@@ -9411,7 +9411,7 @@ function install(name, command, temporary, found, readPath = refreshLoginPath) {
 ` + ran.stdout).trim().split(`
 `).slice(-6).join(`
 `).trim();
-    return { installed: false, message: `${name} isn't installed after \`${command}\`.${output ? `
+    return { installed: false, message: `${name} isn't installed after \u201C${command}\u201D.${output ? `
 
 ${output}` : ""}` };
   });
@@ -9650,10 +9650,57 @@ var STATE_IN_HOME = [
 var KEPT_IN_HOME = ["settings*.json", "hooks", ".mcp.json"];
 var PRINTED_TOKEN = /sk-ant-oat\d+-[A-Za-z0-9_-]{60,}(?=[^A-Za-z0-9_-])/;
 var ANY_TOKEN = /sk-ant-[A-Za-z0-9_-]+/g;
+var VALUE = `"[^"]*"|'[^']*'|[^\\s"',;]+`;
+var SECRET_NAME = "[A-Za-z0-9_-]*(?:key|token(?!s)|secret|password|passwd)[A-Za-z0-9_-]*";
+var withoutSecrets = (text) => text.replace(ANY_TOKEN, "sk-ant-\u2026").replace(/:\/\/[^\s/]*@/g, "://\u2026@").replace(new RegExp(`\\b((?:proxy-)?authorization)(["']?\\s*[:=]\\s*)(?:"[^"]*"|'[^']*'|(?:(?:bearer|basic|token)\\s+)?[^\\s"',;]+)`, "gi"), "$1$2\u2026").replace(/\bBearer\s+(?!tokens?\b)[A-Za-z0-9._~+/-]+=*/gi, "Bearer \u2026").replace(new RegExp(`\\b(${SECRET_NAME})(\\s*=\\s*)(?:${VALUE})`, "gi"), "$1$2\u2026").replace(new RegExp(`(["'])(${SECRET_NAME})\\1(\\s*:\\s*)(?:${VALUE})`, "gi"), "$1$2$1$3\u2026").replace(new RegExp(`\\b((?:[A-Za-z0-9_-]+[-_])?(?:api[-_]?key|token)|[A-Za-z0-9_-]*(?:password|passwd|secret))(?<!(?:^|[\\s(])token)(\\s*:\\s*)(?:${VALUE})`, "gi"), "$1$2\u2026").replace(new RegExp(`(--${SECRET_NAME})(\\s+|=)(?:${VALUE})`, "gi"), "$1$2\u2026");
+var told = (error) => {
+  const said = failure(error);
+  return { ...said, message: withoutSecrets(said.message) };
+};
+
+class Said {
+  text = "";
+  cut = false;
+  finished = false;
+  add(chunk) {
+    let text = this.text + chunk;
+    if (this.cut) {
+      const end = text.indexOf(`
+`);
+      this.cut = end < 0;
+      text = end < 0 ? "" : text.slice(end + 1);
+    }
+    if (text.length > 4000) {
+      text = text.slice(-4000);
+      const start = text.indexOf(`
+`);
+      this.cut = start < 0;
+      text = start < 0 ? "" : text.slice(start + 1);
+    }
+    this.text = text;
+  }
+  finish() {
+    this.finished = true;
+  }
+  forget() {
+    if (this.text && !this.text.endsWith(`
+`))
+      this.cut = true;
+    this.text = "";
+  }
+  get last() {
+    const whole = this.finished ? this.text : this.text.slice(0, this.text.lastIndexOf(`
+`) + 1);
+    const line = whole.split(`
+`).map((each) => each.trim()).filter((each) => each && !/^(at\s|Bun v\d|Node\.js v\d)/.test(each)).pop();
+    return withoutSecrets(line ?? "").slice(0, 300);
+  }
+}
 
 class ClaudeAgent {
   context;
   instance;
+  static heardWithin = 1000;
   static keychain = process.platform === "darwin";
   id = "claude";
   providerID;
@@ -10220,8 +10267,12 @@ class ClaudeThread {
     }
     if (hooks.signal.aborted)
       return { outcome: "interrupted" };
-    if (!this.query || !this.input)
+    if (!this.query || !this.input) {
+      await this.heard(this.lastEnd, hooks.signal);
+      if (hooks.signal.aborted)
+        return { outcome: "interrupted" };
       return { outcome: "failed", error: this.stoppedWhy(this.lastEnd) };
+    }
     return new Promise((resolve) => {
       this.lastHooks = hooks;
       const message = userMessage(input, this.copies());
@@ -10403,6 +10454,7 @@ class ClaudeThread {
     if (!this.agent.executable())
       throw new Error(`Install Claude Code first: ${this.agent.install}`);
     this.lastEnd = undefined;
+    this.said = undefined;
     let id = this.state.claudeSession;
     const resume = Boolean(id && this.state.claudeStarted);
     if (!id) {
@@ -10412,7 +10464,7 @@ class ClaudeThread {
     }
     if (!resume)
       delete this.state.claudeCost;
-    const whole = this.whole(skills);
+    const whole = this.whole(skills, id);
     this.input = new Queue;
     const tools = fenceOn() ? relayedTools(this.session.id, this) : kuvoTools(this.session.id);
     this.opened = { model: modelID, effort, plan, append, program: this.agent.program, tools: tools?.key, skills, fence: fenceKey() + fullAccessMark(this.session.id) };
@@ -10438,10 +10490,12 @@ class ClaudeThread {
     });
     this.read(this.query);
   }
-  whole(skills) {
+  whole(skills, conversation) {
     this.sandboxedNow = fenceOn() || undefined;
     if (!this.sandboxedNow)
       return;
+    this.environment(conversation);
+    const started = ++this.startsInSandbox;
     const directory = this.session.location.directory;
     const attached = fenceAttachments(directory);
     const settings = this.agent.configHome;
@@ -10462,12 +10516,47 @@ class ClaudeThread {
       env,
       spawn: (options) => {
         const given = Object.fromEntries(Object.entries({ ...options.env, ...fence.env, KUVO_FENCE_SHELL: options.command, ...env }).filter((entry) => entry[1] !== undefined));
-        const child = spawn5(fence.command, options.args, { cwd: options.cwd ?? directory, env: given, signal: options.signal, stdio: ["pipe", "pipe", "ignore"] });
-        child.once("exit", () => fence.ended());
+        const child = spawn5(fence.command, options.args, { cwd: options.cwd ?? directory, env: given, signal: options.signal, stdio: ["pipe", "pipe", "pipe"] });
+        child.once("exit", () => {
+          fence.ended();
+          if (started === this.startsInSandbox)
+            this.environmentsEnded();
+        });
+        const said = new Said;
+        this.said = said;
+        this.saidAll = new Promise((done) => {
+          if (!child.stderr)
+            return done();
+          child.stderr.once("close", () => {
+            said.finish();
+            done();
+          });
+        });
+        child.stderr?.setEncoding("utf8");
+        child.stderr?.on("data", (chunk) => said.add(chunk));
+        child.stderr?.on("error", () => {});
         return child;
       }
     };
   }
+  environment(conversation) {
+    if (!/^[A-Za-z0-9-]+$/.test(conversation))
+      return;
+    const folder = join21(this.agent.configHome, "session-env", conversation);
+    try {
+      mkdirSync13(folder, { recursive: true });
+      this.environments.add(folder);
+    } catch {}
+  }
+  environmentsEnded() {
+    for (const folder of this.environments)
+      try {
+        rmdirSync2(folder);
+      } catch {}
+    this.environments.clear();
+  }
+  environments = new Set;
+  startsInSandbox = 0;
   copies() {
     const directory = this.session.location.directory;
     return this.sandboxedNow ? (path) => fenceCopy(directory, path) : undefined;
@@ -10505,12 +10594,37 @@ class ClaudeThread {
       active.resolve({ outcome: "interrupted" });
     else if (active.limit)
       active.resolve({ outcome: "failed", error: { type: "limit", message: active.problem ?? "You've reached a Claude usage limit." }, limit: active.limit });
-    else
-      active.resolve({ outcome: "failed", error: this.failed(active, failure(active.problem ?? ended ?? "Claude Code stopped.")) });
+    else {
+      if (!active.problem)
+        await this.heard(ended, active.hooks.signal);
+      if (active.hooks.signal.aborted)
+        return active.resolve({ outcome: "interrupted" });
+      active.resolve({ outcome: "failed", error: this.failed(active, active.problem ? told(active.problem) : this.stoppedWhy(ended, "Claude Code stopped.")) });
+    }
   }
   lastEnd;
-  stoppedWhy(ended) {
-    return failure(ended ?? "Claude Code stopped before it took your message.");
+  said;
+  saidAll;
+  async heard(ended, stopped) {
+    if (ended === undefined || !this.said || stopped.aborted)
+      return;
+    let bound;
+    let stop = () => {};
+    await Promise.race([
+      this.saidAll,
+      new Promise((done) => {
+        bound = setTimeout(done, ClaudeAgent.heardWithin);
+        stop = done;
+        stopped.addEventListener("abort", stop, { once: true });
+      })
+    ]);
+    clearTimeout(bound);
+    stopped.removeEventListener("abort", stop);
+  }
+  stoppedWhy(ended, otherwise = "Claude Code stopped before it took your message.") {
+    const error = told(ended ?? otherwise);
+    const last = this.said?.last;
+    return ended !== undefined && last && !error.message.includes(last) ? { ...error, message: `${error.message}: ${last}` } : error;
   }
   failed(active, error) {
     if (!active.signInTurnedAway)
@@ -10519,8 +10633,11 @@ class ClaudeThread {
     return { ...error, type: "signin" };
   }
   handle(message) {
+    this.said?.forget();
     if (message.type === "system" && message.subtype === "init") {
       if (!this.state.claudeStarted || this.state.claudeSession !== message.session_id) {
+        if (this.sandboxedNow && typeof message.session_id === "string")
+          this.environment(message.session_id);
         this.state.claudeSession = message.session_id;
         this.state.claudeStarted = true;
         this.active?.hooks.saveState();
@@ -10700,7 +10817,7 @@ class ClaudeThread {
         return;
       case "hook_response":
         if (message.outcome === "error" || message.exit_code)
-          turn.notice(`Your ${message.hook_name ?? message.hook_event ?? ""} hook failed${message.stderr ? `: ${String(message.stderr).trim()}` : ""}.`);
+          turn.notice(`Your ${message.hook_name ?? message.hook_event ?? ""} hook failed${this.hookWords(String(message.stderr ?? ""))}.`);
         return;
       case "memory_recall": {
         const id = newID("call");
@@ -10713,6 +10830,16 @@ class ClaudeThread {
     }
     if (!claudeSystem.has(message.subtype))
       this.unknownFrame(turn, `system:${message.subtype}`, message);
+  }
+  hookWords(said) {
+    const lines = said.trim().split(`
+`);
+    const about = lines.filter((line) => line.includes("session-env"));
+    if (!this.sandboxedNow || !about.length)
+      return said.trim() ? `: ${said.trim()}` : "";
+    const why = about.some((line) => line.includes("mkdir")) ? "Claude Code can't start this one in the sandbox" : "the sandbox doesn't let a hook set environment variables with CLAUDE_ENV_FILE";
+    return `: ${[...lines.filter((line) => !line.includes("session-env") && line.trim()), why].join(`
+`)}`;
   }
   noticeLater(lane, text) {
     lane.turn.notice(text);
@@ -15085,6 +15212,9 @@ class Turn {
   notice(text) {
     if (this.ended)
       return;
+    const last = this.messages.at(-1);
+    if (last?.type === "synthetic" && last.text === text)
+      return;
     this.endBlock();
     if (this.step)
       this.endStep();
@@ -16869,7 +16999,7 @@ ${text.slice(0, 4000)}
       if (agent.id !== "engine")
         emit("integration.updated", { integrationID: agent.providerID });
       const machine = onMachine ? process.env.KUVO_MACHINE_NAME || "this machine" : undefined;
-      const message = machine ? `${agent.name} isn't signed in on ${machine}, where this conversation runs (each machine signs in on its own). Sign in to it there in Settings \u203A Accounts, with ${machine} picked, or pick another model.` : `${agent.name} isn't signed in. Sign in to it in Settings \u203A Accounts, or pick another model.`;
+      const message = machine ? `${agent.name} isn't signed in on ${machine}, where this conversation runs: each machine signs in on its own.` : `${agent.name} isn't signed in.`;
       return { outcome: "failed", error: { type: agent.id === "engine" ? "provider.auth" : "signin", message } };
     }
     if (signal.aborted) {
@@ -23192,4 +23322,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 803c18dae990b75b4a1f1976c269f3cb50ab413efe458bd15678de909b9335b4
+// Built from Packages/Box/src/agents e4070fd7b0790da20761e119627cce13bd1528d756317584d0b068a4fd50fc9f

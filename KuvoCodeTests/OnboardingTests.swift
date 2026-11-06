@@ -350,7 +350,7 @@ import UsageKit
 
     @Test func aFailedInstallSaysWhyThereAndNotLaterInSettings() async throws {
         defer { done() }
-        let why = "Claude Code isn't installed after `curl -fsSL https://claude.ai/install.sh | bash`.\n\ncurl: (6) Could not resolve host: claude.ai"
+        let why = "Claude Code isn't installed after “curl -fsSL https://claude.ai/install.sh | bash”.\n\ncurl: (6) Could not resolve host: claude.ai"
         failing("claude-code", why)
         let claude = try await rows().claude
 

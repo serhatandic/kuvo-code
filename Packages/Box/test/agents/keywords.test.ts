@@ -1,3 +1,4 @@
+import "../safety"
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -917,7 +918,8 @@ describe("a review with fresh eyes", () => {
       expect((await run("git", ["-C", join(root, "reviewers"), "log", "--format=%s"])).stdout.trim()).toBe("Kuvo Code's reviewers read projects from here")
       reviews.stopAll()
     } finally {
-      process.env.GIT_CONFIG_GLOBAL = before
+      if (before === undefined) delete process.env.GIT_CONFIG_GLOBAL
+      else process.env.GIT_CONFIG_GLOBAL = before
     }
   })
 

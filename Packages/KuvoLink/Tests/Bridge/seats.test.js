@@ -2,6 +2,7 @@
 // agents' bridge's mail between computers, now or until it's there, in parts when it's big, and
 // tells the bridge who your other computers and their bots are. Run with
 // `node --test Packages/KuvoLink/Tests/Bridge/*.test.js`.
+import "./test-safety.js";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";

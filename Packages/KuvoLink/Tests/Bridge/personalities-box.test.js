@@ -3,6 +3,7 @@
 // gives it another computer's copy to meet with it, which a phone can't; and any client follows the
 // library as it changes, from a route, a copy met, or another process writing it. The engine is a
 // stand-in; the bridge is the real one, in this process and run as a command beside it.
+import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import fs from "node:fs";

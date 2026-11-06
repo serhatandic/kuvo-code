@@ -46,7 +46,7 @@ import Testing
                             return StubWeb.json(["data": ["updated": false, "version": Self.newest[id] ?? ""]])
                         }
                         if self.stuck.contains(id) {
-                            return StubWeb.json(["data": ["updated": false, "version": self.versions[id] ?? "", "message": "Grok is still \(self.versions[id] ?? "") after `grok update`."]])
+                            return StubWeb.json(["data": ["updated": false, "version": self.versions[id] ?? "", "message": "Grok is still \(self.versions[id] ?? "") after “grok update”."]])
                         }
                         self.versions[id] = Self.newest[id]
                         return StubWeb.json(["data": ["updated": true, "version": Self.newest[id] ?? ""]])
@@ -135,7 +135,7 @@ import Testing
         for update in updates { await update.value }
 
         #expect(status("claude-code") == .updated("2.1.309"))
-        #expect(status("grok-cli") == .failed("Grok is still 1.0.60 after `grok update`."))
+        #expect(status("grok-cli") == .failed("Grok is still 1.0.60 after “grok update”."))
         #expect(app.outdatedAgents(on: .mac).map(\.id) == ["grok-cli"], "still out of date, so Update All stays")
     }
 

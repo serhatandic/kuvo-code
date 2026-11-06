@@ -2,6 +2,7 @@
 // they browse, whether a Mac is connected to it or not: a Mac never tells them a machine's news,
 // so each notice comes once, from the machine. Run with
 // `node --test Packages/KuvoLink/Tests/Bridge/*.test.js`.
+import "./test-safety.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import http from "node:http";

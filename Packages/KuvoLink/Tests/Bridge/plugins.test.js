@@ -1,6 +1,7 @@
 // Settings › Engine's plugins, as each box finds them on npm: the most used ones before you type,
 // the ones a word finds, the package you name exactly first, and a name npm doesn't have said
 // so. npm is a stand-in, as a box reaches it.
+import "./test-safety.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";

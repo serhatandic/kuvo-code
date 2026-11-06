@@ -3,6 +3,7 @@
 // own, against a release served on localhost, with a stand-in engine and keeper (the real ones
 // need Linux); the new link's self-test is the real one.
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/*.test.js`.
+import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";

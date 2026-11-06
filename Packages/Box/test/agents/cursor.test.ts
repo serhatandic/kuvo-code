@@ -1,6 +1,7 @@
 // Cursor's thread against a fake SDK: what its agent is started with, and what a session shows of
 // its turns (its reply and steps, Stop, each approval mode, what a turn used).
 
+import "../safety"
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { createHash } from "node:crypto"
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"

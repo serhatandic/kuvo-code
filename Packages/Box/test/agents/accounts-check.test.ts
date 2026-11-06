@@ -3,6 +3,7 @@
 // stay as the agent last said, and only the agent's own word that you're signed out is a sign-out.
 // Claude Code and Grok are fake programs on the PATH; Codex's app-server and Cursor's SDK are stand-ins.
 
+import "../safety"
 import { afterAll, afterEach, beforeAll, describe, expect, setSystemTime, test } from "bun:test"
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"

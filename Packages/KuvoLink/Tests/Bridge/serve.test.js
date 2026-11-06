@@ -1,6 +1,7 @@
 // A Mac's own box (`kuvo-link.js serve`): its routes over HTTP on 127.0.0.1, as the app starts it
 // beside the engine (PROTOCOL.md, "This Mac's box"). Run with
 // `node --test Packages/KuvoLink/Tests/Bridge/*.test.js`.
+import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import fs from "node:fs";

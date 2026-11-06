@@ -2,6 +2,7 @@
 // starts the bridge first, a machine's launch may too): no coding agent starts until the box has
 // said whether the sandbox is on, so none is left running outside it.
 
+import "../safety"
 import { afterAll, afterEach, expect, test } from "bun:test"
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"

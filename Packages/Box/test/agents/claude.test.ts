@@ -1,8 +1,9 @@
 // Claude Code's thread against a fake SDK: messages you send partway, taken late or never.
 
+import "../safety"
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { spawnSync } from "node:child_process"
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { ClaudeAgent } from "../../src/agents/agents/claude"
@@ -630,6 +631,13 @@ describe("Claude Code, nothing dropped", () => {
     ])
     expect(notices(id)).toEqual(["Claude Code summarized the conversation to make room.", "Claude's API is overloaded: trying again (2/10).", "Something new to read."])
   })
+
+  test("several hooks failing the same way at the same moment show as one row, and the same failure again later as another", async () => {
+    const failed = { type: "system", subtype: "hook_response", hook_name: "SessionStart:compact", hook_event: "SessionStart", outcome: "error", stderr: "Failed to run" }
+    const id = await turn(() => [failed, failed, failed, failed, { type: "system", subtype: "compact_boundary", compact_metadata: { trigger: "auto" } }, failed])
+    const row = "Your SessionStart:compact hook failed: Failed to run."
+    expect(notices(id)).toEqual([row, "Claude Code summarized the conversation to make room.", row])
+  })
 })
 
 describe("Claude Code's models", () => {
@@ -705,6 +713,7 @@ describe("Claude Code in the box's sandbox", () => {
   // The box's sandbox folder, as the box sets it up (link/fence/state.ts): its rules, and its
   // launcher for an agent run whole, which here notes what it was told and runs the program.
   let fence: string
+  let givenSettings: string | undefined
   const turnOn = () => {
     writeFileSync(join(fence, "policy.json"), JSON.stringify({ hidden: [], readable: [], writable: [], readOnly: [] }))
     writeFileSync(join(fence, "on"), "")
@@ -719,9 +728,14 @@ describe("Claude Code in the box's sandbox", () => {
       { mode: 0o700 },
     )
     process.env.KUVO_FENCE = fence
+    // (Its settings folder a test's own: it makes things in it as it starts here.)
+    givenSettings = process.env.CLAUDE_CONFIG_DIR
+    process.env.CLAUDE_CONFIG_DIR = join(root, "claude-settings")
   })
   afterEach(() => {
     delete process.env.KUVO_FENCE
+    if (givenSettings === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = givenSettings
     setToolServer(undefined)
   })
 
@@ -746,7 +760,7 @@ describe("Claude Code in the box's sandbox", () => {
     expect(launched).toMatchObject({ program: "/bin/echo", args: "--output-format stream-json", folder: work, work, git: join(work, ".git") })
     // Its settings folder its own: its conversations, sign-in and caches written; never its
     // settings or hooks, which run outside the sandbox when you use it yourself.
-    expect(launched.own).toBe(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"))
+    expect(launched.own).toBe(join(work, "claude-settings"))
     expect(launched.state.split(" ")).toEqual(expect.arrayContaining(["projects", "sessions", "todos", ".credentials.json*"]))
     // Never what your own Claude Code, outside, runs or reads later: its settings, the shells its
     // commands source, a session's environment, an editor's lock, a settings backup.
@@ -763,6 +777,69 @@ describe("Claude Code in the box's sandbox", () => {
     expect(tools.headers.Authorization).not.toBe("Bearer app-password")
   })
 
+  test("its hooks can start: this conversation's environment is there before it starts, and for the new name after /clear, as plain folders outside what it writes", async () => {
+    turnOn()
+    await begin()
+    const environments = join(process.env.CLAUDE_CONFIG_DIR!, "session-env")
+    const mine = join(environments, fake.options.sessionId)
+    expect(lstatSync(mine).isDirectory()).toBe(true)
+    // A new name it chose.
+    fake.out.push({ type: "system", subtype: "init", session_id: "cleared-conversation" })
+    await until(() => existsSync(join(environments, "cleared-conversation")))
+    expect(lstatSync(join(environments, "cleared-conversation")).isDirectory()).toBe(true)
+    // Never a name that would lead out of there.
+    fake.out.push({ type: "system", subtype: "init", session_id: "../escaped" })
+    fake.out.push({ type: "system", subtype: "init", session_id: "cleared-again" })
+    await until(() => existsSync(join(environments, "cleared-again")))
+    expect(existsSync(join(process.env.CLAUDE_CONFIG_DIR!, "escaped"))).toBe(false)
+    // As it stops, what's empty goes; one with your own hook's file in it stays.
+    writeFileSync(join(environments, "cleared-again", "sessionstart-hook-0.sh"), "export YOURS=1\n")
+    const { launched } = await started()
+    expect(launched.state.split(" ")).not.toContain("session-env")
+    expect(readdirSync(environments)).toEqual(["cleared-again"])
+    expect(readFileSync(join(environments, "cleared-again", "sessionstart-hook-0.sh"), "utf8")).toBe("export YOURS=1\n")
+  })
+
+  test("one being replaced stopping leaves the new one's environment where it is", async () => {
+    turnOn()
+    const { id, first } = await begin()
+    const mine = join(process.env.CLAUDE_CONFIG_DIR!, "session-env", fake.options.sessionId)
+    const replaced = fake.options
+    fake.result([first])
+    await until(() => idles(id).length === 1)
+    // The conversation goes to Full Access: at its next message its Claude Code starts again.
+    mkdirSync(join(fence, "full"), { recursive: true })
+    writeFileSync(join(fence, "full", id), "")
+    sessions.prompt(id, { id: "msg_claude_turn_replaced", text: "again", files: [], delivery: "steer" })
+    await until(() => fake.options !== replaced)
+    const child = replaced.spawnClaudeCodeProcess({ command: "/bin/echo", args: [], cwd: root, env: { PATH: process.env.PATH, OPENCODE_SESSION_ID: "ses_x" } })
+    await new Promise((resolve) => child.once("exit", resolve))
+    expect(existsSync(mine)).toBe(true)
+  })
+
+  test("a hook the sandbox kept from its session's environment says so in words, and the same for each, once", async () => {
+    turnOn()
+    const { id } = await begin()
+    const environment = join(process.env.CLAUDE_CONFIG_DIR!, "session-env", fake.options.sessionId, "sessionstart-hook-0.sh")
+    const failed = (stderr: string) => ({ type: "system", subtype: "hook_response", hook_name: "SessionStart:compact", outcome: "error", exit_code: 1, stderr })
+    fake.out.push(failed(`/bin/sh: ${environment}: Operation not permitted`))
+    fake.out.push(failed(`/bin/sh: ${environment}: Operation not permitted`))
+    fake.out.push(failed(`Failed to run: EPERM: operation not permitted, mkdir '${join(process.env.CLAUDE_CONFIG_DIR!, "session-env", "new")}'`))
+    fake.out.push(failed("rate limited by the tool"))
+    const rows = () => sessions.messages(id).filter((message) => message.type === "synthetic").map((message: any) => message.text)
+    await until(() => rows().length === 3)
+    expect(rows()).toEqual([
+      "Your SessionStart:compact hook failed: the sandbox doesn't let a hook set environment variables with CLAUDE_ENV_FILE.",
+      "Your SessionStart:compact hook failed: Claude Code can't start this one in the sandbox.",
+      "Your SessionStart:compact hook failed: rate limited by the tool.",
+    ])
+  })
+
+  test("with the sandbox off, it makes its own as it always has", async () => {
+    await begin()
+    expect(existsSync(join(process.env.CLAUDE_CONFIG_DIR!, "session-env"))).toBe(false)
+  })
+
   test("on, with no launcher of the box's yet (a box from before), Claude Code doesn't start, rather than outside the sandbox", async () => {
     turnOn()
     rmSync(join(fence, "shell"), { recursive: true })
@@ -771,6 +848,226 @@ describe("Claude Code in the box's sandbox", () => {
     await until(() => idles(id).length === 1)
     expect(idles(id)[0].error?.message ?? "").toContain("restart Kuvo Code")
     expect(fake.options).toBeUndefined()
+  })
+
+  describe("what it says on its error output as it stops", () => {
+    const plain = "Claude Code process exited with code 1"
+    const launcher = (script: string) => writeFileSync(join(fence, "shell", "run"), `#!/bin/sh\n${script}\n`, { mode: 0o700 })
+    /** Claude Code started through the launcher, as the SDK starts it. */
+    const spawned = () => fake.options.spawnClaudeCodeProcess({ command: "/bin/echo", args: [], cwd: root, env: { PATH: process.env.PATH, OPENCODE_SESSION_ID: "ses_x" } })
+    const closed = (child: any) => new Promise((resolve) => child.once("close", resolve))
+    const newSession = () => sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
+    const send = (id: string, turn: number) => sessions.prompt(id, { id: `msg_claude_turn_000${turn}`, text: "go", files: [], delivery: "steer" })
+    /** Starts, says what the launcher says, and stops before it takes the message: what the failure says. */
+    const stopsAsItStarts = async (id: string, turn: number) => {
+      const before = idles(id).length
+      fake.onServers = async () => {
+        await closed(spawned())
+        fake.crash(new Error(plain))
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      }
+      send(id, turn)
+      await until(() => idles(id).length === before + 1)
+      return idles(id)[before].error?.message
+    }
+
+    /** Says this line as it stops, and what the failure makes of it. */
+    const saying = async (line: string) => {
+      launcher(`cat >&2 <<'SAID'\n${line}\nSAID\nexit 1`)
+      return (await stopsAsItStarts(newSession(), 1))?.slice(plain.length + 2)
+    }
+
+    test("no secret an error line can hold is said back", async () => {
+      turnOn()
+      for (const [line, said] of [
+        ["cannot reach https://me:p@ss@proxy.test/v1", "cannot reach https://…@proxy.test/v1"],
+        ["sent Bearer abc.def-ghi, Authorization: Basic Zm9v", "sent Bearer …, Authorization: …"],
+        [`API_KEY="a b" TOKEN=k1 x-api-key: k2`, `API_KEY=… TOKEN=… x-api-key: …`],
+        [`{"apiKey":"k3","password": "k4"}`, `{"apiKey":…,"password": …}`],
+        ["password: k5 auth_token: k6", "password: … auth_token: …"],
+        ["ran it with --token k7 --api-key=k8", "ran it with --token … --api-key=…"],
+      ]) expect(await saying(line)).toBe(said)
+    })
+
+    test("a plain sentence keeps its words", async () => {
+      turnOn()
+      for (const line of ["Bearer token expired", "Invalid API key: not found", "Invalid token: expired", "max_tokens=4096 is too many", "Authorization failed for that account"]) expect(await saying(line)).toBe(line)
+    })
+
+    test("a line too long to keep whole is left out, so no piece of a token gets through", async () => {
+      turnOn()
+      launcher(`{ printf 'sk-ant-oat01-'; head -c 5000 /dev/zero | tr '\\0' a; echo; } >&2\nexit 1`)
+      expect(await stopsAsItStarts(newSession(), 1)).toBe(plain)
+    })
+
+    test("what an earlier Claude Code said isn't why a later one stopped", async () => {
+      turnOn()
+      const id = newSession()
+      launcher(`echo "the first one's reason" >&2\nexit 1`)
+      expect(await stopsAsItStarts(id, 1)).toBe(`${plain}: the first one's reason`)
+      launcher("exit 1")
+      expect(await stopsAsItStarts(id, 2)).toBe(plain)
+    })
+
+    test("with the sandbox turned off since, what the one in it said isn't why the next one stopped", async () => {
+      turnOn()
+      const id = newSession()
+      launcher(`echo "the sandboxed one's reason" >&2\nexit 1`)
+      expect(await stopsAsItStarts(id, 1)).toBe(`${plain}: the sandboxed one's reason`)
+      rmSync(join(fence, "on"))
+      fake.onServers = async () => {
+        fake.crash(new Error(plain))
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      }
+      send(id, 2)
+      await until(() => idles(id).length === 2)
+      expect(idles(id)[1].error?.message).toBe(plain)
+    })
+
+    test("one being replaced, still writing as it goes, doesn't speak for the new one", async () => {
+      turnOn()
+      const go = join(root, "go")
+      const id = newSession()
+      fake.onServers = async () => {
+        launcher(`( while [ ! -e ${JSON.stringify(go)} ]; do sleep 0.01; done; echo "the old one's last words" >&2 ) &\nexit 0`)
+        const old = spawned()
+        await new Promise((resolve) => old.once("exit", resolve))
+        launcher("exit 1")
+        await closed(spawned())
+        writeFileSync(go, "")
+        await closed(old)
+        fake.crash(new Error(plain))
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      }
+      send(id, 1)
+      await until(() => idles(id).length === 1)
+      expect(idles(id)[0].error?.message).toBe(plain)
+    })
+
+    test("a warning from when it was working isn't why it stops later", async () => {
+      turnOn()
+      launcher(`echo "warning: something old" >&2\nexit 0`)
+      const id = newSession()
+      send(id, 1)
+      await until(() => fake.sent.length === 1)
+      await closed(spawned())
+      fake.say("done", [fake.sent[0].uuid])
+      fake.result([fake.sent[0].uuid])
+      await until(() => idles(id).length === 1)
+      expect(idles(id)[0].outcome).toBe("succeeded")
+      send(id, 2)
+      await until(() => fake.sent.length === 2)
+      fake.crash(new Error(plain))
+      await until(() => idles(id).length === 2)
+      expect(idles(id)[1].error?.message).toBe(plain)
+    })
+
+    test("crashing in a turn, the failure says its error, not the stack under it", async () => {
+      turnOn()
+      launcher(`printf 'Error: out of memory\\n    at run (cli.js:1:1)\\n\\nBun v1.3.14 (macOS arm64)\\n' >&2\nexit 1`)
+      const id = newSession()
+      send(id, 1)
+      await until(() => fake.sent.length === 1)
+      await closed(spawned())
+      fake.crash(new Error(plain))
+      await until(() => idles(id).length === 1)
+      expect(idles(id)[0].error?.message).toBe(`${plain}: Error: out of memory`)
+    })
+
+    describe("with its error output held open by what it left running", () => {
+      const within = ClaudeAgent.heardWithin
+      afterEach(() => {
+        ClaudeAgent.heardWithin = within
+      })
+      /** Says `before`, exits, and leaves a process holding its error output until `go` is there, which then says `after`. */
+      const holding = (go: string, before: string, after: string) => launcher(`printf '${before}' >&2\n( while [ ! -e ${JSON.stringify(go)} ]; do sleep 0.01; done; printf '${after}' >&2 ) &\nexit 1`)
+      const stops = () => {
+        fake.onServers = async () => {
+          const child = spawned()
+          await new Promise((resolve) => child.once("exit", resolve))
+          fake.crash(new Error(plain))
+          await new Promise((resolve) => setTimeout(resolve, 0))
+        }
+      }
+
+      test("what comes after it exits still counts", async () => {
+        turnOn()
+        ClaudeAgent.heardWithin = 60_000
+        const go = join(root, "go")
+        holding(go, "", "said as it went\\n")
+        const id = newSession()
+        fake.onServers = async () => {
+          const child = spawned()
+          await new Promise((resolve) => child.once("exit", resolve))
+          fake.crash(new Error(plain))
+          await new Promise((resolve) => setTimeout(resolve, 0))
+          writeFileSync(go, "")
+        }
+        send(id, 1)
+        await until(() => idles(id).length === 1, 30_000)
+        expect(idles(id)[0].error?.message).toBe(`${plain}: said as it went`)
+      }, 40_000)
+
+      test("the failure doesn't wait for long, and leaves out a line still coming", async () => {
+        turnOn()
+        const go = join(root, "go")
+        holding(go, "a whole line\\nhttps://me:hunt", "er2@proxy\\n")
+        const id = newSession()
+        stops()
+        try {
+          send(id, 1)
+          await until(() => idles(id).length === 1, 30_000)
+          expect(idles(id)[0].error?.message).toBe(`${plain}: a whole line`)
+        } finally {
+          writeFileSync(go, "")
+        }
+      }, 40_000)
+
+      test("you can stop the turn while it waits", async () => {
+        turnOn()
+        ClaudeAgent.heardWithin = 60_000
+        const go = join(root, "go")
+        holding(go, "", "")
+        const id = newSession()
+        try {
+          send(id, 1)
+          await until(() => fake.sent.length === 1)
+          const child = spawned()
+          await new Promise((resolve) => child.once("exit", resolve))
+          fake.crash(new Error(plain))
+          await new Promise((resolve) => setTimeout(resolve, 0))
+          await sessions.interrupt(id, false)
+          await until(() => idles(id).length === 1)
+          expect(idles(id)[0].outcome).toBe("interrupted")
+        } finally {
+          writeFileSync(go, "")
+        }
+      })
+    })
+  })
+
+  test("stopped as it starts there, the turn fails with what Claude Code said, never with a token in it", async () => {
+    turnOn()
+    // Claude Code quits as it starts in the sandbox, saying why on its error output (as 2.1.318 did in
+    // a folder the sandbox hid from it).
+    writeFileSync(join(fence, "shell", "run"), `#!/bin/sh\necho "starting with sk-ant-oat01-abcdefghijklmnop" >&2\necho "Can't read the current directory (EPERM). Start Claude Code from a different directory." >&2\nexit 1\n`, { mode: 0o700 })
+    fake.onServers = async () => {
+      const child = fake.options.spawnClaudeCodeProcess({ command: "/bin/echo", args: [], cwd: root, env: { PATH: process.env.PATH, OPENCODE_SESSION_ID: "ses_x" } })
+      await new Promise((resolve) => child.once("close", resolve))
+      fake.crash(new Error("Claude Code process exited with code 1"))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    }
+    const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
+    sessions.prompt(id, { id: "msg_claude_turn_0001", text: "go", files: [], delivery: "steer" })
+    await until(() => idles(id).length === 1)
+    expect(idles(id)[0].outcome).toBe("failed")
+    expect(idles(id)[0].error?.message).toBe("Claude Code process exited with code 1: Can't read the current directory (EPERM). Start Claude Code from a different directory.")
+
+    // A token it printed as it stopped is never said back.
+    writeFileSync(join(fence, "shell", "run"), `#!/bin/sh\necho "Invalid token sk-ant-oat01-abcdefghijklmnop" >&2\nexit 1\n`, { mode: 0o700 })
+    sessions.prompt(id, { id: "msg_claude_turn_0002", text: "again", files: [], delivery: "steer" })
+    await until(() => idles(id).length === 2)
+    expect(idles(id)[1].error?.message).toBe("Claude Code process exited with code 1: Invalid token sk-ant-…")
   })
 
   test("its own sandbox stays off while the box's is on, whatever your settings or a project's say (one can't run inside the other)", async () => {

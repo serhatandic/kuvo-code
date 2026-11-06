@@ -7,6 +7,7 @@
 // relay connection are stand-ins, and the clock is the test's own.
 //
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/attention-mac.test.js`.
+import "./test-safety.js";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";

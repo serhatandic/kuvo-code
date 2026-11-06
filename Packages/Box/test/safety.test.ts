@@ -1,0 +1,136 @@
+import "./safety"
+// What test/safety.ts promises on Bun's runner, which a box's tests run on: test-safety.test.js holds
+// Node's. Decoys stand for the real folders, as `mktemp` in another process, so they aren't a test's own.
+import { afterAll, expect, test } from "bun:test"
+import { execFileSync } from "node:child_process"
+import fs, { mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync, existsSync } from "node:fs"
+import { rm } from "node:fs/promises"
+import { homedir, tmpdir } from "node:os"
+import { dirname, join, relative, resolve, sep } from "node:path"
+
+const decoys: string[] = []
+afterAll(() => {
+  for (const decoy of decoys) execFileSync("rm", ["-rf", decoy])
+})
+function decoy() {
+  const folder = execFileSync("mktemp", ["-d", join(tmpdir(), "kuvo-decoy.XXXXXX")], { encoding: "utf8" }).trim()
+  decoys.push(folder)
+  mkdirSync(join(folder, "wakes"))
+  writeFileSync(join(folder, "wakes", "keep"), "mine")
+  return folder
+}
+const untouched = (folder: string) => expect(readdirSync(join(folder, "wakes"))).toEqual(["keep"])
+
+test("deleting or moving outside the test's own folders throws, however it's imported, and leaves it", async () => {
+  const folder = decoy()
+  const wakes = join(folder, "wakes")
+  const own = mkdtempSync(join(tmpdir(), "own-"))
+  for (const attempt of [
+    () => rmSync(wakes, { recursive: true, force: true }),
+    () => fs.rmSync(wakes, { recursive: true, force: true }),
+    () => renameSync(wakes, join(folder, "gone")),
+    () => renameSync(own, join(wakes, "keep")),
+  ]) {
+    expect(attempt).toThrow(/Refusing to .*test-safety/)
+    untouched(folder)
+  }
+  expect(() => rm(wakes, { recursive: true, force: true })).toThrow(/Refusing to .*test-safety/)
+  untouched(folder)
+  // What the test made is its own to delete.
+  rmSync(own, { recursive: true })
+  expect(existsSync(own)).toBe(false)
+})
+
+test("a test's home is its own, by either way of asking, and in it the box's", () => {
+  const real = process.env.KUVO_TEST_REAL_HOME!
+  expect(process.env.HOME).not.toBe(real)
+  expect(homedir()).toBe(process.env.HOME!)
+  expect(process.env.KUVO_HOME!.startsWith(`${process.env.HOME}/`)).toBe(true)
+})
+
+// `bun test` reads a bunfig.toml only in the folder it starts in, so from any other there's no preload.
+test("run from another folder, a test is kept from what its shell names, and has no real home", () => {
+  const folder = decoy()
+  const scratch = mkdtempSync(join(tmpdir(), "elsewhere-"))
+  const box = resolve(import.meta.dir, "..")
+  const printed = `printf '%s|%s' "$HOME" "$KUVO_WAKES"`
+  writeFileSync(join(scratch, "run.test.ts"), `
+    import "${join(box, "test", "safety")}"
+    import { rmSync, writeFileSync } from "node:fs"
+    import { execSync } from "node:child_process"
+    import { test } from "bun:test"
+    test("as a test would", async () => {
+      // (As the tests that judge your own home do, before they load the link.)
+      const own = process.env.HOME
+      process.env.HOME = process.env.KUVO_TEST_REAL_HOME
+      const { K, ENGINE_FILE } = await import("${join(box, "src", "link", "home")}")
+      process.env.HOME = own
+      let refused = false
+      try { rmSync(${JSON.stringify(join(folder, "wakes"))}, { recursive: true, force: true }) } catch { refused = true }
+      // What it starts, every way there is. (Bun's own hand on the environment the process started with.)
+      const printed = ${JSON.stringify(printed)}
+      const started = {
+        spawnSync: Bun.spawnSync(["/bin/sh", "-c", printed]).stdout.toString(),
+        spawn: await new Response(Bun.spawn(["/bin/sh", "-c", printed]).stdout).text(),
+        spawnOfOptions: await new Response(Bun.spawn({ cmd: ["/bin/sh", "-c", printed] }).stdout).text(),
+        shell: await Bun.$\`/bin/sh -c \${printed}\`.text(),
+        execSync: execSync(printed, { encoding: "utf8" }),
+      }
+      writeFileSync(${JSON.stringify(join(scratch, "seen.json"))}, JSON.stringify({ K, ENGINE_FILE, wakes: process.env.KUVO_WAKES, refused, own, started }))
+    })
+  `)
+  const named = { KUVO_WAKES: join(folder, "wakes"), KUVO_BOTS: join(folder, "wakes"), KUVO_HOME: join(folder, "wakes"), KUVO_TEST_REAL_HOME: scratch }
+  const run = Bun.spawnSync([process.execPath, "test", "./run.test.ts"], { cwd: scratch, env: { ...process.env, ...named } })
+  expect(run.exitCode, run.stderr.toString()).toBe(0)
+  untouched(folder)
+  const seen = JSON.parse(readFileSync(join(scratch, "seen.json"), "utf8"))
+  expect(seen.refused).toBe(true)
+  expect(seen.wakes).toBeUndefined()
+  const tests = join(fs.realpathSync(scratch), ".kuvo-code-test")
+  expect(seen.K.startsWith(`${tests}/ku-`)).toBe(true)
+  expect(seen.ENGINE_FILE.startsWith(`${tests}/ku-`)).toBe(true)
+  for (const [how, printed] of Object.entries(seen.started)) expect([how, printed]).toEqual([how, `${seen.own}|`])
+  rmSync(scratch, { recursive: true, force: true })
+})
+
+// Bun's own `os.userInfo()` follows HOME, so the guard asks the system (the box's lookup, home.ts, does the same).
+test("under Bun the account's own home is found from the system, whatever HOME says, and can't be a test's own", () => {
+  const scratch = mkdtempSync(join(tmpdir(), "account-"))
+  const entry = process.platform === "darwin"
+    ? execFileSync("/usr/bin/id", ["-P"], { encoding: "utf8" }).trim().split(":")[8]
+    : execFileSync("/usr/bin/getent", ["passwd", String(process.getuid!())], { encoding: "utf8" }).trim().split(":")[5]
+  const script = `import { accountHome, ownPath } from ${JSON.stringify(join(import.meta.dir, "../../KuvoLink/Tests/Bridge/test-safety.js"))}
+    let refused = false
+    try { ownPath(${JSON.stringify(join(entry, ".kuvo-code", "x"))}) } catch { refused = true }
+    console.log(JSON.stringify({ accountHome, refused }))`
+  const run = Bun.spawnSync([process.execPath, "-e", script], { cwd: scratch, env: { ...process.env, HOME: scratch, KUVO_TEST_REAL_HOME: scratch } })
+  expect(run.exitCode, run.stderr.toString()).toBe(0)
+  expect(JSON.parse(run.stdout.toString())).toEqual({ accountHome: entry, refused: true })
+  expect(entry).not.toBe(scratch)
+  rmSync(scratch, { recursive: true, force: true })
+})
+
+test("with the preload, the run's home is gone as the run ends", () => {
+  const scratch = mkdtempSync(join(tmpdir(), "with-preload-"))
+  const box = resolve(import.meta.dir, "..")
+  writeFileSync(join(scratch, "run.test.ts"), `import { test } from "bun:test"\ntest("nothing", () => {})\n`)
+  const run = Bun.spawnSync([process.execPath, "test", join(scratch, "run.test.ts")], { cwd: box, env: { ...process.env, KUVO_TEST_REAL_HOME: scratch } })
+  expect(run.exitCode).toBe(0)
+  expect(existsSync(join(scratch, ".kuvo-code-test"))).toBe(false)
+  rmSync(scratch, { recursive: true, force: true })
+})
+
+// (Every file `bun test` takes for a test, anywhere under the box: *.test, *_test, *.spec, *_spec, in
+// any of its script extensions, in test/'s subfolders and outside test/ too.)
+test("every box test file loads test/safety.ts before anything else", () => {
+  const box = resolve(import.meta.dir, "..")
+  const files = (readdirSync(box, { recursive: true }) as string[]).filter(name => !name.split(sep).includes("node_modules") && /[._](test|spec)\.[cm]?[jt]sx?$/.test(name))
+  expect(files.length).toBeGreaterThan(50)
+  expect(files.some(name => name.split(sep).length > 2)).toBe(true)
+  const missing = files.filter(name => {
+    const first = readFileSync(join(box, name), "utf8").split("\n").find(line => line.trim() && !line.startsWith("//"))
+    const safety = relative(dirname(join(box, name)), join(box, "test", "safety"))
+    return first !== `import "${safety.startsWith(".") ? safety : `./${safety}`}"`
+  })
+  expect(missing).toEqual([])
+})

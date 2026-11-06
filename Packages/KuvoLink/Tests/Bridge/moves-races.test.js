@@ -7,6 +7,7 @@
 // switched. This Mac's box, here; its engine a stand-in.
 //
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/moves-races.test.js`.
+import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";

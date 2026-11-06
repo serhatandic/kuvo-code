@@ -6,6 +6,7 @@
 // their own.
 //
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/mac-docs.test.js`.
+import "./test-safety.js";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";

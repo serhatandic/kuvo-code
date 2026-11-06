@@ -1,6 +1,7 @@
 // Settings › Skills on a machine, from a phone with the Mac closed: the machine's own skills
 // folder, a skill written and put away, and GitHub's collections, which the machine reaches
 // itself (a local stand-in here), installed from whole.
+import "./test-safety.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";

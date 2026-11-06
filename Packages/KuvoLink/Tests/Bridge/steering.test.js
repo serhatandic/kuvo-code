@@ -2,6 +2,7 @@
 // foreground is read at once: the box moves what it waits on to the background, as the engine's
 // own Ctrl+B does, rather than leave your message until the command ends. Run with
 // `node --test Packages/KuvoLink/Tests/Bridge/*.test.js`.
+import "./test-safety.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import http from "node:http";

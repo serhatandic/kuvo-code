@@ -92,7 +92,7 @@ struct GoalPlanBar: View {
     // MARK: The line
 
     private func line(progress: String, switchOnLine: Bool) -> some View {
-        BarLine(mark: AnyView(mark), title: GoalPlanWords.name(plan), progress: progress, status: status(progress), spoken: waitingWords,
+        BarLine(mark: AnyView(mark), title: GoalPlanWords.name(plan), progress: progress, status: status(progress), spoken: waitingWords, badge: waitingBadge,
                 accessory: AnyView(actions(switchOnLine: switchOnLine)), folded: AnyView(strip), showHelp: "Show the goal’s steps", hideHelp: "Hide them: this line stays",
                 isHidden: $isHidden, close: isOver ? putAway : nil, closeHelp: "Put the goal away", stacks: true)
     }
@@ -132,11 +132,21 @@ struct GoalPlanBar: View {
         return Text("Paused · ") + Text(GoalPlanWords.pausedBy(by)).fontWeight(.semibold).foregroundStyle(needsYou ? AnyShapeStyle(Color.orange) : AnyShapeStyle(.secondary)) + Text(rest)
     }
 
-    /// What waits for you among the steps, for VoiceOver on the line (the strip shows it by its
-    /// hollow tracks).
+    /// How many things wait for you, in orange after where it stands, as the phone's line has it:
+    /// what the line says of them while a question folds the bar.
+    private var waitingBadge: Text? {
+        let waiting = plan.waitingInItsConversation.count
+        return waiting == 0 ? nil : Text(GoalPlanWords.waiting(waiting)).foregroundStyle(.orange)
+    }
+
+    /// What waits for you among the steps, and how many things do, for VoiceOver on the line (the
+    /// strip shows the steps by their hollow tracks).
     private var waitingWords: String? {
         let waiting = plan.steps.filter { GoalSteps.track($0.state) == .waiting }.count
-        return waiting == 0 ? nil : waiting == 1 ? "1 step waiting for you" : "\(waiting) steps waiting for you"
+        let things = plan.waitingInItsConversation.count
+        let words = [waiting == 0 ? nil : waiting == 1 ? "1 step waiting for you" : "\(waiting) steps waiting for you",
+                     things == 0 ? nil : GoalPlanWords.waiting(things)].compactMap { $0 }
+        return words.isEmpty ? nil : words.joined(separator: ", ")
     }
 
     /// A short track for each step, while the steps are hidden.
@@ -214,9 +224,9 @@ struct GoalPlanBar: View {
                 case .timeline: GoalChartView(plan: plan, timeline: timeline)
                 }
             }
-            if !plan.waiting.isEmpty {
+            if !plan.waitingInItsConversation.isEmpty {
                 VStack(spacing: 4) {
-                    ForEach(plan.waiting) { item in waitingRow(item, now: now) }
+                    ForEach(plan.waitingInItsConversation) { item in waitingRow(item, now: now) }
                 }
                 .padding(.leading, GoalSteps.nameInset - 24)
             }

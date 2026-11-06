@@ -776,6 +776,21 @@ client shows it from the same routes.
 - **`GET kuvo/work/events`** (ndjson): `{"changed": {<bot>: <ms>}}` now and at each change to a
   bot's work (a session started, stopped, finished or asking, an ask answered, its limits); a
   client reads that bot's work again when its time moves. Kept in `run/work/changes.json`.
+- **`GET kuvo/work/oversight`** → `{marks: [{id, bot, session, kind, at}]}`, and
+  **`GET kuvo/work/oversight/events`** (ndjson, the same now and at each new mark): what bots just
+  did, from their own conversations, to their own sessions (`kuvo.by`), the oldest first. `kind`
+  is one of:
+  - `started`: started it with `start_session`;
+  - `told`: wrote to it with `send_message`;
+  - `read`: read it with `read_conversation`;
+  - `answered`: answered what it asked;
+  - `stopped`: stopped it;
+  - `finished`: it finished well. A failed or stopped one isn't marked.
+
+  Nothing is marked for a session that isn't the bot's own, or for what one of its sessions does to
+  another (its session that started one, say).
+
+  Clients show the bot looking after its sessions with these marks. The first line is what was there already; each new `id` after it plays once. Only the latest minute is kept, at most 50, in `run/work/oversight.json`. A box from before it answers 404.
 - **`POST kuvo/bots/<id>/stop-all`** → `{stopped}`: every session of its work that's working,
   stopped (held and paused, as the queue's Stop), and the bot's own turn too, with what it was
   still to hear of them dropped. 404 for no such bot here, 503 with no engine.
@@ -860,7 +875,8 @@ beside it.
   `goal_progress` (`{steps: [{step, state?: todo|doing|done|waiting|paused|skipped, progress?: 0–1,
   note?, until?, app?}]}`, `until` a time like `2026-11-02T09:00` that a step can only start at (null
   takes it away; taken up, it goes; `app: null` takes the step's away), `add?: [text | {text, detail?, site?, app?, after?}]`, `waiting?: {kind: you|judgment|outside, text,
-  detail?, url?, app?}`, `resolved?: [id or words]` (what waited and is dealt with), `spent?: [{what,
+  detail?, url?, app?, step?}` (`step`, the step it holds up by number: it goes once the bot takes
+  that step up or ends it, marking it doing, done or skipped), `resolved?: [id or words]` (what waited and is dealt with), `spent?: [{what,
   amount}]` (one on no spend line is kept as waiting, kind `outside`), `watching?: [text]`,
   `decided?: {text, choice, why?, options?: [text]}` (a call the bot made on its own, bridge
   0.9.199)}; all checked before any is kept; it says whether you're here, and how the goal runs); `may_spend` (`{what,
@@ -903,7 +919,7 @@ beside it.
   sends goes as its conversation's mode allows; before bridge 0.9.197 each public step waited as a
   draft until you switched it on), projects, wake, digest,
   ends?, proposed, started?, ended?, waiting: [{id, kind: you|judgment|outside|ask, text, detail?,
-  url?, site?, app?: {name, id?}, session?, at}], paused: [{why, until?, session?}], waited, watching, next?, lastDigest?: {at, text},
+  url?, site?, app?: {name, id?}, session?, step?, at}], paused: [{why, until?, session?}], waited, watching, next?, lastDigest?: {at, text},
   report?, mode: interactive|autopilot, decided: [{id, text, choice, why?, options?, session?, at,
   yours?: {choice, at}}], alone, folders?: [{project, folder: path|null, shown: path|null, there?}]}]}` (`next`: when it goes on next, while nothing of it is at work and nothing can be
   before a time: the bot's soonest wake-up, or the steps it put off; clients say "Next: Mon 09:00"): each bot's latest, while it's proposed or running, or ended within a day. Kept
@@ -1004,9 +1020,13 @@ beside it.
 - **Present or away**: you're here while a client is in use (`kuvo/attention`); the box keeps it in
   `run/work/here.json` for the tools. Whether you're here or not, unattended rules hold:
   - what its sessions ask that the bot hasn't answered in a couple of minutes, and what the bot
-    asks itself, is listed as `waiting` (kind `ask`) and waits for you, however long: it never
-    stalls the rest and is never said no to; it leaves the list once it's answered (on Autopilot, a
-    question that recommends a choice goes ahead on it instead: "Interactive or Autopilot");
+    asks itself, is listed as `waiting` (kind `ask`, its text `<who> asks: <question>`, or `<who>: <the
+    permission>`) and waits for you, however long: it never stalls the rest and is never said no
+    to; it leaves the list as soon as it's answered or skipped (the engine's `form.replied`,
+    `form.cancelled` or `permission.replied`), and clients are told the work changed; a client
+    leaves the bot's own question out of the bar in the bot's own conversation, where it's the
+    question card (`GoalPlan.waitingInItsConversation`) (on Autopilot, a question that recommends
+    a choice goes ahead on it instead: "Interactive or Autopilot");
   - a session the bot starts for a goal is told you may not be watching: what it asks can wait,
     so it carries on with what doesn't depend on it (before bridge 0.9.189 it was also told not to
     publish, deploy, send or pay, and publishing and deploying asked in the bot's conversation and

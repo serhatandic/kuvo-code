@@ -8,6 +8,7 @@
 // over SSH. Only the relay, the app, the engines and the coding agents' bridges are stand-ins.
 //
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/mac-peers.test.js`.
+import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import crypto from "node:crypto";

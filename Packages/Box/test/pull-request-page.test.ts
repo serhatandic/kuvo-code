@@ -1,6 +1,7 @@
 // The page Create Pull Request opens when the box can't make one with gh: on the remote's host,
 // whichever way the remote is written, and never with the name, password or port it may carry.
 
+import "./safety"
 import { expect, test } from "bun:test";
 import { comparePage } from "../src/link/areas/changes";
 

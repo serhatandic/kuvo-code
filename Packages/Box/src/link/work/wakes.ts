@@ -17,10 +17,12 @@ import { LETTER_LIFE, placeOfSession } from "../letters/letter";
 import { tellMovedAway } from "../letters/outbox";
 import { frozen } from "../moves/records";
 import { isPutAway, type PutAwayable } from "../peers/directory";
-import { describeForm, describePermission } from "../notices/news";
+import { ANSWERED, describeForm, describePermission } from "../notices/news";
+import { noteOversight } from "./oversight";
 import { noteWorkChanged, WORK_FOLDER } from "./changes";
 import { asksIn } from "./answers";
 import { catchUpAutopilot, goAheadOnAutopilot, isAutopilot } from "./autopilot";
+import { settleAsk } from "./goals";
 import { awaitedBy } from "./awaited";
 import { tellLateAnswers } from "./asks";
 import { errorOf, failedOn, followUnanswering, holdWords, turnError } from "./unanswering";
@@ -446,7 +448,13 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
   void caughtUp.then(lateAgain);
   // (What each event set going, for a test to wait on.) Models that couldn't answer, too: let go
   // once one answers, or an account's key changes.
-  const watch = (event: WorkEvent) => Promise.all([followUnanswering(source, event).catch(() => {}), told(event)]).then(() => {});
+  const watch = (event: WorkEvent) => Promise.all([followUnanswering(source, event).catch(() => {}), told(event), settled(event)]).then(() => {});
+  // An ask answered or skipped: what stands for it on a goal goes at once.
+  const settled = async (event: WorkEvent) => {
+    if (!ANSWERED.has(event.type)) return;
+    const ask = event.data?.requestID ?? event.data?.id;
+    if (typeof ask === "string") settleAsk(ask);
+  };
   const told = (event: WorkEvent) => {
     const id = event.data?.sessionID ?? event.data?.form?.sessionID;
     if (typeof id !== "string" || !["session.execution.started", "session.execution.succeeded", "session.execution.failed", "session.execution.interrupted", "permission.asked", "form.created", "permission.replied", "form.replied"].includes(event.type)) return Promise.resolve();
@@ -460,6 +468,8 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
       // On Autopilot, a question that marks the choice it recommends goes ahead on it: nothing waits.
       const form = event.type === "form.created" ? event.data?.form ?? event.data as unknown as EngineForm : null;
       if (form && isAutopilot(session) && await goAheadOnAutopilot(source, session, { ...form, sessionID: form.sessionID ?? id }).catch(() => null)) return;
+      // One of a bot's sessions done: for clients to show it seeing that.
+      if (bot && event.type === "session.execution.succeeded") noteOversight(bot, session.id, "finished");
       const starter = startedByOf(session);
       const wakes = wakesOf(session);
       // (One starting or stopped is its bot's work changing, for clients to read: nothing to tell.)

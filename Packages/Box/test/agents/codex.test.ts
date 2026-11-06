@@ -1,5 +1,6 @@
 // Codex's thread against a fake `codex app-server`: what Codex 0.16x sends, shown, not lost.
 
+import "../safety"
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { chmodSync, linkSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"

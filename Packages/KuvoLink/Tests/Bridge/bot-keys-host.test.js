@@ -4,6 +4,7 @@
 // for the app keeps them in memory. The scenarios in bot-keys-scenarios.js, then what's this Mac's
 // own: only `KUVO_KEY_…` names asked for, a key or the password never in its output, and the app
 // not answering said plainly.
+import "./test-safety.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";

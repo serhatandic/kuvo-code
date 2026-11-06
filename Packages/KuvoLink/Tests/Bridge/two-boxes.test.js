@@ -5,6 +5,7 @@
 // group chats' mail between the two: mac-peers.) Only the relay and the app are stand-ins.
 //
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/two-boxes.test.js`.
+import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";

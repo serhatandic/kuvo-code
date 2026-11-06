@@ -1929,18 +1929,16 @@ private struct AgentSentRow: View {
     }
 
     var body: some View {
-        // As it may have been named: "&Mira".
-        let to = input?["to"]?.string.map { $0.hasPrefix("&") ? String($0.dropFirst()) : $0 } ?? "another agent"
-        let address = AgentMail.shared.directory().first { $0.session == to || $0.name.caseInsensitiveCompare(to) == .orderedSame }
-            // One the list leaves out (untitled, older than the latest it names): as this Mac has it.
-            ?? app.workspace.session(to).map { AgentMail.Agent(session: $0.id, name: $0.title.flatMap { $0.isEmpty ? nil : $0 } ?? "New session", kind: "session") }
+        let to = input?["to"]?.string
+        let address = to.flatMap { AgentMail.shared.agent(named: $0) }
+        let name = AgentMail.shared.name(of: to)
         let text = input?["text"]?.string ?? ""
         let answer = said.flatMap { said in said.range(of: " answered:\n\n").map { String(said[$0.upperBound...]) } }
         FoldingCard(id: call.id, summary: text, startsOpen: FoldingCard<EmptyView, EmptyView, EmptyView>.isShort(text + (answer ?? "")), help: "A message this agent sent another") {
             Image(systemName: "paperplane.fill")
                 .foregroundStyle(.tint)
                 .frame(width: 16)
-            Text("To \(Text(address?.name ?? to).fontWeight(.semibold).foregroundStyle(.primary))")
+            Text("To \(Text(name).fontWeight(.semibold).foregroundStyle(.primary))")
                 .foregroundStyle(.secondary)
             if case .running = call.state, input?["wait"]?.bool == true {
                 StepActivity(symbol: nil, running: true, size: 12)
@@ -1958,7 +1956,7 @@ private struct AgentSentRow: View {
             if let session = address?.session, app.workspace.session(session) != nil {
                 Button("Open") { app.open(.session(session)) }
                     .buttonStyle(TextButtonStyle())
-                    .help("Open \(address?.name ?? to)'s conversation")
+                    .help("Open \(name)'s conversation")
             }
         } content: {
             if !text.isEmpty {
@@ -1968,7 +1966,7 @@ private struct AgentSentRow: View {
             // What it answered, when it was waited for.
             if let answer {
                 Divider().padding(.leading, 24)
-                Text("\(Text(address?.name ?? to).fontWeight(.semibold)) answered")
+                Text("\(Text(name).fontWeight(.semibold)) answered")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .padding(.leading, 24)
@@ -2336,16 +2334,7 @@ extension EnvironmentValues {
     @Entry var conversationSignIn: ConversationSignIn?
 }
 
-// DRAFTS (to pick from, then fold into the code): what a card for a sign-in offers.
-// KUVO_DEMO_SIGNIN_CARD=alone: Sign In only; otherwise Sign In and Switch Model.
 enum SignInCard {
-    static let offersSwitch: Bool = {
-        #if DEBUG
-        if ProcessInfo.processInfo.environment["KUVO_DEMO_SIGNIN_CARD"] == "alone" { return false }
-        #endif
-        return true
-    }()
-
     /// What a card for a sign-in offers: Sign In to the account of the model the turn failed on
     /// (one with a sign-in, not Auto's: Accounts lists a Custom Auto list's several), Switch Model
     /// while the conversation is still on that model and it's still signed out, and Try Again
@@ -2365,6 +2354,6 @@ enum SignInCard {
             return Actions(tryAgain: !signedOut(current))
         }
         let onIt = current.map { $0.providerID == failed.providerID && $0.id == failed.id } ?? true
-        return Actions(signIn: failed, switchModel: offersSwitch && onIt && signedOut(failed), tryAgain: !signedOut(current ?? failed))
+        return Actions(signIn: failed, switchModel: onIt && signedOut(failed), tryAgain: !signedOut(current ?? failed))
     }
 }

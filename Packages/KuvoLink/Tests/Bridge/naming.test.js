@@ -3,6 +3,7 @@
 // cases (Vectors/routes/names/agent-naming.json).
 //
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/naming.test.js`.
+import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
