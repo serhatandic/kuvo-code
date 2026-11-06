@@ -9594,6 +9594,9 @@ function endShell(id, exit) {
 function shells(directory) {
   return [...kept.values()].map((one) => one.job).filter((job) => !directory || job.cwd === directory);
 }
+function runningShells(sessionID) {
+  return [...kept.values()].map((one) => one.job).filter((job) => job.status === "running" && job.metadata.sessionID === sessionID);
+}
 function shell(id) {
   return kept.get(id)?.job;
 }
@@ -10402,12 +10405,13 @@ class ClaudeThread {
         this.liveTasks = new Set(tasks.map((task) => String(task.task_id)));
         for (const task of tasks) {
           const known = this.tasks.get(task.task_id);
-          this.tasks.set(task.task_id, { ...known, type: task.task_type ?? known?.type ?? "", description: task.description ?? known?.description ?? "" });
+          this.tasks.set(task.task_id, { ...known, type: task.task_type ?? known?.type ?? "", description: task.description ?? known?.description ?? "", since: known?.since ?? Date.now() });
           this.shellFor(task.task_id);
         }
         for (const [id, task] of this.tasks)
           if (task.shell && !this.liveTasks.has(id))
             endShell(task.shell);
+        emit("session.background.updated", { sessionID: this.session.id }, this.session.location.directory);
         return;
       }
     }
@@ -10449,6 +10453,20 @@ class ClaudeThread {
   }
   get keepsWorking() {
     return Boolean(this.query) && this.liveTasks.size > 0;
+  }
+  get backgroundTasks() {
+    if (!this.query)
+      return [];
+    return [...this.liveTasks].flatMap((id) => {
+      const task = this.tasks.get(id);
+      if (task?.shell || task?.type === "local_bash" || task?.toolUseID && this.backgroundLanes.has(task.toolUseID))
+        return [];
+      return [{ id, since: task?.since ?? Date.now() }];
+    });
+  }
+  async stopBackgroundTasks() {
+    for (const { id } of this.backgroundTasks)
+      await this.query?.stopTask?.(id).catch(() => {});
   }
   open(sdk, modelID, effort, plan, append, hooks, skills) {
     if (!this.agent.executable())
@@ -16247,6 +16265,26 @@ class Sessions {
         if (!turn.isEnded)
           ids.push(child);
     return ids;
+  }
+  background() {
+    const all = {};
+    for (const [id, live] of this.live) {
+      const subagents = [...live.subagents].filter(([, turn]) => !turn.isEnded).map(([child, turn]) => ({ id: child, since: turn.started }));
+      const tasks = [...live.threads.values()].flatMap((thread) => thread.backgroundTasks ?? []);
+      const commands = runningShells(id).map((job) => ({ id: job.id, command: job.command, started: job.time.started }));
+      if (subagents.length || tasks.length || commands.length)
+        all[id] = { commands, subagents, tasks };
+    }
+    return all;
+  }
+  async stopBackground(id) {
+    this.record(id);
+    const live = this.live.get(id);
+    await this.stopSubagents(id);
+    for (const job of runningShells(id))
+      await stopShell(job.id);
+    for (const thread of live?.threads.values() ?? [])
+      await thread.stopBackgroundTasks?.().catch(() => {});
   }
   runShell(id, command) {
     const record = this.record(id);
@@ -22728,6 +22766,8 @@ function handler(context) {
         }
         if (a === "active")
           return json11({ data: Object.fromEntries(sessions.active().map((id) => [id, { type: "busy" }])) });
+        if (a === "background")
+          return json11({ data: sessions.background() });
         if (a === "import" && method === "POST")
           return json11({ data: sessions.importSession(await body()) });
         const id = a;
@@ -22744,6 +22784,12 @@ function handler(context) {
           }
         }
         switch (b) {
+          case "background":
+            if (method === "DELETE") {
+              await sessions.stopBackground(id);
+              return json11({});
+            }
+            break;
           case "message": {
             const messages = sessions.messages(id);
             const asc = url.searchParams.get("order") === "asc" || url.searchParams.get("cursor")?.startsWith("asc");
@@ -23322,4 +23368,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 7361915996bdc0454e0c7eccd80840d3f0b640615d4010ec6ccaf6083275f887
+// Built from Packages/Box/src/agents f814a1dcdce2c4106945a57fd341eeb354773f378a0d5be5c7272cc54bf52c8e

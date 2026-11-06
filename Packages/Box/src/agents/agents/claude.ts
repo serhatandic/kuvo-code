@@ -779,7 +779,7 @@ class ClaudeThread implements Thread {
   /** Subagents it sent off in the background, at work after the turn that started them: by their call. */
   private backgroundLanes = new Map<string, Lane & { run: SubagentRun; background: boolean }>()
   /** Its background tasks (commands, subagents), by its id: commands are in the bar. */
-  private tasks = new Map<string, { type: string; description: string; toolUseID?: string; shell?: string; outputFile?: string; last?: { output: string; total: number } }>()
+  private tasks = new Map<string, { type: string; description: string; toolUseID?: string; shell?: string; outputFile?: string; last?: { output: string; total: number }; since?: number }>()
   /** Its live background tasks, as it last listed them. */
   private liveTasks = new Set<string>()
   /** Commands it ran, by their call: what a background one runs. */
@@ -1040,10 +1040,11 @@ class ClaudeThread implements Thread {
         this.liveTasks = new Set(tasks.map((task: any) => String(task.task_id)))
         for (const task of tasks) {
           const known = this.tasks.get(task.task_id)
-          this.tasks.set(task.task_id, { ...known, type: task.task_type ?? known?.type ?? "", description: task.description ?? known?.description ?? "" })
+          this.tasks.set(task.task_id, { ...known, type: task.task_type ?? known?.type ?? "", description: task.description ?? known?.description ?? "", since: known?.since ?? Date.now() })
           this.shellFor(task.task_id)
         }
         for (const [id, task] of this.tasks) if (task.shell && !this.liveTasks.has(id)) endShell(task.shell)
+        emit("session.background.updated", { sessionID: this.session.id }, this.session.location.directory)
         return
       }
     }
@@ -1094,6 +1095,20 @@ class ClaudeThread implements Thread {
   /** Commands or subagents it left going: closing it would end them. */
   get keepsWorking(): boolean {
     return Boolean(this.query) && this.liveTasks.size > 0
+  }
+
+  /** What it keeps going that's neither a command (in the bar) nor a subagent (a session of its own). */
+  get backgroundTasks() {
+    if (!this.query) return []
+    return [...this.liveTasks].flatMap((id) => {
+      const task = this.tasks.get(id)
+      if (task?.shell || task?.type === "local_bash" || (task?.toolUseID && this.backgroundLanes.has(task.toolUseID))) return []
+      return [{ id, since: task?.since ?? Date.now() }]
+    })
+  }
+
+  async stopBackgroundTasks() {
+    for (const { id } of this.backgroundTasks) await this.query?.stopTask?.(id).catch(() => {})
   }
 
   private open(sdk: any, modelID: string, effort: string | undefined, plan: boolean, append: string, hooks: TurnHooks, skills?: string) {

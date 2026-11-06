@@ -24,6 +24,7 @@ import { onMachine, ownEnvironment } from "./machine"
 import { messageID, newID } from "./ids"
 import type { Roster } from "./roster"
 import { asksFirst, holdsBack, matches, ruled } from "./rules"
+import { runningShells, stopShell } from "./shells"
 import { skillFolders, within } from "./skills"
 import type { Record_, Store } from "./store"
 import { Turn, type Outcome } from "./turn"
@@ -1238,6 +1239,31 @@ export class Sessions {
     const ids = [...this.live.keys()].filter((id) => this.atWork(id))
     for (const live of this.live.values()) for (const [child, turn] of live.subagents) if (!turn.isEnded) ids.push(child)
     return ids
+  }
+
+  /**
+   * What still runs for each session besides its own turn (the link's `kuvo/work/background` reads
+   * this): commands it left running, subagents at work under it, and other tasks its agent keeps
+   * going. Lanes that can't say what they left running (see PROTOCOL.md) have none here.
+   */
+  background() {
+    const all: Record<string, { commands: { id: string; command: string; started: number }[]; subagents: { id: string; since: number }[]; tasks: { id: string; since: number }[] }> = {}
+    for (const [id, live] of this.live) {
+      const subagents = [...live.subagents].filter(([, turn]) => !turn.isEnded).map(([child, turn]) => ({ id: child, since: turn.started }))
+      const tasks = [...live.threads.values()].flatMap((thread) => thread.backgroundTasks ?? [])
+      const commands = runningShells(id).map((job) => ({ id: job.id, command: job.command, started: job.time.started }))
+      if (subagents.length || tasks.length || commands.length) all[id] = { commands, subagents, tasks }
+    }
+    return all
+  }
+
+  /** What still runs for it besides its own turn, ended (Stop, for a session someone started). */
+  async stopBackground(id: string) {
+    this.record(id)
+    const live = this.live.get(id)
+    await this.stopSubagents(id)
+    for (const job of runningShells(id)) await stopShell(job.id)
+    for (const thread of live?.threads.values() ?? []) await thread.stopBackgroundTasks?.().catch(() => {})
   }
 
   /**
