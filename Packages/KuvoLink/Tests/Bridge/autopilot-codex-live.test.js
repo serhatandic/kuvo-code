@@ -299,6 +299,27 @@ test("Autopilot in the Codex lane on a real Codex", { skip, timeout: 900_000 }, 
     assert.ok(slept.every(each => each.state?.status === "completed"), "no sleep is left going");
   });
 
+  // Not on Autopilot: whatever the model does while it waits, the question stays up for you, nothing
+  // answers it for you, and your answer reaches the model.
+  await t.test("in an Interactive conversation the question waits for you, and your answer reaches the model", async () => {
+    const session = await make("Cup");
+    await send(session, "msg_autopilotcodex0005", "Use your question tool now to ask me one question, \"Which cup size for the takeaway?\", with the choices Small and Large. When you have my answer, reply with only the size I chose.");
+    const [form] = await waitFor(async () => {
+      await settlePermissions(session);
+      const open = await forms(session);
+      return open.length ? open : null;
+    }, "its question to show");
+    assert.match(JSON.stringify(form.fields), /cup size/i);
+    // (A while for the model to go on from it, as it does: reasoning, a step or a sleep.)
+    await new Promise(resolve => setTimeout(resolve, 15_000));
+    assert.deepEqual((await forms(session)).map(each => each.id), [form.id], "it's still up, with nobody having answered it");
+    const key = form.fields[0].key;
+    assert.equal((await api("POST", `api/session/${session}/form/${form.id}/reply`, { answer: { [key]: "Large" } })).status, 200);
+    const messages = await turnsDone(session, "its turn to go on with your answer and end", all => assistants(all).some(each => /large/i.test(textOf(each)) && !/cup size/i.test(textOf(each))));
+    assert.equal(failure(messages), undefined);
+    assert.deepEqual(await calls(session), [], "it's no call Autopilot made");
+  });
+
   // What an MCP server asks mid-tool: its box declines it and the server hears no.
   await t.test("what an MCP server asks is declined, and the server hears no", async () => {
     const session = await onAutopilot("Probe");
