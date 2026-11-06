@@ -313,12 +313,39 @@ import Testing
         let notes = URL(filePath: folder + "/notes.md")
         app.utilities.open(notes)
         let tabsBefore = app.utilities.visibleTabs.map(\.id)
+        // What tells the window to look again.
+        let told = Told()
+        withObservationTracking { _ = tabs.inView } onChange: { told.now = true }
 
         listBot(session: "ses_bot")
+        #expect(told.now, "the window hears of it")
         panelFollows()
         #expect(app.utilities.panelKey == "bot_ada")
         #expect(app.utilities.visibleTabs.map(\.id) == tabsBefore, "the same tabs")
         #expect(app.utilities.selected?.kind == .file(notes), "on the one in view")
+    }
+
+    /// A bot carried on in a new session (a coding agent's model): its box lists the new one while
+    /// the old one is still in view, then the new one takes its place and the old one is deleted.
+    /// Its tabs were its all along: they're there, on the one you were looking at.
+    @Test func aBotCarriedOnInANewSessionKeepsItsTabs() async {
+        defer { done(); forgetBots() }
+        app.followSessions()
+        listBot(session: "ses_old")
+        await sessions(["ses_old", "ses_new"])
+        tabs.open(.session("ses_old"))
+        panelFollows()
+        let notes = URL(filePath: folder + "/notes.md")
+        app.utilities.open(notes)
+
+        listBot(session: "ses_new")
+        panelFollows()
+        _ = tabs.swap(from: "ses_old", to: "ses_new")
+        panelFollows()
+        app.workspace.drop("ses_old")
+        panelFollows()
+        #expect(app.utilities.panelKey == "bot_ada")
+        #expect(app.utilities.selected?.kind == .file(notes))
     }
 
     /// Short of room, only the split you opened last keeps its place: another tab's, met again,
@@ -610,4 +637,9 @@ import Testing
         #expect(Drafts.shared[draft.text].text.contains("make: *** [build] Error 1"))
         Drafts.shared[draft.text] = Drafts.Draft()
     }
+}
+
+/// Whether an observed value told of a change.
+private nonisolated final class Told: @unchecked Sendable {
+    var now = false
 }

@@ -154,8 +154,11 @@ final class Utilities {
         let movedPlace = inView.place != old.place
         if movedPlace || oldPanel != panelKey {
             chosen[chosenKey(oldPanel, old.place)] = selection
-            // The same conversation, its panel known by another name now: its tabs stay with it.
-            if oldPanel != panelKey, old.group == nil, inView.group == nil, let working = old.worksBeside ?? old.session, working == inView.worksBeside ?? inView.session {
+            // A conversation whose panel was its own, found to be another's (a bot's, the session
+            // that started it): its tabs go along. Not the other way: a bot carrying on in a new
+            // session keeps its panel, while the old session it's leaving is still in view.
+            if oldPanel != panelKey, old.group == nil, inView.group == nil, let working = old.worksBeside ?? old.session,
+               oldPanel == working, working == inView.worksBeside ?? inView.session {
                 movePanel(from: oldPanel, to: panelKey)
             }
             if movedPlace {
@@ -169,8 +172,10 @@ final class Utilities {
             restoreSelection()
             if oldPanel != panelKey { showKept() }
         }
-        if inView.bots != old.bots, let selected = tabs.first(where: { $0.id == selection }), !isVisible(selected) {
-            selection = visibleTabs.last { $0.kind == .browser }?.id ?? visibleTabs.first?.id
+        if inView.bots != old.bots {
+            if let selected = tabs.first(where: { $0.id == selection }), !isVisible(selected) {
+                selection = visibleTabs.last { $0.kind == .browser }?.id ?? visibleTabs.first?.id
+            }
             if visibleTabs.isEmpty { startOver() }
         }
     }
@@ -436,6 +441,8 @@ final class Utilities {
         // The page is in the panel of the conversation whose agent works in it.
         if let session { tabs[index].owner = panelOf(session) }
         let tab = tabs[index]
+        // It was all the panel in view had (an unclaimed page, its own tabs closed).
+        if visibleTabs.isEmpty { startOver() }
         if place == machine, isVisible(tab), session.map(isInView) ?? true {
             selection = tab.id
             if PanelSettings.isOn(PanelSettings.revealsForAgent) { revealRequest += 1 }
@@ -810,6 +817,10 @@ final class Utilities {
     /// A panel under another name: its tabs, the one you'd chosen there, its run terminals and
     /// what an agent showed you meanwhile.
     private func movePanel(from: String, to: String) {
+        // A panel has one Changes tab and one file tree.
+        for tab in tabs where tab.owner == from && (tab.kind == .changes || tab.kind == .file(nil)) && tabs.contains(where: { $0.owner == to && $0.kind == tab.kind }) {
+            remove(tab.id, refills: false)
+        }
         for index in tabs.indices where tabs[index].owner == from { tabs[index].owner = to }
         for (key, tab) in chosen where key.hasPrefix(from + "|") {
             chosen[key] = nil

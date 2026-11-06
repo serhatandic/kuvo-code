@@ -268,7 +268,9 @@ import Testing
 
         over.now = true
         await app.moves.reload(BoxClient.mac)
+        app.utilities.inView = app.tabs.inView
         await app.bots.refresh(BoxClient.mac)
+        app.utilities.inView = app.tabs.inView
         try await until { app.bots.bot("bot_move00002")?.machine == lab && !app.moves.held.contains("bot_move00002") }
         app.utilities.inView = app.tabs.inView
         #expect(app.utilities.selected != nil, "its panel, tabs: \(app.utilities.tabs.map(\.owner))")

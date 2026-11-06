@@ -61,6 +61,40 @@ import Testing
         #expect(panel.selected?.owner == "group:grp_team")
     }
 
+    /// The same, when the bot is deleted: its tab goes first, then it leaves the chat.
+    @Test func aGroupChatsPanelStartsOverWhenItsLastBotIsDeleted() throws {
+        panel.inView = .init(group: "group:grp_team", bots: ["bot_a"])
+        let own = panel.visibleTabs
+        panel.newBrowser(owner: "bot_a")
+        for tab in own { panel.close(tab.id) }
+        panel.closeTabs(of: "bot_a")
+        panel.inView = .init(group: "group:grp_team")
+        #expect(panel.selected?.owner == "group:grp_team")
+    }
+
+    /// A machine's unclaimed page that was all a panel had, taken by another conversation's agent:
+    /// the panel starts over.
+    @Test func aPanelStartsOverWhenAnAgentTakesTheMachinePageItShowed() throws {
+        panel.inView = .init(session: "ses_a", place: "lab")
+        let own = panel.visibleTabs
+        panel.syncMachinePages("lab", [.init(id: "page_1", title: "Docs", url: "https://example.com")])
+        for tab in own { panel.close(tab.id) }
+        #expect(panel.visibleTabs.map(\.owner) == [Utilities.unclaimed])
+        panel.machinePageActive("lab", page: "page_1", byAgent: true, session: "ses_b")
+        #expect(panel.selected?.owner == "ses_a")
+    }
+
+    /// A conversation found to belong in a panel that has its own Changes tab (a subagent opened
+    /// before it was known to be one): one Changes tab there, and its other tabs alongside.
+    @Test func aPanelFoundToBeAnothersHasOneChangesTab() {
+        panel.inView = .init(session: "ses_root", panel: "ses_root")
+        panel.inView = .init(session: "ses_sub", panel: "ses_sub")
+        panel.open(a)
+        panel.inView = .init(session: "ses_sub", panel: "ses_root")
+        #expect(startTabs.count == 1)
+        #expect(panel.visibleTabs.contains { $0.kind == .file(a) })
+    }
+
     /// A group chat has no project: its panel opens on a new tab (browser and tools), never on a
     /// Changes tab saying "No Project", and Show Changes and Show Files don't add one there.
     @Test func aGroupChatsPanelHasNoChangesOrFiles() {
