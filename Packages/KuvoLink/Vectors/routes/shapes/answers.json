@@ -9510,6 +9510,11 @@
      "object": {
       "message": "string"
      }
+    },
+    "502": {
+     "object": {
+      "message": "string"
+     }
     }
    }
   },

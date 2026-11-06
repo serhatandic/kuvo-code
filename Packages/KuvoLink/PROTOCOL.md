@@ -3514,7 +3514,7 @@ what may be decided without asking. Every conversation is Interactive until it's
   made, kept as `yours`. The one it goes by now (your last, else its own) confirms it quietly;
   another tells the conversation `[Decision changed] For "…" the user picked …, not … as you
   decided. …` (`… the user now picked …, not ….` after a choice of yours; a box note, `You picked
-  …`). 404 where there's no such call, 502 where the engine didn't take it (your choice is kept).
+  …`). 404 where there's no such call, 502 where the engine didn't take it (your choice isn't kept: make it again).
 - A session a conversation starts (`start_session`) takes its Autopilot, and a client can start one
   on it with `autopilot: true` in `POST kuvo/sessions`.
 - A bot's goal and its bot's conversation are one setting: a goal started or switched to a `mode`

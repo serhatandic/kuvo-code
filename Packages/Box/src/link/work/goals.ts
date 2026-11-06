@@ -476,7 +476,7 @@ function planGiven(given: Record<string, unknown>): { plan: Plan } | { refused: 
 
 /** Why your answer can't be taken: no such goal (404), or one that won't do (400). */
 export interface GoalRefusal {
-  status: 400 | 404 | 409;
+  status: 400 | 404 | 409 | 502;
   message: string;
 }
 
@@ -898,21 +898,23 @@ export function addDecided(bot: string, item: Omit<GoalDecidedShape, "id" | "at"
 async function decidedByYou(id: string, given: Record<string, unknown>, targets: () => Target[], file: string): Promise<{ goal: GoalPlanShape } | { refused: GoalRefusal }> {
   const choice = line(given.choice, 200);
   if (!choice) return { refused: { status: 400, message: "Say your choice (choice)." } };
-  let decided: GoalDecidedShape | undefined;
-  const changed = changeKept(all => {
-    const goal = all.find(each => each.id === id);
-    if (!goal || !botHere(goal.bot)) return { status: 404 as const, message: "There's no such goal here." };
-    if (goal.state !== "running") return { status: 400 as const, message: "That goal isn't running." };
-    decided = goal.decided?.find(each => each.id === given.decided);
-    if (!decided) return { status: 404 as const, message: "There's no such call on it." };
-    decided.yours = { choice, at: Date.now() };
-    return goal;
-  }, file);
-  if (!("id" in changed)) return { refused: changed };
-  noteWorkChanged(changed.bot);
-  if (decided && choice.toLowerCase() !== decided.choice.toLowerCase()) {
-    await tellBot(changed, `[Decision changed] For "${decided.text}" the user picked ${choice}, not ${decided.choice} as you decided. Go that way from here: redo what depends on it, and say in a line what changes.`, `You picked ${choice}`, targets);
+  const goal = readKept(file).find(each => each.id === id);
+  if (!goal || !botHere(goal.bot)) return { refused: { status: 404, message: "There's no such goal here." } };
+  if (goal.state !== "running") return { refused: { status: 400, message: "That goal isn't running." } };
+  const decided = goal.decided?.find(each => each.id === given.decided);
+  if (!decided) return { refused: { status: 404, message: "There's no such call on it." } };
+  const was = decided.yours?.choice ?? decided.choice;
+  // Kept once the bot is told, so a choice that didn't reach it can be made again.
+  if (choice.toLowerCase() !== was.toLowerCase() && !await tellBot(goal, `[Decision changed] For "${decided.text}" the user picked ${choice}, not ${was} as you decided. Go that way from here: redo what depends on it, and say in a line what changes.`, `You picked ${choice}`, targets)) {
+    return { refused: { status: 502, message: "The bot couldn't be told: try again." } };
   }
+  const changed = changeKept(all => {
+    const kept = all.find(each => each.id === id);
+    const call = kept?.decided?.find(each => each.id === decided.id);
+    if (call) call.yours = { choice, at: Date.now() };
+    return kept ?? goal;
+  }, file);
+  noteWorkChanged(changed.bot);
   return { goal: shown(changed) };
 }
 

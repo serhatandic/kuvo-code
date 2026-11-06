@@ -272,7 +272,7 @@ export const WORK_ROUTES: RouteShape[] = [
   { route: "GET kuvo/work/goals", answers: { 200: GOAL_PLANS } },
   { route: "GET kuvo/work/goals/events", answers: { 200: GOAL_PLANS } },
   { route: "POST kuvo/work/goals/ask", answers: { 200: object({ text: string }), 400: REFUSED, 404: REFUSED, 409: REFUSED } },
-  { route: "POST kuvo/work/goals/:id", answers: { 200: object({ goal: GOAL_PLAN }), 400: REFUSED, 404: REFUSED, 409: REFUSED } },
+  { route: "POST kuvo/work/goals/:id", answers: { 200: object({ goal: GOAL_PLAN }), 400: REFUSED, 404: REFUSED, 409: REFUSED, 502: REFUSED } },
   { route: "GET kuvo/work/apps/icon", answers: { 200: BYTES, 400: REFUSED, 404: REFUSED } },
   { route: "POST kuvo/projects/new", answers: { 201: object({ project: PROJECT, text: string }), 400: REFUSED, 403: object({ message: string, needs: string }), 409: REFUSED, 502: REFUSED } },
 ];

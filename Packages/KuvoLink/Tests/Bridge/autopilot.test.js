@@ -40,6 +40,7 @@ let answered;
 let entries;
 let refusesEntries;
 let prompts;
+let refusesPrompts;
 const engine = http.createServer((request, response) => {
   let body = "";
   request.on("data", chunk => { body += chunk; });
@@ -70,6 +71,7 @@ const engine = http.createServer((request, response) => {
     const forms = url.pathname.match(/^\/api\/session\/([^/]+)\/form$/);
     if (forms) return reply({ data: waiting.get(decodeURIComponent(forms[1])) ?? [] });
     const prompt = url.pathname.match(/^\/api\/session\/([^/]+)\/prompt$/);
+    if (prompt && request.method === "POST" && refusesPrompts) return reply({ message: "Not now." }, 500);
     if (prompt && request.method === "POST") { prompts.push({ to: decodeURIComponent(prompt[1]), ...given }); return reply({ data: true }); }
     if (/\/(permission|form)$/.test(url.pathname)) return reply({ data: [] });
     const one = url.pathname.match(/^\/api\/session\/([^/]+)$/);
@@ -105,6 +107,7 @@ beforeEach(() => {
   entries = new Map();
   refusesEntries = false;
   prompts = [];
+  refusesPrompts = false;
   fs.rmSync(path.join(home, "run", "work"), { recursive: true, force: true });
 });
 
@@ -228,6 +231,33 @@ test("your choice on a call: the same confirms it quietly; another tells the con
   assert.equal(prompts.length, 2);
   assert.equal((await route("POST", "kuvo/sessions/ses_away/autopilot", { decided: "frm_9", choice: "Dark" })).status, 404);
   assert.equal((await route("POST", "kuvo/sessions/ses_away/autopilot", { decided: "frm_1" })).status, 400);
+});
+
+test("a change the engine didn't take isn't kept: it says so, and making it again reaches the agent", async () => {
+  const { watch } = await watcher();
+  await watch({ type: "form.created", data: { form: QUESTION("frm_1", "ses_away", ROASTS) } });
+  refusesPrompts = true;
+  const failed = await route("POST", "kuvo/sessions/ses_away/autopilot", { decided: "frm_1", choice: "Light and fruity" });
+  assert.equal(failed.status, 502);
+  assert.equal((await route("GET", "kuvo/sessions/ses_away/autopilot")).body.decided[0].yours, undefined, "it doesn't read as your choice");
+  refusesPrompts = false;
+  const again = await route("POST", "kuvo/sessions/ses_away/autopilot", { decided: "frm_1", choice: "Light and fruity" });
+  assert.equal(again.status, 200);
+  assert.equal(prompts.length, 1, "told now");
+  assert.match(prompts[0].text, /picked Light and fruity, not Warm and roasty/);
+  assert.equal(again.body.decided[0].yours.choice, "Light and fruity");
+});
+
+test("a change to a goal's call the bot couldn't hear isn't kept either", async () => {
+  goalIn("ses_mine", { decided: [{ id: "dec_host", text: "Which hosting?", choice: "Cloudflare", options: ["Cloudflare", "Vercel"], at: 1 }] });
+  refusesPrompts = true;
+  assert.equal((await route("POST", "kuvo/work/goals/goal_cafe", { action: "decided", decided: "dec_host", choice: "Vercel" })).status, 502);
+  assert.equal(goalDecided()[0].yours, undefined);
+  refusesPrompts = false;
+  const again = await route("POST", "kuvo/work/goals/goal_cafe", { action: "decided", decided: "dec_host", choice: "Vercel" });
+  assert.equal(again.status, 200);
+  assert.equal(again.body.goal.decided[0].yours.choice, "Vercel");
+  assert.equal(prompts.length, 1);
 });
 
 test("the engine doesn't take it: the conversation stays as it was, and says so", async () => {

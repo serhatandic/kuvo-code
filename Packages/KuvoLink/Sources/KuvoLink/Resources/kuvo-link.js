@@ -6818,7 +6818,7 @@ var WORK_ROUTES = [
   { route: "GET kuvo/work/goals", answers: { 200: GOAL_PLANS } },
   { route: "GET kuvo/work/goals/events", answers: { 200: GOAL_PLANS } },
   { route: "POST kuvo/work/goals/ask", answers: { 200: object({ text: string }), 400: REFUSED, 404: REFUSED, 409: REFUSED } },
-  { route: "POST kuvo/work/goals/:id", answers: { 200: object({ goal: GOAL_PLAN }), 400: REFUSED, 404: REFUSED, 409: REFUSED } },
+  { route: "POST kuvo/work/goals/:id", answers: { 200: object({ goal: GOAL_PLAN }), 400: REFUSED, 404: REFUSED, 409: REFUSED, 502: REFUSED } },
   { route: "GET kuvo/work/apps/icon", answers: { 200: BYTES, 400: REFUSED, 404: REFUSED } },
   { route: "POST kuvo/projects/new", answers: { 201: object({ project: PROJECT, text: string }), 400: REFUSED, 403: object({ message: string, needs: string }), 409: REFUSED, 502: REFUSED } }
 ];
@@ -8285,25 +8285,26 @@ async function decidedByYou(id, given, targets, file) {
   const choice = line(given.choice, 200);
   if (!choice)
     return { refused: { status: 400, message: "Say your choice (choice)." } };
-  let decided;
-  const changed = changeKept((all) => {
-    const goal = all.find((each) => each.id === id);
-    if (!goal || !botHere(goal.bot))
-      return { status: 404, message: "There's no such goal here." };
-    if (goal.state !== "running")
-      return { status: 400, message: "That goal isn't running." };
-    decided = goal.decided?.find((each) => each.id === given.decided);
-    if (!decided)
-      return { status: 404, message: "There's no such call on it." };
-    decided.yours = { choice, at: Date.now() };
-    return goal;
-  }, file);
-  if (!("id" in changed))
-    return { refused: changed };
-  noteWorkChanged(changed.bot);
-  if (decided && choice.toLowerCase() !== decided.choice.toLowerCase()) {
-    await tellBot2(changed, `[Decision changed] For "${decided.text}" the user picked ${choice}, not ${decided.choice} as you decided. Go that way from here: redo what depends on it, and say in a line what changes.`, `You picked ${choice}`, targets);
+  const goal = readKept(file).find((each) => each.id === id);
+  if (!goal || !botHere(goal.bot))
+    return { refused: { status: 404, message: "There's no such goal here." } };
+  if (goal.state !== "running")
+    return { refused: { status: 400, message: "That goal isn't running." } };
+  const decided = goal.decided?.find((each) => each.id === given.decided);
+  if (!decided)
+    return { refused: { status: 404, message: "There's no such call on it." } };
+  const was = decided.yours?.choice ?? decided.choice;
+  if (choice.toLowerCase() !== was.toLowerCase() && !await tellBot2(goal, `[Decision changed] For "${decided.text}" the user picked ${choice}, not ${was} as you decided. Go that way from here: redo what depends on it, and say in a line what changes.`, `You picked ${choice}`, targets)) {
+    return { refused: { status: 502, message: "The bot couldn't be told: try again." } };
   }
+  const changed = changeKept((all) => {
+    const kept = all.find((each) => each.id === id);
+    const call = kept?.decided?.find((each) => each.id === decided.id);
+    if (call)
+      call.yours = { choice, at: Date.now() };
+    return kept ?? goal;
+  }, file);
+  noteWorkChanged(changed.bot);
   return { goal: shown(changed) };
 }
 var settledAsks = new Map;
@@ -8993,22 +8994,21 @@ async function goAhead(target, conversation, asker, id, recommended, file, signa
   return kept;
 }
 async function decidedByYou2(target, conversation, id, choice, file = DECIDED_FILE) {
-  const before = changeAll((all) => {
-    const made = all[conversation]?.find((each) => each.id === id);
-    if (!made)
-      return null;
-    const was = { text: made.text, choice: made.yours?.choice ?? made.choice, yours: Boolean(made.yours) };
-    made.yours = { choice, at: Date.now() };
-    return was;
-  }, file);
-  if (!before)
+  const made = decidedIn(conversation, file).find((each) => each.id === id);
+  if (!made)
     return { status: 404, message: "There's no such call in that conversation." };
-  if (choice.toLowerCase() !== before.choice.toLowerCase()) {
-    const said = before.yours ? `[Decision changed] For "${before.text}" the user now picked ${choice}, not ${before.choice}. Go that way from here: redo what depends on it, and say in a line what changes.` : `[Decision changed] For "${before.text}" the user picked ${choice}, not ${before.choice} as you decided. Go that way from here: redo what depends on it, and say in a line what changes.`;
+  const was = made.yours?.choice ?? made.choice;
+  if (choice.toLowerCase() !== was.toLowerCase()) {
+    const said = made.yours ? `[Decision changed] For "${made.text}" the user now picked ${choice}, not ${was}. Go that way from here: redo what depends on it, and say in a line what changes.` : `[Decision changed] For "${made.text}" the user picked ${choice}, not ${was} as you decided. Go that way from here: redo what depends on it, and say in a line what changes.`;
     const told = await sendInto(target, conversation, { text: said, delivery: "queue", metadata: boxNote("Autopilot", `You picked ${choice}`) }, { from: "Autopilot", words: `You picked ${choice}` }).then(() => true, () => false);
     if (!told)
-      return { status: 502, message: "Your choice is kept, but the conversation couldn't be told: the engine didn't take it." };
+      return { status: 502, message: "The conversation couldn't be told: the engine didn't take it. Try again." };
   }
+  changeAll((all) => {
+    const kept = all[conversation]?.find((each) => each.id === id);
+    if (kept)
+      kept.yours = { choice, at: Date.now() };
+  }, file);
   return { decided: decidedIn(conversation, file) };
 }
 

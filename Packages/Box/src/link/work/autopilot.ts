@@ -177,23 +177,23 @@ async function goAhead(target: Target, conversation: Pick<EngineSession, "id" | 
 }
 
 /** Your choice on a call Autopilot made in `conversation` (on `target`): the same confirms it,
- * quietly; another tells its agent to go that way from here. */
+ * quietly; another tells its agent to go that way from here, and is kept once it's told, so a
+ * choice the engine didn't take can be made again. */
 export async function decidedByYou(target: Target, conversation: string, id: string, choice: string, file = DECIDED_FILE): Promise<{ decided: DecidedShape[] } | { status: 404 | 502; message: string }> {
+  const made = decidedIn(conversation, file).find(each => each.id === id);
+  if (!made) return { status: 404, message: "There's no such call in that conversation." };
   // (What it goes by now: your last choice, else its own.)
-  const before = changeAll(all => {
-    const made = all[conversation]?.find(each => each.id === id);
-    if (!made) return null;
-    const was = { text: made.text, choice: made.yours?.choice ?? made.choice, yours: Boolean(made.yours) };
-    made.yours = { choice, at: Date.now() };
-    return was;
-  }, file);
-  if (!before) return { status: 404, message: "There's no such call in that conversation." };
-  if (choice.toLowerCase() !== before.choice.toLowerCase()) {
-    const said = before.yours
-      ? `[Decision changed] For "${before.text}" the user now picked ${choice}, not ${before.choice}. Go that way from here: redo what depends on it, and say in a line what changes.`
-      : `[Decision changed] For "${before.text}" the user picked ${choice}, not ${before.choice} as you decided. Go that way from here: redo what depends on it, and say in a line what changes.`;
+  const was = made.yours?.choice ?? made.choice;
+  if (choice.toLowerCase() !== was.toLowerCase()) {
+    const said = made.yours
+      ? `[Decision changed] For "${made.text}" the user now picked ${choice}, not ${was}. Go that way from here: redo what depends on it, and say in a line what changes.`
+      : `[Decision changed] For "${made.text}" the user picked ${choice}, not ${was} as you decided. Go that way from here: redo what depends on it, and say in a line what changes.`;
     const told = await sendInto(target, conversation, { text: said, delivery: "queue", metadata: boxNote("Autopilot", `You picked ${choice}`) }, { from: "Autopilot", words: `You picked ${choice}` }).then(() => true, () => false);
-    if (!told) return { status: 502, message: "Your choice is kept, but the conversation couldn't be told: the engine didn't take it." };
+    if (!told) return { status: 502, message: "The conversation couldn't be told: the engine didn't take it. Try again." };
   }
+  changeAll(all => {
+    const kept = all[conversation]?.find(each => each.id === id);
+    if (kept) kept.yours = { choice, at: Date.now() };
+  }, file);
   return { decided: decidedIn(conversation, file) };
 }
