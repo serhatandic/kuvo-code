@@ -90,10 +90,10 @@ struct GoalCard: View {
         }
         .padding(16)
         .onAppear(perform: takeIn)
+        .task(id: box) { await app.workspace.readAutopilotHere(on: box) }
         #if DEBUG
         // KUVO_DEMO_GOAL_OPEN=<seconds>: that long after it shows, its first page to open is
         // opened, as its button does.
-        .task(id: box) { await app.workspace.readAutopilotHere(on: box) }
         .task(id: plan.id) {
             guard let wait = ProcessInfo.processInfo.environment["KUVO_DEMO_GOAL_OPEN"].flatMap(Double.init),
                   let action = yours.compactMap(\.action).first(where: { $0.kind == .open }) else { return }
@@ -482,7 +482,7 @@ struct GoalCard: View {
         sent = action
         failure = nil
         let answer: GoalPlanAnswer = action == .start
-            ? Self.start(plan, wake: wake, digest: digest, deadline: deadline, caps: caps, periods: periods, autopilot: autopilot && offersAutopilot)
+            ? Self.start(plan, wake: wake, digest: digest, deadline: deadline, caps: caps, periods: periods, autopilot: offersAutopilot ? autopilot : nil)
             : .decline
         let client = action == .start && modelAsks ? app.goalPlans.client(box) : nil
         Task {
@@ -501,7 +501,7 @@ struct GoalCard: View {
 extension GoalCard {
     /// What Start Goal sends: Wake me, how often you hear, the end you picked, and each spend line's cap and period as you set them.
     static func start(_ plan: GoalPlan, wake: Bool, digest: GoalPlan.Cadence, deadline: Deadline,
-                      caps: [Double], periods: [GoalPlan.Spend.Period], autopilot: Bool = false, now: Date = .now, calendar: Calendar = .current) -> GoalPlanAnswer {
+                      caps: [Double], periods: [GoalPlan.Spend.Period], autopilot: Bool? = nil, now: Date = .now, calendar: Calendar = .current) -> GoalPlanAnswer {
         .start(wake: wake, digest: digest,
                ends: deadline.date(now: now, calendar: calendar),
                // None where the bot had proposed an end: no end.
@@ -510,7 +510,8 @@ extension GoalCard {
                    GoalPlanAnswer.SpendChange(cap: caps.indices.contains(index) ? caps[index] : plan.spend[index].cap,
                                               per: periods.indices.contains(index) ? periods[index] : plan.spend[index].per)
                },
-               mode: autopilot ? .autopilot : .interactive)
+               // None where the row doesn't show: the conversation stays as it runs.
+               mode: autopilot.map { $0 ? .autopilot : .interactive })
     }
 }
 
