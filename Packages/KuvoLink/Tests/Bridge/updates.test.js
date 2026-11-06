@@ -369,7 +369,8 @@ test("a machine with no bridge, updated by its `update` command: confirmed, and 
   let said = "";
   updating.stdout.setEncoding("utf8");
   updating.stdout.on("data", chunk => { said += chunk; });
-  await new Promise(resolve => updating.once("exit", resolve));
+  // (Once its output has all come.)
+  await new Promise(resolve => updating.once("close", resolve));
   assert.equal(JSON.parse(said).result, "updated", said);
   engines.add(read(engineFile).pid);
   assert.equal(fs.existsSync(path.join(home, "run", "update-trial")), false, "confirmed");

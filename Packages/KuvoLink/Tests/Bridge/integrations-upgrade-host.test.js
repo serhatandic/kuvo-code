@@ -84,6 +84,25 @@ test("its app not answering: that one waits, still naming its key, the rest go o
   assert.equal(host.keys.has(FIGMA), false);
 });
 
+test("a key its app can't take away: the server waits, and the next start finishes, a bot's own key with it", async () => {
+  start();
+  const own = `${FIGMA}__MIRA`;
+  host.keys.set(own, "bot-token");
+  host.failing = new Set(["/keys/delete"]);
+  try {
+    await link.upgradeIntegrations();
+  } finally {
+    host.failing = null;
+  }
+  assert.deepEqual(servers().figma, older().figma);
+  assert.equal(host.keys.get(FIGMA), "figma-token");
+
+  await link.upgradeIntegrations();
+  assert.deepEqual(servers().figma, figmaNow);
+  assert.equal(host.keys.has(FIGMA), false);
+  assert.equal(host.keys.has(own), false);
+});
+
 test("this Mac's box starting, as its app or keeper starts it: up to date before it says where it is, so before its engine starts; a key to take away after", { timeout: 60_000 }, async () => {
   start();
   // Chrome DevTools, as an older version added it, on this Mac.

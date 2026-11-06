@@ -1,9 +1,8 @@
 // A box's integrations brought up to date by the box, with no client there: from the catalogs it has
-// (a Mac's, or the ones its own update brought). An older Kuvo Code on a Mac still does the same as
-// it connects to a box not newer than it, so each order of the two has to come to the same settings,
-// with nothing anyone else changed lost. The catalog is the one the Mac's own code
-// writes (Vectors/routes/box, scripts/route-vectors.sh), and a Mac's writes are what its
-// `EngineConfig` sends: each server's whole value at its path.
+// (a Mac's, or the ones its own update brought). Kuvo Code on a Mac used to do this itself, so a box
+// may find settings it left, and each client's change around the box's has to stay. The catalog is the
+// one the Mac's own code writes (Vectors/routes/box, scripts/route-vectors.sh), and what's written here
+// as a Mac is what its `EngineConfig` sent: each server's whole value at its path.
 import "./safety"
 import { afterAll, beforeEach, expect, spyOn, test } from "bun:test"
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, watch, writeFileSync } from "node:fs"
@@ -321,6 +320,15 @@ test("a machine's engine about to start, with no bridge and no Mac: its settings
   expect(JSON.parse(printed)).toBeObject()
   expect(JSON.parse(readFileSync(settings, "utf8")).mcp.servers).toEqual(upToDate(MACHINE))
   expect(existsSync(join(home, "box", "keys", FIGMA))).toBe(false)
+}, SPAWNS)
+
+test("that command while an update is on trial: everything but the key, which the version before may need", async () => {
+  const { settings, home, env } = machineFolder(oldServers(MACHINE))
+  writeFileSync(join(home, "run", "update-trial"), "9.9.9")
+  const start = Bun.spawn([process.execPath, main, "engine-config"], { env, stdout: "pipe", stderr: "pipe" })
+  expect(await start.exited).toBe(0)
+  expect(JSON.parse(readFileSync(settings, "utf8")).mcp.servers).toEqual({ ...upToDate(MACHINE), figma: oldServers(MACHINE).figma })
+  expect(existsSync(join(home, "box", "keys", FIGMA))).toBe(true)
 }, SPAWNS)
 
 test("that command with no settings file there, as this Mac's app runs it: it prints what it prints and makes none", async () => {

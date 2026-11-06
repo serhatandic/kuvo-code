@@ -2991,8 +2991,8 @@ haven't come yet leaves what it learned), as it finds the engine and every ten m
 while it's at work (on a machine, while its bridge runs: it has peers or phones), and keeps the
 layer in `run/compatibility.json` (nothing until it has learned, and nothing with no account). What
 it learns goes to the engine's next start; the box doesn't restart it for that. Whatever starts the engine asks the box: `kuvo-link.js
-engine-config` prints the `OPENCODE_CONFIG_CONTENT` it's run with, the layer merged on top. This
-Mac's app runs it as it starts its engine, and a machine's start scripts do, so an engine started
+engine-config` prints the `OPENCODE_CONFIG_CONTENT` it's run with, the layer merged on top, having
+brought a machine's integrations up to date first (see `kuvo/integrations`). This Mac's app runs it as it starts its engine, and a machine's start scripts do, so an engine started
 after a restart with no Mac there gets it too; a box too old to know it starts its engine as
 before. A Mac sends none.
 

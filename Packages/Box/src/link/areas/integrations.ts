@@ -73,8 +73,9 @@ const leftForItsMaker = (entry: CatalogIntegration, server: Record<string, unkno
 const kept = (server: Record<string, unknown>, names: string[]) => Object.fromEntries(names.filter(name => server[name] !== undefined).map(name => [name, server[name]]));
 
 /** An added integration's settings as `entry` has them now: the maker's server, for one it left a
- * package for, still off if you turned it off and with the tools you chose; else its tools plain tools, its package started as it's pinned now, and its keys named
- * where this box reads them. Whatever else you set on it stays. */
+ * package for, still off if you turned it off and with the Code Mode you chose; else its tools plain
+ * tools, its package started as it's pinned now and its keys named where this box reads them, with
+ * whatever else you set on it. */
 function broughtUpToDate(entry: CatalogIntegration, server: Record<string, unknown>): unknown {
   if (leftForItsMaker(entry, server)) return { ...entry.settings as object, ...kept(server, ["disabled", "codemode"]) };
   const next = { ...server };
@@ -158,8 +159,8 @@ function upgradeChanges(settings: Settings, catalog: CatalogIntegration[], keysG
   return changes;
 }
 
-/** The settings bringing `settings` up to date makes, under the settings' lock so a client's change
- * meanwhile stays. */
+/** Writes what bringing the settings up to date changes, worked out under the settings' lock so a
+ * client's change meanwhile stays. */
 function writeUpgrade(catalog: CatalogIntegration[], popular: Record<string, unknown> | null, keysGone: Set<string>, file: string, lock: string): void {
   locked(lock, () => {
     const { settings, problem } = readSettings(file);

@@ -18,6 +18,12 @@ import Testing
 
     private var withKeys: [Integrations.Service] { Integrations.all.filter { !Integrations.keys(of: $0.way).isEmpty } }
 
+    /// The keys a server's settings name (`KUVO_KEY_…`).
+    private func keyNames(in value: JSONValue) -> [String] {
+        let text = text(value)
+        return text.matches(of: /KUVO_KEY_[A-Z0-9_]+/).map { String($0.output) }
+    }
+
     private func text(_ value: JSONValue?) -> String {
         value.flatMap { try? JSONEncoder().encode($0) }.map { String(decoding: $0, as: UTF8.self) } ?? ""
     }
@@ -27,7 +33,7 @@ import Testing
         #expect(!withKeys.isEmpty)
         for service in withKeys {
             let settings = text(Integrations.settings(for: service))
-            let names = Integrations.keyNames(in: try #require(Integrations.settings(for: service)))
+            let names = keyNames(in: try #require(Integrations.settings(for: service)))
             #expect(!names.isEmpty, "\(service.id) names no key")
             for name in names {
                 #expect(settings.contains(IntegrationKeys.reference(name).replacingOccurrences(of: "/", with: "\\/")) || settings.contains(IntegrationKeys.reference(name)))
@@ -40,8 +46,8 @@ import Testing
     /// A bot's own key is its own file, apart from the shared one.
     @Test func aBotsOwnKey() throws {
         let service = try #require(withKeys.first)
-        let shared = Set(Integrations.keyNames(in: try #require(Integrations.settings(for: service))))
-        let bots = Set(Integrations.keyNames(in: try #require(Integrations.settings(for: service, bot: "bot_abc"))))
+        let shared = Set(keyNames(in: try #require(Integrations.settings(for: service))))
+        let bots = Set(keyNames(in: try #require(Integrations.settings(for: service, bot: "bot_abc"))))
         #expect(shared.isDisjoint(with: bots))
         #expect(bots.allSatisfy { IntegrationKeys.isBots($0) && IntegrationKeys.variables(ofBot: "bot_abc", in: [$0]) == [$0] })
     }
@@ -62,7 +68,7 @@ import Testing
         for service in withKeys where !Integrations.macOnly.contains(service.id) {
             let settings = text(Integrations.settings(for: service, on: "lab"))
             #expect(!settings.contains(IntegrationKeys.folder.path), "\(service.id) names this Mac's folder")
-            for name in Integrations.keyNames(in: try #require(Integrations.settings(for: service, on: "lab"))) {
+            for name in keyNames(in: try #require(Integrations.settings(for: service, on: "lab"))) {
                 let reference = IntegrationKeys.reference(name, on: "lab")
                 #expect(reference == "{file:~/.kuvo-code/box/keys/\(name)}" || reference.contains("/box/keys/\(name)}"))
                 #expect(settings.contains(reference) || settings.contains(reference.replacingOccurrences(of: "/", with: "\\/")))

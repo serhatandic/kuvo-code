@@ -2,8 +2,8 @@ import Foundation
 import OpenCodeKit
 @testable import KuvoCode
 
-/// A box's settings kept in memory, for a test of what Kuvo Code makes of settings (bringing them
-/// up to date, importing into them, naming models) rather than of where a box keeps them, which
+/// A box's settings kept in memory, for a test of what Kuvo Code makes of settings (importing into
+/// them, naming models) rather than of where a box keeps them, which
 /// the box's own tests and the settings-on-the-box tests cover.
 final class MemorySettings: RemoteSettings {
     private(set) var settings: [String: JSONValue]
