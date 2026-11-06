@@ -106,6 +106,10 @@ in its `~/.kuvo-code-test` that it removes afterwards (tests that run the engine
 `outside-asks-live.test.js`, run that machine's). Run it again with `--engine`: the tests then
 run on the engine's own runner, so the boxes they start run on Bun, as a machine's does.
 
+A home folder of a test's own doesn't keep a script from `crontab` or `launchctl`, which are the
+account's. A test that runs a machine's scripts puts stand-ins for them first on its PATH, and its
+suite takes the `AccountUntouched` trait; `scripts/test-app.sh` makes the same check around its run.
+
 A bridge test file cleans up with `atEnd` and `removeAtEnd` from `Tests/Bridge/at-end.js`, never
 node:test's `after` (a test's own `t.after` is fine). They stop what the file started, latest
 first, and remove its folders last, even when a step fails. Then anything still open fails the

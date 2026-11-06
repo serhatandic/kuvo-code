@@ -31,8 +31,8 @@ import Testing
 
     /// Removing a machine takes away everything that would start its engine again or sign in there
     /// (its keeper and both of the keeper's own copies, how it launches, its keys), and leaves its
-    /// sessions. Run on a home of its own, with a crontab that answers nothing, so this Mac's
-    /// isn't touched.
+    /// sessions. Run on a home of its own, with a crontab and launchd standing in for the account's,
+    /// which that home doesn't keep it from, so this Mac's aren't touched.
     @Test func removingAMachineLeavesNothingThatStartsItAgain() throws {
         let home = AppInfo.testRoot.appending(path: "MachineHome/\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: home) }
@@ -50,6 +50,8 @@ import Testing
         try FileManager.default.createDirectory(at: tools, withIntermediateDirectories: true)
         try Data("#!/bin/sh\nexit 1\n".utf8).write(to: tools.appending(path: "crontab"))
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: tools.appending(path: "crontab").path)
+        try Data("#!/bin/sh\necho \"$*\" >>\"$HOME/launchctl\"\n".utf8).write(to: tools.appending(path: "launchctl"))
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: tools.appending(path: "launchctl").path)
 
         let process = Process()
         process.executableURL = URL(filePath: "/bin/sh")
@@ -60,6 +62,7 @@ import Testing
         #expect(process.terminationStatus == 0)
         for path in gone { #expect(!FileManager.default.fileExists(atPath: root.appending(path: path).path), "\(path) stayed") }
         for path in kept { #expect(FileManager.default.fileExists(atPath: root.appending(path: path).path), "\(path) went") }
+        #expect(!FileManager.default.fileExists(atPath: home.appending(path: "launchctl").path), "no login agent in this home, so launchd isn't asked")
     }
 
     /// The removal scripts, connected or not, both sign the agents out.

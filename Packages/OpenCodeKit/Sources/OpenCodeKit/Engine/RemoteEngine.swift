@@ -1233,10 +1233,11 @@ public final class RemoteServer: @unchecked Sendable {
         """
     }
 
-    /// Takes the launch agent away again.
+    /// Takes the launch agent away again, if this home has it: `launchctl` is the account's, whatever
+    /// `$HOME` says, so a test's or another home's removal never reaches one it didn't add.
     static var launchAgentRemovalScript: String {
         """
-        if [ "$(uname -s)" = Darwin ]; then
+        if [ "$(uname -s)" = Darwin ] && [ -f "$HOME/Library/LaunchAgents/\(launchAgent).plist" ]; then
           launchctl bootout "gui/$(id -u)/\(launchAgent)" >/dev/null 2>&1
           rm -f "$HOME/Library/LaunchAgents/\(launchAgent).plist"
         fi

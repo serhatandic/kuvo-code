@@ -10,7 +10,7 @@ import Testing
 ///     KUVO_TEST_THIS_MAC=1 swift test --filter ThisMacAsAMachineTests
 ///
 /// (`LiveRemoteEngineTests` covers the same on a real Mac over SSH, with `KUVO_TEST_SSH_HOST`.)
-@Suite(.enabled(if: ProcessInfo.processInfo.environment["KUVO_TEST_THIS_MAC"] != nil), .serialized, OwnMachineFolder())
+@Suite(.enabled(if: ProcessInfo.processInfo.environment["KUVO_TEST_THIS_MAC"] != nil), .serialized, OwnMachineFolder(), AccountUntouched())
 struct ThisMacAsAMachineTests {
     /// Short, as a real home is, as sockets need.
     let home = URL(filePath: "/private/tmp/kuvo-mac-machine-\(UUID().uuidString.prefix(6))")
@@ -20,8 +20,12 @@ struct ThisMacAsAMachineTests {
     /// Where this checkout's built files are.
     private static let repository = URL(filePath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
 
+    /// Beside the home: stand-ins for the account's crontab and launchd, which a home of the test's
+    /// own doesn't keep it from, first on the PATH. Each notes that it was run.
+    private static func standIns(home: URL) -> URL { URL(filePath: home.path + "-account") }
+
     private static func environment(home: URL) -> [String: String] {
-        ["HOME": home.path, "USER": NSUserName(), "LOGNAME": NSUserName(), "SHELL": "/bin/zsh", "PATH": "/usr/bin:/bin:/usr/sbin:/sbin"]
+        ["HOME": home.path, "USER": NSUserName(), "LOGNAME": NSUserName(), "SHELL": "/bin/zsh", "PATH": "\(standIns(home: home).path):/usr/bin:/bin:/usr/sbin:/sbin"]
     }
 
     @discardableResult
@@ -60,6 +64,7 @@ struct ThisMacAsAMachineTests {
             if let pid = pid_t(line.split(separator: " ").first ?? "") { kill(pid, SIGKILL) }
         }
         try? FileManager.default.removeItem(at: home)
+        try? FileManager.default.removeItem(at: Self.standIns(home: home))
         SSHConnection.fedStandIn = nil
     }
 
@@ -67,6 +72,13 @@ struct ThisMacAsAMachineTests {
         defer { cleanUp() }
         try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
         let home = home
+        let account = Self.standIns(home: home)
+        try FileManager.default.createDirectory(at: account, withIntermediateDirectories: true)
+        for tool in ["crontab", "launchctl"] {
+            let file = account.appending(path: tool)
+            try Data("#!/bin/sh\necho \"\(tool) $*\" >>\"\(account.path)/used\"\n".utf8).write(to: file)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: file.path)
+        }
         SSHConnection.fedStandIn = { _, script, input in Self.runHere(script, input: input, home: home) }
         let realHomeBefore = try FileManager.default.contentsOfDirectory(atPath: NSHomeDirectory()).sorted()
 
@@ -121,7 +133,8 @@ struct ThisMacAsAMachineTests {
         try await RemoteServer.stop(on: connection)
         #expect(await until(seconds: 30) { here("ps -axww -o command= | grep -F \(SSHConnection.quoted(home.path)) | grep -v grep | wc -l") == "0" }, "nothing's left running")
 
-        // And nothing of it landed outside its folder.
+        // And nothing of it landed outside its folder, or in the account's crontab or launchd.
+        #expect(!FileManager.default.fileExists(atPath: account.appending(path: "used").path), "a test's folder adds no way back after a restart")
         #expect(try FileManager.default.contentsOfDirectory(atPath: NSHomeDirectory()).sorted() == realHomeBefore)
         #expect(!FileManager.default.fileExists(atPath: NSHomeDirectory() + "/Library/LaunchAgents/\(RemoteServer.launchAgent).plist"))
         #expect(try FileManager.default.contentsOfDirectory(atPath: home.path).sorted() == [".kuvo-code-test", "cache"])

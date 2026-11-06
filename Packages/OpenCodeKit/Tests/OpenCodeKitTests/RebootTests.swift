@@ -11,7 +11,7 @@ import Testing
 /// here, in a home folder of the test's own, with a stand-in engine, with what this computer has
 /// (on a Mac, no `setsid` and no `/proc`, as on a Mac you add as a machine). The live suite does
 /// the same on a real machine.
-@Suite(.serialized) struct RebootTests {
+@Suite(.serialized, AccountUntouched()) struct RebootTests {
     let home: URL
     let tools: URL
     var root: URL { home.appending(path: RemoteEngineInstaller.root) }
@@ -21,6 +21,14 @@ import Testing
         home = FileManager.default.temporaryDirectory.appending(path: "opencodekit-reboot-\(UUID().uuidString)")
         tools = home.appending(path: "tools")
         try FileManager.default.createDirectory(at: tools, withIntermediateDirectories: true)
+        // The account's crontab and launchd, which a home of the test's own doesn't keep them from:
+        // these run in their place, first on the PATH, and note what they're told in that home.
+        try Self.write(tools.appending(path: "crontab"), """
+            #!/bin/sh
+            if [ "$1" = -l ]; then [ -f "$HOME/crontab" ] || { echo "no crontab for test" >&2; exit 1; }; cat "$HOME/crontab"; else cat >"$HOME/crontab"; fi
+
+            """)
+        try Self.write(tools.appending(path: "launchctl"), "#!/bin/sh\necho \"$*\" >>\"$HOME/launchctl\"\n")
         // The engine: says it's listening, notes how it was started, and runs until stopped. Run
         // with the phone link's script, it's the phone link: it notes its process, as that does;
         // asked for the engine's settings layer (`engine-config`), it gives one, around what it was
@@ -65,6 +73,11 @@ import Testing
         // Held awake, the way it can be seen: not this test's Mac for real.
         try tool("caffeinate", "echo \"$*\" >>\"$HOME/awake\"; while :; do /bin/sleep 1; done")
         try write(bin.appending(path: "kuvo-wake"), "#!/bin/sh\necho >>\"$HOME/rounds\"\n", executable: true)
+    }
+
+    private static func write(_ file: URL, _ text: String) throws {
+        try Data(text.utf8).write(to: file)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: file.path)
     }
 
     private func tool(_ name: String, _ body: String) throws {
@@ -514,7 +527,6 @@ import Testing
     /// and left as it is; and takes it out with the machine.
     @Test func aMacsLaunchAgentIsAddedOnceAndTakenOut() throws {
         defer { cleanUp() }
-        try tool("launchctl", "echo \"$*\" >>\"$HOME/launchctl\"")
         func run(_ script: String) throws {
             let process = Process()
             process.executableURL = URL(filePath: "/bin/sh")
@@ -525,6 +537,8 @@ import Testing
             #expect(process.terminationStatus == 0)
         }
         let plist = home.appending(path: "Library/LaunchAgents/\(RemoteServer.launchAgent).plist")
+        try run(RemoteServer.launchAgentRemovalScript)
+        #expect(!FileManager.default.fileExists(atPath: home.appending(path: "launchctl").path), "a home without it leaves the account's launchd alone")
         try run(RemoteServer.launchAgentScript)
         try run("plutil -lint \(SSHConnection.quoted(plist.path)) >/dev/null")
         let written = try #require(NSDictionary(contentsOf: plist))
@@ -601,6 +615,21 @@ import Testing
     }
 
     // MARK: A start from the Mac
+
+    /// A start from the Mac leaves what starts it again after a restart, in what these tests stand
+    /// in for and never the account's own: one line in the crontab, however often it's started, and
+    /// on a Mac the login agent, in this home.
+    @Test func aStartLeavesOneWayBackAfterARestart() throws {
+        defer { cleanUp() }
+        #expect(try macLaunch() == 0)
+        #expect(try start("off") == 0)
+        #expect(try macLaunch(["KUVO_START=1"]) == 0)
+        let lines = try String(contentsOf: home.appending(path: "crontab"), encoding: .utf8).split(separator: "\n")
+        #expect(lines == [Substring(RemoteServer.rebootLine)])
+        #if os(macOS)
+        #expect(FileManager.default.fileExists(atPath: home.appending(path: "Library/LaunchAgents/\(RemoteServer.launchAgent).plist").path))
+        #endif
+    }
 
     /// The launch as the Mac sends it, with `extra` lines; its exit status.
     private func macLaunch(_ extra: [String] = []) throws -> Int32 {
