@@ -60,7 +60,7 @@ const TAB_IDLE = Number(process.env.KUVO_BROWSER_TAB_IDLE || 3600) * 1000;
 
 // Goes up with every change to the keeper (host mode): a newer one replaces one that's running
 // (its pages close, its sign-ins stay), and an older one never replaces a newer.
-const KEEPER = 45;
+const KEEPER = 46;
 // Passkeys: none yet, as in the panel's browser on the Mac (Passkeys.swift, the same script).
 const NO_PASSKEYS = "(() => {\n  try {\n    // Says a passkey was asked for with an event only this launch's listener, in a world of its\n    // own, knows the name of: nothing of it is left in the page's world. (Taken before the page\n    // can change them.)\n    const dispatch = EventTarget.prototype.dispatchEvent, Made = Event;\n    const tell = () => {\n      try {\n        dispatch.call(window, new Made(\"KUVO_PASSKEY_EVENT\"));\n      } catch {}\n    };\n    const none = (options) => {\n      // Asked of you, not looked for quietly as the page loads.\n      if (options.mediation !== \"conditional\") tell();\n      return Promise.reject(new DOMException(\"Passkeys can't be used in this browser.\", \"NotAllowedError\"));\n    };\n    const Container = window.CredentialsContainer;\n    if (Container && Container.prototype) {\n      const prototype = Container.prototype, get = prototype.get, create = prototype.create;\n      if (get) prototype.get = function (options) { return options && options.publicKey ? none(options) : get.call(this, options); };\n      if (create) prototype.create = function (options) { return options && options.publicKey ? none(options) : create.call(this, options); };\n    }\n    const Credential = window.PublicKeyCredential;\n    if (Credential) {\n      Credential.isUserVerifyingPlatformAuthenticatorAvailable = () => Promise.resolve(false);\n      if (Credential.isConditionalMediationAvailable) Credential.isConditionalMediationAvailable = () => Promise.resolve(false);\n    }\n  } catch {}\n})();";
 // The event it fires when a passkey is asked for (a name of this keeper's, which only the
@@ -399,7 +399,7 @@ function removeStaleLock() {
       }
     }
     const folder = path.dirname(fs.readlinkSync(path.join(PROFILE, "SingletonSocket")));
-    if (!/^(org\.chromium\.Chromium|com\.google\.Chrome)\.[A-Za-z0-9]+$/.test(path.basename(folder))) return;
+    if (!/^(org\.chromium\.Chromium|com\.google\.Chrome|com\.google\.chrome\.for\.testing)\.[A-Za-z0-9]+$/.test(path.basename(folder))) return;
     if (fs.lstatSync(folder).uid !== process.getuid()) return;
     fs.rmSync(folder, { recursive: true, force: true });
   } catch {}
@@ -412,7 +412,7 @@ const MAC_MOVES = { ArrowLeft: "moveLeft", ArrowRight: "moveRight", ArrowUp: "mo
 const MAC_WORD_MOVES = { ArrowLeft: "moveWordLeft", ArrowRight: "moveWordRight", Home: "moveToBeginningOfDocument", End: "moveToEndOfDocument" };
 const MAC_DELETES = { Backspace: "deleteBackward", Delete: "deleteForward" };
 const MAC_WORD_DELETES = { Backspace: "deleteWordBackward", Delete: "deleteWordForward" };
-const MAC_LETTERS = { a: "selectAll", z: "undo" };
+const MAC_LETTERS = { a: "selectAll", c: "copy", v: "paste", x: "cut", z: "undo" };
 
 /// A key as Chrome here takes it: on Linux as it's sent; on a Mac with ⌘ for Control, as pages there
 /// expect, and what it does named.
@@ -508,10 +508,10 @@ async function launchChrome(sandbox) {
     ...process.env,
     ...(fits ? { TMPDIR: TMP } : {}),
     HOME: home,
-    // (A Mac's programs find your home by your account, and this is what they take it from instead;
-    // and their preferences, written by the system's own process in the real one, without it.)
+    // (A Mac's programs find your home by your account, and this is what they take it from instead.
+    // The one thing that still lands in the real one is the system's own record of Chrome's last run,
+    // in its preferences, which nothing here changes: removing the machine takes it out.)
     CFFIXED_USER_HOME: home,
-    __CFPREFERENCES_AVOID_DAEMON: "1",
     XDG_CONFIG_HOME: path.join(home, ".config"),
     XDG_CACHE_HOME: path.join(home, ".cache"),
     XDG_DATA_HOME: path.join(home, ".local", "share"),

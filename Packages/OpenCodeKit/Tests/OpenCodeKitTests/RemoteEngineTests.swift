@@ -185,6 +185,17 @@ struct RemoteEngineTests {
         }
     }
 
+    @Test func aMacTooOldForTheEngineIsToldSo() throws {
+        do {
+            _ = try installer().checked("Darwin x86_64\ntools\nmacos 12.7.6\ncomputer ANOTHER-MAC 501\n")
+            Issue.record("it's refused")
+        } catch {
+            #expect(error.localizedDescription.contains("macOS 13 or later") && error.localizedDescription.contains("12.7.6"))
+        }
+        #expect(try installer().checked("Darwin arm64\ntools\nmacos 13.0\ncomputer ANOTHER-MAC 501\n").isInstalled == false)
+        #expect(try installer().checked("Darwin arm64\ntools\nmacos 26.1\ncomputer ANOTHER-MAC 501\n\(OpenCodeEngine.version)\n").isInstalled)
+    }
+
     @Test func linuxStillGetsItsOwnAndOthersAreRefusedSayingWhy() throws {
         #expect(try installer().checked("Linux x86_64\nglibc\n").release == EngineRelease.linux(machine: "x86_64"))
         #expect(try installer().checked("Linux aarch64\nglibc\n\(OpenCodeEngine.version)\n").isInstalled)
@@ -216,8 +227,9 @@ struct RemoteEngineTests {
         #expect(answer.hasPrefix("Darwin "))
         let lines = answer.split(separator: "\n").map(String.init)
         #expect(["tools", "no-tools"].contains(lines[1]))
-        #expect(lines[2] == "computer \(ThisMac.identifier) \(getuid())")
-        #expect(RemoteEngineInstaller.isThisAccount(lines[2]) == (RemoteEngineInstaller.root == ".kuvo-code"))
+        #expect(lines[2].hasPrefix("macos "))
+        #expect(lines[3] == "computer \(ThisMac.identifier) \(getuid())")
+        #expect(RemoteEngineInstaller.isThisAccount(lines[3]) == (RemoteEngineInstaller.root == ".kuvo-code"))
         #expect(!RemoteEngineInstaller.isThisAccount("computer \(ThisMac.identifier) \(getuid() + 1)"), "another account on it is a box of its own")
         #expect(!RemoteEngineInstaller.isThisAccount("computer ANOTHER-MAC \(getuid())"))
     }
@@ -313,6 +325,16 @@ struct RemoteEngineTests {
 struct LiveRemoteEngineTests {
     let connection = SSHConnection(destination: ProcessInfo.processInfo.environment["KUVO_TEST_SSH_HOST"] ?? "")
 
+    /// A process's environment there, a variable to a line: Linux's /proc, or a Mac's `ps`.
+    private static func environmentOf(_ pid: Int) -> String {
+        "if [ -r /proc/\(pid)/environ ]; then tr '\\0' '\\n' </proc/\(pid)/environ; else ps eww -o command= -p \(pid) | tr ' ' '\\n'; fi"
+    }
+
+    /// A file's permissions there, as GNU's `stat` or a Mac's says them.
+    private static func modeOf(_ file: String) -> String {
+        "stat -c %a \(file) 2>/dev/null || stat -f %Lp \(file)"
+    }
+
     init() throws {
         // Never the app's own folder there, whose engine these would stop.
         try #require(RemoteEngineInstaller.root == ".kuvo-code-test", "the live tests run in a folder of their own")
@@ -406,7 +428,7 @@ struct LiveRemoteEngineTests {
         let secret = "kuvo-test-secret-" + UUID().uuidString.prefix(8)
         let settings = #"{"mcp":{"servers":{"private-test":{"type":"local","command":["true"],"disabled":true,"environment":{"TOKEN":"\#(secret)"}}}}}"#
         let engine = try await RemoteServer.launch(on: connection, environment: [RemoteServer.privateSettingsVariable: settings])
-        let environment = try await connection.run("tr '\\0' '\\n' </proc/\(engine.pid)/environ")
+        let environment = try await connection.run(Self.environmentOf(engine.pid))
         #expect(!environment.isEmpty)
         #expect(!environment.contains(secret))
         #expect(!environment.contains(RemoteServer.privateSettingsVariable))
@@ -414,7 +436,7 @@ struct LiveRemoteEngineTests {
         // Bots' wake-ups are found under this root, not the app's own.
         #expect(environment.contains("KUVO_BOTS=") && environment.contains("/.kuvo-code-test/bots"))
         let file = "\"$HOME/.kuvo-code-test/keys/settings.json\""
-        #expect(try await connection.run("stat -c %a \(file)").trimmingCharacters(in: .whitespacesAndNewlines) == "600")
+        #expect(try await connection.run(Self.modeOf(file)).trimmingCharacters(in: .whitespacesAndNewlines) == "600")
 
         // The engine has them.
         let server = try await RemoteServer.attach(to: engine, on: connection)
@@ -427,7 +449,7 @@ struct LiveRemoteEngineTests {
         // They stay when it stops, for a start after a restart, still only yours to read; how it
         // was started is kept without them.
         try await RemoteServer.stop(on: connection)
-        #expect(try await connection.run("stat -c %a \(file)").trimmingCharacters(in: .whitespacesAndNewlines) == "600")
+        #expect(try await connection.run(Self.modeOf(file)).trimmingCharacters(in: .whitespacesAndNewlines) == "600")
         let kept = try await connection.run("cat \"$HOME/.kuvo-code-test/run/launch.env\"")
         #expect(!kept.contains(secret) && !kept.contains(RemoteServer.privateSettingsVariable) && !kept.contains("PASSWORD"))
         _ = try await connection.run("pkill -f '[/]\\.kuvo-code-test/' || true; rm -rf \"$HOME/.kuvo-code-test\"")
@@ -461,7 +483,7 @@ struct LiveRemoteEngineTests {
         #expect(String(decoding: try JSONEncoder().encode(config), as: UTF8.self).contains("private-test"))
         server.disconnect()
         #expect(try await connection.run("cat \"$HOME/.kuvo-code-test/keys/KUVO_KEY_TEST_TOKEN\"") == secret, "its keys are still there")
-        let environment = try await connection.run("tr '\\0' '\\n' </proc/\(again.pid)/environ")
+        let environment = try await connection.run(Self.environmentOf(again.pid))
         #expect(!environment.contains(secret) && environment.contains("KUVO_TZ=Europe/Istanbul") && !environment.contains("KUVO_BOOT"))
 
         // One running: it starts none.
@@ -564,7 +586,7 @@ struct LiveRemoteEngineTests {
         let client = HTTPClient(endpoint: server.endpoint)
         #expect((try? await client.send(client.request("GET", "api/info"), as: Info.self)) != nil, "it answers as the engine")
         server.disconnect()
-        let environment = try await connection.run("tr '\\0' '\\n' </proc/\(back.pid)/environ")
+        let environment = try await connection.run(Self.environmentOf(back.pid))
         #expect(!environment.contains("BUN_BE_BUN"))
         #expect(try await connection.run("kill -0 \(first.pid) 2>/dev/null && echo alive || true").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
@@ -603,7 +625,7 @@ struct LiveRemoteEngineTests {
 
         // A start from this Mac now: nothing of its settings sent, the box read.
         let started = try await RemoteServer.launch(on: connection, environment: [:], notes: ["mac": "test-mac"], replace: older.pid)
-        let environment = try await connection.run("tr '\\0' '\\n' </proc/\(started.pid)/environ")
+        let environment = try await connection.run(Self.environmentOf(started.pid))
         #expect(environment.contains("OPENCODE_CONFIG=\(try await connection.run("printf %s \"$HOME\"").trimmingCharacters(in: .whitespacesAndNewlines))/.kuvo-code-test/box/opencode.json"))
         #expect(try await connection.run("cat \"$HOME/.kuvo-code-test/config/opencode/opencode.json\"").trimmingCharacters(in: .whitespacesAndNewlines) == "{}")
         #expect(try await connection.run("[ -e \"$HOME/.kuvo-code-test/keys/settings.json\" ] && echo there || true").isEmpty)
@@ -689,7 +711,7 @@ struct LiveRemoteEngineTests {
         let own = try await connection.run("printf %s \"${XDG_CONFIG_HOME:-unset}\"")
         #expect(seen == own + "|unset")
         // Only you can open its folder there.
-        #expect(try await connection.run("stat -c %a \"$HOME/.kuvo-code-test\"").trimmingCharacters(in: .whitespacesAndNewlines) == "700")
+        #expect(try await connection.run(Self.modeOf("\"$HOME/.kuvo-code-test\"")).trimmingCharacters(in: .whitespacesAndNewlines) == "700")
         server.disconnect()
 
         try await RemoteServer.stop(on: connection)

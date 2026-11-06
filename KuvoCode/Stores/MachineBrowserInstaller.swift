@@ -59,7 +59,11 @@ nonisolated struct BrowserRuntime: Decodable, Sendable {
 
     /// The build for a system, by `uname -s` on the machine.
     static func pinned(for system: String) -> BrowserRuntime? {
-        system == "Darwin" ? mac : pinned
+        switch system {
+        case "Darwin": mac
+        case "Linux": pinned
+        default: nil
+        }
     }
 
     /// Whether this is a Mac's build, Chrome's own app and nothing else.

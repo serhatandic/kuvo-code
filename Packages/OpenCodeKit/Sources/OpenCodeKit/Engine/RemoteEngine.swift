@@ -170,6 +170,8 @@ public enum RemoteEngineError: LocalizedError {
     case unsupportedPlatform(String)
     /// A Mac without Apple's Command Line Tools, where `git` only asks to install them.
     case needsDeveloperTools
+    /// A Mac on a macOS older than `RemoteEngineInstaller.oldestMacOS`, which the engine doesn't run on.
+    case needsNewerMacOS(String)
     /// The Mac this copy of the app runs on, in the account it runs in: its own box is already here.
     case thisMac
     case exited(status: Int32, output: String)
@@ -204,7 +206,9 @@ public enum RemoteEngineError: LocalizedError {
         case .unsupportedPlatform(let platform):
             return "The engine runs on macOS, and on Linux with glibc, on x86-64 or ARM64; this machine is \(platform)."
         case .needsDeveloperTools:
-            return "This Mac needs Apple’s Command Line Tools first, for git. Run xcode-select --install on it, then try again."
+            return "This Mac needs a working git first. Run xcode-select --install on it (with Xcode, accept its license), then try again."
+        case .needsNewerMacOS(let version):
+            return "The engine runs on macOS \(RemoteEngineInstaller.oldestMacOS) or later; this Mac has macOS \(version)."
         case .thisMac:
             return "That’s this Mac, whose box is already here. Add another computer."
         case .exited(let status, let output):
@@ -295,12 +299,16 @@ public struct RemoteEngineInstaller: Sendable {
         try checked(try await connection.run(probe))
     }
 
+    /// The first macOS the engine runs on.
+    static let oldestMacOS = 13
+
     /// What `check` asks the machine.
     var probe: String {
         """
         uname -sm
         if [ "$(uname -s)" = Darwin ]; then
-          if xcode-select -p >/dev/null 2>&1; then echo tools; else echo no-tools; fi
+          if xcode-select -p >/dev/null 2>&1 && /usr/bin/git --version >/dev/null 2>&1; then echo tools; else echo no-tools; fi
+          echo "macos $(sw_vers -productVersion 2>/dev/null)"
           echo "computer $(ioreg -rd1 -c IOPlatformExpertDevice 2>/dev/null | sed -n 's/.*"IOPlatformUUID" = "\\(.*\\)".*/\\1/p') $(id -u)"
         elif ldd --version 2>&1 | grep -qi musl; then echo musl; else echo glibc; fi
         test -x "\(remoteExecutable)" && (\(Self.folders.replacingOccurrences(of: "\n", with: "; ")); "\(remoteExecutable)" --version) 2>/dev/null || true
@@ -324,8 +332,11 @@ public struct RemoteEngineInstaller: Sendable {
         }
         guard let release else { throw RemoteEngineError.unsupportedPlatform(platform + (second == "musl" ? " (musl)" : "")) }
         let rest = lines.dropFirst(2)
+        if let version = rest.first(where: { $0.hasPrefix("macos ") })?.dropFirst(6), let major = Int(version.prefix { $0.isNumber }), major < Self.oldestMacOS {
+            throw RemoteEngineError.needsNewerMacOS(String(version))
+        }
         if let computer = rest.first(where: { $0.hasPrefix("computer ") }), Self.isThisAccount(computer) { throw RemoteEngineError.thisMac }
-        return (release, rest.contains { !$0.hasPrefix("computer ") && $0.hasSuffix(OpenCodeEngine.version) })
+        return (release, rest.contains { !$0.hasPrefix("computer ") && !$0.hasPrefix("macos ") && $0.hasSuffix(OpenCodeEngine.version) })
     }
 
     /// Whether a Mac's `computer <its id> <account>` is this Mac, in the account this runs in. (Another
@@ -383,9 +394,6 @@ public struct RemoteEngineInstaller: Sendable {
     }
 }
 
-/// Which Kuvo Code put a box's files there (`bin/box-version`): a Mac as it set the box up, or the
-/// box as it updated itself. A Mac never puts its own over a newer one's: it uses what's there as
-/// it is, so a box that updated itself, or another Mac's, isn't taken back to an older version.
 /// Whether a process there is what a script takes it for, after a crash or a restart may have given
 /// its number to something else.
 public enum RemoteProcess {
@@ -861,10 +869,14 @@ public final class RemoteServer: @unchecked Sendable {
           echo $$ >"$R/box.pid"
           # A Mac sleeps by itself, and a box works with nobody there: awake while it's on power,
           # for as long as this keeper runs (its display still sleeps). No setting of yours changes.
-          if command -v caffeinate >/dev/null 2>&1 && ! is "$(cat "$R/awake.pid" 2>/dev/null)" caffeinate; then
-            caffeinate -s -w $$ </dev/null >/dev/null 2>&1 &
-            echo $! >"$R/awake.pid"
-          fi
+          # Looked at each round: one held for a keeper that has since gone is gone with it.
+          hold() {
+            if command -v caffeinate >/dev/null 2>&1 && ! is "$(cat "$R/awake.pid" 2>/dev/null)" caffeinate; then
+              caffeinate -s -w $$ </dev/null >/dev/null 2>&1 &
+              echo $! >"$R/awake.pid"
+            fi
+          }
+          hold
           boot=$(cat "$K/bin/.kuvo-boot" 2>/dev/null)
           # COMPAT(0.7 keeper): its own copies, bin/.kuvo-start-keeper and bin/.kuvo-launch-keeper. Goes 3 months after 0.8.0.
           # A copy of itself and of its launcher, which it runs its starts from and puts back when an
@@ -894,6 +906,7 @@ public final class RemoteServer: @unchecked Sendable {
           fails=0; next=0; started=; round=0
           while :; do
             [ -f "$K/bin/kuvo-start" ] && [ "$(cat "$R/box.pid" 2>/dev/null)" = "$$" ] || exit 0
+            hold
             # COMPAT(0.7 keeper): checked each round. Goes 3 months after 0.8.0.
             # Its script replaced: a newer keeper carries on; an older Mac's gets this one back (its
             # mark left as it is, so that Mac doesn't put its own there again).
@@ -1188,15 +1201,18 @@ public final class RemoteServer: @unchecked Sendable {
     /// Adds `rebootLine` to the machine's crontab, once, keeping what's there; a crontab that
     /// can't be read (for another reason than there being none) is left alone. On a Mac, cron can
     /// write it only where Remote Login has full disk access; it's what starts the box there with
-    /// nobody logged in, and where it can't, the launch agent starts it once someone is.
+    /// nobody logged in, and where it can't, the launch agent starts it once someone is. Given a few
+    /// seconds, where `perl` can see to it: the start waits for this, holding up all that waits on it,
+    /// should macOS ask something on a screen nobody's at.
     static var rebootCrontabScript: String {
         """
         if command -v crontab >/dev/null 2>&1; then
-          cron_now=$(crontab -l 2>"$R/.crontab.err"); cron_read=$?
+          cron_tab() { if command -v perl >/dev/null 2>&1; then perl -e 'alarm 5; exec @ARGV' crontab "$@"; else crontab "$@"; fi; }
+          cron_now=$(cron_tab -l 2>"$R/.crontab.err"); cron_read=$?
           if [ $cron_read -eq 0 ] || grep -qi 'no crontab' "$R/.crontab.err" 2>/dev/null; then
             case "$cron_now" in
               *"\(rebootTag)"*) ;;
-              *) { [ -z "$cron_now" ] || printf '%s\\n' "$cron_now"; printf '%s\\n' \(SSHConnection.quoted(rebootLine)); } | crontab - >/dev/null 2>&1 ;;
+              *) { [ -z "$cron_now" ] || printf '%s\\n' "$cron_now"; printf '%s\\n' \(SSHConnection.quoted(rebootLine)); } | cron_tab - >/dev/null 2>&1 ;;
             esac
           fi
           rm -f "$R/.crontab.err"

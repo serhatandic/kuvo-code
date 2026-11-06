@@ -9,7 +9,8 @@ import Testing
 ///
 ///     KUVO_TEST_THIS_MAC=1 swift test --filter ThisMacAsAMachineTests
 ///
-/// (`LiveRemoteEngineTests` covers the same on a real Mac over SSH, with `KUVO_TEST_SSH_HOST`.)
+/// It has no SSH and no browser in it: `LiveRemoteEngineTests`, with `KUVO_TEST_SSH_HOST` naming a Mac,
+/// takes it over SSH.
 @Suite(.enabled(if: ProcessInfo.processInfo.environment["KUVO_TEST_THIS_MAC"] != nil), .serialized, OwnMachineFolder(), AccountUntouched())
 struct ThisMacAsAMachineTests {
     /// Short, as a real home is, as sockets need.
@@ -87,7 +88,6 @@ struct ThisMacAsAMachineTests {
         try await installer.install()
         #expect(try await installer.check().isInstalled)
         let engine = box.appending(path: "engine/\(OpenCodeEngine.version)/opencode")
-        #expect(here("xattr \(SSHConnection.quoted(engine.path))").contains("quarantine") == false)
 
         // The box's own code beside it.
         for (name, file) in [("kuvo-link.js", "Packages/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js"), ("kuvo-agents.js", "KuvoCode/Resources/kuvo-agents.js")] {

@@ -1137,13 +1137,21 @@ final class Machines {
         # COMPAT(0.7 keeper): the keeper copies go with it. Goes 3 months after 0.8.0.
         rm -f "$K/run/launch.env" "$K/run/launch.notes" "$K/bin/kuvo-start" "$K/bin/.kuvo-start-keeper" "$K/bin/kuvo-launch" "$K/bin/.kuvo-launch-keeper" "$K/bin/.kuvo-boot" "$K/bin/kuvo-setsid" "$K/run/awake.pid"
         \(RemoteServer.rebootCrontabRemoval)
+        # What macOS keeps of the browser outside its folder, in the account's preferences.
+        if [ "$(uname -s)" = Darwin ] && [ -d "$K/browser" ]; then defaults delete com.google.chrome.for.testing LastRunAppBundlePath >/dev/null 2>&1; fi
         """
     }
 
     /// Signs the coding agents there out: their sign-ins' files, under `$K` (their conversations
-    /// stay, as the engine's sessions do).
+    /// stay, as the engine's sessions do), and on a Mac Claude Code's Anthropic Console sign-ins, which
+    /// it keeps in that Mac's Keychain, each named after its folder (a Keychain that's locked keeps them).
     static let agentsSignOut = """
         [ -d "$K/agents" ] && find "$K/agents" -path "$K/agents/runtime" -prune -o \\( -name .credentials.json -o -name auth.json -o -name 'auth.json.*' -o -name acp_token.json -o -name 'acp_token.json.*' -o -name 'oauth-token.json*' -o -path "$K/agents/claude/tokens/*" \\) -type f -exec rm -f {} + 2>/dev/null
+        if [ "$(uname -s)" = Darwin ]; then
+          for d in "$K/agents/claude/console" "$K"/agents/claude/accounts/*; do
+            [ -d "$d" ] && security delete-generic-password -s "Claude Code-credentials-$(printf %s "$d" | shasum -a 256 | cut -c1-8)" >/dev/null 2>&1 </dev/null
+          done
+        fi
         true
         """
 

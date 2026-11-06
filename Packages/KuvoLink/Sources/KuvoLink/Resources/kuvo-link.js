@@ -302,7 +302,7 @@ var VERSION_FILE = path2.join(RUN, "link.version");
 var SOCKET_KEY_FILE = path2.join(RUN, "socket.key");
 var SSH_FOR = path2.join(RUN, "ssh-for");
 var OWN_SSH_AGENTS = path2.join(RUN, "ssh-agents");
-var SSH_AGENTS = process.platform === "darwin" && (process.env.KUVO_BOX === "mac" || OWN_SSH_AGENTS.length > 69) ? path2.join("/private/tmp", `kuvo-ssh-${os.userInfo().uid}`, `agents-${crypto2.createHash("sha256").update(K).digest("hex").slice(0, 8)}`) : OWN_SSH_AGENTS;
+var SSH_AGENTS = process.platform === "darwin" && (process.env.KUVO_BOX === "mac" || Buffer.byteLength(OWN_SSH_AGENTS) > 68) ? path2.join("/private/tmp", `kuvo-ssh-${os.userInfo().uid}`, `agents-${crypto2.createHash("sha256").update(K).digest("hex").slice(0, 8)}`) : OWN_SSH_AGENTS;
 var SANDBOX_NOTE = path2.join(RUN, "fence", "agents.md");
 var KEY_SHAPE = /^[0-9a-f]{64}$/;
 var madeKey = () => crypto2.randomBytes(32).toString("hex") + `

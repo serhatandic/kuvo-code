@@ -491,7 +491,6 @@ import Testing
         #expect(!alive(box))
     }
 
-    /// Removed: the keeper first, then the phone link and the engine, nothing started again.
     /// On a Mac, whatever else is set: the box's running keeps it from sleeping, one hold at a time,
     /// tied to the keeper (Linux has no `caffeinate`).
     @Test func aRunningBoxHoldsItsMacAwakeOnce() throws {
@@ -506,6 +505,12 @@ import Testing
         until { self.rounds() > rounds + 2 }
         let held = try String(contentsOf: home.appending(path: "awake"), encoding: .utf8).split(separator: "\n")
         #expect(held == ["-s -w \(keeping)"])
+
+        // Should the hold go (one a keeper before it held, gone with that keeper), it holds again.
+        let holding = try String(contentsOf: run.appending(path: "awake.pid"), encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
+        kill(try #require(pid_t(holding)), SIGKILL)
+        until { (try? String(contentsOf: home.appending(path: "awake"), encoding: .utf8).split(separator: "\n").count) == 2 }
+        #expect(try String(contentsOf: home.appending(path: "awake"), encoding: .utf8).split(separator: "\n") == ["-s -w \(keeping)", "-s -w \(keeping)"])
     }
 
     /// What it starts leaves the connection that started it: a session of its own, so closing SSH
@@ -615,6 +620,16 @@ import Testing
     }
 
     // MARK: A start from the Mac
+
+    /// A crontab that doesn't answer (macOS asking something on a screen nobody's at) doesn't hold up
+    /// the start, and all that waits on it.
+    @Test func aCrontabThatHangsDoesntHoldUpTheStart() throws {
+        defer { cleanUp() }
+        try tool("crontab", "exec /bin/sleep 60")
+        let started = Date()
+        #expect(try macLaunch() == 0)
+        #expect(Date().timeIntervalSince(started) < 30)
+    }
 
     /// A start from the Mac leaves what starts it again after a restart, in what these tests stand
     /// in for and never the account's own: one line in the crontab, however often it's started, and

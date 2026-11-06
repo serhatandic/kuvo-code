@@ -1,8 +1,8 @@
 import Foundation
-import IOKit
 
 // Only on the Mac.
 #if os(macOS)
+import IOKit
 
 /// The Mac this runs on.
 public enum ThisMac {
