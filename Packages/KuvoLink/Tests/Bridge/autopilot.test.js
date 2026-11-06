@@ -48,6 +48,8 @@ let refusesPrompts;
 let refusesAnswers;
 let refusesReading;
 let refusesForms;
+let refusesList;
+const refusesFormsOnce = new Set();
 let followers = [];
 const followed = new Set();
 const engine = http.createServer((request, response) => {
@@ -58,6 +60,7 @@ const engine = http.createServer((request, response) => {
     const url = new URL(request.url, "http://x");
     const given = body ? JSON.parse(body) : undefined;
     if (url.pathname === "/api/session" && request.method === "GET") {
+      if (refusesList) return reply({ message: "Not now." }, 500);
       const parent = url.searchParams.get("parentID");
       return reply({ data: [...sessions.values()].filter(each => (parent && parent !== "null" ? each.parentID === parent : !each.parentID)) });
     }
@@ -110,6 +113,7 @@ const engine = http.createServer((request, response) => {
     }
     const forms = url.pathname.match(/^\/api\/session\/([^/]+)\/form$/);
     if (forms && refusesForms) return reply({ message: "Not now." }, 500);
+    if (forms && refusesFormsOnce.delete(decodeURIComponent(forms[1]))) return reply({ message: "Not now." }, 500);
     if (forms) return reply({ data: waiting.get(decodeURIComponent(forms[1])) ?? [] });
     const prompt = url.pathname.match(/^\/api\/session\/([^/]+)\/prompt$/);
     if (prompt && request.method === "POST" && refusesPrompts) return reply({ message: "Not now." }, 500);
@@ -153,6 +157,8 @@ beforeEach(() => {
   refusesAnswers = false;
   refusesReading = false;
   refusesForms = false;
+  refusesList = false;
+  refusesFormsOnce.clear();
   declined = [];
   shared = [];
   atWorkOn = {};
@@ -444,6 +450,32 @@ test("asked while the box wasn't listening: it goes ahead as the box starts agai
   await watcher();
   assert.deepEqual(answered.map(each => each.form).sort(), ["frm_10", "frm_9"], "an Interactive conversation's still waits");
   assert.equal((await route("GET", "kuvo/sessions/ses_away/autopilot")).body.decided.length, 2);
+});
+
+test("asked while the box wasn't listening, and the engine couldn't list its sessions as the box connected: it goes ahead when the box looks again, with no one told", async () => {
+  waiting.set("ses_away", [QUESTION("frm_late", "ses_away", ROASTS)]);
+  waiting.set("ses_menu", [QUESTION("frm_late2", "ses_menu", ROASTS)]);
+  // (Not the box's first start: it has looked before, so it catches up on what its starters missed.)
+  fs.mkdirSync(path.join(home, "run", "work"), { recursive: true });
+  fs.writeFileSync(path.join(home, "run", "work", "told.json"), JSON.stringify({ since: 0, sessions: {} }));
+  refusesList = true;
+  const { tellAll } = await watcher();
+  assert.deepEqual(answered, [], "nothing it could read yet");
+  refusesList = false;
+  await tellAll();
+  assert.deepEqual(answered.map(each => each.form).sort(), ["frm_late", "frm_late2"]);
+  assert.deepEqual(prompts, [], "its starter isn't told of what went ahead");
+});
+
+test("a question on Autopilot its look at the conversations missed, there when its starter would be told: it goes ahead instead", async () => {
+  fs.mkdirSync(path.join(home, "run", "work"), { recursive: true });
+  fs.writeFileSync(path.join(home, "run", "work", "told.json"), JSON.stringify({ since: 0, sessions: {} }));
+  // (Its forms can't be read for the first look, Autopilot's, and can for the next, what its starter missed.)
+  waiting.set("ses_menu", [QUESTION("frm_missed", "ses_menu", ROASTS)]);
+  refusesFormsOnce.add("ses_menu");
+  await watcher();
+  assert.deepEqual(answered.map(each => each.form), ["frm_missed"]);
+  assert.deepEqual(prompts, [], "its starter isn't told of what went ahead");
 });
 
 test("your phone isn't told of a question gone from a conversation on Autopilot; of one still asked there, or in an Interactive one, as ever", async () => {

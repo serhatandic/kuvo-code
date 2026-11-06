@@ -23,7 +23,7 @@ import { ANSWERED, describeForm, describePermission, stillAsked } from "../notic
 import { noteOversight } from "./oversight";
 import { noteWorkChanged, WORK_FOLDER } from "./changes";
 import { asksIn } from "./answers";
-import { catchUpAutopilot, declineSharedOnAutopilot, goAheadOnAutopilot, isAutopilot } from "./autopilot";
+import { catchUpAutopilot, declineSharedOnAutopilot, goAheadOnAutopilot, goAheadOnQuestion, isAutopilot } from "./autopilot";
 import { settleAsk } from "./goals";
 import { awaitedBy } from "./awaited";
 import { tellLateAnswers } from "./asks";
@@ -606,6 +606,8 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
         noteTold(data.id, { ask: permission.id });
       }
       for (const question of questions.filter(each => !was.asks?.includes(each.id))) {
+        // On Autopilot nothing waits: it goes ahead here, as one heard as it's asked does.
+        if (isAutopilot(data) && await goAheadOnQuestion(source, data, question).catch(() => null)) continue;
         tell(starter, `[Session asks] "${data.title || "New Session"}" (address ${data.id}) asks: ${question.text} (ask ${question.id}). Answer with answer_ask (answer), or tell the user in a line and carry on.`, true);
         noteTold(data.id, { ask: question.id });
       }
@@ -633,15 +635,14 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
     if (line) tell(starter, line, false);
     noteTold(data.id, { reply, turn: last.turn });
   };
-  const catchingUp = (): Promise<void> => catchUp().catch(() => {
+  // (Questions its conversations on Autopilot asked meanwhile go ahead first, however many tries it
+  // takes to read them: no one is told of those.)
+  const catchingUp = (): Promise<void> => catchUpAutopilot(source, undefined, signal).then(catchUp).catch(() => {
     if (signal?.aborted) return;
     const timer = schedule(() => catchingUp(), CATCH_UP_AGAIN);
     (timer as { unref?: () => void } | undefined)?.unref?.();
   });
-  // (Questions its conversations on Autopilot asked meanwhile go ahead first: no one is told of
-  // those.)
-  const caughtUp = catchUpAutopilot(source, undefined, signal).catch(() => {})
-    .then(() => Promise.all([catchingUp(), tellLateAnswers(targets, undefined, bridgeRuns).catch(() => {})])).then(() => {});
+  const caughtUp = Promise.all([catchingUp(), tellLateAnswers(targets, undefined, bridgeRuns).catch(() => {})]).then(() => {});
   // Answers given late that waited (the coding agents' bridge not running), tried again every few
   // minutes while the box runs.
   const lateAgain = () => {

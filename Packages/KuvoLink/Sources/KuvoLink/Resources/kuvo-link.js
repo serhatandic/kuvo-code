@@ -8828,6 +8828,8 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
         noteTold(data.id, { ask: permission.id });
       }
       for (const question of questions.filter((each) => !was.asks?.includes(each.id))) {
+        if (isAutopilot(data) && await goAheadOnQuestion(source, data, question).catch(() => null))
+          continue;
         tell(starter, `[Session asks] "${data.title || "New Session"}" (address ${data.id}) asks: ${question.text} (ask ${question.id}). Answer with answer_ask (answer), or tell the user in a line and carry on.`, true);
         noteTold(data.id, { ask: question.id });
       }
@@ -8858,13 +8860,13 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
       tell(starter, line, false);
     noteTold(data.id, { reply, turn: last.turn });
   };
-  const catchingUp = () => catchUp().catch(() => {
+  const catchingUp = () => catchUpAutopilot(source, undefined, signal).then(catchUp).catch(() => {
     if (signal?.aborted)
       return;
     const timer = schedule(() => catchingUp(), CATCH_UP_AGAIN);
     timer?.unref?.();
   });
-  const caughtUp = catchUpAutopilot(source, undefined, signal).catch(() => {}).then(() => Promise.all([catchingUp(), tellLateAnswers(targets, undefined, bridgeRuns).catch(() => {})])).then(() => {});
+  const caughtUp = Promise.all([catchingUp(), tellLateAnswers(targets, undefined, bridgeRuns).catch(() => {})]).then(() => {});
   const lateAgain = () => {
     if (signal?.aborted)
       return;
