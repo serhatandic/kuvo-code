@@ -264,7 +264,8 @@ test("Autopilot in the Codex lane on a real Codex", { skip, timeout: 900_000 }, 
     // (What came after the message that asked: its turn went on, with nothing put to anyone.)
     const wentOn = messages => {
       const mine = assistants(messages);
-      const asking = mine.findIndex(each => /ship\?/i.test(textOf(each)));
+      // (Newest first, so the oldest that speaks of shipping, however the model worded it.)
+      const asking = mine.findLastIndex(each => /ship/i.test(textOf(each)));
       return asking < 0 ? [] : mine.slice(0, asking);
     };
     const messages = await turnsDone(session, "its turn to go on after the question and end, with nobody answering", all => wentOn(all).some(each => /monday|friday/i.test(textOf(each))));
@@ -309,13 +310,14 @@ test("Autopilot in the Codex lane on a real Codex", { skip, timeout: 900_000 }, 
       const open = await forms(session);
       return open.length ? open : null;
     }, "its question to show");
-    assert.match(JSON.stringify(form.fields), /cup size/i);
+    // (The model words the question its own way, so only what it's about is asked of it here.)
+    assert.match(JSON.stringify(form.fields), /cup/i);
     // (A while for the model to go on from it, as it does: reasoning, a step or a sleep.)
     await new Promise(resolve => setTimeout(resolve, 15_000));
     assert.deepEqual((await forms(session)).map(each => each.id), [form.id], "it's still up, with nobody having answered it");
     const key = form.fields[0].key;
     assert.equal((await api("POST", `api/session/${session}/form/${form.id}/reply`, { answer: { [key]: "Large" } })).status, 200);
-    const messages = await turnsDone(session, "its turn to go on with your answer and end", all => assistants(all).some(each => /large/i.test(textOf(each)) && !/cup size/i.test(textOf(each))));
+    const messages = await turnsDone(session, "its turn to go on with your answer and end", all => assistants(all).flatMap(each => each.content ?? []).some(block => block.type === "text" && /large/i.test(block.text) && !/small|\?/i.test(block.text)));
     assert.equal(failure(messages), undefined);
     assert.deepEqual(await calls(session), [], "it's no call Autopilot made");
   });
