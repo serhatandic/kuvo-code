@@ -52,7 +52,8 @@ export const wakesOf = (data: Partial<EngineSession> | null | undefined): string
   return Array.isArray(wake) ? wake.filter((each): each is string => typeof each === "string") : [];
 };
 
-const isArchived = (data: Partial<EngineSession>) => Boolean(data.time?.archived || data.metadata?.["kuvo.archived"] === true || data.metadata?.kuvo?.archived === true);
+/** Whether a session was put away, in any of the ways a client marks it. */
+export const isArchived = (data: Partial<EngineSession>) => Boolean(data.time?.archived || data.metadata?.["kuvo.archived"] === true || data.metadata?.kuvo?.archived === true);
 
 /** Every session here that's someone's work (started by another conversation), the latest first,
  * from the engine and the coding agents' bridge; those put away left out, unless `archived` (as

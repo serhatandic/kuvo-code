@@ -107,6 +107,7 @@ export { COMPATIBILITY_FILE, engineConfigContent, learnCompatibility, readCompat
 export { queueOf, queueWatcher, readQueues, scanQueues } from "./engine/queue";
 export { letAttachmentsGo } from "./server/attached";
 export { workWatcher } from "./work/wakes";
+export { AT_WORK_LIMIT, FINISH_HOLD_LIMIT, atWorkNow, noteStopped, readBackground, readStopped, stopWork } from "./work/background";
 export { goalFollowers, goalHolds, settleGoalHolds, lookAtGoals, periodOf, periodEnd, pauseGoal, REVIEW_PAUSE } from "./work/goals";
 export { keptAwake, letGo } from "./work/awake";
 export { macLink, readLink, updateLink, writeLink } from "./state";

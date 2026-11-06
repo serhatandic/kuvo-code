@@ -51,6 +51,11 @@ export function shells(directory?: string): ShellJob[] {
   return [...kept.values()].map((one) => one.job).filter((job) => !directory || job.cwd === directory)
 }
 
+/** A session's commands running now. */
+export function runningShells(sessionID: string): ShellJob[] {
+  return [...kept.values()].map((one) => one.job).filter((job) => job.status === "running" && job.metadata.sessionID === sessionID)
+}
+
 export function shell(id: string): ShellJob | undefined {
   return kept.get(id)?.job
 }

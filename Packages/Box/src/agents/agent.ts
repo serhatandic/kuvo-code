@@ -330,6 +330,10 @@ export interface Thread {
   turnAway?(): void
   /** It has work going that closing it would end (commands left running): it's kept open. */
   readonly keepsWorking?: boolean
+  /** What else it keeps going in the background, besides commands and subagents: each with when it started. */
+  readonly backgroundTasks?: { id: string; since: number }[]
+  /** Those tasks ended. */
+  stopBackgroundTasks?(): Promise<void>
   /** Its commands run in the box's sandbox now: the agent's whole program runs in it. */
   readonly sandboxed?: boolean
   /** A process of its that runs commands was started outside the box's sandbox, and still runs. */

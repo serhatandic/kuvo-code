@@ -107,6 +107,12 @@ export const OVERSIGHT = object({ marks: list(OVERSIGHT_MARK) });
  * work again when its time moves. */
 export const WORK_CHANGED = object({ changed: map(number) });
 
+/** What still runs for each session here besides its own turn (`kuvo/work/background`, PROTOCOL.md
+ * "Work › Background work"), by its id: how many commands it left running, subagents at work under
+ * it and other tasks its agent keeps going, and since when (ms). One here counts as at work; one that
+ * never ends stops counting a while after it started. Clients take this as it is. */
+export const BACKGROUND_LIST = object({ sessions: map(object({ commands: number, subagents: number, tasks: number, since: number })) });
+
 /** An app on the box's computer something is done in, as the bot named it (`name`): with its `id`
  * once the box found it installed there, whose icon is `kuvo/work/apps/icon?app=<id>`; none for one
  * that isn't there. */
@@ -241,6 +247,7 @@ export const GOAL_PLANS = object({ goals: list(GOAL_PLAN) });
 
 const REFUSED = object({ message: string });
 
+export type BackgroundList = Infer<typeof BACKGROUND_LIST>;
 export type WorkLimits = Infer<typeof LIMITS>;
 export type WorksFor = Infer<typeof WORKS_FOR>;
 export type WorkAnswer = Infer<typeof ANSWER>;
@@ -261,6 +268,8 @@ export type GoalDecidedShape = Infer<typeof GOAL_DECIDED>;
 export const WORK_ROUTES: RouteShape[] = [
   { route: "GET kuvo/work", answers: { 200: WORK, 400: REFUSED, 404: REFUSED, 503: REFUSED } },
   { route: "GET kuvo/work/events", answers: { 200: WORK_CHANGED } },
+  { route: "GET kuvo/work/background", answers: { 200: BACKGROUND_LIST } },
+  { route: "GET kuvo/work/background/events", answers: { 200: BACKGROUND_LIST } },
   { route: "POST kuvo/bots/:id/stop-all", answers: { 200: object({ stopped: number }), 404: REFUSED, 503: REFUSED } },
   { route: "GET kuvo/work/oversight", answers: { 200: OVERSIGHT } },
   { route: "GET kuvo/work/oversight/events", answers: { 200: OVERSIGHT } },

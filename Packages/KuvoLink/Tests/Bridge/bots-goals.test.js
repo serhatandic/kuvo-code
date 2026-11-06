@@ -716,6 +716,21 @@ test("Pause on a conversation's own goal stops its turn and holds it until Resum
   assert.deepEqual(prompts, []);
 });
 
+// A pause goes on from where it was: unlike Stop, what's waiting on its timers stays, and isn't stopped.
+test("pausing a goal stops its sessions' turns and leaves their wake-ups, and nothing marks them stopped", async () => {
+  await startedGoal();
+  active.add("ses_site");
+  const wakes = path.join(home, "wakes", "ses_site", "wakes");
+  fs.mkdirSync(wakes, { recursive: true });
+  const wake = path.join(wakes, `${Math.floor(Date.now() / 1000) + 3600}-abc`);
+  fs.writeFileSync(wake, "Look again.");
+  await link.goalHolds(target)(goalEvent("ses_pixel", "paused", "you"));
+  assert.ok(interrupted.includes("ses_site"), "its turn stops");
+  assert.equal(fs.existsSync(wake), true, "its wake-up stays");
+  assert.equal(link.readStopped().ses_site, undefined);
+  fs.rmSync(path.join(home, "wakes", "ses_site"), { recursive: true, force: true });
+});
+
 // The box restarting (or its stream from the bridge dropping) while a goal is paused: what it held
 // stays held, and once it's found the bridge again, a goal resumed meanwhile goes on.
 test("a goal paused before the box restarted stays held, and goes on once it finds the goal resumed meanwhile", async () => {
@@ -901,6 +916,42 @@ test("a goal's conversation Auto's reviewer paused stays paused on its card, wha
 });
 
 const nudges = () => prompts.filter(each => each.to === "ses_pixel" && each.text.startsWith("[Goal] Nothing of the goal is at work"));
+
+// A dev server a session left up isn't the goal at work: it would never be nudged on, or paused.
+const leftRunning = (session, since) => fs.writeFileSync(path.join(home, "run", "work", "background.json"), JSON.stringify({ engine: { folders: [], sessions: { [session]: { commands: [{ id: "sh_dev", command: "npm run dev", started: since }], subagents: [], tasks: [] } } } }));
+const forgetLeftRunning = () => fs.rmSync(path.join(home, "run", "work", "background.json"), { force: true });
+
+test("what a goal's session left running holds off a nudge only for a while", async () => {
+  await startedGoal();
+  await tool("start_session", { task: "Build the site.", project: "Driftwood", step: 1 });
+  const site = made[0].id;
+  const now = Date.now();
+  await look(now);
+  // A command just started: it's at work, and nobody's reminded.
+  leftRunning(site, now + 10 * 60_000);
+  await look(now + 11 * 60_000);
+  assert.equal(nudges().length, 0);
+  // Still up long after: that's a dev server, not the goal going on.
+  leftRunning(site, now);
+  await look(now + 42 * 60_000);
+  await look(now + 53 * 60_000);
+  forgetLeftRunning();
+  assert.equal(nudges().length, 1);
+});
+
+test("a turn that failed at a limit pauses the goal, with what its session left running still up", async () => {
+  await startedGoal();
+  await tool("start_session", { task: "Build the site.", project: "Driftwood", step: 1 });
+  const site = made[0].id;
+  sessions.get(site).model = { providerID: "anthropic", id: "claude-opus-5-5" };
+  sessions.get(site).metadata = { kuvo: { startedBy: "ses_pixel", by, depth: 1 } };
+  failures.set(site, "You've hit your usage limit. Your limit resets in 2h.");
+  const now = Date.now();
+  leftRunning(site, now);
+  await look(now);
+  forgetLeftRunning();
+  assert.equal((await goals())[0].paused.length, 1);
+});
 
 test("with nothing of the goal at work, the bot is told to carry on after a while; told once with nothing changing after, it isn't told again until something does, and never while all that's left waits for you", async () => {
   await startedGoal();

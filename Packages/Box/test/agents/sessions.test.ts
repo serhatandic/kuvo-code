@@ -2005,6 +2005,30 @@ process.stdin.on("data", (chunk) => {
     expect(sessions.messages(run.sessionID).at(-1)).toMatchObject({ type: "idle", outcome: "interrupted" })
   })
 
+  test("a subagent in the background counts for its session after its turn, until it ends or the session's work is stopped", async () => {
+    let run: any
+    a.script = async (_input, turn, hooks) => {
+      turn.startStep()
+      turn.toolStart("call_task", "subagent")
+      run = hooks.subagent("call_task", { title: "Wait", background: true })
+      turn.endStep()
+      return { outcome: "succeeded" }
+    }
+    const id = create()
+    send(id, "go")
+    await settled(id, 1)
+    expect(sessions.background()[id].subagents.map((each) => each.id)).toEqual([run.sessionID])
+    run.end("succeeded")
+    expect(sessions.background()[id]).toBeUndefined()
+    // Another, stopped with what its session left running: Stop on one someone started.
+    send(id, "again")
+    await settled(id, 2)
+    expect(sessions.background()[id].subagents).toHaveLength(1)
+    await sessions.stopBackground(id)
+    expect(sessions.background()[id]).toBeUndefined()
+    expect(sessions.active()).not.toContain(run.sessionID)
+  })
+
   test("a subagent at work when the bridge stops ends with it", async () => {
     let child = ""
     a.script = (_input, turn, hooks) => {

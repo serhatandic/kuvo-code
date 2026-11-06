@@ -325,6 +325,7 @@ export function handler(context: Context) {
           return json(page(ordered, url))
         }
         if (a === "active") return json({ data: Object.fromEntries(sessions.active().map((id) => [id, { type: "busy" }])) })
+        if (a === "background") return json({ data: sessions.background() })
         // A conversation from the engine, carried on here.
         if (a === "import" && method === "POST") return json({ data: sessions.importSession(await body()) })
         const id = a
@@ -340,6 +341,12 @@ export function handler(context: Context) {
           }
         }
         switch (b) {
+          case "background":
+            if (method === "DELETE") {
+              await sessions.stopBackground(id)
+              return json({})
+            }
+            break
           case "message": {
             const messages = sessions.messages(id)
             const asc = url.searchParams.get("order") === "asc" || url.searchParams.get("cursor")?.startsWith("asc")
