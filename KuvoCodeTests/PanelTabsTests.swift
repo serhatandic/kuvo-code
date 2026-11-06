@@ -49,6 +49,66 @@ import Testing
         #expect(panel.visibleTabs.count == 1)
     }
 
+    /// A group chat showing only a bot's tab (you closed its own), when that bot leaves: the panel
+    /// starts over rather than having nothing to show.
+    @Test func aGroupChatsPanelStartsOverWhenItsLastBotsTabGoes() throws {
+        panel.inView = .init(group: "group:grp_team", bots: ["bot_a"])
+        let own = panel.visibleTabs
+        panel.newBrowser(owner: "bot_a")
+        for tab in own { panel.close(tab.id) }
+        #expect(panel.visibleTabs.map(\.owner) == ["bot_a"])
+        panel.inView = .init(group: "group:grp_team")
+        #expect(panel.selected?.owner == "group:grp_team")
+    }
+
+    /// The same, when the bot is deleted: its tab goes first, then it leaves the chat.
+    @Test func aGroupChatsPanelStartsOverWhenItsLastBotIsDeleted() throws {
+        panel.inView = .init(group: "group:grp_team", bots: ["bot_a"])
+        let own = panel.visibleTabs
+        panel.newBrowser(owner: "bot_a")
+        for tab in own { panel.close(tab.id) }
+        panel.closeTabs(of: "bot_a")
+        panel.inView = .init(group: "group:grp_team")
+        #expect(panel.selected?.owner == "group:grp_team")
+    }
+
+    /// A machine's unclaimed page that was all a panel had, taken by another conversation's agent:
+    /// the panel starts over.
+    @Test func aPanelStartsOverWhenAnAgentTakesTheMachinePageItShowed() throws {
+        panel.inView = .init(session: "ses_a", place: "lab")
+        let own = panel.visibleTabs
+        panel.syncMachinePages("lab", [.init(id: "page_1", title: "Docs", url: "https://example.com")])
+        for tab in own { panel.close(tab.id) }
+        #expect(panel.visibleTabs.map(\.owner) == [Utilities.unclaimed])
+        panel.machinePageActive("lab", page: "page_1", byAgent: true, session: "ses_b")
+        #expect(panel.selected?.owner == "ses_a")
+    }
+
+    /// A conversation found to belong in a panel that has its own Changes tab (a subagent opened
+    /// before it was known to be one): one Changes tab there, and its other tabs alongside.
+    @Test func aPanelFoundToBeAnothersHasOneChangesTab() {
+        panel.inView = .init(session: "ses_root", panel: "ses_root")
+        panel.inView = .init(session: "ses_sub", panel: "ses_sub")
+        panel.open(a)
+        panel.panelOf = { _ in "ses_root" }
+        panel.inView = .init(session: "ses_sub", panel: "ses_root")
+        #expect(startTabs.count == 1)
+        #expect(panel.visibleTabs.contains { $0.kind == .file(a) })
+    }
+
+    /// A subagent of a subagent: the sessions above it arrive one at a time, so its panel is
+    /// found to be another's twice over, and its tabs follow both times.
+    @Test func aPanelFoundToBeAnothersInTwoStepsKeepsItsTabs() {
+        panel.inView = .init(session: "ses_deep", panel: "ses_deep")
+        panel.open(a)
+        panel.panelOf = { $0 == "ses_deep" ? "ses_find" : $0 }
+        panel.inView = .init(session: "ses_deep", panel: "ses_find")
+        #expect(panel.visibleTabs.contains { $0.kind == .file(a) })
+        panel.panelOf = { _ in "ses_root" }
+        panel.inView = .init(session: "ses_deep", panel: "ses_root")
+        #expect(panel.visibleTabs.contains { $0.kind == .file(a) })
+    }
+
     /// A group chat has no project: its panel opens on a new tab (browser and tools), never on a
     /// Changes tab saying "No Project", and Show Changes and Show Files don't add one there.
     @Test func aGroupChatsPanelHasNoChangesOrFiles() {

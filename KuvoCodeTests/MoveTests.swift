@@ -230,6 +230,52 @@ import Testing
         #expect(Drafts.shared["ses_movebot"].text == "And the release notes")
     }
 
+    /// A bot moved to your machine with its conversation in view: its tabs here go, and its panel
+    /// starts over rather than having nothing to show (only the tab bar, in the panel's middle).
+    @Test func aBotMovedWithItsConversationInViewStillHasATabInItsPanel() async throws {
+        let lab = "move-\(UUID().uuidString.prefix(8).lowercased()).invalid"
+        let labKey = String(repeating: "M", count: 43)
+        let app = AppModel()
+        app.moves.app = app
+        app.bots.app = app
+        _ = app.machines.add(lab)
+        defer {
+            app.removeMachine(lab)
+            try? FileManager.default.removeItem(at: Bots.file)
+        }
+        app.phoneLink.standIn(machine: lab, key: labKey)
+        let over = Over()
+        let pixel = #"{"id":"bot_move00002","session":"ses_movebot2","name":"Pixel","look":{"color":"sky","shape":"round","face":"calm"},"folder":"/kuvo-tests-none/bot_move00002"}"#
+        let moving = #"{"moves":[{"id":"mv_bot2","kind":"bot","thing":"bot_move00002","from":"mac-key","to":"\#(labKey)","role":"from","stage":"switching","sessions":["ses_movebot2"]}],"away":[]}"#
+        let mac = BoxClient.mac
+        let boxes = { (box: String) in
+            Self.box(box) { path in
+                switch path {
+                case "kuvo/bots": (box == lab) == over.now ? #"{"bots":[\#(pixel)]}"# : #"{"bots":[]}"#
+                case "kuvo/moves": box == mac && !over.now ? moving : #"{"moves":[],"away":[]}"#
+                default: nil
+                }
+            }
+        }
+        app.bots.boxes = boxes
+        app.moves.boxes = boxes
+        app.bots.reachable = { $0 == lab }
+        await app.bots.refresh(BoxClient.mac)
+        await app.moves.reload(BoxClient.mac)
+        app.tabs.open(.session("ses_movebot2"))
+        app.utilities.inView = app.tabs.inView
+        #expect(app.utilities.panelKey == "bot_move00002")
+
+        over.now = true
+        await app.moves.reload(BoxClient.mac)
+        app.utilities.inView = app.tabs.inView
+        await app.bots.refresh(BoxClient.mac)
+        app.utilities.inView = app.tabs.inView
+        try await until { app.bots.bot("bot_move00002")?.machine == lab && !app.moves.held.contains("bot_move00002") }
+        app.utilities.inView = app.tabs.inView
+        #expect(app.utilities.selected != nil, "its panel, tabs: \(app.utilities.tabs.map(\.owner))")
+    }
+
     /// A machine whose box can't be read for a moment (its connection dropped, say) hasn't ended
     /// what it said was moving: that still shows as moving, until its box says it's over.
     @Test func aMachineThatCantBeReadForAMomentIsStillMovingWhatItWas() async throws {

@@ -561,7 +561,8 @@ final class Moves {
             for end in ends { await app.bots.refresh(end ?? BoxClient.mac) }
             settled(move, on: box)
             // Its tabs here go with it, once it doesn't live here.
-            if app.bots.bot(move.thing).map({ $0.machine != nil }) ?? true { app.utilities.closeTabs(of: move.thing) }
+            let bot = app.bots.bot(move.thing)
+            if bot.map({ $0.machine != nil }) ?? true { app.utilities.closeTabs(of: move.thing, refills: bot != nil) }
             app.wakeUps.forget(key: move.thing)
             if let bot = app.bots.bot(move.thing) { await app.wakeUps.read(bot.wakeOwner) }
         case "chat":

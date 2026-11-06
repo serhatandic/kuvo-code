@@ -231,6 +231,10 @@ struct UtilitiesPane: View {
                     placeholder("Machine Removed", symbol: "server.rack", detail: "\(machine) isn’t one of your machines anymore. Close this tab.")
                 }
             }
+        } else {
+            // A panel with no tab for a moment (its conversation is going): the strip stays at the
+            // top, which it wouldn't with nothing here to fill the card.
+            Color.clear
         }
     }
 
