@@ -126,7 +126,14 @@ test("Autopilot on a real engine: a marked question goes ahead and can be change
 
   // A question it marks goes ahead at once, with nobody answering: kept as the step's call.
   await send("msg_autopilotlive00001", "Use your question tool now to ask me one question, \"Which roast for the house blend?\", with the choices Light, Warm and Dark. You recommend Warm: it suits the pastries. When you have your answer, reply with only the name of the roast you're going with.");
-  const [call] = await waitFor(async () => { const made = await calls(); return made.length ? made : null; }, "the question to go ahead");
+  const [call] = await waitFor(async () => {
+    const made = await calls();
+    if (made.length) return made;
+    // (The model's limit, by name, rather than a long wait.)
+    const failed = (await page()).find(each => each.type === "idle" && each.outcome === "failed");
+    assert.equal(failed, undefined, `Its turn failed: ${failed?.error?.message}`);
+    return null;
+  }, "the question to go ahead");
   assert.equal(call.choice, "Warm");
   assert.match(call.text, /roast/i);
   assert.deepEqual([...call.options].sort(), ["Dark", "Light", "Warm"], "in whatever order the model lists them");
@@ -181,4 +188,72 @@ test("Autopilot on a real engine: a marked question goes ahead and can be change
   assert.equal(await says(cup.id), true, "off Autopilot, its box says so of a marked one too");
   assert.equal((await calls()).length, 1, "it made no call on it");
   assert.equal((await forms()).length, 1);
+});
+
+// No model in this one: the server asks as soon as the engine connects to it.
+test("what an MCP server asks, filed under no session on a real engine, comes back declined to that server with the box's way of turning it down", { skip: !binary && "OPENCODE_TEST_BINARY isn't set" }, async () => {
+  const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-autopilot-live-")));
+  removeAtEnd(home);
+  for (const folder of ["tmp", "work", "xdg/config", "xdg/data", "xdg/state", "xdg/cache"]) fs.mkdirSync(path.join(home, folder), { recursive: true });
+  const heard = path.join(home, "heard.json");
+  const probe = path.join(home, "probe.mjs");
+  fs.writeFileSync(probe, `
+    import fs from "node:fs";
+    import readline from "node:readline";
+    const send = message => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\\n");
+    readline.createInterface({ input: process.stdin }).on("line", line => {
+      const message = JSON.parse(line);
+      if (message.method === "initialize") return send({ id: message.id, result: { protocolVersion: message.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "probe", version: "1.0.0" } } });
+      if (message.method === "tools/list") return send({ id: message.id, result: { tools: [] } });
+      if (message.method === "notifications/initialized") return send({ id: "ask", method: "elicitation/create", params: { message: "Which repository?", requestedSchema: { type: "object", properties: { repo: { type: "string" } }, required: ["repo"] } } });
+      if (message.id === "ask") return fs.writeFileSync(${JSON.stringify(heard)}, JSON.stringify(message));
+      if (message.id !== undefined && message.method) send({ id: message.id, result: {} });
+    });
+  `);
+  const workspace = path.join(home, "work");
+  const child = spawn(binary, ["serve", "--stdio", "--port", "0"], {
+    cwd: workspace,
+    stdio: ["pipe", "pipe", "pipe"],
+    env: {
+      PATH: process.env.PATH, HOME: home, TMPDIR: `${home}/tmp/`, XDG_CONFIG_HOME: `${home}/xdg/config`, XDG_DATA_HOME: `${home}/xdg/data`,
+      XDG_STATE_HOME: `${home}/xdg/state`, XDG_CACHE_HOME: `${home}/xdg/cache`, OPENCODE_PASSWORD: "pw",
+      OPENCODE_CONFIG_CONTENT: JSON.stringify({ mcp: { servers: { probe: { type: "local", command: [process.execPath, probe] } } } }),
+    },
+  });
+  atEnd(() => new Promise(resolve => { if (child.exitCode !== null) return resolve(); child.on("exit", resolve); child.stdin.end(); child.kill(); }));
+  const port = await new Promise((resolve, reject) => {
+    let said = "";
+    const look = chunk => { said += chunk; const found = said.match(/127\.0\.0\.1:(\d+)/); if (found) resolve(Number(found[1])); };
+    child.stdout.on("data", look);
+    child.stderr.on("data", look);
+    child.on("exit", code => reject(new Error(`The engine ended (${code}): ${said}`)));
+  });
+  const headers = { authorization: "Basic " + Buffer.from("opencode:pw").toString("base64"), "x-opencode-directory": encodeURIComponent(workspace) };
+  const get = async route => (await fetch(`http://127.0.0.1:${port}/${route}`, { headers })).json();
+  const waitFor = async (wanted, what) => {
+    const end = Date.now() + 60_000;
+    for (;;) {
+      const found = await wanted().catch(() => null);
+      if (found) return found;
+      assert.ok(Date.now() < end, `Waited too long for ${what}`);
+      await new Promise(resolve => setTimeout(resolve, 250));
+    }
+  };
+
+  // The engine connects to its servers as a folder's first read of them asks it to.
+  const [form] = await waitFor(async () => {
+    await get("api/mcp");
+    const { data } = await get("api/session/global/form");
+    return data?.length ? data : null;
+  }, "the server's form");
+  assert.equal(form.metadata?.kind, "mcp-elicitation");
+  assert.equal(form.sessionID, "global");
+
+  const declined = await fetch(`http://127.0.0.1:${port}/api/session/global/form/${form.id}?message=${encodeURIComponent("Left undone on Autopilot.")}`, { method: "DELETE", headers });
+  assert.equal(declined.ok, true, `The engine said ${declined.status}`);
+
+  const said = await waitFor(async () => (fs.existsSync(heard) ? JSON.parse(fs.readFileSync(heard, "utf8")) : null), "the server to hear");
+  assert.match(said.result?.action ?? "", /^(decline|cancel)$/, "it hears no, with nothing filled in");
+  assert.equal(said.result?.content, undefined);
+  assert.deepEqual((await get("api/session/global/form")).data, []);
 });

@@ -30,6 +30,8 @@ export interface Caller {
   group?: string;
   /** Its conversation is on Autopilot: nothing asks you for it. */
   autopilot?: boolean;
+  /** A command of yours, not an agent's (by the folder it's in): Autopilot has no say in it. */
+  yours?: boolean;
 }
 
 async function sessionAt(targets: Target[], id: string): Promise<EngineSession | null> {

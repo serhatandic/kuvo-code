@@ -3533,8 +3533,13 @@ what may be decided without asking. Every conversation is Interactive until it's
   back at once, left undone, and a project it would ask you about stays asked while it carries on.
   What it was already waiting on when Autopilot is turned on stops waiting the same way, within a few
   seconds. A coding agent's engine run (Auto's, `kuvo.engineFor`) counts as the conversation it runs for.
-  The vault's activity keeps a use left undone as `refused`, `how: "autopilot"`. A sign-in the vault lets
-  it use on its own still goes ahead. Its permissions are its approval's, and wait as ever.
+  The vault's activity keeps a use left undone as `refused`, `how: "autopilot"`, and an SSH command of
+  yours (by its folder, not an agent's) isn't left undone, even in a bot's folder. A sign-in the vault
+  lets it use on its own still goes ahead. Its permissions are its approval's, and wait as ever. A step
+  turned down this way is a failed `question` tool with those words, which clients show as set aside;
+  Grok's completes under its own name, with the words as its answer, and Codex's `requestUserInput` is
+  no step at all, so neither shows it. Codex asking again and again, turned down each time, ends its
+  turn on the third; a question of its for a secret is answered with nothing, not the words.
 - `POST kuvo/sessions/<id>/autopilot/asked` `{form}`: whether a question asked in the conversation
   or by one of its subagents waits on you: `{waiting: bool}`. A client that hears a question asked in
   a conversation on Autopilot asks this before it counts or notifies, and goes by the answer: it

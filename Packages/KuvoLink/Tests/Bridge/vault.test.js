@@ -678,6 +678,25 @@ test("an SSH key you keep for a project signs through its conversations' own age
     const undone = await sshTool("ssh-keygen", ["-Y", "sign", "-n", "git", "-f", `${askFirst}.pub`, path.join(root, "commit")], await sshAgentFor("ses_away", project));
     assert.notEqual(undone.status, 0, "nothing signed");
     assert.deepEqual((await fromMac("GET", "kuvo/vault/asks", undefined, key)).value.asks ?? [], []);
+    // Turned back to Interactive, it asks you again at once: being left undone wasn't your no.
+    const metadata = sessions.ses_away.metadata;
+    delete sessions.ses_away.metadata;
+    const again = sshTool("ssh-keygen", ["-Y", "sign", "-n", "git", "-f", `${askFirst}.pub`, path.join(root, "commit")], await sshAgentFor("ses_away", project));
+    const [card] = await box.asks();
+    assert.equal((await fromMac("POST", `kuvo/vault/asks/${card.id}`, { answer: "once" }, key)).status, 200);
+    assert.equal((await again).status, 0);
+    fs.rmSync(path.join(root, "commit.sig"));
+    sessions.ses_away.metadata = metadata;
+    // A command of yours in a bot's folder is yours: its bot on Autopilot doesn't leave it undone.
+    const yours = sshTool("ssh-keygen", ["-Y", "sign", "-n", "git", "-f", `${askFirst}.pub`, path.join(root, "commit")], await sshAgentFor(folderNote(path.join(home, "bots", "bot_scout", "workspace")), path.join(home, "bots", "bot_scout", "workspace")));
+    const [mine] = await box.asks();
+    sessions.ses_scout.metadata = { kuvo: { autopilot: true } };
+    // (Longer than an ask's look at whether it went on Autopilot.)
+    await new Promise(resolve => setTimeout(resolve, 6_000));
+    delete sessions.ses_scout.metadata;
+    assert.equal((await fromMac("POST", `kuvo/vault/asks/${mine.id}`, { answer: "once" }, key)).status, 200, "it still waits for you");
+    assert.equal((await yours).status, 0);
+    fs.rmSync(path.join(root, "commit.sig"));
     assert.equal((await fromMac("DELETE", `kuvo/vault/items/${kept.value.item.id}`, undefined, key)).status, 200);
     // Paused, the conversation's agent offers nothing either.
     await fromMac("POST", "kuvo/vault/pause", { paused: true, bot: "ses_shop" }, key);

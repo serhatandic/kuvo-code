@@ -61,7 +61,7 @@ function callerFor(note: string, folder: string): () => Promise<Caller | null> {
   };
   return async () => {
     const bot = listBots().find(each => each.folder && (folder === each.folder || folder.startsWith(each.folder + path.sep)));
-    return { folder, ...(bot ? { bot: bot.id, botName: bot.name, ...(bot.session ? { session: bot.session, root: bot.session } : {}) } : {}) };
+    return { folder, yours: true, ...(bot ? { bot: bot.id, botName: bot.name, ...(bot.session ? { session: bot.session, root: bot.session } : {}) } : {}) };
   };
 }
 
@@ -76,7 +76,7 @@ function sourceFor(caller: () => Promise<Caller | null>) {
   // it says it is, as that can only leave a use undone. And that's the conversation to watch meanwhile.
   const asked = async (): Promise<{ who: Caller | null; watch?: string }> => {
     const said = await caller();
-    return { who: EVERYONE_ONLY ? (said?.autopilot ? { autopilot: true } : {}) : said, ...(said?.session ? { watch: said.session } : {}) };
+    return { who: EVERYONE_ONLY ? (said?.autopilot ? { autopilot: true } : {}) : said, ...(said?.session && !said.yours ? { watch: said.session } : {}) };
   };
   return {
     keys: async (): Promise<AgentKey[]> => {
@@ -116,7 +116,8 @@ function sourceFor(caller: () => Promise<Caller | null>) {
           if (!item || !who || !agentsUseVault()) return false;
           const allowed = await mayUse(item, who, { program: "ssh", signal: stop.signal, watch });
           if (allowed.ok) noteUse(item, who, { program: "ssh" }, allowed.how);
-          else if (!stop.signal.aborted) refused.set(key.id, Date.now() + REFUSED_FOR);
+          // (Left undone on Autopilot isn't your no: turned back, it asks.)
+          else if (!stop.signal.aborted && !allowed.leftUndone) refused.set(key.id, Date.now() + REFUSED_FOR);
           return allowed.ok;
         })().catch(() => false).finally(() => asking.delete(key.id));
         open = { answer, waiting: 0, stop };

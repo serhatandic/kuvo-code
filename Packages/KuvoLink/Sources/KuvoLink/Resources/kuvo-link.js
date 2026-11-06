@@ -25812,7 +25812,7 @@ async function mayUse(item, caller, use) {
   if (caller.autopilot)
     return leftUndone();
   note2({ what: "asked", ...itemOf(item), ...whoOf(caller), ...where });
-  const { value: answered, onAutopilot } = await untilOnAutopilot(use.watch ?? caller.session, use.signal, (signal) => ask({ kind: "use", ...whoOf(caller), ...caller.group ? { group: caller.group } : {}, item: item.id, itemName: item.name, ...use.site ? { site: use.site } : {}, ...use.why ? { why: use.why } : {}, ...machineName() ? { machine: machineName() } : {} }, signal));
+  const { value: answered, onAutopilot } = await untilOnAutopilot(caller.yours ? undefined : use.watch ?? caller.session, use.signal, (signal) => ask({ kind: "use", ...whoOf(caller), ...caller.group ? { group: caller.group } : {}, item: item.id, itemName: item.name, ...use.site ? { site: use.site } : {}, ...use.why ? { why: use.why } : {}, ...machineName() ? { machine: machineName() } : {} }, signal));
   if (onAutopilot)
     return leftUndone();
   if (answered.answer === "no") {
@@ -25875,7 +25875,7 @@ function callerFor(note, folder) {
     };
   return async () => {
     const bot = listBots().find((each) => each.folder && (folder === each.folder || folder.startsWith(each.folder + path91.sep)));
-    return { folder, ...bot ? { bot: bot.id, botName: bot.name, ...bot.session ? { session: bot.session, root: bot.session } : {} } : {} };
+    return { folder, yours: true, ...bot ? { bot: bot.id, botName: bot.name, ...bot.session ? { session: bot.session, root: bot.session } : {} } : {} };
   };
 }
 function sourceFor(caller) {
@@ -25884,7 +25884,7 @@ function sourceFor(caller) {
   const refused = new Map;
   const asked = async () => {
     const said = await caller();
-    return { who: EVERYONE_ONLY ? said?.autopilot ? { autopilot: true } : {} : said, ...said?.session ? { watch: said.session } : {} };
+    return { who: EVERYONE_ONLY ? said?.autopilot ? { autopilot: true } : {} : said, ...said?.session && !said.yours ? { watch: said.session } : {} };
   };
   return {
     keys: async () => {
@@ -25926,7 +25926,7 @@ function sourceFor(caller) {
           const allowed = await mayUse(item, who, { program: "ssh", signal: stop.signal, watch });
           if (allowed.ok)
             noteUse(item, who, { program: "ssh" }, allowed.how);
-          else if (!stop.signal.aborted)
+          else if (!stop.signal.aborted && !allowed.leftUndone)
             refused.set(key.id, Date.now() + REFUSED_FOR);
           return allowed.ok;
         })().catch(() => false).finally(() => asking.delete(key.id));
