@@ -34,27 +34,6 @@ public struct FormRequest: Codable, Sendable, Hashable, Identifiable {
         return Single(key: field.key, text: field.description ?? field.title ?? title, choices: choices, allowsText: allowsCustom || choices.isEmpty)
     }
 
-    /// Whether it marks the choice it recommends in each field it needs ("Warm (Recommended)"):
-    /// what a conversation on Autopilot goes ahead on without asking (PROTOCOL.md, "Autopilot").
-    /// Never one that asks for a secret: only you hand those over.
-    public var recommendsAnswer: Bool {
-        guard isQuestion else { return false }
-        var marked = false
-        for field in fields where field.hidden != true && (field.when ?? []).isEmpty {
-            switch field.kind {
-            case .string(_, _, _, _, "password", _):
-                return false
-            case .string(let options, _, _, _, _, _) where (options ?? []).filter(\.isRecommended).count == 1:
-                marked = true
-            case .multiselect(let options, _, _, _, _) where options.contains(where: \.isRecommended):
-                marked = true
-            default:
-                guard field.required == false else { return false }
-            }
-        }
-        return marked
-    }
-
     public struct Single: Sendable, Hashable {
         public let key: String
         public let text: String
@@ -87,8 +66,6 @@ public struct FormField: Codable, Sendable, Hashable, Identifiable {
         public var description: String?
 
         public var id: String { value }
-        /// Marked as the one the agent recommends ("Warm (Recommended)").
-        public var isRecommended: Bool { label.range(of: "(recommended)", options: .caseInsensitive) != nil }
     }
 
     public enum Kind: Sendable, Hashable {

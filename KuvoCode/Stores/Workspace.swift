@@ -2210,7 +2210,7 @@ final class Workspace {
                 found[form.id] = form.sessionID
                 guard tell, asking[form.id] == nil else { continue }
                 let question = Self.question(in: form)
-                notifyAsk(form.sessionID, body: question?.text ?? (form.isQuestion ? "Has a question for you." : "Needs your answer."), request: form.id, question: question, recommends: form.recommendsAnswer)
+                notifyAsk(form.sessionID, body: question?.text ?? (form.isQuestion ? "Has a question for you." : "Needs your answer."), request: form.id, question: question)
             }
         }
         // Answered meanwhile (on your phone, say): no longer asking.
@@ -2750,10 +2750,10 @@ final class Workspace {
             if let reply = try? event.payload(as: EventPayload.PermissionReplied.self) { settled(reply.requestID) }
         case "form.created":
             guard let form = try? event.payload(as: EventPayload.FormCreated.self).form else { return }
-            // (One its box is going ahead on doesn't count on the Dock, even for a moment.)
-            if !form.recommendsAnswer || session(form.sessionID).map(AutopilotShown.isOn) != true { asking[form.id] = form.sessionID }
+            // (On Autopilot it counts once its box says it waits on you: `notifyAsk`.)
+            if session(form.sessionID).map(AutopilotShown.isOn) != true { asking[form.id] = form.sessionID }
             let question = Self.question(in: form)
-            notifyAsk(form.sessionID, body: question?.text ?? (form.isQuestion ? "Has a question for you." : "Needs your answer."), request: form.id, question: question, recommends: form.recommendsAnswer)
+            notifyAsk(form.sessionID, body: question?.text ?? (form.isQuestion ? "Has a question for you." : "Needs your answer."), request: form.id, question: question)
         case "form.replied", "form.cancelled":
             if let form = try? event.payload(as: EventPayload.FormSettled.self) { settled(form.id) }
         case _ where SessionModel.runEnds.contains(event.type):
@@ -2837,8 +2837,6 @@ final class Workspace {
     /// answered or gone meanwhile.
     private(set) var notifying: Set<String> = []
     @ObservationIgnored private var settledWhileNotifying: Set<String> = []
-    /// How long a question that recommends a choice, on Autopilot, is given for its box to go ahead.
-    @ObservationIgnored var autopilotGrace: Duration = .seconds(5)
 
     /// An ask answered (here or elsewhere) or gone with its run: off the Dock's count, and its
     /// notification goes, or isn't posted if it's still being made.
@@ -2872,10 +2870,9 @@ final class Workspace {
         tellYours(request)
     }
 
-    /// `recommends`: a question that marks the choice it recommends, which a conversation on
-    /// Autopilot goes ahead on without you (its box answers it): no notification for it there, unless
-    /// it's still waiting after `autopilotGrace` (its goal paused, or the engine didn't take it).
-    private func notifyAsk(_ id: String, body: String, request: String, isPermission: Bool = false, answerable: Bool = true, always: String? = nil, question: Notifier.Question? = nil, recommends: Bool = false) {
+    /// A question in a conversation on Autopilot counts and tells you only if its box says it waits
+    /// on you: the box decides what goes ahead, and this judges nothing.
+    private func notifyAsk(_ id: String, body: String, request: String, isPermission: Bool = false, answerable: Bool = true, always: String? = nil, question: Notifier.Question? = nil) {
         // A seat's requests are answered by its group chat.
         guard !seats.contains(id), !notifying.contains(request) else { return }
         notifying.insert(request)
@@ -2904,10 +2901,9 @@ final class Workspace {
                 asking[request] = nil
                 return
             }
-            if recommends, session.map(AutopilotShown.isOn) == true {
+            if !isPermission, let conversation = session, AutopilotShown.isOn(conversation) {
                 asking[request] = nil
-                try? await Task.sleep(for: autopilotGrace)
-                guard !settledWhileNotifying.contains(request) else { return }
+                guard await waitsOnYou(request, in: conversation), !settledWhileNotifying.contains(request) else { return }
                 asking[request] = id
             }
             // Answered (or gone) while its session was read: no notification for it.
@@ -2921,6 +2917,15 @@ final class Workspace {
                                    push: .init(isPermission ? .permission : .question, request: (session: id, id: request),
                                                machine: sessionMachines[id] ?? session.flatMap { RemoteFolder.machine(of: $0.location.directory) }, answerable: answerable && shown))
         }
+    }
+
+    /// Whether its box says this question waits on you (PROTOCOL.md, "Autopilot"). One that can't say
+    /// (unreachable, or from before this) has it tell you, as any question.
+    private func waitsOnYou(_ form: String, in conversation: Session) async -> Bool {
+        struct Said: Decodable { var waiting: Bool }
+        guard let box = boxes?(Self.box(of: conversation.location.directory)) else { return true }
+        let said = try? await box.value(Said.self, "POST", "kuvo/sessions/\(conversation.id)/autopilot/asked", body: ["form": form])
+        return said?.waiting ?? true
     }
 
     /// Whether a notification shows all a permission covers: Allow there would allow what it

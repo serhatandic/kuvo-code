@@ -194,33 +194,85 @@ import Testing
         #expect(workspace.autopilotHere[BoxClient.mac] == true)
     }
 
-    /// A question that marks a choice, on Autopilot: nothing waits on the Dock while its box goes
-    /// ahead; one that's still asked after that (its goal paused, or the engine didn't take it)
-    /// waits on you, as any.
-    @Test func aQuestionThatMarksAChoiceWaitsOnYouOnlyIfItStillWaits() async throws {
+    /// A question in a conversation on Autopilot counts, and tells you, as its box says it waits on
+    /// you, whatever it marks; one its box can't say about tells you, as any question. A conversation
+    /// that isn't on Autopilot asks its box nothing.
+    @Test func aQuestionOnAutopilotWaitsOnYouAsItsBoxSays() async throws {
         defer { engine.stop() }
         let workspace = Workspace()
         workspace.api = engine.api
-        engine.list([StubEngine.session("ses_a", directory: "/tmp/kuvo-tests-autopilot", extra: ["metadata": ["kuvo": ["autopilot": true]]])], running: ["ses_a"])
+        let on = StubEngine.session("ses_a", directory: "/tmp/kuvo-tests-autopilot", extra: ["metadata": ["kuvo": ["autopilot": true]]])
+        engine.list([on, StubEngine.session("ses_i", directory: "/tmp/kuvo-tests-autopilot")], running: ["ses_a", "ses_i"])
         engine.conversation("ses_a", [])
+        engine.conversation("ses_i", [])
+        engine.on("GET", "/api/session/ses_sub", json: ["data": StubEngine.session("ses_sub", directory: "/tmp/kuvo-tests-autopilot", extra: ["parentID": "ses_a"])])
         await workspace.refresh()
-        func question(_ id: String) -> [String: Any] {
-            ["id": id, "sessionID": "ses_a", "title": "Roast", "metadata": ["kind": "question"],
-             "fields": [["key": "q0", "title": "Roast", "description": "Which roast?", "type": "string", "required": true,
-                         "options": [["value": "w", "label": "Warm (Recommended)"], ["value": "d", "label": "Dark"]]]]]
+        let asks = Guarded<[String]>([])
+        workspace.boxes = { _ in
+            BoxClient(box: "lab", transport: LocalBox { request in
+                AsyncThrowingStream { out in
+                    let form = (try? JSONSerialization.jsonObject(with: request.body) as? [String: Any])?["form"] as? String ?? ""
+                    asks.withLock { $0.append("\(request.path) \(form)") }
+                    let refused = form == "frm_refused"
+                    out.yield(.head(status: refused ? 404 : 200, headers: [:]))
+                    out.yield(.body(Data((refused ? #"{"message":"Not here."}"# : #"{"waiting":\#(form.hasSuffix("waits"))}"#).utf8)))
+                    out.finish()
+                }
+            })
         }
+        func ask(_ id: String, in session: String = "ses_a", marked: Bool) throws {
+            let labels = marked ? ["Warm (Recommended)", "Dark"] : ["Warm", "Dark"]
+            let form: [String: Any] = ["id": id, "sessionID": session, "title": "Roast", "metadata": ["kind": "question"],
+                                       "fields": [["key": "q0", "title": "Roast", "description": "Which roast?", "type": "string", "required": true,
+                                                   "options": labels.map { ["value": $0, "label": $0] }]]]
+            workspace.handle(try engine.event("form.created", session: session, ["form": form]))
+        }
+        func heard(_ id: String) async throws { try await until { !workspace.notifying.contains(id) } }
 
-        // Its box goes ahead within its time.
-        workspace.autopilotGrace = .zero
-        workspace.handle(try engine.event("form.created", session: "ses_a", ["form": question("frm_went")]))
+        // This Mac's box answers it, as it does a conversation's Autopilot.
+        #expect(PhoneLink.movedToBox("kuvo/sessions/ses_a/autopilot/asked"))
+
+        // Not waiting, as its box says: not counted, marked or not.
+        try ask("frm_marked_goes", marked: true)
         #expect(workspace.waitingCount == 0)
-        workspace.handle(try engine.event("form.replied", session: "ses_a", ["id": "frm_went", "sessionID": "ses_a"]))
-        try await until { !workspace.notifying.contains("frm_went") }
+        try await heard("frm_marked_goes")
+        try ask("frm_plain_goes", marked: false)
+        #expect(workspace.waitingCount == 0, "its box says, not its marks")
+        try await heard("frm_plain_goes")
         #expect(workspace.waitingCount == 0)
 
-        // Still asked once its box has had its chance.
-        workspace.handle(try engine.event("form.created", session: "ses_a", ["form": question("frm_waits")]))
-        try await until { workspace.waitingCount == 1 }
+        // Waiting, as its box says: counted, marked or not.
+        try ask("frm_marked_waits", marked: true)
+        #expect(workspace.waitingCount == 0, "not before its box has said")
+        try await heard("frm_marked_waits")
+        #expect(workspace.asking["frm_marked_waits"] == "ses_a", "its marks don't send it ahead here: its box didn't")
+        #expect(workspace.waitingCount == 1)
+        try ask("frm_plain_waits", marked: false)
+        try await heard("frm_plain_waits")
+        #expect(workspace.asking["frm_plain_waits"] == "ses_a")
+
+        // Its box can't say: yours, as any question.
+        try ask("frm_refused", marked: true)
+        try await heard("frm_refused")
+        #expect(workspace.asking["frm_refused"] == "ses_a")
+
+        // A subagent's: its conversation's box is asked.
+        try ask("frm_sub_goes", in: "ses_sub", marked: true)
+        try await heard("frm_sub_goes")
+        #expect(workspace.asking["frm_sub_goes"] == nil)
+        #expect(asks.withLock { $0.contains("kuvo/sessions/ses_a/autopilot/asked frm_sub_goes") })
+
+        // Answered: off the count.
+        workspace.handle(try engine.event("form.replied", session: "ses_a", ["id": "frm_marked_waits", "sessionID": "ses_a"]))
+        #expect(workspace.asking["frm_marked_waits"] == nil)
+
+        // Not on Autopilot: yours at once, whatever it marks, and its box isn't asked.
+        let before = asks.withLock { $0.count }
+        try ask("frm_interactive", in: "ses_i", marked: true)
+        #expect(workspace.asking["frm_interactive"] == "ses_i")
+        #expect(workspace.waitingCount == 2)
+        try await heard("frm_interactive")
+        #expect(asks.withLock { $0.count } == before)
     }
 
     /// A list of questions shows as a call each at its step; one that takes several answers changes
@@ -291,19 +343,8 @@ import Testing
         #expect(GoalDecidedRows.calls(try goal(state: "done")).allSatisfy { $0.options == nil }, "over, there's nothing left to redirect")
     }
 
-    /// A question that marks the choice it recommends is what Autopilot goes ahead on: the Mac
-    /// doesn't notify you of one in a conversation on Autopilot, as the box answers it.
-    @Test func aQuestionAutopilotGoesAheadOnIsOneThatMarksItsRecommendation() throws {
-        func form(_ labels: [String], required: Bool? = nil, format: String? = nil) throws -> FormRequest {
-            var field: [String: Any] = ["key": "roast", "type": "string", "options": labels.enumerated().map { ["value": "r\($0.offset)", "label": $0.element] }]
-            if let required { field["required"] = required }
-            if let format { field["format"] = format }
-            return try JSONDecoder().decode(FormRequest.self, from: JSONSerialization.data(withJSONObject: ["id": "frm_1", "sessionID": "ses_one", "title": "Roast", "metadata": ["kind": "question"], "fields": [field]]))
-        }
-        #expect(try form(["Light", "Warm (Recommended)"]).recommendsAnswer)
-        #expect(try !form(["Light", "Warm"]).recommendsAnswer, "none marked: it waits for you")
-        #expect(try !form(["Light (Recommended)", "Warm (recommended)"]).recommendsAnswer, "two marked in one choice: it waits")
-        #expect(try !form(["Use this key (Recommended)", "Skip"], format: "password").recommendsAnswer, "a secret is yours to hand over, whatever it marks")
+    /// A conversation's Autopilot is kept in its notes, for a client to read.
+    @Test func aConversationIsOnAutopilotAsItsNotesSay() throws {
         #expect(AutopilotShown.isOn(try JSONDecoder().decode(Session.self, from: JSONSerialization.data(withJSONObject: StubEngine.session("ses_two", directory: "/srv", extra: ["metadata": ["kuvo": ["autopilot": true]]])))))
     }
 }
