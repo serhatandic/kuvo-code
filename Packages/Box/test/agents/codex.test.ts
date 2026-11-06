@@ -33,6 +33,8 @@ const sleepsUntilTold: [string, any] = ["(sleeps until told)", {}]
 const untilTold: [string, any] = ["(works until told)", {}]
 /** In a turn's events: Codex turns down what's steered from here on, as a turn on its way out does. */
 const refusesSteers: [string, any] = ["(refuses steers)", {}]
+/** In a turn's events: Codex turns down the next thing steered, and takes what comes after it. */
+const refusesNextSteer: [string, any] = ["(refuses the next steer)", {}]
 /** In a turn's events: Codex takes what's steered, and says its turn is over in the same breath. */
 const endsAsTold: [string, any] = ["(ends as told)", {}]
 
@@ -56,7 +58,10 @@ let stopped
 let input = []
 let steers = 0
 let wake
+let asleep
+let sleeps = 0
 let refusing = false
+let refusingNext = false
 let turning = false
 let endsAsTold = false
 const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n")
@@ -76,14 +81,20 @@ async function turn() {
       refusing = true
       continue
     }
+    if (method === ${JSON.stringify(refusesNextSteer[0])}) {
+      refusingNext = true
+      continue
+    }
     if (method === ${JSON.stringify(untilTold[0])}) {
       if (!steers) await new Promise((resolve) => (wake = resolve))
+      steers = 0
       continue
     }
     if (method === ${JSON.stringify(sleepsUntilTold[0])}) {
-      send({ method: "item/started", params: inTurn({ item: { type: "sleep", id: "sleep1", durationMs: 43200000 } }) })
-      await new Promise((resolve) => (wake = resolve))
-      send({ method: "item/completed", params: inTurn({ item: { type: "sleep", id: "sleep1", durationMs: 43200000 } }) })
+      const sleep = { type: "sleep", id: "sleep" + ++sleeps, durationMs: 43200000 }
+      send({ method: "item/started", params: inTurn({ item: sleep }) })
+      await new Promise((resolve) => (asleep = resolve))
+      send({ method: "item/completed", params: inTurn({ item: sleep }) })
       continue
     }
     if (method === ${JSON.stringify(tries)}) {
@@ -149,8 +160,16 @@ process.stdin.on("data", (chunk) => {
         process.stdout.write(JSON.stringify({ id: message.id, result: { turnId: "u1" } }) + "\\n" + JSON.stringify({ method: "turn/completed", params: { threadId: thread, turn: { id: "u1", status: "completed" } } }) + "\\n")
         continue
       }
-      if (!turning || refusing) send({ id: message.id, error: { code: -32600, message: "no active turn to steer" } })
-      else send({ id: message.id, result: { turnId: "u1" } })
+      const refused = !turning || refusing || refusingNext
+      refusingNext = false
+      if (refused) send({ id: message.id, error: { code: -32600, message: "no active turn to steer" } })
+      else {
+        send({ id: message.id, result: { turnId: "u1" } })
+        // (As the real one does, as it takes it.)
+        send({ method: "item/started", params: inTurn({ item: { type: "userMessage", id: "steer" + steers, content: message.params.input } }) })
+        asleep?.()
+        asleep = undefined
+      }
       steers++
       wake?.()
       wake = undefined
@@ -654,13 +673,22 @@ describe("A question Codex asks (request_user_input_async)", () => {
     expect(starts()).toEqual(["go", "This is on Autopilot: leave it."])
   })
 
+  /** Turning down what it asks, each once, until its turn's over. */
+  const turnDownUntilEnded = async (id: string) => {
+    const replied = new Set<string>()
+    const unanswered = () => sessions.forms(id).filter((form: any) => !replied.has(form.id))
+    while (!ended(id)) {
+      for (const form of unanswered()) {
+        replied.add(form.id)
+        sessions.replyForm(id, form.id, null, "This is on Autopilot: leave it.")
+      }
+      await until(() => ended(id) || unanswered().length > 0)
+    }
+  }
+
   test("asking again and again, each turned down by its box with words, its turn ends", async () => {
     const id = start(asking, {}, asking)
-    while (!ended(id)) {
-      const [form] = sessions.forms(id)
-      if (form) sessions.replyForm(id, form.id, null, "This is on Autopilot: leave it.")
-      await Bun.sleep(5)
-    }
+    await turnDownUntilEnded(id)
     expect(starts()).toEqual(["go", "This is on Autopilot: leave it.", "This is on Autopilot: leave it."])
   })
 
@@ -740,9 +768,53 @@ describe("A question Codex asks (request_user_input_async)", () => {
   test("a sleep with no answered question behind it isn't woken", async () => {
     const id = start([sleepsUntilTold, ...answered])
     await until(() => tools(id).some((tool) => tool.name === "sleep"))
-    await until(() => sent().some((message) => message.method === "turn/start"))
-    expect(steered()).toEqual([])
-    expect(ended(id)).toBe(false)
+    // (What you send is the first thing to go in.)
+    sessions.prompt(id, { id: "msg_codex_test_005", text: "carry on", files: [], delivery: "steer" })
+    await until(() => ended(id))
+    expect(steered()).toEqual(["carry on"])
+  })
+
+  test("answered while it sleeps, a later sleep of its own (waiting on a build, say) isn't woken", async () => {
+    const id = start([...asking, sleepsUntilTold, thinking, sleepsUntilTold, ...answered])
+    await until(() => sessions.forms(id).length === 1)
+    await until(() => tools(id).some((tool) => tool.name === "sleep"))
+    sessions.replyForm(id, sessions.forms(id)[0].id, { [sessions.forms(id)[0].fields[0].key]: "Turkish" })
+    await until(() => steered().length === 1 && tools(id).filter((tool) => tool.name === "sleep").length === 2)
+    sessions.prompt(id, { id: "msg_codex_test_006", text: "carry on", files: [], delivery: "steer" })
+    await until(() => ended(id))
+    expect(steered()).toEqual(["Turkish", "carry on"])
+  })
+
+  test("answered before a sleep, one it starts after hearing it and working on isn't woken", async () => {
+    const id = start([...asking, untilTold, ["item/started", { item: command("c1", "ls") }], sleepsUntilTold, ...answered])
+    await until(() => sessions.forms(id).length === 1)
+    sessions.replyForm(id, sessions.forms(id)[0].id, { [sessions.forms(id)[0].fields[0].key]: "Turkish" })
+    await until(() => tools(id).some((tool) => tool.name === "sleep"))
+    sessions.prompt(id, { id: "msg_codex_test_007", text: "carry on", files: [], delivery: "steer" })
+    await until(() => ended(id))
+    expect(steered()).toEqual(["Turkish", "carry on"])
+  })
+
+  test("telling it again as it starts to sleep doesn't go through: it's told at the next one it starts", async () => {
+    const id = start([...asking, untilTold, refusesNextSteer, sleepsUntilTold, sleepsUntilTold, ...answered])
+    await until(() => sessions.forms(id).length === 1)
+    sessions.replyForm(id, sessions.forms(id)[0].id, { [sessions.forms(id)[0].fields[0].key]: "Turkish" })
+    await until(() => steered().length === 2)
+    sessions.prompt(id, { id: "msg_codex_test_008", text: "carry on", files: [], delivery: "steer" })
+    await until(() => ended(id))
+    expect(steered().slice(0, 3)).toEqual(["Turkish", expect.stringContaining("Turkish"), "carry on"])
+    expect(steered()).toHaveLength(4)
+    expect(steered()[3]).toContain("Turkish")
+  })
+
+  test("an answer its turn turned down a moment ago goes in as it goes on, and ends the sleep it starts", async () => {
+    const id = start([refusesNextSteer, ...asking, untilTold, sleepsUntilTold, ...answered])
+    await until(() => sessions.forms(id).length === 1)
+    sessions.replyForm(id, sessions.forms(id)[0].id, { [sessions.forms(id)[0].fields[0].key]: "Turkish" })
+    await until(() => ended(id))
+    expect(steered()).toEqual(["Turkish", "Turkish"])
+    expect(starts()).toEqual(["go"])
+    expect(said(id)).toContain("Writing it in Turkish.")
   })
 
   test("still open as its turn ends: the session waits, and your answer starts its next turn", async () => {
@@ -774,6 +846,15 @@ describe("A question Codex asks (request_user_input_async)", () => {
     expect(starts()).toEqual(["go"])
   })
 
+  test("a message you type that Codex takes as its turn ends isn't sent again: it hears it, and acts on it", async () => {
+    const id = start([["item/completed", { item: { type: "agentMessage", id: "m1", text: "Nearly there." } }], endsAsTold], {}, answered)
+    await until(() => said(id).includes("Nearly there."))
+    sessions.prompt(id, { id: "msg_codex_test_009", text: "one more thing", files: [], delivery: "steer" })
+    await until(() => ended(id))
+    expect(steered()).toEqual(["one more thing"])
+    expect(starts()).toEqual(["go"])
+  })
+
   test("two asked in one turn: both cards are up, and each answer goes in", async () => {
     const second: [string, any] = ["item/completed", { item: { type: "agentMessage", id: "m3", text: "Which tone?", delivery: "async", questions: [{ title: "Which tone?", options: ["Plain", "Warm"] }] } }]
     const id = start([...asking, second, sleepsUntilTold, sleepsUntilTold, ...answered])
@@ -793,6 +874,16 @@ describe("A question Codex asks (request_user_input_async)", () => {
     expect(starts()).toEqual(["go"])
   })
 
+  test("a message you type with two cards up answers both: it hears your words, and not that one was dismissed", async () => {
+    const second: [string, any] = ["item/completed", { item: { type: "agentMessage", id: "m3", text: "Which tone?", delivery: "async", questions: [{ title: "Which tone?", options: ["Plain", "Warm"] }] } }]
+    const id = start([...asking, second, sleepsUntilTold, ...answered])
+    await until(() => sessions.forms(id).length === 2)
+    sessions.prompt(id, { id: "msg_codex_test_010", text: "english and warm please", files: [], delivery: "steer" })
+    await until(() => ended(id))
+    expect(sessions.forms(id)).toEqual([])
+    expect(steered()).toEqual(["english and warm please"])
+  })
+
   test("dismissed while it sleeps on it: it hears so, rather than sleep for hours", async () => {
     const id = start([...asking, sleepsUntilTold, ...answered])
     await until(() => sessions.forms(id).length === 1)
@@ -803,24 +894,34 @@ describe("A question Codex asks (request_user_input_async)", () => {
     expect(starts()).toEqual(["go"])
   })
 
-  test("asking again and again in one turn, each turned down by its box: its turn is stopped, and ends as finished, not as stopped by you", async () => {
-    const again = (n: number): [string, any] => ["item/completed", { item: { type: "agentMessage", id: `a${n}`, text: "Which?", delivery: "async", questions: [{ title: `Which ${n}?`, options: ["A", "B"] }] } }]
-    const id = start([again(1), untilTold, again(2), sleepsUntilTold, again(3), untilStopped])
-    const replied = new Set<string>()
-    while (!ended(id)) {
-      for (const form of sessions.forms(id)) {
-        if (replied.has(form.id)) continue
-        replied.add(form.id)
-        sessions.replyForm(id, form.id, null, "This is on Autopilot: leave it.")
-      }
-      await Bun.sleep(5)
-    }
+  const askedAway = (n: number): [string, any] => ["item/completed", { item: { type: "agentMessage", id: `a${n}`, text: "Which?", delivery: "async", questions: [{ title: `Which ${n}?`, options: ["A", "B"] }] } }]
+  const stoppedIt = () => sent().some((message) => message.method === "turn/interrupt")
+
+  test("asking again and again in one turn with no work in between, each turned down by its box: its turn is stopped, and ends as finished, not as stopped by you", async () => {
+    const rounds = [1, 2, 3, 4, 5, 6, 7, 8].flatMap((n) => [askedAway(n), untilTold])
+    const id = start([...rounds, untilStopped])
+    await turnDownUntilEnded(id)
     expect(steered().every((text) => text.includes("This is on Autopilot: leave it."))).toBe(true)
-    expect(sent().some((message) => message.method === "turn/interrupt")).toBe(true)
+    expect(stoppedIt()).toBe(true)
     expect((sessions.messages(id).find((message: any) => message.type === "idle") as any).outcome).toBe("succeeded")
   })
 
-  test("Stop with its card up and it asleep: the card goes, and nothing more is sent", async () => {
+  test("a few unmarked questions before it starts, each turned down by its box: its turn goes on to its work", async () => {
+    const id = start([askedAway(1), untilTold, askedAway(2), untilTold, askedAway(3), untilTold, ["item/started", { item: command("c1", "ls") }], ...answered])
+    await turnDownUntilEnded(id)
+    expect(stoppedIt()).toBe(false)
+    expect(said(id)).toContain("Writing it in Turkish.")
+  })
+
+  test("however many questions it asks in a long turn, turned down by its box, with work in between: its turn isn't stopped", async () => {
+    const rounds = [1, 2, 3, 4, 5, 6, 7, 8].flatMap((n): [string, any][] => [askedAway(n), untilTold, ["item/started", { item: command(`c${n}`, "ls") }]])
+    const id = start([...rounds, ...answered])
+    await turnDownUntilEnded(id)
+    expect(stoppedIt()).toBe(false)
+    expect(said(id)).toContain("Writing it in Turkish.")
+  })
+
+  test("Stop with its card up and it at work: the card goes, and nothing more is sent", async () => {
     const id = start([...asking, untilStopped])
     await until(() => sessions.forms(id).length === 1)
     await until(() => sent().some((message) => message.method === "turn/start"))
@@ -828,6 +929,24 @@ describe("A question Codex asks (request_user_input_async)", () => {
     await until(() => ended(id))
     expect(sessions.forms(id)).toEqual([])
     expect(steered()).toEqual([])
+    expect(starts()).toEqual(["go"])
+  })
+
+  test("Stop with its turn over and its card still up: the card goes, and no turn starts", async () => {
+    const id = start([...asking, ["item/completed", { item: { type: "agentMessage", id: "m2", text: "I'll wait to hear." } }]], {}, answered)
+    await until(() => said(id).includes("I'll wait to hear."))
+    await until(() => sessions.forms(id).length === 1)
+    sessions.interrupt(id)
+    await until(() => ended(id))
+    expect(sessions.forms(id)).toEqual([])
+    expect(starts()).toEqual(["go"])
+  })
+
+  test("its turn fails with its card up: the card goes, and the failure is what you see", async () => {
+    const id = start([...asking, ["turn/completed", { turn: { id: "u1", status: "failed", error: { message: "It broke." } } }], untilStopped])
+    await until(() => ended(id))
+    expect(sessions.forms(id)).toEqual([])
+    expect((sessions.messages(id).find((message: any) => message.type === "idle") as any).outcome).toBe("failed")
     expect(starts()).toEqual(["go"])
   })
 

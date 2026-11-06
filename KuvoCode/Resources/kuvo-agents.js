@@ -12259,6 +12259,9 @@ function citationsOf(lane, item) {
   return citations;
 }
 var ASKING_WORDS = "Outside Plan mode, ask the user with request_user_input_async: request_user_input refuses there, which doesn't mean you can't ask. It returns at once, and the answer comes as a new user message, which also ends a sleep you're in.";
+var WORK_ITEMS = new Set(["commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall", "webSearch", "imageGeneration", "collabAgentToolCall"]);
+var TURNED_DOWN_TURNS = 2;
+var TURNED_DOWN_IN_TURN = 5;
 
 class CodexThread {
   agent;
@@ -12274,6 +12277,7 @@ class CodexThread {
   asking = new Set;
   answers = [];
   answered = [];
+  sleeping = false;
   turnedDown = 0;
   toolsKey;
   serversKey;
@@ -12421,23 +12425,18 @@ class CodexThread {
     return this.backgroundLanes.size > 0;
   }
   async steer(input) {
-    const [waiting] = this.waiting;
-    if (waiting && !input.synthetic) {
-      waiting.typed = input;
-      for (const card of this.waiting)
+    const [first] = this.waiting;
+    if (first && !input.synthetic) {
+      for (const card of this.waiting) {
+        card.typed = card === first ? input : null;
         card.abort.abort();
+      }
       return true;
     }
     const active = this.active;
     if (!active?.turnID || !this.nativeID)
       return false;
-    try {
-      const rpc = await this.agent.rpc(this);
-      await rpc.request("turn/steer", { threadId: this.nativeID, input: codexInput(input, this.fencedIn(rpc)), expectedTurnId: active.turnID }, 30000);
-      return this.active === active;
-    } catch {
-      return false;
-    }
+    return this.steerIn(active, input);
   }
   subagentMessages(sessionID) {
     const threadID = Object.entries(this.spawnedSessions).find(([, known]) => known.sessionID === sessionID)?.[0];
@@ -12515,7 +12514,10 @@ class CodexThread {
     }
   }
   ask(questions, hooks) {
-    const job = this.answer(questions, hooks).then((answer) => this.deliver(answer)).catch(() => {}).finally(() => this.asking.delete(job));
+    this.keep(this.answer(questions, hooks).then((answer) => this.deliver(answer)));
+  }
+  keep(work) {
+    const job = work.catch(() => {}).finally(() => this.asking.delete(job));
     this.asking.add(job);
   }
   async answer(questions, hooks) {
@@ -12535,8 +12537,8 @@ class CodexThread {
       const answer = await hooks.question({ title: questions.length === 1 ? "Question" : "Questions", fields, signal: card.abort.signal, declined: (words) => {
         declined = words;
       } });
-      if (card.typed)
-        return { text: card.typed.text, files: card.typed.files };
+      if (card.typed !== undefined)
+        return card.typed && { text: card.typed.text, files: card.typed.files };
       if (!answer && declined)
         return { text: declined, files: [], declined: true };
       if (!answer)
@@ -12554,23 +12556,30 @@ ${said(index)}`).join(`
     }
   }
   async deliver(answer) {
+    if (answer === null)
+      return;
     const active = this.active;
     if (!answer && (!active || active.stopping || active.hooks.signal.aborted))
       return;
-    if (answer?.declined && ++this.turnedDown > 2) {
+    if (answer?.declined && ++this.turnedDown > (active ? TURNED_DOWN_IN_TURN : TURNED_DOWN_TURNS)) {
       if (active) {
         active.stoppedAsking = true;
         await this.stopTurn(active);
       }
       return;
     }
+    await this.steerAnswer(active, answer);
+  }
+  async steerAnswer(active, answer) {
     const text = answer?.text ?? "The user dismissed this question without answering it. Don't wait for an answer.";
     const files = answer?.files ?? [];
     if (active?.turnID && this.nativeID) {
-      this.answered.push(text);
+      const noted = this.sleeping ? undefined : { text };
+      if (noted)
+        this.answered.push(noted);
       if (await this.steerIn(active, { text, files }))
         return;
-      this.answered = this.answered.filter((each) => each !== text);
+      this.answered = this.answered.filter((each) => each !== noted);
     }
     if (answer)
       this.answers.push(answer);
@@ -12622,6 +12631,7 @@ ${others.map((path) => `- ${path}`).join(`
     };
     return new Promise((resolve) => {
       this.answered = [];
+      this.sleeping = false;
       const active = { turn, hooks, resolve, streamed: new Set, changes: new Map, output: new Map, toolsSinceText: false, subagents: new Map, spawning: [], auto: input.auto, model: input.model.id, planning: input.plan };
       active.resolve = (result) => {
         for (const [threadID, lane] of active.subagents) {
@@ -12649,6 +12659,42 @@ ${others.map((path) => `- ${path}`).join(`
       });
     });
   }
+  answersOnItem(active, method, item) {
+    if (item?.type === "sleep" && method === "item/completed")
+      this.sleeping = false;
+    if (method !== "item/started")
+      return;
+    if (item?.type === "sleep") {
+      this.sleeping = true;
+      const said = this.answered;
+      this.answered = [];
+      if (said.length) {
+        const again = this.steerIn(active, { text: `Your question has its answer, so there's nothing to wait for on it:
+
+${said.map((each) => each.text).join(`
+
+`)}`, files: [] });
+        this.keep(again.then((took) => {
+          if (!took)
+            this.answered.push(...said);
+        }));
+      }
+    } else if (item?.type === "userMessage") {
+      const text = (item.content ?? []).find((part) => part?.type === "text")?.text;
+      const heard = this.answered.find((each) => !each.heard && each.text === text);
+      if (heard)
+        heard.heard = true;
+    } else if (WORK_ITEMS.has(item?.type)) {
+      this.turnedDown = 0;
+      this.answered = this.answered.filter((each) => !each.heard);
+    }
+    if (this.answers.length) {
+      const waiting = this.answers;
+      this.answers = [];
+      for (const answer of waiting)
+        this.keep(this.steerAnswer(active, answer));
+    }
+  }
   notification(method, params, from) {
     const active = this.active;
     if (params?.threadId && this.nativeID && params.threadId !== this.nativeID)
@@ -12668,15 +12714,8 @@ ${others.map((path) => `- ${path}`).join(`
       if (questions.length)
         this.ask(questions, active.hooks);
     }
-    if (method === "item/started" && params?.item?.type === "sleep" && this.answered.length) {
-      const said = this.answered;
-      this.answered = [];
-      this.steerIn(active, { text: `Your question has its answer, so there's nothing to wait for on it:
-
-${said.join(`
-
-`)}`, files: [] });
-    }
+    if (method === "item/started" || method === "item/completed")
+      this.answersOnItem(active, method, params?.item);
     switch (method) {
       case "turn/started":
         active.turnID ??= params.turn?.id;
@@ -23458,4 +23497,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 52c4ec04b8ad3b1c64b79e1472131128f848357fea26c5a94bdbd9a9bc12ddb0
+// Built from Packages/Box/src/agents b0494261b5011703aad75e22bc6b982aa05f215e6de69b844b7200746ec7a00d
