@@ -18,7 +18,9 @@ import { generatedImages } from "../../src/agents/agents/antigravity"
 import { kuvoToolName, loadKuvoTools, setToolServer } from "../../src/agents/kuvotools"
 import { pictureData, pictureFile, withPictures } from "../../src/agents/pictures"
 import { expandCommand } from "../../src/agents/server"
-import { commandParts, parseCommands, withTextFiles } from "../../src/agents/sessions"
+import { Auto } from "../../src/agents/auto"
+import type { Roster } from "../../src/agents/roster"
+import { commandParts, parseCommands, Sessions, withTextFiles } from "../../src/agents/sessions"
 import { refreshLoginPath, run, which } from "../../src/agents/proc"
 import { commandSignIn } from "../../src/agents/signin"
 
@@ -702,6 +704,55 @@ describe("your commands", () => {
     expect(expandCommand("Review $1", "a.ts and b.ts")).toBe("Review a.ts and b.ts")
     expect(expandCommand("Move $1 to $2", "a.ts b c")).toBe("Move a.ts to b c")
     expect(expandCommand("Fix $1: $ARGUMENTS", "$ARGUMENTS x")).toBe("Fix $ARGUMENTS x: $ARGUMENTS x")
+  })
+})
+
+describe("what the engine asks in a conversation run through the bridge", () => {
+  test("keeps what it is: an MCP server's form stays one, a question stays one with its tool call, and your answer goes back", async () => {
+    const folder = mkdtempSync(join(process.env.KUVO_TEST_ROOT ?? tmpdir(), "kuvo-engine-forms-"))
+    const requests: { method: string; path: string; body?: any }[] = []
+    let heard: { event(event: any): void } | undefined
+    const link = {
+      ready: true,
+      providerName: () => "OpenAI",
+      offered: async () => ({ listed: true, ready: true, models: [] }),
+      listen: (_: string, listener: { event(event: any): void }) => ((heard = listener), () => {}),
+      request: async (method: string, path: string, body?: unknown) => {
+        requests.push({ method, path, body })
+        return method === "POST" && path === "/api/session" ? { data: { id: "eng_1" } } : {}
+      },
+    } as unknown as EngineLink
+    const agent = new EngineAgent(link, "openai")
+    const sessions = new Sessions(new Store(join(folder, "sessions")), { find: () => agent } as unknown as Roster, new Auto(folder))
+    const until = async (condition: () => boolean) => {
+      while (!condition()) await Bun.sleep(5)
+    }
+    try {
+      const id = sessions.create({ title: "Bridge", model: { providerID: "openai", id: "one" }, location: { directory: folder } }).id
+      sessions.prompt(id, { id: "msg_engine_forms_00001", text: "go", files: [], delivery: "steer" })
+      await until(() => Boolean(heard) && requests.some((request) => request.path.endsWith("/prompt")))
+      const fields = [{ key: "pick", title: "Pick", type: "string", required: true, options: [{ value: "a", label: "A (Recommended)" }, { value: "b", label: "B" }] }]
+      heard!.event({ type: "form.created", data: { sessionID: "eng_1", form: { id: "frm_server", sessionID: "global", title: "probe asks", metadata: { kind: "mcp-elicitation", server: "probe", message: "Pick one" }, fields } } })
+      await until(() => sessions.forms(id).length === 1)
+      expect(sessions.forms(id)[0].metadata).toEqual({ kind: "mcp-elicitation", server: "probe", message: "Pick one" })
+      sessions.replyForm(id, sessions.forms(id)[0].id, { pick: "a" })
+      await until(() => requests.some((request) => request.path === "/api/session/global/form/frm_server/reply"))
+
+      heard!.event({ type: "form.created", data: { sessionID: "eng_1", form: { id: "frm_asked", sessionID: "eng_1", title: "Question", metadata: { kind: "question", tool: { id: "call_7" } }, fields } } })
+      await until(() => sessions.forms(id).length === 1)
+      expect(sessions.forms(id)[0].metadata).toEqual({ kind: "question", tool: { id: "call_7" } })
+      sessions.replyForm(id, sessions.forms(id)[0].id, null)
+      await until(() => requests.some((request) => request.method === "DELETE" && request.path === "/api/session/eng_1/form/frm_asked"))
+
+      // One the engine names no kind for isn't taken for the agent's question.
+      heard!.event({ type: "form.created", data: { sessionID: "eng_1", form: { id: "frm_plain", sessionID: "eng_1", title: "Details", fields } } })
+      await until(() => sessions.forms(id).length === 1)
+      expect(sessions.forms(id)[0].metadata?.kind).not.toBe("question")
+      sessions.replyForm(id, sessions.forms(id)[0].id, null)
+    } finally {
+      sessions.closeAll()
+      rmSync(folder, { recursive: true, force: true })
+    }
   })
 })
 

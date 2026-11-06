@@ -157,7 +157,7 @@ const singleQuestion = (form: EngineForm): FormField | null => {
 // What a form asks, as the Mac's notification says it.
 export function describeForm(form: EngineForm): string {
   const kind = form.metadata?.kind;
-  if (kind === "mcp-elicitation") return form.metadata?.message || "Needs your answer.";
+  if (kind === "mcp-elicitation") return form.metadata?.message || form.fields?.[0]?.description || form.fields?.[0]?.title || "Needs your answer.";
   if (kind !== "question") return "Needs your answer.";
   const fields = (form.fields ?? []).filter(field => !field.hidden && !field.when?.length);
   if (fields.length === 1 && fields[0].type === "string") return fields[0].description || fields[0].title || form.title || "Has a question for you.";

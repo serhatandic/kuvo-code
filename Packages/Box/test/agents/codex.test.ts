@@ -685,6 +685,14 @@ describe("Codex in the session's modes", () => {
     expect(answers()).toEqual([{ action: "accept", content: null }, { action: "decline" }])
   })
 
+  test("what an MCP server asks in Plan is its form, not the agent's question, so it never counts as one", async () => {
+    const id = start([mcpAsk("probe", "erase_everything"), ...reply], { agent: "plan" })
+    await until(() => sessions.forms(id).length === 1)
+    expect(sessions.forms(id)[0].metadata).toEqual({ kind: "mcp-elicitation", server: "probe" })
+    sessions.replyForm(id, sessions.forms(id)[0].id, null)
+    await until(() => ended(id))
+  })
+
   test("Ask First: it asks before commands and changes, and what it runs can write in the project and reach the network", async () => {
     await run(reply, { permissions: askFirst })
     expect(turnStart()).toMatchObject({ approvalPolicy: "untrusted", sandboxPolicy: { type: "workspaceWrite", networkAccess: true }, collaborationMode: { mode: "default" } })

@@ -448,6 +448,8 @@ describe("ACP agents, nothing dropped", () => {
     const session = sessions.list(root)[0].id
     const [form] = sessions.forms(session)
     expect(form.fields[0]).toMatchObject({ key: "branch", options: [{ value: "main" }, { value: "dev" }] })
+    // Not the agent's question: a form like this never goes ahead on its own.
+    expect(form.metadata?.kind).toBe("mcp-elicitation")
     sessions.replyForm(session, form.id, { branch: "dev" })
     const id = await started
     expect(words(id)).toContain('"action":"accept","content":{"branch":"dev"}')

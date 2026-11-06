@@ -3344,7 +3344,7 @@ class EngineThread {
     const answerForm = async (form) => {
       let answer = null;
       try {
-        answer = await hooks.question({ title: form.title ?? "A question", fields: form.fields ?? [] });
+        answer = await hooks.question({ title: form.title ?? "A question", fields: form.fields ?? [], metadata: { kind: "form", ...form.metadata } });
       } catch {}
       const formPath = `/api/session/${encodeURIComponent(form.sessionID)}/form/${encodeURIComponent(form.id)}`;
       if (answer)
@@ -8058,8 +8058,9 @@ ${others.map((path) => `- ${path}`).join(`
       case "elicitation/create": {
         if (!active)
           return { action: "decline" };
+        const metadata = { kind: "mcp-elicitation", server: this.name };
         if (params?.mode === "url" && params.url) {
-          const answer = await active.hooks.question({ title: `${this.name} asks`, fields: [{ key: "open", title: params.message ?? "Open this page to go on.", type: "external", url: params.url }] });
+          const answer = await active.hooks.question({ title: `${this.name} asks`, metadata, fields: [{ key: "open", title: params.message ?? "Open this page to go on.", type: "external", url: params.url }] });
           return { action: answer ? "accept" : "decline" };
         }
         const schema = params?.requestedSchema ?? {};
@@ -8069,7 +8070,7 @@ ${others.map((path) => `- ${path}`).join(`
           fields[0] = { ...fields[0], description: [params.message, fields[0].description].filter(Boolean).join(`
 
 `) };
-        const answer = await active.hooks.question({ title: `${this.name} asks`, fields: fields.length ? fields : [{ key: "ok", title: params?.message ?? "Go on?", type: "boolean", required: true }] });
+        const answer = await active.hooks.question({ title: `${this.name} asks`, metadata, fields: fields.length ? fields : [{ key: "ok", title: params?.message ?? "Go on?", type: "boolean", required: true }] });
         if (!answer)
           return { action: "decline" };
         const content = {};
@@ -13262,8 +13263,9 @@ From memory: ${cited.join("; ")}`);
           return decision === "reject" ? { action: "decline", content: null } : { action: "accept", content: null };
         }
         const title = `${params.serverName ?? "A tool"} asks`;
+        const metadata = { kind: "mcp-elicitation", server: String(params.serverName ?? "A tool") };
         if (params.mode === "url") {
-          const answer = await hooks.question({ title, fields: [{ key: "open", title: params.message ?? "Open this page to go on.", type: "external", url: params.url }] });
+          const answer = await hooks.question({ title, metadata, fields: [{ key: "open", title: params.message ?? "Open this page to go on.", type: "external", url: params.url }] });
           return { action: answer ? "accept" : "decline" };
         }
         const schema = params.requestedSchema ?? {};
@@ -13273,7 +13275,7 @@ From memory: ${cited.join("; ")}`);
           fields[0] = { ...fields[0], description: [params.message, fields[0].description].filter(Boolean).join(`
 
 `) };
-        const answer = await hooks.question({ title, fields: fields.length ? fields : [{ key: "ok", title: params.message ?? "Go on?", type: "boolean", required: true }] });
+        const answer = await hooks.question({ title, metadata, fields: fields.length ? fields : [{ key: "ok", title: params.message ?? "Go on?", type: "boolean", required: true }] });
         if (!answer)
           return { action: "decline" };
         const content = {};
@@ -17589,7 +17591,7 @@ ${live.agentPrompt}` : ""
     const session = this.record(id).session;
     if (turn.isEnded || refusesAsks(live.doing))
       return Promise.resolve(null);
-    const form = { id: newID("frm"), sessionID: id, title: ask.title, metadata: { kind: "question", ...ask.toolCallID ? { tool: { id: ask.toolCallID } } : {} }, fields: ask.fields };
+    const form = { id: newID("frm"), sessionID: id, title: ask.title, metadata: { kind: "question", ...ask.metadata, ...ask.toolCallID ? { tool: { id: ask.toolCallID } } : {} }, fields: ask.fields };
     return new Promise((resolve) => {
       live.forms.set(form.id, { form, resolve });
       emit("form.created", { form }, session.location.directory);
@@ -23322,4 +23324,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents efeca07d362cd39e4d78fd58d5f387e18c56137cc64e63ab5e4bbea1fe494280
+// Built from Packages/Box/src/agents 3179a17f56453036d5eed0a03a05dbfca632f657c21c1ca4ccc48bc0e66400ee

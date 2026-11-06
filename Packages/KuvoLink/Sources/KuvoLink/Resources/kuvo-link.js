@@ -9207,7 +9207,7 @@ var singleQuestion = (form) => {
 function describeForm(form) {
   const kind = form.metadata?.kind;
   if (kind === "mcp-elicitation")
-    return form.metadata?.message || "Needs your answer.";
+    return form.metadata?.message || form.fields?.[0]?.description || form.fields?.[0]?.title || "Needs your answer.";
   if (kind !== "question")
     return "Needs your answer.";
   const fields = (form.fields ?? []).filter((field) => !field.hidden && !field.when?.length);

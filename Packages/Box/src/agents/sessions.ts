@@ -2664,7 +2664,7 @@ export class Sessions {
     const session = this.record(id).session
     if (turn.isEnded || refusesAsks(live.doing)) return Promise.resolve(null)
     // (Its tool call, as the engine names a question's: a client finds its step by it.)
-    const form: FormRequest = { id: newID("frm"), sessionID: id, title: ask.title, metadata: { kind: "question", ...(ask.toolCallID ? { tool: { id: ask.toolCallID } } : {}) }, fields: ask.fields }
+    const form: FormRequest = { id: newID("frm"), sessionID: id, title: ask.title, metadata: { kind: "question", ...ask.metadata, ...(ask.toolCallID ? { tool: { id: ask.toolCallID } } : {}) }, fields: ask.fields }
     return new Promise((resolve) => {
       live.forms.set(form.id, { form, resolve })
       emit("form.created", { form }, session.location.directory)

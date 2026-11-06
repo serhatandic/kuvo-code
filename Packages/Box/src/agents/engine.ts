@@ -493,10 +493,11 @@ class EngineThread implements Thread {
       await this.link.request("POST", `/api/session/${encodeURIComponent(data.sessionID)}/permission/${encodeURIComponent(data.id)}/reply`, { decision }).catch(() => {})
     }
 
-    const answerForm = async (form: { id: string; sessionID: string; title?: string; fields?: FormField[] }) => {
+    const answerForm = async (form: { id: string; sessionID: string; title?: string; fields?: FormField[]; metadata?: Record<string, unknown> }) => {
       let answer: Record<string, unknown> | null = null
       try {
-        answer = await hooks.question({ title: form.title ?? "A question", fields: form.fields ?? [] })
+        // As the engine has it: its kind (a form with none isn't a question) and its tool call.
+        answer = await hooks.question({ title: form.title ?? "A question", fields: form.fields ?? [], metadata: { kind: "form", ...form.metadata } })
       } catch {}
       const formPath = `/api/session/${encodeURIComponent(form.sessionID)}/form/${encodeURIComponent(form.id)}`
       if (answer) await this.link.request("POST", `${formPath}/reply`, { answer }).catch(() => {})

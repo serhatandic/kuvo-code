@@ -200,6 +200,14 @@ test("what only you can do goes to you: its agent is told to ask it with no mark
   assert.deepEqual((await route("GET", "kuvo/sessions/ses_away/autopilot")).body.decided, []);
 });
 
+test("an MCP server's form never goes ahead, whatever it marks, here or from a coding agent's conversation", async () => {
+  const { watch } = await watcher();
+  const server = { ...QUESTION("frm_server", "ses_away", ROASTS), metadata: { kind: "mcp-elicitation", server: "probe" } };
+  await watch({ type: "form.created", data: { form: server } });
+  assert.deepEqual(answered, []);
+  assert.deepEqual((await route("GET", "kuvo/sessions/ses_away/autopilot")).body.decided, []);
+});
+
 test("one a session on Autopilot went ahead on isn't put to its starter", async () => {
   const { watch, tellAll } = await watcher();
   await watch({ type: "form.created", data: { form: QUESTION("frm_6", "ses_menu", ROASTS) } });

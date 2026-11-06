@@ -1851,8 +1851,9 @@ class CodexThread implements Thread {
         }
         // An MCP server asks you something (a form), or to open a page (a sign-in).
         const title = `${params.serverName ?? "A tool"} asks`
+        const metadata = { kind: "mcp-elicitation", server: String(params.serverName ?? "A tool") }
         if (params.mode === "url") {
-          const answer = await hooks.question({ title, fields: [{ key: "open", title: params.message ?? "Open this page to go on.", type: "external", url: params.url }] })
+          const answer = await hooks.question({ title, metadata, fields: [{ key: "open", title: params.message ?? "Open this page to go on.", type: "external", url: params.url }] })
           return { action: answer ? "accept" : "decline" }
         }
         const schema = params.requestedSchema ?? {}
@@ -1860,7 +1861,7 @@ class CodexThread implements Thread {
         const fields: FormField[] = Object.entries((schema.properties ?? {}) as Record<string, any>).map(([key, field]) => elicitationField(key, field, required.has(key)))
         // Its message goes with the form's first field; a form with no fields is a yes or no.
         if (fields[0] && params.message) fields[0] = { ...fields[0], description: [params.message, fields[0].description].filter(Boolean).join("\n\n") }
-        const answer = await hooks.question({ title, fields: fields.length ? fields : [{ key: "ok", title: params.message ?? "Go on?", type: "boolean", required: true }] })
+        const answer = await hooks.question({ title, metadata, fields: fields.length ? fields : [{ key: "ok", title: params.message ?? "Go on?", type: "boolean", required: true }] })
         if (!answer) return { action: "decline" }
         const content: Record<string, unknown> = {}
         for (const [key, field] of Object.entries((schema.properties ?? {}) as Record<string, any>)) {
