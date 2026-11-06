@@ -1588,10 +1588,20 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     file that can't be changed, `503 {"message"}` when its bots' keys can't be taken away (nothing
     removed) or its own can't (removed, with its key still kept, which Remove again takes). A
     Mac's Remove… is its box's, through `BoxClient` (a machine's through `box route`).
-  - Not on the box yet: bringing added integrations up to date as the engine starts (a package's
-    pinned version, Code Mode off, keys named where the computer reads them) is the Mac app's
-    (`Integrations.upgrade`), through `kuvo/config`, for its own box and each machine as it
-    connects; a machine whose Mac doesn't connect keeps them as they were.
+  - Brought up to date by the box and only the box, from the catalogs it has, with no client
+    there: a package's pinned version, Code Mode off unless it says otherwise, keys named where the
+    computer reads them, Chrome DevTools on a Mac as it's offered now (a newer version or your options
+    stay), and Code Mode off on every other MCP server that doesn't say, but for Kuvo Code's own. A
+    package whose maker now runs its own server is replaced by that server, staying off if you turned
+    it off and with the Code Mode you chose, its key and bots' own keys for it taken away first.
+    That one waits where a key can't be taken away now (this Mac's app not answering), and while an
+    update is on trial, as a key can't come back with the version before: the box does it once the
+    update is confirmed, or at its next start.
+  - When: a machine's before each start of its engine (`engine-config`, from its start script), as a
+    Mac connects (`box adopt`, after the Mac puts its catalogs there), as its bridge starts, and as an
+    update's confirmed. This Mac's as its box starts, before it says where it is, so before its engine
+    starts; a key to take away comes after that, and the engine takes the change as it runs. There's
+    no write once they're up to date.
 - Bots' own keys, as Edit Bot shows and changes them: a key a bot has of its own for an
   integration you bring a key for, used only in its conversation, kept on the computer the bot
   lives on (a Mac's bots' in its Keychain, which its box reaches through the app: "Host
@@ -2981,8 +2991,8 @@ haven't come yet leaves what it learned), as it finds the engine and every ten m
 while it's at work (on a machine, while its bridge runs: it has peers or phones), and keeps the
 layer in `run/compatibility.json` (nothing until it has learned, and nothing with no account). What
 it learns goes to the engine's next start; the box doesn't restart it for that. Whatever starts the engine asks the box: `kuvo-link.js
-engine-config` prints the `OPENCODE_CONFIG_CONTENT` it's run with, the layer merged on top. This
-Mac's app runs it as it starts its engine, and a machine's start scripts do, so an engine started
+engine-config` prints the `OPENCODE_CONFIG_CONTENT` it's run with, the layer merged on top, having
+brought a machine's integrations up to date first (see `kuvo/integrations`). This Mac's app runs it as it starts its engine, and a machine's start scripts do, so an engine started
 after a restart with no Mac there gets it too; a box too old to know it starts its engine as
 before. A Mac sends none.
 

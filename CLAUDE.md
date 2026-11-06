@@ -21,8 +21,8 @@ What people see and touch is the most important part of Kuvo Code. Never trade i
 - Design the UI of a change with as much care as its internals, in the same task. Never a quick sketch to get it out of the way and polish later: polishing it afterwards costs the user's time.
 - Before you build a screen or a control, look at how the app already draws the same kind of thing (`KuvoCode/Design`, the views beside it, the website's screenshots) and match its materials, spacing, wording, states and motion.
 - Work through every state: empty, loading, failed, long text, many items, a narrow window, light and dark, larger text, and VoiceOver.
-- See it yourself in a demo copy before calling it done, and look at it as the user will.
-- **UI work starts with drafts to pick from, always.** Before building any screen, control or visible change, draft two or three options (mocks or renders, light and dark) with your recommendation and why, and let the user pick. Build the picked one; meanwhile build only what doesn't depend on the choice. This holds even when one option seems obvious.
+- See it yourself in a demo copy where you can, and look at it as the user will. Not having seen it doesn't hold up a merge (see "Carry work to main in checkpoints"), but say so in your report.
+- **UI work starts with drafts to pick from, always.** Before building any screen, control or visible change, draft two or three options (mocks or renders, light and dark) with your recommendation and why, and let the user pick. Build the picked one; meanwhile build only what doesn't depend on the choice. This holds even when one option seems obvious. It's for new things: a bug fix that restores an existing design needs no drafts.
 - **Look at how the best do it first.** Before designing a feature or a screen, study how the leading products handle the same thing (other agent apps like Codex, Claude Code and Cursor, and the best of their kind, like GitHub, Linear or Apple's own apps). Bring what you found with your drafts: what you borrow, and where Kuvo Code does it differently and why.
 - When the machinery makes the right UI hard, change the machinery. Don't bend the UI around it.
 - **The right panel is only for common tools**: the browser, terminals, files, and Changes for coding sessions. A feature's own view goes where it belongs, never in a new panel tab: a popover or sheet on the conversation (like Artifacts), or a page in Settings.
@@ -55,7 +55,7 @@ Each session runs at most 2 subagents at once: workers, reviewers, and any that 
 - **Use the real components.** Stub only what's outside the app or unpredictable: the engine's HTTP API, SSH, the network. Never write a test that only proves a stub returns what it was given.
 - **A bug fix starts with a test** that fails on the old code for the right reason. Then fix the cause, not the symptom. Never loosen a test to make it pass.
 - **A test must go the way the real thing goes.** Send events through the window, as AppKit routes them, not straight to our own handler. A test that skips the system's part can pass while the bug is still there.
-- **Never call a user's bug fixed, or maybe fixed,** until you've reproduced it the way they saw it and seen it gone there: in a demo copy, or with their logger or steps. A fix to a nearby test is not a fix to their bug.
+- **Reproduce a user's bug the way they saw it where you can**: in a demo copy, or with their logger or steps. A fix to a nearby test is not a fix to their bug. Once the fix completes its review loop it goes to local main, and the user confirms it in their own copy (see "Carry work to main in checkpoints"). Until then, report it as merged and not yet seen by the user, not as fixed.
 - **Keep tests deterministic.** No sleeps, timeouts or retries, and no device clocks. A flaky test gets fixed, not retried. Each test runs alone, in folders of its own.
 - **Skip low-value tests**: trivial getters, wiring, and edge cases no one would hit. A visual nitpick gets a look before and after, not a UI test.
 - **Running them:**
@@ -98,7 +98,7 @@ The website and docs live in a separate repo, **kuvo-web**, checked out next to 
 - Before you report a task as finished, check every doc page mapped below for the files you touched, and say which pages you updated, or that you checked and none needed changes.
 - Never document behavior you haven't confirmed in the code. If the docs and the code disagree, the code wins: fix the docs and mention the mismatch.
 - If `../kuvo-web` isn't there, stop and tell the user. Don't skip the docs silently.
-- Commit docs changes in kuvo-web separately from code commits here, with a message that says what changed for users. Pushing kuvo-web deploys kuvo.run, so push only when the user says so.
+- Commit docs changes in kuvo-web separately from code commits here, with a message that says what changed for users. They go to kuvo-web's local main when the work they describe is done, as its code goes to local main here. Pushing kuvo-web deploys kuvo.run, so push only when the user says so.
 - Set `updated:` in the frontmatter of every page you change to today's date.
 - **Keep the docs short.** Say what people do and what they see, in a few sentences per topic. Leave out implementation details, exact numbers and limits, internal file formats, every menu item and edge case, and tables of settings that the app already labels. When in doubt, cut it.
 
@@ -261,5 +261,5 @@ On 2026-10-28 GitHub's automated abuse checks hid the user's account: the profil
 - Commit in small, logical chunks with plain messages.
 - Never add `Co-Authored-By` or any other AI attribution to commits or pull requests.
 - This repo will be open source. Before committing, check for personal paths, secrets and machine-specific data. The signing team stays in the git-ignored `Config/Signing.local.xcconfig`.
-- **Carry work to main in checkpoints.** Each finished piece that passes every suite and its review is merged into main and pushed, rather than waiting on a branch. Main doesn't need to be release ready: releases and betas come only from tags, on the user's word.
+- **Carry work to main in checkpoints.** Each finished piece that passes every suite and completes its review loop is merged into local main, rather than waiting on a branch. It's pushed only when the user asks. The user reviews merged work in batches, whenever they ask, in their own copy by taking a local update (`scripts/try-update.sh`). Main doesn't need to be release ready: releases and betas come only from tags, on the user's word.
 - **Delete a branch once it's merged into main**, both locally and on origin (`git branch -d`, `git push origin --delete`), and remove its worktree. `git fetch --prune` and `git branch --merged origin/main` (with `-r` for origin's) show what's left. A branch someone is still working on stays until they're done, and a branch that isn't merged is never deleted this way.

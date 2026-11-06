@@ -75,76 +75,6 @@ nonisolated enum Integrations {
         return .object(settings)
     }
 
-    /// Brings added integrations up to date before the engine starts: tools made plain tools (for
-    /// those added before they were), a package's server started as it's pinned now (so a new
-    /// version or option reaches integrations added with an older one), and keys read from their
-    /// files where an earlier version named them in the environment. A machine's (`machine`) as
-    /// it keeps its keys.
-    @MainActor static func upgrade(_ config: EngineConfig, on machine: String? = nil) {
-        guard case .object(let servers) = config.value(at: MCPSettings.path) else { return }
-        for (id, original) in servers {
-            guard let service = service(id), case .object(var server) = original else { continue }
-            // One whose maker now runs its own server (Figma's): that server, signed in to, in
-            // place of the package, whose key goes.
-            if case .official = service.way, case .array(let old)? = server["command"], old.first?.string == Launcher.name,
-               let settings = settings(for: service) {
-                let keys = Self.keyNames(in: original)
-                if let machine {
-                    Task { for variable in keys { try? await MachineBox.setKey(variable, nil, on: SSHConnection(destination: machine)) } }
-                } else {
-                    for variable in keys { IntegrationKeys.set(nil, for: variable) }
-                }
-                config.set(settings, at: MCPSettings.path + [id], noted: false)
-                continue
-            }
-            if server["codemode"] == nil { server["codemode"] = .bool(false) }
-            // The same package through kuvo-npx, pinned or started differently: as it is now.
-            if case .package(let command, _, _, _, _, _) = service.way, let package = command.first,
-               case .array(let old)? = server["command"], old.first?.string == Launcher.name,
-               let oldPackage = old.dropFirst().first?.string, Self.packageName(oldPackage) == Self.packageName(package) {
-                server["command"] = .array(([Launcher.name] + command).map(JSONValue.string))
-                // Run apart from the project, as one added now is.
-                if case .object(var environment) = server["environment"] ?? .object([:]), environment[Self.apart] == nil {
-                    environment[Self.apart] = .string("1")
-                    server["environment"] = .object(environment)
-                }
-            }
-            let updated = Self.keyFiles(in: .object(server), on: machine)
-            if updated != original { config.set(updated, at: MCPSettings.path + [id], noted: false) }
-        }
-    }
-
-    /// Settings with each key named by the file the computer's engine reads it from (this Mac's,
-    /// or `machine`'s): one an earlier version named in the environment (`{env:KUVO_KEY_…}`), or
-    /// in another folder.
-    nonisolated static func keyFiles(in value: JSONValue, on machine: String? = nil) -> JSONValue {
-        switch value {
-        case .string(let text):
-            guard text.contains("KUVO_KEY_"), let regex = try? NSRegularExpression(pattern: #"\{(?:env|file):[^{}]*?(KUVO_KEY_[A-Z0-9_]+)\}"#) else { return value }
-            let original = text as NSString
-            let result = NSMutableString(string: text)
-            for match in regex.matches(in: text, range: NSRange(location: 0, length: original.length)).reversed() {
-                result.replaceCharacters(in: match.range, with: IntegrationKeys.reference(original.substring(with: match.range(at: 1)), on: machine))
-            }
-            return .string(result as String)
-        case .object(let object): return .object(object.mapValues { keyFiles(in: $0, on: machine) })
-        case .array(let array): return .array(array.map { keyFiles(in: $0, on: machine) })
-        default: return value
-        }
-    }
-
-    /// The keys a server's settings name (`KUVO_KEY_…`).
-    nonisolated static func keyNames(in value: JSONValue) -> [String] {
-        switch value {
-        case .string(let text):
-            guard let regex = try? NSRegularExpression(pattern: "KUVO_KEY_[A-Z0-9_]+") else { return [] }
-            return regex.matches(in: text, range: NSRange(text.startIndex..., in: text)).map { (text as NSString).substring(with: $0.range) }
-        case .object(let object): return object.values.flatMap(keyNames)
-        case .array(let array): return array.flatMap(keyNames)
-        default: return []
-        }
-    }
-
     /// Settings for a machine, where the engine reads the keys from files of their own in its
     /// folder (see `RemoteServer.launchScript`): each named there.
     nonisolated static func keyVariables(in value: Any) -> Any {
@@ -155,12 +85,6 @@ nonisolated enum Integrations {
         case let array as [Any]: return array.map(keyVariables)
         default: return value
         }
-    }
-
-    /// "@scope/name" of "@scope/name@1.2.3", "name" of "name@1.2.3".
-    static func packageName(_ spec: String) -> String {
-        guard let at = spec.dropFirst().lastIndex(of: "@") else { return spec }
-        return String(spec[..<at])
     }
 
     /// `variable` names a key's variable (the shared key's, or a bot's own).

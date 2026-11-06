@@ -9,6 +9,8 @@ let package = Package(
     ],
     targets: [
         .target(name: "OpenCodeKit"),
-        .testTarget(name: "OpenCodeKitTests", dependencies: ["OpenCodeKit"], resources: [.copy("Fixtures")]),
+        // A process for the tests to kill, as a crash would, with a server running under it.
+        .executableTarget(name: "ServerProcessTestHost", dependencies: ["OpenCodeKit"], path: "Tests/ServerProcessTestHost"),
+        .testTarget(name: "OpenCodeKitTests", dependencies: ["OpenCodeKit", "ServerProcessTestHost"], resources: [.copy("Fixtures")]),
     ]
 )
