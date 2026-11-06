@@ -8820,7 +8820,7 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
     const wakes = wakesOf(data);
     const was = readTold(toldFile)?.sessions[data.id] ?? {};
     if (wakes.includes("asks")) {
-      const { permissions, questions } = await asksIn(source, data.id);
+      const { permissions, questions, whole } = await asksIn(source, data.id);
       for (const permission of permissions.filter((each) => !was.asks?.includes(each.id))) {
         const line = await wakeLine({ type: "permission.asked", data: { id: permission.id, sessionID: data.id, action: permission.action, resources: permission.resources } }, data, source);
         if (line)
@@ -8833,6 +8833,8 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
         tell(starter, `[Session asks] "${data.title || "New Session"}" (address ${data.id}) asks: ${question.text} (ask ${question.id}). Answer with answer_ask (answer), or tell the user in a line and carry on.`, true);
         noteTold(data.id, { ask: question.id });
       }
+      if (!whole)
+        throw new Error("Its questions couldn't be read.");
     }
     if (!wakes.includes("finished") || working.has(data.id))
       return;
@@ -8860,12 +8862,35 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
       tell(starter, line, false);
     noteTold(data.id, { reply, turn: last.turn });
   };
-  const catchingUp = () => catchUpAutopilot(source, undefined, signal).then(catchUp).catch(() => {
+  let lookingAgain = false;
+  let looksAgain = 0;
+  const lookAtAutopilotAgain = () => {
+    if (signal?.aborted || lookingAgain || ++looksAgain >= CATCH_UP_TRIES)
+      return;
+    lookingAgain = true;
+    const timer = schedule(async () => {
+      lookingAgain = false;
+      if (signal?.aborted)
+        return;
+      if (!await catchUpAutopilot(source, undefined, signal).catch(() => false))
+        lookAtAutopilotAgain();
+    }, CATCH_UP_AGAIN);
+    timer?.unref?.();
+  };
+  const catchingUp = async () => {
     if (signal?.aborted)
       return;
-    const timer = schedule(() => catchingUp(), CATCH_UP_AGAIN);
-    timer?.unref?.();
-  });
+    try {
+      if (!await catchUpAutopilot(source, undefined, signal))
+        lookAtAutopilotAgain();
+      await catchUp();
+    } catch {
+      if (signal?.aborted)
+        return;
+      const timer = schedule(() => catchingUp(), CATCH_UP_AGAIN);
+      timer?.unref?.();
+    }
+  };
   const caughtUp = Promise.all([catchingUp(), tellLateAnswers(targets, undefined, bridgeRuns).catch(() => {})]).then(() => {});
   const lateAgain = () => {
     if (signal?.aborted)
@@ -10428,15 +10453,23 @@ async function goAheadOnAutopilot(target, conversation, form, file = DECIDED_FIL
   return goAhead(target, conversation, asker, form.id, recommendationOf(form), file, signal, askedBy(form));
 }
 async function goAheadOnWaiting(target, conversation, file = DECIDED_FILE, signal) {
-  const { questions } = await asksIn(target, conversation.id, signal);
+  return (await lookAtWaiting(target, conversation, file, signal)).made;
+}
+async function lookAtWaiting(target, conversation, file, signal) {
+  const { questions, whole } = await asksIn(target, conversation.id, signal);
   const made = [];
+  let settled = whole;
   for (const question of questions) {
     if (signal?.aborted)
       break;
-    made.push(...await goAheadOnQuestion(target, conversation, question, file, signal) ?? []);
+    const calls = await goAheadOnQuestion(target, conversation, question, file, signal);
+    if (calls)
+      made.push(...calls);
+    else
+      settled = false;
   }
   await declineSharedIn(target, conversation, signal);
-  return made;
+  return { made, settled };
 }
 async function declineSharedIn(target, conversation, signal) {
   const folder = conversation.location?.directory;
@@ -10449,13 +10482,16 @@ async function declineSharedIn(target, conversation, signal) {
 var goAheadOnQuestion = (target, conversation, question, file = DECIDED_FILE, signal) => goAhead(target, conversation, question.asker, question.id, question.recommended ?? null, file, signal, question.call);
 async function catchUpAutopilot(target, file = DECIDED_FILE, signal) {
   const page = await engineGet(target, "api/session?limit=200&order=desc&parentID=null");
+  let settled = true;
   for (const data of Array.isArray(page?.data) ? page.data : []) {
     if (signal?.aborted)
-      return;
+      break;
     if (!data?.id || data.parentID || data.time?.archived || data.metadata?.kuvo?.archived === true || !isAutopilot(data))
       continue;
-    await goAheadOnWaiting(target, data, file, signal).catch(() => {});
+    if (!(await lookAtWaiting(target, data, file, signal).catch(() => null))?.settled)
+      settled = false;
   }
+  return settled;
 }
 async function waitsOnYou(target, conversation, form, file = DECIDED_FILE, signal) {
   const before = await asksIn(target, conversation.id, signal);

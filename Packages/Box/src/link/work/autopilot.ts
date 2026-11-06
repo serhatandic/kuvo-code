@@ -152,14 +152,22 @@ export async function goAheadOnAutopilot(target: Target, conversation: Pick<Engi
 /** What `conversation` (on Autopilot) and its subagents ask now, gone ahead on or declined: one asked
  * while the box couldn't hear, or before it was turned on. The calls made. */
 export async function goAheadOnWaiting(target: Target, conversation: Pick<EngineSession, "id" | "metadata" | "location">, file = DECIDED_FILE, signal?: AbortSignal): Promise<DecidedShape[]> {
-  const { questions } = await asksIn(target, conversation.id, signal);
+  return (await lookAtWaiting(target, conversation, file, signal)).made;
+}
+
+/** As `goAheadOnWaiting`; and whether nothing's left for a later look: its forms all read, and each gone ahead on or declined. */
+async function lookAtWaiting(target: Target, conversation: Pick<EngineSession, "id" | "metadata" | "location">, file: string, signal?: AbortSignal): Promise<{ made: DecidedShape[]; settled: boolean }> {
+  const { questions, whole } = await asksIn(target, conversation.id, signal);
   const made: DecidedShape[] = [];
+  let settled = whole;
   for (const question of questions) {
     if (signal?.aborted) break;
-    made.push(...await goAheadOnQuestion(target, conversation, question, file, signal) ?? []);
+    const calls = await goAheadOnQuestion(target, conversation, question, file, signal);
+    if (calls) made.push(...calls);
+    else settled = false;
   }
   await declineSharedIn(target, conversation, signal);
-  return made;
+  return { made, settled };
 }
 
 /** What MCP servers ask in the folder of `conversation` (on Autopilot), filed under no session and
@@ -177,14 +185,17 @@ export const goAheadOnQuestion = (target: Target, conversation: Pick<EngineSessi
   goAhead(target, conversation, question.asker, question.id, question.recommended ?? null, file, signal, question.call);
 
 /** As the box starts, or hears `target` again: what its conversations on Autopilot (the latest
- * few hundred) ask, gone ahead on or declined. */
-export async function catchUpAutopilot(target: Target, file = DECIDED_FILE, signal?: AbortSignal): Promise<void> {
+ * few hundred) ask, gone ahead on or declined. Whether it got through them all: one it couldn't
+ * doesn't stop the others. It throws where it can't list them. */
+export async function catchUpAutopilot(target: Target, file = DECIDED_FILE, signal?: AbortSignal): Promise<boolean> {
   const page = await engineGet(target, "api/session?limit=200&order=desc&parentID=null") as { data?: unknown } | null;
+  let settled = true;
   for (const data of Array.isArray(page?.data) ? page.data as EngineSession[] : []) {
-    if (signal?.aborted) return;
+    if (signal?.aborted) break;
     if (!data?.id || data.parentID || data.time?.archived || data.metadata?.kuvo?.archived === true || !isAutopilot(data)) continue;
-    await goAheadOnWaiting(target, data, file, signal).catch(() => {});
+    if (!(await lookAtWaiting(target, data, file, signal).catch(() => null))?.settled) settled = false;
   }
+  return settled;
 }
 
 /** Whether the question `form`, asked in `conversation` (on `target`) or by a subagent of it, waits

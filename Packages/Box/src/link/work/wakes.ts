@@ -599,7 +599,7 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
     // (As told by now: one heard of meanwhile isn't told twice.)
     const was = readTold(toldFile)?.sessions[data.id] ?? {};
     if (wakes.includes("asks")) {
-      const { permissions, questions } = await asksIn(source, data.id);
+      const { permissions, questions, whole } = await asksIn(source, data.id);
       for (const permission of permissions.filter(each => !was.asks?.includes(each.id))) {
         const line = await wakeLine({ type: "permission.asked", data: { id: permission.id, sessionID: data.id, action: permission.action, resources: permission.resources } as WorkEvent["data"] }, data, source);
         if (line) tell(starter, line, true);
@@ -611,6 +611,8 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
         tell(starter, `[Session asks] "${data.title || "New Session"}" (address ${data.id}) asks: ${question.text} (ask ${question.id}). Answer with answer_ask (answer), or tell the user in a line and carry on.`, true);
         noteTold(data.id, { ask: question.id });
       }
+      // (Questions it couldn't read: it isn't past them.)
+      if (!whole) throw new Error("Its questions couldn't be read.");
     }
     if (!wakes.includes("finished") || working.has(data.id)) return;
     const at = now();
@@ -635,13 +637,34 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
     if (line) tell(starter, line, false);
     noteTold(data.id, { reply, turn: last.turn });
   };
-  // (Questions its conversations on Autopilot asked meanwhile go ahead first, however many tries it
-  // takes to read them: no one is told of those.)
-  const catchingUp = (): Promise<void> => catchUpAutopilot(source, undefined, signal).then(catchUp).catch(() => {
-    if (signal?.aborted) return;
-    const timer = schedule(() => catchingUp(), CATCH_UP_AGAIN);
+  // Conversations on Autopilot it couldn't get through, looked at again a few times; the box's next
+  // start looks again after that.
+  let lookingAgain = false;
+  let looksAgain = 0;
+  const lookAtAutopilotAgain = () => {
+    if (signal?.aborted || lookingAgain || ++looksAgain >= CATCH_UP_TRIES) return;
+    lookingAgain = true;
+    const timer = schedule(async () => {
+      lookingAgain = false;
+      if (signal?.aborted) return;
+      if (!await catchUpAutopilot(source, undefined, signal).catch(() => false)) lookAtAutopilotAgain();
+    }, CATCH_UP_AGAIN);
     (timer as { unref?: () => void } | undefined)?.unref?.();
-  });
+  };
+  // (Questions its conversations on Autopilot asked meanwhile go ahead first, however many tries it
+  // takes to read them: no one is told of those. One it can't read doesn't hold up telling starters
+  // of the rest.)
+  const catchingUp = async (): Promise<void> => {
+    if (signal?.aborted) return;
+    try {
+      if (!await catchUpAutopilot(source, undefined, signal)) lookAtAutopilotAgain();
+      await catchUp();
+    } catch {
+      if (signal?.aborted) return;
+      const timer = schedule(() => catchingUp(), CATCH_UP_AGAIN);
+      (timer as { unref?: () => void } | undefined)?.unref?.();
+    }
+  };
   const caughtUp = Promise.all([catchingUp(), tellLateAnswers(targets, undefined, bridgeRuns).catch(() => {})]).then(() => {});
   // Answers given late that waited (the coding agents' bridge not running), tried again every few
   // minutes while the box runs.
