@@ -264,8 +264,8 @@ test("Autopilot in the Codex lane on a real Codex", { skip, timeout: 900_000 }, 
     // (What came after the message that asked: its turn went on, with nothing put to anyone.)
     const wentOn = messages => {
       const mine = assistants(messages);
-      // (Newest first, so the oldest that speaks of shipping, however the model worded it.)
-      const asking = mine.findLastIndex(each => /ship/i.test(textOf(each)));
+      // (Newest first, so the oldest that names both choices: the model words the question its own way.)
+      const asking = mine.findLastIndex(each => /monday/i.test(textOf(each)) && /friday/i.test(textOf(each)));
       return asking < 0 ? [] : mine.slice(0, asking);
     };
     const messages = await turnsDone(session, "its turn to go on after the question and end, with nobody answering", all => wentOn(all).some(each => /monday|friday/i.test(textOf(each))));
@@ -274,7 +274,7 @@ test("Autopilot in the Codex lane on a real Codex", { skip, timeout: 900_000 }, 
     // drop the first test shows, leaves everything else here looking right).
     const question = questionOf(session);
     assert.ok(question.asked, `the question reached its box: ${await describe()}`);
-    assert.match(JSON.stringify(question.asked.fields), /ship/, "and it was the one this test asked");
+    assert.match(JSON.stringify(question.asked.fields), /monday/i, "and it was the one this test asked");
     assert.equal(question.settled, "cancelled", `and it was declined there (it asked with the choices ${JSON.stringify(question.asked.fields?.map(field => field.options?.map(option => option.label)))}: one marked means the model marked it anyway)`);
     assert.deepEqual(await forms(session), [], "nothing's left asked");
     assert.deepEqual(await calls(session), [], `it made no call on it (the model marked a choice anyway? ${JSON.stringify(question.asked?.fields?.map(field => field.options?.map(option => option.label)))})`);
