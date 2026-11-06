@@ -1715,7 +1715,7 @@ final class Workspace {
         upsert(moved)
         await WakeUps.carry(from: session, to: moved)
         // On Autopilot, it stays so there, its agent told by its box (which brings its calls along).
-        if AutopilotShown.isOn(current) { await model(for: moved.id)?.switchAutopilot(true) }
+        if AutopilotShown.isOn(current) { await self.model(for: moved.id)?.switchAutopilot(true) }
         return moved
     }
 
@@ -2835,7 +2835,7 @@ final class Workspace {
     /// `answerable`: its buttons answer it (not when the notification can't show all it covers).
     /// Asks whose notification is being made (its session read first), and those of them
     /// answered or gone meanwhile.
-    @ObservationIgnored private(set) var notifying: Set<String> = []
+    private(set) var notifying: Set<String> = []
     @ObservationIgnored private var settledWhileNotifying: Set<String> = []
     /// How long a question that recommends a choice, on Autopilot, is given for its box to go ahead.
     @ObservationIgnored var autopilotGrace: Duration = .seconds(5)

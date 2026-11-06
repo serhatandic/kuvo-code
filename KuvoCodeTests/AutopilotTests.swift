@@ -152,13 +152,15 @@ import Testing
         workspace.boxes = { _ in machine.client }
         agents.connect(bridge.api.client.endpoint, folderPrefix: "")
         let away = StubEngine.session("ses_away", directory: "/tmp/kuvo-tests-autopilot-carry", extra: ["metadata": ["kuvo": ["autopilot": true]]])
-        engine.list([away])
+        // (`lab` answers this route with no conversations.)
+        engine.on("GET", "/api/session", json: ["data": [away]])
         engine.conversation("ses_away", [])
         engine.on("GET", "/api/session/ses_away", json: ["data": away])
         engine.on("GET", "/api/session/ses_away/inbox", json: ["data": []])
         engine.on("PATCH", "/api/session/ses_away", json: [:])
         let carried = StubEngine.session("ses_carried", directory: "/tmp/kuvo-tests-autopilot-carry")
         bridge.on("POST", "/api/session/import", json: ["data": carried])
+        bridge.list([carried])
         bridge.on("PATCH", "/api/session/ses_carried", json: [:])
         // (The box finds it on its engine here, which is told as its bridge would be.)
         engine.on("GET", "/api/session/ses_carried", json: ["data": carried])
@@ -166,7 +168,8 @@ import Testing
         engine.on("PUT", "/api/experimental/session/ses_carried/instructions/entries/kuvo.autopilot", json: ["data": [:]])
         await workspace.refresh()
 
-        _ = try await workspace.carryToAgents("ses_away", model: ModelRef(id: "sonnet", providerID: "claude-code"))
+        let moved = try await workspace.carryToAgents("ses_away", model: ModelRef(id: "sonnet", providerID: "claude-code"))
+        #expect(moved?.id == "ses_carried")
 
         #expect(engine.requests("PUT", "/api/experimental/session/ses_carried/instructions/entries/kuvo.autopilot").count == 1)
         #expect(workspace.model(for: "ses_carried")?.isAutopilot == true)
