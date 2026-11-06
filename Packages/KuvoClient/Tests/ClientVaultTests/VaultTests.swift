@@ -62,6 +62,7 @@ import Testing
         let left = VaultActivity(id: "a_9", at: 0, what: "refused", itemName: "GitHub", botName: "Scout", how: "autopilot")
         #expect(!left.isWarning, "Autopilot left it for you: nothing's wrong")
         #expect(left.sentence == "Scout left “GitHub” for you, on Autopilot")
+        #expect(VaultActivity(id: "a_10", at: 0, what: "refused", botName: "Scout", how: "autopilot").sentence == "Scout went on without something from your vault, on Autopilot")
     }
 
     /// What you did from the client you're reading it on leads with what happened; who and where

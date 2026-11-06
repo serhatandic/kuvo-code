@@ -333,7 +333,7 @@ public struct VaultActivity: Codable, Equatable, Identifiable, Sendable {
             switch how {
             case "wrong site": return "Refused \(item)\(where_): not one of its sites. \(botName ?? "The bot") was paused"
             case "paused": return "\(who) couldn’t use \(item): paused"
-            case "autopilot": return "\(who) left \(item) for you, on Autopilot"
+            case "autopilot": return itemName == nil ? "\(who) went on without something from your vault, on Autopilot" : "\(who) left \(item) for you, on Autopilot"
             default: return "\(who) wasn’t allowed \(item)"
             }
         case "added": return "\(you) added \(item)"
