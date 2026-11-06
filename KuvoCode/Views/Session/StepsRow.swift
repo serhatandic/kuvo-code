@@ -87,8 +87,7 @@ struct StepsRow: View {
             ForEach(under(done, current), id: \.offset) { offset, block in step(block, at: offset) }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        // Open still when you come back to a conversation: what comes in goes on under what you read.
-        .onAppear { if isExpanded { scrollAnchor?.hasFolds = true } }
+        .foldOpen(isExpanded)
         #if DEBUG
         // KUVO_DEMO_OPEN_STEPS: each step shows, opened.
         .onAppear { if ProcessInfo.processInfo.environment["KUVO_DEMO_OPEN_STEPS"] != nil { opened = true } }

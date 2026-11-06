@@ -60,11 +60,15 @@ final class ConversationScroller {
     /// yourself since (each way goes through `follow`) means you left it for good.
     @ObservationIgnored private var heldFor: Set<String> = []
 
-    /// You scrolled, and this is where it took you. Opening a step leaves you at the end, so a
-    /// nudge there is still reading: only leaving the end is going somewhere else.
+    /// You're scrolling, and this is where it's taken you. While you read what you opened, where
+    /// it stops decides.
     fileprivate func scrolled(atEnd: Bool) {
-        if atEnd, !heldFor.isEmpty { return }
-        follow(atEnd)
+        if heldFor.isEmpty { follow(atEnd) }
+    }
+
+    /// Your scroll stopped. A nudge is still reading; moved further, you went somewhere else.
+    fileprivate func stopped(atEnd: Bool, moved: CGFloat) {
+        if !heldFor.isEmpty, moved >= 40 { follow(atEnd) }
     }
 
     /// `id` opened or closed by you: back to the end once the last you left it for is closed.
@@ -195,7 +199,15 @@ struct ConversationScroll<Rows: View>: View {
         .onScrollPhaseChange { _, phase, context in
             scrolling.isOn = phase != .idle
             // Taken in hand on the way to the end: where it goes is yours again.
-            if phase == .tracking || phase == .interacting { scrolling.goesToEnd = false }
+            if phase == .tracking || phase == .interacting {
+                scrolling.goesToEnd = false
+                if scrolling.from == nil { scrolling.from = context.geometry.contentOffset.y }
+            }
+            if phase == .idle, let from = scrolling.from {
+                scrolling.from = nil
+                let geometry = context.geometry
+                scroller.stopped(atEnd: geometry.visibleRect.maxY >= geometry.contentSize.height - 40, moved: abs(geometry.contentOffset.y - from))
+            }
             // Its button's way to the end is over, with the glide it stopped: at the end, wherever
             // the rows measured on the way moved it.
             if phase == .idle, scrolling.goesToEnd {
@@ -492,6 +504,8 @@ final class ScrollingFlag {
     var isOn = false
     /// Sent to the end by its button while it scrolled: the scroll that's left is its, not yours.
     var goesToEnd = false
+    /// Where your scroll started.
+    var from: CGFloat?
     /// You're scrolling: not the end's button finishing a scroll you'd started.
     var isYours: Bool { isOn && !goesToEnd }
 }
@@ -621,8 +635,6 @@ final class ScrollAnchor {
     var stopFollowing: () -> Void = {}
     /// Steps opened (true) or closed by you, by what their fold is kept by.
     var reading: ((String, Bool) -> Void)?
-    /// You've opened or closed steps in this conversation: `RowStackView.rowResized`.
-    var hasFolds = false
 
     /// The rows laid out, where they are in the conversation, and those shown now. A row that
     /// goes and comes back where it was (the whole conversation hidden a moment) isn't told its

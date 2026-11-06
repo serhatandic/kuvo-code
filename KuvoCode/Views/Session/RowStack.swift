@@ -3,6 +3,19 @@ import ClientDesign
 import SwiftUI
 import Textual
 
+/// Something you opened is in this row: `RowStackView.rowResized`.
+struct RowHasOpenFold: PreferenceKey {
+    static let defaultValue = false
+    static func reduce(value: inout Bool, nextValue: () -> Bool) { value = value || nextValue() }
+}
+
+extension View {
+    /// Says so to the row it's in, along with whatever else in the row does.
+    func foldOpen(_ isOpen: Bool) -> some View {
+        transformPreference(RowHasOpenFold.self) { $0 = $0 || isOpen }
+    }
+}
+
 /// A conversation's rows, laid out here rather than by a lazy stack: each row in view is a
 /// SwiftUI view of its own, measured at the width it's shown at, and the rows out of view keep
 /// the height they were last measured at (or a guess, never measured). The lazy stack guessed
@@ -157,6 +170,8 @@ final class RowStackView: NSView, NSUserInterfaceValidations {
     private var watch: NSObjectProtocol?
     private weak var watchedClip: NSClipView?
     private var isLayingOut = false
+    /// The rows you opened something in.
+    private var rowsWithOpenFolds: Set<String> = []
     /// The rows last laid out: scrolling past them lays out again.
     private var laidOut: Range<Int> = 0..<0
     /// Rows below one that changed height from within (a part opening) move to their new
@@ -198,6 +213,7 @@ final class RowStackView: NSView, NSUserInterfaceValidations {
                 hosts[id] = nil
             }
             for id in heights.keys where rowIndex[id] == nil { heights[id] = nil }
+            rowsWithOpenFolds.formIntersection(rowIndex.keys)
             keptOrder.removeAll { rowIndex[$0] == nil }
             fresh = fresh.filter { rowIndex[$0] != nil }
             // Only while the end is in view, where they come: rows that came while you read
@@ -265,6 +281,11 @@ final class RowStackView: NSView, NSUserInterfaceValidations {
                     .onGeometryChange(for: CGFloat.self) { ceil($0.size.height) } action: { [weak self] height in
                         self?.rowResized(id, to: height)
                     }
+                    .onPreferenceChange(RowHasOpenFold.self) { [weak self] isOpen in
+                        MainActor.assumeIsolated {
+                            if isOpen { self?.rowsWithOpenFolds.insert(id) } else { self?.rowsWithOpenFolds.remove(id) }
+                        }
+                    }
             }
         )
     }
@@ -277,9 +298,9 @@ final class RowStackView: NSView, NSUserInterfaceValidations {
         guard let known = heights[id], abs(known.value - height) > 0.5, width > 0, hosts[id]?.isShown == true,
               let index = rowIndex[id] else { return }
         // A row whose top is above the view (coming in as you scroll up, a picture or widget
-        // growing as it draws) grows up out of view, so what's below it stays. Except once you
-        // open steps here, as a row can then grow where you read: only one wholly above moves it.
-        let changedAt = scrollAnchor?.hasFolds == true ? tops[index] + known.value : tops[index]
+        // growing as it draws) grows up out of view, so what's below it stays. Except one you
+        // opened something in, which you may be reading: it grows under that, moving nothing.
+        let changedAt = rowsWithOpenFolds.contains(id) ? tops[index] + known.value : tops[index]
         keepInPlace(changedAt: changedAt, by: height - known.value) {
             heights[id] = Height(value: height, width: width)
             place()

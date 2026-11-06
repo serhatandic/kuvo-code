@@ -1421,6 +1421,7 @@ struct ReasoningView: View {
                     .transition(.fold)
             }
         }
+        .foldOpen(isExpanded)
         // Stays where it is from when it ends, as what's next comes in under it.
         .onChange(of: block.isComplete) { _, ended in
             if ended, CardFolds.shared.isOpen(foldKey, otherwise: false) { scrollAnchor?.reading?(foldKey, true) }
@@ -2003,7 +2004,6 @@ final class CardFolds {
     /// under way, kept in view until it ends); closing what you opened goes back to it (see
     /// `ConversationScroller.reading`). `closes`: what goes with it.
     func toggle(_ id: String, open: Bool, in anchor: ScrollAnchor?, holds: Bool = true, closes: [String] = []) {
-        anchor?.hasFolds = true
         withAnimation(.ui) {
             set(id, open: open)
             closes.forEach(forget)

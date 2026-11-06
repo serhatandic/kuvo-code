@@ -93,6 +93,7 @@ struct SubagentRow: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .foldOpen(isExpanded)
         .task(id: session) {
             guard let session else { return }
             let model = await workspace.subagentModel(for: session, in: directory)
