@@ -259,11 +259,14 @@ async function lastReply(target: Target, session: string): Promise<LastReply> {
   const newest = (type: string) => { const index = messages.findIndex(message => message.type === type); return index < 0 ? Infinity : index; };
   const reply = messages[newest("assistant")];
   // Its latest turn, newest first: back to where the one before it ended (read as it runs too, not
-  // ended yet). Words of the box's or its agent's can land anywhere in it.
-  const from = messages[0]?.type === "idle" ? 1 : 0;
+  // ended yet). Words of the box's or its agent's can land anywhere in it; commands you ran after
+  // it, above it, are no part of it.
+  const ofTurn = (message: { type?: unknown }) => message.type === "user" || message.type === "synthetic" || message.type === "assistant";
+  const lastEnd = messages.findIndex(message => message.type === "idle");
+  const from = lastEnd >= 0 && !messages.slice(0, lastEnd).some(ofTurn) ? lastEnd + 1 : 0;
   const before = messages.findIndex((message, index) => index >= from && message.type === "idle");
   const turn = messages.slice(from, before < 0 ? undefined : before);
-  const ended = from === 1 && turn.length > 0 && !turn.some(message => message.type === "assistant") ? messages[0] : undefined;
+  const ended = from > 0 && turn.length > 0 && !turn.some(message => message.type === "assistant") ? messages[from - 1] : undefined;
   // What it said in it, the latest first (a step of tools alone says nothing).
   let text = "";
   for (const message of turn) {
@@ -271,7 +274,7 @@ async function lastReply(target: Target, session: string): Promise<LastReply> {
     text = message.content.filter((part: unknown) => isObject(part) && part.type === "text").map((part: { text?: unknown }) => String(part.text ?? "")).join(" ").replace(/\s+/g, " ").trim();
     if (text) break;
   }
-  return { id: reply?.id ?? null, at: at(reply), turn: ended?.id ?? null, turnAt: at(ended), text, began: beganBy(turn), underWay: from === 0 && turn.length > 0 };
+  return { id: reply?.id ?? null, at: at(reply), turn: ended?.id ?? null, turnAt: at(ended), text, began: beganBy(turn), underWay: from === 0 && turn.some(ofTurn) };
 }
 
 // Whether a finished turn is news to whoever started the session. The first it hears of it always is,

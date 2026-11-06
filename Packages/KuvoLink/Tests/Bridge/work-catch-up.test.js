@@ -55,7 +55,7 @@ function place(sessions) {
         const limit = Number(new URL(request.url, "http://engine").searchParams.get("limit") ?? Infinity);
         const page = data => reply({ data: data.slice(0, limit) });
         if (sessions[id].replied === null) return page([...later, ...after]);
-        return page([...later, ...after, { id: `msg_${id}`, type: "assistant", time: { created: sessions[id].replied ?? 9 }, content: [{ type: "text", text: sessions[id].said ?? "Done." }] }, { id: `msg_${id}_asked`, type: "user", time: { created: 8 }, content: [] }]);
+        return page([...later, ...after, ...(after.length ? [{ id: `msg_${id}_end`, type: "idle", time: { created: sessions[id].replied ?? 9 } }] : []), { id: `msg_${id}`, type: "assistant", time: { created: sessions[id].replied ?? 9 }, content: [{ type: "text", text: sessions[id].said ?? "Done." }] }, { id: `msg_${id}_asked`, type: "user", time: { created: 8 }, content: [] }]);
       }
       if (one?.[2] === "/prompt" && sessions[id]) {
         state.prompts.push({ to: id, ...JSON.parse(body) });

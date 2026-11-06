@@ -11402,10 +11402,12 @@ async function lastReply(target, session) {
     return index < 0 ? Infinity : index;
   };
   const reply = messages[newest("assistant")];
-  const from = messages[0]?.type === "idle" ? 1 : 0;
+  const ofTurn = (message) => message.type === "user" || message.type === "synthetic" || message.type === "assistant";
+  const lastEnd = messages.findIndex((message) => message.type === "idle");
+  const from = lastEnd >= 0 && !messages.slice(0, lastEnd).some(ofTurn) ? lastEnd + 1 : 0;
   const before = messages.findIndex((message, index) => index >= from && message.type === "idle");
   const turn = messages.slice(from, before < 0 ? undefined : before);
-  const ended = from === 1 && turn.length > 0 && !turn.some((message) => message.type === "assistant") ? messages[0] : undefined;
+  const ended = from > 0 && turn.length > 0 && !turn.some((message) => message.type === "assistant") ? messages[from - 1] : undefined;
   let text = "";
   for (const message of turn) {
     if (message.type !== "assistant" || !Array.isArray(message.content))
@@ -11414,7 +11416,7 @@ async function lastReply(target, session) {
     if (text)
       break;
   }
-  return { id: reply?.id ?? null, at: at(reply), turn: ended?.id ?? null, turnAt: at(ended), text, began: beganBy(turn), underWay: from === 0 && turn.length > 0 };
+  return { id: reply?.id ?? null, at: at(reply), turn: ended?.id ?? null, turnAt: at(ended), text, began: beganBy(turn), underWay: from === 0 && turn.some(ofTurn) };
 }
 function isNews(was, last) {
   if (last.id && last.id === was.reply)
