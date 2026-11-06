@@ -26,16 +26,19 @@ const scratch = () => {
 }
 const environment = (home: string) => ({ HOME: home, PATH: "/usr/bin:/bin", TMPDIR: tmpdir(), BUN_BE_BUN: "1", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" })
 
-/** Loaded before the box's code: what would open a folder macOS asks about in your account's home is
- * noted in `noted`, and never reaches the system, so these tests can't ask either, whatever the code does. */
+/** Loaded before the box's code: what would open a folder macOS guards in your account's home (all of
+ * ~/Library: it guards more of it than it says) is noted in `noted`, and never reaches the system, so
+ * these tests can't ask either, whatever the code does. This checkout is its own, wherever it is. */
 function guard(root: string): { preload: string; noted: string } {
   const preload = join(root, "note-opens.cjs")
   const noted = join(root, "opened")
   writeFileSync(noted, "")
-  const names = "Desktop|Documents|Downloads|Pictures|Movies|Music|Library/Mobile Documents|Library/CloudStorage|Library/Containers|Library/Group Containers"
+  // (But for listing your Keychain's folder, to wall off the system's keychains in it: macOS doesn't guard that.)
+  const names = "Desktop|Documents|Downloads|Pictures|Movies|Music|Library(?!/Keychains$)"
+  const checkout = join(import.meta.dir, "..", "..", "..")
   writeFileSync(preload, `
 const fs = require("fs")
-const guarded = where => typeof where === "string" && new RegExp(${JSON.stringify(`^${accountHome()}/(${names})(/|$)`)}, "i").test(where)
+const guarded = where => typeof where === "string" && !where.startsWith(${JSON.stringify(checkout + "/")}) && new RegExp(${JSON.stringify(`^${accountHome()}/(${names})(/|$)`)}, "i").test(where)
 const stop = (name, where) => {
   fs.appendFileSync(${JSON.stringify(noted)}, name + " " + where + "\\n")
   return Object.assign(new Error("ENOENT: " + where), { code: "ENOENT" })

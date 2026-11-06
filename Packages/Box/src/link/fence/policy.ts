@@ -380,8 +380,8 @@ export function fencePolicy(ports: number[] = []): FencePolicy {
   const opencodes = homes.map(each => throughLinks(opencodeAuthFile(each))).filter(each => !inHomes([".local/share/opencode/auth.json"]).includes(each));
   // A machine's folder, and the real one if this is a test's own.
   const own = IS_MAC ? macFolders(home) : { kuvo: [K, path.join(home, ".kuvo-code")], readable: [path.join(K, "bin")] };
-  const kuvo = [...new Set(own.kuvo.map(realish))];
-  const kuvoReadable = own.readable.map(realish);
+  const kuvo = [...new Set(own.kuvo.map(throughLinks))];
+  const kuvoReadable = own.readable.map(throughLinks);
   const commandCaches = Object.values(sandboxCaches());
   // Your cache folder, and your own if you set one (on a machine, what its launch kept: the box's
   // own is in Kuvo Code's folder), with the tools' caches in it.
@@ -527,9 +527,10 @@ export function throughLinks(where: string): string {
   return macAsksAbout(found) ? found : realish(found);
 }
 
-// What macOS holds a process for as it opens it: those folders in your account's home, and other
-// drives. (Not its secrets, as Mail's or Safari's, which it refuses at once.)
-const MAC_ASKS = [...MAC_PERSONAL, "Library/CloudStorage", "Library/Containers", "Library/Group Containers"];
+// What macOS guards as it's opened: those folders in your account's home, all of ~/Library (it holds a
+// process for other apps' data and asks itself about Safari's and Cookies, and more of it each
+// release), and other drives. The walls name ~/Library's as macOS does, so nothing there needs opening.
+const MAC_ASKS = [...MAC_PERSONAL, "Library"];
 let macAsks: RegExp | undefined;
 function macAsksAbout(at: string): boolean {
   if (process.platform !== "darwin") return false;

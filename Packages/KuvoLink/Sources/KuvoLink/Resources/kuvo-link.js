@@ -2815,8 +2815,8 @@ function fencePolicy(ports = []) {
   const inHomes = (names) => homes.flatMap((each) => names.map((name) => throughLinks(path12.join(each, name))));
   const opencodes = homes.map((each) => throughLinks(opencodeAuthFile(each))).filter((each) => !inHomes([".local/share/opencode/auth.json"]).includes(each));
   const own = IS_MAC ? macFolders(home) : { kuvo: [K, path12.join(home, ".kuvo-code")], readable: [path12.join(K, "bin")] };
-  const kuvo = [...new Set(own.kuvo.map(realish))];
-  const kuvoReadable = own.readable.map(realish);
+  const kuvo = [...new Set(own.kuvo.map(throughLinks))];
+  const kuvoReadable = own.readable.map(throughLinks);
   const commandCaches = Object.values(sandboxCaches());
   const ownCache = "KUVO_OWN_XDG_CACHE_HOME" in process.env ? process.env.KUVO_OWN_XDG_CACHE_HOME : process.env.XDG_CACHE_HOME;
   const yourCaches = [throughLinks(path12.join(home, ".cache"))];
@@ -2978,7 +2978,7 @@ function throughLinks(where) {
   const found = deepestThere(where, followLinks);
   return macAsksAbout(found) ? found : realish(found);
 }
-var MAC_ASKS = [...MAC_PERSONAL, "Library/CloudStorage", "Library/Containers", "Library/Group Containers"];
+var MAC_ASKS = [...MAC_PERSONAL, "Library"];
 var macAsks;
 function macAsksAbout(at) {
   if (process.platform !== "darwin")
