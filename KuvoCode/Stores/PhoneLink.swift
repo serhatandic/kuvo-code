@@ -515,7 +515,7 @@ final class PhoneLink {
             try script.write(to: scriptFile)
             try await machine.connection.run(BoxVersion.guardScript + "\n" + RemoteEngineInstaller.script("""
                 f="$K/bin/\(Bridge.fileName)"
-                if [ "$(sha256sum "$f" 2>/dev/null | cut -c1-64)" = "\(hash)" ]; then cat >/dev/null; else cat >"$f.new" && mv -f "$f.new" "$f"; fi
+                if [ "\(RemoteEngineInstaller.sumOfFile)" = "\(hash)" ]; then cat >/dev/null; else cat >"$f.new" && mv -f "$f.new" "$f"; fi
                 """), input: scriptFile)
 
             struct Setup: Encodable {
