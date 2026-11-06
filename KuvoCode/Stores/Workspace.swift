@@ -1251,24 +1251,27 @@ final class Workspace {
 
     /// What still runs for `box`'s sessions besides their own turns, as it says (PROTOCOL.md, "Work ›
     /// Background work"), from now on, until the task following it ends (a machine disconnecting). What
-    /// it said is gone once it can't be heard: this Mac doesn't say what it can't know runs.
+    /// it said stands through a dropped stream, and goes once it can't be reached: this Mac doesn't say
+    /// what it can't know runs.
     func followBackground(_ box: String) async {
         while !Task.isCancelled {
             var older = false
+            var heard = false
             if let client = boxes?(box) {
                 do {
                     for try await line in client.follow("kuvo/work/background/events") {
+                        heard = true
                         guard let list = try? JSONDecoder().decode(BackgroundList.self, from: line), background[box] != list.sessions else { continue }
                         background[box] = list.sessions
                     }
                 } catch let refusal as BoxRefusal {
                     older = refusal.status == 404 || refusal.status == 403
                 } catch {}
-                if background[box] != nil { background[box] = nil }
+                if !heard, background[box] != nil { background[box] = nil }
             }
-            // The box restarted, or the machine went away: followed again in a moment. One from before
-            // it told this, only now and then.
-            try? await Task.sleep(for: .seconds(older ? 300 : box == BoxClient.mac ? 2 : 30))
+            // The box restarted, or the machine went away: followed again in a moment, at once after a
+            // stream that dropped. One from before it told this, only now and then.
+            try? await Task.sleep(for: .seconds(older ? 300 : heard || box == BoxClient.mac ? 2 : 30))
         }
         if background[box] != nil { background[box] = nil }
     }

@@ -805,19 +805,28 @@ client shows it from the same routes.
     it may still run, and a client's list of commands still shows it.
   - **Telling a lead**: `[Session finished]` waits while any of it runs, and looks again 10 seconds
     after it ends, since the end wakes its agent. At 30 minutes it's told anyway, saying what still
-    runs. After that a turn someone asked for is always told. A turn that began on its own (what it
+    runs. A turn someone asked for doesn't wait on what was running before they asked (a dev server):
+    it's told at once, saying what still runs. After that a turn someone asked for is always told. A
+    turn that began on its own (what it
     left running ended, its own wake-up) is told only if it has something to say: 200 characters or
     more, and not the same again. The exception is what follows a finish told before the work was
     over, told however short, unless its own wake-up began it. The same failure again in a turn
     that began on its own is told once. Oversight's `finished` mark goes with the telling.
   - **Stopping**: `stop_session`, Stop on a session someone started, and `stop-all` end its turn,
-    what it left running, and its wake-ups and watches, and mark it in `run/work/stopped.json`. Until
-    someone writes to it, nothing it does is told, and a turn it begins on its own is interrupted at
-    once; the same goes for one that's archived. Stop in your own conversation or in a bot's own
-    ends the turn only, and keeps its background commands and wake-ups.
+    what it left running, and its wake-ups and watches, and mark it in `run/work/stopped.json`.
+    `stop-all` takes those waiting on a timer of their own too. Until it's set going again, nothing
+    it does is told. What's written to it decides, read at `session.inbox.delivered` (the turn starts
+    before the message is in its conversation): what it left running ending (a `synthetic` with
+    `metadata.source` `shell` or `subagent`) is interrupted at once; anything else written since the
+    stop, a message, a goal or a wake-up, sets it going and clears the mark. An archived session is
+    interrupted the same way, and never told of. Stop in your own conversation or in a bot's own ends
+    the turn only, and keeps its background commands and wake-ups. So does a goal's Pause, for each
+    of its sessions, since it goes on from where it was.
   - **The box restarting**: what it was holding is in `run/work/told.json` (`waiting`) and looked at
-    again as it starts: told once if it's over, held if it still runs. The engine's connection
-    dropping clears that place's list until it's looked at again: its commands go with its engine.
+    again as it starts: told once if it's over, held if it still runs, let go of if it's gone. The
+    engine's connection dropping clears that place's list until it's looked at again: its commands
+    go with its engine. A client keeps what a box said while its stream drops for a moment, and drops
+    it once the box can't be reached.
   - **Which agents can say**: the engine's own agents say all of it (`GET api/shell` one folder at
     a time, `shell.created`, `shell.exited`, and child sessions in `/api/session/active`). Only
     folders with something at work are asked, because asking starts a folder's tools. Claude Code:

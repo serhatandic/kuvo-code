@@ -89,6 +89,55 @@ import Testing
         try await until { !workspace.isWorking(parent) }
     }
 
+    /// The box's stream dropping for a moment isn't the work ending: the session keeps showing at work
+    /// while it's followed again, and goes only once the box can't be reached.
+    @Test func aDroppedStreamLeavesASessionAtWork() async throws {
+        defer { engine.stop() }
+        final class Answers: @unchecked Sendable {
+            private let lock = NSLock()
+            private var count = 0
+            var asked: Int { lock.withLock { count } }
+            func next() -> Int { lock.withLock { count += 1; return count } }
+        }
+        let answers = Answers()
+        engine.list([StubEngine.session(parent, title: "Lead", directory: "/tmp/kuvo-tests-subagents")])
+        await workspace.refresh()
+        let list = Data(#"{"sessions": {"\#(parent)": {"commands": 1, "subagents": 0, "tasks": 0, "since": 1}}}"#.utf8) + Data("\n".utf8)
+        let (open, keepOpen) = AsyncStream<Void>.makeStream()
+        defer { keepOpen.finish() }
+        let client = BoxClient(box: "lab", transport: LocalBox { _ in
+            let answer = answers.next()
+            return AsyncThrowingStream { continuation in
+                let task = Task {
+                    switch answer {
+                    case 1:
+                        // What it says, and the stream drops.
+                        continuation.yield(.head(status: 200, headers: [:]))
+                        continuation.yield(.body(list))
+                    case 2:
+                        // Followed again, with nothing said yet, and then it goes.
+                        continuation.yield(.head(status: 200, headers: [:]))
+                        for await _ in open {}
+                    default:
+                        continuation.finish(throwing: URLError(.cannotConnectToHost))
+                        return
+                    }
+                    continuation.finish()
+                }
+                continuation.onTermination = { _ in task.cancel() }
+            }
+        })
+        workspace.boxes = { _ in client }
+        let workspace = workspace
+        let follow = Task { await workspace.followBackground("lab") }
+        defer { follow.cancel() }
+        try await until { workspace.isWorking(parent) }
+        try await until { answers.asked == 2 }
+        #expect(workspace.isWorking(parent), "still at work as far as anyone knows")
+        keepOpen.finish()
+        try await until { !workspace.isWorking(parent) }
+    }
+
     /// A review's part's tab, opened again as Kuvo Code opens after its review was put away,
     /// says the part is gone, not that a subagent is missing.
     @Test func aReviewsPartOpenedIsKnownAfterRelaunch() {
