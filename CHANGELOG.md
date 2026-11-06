@@ -16,6 +16,9 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- A session waiting on a command or a subagent it left running now shows as at work, in its row and in the bar over its bot's composer, on your Mac and iPhone alike.
+- A bot or a session that started another hears "finished" once, when that session is really done, instead of after every turn: a timer of its own or a command ending no longer sends it again unless it has something new to say.
+- Stopping a session a bot or another session started also ends the commands and subagents it left running and its wake-ups, and nothing more comes of it until someone writes to it. Nothing comes of an archived one either.
 - **Autopilot**, in the Mode menu or with **/autopilot**: a conversation, a chat or a bot's conversation decides for itself and nothing waits for you: what only you can do, like a sign-in or a payment, it leaves undone and lists at the end. Where it would have asked you to choose, it goes with the choice it recommends and says so in the conversation (**Went with Warm and roasty · best reviewed**); **Change** picks another, and the agent goes that way from there. While it's on, an **✈ Autopilot** chip sits before the mode, and its **×** turns it off. Conversations start Interactive, asking you as before. A goal's card sets it too, as one setting with its bot's conversation. <!-- new: keyword/autopilot -->
 - The coding agents' bridge, this Mac's box or the engine, if stuck, no longer keeps running after it's stopped or after Kuvo Code crashes: it's ended within seconds.
 - Integrations on a machine stay up to date with your Mac closed: when the machine updates itself, the ones you added move to the versions that update brings, rather than waiting for your Mac to connect.

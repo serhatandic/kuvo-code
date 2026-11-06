@@ -18,6 +18,21 @@ public struct WorksFor: Sendable, Hashable {
     }
 }
 
+/// What still runs for a session besides its own turn, as its box says (`kuvo/work/background`): how
+/// many commands it left running, subagents at work under it and other tasks its agent keeps going,
+/// and since when (ms since 1970). A session with nothing running isn't listed.
+public struct SessionBackground: Decodable, Sendable, Hashable {
+    public let commands: Int
+    public let subagents: Int
+    public let tasks: Int
+    public let since: Double
+}
+
+/// A box's sessions with something running besides their own turns, by session.
+public struct BackgroundList: Decodable, Sendable, Hashable {
+    public let sessions: [String: SessionBackground]
+}
+
 /// An ask a session had, as a bot (or the conversation that started it) answered it: kept on the
 /// session for every client to show on its step.
 public struct WorkAnswer: Decodable, Sendable, Hashable, Identifiable {

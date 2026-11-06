@@ -31,7 +31,8 @@ import { keptFromSessions } from "../work/reviewer";
 import type { Approval } from "../work/approval";
 import { linkSession, pauseGoal, runningGoal } from "../work/goals";
 import { nextMidnight, startOfDay } from "../work/clock";
-import { botOfConversation, depthOf, ofBot, workingNow, workSessions, worksFor } from "../work/tree";
+import { atWorkNow } from "../work/background";
+import { botOfConversation, depthOf, isArchived, ofBot, workSessions, worksFor } from "../work/tree";
 import { isAutopilot, tellAutopilot } from "../work/autopilot";
 import type { WorksFor } from "../../shared/routes/work";
 import type { Target } from "../../shared/records";
@@ -305,7 +306,7 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   if (bot && limits && noted) {
     const targets = [engine, bridge].filter((each): each is Target => Boolean(each));
     const work = ofBot(bot.bot, await workSessions(targets, place.signal, { archived: true }));
-    const working = await workingNow(targets, place.signal);
+    const working = await atWorkNow(targets, place.signal);
     const midnight = startOfDay(Date.now());
     const today = work.filter(each => (each.data.time?.created ?? 0) >= midnight);
     const tokens = today.reduce((sum, each) => sum + (each.data.tokens?.input ?? 0) + (each.data.tokens?.output ?? 0) + (each.data.tokens?.reasoning ?? 0), 0);
@@ -315,7 +316,8 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
     const earlier = startsBefore(bot.bot, noted.before);
     const past = pastLimit(limits, {
       depth,
-      working: work.filter(each => working.has(each.data.id)).length + earlier.filter(each => !each.session || !each.prompted || !workIDs.has(each.session)).length,
+      // (One put away doesn't take a place for what it left running.)
+      working: work.filter(each => working.has(each.data.id) && !isArchived(each.data)).length + earlier.filter(each => !each.session || !each.prompted || !workIDs.has(each.session)).length,
       started: todayIDs.size + earlier.filter(each => !each.session || !todayIDs.has(each.session)).length,
       tokens,
     });

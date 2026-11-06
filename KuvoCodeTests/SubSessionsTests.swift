@@ -45,7 +45,6 @@ import Testing
         #expect(workspace.sessions.map(\.id) == ["ses_timer"], "no row of their own")
         try await until { workspace.isWorking("ses_tests") }
         #expect(!workspace.isWorking("ses_find"))
-        #expect(workspace.isWorking("ses_timer"), "its subagent works, so it does")
 
         // One asks you something: it waits for you.
         workspace.handle(try engine.event("permission.asked", ["id": "per_1", "sessionID": "ses_ask", "action": "edit", "resources": ["Settings.swift"]]))

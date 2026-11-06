@@ -481,6 +481,84 @@ describe("Claude Code's subagents in the background", () => {
   })
 })
 
+describe("what Claude Code left running, as the box reads it", () => {
+  test("a command, a subagent and another task count until each ends; a stop ends them all", async () => {
+    const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
+    sessions.prompt(id, { id: "msg_claude_left_001", text: "start them", files: [], delivery: "steer" })
+    await until(() => fake.sent.length === 1)
+    const [first] = fake.sent.map((message) => message.uuid)
+    expect(sessions.background()[id]).toBeUndefined()
+    fake.out.push({ type: "assistant", message: { id: "m1", content: [
+      { type: "tool_use", id: "tool1", name: "Bash", input: { command: "npm run dev", run_in_background: true } },
+      { type: "tool_use", id: "call1", name: "Agent", input: { description: "Look into it", prompt: "Look into it", subagent_type: "general-purpose", run_in_background: true } },
+    ] }, parent_tool_use_id: null, user_message_uuids: [first] })
+    fake.out.push({ type: "system", subtype: "task_started", task_id: "t1", task_type: "local_bash", description: "Start the dev server", tool_use_id: "tool1", is_backgrounded: true })
+    fake.out.push({ type: "system", subtype: "task_started", task_id: "ag1", task_type: "local_agent", description: "Look into it", tool_use_id: "call1", is_backgrounded: true })
+    const everything = [
+      { task_id: "t1", task_type: "local_bash", description: "Start the dev server" },
+      { task_id: "ag1", task_type: "local_agent", description: "Look into it" },
+      { task_id: "m1", task_type: "monitor_mcp", description: "Watch it" },
+    ]
+    fake.out.push({ type: "system", subtype: "background_tasks_changed", tasks: everything })
+    fake.out.push({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "call1", content: "Launched in the background." }] }, parent_tool_use_id: null })
+    fake.say("All going.", [first])
+    fake.result([first])
+    await until(() => idles(id).length === 1)
+    // Its turn is over: it's the rest that still run, each once.
+    await until(() => (sessions.background()[id]?.tasks.length ?? 0) > 0)
+    const left = sessions.background()[id]
+    expect(left.commands.map((each) => each.command)).toEqual(["npm run dev"])
+    expect(left.subagents).toHaveLength(1)
+    expect(left.tasks.map((each) => each.id)).toEqual(["m1"])
+    await sessions.stopBackground(id)
+    // Each is asked to stop; it's Claude Code that says they did, and then nothing's left.
+    expect([...fake.stopped].sort()).toEqual(["ag1", "m1", "t1"])
+    fake.out.push({ type: "system", subtype: "task_notification", task_id: "ag1", status: "stopped", tool_use_id: "call1", output_file: "", summary: "stopped" })
+    fake.out.push({ type: "system", subtype: "background_tasks_changed", tasks: [] })
+    await until(() => !sessions.background()[id])
+    expect(sessions.active()).not.toContain(left.subagents[0].id)
+  })
+})
+
+describe("Claude Code stopping with work left running", () => {
+  test("what it left running went with it, and whoever follows the session hears so", async () => {
+    const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
+    sessions.prompt(id, { id: "msg_claude_exit_001", text: "start it", files: [], delivery: "steer" })
+    await until(() => fake.sent.length === 1)
+    const [first] = fake.sent.map((message) => message.uuid)
+    fake.out.push({ type: "assistant", message: { id: "m1", content: [{ type: "tool_use", id: "tool1", name: "Bash", input: { command: "npm run dev", run_in_background: true } }] }, parent_tool_use_id: null, user_message_uuids: [first] })
+    fake.out.push({ type: "system", subtype: "task_started", task_id: "t1", task_type: "local_bash", description: "Start the dev server", tool_use_id: "tool1", is_backgrounded: true })
+    fake.out.push({ type: "system", subtype: "background_tasks_changed", tasks: [{ task_id: "t1", task_type: "local_bash", description: "Start the dev server" }] })
+    fake.say("It's up.", [first])
+    fake.result([first])
+    await until(() => idles(id).length === 1)
+    await until(() => (sessions.background()[id]?.commands.length ?? 0) === 1)
+    const heard: unknown[] = []
+    const unsubscribe = subscribe((event) => {
+      if (event.type === "session.background.updated") heard.push(event.data.sessionID)
+    })
+    fake.crash(new Error("Claude Code process exited with code 1"))
+    await until(() => heard.includes(id))
+    unsubscribe()
+    expect(sessions.background()[id]).toBeUndefined()
+  })
+
+  test("a turn it begins on its own says so, whatever began it", async () => {
+    const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
+    sessions.prompt(id, { id: "msg_claude_own_0001", text: "start it", files: [], delivery: "steer" })
+    await until(() => fake.sent.length === 1)
+    const [first] = fake.sent.map((message) => message.uuid)
+    fake.say("Sent it off.", [first])
+    fake.result([first])
+    await until(() => idles(id).length === 1)
+    // Nothing of yours is in it: it goes on with something it had going.
+    fake.say("Carrying on.", [])
+    await until(() => texts(id).includes("Carrying on."))
+    const own = sessions.messages(id).find((message) => message.type === "synthetic")
+    expect((own as { metadata?: { source?: string } } | undefined)?.metadata?.source).toBe("agent")
+  })
+})
+
 describe("Writing to a Claude Code subagent", () => {
   /** A conversation whose subagent (call1, Claude Code's ag1) went off in the background; `done`, it has finished since. */
   async function sendOff(done: boolean) {
