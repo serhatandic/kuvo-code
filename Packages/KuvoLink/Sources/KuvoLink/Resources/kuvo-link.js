@@ -7915,8 +7915,9 @@ async function answerGoal(id, given, targets, file = GOALS_FILE) {
   const ends = action === "start" ? endGiven(given.ends) : undefined;
   if (ends === null)
     return { refused: { status: 400, message: "The end (ends) is a date and time to come." } };
-  const wasAutopilot = action === "start" && isAutopilot((await placeOfSession(before.session, targets()).catch(() => null))?.data ?? {});
-  const asItRuns = wasAutopilot && given.mode === undefined && before.mode === undefined ? "autopilot" : undefined;
+  const runsNow = action === "start" ? await placeOfSession(before.session, targets()).catch(() => null) : null;
+  const wasAutopilot = action === "start" && (!runsNow || isAutopilot(runsNow.data));
+  const asItRuns = runsNow && isAutopilot(runsNow.data) && given.mode === undefined && before.mode === undefined ? "autopilot" : undefined;
   const changed = changeKept((all) => {
     const goal = all.find((each) => each.id === id);
     if (!goal)
@@ -7977,7 +7978,7 @@ async function followMode(goal, targets, file = GOALS_FILE) {
     return;
   const on = !ended && modeOf(goal) === "autopilot";
   const own = await placeOfSession(goal.session, targets()).catch(() => null);
-  let reached = ended || Boolean(own?.data.id);
+  let reached = Boolean(own?.data.id);
   const listed = await workSessions(targets(), undefined, { whole: true }).catch(() => {
     reached = false;
     return workSessions(targets()).catch(() => []);
@@ -7988,6 +7989,8 @@ async function followMode(goal, targets, file = GOALS_FILE) {
     if (!await setAutopilot(each.target, { ...each.data, id: each.data.id }, on).catch(() => false))
       reached = false;
   }
+  if (ended)
+    reached = true;
   changeKept((all) => {
     const kept = all.find((one) => one.id === goal.id);
     if (!kept || Boolean(kept.following) === !reached)
@@ -8680,8 +8683,6 @@ async function lookAtGoals(tell, targets, { file = GOALS_FILE, here, now = Date.
     if (goal.state !== "running") {
       if (goal.loop)
         await setGoalLoop(goal, null, targets, file);
-      if (goal.following)
-        await followMode(goal, targets, file);
       continue;
     }
     if (!bridge)

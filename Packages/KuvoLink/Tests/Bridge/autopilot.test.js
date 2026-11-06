@@ -580,6 +580,26 @@ test("a goal's end takes its conversation and sessions back to Interactive, whic
   assert.equal(on("ses_away"), true);
 });
 
+test("a goal's end that couldn't reach its conversation doesn't come back later to turn off what you've switched on since", async () => {
+  goalIn("ses_mine", { state: "proposed", proposed: Date.now(), projects: [] });
+  await route("POST", "kuvo/work/goals/goal_cafe", { action: "start", mode: "autopilot", wake: false });
+  refusesEntries = true;
+  await route("POST", "kuvo/work/goals/goal_cafe", { action: "stop" });
+  refusesEntries = false;
+  assert.equal((await route("PUT", "kuvo/sessions/ses_mine/autopilot", { autopilot: true })).status, 200);
+  await link.lookAtGoals(() => true, () => [source], { now: Date.now() });
+  assert.equal(sessions.get("ses_mine").metadata.kuvo.autopilot, true);
+});
+
+test("a goal started while its conversation can't be read leaves it as it is when it ends", async () => {
+  goalIn("ses_away", { state: "proposed", proposed: Date.now(), projects: [] });
+  refusesReading = true;
+  await route("POST", "kuvo/work/goals/goal_cafe", { action: "start", mode: "autopilot", wake: false });
+  refusesReading = false;
+  await route("POST", "kuvo/work/goals/goal_cafe", { action: "stop" });
+  assert.equal(sessions.get("ses_away").metadata.kuvo.autopilot, true);
+});
+
 test("switching a goal reaches its running sessions: off, their questions wait and their agents are told no longer; on, they go ahead again; one the engine turned away follows on the box's next look", async () => {
   goalIn("ses_mine", { mode: "autopilot", started: Date.now() - 1000 });
   sessions.set("ses_work", atWork("ses_work", true));

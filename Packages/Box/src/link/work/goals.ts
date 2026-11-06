@@ -111,7 +111,7 @@ export interface KeptGoal extends Omit<GoalPlanShape, "alone" | "folders" | "ste
   heldByYou?: number;
   /** A switch of its mode hasn't reached all of its sessions yet (`followMode`). */
   following?: boolean;
-  /** Its conversation was on Autopilot before it started, and stays so after it ends. */
+  /** Its conversation was on Autopilot before it started (or couldn't be read then): it's left as it is when the goal ends. */
   wasAutopilot?: boolean;
   /** The projects the bot proposed, while you've set others on its card (`projects`): a proposal
    * again with these keeps yours. */
@@ -502,8 +502,9 @@ export async function answerGoal(id: string, given: Record<string, unknown>, tar
   if (ends === null) return { refused: { status: 400, message: "The end (ends) is a date and time to come." } };
   // Started without saying how it runs (a client from before Autopilot): as its conversation runs
   // now, rather than turning the conversation's Autopilot off.
-  const wasAutopilot = action === "start" && isAutopilot((await placeOfSession(before.session, targets()).catch(() => null))?.data ?? {});
-  const asItRuns = wasAutopilot && given.mode === undefined && before.mode === undefined ? "autopilot" as const : undefined;
+  const runsNow = action === "start" ? await placeOfSession(before.session, targets()).catch(() => null) : null;
+  const wasAutopilot = action === "start" && (!runsNow || isAutopilot(runsNow.data));
+  const asItRuns = runsNow && isAutopilot(runsNow.data) && given.mode === undefined && before.mode === undefined ? "autopilot" as const : undefined;
   const changed = changeKept(all => {
     const goal = all.find(each => each.id === id);
     if (!goal) return { status: 404 as const, message: "There's no such goal here." };
@@ -559,8 +560,7 @@ async function followMode(goal: KeptGoal, targets: () => Target[], file = GOALS_
   if (ended && goal.wasAutopilot) return;
   const on = !ended && modeOf(goal) === "autopilot";
   const own = await placeOfSession(goal.session, targets()).catch(() => null);
-  // (Ended, a conversation that's gone has nothing left to follow.)
-  let reached = ended || Boolean(own?.data.id);
+  let reached = Boolean(own?.data.id);
   const listed = await workSessions(targets(), undefined, { whole: true }).catch(() => {
     reached = false;
     return workSessions(targets()).catch((): Listed[] => []);
@@ -569,6 +569,8 @@ async function followMode(goal: KeptGoal, targets: () => Target[], file = GOALS_
     if (!each.data.id || isAutopilot(each.data) === on) continue;
     if (!await setAutopilot(each.target, { ...each.data, id: each.data.id }, on).catch(() => false)) reached = false;
   }
+  // (Ended, it's one try: a later look could turn off what you've switched on since.)
+  if (ended) reached = true;
   changeKept(all => {
     const kept = all.find(one => one.id === goal.id);
     if (!kept || Boolean(kept.following) === !reached) return;
@@ -1305,7 +1307,6 @@ export async function lookAtGoals(tell: (notice: Notice) => boolean, targets: ()
   for (const goal of readKept(file).filter(each => botHere(each.bot) && each.state !== "proposed" && each.state !== "declined")) {
     if (goal.state !== "running") {
       if (goal.loop) await setGoalLoop(goal, null, targets, file);
-      if (goal.following) await followMode(goal, targets, file);
       continue;
     }
     if (!bridge) continue;
