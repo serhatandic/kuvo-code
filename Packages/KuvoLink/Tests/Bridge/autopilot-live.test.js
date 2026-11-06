@@ -133,14 +133,15 @@ test("Autopilot on a real engine: a marked question goes ahead and can be change
   // Asked with no mark: declined by its box. Its turn goes on to the end, what it asked is told to
   // nobody and no call is kept, and it says what it left.
   const before = told.length;
-  await send("msg_autopilotlive00002", "Use your question tool now to ask me one question, \"Pay $29 for the domain?\", with the choices \"I paid\" and \"Skip\", no choice marked. Then, whatever comes back, reply with one short line saying what's left for me to do.");
+  await send("msg_autopilotlive00002", "Use your question tool now to ask me one question, \"Which day should it ship?\", with the choices \"Monday\" and \"Friday\", no choice marked. Then, whatever comes back, reply with one short line saying which day you settled on and why.");
   const left = await turnAfter("msg_autopilotlive00002", "its turn to end, with nobody answering");
   const asking = (await page()).flatMap(each => each.content ?? []).filter(block => block.type === "tool" && /question/i.test(block.name ?? ""));
   assert.ok(asking.length >= 2, `it asked with its question tool: ${JSON.stringify(asking.map(each => each.state?.status))}`);
   assert.deepEqual(await forms(), [], "nothing's left asked");
   assert.equal((await calls()).length, 1, "it made no call on it");
   assert.deepEqual(told.slice(before).filter(each => each.data?.request), [], "nobody's told");
-  assert.match(JSON.stringify(left), /domain|\$29|pay/i, "it says what's left");
+  assert.ok(asking.some(each => each.state?.status === "error" && /This is on Autopilot:/.test(JSON.stringify(each.state.error))), `its step shows it was set aside, as both apps read it: ${JSON.stringify(asking.map(each => each.state))}`);
+  assert.match(JSON.stringify(left), /monday|friday/i, "it says what it settled on");
 
   // Off: a marked question waits like any other. (Only its label says so: what Autopilot told it
   // is gone, so this says it itself.)

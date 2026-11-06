@@ -244,6 +244,7 @@ test("what only you can do is left undone: its agent is told never to ask it, an
   const told = entries.get("ses_mine kuvo.autopilot");
   for (const word of [/paying/, /signing in/, /making an account/, /handing over a key/, /destructive/]) assert.match(told, word);
   assert.match(told, /Never ask for what only the user can do/);
+  for (const tool of [/browser_sign_in/, /browser_ask_code/, /browser_ask_user/, /vault_ask/]) assert.match(told, tool);
   assert.match(told, /leave that step undone, carry on with everything else, and list what's left for them in your final reply/);
   const { watch } = await watcher();
   const key = QUESTION("frm_key", "ses_away", ["Use this key (Recommended)", "Skip"]);
@@ -257,7 +258,7 @@ test("what only you can do is left undone: its agent is told never to ask it, an
   assert.deepEqual((await route("GET", "kuvo/sessions/ses_away/autopilot")).body.decided, []);
 });
 
-test("an MCP server's form never goes ahead, whatever it marks, here or from a coding agent's conversation: it comes back declined", async () => {
+test("an MCP server's form never goes ahead, whatever it marks: it comes back declined", async () => {
   const { watch } = await watcher();
   const server = { ...QUESTION("frm_server", "ses_away", ROASTS), metadata: { kind: "mcp-elicitation", server: "probe" } };
   await watch({ type: "form.created", data: { form: server } });
@@ -289,6 +290,19 @@ test("what an MCP server asks in a folder, filed under no session, comes back de
   assert.deepEqual(answered, []);
 });
 
+test("what an MCP server asks that the box didn't hear is dealt with as it starts again, or as Autopilot's turned on; never for an Interactive conversation", async () => {
+  const asked = id => ({ id, sessionID: "global", title: "Log in", metadata: { kind: "mcp-elicitation", server: "probe" }, fields: [] });
+  shared = [asked("frm_missed")];
+  atWorkOn = { ses_mine: "probe" };
+  await watcher();
+  assert.deepEqual(declined, [], "it holds an Interactive conversation");
+  await route("PUT", "kuvo/sessions/ses_mine/autopilot", { autopilot: true });
+  assert.deepEqual(declined.map(each => [each.session, each.form, each.folder]), [["global", "frm_missed", project]]);
+  shared = [asked("frm_later")];
+  await watcher();
+  assert.deepEqual(declined.map(each => each.form), ["frm_missed", "frm_later"], "nor does it wait for a client to look");
+});
+
 test("the box says the same of what an MCP server asks, whichever comes first", async () => {
   const says = async form => (await route("POST", "kuvo/sessions/ses_away/autopilot/asked", { form })).body;
   shared = [{ id: "frm_a", sessionID: "global", metadata: { kind: "mcp-elicitation", server: "probe" }, fields: [] }];
@@ -306,6 +320,14 @@ test("one a session on Autopilot went ahead on isn't put to its starter", async 
   await tellAll();
   assert.deepEqual(answered.map(each => each.form), ["frm_6"]);
   assert.deepEqual(prompts, [], "nothing waits, so its starter has nothing to answer");
+});
+
+test("a question gone before the box could answer it (you got there first) isn't put to its starter", async () => {
+  const { watch, tellAll } = await watcher();
+  refusesAnswers = true;
+  await watch({ type: "form.created", data: { form: QUESTION("frm_gone", "ses_menu", ROASTS) } });
+  await tellAll();
+  assert.deepEqual(prompts, []);
 });
 
 test("your choice on a call: the same confirms it quietly; another tells the conversation to go that way", async () => {

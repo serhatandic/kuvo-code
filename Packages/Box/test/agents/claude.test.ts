@@ -1347,6 +1347,11 @@ describe("Claude Code's permissions", () => {
     await until(() => sessions.forms(id).length === 1)
     sessions.replyForm(id, sessions.forms(id)[0].id, null)
     expect(await again).toMatchObject({ behavior: "deny" })
+    // Turned down by its box, with words: those are what it hears, not that you dismissed it.
+    const left = fake.canUse("AskUserQuestion", { questions }, "toolu_3")
+    await until(() => sessions.forms(id).length === 1)
+    sessions.replyForm(id, sessions.forms(id)[0].id, null, "This is on Autopilot: leave it.")
+    expect(await left).toMatchObject({ behavior: "deny", message: "This is on Autopilot: leave it." })
   })
 })
 

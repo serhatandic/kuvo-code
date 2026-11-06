@@ -182,7 +182,7 @@ export function projectNameOf(directory: string | undefined): string | undefined
 // The notification for an engine event, or null for one that isn't news. `get(route)` asks the
 // engine.
 /** Whether the engine still lists `form` as asked: when it can't say, it's taken as asked. */
-const stillAsked = (form: EngineForm, get: EngineAsk, folder?: string): Promise<boolean> =>
+export const stillAsked = (form: EngineForm, get: EngineAsk, folder?: string): Promise<boolean> =>
   get(`api/session/${encodeURIComponent(form.sessionID)}/form`, folder).then(answer => {
     const forms = (answer as EngineAnswer<EngineForm[]> | null)?.data;
     return !Array.isArray(forms) || forms.some(each => each?.id === form.id);

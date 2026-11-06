@@ -28,6 +28,8 @@ export interface Caller {
   seat?: boolean;
   /** That seat's group chat, where its asks show. */
   group?: string;
+  /** Its conversation is on Autopilot: nothing asks you for it. */
+  autopilot?: boolean;
 }
 
 async function sessionAt(targets: Target[], id: string): Promise<EngineSession | null> {
@@ -66,6 +68,7 @@ export async function callerOf(session: unknown, readEngine: () => EngineRecord,
   return {
     session,
     root,
+    ...(current?.metadata?.kuvo?.autopilot === true ? { autopilot: true } : {}),
     ...(current?.title ? { sessionName: current.title } : {}),
     ...(folder ? { folder: path.resolve(folder) } : {}),
     ...(bot ? { bot: bot.id, botName: bot.name } : {}),

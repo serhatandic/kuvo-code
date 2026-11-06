@@ -3509,7 +3509,7 @@ what may be decided without asking. Every conversation is Interactive until it's
 - `PUT kuvo/sessions/<id>/autopilot` `{autopilot: bool}`: on or off; the answer as `GET`'s. It's
   kept with the conversation (`metadata.kuvo.autopilot`, false once off), and its agent is told how
   to work in its instructions (`kuvo.autopilot`), taken out again when it's turned off: decide what
-  its own research settles, ask what only you can do (paying, signing in, making an account, handing
+  its own research settles; what only you can do (paying, signing in, making an account, handing
   over a key, anything destructive that can't be undone) never gets asked: it leaves that step undone,
   carries on and lists what's left in its final reply. It marks the choice it recommends in anything
   else it asks.
@@ -3527,8 +3527,11 @@ what may be decided without asking. Every conversation is Interactive until it's
   have its goal paused) waits for you, and they're told. What its conversations asked while the box
   couldn't hear (it started again, or its engine did) is dealt with as it catches up. What an MCP
   server asks in a folder, filed under no session (`global`), is declined only where it holds nothing
-  but conversations on Autopilot (a tool of that server at work in them, and in no other there). Its
-  permissions are its approval's, and wait as ever.
+  but conversations on Autopilot (a tool of that server at work in them, and in no other there). So
+  is a sign-in, a code or a step the browser would ask you for, or anything the vault would: each comes
+  back at once, left undone, and a project it would ask you about stays asked while it carries on. A
+  sign-in the vault lets it use on its own still goes ahead. Its permissions are its approval's, and
+  wait as ever.
 - `POST kuvo/sessions/<id>/autopilot/asked` `{form}`: whether a question asked in the conversation
   or by one of its subagents waits on you: `{waiting: bool}`. A client that hears a question asked in
   a conversation on Autopilot asks this before it counts or notifies, and goes by the answer: it

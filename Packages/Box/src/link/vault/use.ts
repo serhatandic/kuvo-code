@@ -2,6 +2,7 @@
 // each time), and an item named without a grant asks you too. Every outcome is noted.
 
 import os from "node:os";
+import { LEFT_UNDONE_WORDS } from "../work/autopilot";
 import type { VaultItem } from "../../shared/routes/vault";
 import { homeFolder, IS_MAC } from "../home";
 import type { Notice } from "../notices/notice";
@@ -85,6 +86,7 @@ export async function mayUse(item: VaultItem, caller: Caller, use: Use): Promise
     note({ what: "refused", ...itemOf(item), ...whoOf(caller), ...where, how: "no grant" });
     return { ok: false, message: `You may not use “${item.name}”. Ask the user for it with vault_ask.` };
   }
+  if (caller.autopilot) return { ok: false, message: LEFT_UNDONE_WORDS };
   note({ what: "asked", ...itemOf(item), ...whoOf(caller), ...where });
   const answered = await ask({ kind: "use", ...whoOf(caller), ...(caller.group ? { group: caller.group } : {}), item: item.id, itemName: item.name, ...(use.site ? { site: use.site } : {}), ...(use.why ? { why: use.why } : {}), ...(machineName() ? { machine: machineName() } : {}) }, use.signal);
   if (answered.answer === "no") {

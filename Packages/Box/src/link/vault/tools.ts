@@ -13,6 +13,7 @@ import { homeFolder, IS_MAC, RUN } from "../home";
 import { ask } from "./asks";
 import { type Hidden, maskValues } from "./mask";
 import { itemNamed, noteUsed, readItems, setGrant, siteOf, valuesOf, VaultRefusal } from "./store";
+import { LEFT_UNDONE_WORDS } from "../work/autopilot";
 import { type Caller, grantFor } from "./who";
 import { allowOnce, alwaysFor, mayUse, noteUse } from "./use";
 import { note } from "./activity";
@@ -99,6 +100,7 @@ async function askForItem(caller: Caller, args: Record<string, unknown>, signal?
   const need = oneLine(typeof args.need === "string" ? args.need : "", 200).trim();
   const why = oneLine(typeof args.why === "string" ? args.why : "", 300).trim();
   if (!need || !why) return failed("Say what you need and why.");
+  if (caller.autopilot) return { text: LEFT_UNDONE_WORDS, isError: false };
   const site = siteOf(args.site) ?? undefined;
   note({ what: "asked", ...(caller.bot ? { bot: caller.bot, botName: caller.botName } : {}), ...(caller.root ? { session: caller.root, sessionName: caller.sessionName } : {}), why: `${need}: ${why}`, ...(site ? { site } : {}) });
   const answered = await ask({

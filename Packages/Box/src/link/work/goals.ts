@@ -32,7 +32,7 @@ import { placeOfSession } from "../letters/letter";
 import { readWakes } from "../areas/wakes";
 import { periodEnd, periodOf, startOfDay, timeGiven } from "./clock";
 import { asksIn, CHOICE_MOST, decisionChanged, permissionWords, type PendingQuestion } from "./answers";
-import { decidedByYou as decidedInConversation, goAheadOnQuestion, isAutopilot, setAutopilot } from "./autopilot";
+import { decidedByYou as decidedInConversation, declineSharedIn, goAheadOnQuestion, isAutopilot, setAutopilot } from "./autopilot";
 import type { EngineSession } from "../engine/sessions";
 import { keepAwake, keepsAwake, onPower } from "./awake";
 import { noteWorkChanged, WORK_FOLDER } from "./changes";
@@ -1373,10 +1373,11 @@ export async function lookAtGoals(tell: (notice: Notice) => boolean, targets: ()
     if (kept?.following) await followMode(kept, targets, file);
     const asksSeen: Record<string, number> = {};
     const open = new Set<string>();
-    const askers = [...work.map(each => ({ target: each.target, id: each.data.id, title: each.data.title || "New Session", data: each.data as Pick<EngineSession, "id" | "metadata"> })), ...(own ? [{ target: own.target, id: goal.session, title: goal.name, data: { ...own.data, id: goal.session } as Pick<EngineSession, "id" | "metadata"> }] : [])];
+    const askers = [...work.map(each => ({ target: each.target, id: each.data.id, title: each.data.title || "New Session", data: each.data as Pick<EngineSession, "id" | "metadata" | "location"> })), ...(own ? [{ target: own.target, id: goal.session, title: goal.name, data: { ...own.data, id: goal.session } as Pick<EngineSession, "id" | "metadata" | "location"> }] : [])];
     for (const each of askers) {
       const { permissions, questions } = await asksIn(each.target, each.id, signal).catch(() => ({ permissions: [], questions: [] }));
       const asks: { id: string; text: string; question?: PendingQuestion }[] = [...permissions.map(one => ({ id: one.id, text: `${each.title}: ${permissionWords(one).replace(/\.$/, "")}` })), ...questions.map(one => ({ id: one.id, text: `${each.title} asks: ${one.text}`, question: one }))];
+      if (isAutopilot(each.data)) await declineSharedIn(each.target, each.data, signal);
       for (const ask of asks) {
         const key = `${each.id}:${ask.id}`;
         if (settledAsks.has(ask.id)) continue;

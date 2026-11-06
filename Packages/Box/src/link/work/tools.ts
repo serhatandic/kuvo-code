@@ -4,7 +4,8 @@
 // project made (asking you first, once for a bot if you say Always); list_projects, the projects
 // here. Every box answers them alike, through `POST kuvo/agent-tools`.
 
-import { call, readEngineFile } from "../engine/client";
+import { call, readBridgeFile, readEngineFile } from "../engine/client";
+import { callerOf } from "../vault/who";
 import { agentsCommandsInSandbox, engineCommandsInSandbox, fenceWhole } from "../fence/state";
 import { stopSession } from "../engine/queue";
 import { holdArchived } from "../areas/wakes";
@@ -225,7 +226,9 @@ export async function makeProjectTool(caller: Caller, args: Record<string, unkno
     }
   }
   const ask = askWork(asker, action, given);
-  const answer = await answerOf(ask.id, { wait: wait ?? (Number(process.env.KUVO_WORK_ASK_WAIT) || undefined), every, signal });
+  // On Autopilot it doesn't wait for you: it stays asked, for when you're back.
+  const away = (await callerOf(caller.session, readEngineFile, readBridgeFile)).autopilot === true;
+  const answer = await answerOf(ask.id, { wait: away ? 0 : wait ?? (Number(process.env.KUVO_WORK_ASK_WAIT) || undefined), every, signal });
   if (!answer) return said(`The user hasn't answered yet: it stays asked on ${HERE}, and you'll hear when they answer. Carry on with what you can meanwhile.`);
   return answer.isError ? refused(answer.text) : said(answer.text);
 }

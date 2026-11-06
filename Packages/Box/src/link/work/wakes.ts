@@ -8,7 +8,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isObject } from "../../shared/json";
 import { cut } from "../../shared/text";
-import { asked, call, peerPlaces } from "../engine/client";
+import { asked, call, engineGet, peerPlaces } from "../engine/client";
 import { sendInto } from "../engine/queue";
 import { boxNote } from "../../shared/queues";
 import { messageID } from "../engine/sessions";
@@ -17,7 +17,7 @@ import { LETTER_LIFE, placeOfSession } from "../letters/letter";
 import { tellMovedAway } from "../letters/outbox";
 import { frozen } from "../moves/records";
 import { isPutAway, type PutAwayable } from "../peers/directory";
-import { ANSWERED, describeForm, describePermission } from "../notices/news";
+import { ANSWERED, describeForm, describePermission, stillAsked } from "../notices/news";
 import { noteOversight } from "./oversight";
 import { noteWorkChanged, WORK_FOLDER } from "./changes";
 import { asksIn } from "./answers";
@@ -470,7 +470,12 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
       if (bot) noteWorkChanged(bot);
       // On Autopilot nothing waits: a question goes ahead on the choice it marks, or comes back declined.
       const form = event.type === "form.created" ? event.data?.form ?? event.data as unknown as EngineForm : null;
-      if (form && isAutopilot(session) && await goAheadOnAutopilot(source, session, { ...form, sessionID: form.sessionID ?? id }).catch(() => null)) return;
+      if (form && isAutopilot(session)) {
+        const asked = { ...form, sessionID: form.sessionID ?? id };
+        if (await goAheadOnAutopilot(source, session, asked).catch(() => null)) return;
+        // Gone before it could be answered (you got there first): nothing to put to anyone.
+        if (!await stillAsked(asked, route => engineGet(source, route))) return;
+      }
       // One of a bot's sessions done: for clients to show it seeing that.
       if (bot && event.type === "session.execution.succeeded") noteOversight(bot, session.id, "finished");
       const starter = startedByOf(session);

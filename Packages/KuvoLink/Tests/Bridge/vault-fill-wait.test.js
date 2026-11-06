@@ -53,7 +53,7 @@ write(path.join(home, "run", "link.json"), JSON.stringify({ id: "devbox", macs: 
 
 // The engine: a bot's conversation and another one, in the test's folder, and the tool calls
 // running in each (the box checks a fill comes from one).
-const sessions = { ses_ship: { id: "ses_ship", title: "Ship", location: { directory: home } }, ses_shop: { id: "ses_shop", title: "Fix checkout", location: { directory: home } } };
+const sessions = { ses_pilot: { id: "ses_pilot", title: "Pilot", location: { directory: home }, metadata: { kuvo: { autopilot: true } } }, ses_helper: { id: "ses_helper", title: "Helper", parentID: "ses_pilot", location: { directory: home } }, ses_ship: { id: "ses_ship", title: "Ship", location: { directory: home } }, ses_shop: { id: "ses_shop", title: "Fix checkout", location: { directory: home } } };
 const running = new Map();
 const engine = http.createServer((request, response) => {
   const [, id, messages] = request.url.match(/^\/api\/session\/([^/?]+)(\/message)?(\?.*)?$/) ?? [];
@@ -225,6 +225,20 @@ test("while the vault asks you about a sign-in, other conversations keep browsin
   assert.match(signedIn.content[0].text, /Filled the username and the password for github\.com from the vault's “GitHub”/);
   assert.ok(!JSON.stringify(signedIn).includes(SECRET), "the agent never sees the password");
   assert.deepEqual(pages.login.filled, [{ index: 1, value: "ship-bot" }, { index: 2, value: SECRET }]);
+});
+
+test("on Autopilot nothing asks you while it browses: a sign-in, a code, a step or an item from the vault come back at once, left undone, a subagent's too", async () => {
+  const leftUndone = answer => {
+    assert.equal(answer.isError, false, answer.content[0].text);
+    assert.match(answer.content[0].text, /This is on Autopilot: nothing was put to the user/);
+  };
+  leftUndone(await call("ses_pilot", "browser_ask_user", { instruction: "Solve the CAPTCHA." }));
+  leftUndone(await call("ses_helper", "browser_ask_user", { instruction: "Solve the CAPTCHA." }));
+  leftUndone(await call("ses_pilot", "browser_sign_in", { username: 1, password: 2 }));
+  leftUndone(await call("ses_pilot", "browser_ask_code", { index: 1, prompt: "The code texted to you." }));
+  leftUndone(await call("ses_pilot", "vault_ask", { need: "The deploy key", why: "To deploy." }));
+  assert.deepEqual(pages.login.filled, []);
+  assert.deepEqual((await fromMac("GET", "kuvo/vault/asks")).value.asks ?? [], []);
 });
 
 test("a page that left its site while the vault asked you gets nothing", async () => {

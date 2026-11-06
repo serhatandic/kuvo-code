@@ -11142,9 +11142,12 @@ class ClaudeThread {
         options: (question.options ?? []).map((option) => ({ value: option.label, label: option.label, description: option.description })),
         custom: true
       }));
-      const answer = await hooks.question({ title: questions.length === 1 ? questions[0].header ?? "Question" : "Questions", fields, toolCallID: toolUseID });
+      let declinedWords;
+      const answer = await hooks.question({ title: questions.length === 1 ? questions[0].header ?? "Question" : "Questions", fields, toolCallID: toolUseID, declined: (words) => {
+        declinedWords = words;
+      } });
       if (!answer)
-        return { behavior: "deny", message: "The user dismissed the question.", toolUseID };
+        return { behavior: "deny", message: declinedWords ?? "The user dismissed the question.", toolUseID };
       const answers = {};
       questions.forEach((question, index) => {
         const value = answer[`q${index}`];
@@ -17594,7 +17597,7 @@ ${live.agentPrompt}` : ""
       return Promise.resolve(null);
     const form = { id: newID("frm"), sessionID: id, title: ask.title, metadata: { kind: "question", ...ask.metadata, ...ask.toolCallID ? { tool: { id: ask.toolCallID } } : {} }, fields: ask.fields };
     return new Promise((resolve) => {
-      live.forms.set(form.id, { form, resolve });
+      live.forms.set(form.id, { form, resolve, declined: ask.declined });
       emit("form.created", { form }, session.location.directory);
       ask.signal?.addEventListener("abort", () => {
         if (!live.forms.delete(form.id))
@@ -17608,12 +17611,14 @@ ${live.agentPrompt}` : ""
     this.record(id);
     return [...this.live.get(id)?.forms.values() ?? []].map((pending) => pending.form);
   }
-  replyForm(id, formID, answer) {
+  replyForm(id, formID, answer, declined) {
     const live = this.live.get(id);
     const pending = live?.forms.get(formID);
     if (!live || !pending)
       throw new NotFound("That question was answered already.");
     live.forms.delete(formID);
+    if (answer === null && declined)
+      pending.declined?.(declined);
     pending.resolve(answer);
     emit(answer ? "form.replied" : "form.cancelled", { id: formID, sessionID: id }, this.record(id).session.location.directory);
   }
@@ -22834,7 +22839,7 @@ function handler(context) {
               return json11({});
             }
             if (method === "DELETE") {
-              sessions.replyForm(id, c, null);
+              sessions.replyForm(id, c, null, url.searchParams.get("message") ?? undefined);
               return json11({});
             }
             break;
@@ -23325,4 +23330,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 18a0e1e9c15cf6d2d0d629271ce0f3d17fccab1f14c31b8a4f64663bfbefd3cf
+// Built from Packages/Box/src/agents 896dc010b435c5cf871d52f3f96ef62f9923b46d12ab3f3e0badce5a2a303375
