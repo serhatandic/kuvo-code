@@ -533,6 +533,16 @@ test("a conversation on Autopilot that can't be read at all: looked at a few tim
   assert.equal(formLooks, looks, "and then stopped");
 });
 
+test("a question in a conversation whose goal you have paused waits for you, and the box doesn't keep looking at it", async () => {
+  goalIn("ses_away", { heldByYou: true });
+  waiting.set("ses_away", [QUESTION("frm_paused", "ses_away", ROASTS)]);
+  const { tellAll } = await watcher();
+  const looks = formLooks;
+  for (let round = 0; round < 3; round++) await tellAll();
+  assert.deepEqual(answered, []);
+  assert.equal(formLooks, looks);
+});
+
 test("the box stopped before it looks again: a watcher that's gone doesn't move on what's been told", async () => {
   refusesList = true;
   const { tellAll, stop } = await watcher();
