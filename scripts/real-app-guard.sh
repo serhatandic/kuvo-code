@@ -46,6 +46,57 @@ newest_copy_engine() {
         awk -F/ '{ print $(NF-1) "\t" $0 }' | sort -V -k1,1 | tail -n 1 | cut -f2
 }
 
+# A Bun under the user's Desktop or Documents: a test copy of the app (ad-hoc signed, so macOS takes
+# each build for a new app) that starts it waits on the privacy prompt for those folders, and nothing
+# answers it while tests run. Exits (or returns) 1, naming the caller, like real_app_guard does.
+#   desktop_guard <caller> <value>...
+desktop_guard() {
+    _guard_caller=$1
+    shift
+    _guard_home=$(realpath "$HOME" 2>/dev/null || printf '%s' "$HOME")
+    for _guard_value in "$@"; do
+        [ -n "$_guard_value" ] || continue
+        _guard_resolved=$(realpath "$_guard_value" 2>/dev/null || printf '%s' "$_guard_value")
+        for _guard_candidate in "$_guard_value" "$_guard_resolved"; do
+            _guard_lower=$(printf '%s' "$_guard_candidate" | tr '[:upper:]' '[:lower:]')
+            for _guard_root in "$HOME" "$_guard_home"; do
+                _guard_root=$(printf '%s' "$_guard_root" | tr '[:upper:]' '[:lower:]')
+                case "$_guard_lower" in
+                "$_guard_root"/desktop | "$_guard_root"/desktop/* | "$_guard_root"/documents | "$_guard_root"/documents/*)
+                    echo "$_guard_caller: refusing to start, because $_guard_value is in your Desktop or Documents folder." >&2
+                    echo "  macOS asks before a test copy of the app uses it, and nothing answers while tests run. Use one elsewhere (~/.bun/bin/bun), or leave it unset." >&2
+                    return 1
+                    ;;
+                esac
+            done
+        done
+    done
+    return 0
+}
+
+# The Bun the app's tests run the agents bridge with: the first `bun` on PATH that isn't in the
+# Desktop or Documents (desktop_guard says why), else ~/.bun/bin/bun, else the newest engine a copy
+# of its own installed (newest_copy_engine). Nothing when there's none.
+pick_test_bun() {
+    _pick_rest=$PATH
+    while [ -n "$_pick_rest" ]; do
+        case "$_pick_rest" in
+        *:*) _pick_dir=${_pick_rest%%:*}; _pick_rest=${_pick_rest#*:} ;;
+        *) _pick_dir=$_pick_rest; _pick_rest= ;;
+        esac
+        [ -n "$_pick_dir" ] && [ -x "$_pick_dir/bun" ] && [ ! -d "$_pick_dir/bun" ] || continue
+        if desktop_guard pick_test_bun "$_pick_dir/bun" 2>/dev/null; then
+            printf '%s\n' "$_pick_dir/bun"
+            return 0
+        fi
+    done
+    if [ -x "$HOME/.bun/bin/bun" ] && desktop_guard pick_test_bun "$HOME/.bun/bin/bun" 2>/dev/null; then
+        printf '%s\n' "$HOME/.bun/bin/bun"
+        return 0
+    fi
+    newest_copy_engine
+}
+
 # For the one script meant to work on the real app, with someone at the Mac
 # (scripts/groups-rehearsal.sh): it goes on only once they type "yes" at the terminal, so a test,
 # an agent or anything else without a terminal never gets past it.
