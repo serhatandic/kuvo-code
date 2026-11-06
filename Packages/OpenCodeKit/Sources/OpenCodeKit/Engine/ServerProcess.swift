@@ -204,7 +204,7 @@ public final class ServerProcess: @unchecked Sendable {
             }
         }
         let exit = Arrival<Int32>()
-        // First: never a server nothing would stop.
+        // First: a server it can't watch doesn't start.
         let watcher = try ServerWatcher()
         process.terminationHandler = { process in
             watcher.letGo()

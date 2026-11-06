@@ -246,8 +246,10 @@ struct ServerProcessTests {
         host.arguments = [try stuck(saysWhereItListens: saysWhereItListens, after: "/bin/sleep 1").path, root.path]
         try host.run()
         defer {
-            kill(host.processIdentifier, SIGKILL)
-            host.waitUntilExit()
+            if host.isRunning {
+                kill(host.processIdentifier, SIGKILL)
+                host.waitUntilExit()
+            }
         }
         pid = try await saidPID()
         kill(host.processIdentifier, SIGKILL)
