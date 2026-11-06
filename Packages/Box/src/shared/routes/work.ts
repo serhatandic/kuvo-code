@@ -176,6 +176,7 @@ export const GOAL_DECIDED = object({
   choice: string,
   "why?": string,
   "options?": list(string),
+  "multiple?": bool,
   "session?": string,
   at: number,
   "yours?": object({ choice: string, at: number }),

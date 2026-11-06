@@ -29,7 +29,9 @@ struct ToolCallView: View {
         // card shows one so, through this view).
         if let decided = autopilotCalls[call.id], !autopilotCallsShownAbove {
             // A question Autopilot went ahead on: the call it made, where it was asked.
-            DecidedLine(call: decided)
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(decided) { each in DecidedLine(call: each, saysQuestion: decided.count > 1) }
+            }
         } else if WidgetCard.isWidget(call), !call.state.isFailure {
             WidgetCard(call: call, send: answerAgent)
         } else if MadePictureRow.isMade(call) {

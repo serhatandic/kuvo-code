@@ -5,7 +5,7 @@ import SwiftUI
 extension EnvironmentValues {
     /// The calls Autopilot made in this conversation (or, a subagent's, the one it works for), by
     /// the tool call that asked.
-    @Entry var autopilotCalls: [String: AutopilotShown.Call] = [:]
+    @Entry var autopilotCalls: [String: [AutopilotShown.Call]] = [:]
     /// Those its subagents made, by the subagent's session: shown at its row.
     @Entry var autopilotCallsOfSubagents: [String: [AutopilotShown.Call]] = [:]
     /// Your choice on one of them.
@@ -70,9 +70,11 @@ struct DecidedLine: View {
         menu.addItem(.sectionHeader(title: call.text))
         var checked: Set<NSMenuItem> = []
         for option in options {
-            let item = ActionItem(option) { [call, choose] in choose(option, call) }
+            let item = ActionItem(option) { [call, choose] in
+                if let choice = call.picking(option) { choose(choice, call) }
+            }
             menu.addItem(item)
-            if option == call.current { checked.insert(item) }
+            if call.isChosen(option) { checked.insert(item) }
         }
         menu.checksOnTrailingSide(checked)
         return menu

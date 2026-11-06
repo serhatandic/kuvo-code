@@ -16,6 +16,7 @@ struct AutopilotShown: Decodable, Equatable {
         var choice: String
         var why: String?
         var options: [String]?
+        var multiple: Bool?
         /// The session that asked, where it's a subagent's.
         var session: String?
         /// The tool call that asked it: the step it shows at.
@@ -31,6 +32,7 @@ struct AutopilotShown: Decodable, Equatable {
             choice = call.choice
             why = call.why
             options = changeable ? call.options : nil
+            multiple = call.multiple
             session = call.session
             at = call.at
             yours = call.yours.map { Yours(choice: $0.choice, at: $0.at) }
@@ -40,6 +42,20 @@ struct AutopilotShown: Decodable, Equatable {
         var current: String { yours?.choice ?? choice }
         /// You picked another than it went with.
         var changed: Bool { yours.map { $0.choice != choice } ?? false }
+
+        /// Takes several (`options`), joined in `choice`.
+        var isMultiple: Bool { multiple == true }
+        /// Whether `option` is what it goes with now.
+        func isChosen(_ option: String) -> Bool {
+            isMultiple ? ", \(current), ".contains(", \(option), ") : option == current
+        }
+        /// What it goes with once `option` is picked: where it takes several, that one added or
+        /// taken out (nil where none would be left).
+        func picking(_ option: String) -> String? {
+            guard isMultiple, let options else { return option }
+            let chosen = options.filter { $0 == option ? !isChosen($0) : isChosen($0) }
+            return chosen.isEmpty ? nil : chosen.joined(separator: ", ")
+        }
     }
     var autopilot: Bool
     var decided: [Call]
@@ -57,8 +73,12 @@ struct AutopilotShown: Decodable, Equatable {
         decided.last { $0.call == call }
     }
 
-    /// Where its calls show in a conversation's rows: most at the step that asked (`byCall`, as
-    /// ever); a subagent's at the subagent's own row or step, with what it asked; and what has no
+    /// The calls it made, by the tool call that asked (a form may ask several).
+    var byCall: [String: [Call]] {
+        Dictionary(grouping: decided.filter { $0.call != nil }) { $0.call ?? "" }
+    }
+
+    /// Where its calls show in a conversation's rows: most at the step that asked (`byCall`); a subagent's at the subagent's own row or step, with what it asked; and what has no
     /// step here, under the rows.
     struct Places: Equatable {
         var bySubagent: [String: [Call]] = [:]

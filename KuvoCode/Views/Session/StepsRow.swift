@@ -34,9 +34,9 @@ struct StepsRow: View {
     /// The calls Autopilot made where these steps asked: shown under their line, folded or not.
     private func decided(_ done: [Message.Content]) -> [AutopilotShown.Call] {
         guard !autopilotCalls.isEmpty else { return [] }
-        return done.compactMap { block in
-            guard case .tool(let call) = block else { return nil }
-            return autopilotCalls[call.id]
+        return done.flatMap { block -> [AutopilotShown.Call] in
+            guard case .tool(let call) = block else { return [] }
+            return autopilotCalls[call.id] ?? []
         }
     }
 
@@ -68,7 +68,8 @@ struct StepsRow: View {
                     let decided = decided(done)
                     if !decided.isEmpty {
                         VStack(alignment: .leading, spacing: 6) {
-                            ForEach(decided) { DecidedLine(call: $0) }
+                            // (Several of a list of questions say which is which.)
+                            ForEach(decided) { call in DecidedLine(call: call, saysQuestion: decided.count > 1) }
                         }
                         .padding(.top, 8)
                     }

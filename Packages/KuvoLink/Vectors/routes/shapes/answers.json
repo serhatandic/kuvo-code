@@ -1977,6 +1977,7 @@
          "options?": {
           "list": "string"
          },
+         "multiple?": "bool",
          "session?": "string",
          "call?": "string",
          "at": "number",
@@ -2019,6 +2020,7 @@
          "options?": {
           "list": "string"
          },
+         "multiple?": "bool",
          "session?": "string",
          "call?": "string",
          "at": "number",
@@ -2071,6 +2073,7 @@
          "options?": {
           "list": "string"
          },
+         "multiple?": "bool",
          "session?": "string",
          "call?": "string",
          "at": "number",
@@ -8818,6 +8821,7 @@
             "options?": {
              "list": "string"
             },
+            "multiple?": "bool",
             "session?": "string",
             "at": "number",
             "yours?": {
@@ -9127,6 +9131,7 @@
             "options?": {
              "list": "string"
             },
+            "multiple?": "bool",
             "session?": "string",
             "at": "number",
             "yours?": {
@@ -9460,6 +9465,7 @@
            "options?": {
             "list": "string"
            },
+           "multiple?": "bool",
            "session?": "string",
            "at": "number",
            "yours?": {

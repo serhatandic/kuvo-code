@@ -920,7 +920,7 @@ beside it.
   draft until you switched it on), projects, wake, digest,
   ends?, proposed, started?, ended?, waiting: [{id, kind: you|judgment|outside|ask, text, detail?,
   url?, site?, app?: {name, id?}, session?, step?, at}], paused: [{why, until?, session?}], waited, watching, next?, lastDigest?: {at, text},
-  report?, mode: interactive|autopilot, decided: [{id, text, choice, why?, options?, session?, at,
+  report?, mode: interactive|autopilot, decided: [{id, text, choice, why?, options?, multiple?, session?, at,
   yours?: {choice, at}}], alone, folders?: [{project, folder: path|null, shown: path|null, there?}]}]}` (`next`: when it goes on next, while nothing of it is at work and nothing can be
   before a time: the bot's soonest wake-up, or the steps it put off; clients say "Next: Mon 09:00"): each bot's latest, while it's proposed or running, or ended within a day. Kept
   in `run/work/goals.json`; `kuvo/work/events` moves too. While it's proposed, the box's own checks
@@ -3489,8 +3489,9 @@ the conversation's approval, never part of it: approval says what may run withou
 what may be decided without asking. Every conversation is Interactive until it's turned on.
 
 - `GET kuvo/sessions/<id>/autopilot`: `{autopilot, decided}`, the calls it made, the latest last
-  (each `{id, text, choice, why?, options?, session?, call?, at, yours?}`: the question's form, what
-  it asked, the choice it went with and why, the choices it had, the session that asked where it's
+  (each `{id, text, choice, why?, options?, multiple?, session?, call?, at, yours?}`: the question's
+  form (`<form>/<field>` where a form asks several, each a call of its own), what it asked, the choice
+  it went with and why, the choices it had (`multiple`: it takes several, joined with ", "), the session that asked where it's
   a subagent's, the tool call that asked it (the form's `metadata.tool.id`, where it has one: a
   client shows the call at that step; a subagent's at the subagent, and one with no step here under
   the conversation), and your choice since). 404 where there's no such
@@ -3513,7 +3514,7 @@ what may be decided without asking. Every conversation is Interactive until it's
   that marks none, asks for a secret (a field with `format: "password"`) or isn't the question
   tool's (an MCP server's form), waits for you as ever, and so do its permissions, which are its
   approval's.
-- `POST kuvo/sessions/<id>/autopilot` `{decided: <form id>, choice}`: your choice on a call it
+- `POST kuvo/sessions/<id>/autopilot` `{decided: <its id>, choice}`: your choice on a call it
   made, kept as `yours`. The one it goes by now (your last, else its own) confirms it quietly;
   another tells the conversation `[Decision changed] For "…" the user picked …, not … as you
   decided. …` (`… the user now picked …, not ….` after a choice of yours; a box note, `You picked

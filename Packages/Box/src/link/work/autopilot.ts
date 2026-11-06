@@ -109,7 +109,7 @@ export async function tellAutopilot(target: Target, session: string, on: boolean
  * the engine or the coding agents' bridge on `target` has it): answered with the choice it marked
  * "(Recommended)", and kept as a call it made. Null where it marks none (it waits for you), or the
  * answer didn't go. */
-export async function goAheadOnAutopilot(target: Target, conversation: Pick<EngineSession, "id" | "metadata">, form: Record<string, unknown>, file = DECIDED_FILE, signal?: AbortSignal): Promise<DecidedShape | null> {
+export async function goAheadOnAutopilot(target: Target, conversation: Pick<EngineSession, "id" | "metadata">, form: Record<string, unknown>, file = DECIDED_FILE, signal?: AbortSignal): Promise<DecidedShape[] | null> {
   const recommended = recommendationOf(form);
   const asker = typeof form.sessionID === "string" ? form.sessionID : null;
   if (!recommended || !asker || typeof form.id !== "string") return null;
@@ -123,8 +123,7 @@ export async function goAheadOnWaiting(target: Target, conversation: Pick<Engine
   const made: DecidedShape[] = [];
   for (const question of questions) {
     if (signal?.aborted) break;
-    const one = await goAheadOnQuestion(target, conversation, question, file, signal);
-    if (one) made.push(one);
+    made.push(...await goAheadOnQuestion(target, conversation, question, file, signal) ?? []);
   }
   return made;
 }
@@ -132,7 +131,7 @@ export async function goAheadOnWaiting(target: Target, conversation: Pick<Engine
 /** A question `conversation` (on Autopilot) or a subagent asks, as the engine lists it: answered
  * with what it recommends and kept, as one heard as it's asked is. Null where it recommends nothing,
  * or the answer didn't go. */
-export const goAheadOnQuestion = (target: Target, conversation: Pick<EngineSession, "id" | "metadata">, question: PendingQuestion, file = DECIDED_FILE, signal?: AbortSignal): Promise<DecidedShape | null> =>
+export const goAheadOnQuestion = (target: Target, conversation: Pick<EngineSession, "id" | "metadata">, question: PendingQuestion, file = DECIDED_FILE, signal?: AbortSignal): Promise<DecidedShape[] | null> =>
   question.recommended ? goAhead(target, conversation, question.asker, question.id, question.recommended, file, signal, question.call) : Promise.resolve(null);
 
 /** As the box starts, or hears `target` again: what its conversations on Autopilot (the latest
@@ -149,30 +148,27 @@ export async function catchUpAutopilot(target: Target, file = DECIDED_FILE, sign
 // Answered with what it recommends, and kept: with the conversation, and on its bot's running goal
 // (as the goal's own Autopilot keeps it), so the goal shows it too. Not while you have that goal
 // paused: it waits for you.
-async function goAhead(target: Target, conversation: Pick<EngineSession, "id" | "metadata">, asker: string, id: string, recommended: Recommendation, file: string, signal?: AbortSignal, asked?: string | null): Promise<DecidedShape | null> {
+async function goAhead(target: Target, conversation: Pick<EngineSession, "id" | "metadata">, asker: string, id: string, recommended: Recommendation, file: string, signal?: AbortSignal, asked?: string | null): Promise<DecidedShape[] | null> {
   const goal = runningGoalOf(conversation.id, worksFor(conversation)?.bot ?? null);
   if (goal?.heldByYou) return null;
   const went = await call(target, "POST", `/api/session/${encodeURIComponent(asker)}/form/${encodeURIComponent(id)}/reply`, { answer: recommended.answer }, signal).then(() => true, () => false);
   if (!went) return null;
-  const kept = changeAll(all => {
+  // One call a question: a form that asks several keeps each under its field.
+  const callID = (key: string) => recommended.calls.length > 1 ? `${id}/${key}` : id;
+  const kept = changeAll(all => recommended.calls.map(({ key, ...each }) => {
     const list = all[conversation.id] ?? [];
-    const same = list.find(each => each.id === id);
+    const same = list.find(one => one.id === callID(key));
     if (same) return same;
     const made: DecidedShape = {
-      id, text: recommended.text, choice: recommended.choice,
-      ...(recommended.why ? { why: recommended.why } : {}),
-      ...(recommended.options ? { options: recommended.options } : {}),
+      id: callID(key), ...each,
       ...(asker !== conversation.id ? { session: asker } : {}),
       ...(asked ? { call: asked } : {}),
       at: Date.now(),
     };
     all[conversation.id] = [...list, made].slice(-KEPT);
     return made;
-  }, file);
-  if (goal) addDecided(goal.bot, {
-    text: recommended.text, choice: recommended.choice, session: conversation.id,
-    ...(recommended.why ? { why: recommended.why } : {}), ...(recommended.options ? { options: recommended.options } : {}),
-  }, undefined, `ask:${conversation.id}:${id}`);
+  }), file);
+  if (goal) for (const { key, ...each } of recommended.calls) addDecided(goal.bot, { ...each, session: conversation.id }, undefined, `ask:${conversation.id}:${callID(key)}`);
   return kept;
 }
 

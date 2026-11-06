@@ -96,15 +96,23 @@ export interface PendingQuestion {
   call?: string;
 }
 
-/** The answer a question recommends: a choice marked "(Recommended)" in each field it asks, as the
- * form's answer (`answer`), and in words: what was asked, the choice (its label, unmarked), why (the
- * choice's description) and the choices there were. */
-export interface Recommendation {
-  answer: Record<string, unknown>;
+/** A question a form asks, as it goes ahead: what it asked (`key`, its field), the choice (its label,
+ * unmarked; several, joined, where it takes several), why (the choice's description) and the choices
+ * there were. */
+export interface RecommendedCall {
+  key: string;
   text: string;
   choice: string;
   why?: string;
   options?: string[];
+  multiple?: boolean;
+}
+
+/** What a form recommends, as it goes ahead on it: the form's answer (`answer`), and the question
+ * each answer is to (a form may ask several). */
+export interface Recommendation {
+  answer: Record<string, unknown>;
+  calls: RecommendedCall[];
 }
 
 const RECOMMENDED = /\s*\(recommended\)\s*/i;
@@ -119,21 +127,27 @@ export function recommendationOf(form: Record<string, unknown>): Recommendation 
   const fields = (Array.isArray(form.fields) ? form.fields : []).filter((field): field is Record<string, unknown> => isObject(field) && !field.hidden && !(Array.isArray(field.when) && field.when.length));
   if (fields.some(field => field.format === "password")) return null;
   const answer: Record<string, unknown> = {};
-  const chosen: { label: string; why?: string }[] = [];
+  const calls: RecommendedCall[] = [];
   for (const field of fields) {
     const options = (Array.isArray(field.options) ? field.options : []).filter((option): option is Record<string, unknown> => isObject(option) && typeof option.value === "string" && typeof option.label === "string");
     const marked = options.filter(option => RECOMMENDED.test(option.label as string));
+    const multiple = field.type === "multiselect";
     if (typeof field.key === "string" && field.type === "string" && marked.length === 1) answer[field.key] = marked[0].value;
-    else if (typeof field.key === "string" && field.type === "multiselect" && marked.length) answer[field.key] = marked.map(option => option.value);
+    else if (typeof field.key === "string" && multiple && marked.length) answer[field.key] = marked.map(option => option.value);
     else if (field.required === false) continue;
     else return null;
-    chosen.push(...marked.map(option => ({ label: unmarked(option.label as string), ...(typeof option.description === "string" && option.description.trim() ? { why: option.description.trim() } : {}) })));
+    const why = marked.length === 1 && typeof marked[0].description === "string" ? marked[0].description.trim() : "";
+    const labels = options.map(option => unmarked(option.label as string)).filter(Boolean);
+    calls.push({
+      key: field.key as string,
+      text: String(field.description || field.title || form.title || "A question"),
+      choice: marked.map(option => unmarked(option.label as string)).join(", "),
+      ...(why ? { why } : {}),
+      ...(labels.length ? { options: labels } : {}),
+      ...(multiple ? { multiple } : {}),
+    });
   }
-  if (!chosen.length) return null;
-  const [one] = fields.length === 1 ? fields : [];
-  const asked = String((one && (one.description || one.title)) || form.title || "A question");
-  const options = one && Array.isArray(one.options) ? one.options.filter(isObject).map(option => unmarked(String(option.label ?? ""))).filter(Boolean) : [];
-  return { answer, text: asked, choice: chosen.map(each => each.label).join(", "), ...(chosen.length === 1 && chosen[0].why ? { why: chosen[0].why } : {}), ...(options.length ? { options } : {}) };
+  return calls.length ? { answer, calls } : null;
 }
 
 /** The tool call that asked a form (`metadata.tool.id`, the engine's and the agents bridge's). */

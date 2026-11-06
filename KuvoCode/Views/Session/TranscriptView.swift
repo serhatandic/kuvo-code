@@ -71,9 +71,7 @@ struct TranscriptView: View {
     }
 
     /// The calls Autopilot made here, by the tool call that asked.
-    private var autopilotCalls: [String: AutopilotShown.Call] {
-        Dictionary((autopilotModel.autopilotShown?.decided ?? []).compactMap { call in call.call.map { ($0, call) } }) { _, latest in latest }
-    }
+    private var autopilotCalls: [String: [AutopilotShown.Call]] { autopilotModel.autopilotShown?.byCall ?? [:] }
 
     /// Where its calls show, of those with no step of their own in `rows`.
     private func autopilotPlaces(in rows: [Row]) -> AutopilotShown.Places {

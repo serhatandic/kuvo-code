@@ -133,6 +133,26 @@ import Testing
         try await until { engine.requests("POST", "").contains { "\($0.body)".contains("the user picked Dark and smoky, not Warm and roasty") } }
     }
 
+    /// A list of questions shows as a call each at its step; one that takes several answers changes
+    /// one at a time, keeping one at least.
+    @Test func aListOfQuestionsShowsACallEachAndSeveralAnswersChangeOneAtATime() throws {
+        let data = try JSONSerialization.data(withJSONObject: ["autopilot": true, "decided": [
+            ["id": "frm/roast", "text": "Which roast?", "choice": "Warm", "options": ["Warm", "Dark"], "call": "call_list", "at": 1],
+            ["id": "frm/extras", "text": "Which extras?", "choice": "Oat milk, Cinnamon", "options": ["Oat milk", "Syrup", "Cinnamon"], "multiple": true, "call": "call_list", "at": 1],
+        ]])
+        let shown = try JSONDecoder().decode(AutopilotShown.self, from: data)
+        #expect(shown.byCall["call_list"]?.map(\.id) == ["frm/roast", "frm/extras"])
+
+        let extras = shown.decided[1]
+        #expect(extras.isChosen("Cinnamon"))
+        #expect(!extras.isChosen("Syrup"))
+        #expect(extras.picking("Syrup") == "Oat milk, Syrup, Cinnamon")
+        #expect(extras.picking("Cinnamon") == "Oat milk")
+        #expect(shown.decided[0].picking("Dark") == "Dark")
+        let one = try JSONDecoder().decode(AutopilotShown.Call.self, from: JSONSerialization.data(withJSONObject: ["id": "f", "text": "t", "choice": "Oat milk", "options": ["Oat milk", "Syrup"], "multiple": true, "at": 1]))
+        #expect(one.picking("Oat milk") == nil)
+    }
+
     /// A call with no step of its own still shows, with what it asked: at its subagent's row, or
     /// under the conversation. One whose step may be among earlier messages waits for them.
     @Test func aCallWithNoStepOfItsOwnShowsAtItsSubagentOrUnderTheConversation() throws {

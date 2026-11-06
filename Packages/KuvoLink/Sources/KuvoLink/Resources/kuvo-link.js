@@ -6764,6 +6764,7 @@ var GOAL_DECIDED = object({
   choice: string,
   "why?": string,
   "options?": list(string),
+  "multiple?": bool,
   "session?": string,
   at: number,
   "yours?": object({ choice: string, at: number })
@@ -8962,9 +8963,7 @@ async function goAheadOnWaiting(target, conversation, file = DECIDED_FILE, signa
   for (const question of questions) {
     if (signal?.aborted)
       break;
-    const one = await goAheadOnQuestion(target, conversation, question, file, signal);
-    if (one)
-      made.push(one);
+    made.push(...await goAheadOnQuestion(target, conversation, question, file, signal) ?? []);
   }
   return made;
 }
@@ -8986,32 +8985,25 @@ async function goAhead(target, conversation, asker, id, recommended, file, signa
   const went = await call(target, "POST", `/api/session/${encodeURIComponent(asker)}/form/${encodeURIComponent(id)}/reply`, { answer: recommended.answer }, signal).then(() => true, () => false);
   if (!went)
     return null;
-  const kept = changeAll((all) => {
+  const callID = (key) => recommended.calls.length > 1 ? `${id}/${key}` : id;
+  const kept = changeAll((all) => recommended.calls.map(({ key, ...each }) => {
     const list = all[conversation.id] ?? [];
-    const same = list.find((each) => each.id === id);
+    const same = list.find((one) => one.id === callID(key));
     if (same)
       return same;
     const made = {
-      id,
-      text: recommended.text,
-      choice: recommended.choice,
-      ...recommended.why ? { why: recommended.why } : {},
-      ...recommended.options ? { options: recommended.options } : {},
+      id: callID(key),
+      ...each,
       ...asker !== conversation.id ? { session: asker } : {},
       ...asked ? { call: asked } : {},
       at: Date.now()
     };
     all[conversation.id] = [...list, made].slice(-KEPT);
     return made;
-  }, file);
+  }), file);
   if (goal)
-    addDecided(goal.bot, {
-      text: recommended.text,
-      choice: recommended.choice,
-      session: conversation.id,
-      ...recommended.why ? { why: recommended.why } : {},
-      ...recommended.options ? { options: recommended.options } : {}
-    }, undefined, `ask:${conversation.id}:${id}`);
+    for (const { key, ...each } of recommended.calls)
+      addDecided(goal.bot, { ...each, session: conversation.id }, undefined, `ask:${conversation.id}:${callID(key)}`);
   return kept;
 }
 async function decidedByYou(target, conversation, id, choice, file = DECIDED_FILE) {
@@ -9384,26 +9376,31 @@ function recommendationOf(form) {
   if (fields.some((field) => field.format === "password"))
     return null;
   const answer = {};
-  const chosen = [];
+  const calls = [];
   for (const field of fields) {
     const options = (Array.isArray(field.options) ? field.options : []).filter((option) => isObject(option) && typeof option.value === "string" && typeof option.label === "string");
     const marked = options.filter((option) => RECOMMENDED.test(option.label));
+    const multiple = field.type === "multiselect";
     if (typeof field.key === "string" && field.type === "string" && marked.length === 1)
       answer[field.key] = marked[0].value;
-    else if (typeof field.key === "string" && field.type === "multiselect" && marked.length)
+    else if (typeof field.key === "string" && multiple && marked.length)
       answer[field.key] = marked.map((option) => option.value);
     else if (field.required === false)
       continue;
     else
       return null;
-    chosen.push(...marked.map((option) => ({ label: unmarked(option.label), ...typeof option.description === "string" && option.description.trim() ? { why: option.description.trim() } : {} })));
+    const why = marked.length === 1 && typeof marked[0].description === "string" ? marked[0].description.trim() : "";
+    const labels = options.map((option) => unmarked(option.label)).filter(Boolean);
+    calls.push({
+      key: field.key,
+      text: String(field.description || field.title || form.title || "A question"),
+      choice: marked.map((option) => unmarked(option.label)).join(", "),
+      ...why ? { why } : {},
+      ...labels.length ? { options: labels } : {},
+      ...multiple ? { multiple } : {}
+    });
   }
-  if (!chosen.length)
-    return null;
-  const [one] = fields.length === 1 ? fields : [];
-  const asked = String(one && (one.description || one.title) || form.title || "A question");
-  const options = one && Array.isArray(one.options) ? one.options.filter(isObject).map((option) => unmarked(String(option.label ?? ""))).filter(Boolean) : [];
-  return { answer, text: asked, choice: chosen.map((each) => each.label).join(", "), ...chosen.length === 1 && chosen[0].why ? { why: chosen[0].why } : {}, ...options.length ? { options } : {} };
+  return calls.length ? { answer, calls } : null;
 }
 var askedBy = (form) => {
   const tool = isObject(form.metadata) && isObject(form.metadata.tool) ? form.metadata.tool : null;

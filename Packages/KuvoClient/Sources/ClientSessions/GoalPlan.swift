@@ -300,15 +300,18 @@ public struct GoalPlan: Decodable, Sendable, Hashable, Identifiable {
         public let choice: String
         public let why: String?
         public let options: [String]?
+        /// It takes several of `options`, joined in `choice`.
+        public let multiple: Bool?
         public let session: String?
         public let at: Double
         public let yours: Yours?
-        public init(id: String, text: String, choice: String, why: String? = nil, options: [String]? = nil, session: String? = nil, at: Double, yours: Yours? = nil) {
+        public init(id: String, text: String, choice: String, why: String? = nil, options: [String]? = nil, multiple: Bool? = nil, session: String? = nil, at: Double, yours: Yours? = nil) {
             self.id = id
             self.text = text
             self.choice = choice
             self.why = why
             self.options = options
+            self.multiple = multiple
             self.session = session
             self.at = at
             self.yours = yours

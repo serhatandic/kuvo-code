@@ -3,13 +3,14 @@
 
 import { bool, type Infer, list, number, object, type RouteShape, string } from "../shape";
 
-/** A call Autopilot made where a question would have waited: the question's form (`id`), what it
- * asked, the choice it went with and why, the choices it had (one question's), the session that
- * asked where it isn't the conversation itself (a subagent's), the tool call that asked it (`call`,
+/** A call Autopilot made where a question would have waited: the question's form (`id`; its field
+ * too, `<form>/<key>`, where a form asks several, each a call of its own), what it asked, the choice
+ * it went with and why, the choices it had (`multiple`, it takes several, joined with ", "), the
+ * session that asked where it isn't the conversation itself (a subagent's), the tool call that asked it (`call`,
  * where its form names one: the step a client shows it at), when; and your choice since
  * (`yours`). */
 export const DECIDED = object({
-  id: string, text: string, choice: string, "why?": string, "options?": list(string), "session?": string, "call?": string, at: number,
+  id: string, text: string, choice: string, "why?": string, "options?": list(string), "multiple?": bool, "session?": string, "call?": string, at: number,
   "yours?": object({ choice: string, at: number }),
 });
 

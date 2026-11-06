@@ -241,6 +241,33 @@ test("your choice on a call: the same confirms it quietly; another tells the con
   assert.equal((await route("POST", "kuvo/sessions/ses_away/autopilot", { decided: "frm_1" })).status, 400);
 });
 
+test("a list of questions goes ahead as one call each, to change one at a time; one with several answers keeps them", async () => {
+  const { watch } = await watcher();
+  const form = QUESTION("frm_list", "ses_away", ROASTS);
+  form.metadata.tool = { id: "call_list" };
+  form.fields.push({ key: "extras", type: "multiselect", title: "Which extras?", required: true,
+                     options: ["Oat milk (Recommended)", "Syrup", "Cinnamon (Recommended)"].map((label, index) => ({ value: `e${index}`, label })) });
+  await watch({ type: "form.created", data: { form } });
+  assert.deepEqual(answered[0].answer, { roast: "r1", extras: ["e0", "e2"] });
+
+  const { decided } = (await route("GET", "kuvo/sessions/ses_away/autopilot")).body;
+  assert.deepEqual(decided.map(call => ({ id: call.id, text: call.text, choice: call.choice, options: call.options, multiple: call.multiple, tool: call.call })), [
+    { id: "frm_list/roast", text: "Which roast for the house blend?", choice: "Warm and roasty", options: ["Light and fruity", "Warm and roasty", "Dark and smoky"], multiple: undefined, tool: "call_list" },
+    { id: "frm_list/extras", text: "Which extras?", choice: "Oat milk, Cinnamon", options: ["Oat milk", "Syrup", "Cinnamon"], multiple: true, tool: "call_list" },
+  ]);
+  assert.match(decided[0].why, /Best reviewed/);
+
+  // Changing one says only that one; the other stays its own.
+  const changed = await route("POST", "kuvo/sessions/ses_away/autopilot", { decided: "frm_list/extras", choice: "Oat milk, Syrup" });
+  assert.equal(changed.status, 200);
+  assert.deepEqual(changed.body.decided.map(call => call.yours?.choice), [undefined, "Oat milk, Syrup"]);
+  assert.match(prompts.at(-1).text, /For "Which extras\?" the user picked Oat milk, Syrup, not Oat milk, Cinnamon/);
+
+  // Asked again (a catch-up after it's answered): still one each.
+  await watch({ type: "form.created", data: { form } });
+  assert.equal((await route("GET", "kuvo/sessions/ses_away/autopilot")).body.decided.length, 2);
+});
+
 test("a change the engine didn't take isn't kept: it says so, and making it again reaches the agent", async () => {
   const { watch } = await watcher();
   await watch({ type: "form.created", data: { form: QUESTION("frm_1", "ses_away", ROASTS) } });
