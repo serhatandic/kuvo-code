@@ -10,6 +10,7 @@ extension UsageMenuBar {
     public func phoneUsage() -> Data? {
         guard let container else { return nil }
         let store = container.dataStore
+        let encoder = Self.phoneEncoder
         let providers = container.layout.displayGroups.compactMap { group -> PhoneUsage.Provider? in
             let provider = group.provider
             guard let snapshot = store.snapshots[provider.id] else { return nil }
@@ -23,15 +24,25 @@ extension UsageMenuBar {
                 refreshed: snapshot.refreshedAt,
                 notice: store.headerNotice(for: provider.id),
                 stale: store.stalenessHint(for: provider.id) == nil ? nil : true,
-                lines: snapshot.lines
+                lines: Self.phoneLines(snapshot.lines, encoder: encoder)
             )
         }
         let usage = PhoneUsage(providers: providers, refreshing: !store.refreshingProviderIDs.isEmpty, refreshed: store.lastRefreshAt)
+        return try? encoder.encode(usage)
+    }
+
+    private static var phoneEncoder: JSONEncoder {
         let encoder = JSONEncoder()
         // Sorted: the phone link sends it again only when the text differs.
         encoder.outputFormatting = .sortedKeys
         encoder.dateEncodingStrategy = .secondsSince1970
-        return try? encoder.encode(usage)
+        return encoder
+    }
+
+    /// The lines JSON can carry: one that can't (a provider's infinite or undefined number) is left
+    /// out, or it would take every provider's with it.
+    static func phoneLines(_ lines: [MetricLine], encoder: JSONEncoder = phoneEncoder) -> [MetricLine] {
+        lines.filter { (try? encoder.encode($0)) != nil }
     }
 
     /// Refreshes every provider now, past the cache (a phone pulled to refresh). False until the

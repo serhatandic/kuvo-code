@@ -338,15 +338,25 @@ final class HostInterface {
 }
 
 extension HostInterface {
+    /// Connections of its own to the open app, plenty of them: each stream a phone follows holds
+    /// one open, and none may hold up the next request. Kept in memory only.
+    private nonisolated static let appSession: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.httpMaximumConnectionsPerHost = 64
+        return URLSession(configuration: configuration)
+    }()
+
     /// What the box asked, to the open app's host interface, as it came: nil when it doesn't answer.
     static func forward(_ request: HTTPRequest, to app: (url: URL, password: String)) async -> HTTPResponse? {
-        var forwarded = URLRequest(url: app.url.appending(path: String(request.path.dropFirst())), timeoutInterval: 120)
+        // However long it says nothing (what follows something does, until that changes): it ends
+        // when the box goes.
+        var forwarded = URLRequest(url: app.url.appending(path: String(request.path.dropFirst())), timeoutInterval: 7 * 24 * 3600)
         forwarded.httpMethod = request.method
         forwarded.setValue("Bearer \(app.password)", forHTTPHeaderField: "Authorization")
         forwarded.setValue("application/json", forHTTPHeaderField: "Content-Type")
         forwarded.httpBody = request.body
         // As it comes: a route that follows something (a phone's stream) answers for as long as it lasts.
-        guard let (bytes, response) = try? await URLSession.shared.bytes(for: forwarded), let response = response as? HTTPURLResponse else { return nil }
+        guard let (bytes, response) = try? await appSession.bytes(for: forwarded), let response = response as? HTTPURLResponse else { return nil }
         let stream = AsyncThrowingStream<Data, Error> { continuation in
             let reading = Task {
                 var chunk = Data()
@@ -366,7 +376,13 @@ extension HostInterface {
             }
             continuation.onTermination = { _ in reading.cancel() }
         }
-        return HTTPResponse(status: response.statusCode, headers: ["Content-Type": response.value(forHTTPHeaderField: "Content-Type") ?? "application/json"], stream: stream)
+        // As the app said it: its type, how it may be kept, and that it's the app's own (`passed`),
+        // without which the box takes this for the app not being there.
+        var headers = ["Content-Type": response.value(forHTTPHeaderField: "Content-Type") ?? "application/json"]
+        for name in ["X-Kuvo-Answer", "Cache-Control"] {
+            if let value = response.value(forHTTPHeaderField: name) { headers[name] = value }
+        }
+        return HTTPResponse(status: response.statusCode, headers: headers, stream: stream)
     }
 
     /// What only the open app answers, asked while it isn't.

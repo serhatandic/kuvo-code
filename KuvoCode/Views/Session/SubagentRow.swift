@@ -9,11 +9,17 @@ import SwiftUI
 struct SubagentRow: View {
     let call: Message.ToolCall
     let directory: String
+    /// The conversation it's in (see `CardFolds`).
+    var scope = ""
     @Environment(Workspace.self) private var workspace
     @Environment(AppModel.self) private var app
     @Environment(Catalog.self) private var catalog
     @State private var model: SessionModel?
-    @State private var isExpanded = false
+    @Environment(\.scrollAnchor) private var scrollAnchor
+
+    /// Open as you left it, as its view may not last (see `CardFolds`).
+    private var key: String { "subagent#" + scope + "#" + call.id }
+    private var isExpanded: Bool { CardFolds.shared.isOpen(key, otherwise: false) }
     @Environment(\.autopilotCallsOfSubagents) private var autopilotCalls
 
     private static let iconWidth: CGFloat = 16
@@ -51,7 +57,9 @@ struct SubagentRow: View {
             // The whole row opens to its steps, the chevron at its end saying so; its conversation
             // opens from under them, or from its menu.
             Button {
-                withAnimation(.ui) { isExpanded.toggle() }
+                // Closing it closes the steps you opened in it.
+                let inside = isExpanded ? session.map { CardFolds.shared.kept(under: $0 + "#") } ?? [] : []
+                CardFolds.shared.toggle(key, open: !isExpanded, in: scrollAnchor, closes: inside)
             } label: {
                 header
             }
@@ -97,6 +105,7 @@ struct SubagentRow: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .foldOpen(isExpanded)
         .task(id: session) {
             guard let session else { return }
             let model = await workspace.subagentModel(for: session, in: directory)

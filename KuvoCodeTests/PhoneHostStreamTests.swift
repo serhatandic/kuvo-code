@@ -2,6 +2,7 @@ import CryptoKit
 import Foundation
 import KuvoLink
 import Network
+import Observation
 import OpenCodeKit
 import os
 import Testing
@@ -54,6 +55,185 @@ import Testing
         request.setValue("Bearer \(password)", forHTTPHeaderField: "Authorization")
         request.httpBody = try JSONSerialization.data(withJSONObject: ["method": "GET", "path": path, "headers": [:], "body": "", "phone": LinkKey().publicBytes.base64URL])
         return request
+    }
+
+    /// The keeper's host, as it runs this Mac's box with the app open: told where the app answers.
+    private func keeper(of app: HostInterface) async throws -> (host: HostInterface, environment: [String: String]) {
+        let keeper = HostInterface()
+        keeper.appAnswers = false
+        keeper.useApp(try #require(app.address))
+        let environment = try await keeper.start()
+        StubWeb.letThrough(port: URL(string: environment["KUVO_HOST_URL"] ?? "")?.port ?? 0)
+        return (keeper, environment)
+    }
+
+    /// With the keeper running this Mac's box, what a phone asks of the Mac's own routes goes to the
+    /// keeper's host and on to the open app. The box takes an answer only when it says it's the
+    /// app's (anything else is "the app isn't answering", a 503, and the phone waits for ever): it
+    /// has to say so through the keeper too, a real 404 and a followed route's lines with it.
+    @Test func withTheKeeperRunningTheBoxTheAppsAnswersStillReachAPhone() async throws {
+        let (engine, _) = try await engine { _ in HTTPResponse(status: 200) }
+        defer { done(engine) }
+        let keeper = try await keeper(of: host)
+        defer { keeper.host.stop() }
+
+        let session = URLSession(configuration: .ephemeral)
+        let (lines, followed) = try await session.bytes(for: try asked("kuvo/asks/events", at: keeper.environment))
+        let answer = try #require(followed as? HTTPURLResponse)
+        #expect(answer.statusCode == 200)
+        #expect(answer.value(forHTTPHeaderField: "X-Kuvo-Answer") == "1", "the box would turn this away as the app not answering")
+        var first: String?
+        for try await line in lines.lines {
+            first = line
+            break
+        }
+        #expect(try JSONSerialization.jsonObject(with: Data(try #require(first).utf8)) is [String: Any])
+
+        // A real 404 is the app's too (no usage to read in this test copy).
+        let (_, read) = try await session.data(for: try asked("kuvo/usage", at: keeper.environment))
+        let missing = try #require(read as? HTTPURLResponse)
+        #expect(missing.statusCode == 404)
+        #expect(missing.value(forHTTPHeaderField: "X-Kuvo-Answer") == "1")
+
+        // The app quit: the keeper answers itself, and doesn't say it's the app's.
+        keeper.host.useApp([:])
+        let (_, away) = try await session.data(for: try asked("kuvo/usage", at: keeper.environment))
+        let closed = try #require(away as? HTTPURLResponse)
+        #expect(closed.statusCode == 503)
+        #expect(closed.value(forHTTPHeaderField: "X-Kuvo-Answer") == nil)
+    }
+
+    /// The usage panel, as UsageKit's reads: nothing until it's up, and observed, as it is.
+    @Observable final class Panel {
+        var report: Data?
+    }
+
+    /// A phone that asks while the panel is still coming up (the app just started) isn't told
+    /// there's no usage, which it would believe until it next opened: its stream stays open, and
+    /// the report comes down it as soon as the panel is up, and again as it changes.
+    @Test func thePanelComingUpLateReachesAPhoneThatAskedBefore() async throws {
+        let (engine, _) = try await engine { _ in HTTPResponse(status: 200) }
+        defer { done(engine) }
+        let panel = Panel()
+        link.usagePanel = { panel.report }
+        let keeper = try await keeper(of: host)
+        defer { keeper.host.stop() }
+
+        let request = try asked("kuvo/usage/events", at: keeper.environment)
+        let seen = OSAllocatedUnfairLock<(status: Int?, answer: String?, lines: [String])>(initialState: (nil, nil, []))
+        let reading = Task.detached {
+            let (bytes, response) = try await URLSession(configuration: .ephemeral).bytes(for: request)
+            let http = response as? HTTPURLResponse
+            seen.withLock { $0.status = http?.statusCode; $0.answer = http?.value(forHTTPHeaderField: "X-Kuvo-Answer") }
+            TestPulse.beat()
+            for try await line in bytes.lines where !line.isEmpty {
+                seen.withLock { $0.lines.append(line) }
+                TestPulse.beat()
+            }
+        }
+        defer { reading.cancel() }
+        try await until { seen.withLock { $0.status != nil } }
+        #expect(seen.withLock { $0.status } == 200)
+        #expect(seen.withLock { $0.answer } == "1")
+        #expect(seen.withLock { $0.lines }.isEmpty)
+
+        panel.report = Data(#"{"providers":[],"refreshing":false}"#.utf8)
+        try await until { seen.withLock { $0.lines.count == 1 } }
+        panel.report = Data(#"{"providers":[],"refreshing":true}"#.utf8)
+        try await until { seen.withLock { $0.lines.count == 2 } }
+        #expect(seen.withLock { $0.lines.last } == #"{"providers":[],"refreshing":true}"#)
+    }
+
+    /// What the real box's code (`macFront`, in `kuvo-link.js`, on Node) gives a phone asking
+    /// `path`, as it comes: first its status, then each piece of the answer as a JSON string. (What
+    /// it says if it can't load shows here too.)
+    private final class AskedOfTheBox: @unchecked Sendable {
+        let process = Process()
+        let said = OSAllocatedUnfairLock<[String]>(initialState: [])
+
+        init(_ path: String, keeper environment: [String: String]) throws {
+            guard let node = TestBox.node else { throw TestFailure("Node runs the box's code in the tests, and there's none.") }
+            let folder = AppInfo.testRoot.appending(path: "PhoneHostStream/box-\(UUID().uuidString)")
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            process.executableURL = node
+            process.arguments = ["--input-type=module", "-e", """
+                import { pathToFileURL } from "node:url";
+                const { macFront } = await import(pathToFileURL(\(String(reflecting: try #require(Bridge.scriptURL).path))).href);
+                for await (const piece of macFront()({ method: "GET", path: \(String(reflecting: path)), headers: {}, body: null }, { key: Buffer.alloc(32) })) {
+                  console.log(piece.head ? piece.head.status : JSON.stringify(Buffer.from(piece.body).toString()));
+                }
+                """]
+            process.environment = environment.merging(["KUVO_HOME": folder.path, "KUVO_BOX": "mac", "KUVO_BOTS": folder.appending(path: "bots").path,
+                                                       "KUVO_WAKES": folder.appending(path: "wakes").path, "KUVO_ENGINE_CONFIG": folder.appending(path: "opencode").path,
+                                                       "KUVO_KEYS": folder.appending(path: "keys").path]) { given, _ in given }
+            let out = Pipe()
+            process.standardOutput = out
+            process.standardError = out
+            try process.run()
+            Task.detached { [said] in
+                for try await line in out.fileHandleForReading.bytes.lines {
+                    said.withLock { $0.append(line) }
+                    TestPulse.beat()
+                }
+                TestPulse.beat()
+            }
+        }
+
+        func stop() { process.terminate() }
+    }
+
+    /// The whole way from the box to the usage panel, with the keeper running the box: Kuvo Code
+    /// closed, the box tells a phone it isn't answering (503, which a phone asks again after); open
+    /// with the panel still coming up, the stream is open and says nothing; and with the panel up,
+    /// the report comes down it, so the phone's gauge is back with nothing restarted.
+    @Test func theRealBoxGivesAPhoneTheUsageAsTheAppComesAndThePanelComesUp() async throws {
+        let (engine, _) = try await engine { _ in HTTPResponse(status: 200) }
+        defer { done(engine) }
+        let panel = Panel()
+        link.usagePanel = { panel.report }
+        let address = try #require(host.address)
+        let keeper = try await keeper(of: host)
+        defer { keeper.host.stop() }
+
+        keeper.host.useApp([:])
+        let closed = try AskedOfTheBox("kuvo/usage/events", keeper: keeper.environment)
+        defer { closed.stop() }
+        try await until { !closed.said.withLock { $0 }.isEmpty }
+        #expect(closed.said.withLock { $0.first } == "503")
+
+        keeper.host.useApp(address)
+        let opened = try AskedOfTheBox("kuvo/usage/events", keeper: keeper.environment)
+        defer { opened.stop() }
+        // At once, with the panel not up: an empty line, or what's on the way holds the head back.
+        try await until { opened.said.withLock { $0.count >= 2 } }
+        #expect(opened.said.withLock { $0 } == ["200", #""\n""#])
+
+        panel.report = Data(#"{"providers":[],"refreshing":false}"#.utf8)
+        try await until { opened.said.withLock { $0.count >= 3 } }
+        #expect(opened.said.withLock { $0.last } == #""{\"providers\":[],\"refreshing\":false}\n""#)
+    }
+
+    /// Each stream a phone follows through the keeper holds a connection to the app: two phones'
+    /// worth of them, and the next thing a phone asks is still answered, not left waiting behind them.
+    @Test func manyFollowedStreamsDontHoldUpTheNextRequest() async throws {
+        let (engine, _) = try await engine { _ in HTTPResponse(status: 200) }
+        defer { done(engine) }
+        let keeper = try await keeper(of: host)
+        defer { keeper.host.stop() }
+
+        var streams: [(URLSession, URLSession.AsyncBytes)] = []
+        defer { for (session, _) in streams { session.invalidateAndCancel() } }
+        for _ in 0..<8 {
+            let session = URLSession(configuration: .ephemeral)
+            let (bytes, _) = try await session.bytes(for: try asked("kuvo/asks/events", at: keeper.environment))
+            var lines = bytes.lines.makeAsyncIterator()
+            #expect(try await lines.next() != nil)
+            streams.append((session, bytes))
+        }
+        let session = URLSession(configuration: .ephemeral)
+        defer { session.invalidateAndCancel() }
+        let (_, read) = try await session.data(for: try asked("kuvo/usage", at: keeper.environment))
+        #expect((read as? HTTPURLResponse)?.value(forHTTPHeaderField: "X-Kuvo-Answer") == "1")
     }
 
     @Test func aPhoneThatGoesStopsWhatItAskedBeforeAnyAnswer() async throws {
