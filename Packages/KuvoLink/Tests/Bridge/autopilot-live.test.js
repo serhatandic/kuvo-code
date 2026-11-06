@@ -6,7 +6,9 @@
 // unless OPENCODE_TEST_BINARY names the engine.
 //
 // Run with `OPENCODE_TEST_BINARY=<opencode> node --test Packages/KuvoLink/Tests/Bridge/autopilot-live.test.js`,
-// with `KUVO_TEST_MODEL=<id>` for another of OpenCode's free models than the engine's default.
+// with `KUVO_TEST_MODEL=<id>` for another of OpenCode's free models than the engine's default. For a
+// provider's model with a sign-in of its own, also `KUVO_TEST_PROVIDER=<its id>` and
+// `KUVO_TEST_CREDENTIAL=<a file of what POST api/credential takes>`, which only this test's own engine gets.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -80,7 +82,11 @@ test("Autopilot on a real engine: a marked question goes ahead and can be change
   };
   const engineUp = await waitFor(async () => (await api("GET", "api/model/default").catch(() => ({ status: 0 }))).status === 200, "the engine to start");
   assert.ok(engineUp);
-  const model = process.env.KUVO_TEST_MODEL ? { model: { providerID: "opencode", id: process.env.KUVO_TEST_MODEL } } : {};
+  if (process.env.KUVO_TEST_CREDENTIAL) {
+    const stored = await api("POST", "api/credential", JSON.parse(fs.readFileSync(process.env.KUVO_TEST_CREDENTIAL, "utf8")));
+    assert.ok(stored.status < 300, `The engine didn't take the sign-in (${stored.status})`);
+  }
+  const model = process.env.KUVO_TEST_MODEL ? { model: { providerID: process.env.KUVO_TEST_PROVIDER ?? "opencode", id: process.env.KUVO_TEST_MODEL } } : {};
   const session = (await api("POST", "api/session", { title: "Menu page", location: { directory: workspace }, ...model })).json.data.id;
   fs.writeFileSync(path.join(home, "run", "engine.json"), JSON.stringify({ port, password: "pw", version: "0.0.0" }));
   fs.copyFileSync(new URL("../../Sources/KuvoLink/Resources/bot-words.json", import.meta.url), path.join(home, "bin", "bot-words.json"));
