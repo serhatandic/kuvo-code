@@ -2685,7 +2685,7 @@ function sshSockets(home, system = "/etc/ssh/ssh_config") {
 function globPattern(glob) {
   const parts = glob.split("/");
   const first = parts.findIndex((part) => part.includes("*"));
-  const plain = realish(parts.slice(0, first).join("/") || "/");
+  const plain = throughLinks(parts.slice(0, first).join("/") || "/");
   const rest = parts.slice(first).map((part) => escapeRegex(part).replace(/\\\*/g, "[^/]*")).join("/");
   return `^${plain === "/" ? "" : escapeRegex(plain)}/${rest}$`;
 }
@@ -2791,7 +2791,7 @@ function appTemporary() {
 }
 function sandboxCaches() {
   const tmp = appTemporary();
-  const root = realish(tmp ? path12.join(homeFolder(), "Library", "Caches", path12.basename(tmp)) : path12.join(K, "cache"));
+  const root = throughLinks(tmp ? path12.join(homeFolder(), "Library", "Caches", path12.basename(tmp)) : path12.join(K, "cache"));
   return { npm: path12.join(root, "sandbox-npm"), pnpm: path12.join(root, "sandbox-pnpm"), uv: path12.join(root, "sandbox-uv"), corepack: path12.join(root, "sandbox-corepack") };
 }
 function macFolders(home) {
@@ -2813,22 +2813,23 @@ function macFolders(home) {
 }
 function fencePolicy(ports = []) {
   const home = realish(accountHome());
-  const inHome = (names) => names.map((name) => realish(path12.join(home, name)));
+  const inHome = (names) => names.map((name) => throughLinks(path12.join(home, name)));
   const given = process.env.HOME && path12.isAbsolute(process.env.HOME) ? realish(process.env.HOME) : home;
   const named = given === "/" || home.startsWith(given + "/") ? home : given;
   const homes = named === home ? [home] : [home, named];
-  const inHomes = (names) => homes.flatMap((each) => names.map((name) => realish(path12.join(each, name))));
-  const opencodes = homes.map((each) => realish(opencodeAuthFile(each))).filter((each) => !inHomes([".local/share/opencode/auth.json"]).includes(each));
+  const inHomes = (names) => homes.flatMap((each) => names.map((name) => throughLinks(path12.join(each, name))));
+  const opencodes = homes.map((each) => throughLinks(opencodeAuthFile(each))).filter((each) => !inHomes([".local/share/opencode/auth.json"]).includes(each));
   const own = IS_MAC ? macFolders(home) : { kuvo: [K, path12.join(home, ".kuvo-code")], readable: [path12.join(K, "bin")] };
-  const kuvo = [...new Set(own.kuvo.map(realish))];
-  const kuvoReadable = own.readable.map(realish);
+  const kuvo = [...new Set(own.kuvo.map(throughLinks))];
+  const kuvoReadable = own.readable.map(throughLinks);
   const commandCaches = Object.values(sandboxCaches());
   const ownCache = "KUVO_OWN_XDG_CACHE_HOME" in process.env ? process.env.KUVO_OWN_XDG_CACHE_HOME : process.env.XDG_CACHE_HOME;
-  const yourCaches = [realish(path12.join(home, ".cache"))];
-  if (ownCache && path12.isAbsolute(ownCache) && !kuvo.some((folder) => realish(ownCache) === folder || realish(ownCache).startsWith(folder + "/")))
-    yourCaches.push(realish(ownCache));
+  const yourCaches = [throughLinks(path12.join(home, ".cache"))];
+  const ownCacheAt = ownCache && path12.isAbsolute(ownCache) ? throughLinks(ownCache) : null;
+  if (ownCacheAt && !kuvo.some((folder) => ownCacheAt === folder || ownCacheAt.startsWith(folder + "/")))
+    yourCaches.push(ownCacheAt);
   const runsLater = [...inHomes(RUNS_LATER), ...new Set(yourCaches.flatMap((folder) => [...TOOL_CACHES, ...SHELL_CACHES(accountName())].map((name) => path12.join(folder, name))))];
-  const onPath = [...new Set((process.env.PATH ?? "").split(":").filter((each) => path12.isAbsolute(each)).map(realish))].filter((folder) => homes.some((each) => folder.startsWith(each + "/")) && !kuvo.some((each) => folder === each || folder.startsWith(each + "/"))).filter((folder) => {
+  const onPath = [...new Set((process.env.PATH ?? "").split(":").filter((each) => path12.isAbsolute(each)).map(throughLinks))].filter((folder) => homes.some((each) => folder.startsWith(each + "/")) && !kuvo.some((each) => folder === each || folder.startsWith(each + "/"))).filter((folder) => {
     try {
       return fs13.statSync(folder).isDirectory();
     } catch {
@@ -2837,7 +2838,7 @@ function fencePolicy(ports = []) {
   });
   const homeRunsLater = [...new Set([...inHomes(HOME_RUNS_LATER), ...onPath])];
   const ssh = homes.map((each) => sshSockets(each));
-  const sshPaths = [...new Set(ssh.flatMap((each) => each.paths).map(realish))];
+  const sshPaths = [...new Set(ssh.flatMap((each) => each.paths).map(throughLinks))];
   const sshGlobs = [...new Set(ssh.flatMap((each) => each.globs))];
   if (process.platform === "darwin") {
     return {
@@ -2895,10 +2896,10 @@ function fencePolicy(ports = []) {
           "Library/Containers/com.docker.docker/Data",
           "Library/Group Containers/HUAQ24HBR6.dev.orbstack"
         ]),
-        realish("/var/run/docker.sock"),
+        throughLinks("/var/run/docker.sock"),
         "/private/var/run/docker.sock",
         ...sshPaths,
-        ...process.env.SSH_AUTH_SOCK && path12.isAbsolute(process.env.SSH_AUTH_SOCK) ? [realish(process.env.SSH_AUTH_SOCK)] : []
+        ...process.env.SSH_AUTH_SOCK && path12.isAbsolute(process.env.SSH_AUTH_SOCK) ? [throughLinks(process.env.SSH_AUTH_SOCK)] : []
       ],
       socketPatterns: [
         "^/private/(var/run|tmp)/com\\.apple\\.launchd\\.[^/]+/",
@@ -2916,7 +2917,7 @@ function fencePolicy(ports = []) {
         "^/private/tmp/ssh-[^/]+$",
         "^/private/var/folders/[^/]+/[^/]+/T/(ssh-[^/]+|zellij-[^/]+|emacs[0-9]+|nvim\\.[^/]+|podman)$"
       ],
-      secrets: [...inHomes([...SECRETS, ...MAC_SECRETS]), ...opencodes, ...keychainDaemons(home).map(realish), ...homes.flatMap((each) => [...sshKeys(each), ...ghHosts(each)]).map(realish)]
+      secrets: [...inHomes([...SECRETS, ...MAC_SECRETS]), ...opencodes, ...keychainDaemons(home).map(throughLinks), ...homes.flatMap((each) => [...sshKeys(each), ...ghHosts(each)]).map(throughLinks)]
     };
   }
   return {
@@ -2927,12 +2928,12 @@ function fencePolicy(ports = []) {
       ...runsLater,
       ...homeRunsLater,
       ...inHomes(LINUX_RUNS_LATER),
-      ...homes.flatMap((each) => startingWith(each, HOME_RUNS_LATER_PREFIXES)).map(realish)
+      ...homes.flatMap((each) => startingWith(each, HOME_RUNS_LATER_PREFIXES)).map(throughLinks)
     ],
     ports,
     commandCaches,
     homeWrites: homes,
-    personal: [...new Set(homes.flatMap(xdgPersonal).map(realish))],
+    personal: [...new Set(homes.flatMap(xdgPersonal).map(throughLinks))],
     kuvoPatterns: [],
     writable: ["/tmp", "/var/tmp", "/dev", "/dev/shm", ...inHome([...CACHES, ...LINUX_CACHES])],
     sockets: [
@@ -2947,7 +2948,7 @@ function fencePolicy(ports = []) {
         ".local/share/wezterm"
       ]),
       `/tmp/zellij-${os3.userInfo().uid}`,
-      ...[...new Set(["/var/run/tailscale/tailscaled.sock", "/run/tailscale/tailscaled.sock"].map(realish))],
+      ...[...new Set(["/var/run/tailscale/tailscaled.sock", "/run/tailscale/tailscaled.sock"].map(throughLinks))],
       ...process.env.SSH_AUTH_SOCK && path12.isAbsolute(process.env.SSH_AUTH_SOCK) ? [process.env.SSH_AUTH_SOCK] : [],
       ...[...new Set([
         "/var/run/docker.sock",
@@ -2959,7 +2960,7 @@ function fencePolicy(ports = []) {
         "/run/incus/unix.socket",
         "/var/run/libvirt/libvirt-sock",
         "/run/libvirt/libvirt-sock"
-      ].map(realish))],
+      ].map(throughLinks))],
       ...inHome([".docker/run", ".colima", ".lima"]),
       ...sshPaths,
       ...sshGlobs
@@ -2976,14 +2977,57 @@ function userTemporary() {
   return user ? [user] : [];
 }
 function realish(where) {
+  return deepestThere(where, fs13.realpathSync);
+}
+function throughLinks(where) {
+  if (process.platform !== "darwin")
+    return realish(where);
+  const found = deepestThere(where, followLinks);
+  return macAsksAbout(found) ? found : realish(found);
+}
+var MAC_ASKS = [...MAC_PERSONAL, "Library"];
+var macAsks;
+function macAsksAbout(at) {
+  if (!macAsks) {
+    const homes = [accountHome(), realish(accountHome())].map((each) => escapeRegex(each.toLowerCase())).join("|");
+    macAsks = new RegExp(`^(/system/volumes/data)?(/volumes/|(${homes})/(${MAC_ASKS.map((each) => escapeRegex(each.toLowerCase())).join("|")})(/|$))`);
+  }
+  return macAsks.test(at.toLowerCase());
+}
+function deepestThere(where, resolve) {
   const full = path12.resolve(where);
   for (let at = full, rest = "";; rest = path12.join(path12.basename(at), rest), at = path12.dirname(at)) {
     try {
-      return path12.join(fs13.realpathSync(at), rest);
+      return path12.join(resolve(at), rest);
     } catch {}
     if (at === path12.dirname(at))
       return full;
   }
+}
+function followLinks(where) {
+  let names = where.split("/");
+  let at = "/";
+  for (let links = 0;names.length; ) {
+    const name = names.shift();
+    if (!name || name === ".")
+      continue;
+    if (name === "..") {
+      at = path12.dirname(at);
+      continue;
+    }
+    const next = path12.join(at, name);
+    if (!fs13.lstatSync(next).isSymbolicLink()) {
+      at = next;
+      continue;
+    }
+    if (++links > 40)
+      throw new Error(`Too many links: ${where}`);
+    const target = fs13.readlinkSync(next);
+    if (target.startsWith("/"))
+      at = "/";
+    names = [...target.split("/"), ...names];
+  }
+  return at;
 }
 var escapeRegex = (text) => text.replace(/[.^$*+?()[\]{}|\\]/g, "\\$&");
 
@@ -3016,7 +3060,7 @@ var realProject = (project) => {
     return real;
   }
 };
-var projectSum = (project) => crypto6.createHash("sha256").update(realProject(project)).digest("hex").slice(0, 32);
+var sumOf = (real) => crypto6.createHash("sha256").update(real).digest("hex").slice(0, 32);
 function readAllowed() {
   try {
     const kept = JSON.parse(fs14.readFileSync(FILE, "utf8"));
@@ -3089,7 +3133,7 @@ function keep(rules) {
 function tellLauncher(rules = readAllowed()) {
   const byProject = new Map;
   for (const rule of rules)
-    byProject.set(projectSum(rule.project), [...byProject.get(projectSum(rule.project)) ?? [], rule.path]);
+    byProject.set(sumOf(rule.project), [...byProject.get(sumOf(rule.project)) ?? [], rule.path]);
   fs14.mkdirSync(FOR_LAUNCHER, { recursive: true, mode: 448 });
   for (const name of fs14.readdirSync(FOR_LAUNCHER))
     if (!byProject.has(name))
@@ -25176,7 +25220,7 @@ var noteUse = (item, caller, use, how) => note2({ what: "used", ...itemOf(item),
 
 // Packages/Box/src/link/vault/ssh.ts
 var isSshKey = (item) => item.kind === "key" && item.fields.includes("private_key");
-var sumOf = (text) => crypto34.createHash("sha256").update(text).digest("hex").slice(0, 32);
+var sumOf2 = (text) => crypto34.createHash("sha256").update(text).digest("hex").slice(0, 32);
 var REFUSED_FOR = 30000;
 var NOTE_KEPT = 30 * 24 * 60 * 60000;
 var IDLE = 60 * 60000;
@@ -25316,12 +25360,12 @@ function keepSshAgents() {
       } catch {
         continue;
       }
-      if (!path90.isAbsolute(folder) || note.startsWith("dir-") && note !== `dir-${sumOf(folder)}`)
+      if (!path90.isAbsolute(folder) || note.startsWith("dir-") && note !== `dir-${sumOf2(folder)}`)
         continue;
       if (agents.get(note)?.folder === folder)
         continue;
       close(note);
-      const prefix = sumOf(note).slice(0, 16);
+      const prefix = sumOf2(note).slice(0, 16);
       for (const old of fs87.readdirSync(SSH_AGENTS))
         if (old.startsWith(prefix))
           fs87.rmSync(path90.join(SSH_AGENTS, old), { force: true });

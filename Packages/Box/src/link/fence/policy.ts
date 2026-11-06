@@ -256,7 +256,7 @@ export function sshSockets(home: string, system = "/etc/ssh/ssh_config"): { path
 function globPattern(glob: string): string {
   const parts = glob.split("/");
   const first = parts.findIndex(part => part.includes("*"));
-  const plain = realish(parts.slice(0, first).join("/") || "/");
+  const plain = throughLinks(parts.slice(0, first).join("/") || "/");
   const rest = parts.slice(first).map(part => escapeRegex(part).replace(/\\\*/g, "[^/]*")).join("/");
   return `^${plain === "/" ? "" : escapeRegex(plain)}/${rest}$`;
 }
@@ -340,7 +340,7 @@ export function appTemporary(): string | null {
  */
 export function sandboxCaches(): { npm: string; pnpm: string; uv: string; corepack: string } {
   const tmp = appTemporary();
-  const root = realish(tmp ? path.join(homeFolder(), "Library", "Caches", path.basename(tmp)) : path.join(K, "cache"));
+  const root = throughLinks(tmp ? path.join(homeFolder(), "Library", "Caches", path.basename(tmp)) : path.join(K, "cache"));
   return { npm: path.join(root, "sandbox-npm"), pnpm: path.join(root, "sandbox-pnpm"), uv: path.join(root, "sandbox-uv"), corepack: path.join(root, "sandbox-corepack") };
 }
 
@@ -363,38 +363,41 @@ function macFolders(home: string): { kuvo: string[]; readable: string[] } {
  * `allowed.ts` has it: Bun's `os.userInfo()` follows HOME) and your SSH keys are now: this Mac's app's
  * folders on this Mac's box, a machine's folder on a machine's; the system's own paths and secrets
  * as the computer it runs on has them.
+ * Each named place goes through `throughLinks`: this runs as the box starts and every few seconds
+ * after, for folders of yours nobody asked to be read.
  */
 export function fencePolicy(ports: number[] = []): FencePolicy {
   const home = realish(accountHome());
-  const inHome = (names: string[]) => names.map(name => realish(path.join(home, name)));
+  const inHome = (names: string[]) => names.map(name => throughLinks(path.join(home, name)));
   // And what's kept from commands in the home HOME names, where that isn't your account's, as tools
   // run from it look there.
   // (Never one that isn't a home: not a relative path, nor `/` or a folder above yours.)
   const given = process.env.HOME && path.isAbsolute(process.env.HOME) ? realish(process.env.HOME) : home;
   const named = given === "/" || home.startsWith(given + "/") ? home : given;
   const homes = named === home ? [home] : [home, named];
-  const inHomes = (names: string[]) => homes.flatMap(each => names.map(name => realish(path.join(each, name))));
+  const inHomes = (names: string[]) => homes.flatMap(each => names.map(name => throughLinks(path.join(each, name))));
   // opencode's sign-ins where your own XDG_DATA_HOME puts them, besides where they are by default.
-  const opencodes = homes.map(each => realish(opencodeAuthFile(each))).filter(each => !inHomes([".local/share/opencode/auth.json"]).includes(each));
+  const opencodes = homes.map(each => throughLinks(opencodeAuthFile(each))).filter(each => !inHomes([".local/share/opencode/auth.json"]).includes(each));
   // A machine's folder, and the real one if this is a test's own.
   const own = IS_MAC ? macFolders(home) : { kuvo: [K, path.join(home, ".kuvo-code")], readable: [path.join(K, "bin")] };
-  const kuvo = [...new Set(own.kuvo.map(realish))];
-  const kuvoReadable = own.readable.map(realish);
+  const kuvo = [...new Set(own.kuvo.map(throughLinks))];
+  const kuvoReadable = own.readable.map(throughLinks);
   const commandCaches = Object.values(sandboxCaches());
   // Your cache folder, and your own if you set one (on a machine, what its launch kept: the box's
   // own is in Kuvo Code's folder), with the tools' caches in it.
   const ownCache = "KUVO_OWN_XDG_CACHE_HOME" in process.env ? process.env.KUVO_OWN_XDG_CACHE_HOME : process.env.XDG_CACHE_HOME;
-  const yourCaches = [realish(path.join(home, ".cache"))];
-  if (ownCache && path.isAbsolute(ownCache) && !kuvo.some(folder => realish(ownCache) === folder || realish(ownCache).startsWith(folder + "/"))) yourCaches.push(realish(ownCache));
+  const yourCaches = [throughLinks(path.join(home, ".cache"))];
+  const ownCacheAt = ownCache && path.isAbsolute(ownCache) ? throughLinks(ownCache) : null;
+  if (ownCacheAt && !kuvo.some(folder => ownCacheAt === folder || ownCacheAt.startsWith(folder + "/"))) yourCaches.push(ownCacheAt);
   const runsLater = [...inHomes(RUNS_LATER), ...new Set(yourCaches.flatMap(folder => [...TOOL_CACHES, ...SHELL_CACHES(accountName())].map(name => path.join(folder, name))))];
   // And the folders on your PATH in a home, whatever they're named (but a home itself, or Kuvo
   // Code's own folders), each that's there.
-  const onPath = [...new Set((process.env.PATH ?? "").split(":").filter(each => path.isAbsolute(each)).map(realish))]
+  const onPath = [...new Set((process.env.PATH ?? "").split(":").filter(each => path.isAbsolute(each)).map(throughLinks))]
     .filter(folder => homes.some(each => folder.startsWith(each + "/")) && !kuvo.some(each => folder === each || folder.startsWith(each + "/")))
     .filter(folder => { try { return fs.statSync(folder).isDirectory(); } catch { return false; } });
   const homeRunsLater = [...new Set([...inHomes(HOME_RUNS_LATER), ...onPath])];
   const ssh = homes.map(each => sshSockets(each));
-  const sshPaths = [...new Set(ssh.flatMap(each => each.paths).map(realish))];
+  const sshPaths = [...new Set(ssh.flatMap(each => each.paths).map(throughLinks))];
   const sshGlobs = [...new Set(ssh.flatMap(each => each.globs))];
   if (process.platform === "darwin") {
     return {
@@ -427,11 +430,11 @@ export function fencePolicy(ports: number[] = []): FencePolicy {
         // your home writes in it), wherever their apps keep them.
         ...inHome([".docker/run", ".orbstack/run", ".colima", ".lima", ".rd", ".local/share/containers/podman/machine",
           "Library/Containers/com.docker.docker/Data", "Library/Group Containers/HUAQ24HBR6.dev.orbstack"]),
-        realish("/var/run/docker.sock"), "/private/var/run/docker.sock",
+        throughLinks("/var/run/docker.sock"), "/private/var/run/docker.sock",
         // SSH's shared connections and agents your settings name.
         ...sshPaths,
         // (And the one this box was started with, wherever it is.)
-        ...(process.env.SSH_AUTH_SOCK && path.isAbsolute(process.env.SSH_AUTH_SOCK) ? [realish(process.env.SSH_AUTH_SOCK)] : [])],
+        ...(process.env.SSH_AUTH_SOCK && path.isAbsolute(process.env.SSH_AUTH_SOCK) ? [throughLinks(process.env.SSH_AUTH_SOCK)] : [])],
       socketPatterns: [
         // The system's, where launchd keeps it, and one your shell starts (`eval $(ssh-agent)`; since
         // OpenSSH 10.1 in ~/.ssh/agent, above).
@@ -450,26 +453,26 @@ export function fencePolicy(ports: number[] = []): FencePolicy {
       ],
       socketFolders: [`^/private/tmp/tmux-${os.userInfo().uid}$`, "^/private/tmp/com\\.apple\\.launchd\\.[^/]+$", "^/private/tmp/ssh-[^/]+$",
         "^/private/var/folders/[^/]+/[^/]+/T/(ssh-[^/]+|zellij-[^/]+|emacs[0-9]+|nvim\\.[^/]+|podman)$"],
-      secrets: [...inHomes([...SECRETS, ...MAC_SECRETS]), ...opencodes, ...keychainDaemons(home).map(realish), ...homes.flatMap(each => [...sshKeys(each), ...ghHosts(each)]).map(realish)],
+      secrets: [...inHomes([...SECRETS, ...MAC_SECRETS]), ...opencodes, ...keychainDaemons(home).map(throughLinks), ...homes.flatMap(each => [...sshKeys(each), ...ghHosts(each)]).map(throughLinks)],
     };
   }
   return {
     home, kuvo, kuvoReadable, readOnly: [...runsLater, ...homeRunsLater, ...inHomes(LINUX_RUNS_LATER),
-      ...homes.flatMap(each => startingWith(each, HOME_RUNS_LATER_PREFIXES)).map(realish)], ports, commandCaches,
-    homeWrites: homes, personal: [...new Set(homes.flatMap(xdgPersonal).map(realish))],
+      ...homes.flatMap(each => startingWith(each, HOME_RUNS_LATER_PREFIXES)).map(throughLinks)], ports, commandCaches,
+    homeWrites: homes, personal: [...new Set(homes.flatMap(xdgPersonal).map(throughLinks))],
     kuvoPatterns: [],
     writable: ["/tmp", "/var/tmp", "/dev", "/dev/shm", ...inHome([...CACHES, ...LINUX_CACHES])],
     // (Hidden in each command's namespace, beside your session's own: fence/landlock.ts, HIDE.)
     sockets: [...inHome([".grok/leader.sock", ".ssh/agent", ".1password/agent.sock", ".bitwarden-ssh-agent.sock",
       ".gnupg/S.gpg-agent", ".gnupg/S.gpg-agent.ssh", ".gnupg/S.scdaemon", ".local/share/wezterm"]),
       // zellij's server, and Tailscale's, which changes this computer's network and SSH.
-      `/tmp/zellij-${os.userInfo().uid}`, ...[...new Set(["/var/run/tailscale/tailscaled.sock", "/run/tailscale/tailscaled.sock"].map(realish))],
+      `/tmp/zellij-${os.userInfo().uid}`, ...[...new Set(["/var/run/tailscale/tailscaled.sock", "/run/tailscale/tailscaled.sock"].map(throughLinks))],
       ...(process.env.SSH_AUTH_SOCK && path.isAbsolute(process.env.SSH_AUTH_SOCK) ? [process.env.SSH_AUTH_SOCK] : []),
       // Docker's and the like, which run anything as the whole computer (rootless ones are in your
       // session's folder, hidden whole).
       ...[...new Set(["/var/run/docker.sock", "/run/docker.sock", "/run/podman/podman.sock", "/var/snap/lxd/common/lxd/unix.socket",
         "/var/lib/lxd/unix.socket", "/var/lib/incus/unix.socket", "/run/incus/unix.socket", "/var/run/libvirt/libvirt-sock",
-        "/run/libvirt/libvirt-sock"].map(realish))], ...inHome([".docker/run", ".colima", ".lima"]),
+        "/run/libvirt/libvirt-sock"].map(throughLinks))], ...inHome([".docker/run", ".colima", ".lima"]),
       // SSH's shared connections and agents your settings name; those named by host, by the names
       // they can have (each that's there as a command starts).
       ...sshPaths, ...sshGlobs],
@@ -508,11 +511,67 @@ export function keptFromWork(folder: string, ours: readonly string[] = [], polic
 /** A path as the system has it, through symlinks (`/tmp` is `/private/tmp` on macOS), as the
  * sandbox compares them: its deepest folder that's there resolved, the rest as it's named. */
 export function realish(where: string): string {
+  return deepestThere(where, fs.realpathSync);
+}
+
+/**
+ * As `realish`, for the places the sandbox's walls name, without opening those macOS asks about.
+ * Bun's `fs.realpathSync` opens what it's given, and macOS holds a process that opens your Desktop,
+ * iCloud Drive or another app's data until you answer its prompt, so a box would wait there,
+ * answering no one, on folders it only needs the name of. Asking about each name and reading links
+ * opens nothing. (Those keep the letters as named, where `realish` has a Mac disk's own: the walls
+ * name them as macOS and their apps do.)
+ */
+export function throughLinks(where: string): string {
+  if (process.platform !== "darwin") return realish(where);
+  const found = deepestThere(where, followLinks);
+  return macAsksAbout(found) ? found : realish(found);
+}
+
+// What macOS guards as it's opened: those folders in your account's home, all of ~/Library (it holds a
+// process for other apps' data and asks itself about Safari's and Cookies, and more of it each
+// release), and other drives. The walls name ~/Library's as macOS does, so nothing there needs opening.
+const MAC_ASKS = [...MAC_PERSONAL, "Library"];
+let macAsks: RegExp | undefined;
+function macAsksAbout(at: string): boolean {
+  if (!macAsks) {
+    // (Your home by the name your account has for it, and by where it is if that's a link.)
+    const homes = [accountHome(), realish(accountHome())].map(each => escapeRegex(each.toLowerCase())).join("|");
+    macAsks = new RegExp(`^(/system/volumes/data)?(/volumes/|(${homes})/(${MAC_ASKS.map(each => escapeRegex(each.toLowerCase())).join("|")})(/|$))`);
+  }
+  return macAsks.test(at.toLowerCase());
+}
+
+function deepestThere(where: string, resolve: (at: string) => string): string {
   const full = path.resolve(where);
   for (let at = full, rest = ""; ; rest = path.join(path.basename(at), rest), at = path.dirname(at)) {
-    try { return path.join(fs.realpathSync(at), rest); } catch {}
+    try { return path.join(resolve(at), rest); } catch {}
     if (at === path.dirname(at)) return full;
   }
+}
+
+/** A whole path through its links, a name at a time; it throws where a name isn't there. */
+function followLinks(where: string): string {
+  let names = where.split("/");
+  let at = "/";
+  for (let links = 0; names.length;) {
+    const name = names.shift()!;
+    if (!name || name === ".") continue;
+    if (name === "..") {
+      at = path.dirname(at);
+      continue;
+    }
+    const next = path.join(at, name);
+    if (!fs.lstatSync(next).isSymbolicLink()) {
+      at = next;
+      continue;
+    }
+    if (++links > 40) throw new Error(`Too many links: ${where}`);
+    const target = fs.readlinkSync(next);
+    if (target.startsWith("/")) at = "/";
+    names = [...target.split("/"), ...names];
+  }
+  return at;
 }
 
 export const escapeRegex = (text: string) => text.replace(/[.^$*+?()[\]{}|\\]/g, "\\$&");
