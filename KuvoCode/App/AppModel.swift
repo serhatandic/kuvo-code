@@ -364,7 +364,7 @@ final class AppModel {
     func wirePhoneLink() {
         phoneLink.readyMachines = { [weak self] in self?.machines.engines.values.filter(\.isReady) ?? [] }
         // With machines, this Mac meets them at the relay, phone or not.
-        phoneLink.hasMachines = { [weak self] in !(self?.machines.list.isEmpty ?? true) }
+        phoneLink.hasMachines = { [weak self] in self.map { !$0.machines.list.isEmpty || $0.machines.fileDidntRead } ?? false }
         Machines.linkKey = { [weak self] in self?.phoneLink.macKey }
         phoneLink.bots = bots
         phoneLink.browserAsks = browserAsks

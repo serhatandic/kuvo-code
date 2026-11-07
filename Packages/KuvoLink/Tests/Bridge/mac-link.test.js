@@ -50,10 +50,10 @@ const appHost = http.createServer((request, response) => {
     }
     if (request.url === "/link/route") {
       app.asked.push(given);
-      if (given.path === "kuvo/machines/events") {
+      if (given.path === "kuvo/usage/events") {
         // Followed: a line now, then open until the app goes.
         response.writeHead(200, { "content-type": "application/x-ndjson", "x-kuvo-answer": "1" });
-        response.write(JSON.stringify({ machines: ["lab"] }) + "\n");
+        response.write(JSON.stringify({ usage: ["lab"] }) + "\n");
         app.streams.add(response);
         return;
       }
@@ -307,10 +307,10 @@ test("a phone asking for a pairing link leaves Settings › Phone's as it is: ea
 test("what the app doesn't answer is a 503 at once, and a stream from the app ends when the app goes", async () => {
   const { it } = await paired();
   // Followed through the app: its first line, then the end once the app's gone.
-  it.send("GET", "kuvo/machines/events", 7);
+  it.send("GET", "kuvo/usage/events", 7);
   const first = await it.piece();
   assert.equal(first.head.s, 200);
-  assert.deepEqual(JSON.parse(first.body.toString()), { machines: ["lab"] });
+  assert.deepEqual(JSON.parse(first.body.toString()), { usage: ["lab"] });
   for (const response of app.streams) response.end();
   app.streams.clear();
   let last = first;

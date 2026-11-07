@@ -16,9 +16,10 @@ import Testing
     }
 
     private static func clean() {
-        for key in ["machines", "machines.waiting", "machines.waitingSince", "projectFolders", "projectSettings", "worktrees"] {
+        for key in ["machines", "machines.unsaved", "machines.waiting", "machines.waitingSince", "projectFolders", "projectSettings", "worktrees"] {
             UserDefaults.standard.removeObject(forKey: key)
         }
+        try? FileManager.default.removeItem(at: Machines.file)
     }
 
     private func machines(_ names: String...) -> Machines {

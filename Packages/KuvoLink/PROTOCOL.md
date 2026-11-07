@@ -1530,7 +1530,10 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   (as a bot's `machine`), and `anotherMac`: its engine is another Mac's, which gives it its
   settings, so this Mac's (`kuvo/config`) don't reach it (as it was when it last connected).
   `removed`: this Mac removed it (it runs on there), and `DELETE kuvo/hosts/<id>` forgets it for
-  your phones (`200 {}`; `404` for none; `409 {"message"}` for one this Mac still has).
+  your phones (`200 {}`; `404` for none; `409 {"message"}` for one this Mac still has). With the app
+  closed the box answers it from what the app keeps (`phone-link.json`, `machines.json`), and `DELETE`
+  answers `503` as Machines' changes do. A phone takes this list for all your machines and forgets
+  the rest, so where those can't be told, the box answers `503 {"message"}` rather than a short list.
 - `POST kuvo/sessions/<id>/agents` with `{"model": {providerID, id, variant?}}`: a
   conversation the engine runs (on the Mac or a machine it reaches) carried on with the coding
   agents on that model (one of theirs, or Custom Auto's `auto`), as picking it in the
@@ -1765,7 +1768,8 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     409 for a name that's taken, 503 while GitHub is limiting requests, 502 when it couldn't be
     reached.
 - On a Mac, Settings › Machines: the machines it runs sessions on (a machine's bridge doesn't
-  answer these).
+  answer these). The app reaches them over SSH, so how a connection stands and what's done with one
+  are the open app's to say, and it answers these as long as it's there:
   - `GET kuvo/machines` → `{"machines": [{id, name, otherAddresses, connection, status, failure?,
     action?}], "hosts", "folded"?}`, in the page's order. `connection` is `notConnected`,
     `connecting`, `reconnecting`, `installing`, `connected`, `failed` or `stopped`; `status` says
@@ -1803,6 +1807,26 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     of `other`'s addresses, as Same Computer As does: `200 {"machine"}`, the other; `404` when
     `other` isn't another of the Mac's machines; `409 {"message"}` when the two told Kuvo Code
     different names and stay two machines.
+  - The list isn't only the app's: it's `machines.json` in this Mac's box's folder, which the app
+    alone writes and the box only reads (bridge 0.9.201). With the app closed, stuck (no answer
+    within seconds) or answering anything else, the box answers from it, so a phone needs nothing
+    different:
+    - `GET kuvo/machines` lists them with `connection` `notConnected`, no `action`, no `failure`, and
+      `hosts` empty. `status` says what the box can tell by itself, and that the app isn't open:
+      "Running · Kuvo Code isn’t open on Studio" for a machine whose box was heard from in the last
+      half hour by this Mac's clock (its agents' mail, "Peers", every ten minutes), "Not heard from
+      lately · …" for one that wasn't, and only "Kuvo Code isn’t open on Studio" for one this box
+      doesn't meet (another Mac's). `503 {"message"}` when the list can't be told, which isn't none:
+      it's there and won't read, or it isn't there while the app keeps bridges for machines (it
+      couldn't be written, and stays in the app's settings). Removing the last one leaves `[]`.
+    - `GET kuvo/machines/events` is one stream over both: the app's lines while it's there, the box's
+      while it isn't, looking for the app again every ten seconds. It ends if the list stops reading,
+      and the next try answers `503`, as a read does.
+    - Anything else (adding one, its button, removing or uninstalling it, its addresses, same-as,
+      Make This Mac Its Home) answers `503 {"message": "Kuvo Code isn’t open on Studio. Open it there,
+      then try again."}` as soon as the box hears the app isn't open. An app that's open and stuck
+      isn't answered for here, as a change can't be said not to have happened: it waits for the app,
+      or for the phone to stop waiting.
 - Settings › Worktrees: the git worktrees sessions run in, each box its own, kept and named by its
   box (a Mac's by its own box from bridge 0.9.35; before, by the app), with the Mac closed too.
   A Mac's app reaches every box's the same way, its own included, and follows its own as they
@@ -2639,9 +2663,9 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `update` | a machine only: `kuvo/update` |
 | `accounts.ended` | `kuvo/accounts/ended` and `POST kuvo/accounts/<provider>/forget` (a machine from 0.9.61) |
 | `claude-code` | a Mac only: `kuvo/claude-code` |
-| `hosts` | the Mac with the app only for now: `kuvo/hosts…` (a machine's box can't do this yet, on Linux or a Mac) |
+| `hosts` | a Mac only: `kuvo/hosts…` (with its app closed its box still lists them, and `DELETE` says the app must be open) |
 | `mac` | a Mac only: `kuvo/mac` |
-| `machines` | a Mac only: `kuvo/machines…` |
+| `machines` | a Mac only: `kuvo/machines…` (with its app closed its box still lists them, and the rest says the app must be open) |
 | `usage` | the Mac with the app only for now, while it has the usage panel: `kuvo/usage…` (a machine's box can't do this yet, on Linux or a Mac) |
 
 Here "a Mac" is the box the app runs (`KUVO_BOX=mac`), and "a machine" any box in `~/.kuvo-code`,

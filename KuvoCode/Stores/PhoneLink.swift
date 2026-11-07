@@ -1050,9 +1050,11 @@ final class PhoneLink {
             info.started = engineStarted()?.timeIntervalSince1970
             return (200, (try? encoder.encode(info)) ?? Data())
         case "kuvo/hosts":
+            let machines = bots?.app?.machines
             let hosts = machineHosts.sorted { $0.value.name < $1.value.name }.map { id, host in
+                // (With a list that wouldn't read, none is known to be removed: a phone would forget it.)
                 Hosts.Host(name: host.name, address: host.address, key: host.key, relay: relay.absoluteString, machine: id, anotherMac: host.anotherMac ?? false,
-                           removed: bots?.app?.machines.engine(id) == nil)
+                           removed: machines?.engine(id) == nil && machines?.fileDidntRead != true)
             }
             return (200, (try? encoder.encode(Hosts(hosts: hosts))) ?? Data())
         case let path where path.hasPrefix("kuvo/hosts/") && request.method.uppercased() == "DELETE":

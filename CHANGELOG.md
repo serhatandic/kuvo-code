@@ -16,6 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- Kuvo Code for iPhone lists your Mac's machines with the app closed on your Mac, and says whether each is running. What needs the app, like adding or connecting one, says so instead of "isn't answering". The list moved from Kuvo Code's preferences to its own file: an older version shows none of them, and they're all there again once you update.
 - A question from Codex always reaches you now, whatever its model does after asking. Before, one it went on from, by thinking, running a step or sleeping, was lost, so nothing showed and Autopilot had nothing to go ahead on. Your answer goes straight into its turn, and wakes it if it was sleeping on it.
 - A Mac can be one of your machines now, like a Mac mini you reach with SSH: add it in Settings › Machines, and its sessions, bots, browser and coding agents work on it as on a Linux machine, with your Mac closed too.
 - Steps you open stay open as new ones come in, until you close them, and what you're reading stays where it is. Thinking you open as it's written stays open once it ends. Close them and you're back at the end.

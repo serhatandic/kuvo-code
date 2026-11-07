@@ -12,7 +12,9 @@ extension PhoneLink {
         let body = (try? JSONSerialization.jsonObject(with: request.body) as? [String: Any]) ?? [:]
         if parts.count == 2 {
             switch method {
-            case "GET": return (200, machinesJSON() ?? Data())
+            case "GET":
+                guard let json = machinesJSON() else { return (503, Self.message("This Mac’s list of machines can’t be read right now.")) }
+                return (200, json)
             case "POST": return await addMachine(body["destination"] as? String, app: app)
             default: return (405, Data())
             }
@@ -59,9 +61,9 @@ extension PhoneLink {
 
     /// `kuvo/machines` and its events: the machines as Settings › Machines lists them, the hosts
     /// in this Mac's `~/.ssh/config` not added yet (what Add a Machine suggests), and the address
-    /// last found to be a machine already here.
+    /// last found to be a machine already here. Nil for a list that wouldn't read, which isn't none.
     func machinesJSON() -> Data? {
-        guard let machines = bots?.app?.machines else { return nil }
+        guard let machines = bots?.app?.machines, !machines.fileDidntRead else { return nil }
         let added = Set(machines.list.flatMap(\.addresses))
         var answer: [String: Any] = [
             "machines": machines.list.compactMap { machines.engine($0.id).map(Self.machineEntry) },

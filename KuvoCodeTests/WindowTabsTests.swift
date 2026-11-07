@@ -218,7 +218,7 @@ import Testing
         defer {
             done()
             UserDefaults.standard.removeObject(forKey: SidebarBox.inViewKey)
-            UserDefaults.standard.removeObject(forKey: "machines")
+            try? FileManager.default.removeItem(at: Machines.file)
         }
         let machine = app.machines.add("lokum").machine.id
         UserDefaults.standard.set(machine, forKey: SidebarBox.inViewKey)
