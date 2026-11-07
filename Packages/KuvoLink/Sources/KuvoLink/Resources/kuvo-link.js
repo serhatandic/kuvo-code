@@ -18600,7 +18600,7 @@ async function bringIn(record, signal) {
   const directory = directoryOf(record.kind, record.thing);
   fs65.mkdirSync(directory, { recursive: true });
   const was = contents.was && typeof contents.was.place === "string" ? { place: plainName(contents.was.place), ...typeof contents.was.folder === "string" ? { folder: contents.was.folder } : {} } : undefined;
-  const sessions = contents.lane ? contents.lane.sessions : idsOf(contents.exports);
+  let sessions = contents.lane ? [] : idsOf(contents.exports);
   changeMove(record.id, (each) => {
     each.sessions = sessions;
     each.was = was;
@@ -18612,8 +18612,10 @@ async function bringIn(record, signal) {
         throw new NotTaken(String(error.message));
       throw error;
     });
+    sessions = placed.sessions;
     changeMove(record.id, (each) => {
       each.digest = placed.digest;
+      each.sessions = sessions;
     });
     infos = placed.infos;
     if (record.kind === "bot" && placed.model?.providerID)

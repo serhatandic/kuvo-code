@@ -963,8 +963,9 @@ async function bringIn(record: MoveRecord, signal: AbortSignal): Promise<string[
   const directory = directoryOf(record.kind, record.thing);
   fs.mkdirSync(directory, { recursive: true });
   const was = contents.was && typeof contents.was.place === "string" ? { place: plainName(contents.was.place), ...(typeof contents.was.folder === "string" ? { folder: contents.was.folder } : {}) } : undefined;
-  // Its conversations, noted before they're brought in: any that came go if it's taken back.
-  const sessions = contents.lane ? contents.lane.sessions : idsOf(contents.exports);
+  // Its conversations, noted before they're brought in: any that came go if it's taken back. (With a
+  // coding agent, those its bridge placed, as it says: what it placed it undoes itself.)
+  let sessions = contents.lane ? [] : idsOf(contents.exports);
   changeMove(record.id, each => { each.sessions = sessions; each.was = was; });
   let infos: (Partial<EngineSession> & { id: string })[];
   if (contents.lane) {
@@ -972,7 +973,8 @@ async function bringIn(record: MoveRecord, signal: AbortSignal): Promise<string[
       if ((error as { status?: number } | null)?.status === 409) throw new NotTaken(String((error as Error).message));
       throw error;
     });
-    changeMove(record.id, each => { each.digest = placed.digest; });
+    sessions = placed.sessions;
+    changeMove(record.id, each => { each.digest = placed.digest; each.sessions = sessions; });
     infos = placed.infos as typeof infos;
     // Its account isn't on this computer: the bot goes on with the one its conversation went to.
     if (record.kind === "bot" && placed.model?.providerID) rewriteModel(place, placed.model.providerID);

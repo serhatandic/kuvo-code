@@ -178,6 +178,12 @@ seedSession(mac, "ses_chat", mac.chats, chatClaude);
 const chat = seedClaude(mac, mac.chats, chatClaude, { memory: { "MEMORY.md": "From the Mac.\n", "only-mac.md": "Mine.\n" } });
 fs.mkdirSync(mac.chats, { recursive: true });
 
+// A chat whose ID a conversation on the machine has too (as a buggy or copied box might send), that
+// one paused there with its queue.
+seedSession(mac, "ses_twin", mac.chats, conversation());
+seedSession(lab, "ses_twin", lab.chats, conversation());
+write(path.join(lab.home, "run", "queues.json"), { ses_twin: { paused: true, held: [] } });
+
 // A chat the machine's Chats has memory of its own for.
 seedClaude(lab, lab.chats, conversation(), { memory: { "MEMORY.md": "From the machine.\n" }, beside: false });
 
@@ -364,6 +370,16 @@ test("a Claude Code chat moves, and what the other computer's chats remember sta
   const beside = fs.readdirSync(path.join(placed, "memory")).find(name => /^moved-.*-MEMORY\.md$/.test(name));
   assert.equal(fs.readFileSync(path.join(placed, "memory", beside), "utf8"), "From the Mac.\n");
   assert.equal(await sessionThere(mac, "ses_chat"), false);
+});
+
+test("a chat whose conversation is there already doesn't go, and the one there is left as it was", { timeout: 60_000 }, async t => {
+  signal = t.signal;
+  const moved = await ask("POST", "kuvo/moves", { kind: "chat", id: "ses_twin", to: machine.key });
+  assert.equal(moved.status, 409, JSON.stringify(moved.json));
+  assert.match(moved.json.message, /is on lab already/);
+  assert.equal(await sessionThere(mac, "ses_twin"), true, "it stays here");
+  assert.equal((await asks(lab, "GET", "/api/session/ses_twin")).json.data.location.directory, lab.chats);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(lab.home, "run", "queues.json"), "utf8")).ses_twin, { paused: true, held: [] }, "its queue there is as it was");
 });
 
 test("a bot of more than 100 MB goes whole over the relay", { timeout: 600_000 }, async t => {
