@@ -151,7 +151,8 @@ import Testing
         let process = Process()
         let said = OSAllocatedUnfairLock<[String]>(initialState: [])
 
-        init(_ path: String, keeper environment: [String: String]) throws {
+        /// `home`: this Mac's box's own folder, rather than one of the test's.
+        init(_ path: String, keeper environment: [String: String], home: URL? = nil) throws {
             guard let node = TestBox.node else { throw TestFailure("Node runs the box's code in the tests, and there's none.") }
             let folder = AppInfo.testRoot.appending(path: "PhoneHostStream/box-\(UUID().uuidString)")
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -163,7 +164,7 @@ import Testing
                   console.log(piece.head ? piece.head.status : JSON.stringify(Buffer.from(piece.body).toString()));
                 }
                 """]
-            process.environment = environment.merging(["KUVO_HOME": folder.path, "KUVO_BOX": "mac", "KUVO_BOTS": folder.appending(path: "bots").path,
+            process.environment = environment.merging(["KUVO_HOME": (home ?? folder).path, "KUVO_BOX": "mac", "KUVO_BOTS": folder.appending(path: "bots").path,
                                                        "KUVO_WAKES": folder.appending(path: "wakes").path, "KUVO_ENGINE_CONFIG": folder.appending(path: "opencode").path,
                                                        "KUVO_KEYS": folder.appending(path: "keys").path]) { given, _ in given }
             let out = Pipe()
@@ -211,6 +212,34 @@ import Testing
         panel.report = Data(#"{"providers":[],"refreshing":false}"#.utf8)
         try await until { opened.said.withLock { $0.count >= 3 } }
         #expect(opened.said.withLock { $0.last } == #""{\"providers\":[],\"refreshing\":false}\n""#)
+    }
+
+    /// From what the app keeps to a phone, the real thing at both ends: machines only in the settings,
+    /// as an update first finds them, moved as the keeper starts, and with the app closed the box reads
+    /// them from where it runs, for a phone.
+    @Test func machinesInTheSettingsReachAPhoneThroughTheRealBoxWithTheAppClosed() async throws {
+        let (engine, _) = try await engine { _ in HTTPResponse(status: 200) }
+        defer {
+            done(engine)
+            UserDefaults.standard.removeObject(forKey: "machines")
+            try? FileManager.default.removeItem(at: Machines.file)
+        }
+        let keeper = try await keeper(of: host)
+        defer { keeper.host.stop() }
+        keeper.host.useApp([:])
+        UserDefaults.standard.set(try JSONEncoder().encode([Machine(destination: "lab", otherAddresses: ["lab.tail"], identity: "a", reachedAt: "lab.tail")]), forKey: "machines")
+        Machines.moveFromSettings()
+
+        let closed = try AskedOfTheBox("kuvo/machines", keeper: keeper.environment, home: BoxProcess.home)
+        defer { closed.stop() }
+        try await until { closed.said.withLock { $0.count >= 2 } }
+        let said = closed.said.withLock { $0 }
+        #expect(said.first == "200")
+        let text = try #require(try JSONSerialization.jsonObject(with: Data(said[1].utf8), options: .fragmentsAllowed) as? String)
+        let listed = try #require(try JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])["machines"] as? [[String: Any]]
+        #expect(listed?.map { $0["id"] as? String } == ["lab"])
+        #expect(listed?.first?["otherAddresses"] as? [String] == ["lab.tail"])
+        #expect(listed?.first?["status"] as? String == "Kuvo Code isn’t open on this Mac")
     }
 
     /// Each stream a phone follows through the keeper holds a connection to the app: two phones'

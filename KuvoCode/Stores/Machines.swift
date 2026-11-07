@@ -944,7 +944,7 @@ final class Machines {
     private(set) var engines: [String: MachineEngine] = [:]
     /// The file was there as this started and couldn't be read: not an empty list, so what's written
     /// next goes beside it, never over it.
-    @ObservationIgnored private var fileDidntRead: Bool
+    @ObservationIgnored private(set) var fileDidntRead: Bool
 
     /// The list, in this Mac's box's folder: this writes it and the box only reads it, so the box can
     /// say what your machines are with the app closed (`kuvo/machines`), and there's one list.
@@ -1376,7 +1376,7 @@ final class Machines {
     nonisolated private static func store(_ list: [Machine], besideFile: Bool = false) -> Bool {
         let wontRead = switch readFile() {
         case .none: false
-        case .list: besideFile
+        case .list(let there): besideFile && there != list
         case .unreadable: true
         }
         if !wontRead || JSONFile.setAside(file, because: "a list was about to be saved over it"), write(list) {
@@ -1402,10 +1402,13 @@ final class Machines {
     }
 
     /// As it stands: what the settings still hold comes first (it's only there when it hasn't reached
-    /// the file yet), moved to the file as it's read.
+    /// the file yet), moved to the file as it's read. A file there beside it keeps what's only in the
+    /// file: an older version keeps its own list and doesn't see this one, so going back to it and
+    /// forward again finds them all.
     private static func load() -> (list: [Machine], fileDidntRead: Bool) {
         if let data = UserDefaults.standard.data(forKey: key) {
-            if let list = try? JSONDecoder().decode([Machine].self, from: data) {
+            if var list = try? JSONDecoder().decode([Machine].self, from: data) {
+                if case .list(let there) = readFile() { list += there.filter { kept in !list.contains { $0.id == kept.id } } }
                 store(list)
                 return (list, false)
             }

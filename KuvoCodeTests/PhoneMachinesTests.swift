@@ -26,6 +26,36 @@ import Testing
         try? FileManager.default.removeItem(at: Machines.file)
     }
 
+    /// A list that won't read isn't an empty one: with the app open too, a phone isn't told your
+    /// machines were removed (it would forget them), and this Mac still meets them at the relay.
+    @Test func aListThatWontReadIsntTakenForNoMachines() async throws {
+        defer {
+            try? FileManager.default.removeItem(at: AppInfo.testRoot.appending(path: "PhoneMachines"))
+            for name in (try? FileManager.default.contentsOfDirectory(at: Machines.file.deletingLastPathComponent(), includingPropertiesForKeys: nil)) ?? [] where name.lastPathComponent.contains("unreadable") {
+                try? FileManager.default.removeItem(at: name)
+            }
+            Self.clean()
+        }
+        try FileManager.default.createDirectory(at: Machines.file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("{ not json".utf8).write(to: Machines.file)
+        let file = AppInfo.testRoot.appending(path: "PhoneMachines/\(UUID().uuidString).json")
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONSerialization.data(withJSONObject: ["machines": ["lab": ["name": "lab", "address": String(repeating: "ab", count: 16), "key": Data(repeating: 9, count: 32).base64EncodedString()]]]).write(to: file)
+        let model = AppModel()
+        model.bots.app = model
+        model.wirePhoneLink()
+        #expect(model.phoneLink.hasMachines())
+        let link = PhoneLink(file: file, identity: (LinkKey(), RelaySecret()))
+        link.bots = model.bots
+        var answer = Data()
+        for try await part in PhoneLink.respond(to: LinkRequest(method: "GET", path: "kuvo/hosts", headers: [:], body: Data()), link: link, engine: URL(string: "http://127.0.0.1:47996/")!, password: nil, agents: nil) {
+            if case .body(let chunk) = part { answer += chunk }
+        }
+        let hosts = try #require(try JSONSerialization.jsonObject(with: answer) as? [String: Any])["hosts"] as? [[String: Any]]
+        #expect(hosts?.map { $0["machine"] as? String } == ["lab"])
+        #expect(hosts?.first?["removed"] as? Bool == false)
+    }
+
     private func ask(_ path: String, method: String = "GET", body: [String: Any]? = nil) async throws -> (status: Int, json: [String: Any]) {
         let data = try body.map { try JSONSerialization.data(withJSONObject: $0) } ?? Data()
         let request = LinkRequest(method: method, path: path, headers: ["content-type": "application/json"], body: data)
