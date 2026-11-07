@@ -52,7 +52,7 @@ const server = http.createServer((request, response) => {
     // (Those at the top, `parentID=null`, only those another conversation started: the work lists'.)
     const parent = url.searchParams.get("parentID");
     if (url.pathname === "/api/session" && parent) return send(200, [...engine.sessions.values()].filter(each => parent === "null" ? !each.parentID && each.metadata : each.parentID === parent).map(listed));
-    if (url.pathname === "/api/session/active") return send(200, {});
+    if (url.pathname === "/api/session/active") return send(200, engine.active ?? {});
     if (url.pathname === "/api/provider") return send(200, [{ id: "opencode" }]);
     if (url.pathname === "/api/experimental/session/import") {
       const bring = () => {
@@ -1223,6 +1223,23 @@ test("asked with its coding agents here on a model none of them has: the engine'
     fs.rmSync(file, { force: true });
     bridge.close();
   }
+});
+
+nodeTest("still in its turn after the wait: it says it's working, not that messages are on their way, and it stays as it was", { timeout: 120_000 }, async () => {
+  chat("ses_busy1");
+  engine.active = { ses_busy1: { type: "busy" } };
+  const sent = [];
+  script = move => { if (move.op === "offer" || move.op === "part") sent.push(move.op); };
+  try {
+    const moved = await ask("POST", "kuvo/moves", { kind: "chat", id: "ses_busy1", to: peerKey });
+    assert.deepEqual(sent, [], "nothing went");
+    assert.equal(moved.status, 409);
+    assert.equal(moved.json.message, "“Trip plans” is working. Move it once it’s done.");
+  } finally {
+    engine.active = null;
+    script = () => {};
+  }
+  await asItWas("ses_busy1");
 });
 
 // ---- A bot's own keys ----

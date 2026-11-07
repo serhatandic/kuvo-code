@@ -231,6 +231,28 @@ export async function unpack(id: string): Promise<{ contents: Contents; folder: 
   return { contents, folder: kind ? brought : null, carry };
 }
 
+/** The first thing in `folder` that isn't a plain file or folder (a link, say, which the computer it
+ * goes to never takes), by its path in it; null when there's none, or when there's more than `most`
+ * to look through (looked for again as it's packed). */
+export function notPlainIn(folder: string, most = Infinity): { path: string; link: boolean } | null {
+  const left = [""];
+  let looked = 0;
+  while (left.length) {
+    const at = left.pop()!;
+    let names: string[];
+    try { names = fs.readdirSync(path.join(folder, at)); } catch { continue; }
+    for (const name of names) {
+      if (++looked > most) return null;
+      const inside = at ? path.join(at, name) : name;
+      let kind: fs.Stats;
+      try { kind = fs.lstatSync(path.join(folder, inside)); } catch { continue; }
+      if (kind.isDirectory()) left.push(inside);
+      else if (!kind.isFile()) return { path: inside, link: kind.isSymbolicLink() };
+    }
+  }
+  return null;
+}
+
 function plainOnly(folder: string): void {
   for (const name of fs.readdirSync(folder)) {
     const entry = path.join(folder, name);

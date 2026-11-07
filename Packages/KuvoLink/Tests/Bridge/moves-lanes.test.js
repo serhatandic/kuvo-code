@@ -213,6 +213,15 @@ write(path.join(mac.bots, "bot_work", "bot.json"), { kuvo: 1, id: "bot_work", na
 seedSession(mac, "ses_work", workWork, workClaude, { metadata: { kuvo: { bot: "bot_work" } }, provider: "claude-code@work" });
 const work = seedClaude({ claude: path.join(mac.agents, "claude", "accounts", "work") }, workWork, workClaude);
 
+// A bot whose folder has a link in it (a tool's, in its work), which no computer takes.
+const linkClaude = conversation();
+const linkWork = seedBot(mac, "bot_link", "ses_link");
+seedSession(mac, "ses_link", linkWork, linkClaude, { metadata: { kuvo: { bot: "bot_link" } } });
+seedClaude(mac, linkWork, linkClaude);
+fs.mkdirSync(path.join(linkWork, "tools", "bin"), { recursive: true });
+write(path.join(linkWork, "tools", "cli.js"), "console.log(1)\n");
+fs.symlinkSync("../cli.js", path.join(linkWork, "tools", "bin", "cli"));
+
 const dropClaude = conversation();
 const dropWork = seedBot(mac, "bot_drop", "ses_drop");
 seedSession(mac, "ses_drop", dropWork, dropClaude, { metadata: { kuvo: { bot: "bot_drop" } } });
@@ -411,6 +420,21 @@ test("a bot on a second account goes to a computer without that account: it says
   assert.equal(agentState(lab, "ses_work")?.threads?.["claude-code"]?.state?.claudeSession, workClaude, JSON.stringify(agentState(lab, "ses_work")));
   assert.equal(JSON.parse(fs.readFileSync(path.join(lab.bots, "bot_work", "bot.json"), "utf8")).model.providerID, "claude-code");
   assert.equal(await sessionThere(mac, "ses_work"), false);
+});
+
+test("a link in a bot's folder is found before anything goes: it says which, and the bot stays as it was", { timeout: 60_000 }, async t => {
+  signal = t.signal;
+  const why = "bot_link’s folder has a link (workspace/tools/bin/cli), which can’t move to another computer. Remove it, then move bot_link.";
+  const there = (await ask("GET", "kuvo/moves/places?kind=bot&id=bot_link")).json.places.find(place => place.key === machine.key);
+  assert.equal(there.ok, false);
+  assert.equal(there.why, why);
+  assert.equal(there.note, "Has a link in its folder");
+  const moved = await ask("POST", "kuvo/moves", { kind: "bot", id: "bot_link", to: machine.key });
+  assert.equal(moved.status, 409);
+  assert.equal(moved.json.message, why);
+  assert.equal(await sessionThere(mac, "ses_link"), true);
+  assert.ok(!fs.existsSync(path.join(mac.bots, "bot_link", "paused")), "never held");
+  assert.ok(!fs.existsSync(path.join(lab.bots, "bot_link")));
 });
 
 test("a bot of more than 100 MB goes whole over the relay", { timeout: 600_000 }, async t => {

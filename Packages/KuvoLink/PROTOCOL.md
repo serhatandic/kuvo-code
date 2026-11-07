@@ -510,7 +510,9 @@ A client asks the box it lives on once, and watches; the move goes on with no cl
   it can go there now, with why not in words to show (it works in a project, talks with a coding
   agent and this box's agents bridge isn't running, or that computer's box is from before
   `moves.agents`, is in a group chat that lives here with its bots, is working on a goal (a bot's, or a
-  chat's own `/goal` working or paused; it stays on this box), is moving already; that computer's box is
+  chat's own `/goal` working or paused; it stays on this box), has a command or subagent running, has
+  a link or anything but plain files and folders in its folder (the box it goes to takes none; looked
+  for again as it's packed), is moving already; that computer's box is
   from before moves, as the `features` its agents' mail last gave say; a group chat's bots don't all
   live on that machine, as its agents' mail says, none of them here) and `note`, the same in a few
   words for beside the computer's name in a menu. `404 {message}` when it isn't here. A group chat
@@ -523,8 +525,8 @@ A client asks the box it lives on once, and watches; the move goes on with no cl
   there). Clients put it in Move's question (`MoveWords.question`, its `stays`), with the words
   that each computer's vault, integrations and browser sign-ins stay with it.
 - `POST kuvo/moves {kind, id, to}` (`to`: the box's key, as `places` gives it) answers once the move
-  ends: `200 {move}` (it lives there now); `409 {message}` refused or taken back, as it was (working,
-  working on a goal,
+  ends: `200 {move}` (it lives there now); `409 {message}` refused or taken back, as it was (still in
+  a turn after a minute's wait, working on a goal,
   messages still on their way, kept getting messages while it moved, too big, refused there);
   `503 {message}` the other computer didn't answer; `404 {message}` it isn't here, or that isn't one
   of your computers. A client that goes doesn't stop it. `note` beside `move` (feature

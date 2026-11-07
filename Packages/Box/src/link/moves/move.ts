@@ -36,7 +36,7 @@ import { ofBot, under, workSessions } from "../work/tree";
 import { readBackground } from "../work/background";
 import { decidedOf, forgetDecided, isAutopilot, keepDecided, tellAutopilot } from "../work/autopilot";
 import type { EngineSession } from "../engine/sessions";
-import { CHATS, engineWait, MOST_BUNDLE, NotTaken, TooBig, deleteSession, directoryOf, exportAll, folderOf, groupAction, conversationHash, hashOf, idsOf, importAll, keysOf, ownTree, pack, toTrash, unpack } from "./bundle";
+import { CHATS, engineWait, MOST_BUNDLE, NotTaken, TooBig, deleteSession, directoryOf, exportAll, folderOf, groupAction, conversationHash, hashOf, idsOf, importAll, keysOf, notPlainIn, ownTree, pack, toTrash, unpack } from "./bundle";
 import type { Contents } from "./bundle";
 import { forgetQuiet, tellMoving } from "./elsewhere";
 import { ASK_LEFT, KEEP_LEFT, forgetLeft, keysGone, noteLeft, noteRan, readLeft, removeTrashed } from "./left";
@@ -104,6 +104,7 @@ export const say = {
   background: (name: string, what: string) => `${name} has ${what} running. Wait for it to finish, or stop it, then move ${name}.`,
   onGoal: (name: string) => `${name} is working on a goal, which stays on this computer. Move it once the goal is done, or stop the goal first.`,
   waiting: (name: string) => `${name} still has messages on their way. Try again in a moment.`,
+  notPlain: (name: string, what: { path: string; link: boolean }) => `${name}’s folder has ${what.link ? "a link" : "something that isn’t a file"} (${what.path}), which can’t move to another computer. Remove it, then move ${name}.`,
   busy: (name: string) => `${name} kept getting messages while it moved, so it stayed where it is. Try again in a moment.`,
   botsElsewhere: (chat: string) => `${chat}’s bots live on different computers, so it can’t go there.`,
   inBoxGroup: (name: string, chat: string) => `${name} is in “${chat}”, which lives on ${HERE} with its bots. Move the chat to a Mac first, or take ${name} out of it.`,
@@ -123,6 +124,7 @@ const note = {
   noAgents: "Its coding agents aren’t running",
   onGoal: "Working on a goal",
   background: "Running something",
+  notPlain: "Has a link in its folder",
   inBoxGroup: "In a group chat that lives here",
   needsUpdate: "Needs a newer Kuvo Code",
   botsNotThere: "Its bots don’t all live there",
@@ -266,6 +268,10 @@ async function movable(kind: MoveKind, thing: string, signal?: AbortSignal): Pro
     if (goalRuns(thing)) return { name, why: say.onGoal(name), note: note.onGoal };
     const running = runningOf([here.session]);
     if (running) return { name, why: say.background(name, running), note: note.background };
+    // Found now, not by the computer it goes to once it's all there. (A folder too big to look
+    // through here is looked through as it's packed.)
+    const odd = notPlainIn(here.folder, 50_000);
+    if (odd) return { name, why: say.notPlain(name, odd), note: note.notPlain };
     // One in a group chat that lives here with its bots, on a machine, stays with it.
     if (!IS_MAC) {
       let bridge: Target | null = null;
@@ -459,14 +465,16 @@ function unhold(folder: string | undefined, wasPaused: boolean, pausedAs?: strin
 /** Until none of its conversations is at work and nothing waits to go to them: a minute at most.
  * What the engine holds for one you stopped waits for Resume, and goes with it (`packQueues`). */
 async function settle(target: Target, sessions: readonly string[], name: string): Promise<void> {
+  // (Still in a turn at the end, it's working; else only messages wait to go to it.)
+  let busy = false;
   for (let tries = 0; tries < SETTLE_FOR; tries++) {
     const active = await call(target, "GET", "/api/session/active", undefined, engineWait()).catch(() => ({}));
-    const busy = isObject(active) && sessions.some(session => session in active);
+    busy = isObject(active) && sessions.some(session => session in active);
     const inbox = sessions[0] && !queueOf(sessions[0]).paused ? await call(target, "GET", `/api/session/${encodeURIComponent(sessions[0])}/inbox`, undefined, engineWait()).catch(() => []) : [];
     if (!busy && !(Array.isArray(inbox) && inbox.length)) return;
     await new Promise(resolve => setTimeout(resolve, 1000));
   }
-  throw new Refused(say.waiting(name));
+  throw new Refused(busy ? say.working(name) : say.waiting(name));
 }
 
 class Refused extends Error {
@@ -539,9 +547,15 @@ async function carryOn(id: string): Promise<void> {
     await settle(target, record.sessions, record.name);
     const running = runningOf(record.sessions);
     if (running) throw new Refused(say.background(record.name, running));
+    // Its folder goes as it is, and the computer it goes to takes plain files only: found here first.
+    const odd = record.folder && fs.existsSync(record.folder) ? notPlainIn(record.folder) : null;
+    if (odd) throw new Refused(say.notPlain(record.name, odd));
     if (record.lane) {
       const packed = await carry<Packed>(target, "pack", { root: record.sessions[0], into: path.join(bundleOf(id), "carry"), most: MOST_BUNDLE }).catch(error => {
-        throw (error as { status?: number } | null)?.status === 413 ? new Refused(say.tooBig(record.name)) : new Refused(say.cantCarry(record.name, String((error as Error | null)?.message ?? error)));
+        const why = String((error as Error | null)?.message ?? error);
+        // (Its turn started again as it was packed.)
+        if (/it's working/.test(why)) throw new Refused(say.working(record.name));
+        throw (error as { status?: number } | null)?.status === 413 ? new Refused(say.tooBig(record.name)) : new Refused(say.cantCarry(record.name, why));
       });
       digest = packed.digest;
       record.sessions = packed.sessions.map(each => each.id);

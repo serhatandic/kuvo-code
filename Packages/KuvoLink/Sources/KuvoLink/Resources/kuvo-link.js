@@ -17458,6 +17458,35 @@ async function unpack(id) {
   }
   return { contents, folder: kind ? brought : null, carry };
 }
+function notPlainIn(folder, most = Infinity) {
+  const left = [""];
+  let looked = 0;
+  while (left.length) {
+    const at = left.pop();
+    let names;
+    try {
+      names = fs62.readdirSync(path65.join(folder, at));
+    } catch {
+      continue;
+    }
+    for (const name of names) {
+      if (++looked > most)
+        return null;
+      const inside = at ? path65.join(at, name) : name;
+      let kind;
+      try {
+        kind = fs62.lstatSync(path65.join(folder, inside));
+      } catch {
+        continue;
+      }
+      if (kind.isDirectory())
+        left.push(inside);
+      else if (!kind.isFile())
+        return { path: inside, link: kind.isSymbolicLink() };
+    }
+  }
+  return null;
+}
 function plainOnly(folder) {
   for (const name of fs62.readdirSync(folder)) {
     const entry = path65.join(folder, name);
@@ -17718,6 +17747,7 @@ var say = {
   background: (name, what) => `${name} has ${what} running. Wait for it to finish, or stop it, then move ${name}.`,
   onGoal: (name) => `${name} is working on a goal, which stays on this computer. Move it once the goal is done, or stop the goal first.`,
   waiting: (name) => `${name} still has messages on their way. Try again in a moment.`,
+  notPlain: (name, what) => `${name}’s folder has ${what.link ? "a link" : "something that isn’t a file"} (${what.path}), which can’t move to another computer. Remove it, then move ${name}.`,
   busy: (name) => `${name} kept getting messages while it moved, so it stayed where it is. Try again in a moment.`,
   botsElsewhere: (chat) => `${chat}’s bots live on different computers, so it can’t go there.`,
   inBoxGroup: (name, chat) => `${name} is in “${chat}”, which lives on ${HERE} with its bots. Move the chat to a Mac first, or take ${name} out of it.`,
@@ -17735,6 +17765,7 @@ var note = {
   noAgents: "Its coding agents aren’t running",
   onGoal: "Working on a goal",
   background: "Running something",
+  notPlain: "Has a link in its folder",
   inBoxGroup: "In a group chat that lives here",
   needsUpdate: "Needs a newer Kuvo Code",
   botsNotThere: "Its bots don’t all live there",
@@ -17847,6 +17878,9 @@ async function movable(kind, thing, signal) {
     const running = runningOf([here.session]);
     if (running)
       return { name, why: say.background(name, running), note: note.background };
+    const odd = notPlainIn(here.folder, 50000);
+    if (odd)
+      return { name, why: say.notPlain(name, odd), note: note.notPlain };
     if (!IS_MAC) {
       let bridge = null;
       try {
@@ -18057,15 +18091,16 @@ function unhold(folder, wasPaused, pausedAs) {
   } catch {}
 }
 async function settle2(target, sessions, name) {
+  let busy = false;
   for (let tries = 0;tries < SETTLE_FOR; tries++) {
     const active = await call(target, "GET", "/api/session/active", undefined, engineWait()).catch(() => ({}));
-    const busy = isObject(active) && sessions.some((session) => (session in active));
+    busy = isObject(active) && sessions.some((session) => (session in active));
     const inbox = sessions[0] && !queueOf(sessions[0]).paused ? await call(target, "GET", `/api/session/${encodeURIComponent(sessions[0])}/inbox`, undefined, engineWait()).catch(() => []) : [];
     if (!busy && !(Array.isArray(inbox) && inbox.length))
       return;
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
-  throw new Refused(say.waiting(name));
+  throw new Refused(busy ? say.working(name) : say.waiting(name));
 }
 
 class Refused extends Error {
@@ -18132,9 +18167,15 @@ async function carryOn(id) {
     const running = runningOf(record.sessions);
     if (running)
       throw new Refused(say.background(record.name, running));
+    const odd = record.folder && fs65.existsSync(record.folder) ? notPlainIn(record.folder) : null;
+    if (odd)
+      throw new Refused(say.notPlain(record.name, odd));
     if (record.lane) {
       const packed = await carry(target, "pack", { root: record.sessions[0], into: path68.join(bundleOf(id), "carry"), most: MOST_BUNDLE }).catch((error) => {
-        throw error?.status === 413 ? new Refused(say.tooBig(record.name)) : new Refused(say.cantCarry(record.name, String(error?.message ?? error)));
+        const why = String(error?.message ?? error);
+        if (/it's working/.test(why))
+          throw new Refused(say.working(record.name));
+        throw error?.status === 413 ? new Refused(say.tooBig(record.name)) : new Refused(say.cantCarry(record.name, why));
       });
       digest = packed.digest;
       record.sessions = packed.sessions.map((each) => each.id);
