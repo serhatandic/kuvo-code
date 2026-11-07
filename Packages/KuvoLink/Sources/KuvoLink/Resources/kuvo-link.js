@@ -1086,6 +1086,11 @@ function pastSummaries(messages) {
   });
   return work;
 }
+function workOutcome(messages, outcome) {
+  const rows = asRows(messages);
+  const work = pastSummaries(rows);
+  return work.length < rows.length ? work.find((row) => row?.type === "idle")?.outcome ?? outcome : outcome;
+}
 var lastTurnEnd = (messages) => pastSummaries(asRows(messages)).find((row) => row?.type === "idle");
 
 // Packages/Box/src/link/engine/sessions.ts
@@ -7383,7 +7388,7 @@ async function summaryRowOf(target, session, signal) {
 }
 var lastMessages = (target, session, signal) => call(target, "GET", `/api/session/${encodeURIComponent(session)}/message?limit=6&order=desc`, undefined, signal).catch(() => null);
 function outcomeOf(listed, page) {
-  return lastTurnEnd(page)?.outcome ?? listed.data.outcome;
+  return workOutcome(page, listed.data.outcome);
 }
 async function keepReadThroughSummary(target, session, signal) {
   const route = `/api/session/${encodeURIComponent(session)}`;
@@ -8915,7 +8920,7 @@ async function lastReply(target, session) {
     if (text)
       break;
   }
-  return { id: reply?.id ?? null, at: at(reply), turn: ended?.id ?? null, turnAt: at(ended), text, began: beganBy(turn), underWay: from === 0 && turn.some(ofTurn), workOutcome: messages.find((message) => message.type === "idle")?.outcome };
+  return { id: reply?.id ?? null, at: at(reply), turn: ended?.id ?? null, turnAt: at(ended), text, began: beganBy(turn), underWay: from === 0 && turn.some(ofTurn), whole };
 }
 function isNews(was, last) {
   if (last.id && last.id === was.reply)
@@ -9232,7 +9237,7 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
     const waited = readTold(toldFile)?.waiting?.[data.id];
     if (waited && waited.from === from)
       return finish(data, starter, last);
-    const outcome = last.workOutcome ?? data.outcome;
+    const outcome = workOutcome(last.whole, data.outcome);
     const failed = outcome === "failed";
     const reply = last.id && last.id !== was.reply ? last.id : null;
     const failedBare = failed && !reply && !!last.turn && last.turn !== was.turn && !(was.at && (last.turnAt ?? Infinity) <= was.at);

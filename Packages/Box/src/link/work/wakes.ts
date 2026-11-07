@@ -34,7 +34,7 @@ import { projectNameOf } from "../notices/news";
 import type { Target } from "../../shared/records";
 import type { EngineSession } from "../engine/sessions";
 import type { EngineForm, PermissionAsked } from "../notices/news";
-import { pastSummaries } from "../../shared/summaries";
+import { pastSummaries, workOutcome } from "../../shared/summaries";
 
 export const WORK_WAKES = path.join(WORK_FOLDER, "wakes.json");
 /** What each followed session's starter was told (its last reply's message, its asks), and when the
@@ -262,8 +262,8 @@ interface LastReply {
   began: Began;
   /** Something's written since its last turn ended. */
   underWay: boolean;
-  /** How its last turn of work ended, past any summaries asked for after it. */
-  workOutcome?: unknown;
+  /** Its conversation, to read how its work went. */
+  whole: unknown;
 }
 
 // A session's last reply (its id, and when it was written; null for none), the end of a turn
@@ -313,7 +313,7 @@ async function lastReply(target: Target, session: string): Promise<LastReply> {
     text = message.content.filter((part: unknown) => isObject(part) && part.type === "text").map((part: { text?: unknown }) => String(part.text ?? "")).join(" ").replace(/\s+/g, " ").trim();
     if (text) break;
   }
-  return { id: reply?.id ?? null, at: at(reply), turn: ended?.id ?? null, turnAt: at(ended), text, began: beganBy(turn), underWay: from === 0 && turn.some(ofTurn), workOutcome: (messages.find(message => message.type === "idle") as { outcome?: unknown } | undefined)?.outcome };
+  return { id: reply?.id ?? null, at: at(reply), turn: ended?.id ?? null, turnAt: at(ended), text, began: beganBy(turn), underWay: from === 0 && turn.some(ofTurn), whole };
 }
 
 // Whether a finished turn is news to whoever started the session. The first it hears of it always is,
@@ -641,7 +641,7 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
     // Its finish was waiting as the box stopped: looked at as it would have been.
     if (waited && waited.from === from) return finish(data, starter, last);
     // (Its work's, past a summary after it, whose own run says how that went.)
-    const outcome = last.workOutcome ?? (data as { outcome?: string }).outcome;
+    const outcome = workOutcome(last.whole, (data as { outcome?: string }).outcome);
     const failed = outcome === "failed";
     const reply = last.id && last.id !== was.reply ? last.id : null;
     // A turn that failed before it replied (its model out of reach, say): told by its end, once

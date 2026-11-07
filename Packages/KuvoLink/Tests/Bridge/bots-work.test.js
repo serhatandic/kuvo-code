@@ -374,6 +374,11 @@ test("how a lead reads a session past several summaries: what they did isn't how
   // Failed; then two summaries.
   kept.set(session, [end("succeeded", "msg_i3"), summary("completed", "msg_c2"), end("succeeded", "msg_i2"), summary("completed", "msg_c1"), end("failed", "msg_i1"), said]);
   assert.match((await tool("list_sessions", {}, "ses_pixel")).text, /failed/);
+  // No summary, and a run that died without writing its end: the session's word.
+  sessions.get(session).outcome = "failed";
+  kept.set(session, [said, end("succeeded", "msg_i1")]);
+  assert.match((await tool("list_sessions", {}, "ses_pixel")).text, /failed/);
+  sessions.get(session).outcome = "succeeded";
   // Failed; a summary; then a model picked, which is no turn.
   kept.set(session, [{ id: "msg_m", type: "model-switched" }, end("succeeded", "msg_i2"), summary("completed", "msg_c1"), end("failed", "msg_i1"), said]);
   assert.match((await tool("list_sessions", {}, "ses_pixel")).text, /failed/);

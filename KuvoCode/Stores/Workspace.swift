@@ -2087,7 +2087,9 @@ final class Workspace {
         if let summary = messages.summaryAtEnd, (end?.time.created ?? 0) <= told {
             return summary.status == "failed" ? .couldntSummarize : nil
         }
-        return (end?.outcome ?? outcome) == .failed ? .stopped : .finished
+        // (A run that died without writing an end has only its session's word.)
+        let went = messages.summaryAtEnd == nil ? outcome : end?.outcome ?? outcome
+        return went == .failed ? .stopped : .finished
     }
 
     /// A machine's sessions, when it connects (or reconnects after a gap), in place of what was

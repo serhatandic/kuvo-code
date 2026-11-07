@@ -60,6 +60,16 @@ export function pastSummaries<Row extends ConversationRow>(messages: Row[]): Row
   return work;
 }
 
+/**
+ * How a session's work went: its own word, unless a summary came after that work, whose run changed
+ * it. (A run that died without writing an end has only its session's word.)
+ */
+export function workOutcome(messages: unknown, outcome: unknown): unknown {
+  const rows = asRows(messages);
+  const work = pastSummaries(rows);
+  return work.length < rows.length ? work.find(row => row?.type === "idle")?.outcome ?? outcome : outcome;
+}
+
 /** Where a session's last turn of work ended. */
 export const lastTurnEnd = (messages: unknown): ConversationRow | undefined =>
   pastSummaries(asRows(messages)).find(row => row?.type === "idle");

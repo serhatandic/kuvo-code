@@ -9,7 +9,7 @@ import { cut } from "../../shared/text";
 import { call, engineGet } from "../engine/client";
 import { CHATS } from "../home";
 import { describePermission, projectNameOf } from "../notices/news";
-import { lastTurnEnd, summaryAtEnd, summaryRowAtEnd } from "../../shared/summaries";
+import { lastTurnEnd, summaryAtEnd, summaryRowAtEnd, workOutcome } from "../../shared/summaries";
 import { listBots } from "../bots/list";
 import { asksIn } from "./answers";
 import type { Target } from "../../shared/records";
@@ -161,7 +161,7 @@ const lastMessages = (target: Target, session: string, signal?: AbortSignal) =>
  * engine's `outcome` says how that went. What it said before stands.
  */
 function outcomeOf(listed: Listed, page: unknown): unknown {
-  return lastTurnEnd(page)?.outcome ?? listed.data.outcome;
+  return workOutcome(page, listed.data.outcome);
 }
 
 /**

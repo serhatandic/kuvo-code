@@ -129,6 +129,8 @@ import Testing
         // With nothing to read, what the session says; no summary, its end.
         #expect(Workspace.missedNews([], outcome: .failed, told: 0) == .stopped)
         #expect(Workspace.missedNews(try rows([said, end(2)]), outcome: .succeeded, told: 1) == .finished)
+        // A run that died without writing an end: the session's word, not the end of the turn before.
+        #expect(Workspace.missedNews(try rows([end(2), said]), outcome: .failed, told: 1) == .stopped)
     }
 
     @Test func theLastRequestAgainstWhatTheModelTakes() async throws {
