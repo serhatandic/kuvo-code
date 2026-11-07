@@ -271,6 +271,67 @@ import Testing
         #expect(isOpen)
     }
 
+    /// A group chat's composer is the session's: a quote leaves its last message over it, and
+    /// scrolled up, your place where it is.
+    @Test func aQuoteInAChatLeavesItsLastMessageOverTheComposerAndYourPlaceAlone() async throws {
+        TestEnvironment.prepare()
+        defer { Self.clean(); mac.stop(); AXElement.reading(false) }
+        try saveBots([("bot_ada", "Ada", nil), ("bot_ben", "Ben", nil)])
+        let id = "grp_mac0000003"
+        here.add(Self.group(id, members: ["bot_ada", "bot_ben"]), messages: (1...30).map {
+            ["id": "gm_\($0)", "author": "bot_ada", "text": "Message \($0). " + String(repeating: "Some words of it. ", count: 30), "time": "2026-10-22T08:00:00Z", "kind": "message"]
+        })
+        let app = app()
+        await app.boxGroups.connected(nil)
+        let group = try #require(app.chats.group(id))
+        defer { Drafts.shared.remove(BotGroups.tabKey(id)) }
+
+        AXElement.reading(true)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 560), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView: AnyView(GroupChatView(group: group)
+            .environment(app)
+            .environment(app.catalog)
+            .environment(app.workspace)
+            .environment(app.bots)
+            .environment(app.chats)
+            .frame(width: 760, height: 560)))
+        window.orderBack(nil)
+        defer { window.orderOut(nil); window.close(); window.contentView = nil }
+        func stacks(_ view: NSView?) -> [RowStackView] {
+            guard let view else { return [] }
+            return (view as? RowStackView).map { [$0] } ?? view.subviews.flatMap(stacks)
+        }
+        var stack: RowStackView? {
+            window.contentView?.layoutSubtreeIfNeeded()
+            DispatchQueue.main.async { TestPulse.beat() }
+            return stacks(window.contentView).first
+        }
+        try await until { stack?.shownFrames().window.isEmpty == false && stack?.enclosingScrollView?.contentInsets.bottom ?? 0 > 0 }
+        let scroll = try #require(stack?.enclosingScrollView)
+        var room: CGFloat {
+            window.contentLayoutRect.height - scroll.contentInsets.bottom - (stack?.shownFrames().window.values.map(\.maxY).max() ?? 0)
+        }
+        // Settled at its end, its heights all measured.
+        try await until { abs(room - ConversationEndFade.height) < 20 }
+        let before = room
+        let over = scroll.contentInsets.bottom
+        _ = Drafts.shared.addQuote(String(repeating: "Some words of it. ", count: 20), to: BotGroups.tabKey(id))
+        try await until { _ = stack; return scroll.contentInsets.bottom > over + 40 && abs(room - before) < 2 }
+
+        // Scrolled up, what's added next leaves your place.
+        let clip = scroll.contentView
+        clip.scroll(to: NSPoint(x: 0, y: clip.bounds.minY - 900))
+        scroll.reflectScrolledClipView(clip)
+        stack?.scrollAnchor?.stopFollowing()
+        try await until { stack?.scrollAnchor?.isFollowingEnd == false }
+        let place = clip.bounds.minY
+        let taller = scroll.contentInsets.bottom
+        _ = Drafts.shared.addQuote("Another: " + String(repeating: "Some words of it. ", count: 20), to: BotGroups.tabKey(id))
+        try await until { _ = stack; return scroll.contentInsets.bottom > taller + 40 }
+        #expect(abs(clip.bounds.minY - place) < 1, "moved from \(place) to \(clip.bounds.minY)")
+    }
+
     /// New Group Chat from a machine's page: the chat is made by that machine's box and lives
     /// there, on its page, not on this Mac's; with the machine away, nothing's made and it says so.
     @Test func aGroupChatStartedOnAMachineLivesThere() async throws {

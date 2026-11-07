@@ -164,7 +164,8 @@ struct GroupChatView: View {
     /// A quote to answer, after those there are, as in a session; its answer takes the keyboard.
     private func addQuote(_ text: String, how: String) {
         let count = Drafts.shared[draftKey].quotes.count
-        guard let id = Drafts.shared.addQuote(text, to: draftKey) else { return }
+        // Animated as removing one is: the composer grows and the conversation goes with it.
+        guard let id = withAnimation(.ui, { Drafts.shared.addQuote(text, to: draftKey) }) else { return }
         quoteFocus = Drafts.QuoteFocus(id)
         if Drafts.shared[draftKey].quotes.count > count { Analytics.shared.track("message_replied", ["group": true, "how": how]) }
     }

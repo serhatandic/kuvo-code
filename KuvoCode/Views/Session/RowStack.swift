@@ -954,7 +954,10 @@ final class RowStackView: NSView, NSUserInterfaceValidations {
         let actions = SelectionActions(addToChat: scrollAnchor?.quote.map { quote in { [weak self] in
             guard let self else { return }
             let text = self.selectedText().trimmingCharacters(in: .whitespacesAndNewlines)
-            if !text.isEmpty { quote(text) }
+            if !text.isEmpty {
+                self.scrollAnchor?.quoted = self.selectedLines()
+                quote(text)
+            }
             self.hideMenu()
         } }, copy: { [weak self] in
             self?.copy(nil)
@@ -965,6 +968,14 @@ final class RowStackView: NSView, NSUserInterfaceValidations {
         actionsBar = view
         addSubview(view)
         placeMenu()
+    }
+
+    /// Where the selection's lines are, from the top of its first row.
+    private func selectedLines() -> (row: String, top: CGFloat, bottom: CGFloat)? {
+        guard let selected = orderedSelection, selected.start.row < ids.count, let first = edgeLine(of: selected, last: false),
+              let last = edgeLine(of: selected, last: true) else { return nil }
+        let row = frame(at: selected.start.row).minY
+        return (ids[selected.start.row], first.minY - row, last.maxY - row)
     }
 
     /// What's in sight of the conversation: not under the header or the composer.

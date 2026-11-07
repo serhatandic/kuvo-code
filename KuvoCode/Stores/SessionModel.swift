@@ -3,6 +3,7 @@ import ClientSessions
 import ClientText
 import Foundation
 import OpenCodeKit
+import SwiftUI
 import Textual
 
 /// One session, live: its transcript, what's pending, and the actions on it.
@@ -398,7 +399,8 @@ final class SessionModel {
     /// and its answer takes the keyboard.
     func addQuote(_ text: String, how: String) {
         let count = draftQuotes.count
-        guard let id = Drafts.shared.addQuote(text, to: self.id) else { return }
+        // Animated as removing one is: the composer grows and the conversation goes with it.
+        guard let id = withAnimation(.ui, { Drafts.shared.addQuote(text, to: self.id) }) else { return }
         quoteFocus = Drafts.QuoteFocus(id)
         if draftQuotes.count > count { Analytics.shared.track("message_replied", ["how": how]) }
     }
