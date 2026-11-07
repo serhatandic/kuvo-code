@@ -17235,6 +17235,8 @@ async function makeOnce(given, readEngine, readBridge, machine) {
   try {
     fs61.mkdirSync(path64.join(folder, "workspace"), { recursive: true });
     fs61.mkdirSync(path64.join(folder, "wakes"), { recursive: true });
+    if (!project)
+      fs61.mkdirSync(path64.join(folder, "memory"), { recursive: true });
     fs61.writeFileSync(path64.join(folder, "MEMORY.md"), kit.memory.replaceAll("⟦name⟧", name));
     const rules = [...kit.rules ?? [], { action: "external_directory", resource: path64.join(folder, "*"), effect: "allow" }];
     const made = await call(target, "POST", "/api/session", { title: name, location: { directory }, model, permissions: rules, metadata: { kuvo: { bot: id } } }, AbortSignal.timeout(BOT_STEP));
