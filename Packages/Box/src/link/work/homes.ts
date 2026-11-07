@@ -60,12 +60,13 @@ export function homesOf(link: LinkState | null | undefined): Map<string, string>
   return new Map([...newest].filter(([, home]) => !removed.has(home.key)).map(([session, home]) => [session, home.key]));
 }
 
-/** Word that `session` lives on box `key`, as of `at`: an older word than what's kept changes nothing. */
-export function noteHome(session: string, key: string, at = Date.now()): void {
+/** Word that `sessions` live on box `key`, as of `at`: an older word than what's kept changes nothing. */
+export function noteHomes(sessions: readonly string[], key: string, at = Date.now()): void {
+  if (!sessions.length) return;
   changeHomes(homes => {
-    if ((homes[session]?.at ?? -Infinity) > at) return false;
-    homes[session] = { key, at };
-    return true;
+    const newer = sessions.filter(session => (homes[session]?.at ?? -Infinity) <= at);
+    for (const session of newer) homes[session] = { key, at };
+    return newer.length > 0;
   });
 }
 
@@ -73,14 +74,18 @@ export function noteHome(session: string, key: string, at = Date.now()): void {
  * (the record itself forgets, and is rewritten without what's older than two days). One listed here
  * again has no home; one older than a home lasts wasn't learned in time, and `homesOf` still reads it. */
 export function learnHomes(link: LinkState | null | undefined, now = Date.now()): void {
-  const heard = [...everyMove().filter(each => now - each.at < NOTE_MEMORY), ...movesTold(link, now)];
+  const newest = new Map<string, Home>();
+  for (const { session, key, at } of [...everyMove().filter(each => now - each.at < NOTE_MEMORY), ...movesTold(link, now)]) {
+    if (at > (newest.get(session)?.at ?? -Infinity)) newest.set(session, { key, at });
+  }
   const here = new Set(ownListed().map(agent => agent.session));
   const own = ownKey(link ?? {});
   const kept = readHomes();
-  const news = heard.some(({ session, key, at }) => !here.has(session) && key !== own && at > (kept[session]?.at ?? -Infinity));
+  // (A word that it's here is news only of one with a home.)
+  const news = [...newest].some(([session, { key, at }]) => !here.has(session) && at > (kept[session]?.at ?? -Infinity) && (key !== own || session in kept));
   if (!news && !Object.keys(kept).some(session => here.has(session))) return;
   changeHomes(homes => {
-    for (const { session, key, at } of heard) if (!here.has(session) && at > (homes[session]?.at ?? -Infinity)) homes[session] = { key, at };
+    for (const [session, home] of newest) if (!here.has(session) && home.at > (homes[session]?.at ?? -Infinity)) homes[session] = home;
     for (const session of Object.keys(homes)) if (here.has(session) || homes[session]!.key === own) delete homes[session];
     return true;
   });
@@ -96,7 +101,7 @@ export async function forgetOldHomes(now = Date.now(), places: () => PeerPlaces 
   const old = Object.entries(readHomes()).filter(([, home]) => now - home.at > NOTE_MEMORY).map(([session]) => session);
   if (!old.length || Math.abs(now - lookedAt) < LOOK_EVERY) return;
   const { targets, bridge } = places();
-  if (!targets.length || !bridge) return;
+  if (!bridge) return;
   lookedAt = now;
   const named = new Set((await workSessions(targets, undefined, { archived: true, whole: true })).map(each => startedByOf(each.data)));
   changeHomes(homes => {

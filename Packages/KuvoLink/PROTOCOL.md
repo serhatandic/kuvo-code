@@ -254,11 +254,12 @@ connection.
     its own moves (`kuvo/moves`; bridge 0.9.108, before which this Mac's box asked its app). One
     for a conversation its engine doesn't have, while its coding agents' bridge isn't running, is
     answered `retry` too (it may be one of theirs, starting again), for half an hour from the first
-    time; after that it's refused as for no conversation (bridge 0.9.123).
+    time; after that it's refused as for no conversation (bridge 0.9.123). The same goes while its
+    engine isn't there to ask, as when it's starting (bridge 0.9.203).
   - **Sender**: it names the sender as the sending box named that agent, when that box alone
     lists `from` and it isn't one of the receiver's own conversations. Otherwise the letter is from
     "an agent on <box>", with no address to answer.
-  - **`delivered`**: it answers `{"delivered": {id, ok, why?, retry?, answer?}}`. `retry`: not
+  - **`delivered`**: it answers `{"delivered": {id, ok, why?, retry?, answer?, lives?}}`. `retry`: not
     now (an engine restarting, too many lately), so the sender tries again. `answer: false`: there,
     but no answer will come (its sender couldn't be verified, or its machine is away).
   - **`wait`**: the receiver watches for an answer for ten minutes and sends it back as a letter
@@ -306,12 +307,15 @@ connection.
       running, however long that lasts. For one that lives elsewhere, as far as it knows, it answers
       `{id, ok: false, retry: true, lives: <key>}`: the sender, taking that only from the box it
       sent it to, sends it there next (and to this box itself, if that's the key). A box that
-      answers plain `retry` has its peers' `moved` to go by. "There's no such conversation" from a
-      box whose bridge runs, and knows of no home, ends it.
+      answers plain `retry` has its peers' `moved` to go by, and an older box that no longer knows
+      where it went says there's no such conversation, which ends it. "There's no such conversation"
+      from a box that could ask both its engine and its bridge, and knows of no home, ends it; a box
+      that can't ask both now (its engine starting, say) answers `retry`, as it does any letter for one.
     - A computer you removed (`left` in a peers document, or this Mac's own record) ends it. One just
       missing from a list isn't that: it waits, for its 30 days.
-    - To a box that hasn't answered any of them for two minutes, only the oldest goes each minute,
-      until any word comes on how a letter went.
+    - Past two minutes without one for a conversation there, only that conversation's oldest goes
+      each minute, until one's delivered or ended (`retry` doesn't count) or it's found to live
+      elsewhere. A box's notes are counted apart from its letters, 20 in ten minutes each.
 - **Leaving one**: an agent's `send_message` or `read_conversation` for an agent on another
   computer ("Agents' tools") leaves a letter in `run/outbox/sending/<id>.json`, which the link
   sends. Without the relay, letters wait for it: no box hands them to anyone over SSH (bridge
@@ -735,8 +739,9 @@ client shows it from the same routes.
     conversation that left lives on, by the newest word: this box's record of its moves, its peers'
     `moved`, a box's `lives`, and a note's `about`. Unlike `moved` it doesn't forget at two days: a
     home goes 30 days after its `at`, once no session here says it was started by that conversation
-    (looked at hourly, and only with the engine and the coding agents' bridge both answering). A
-    conversation found here always wins over a home, and a computer you removed is no one's home.
+    (looked at hourly, and only with the engine and the coding agents' bridge both there to ask). A
+    conversation this box has always wins over a home, and a computer you removed is no one's home.
+    A note's `about` counts as of its `made`.
   Its task ends with the session's half of the playbook: review your work with reviewer subagents,
   fix what they find, and end with a short report.
 - **Tools** (`POST kuvo/agent-tools`, any conversation, for the sessions under it):

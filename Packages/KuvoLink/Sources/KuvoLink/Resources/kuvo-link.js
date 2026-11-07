@@ -664,13 +664,15 @@ function bridgeTarget() {
 }
 function peerPlaces() {
   const targets = [];
+  let engine = false;
   try {
     targets.push(readEngineFile());
+    engine = true;
   } catch {}
   const bridge = bridgeTarget();
   if (bridge)
     targets.push(bridge);
-  return { targets, bridge: bridge !== null };
+  return { targets, bridge: engine && bridge !== null };
 }
 var peerTargets = () => peerPlaces().targets;
 function engineGet(engine, route, folder) {
@@ -13083,26 +13085,32 @@ function homesOf(link) {
   const removed = removedBoxes(link);
   return new Map([...newest].filter(([, home]) => !removed.has(home.key)).map(([session, home]) => [session, home.key]));
 }
-function noteHome(session, key, at = Date.now()) {
+function noteHomes(sessions, key, at = Date.now()) {
+  if (!sessions.length)
+    return;
   changeHomes((homes) => {
-    if ((homes[session]?.at ?? -Infinity) > at)
-      return false;
-    homes[session] = { key, at };
-    return true;
+    const newer = sessions.filter((session) => (homes[session]?.at ?? -Infinity) <= at);
+    for (const session of newer)
+      homes[session] = { key, at };
+    return newer.length > 0;
   });
 }
 function learnHomes(link, now = Date.now()) {
-  const heard = [...everyMove().filter((each) => now - each.at < NOTE_MEMORY), ...movesTold(link, now)];
+  const newest = new Map;
+  for (const { session, key, at } of [...everyMove().filter((each) => now - each.at < NOTE_MEMORY), ...movesTold(link, now)]) {
+    if (at > (newest.get(session)?.at ?? -Infinity))
+      newest.set(session, { key, at });
+  }
   const here = new Set(ownListed().map((agent) => agent.session));
   const own = ownKey(link ?? {});
   const kept = readHomes();
-  const news = heard.some(({ session, key, at }) => !here.has(session) && key !== own && at > (kept[session]?.at ?? -Infinity));
+  const news = [...newest].some(([session, { key, at }]) => !here.has(session) && at > (kept[session]?.at ?? -Infinity) && (key !== own || (session in kept)));
   if (!news && !Object.keys(kept).some((session) => here.has(session)))
     return;
   changeHomes((homes) => {
-    for (const { session, key, at } of heard)
-      if (!here.has(session) && at > (homes[session]?.at ?? -Infinity))
-        homes[session] = { key, at };
+    for (const [session, home] of newest)
+      if (!here.has(session) && home.at > (homes[session]?.at ?? -Infinity))
+        homes[session] = home;
     for (const session of Object.keys(homes))
       if (here.has(session) || homes[session].key === own)
         delete homes[session];
@@ -13116,7 +13124,7 @@ async function forgetOldHomes(now = Date.now(), places = peerPlaces) {
   if (!old.length || Math.abs(now - lookedAt) < LOOK_EVERY2)
     return;
   const { targets, bridge } = places();
-  if (!targets.length || !bridge)
+  if (!bridge)
     return;
   lookedAt = now;
   const named = new Set((await workSessions(targets, undefined, { archived: true, whole: true })).map((each) => startedByOf(each.data)));
@@ -13244,18 +13252,19 @@ async function takeLetter(sender, letter, { send, targets, answer = () => {}, to
   }
   if (isObject(letter.read))
     return readFor(sender, letter, { send, targets, answer, now, moved, moving, bridge });
-  let counted = allowed2("messages", `peer:${sender.key}`, now);
+  const note = noteOf(letter.note);
+  const countedAs = `${note ? "note" : "peer"}:${sender.key}`;
+  let counted = allowed2("messages", countedAs, now);
   if (counted === null)
     return no("It's sent a lot of messages in the last few minutes.", true);
   const notDelivered = (why, again = false, lives) => {
     if (again && counted !== null)
-      takeBack("messages", `peer:${sender.key}`, counted);
+      takeBack("messages", countedAs, counted);
     counted = null;
     return no(why, again, lives);
   };
   delivering.add(id);
   let place, prompt = "", fromAgent = null, went;
-  const note = noteOf(letter.note);
   try {
     const own = ownKey(readLink() ?? {});
     const lives = moved.get(letter.to);
@@ -13297,8 +13306,7 @@ async function takeLetter(sender, letter, { send, targets, answer = () => {}, to
   if (answers)
     noteSeen(answerSeen(answers), now);
   if (note) {
-    for (const session of note.about ?? [])
-      noteHome(session, sender.key, now);
+    noteHomes(note.about ?? [], sender.key, typeof letter.made === "number" ? Math.min(letter.made, now) : now);
     return send(sender, { delivered: { id, ok: true } });
   }
   if (letter.wait === true && !fromAgent)
@@ -13348,7 +13356,7 @@ async function readFor(sender, letter, { send, targets, answer = () => {}, now =
 // Packages/Box/src/link/letters/outbox.ts
 var introducing = new Map;
 var INTRODUCING_FOR = 60000;
-var notesUnanswered = new Map;
+var notesWaiting = new Map;
 var QUIET_AFTER = 120000;
 var REPLIES = path50.join(RUN, "replies");
 var LETTER_BYTES = 24000;
@@ -13391,7 +13399,6 @@ function tellMovedAway(session, text, note, now = Date.now()) {
 function letterWent(sender, { id, ok, why, retry, answer, lives }, now = Date.now()) {
   if (!LETTER_ID.test(id))
     return;
-  notesUnanswered.delete(sender.key);
   const file = path50.join(SENDING, `${id}.json`);
   let letter = null;
   try {
@@ -13402,8 +13409,10 @@ function letterWent(sender, { id, ok, why, retry, answer, lives }, now = Date.no
   if (letter?.sentTo !== sender.key)
     return;
   const note = noteOf(letter.note);
+  if (note && (ok || retry !== true || lives))
+    notesWaiting.delete(`${sender.key} ${letter.to}`);
   if (!ok && retry === true && note && typeof lives === "string" && KEY.test(lives)) {
-    noteHome(letter.to, lives, now);
+    noteHomes([letter.to], lives, now);
     try {
       writePrivate(file, JSON.stringify({ ...letter, peer: lives }));
     } catch {}
@@ -13682,15 +13691,15 @@ function sendOutbox(host, link = readLink(), now = Date.now(), offline = 0, ask 
         reply(id, { failed: "Its agent couldn't be reached." });
       continue;
     }
-    if (note && !lives && !peer && removed.has(letter.peer)) {
-      fs47.rmSync(file, { force: true });
-      continue;
-    }
     if (lives === mine || !lives && ownHere.has(letter.to)) {
       if (now - (letterTries.get(id) ?? 0) < 60000)
         continue;
       letterTries.set(id, now);
       telling.push(deliverHere(id, file, letter, step));
+      continue;
+    }
+    if (note && !lives && !peer && removed.has(letter.peer)) {
+      fs47.rmSync(file, { force: true });
       continue;
     }
     if (!peer)
@@ -13710,11 +13719,11 @@ function sendOutbox(host, link = readLink(), now = Date.now(), offline = 0, ask 
       if (!introduced.done && now - introduced.at < INTRODUCING_FOR)
         continue;
     }
-    const unanswered = note ? notesUnanswered.get(peer.key) : undefined;
-    if (unanswered && now - unanswered.since >= QUIET_AFTER && now - unanswered.last < 60000)
+    const waiting = note ? notesWaiting.get(`${peer.key} ${letter.to}`) : undefined;
+    if (waiting && now - waiting.since >= QUIET_AFTER && now - waiting.last < 60000)
       continue;
     if (note)
-      notesUnanswered.set(peer.key, { since: unanswered?.since ?? now, last: now });
+      notesWaiting.set(`${peer.key} ${letter.to}`, { since: waiting?.since ?? now, last: now });
     letterTries.set(id, now);
     const bytes = letterMail(peer, {
       id,
@@ -29989,7 +29998,6 @@ export {
   letAttachmentsGo,
   letGo,
   letterMail,
-  letterTries,
   letterWent,
   listBots,
   listFolders,

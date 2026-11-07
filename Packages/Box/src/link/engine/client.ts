@@ -22,8 +22,9 @@ export function bridgeTarget(): Target | null {
 }
 
 /** Where a letter's agent can be here (`targets`): the engine, and the coding agents' bridge while
- * it runs; and whether it runs now (`bridge`), so one for a conversation the engine doesn't know may
- * be the bridge's, kept to try again. */
+ * it runs; and whether both can be asked now (`bridge`), as only then is one neither knows gone. One
+ * the engine doesn't know while the bridge isn't running may be the bridge's, and one the bridge
+ * doesn't know while the engine's starting may be the engine's: kept to try again. */
 export interface PeerPlaces {
   targets: Target[];
   bridge: boolean;
@@ -31,10 +32,14 @@ export interface PeerPlaces {
 
 export function peerPlaces(): PeerPlaces {
   const targets: Target[] = [];
-  try { targets.push(readEngineFile()); } catch {}
+  let engine = false;
+  try {
+    targets.push(readEngineFile());
+    engine = true;
+  } catch {}
   const bridge = bridgeTarget();
   if (bridge) targets.push(bridge);
-  return { targets, bridge: bridge !== null };
+  return { targets, bridge: engine && bridge !== null };
 }
 
 // Where a letter's agent can be here: the engine, and the coding agents' bridge while it runs.

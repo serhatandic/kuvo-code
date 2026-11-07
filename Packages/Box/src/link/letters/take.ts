@@ -18,7 +18,7 @@ import { allowed, takeBack } from "./limits";
 import { deliverNote, noteOf } from "./note";
 import { ANSWER_TEXT, answered } from "./outbox";
 import { awaitingAnswer } from "../work/awaited";
-import { homesOf, noteHome } from "../work/homes";
+import { homesOf, noteHomes } from "../work/homes";
 import type { ListedAgent, Target, ToldAgents } from "../../shared/records";
 import type { EngineAnswer } from "../engine/client";
 import type { Peer } from "../peers/known";
@@ -208,21 +208,23 @@ export async function takeLetter(sender: LetterSender, letter: unknown, { send, 
     return send(sender, { delivered: { id, ok: true } });
   }
   if (isObject(letter.read)) return readFor(sender, letter as ReadLetter, { send, targets, answer, now, moved, moving, bridge });
+  // The sending box's own word for a conversation that moved here from it (`note`): delivered as
+  // it would have been there, and never answered. Only a box sends one: its agents' letters are
+  // never notes.
+  const note = noteOf(letter.note);
   // Letters from each peer lately, a few at a time, as a conversation's messages are counted: not
-  // one that can't be delivered yet, so one tried again and again leaves room for the rest.
-  let counted: number | null = allowed("messages", `peer:${sender.key}`, now);
+  // one that can't be delivered yet, so one tried again and again leaves room for the rest; and its
+  // notes apart, so days of them kept for this box don't hold up its messages.
+  const countedAs = `${note ? "note" : "peer"}:${sender.key}`;
+  let counted: number | null = allowed("messages", countedAs, now);
   if (counted === null) return no("It's sent a lot of messages in the last few minutes.", true);
   const notDelivered = (why: string, again = false, lives?: string) => {
-    if (again && counted !== null) takeBack("messages", `peer:${sender.key}`, counted);
+    if (again && counted !== null) takeBack("messages", countedAs, counted);
     counted = null;
     return no(why, again, lives);
   };
   delivering.add(id);
   let place: SessionPlace | null, prompt = "", fromAgent: ListedAgent | null = null, went: "sent" | "waits";
-  // The sending box's own word for a conversation that moved here from it (`note`): delivered as
-  // it would have been there, and never answered. Only a box sends one: its agents' letters are
-  // never notes.
-  const note = noteOf(letter.note);
   try {
     const own = ownKey(readLink() ?? {});
     const lives = moved.get(letter.to);
@@ -261,8 +263,8 @@ export async function takeLetter(sender: LetterSender, letter: unknown, { send, 
   noteSeen(note ? `note:${id}` : id, now);
   if (answers) noteSeen(answerSeen(answers), now);
   if (note) {
-    // The sessions it speaks of live on the box it came from.
-    for (const session of note.about ?? []) noteHome(session, sender.key, now);
+    // The sessions it speaks of live on the box it came from, as of when it was made.
+    noteHomes(note.about ?? [], sender.key, typeof letter.made === "number" ? Math.min(letter.made, now) : now);
     return send(sender, { delivered: { id, ok: true } });
   }
   // Waiting for an answer it can't have (its sender couldn't be told): it hears no answer's coming.

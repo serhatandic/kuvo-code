@@ -447,9 +447,8 @@ test("news kept three days for a lead on the machine, whose link is stopped, arr
   await link.macSendOutbox();
   assert.ok(sending(macHome).includes("ltr_newsformachine.json"));
   await startMachineLink();
-  // (A try comes each minute: here, now.)
-  link.letterTries.clear();
-  await link.macSendOutbox();
+  // (A try comes each minute: here, a minute on.)
+  await link.sendOutbox(link.macLink.host, undefined, Date.now() + 61_000, 0);
   await arrived(() => labEngine.seen.prompts.find(each => each.text === "[Session finished] from the Mac"));
   await eventually(() => !sending(macHome).includes("ltr_newsformachine.json"));
   assert.equal(labEngine.seen.prompts.filter(each => each.text === "[Session finished] from the Mac").length, 1);

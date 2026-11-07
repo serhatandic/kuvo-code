@@ -9,6 +9,7 @@
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/news-arrives.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
@@ -99,6 +100,16 @@ async function taken(letter, target, now, extra = {}) {
   await link.takeLetter(here.peer, letter, { send: (_to, message) => said.push(message.delivered), targets: [target], peers: [here.peer], told: {}, moved: new Map(), now, wait: 1, ...extra });
   return said[0];
 }
+
+// The coding agents' bridge running, as this box's real `peerPlaces` reads it: a process its record
+// names, whose command line says it's the bridge, over an engine-like stand-in with no sessions.
+const bridgeProcess = spawn(process.execPath, ["-e", "setInterval(() => {}, 1e9)", "kuvo-agents"], { stdio: "ignore" });
+atEnd(() => bridgeProcess.kill());
+async function bridgeUp() {
+  const bridge = await engine({});
+  fs.writeFileSync(path.join(run, "bridge.json"), JSON.stringify({ ...bridge.target, pid: bridgeProcess.pid }));
+}
+const engineUp = source => fs.writeFileSync(path.join(run, "engine.json"), JSON.stringify(source.target));
 
 const waitingNotes = () => {
   try { return fs.readdirSync(path.join(run, "outbox", "sending")).filter(name => name.endsWith(".json")); } catch { return []; }
@@ -368,8 +379,17 @@ test("a machine dropped from a list isn't given up on; one you removed is", asyn
   assert.deepEqual(waitingNotes(), ["ltr_news04.json"], "a removed machine's news has nowhere to go; the other waits");
 
   // Back on the list, days on: it goes.
-  await link.receiveDocs(sender, { give: [signer.doc("peers", { boxes: boxes(lead), moved: [], left: [] })] }, host);
+  await link.receiveDocs(sender, { give: [signer.doc("peers", { boxes: boxes(lead), moved: [], left: [third.pub] })] }, host);
   assert.equal(lettersFor(await round(T), lead).length, 1);
+
+  // One left for a removed box whose lead is listed here again: it's delivered here, not ended.
+  const backHere = await engine({ ses_back: { id: "ses_back", title: "Back" } });
+  engineUp(backHere);
+  fs.writeFileSync(path.join(run, "agents.json"), JSON.stringify({ agents: [{ session: "ses_back", name: "Back" }] }));
+  leaveNote("ltr_news12", third.pub, T, "ses_back");
+  await round(T + MINUTE);
+  assert.equal(backHere.prompts.filter(each => each.to === "ses_back").length, 1);
+  assert.ok(!waitingNotes().includes("ltr_news12.json"));
 });
 
 test("a lead on a coding agent whose bridge is down: a note comes again however long that takes; a plain message is refused, as it was", async () => {
@@ -401,6 +421,159 @@ test("a conversation really gone there ends the note: its box says so, and aslee
   assert.deepEqual(waitingNotes(), []);
 });
 
+test("a box whose engine is starting again, its bridge up: news kept for it isn't told there's no such conversation, and arrives once the engine's up", async () => {
+  const { lead } = computers();
+  const leadBox = await engine({ ses_lead: { id: "ses_lead", title: "Foreman" } });
+  await bridgeUp();
+  // Its record isn't written until the engine's ready, so only the bridge can be asked.
+  const said = await taken(noteLetter(), null, T, link.peerPlaces());
+  assert.deepEqual([said.ok, said.retry], [false, true]);
+  const plain = await taken(noteLetter({ note: undefined, from: "ses_there" }), null, T, link.peerPlaces());
+  assert.deepEqual([plain.ok, plain.retry], [false, true], "nor is a message");
+  link.letterWent(lead.peer, said, T);
+
+  engineUp(leadBox);
+  assert.equal(link.peerPlaces().bridge, true);
+  assert.equal((await taken(noteLetter(), null, T, link.peerPlaces())).ok, true);
+  assert.equal(leadBox.prompts.length, 1);
+});
+
+test("this box's engine starting again: a note for a lead back here waits, news kept for it stays, old addresses stay", async () => {
+  computers();
+  const source = await engine({ ...leftBehind, ses_lead: { id: "ses_lead", title: "Foreman" } });
+  await bridgeUp();
+  // A note for one that came back here.
+  leaveNote("ltr_news10", k(link.publicOf(here.key)), T);
+  await round(T);
+  assert.deepEqual(waitingNotes(), ["ltr_news10.json"]);
+
+  // The news of a session here, which only the engine could say a word on.
+  const later = [];
+  const watch = link.workWatcher(source.target, () => link.peerPlaces().targets, { schedule: each => { later.push(each); }, now: () => T });
+  await watch({ type: "session.execution.succeeded", data: { sessionID: "ses_left" } });
+  for (const each of later.splice(0)) await each();
+  assert.equal(source.prompts.length, 0);
+
+  // An address a month old, while the engine that may name it can't say.
+  fs.writeFileSync(path.join(run, "work", "homes.json"), JSON.stringify({ ses_old: { key: here.peer.key, at: T - 40 * DAY } }));
+  await link.forgetOldHomes(T);
+  assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(path.join(run, "work", "homes.json"), "utf8"))), ["ses_old"]);
+
+  // The engine's up: both arrive.
+  engineUp(source);
+  await round(T + MINUTE);
+  for (const each of later.splice(0)) await each();
+  assert.deepEqual(source.prompts.map(each => each.text).filter(text => text.startsWith("[Session finished] ltr_news10")).length, 1);
+  assert.equal(finishedOf(source.prompts).length, 1);
+  assert.deepEqual(waitingNotes(), []);
+});
+
+test("a lead on a coding agent whose bridge is down: its news is kept here for days, and it hears once the bridge is back", async () => {
+  computers();
+  const source = await engine(leftBehind);
+  const agentBridge = await engine({ ses_lead: { id: "ses_lead", title: "Foreman" } });
+  let at = T, places = [source.target];
+  const later = [];
+  const watch = link.workWatcher(source.target, () => places, { schedule: each => { later.push(each); }, now: () => at, bridgeRuns: () => false });
+  const drain = async () => { for (const each of later.splice(0)) await each(); };
+  await watch({ type: "session.execution.succeeded", data: { sessionID: "ses_left" } });
+  await drain();
+  at = T + 3 * DAY;
+  await drain();
+  places = [source.target, agentBridge.target];
+  at += MINUTE;
+  await drain();
+  assert.equal(finishedOf(agentBridge.prompts).length, 1);
+
+  // As long as a note would be, and no longer.
+  const otherWatch = link.workWatcher(source.target, () => [source.target], { schedule: each => { later.push(each); }, now: () => at, bridgeRuns: () => false });
+  await otherWatch({ type: "session.execution.succeeded", data: { sessionID: "ses_left" } });
+  await drain();
+  at += 31 * DAY;
+  await drain();
+  places = [source.target, agentBridge.target];
+  await drain();
+  const wakes = JSON.parse(fs.readFileSync(path.join(run, "work", "wakes.json"), "utf8"));
+  assert.equal(Object.keys(wakes.waiting ?? wakes).filter(key => key === "ses_lead").length, 0);
+});
+
+test("a note for a lead put away here waits until it's brought back; a plain message for it is refused, as it was", async () => {
+  computers();
+  const lead = { id: "ses_lead", title: "Foreman", metadata: { kuvo: { archived: true } } };
+  const backHere = await engine({ ses_lead: lead });
+  engineUp(backHere);
+  leaveNote("ltr_news11", k(link.publicOf(here.key)), T);
+  fs.mkdirSync(path.join(run, "outbox", "sending"), { recursive: true });
+  await round(T);
+  assert.deepEqual(waitingNotes(), ["ltr_news11.json"]);
+  assert.equal(backHere.prompts.length, 0);
+  delete lead.metadata;
+  await round(T + MINUTE);
+  assert.equal(backHere.prompts.length, 1);
+  assert.deepEqual(waitingNotes(), []);
+});
+
+test("a box that keeps saying not now for one conversation: only that conversation's oldest goes each minute, and another's isn't held back", async () => {
+  const { lead } = computers();
+  for (let i = 0; i < 4; i++) leaveNote(`ltr_kept0${i}`, lead.pub, T + i);
+  leaveNote("ltr_other", lead.pub, T + 9, "ses_other");
+  const notNow = (id, at) => link.letterWent(lead.peer, { id, ok: false, why: "It's archived: it comes again once it's brought back.", retry: true }, at);
+  for (const each of lettersFor(await round(T + 10), lead)) notNow(each.id, T + 20);
+  for (const each of lettersFor(await round(T + MINUTE + 10), lead)) notNow(each.id, T + MINUTE + 20);
+  const paced = lettersFor(await round(T + 3 * MINUTE), lead);
+  assert.deepEqual(paced.map(each => each.id).sort(), ["ltr_kept00", "ltr_other"], "one each, however often it answers");
+  // The other is delivered, and that conversation's next would go at once: this one stays paced.
+  link.letterWent(lead.peer, { id: "ltr_other", ok: true }, T + 3 * MINUTE);
+  notNow("ltr_kept00", T + 3 * MINUTE);
+  assert.deepEqual(lettersFor(await round(T + 4 * MINUTE), lead).map(each => each.id), ["ltr_kept00"]);
+  // It's brought back, and the rest follow.
+  link.letterWent(lead.peer, { id: "ltr_kept00", ok: true }, T + 4 * MINUTE);
+  assert.equal(lettersFor(await round(T + 5 * MINUTE), lead).length, 3);
+});
+
+test("what a kept note says of where a session lives is as old as the note: it doesn't undo fresher word", async () => {
+  const { lead, third } = computers();
+  const leadBox = await engine({ ses_lead: { id: "ses_lead", title: "Foreman" } });
+  const homes = () => JSON.parse(fs.readFileSync(path.join(run, "work", "homes.json"), "utf8"));
+  fs.mkdirSync(path.join(run, "work"), { recursive: true });
+  fs.writeFileSync(path.join(run, "work", "homes.json"), JSON.stringify({ ses_left: { key: third.pub, at: T - DAY } }));
+  const note = { from: "Its sessions", words: "It finished.", delivery: "queue" };
+  const fromLead = (made, about) => link.takeLetter(lead.peer, noteLetter({ made, note: { ...note, about: [about] } }), { send() {}, targets: [leadBox.target], peers: [lead.peer], told: {}, moved: new Map(), now: T, wait: 1, moving: async () => false });
+  await fromLead(T - 3 * DAY, "ses_left");
+  assert.equal(homes().ses_left.key, third.pub, "a note made before that move was heard of");
+  await fromLead(T - MINUTE, "ses_left");
+  assert.equal(homes().ses_left.key, lead.pub, "one made since is news");
+  await fromLead(T - 2 * DAY, "ses_new");
+  assert.deepEqual(homes().ses_new, { key: lead.pub, at: T - 2 * DAY });
+});
+
+test("days of kept notes arriving don't hold up a plain message from that box", async () => {
+  computers();
+  const leadBox = await engine({ ses_lead: { id: "ses_lead", title: "Foreman" } });
+  for (let i = 0; i < 20; i++) assert.equal((await taken(noteLetter(), leadBox.target, T)).ok, true);
+  const more = await taken(noteLetter(), leadBox.target, T);
+  assert.deepEqual([more.ok, more.retry], [false, true], "a box's notes still come a few at a time");
+  const plain = await taken(noteLetter({ note: undefined, from: "ses_there", text: "Fresh." }), leadBox.target, T);
+  assert.equal(plain.ok, true);
+  assert.ok(leadBox.prompts.some(each => each.text.includes("Fresh.")));
+});
+
+test("what this box knows of homes isn't written again and again while nothing's new", async () => {
+  const { lead } = computers();
+  const file = path.join(run, "work", "homes.json");
+  const mine = k(link.publicOf(here.key));
+  movedFrom([{ session: "ses_went", key: lead.pub, at: T - 60 * MINUTE }]);
+  await round(T);
+  assert.equal(JSON.parse(fs.readFileSync(file, "utf8")).ses_went.key, lead.pub);
+  // Away and back here again, as that box says, and it isn't listed here yet: its home goes, once.
+  fs.writeFileSync(path.join(run, "peer-agents.json"), JSON.stringify({ [lead.pub]: { at: 2, heard: T, kind: "machine", list: [], moved: [{ session: "ses_went", key: mine, at: T - 30 * MINUTE }] } }));
+  await round(T);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), {});
+  const written = fs.statSync(file).ino;
+  await round(T + 3000);
+  assert.equal(fs.statSync(file).ino, written);
+});
+
 test("many notes for a box that's away: only the oldest goes each minute until it answers, then the rest follow", async () => {
   const { lead } = computers();
   for (let i = 0; i < 5; i++) leaveNote(`ltr_many0${i}`, lead.pub, T + i);
@@ -427,6 +600,7 @@ test("a note teaches this box where the sessions it speaks of live; an address g
   // While a place conversations run isn't there, nothing can be said of what's named: they stay.
   await link.forgetOldHomes(T, () => ({ targets: [leadBox.target], bridge: false }));
   assert.deepEqual(Object.keys(homes()).sort(), ["ses_kept", "ses_new", "ses_old"]);
-  await link.forgetOldHomes(T, () => ({ targets: [leadBox.target], bridge: true }));
+  // (It looks once an hour: a round in an earlier test may just have.)
+  await link.forgetOldHomes(T + 2 * 60 * MINUTE, () => ({ targets: [leadBox.target], bridge: true }));
   assert.deepEqual(Object.keys(homes()).sort(), ["ses_kept", "ses_new"]);
 });
