@@ -269,10 +269,14 @@ test("a phone pairs with Settings › Phone's link, and the Mac's box answers it
   // and what starts it, when nothing's trying.
   const run = path.join(support, "box", "run");
   const agentsStopped = path.join(run, "agents-stopped");
-  const heard = async () => Promise.all(["kuvo/groups", "kuvo/artifacts", "kuvo/agents/api/session"].map(async route => {
-    const answer = await it.request("GET", route);
-    return [answer.status, JSON.parse(answer.body).message];
-  }));
+  const heard = async () => {
+    const answers = [];
+    for (const route of ["kuvo/groups", "kuvo/artifacts", "kuvo/agents/api/session"]) {
+      const answer = await it.request("GET", route);
+      answers.push([answer.status, JSON.parse(answer.body).message]);
+    }
+    return answers;
+  };
   fs.writeFileSync(agentsStopped, JSON.stringify({ why: "It can't be run.", retrying: false }));
   for (const each of await heard()) assert.deepEqual(each, [503, "This Mac's coding agents aren't running. It can't be run. Restart them in Kuvo Code on the Mac."]);
   fs.writeFileSync(agentsStopped, JSON.stringify({ why: "It stopped (exit code 3). Trying again by itself.", retrying: true }));
