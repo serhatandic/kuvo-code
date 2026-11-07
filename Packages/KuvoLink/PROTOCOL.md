@@ -520,7 +520,9 @@ A client asks the box it lives on once, and watches; the move goes on with no cl
   working on a goal,
   messages still on their way, kept getting messages while it moved, too big, refused there);
   `503 {message}` the other computer didn't answer; `404 {message}` it isn't here, or that isn't one
-  of your computers. A client that goes doesn't stop it.
+  of your computers. A client that goes doesn't stop it. `note` beside `move` (feature
+  `moves.check`), when there is one, says what it does differently there, in words to show (it uses
+  another account of its coding agent, the one signed in there).
 - `GET kuvo/moves` → `200 {moves: [Move], away: [session]}`, and `GET kuvo/moves/events`, the same
   as a line now and each time it changes. `Move = {id, kind, thing, name, from, to, role, stage,
   sessions, place?, sent?, size?, waiting?}`: `from` and `to` are boxes' keys; `role`, whether this box is
@@ -563,6 +565,15 @@ can't be found, goes with the bridge's record, and its next turn starts from wha
 Between the boxes, each `{"move": {op, id, …}}` (`id`: `mov_…`), each step sent again each minute
 until it's answered:
 
+0. To a box whose `features` say `moves.check`, before anything's held: `check {kind, name, lane?,
+   model?}` (`model`, `{providerID, id}`, the one it talks with) → `checked {ok, message?, note?}`.
+   The box it goes to says, at once and keeping nothing, whether it can run it: its engine or agents
+   bridge running; on the engine, the model's account signed in there; with a coding agent, that
+   agent installed and signed in there (Custom Auto picks there itself). Its own account of the
+   agent not there but another one signed in: `ok`, with a `note` saying which it uses. `ok: false`
+   takes it back (409, `message` as it's said); no answer in 45 seconds, 503. While it's asked,
+   nothing's held: it isn't in what's moving for prompts and letters, and its wake-ups go on.
+
 1. The box it leaves holds it, waits until its conversations are settled (no turn running, nothing
    in their inbox but what a Stop held there; a minute at most), and packs one file: `move.json` (its conversations as the
    engine exports them, root first; a bot's own keys; a group chat as its bridge held it, `POST
@@ -592,7 +603,8 @@ until it's answered:
    a chat's `directory` its chats folder; each conversation imported under its own ID (noted first;
    they must be one conversation and its subagents', rooted at the chat or at the conversation a
    bot's folder names, none of them on this box already); their `queues` kept paused in place of
-   any there (what waits, whole, in its order; a file only as a `data:` link); a bot's keys given; a group chat put there
+   any there (what waits, whole, in its order; a file only as a `data:` link); a bot's keys given
+   (one this box can't keep, and it's `failed`, so the bot stays where it was with it); a group chat put there
    held (`PUT api/kuvo/groups/<id>`, `status: "held"`); with a coding agent, on the agents bridge
    (`carry/place`). → `arrived {hash, digest?}` (`digest`, what's in place, with a coding agent), or `failed {message}`,
    what it set up gone again; the message says only what's wrong with what came, never what this box
@@ -612,7 +624,8 @@ until it's answered:
 7. Then the box it left lets the original go: its conversation saved in its folder (or
    `moved-<id>` in the box's folder) as `conversation.json`, its conversations deleted with their
    queues (what waited for them on this box went with them), a bot's own
-   keys removed, the folder to Kuvo Code's trash (on a Mac, on to the Finder's Trash), a group chat
+   keys removed (ones that can't be now, its Keychain out of reach, noted in `left.json` and tried
+   again each hour until they're gone, never while it's moving back), the folder to Kuvo Code's trash (on a Mac, on to the Finder's Trash), a group chat
    released. It says for two days where those conversations live now ("Peers", `moved`). With a
    coding agent, the bridge's record is kept in the folder (`conversation/`), and each agent's own
    files stay where they were, kept as the way back: nothing here runs or reaches them. At the switch

@@ -16,7 +16,7 @@ import { isObject } from "../../shared/json";
 import type { Target } from "../../shared/records";
 import type { Move, MoveKind, MovePlace } from "../../shared/routes/moves";
 import { plainName } from "../../shared/text";
-import { answerBotKeys } from "../areas/bot-keys";
+import { answerBotKeys, forgetBotKeys } from "../areas/bot-keys";
 import { askGroups } from "../areas/groups";
 import { botHere, MOVING } from "../bots/here";
 import { signInRefusal } from "../bots/make";
@@ -36,7 +36,7 @@ import type { EngineSession } from "../engine/sessions";
 import { CHATS, engineWait, MOST_BUNDLE, NotTaken, TooBig, deleteSession, directoryOf, exportAll, folderOf, groupAction, conversationHash, hashOf, idsOf, importAll, keysOf, ownTree, pack, toTrash, unpack } from "./bundle";
 import type { Contents } from "./bundle";
 import { forgetQuiet, tellMoving } from "./elsewhere";
-import { ASK_LEFT, KEEP_LEFT, forgetLeft, noteLeft, noteRan, readLeft, removeTrashed } from "./left";
+import { ASK_LEFT, KEEP_LEFT, forgetLeft, keysGone, noteLeft, noteRan, readLeft, removeTrashed } from "./left";
 import type { LeftEntry } from "./left";
 import { MOVES, bundleOf, changeMove, endedAs, endedAt, forgetMove, forgetMovedAway, moveOf, movesChanged, noteEnded, noteMovedAway, readMove, readMoves, saveMove, shownMove, waitingFor } from "./records";
 import type { MoveRecord } from "./records";
@@ -696,10 +696,11 @@ async function finish(id: string): Promise<void> {
     }
     // What waited for them here went with them.
     for (const session of record.sessions) forgetQueue(session);
-    if (record.kind === "bot") await answerBotKeys("DELETE", `kuvo/bots/${record.thing}/keys`, null, null).catch(() => {});
+    // (Kept here they're no one's, but never left for good: tried again till they're gone.)
+    const keysLeft = record.kind === "bot" && !(await answerBotKeys("DELETE", `kuvo/bots/${record.thing}/keys`, null, null).then(answer => answer.status === 200, () => false));
     const trash = await toTrash(place);
     // Kept as the way back, until it has run there a while.
-    noteLeft({ id, thing: record.thing, kind: record.kind, to: record.to, at: Date.now(), sessions: [...record.sessions], ...(record.lane ? { lane: true } : {}), ...(trash ? { trash } : {}), ...(record.leftOf?.length ? { left: record.leftOf } : {}) });
+    noteLeft({ id, thing: record.thing, kind: record.kind, to: record.to, at: Date.now(), sessions: [...record.sessions], ...(record.lane ? { lane: true } : {}), ...(trash ? { trash } : {}), ...(record.leftOf?.length ? { left: record.leftOf } : {}), ...(keysLeft ? { keys: true } : {}) });
   }
   noteMovedAway(record.sessions, record.to);
   forgetMove(id);
@@ -969,7 +970,11 @@ async function bringIn(record: MoveRecord, signal: AbortSignal): Promise<string[
   }
   for (const [integration, keys] of Object.entries(contents.keys ?? {})) {
     const given = await answerBotKeys("PUT", `kuvo/bots/${record.thing}/keys/${encodeURIComponent(integration)}`, { keys }, null);
-    if (given.status !== 200) console.error(`kuvo-link: a moved bot's own key for ${integration} didn't come with it (${given.status}).`);
+    // Never lost on the way: one that can't be kept here takes the move back, and it stays there.
+    if (given.status !== 200) {
+      console.error(`kuvo-link: a moved bot's own key for ${integration} couldn't be kept here (${given.status}).`);
+      throw new NotTaken(`Its own key for ${integration} couldn’t be kept there.`);
+    }
   }
   fs.rmSync(path.join(bundleOf(record.id), "opened"), { recursive: true, force: true });
   return sessions;
@@ -1060,13 +1065,16 @@ function keepLeft(now: number): void {
   const entries = readLeft();
   if (!entries.length) return;
   // (A clock set back asks again, rather than not until it's caught up.)
-  if (now - leftAskedAt >= ASK_LEFT || now < leftAskedAt) {
+  const asking = now - leftAskedAt >= ASK_LEFT || now < leftAskedAt;
+  if (asking) {
     leftAskedAt = now;
     for (const entry of entries) {
       if (entry.ranAt === undefined && entry.sessions[0]) tell(entry.to, { op: "ran?", id: entry.id, session: entry.sessions[0], ...(entry.lane ? { lane: true } : {}) });
     }
   }
   for (const entry of entries) {
+    // A bot's keys that couldn't go as it left: again each hour (never while it's moving back here).
+    if (entry.keys && asking && !moveOf(entry.thing)) void inTurn(entry.id, () => forgetBotKeys(entry.thing).then(gone => { if (gone && !moveOf(entry.thing)) keysGone(entry.id); }));
     if (entry.ranAt === undefined || now - entry.ranAt < KEEP_LEFT || moveOf(entry.thing)) continue;
     inTurn(entry.id, () => clearLeft(entry)).catch(error => console.error(`kuvo-link: what a move of ${entry.thing} left couldn't be removed yet: ${String((error as Error | null)?.message ?? error)}`));
   }
@@ -1074,6 +1082,8 @@ function keepLeft(now: number): void {
 
 async function clearLeft(entry: LeftEntry): Promise<void> {
   if (moveOf(entry.thing) || !readLeft().some(each => each.id === entry.id)) return;
+  // (Its keys first: the entry stays, and all of it's tried again, while they can't go.)
+  if (entry.keys && !(await forgetBotKeys(entry.thing))) throw new Error("its own keys couldn't be taken away yet");
   if (entry.left?.length) {
     const bridge = bridgeTarget();
     // (Its agents' folders aren't looked at without it: tried again later.)

@@ -35,6 +35,9 @@ export interface LeftEntry {
   left?: unknown[];
   /** When it first ran there, as that computer says. */
   ranAt?: number;
+  /** A bot's own keys, which couldn't be taken away here as it went (your Keychain out of reach):
+   * tried again until they're gone. */
+  keys?: boolean;
 }
 
 const FILE = path.join(MOVES, "left.json");
@@ -57,13 +60,22 @@ function writeLeft(entries: LeftEntry[]): void {
 
 /** What a move that's over left here (nothing noted when it left nothing). */
 export function noteLeft(entry: LeftEntry): void {
-  if (!entry.trash && !entry.left?.length) return;
+  if (!entry.trash && !entry.left?.length && !entry.keys) return;
   writeLeft([...readLeft().filter(each => each.id !== entry.id), entry]);
 }
 
 export function forgetLeft(id: string): void {
   const entries = readLeft();
   if (entries.some(each => each.id === id)) writeLeft(entries.filter(each => each.id !== id));
+}
+
+/** Its keys gone here at last. */
+export function keysGone(id: string): void {
+  const entries = readLeft();
+  const entry = entries.find(each => each.id === id);
+  if (!entry?.keys) return;
+  delete entry.keys;
+  writeLeft(entries.filter(each => each.id !== id || each.trash || each.left?.length));
 }
 
 /** It first ran there at `at`, as the computer it went to says (only that one's word counts). */

@@ -1137,3 +1137,26 @@ test("asked whether it can run what's coming: not with its coding agents down, n
   // It keeps nothing of them: they're only questions.
   assert.deepEqual((await ask("GET", "kuvo/moves")).json, { moves: [], away: [] });
 });
+
+// ---- A bot's own keys ----
+
+test("a bot whose own key can't be kept here isn't set up: it's said back, and nothing of it stays", async () => {
+  const packed = fs.mkdtempSync(path.join(support, "pack-"));
+  const thing = "bot_keyed1", session = "ses_keyed1";
+  fs.writeFileSync(path.join(packed, "move.json"), JSON.stringify({ kind: "bot", thing, name: "Kay", wasPaused: false, folder: thing, exports: [{ info: { id: session, title: "Kay" }, messages: [] }], keys: { "not-here": { TOKEN: "secret" } } }));
+  fs.mkdirSync(path.join(packed, thing, "workspace"), { recursive: true });
+  fs.writeFileSync(path.join(packed, thing, "bot.json"), JSON.stringify({ kuvo: 1, id: thing, name: "Kay", model: { id: "big-pickle", providerID: "opencode" } }));
+  fs.writeFileSync(path.join(packed, thing, "session"), `${session}\n`);
+  const file = path.join(packed, "bundle.tgz");
+  assert.equal(spawnSync("tar", ["-czf", file, "-C", packed, "move.json", thing]).status, 0);
+  const bytes = fs.readFileSync(file), hash = crypto.createHash("sha256").update(bytes).digest("base64url");
+  await say({ op: "offer", id: "mov_keyed1", kind: "bot", thing, name: "Kay", size: bytes.length, hash, wasPaused: false, from: peerKey });
+  await say({ op: "part", id: "mov_keyed1", hash, i: 0, of: 1, d: bytes.toString("base64url") });
+  await until(() => told.some(move => move.id === "mov_keyed1" && (move.op === "failed" || move.op === "arrived")));
+  const failed = told.find(move => move.id === "mov_keyed1" && move.op === "failed");
+  assert.ok(failed, "never arrived: the box it came from keeps it, with its key");
+  assert.match(failed.message, /own key for not-here couldn’t be kept there/);
+  assert.doesNotMatch(failed.message, /secret/);
+  assert.ok(!engine.sessions.has(session));
+  assert.ok(!fs.existsSync(path.join(support, "bots", thing)));
+});

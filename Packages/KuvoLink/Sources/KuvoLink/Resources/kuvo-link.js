@@ -14723,6 +14723,17 @@ function reconnectForBot(engine, id, bot, later) {
     headers: { authorization: `Basic ${Buffer.from(`opencode:${engine.password}`).toString("base64")}`, "x-opencode-directory": encodeURIComponent(folder) }
   }).catch(() => {}), 2000);
 }
+async function forgetBotKeys(bot) {
+  try {
+    return await keyWork(async () => {
+      for (const name of (await keyNames()).filter((each) => each.endsWith(botVariable("", bot))))
+        await deleteKey(name);
+      return true;
+    });
+  } catch {
+    return false;
+  }
+}
 async function answerBotKeys(method, requestPath, body, engine, file = INTEGRATIONS_FILE, later = soon) {
   try {
     return await keyWork(() => botKeysAnswer(method, requestPath, body, engine, file, later));
@@ -17624,7 +17635,7 @@ function writeLeft(entries) {
     fs64.rmSync(FILE3, { force: true });
 }
 function noteLeft(entry) {
-  if (!entry.trash && !entry.left?.length)
+  if (!entry.trash && !entry.left?.length && !entry.keys)
     return;
   writeLeft([...readLeft().filter((each) => each.id !== entry.id), entry]);
 }
@@ -17632,6 +17643,14 @@ function forgetLeft(id) {
   const entries = readLeft();
   if (entries.some((each) => each.id === id))
     writeLeft(entries.filter((each) => each.id !== id));
+}
+function keysGone(id) {
+  const entries = readLeft();
+  const entry = entries.find((each) => each.id === id);
+  if (!entry?.keys)
+    return;
+  delete entry.keys;
+  writeLeft(entries.filter((each) => each.id !== id || each.trash || each.left?.length));
 }
 function noteRan(id, from, at) {
   const entries = readLeft();
@@ -18272,10 +18291,9 @@ async function finish(id) {
     }
     for (const session of record.sessions)
       forgetQueue(session);
-    if (record.kind === "bot")
-      await answerBotKeys("DELETE", `kuvo/bots/${record.thing}/keys`, null, null).catch(() => {});
+    const keysLeft = record.kind === "bot" && !await answerBotKeys("DELETE", `kuvo/bots/${record.thing}/keys`, null, null).then((answer) => answer.status === 200, () => false);
     const trash = await toTrash(place);
-    noteLeft({ id, thing: record.thing, kind: record.kind, to: record.to, at: Date.now(), sessions: [...record.sessions], ...record.lane ? { lane: true } : {}, ...trash ? { trash } : {}, ...record.leftOf?.length ? { left: record.leftOf } : {} });
+    noteLeft({ id, thing: record.thing, kind: record.kind, to: record.to, at: Date.now(), sessions: [...record.sessions], ...record.lane ? { lane: true } : {}, ...trash ? { trash } : {}, ...record.leftOf?.length ? { left: record.leftOf } : {}, ...keysLeft ? { keys: true } : {} });
   }
   noteMovedAway(record.sessions, record.to);
   forgetMove(id);
@@ -18589,8 +18607,10 @@ async function bringIn(record, signal) {
   }
   for (const [integration, keys] of Object.entries(contents.keys ?? {})) {
     const given = await answerBotKeys("PUT", `kuvo/bots/${record.thing}/keys/${encodeURIComponent(integration)}`, { keys }, null);
-    if (given.status !== 200)
-      console.error(`kuvo-link: a moved bot's own key for ${integration} didn't come with it (${given.status}).`);
+    if (given.status !== 200) {
+      console.error(`kuvo-link: a moved bot's own key for ${integration} couldn't be kept here (${given.status}).`);
+      throw new NotTaken(`Its own key for ${integration} couldn’t be kept there.`);
+    }
   }
   fs65.rmSync(path68.join(bundleOf(record.id), "opened"), { recursive: true, force: true });
   return sessions;
@@ -18672,7 +18692,8 @@ function keepLeft(now) {
   const entries = readLeft();
   if (!entries.length)
     return;
-  if (now - leftAskedAt >= ASK_LEFT || now < leftAskedAt) {
+  const asking = now - leftAskedAt >= ASK_LEFT || now < leftAskedAt;
+  if (asking) {
     leftAskedAt = now;
     for (const entry of entries) {
       if (entry.ranAt === undefined && entry.sessions[0])
@@ -18680,6 +18701,11 @@ function keepLeft(now) {
     }
   }
   for (const entry of entries) {
+    if (entry.keys && asking && !moveOf(entry.thing))
+      inTurn(entry.id, () => forgetBotKeys(entry.thing).then((gone) => {
+        if (gone && !moveOf(entry.thing))
+          keysGone(entry.id);
+      }));
     if (entry.ranAt === undefined || now - entry.ranAt < KEEP_LEFT || moveOf(entry.thing))
       continue;
     inTurn(entry.id, () => clearLeft(entry)).catch((error) => console.error(`kuvo-link: what a move of ${entry.thing} left couldn't be removed yet: ${String(error?.message ?? error)}`));
@@ -18688,6 +18714,8 @@ function keepLeft(now) {
 async function clearLeft(entry) {
   if (moveOf(entry.thing) || !readLeft().some((each) => each.id === entry.id))
     return;
+  if (entry.keys && !await forgetBotKeys(entry.thing))
+    throw new Error("its own keys couldn't be taken away yet");
   if (entry.left?.length) {
     const bridge = bridgeTarget();
     if (!bridge)
