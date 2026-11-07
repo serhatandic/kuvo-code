@@ -217,8 +217,11 @@ test("parts that come twice set a copy up once; a part after the switch changes 
   assert.equal(told.filter(move => move.id === id && (move.op === "arrived" || move.op === "failed")).map(move => move.op).join(), "arrived");
   // Held until the switch: not this box's yet.
   assert.deepEqual((await ask("GET", "kuvo/moves")).json.away, ["ses_in1"]);
+  engine.sessions.get("ses_in1").replies = [{ id: "msg_in1last", type: "assistant", time: { created: 1 } }];
   await say({ op: "switch", id });
   assert.ok(told.some(move => move.id === id && move.op === "switched"));
+  // What it came with, noted: only what's after it is its running here.
+  assert.equal(JSON.parse(fs.readFileSync(path.join(movesFolder, "ended.json"), "utf8"))[id]?.last, "msg_in1last");
   assert.deepEqual((await ask("GET", "kuvo/moves")).json, { moves: [], away: [] });
   // A late repeat of the part: nothing set up again, nothing held.
   await say(part);
@@ -1069,6 +1072,24 @@ test("asked whether what came here has run: when it first did since it came; not
   await say({ op: "ran?", id: "mov_ran4", session: "ses_ran1" });
   await say({ op: "ran?", id: "mov_ran5", session: "ses_ran1" });
   assert.deepEqual([...heard("mov_ran4"), ...heard("mov_ran5")], []);
+});
+
+test("what came with it doesn't count as having run here, whatever the other computer's clock said", async () => {
+  const file = path.join(movesFolder, "ended.json");
+  const at = Date.now() - 3600_000;
+  const kept = JSON.parse(fs.readFileSync(file, "utf8"));
+  Object.assign(kept, { mov_skew: { as: "switched", at, last: "msg_came2" } });
+  fs.writeFileSync(file, JSON.stringify(kept));
+  // Its last reply there, timed by a clock an hour and more ahead of this one.
+  const came = [{ id: "msg_came2", type: "assistant", time: { created: at + 5_000_000 } }, { id: "msg_came1", type: "user", time: { created: at + 4_000_000 } }];
+  engine.sessions.set("ses_skew", { id: "ses_skew", title: "Skewed", directory: chats, messages: [], replies: came });
+  const heard = () => told.filter(move => move.id === "mov_skew" && move.op === "ran");
+  await say({ op: "ran?", id: "mov_skew", session: "ses_skew" });
+  assert.deepEqual(heard(), [], "nothing's run here yet");
+  // It runs here: its first reply here is when.
+  engine.sessions.get("ses_skew").replies = [{ id: "msg_here1", type: "assistant", time: { created: at + 60_000 } }, { id: "msg_here0", type: "user", time: { created: at + 50_000 } }, ...came];
+  await say({ op: "ran?", id: "mov_skew", session: "ses_skew" });
+  assert.deepEqual(heard().map(move => move.at), [at + 60_000]);
 });
 
 // ---- Whether it can run there, asked first ----

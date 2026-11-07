@@ -1938,7 +1938,15 @@ function endedAt(id, now = Date.now()) {
     return null;
   }
 }
-function noteEnded(id, as, now = Date.now(), sessions = []) {
+function endedLast(id, now = Date.now()) {
+  try {
+    const one = JSON.parse(fs10.readFileSync(ENDED_FILE, "utf8"))?.[id];
+    return keptFor(one, now) && typeof one.last === "string" ? one.last : undefined;
+  } catch {
+    return;
+  }
+}
+function noteEnded(id, as, now = Date.now(), sessions = [], last) {
   let kept = {};
   try {
     kept = JSON.parse(fs10.readFileSync(ENDED_FILE, "utf8")) ?? {};
@@ -1946,7 +1954,7 @@ function noteEnded(id, as, now = Date.now(), sessions = []) {
   for (const [other, one] of Object.entries(kept))
     if (!keptFor(one, now))
       delete kept[other];
-  kept[id] = { as, at: now, ...sessions.length ? { sessions: [...sessions] } : {} };
+  kept[id] = { as, at: now, ...sessions.length ? { sessions: [...sessions] } : {}, ...last ? { last } : {} };
   writePrivate(ENDED_FILE, JSON.stringify(kept));
 }
 function droppedHere(now = Date.now()) {
@@ -18689,7 +18697,13 @@ async function backHere(thing) {
   }
 }
 var leftAskedAt = 0;
-async function ranHereSince(lane, session, since) {
+async function newestMessage(lane, session) {
+  const target = lane ? readBridgeFile() : readEngineFile();
+  const listed = await call(target, "GET", `/api/session/${encodeURIComponent(session)}/message?limit=1&order=desc`, undefined, engineWait());
+  const newest = Array.isArray(listed) ? listed[0] : null;
+  return isObject(newest) && typeof newest.id === "string" ? newest.id : undefined;
+}
+async function ranHereSince(lane, session, since, last) {
   const target = lane ? readBridgeFile() : readEngineFile();
   let listed;
   try {
@@ -18699,11 +18713,14 @@ async function ranHereSince(lane, session, since) {
       return "gone";
     throw error;
   }
-  const messages = Array.isArray(listed) ? listed : [];
+  let messages = Array.isArray(listed) ? listed : [];
+  const came = last ? messages.findIndex((each) => isObject(each) && each.id === last) : -1;
+  if (came >= 0)
+    messages = messages.slice(0, came);
   const replies = messages.flatMap((each) => {
     if (!isObject(each) || each.type !== "assistant" || !isObject(each.time) || typeof each.time.created !== "number")
       return [];
-    return each.time.created > since ? [each.time.created] : [];
+    return last || each.time.created > since ? [Math.max(each.time.created, since)] : [];
   });
   return replies.length ? Math.min(...replies) : null;
 }
@@ -18857,8 +18874,11 @@ async function moveMail(sender, given, id) {
       if (record && !mine)
         return;
       if (mine?.role === "to" && mine.complete && !mine.dropping && mine.sessions.length + (mine.kind === "group" ? 1 : 0) > 0) {
+        const last = mine.kind === "group" ? undefined : await newestMessage(mine.lane === true, mine.sessions[0]).catch(() => {
+          return;
+        });
         await switchHere(mine);
-        noteEnded(id, "switched");
+        noteEnded(id, "switched", Date.now(), [], last);
         forgetMove(id);
         return void tell(sender.key, { op: "switched", id });
       }
@@ -18945,7 +18965,7 @@ async function moveMail(sender, given, id) {
       const since = endedAt(id);
       if (since === null || endedAs(id) !== "switched")
         return;
-      const ran = await ranHereSince(given.lane === true, given.session, since).catch(() => null);
+      const ran = await ranHereSince(given.lane === true, given.session, since, endedLast(id)).catch(() => null);
       if (ran !== null)
         tell(sender.key, { op: "ran", id, at: ran === "gone" ? Date.now() : ran });
       return;

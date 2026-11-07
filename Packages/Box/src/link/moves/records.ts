@@ -231,12 +231,23 @@ export function endedAt(id: string, now = Date.now()): number | null {
   }
 }
 
-/** `sessions`: those of a copy here let go of, which live on where they came from. */
-export function noteEnded(id: string, as: "switched" | "dropped", now = Date.now(), sessions: readonly string[] = []): void {
-  let kept: Record<string, { as: string; at: number; sessions?: string[] }> = {};
+/** The newest message of a copy switched to here, as it came. */
+export function endedLast(id: string, now = Date.now()): string | undefined {
+  try {
+    const one = JSON.parse(fs.readFileSync(ENDED_FILE, "utf8"))?.[id];
+    return keptFor(one, now) && typeof one.last === "string" ? one.last : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** `sessions`: those of a copy here let go of, which live on where they came from. `last`: the newest
+ * message of one switched to, as it came (what's after it ran here, whatever the clocks say). */
+export function noteEnded(id: string, as: "switched" | "dropped", now = Date.now(), sessions: readonly string[] = [], last?: string): void {
+  let kept: Record<string, { as: string; at: number; sessions?: string[]; last?: string }> = {};
   try { kept = JSON.parse(fs.readFileSync(ENDED_FILE, "utf8")) ?? {}; } catch {}
   for (const [other, one] of Object.entries(kept)) if (!keptFor(one, now)) delete kept[other];
-  kept[id] = { as, at: now, ...(sessions.length ? { sessions: [...sessions] } : {}) };
+  kept[id] = { as, at: now, ...(sessions.length ? { sessions: [...sessions] } : {}), ...(last ? { last } : {}) };
   writePrivate(ENDED_FILE, JSON.stringify(kept));
 }
 

@@ -39,7 +39,7 @@ import type { Contents } from "./bundle";
 import { forgetQuiet, tellMoving } from "./elsewhere";
 import { ASK_LEFT, KEEP_LEFT, forgetLeft, keysGone, noteLeft, noteRan, readLeft, removeTrashed } from "./left";
 import type { LeftEntry } from "./left";
-import { MOVES, bundleOf, changeMove, endedAs, endedAt, forgetMove, forgetMovedAway, moveOf, movesChanged, noteEnded, noteMovedAway, readMove, readMoves, saveMove, shownMove, waitingFor } from "./records";
+import { MOVES, bundleOf, changeMove, endedAs, endedAt, endedLast, forgetMove, forgetMovedAway, moveOf, movesChanged, noteEnded, noteMovedAway, readMove, readMoves, saveMove, shownMove, waitingFor } from "./records";
 import type { MoveRecord } from "./records";
 
 /** Raw bytes in each part (40,000 characters as base64url, as documents' parts are). */
@@ -1061,8 +1061,17 @@ async function backHere(thing: string): Promise<void> {
 
 let leftAskedAt = 0;
 
-/** Whether it has run here since `since`: the newest of its replies, on what it's kept on. */
-async function ranHereSince(lane: boolean, session: string, since: number): Promise<number | null | "gone"> {
+/** The newest message of a session here. */
+async function newestMessage(lane: boolean, session: string): Promise<string | undefined> {
+  const target = lane ? readBridgeFile() : readEngineFile();
+  const listed = await call(target, "GET", `/api/session/${encodeURIComponent(session)}/message?limit=1&order=desc`, undefined, engineWait());
+  const newest = Array.isArray(listed) ? listed[0] : null;
+  return isObject(newest) && typeof newest.id === "string" ? newest.id : undefined;
+}
+
+/** When it first ran here since it came at `since`: the first of its replies after `last` (its newest
+ * message as it came; replies that came with it keep the other computer's times), on what it's kept on. */
+async function ranHereSince(lane: boolean, session: string, since: number, last?: string): Promise<number | null | "gone"> {
   const target = lane ? readBridgeFile() : readEngineFile();
   let listed: unknown;
   try {
@@ -1071,10 +1080,13 @@ async function ranHereSince(lane: boolean, session: string, since: number): Prom
     if ((error as { status?: number } | null)?.status === 404) return "gone";
     throw error;
   }
-  const messages = Array.isArray(listed) ? listed : [];
+  let messages = Array.isArray(listed) ? listed : [];
+  // (Not among the last 20: all of those came after it.)
+  const came = last ? messages.findIndex(each => isObject(each) && each.id === last) : -1;
+  if (came >= 0) messages = messages.slice(0, came);
   const replies = messages.flatMap(each => {
     if (!isObject(each) || each.type !== "assistant" || !isObject(each.time) || typeof each.time.created !== "number") return [];
-    return each.time.created > since ? [each.time.created] : [];
+    return last || each.time.created > since ? [Math.max(each.time.created, since)] : [];
   });
   return replies.length ? Math.min(...replies) : null;
 }
@@ -1247,8 +1259,10 @@ async function moveMail(sender: MailSender, given: Record<string, unknown>, id: 
       // so again; any other (dropped, never set up, unknown) is `dropped`, and the box it came
       // from keeps its original.
       if (mine?.role === "to" && mine.complete && !mine.dropping && mine.sessions.length + (mine.kind === "group" ? 1 : 0) > 0) {
+        // (Its newest message as it came, before anything could run it here.)
+        const last = mine.kind === "group" ? undefined : await newestMessage(mine.lane === true, mine.sessions[0]!).catch(() => undefined);
         await switchHere(mine);
-        noteEnded(id, "switched");
+        noteEnded(id, "switched", Date.now(), [], last);
         forgetMove(id);
         return void tell(sender.key, { op: "switched", id });
       }
@@ -1317,7 +1331,7 @@ async function moveMail(sender: MailSender, given: Record<string, unknown>, id: 
       const since = endedAt(id);
       // (Only one that came here, from that computer: a word of it is what removes what's there.)
       if (since === null || endedAs(id) !== "switched") return;
-      const ran = await ranHereSince(given.lane === true, given.session, since).catch(() => null);
+      const ran = await ranHereSince(given.lane === true, given.session, since, endedLast(id)).catch(() => null);
       // Gone from here (moved on, or deleted): it's not coming back through that way, so the time starts.
       if (ran !== null) tell(sender.key, { op: "ran", id, at: ran === "gone" ? Date.now() : ran });
       return;
