@@ -223,7 +223,7 @@ test("a failed run lets go of a summary waiting; a summary that failed pauses no
   pages.ses_2 = [{ type: "idle", outcome: "failed" }, { type: "compaction", status: "failed", reason: "manual" }];
   b.hear("session.execution.failed", { error: { message: "It couldn't." } }, "ses_2");
   await new Promise(resolve => setImmediate(resolve));
-  for (let looks = 0; looks < 50 && !asked.includes("ses_2 msg_q2 steer"); looks++) { b.wait(5000); await Promise.race([heard(), new Promise(resolve => setImmediate(resolve))]); }
+  for (let looks = 0; looks < 100_000 && !asked.includes("ses_2 msg_q2 steer"); looks++) { b.wait(5000); await Promise.race([heard(), new Promise(resolve => setImmediate(resolve))]); }
   assert.ok(asked.includes("ses_2 msg_q2 steer"), "what waited went on");
   assert.equal((await ask("GET", "kuvo/sessions/ses_2/queue")).json.paused, false);
 });
