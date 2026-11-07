@@ -18725,7 +18725,9 @@ class Carrying {
     for (const record of family) {
       const id = record.session.id;
       this.store.save(id, true);
-      said.push(JSON.stringify([id, record.session.title ?? null, record.session.model ?? null, record.session.time.archived ?? null]));
+      const marks = record.session.metadata ?? {};
+      const archived = record.session.time.archived ?? marks["kuvo.archived"] ?? marks.kuvo?.archived ?? null;
+      said.push(JSON.stringify([id, record.session.title ?? null, record.session.model ?? null, archived]));
       for (const name of ["session.json", "messages.json", "agent.json"]) {
         const file = this.store.fileOf(id, name);
         const path = join27("sessions", id, name);
@@ -19058,7 +19060,7 @@ class Undo {
       if (there)
         return;
     }
-    const placed = { dest, sha256: file.sha256 };
+    const placed = merges ? { dest, sha256: file.sha256 } : { dest };
     if (there)
       placed.replaced = join27(this.keep, "replaced", String(this.count++));
     this.list.placed.push(placed);
@@ -24618,4 +24620,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents f5ee5907aafd8c3bf44f15f414f08cb5eaba71579a142dfaab40d82d74fa7597
+// Built from Packages/Box/src/agents aacae02d338a0ced4738d6f5382323d6897a8380958d6363c9bb8478babd6f56

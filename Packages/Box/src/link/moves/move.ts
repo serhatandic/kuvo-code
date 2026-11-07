@@ -638,7 +638,12 @@ async function checkHere(sender: MailSender, given: Record<string, unknown>, id:
   const listed = await call(target, "GET", "/api/integration", undefined, wait).catch(() => null);
   if (!Array.isArray(listed)) return answer({ ok: false, message: say.noAgents(place) });
   const ofKind = (listed as (AgentAccount | null)[]).filter((each): each is AgentAccount => typeof each?.id === "string" && each.id.split("@")[0] === kind);
-  const agentName = ofKind[0]?.name ?? "its coding agent";
+  // Not a coding agent's: a model the engine's sign-ins give it, as for a bot of the engine's.
+  if (!ofKind.length) {
+    const refused = await signInRefusal(model, readEngineFile(), wait).catch(() => null);
+    return answer(refused ? { ok: false, message: say.modelNotThere(name, model.id, place) } : { ok: true });
+  }
+  const agentName = ofKind[0]!.name ?? "its coding agent";
   if (!ofKind.some(each => each.metadata?.installed)) return answer({ ok: false, message: say.agentNotThere(name, agentName, place) });
   const signedIn = ofKind.filter(each => each.metadata?.installed && Array.isArray(each.connections) && each.connections.length);
   if (!signedIn.length) return answer({ ok: false, message: say.agentSignedOut(name, agentName, place) });
@@ -977,8 +982,11 @@ async function bringIn(record: MoveRecord, signal: AbortSignal): Promise<string[
   if (Boolean(contents.lane) !== Boolean(record.lane)) throw new NotTaken("What came isn’t a move.");
   if (contents.lane ? contents.lane.root !== root : !ownTree(contents.exports, root)) throw new NotTaken("Its conversations aren’t its own.");
   const engine = record.lane ? readBridgeFile() : readEngineFile();
-  // (The bridge looks for itself as it places them.)
-  if (!contents.lane) for (const session of idsOf(contents.exports)) {
+  // (Those it says it brings, none of them here: noted before they're brought in, so each is held from
+  // the moment it's here. The bridge looks again as it places them.)
+  const bringing = contents.lane ? contents.lane.sessions.filter(each => typeof each === "string" && /^ses_[A-Za-z0-9]{1,60}$/.test(each)) : idsOf(contents.exports);
+  if (contents.lane && (!bringing.length || bringing.length !== contents.lane.sessions.length)) throw new NotTaken("Its conversations aren’t its own.");
+  for (const session of bringing) {
     if (await call(engine, "GET", `/api/session/${encodeURIComponent(session)}`, undefined, engineWait(signal)).then(() => true, () => false)) throw new NotTaken(`Its conversations are on ${HERE} already.`);
   }
   signal.throwIfAborted();
@@ -997,9 +1005,9 @@ async function bringIn(record: MoveRecord, signal: AbortSignal): Promise<string[
   const directory = directoryOf(record.kind, record.thing);
   fs.mkdirSync(directory, { recursive: true });
   const was = contents.was && typeof contents.was.place === "string" ? { place: plainName(contents.was.place), ...(typeof contents.was.folder === "string" ? { folder: contents.was.folder } : {}) } : undefined;
-  // Its conversations, noted before they're brought in: any that came go if it's taken back. (With a
-  // coding agent, those its bridge placed, as it says: what it placed it undoes itself.)
-  let sessions = contents.lane ? [] : idsOf(contents.exports);
+  // Its conversations, noted before they're brought in: any that came go if it's taken back (with a
+  // coding agent, what its bridge placed it undoes itself).
+  let sessions = bringing;
   changeMove(record.id, each => { each.sessions = sessions; each.was = was; });
   let infos: (Partial<EngineSession> & { id: string })[];
   if (contents.lane) {
@@ -1007,7 +1015,7 @@ async function bringIn(record: MoveRecord, signal: AbortSignal): Promise<string[
       if ((error as { status?: number } | null)?.status === 409) throw new NotTaken(String((error as Error).message));
       throw error;
     });
-    sessions = placed.sessions;
+    sessions = [...new Set([...sessions, ...placed.sessions])];
     changeMove(record.id, each => { each.digest = placed.digest; each.sessions = sessions; });
     infos = placed.infos as typeof infos;
     // Its account isn't on this computer: the bot goes on with the one its conversation went to.
@@ -1117,12 +1125,15 @@ async function ranHereSince(lane: boolean, session: string, since: number, last?
     throw error;
   }
   let messages = Array.isArray(listed) ? listed : [];
-  // (Not among the last 20: all of those came after it.)
-  const came = last ? messages.findIndex(each => isObject(each) && each.id === last) : -1;
+  // Not among the last 20 when there are more: all of those came after it. Fewer, and it isn't one
+  // (gone since, reverted say): by the time, then.
+  let came = last ? messages.findIndex(each => isObject(each) && each.id === last) : -1;
+  if (came < 0 && messages.length < 20) came = -2;
   if (came >= 0) messages = messages.slice(0, came);
+  const byOrder = !!last && came !== -2;
   const replies = messages.flatMap(each => {
     if (!isObject(each) || each.type !== "assistant" || !isObject(each.time) || typeof each.time.created !== "number") return [];
-    return last || each.time.created > since ? [Math.max(each.time.created, since)] : [];
+    return byOrder || each.time.created > since ? [Math.max(each.time.created, since)] : [];
   });
   return replies.length ? Math.min(...replies) : null;
 }
@@ -1330,8 +1341,11 @@ async function moveMail(sender: MailSender, given: Record<string, unknown>, id: 
       if (mine?.role !== "from" || mine.step !== "parts" || !Number.isInteger(given.i)) return;
       const state = outgoing.get(id);
       if (!state) return;
+      // (One lost and then come after all counts too, as it's no longer on its way.)
+      const fresh = !state.got.has(given.i as number);
       state.got.add(given.i as number);
-      if (state.flying.delete(given.i as number)) state.window = Math.min(IN_FLIGHT, (state.window ?? IN_FLIGHT) + 1);
+      state.flying.delete(given.i as number);
+      if (fresh) state.window = Math.min(IN_FLIGHT, (state.window ?? IN_FLIGHT) + 1);
       const of = Math.ceil((mine.size ?? 0) / PART_BYTES);
       if (state.got.size === of) {
         changeMove(id, each => { each.sent = each.size; each.step = "arrive"; each.sentAt = Date.now(); });
@@ -1396,6 +1410,11 @@ async function letGoOf(sender: MailSender, id: string): Promise<void> {
 // Each move's next step, once in a while: a step unanswered sent again; a first offer with no answer
 // taken back (the other computer isn't there); one whose other computer was removed, ended. And your
 // other computers told what moves here, and what one quiet a while said forgotten (`elsewhere.ts`).
+/** Move folders no move here has, by when they were first seen so. */
+const orphans = new Map<string, number>();
+/** How long one's left first: longer than the bridge's packing or placing is waited for. */
+const ORPHAN_AFTER = 2 * CARRY_WAIT;
+
 export function keepMoving(now = Date.now()): void {
   const records = readMoves();
   noteWaiting(records, now);
@@ -1410,6 +1429,21 @@ export function keepMoving(now = Date.now()): void {
   let names: string[] = [];
   try { names = fs.readdirSync(MOVES).filter(name => name.endsWith(".outcome.json")); } catch {}
   for (const name of names) try { if (now - fs.statSync(path.join(MOVES, name)).mtimeMs > OUTCOME_KEPT) fs.rmSync(path.join(MOVES, name), { force: true }); } catch {}
+  // A move's folder no move here has any more (a step under way as it was taken back made it again):
+  // gone once it's been seen so for longer than a step's given.
+  let folders: string[] = [];
+  try { folders = fs.readdirSync(MOVES, { withFileTypes: true }).filter(each => each.isDirectory() && each.name.startsWith("mov_")).map(each => each.name); } catch {}
+  const known = new Set(records.map(record => record.id));
+  for (const name of [...orphans.keys()]) if (!folders.includes(name) || known.has(name)) orphans.delete(name);
+  for (const name of folders) {
+    if (known.has(name)) continue;
+    const since = orphans.get(name) ?? now;
+    orphans.set(name, since);
+    if (now - since > ORPHAN_AFTER) {
+      try { fs.rmSync(bundleOf(name), { recursive: true, force: true }); } catch {}
+      orphans.delete(name);
+    }
+  }
   for (const record of records) {
     if (!peers.has(record.peer)) {
       // Gone a while, not just left out as your computers are read again.

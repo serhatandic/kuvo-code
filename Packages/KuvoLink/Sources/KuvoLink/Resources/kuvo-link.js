@@ -18230,7 +18230,11 @@ async function checkHere(sender, given, id) {
   if (!Array.isArray(listed))
     return answer({ ok: false, message: say.noAgents(place) });
   const ofKind = listed.filter((each) => typeof each?.id === "string" && each.id.split("@")[0] === kind);
-  const agentName = ofKind[0]?.name ?? "its coding agent";
+  if (!ofKind.length) {
+    const refused = await signInRefusal(model, readEngineFile(), wait).catch(() => null);
+    return answer(refused ? { ok: false, message: say.modelNotThere(name, model.id, place) } : { ok: true });
+  }
+  const agentName = ofKind[0].name ?? "its coding agent";
   if (!ofKind.some((each) => each.metadata?.installed))
     return answer({ ok: false, message: say.agentNotThere(name, agentName, place) });
   const signedIn = ofKind.filter((each) => each.metadata?.installed && Array.isArray(each.connections) && each.connections.length);
@@ -18619,11 +18623,13 @@ async function bringIn(record, signal) {
   if (contents.lane ? contents.lane.root !== root : !ownTree(contents.exports, root))
     throw new NotTaken("Its conversations aren’t its own.");
   const engine = record.lane ? readBridgeFile() : readEngineFile();
-  if (!contents.lane)
-    for (const session of idsOf(contents.exports)) {
-      if (await call(engine, "GET", `/api/session/${encodeURIComponent(session)}`, undefined, engineWait(signal)).then(() => true, () => false))
-        throw new NotTaken(`Its conversations are on ${HERE} already.`);
-    }
+  const bringing = contents.lane ? contents.lane.sessions.filter((each) => typeof each === "string" && /^ses_[A-Za-z0-9]{1,60}$/.test(each)) : idsOf(contents.exports);
+  if (contents.lane && (!bringing.length || bringing.length !== contents.lane.sessions.length))
+    throw new NotTaken("Its conversations aren’t its own.");
+  for (const session of bringing) {
+    if (await call(engine, "GET", `/api/session/${encodeURIComponent(session)}`, undefined, engineWait(signal)).then(() => true, () => false))
+      throw new NotTaken(`Its conversations are on ${HERE} already.`);
+  }
   signal.throwIfAborted();
   if (folder) {
     if (fs65.existsSync(place))
@@ -18640,7 +18646,7 @@ async function bringIn(record, signal) {
   const directory = directoryOf(record.kind, record.thing);
   fs65.mkdirSync(directory, { recursive: true });
   const was = contents.was && typeof contents.was.place === "string" ? { place: plainName(contents.was.place), ...typeof contents.was.folder === "string" ? { folder: contents.was.folder } : {} } : undefined;
-  let sessions = contents.lane ? [] : idsOf(contents.exports);
+  let sessions = bringing;
   changeMove(record.id, (each) => {
     each.sessions = sessions;
     each.was = was;
@@ -18652,7 +18658,7 @@ async function bringIn(record, signal) {
         throw new NotTaken(String(error.message));
       throw error;
     });
-    sessions = placed.sessions;
+    sessions = [...new Set([...sessions, ...placed.sessions])];
     changeMove(record.id, (each) => {
       each.digest = placed.digest;
       each.sessions = sessions;
@@ -18756,13 +18762,16 @@ async function ranHereSince(lane, session, since, last) {
     throw error;
   }
   let messages = Array.isArray(listed) ? listed : [];
-  const came = last ? messages.findIndex((each) => isObject(each) && each.id === last) : -1;
+  let came = last ? messages.findIndex((each) => isObject(each) && each.id === last) : -1;
+  if (came < 0 && messages.length < 20)
+    came = -2;
   if (came >= 0)
     messages = messages.slice(0, came);
+  const byOrder = !!last && came !== -2;
   const replies = messages.flatMap((each) => {
     if (!isObject(each) || each.type !== "assistant" || !isObject(each.time) || typeof each.time.created !== "number")
       return [];
-    return last || each.time.created > since ? [Math.max(each.time.created, since)] : [];
+    return byOrder || each.time.created > since ? [Math.max(each.time.created, since)] : [];
   });
   return replies.length ? Math.min(...replies) : null;
 }
@@ -18962,8 +18971,10 @@ async function moveMail(sender, given, id) {
       const state = outgoing.get(id);
       if (!state)
         return;
+      const fresh = !state.got.has(given.i);
       state.got.add(given.i);
-      if (state.flying.delete(given.i))
+      state.flying.delete(given.i);
+      if (fresh)
         state.window = Math.min(IN_FLIGHT, (state.window ?? IN_FLIGHT) + 1);
       const of = Math.ceil((mine.size ?? 0) / PART_BYTES);
       if (state.got.size === of) {
@@ -19028,6 +19039,8 @@ async function letGoOf(sender, id) {
   tell(sender.key, { op: "dropped", id });
   await drop(id).catch(() => {});
 }
+var orphans = new Map;
+var ORPHAN_AFTER = 2 * CARRY_WAIT;
 function keepMoving(now = Date.now()) {
   const records = readMoves();
   noteWaiting(records, now);
@@ -19048,6 +19061,26 @@ function keepMoving(now = Date.now()) {
       if (now - fs65.statSync(path68.join(MOVES, name)).mtimeMs > OUTCOME_KEPT)
         fs65.rmSync(path68.join(MOVES, name), { force: true });
     } catch {}
+  let folders = [];
+  try {
+    folders = fs65.readdirSync(MOVES, { withFileTypes: true }).filter((each) => each.isDirectory() && each.name.startsWith("mov_")).map((each) => each.name);
+  } catch {}
+  const known = new Set(records.map((record) => record.id));
+  for (const name of [...orphans.keys()])
+    if (!folders.includes(name) || known.has(name))
+      orphans.delete(name);
+  for (const name of folders) {
+    if (known.has(name))
+      continue;
+    const since = orphans.get(name) ?? now;
+    orphans.set(name, since);
+    if (now - since > ORPHAN_AFTER) {
+      try {
+        fs65.rmSync(bundleOf(name), { recursive: true, force: true });
+      } catch {}
+      orphans.delete(name);
+    }
+  }
   for (const record of records) {
     if (!peers.has(record.peer)) {
       const since = missing.get(record.id) ?? now;

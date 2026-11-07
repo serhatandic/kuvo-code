@@ -1119,6 +1119,18 @@ test("asked where it can go, it says what stays here: the sessions it started, w
   }
 });
 
+test("a move's folder that no move here has is cleared away after a while, never one a move has", async () => {
+  const orphan = path.join(movesFolder, "mov_orphan1");
+  fs.mkdirSync(path.join(orphan, "carry", "lanes"), { recursive: true });
+  fs.writeFileSync(path.join(orphan, "carry", "lanes", "big"), "a copy of a conversation");
+  const at = Date.now();
+  link.keepMoving(at);
+  link.keepMoving(at + 10 * 60_000);
+  assert.ok(fs.existsSync(orphan), "not at once: a step may still be making it");
+  link.keepMoving(at + 21 * 60_000);
+  assert.ok(!fs.existsSync(orphan));
+});
+
 // ---- Whether it can run there, asked first ----
 
 async function checking(run) {
@@ -1184,6 +1196,33 @@ test("asked whether it can run what's coming: not with its coding agents down, n
   assert.equal(fine.ok, true);
   // It keeps nothing of them: they're only questions.
   assert.deepEqual((await ask("GET", "kuvo/moves")).json, { moves: [], away: [] });
+});
+
+test("asked with its coding agents here on a model none of them has: the engine's sign-ins answer, not 'isn't installed'", async () => {
+  const bridge = http.createServer((request, response) => {
+    const send = data => response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ data }));
+    if (request.url.startsWith("/api/session/active")) return send({});
+    if (request.url.startsWith("/api/integration")) return send([{ id: "claude-code", name: "Claude Code", metadata: { installed: true }, connections: [{}] }]);
+    response.writeHead(404).end("{}");
+  });
+  await new Promise(resolve => bridge.listen(0, "127.0.0.1", resolve));
+  const file = path.join(home, "run", "bridge.json");
+  fs.writeFileSync(file, JSON.stringify({ port: bridge.address().port, password: "pw" }));
+  try {
+    const answerTo = async (id, model) => {
+      await say({ op: "check", id, kind: "bot", name: "Ada", lane: true, model });
+      await until(() => told.some(move => move.id === id && move.op === "checked"));
+      return told.find(move => move.id === id && move.op === "checked");
+    };
+    const signedOut = await answerTo("mov_chk6", { providerID: "anthropic", id: "claude-opus-5-5" });
+    assert.equal(signedOut.ok, false);
+    assert.match(signedOut.message, /needs a sign-in on this Mac/);
+    assert.equal((await answerTo("mov_chk7", { providerID: "opencode", id: "big-pickle" })).ok, true);
+    assert.equal((await answerTo("mov_chk8", { providerID: "claude-code", id: "default" })).ok, true);
+  } finally {
+    fs.rmSync(file, { force: true });
+    bridge.close();
+  }
 });
 
 // ---- A bot's own keys ----

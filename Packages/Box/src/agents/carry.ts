@@ -172,7 +172,9 @@ export class Carrying {
     for (const record of family) {
       const id = record.session.id
       this.store.save(id, true)
-      said.push(JSON.stringify([id, record.session.title ?? null, record.session.model ?? null, record.session.time.archived ?? null]))
+      const marks = (record.session.metadata ?? {}) as Record<string, any>
+      const archived = record.session.time.archived ?? marks["kuvo.archived"] ?? marks.kuvo?.archived ?? null
+      said.push(JSON.stringify([id, record.session.title ?? null, record.session.model ?? null, archived]))
       for (const name of ["session.json", "messages.json", "agent.json"]) {
         const file = this.store.fileOf(id, name)
         const path = join("sessions", id, name)
@@ -533,7 +535,8 @@ class Undo {
       there = await lstat(dest).then(() => true, () => false)
       if (there) return
     }
-    const placed: Placed = { dest, sha256: file.sha256 }
+    // (Its hash only where others may write to it too: one of its own, cut short or not, always goes.)
+    const placed: Placed = merges ? { dest, sha256: file.sha256 } : { dest }
     if (there) placed.replaced = join(this.keep, "replaced", String(this.count++))
     this.list.placed.push(placed)
     await this.write()
