@@ -18,6 +18,7 @@ Kuvo Code is a small distributed system. Build every feature for that system, ne
 
 The default for all new code that isn't drawing is the box, `Packages/Box`. This rule has no exceptions unless the user agrees to one. In November 2026 a review found 32 to 45 hours of work to move out of the Mac app, and features that failed whenever the app was closed. That must not build up again.
 
+- **A box means every box: a Mac's and a Linux machine's.** Linux gets its share wherever it applies, not only the Mac's box. What can't apply there is said plainly, with the reason, in your plan and report.
 - **A box decides, a client draws.** Anything about sessions, agents, accounts, models, settings, files, git, processes, the network or what's allowed belongs in the box, this Mac's box included. A client reads the box's state, changes it through a route, and draws the result.
 - **The box states facts, not finished views.** It says "this session is running, and this bot oversees it", not "6 sessions at work". Clients work out what they show from that state, and what Mac and phone both work out goes in the shared client code, `Packages/KuvoClient`, so they can't differ. Only views go there: a rule that changes behavior or data is still the box's.
 - **Only this stays in a client:** drawing and layout, animation, window and selection state, the side panel's browser, and what only an installed app can do (updating itself, login items, Mac notifications). The keeper starts and watches the box, and takes on no features.
