@@ -65,7 +65,8 @@ import Testing
     @Test func heldModelsAreMarkedWithWhyAndStillOffered() async throws {
         defer { StubWeb.stop() }
         try await engine()
-        let now = Date()
+        // Noon, so a reset half an hour on is still today: past midnight the line names a weekday (right for users, wrong for these expectations).
+        let now = Calendar.current.date(bySettingHour: 12, minute: 0, second: 0, of: Date())!
         let soon = (now.timeIntervalSince1970 + 1800) * 1000
         let time = Date(timeIntervalSince1970: soon / 1000).formatted(date: .omitted, time: .shortened)
         // OpenCode Zen out of funds (its paid models), and one free model at its own limit.
