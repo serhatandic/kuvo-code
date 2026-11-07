@@ -51,6 +51,7 @@ const server = http.createServer((request, response) => {
     const listed = each => ({ id: each.id, title: each.title, directory: each.directory, location: { directory: each.directory } });
     if (url.pathname === "/api/session" && url.searchParams.get("parentID")) return send(200, [...engine.sessions.values()].filter(each => each.parentID === url.searchParams.get("parentID")).map(listed));
     if (url.pathname === "/api/session/active") return send(200, {});
+    if (url.pathname === "/api/provider") return send(200, [{ id: "opencode" }]);
     if (url.pathname === "/api/experimental/session/import") {
       const bring = () => {
         if (engine.sessions.has(given.info.id)) return response.writeHead(409).end("{}");
@@ -1068,4 +1069,71 @@ test("asked whether what came here has run: when it first did since it came; not
   await say({ op: "ran?", id: "mov_ran4", session: "ses_ran1" });
   await say({ op: "ran?", id: "mov_ran5", session: "ses_ran1" });
   assert.deepEqual([...heard("mov_ran4"), ...heard("mov_ran5")], []);
+});
+
+// ---- Whether it can run there, asked first ----
+
+async function checking(run) {
+  const file = path.join(home, "run", "peer-agents.json");
+  fs.writeFileSync(file, JSON.stringify({ [peerKey]: { at: Date.now(), kind: "machine", list: [], features: ["sessions", "bots", "moves", "moves.agents", "moves.check"] } }));
+  try { return await run(); } finally { fs.rmSync(file, { force: true }); }
+}
+
+test("the other computer says first whether it can run it: refused there, nothing was held here, and its words are said", () => checking(async () => {
+  chat("ses_chk1");
+  let asked = null;
+  const said = "The coding agents on lab aren’t running. Try again once they are.";
+  script = async move => {
+    // (Others' mail, like a word of what an earlier move left, isn't this move's.)
+    if (move.op !== "check" && move.id !== asked?.id) return;
+    if (move.op !== "check") return assert.fail(`nothing more goes once it's refused: ${move.op}`);
+    asked = move;
+    // While it's asked, nothing's held here: a prompt goes, its wake-ups go on.
+    assert.ok(!fs.existsSync(path.join(wakes, "ses_chk1", "paused")), "its wake-ups aren't held");
+    const prompted = await ask("POST", "api/session/ses_chk1/prompt", { text: "Still here?" });
+    assert.notEqual(prompted.status, 409, "a prompt isn't refused as moving");
+    say({ op: "checked", id: move.id, ok: false, message: said });
+  };
+  const moved = await ask("POST", "kuvo/moves", { kind: "chat", id: "ses_chk1", to: peerKey });
+  assert.equal(moved.status, 409);
+  assert.equal(moved.json.message, said);
+  assert.equal(asked?.kind, "chat");
+  assert.deepEqual(told.filter(move => move.id === asked.id).map(move => move.op), ["check"]);
+  await asItWas("ses_chk1");
+}));
+
+test("it can run there, another way: the move goes, and its answer says how", () => checking(async () => {
+  chat("ses_chk2");
+  const note = "On lab, Trip plans uses the Claude Code account signed in there (ada@example.com).";
+  script = move => {
+    if (move.op === "check") say({ op: "checked", id: move.id, ok: true, note });
+    if (move.op === "offer") say({ op: "ready", id: move.id });
+    if (move.op === "part") {
+      say({ op: "got", id: move.id, i: move.i });
+      if (move.i === move.of - 1) say({ op: "arrived", id: move.id });
+    }
+    if (move.op === "switch") say({ op: "switched", id: move.id });
+  };
+  const moved = await ask("POST", "kuvo/moves", { kind: "chat", id: "ses_chk2", to: peerKey });
+  assert.equal(moved.status, 200, JSON.stringify(moved.json));
+  assert.equal(moved.json.note, note);
+  assert.ok(!engine.sessions.has("ses_chk2"));
+}));
+
+test("asked whether it can run what's coming: not with its coding agents down, nor on a model with no sign-in here; else yes", async () => {
+  const answerTo = async (id, given) => {
+    await say({ op: "check", id, kind: "bot", name: "Ada", ...given });
+    await until(() => told.some(move => move.id === id && move.op === "checked"));
+    return told.find(move => move.id === id && move.op === "checked");
+  };
+  const agents = await answerTo("mov_chk3", { lane: true, model: { providerID: "claude-code", id: "default" } });
+  assert.equal(agents.ok, false);
+  assert.match(agents.message, /coding agents on this Mac aren’t running/);
+  const signedOut = await answerTo("mov_chk4", { model: { providerID: "anthropic", id: "claude-opus-5-5" } });
+  assert.equal(signedOut.ok, false);
+  assert.equal(signedOut.message, "Ada uses claude-opus-5-5, which needs a sign-in on this Mac. Sign in to it in Settings › Accounts there, or choose another model, then move Ada.");
+  const fine = await answerTo("mov_chk5", { model: { providerID: "opencode", id: "big-pickle" } });
+  assert.equal(fine.ok, true);
+  // It keeps nothing of them: they're only questions.
+  assert.deepEqual((await ask("GET", "kuvo/moves")).json, { moves: [], away: [] });
 });

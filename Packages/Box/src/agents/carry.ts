@@ -275,14 +275,17 @@ export class Carrying {
 
   /** The agent here that takes a lane's conversation: its own account, or, without it here, the
    * agent's first account that's signed in (its sign-in first), else that agent's own. */
+  // The same account here, signed in; else the first of that agent's signed in here (as the move's
+  // check said before it went: `check` in the link's moves); else the same, or the first, as it is.
   private async hostOf(provider: string): Promise<Agent | undefined> {
     const own = this.agentOf(provider)
-    if (own) return own
+    const signedIn = (agent: Agent) => agent.account(false).then((said) => said.signedIn, () => false)
+    if (own && (await signedIn(own))) return own
     const named = parseProvider(provider)
-    if (!named) return undefined
+    if (!named) return own
     const accounts = this.accountsOf(named.kind)
-    for (const account of accounts) if (await account.account(false).then((said) => said.signedIn, () => false)) return account
-    return accounts[0] ?? this.agentOf(baseProvider[named.kind])
+    for (const account of accounts) if (await signedIn(account)) return account
+    return own ?? accounts[0] ?? this.agentOf(baseProvider[named.kind])
   }
 
   /**

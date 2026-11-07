@@ -18822,16 +18822,17 @@ class Carrying {
   }
   async hostOf(provider) {
     const own = this.agentOf(provider);
-    if (own)
+    const signedIn = (agent) => agent.account(false).then((said) => said.signedIn, () => false);
+    if (own && await signedIn(own))
       return own;
     const named = parseProvider(provider);
     if (!named)
-      return;
+      return own;
     const accounts = this.accountsOf(named.kind);
     for (const account of accounts)
-      if (await account.account(false).then((said) => said.signedIn, () => false))
+      if (await signedIn(account))
         return account;
-    return accounts[0] ?? this.agentOf(baseProvider[named.kind]);
+    return own ?? accounts[0] ?? this.agentOf(baseProvider[named.kind]);
   }
   async place(from, keep, directory, root) {
     const manifest = await this.readManifest(from);
@@ -24558,4 +24559,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 162e8ccc1715767ce0c6c36df8b4fc1ffc58024d8c4ccdcd98265875d7b5a08c
+// Built from Packages/Box/src/agents 98d7d0bb88da67d2478d88b0325c56bbfec6dec4397c93e4e8ba9e1d5d23d729

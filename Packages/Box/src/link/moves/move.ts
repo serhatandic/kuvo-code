@@ -19,6 +19,7 @@ import { plainName } from "../../shared/text";
 import { answerBotKeys } from "../areas/bot-keys";
 import { askGroups } from "../areas/groups";
 import { botHere, MOVING } from "../bots/here";
+import { signInRefusal } from "../bots/make";
 import { settleBot } from "../bots/tell";
 import { bridgeTarget, call, readBridgeFile, readEngineFile } from "../engine/client";
 import { CantCarry, forgetQueue, packQueues, queueOf, resumeQueue, unpackQueues } from "../engine/queue";
@@ -92,6 +93,10 @@ export const say = {
   inProject: (name: string) => `${name} works in one of your projects, which stays where it is. Only a bot with a folder of its own can move.`,
   noAgents: (place: string) => `The coding agents on ${place} aren’t running. Try again once they are.`,
   cantCarry: (name: string, why: string) => `${name} can’t move: ${why}.`,
+  agentNotThere: (name: string, agent: string, place: string) => `${name} talks with ${agent}, which isn’t installed on ${place}. Install it in Settings › Accounts there, then move ${name}.`,
+  agentSignedOut: (name: string, agent: string, place: string) => `${name} talks with ${agent}, which isn’t signed in on ${place}. Sign in to it in Settings › Accounts there, then move ${name}.`,
+  otherAccount: (name: string, agent: string, who: string, place: string) => `On ${place}, ${name} uses the ${agent} account signed in there${who}.`,
+  modelNotThere: (name: string, model: string, place: string) => `${name} uses ${model}, which needs a sign-in on ${place}. Sign in to it in Settings › Accounts there, or choose another model, then move ${name}.`,
   notSame: (name: string) => `${name}’s conversation didn’t come out the same on the other computer, so it stayed here. Try again.`,
   onGoal: (name: string) => `${name} is working on a goal, which stays on this computer. Move it once the goal is done, or stop the goal first.`,
   waiting: (name: string) => `${name} still has messages on their way. Try again in a moment.`,
@@ -120,7 +125,7 @@ const note = {
 };
 
 /** A move's outcome, for whoever asked for it. */
-export type MoveOutcome = { ok: true; move: Move } | { ok: false; status: number; message: string };
+export type MoveOutcome = { ok: true; move: Move; note?: string } | { ok: false; status: number; message: string };
 
 // Those waiting on a move here, by its ID. How it ended is also noted beside its record for a while
 // (`<id>.outcome.json`), for a client that asked through another process (a Mac's `box route`),
@@ -208,6 +213,8 @@ interface Movable {
   members?: string[];
   /** It talks with a coding agent. */
   lane?: boolean;
+  /** The model it talks with, for the computer it goes to to check it can. */
+  model?: { providerID: string; id: string };
 }
 
 
@@ -256,7 +263,7 @@ async function movable(kind: MoveKind, thing: string, signal?: AbortSignal): Pro
       const chat = (listed?.status === 200 && Array.isArray(listed.value?.data) ? listed.value.data : []).find(each => Array.isArray(each?.group?.members) && (each.group.members as unknown[]).includes(thing));
       if (chat) return { name, root: here.session, why: say.inBoxGroup(name, plainName(chat.group?.name ?? "") || "a group chat"), note: note.inBoxGroup };
     }
-    return { name, root: here.session, ...(here.agents ? { lane: true } : {}) };
+    return { name, root: here.session, ...(here.agents ? { lane: true } : {}), ...(modelOf(here.described.model) ?? {}) };
   }
   if (kind === "chat") {
     // On the engine, or, talking with a coding agent, on the agents bridge.
@@ -269,7 +276,7 @@ async function movable(kind: MoveKind, thing: string, signal?: AbortSignal): Pro
     const directory = isObject(session.location) ? session.location.directory : session.directory;
     if (directory !== CHATS) return null;
     if (await chatGoalRuns(thing, signal)) return { name: title, why: say.onGoal(title), note: note.onGoal };
-    return { name: title, root: thing, ...(lane ? { lane: true } : {}) };
+    return { name: title, root: thing, ...(lane ? { lane: true } : {}), ...(modelOf(session.model) ?? {}) };
   }
   let bridge: Target;
   try { bridge = readBridgeFile(); } catch { return null; }
@@ -281,6 +288,9 @@ async function movable(kind: MoveKind, thing: string, signal?: AbortSignal): Pro
     members: Array.isArray(members) ? members.filter((member): member is string => typeof member === "string") : [],
   };
 }
+
+const modelOf = (model: unknown): { model: { providerID: string; id: string } } | null =>
+  isObject(model) && typeof model.providerID === "string" && typeof model.id === "string" ? { model: { providerID: model.providerID, id: model.id } } : null;
 
 /** Whether a group chat's bots all live on the machine `peer`, as the computers say: none here, and
  * each in that machine's list of its agents. One that hasn't said what it has isn't judged (it
@@ -317,6 +327,9 @@ function olderThanMoves(key: string): boolean {
   return Array.isArray(features) && !features.includes("moves");
 }
 
+/** Whether another computer checks it can run what comes before it's held here (`check`). */
+const checksFirst = (key: string): boolean => readPeerAgents()[key]?.features?.includes("moves.check") === true;
+
 /** The same, for one that talks with a coding agent. */
 function olderThanCarrying(key: string): boolean {
   const features = readPeerAgents()[key]?.features;
@@ -342,6 +355,7 @@ export async function startMove(kind: MoveKind, thing: string, to: string, signa
   const record: MoveRecord = {
     id, kind, thing, name: what.name, from: own, to, role: "from", stage: "holding", sessions: what.root ? [what.root] : [],
     peer: to, wasPaused: true, tries: 0, started: Date.now(), ...(folder && fs.existsSync(folder) ? { folder } : {}), ...(what.lane ? { lane: true } : {}),
+    ...(what.model ? { model: what.model } : {}), ...(checksFirst(to) && kind !== "group" ? { step: "check" as const } : {}),
   };
   // One move of a thing at a time, whoever asks (a phone and a Mac at once, through this bridge or
   // `box route`): noted under a lock, after a look again.
@@ -433,8 +447,15 @@ const outgoing = new Map<string, { got: Set<number>; flying: Map<number, number>
 
 /** The box it leaves, carrying on from where it is (as it starts, or step by step). */
 async function carryOn(id: string): Promise<void> {
-  const record = readMove(id);
+  let record = readMove(id);
   if (!record || record.role !== "from" || record.stage !== "holding" || record.failed) return;
+  // The computer it goes to says first whether it can run it there: nothing's held here till then.
+  if (record.step === "check") {
+    const there = await checkThere(record);
+    const now = changeMove(id, each => { if (!each.failed && each.stage === "holding") { each.step = undefined; if (there.note) each.note = there.note; } });
+    if (!now || now.failed || now.stage !== "holding") return;
+    record = now;
+  }
   hold(record);
   record.holdSince = Date.now();
   saveMove(record);
@@ -509,6 +530,71 @@ async function carryOn(id: string): Promise<void> {
     Object.assign(each, { leftOf: record.leftOf, sessions: record.sessions, wasPaused: record.wasPaused, pausedAs: record.pausedAs, members: record.members, hash: bundle.hash, size: bundle.size, sent: 0, stage: "copying", step: "offer", offered: true, sentAt: Date.now(), holdSince: undefined });
   });
   if (now) offer(now);
+}
+
+// ---- Whether it can run there ----
+
+/** How long the computer it goes to has to say whether it can run it. */
+const CHECK_WAIT = 45_000;
+const checking = new Map<string, (answer: Record<string, unknown>) => void>();
+
+/** Asked of the computer it goes to before anything's held: whether it can run it there (its agents
+ * or engine running, its coding agent there and signed in, its model usable). Refused there: why,
+ * as that computer says it; no answer: it isn't connected. */
+async function checkThere(record: MoveRecord): Promise<{ note?: string }> {
+  const answer = await new Promise<Record<string, unknown> | null>(resolve => {
+    const timer = setTimeout(() => { checking.delete(record.id); resolve(null); }, CHECK_WAIT);
+    checking.set(record.id, given => { clearTimeout(timer); checking.delete(record.id); resolve(given); });
+    tell(record.peer, { op: "check", id: record.id, kind: record.kind, name: record.name, ...(record.lane ? { lane: true } : {}), ...(record.model ? { model: record.model } : {}) });
+  });
+  if (!answer) throw new Refused(say.notConnected(nameOf(record.peer)), 503);
+  if (answer.ok !== true) throw new Refused(typeof answer.message === "string" && answer.message ? answer.message : `${record.name} can’t run on ${nameOf(record.peer)}.`);
+  return typeof answer.note === "string" && answer.note ? { note: answer.note } : {};
+}
+
+/** A coding agent's account here, as its bridge lists it (`api/integration`). */
+interface AgentAccount {
+  id?: string;
+  name?: string;
+  metadata?: { agent?: string; installed?: boolean; account?: string; accountLabel?: string };
+  connections?: unknown[];
+}
+
+/** The box it goes to: whether it can run what's coming (`check`), said back at once. */
+async function checkHere(sender: MailSender, given: Record<string, unknown>, id: string): Promise<void> {
+  const answer = (move: Record<string, unknown>) => void tell(sender.key, { op: "checked", id, ...move });
+  const name = typeof given.name === "string" ? given.name : "It";
+  const lane = given.lane === true;
+  const place = IS_MAC ? "this Mac" : (plainName(readLink()?.name ?? "") || "this machine");
+  const wait = AbortSignal.timeout(20_000);
+  let target: Target;
+  try {
+    target = lane ? readBridgeFile() : readEngineFile();
+    await call(target, "GET", "/api/session/active", undefined, wait);
+  } catch {
+    return answer({ ok: false, message: lane ? say.noAgents(place) : say.noEngine(place) });
+  }
+  const model = isObject(given.model) && typeof given.model.providerID === "string" && typeof given.model.id === "string" ? { providerID: given.model.providerID, id: given.model.id } : null;
+  if (!model || given.kind === "group") return answer({ ok: true });
+  if (!lane) {
+    const refused = await signInRefusal(model, target, wait).catch(() => null);
+    return answer(refused ? { ok: false, message: say.modelNotThere(name, model.id, place) } : { ok: true });
+  }
+  const kind = model.providerID.split("@")[0]!;
+  // Custom Auto picks among what's signed in there.
+  if (kind === "auto") return answer({ ok: true });
+  const listed = await call(target, "GET", "/api/integration", undefined, wait).catch(() => null);
+  if (!Array.isArray(listed)) return answer({ ok: false, message: say.noAgents(place) });
+  const ofKind = (listed as (AgentAccount | null)[]).filter((each): each is AgentAccount => each?.metadata?.agent === kind);
+  const agentName = ofKind[0]?.name ?? "its coding agent";
+  if (!ofKind.some(each => each.metadata?.installed)) return answer({ ok: false, message: say.agentNotThere(name, agentName, place) });
+  const signedIn = ofKind.filter(each => each.metadata?.installed && Array.isArray(each.connections) && each.connections.length);
+  if (!signedIn.length) return answer({ ok: false, message: say.agentSignedOut(name, agentName, place) });
+  // Its own account, or another of the same agent there: which it is from then on, said.
+  if (signedIn.some(each => each.id === model.providerID)) return answer({ ok: true });
+  const uses = signedIn[0]!;
+  const who = uses.metadata?.account ? ` (${uses.metadata.account})` : "";
+  return answer({ ok: true, note: say.otherAccount(name, agentName, who, place) });
 }
 
 function offer(record: MoveRecord): void {
@@ -618,7 +704,7 @@ async function finish(id: string): Promise<void> {
   noteMovedAway(record.sessions, record.to);
   forgetMove(id);
   outgoing.delete(id);
-  ended(id, { ok: true, move: shownMove({ ...record, stage: "finishing" }) });
+  ended(id, { ok: true, move: shownMove({ ...record, stage: "finishing" }), ...(record.note ? { note: record.note } : {}) });
 }
 
 /** Taken back before it switched: the other box lets its copy go, and it goes on here as it was. */
@@ -1108,6 +1194,12 @@ export async function takeMoveMail(sender: MailSender, given: unknown): Promise<
   // Parts and their answers come many at once, and need no turn of their own (nor does word that a
   // copy's still being set up).
   if (given.op === "part" || given.op === "got" || given.op === "working" || given.op === "arrive") return moveMail(sender, given, given.id);
+  // Whether it can run there: asked and answered while the box it leaves waits, in its turn.
+  if (given.op === "check") return checkHere(sender, given, given.id);
+  if (given.op === "checked") {
+    if (record?.role === "from" && record.peer === sender.key) checking.get(given.id)?.(given);
+    return;
+  }
   return inTurn(given.id, () => moveMail(sender, given, given.id as string));
 }
 

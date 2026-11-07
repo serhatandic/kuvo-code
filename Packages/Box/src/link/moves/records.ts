@@ -25,7 +25,7 @@ export interface MoveRecord extends Move {
   folder?: string;
   hash?: string;
   /** Where it is between the boxes: the source waits for `ready`, `arrived`, `switched`, `dropped`. */
-  step?: "offer" | "parts" | "arrive" | "switch" | "drop" | "done";
+  step?: "check" | "offer" | "parts" | "arrive" | "switch" | "drop" | "done";
   tries: number;
   /** The box it goes to: all its parts came, and it's being (or was) put in place; parts that come
    * after are ignored. */
@@ -74,6 +74,10 @@ export interface MoveRecord extends Move {
   digest?: string;
   /** The box it goes to: where it was, to tell it as it's switched to. */
   was?: { place: string; folder?: string };
+  /** The model it talks with, for the box it goes to to check (`check`). */
+  model?: { providerID: string; id: string };
+  /** What the box it goes to said it does differently there (another account of its coding agent). */
+  note?: string;
   /** Taken back, with why (said to whoever asked). */
   failed?: string;
   /** The status a failure answers: 409 (it can't, now) or 503 (the other computer can't be reached). */
@@ -162,7 +166,8 @@ export function awaySessions(records = liveMoves()): string[] {
 /** The conversations held while they move (nothing reaches them: prompts wait, letters come
  * again later), and the bots and group chats. */
 export function frozen(records = liveMoves()): Set<string> {
-  return new Set(records.flatMap(record => [record.thing, ...record.sessions]));
+  // (Not while the box it goes to is only asked whether it can run it: nothing's held yet.)
+  return new Set(records.filter(record => record.step !== "check").flatMap(record => [record.thing, ...record.sessions]));
 }
 
 /** A conversation moved away from here in the last two days, and where it lives now (a box's key). */
