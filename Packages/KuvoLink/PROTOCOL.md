@@ -1765,7 +1765,22 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     409 for a name that's taken, 503 while GitHub is limiting requests, 502 when it couldn't be
     reached.
 - On a Mac, Settings › Machines: the machines it runs sessions on (a machine's bridge doesn't
-  answer these).
+  answer these). The app reaches them over SSH, so how a connection stands and what's done with one
+  are the open app's to say, and it answers these as long as it's there. The list isn't: it's
+  `machines.json` in this Mac's box's folder, which the app alone writes and the box only reads
+  (bridge 0.9.201). With the app closed or stuck, the box answers from it, so a phone needs nothing
+  different:
+  - `GET kuvo/machines` lists them with `connection` `notConnected`, no `action`, no `failure`, and
+    `hosts` empty. `status` says what the box can tell by itself, and that the app isn't open:
+    "Running · Kuvo Code isn’t open on Studio" for a machine whose box was heard from in the last half
+    hour (its agents' mail, "Peers", every ten minutes), "Not heard from lately · …" for one that
+    wasn't, and only "Kuvo Code isn’t open on Studio" for one this box doesn't meet (another Mac's).
+    `503 {"message"}` when the list is there and can't be read, which isn't none.
+  - `GET kuvo/machines/events` is one stream over both: the app's lines while it's there, the box's
+    while it isn't, looking for the app again every ten seconds.
+  - Anything else (adding one, its button, removing or uninstalling it, its addresses, same-as,
+    Make This Mac Its Home) answers `503 {"message": "Kuvo Code isn’t open on Studio. Open it there,
+    then try again."}`, at once.
   - `GET kuvo/machines` → `{"machines": [{id, name, otherAddresses, connection, status, failure?,
     action?}], "hosts", "folded"?}`, in the page's order. `connection` is `notConnected`,
     `connecting`, `reconnecting`, `installing`, `connected`, `failed` or `stopped`; `status` says
@@ -2639,9 +2654,9 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `update` | a machine only: `kuvo/update` |
 | `accounts.ended` | `kuvo/accounts/ended` and `POST kuvo/accounts/<provider>/forget` (a machine from 0.9.61) |
 | `claude-code` | a Mac only: `kuvo/claude-code` |
-| `hosts` | the Mac with the app only for now: `kuvo/hosts…` (a machine's box can't do this yet, on Linux or a Mac) |
+| `hosts` | a Mac only: `kuvo/hosts…` (with its app closed its box still lists them, and `DELETE` says the app must be open) |
 | `mac` | a Mac only: `kuvo/mac` |
-| `machines` | a Mac only: `kuvo/machines…` |
+| `machines` | a Mac only: `kuvo/machines…` (with its app closed its box still lists them, and the rest says the app must be open) |
 | `usage` | the Mac with the app only for now, while it has the usage panel: `kuvo/usage…` (a machine's box can't do this yet, on Linux or a Mac) |
 
 Here "a Mac" is the box the app runs (`KUVO_BOX=mac`), and "a machine" any box in `~/.kuvo-code`,

@@ -3,9 +3,9 @@
 // Packages/Box/src/link/main.ts
 import { spawn as spawn12 } from "node:child_process";
 import crypto40 from "node:crypto";
-import fs95 from "node:fs";
+import fs96 from "node:fs";
 import os14 from "node:os";
-import path96 from "node:path";
+import path97 from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 
 // Packages/Box/src/shared/text.ts
@@ -25123,7 +25123,7 @@ import fs82 from "node:fs";
 import path86 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.200";
+var BRIDGE_VERSION = "0.9.201";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -28456,6 +28456,200 @@ function engineHandler(readEngine = readEngineFile, info = {}, readBridge = read
   };
 }
 
+// Packages/Box/src/link/mac/app-route.ts
+async function appAnswer(request, phone, signal) {
+  const host = appHost();
+  if (!host)
+    return null;
+  let response;
+  try {
+    await proveHost(host);
+    response = await fetch(`${host.url}/link/route`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${host.password}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        method: request.method,
+        path: request.path,
+        headers: request.headers ?? {},
+        body: Buffer.from(request.body ?? EMPTY).toString("base64"),
+        phone: phone?.key?.toString("base64url") ?? null
+      }),
+      signal
+    });
+  } catch {
+    if (!signal?.aborted)
+      forgetHostProof();
+    return null;
+  }
+  if (response.headers.get("x-kuvo-answer") === "1")
+    return response;
+  await response.body?.cancel().catch(() => {});
+  return null;
+}
+async function* passedOn(response, signal) {
+  const headers = { "content-type": response.headers.get("content-type") ?? "application/json" };
+  const cache = response.headers.get("cache-control");
+  if (cache)
+    headers["cache-control"] = cache;
+  yield { head: { status: response.status, headers } };
+  if (!response.body)
+    return;
+  for await (const chunk of response.body) {
+    if (signal?.aborted)
+      break;
+    yield { body: Buffer.from(chunk) };
+  }
+}
+
+// Packages/Box/src/link/mac/machines.ts
+import fs95 from "node:fs";
+import path96 from "node:path";
+var LIST_FILE = path96.join(K, "machines.json");
+var PHONE_LINK_FILE = path96.join(path96.dirname(K), "phone-link.json");
+var HEARD_LATELY = 30 * 60000;
+var TIMING = { wait: 5000, look: 1e4 };
+var macName = () => macLink.config?.name || "this Mac";
+var notOpen = () => `Kuvo Code isn’t open on ${macName()}`;
+var UNREADABLE = "This Mac’s list of machines can’t be read right now.";
+function savedMachines() {
+  let text;
+  try {
+    text = fs95.readFileSync(LIST_FILE, "utf8");
+  } catch (error) {
+    return error.code === "ENOENT" ? [] : null;
+  }
+  try {
+    const saved = JSON.parse(text);
+    return Array.isArray(saved) && saved.every((machine) => typeof machine?.destination === "string") ? saved : null;
+  } catch {
+    return null;
+  }
+}
+function machinesWithoutApp(now = Date.now()) {
+  const saved = savedMachines();
+  if (!saved)
+    return null;
+  const peers = peersOf(readLink());
+  const told = readPeerAgents();
+  return {
+    machines: saved.map(({ destination, otherAddresses }) => {
+      const peer = peers.find((each) => each.id === destination);
+      const at = peer ? told[peer.key]?.at ?? 0 : 0;
+      const heard = !peer ? "" : now - at < HEARD_LATELY ? "Running · " : "Not heard from lately · ";
+      return { id: destination, name: destination, otherAddresses: Array.isArray(otherAddresses) ? otherAddresses : [], connection: "notConnected", status: heard + notOpen() };
+    }),
+    hosts: []
+  };
+}
+function hostsWithoutApp() {
+  const saved = savedMachines();
+  const relay = macLink.config?.relay;
+  if (!saved || !relay)
+    return null;
+  let kept = {};
+  try {
+    kept = JSON.parse(fs95.readFileSync(PHONE_LINK_FILE, "utf8")).machines ?? {};
+  } catch (error) {
+    if (error.code !== "ENOENT")
+      return null;
+  }
+  const hosts = Object.entries(kept).flatMap(([machine, { name, address, key, anotherMac }]) => typeof name === "string" && typeof address === "string" && typeof key === "string" ? [{ kind: "machine", name, address, key, relay, machine, anotherMac: anotherMac === true, removed: !saved.some((each) => each.destination === machine) }] : []);
+  return { hosts: hosts.sort((one, other) => one.name < other.name ? -1 : one.name > other.name ? 1 : 0) };
+}
+var answer4 = (status, value) => [{ head: { status, headers: { "content-type": "application/json" } } }, { body: Buffer.from(JSON.stringify(value)) }];
+async function appWithin(request, phone, signal, wait) {
+  const stop = new AbortController;
+  const stopNow = () => stop.abort();
+  signal?.addEventListener("abort", stopNow, { once: true });
+  let timer;
+  const late = new Promise((done) => {
+    timer = setTimeout(() => {
+      stopNow();
+      done(null);
+    }, wait);
+  });
+  const asked = appAnswer(request, phone, stop.signal);
+  const response = await Promise.race([asked, late]);
+  clearTimeout(timer);
+  if (!response) {
+    signal?.removeEventListener("abort", stopNow);
+    asked.then((gone) => gone?.body?.cancel()).catch(() => {});
+  }
+  return response;
+}
+var pause2 = (ms, signal) => new Promise((done) => {
+  const finish = () => {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", finish);
+    done();
+  };
+  const timer = setTimeout(finish, ms);
+  signal?.addEventListener("abort", finish, { once: true });
+});
+async function* machinesFollowed(request, phone, signal, timing) {
+  const head = { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
+  let started = false;
+  let last = "";
+  while (!signal?.aborted) {
+    const response = await appWithin(request, phone, signal, timing.wait);
+    if (response?.status === 200 && response.body) {
+      if (!started)
+        yield head;
+      started = true;
+      let ended = true;
+      try {
+        for await (const chunk of response.body) {
+          if (signal?.aborted)
+            return;
+          yield { body: Buffer.from(chunk) };
+          ended = chunk[chunk.length - 1] === 10;
+        }
+      } catch {}
+      if (!ended)
+        yield { body: Buffer.from(`
+`) };
+      last = "";
+    } else {
+      await response?.body?.cancel().catch(() => {});
+    }
+    if (signal?.aborted)
+      return;
+    const own = machinesWithoutApp();
+    if (!own && !started)
+      return yield* answer4(503, { message: UNREADABLE });
+    if (!started)
+      yield head;
+    started = true;
+    const line = own && JSON.stringify(own);
+    if (line && line !== last) {
+      yield { body: Buffer.from(line + `
+`) };
+      last = line;
+    }
+    await pause2(timing.look, signal);
+  }
+}
+var isMachinesRoute = (route) => /^kuvo\/(machines|hosts)(\/|$)/.test(route);
+async function* machinesRoute(request, phone, signal, route, timing = TIMING) {
+  const read = request.method.toUpperCase() === "GET";
+  if (read && route === "kuvo/machines/events")
+    return yield* machinesFollowed(request, phone, signal, timing);
+  const response = read ? await appWithin(request, phone, signal, timing.wait) : await appAnswer(request, phone, signal);
+  if (response)
+    return yield* passedOn(response, signal);
+  if (signal?.aborted)
+    return;
+  if (read && route === "kuvo/machines") {
+    const own = machinesWithoutApp();
+    return yield* answer4(own ? 200 : 503, own ?? { message: UNREADABLE });
+  }
+  if (read && route === "kuvo/hosts") {
+    const own = hostsWithoutApp();
+    return yield* answer4(own ? 200 : 503, own ?? { message: UNREADABLE });
+  }
+  yield* answer4(503, { message: `${notOpen()}. Open it there, then try again.` });
+}
+
 // Packages/Box/src/link/mac/relay.ts
 var MAC_BOX_ROUTES = [
   "kuvo/artifacts",
@@ -28497,53 +28691,19 @@ var macAnswersAlso = (route) => /^kuvo\/accounts\/[^/]+\/forget$/.test(route) ||
 var macAnswers = (route) => MAC_BOX_ROUTES.some((area) => route === area || route.startsWith(`${area}/`)) || macAnswersAlso(route);
 var APP_NOT_ANSWERING = "Kuvo Code on this Mac isn't answering. Try again in a moment.";
 async function* toApp(request, phone, signal) {
-  let response = null;
-  const host = appHost();
-  if (host) {
-    try {
-      await proveHost(host);
-      response = await fetch(`${host.url}/link/route`, {
-        method: "POST",
-        headers: { authorization: `Bearer ${host.password}`, "content-type": "application/json" },
-        body: JSON.stringify({
-          method: request.method,
-          path: request.path,
-          headers: request.headers ?? {},
-          body: Buffer.from(request.body ?? EMPTY).toString("base64"),
-          phone: phone?.key?.toString("base64url") ?? null
-        }),
-        signal
-      });
-    } catch {
-      if (!signal?.aborted)
-        forgetHostProof();
-      response = null;
-    }
-  }
-  if (!response || response.headers.get("x-kuvo-answer") !== "1") {
-    await response?.body?.cancel().catch(() => {});
-    yield { head: { status: 503, headers: { "content-type": "application/json" } } };
-    yield { body: Buffer.from(JSON.stringify({ message: APP_NOT_ANSWERING })) };
-    return;
-  }
-  const headers = { "content-type": response.headers.get("content-type") ?? "application/json" };
-  const cache = response.headers.get("cache-control");
-  if (cache)
-    headers["cache-control"] = cache;
-  yield { head: { status: response.status, headers } };
-  if (!response.body)
-    return;
-  for await (const chunk of response.body) {
-    if (signal?.aborted)
-      break;
-    yield { body: Buffer.from(chunk) };
-  }
+  const response = await appAnswer(request, phone, signal);
+  if (response)
+    return yield* passedOn(response, signal);
+  yield { head: { status: 503, headers: { "content-type": "application/json" } } };
+  yield { body: Buffer.from(JSON.stringify({ message: APP_NOT_ANSWERING })) };
 }
-function macFront(handle = engineHandler(readEngineFile, { name: os12.hostname() })) {
+function macFront(handle = engineHandler(readEngineFile, { name: os12.hostname() }), timing) {
   return async function* (request, phone, signal) {
     const route = String(request.path ?? "").split("?")[0];
     if (macAnswers(route) || /^api(\/|$)/.test(route) || route.startsWith(AGENTS))
       return yield* handle(request, phone, signal);
+    if (isMachinesRoute(route))
+      return yield* machinesRoute(request, phone, signal, route, timing);
     yield* toApp(request, phone, signal);
   };
 }
@@ -28683,9 +28843,9 @@ onLinkWritten((link) => {
     return;
   }
   if (needed(link))
-    fs95.writeFileSync(NEEDED_FILE, "", { mode: 384 });
+    fs96.writeFileSync(NEEDED_FILE, "", { mode: 384 });
   else
-    fs95.rmSync(NEEDED_FILE, { force: true });
+    fs96.rmSync(NEEDED_FILE, { force: true });
 });
 function machineWelcomed(host) {
   announce(host, readEngineFile, undefined, undefined, true).catch(() => {});
@@ -28703,18 +28863,18 @@ function updateIsWell() {
 async function run3() {
   let old = null;
   try {
-    old = Number(fs95.readFileSync(PID_FILE, "utf8"));
+    old = Number(fs96.readFileSync(PID_FILE, "utf8"));
     if (isBridge(old))
       process.kill(old, "SIGTERM");
   } catch {}
-  fs95.mkdirSync(RUN, { recursive: true, mode: 448 });
-  fs95.writeFileSync(PID_FILE, String(process.pid), { mode: 384 });
-  fs95.writeFileSync(VERSION_FILE, BRIDGE_VERSION, { mode: 384 });
+  fs96.mkdirSync(RUN, { recursive: true, mode: 448 });
+  fs96.writeFileSync(PID_FILE, String(process.pid), { mode: 384 });
+  fs96.writeFileSync(VERSION_FILE, BRIDGE_VERSION, { mode: 384 });
   const saved = savedLoginPath(K);
   if (saved)
-    process.env.PATH = joinPath(path96.join(K, "bin"), saved);
+    process.env.PATH = joinPath(path97.join(K, "bin"), saved);
   for (const folder of ["present", "connected"])
-    fs95.rmSync(path96.join(RUN, folder), { recursive: true, force: true });
+    fs96.rmSync(path97.join(RUN, folder), { recursive: true, force: true });
   try {
     keepJobs();
   } catch {}
@@ -28730,8 +28890,8 @@ async function run3() {
   });
   const cleanUp = () => {
     try {
-      if (fs95.readFileSync(PID_FILE, "utf8") === String(process.pid))
-        fs95.unlinkSync(PID_FILE);
+      if (fs96.readFileSync(PID_FILE, "utf8") === String(process.pid))
+        fs96.unlinkSync(PID_FILE);
     } catch {}
     process.exit(0);
   };
@@ -28741,7 +28901,7 @@ async function run3() {
   setInterval(() => {
     let owner = null;
     try {
-      owner = Number(fs95.readFileSync(PID_FILE, "utf8"));
+      owner = Number(fs96.readFileSync(PID_FILE, "utf8"));
     } catch {}
     const link = readLink();
     if (!needed(link)) {
@@ -28775,7 +28935,7 @@ async function run3() {
     await sleep(50);
   let held = [];
   try {
-    held = JSON.parse(fs95.readFileSync(HELD_FILE, "utf8"));
+    held = JSON.parse(fs96.readFileSync(HELD_FILE, "utf8"));
   } catch {}
   const hold = new NoticeHold({
     send: tellPhones,
@@ -28785,7 +28945,7 @@ async function run3() {
         if (entries.length)
           writePrivate(HELD_FILE, JSON.stringify(entries));
         else
-          fs95.rmSync(HELD_FILE, { force: true });
+          fs96.rmSync(HELD_FILE, { force: true });
       } catch {}
     }
   });
@@ -29029,7 +29189,7 @@ async function serve() {
     console.error('serve answers only with a password: on its stdin, {"password"}, or in OPENCODE_PASSWORD.');
     process.exit(2);
   }
-  fs95.mkdirSync(RUN, { recursive: true, mode: 448 });
+  fs96.mkdirSync(RUN, { recursive: true, mode: 448 });
   if (IS_MAC)
     addMacDefaults();
   try {
@@ -29153,7 +29313,7 @@ async function setup() {
   }
   let runningVersion = null;
   try {
-    runningVersion = fs95.readFileSync(VERSION_FILE, "utf8").trim();
+    runningVersion = fs96.readFileSync(VERSION_FILE, "utf8").trim();
   } catch {}
   const restart = old?.relay !== link.relay || old?.name !== link.name || runningVersion !== BRIDGE_VERSION;
   if (!isUpdating()) {
@@ -29232,7 +29392,7 @@ function selftest() {
   const ok = said.toString() === "hello" && payload.toString() === "welcome" && echoed.toString() === "ping" && mail.toString() === "mail" && responder.rs.equals(publicOf(phone)) && typeof WebSocket === "function" && typeof fetch === "function";
   return ok;
 }
-var main = process.argv[1] && fs95.realpathSync(process.argv[1]) === fs95.realpathSync(fileURLToPath3(import.meta.url));
+var main = process.argv[1] && fs96.realpathSync(process.argv[1]) === fs96.realpathSync(fileURLToPath3(import.meta.url));
 if (main) {
   const [mode, argument] = process.argv.slice(2);
   if (mode === "run")
