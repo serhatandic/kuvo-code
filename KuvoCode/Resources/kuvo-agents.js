@@ -3722,7 +3722,7 @@ var PAUSED_BY_YOU = "You paused it.";
 
 // Packages/Box/src/shared/summaries.ts
 var asRows = (messages) => Array.isArray(messages) ? messages : [];
-var between = new Set(["synthetic", "system", "model-switched", "agent-switched"]);
+var between = new Set(["synthetic", "system", "model-switched", "agent-switched", "shell"]);
 var asked = (row) => row?.type === "compaction" && row.reason === "manual";
 function onItsOwn(rows, index) {
   for (let at = index + 1;at < rows.length; at++) {
@@ -3732,17 +3732,22 @@ function onItsOwn(rows, index) {
   }
   return true;
 }
-function lastTurnEnd(messages) {
-  const rows = asRows(messages);
-  for (let at = 0;at < rows.length; at++) {
-    if (rows[at]?.type !== "idle")
-      continue;
-    if (!asked(rows[at + 1]) || !onItsOwn(rows, at + 1))
-      return rows[at];
-    at++;
-  }
-  return;
+function pastSummaries(messages) {
+  const work = [];
+  messages.forEach((row, at) => {
+    if (!asked(row) || !onItsOwn(messages, at)) {
+      work.push(row);
+      return;
+    }
+    let end = work.length - 1;
+    while (end >= 0 && between.has(work[end]?.type))
+      end--;
+    if (work[end]?.type === "idle")
+      work.splice(end, 1);
+  });
+  return work;
 }
+var lastTurnEnd = (messages) => pastSummaries(asRows(messages)).find((row) => row?.type === "idle");
 
 // Packages/Box/src/agents/goals.ts
 var unknownReset2 = 30 * 60000;
@@ -23986,4 +23991,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 83ee43e3d9e4d1739131a3c5c2065c5b7c70ec2d3969201c84744bfe6ec3b721
+// Built from Packages/Box/src/agents d1ec36a8d331f7ad660075a89e347e36834a850993b95995cf75f03a8fc50f09

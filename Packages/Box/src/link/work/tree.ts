@@ -148,31 +148,13 @@ export async function contextOf(listed: Listed, signal?: AbortSignal): Promise<{
   return undefined;
 }
 
-/**
- * Whether what a session just finished was only a summary you asked for (`/compact`, or a lead's
- * compact_session), which isn't news: no reply, nothing done.
- */
-export async function endedOnSummary(target: Target, session: string, signal?: AbortSignal): Promise<boolean> {
-  return summaryAtEndOf(target, session, signal).then(status => status === "completed");
-}
-
-/** How a summary asked for went, if that's what a session did last. */
-export async function summaryAtEndOf(target: Target, session: string, signal?: AbortSignal): Promise<string | null> {
-  return summaryAtEnd(await lastMessages(target, session, signal));
-}
-
-/** That summary's row, with why it failed if it did. */
+/** The summary asked for that a session did last, if that's all it did since its last turn. */
 export async function summaryRowOf(target: Target, session: string, signal?: AbortSignal) {
   return summaryRowAtEnd(await lastMessages(target, session, signal));
 }
 
 const lastMessages = (target: Target, session: string, signal?: AbortSignal) =>
   call(target, "GET", `/api/session/${encodeURIComponent(session)}/message?limit=6&order=desc`, undefined, signal).catch(() => null);
-
-/** How a session's last turn of work ended, for one just listed. */
-export async function workOutcomeOf(target: Target, listed: Listed["data"], signal?: AbortSignal): Promise<unknown> {
-  return outcomeOf({ data: listed } as Listed, await lastMessages(target, listed.id, signal));
-}
 
 /**
  * How a session's work ended, past a summary asked for after it, which ends a turn of its own: the
@@ -192,7 +174,7 @@ export async function keepReadThroughSummary(target: Target, session: string, si
   const route = `/api/session/${encodeURIComponent(session)}`;
   const page = await lastMessages(target, session, signal);
   if (summaryAtEnd(page) !== "completed") return;
-  const before = lastTurnEnd(page)?.time?.created;
+  const before = (lastTurnEnd(page)?.time as { created?: number } | undefined)?.created;
   const listed = await call(target, "GET", route, undefined, signal).catch(() => null) as { time?: { viewed?: number; idle?: number } } | null;
   if (before === undefined || listed?.time?.idle === undefined || (listed.time.viewed ?? 0) < before) return;
   // (The engine takes which end you saw, and refuses a look that doesn't say.)

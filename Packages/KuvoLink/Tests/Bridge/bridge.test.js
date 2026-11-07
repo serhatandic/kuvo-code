@@ -1097,6 +1097,9 @@ test("a summary's news: one that failed says only that, one that went through is
   assert.equal(failed.body, "Couldn't summarize the conversation.");
   page = [end("failed"), summary("failed"), end("succeeded"), said];
   assert.equal((await link.noticeFor({ type: "session.execution.failed", data: { sessionID: "ses_s" } }, get)).body, "Couldn't summarize the conversation.");
+  // A command you ran at rest before it isn't a run.
+  page = [end("succeeded"), summary("completed"), { type: "shell", command: "git status" }, end("succeeded"), said];
+  assert.equal(await link.noticeFor(ends, get), null);
   // During a run on the engine, gone through or not: its reply is the news.
   for (const status of ["completed", "failed"]) {
     page = [end("succeeded"), summary(status), said];

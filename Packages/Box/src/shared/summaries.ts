@@ -11,12 +11,12 @@ export interface ConversationRow {
   status?: unknown;
   outcome?: unknown;
   error?: { message?: unknown } | unknown;
-  time?: { created?: number };
+  time?: unknown;
 }
 
 const asRows = (messages: unknown) => (Array.isArray(messages) ? messages as ConversationRow[] : []);
-/** What's written between turns: notes, and a model or mode picked. */
-const between = new Set<unknown>(["synthetic", "system", "model-switched", "agent-switched"]);
+/** What's written between turns: notes, a model or mode picked, a command you ran. */
+const between = new Set<unknown>(["synthetic", "system", "model-switched", "agent-switched", "shell"]);
 const asked = (row: ConversationRow | undefined) => row?.type === "compaction" && row.reason === "manual";
 
 /** Whether the summary at `index` ran on its own: nothing before it was still going. */
@@ -39,13 +39,22 @@ export function summaryRowAtEnd(messages: unknown): ConversationRow | null {
 /** How that summary went, if that's what a session did last. */
 export const summaryAtEnd = (messages: unknown): string | null => summaryRowAtEnd(messages)?.status as string ?? null;
 
-/** Where a session's last turn of work ended, past any summaries that ran on their own after it. */
-export function lastTurnEnd(messages: unknown): ConversationRow | undefined {
-  const rows = asRows(messages);
-  for (let at = 0; at < rows.length; at++) {
-    if (rows[at]?.type !== "idle") continue;
-    if (!asked(rows[at + 1]) || !onItsOwn(rows, at + 1)) return rows[at];
-    at++;
-  }
-  return undefined;
+/** A conversation without the summaries that ran on their own, nor their ends: its turns of work. */
+export function pastSummaries<Row extends ConversationRow>(messages: Row[]): Row[] {
+  const work: Row[] = [];
+  messages.forEach((row, at) => {
+    if (!asked(row) || !onItsOwn(messages, at)) {
+      work.push(row);
+      return;
+    }
+    // Its end is the newest `idle` just above it, past any notes.
+    let end = work.length - 1;
+    while (end >= 0 && between.has(work[end]?.type)) end--;
+    if (work[end]?.type === "idle") work.splice(end, 1);
+  });
+  return work;
 }
+
+/** Where a session's last turn of work ended. */
+export const lastTurnEnd = (messages: unknown): ConversationRow | undefined =>
+  pastSummaries(asRows(messages)).find(row => row?.type === "idle");

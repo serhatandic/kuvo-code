@@ -1046,7 +1046,7 @@ import { fileURLToPath } from "node:url";
 
 // Packages/Box/src/shared/summaries.ts
 var asRows = (messages) => Array.isArray(messages) ? messages : [];
-var between = new Set(["synthetic", "system", "model-switched", "agent-switched"]);
+var between = new Set(["synthetic", "system", "model-switched", "agent-switched", "shell"]);
 var asked2 = (row) => row?.type === "compaction" && row.reason === "manual";
 function onItsOwn(rows, index) {
   for (let at = index + 1;at < rows.length; at++) {
@@ -1064,17 +1064,22 @@ function summaryRowAtEnd(messages) {
   return onItsOwn(rows, at) ? rows[at] : null;
 }
 var summaryAtEnd = (messages) => summaryRowAtEnd(messages)?.status ?? null;
-function lastTurnEnd(messages) {
-  const rows = asRows(messages);
-  for (let at = 0;at < rows.length; at++) {
-    if (rows[at]?.type !== "idle")
-      continue;
-    if (!asked2(rows[at + 1]) || !onItsOwn(rows, at + 1))
-      return rows[at];
-    at++;
-  }
-  return;
+function pastSummaries(messages) {
+  const work = [];
+  messages.forEach((row, at) => {
+    if (!asked2(row) || !onItsOwn(messages, at)) {
+      work.push(row);
+      return;
+    }
+    let end = work.length - 1;
+    while (end >= 0 && between.has(work[end]?.type))
+      end--;
+    if (work[end]?.type === "idle")
+      work.splice(end, 1);
+  });
+  return work;
 }
+var lastTurnEnd = (messages) => pastSummaries(asRows(messages)).find((row) => row?.type === "idle");
 
 // Packages/Box/src/link/engine/sessions.ts
 import crypto3 from "node:crypto";
@@ -7366,16 +7371,10 @@ async function contextOf(listed, signal) {
   }
   return;
 }
-async function summaryAtEndOf(target, session, signal) {
-  return summaryAtEnd(await lastMessages(target, session, signal));
-}
 async function summaryRowOf(target, session, signal) {
   return summaryRowAtEnd(await lastMessages(target, session, signal));
 }
 var lastMessages = (target, session, signal) => call(target, "GET", `/api/session/${encodeURIComponent(session)}/message?limit=6&order=desc`, undefined, signal).catch(() => null);
-async function workOutcomeOf(target, listed, signal) {
-  return outcomeOf({ data: listed }, await lastMessages(target, listed.id, signal));
-}
 function outcomeOf(listed, page) {
   if (summaryAtEnd(page) === null)
     return listed.data.outcome;
@@ -8617,14 +8616,10 @@ function errorOf(value, at) {
 }
 async function turnError(target, session, signal) {
   const page = await call(target, "GET", `/api/session/${encodeURIComponent(session)}/message?limit=5&order=desc`, undefined, signal).catch(() => null);
-  for (const message of Array.isArray(page) ? page : []) {
-    if (!isObject(message) || message.type !== "idle")
-      continue;
-    if (message.outcome !== "failed")
-      return null;
-    return errorOf(message.error, Number(isObject(message.time) ? message.time.created : 0) || undefined) ?? { type: "", message: "" };
-  }
-  return null;
+  const end = lastTurnEnd(page);
+  if (end?.outcome !== "failed")
+    return null;
+  return errorOf(end.error, Number(end.time?.created ?? 0) || undefined) ?? { type: "", message: "" };
 }
 function isFree(model) {
   if (!isObject(model))
@@ -8761,6 +8756,11 @@ var took = (ms) => {
   const minutes = Math.round(ms / 60000);
   return minutes < 1 ? "under a minute" : minutes < 90 ? `${minutes} min` : `${Math.round(minutes / 60)} h`;
 };
+function notSummarizedLine(session, why) {
+  const folder = session.location?.directory ?? session.directory ?? "";
+  const named = `"${session.title || "New Session"}" ${placeWords({ project: projectNameOf(folder), folder })} (address ${session.id})`;
+  return `[Session not summarized] ${named}: ${why ? cut(why.replace(/\.+$/, ""), 400) : "It couldn't"}. Its conversation and work are as they were.`;
+}
 async function wakeLine(event, session, target, still) {
   const folder = session.location?.directory ?? session.directory ?? "";
   const project = projectNameOf(folder);
@@ -8776,8 +8776,6 @@ ${reply ? cut(reply, 1200) : "(It ended without a reply.)"}${running}`;
     }
     case "session.execution.failed": {
       const error = errorOf(event.data.error) ?? await turnError(target, session.id).catch(() => null);
-      if (await summaryAtEndOf(target, session.id) === "failed")
-        return `[Session not summarized] ${named}: ${error?.message ? cut(error.message.replace(/\.+$/, ""), 400) : "It couldn't"}. Its conversation and work are as they were.`;
       const held = error && session.model ? await failedOn(target, session.model, error).catch(() => null) : null;
       if (held)
         return `[Session failed] ${named} stopped: ${holdWords(held)}. Starting it again there fails the same way: start it again on a model that can, from list_models, or tell the user.`;
@@ -8886,14 +8884,15 @@ async function latestMessages(target, session) {
       if (isObject(message) && typeof message.id === "string")
         messages.push(message);
     const next = page?.cursor?.next ?? page?.cursor?.previous;
-    if (!data.length || !next || turnIn(messages).before >= 0)
+    if (!data.length || !next || turnIn(pastSummaries(messages)).before >= 0)
       break;
     query = `limit=100&cursor=${encodeURIComponent(next)}`;
   }
   return messages;
 }
 async function lastReply(target, session) {
-  const messages = await latestMessages(target, session);
+  const whole = await latestMessages(target, session);
+  const messages = pastSummaries(whole);
   const at = messageTime;
   const newest = (type) => {
     const index = messages.findIndex((message) => message.type === type);
@@ -8911,7 +8910,7 @@ async function lastReply(target, session) {
     if (text)
       break;
   }
-  return { id: reply?.id ?? null, at: at(reply), turn: ended?.id ?? null, turnAt: at(ended), text, began: beganBy(turn), underWay: from === 0 && turn.some(ofTurn) };
+  return { id: reply?.id ?? null, at: at(reply), turn: ended?.id ?? null, turnAt: at(ended), text, began: beganBy(turn), underWay: from === 0 && turn.some(ofTurn), ...messages.length < whole.length ? { workOutcome: lastTurnEnd(messages)?.outcome } : {} };
 }
 function isNews(was, last) {
   if (last.id && last.id === was.reply)
@@ -9228,7 +9227,7 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
     const waited = readTold(toldFile)?.waiting?.[data.id];
     if (waited && waited.from === from)
       return finish(data, starter, last);
-    const outcome = await workOutcomeOf(source, data, signal);
+    const outcome = last.workOutcome ?? data.outcome;
     const failed = outcome === "failed";
     const reply = last.id && last.id !== was.reply ? last.id : null;
     const failedBare = failed && !reply && !!last.turn && last.turn !== was.turn && !(was.at && (last.turnAt ?? Infinity) <= was.at);
@@ -9324,9 +9323,7 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
         if (summary?.status === "failed") {
           if (starter && wakes.includes("finished") && !isArchived(session) && readStopped(stoppedFile)[session.id] === undefined) {
             const error = errorOf(event.data.error) ?? errorOf(summary.error);
-            const line = await wakeLine({ type: "session.execution.failed", data: { sessionID: session.id, error } }, session, source);
-            if (line)
-              tell(starter, line, false);
+            tell(starter, notSummarizedLine(session, error?.message), false);
           }
           return await settle(session.id);
         }
