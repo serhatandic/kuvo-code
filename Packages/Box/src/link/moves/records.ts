@@ -65,6 +65,15 @@ export interface MoveRecord extends Move {
    * goes to, since when its copy's been let go of. */
   dropSince?: number;
   started: number;
+  /** It talks with a coding agent: its conversations are on the agents bridge, not the engine, and
+   * each agent's own go with them (`carry.ts`). */
+  lane?: boolean;
+  /** The box it leaves: where each agent kept what it carried, to clear later (`left.ts`). */
+  leftOf?: unknown[];
+  /** The box it goes to: the hash of what's in place, said back as it arrives. */
+  digest?: string;
+  /** The box it goes to: where it was, to tell it as it's switched to. */
+  was?: { place: string; folder?: string };
   /** Taken back, with why (said to whoever asked). */
   failed?: string;
   /** The status a failure answers: 409 (it can't, now) or 503 (the other computer can't be reached). */
@@ -201,6 +210,17 @@ export function endedAs(id: string, now = Date.now()): "switched" | "dropped" | 
     const kept = JSON.parse(fs.readFileSync(ENDED_FILE, "utf8")) as Record<string, { as?: unknown; at?: unknown }>;
     const one = kept?.[id];
     return keptFor(one, now) ? one!.as as "switched" | "dropped" : null;
+  } catch {
+    return null;
+  }
+}
+
+/** When a move that came here was switched to, or let go of. */
+export function endedAt(id: string, now = Date.now()): number | null {
+  try {
+    const kept = JSON.parse(fs.readFileSync(ENDED_FILE, "utf8")) as Record<string, { as?: unknown; at?: unknown }>;
+    const one = kept?.[id];
+    return keptFor(one, now) ? one!.at as number : null;
   } catch {
     return null;
   }

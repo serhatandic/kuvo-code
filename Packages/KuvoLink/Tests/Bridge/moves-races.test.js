@@ -72,10 +72,11 @@ const server = http.createServer((request, response) => {
       }
       return session ? send(200, { info: { id: session.id, title: session.title, ...(session.parentID ? { parentID: session.parentID } : {}) }, messages: session.messages }) : send(404, null);
     }
-    const match = url.pathname.match(/^\/api\/session\/([^/]+)(\/inbox|\/interrupt|\/prompt)?$/);
+    const match = url.pathname.match(/^\/api\/session\/([^/]+)(\/inbox|\/interrupt|\/prompt|\/message)?$/);
     const session = match && engine.sessions.get(match[1]);
     if (!session) return send(404, null);
     if (match[2] === "/inbox") return send(200, []);
+    if (match[2] === "/message") return send(200, session.replies ?? []);
     if (match[2]) return send(200, true);
     if (request.method === "DELETE") {
       if (engine.down || engine.downFor === session.id) {
@@ -271,6 +272,31 @@ test("a part its relay connection didn't take (closing as it was sent) goes agai
     relay = { send: () => true };
     link.sendMovesWith(toScript);
   }
+});
+
+test("every part on its way lost at once (the relay dropped them all) goes again, and it isn't stuck until it's given up on", async () => {
+  chat("ses_race16");
+  // Enough to fill what can be on its way at once, however well it packs.
+  engine.sessions.get("ses_race16").messages[0].parts[0].text = crypto.randomBytes(800_000).toString("base64");
+  const lost = new Set();
+  let losing = true;
+  script = move => {
+    if (move.op === "offer") say({ op: "ready", id: move.id });
+    if (move.op === "part") {
+      if (losing) return void lost.add(move.i);
+      say({ op: "got", id: move.id, i: move.i });
+      if (move.i === move.of - 1) say({ op: "arrived", id: move.id });
+    }
+    if (move.op === "switch") say({ op: "switched", id: move.id });
+  };
+  const moving = ask("POST", "kuvo/moves", { kind: "chat", id: "ses_race16", to: peerKey });
+  await until(() => lost.size === 16);
+  losing = false;
+  const before = told.length;
+  link.keepMoving(Date.now() + 25_000);
+  assert.ok(told.slice(before).some(move => move.op === "part" && lost.has(move.i)), "those it lost go again");
+  const moved = await moving;
+  assert.equal(moved.status, 200, JSON.stringify(moved.json));
 });
 
 test("a step for a move this box doesn't have is answered dropped, never switched", async () => {
@@ -941,3 +967,105 @@ test("a copy all here and set up, whose other computer went quiet before it swit
   assert.ok(told.some(move => move.id === id && move.op === "switched"));
   assert.equal(await listed(), undefined);
 }));
+
+// ---- What a move leaves here: kept as the way back, then removed ----
+
+const WEEK = 7 * 24 * 3600_000;
+const leftHere = () => {
+  try { return JSON.parse(fs.readFileSync(path.join(movesFolder, "left.json"), "utf8")); } catch { return []; }
+};
+const leftBy = thing => leftHere().find(each => each.thing === thing);
+async function movedAwayChat(id) {
+  chat(id);
+  script = move => {
+    if (move.op === "offer") say({ op: "ready", id: move.id });
+    if (move.op === "part") {
+      say({ op: "got", id: move.id, i: move.i });
+      if (move.i === move.of - 1) say({ op: "arrived", id: move.id });
+    }
+    if (move.op === "switch") say({ op: "switched", id: move.id });
+  };
+  const moved = await ask("POST", "kuvo/moves", { kind: "chat", id, to: peerKey });
+  assert.equal(moved.status, 200, JSON.stringify(moved.json));
+  assert.ok(!engine.sessions.has(id), "it went");
+  const entry = leftBy(id);
+  assert.ok(entry?.trash && fs.existsSync(path.join(entry.trash, "conversation.json")), "and what it was is kept, as the way back");
+  return entry;
+}
+
+test("what a move left stays until a week after it first ran on the other computer, then it's gone; only that computer's word counts", async () => {
+  const entry = await movedAwayChat("ses_left1");
+  const before = told.length;
+  link.keepMoving(Date.now() + 2 * 3600_000);
+  assert.ok(told.slice(before).some(move => move.op === "ran?" && move.id === entry.id && move.session === "ses_left1"), "it asks whether it's run there");
+  // Never heard, however long: it stays.
+  link.keepMoving(Date.now() + 90 * 24 * 3600_000);
+  assert.ok(fs.existsSync(entry.trash));
+  const at = Date.now();
+  await link.takeMoveMail(studio, { op: "ran", id: entry.id, at });
+  link.keepMoving(at + 2 * WEEK);
+  assert.ok(fs.existsSync(entry.trash), "another computer's word isn't that one's");
+  assert.equal(leftBy("ses_left1").ranAt, undefined);
+
+  await say({ op: "ran", id: entry.id, at });
+  link.keepMoving(at + WEEK - 1);
+  assert.ok(fs.existsSync(entry.trash), "not before the week's up");
+  link.keepMoving(at + WEEK + 1);
+  await until(() => !fs.existsSync(entry.trash));
+  await until(() => !leftBy("ses_left1"));
+});
+
+test("while it's on its way back, and as that's taken back, nothing it left goes; after that, it goes as it would have", async () => {
+  const entry = await movedAwayChat("ses_left2");
+  const at = Date.now();
+  await say({ op: "ran", id: entry.id, at });
+  const one = bundleFor("ses_left2", [{ info: { id: "ses_left2", title: "Trip plans" }, messages: [] }]);
+  await say({ op: "offer", id: "mov_left2", kind: "chat", thing: "ses_left2", name: "“Trip plans”", size: one.bytes.length, hash: one.hash, wasPaused: false, from: peerKey });
+  await until(() => told.some(move => move.id === "mov_left2" && move.op === "ready"));
+  link.keepMoving(at + 2 * WEEK);
+  assert.ok(fs.existsSync(entry.trash), "on its way, it's kept");
+  assert.ok(leftBy("ses_left2"));
+  await say({ op: "drop", id: "mov_left2" });
+  await until(() => told.some(move => move.id === "mov_left2" && move.op === "dropped"));
+  assert.ok(fs.existsSync(entry.trash), "taken back, it's kept until the next look");
+  link.keepMoving(at + 2 * WEEK);
+  await until(() => !fs.existsSync(entry.trash));
+});
+
+test("moved back before the week's up: what came is the one, the older copy goes, and nothing here is removed later", async () => {
+  const entry = await movedAwayChat("ses_left3");
+  const one = bundleFor("ses_left3", [{ info: { id: "ses_left3", title: "Trip plans, further on" }, messages: [] }]);
+  await say({ op: "offer", id: "mov_left3", kind: "chat", thing: "ses_left3", name: "“Trip plans”", size: one.bytes.length, hash: one.hash, wasPaused: false, from: peerKey });
+  await say({ op: "part", id: "mov_left3", hash: one.hash, i: 0, of: 1, d: one.bytes.toString("base64url") });
+  await until(() => told.some(move => move.id === "mov_left3" && move.op === "arrived"));
+  assert.ok(fs.existsSync(entry.trash), "not yet: it could still be taken back");
+  await say({ op: "switch", id: "mov_left3" });
+  await until(() => told.some(move => move.id === "mov_left3" && move.op === "switched"));
+  assert.ok(!fs.existsSync(entry.trash));
+  assert.equal(leftBy("ses_left3"), undefined);
+  link.keepMoving(Date.now() + 2 * WEEK);
+  assert.equal(engine.sessions.get("ses_left3")?.title, "Trip plans, further on");
+});
+
+test("asked whether what came here has run: when it first did since it came; not yet, no word; gone from here, the time starts", async () => {
+  const file = path.join(movesFolder, "ended.json");
+  const at = Date.now() - 3600_000;
+  let kept = {};
+  try { kept = JSON.parse(fs.readFileSync(file, "utf8")); } catch {}
+  Object.assign(kept, { mov_ran1: { as: "switched", at }, mov_ran2: { as: "switched", at }, mov_ran3: { as: "switched", at }, mov_ran4: { as: "dropped", at } });
+  fs.writeFileSync(file, JSON.stringify(kept));
+  engine.sessions.set("ses_ran1", { id: "ses_ran1", title: "Ran", directory: chats, messages: [], replies: [{ type: "assistant", time: { created: at + 500 } }, { type: "assistant", time: { created: at + 100 } }, { type: "assistant", time: { created: at - 100 } }, { type: "user", time: { created: at + 50 } }] });
+  engine.sessions.set("ses_ran2", { id: "ses_ran2", title: "Not yet", directory: chats, messages: [], replies: [{ type: "assistant", time: { created: at - 100 } }] });
+  const heard = id => told.filter(move => move.id === id && move.op === "ran");
+  await say({ op: "ran?", id: "mov_ran1", session: "ses_ran1" });
+  assert.deepEqual(heard("mov_ran1").map(move => move.at), [at + 100]);
+  await say({ op: "ran?", id: "mov_ran2", session: "ses_ran2" });
+  assert.deepEqual(heard("mov_ran2"), []);
+  const asked = Date.now();
+  await say({ op: "ran?", id: "mov_ran3", session: "ses_notHere" });
+  assert.ok(heard("mov_ran3")[0]?.at >= asked);
+  // One let go of, or one it never had, isn't a word of anything.
+  await say({ op: "ran?", id: "mov_ran4", session: "ses_ran1" });
+  await say({ op: "ran?", id: "mov_ran5", session: "ses_ran1" });
+  assert.deepEqual([...heard("mov_ran4"), ...heard("mov_ran5")], []);
+});
