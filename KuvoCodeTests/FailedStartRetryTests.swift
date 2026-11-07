@@ -611,16 +611,16 @@ import Testing
         let heldUp = Task { await agents.start(engine: binary, environment: bridgeArguments) }
         try await until { starts == 1 }
         let old = try #require(started.first)
-        letItStart()
-        await agents.startAgain()
-        let running = agents.processID
-        #expect(running != nil)
-        await heldUp.value
         var heard = false
         agents.onExitHeard = {
             heard = true
             TestPulse.beat()
         }
+        letItStart()
+        await agents.startAgain()
+        let running = agents.processID
+        #expect(running != nil)
+        await heldUp.value
 
         FileManager.default.createFile(atPath: letGoFile, contents: nil)
         try await isGone(old)
