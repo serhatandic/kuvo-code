@@ -18186,7 +18186,7 @@ async function checkHere(sender, given, id) {
   const listed = await call(target, "GET", "/api/integration", undefined, wait).catch(() => null);
   if (!Array.isArray(listed))
     return answer({ ok: false, message: say.noAgents(place) });
-  const ofKind = listed.filter((each) => each?.metadata?.agent === kind);
+  const ofKind = listed.filter((each) => typeof each?.id === "string" && each.id.split("@")[0] === kind);
   const agentName = ofKind[0]?.name ?? "its coding agent";
   if (!ofKind.some((each) => each.metadata?.installed))
     return answer({ ok: false, message: say.agentNotThere(name, agentName, place) });

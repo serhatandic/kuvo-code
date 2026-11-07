@@ -599,12 +599,13 @@ async function checkHere(sender: MailSender, given: Record<string, unknown>, id:
     const refused = await signInRefusal(model, target, wait).catch(() => null);
     return answer(refused ? { ok: false, message: say.modelNotThere(name, model.id, place) } : { ok: true });
   }
+  // (Its agent's accounts there, by the provider they're all of: `claude-code`, `claude-code@<account>`.)
   const kind = model.providerID.split("@")[0]!;
   // Custom Auto picks among what's signed in there.
   if (kind === "auto") return answer({ ok: true });
   const listed = await call(target, "GET", "/api/integration", undefined, wait).catch(() => null);
   if (!Array.isArray(listed)) return answer({ ok: false, message: say.noAgents(place) });
-  const ofKind = (listed as (AgentAccount | null)[]).filter((each): each is AgentAccount => each?.metadata?.agent === kind);
+  const ofKind = (listed as (AgentAccount | null)[]).filter((each): each is AgentAccount => typeof each?.id === "string" && each.id.split("@")[0] === kind);
   const agentName = ofKind[0]?.name ?? "its coding agent";
   if (!ofKind.some(each => each.metadata?.installed)) return answer({ ok: false, message: say.agentNotThere(name, agentName, place) });
   const signedIn = ofKind.filter(each => each.metadata?.installed && Array.isArray(each.connections) && each.connections.length);

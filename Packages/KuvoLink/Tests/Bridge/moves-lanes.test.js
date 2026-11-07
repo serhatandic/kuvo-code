@@ -79,6 +79,10 @@ const running = new Map();
 async function startBridge(which) {
   // (A Mac without a token of its own keeps a Console sign-in's folder; this one has its CLAUDE_CONFIG_DIR.)
   write(path.join(which.agents, "claude", "tokens", "default.json"), { token: "stand-in" });
+  // Claude Code there, signed in (a move checks that first): a stand-in that says so, never a turn.
+  const claudeCode = path.join(which.root, ".local", "bin", "claude");
+  write(claudeCode, `#!/bin/sh\n[ "$1" = auth ] && echo '{"loggedIn":true,"authMethod":"claude.ai"}' && exit 0\nexit 1\n`);
+  fs.chmodSync(claudeCode, 0o755);
   const child = spawn(bun, [bridgeScript], {
     env: {
       PATH: process.env.PATH, HOME: which.root, TMPDIR: process.env.TMPDIR ?? os.tmpdir(), BUN_BE_BUN: "1", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0",
