@@ -997,9 +997,11 @@ client shows it from the same routes.
     too, but it holds off a goal's nudge only for 30 minutes, and never hides a turn that failed at a
     limit.
   - **Telling a lead**: `[Session finished]` waits while any of it runs, and looks again 10 seconds
-    after it ends, since the end wakes its agent. At 30 minutes it's told anyway, saying what still
-    runs. A turn someone asked for doesn't wait on what was running before they asked (a dev server):
-    it's told at once, saying what still runs. After that a turn someone asked for is always told. A
+    after it ends, since the end wakes its agent. At 30 minutes it's told anyway, but as
+    `[Session still working]` (nothing is finished), saying what still runs; clients show it as
+    "“<title>” still working". When it really finishes with something new to say, that's a normal
+    `[Session finished]`; with nothing new, nothing. A turn someone asked for doesn't wait on what was running before they asked (a dev server):
+    it's told at once as `[Session finished]`, saying what still runs. After that a turn someone asked for is always told. A
     turn following the box's own word (what a session it started did, a limit that reset) is too, as
     what comes of it may be the result. A turn that began on its own (what it
     left running ended, its own wake-up) is told only if it has something to say: 200 characters or
@@ -2432,7 +2434,7 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   them open with `[Goal started] The user approved the plan.`, `[Not now] The user didn't start
   this goal.`, `[Goal changed] The user changed the goal's limits.`, `[Goal's end] The end the
   user set has come.`, `[Goal] Nothing of the goal is at work now.`, `[Limit reset] <why> has
-  reset. Carry on`, `[Session finished|failed|asks] "<title>"` and `[The user answered] `: read
+  reset. Carry on`, `[Session finished|still working|failed|asks] "<title>"` and `[The user answered] `: read
   them the same way
   (`BoxNote` in KuvoClient's ClientSessions does both).
 - A prompt a phone sends (`POST api/session/<id>/prompt`, and `kuvo/agents/api/…` alike) gets a
