@@ -766,8 +766,8 @@ struct BottomStack: View {
                         field.setSelectedRange(NSRange(location: (field.string as NSString).length, length: 0))
                         for (index, line) in lines.enumerated() {
                             if index > 0 { field.insertNewline(nil) }
-                            for word in line.split(separator: " ") {
-                                field.insertText(" " + word, replacementRange: field.selectedRange())
+                            for (count, word) in line.split(separator: " ").enumerated() {
+                                field.insertText((index == 0 || count > 0 ? " " : "") + word, replacementRange: field.selectedRange())
                                 try? await Task.sleep(for: .milliseconds(90))
                             }
                         }
