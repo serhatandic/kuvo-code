@@ -229,16 +229,17 @@ import Testing
         #expect(Machines.anySaved)
     }
 
-    @Test func theKeeperMovesTheListOnlyWhereThereIsNoFile() throws {
+    @Test func theKeeperMovesTheListAsTheAppDoes() throws {
         defer { Self.clean() }
         UserDefaults.standard.set(try JSONEncoder().encode([Machine(destination: "lab")]), forKey: "machines")
         Machines.moveFromSettings()
         #expect(try JSONDecoder().decode([Machine].self, from: Data(contentsOf: Machines.file)).map(\.id) == ["lab"])
         #expect(UserDefaults.standard.object(forKey: "machines") == nil)
-        // A file there is the app's to deal with.
+        // With a file there, what an older version added joins it, for the box too.
         UserDefaults.standard.set(try JSONEncoder().encode([Machine(destination: "old")]), forKey: "machines")
         Machines.moveFromSettings()
-        #expect(try JSONDecoder().decode([Machine].self, from: Data(contentsOf: Machines.file)).map(\.id) == ["lab"])
+        #expect(try JSONDecoder().decode([Machine].self, from: Data(contentsOf: Machines.file)).map(\.id) == ["lab", "old"])
+        #expect(UserDefaults.standard.object(forKey: "machines") == nil)
     }
 
     /// A folder that can't be written: the list stays in the settings, changes to it too, and reaches
@@ -254,7 +255,7 @@ import Testing
         UserDefaults.standard.set(try JSONEncoder().encode([Machine(destination: "lab")]), forKey: "machines")
         let machines = Machines()
         #expect(machines.list.map(\.id) == ["lab"])
-        #expect(UserDefaults.standard.object(forKey: "machines") != nil, "never taken from there")
+        #expect(UserDefaults.standard.object(forKey: "machines") != nil || UserDefaults.standard.object(forKey: "machines.unsaved") != nil, "never out of the settings")
         machines.add("gpu")
         #expect(Machines().list.map(\.id) == ["lab", "gpu"])
         #expect(Machines.anySaved)
@@ -263,6 +264,25 @@ import Testing
         #expect(Machines().list.map(\.id) == ["lab", "gpu"])
         #expect(try JSONDecoder().decode([Machine].self, from: Data(contentsOf: Machines.file)).map(\.id) == ["lab", "gpu"])
         #expect(UserDefaults.standard.object(forKey: "machines") == nil)
+        #expect(UserDefaults.standard.object(forKey: "machines.unsaved") == nil)
+    }
+
+    /// Removed while the file can't be written, it stays removed: what's in the settings then is the
+    /// whole list, not something to add to the file's.
+    @Test func oneRemovedWhileTheFileCantBeWrittenDoesntComeBack() throws {
+        let folder = Machines.file.deletingLastPathComponent()
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: folder.path)
+            Self.clean()
+        }
+        let machines = Machines()
+        machines.add("lab")
+        machines.add("vps")
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: folder.path)
+        machines.remove("lab", uninstall: false)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: folder.path)
+        #expect(Machines().list.map(\.id) == ["vps"])
+        #expect(try JSONDecoder().decode([Machine].self, from: Data(contentsOf: Machines.file)).map(\.id) == ["vps"])
     }
 
     /// A file that won't read isn't an empty list: left as it is, and what's written next goes beside it.
@@ -315,7 +335,8 @@ import Testing
         try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: folder.path)
         stuck.add("lab")
         #expect(try Data(contentsOf: Machines.file) == damaged)
-        #expect(UserDefaults.standard.object(forKey: "machines") != nil, "what's new stays in the settings")
+        #expect(UserDefaults.standard.object(forKey: "machines.unsaved") != nil, "what's new stays in the settings")
+        #expect(stuck.fileDidntRead, "still not known to be none")
     }
 
     /// Back to an older version, which keeps its own list and sees nothing of this one, and forward
@@ -326,7 +347,8 @@ import Testing
         try JSONEncoder().encode([Machine(destination: "lab"), Machine(destination: "vps", otherAddresses: ["vps.tail"])]).write(to: Machines.file)
         UserDefaults.standard.set(try JSONEncoder().encode([Machine(destination: "vps"), Machine(destination: "gpu")]), forKey: "machines")
         let machines = Machines()
-        #expect(machines.list.map(\.id) == ["vps", "gpu", "lab"])
+        #expect(machines.list.map(\.id) == ["lab", "vps", "gpu"])
+        #expect(machines.list.first { $0.id == "vps" }?.otherAddresses == ["vps.tail"], "what the file knows of one in both stays")
         #expect(try JSONDecoder().decode([Machine].self, from: Data(contentsOf: Machines.file)) == machines.list)
         #expect(UserDefaults.standard.object(forKey: "machines") == nil)
     }

@@ -106,7 +106,7 @@ nonisolated enum Backups {
     static let files = ["bots.json", "groups.json", "groups", "bots/personalities.json", "personalities.json", "personalities-removed.json", "agent-messages.json", "phone-link.json", "box/machines.json"]
     /// The settings that hold your things (machines, projects, worktrees): one of them means
     /// there's something to keep.
-    static let settings = ["machines", "projectFolders", "worktrees", "projectSettings"]
+    static let settings = ["machines", "machines.unsaved", "projectFolders", "worktrees", "projectSettings"]
     /// The start of a backup's name while it's being made.
     private static let partialPrefix = ".partial-"
 

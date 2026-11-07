@@ -20,14 +20,15 @@ import Testing
     }
 
     private static func clean() {
-        for key in ["machines", "machines.waiting", "machines.waitingSince", "projectFolders", "projectSettings", "worktrees"] {
+        for key in ["machines", "machines.unsaved", "machines.waiting", "machines.waitingSince", "projectFolders", "projectSettings", "worktrees"] {
             UserDefaults.standard.removeObject(forKey: key)
         }
         try? FileManager.default.removeItem(at: Machines.file)
     }
 
-    /// A list that won't read isn't an empty one: with the app open too, a phone isn't told your
-    /// machines were removed (it would forget them), and this Mac still meets them at the relay.
+    /// A list that won't read isn't an empty one: with the app open too, a phone hears that it can't be
+    /// read, isn't told your machines were removed (it would forget them), and this Mac still meets
+    /// them at the relay. Once one's added, the list is what it says again.
     @Test func aListThatWontReadIsntTakenForNoMachines() async throws {
         defer {
             try? FileManager.default.removeItem(at: AppInfo.testRoot.appending(path: "PhoneMachines"))
@@ -47,13 +48,28 @@ import Testing
         #expect(model.phoneLink.hasMachines())
         let link = PhoneLink(file: file, identity: (LinkKey(), RelaySecret()))
         link.bots = model.bots
-        var answer = Data()
-        for try await part in PhoneLink.respond(to: LinkRequest(method: "GET", path: "kuvo/hosts", headers: [:], body: Data()), link: link, engine: URL(string: "http://127.0.0.1:47996/")!, password: nil, agents: nil) {
-            if case .body(let chunk) = part { answer += chunk }
+        func read(_ path: String) async throws -> (status: Int, json: [String: Any]) {
+            var status = 0
+            var answer = Data()
+            for try await part in PhoneLink.respond(to: LinkRequest(method: "GET", path: path, headers: [:], body: Data()), link: link, engine: URL(string: "http://127.0.0.1:47996/")!, password: nil, agents: nil) {
+                switch part {
+                case .head(let code, _): status = code
+                case .body(let chunk): answer += chunk
+                }
+            }
+            return (status, (try? JSONSerialization.jsonObject(with: answer) as? [String: Any]) ?? [:])
         }
-        let hosts = try #require(try JSONSerialization.jsonObject(with: answer) as? [String: Any])["hosts"] as? [[String: Any]]
+        let hosts = try await read("kuvo/hosts").json["hosts"] as? [[String: Any]]
         #expect(hosts?.map { $0["machine"] as? String } == ["lab"])
         #expect(hosts?.first?["removed"] as? Bool == false)
+        let listed = try await read("kuvo/machines")
+        #expect(listed.status == 503)
+        #expect(listed.json["message"] as? String == "This Mac’s list of machines can’t be read right now.")
+        #expect(try await read("kuvo/machines/events").status == 404, "no lines to follow: the box says why")
+
+        model.machines.add("gpu")
+        #expect(try await read("kuvo/machines").status == 200)
+        #expect((try await read("kuvo/hosts").json["hosts"] as? [[String: Any]])?.first?["removed"] as? Bool == true)
     }
 
     private func ask(_ path: String, method: String = "GET", body: [String: Any]? = nil) async throws -> (status: Int, json: [String: Any]) {

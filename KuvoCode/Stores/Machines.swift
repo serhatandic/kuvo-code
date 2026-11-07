@@ -949,15 +949,19 @@ final class Machines {
     /// The list, in this Mac's box's folder: this writes it and the box only reads it, so the box can
     /// say what your machines are with the app closed (`kuvo/machines`), and there's one list.
     nonisolated static var file: URL { AppInfo.supportDirectory.appending(path: "box").appending(path: "machines.json") }
-    /// Where it was before it had a file, and where it stays while the file can't be written (it's
-    /// taken from here again at the next launch): never removed before the file is known to hold it.
+    /// Where it was before it had a file, and where an older version keeps its own, which sees nothing
+    /// of the file: what's here joins the file's. Never removed before the list is known to be safe.
     nonisolated private static let key = "machines"
+    /// The whole list, where it stays while the file can't be written, until the next launch can.
+    nonisolated private static let unsavedKey = "machines.unsaved"
 
     /// Whether you have machines, as Kuvo Code keeps them (for this Mac's keeper, which keeps no
     /// list of its own: with machines, this Mac's box meets them at the relay). One that can't be
     /// read may well have some.
     nonisolated static var anySaved: Bool {
-        if let data = UserDefaults.standard.data(forKey: key), let list = try? JSONSerialization.jsonObject(with: data) as? [Any] { return !list.isEmpty }
+        for key in [unsavedKey, key] {
+            if let data = UserDefaults.standard.data(forKey: key), let list = try? JSONSerialization.jsonObject(with: data) as? [Any], !list.isEmpty { return true }
+        }
         return switch readFile() {
         case .none: false
         case .list(let list): !list.isEmpty
@@ -1347,8 +1351,7 @@ final class Machines {
         #if DEBUG
         list.removeAll { DemoMachines.standIn($0.id) != nil }
         #endif
-        Self.store(list, besideFile: fileDidntRead)
-        fileDidntRead = false
+        if Self.store(list, besideFile: fileDidntRead) { fileDidntRead = false }
     }
 
     private enum SavedFile {
@@ -1371,7 +1374,7 @@ final class Machines {
 
     /// Writes the list to its file, and takes it out of the settings only once it reads back whole. A
     /// file that won't read (or, `besideFile`, wouldn't as this started) is set aside first, never
-    /// written over. Where any of that fails, the list stays in the settings, so it's never lost.
+    /// written over. Where any of that fails, the list stays in the settings, whole, so it's never lost.
     @discardableResult
     nonisolated private static func store(_ list: [Machine], besideFile: Bool = false) -> Bool {
         let wontRead = switch readFile() {
@@ -1380,11 +1383,14 @@ final class Machines {
         case .unreadable: true
         }
         if !wontRead || JSONFile.setAside(file, because: "a list was about to be saved over it"), write(list) {
-            UserDefaults.standard.removeObject(forKey: key)
+            for key in [key, unsavedKey] { UserDefaults.standard.removeObject(forKey: key) }
             return true
         }
         Logger(subsystem: "run.kuvo.code", category: "machine").error("The machines' file couldn't be written, so they stay in the settings for now")
-        if let data = try? JSONEncoder().encode(list) { UserDefaults.standard.set(data, forKey: key) }
+        if let data = try? JSONEncoder().encode(list) {
+            UserDefaults.standard.set(data, forKey: unsavedKey)
+            UserDefaults.standard.removeObject(forKey: key)
+        }
         return false
     }
 
@@ -1401,38 +1407,40 @@ final class Machines {
         return false
     }
 
-    /// As it stands: what the settings still hold comes first (it's only there when it hasn't reached
-    /// the file yet), moved to the file as it's read. A file there beside it keeps what's only in the
-    /// file: an older version keeps its own list and doesn't see this one, so going back to it and
-    /// forward again finds them all.
-    private static func load() -> (list: [Machine], fileDidntRead: Bool) {
-        if let data = UserDefaults.standard.data(forKey: key) {
-            if var list = try? JSONDecoder().decode([Machine].self, from: data) {
-                if case .list(let there) = readFile() { list += there.filter { kept in !list.contains { $0.id == kept.id } } }
-                store(list)
-                return (list, false)
-            }
-            // One that won't read (a newer version's, or damaged) is set aside, as Kuvo Code's files
-            // are (`JSONFile`).
-            UserDefaults.standard.set(data, forKey: "\(unreadableKey)-\(Int(Date.now.timeIntervalSince1970))")
-            UserDefaults.standard.removeObject(forKey: key)
-            Logger(subsystem: "run.kuvo.code", category: "machine").error("The machines in the settings couldn't be read and were set aside")
+    /// As it stands, moved to the file where the settings still hold any of it: a list that couldn't
+    /// be written stands in for the file's, and an older version's machines join whichever that is
+    /// (going back to one and forward again finds them all).
+    nonisolated private static func load() -> (list: [Machine], fileDidntRead: Bool) {
+        let unsaved = fromSettings(unsavedKey), older = fromSettings(key), file = readFile()
+        var list = unsaved ?? []
+        if unsaved == nil, case .list(let there) = file { list = there }
+        list += (older ?? []).filter { machine in !list.contains { $0.id == machine.id } }
+        if unsaved != nil || older != nil {
+            store(list)
+            return (list, false)
         }
-        switch readFile() {
-        case .none: return ([], false)
-        case .list(let list): return (list, false)
-        case .unreadable:
+        if case .unreadable = file {
             Logger(subsystem: "run.kuvo.code", category: "machine").error("The machines' file couldn't be read: it's left as it is, and set aside before anything is saved")
             return ([], true)
         }
+        return (list, false)
     }
 
-    /// For this Mac's keeper as it starts, before the box does: the list out of the settings (the
-    /// first time, an update's), for a box that may answer before the app has ever opened again. Only
-    /// where there's no file yet: a file there is the app's to deal with.
+    /// The list a setting holds. One that won't read (a newer version's, or damaged) is set aside, as
+    /// Kuvo Code's files are (`JSONFile`).
+    nonisolated private static func fromSettings(_ key: String) -> [Machine]? {
+        guard let data = UserDefaults.standard.data(forKey: key) else { return nil }
+        if let list = try? JSONDecoder().decode([Machine].self, from: data) { return list }
+        UserDefaults.standard.set(data, forKey: "\(unreadableKey)\(key == unsavedKey ? "-unsaved" : "")-\(Int(Date.now.timeIntervalSince1970))")
+        UserDefaults.standard.removeObject(forKey: key)
+        Logger(subsystem: "run.kuvo.code", category: "machine").error("The machines in the settings couldn't be read and were set aside")
+        return nil
+    }
+
+    /// For this Mac's keeper as it starts, before the box does: the list out of the settings, as the
+    /// app does it, for a box that may answer before the app has ever opened again (an update's).
     nonisolated static func moveFromSettings() {
-        guard case .none = readFile(), let data = UserDefaults.standard.data(forKey: key), let list = try? JSONDecoder().decode([Machine].self, from: data) else { return }
-        store(list)
+        _ = load()
     }
 
     /// Where machines that wouldn't read are kept, followed by when.

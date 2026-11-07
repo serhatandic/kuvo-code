@@ -215,8 +215,8 @@ import Testing
     }
 
     /// From what the app keeps to a phone, the real thing at both ends: machines only in the settings,
-    /// as an update first finds them, moved as the keeper starts, and with the app closed the box reads
-    /// them from where it runs, for a phone.
+    /// as an update first finds them, moved as the keeper moves them (`Keeper.start`, which no test
+    /// runs), and with the app closed the box reads them from where it runs, for a phone.
     @Test func machinesInTheSettingsReachAPhoneThroughTheRealBoxWithTheAppClosed() async throws {
         let (engine, _) = try await engine { _ in HTTPResponse(status: 200) }
         defer {
