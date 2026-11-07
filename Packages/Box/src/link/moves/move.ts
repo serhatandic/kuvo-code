@@ -105,7 +105,7 @@ export const say = {
   background: (name: string, what: string) => `${name} has ${what} running. Wait for it to finish, or stop it, then move ${name}.`,
   onGoal: (name: string) => `${name} is working on a goal, which stays on this computer. Move it once the goal is done, or stop the goal first.`,
   waiting: (name: string) => `${name} still has messages on their way. Try again in a moment.`,
-  notPlain: (name: string, what: { path: string; link: boolean }) => `${name}’s folder has ${what.link ? "a link" : "something that isn’t a file"} (${what.path}), which can’t move to another computer. Remove it, then move ${name}.`,
+  notPlain: (name: string, what: { path: string; link: boolean }) => `${name}’s folder has ${what.link ? "a link to somewhere outside it" : "something that isn’t a file"} (${what.path}), which can’t move to another computer. Remove it, then move ${name}.`,
   busy: (name: string) => `${name} kept getting messages while it moved, so it stayed where it is. Try again in a moment.`,
   botsElsewhere: (chat: string) => `${chat}’s bots live on different computers, so it can’t go there.`,
   inBoxGroup: (name: string, chat: string) => `${name} is in “${chat}”, which lives on ${HERE} with its bots. Move the chat to a Mac first, or take ${name} out of it.`,
@@ -125,7 +125,7 @@ const note = {
   noAgents: "Its coding agents aren’t running",
   onGoal: "Working on a goal",
   background: "Running something",
-  notPlain: "Has a link in its folder",
+  notPlain: { link: "Has a link out of its folder", other: "Has something that isn’t a file" },
   inBoxGroup: "In a group chat that lives here",
   needsUpdate: "Needs a newer Kuvo Code",
   botsNotThere: "Its bots don’t all live there",
@@ -272,7 +272,7 @@ async function movable(kind: MoveKind, thing: string, signal?: AbortSignal): Pro
     // Found now, not by the computer it goes to once it's all there. (A folder too big to look
     // through here is looked through as it's packed.)
     const odd = notPlainIn(here.folder, 50_000);
-    if (odd) return { name, why: say.notPlain(name, odd), note: note.notPlain };
+    if (odd) return { name, why: say.notPlain(name, odd), note: odd.link ? note.notPlain.link : note.notPlain.other };
     // One in a group chat that lives here with its bots, on a machine, stays with it.
     if (!IS_MAC) {
       let bridge: Target | null = null;
@@ -558,9 +558,10 @@ async function carryOn(id: string): Promise<void> {
     if (record.lane) {
       const packed = await carry<Packed>(target, "pack", { root: record.sessions[0], into: path.join(bundleOf(id), "carry"), most: MOST_BUNDLE }).catch(error => {
         const why = String((error as Error | null)?.message ?? error);
-        // (Its turn started again as it was packed.)
-        if (/it's working/.test(why)) throw new Refused(say.working(record.name));
-        throw (error as { status?: number } | null)?.status === 413 ? new Refused(say.tooBig(record.name)) : new Refused(say.cantCarry(record.name, why));
+        const status = (error as { status?: number } | null)?.status;
+        // (Its turn started again as it was packed: the bridge's 423.)
+        if (status === 423) throw new Refused(say.working(record.name));
+        throw status === 413 ? new Refused(say.tooBig(record.name)) : new Refused(say.cantCarry(record.name, why));
       });
       digest = packed.digest;
       record.sessions = packed.sessions.map(each => each.id);

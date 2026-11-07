@@ -231,8 +231,18 @@ export async function unpack(id: string): Promise<{ contents: Contents; folder: 
   return { contents, folder: kind ? brought : null, carry };
 }
 
-/** The first thing in `folder` that isn't a plain file or folder (a link, say, which the computer it
- * goes to never takes), by its path in it; null when there's none, or when there's more than `most`
+/** Whether `entry`, in the folder `root`, goes as it is: a file or folder, or a relative link to
+ * somewhere in that folder (a project's `node_modules/.bin`, say), which goes on pointing there. */
+function goesAsIs(root: string, entry: string, kind: fs.Stats): boolean {
+  if (kind.isFile() || kind.isDirectory()) return true;
+  if (!kind.isSymbolicLink()) return false;
+  let target: string;
+  try { target = fs.readlinkSync(entry); } catch { return false; }
+  return !path.isAbsolute(target) && path.resolve(path.dirname(entry), target).startsWith(path.resolve(root) + path.sep);
+}
+
+/** The first thing in `folder` that can't go to another computer (a link out of it, or something
+ * that isn't a file), by its path in it; null when there's none, or when there's more than `most`
  * to look through (looked for again as it's packed). */
 export function notPlainIn(folder: string, most = Infinity): { path: string; link: boolean } | null {
   const left = [""];
@@ -247,18 +257,20 @@ export function notPlainIn(folder: string, most = Infinity): { path: string; lin
       let kind: fs.Stats;
       try { kind = fs.lstatSync(path.join(folder, inside)); } catch { continue; }
       if (kind.isDirectory()) left.push(inside);
-      else if (!kind.isFile()) return { path: inside, link: kind.isSymbolicLink() };
+      else if (!goesAsIs(folder, path.join(folder, inside), kind)) return { path: inside, link: kind.isSymbolicLink() };
     }
   }
   return null;
 }
 
-function plainOnly(folder: string): void {
+/** Only files, folders and links within `root`: never a link to somewhere else on this computer, or
+ * anything else. */
+function plainOnly(folder: string, root = folder): void {
   for (const name of fs.readdirSync(folder)) {
     const entry = path.join(folder, name);
     const kind = fs.lstatSync(entry);
-    if (kind.isDirectory()) plainOnly(entry);
-    else if (!kind.isFile()) throw new NotTaken(`It brought ${kind.isSymbolicLink() ? "a link" : "something that isn’t a file"} (${path.basename(entry)}), which isn’t taken.`);
+    if (kind.isDirectory()) plainOnly(entry, root);
+    else if (!goesAsIs(root, entry, kind)) throw new NotTaken(`It brought ${kind.isSymbolicLink() ? "a link" : "something that isn’t a file"} (${path.basename(entry)}), which isn’t taken.`);
   }
 }
 

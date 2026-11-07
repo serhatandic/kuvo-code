@@ -11964,6 +11964,18 @@ function rolloutOf(home, id) {
     }
   };
   const sessions = join22(home, "sessions");
+  const made = /^[0-9a-f]{8}-[0-9a-f]{4}-7/i.test(id) ? parseInt(id.replace(/-/g, "").slice(0, 12), 16) : NaN;
+  if (Number.isFinite(made))
+    for (const off of [0, -1, 1]) {
+      const day = new Date(made + off * 86400000);
+      const folder = join22(sessions, String(day.getFullYear()), String(day.getMonth() + 1).padStart(2, "0"), String(day.getDate()).padStart(2, "0"));
+      const found = list(folder).find(named);
+      if (found)
+        return join22(folder, found);
+    }
+  const archived = list(join22(home, "archived_sessions")).find(named);
+  if (archived)
+    return join22(home, "archived_sessions", archived);
   for (const year of list(sessions).sort().reverse())
     for (const month of list(join22(sessions, year)).sort().reverse())
       for (const day of list(join22(sessions, year, month)).sort().reverse()) {
@@ -11971,8 +11983,6 @@ function rolloutOf(home, id) {
         if (found)
           return join22(sessions, year, month, day, found);
       }
-  const archived = list(join22(home, "archived_sessions")).find(named);
-  return archived ? join22(home, "archived_sessions", archived) : undefined;
 }
 
 class CodexAgent {
@@ -18655,6 +18665,8 @@ import { createHash as createHash8 } from "crypto";
 import { createReadStream } from "fs";
 import { copyFile, lstat as lstat2, mkdir, readFile as readFile3, readdir, rename, rm, stat as stat2, writeFile } from "fs/promises";
 import { basename as basename11, dirname as dirname15, isAbsolute as isAbsolute3, join as join27, normalize, sep as sep11 } from "path";
+var WORKING = 423;
+
 class CantCarry extends Error {
   status;
   constructor(message, status = 409) {
@@ -18826,7 +18838,7 @@ class Carrying {
     const family = this.family(root);
     const working = family.filter(({ session }) => this.sessions.atWorkNow(session.id));
     if (working.length)
-      throw new CantCarry("it's working");
+      throw new CantCarry("it's working", WORKING);
     const closed = family.map(({ session }) => this.sessions.closeAgents(session.id)).some(Boolean);
     if (!closed)
       return;
@@ -24661,4 +24673,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 72671fa6fa4def8632de684cc3f98a6f09233ae2257cba9659e968a68a6d734a
+// Built from Packages/Box/src/agents 0f429a1f2881abac560990a5b50ca172bb3de8ede0e9d9aa7ee2826e24fbc9d4

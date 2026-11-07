@@ -23,6 +23,9 @@ import { NotFound, type Sessions } from "./sessions"
 import type { Record_, Store } from "./store"
 import type { Session } from "./wire"
 
+/** A pack refused because its conversation is in a turn now (another try may well go). */
+export const WORKING = 423
+
 /** Why a session can't go, or come, in words that may be shown. */
 export class CantCarry extends Error {
   constructor(message: string, readonly status = 409) {
@@ -232,7 +235,7 @@ export class Carrying {
   private async settle(root: string): Promise<void> {
     const family = this.family(root)
     const working = family.filter(({ session }) => this.sessions.atWorkNow(session.id))
-    if (working.length) throw new CantCarry("it's working")
+    if (working.length) throw new CantCarry("it's working", WORKING)
     const closed = family.map(({ session }) => this.sessions.closeAgents(session.id)).some(Boolean)
     if (!closed) return
     const files = family.flatMap((record) =>

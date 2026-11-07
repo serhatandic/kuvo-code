@@ -78,7 +78,7 @@ const CODEX_THREAD = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 const ROLLOUT = /^(?:\d{4}\/\d{2}\/\d{2}\/)?rollout-[0-9A-Za-z:.-]+\.jsonl$/
 
 /** Thread `id`'s rollout in `home`: in `sessions` by day, or `archived_sessions`. */
-function rolloutOf(home: string, id: string): string | undefined {
+export function rolloutOf(home: string, id: string): string | undefined {
   const named = (name: string) => name.startsWith("rollout-") && name.endsWith(`-${id}.jsonl`)
   const list = (folder: string) => {
     try {
@@ -87,16 +87,26 @@ function rolloutOf(home: string, id: string): string | undefined {
       return []
     }
   }
-  // (Newest days first: a thread's file is under the day it started.)
+  // A thread's file is under the day it started, which its id says (a UUIDv7's first 48 bits are
+  // when it was made), as this computer's clock gave it.
   const sessions = join(home, "sessions")
+  const made = /^[0-9a-f]{8}-[0-9a-f]{4}-7/i.test(id) ? parseInt(id.replace(/-/g, "").slice(0, 12), 16) : NaN
+  if (Number.isFinite(made))
+    for (const off of [0, -1, 1]) {
+      const day = new Date(made + off * 86_400_000)
+      const folder = join(sessions, String(day.getFullYear()), String(day.getMonth() + 1).padStart(2, "0"), String(day.getDate()).padStart(2, "0"))
+      const found = list(folder).find(named)
+      if (found) return join(folder, found)
+    }
+  const archived = list(join(home, "archived_sessions")).find(named)
+  if (archived) return join(home, "archived_sessions", archived)
+  // (Else every day, newest first.)
   for (const year of list(sessions).sort().reverse())
     for (const month of list(join(sessions, year)).sort().reverse())
       for (const day of list(join(sessions, year, month)).sort().reverse()) {
         const found = list(join(sessions, year, month, day)).find(named)
         if (found) return join(sessions, year, month, day, found)
       }
-  const archived = list(join(home, "archived_sessions")).find(named)
-  return archived ? join(home, "archived_sessions", archived) : undefined
 }
 
 export class CodexAgent implements Agent {
