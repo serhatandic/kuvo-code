@@ -585,7 +585,7 @@ test("what a chat's sessions tell it while it moves never starts a turn there; o
   assert.deepEqual(more, []);
   assert.match(letter.text, /^\[Session failed\] "Sign-in" .*\(address ses_signin1\) stopped with an error\./);
   // As the box's own word, the way it would have come here: queued, shown as its sessions' news.
-  assert.deepEqual(letter.note, { from: "Its sessions", words: "“Sign-in” stopped with an error", line: "“Sign-in” stopped with an error", delivery: "queue" });
+  assert.deepEqual(letter.note, { from: "Its sessions", words: "“Sign-in” stopped with an error", line: "“Sign-in” stopped with an error", delivery: "queue", about: ["ses_signin1"] });
   const mails = [];
   await link.sendOutbox({ send: bytes => mails.push(bytes) });
   assert.equal(mails.length, 1);

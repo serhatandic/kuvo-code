@@ -76,13 +76,13 @@ async function engine(sessions = {}) {
 
 const leftBehind = { ses_left: { id: "ses_left", title: "Sign-in", location: { directory: "/work/tidepool" }, time: { created: T - DAY, updated: 1 }, metadata: { kuvo: { startedBy: "ses_lead", depth: 1, wake: ["finished", "asks"] } } } };
 
-// One round of this box's outbox, at `now`: what it sent, as `to` opens it (a mail for another box
-// isn't opened: null).
+// One round of this box's outbox, at `now`: the mail it sent.
 async function round(now) {
   const sent = [];
   await link.sendOutbox({ send: bytes => sent.push(bytes) }, link.readLink(), now, 0, undefined, 1);
   return sent;
 }
+// What a mail says, as `to` opens it (a mail for another box isn't opened: null).
 function openedBy(bytes, to) {
   const body = link.readFrame(bytes.subarray(17)).body;
   try {
