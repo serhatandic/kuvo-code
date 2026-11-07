@@ -68,6 +68,14 @@ The user isn't always available, and work goes on without them. Never stop and w
 
 Each session runs at most 2 subagents at once: workers, reviewers, and any that your subagents start themselves all count. Start another only when one finishes. This caps the subagents inside one session, not the number of sessions: several sessions can run side by side, each with its own two. A review split by area runs two reviewers at a time, and the rest wait for a free slot.
 
+## Never kill by pattern (strict)
+
+A pattern matches the user's other apps and other sessions: on 2026-11-07 one `pkill` with a stray option took down two other sessions, the box's link, Kuvo Code's SSH connections and the user's browser tabs.
+
+- Never use `pkill`, `killall`, `pgrep … | xargs kill`, `kill $(pgrep …)`, or the same through a script, a tool or a subagent. That includes a pattern that looks narrow.
+- Kill only a process you started yourself, by its PID (save `$!`, write a pid file) or by a process group you created (`set -m`, `setsid`), never the one you were started in. `scripts/heavy.sh` stops what its job started (what stays in the job's process group) when the job ends or is stopped, so there is nothing left for you to clean up by name. If something is still running that you didn't start, leave it and report it.
+- On macOS every option goes before the pattern, in `pgrep` too: BSD stops reading options at the first pattern and takes everything after it as more patterns.
+
 ## Tests: what users rely on (strict)
 
 - **Test scenarios, not the code's insides.** A test answers this: if someone refactors this or changes something nearby, will it catch a break a user would notice? Assert what the app shows, keeps or does, never which functions ran.
