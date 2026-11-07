@@ -457,6 +457,7 @@ env -i HOME="$HOME" USER="$USER" LOGNAME="$USER" PATH=/usr/bin:/bin:/usr/sbin:/s
 | `KUVO_DEMO_QUESTIONS` | The agent asking three questions at once, over the composer of the session in view; a number opens that question (from 0) |
 | `KUVO_DEMO_QUESTIONS_PICK` | With `KUVO_DEMO_QUESTIONS`: five seconds after the card shows, picks this choice (from 1), as its number key does (0 presses Next), and writes how the main thread kept up to `KUVO_PERF_LOG` (stalls to `KUVO_PERF_STALLS`) |
 | `KUVO_DEMO_QUOTE` | Replying to this text (several, separated by `\|\|`), over the composer of the session in view |
+| `KUVO_DEMO_QUOTE_ANSWER` | With `KUVO_DEMO_QUOTE`: the quotes before the last answered, and this typed into the last one's answer a few seconds after launch, a word at a time, each `\|` starting a new line |
 | `KUVO_DEMO_SELECTION_MENU` | `<x>,<y>` in the window: the paragraph there in the conversation selected, with the menu over it (Add to Chat, Copy) |
 | `KUVO_DEMO_SUBAGENT` | The first subagent of the session in view (or of the session with this ID or title) in its place, as its Open does, once its agent has started one; with `KUVO_DEMO_PROMPT`, of that prompt's session |
 | `KUVO_DEMO_OPEN_QUICKLY` | Open Quickly, with this typed in it (empty for none) |
