@@ -17,6 +17,7 @@ import { locked, writePrivate } from "../files";
 import { WORK_FOLDER } from "./changes";
 import type { Target } from "../../shared/records";
 import type { UnansweringList } from "../../shared/routes/work";
+import { lastTurnEnd } from "../../shared/summaries";
 
 export const UNANSWERING = path.join(WORK_FOLDER, "unanswering.json");
 
@@ -76,12 +77,10 @@ export function errorOf(value: unknown, at?: number): TurnError | null {
 /** The error `session`'s latest turn failed with, or null when it didn't fail. */
 export async function turnError(target: Target, session: string, signal?: AbortSignal): Promise<TurnError | null> {
   const page = await call(target, "GET", `/api/session/${encodeURIComponent(session)}/message?limit=5&order=desc`, undefined, signal).catch(() => null);
-  for (const message of Array.isArray(page) ? page : []) {
-    if (!isObject(message) || message.type !== "idle") continue;
-    if (message.outcome !== "failed") return null;
-    return errorOf(message.error, Number(isObject(message.time) ? message.time.created : 0) || undefined) ?? { type: "", message: "" };
-  }
-  return null;
+  // (Past a summary after it, whose own end says how that went.)
+  const end = lastTurnEnd(page) as { outcome?: unknown; error?: unknown; time?: { created?: number } } | undefined;
+  if (end?.outcome !== "failed") return null;
+  return errorOf(end.error, Number(end.time?.created ?? 0) || undefined) ?? { type: "", message: "" };
 }
 
 /** Whether `model` costs nothing, by its engine's prices (an OpenCode Zen model's name may say so). */

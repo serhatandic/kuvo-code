@@ -36,6 +36,7 @@ const works: Script = (_input, turn, _hooks, thread) => {
 
 class FakeAgent implements Agent {
   id = "fake"
+  compacts?: boolean
   instance = { id: "default" }
   signedIn = true
   /** Its models run where a request it can't send is dropped (the engine's), and it's signed out of. */
@@ -3059,4 +3060,266 @@ test("a conversation is made with what the box marks it as, there when the event
   expect((created?.data as { session?: { metadata?: unknown } }).session?.metadata).toEqual({ kuvo: { approval: "auto", applied: "auto", seat: { group: "grp_a" } }, kuvoAgent: made.metadata?.kuvoAgent })
   expect(sessions.get(made.id).metadata?.kuvo).toEqual({ approval: "auto", applied: "auto", seat: { group: "grp_a" } })
   expect(made.metadata?.kuvoAgent).not.toBe("someone else")
+})
+
+describe("summarizing a conversation you ask for (/compact)", () => {
+  const compacting = (id: string) => sessions.messages(id).filter((message) => message.type === "compaction") as Extract<Message, { type: "compaction" }>[]
+  /** Summarizes when asked, as an agent that can; any other turn replies. */
+  const summarizes: Script = async (input, turn, hooks, thread) => {
+    if (!input.compact) return replies(input, turn, hooks, thread)
+    return { outcome: "succeeded" }
+  }
+  beforeEach(() => {
+    a.compacts = true
+    a.script = summarizes
+  })
+
+  test("idle: its agent is asked, the row shows it, and the conversation stays whole", async () => {
+    const id = create()
+    send(id, "remember the word")
+    await settled(id, 1)
+    expect(sessions.compact(id).state).toBe("compacting")
+    await settled(id, 2)
+    expect(a.runs.map((run) => run.text)).toEqual(["remember the word", "/compact"])
+    expect(compacting(id).map((row) => ({ status: row.status, reason: row.reason }))).toEqual([{ status: "completed", reason: "manual" }])
+    expect(sessions.messages(id).filter((message) => message.type === "user").map((message) => (message as { text: string }).text)).toEqual(["remember the word"])
+    expect(texts(id)).toHaveLength(1)
+    expect(sessions.get(id).outcome).toBe("succeeded")
+    expect(events.map((event) => event.type)).toEqual(expect.arrayContaining(["session.compaction.started", "session.compaction.ended"]))
+  })
+
+  test("mid-turn: it waits for the turn to end, says so, and goes ahead of what else waits", async () => {
+    let release!: () => void
+    a.script = (input, turn, hooks, thread) => {
+      if (input.text !== "first") return summarizes(input, turn, hooks, thread)
+      turn.startStep()
+      return new Promise((resolve) => (release = () => resolve({ outcome: "succeeded" })))
+    }
+    const id = create()
+    send(id, "first")
+    await until(() => a.runs.length === 1)
+    send(id, "second", "queue")
+    expect(sessions.compact(id).state).toBe("waiting")
+    expect(a.runs).toHaveLength(1)
+    expect(sessions.inbox(id).map((item) => item.type)).toEqual(["compaction", "user"])
+    expect(sessions.messages(id).some((message) => message.type === "synthetic" && message.text === "The conversation will be summarized when this turn ends.")).toBe(true)
+    release()
+    await settled(id, 3)
+    expect(a.runs.map((run) => run.text)).toEqual(["first", "/compact", "second"])
+  })
+
+  test("a message sent while it summarizes waits, and isn't handed to it", async () => {
+    let release!: () => void
+    a.script = (input, turn, hooks, thread) => {
+      if (!input.compact) return replies(input, turn, hooks, thread)
+      thread.steer = async () => {
+        throw new Error("A summary doesn't take messages.")
+      }
+      return new Promise((resolve) => (release = () => resolve({ outcome: "succeeded" })))
+    }
+    const id = create()
+    send(id, "first")
+    await settled(id, 1)
+    sessions.compact(id)
+    await until(() => a.runs.length === 2)
+    send(id, "second")
+    expect(sessions.inbox(id).map((item) => item.delivery)).toEqual(["queue"])
+    release()
+    await settled(id, 3)
+    expect(a.runs.map((run) => run.text)).toEqual(["first", "/compact", "second"])
+  })
+
+  test("how a conversation ended stays as it was through a summary, gone through or not", async () => {
+    let fails = false
+    a.script = (input, turn, hooks, thread) => {
+      if (!input.compact) return replies(input, turn, hooks, thread)
+      return Promise.resolve(fails ? { outcome: "failed", error: { type: "agent", message: "It couldn't." } } : { outcome: "succeeded" })
+    }
+    const id = create()
+    send(id, "first")
+    await settled(id, 1)
+    sessions.compact(id)
+    await settled(id, 2)
+    expect(store.get(id)!.session.outcome).toBe("succeeded")
+    fails = true
+    sessions.compact(id)
+    await settled(id, 3)
+    expect(store.get(id)!.session.outcome).toBe("succeeded")
+    // Failed before it: still that, with the summary through.
+    store.get(id)!.session.outcome = "failed"
+    fails = false
+    sessions.compact(id)
+    await settled(id, 4)
+    expect(store.get(id)!.session.outcome).toBe("failed")
+  })
+
+  test("with an undo staged it says why not: the next message would throw the summary away with it", async () => {
+    const id = create()
+    send(id, "first")
+    await settled(id, 1)
+    const first = sessions.messages(id).find((message) => message.type === "user")!.id
+    await sessions.stageRevert(id, first)
+    expect(() => sessions.compact(id)).toThrow("Redo what you undid or send a message first: a summary now would be thrown away with it.")
+  })
+
+  test("asked twice, it's one summary", async () => {
+    let release!: () => void
+    a.script = (input, turn, hooks, thread) => {
+      if (!input.compact) return replies(input, turn, hooks, thread)
+      return new Promise((resolve) => (release = () => resolve({ outcome: "succeeded" })))
+    }
+    const id = create()
+    send(id, "first")
+    await settled(id, 1)
+    sessions.compact(id)
+    await until(() => a.runs.length === 2)
+    expect(sessions.compact(id).state).toBe("compacting")
+    release()
+    await settled(id, 2)
+    // A second one would go ahead of the next message.
+    send(id, "next")
+    await settled(id, 3)
+    expect(compacting(id)).toHaveLength(1)
+    expect(a.runs.map((run) => run.text)).toEqual(["first", "/compact", "next"])
+  })
+
+  test("Stop during the turn before it: it's dropped, and the conversation says so", async () => {
+    a.script = (input, turn, hooks, thread) => (input.compact ? summarizes(input, turn, hooks, thread) : works(input, turn, hooks, thread))
+    const id = create()
+    send(id, "first")
+    await until(() => a.runs.length === 1)
+    sessions.compact(id)
+    await sessions.interrupt(id)
+    await settled(id, 1)
+    expect(sessions.inbox(id)).toHaveLength(0)
+    expect(sessions.messages(id).some((message) => message.type === "synthetic" && message.text === "The conversation wasn't summarized: this turn stopped first.")).toBe(true)
+    expect(a.runs).toHaveLength(1)
+    expect(compacting(id)).toHaveLength(0)
+  })
+
+  test("Stop during the summary: the row says it didn't, and the agent was told to stop", async () => {
+    a.script = (input, turn, hooks, thread) => {
+      if (!input.compact) return replies(input, turn, hooks, thread)
+      return new Promise((resolve) => (thread.onStop = () => resolve({ outcome: "interrupted" })))
+    }
+    const id = create()
+    send(id, "first")
+    await settled(id, 1)
+    sessions.compact(id)
+    await until(() => a.runs.length === 2)
+    await sessions.interrupt(id)
+    await settled(id, 2)
+    expect(a.threads[0].interrupted).toBe(1)
+    expect(compacting(id)[0].status).toBe("failed")
+    expect(idles(id)[1].outcome).toBe("interrupted")
+    expect(events.map((event) => event.type)).toContain("session.compaction.failed")
+  })
+
+  test("what was held after a Stop stays held after a summary", async () => {
+    a.script = (input, turn, hooks, thread) => (input.compact ? summarizes(input, turn, hooks, thread) : input.text === "first" ? replies(input, turn, hooks, thread) : works(input, turn, hooks, thread))
+    const id = create()
+    send(id, "first")
+    await settled(id, 1)
+    send(id, "working")
+    await until(() => a.runs.length === 2)
+    send(id, "held", "queue")
+    await sessions.interrupt(id)
+    await settled(id, 2)
+    sessions.compact(id)
+    await settled(id, 3)
+    // Let go, it would be under way by now, and a second summary would have to wait for it.
+    expect(sessions.compact(id).state).toBe("compacting")
+    await settled(id, 4)
+    expect(a.runs.map((run) => run.text)).toEqual(["first", "working", "/compact", "/compact"])
+    expect(sessions.inbox(id).map((item) => item.type)).toEqual(["user"])
+  })
+
+  test("a failed summary shows why, and what the agent hadn't seen still reaches it", async () => {
+    a.script = async (input, turn, hooks, thread) => {
+      if (input.compact) return { outcome: "failed", error: { type: "agent", message: "It couldn't." } }
+      return replies(input, turn, hooks, thread)
+    }
+    const id = create()
+    send(id, "first")
+    await settled(id, 1)
+    sessions.compact(id)
+    await settled(id, 2)
+    expect(compacting(id)[0].status).toBe("failed")
+    expect(idles(id)[1].error?.message).toBe("It couldn't.")
+    send(id, "after")
+    await settled(id, 3)
+    expect(a.runs.at(-1)!.text).toBe("after")
+  })
+
+  test("an agent that can't says so in a sentence, and nothing starts", async () => {
+    a.compacts = undefined
+    const id = create()
+    send(id, "first")
+    await settled(id, 1)
+    expect(() => sessions.compact(id)).toThrow("Alpha can't summarize on request: it does so by itself when the conversation fills up.")
+    expect(a.runs).toHaveLength(1)
+    expect(sessions.inbox(id)).toHaveLength(0)
+  })
+
+  test("nothing to summarize yet: a new conversation, and an agent that hasn't started on it", async () => {
+    b.compacts = true
+    const id = create()
+    expect(() => sessions.compact(id)).toThrow("There's nothing to summarize yet: Alpha hasn't started on this conversation.")
+    send(id, "first")
+    await settled(id, 1)
+    sessions.selectModel(id, { providerID: "beta", id: "two" })
+    expect(() => sessions.compact(id)).toThrow("There's nothing to summarize yet: Beta hasn't started on this conversation.")
+    expect(a.runs).toHaveLength(1)
+  })
+
+  test("asked during the first turn it waits rather than refuses", async () => {
+    let release!: () => void
+    a.script = (input, turn, hooks, thread) => {
+      if (input.compact) return summarizes(input, turn, hooks, thread)
+      return new Promise((resolve) => (release = () => resolve({ outcome: "succeeded" })))
+    }
+    const id = create()
+    send(id, "first")
+    await until(() => a.runs.length === 1)
+    expect(sessions.compact(id).state).toBe("waiting")
+    release()
+    await settled(id, 2)
+    expect(compacting(id)[0].status).toBe("completed")
+  })
+
+  test("on Auto, the agent that ran last is the one asked", async () => {
+    b.compacts = true
+    b.script = summarizes
+    auto.set([{ providerID: "beta", modelID: "two" }])
+    const id = create({ providerID: "auto", id: "auto" })
+    send(id, "first")
+    await settled(id, 1)
+    sessions.compact(id)
+    await settled(id, 2)
+    expect(b.runs.map((run) => run.text)).toEqual(["first", "/compact"])
+    expect(a.runs).toHaveLength(0)
+  })
+
+  test("a subagent's conversation points to the one that started it", async () => {
+    const parent = create()
+    const child = create()
+    store.get(child)!.session.parentID = parent
+    expect(() => sessions.compact(child)).toThrow("A subagent's conversation can't be summarized: summarize the conversation that started it.")
+  })
+
+  test("the bridge stopping meanwhile: the summary under way shows it didn't finish", async () => {
+    a.script = (input, turn, hooks, thread) => {
+      if (!input.compact) return replies(input, turn, hooks, thread)
+      return new Promise(() => {})
+    }
+    const id = create()
+    send(id, "first")
+    await settled(id, 1)
+    sessions.compact(id)
+    await until(() => a.runs.length === 2)
+    make()
+    expect(compacting(id)[0].status).toBe("failed")
+    expect(idles(id).at(-1)!.outcome).toBe("interrupted")
+    expect(sessions.inbox(id)).toHaveLength(0)
+  })
 })

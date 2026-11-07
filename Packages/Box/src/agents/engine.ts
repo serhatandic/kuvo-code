@@ -326,6 +326,7 @@ class EngineError extends Error {
 /** A model of one of the engine's providers, run here. */
 export class EngineAgent implements Agent {
   readonly id = "engine"
+  readonly compacts = true
   readonly instance = { id: "default" }
 
   constructor(
@@ -541,6 +542,8 @@ class EngineThread implements Thread {
       }
       // A subagent's own steps show in its own conversation, not in this one.
       if (!ownSession) return
+      // A summary you asked for: how it ends, and none of its words.
+      if (input.compact && !event.type.startsWith("session.execution.")) return
       switch (event.type) {
         case "session.inbox.delivered":
           if (data.inboxID === inputID) delivered = true
@@ -641,7 +644,10 @@ class EngineThread implements Thread {
     const abort = () => void interrupt()
     hooks.signal.addEventListener("abort", abort)
     try {
-      await this.link.request("POST", `${path}/prompt`, {
+      if (input.compact) {
+        delivered = true
+        await this.link.request("POST", `${path}/compact`, { id: inputID, delivery: "steer" })
+      } else await this.link.request("POST", `${path}/prompt`, {
         id: inputID,
         text: input.text,
         files: input.files.length ? input.files.map((file) => ({ uri: file.uri, name: file.name })) : undefined,

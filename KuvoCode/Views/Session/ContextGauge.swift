@@ -46,11 +46,10 @@ struct ContextGauge: View {
             .accessibilityHint("Shows the details")
             .closesWhenKept($showsDetails)
             .popover(isPresented: $showsDetails, arrowEdge: .bottom) {
-                // A coding agent makes room in its own context, as it does in its own app.
                 ContextDetails(used: used, limit: limit, cost: model.session.cost, plan: planLimits, openUsage: {
                     showsDetails = false
                     UsageMenuBar.shared.open(.dashboard)
-                }, summarize: OutsideAgents.isAgentSession(model.session) ? nil : {
+                }, summarize: {
                     showsDetails = false
                     model.compact()
                 })

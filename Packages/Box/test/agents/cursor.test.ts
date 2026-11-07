@@ -133,6 +133,16 @@ const notices = (opened: Sessions, id: string) => opened.messages(id).flatMap((m
 const askFirst: PermissionRule[] = ["edit", "write", "patch", "shell", "webfetch", "external_directory"].map((action) => ({ action, resource: "*", effect: "ask" }))
 
 describe("Cursor", () => {
+  test("/compact: it can't be asked, so it says so, and nothing is sent to it", async () => {
+    const sdk = fakeSDK([])
+    const { sessions: opened, id } = cursorSession(sdk)
+    await send(opened, id)
+    const sent = sdk.sent.length
+    expect(() => opened.compact(id)).toThrow("Cursor can't summarize on request: it does so by itself when the conversation fills up.")
+    expect(sdk.sent).toHaveLength(sent)
+    expect(opened.messages(id).some((message) => message.type === "compaction")).toBe(false)
+  })
+
   test("its agent gets Kuvo Code's tools, for its own conversation, as the other agents do", async () => {
     const home = mkdtempSync(join(tmpdir(), "kuvo-cursor-"))
     folders.push(home)

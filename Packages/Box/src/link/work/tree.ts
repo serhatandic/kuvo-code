@@ -9,6 +9,7 @@ import { cut } from "../../shared/text";
 import { call, engineGet } from "../engine/client";
 import { CHATS } from "../home";
 import { describePermission, projectNameOf } from "../notices/news";
+import { lastTurnEnd, summaryAtEnd, summaryRowAtEnd, workOutcome } from "../../shared/summaries";
 import { listBots } from "../bots/list";
 import { asksIn } from "./answers";
 import type { Target } from "../../shared/records";
@@ -130,6 +131,55 @@ export async function lastReplyOf(listed: Listed, signal?: AbortSignal): Promise
   return null;
 }
 
+/**
+ * How full a session's context is now, as the app's gauge reads it: what its last step sent and got
+ * back. `summarized`: it was summarized since that step, and how much is left shows at its next.
+ * Undefined when it hasn't said.
+ */
+export async function contextOf(listed: Listed, signal?: AbortSignal): Promise<{ used: number } | { summarized: true } | undefined> {
+  const page = await call(listed.target, "GET", `/api/session/${encodeURIComponent(listed.data.id)}/message?limit=20&order=desc`, undefined, signal).catch(() => null);
+  for (const message of Array.isArray(page) ? page : []) {
+    if (!isObject(message)) continue;
+    if (message.type === "compaction" && message.status === "completed") return { summarized: true };
+    if (message.type !== "assistant" || !isObject(message.tokens)) continue;
+    const { input, output, cache } = message.tokens as { input?: number; output?: number; cache?: { read?: number; write?: number } };
+    return { used: (input ?? 0) + (cache?.read ?? 0) + (cache?.write ?? 0) + (output ?? 0) };
+  }
+  return undefined;
+}
+
+/** The summary asked for that a session did last, if that's all it did since its last turn. */
+export async function summaryRowOf(target: Target, session: string, signal?: AbortSignal) {
+  return summaryRowAtEnd(await lastMessages(target, session, signal));
+}
+
+const lastMessages = (target: Target, session: string, signal?: AbortSignal) =>
+  call(target, "GET", `/api/session/${encodeURIComponent(session)}/message?limit=6&order=desc`, undefined, signal).catch(() => null);
+
+/**
+ * How a session's work ended, past a summary asked for after it, which ends a turn of its own: the
+ * engine's `outcome` says how that went. What it said before stands.
+ */
+function outcomeOf(listed: Listed, page: unknown): unknown {
+  return workOutcome(page, listed.data.outcome);
+}
+
+/**
+ * A session that did nothing but summarize stays read, if it was read before: a summary leaves its
+ * idle time newer than when it was last looked at, on the engine as on the bridge. One with news
+ * from before it stays unread.
+ */
+export async function keepReadThroughSummary(target: Target, session: string, signal?: AbortSignal): Promise<void> {
+  const route = `/api/session/${encodeURIComponent(session)}`;
+  const page = await lastMessages(target, session, signal);
+  if (summaryAtEnd(page) !== "completed") return;
+  const before = (lastTurnEnd(page)?.time as { created?: number } | undefined)?.created;
+  const listed = await call(target, "GET", route, undefined, signal).catch(() => null) as { time?: { viewed?: number; idle?: number } } | null;
+  if (before === undefined || listed?.time?.idle === undefined || (listed.time.viewed ?? 0) < before) return;
+  // (The engine takes which end you saw, and refuses a look that doesn't say.)
+  await call(target, "POST", `${route}/view`, { idle: listed.time.idle }, signal).catch(() => {});
+}
+
 const tokensOf = (data: Listed["data"]) => (data.tokens?.input ?? 0) + (data.tokens?.output ?? 0) + (data.tokens?.reasoning ?? 0);
 
 /** A session of a bot's work as clients show it: where it stands now (`working`, what each asks:
@@ -138,8 +188,10 @@ export async function describeWork(listed: Listed, working: Set<string>, { repli
   const { data } = listed;
   const folder = data.location?.directory ?? data.directory ?? "";
   const asking = await askingNow(listed, signal);
+  // (With its last reply, read as well: how it ended, past a summary.)
+  const outcome = replies && !working.has(data.id) ? outcomeOf(listed, await call(listed.target, "GET", `/api/session/${encodeURIComponent(data.id)}/message?limit=6&order=desc`, undefined, signal).catch(() => null)) : data.outcome;
   const state: WorkSession["state"] = asking ? "asking" : working.has(data.id) ? "working"
-    : data.outcome === "succeeded" ? "finished" : data.outcome === "failed" ? "failed" : data.outcome === "interrupted" ? "stopped" : data.time?.idle ? "finished" : "idle";
+    : outcome === "succeeded" ? "finished" : outcome === "failed" ? "failed" : outcome === "interrupted" ? "stopped" : data.time?.idle ? "finished" : "idle";
   const reply = replies && state !== "working" ? await lastReplyOf(listed, signal) : null;
   const project = folder === CHATS ? undefined : projectNameOf(folder);
   return {

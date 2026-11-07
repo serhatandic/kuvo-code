@@ -424,7 +424,9 @@ export class AcpThread implements Thread {
       // A mode it can't be put in (asking first) stops the turn, rather than going on in another.
       await this.flavor.selectMode?.(rpc, sessionId, { approvesAll: active.hooks.approvesAll(), plan: input.plan }, this.setup)
       if (active.ended) return
-      this.prompt(active, sessionId, [{ type: "text", text: "<system-reminder>Your connection was renewed partway through your work, and what was under way then was cut off. Carry on with the task from where you were.</system-reminder>" }])
+      // (A summary is asked for again, exactly: words would start a turn of work.)
+      if (input.compact) this.prompt(active, sessionId, [{ type: "text", text: "/compact" }])
+      else this.prompt(active, sessionId, [{ type: "text", text: "<system-reminder>Your connection was renewed partway through your work, and what was under way then was cut off. Carry on with the task from where you were.</system-reminder>" }])
     } catch (error) {
       this.end(active, "failed", failure(error).message)
     }
@@ -461,6 +463,14 @@ export class AcpThread implements Thread {
       if (file.mime.startsWith("image/") && data) prompt.push({ type: "image", data, mimeType: file.mime })
       // (Run whole in the sandbox, which hides Kuvo Code's folder where it's kept: a copy it reads.)
       else if (file.path) others.push(this.fenced ? fenceCopy(this.session.location.directory, file.path) : file.path)
+    }
+    // Its command, exactly as typed, or it'd be taken for a message; its instructions wait for one.
+    if (input.compact) {
+      return new Promise<RunResult>((resolve) => {
+        const active: Active = { turn, hooks, resolve, rpc, tools: new Map(), toolsSinceText: false, ended: false, compacted: true, children: new Map(), served: new Map(), started: Date.now(), prompt: 0, input }
+        this.active = active
+        this.prompt(active, sessionId, [{ type: "text", text: "/compact" }])
+      })
     }
     let text = input.text
     const instructions = hooks.instructions()
