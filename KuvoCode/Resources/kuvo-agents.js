@@ -19848,6 +19848,8 @@ async function linkRoutes(runner, store, method, parts, body, signal) {
       if (typeof given.text !== "string" || !trim(given.text))
         return json9({}, 400);
       asked = await ask(runner, store, "POST", [id, "send"], { text: given.text, ...typeof given.named === "string" ? { named: given.named } : {} });
+      if (asked.status === 400 && asked.value?.message)
+        return message2(400, asked.value.message);
       break;
     case "stop":
     case "keep-going":
@@ -23955,4 +23957,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents bfb4303a78be5a190ff8c06de79e19989bce5c46b39a6c3eeda0a9ee94730c5a
+// Built from Packages/Box/src/agents 8675463228a8e0a9b7bbc49c47f0fdd5ffba864a41fe558db15dc402088405bc
