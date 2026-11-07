@@ -596,6 +596,8 @@ struct TranscriptView: View {
                 followsHeard = step.time.completed == nil && !step.content.isEmpty && !toolRuns
             case .user(let message)?: quiet = message.time.created
             case .synthetic(let notice)?, .system(let notice)?: quiet = notice.time.created
+            // A summary just done: nothing from the model since.
+            case .compaction(let summary)?: quiet = summary.time.completed
             default: break
             }
             // A tool or a subagent at work shows it, moving: this line holds still meanwhile.
@@ -603,7 +605,7 @@ struct TranscriptView: View {
             if case .assistant(let step)? = messages.last {
                 stepWorks = step.content.contains { if case .tool(let call) = $0 { !call.state.isFinished } else { false } }
             }
-            rows.append(.working(since: turn.started, quiet: quiet, followsHeard: followsHeard, holds: stepWorks))
+            rows.append(.working(since: turn.started, quiet: quiet, followsHeard: followsHeard, holds: stepWorks, summarizing: messages.summaryUnderWay?.time.created))
         }
         return rows
     }
@@ -719,7 +721,16 @@ enum Row: Identifiable, Hashable {
     /// `quiet`: since when nothing has come back from the model.
     /// `followsHeard`: quiet since the model last sent anything, which new words move on without
     /// the rows being made again (see `RowView.heard`).
-    case working(since: Milliseconds?, quiet: Milliseconds?, followsHeard: Bool, holds: Bool)
+    /// `summarizing`: since when it's been summarizing the conversation, which it says instead.
+    case working(since: Milliseconds?, quiet: Milliseconds?, followsHeard: Bool, holds: Bool, summarizing: Milliseconds?)
+
+    /// The line under the conversation at `now` (see `WorkingLine`), with " · Esc to stop" after its
+    /// time.
+    static func working(since: Milliseconds?, quiet: Milliseconds?, summarizing: Milliseconds? = nil, now: Date) -> String {
+        let line = WorkingLine.words(since: since, quiet: quiet, summarizing: summarizing, now: now)
+        guard let seconds = WorkingLine.seconds(since: line.since, now: now) else { return line.words }
+        return line.words + " \(MessageTime.duration(seconds)) · Esc to stop"
+    }
 
     /// A reply's words in it, on a row of them.
     var words: String? {
@@ -867,23 +878,6 @@ private struct RowView: View, Equatable {
         MessageTime.sentAt(Date(timeIntervalSince1970: created / 1000))
     }
 
-    /// "Working… 12s · Esc to stop"; once the model has said nothing for a while, that it's
-    /// waiting for it, which a provider that never answers can make last many minutes.
-    static func working(since: Milliseconds?, quiet: Milliseconds?, now: Date) -> String {
-        if let quiet, now.timeIntervalSince1970 - quiet / 1000 >= 20 {
-            return "Waiting for the model to answer…" + elapsed(since: quiet, now: now)
-        }
-        return "Working…" + elapsed(since: since, now: now)
-    }
-
-    /// " 12s", " 1m 5s" after a few seconds, then " · Esc to stop".
-    static func elapsed(since: Milliseconds?, now: Date) -> String {
-        guard let since else { return "" }
-        let seconds = Int(now.timeIntervalSince1970 - since / 1000)
-        guard seconds >= 2 else { return "" }
-        return " \(MessageTime.duration(seconds)) · Esc to stop"
-    }
-
     var body: some View {
         switch row {
         case .user(let message) where AgentMail.parse(CommandMessages.shared.text(of: message)) != nil:
@@ -962,7 +956,7 @@ private struct RowView: View, Equatable {
             .background(.quaternary.opacity(0.5), in: .capsule)
             .frame(maxWidth: .infinity)
             .help("Sending a message makes the undo final")
-        case .working(let since, let quiet, let followsHeard, let holds):
+        case .working(let since, let quiet, let followsHeard, let holds, let summarizing):
             HStack(spacing: 8) {
                 // A bot shows itself at work.
                 if let bot {
@@ -972,7 +966,7 @@ private struct RowView: View, Equatable {
                 TimelineView(.periodic(from: .now, by: 1)) { context in
                     let latest = heard()
                     // Against the engine's clock, as its times are: a machine's may be behind.
-                    let text = Self.working(since: since, quiet: followsHeard ? latest.last ?? quiet : quiet, now: context.date.addingTimeInterval(-latest.offset / 1000))
+                    let text = Row.working(since: since, quiet: followsHeard ? latest.last ?? quiet : quiet, summarizing: summarizing, now: context.date.addingTimeInterval(-latest.offset / 1000))
                     Group {
                         if holds {
                             Text(text).foregroundStyle(.secondary)
