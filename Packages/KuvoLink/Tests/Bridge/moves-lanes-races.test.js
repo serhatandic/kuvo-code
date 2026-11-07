@@ -72,6 +72,9 @@ const seedStarted = (session, directory) => {
 };
 const leaves = seedBot("bot_leaves"), shares = seedBot("bot_shares"), keyLeft = seedBot("bot_keyleft"), back = seedBot("bot_back");
 write(path.join(memoryOf(back), "MEMORY.md"), "Still in use.\n");
+const over = seedBot("bot_over"), merged = seedBot("bot_merged"), many = seedBot("bot_many");
+write(path.join(memoryOf(merged), "MEMORY.md"), "What it remembers.\n");
+for (let i = 0; i < 3000; i++) write(path.join(path.dirname(many.file), many.id, "tool-results", `${i}.txt`), `output ${i}\n`);
 write(path.join(memoryOf(leaves), "MEMORY.md"), "The bot's.\n");
 write(path.join(path.dirname(leaves.file), leaves.id, "subagents", "agent-1.jsonl"), "{}\n");
 write(path.join(memoryOf(shares), "MEMORY.md"), "Both of them use this.\n");
@@ -395,4 +398,65 @@ test("what a move left is never removed once the conversation runs here again, w
   await until(() => !leftHere().some(each => each.id === entry.id));
   assert.equal(fs.readFileSync(back.file, "utf8"), '{"type":"user"}\n', "the conversation it's on here is still there");
   assert.equal(fs.readFileSync(path.join(memoryOf(back), "MEMORY.md"), "utf8"), "Still in use.\n", "and so is its memory");
+});
+
+// ---- Placing what came: never over what's here, and undone whole ----
+
+// A bundle packed here, as if it were another conversation's that came (its session named `to`).
+async function bundleAs({ session }, to) {
+  const bundle = path.join(support, `bundle-${to}`);
+  assert.equal((await asks("POST", "/api/kuvo/carry/pack", { root: session, into: bundle })).status, 200);
+  const manifest = path.join(bundle, "carry.json");
+  fs.writeFileSync(manifest, fs.readFileSync(manifest, "utf8").replaceAll(session, to));
+  fs.renameSync(path.join(bundle, "sessions", session), path.join(bundle, "sessions", to));
+  const record = path.join(bundle, "sessions", to, "session.json");
+  fs.writeFileSync(record, fs.readFileSync(record, "utf8").replaceAll(session, to));
+  return bundle;
+}
+
+test("what comes never takes the place of a conversation a session here is on", async () => {
+  const bundle = await bundleAs(over, "ses_overCopy");
+  fs.appendFileSync(over.file, '{"type":"assistant","since":true}\n');
+  const now = fs.readFileSync(over.file, "utf8");
+  const placed = await asks("POST", "/api/kuvo/carry/place", { from: bundle, keep: path.join(support, "over-keep"), directory: path.join(over.folder, "workspace"), root: "ses_overCopy" });
+  assert.equal(placed.status, 409, JSON.stringify(placed.json));
+  assert.equal(fs.readFileSync(over.file, "utf8"), now, "the one here is as it was");
+  assert.equal((await asks("GET", "/api/session/ses_overCopy")).status, 404);
+  assert.equal((await asks("GET", `/api/session/${over.session}`)).status, 200);
+});
+
+test("taken back after it was placed: what it made goes, but a memory something here wrote to since stays", async () => {
+  const bundle = await bundleAs(merged, "ses_mergedCopy");
+  const elsewhere = path.join(support, "elsewhere"), keep = path.join(support, "merged-keep");
+  fs.mkdirSync(elsewhere, { recursive: true });
+  const placed = await asks("POST", "/api/kuvo/carry/place", { from: bundle, keep, directory: elsewhere, root: "ses_mergedCopy" });
+  assert.equal(placed.status, 200, JSON.stringify(placed.json));
+  const folder = path.join(claude, "projects", slug(elsewhere));
+  const memory = path.join(folder, "memory", "MEMORY.md");
+  assert.equal(fs.readFileSync(memory, "utf8"), "What it remembers.\n");
+  fs.appendFileSync(memory, "Another conversation here, since.\n");
+  assert.equal((await asks("POST", "/api/kuvo/carry/undo", { keep })).status, 200);
+  assert.equal((await asks("GET", "/api/session/ses_mergedCopy")).status, 404);
+  assert.ok(!fs.existsSync(path.join(folder, `${merged.id}.jsonl`)), "its conversation's gone");
+  assert.equal(fs.readFileSync(memory, "utf8"), "What it remembers.\nAnother conversation here, since.\n", "what was written since stays");
+  // Undone again (a box that stopped midway): nothing more goes.
+  assert.equal((await asks("POST", "/api/kuvo/carry/undo", { keep })).status, 200);
+  assert.ok(fs.existsSync(memory));
+});
+
+test("taken back while it's still being placed: none of it stays here", async () => {
+  const bundle = await bundleAs(many, "ses_manyCopy");
+  const elsewhere = path.join(support, "elsewhere-many"), keep = path.join(support, "many-keep");
+  fs.mkdirSync(elsewhere, { recursive: true });
+  const placing = asks("POST", "/api/kuvo/carry/place", { from: bundle, keep, directory: elsewhere, root: "ses_manyCopy" });
+  // As soon as it's begun placing: taken back.
+  await until(() => fs.existsSync(path.join(keep, "placed.json")));
+  const undone = await asks("POST", "/api/kuvo/carry/undo", { keep });
+  assert.equal(undone.status, 200);
+  await placing;
+  assert.equal((await asks("GET", "/api/session/ses_manyCopy")).status, 404, "its session isn't here");
+  const folder = path.join(claude, "projects", slug(elsewhere));
+  assert.ok(!fs.existsSync(path.join(folder, `${many.id}.jsonl`)));
+  const left = fs.existsSync(path.join(folder, many.id)) ? fs.readdirSync(path.join(folder, many.id), { recursive: true }).filter(name => name.endsWith(".txt")) : [];
+  assert.deepEqual(left, [], "nor any of its files");
 });

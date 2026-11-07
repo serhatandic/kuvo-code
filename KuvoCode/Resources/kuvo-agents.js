@@ -18835,6 +18835,30 @@ class Carrying {
     return own ?? accounts[0] ?? this.agentOf(baseProvider[named.kind]);
   }
   async place(from, keep, directory, root) {
+    return await this.inTurn(keep, () => this.placeNow(from, keep, directory, root));
+  }
+  turns = new Map;
+  takenBack = new Set;
+  async inTurn(keep, work) {
+    const before = this.turns.get(keep) ?? Promise.resolve();
+    const now = before.catch(() => {}).then(work);
+    this.turns.set(keep, now);
+    try {
+      return await now;
+    } finally {
+      if (this.turns.get(keep) === now)
+        this.turns.delete(keep);
+    }
+  }
+  inUse() {
+    return this.store.all().flatMap((session) => {
+      const record = this.store.get(session.id);
+      if (!record)
+        return [];
+      return Object.entries(this.sessions.slotsOf(session.id)).flatMap(([provider, slot]) => this.laneFiles(record, provider, slot.state ?? {}, true).files?.items.map((item) => item.path) ?? []);
+    });
+  }
+  async placeNow(from, keep, directory, root) {
     const manifest = await this.readManifest(from);
     if (manifest.root !== root)
       throw new CantCarry("its conversations aren't its own");
@@ -18846,6 +18870,11 @@ class Carrying {
     await mkdir(keep, { recursive: true, mode: 448 });
     const undo = new Undo(keep);
     const sessions = manifest.sessions.map(({ id }) => id);
+    const stillOn = () => {
+      if (this.takenBack.has(keep))
+        throw new CantCarry("it was taken back");
+    };
+    const inUse = this.inUse();
     try {
       const hosts = new Map;
       for (const lane of manifest.lanes)
@@ -18853,6 +18882,7 @@ class Carrying {
           hosts.set(lane.provider, await this.hostOf(lane.provider));
       const placed = [];
       for (const { id } of manifest.sessions) {
+        stillOn();
         const read = async (name, or) => {
           try {
             return JSON.parse(await readFile3(join27(from, "sessions", id, name), "utf8"));
@@ -18878,6 +18908,8 @@ class Carrying {
           const lane = lanesHere.find((each) => each.provider === provider);
           const host = hosts.get(provider) ?? this.agentOf(provider);
           const here = host?.providerID ?? provider;
+          if (lane?.how === "files" && !host?.conversationPlace)
+            throw new CantCarry("its coding agent isn't here to take its conversation");
           if (lane?.how === "files" && host?.conversationPlace) {
             kept[here] = slot;
             const where = host.conversationPlace(slot.state, session);
@@ -18887,6 +18919,9 @@ class Carrying {
               const dest = file.path.startsWith(conversation) ? where.item(file.path.slice(conversation.length)) : file.path === memory ? where.memory ?? null : file.path.startsWith(memory + sep11) && where.memory ? join27(where.memory, file.path.slice(memory.length + 1)) : null;
               if (!dest)
                 throw new CantCarry("its conversation didn't come whole");
+              if (inUse.some((path) => dest === path || dest.startsWith(path + sep11)))
+                throw new CantCarry("its conversation is one here already");
+              stillOn();
               await undo.put(join27(from, file.path), dest, file, Boolean(where.memoryMerges && !file.path.startsWith(conversation)));
             }
             placed.push(lane);
@@ -18897,12 +18932,13 @@ class Carrying {
         agent.threads = kept;
         if (session.model?.providerID && hosts.get(session.model.providerID))
           session.model = { ...session.model, providerID: hosts.get(session.model.providerID).providerID };
+        stillOn();
         await undo.noteSession(id);
         this.sessions.addCarried({ session, messages, agent });
       }
       return { sessions, infos: manifest.sessions.map(({ id, metadata }) => ({ id, metadata })), digest: manifest.digest, lanes: manifest.lanes.map(({ list: _, ...lane }) => ({ ...lane, how: placed.includes(manifest.lanes.find((each) => each.session === lane.session && each.provider === lane.provider)) ? "files" : "handover" })), model: this.store.get(manifest.root)?.session.model };
     } catch (error) {
-      await this.undo(keep).catch(() => {});
+      await this.undoNow(keep).catch(() => {});
       throw error;
     }
   }
@@ -18935,6 +18971,14 @@ class Carrying {
       throw new CantCarry("a file of its conversation didn't come whole");
   }
   async undo(keep) {
+    this.takenBack.add(keep);
+    try {
+      await this.inTurn(keep, () => this.undoNow(keep));
+    } finally {
+      this.takenBack.delete(keep);
+    }
+  }
+  async undoNow(keep) {
     const undo = new Undo(keep);
     for (const id of (await undo.read()).sessions.reverse())
       await this.sessions.remove(id).catch((error) => {
@@ -18946,12 +18990,7 @@ class Carrying {
   async remove(left, ownSessions = [], back = false) {
     const removed = [];
     const kept = [];
-    const live = new Set(this.store.all().flatMap((session) => {
-      const record = this.store.get(session.id);
-      if (!record)
-        return [];
-      return Object.entries(this.sessions.slotsOf(session.id)).flatMap(([provider, slot]) => this.laneFiles(record, provider, slot.state ?? {}, true).files?.items.map((item) => item.path) ?? []);
-    }));
+    const live = new Set(this.inUse());
     for (const lane of left) {
       const named = parseProvider(lane.provider);
       const agents = named ? this.accountsOf(named.kind) : [];
@@ -19014,7 +19053,7 @@ class Undo {
       if (there)
         return;
     }
-    const placed = { dest };
+    const placed = { dest, sha256: file.sha256 };
     if (there)
       placed.replaced = join27(this.keep, "replaced", String(this.count++));
     this.list.placed.push(placed);
@@ -19029,12 +19068,21 @@ class Undo {
   }
   async undo() {
     await this.read();
-    for (const { dest, replaced } of [...this.list.placed].reverse()) {
-      await rm(dest, { force: true });
-      if (replaced)
-        await rename(replaced, dest).catch(() => {});
+    this.list.sessions = [];
+    while (this.list.placed.length) {
+      const { dest, replaced, sha256 } = this.list.placed[this.list.placed.length - 1];
+      const exists = (path) => lstat2(path).then(() => true, () => false);
+      if (replaced) {
+        if (await exists(replaced)) {
+          await rm(dest, { force: true });
+          await rename(replaced, dest);
+        }
+      } else if (!sha256 || !await exists(dest) || await hashOf(dest).catch(() => "") === sha256) {
+        await rm(dest, { force: true });
+      }
+      this.list.placed.pop();
+      await this.write();
     }
-    this.list = { sessions: [], placed: [] };
     await this.write().catch(() => {});
   }
 }
@@ -24565,4 +24613,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 2b84fef62809f0b8f2cf2ec37c029be7f620e74bbbebd1eeefa9fdcf3f1ab2e6
+// Built from Packages/Box/src/agents b739258d84ce8c1246bf19fc0b113ff6064db7864466bea553cb579e8fe984fe

@@ -295,6 +295,35 @@ export class Carrying {
    * It throws `CantCarry` for what's wrong with what came; anything of it placed goes back then.
    */
   async place(from: string, keep: string, directory: string, root: string) {
+    return await this.inTurn(keep, () => this.placeNow(from, keep, directory, root))
+  }
+
+  /** What's placed or undone with a folder of a move's, one after the other: an undo that comes while
+   * it's placed stops it at its next step, and undoes all of it once it's stopped. */
+  private turns = new Map<string, Promise<unknown>>()
+  private takenBack = new Set<string>()
+
+  private async inTurn<T>(keep: string, work: () => Promise<T>): Promise<T> {
+    const before = this.turns.get(keep) ?? Promise.resolve()
+    const now = before.catch(() => {}).then(work)
+    this.turns.set(keep, now)
+    try {
+      return await now
+    } finally {
+      if (this.turns.get(keep) === now) this.turns.delete(keep)
+    }
+  }
+
+  /** Each file a session here works on now, by its agent's own say. */
+  private inUse(): string[] {
+    return this.store.all().flatMap((session) => {
+      const record = this.store.get(session.id)
+      if (!record) return []
+      return Object.entries(this.sessions.slotsOf(session.id)).flatMap(([provider, slot]) => this.laneFiles(record, provider, slot.state ?? {}, true).files?.items.map((item) => item.path) ?? [])
+    })
+  }
+
+  private async placeNow(from: string, keep: string, directory: string, root: string) {
     const manifest = await this.readManifest(from)
     if (manifest.root !== root) throw new CantCarry("its conversations aren't its own")
     for (const { id } of manifest.sessions) if (this.store.get(id)) throw new CantCarry("its conversations are here already")
@@ -302,12 +331,17 @@ export class Carrying {
     await mkdir(keep, { recursive: true, mode: 0o700 })
     const undo = new Undo(keep)
     const sessions = manifest.sessions.map(({ id }) => id)
+    const stillOn = () => {
+      if (this.takenBack.has(keep)) throw new CantCarry("it was taken back")
+    }
+    const inUse = this.inUse()
     try {
       const hosts = new Map<string, Agent | undefined>()
       for (const lane of manifest.lanes) if (!hosts.has(lane.provider)) hosts.set(lane.provider, await this.hostOf(lane.provider))
       const placed: Manifest["lanes"] = []
       // Sessions first, into a folder of their own: so whatever goes wrong below, `undo` has them too.
       for (const { id } of manifest.sessions) {
+        stillOn()
         const read = async (name: string, or?: unknown) => {
           try {
             return JSON.parse(await readFile(join(from, "sessions", id, name), "utf8"))
@@ -334,6 +368,8 @@ export class Carrying {
           const host = hosts.get(provider) ?? this.agentOf(provider)
           const here = host?.providerID ?? provider
           // Carried: as it was. Otherwise it starts over, handed what came before.
+          // (A conversation that was carried is placed whole, or not at all: it's never said to have come when it didn't.)
+          if (lane?.how === "files" && !host?.conversationPlace) throw new CantCarry("its coding agent isn't here to take its conversation")
           if (lane?.how === "files" && host?.conversationPlace) {
             kept[here] = slot
             const where = host.conversationPlace(slot.state, session)
@@ -342,6 +378,9 @@ export class Carrying {
               const memory = join("lanes", String(manifest.lanes.indexOf(lane)), "memory")
               const dest = file.path.startsWith(conversation) ? where.item(file.path.slice(conversation.length)) : file.path === memory ? where.memory ?? null : file.path.startsWith(memory + sep) && where.memory ? join(where.memory, file.path.slice(memory.length + 1)) : null
               if (!dest) throw new CantCarry("its conversation didn't come whole")
+              // Never over a conversation a session here is on.
+              if (inUse.some((path) => dest === path || dest.startsWith(path + sep))) throw new CantCarry("its conversation is one here already")
+              stillOn()
               await undo.put(join(from, file.path), dest, file, Boolean(where.memoryMerges && !file.path.startsWith(conversation)))
             }
             placed.push(lane)
@@ -351,12 +390,13 @@ export class Carrying {
         }
         agent.threads = kept
         if (session.model?.providerID && hosts.get(session.model.providerID)) session.model = { ...session.model, providerID: hosts.get(session.model.providerID)!.providerID }
+        stillOn()
         await undo.noteSession(id)
         this.sessions.addCarried({ session, messages, agent })
       }
       return { sessions, infos: manifest.sessions.map(({ id, metadata }) => ({ id, metadata })), digest: manifest.digest, lanes: manifest.lanes.map(({ list: _, ...lane }) => ({ ...lane, how: placed.includes(manifest.lanes.find((each) => each.session === lane.session && each.provider === lane.provider)!) ? ("files" as const) : ("handover" as const) })), model: this.store.get(manifest.root)?.session.model }
     } catch (error) {
-      await this.undo(keep).catch(() => {})
+      await this.undoNow(keep).catch(() => {})
       throw error
     }
   }
@@ -389,6 +429,15 @@ export class Carrying {
 
   /** What `place` did, undone: its sessions gone (their files here with them), what it placed gone, what it replaced back. */
   async undo(keep: string) {
+    this.takenBack.add(keep)
+    try {
+      await this.inTurn(keep, () => this.undoNow(keep))
+    } finally {
+      this.takenBack.delete(keep)
+    }
+  }
+
+  private async undoNow(keep: string) {
     const undo = new Undo(keep)
     for (const id of (await undo.read()).sessions.reverse()) await this.sessions.remove(id).catch((error) => {
       if (!(error instanceof NotFound)) throw error
@@ -406,13 +455,7 @@ export class Carrying {
     const removed: string[] = []
     const kept: string[] = []
     // Never what a session here works on now: one that moved back has its files where they were.
-    const live = new Set(
-      this.store.all().flatMap((session) => {
-        const record = this.store.get(session.id)
-        if (!record) return []
-        return Object.entries(this.sessions.slotsOf(session.id)).flatMap(([provider, slot]) => this.laneFiles(record, provider, slot.state ?? {}, true).files?.items.map((item) => item.path) ?? [])
-      }),
-    )
+    const live = new Set(this.inUse())
     for (const lane of left) {
       const named = parseProvider(lane.provider)
       const agents = named ? this.accountsOf(named.kind) : []
@@ -439,9 +482,17 @@ export class Carrying {
   }
 }
 
+interface Placed {
+  dest: string
+  /** What was there, moved aside. */
+  replaced?: string
+  /** What was put there. */
+  sha256?: string
+}
+
 /** What a placing did, written down as it goes (a box that stops midway still undoes it), in `keep`. */
 class Undo {
-  private list: { sessions: string[]; placed: { dest: string; replaced?: string }[] } = { sessions: [], placed: [] }
+  private list: { sessions: string[]; placed: Placed[] } = { sessions: [], placed: [] }
   private count = 0
 
   constructor(private readonly keep: string) {}
@@ -478,7 +529,7 @@ class Undo {
       there = await lstat(dest).then(() => true, () => false)
       if (there) return
     }
-    const placed: { dest: string; replaced?: string } = { dest }
+    const placed: Placed = { dest, sha256: file.sha256 }
     if (there) placed.replaced = join(this.keep, "replaced", String(this.count++))
     this.list.placed.push(placed)
     await this.write()
@@ -490,13 +541,26 @@ class Undo {
     if ((await hashOf(dest)) !== file.sha256) throw new CantCarry("a file of its conversation didn't copy whole")
   }
 
+  /** Each one undone from the last, and crossed off as it is (undone again after a stop, nothing's undone twice). */
   async undo() {
     await this.read()
-    for (const { dest, replaced } of [...this.list.placed].reverse()) {
-      await rm(dest, { force: true })
-      if (replaced) await rename(replaced, dest).catch(() => {})
+    this.list.sessions = []
+    while (this.list.placed.length) {
+      const { dest, replaced, sha256 } = this.list.placed[this.list.placed.length - 1]
+      const exists = (path: string) => lstat(path).then(() => true, () => false)
+      if (replaced) {
+        // What was there, back; still there if it was never moved aside.
+        if (await exists(replaced)) {
+          await rm(dest, { force: true })
+          await rename(replaced, dest)
+        }
+      } else if (!sha256 || !(await exists(dest)) || (await hashOf(dest).catch(() => "")) === sha256) {
+        await rm(dest, { force: true })
+      }
+      // (Written to since by something here, a memory the others share: kept as it is now.)
+      this.list.placed.pop()
+      await this.write()
     }
-    this.list = { sessions: [], placed: [] }
     await this.write().catch(() => {})
   }
 }
