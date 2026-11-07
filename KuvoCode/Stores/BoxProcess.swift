@@ -379,7 +379,7 @@ final class BoxProcess {
         forgetEngineStopped()
     }
 
-    /// The engine stopped and isn't started again until you say (`run/engine-stopped`): why, in
+    /// The engine is down, for you to start or till its next try (`run/engine-stopped`): why, in
     /// the words the window shows (their first paragraph), for the box to tell whoever asks it;
     /// and what the engine wrote last, which the window shows under it (`run/engine-output`), for
     /// the app to show as it shows its own engine's when it follows the keeper's. `retryingAfter`:

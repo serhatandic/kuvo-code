@@ -2709,10 +2709,12 @@ closed: its keeper is Kuvo Code's own executable run with `--box`, which launchd
 launch agent in the app (`Contents/Library/LaunchAgents/<bundle id>.box.plist`, registered with
 `SMAppService` the first time the app opens), at each login and again if it stops by itself. It has
 no window. It runs the engine, the box and the coding agents' bridge, starts each again when it
-stops (up to three times in five minutes), tries the engine and the bridge again when they couldn't
-start (after 15 s, 30 s, 1, 2, 5 and 10 minutes, as a machine's keeper waits, though a machine's
-goes on at the last for good; and not when another try can't help: a program that isn't there), and
-records each in the box's `run` folder,
+stops (at once, up to three times in five minutes), and tries each again when it couldn't start or
+keeps stopping (after 15 s, 30 s, 1, 2 and 5 minutes, then every 10 minutes for good, as a machine's
+keeper waits, starting over once it ran for ten minutes; not when another try can't help: a program
+that isn't there). Past those waits, a try that took too long while macOS was asking you something
+waits an hour instead, and goes as soon as that question is answered. It records each in the box's
+`run` folder,
 as a machine's keeper does, so a client finds them there:
 
 - `run/keeper.json`: `{"pid", "version", "build", "url", "password", "started"}` (milliseconds).
@@ -2721,7 +2723,8 @@ as a machine's keeper does, so a client finds them there:
   the engine stopped and isn't started again until asked, or until its next try, and beside it
   `run/engine-output`, what the engine wrote last (when it wrote anything), which the app shows under
   the reason, and while it waits for that try, `run/engine.retry` (when, in seconds since 1970, as on
-  a machine); `run/.system-asking` while macOS asks you something.
+  a machine); `run/agents-stopped` (`{"why", "retrying"}`) while the bridge is down, not while it's
+  starting or stopped on purpose; `run/.system-asking` while macOS asks you something.
 - `run/serve.json`: `{"pid", "port", "password"}`, where the box answers.
 - `bin/kuvo-start`: as a machine's (`kuvo-start restart`), here calling the keeper
   (`--box-control`).
@@ -2772,7 +2775,11 @@ it's a Mac's: its bots are the Mac's own (`machine` left out), made with the wor
 their own (they go by the Mac's clock). Its bots remember its
 chats under `kuvo.groups` (`KUVO_GROUPS_MEMORY_KEY`). The box passes a client's `kuvo/groups…`
 on to that bridge, as a machine's does (bridge 0.9.65; the app did before), saying "Group chats on
-this Mac are starting" or "aren't answering" when it can't. The box carries its group chats' mail (`seat`, "Peers")
+this Mac are starting" or "aren't answering" when it can't; from 0.9.202, while the bridge is down,
+what `kuvo/groups…`, `kuvo/artifacts…` and `kuvo/agents/…` answer with their 503 is "This Mac's coding
+agents aren't running." with why (`run/agents-stopped`), and that Restart on the Mac starts them unless
+they're being tried again; or, when the engine whose Bun runs the bridge is what's down, what the
+engine's routes say. The box carries its group chats' mail (`seat`, "Peers")
 on its relay connection, as a machine's bridge does, and tells the bridge who your machines and
 their bots are (bridge 0.9.63).
 
@@ -2858,8 +2865,8 @@ What a phone asks, it answers itself for the areas that have moved onto it and i
 (`api/…`, `kuvo/agents/…`, telling who a message names with `&`; bridge 0.9.64), and `kuvo/named`
 and `kuvo/groups…` (bridge 0.9.65); the app did each before. While its engine starts, or starts
 again, the engine's routes answer `503 {"message": "This Mac's engine is starting. Try again in a
-moment."}` (a machine's say "This machine's"). From 0.9.66, once the app has given up on it (it kept
-stopping, or couldn't start; the app's `run/engine-stopped`, why, until it starts or stops it again),
+moment."}` (a machine's say "This machine's"). From 0.9.66, once the app has given up on it (no try
+can help; the app's `run/engine-stopped`, why, until it starts or stops it again),
 they say "This Mac's engine isn't running." with why, and that Try Again on the Mac starts it (or
 from 0.9.201, while it waits for its next try, `run/engine.retry`, that it's trying again); and a
 machine's, while its keeper's next start is more than half a minute away (`run/engine.retry`, when,

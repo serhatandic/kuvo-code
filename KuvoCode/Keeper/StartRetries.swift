@@ -8,17 +8,17 @@ import OpenCodeKit
 /// way each time. What you ask for (Try Again, Restart) starts it at once, and a stop calls it off.
 @MainActor final class StartRetries {
     /// How long to wait, in seconds, before each try after the first; the last for good after that.
-    static let waits = [15, 30, 60, 120, 300, 600]
+    nonisolated static let waits = [15, 30, 60, 120, 300, 600]
     /// In place of that last one, after a try that took too long while macOS was asking you
     /// something: each try may bring the question back, and a question nobody's there to answer
     /// shouldn't come back every few minutes all night. Never no more tries: what looks like asking
     /// may be another app's question, and then this is all that brings the server back.
-    static let askedWait = 3600
+    nonisolated static let askedWait = 3600
     /// Up for this long, in seconds, it's running as it should: the waits begin again the next time
     /// it stops (as `bin/kuvo-start`).
-    static let steadyAfter: TimeInterval = 600
+    nonisolated static let steadyAfter: TimeInterval = 600
     /// Said after why it failed, as long as it's tried again.
-    static let note = "Trying again by itself."
+    nonisolated static let note = "Trying again by itself."
 
     /// How it waits between tries (a test's moves on as it says).
     var clock: (Int) async -> Void = StartRetries.wait

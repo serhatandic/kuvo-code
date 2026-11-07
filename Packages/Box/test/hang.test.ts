@@ -379,6 +379,28 @@ test("the coding agents' bridge ends this box's hung engine", async () => {
   expect(existsSync(join(run, "hung-engine.json"))).toBe(true)
 })
 
+// As a machine runs it, a Mac among them (`KUVO_AGENTS_REMOTE`): no app there to say macOS is asking,
+// and its keeper is what starts it again.
+test("on a machine, its bridge ends its hung engine", async () => {
+  const hung = await server("hangs")
+  const free = net.createServer()
+  await new Promise<void>(resolve => free.listen(0, "127.0.0.1", resolve))
+  const port = (free.address() as net.AddressInfo).port
+  await new Promise(resolve => free.close(resolve))
+  realServer(join("agents", "main.ts"), [], {
+    KUVO_AGENTS_REMOTE: "1",
+    KUVO_AGENTS_HOME: join(root, "agents"),
+    KUVO_HOME: root,
+    KUVO_AGENTS_PORT: String(port),
+    KUVO_AGENTS_PASSWORD: "x",
+    KUVO_ENGINE_PORT: String(hung.port),
+    KUVO_ENGINE_PID: String(hung.pid),
+    KUVO_SANDBOX: "off",
+  })
+  await hung.gone
+  expect(existsSync(join(run, "hung-engine.json"))).toBe(true)
+})
+
 test("the link ends this box's hung coding agents' bridge", async () => {
   record = join(run, "bridge.json")
   const hung = await server("hangs", "kuvo-agents")
