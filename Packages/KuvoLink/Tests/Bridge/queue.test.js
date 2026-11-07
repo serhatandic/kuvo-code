@@ -21,7 +21,7 @@ const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
 
 // The engine: each session's inbox and whether it runs; what was asked of it, each time a test
 // waits on it looking again.
-let inboxes, running, asked, prompted, unsure = false, taken = new Set(), waiting = [], latest = {}, looks = 0, whenLooked = null;
+let inboxes, running, asked, prompted, unsure = false, taken = new Set(), waiting = [], latest = {}, pages = {}, viewedAt = 0, looks = 0, whenLooked = null;
 const heard = () => new Promise(resolve => waiting.push(resolve));
 const engine = http.createServer((request, response) => {
   let body = "";
@@ -40,10 +40,19 @@ const engine = http.createServer((request, response) => {
       whenLooked = null;
       then?.();
     }
-    else if (session && !rest && request.method === "GET") answer = inboxes[session] ? { data: { id: session } } : null;
+    else if (session && !rest && request.method === "GET") answer = inboxes[session] ? { data: { id: session, time: { viewed: viewedAt } } } : null;
+    else if (rest === "/view" && request.method === "POST") {
+      asked.push(`${session} viewed`);
+      answer = {};
+    }
     else if (rest === "/inbox") answer = { data: inboxes[session] ?? [] };
     // Its newest message (the queue only asks for the one).
-    else if (rest === "/message") answer = { data: latest[session] ? [latest[session]] : [] };
+    else if (rest === "/message") answer = { data: url.searchParams.get("limit") === "6" ? pages[session] ?? [] : latest[session] ? [latest[session]] : [] };
+    else if (rest?.startsWith("/inbox/") && request.method === "DELETE") {
+      inboxes[session] = (inboxes[session] ?? []).filter(each => each.id !== decodeURIComponent(rest.slice(7)));
+      asked.push(`${session} ${decodeURIComponent(rest.slice(7))} gone`);
+      answer = {};
+    }
     else if (rest?.startsWith("/inbox/") && request.method === "PATCH") {
       const item = (inboxes[session] ?? []).find(each => each.id === decodeURIComponent(rest.slice(7)));
       const { delivery } = JSON.parse(body);
@@ -81,6 +90,7 @@ beforeEach(() => {
   unsure = false;
   taken = new Set();
   latest = {};
+  pages = {};
   whenLooked = null;
   fs.rmSync(path.join(home, "run", "queues.json"), { force: true });
   fs.rmSync(path.join(home, "run", "waiting"), { recursive: true, force: true });
@@ -172,6 +182,65 @@ test("Stop holds what was for the next step ahead of the queue and pauses it; a 
   assert.equal(resumed.status, 200);
   assert.deepEqual(asked.slice(2), ["ses_1 msg_s1 steer"], "what Stop held goes first");
   assert.deepEqual(resumed.json, { paused: false, held: [] });
+});
+
+test("a summary waiting at Stop isn't a message: what a lead's stop_session leaves isn't paused, and nothing is left to run unseen", async () => {
+  // A bot stopping its own session: paused only when something really waits.
+  inboxes.ses_1 = [{ id: "msg_sum", type: "compaction", delivery: "steer" }];
+  running.add("ses_1");
+  await link.stopSession(target, "ses_1", false);
+  assert.deepEqual((await ask("GET", "kuvo/sessions/ses_1/queue")).json, { paused: false, held: [] });
+  assert.deepEqual(asked, ["ses_1 stop"]);
+  running.delete("ses_1");
+  const b = box();
+  b.hear("session.execution.interrupted", { reason: "user" });
+  b.wait(5000);
+  await askedAfter(2);
+  assert.equal(asked[1], "ses_1 msg_sum gone");
+  assert.deepEqual(inboxes.ses_1, []);
+
+  // Your Stop holds what's yours and pauses, as ever; the summary isn't among them.
+  inboxes.ses_1 = [{ id: "msg_sum", type: "compaction", delivery: "steer" }, { id: "msg_s1", delivery: "steer" }];
+  const stopped = await ask("POST", "kuvo/sessions/ses_1/stop");
+  assert.deepEqual(stopped.json, { paused: true, held: ["msg_s1"] });
+});
+
+test("a failed run lets go of a summary waiting; a summary that failed pauses nothing, and what's queued goes on", async () => {
+  inboxes.ses_1 = [{ id: "msg_sum", type: "compaction", delivery: "steer" }, { id: "msg_q1", delivery: "queue" }];
+  const b = box();
+  b.hear("session.execution.failed", { error: { message: "No." } });
+  await askedAfter(1);
+  assert.deepEqual(asked, ["ses_1 msg_sum gone"]);
+  assert.equal((await ask("GET", "kuvo/sessions/ses_1/queue")).json.paused, true, "a run that failed pauses, as ever");
+
+  await ask("POST", "kuvo/sessions/ses_1/queue/resume");
+  asked = [];
+  prompted = [];
+  inboxes.ses_2 = [{ id: "msg_q2", delivery: "queue" }];
+  pages.ses_2 = [{ type: "idle", outcome: "failed" }, { type: "compaction", status: "failed", reason: "manual" }];
+  b.hear("session.execution.failed", { error: { message: "It couldn't." } }, "ses_2");
+  await new Promise(resolve => setImmediate(resolve));
+  while (!asked.includes("ses_2 msg_q2 steer")) { b.wait(5000); await Promise.race([heard(), new Promise(resolve => setImmediate(resolve))]); }
+  assert.equal((await ask("GET", "kuvo/sessions/ses_2/queue")).json.paused, false);
+});
+
+test("a session only summarized while it was read stays read; one with news from before stays unread; a reply after it is news", async () => {
+  inboxes.ses_1 = [];
+  const summarized = [{ type: "idle", outcome: "succeeded", time: { created: 3_000 } }, { type: "compaction", status: "completed", reason: "manual" }, { type: "idle", outcome: "succeeded", time: { created: 1_000 } }];
+  pages.ses_1 = summarized;
+  viewedAt = 2_000;
+  await link.keepReadThroughSummary(target, "ses_1");
+  assert.deepEqual(asked, ["ses_1 viewed"]);
+
+  asked = [];
+  viewedAt = 500;
+  await link.keepReadThroughSummary(target, "ses_1");
+  assert.deepEqual(asked, [], "there was news before it");
+
+  viewedAt = 2_000;
+  pages.ses_1 = [{ type: "idle", outcome: "succeeded", time: { created: 4_000 } }, { type: "assistant", content: [] }, ...summarized.slice(1)];
+  await link.keepReadThroughSummary(target, "ses_1");
+  assert.deepEqual(asked, []);
 });
 
 test("a Stop from a client that stops the run itself pauses the queue too; Send Now's stop-and-go doesn't", async () => {

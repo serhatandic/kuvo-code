@@ -49,3 +49,13 @@ export function messageID(now = Date.now()) {
   const alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
   return `msg_${time}${Array.from(crypto.randomBytes(14), byte => alphabet[byte % alphabet.length]).join("")}`;
 }
+
+/** Of a session's latest messages, newest first, how a summary it was asked for went, if that's
+ * what it did last (`/compact`, a lead's compact_session). */
+export function summaryAtEnd(messages: unknown): string | null {
+  for (const message of Array.isArray(messages) ? messages as { type?: unknown; reason?: unknown; status?: unknown }[] : []) {
+    if (message?.type === "idle") continue;
+    return message?.type === "compaction" && message.reason === "manual" && typeof message.status === "string" ? message.status : null;
+  }
+  return null;
+}

@@ -7,7 +7,7 @@ import { cut, outsideShown } from "../../shared/text";
 import { readProjects } from "../areas/projects";
 import { readRemovedWorktrees, readWorktrees } from "../areas/worktree-records";
 import { engineGet } from "../engine/client";
-import { isHiddenRun } from "../engine/sessions";
+import { isHiddenRun, summaryAtEnd } from "../engine/sessions";
 import { sessionsWaitingOnServer } from "../work/answers";
 import { isAutopilot } from "../work/autopilot";
 import { IS_MAC, K } from "../home";
@@ -269,11 +269,7 @@ export async function noticeFor(event: EngineEvent, get: EngineAsk): Promise<Not
  * for (`/compact`, a lead's compact_session): no reply, nothing done.
  */
 export function lastIsSummary(messages: unknown): boolean {
-  for (const message of Array.isArray(messages) ? messages as { type?: unknown; reason?: unknown; status?: unknown }[] : []) {
-    if (message?.type === "idle") continue;
-    return message?.type === "compaction" && message.reason === "manual" && message.status === "completed";
-  }
-  return false;
+  return summaryAtEnd(messages) === "completed";
 }
 
 // What `hold` keeps of `engine`'s that it asked you (a permission, a question) and isn't asked any

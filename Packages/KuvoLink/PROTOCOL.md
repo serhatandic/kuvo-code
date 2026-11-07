@@ -1482,16 +1482,18 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     too: it runs those through an engine session of its own, which carries
     `metadata.kuvo.engineFor` and is never shown (hide it in the engine's session list).
     `…/session/<id>/fork {before}` makes a new session from a message.
-    `…/session/<id>/fork {before}` makes a new session from a message.
   - `POST …/session/<id>/compact` summarizes a conversation, on the engine as on the agents (the
     command `/compact`, and a lead's `compact_session`). On the agents: `{"data": {"state":
     "compacting"}}`, or `"waiting"` while a turn runs (held to its end, first in the queue, as an
     inbox item of type `compaction`, and dropped with a notice if the turn doesn't succeed; asked
-    twice is once). 400 `{"message"}` is a sentence to show: nothing to summarize yet, a subagent's,
+    twice is once). On the engine it waits for the next step; Stop and a failed run take it from the
+    inbox, and it's never held or paused for. 400 `{"message"}` is a sentence to show: nothing to summarize yet, a subagent's,
     or an agent that can't be asked (Cursor, Antigravity). It shows as the engine's own does, a
     `compaction` message with `reason: "manual"` and `session.compaction.started`, `.ended` or
-    `.failed`, then `idle`; a failed one is a failed run. It adds no reply, and what's there stays.
-    A summary that went through is no news: no notification, no `[Session finished]` to a lead.
+    `.failed`, then `idle`. It adds no reply, and what's there stays, how the session ended too.
+    A summary that went through is no news: it stays read if it was, with no notification and no
+    `[Session finished]` to a lead. One that failed says why, tells a lead `[Session not summarized]`
+    and pauses nothing.
 - Plan accounts (Copilot, OpenCode, GitLab, Poe, a provider's API key), on a Mac and a machine,
   as Settings › Accounts has them: the phone sees, reads and signs in to them as the app does.
   Each computer keeps its own: a new

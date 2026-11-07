@@ -15,6 +15,7 @@ export const READ_BY_MAIL = 20_000;
 interface ReadMessage {
   id: string;
   type: string;
+  status?: string;
   text?: string;
   files?: { name?: string }[];
   content?: { type: string; text?: string; name?: string; state?: { input?: Record<string, unknown> } }[];
@@ -94,7 +95,8 @@ export function conversationMarkdown(title: string, messages: ReadMessage[], age
       // Why a turn stopped, as the conversation shows it.
       say("Stopped", `It stopped with an error: ${message.error?.message?.trim() || "the engine gave no reason."}`);
     } else if (message.type === "compaction") {
-      say(agent, "_Summarized the conversation so far._");
+      if (message.status === "completed") say(agent, "_Summarized the conversation so far._");
+      else if (message.status === "failed") say(agent, "_Couldn't summarize the conversation._");
     }
   }
   if (steps.length) say(agent, "");

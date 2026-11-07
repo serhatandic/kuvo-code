@@ -350,6 +350,16 @@ test("list_sessions shows a bot's work and where each stands; stop_session stops
   assert.deepEqual(notMine, { text: "\"My own\" isn't yours to stop: ask the user.", isError: true });
 });
 
+test("a summary doesn't change how a lead reads a session: failed stays failed, and a summary that failed is said to be only that", async () => {
+  const session = startedAddress(await tool("start_session", { task: "One.", title: "Sign-in", project: "Tidepool" }, "ses_pixel"));
+  busy.delete(session);
+  sessions.get(session).outcome = "succeeded"; // As the engine has it after the summary.
+  sessions.get(session).time.idle = Date.now();
+  kept.set(session, [{ id: "msg_i2", type: "idle", outcome: "succeeded" }, { id: "msg_c", type: "compaction", status: "completed", reason: "manual" }, { id: "msg_i1", type: "idle", outcome: "failed" }, { id: "msg_s", type: "assistant", content: [] }]);
+  assert.match((await tool("list_sessions", {}, "ses_pixel")).text, /failed/);
+  assert.doesNotMatch((await tool("list_sessions", {}, "ses_pixel")).text, /finished/);
+});
+
 test("list_sessions tells how full a session's context is, as the app's gauge reads it, and the running total as that", async () => {
   const session = startedAddress(await tool("start_session", { task: "One.", title: "Sign-in", project: "Tidepool" }, "ses_pixel"));
   sessions.get(session).tokens = { input: 400_000, output: 27_000, reasoning: 0, cache: { read: 9_000_000, write: 0 } };

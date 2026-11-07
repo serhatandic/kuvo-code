@@ -1054,6 +1054,14 @@ function messageID(now = Date.now()) {
   const alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
   return `msg_${time}${Array.from(crypto3.randomBytes(14), (byte) => alphabet[byte % alphabet.length]).join("")}`;
 }
+function summaryAtEnd(messages) {
+  for (const message of Array.isArray(messages) ? messages : []) {
+    if (message?.type === "idle")
+      continue;
+    return message?.type === "compaction" && message.reason === "manual" && typeof message.status === "string" ? message.status : null;
+  }
+  return null;
+}
 
 // Packages/Box/src/shared/queues.ts
 import fs8 from "node:fs";
@@ -1196,6 +1204,17 @@ async function inboxOf(target, session) {
 async function isRunning(target, session) {
   const active = (await asked(target, "GET", "api/session/active"))?.data ?? {};
   return Array.isArray(active) ? active.includes(session) : Boolean(active[session]);
+}
+var messagesIn = (inbox) => inbox.filter((item) => item.type !== "compaction");
+async function letSummariesGo(target, session) {
+  for (const item of await inboxOf(target, session)) {
+    if (item.type === "compaction")
+      await asked(target, "DELETE", `api/session/${address(session)}/inbox/${address(item.id)}`).catch(() => {});
+  }
+}
+async function onlyASummaryFailed(target, session) {
+  const page = await asked(target, "GET", `api/session/${address(session)}/message?limit=6&order=desc`).catch(() => null);
+  return summaryAtEnd(page?.data) === "failed";
 }
 var setDelivery = (target, session, item, delivery) => asked(target, "PATCH", `api/session/${address(session)}/inbox/${address(item)}`, { delivery });
 var interrupt = (target, session, resume = false) => asked(target, "POST", `api/session/${address(session)}/interrupt${resume ? "?resume=true" : ""}`);
@@ -1470,7 +1489,7 @@ function putBack(session, { message, shown, held }, place) {
 }
 async function holdQueue(target, session, since, items = []) {
   const resumedSince = () => since !== undefined && (queueOf(session).resumed ?? 0) >= since;
-  const inbox = await inboxOf(target, session);
+  const inbox = messagesIn(await inboxOf(target, session));
   if (resumedSince())
     return queueOf(session);
   const held = queueOf(session).held;
@@ -1483,7 +1502,7 @@ async function holdQueue(target, session, since, items = []) {
     else if (await setDelivery(target, session, id, "queue").then(() => true, () => false))
       moved.push(id);
   }
-  const waiting = await inboxOf(target, session).catch(() => inbox);
+  const waiting = await inboxOf(target, session).then(messagesIn, () => inbox);
   return changeQueue2(session, (state) => {
     const there = (id) => waiting.some((item) => item.id === id) || Boolean(state.waiting?.some((each) => each.id === id));
     return since !== undefined && (state.resumed ?? 0) >= since ? state : { ...state, paused: state.paused || waiting.length > 0 || Boolean(state.waiting?.length), held: [...moved.filter(there), ...state.held.filter((id) => !moved.includes(id) && there(id))] };
@@ -1585,9 +1604,10 @@ function queueWatcher(target, { after = DRAIN_AFTER, schedule = setTimeout, canc
         }
         const at = Date.now();
         ended(session, stops, async (waited) => {
-          if ((queueOf(session).resumed ?? 0) < at)
+          if ((queueOf(session).resumed ?? 0) < at) {
             await holdQueue(target, session, at);
-          else if (waited)
+            await letSummariesGo(target, session);
+          } else if (waited)
             await drain(target, session);
         });
         break;
@@ -1608,9 +1628,17 @@ function queueWatcher(target, { after = DRAIN_AFTER, schedule = setTimeout, canc
       case "session.execution.failed": {
         forget(stops, session);
         const at = Date.now();
-        holdQueue(target, session, at).catch(() => {});
+        const onlySummary = onlyASummaryFailed(target, session);
+        onlySummary.then(async (only) => {
+          if (only)
+            return;
+          await holdQueue(target, session, at);
+          await letSummariesGo(target, session);
+        }).catch(() => {});
         ended(session, stops, async (waited) => {
-          if (waited && (queueOf(session).resumed ?? 0) >= at)
+          if (await onlySummary)
+            await drain(target, session);
+          else if (waited && (queueOf(session).resumed ?? 0) >= at)
             await drain(target, session);
         });
         break;
@@ -7315,15 +7343,38 @@ async function contextOf(listed, signal) {
   return;
 }
 async function endedOnSummary(target, session, signal) {
+  return summaryAtEndOf(target, session, signal).then((status) => status === "completed");
+}
+async function summaryAtEndOf(target, session, signal) {
   const page = await call(target, "GET", `/api/session/${encodeURIComponent(session)}/message?limit=6&order=desc`, undefined, signal).catch(() => null);
-  return lastIsSummary(page);
+  return summaryAtEnd(page);
+}
+function outcomeOf(listed, page) {
+  const messages = Array.isArray(page) ? page : [];
+  if (summaryAtEnd(messages) === null)
+    return listed.data.outcome;
+  const summary = messages.findIndex((message) => message?.type === "compaction");
+  return messages.slice(summary + 1).find((message) => message?.type === "idle")?.outcome ?? listed.data.outcome;
+}
+async function keepReadThroughSummary(target, session, signal) {
+  const route = `/api/session/${encodeURIComponent(session)}`;
+  const page = await call(target, "GET", `${route}/message?limit=6&order=desc`, undefined, signal).catch(() => null);
+  if (summaryAtEnd(page) !== "completed" || !Array.isArray(page))
+    return;
+  const summary = page.findIndex((message) => message?.type === "compaction");
+  const before = page.slice(summary + 1).find((message) => message?.type === "idle")?.time?.created;
+  const listed = await call(target, "GET", route, undefined, signal).catch(() => null);
+  if (before === undefined || (listed?.time?.viewed ?? 0) < before)
+    return;
+  await call(target, "POST", `${route}/view`, {}, signal).catch(() => {});
 }
 var tokensOf = (data) => (data.tokens?.input ?? 0) + (data.tokens?.output ?? 0) + (data.tokens?.reasoning ?? 0);
 async function describeWork(listed, working, { replies = false, signal } = {}) {
   const { data } = listed;
   const folder = data.location?.directory ?? data.directory ?? "";
   const asking = await askingNow(listed, signal);
-  const state = asking ? "asking" : working.has(data.id) ? "working" : data.outcome === "succeeded" ? "finished" : data.outcome === "failed" ? "failed" : data.outcome === "interrupted" ? "stopped" : data.time?.idle ? "finished" : "idle";
+  const outcome = replies && !working.has(data.id) ? outcomeOf(listed, await call(listed.target, "GET", `/api/session/${encodeURIComponent(data.id)}/message?limit=6&order=desc`, undefined, signal).catch(() => null)) : data.outcome;
+  const state = asking ? "asking" : working.has(data.id) ? "working" : outcome === "succeeded" ? "finished" : outcome === "failed" ? "failed" : outcome === "interrupted" ? "stopped" : data.time?.idle ? "finished" : "idle";
   const reply = replies && state !== "working" ? await lastReplyOf(listed, signal) : null;
   const project = folder === CHATS ? undefined : projectNameOf(folder);
   return {
@@ -8701,6 +8752,8 @@ ${reply ? cut(reply, 1200) : "(It ended without a reply.)"}${running}`;
     }
     case "session.execution.failed": {
       const error = errorOf(event.data.error) ?? await turnError(target, session.id).catch(() => null);
+      if (await summaryAtEndOf(target, session.id) === "failed")
+        return `[Session not summarized] ${named}: ${error?.message ? cut(error.message.replace(/\.+$/, ""), 400) : "It couldn't"}. Its conversation and work are as they were.`;
       const held = error && session.model ? await failedOn(target, session.model, error).catch(() => null) : null;
       if (held)
         return `[Session failed] ${named} stopped: ${holdWords(held)}. Starting it again there fails the same way: start it again on a model that can, from list_models, or tell the user.`;
@@ -9243,7 +9296,7 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
       if (bot)
         noteWorkChanged(bot);
       if (event.type === "session.execution.succeeded" && await endedOnSummary(source, session.id))
-        return;
+        return await settle(session.id);
       const form = event.type === "form.created" ? event.data?.form ?? event.data : null;
       if (form && isAutopilot(session)) {
         const asked = { ...form, sessionID: form.sessionID ?? id };
@@ -11148,12 +11201,7 @@ async function noticeFor(event, get) {
   }
 }
 function lastIsSummary(messages) {
-  for (const message of Array.isArray(messages) ? messages : []) {
-    if (message?.type === "idle")
-      continue;
-    return message?.type === "compaction" && message.reason === "manual" && message.status === "completed";
-  }
-  return false;
+  return summaryAtEnd(messages) === "completed";
 }
 async function settleHeld(engine, hold, only) {
   for (const entry of [...hold.held]) {
@@ -12857,7 +12905,10 @@ function conversationMarkdown(title, messages, agent) {
     } else if (message.type === "idle" && message.outcome === "failed") {
       say("Stopped", `It stopped with an error: ${message.error?.message?.trim() || "the engine gave no reason."}`);
     } else if (message.type === "compaction") {
-      say(agent, "_Summarized the conversation so far._");
+      if (message.status === "completed")
+        say(agent, "_Summarized the conversation so far._");
+      else if (message.status === "failed")
+        say(agent, "_Couldn't summarize the conversation._");
     }
   }
   if (steps.length)
@@ -20004,6 +20055,8 @@ async function watchEvents(read, tell, signal, answered = () => {}, { bots = fal
         goalHeld?.(event).catch(() => {});
         if (signIns)
           noteSignIn(event, source).catch(() => {}).finally(() => signedIn(event));
+        if (work && event.type === "session.execution.succeeded" && typeof event.data?.sessionID === "string")
+          keepReadThroughSummary(source, event.data.sessionID, connection.signal).catch(() => {});
         if (!bots) {
           if (event.type === "session.created")
             settleNewSession(source, event.data?.sessionID ?? event.data?.info?.id).catch(() => {});
@@ -20438,7 +20491,7 @@ function ended(id, outcome) {
     resolve(outcome);
   waiting.delete(id);
 }
-function outcomeOf(id) {
+function outcomeOf2(id) {
   return new Promise((resolve) => {
     let timer = null;
     const done = (outcome) => {
@@ -20627,7 +20680,7 @@ async function startMove(kind, thing, to, signal) {
   };
   if (!noteFirst(record))
     return { ok: false, status: 409, message: say.moving };
-  const outcome = outcomeOf(id);
+  const outcome = outcomeOf2(id);
   if (watching)
     drive(id);
   return outcome;
@@ -29891,6 +29944,7 @@ export {
   keepJobs,
   keepKeeper,
   keepMoving,
+  keepReadThroughSummary,
   keepSkillTrashClear,
   keptAwake,
   keysNamedHere,
@@ -30032,6 +30086,7 @@ export {
   steering,
   stopMacLink,
   stopMacPeers,
+  stopSession,
   stopWork,
   takeAgents,
   takeDoc,

@@ -29,7 +29,7 @@ import { awaitedBy } from "./awaited";
 import { tellLateAnswers } from "./asks";
 import { errorOf, failedOn, followUnanswering, holdWords, turnError } from "./unanswering";
 import { backgroundWatcher, backgroundWords, forgetStopped, FINISH_HOLD_LIMIT, readStopped, startedSince, type BackgroundEvent, type BackgroundWork } from "./background";
-import { endedOnSummary, isArchived, lastReplyOf, placeWords, startedByOf, wakesOf, workSessions, worksFor, type Listed } from "./tree";
+import { endedOnSummary, summaryAtEndOf, isArchived, lastReplyOf, placeWords, startedByOf, wakesOf, workSessions, worksFor, type Listed } from "./tree";
 import { projectNameOf } from "../notices/news";
 import type { Target } from "../../shared/records";
 import type { EngineSession } from "../engine/sessions";
@@ -114,6 +114,7 @@ export async function wakeLine(event: WorkEvent, session: Partial<EngineSession>
       // Why, in its engine's words; one at its account or its limit fails the same way again there.
       // (The event's own, as it happens; read from its conversation when caught up on later.)
       const error = errorOf((event.data as { error?: unknown }).error) ?? await turnError(target, session.id).catch(() => null);
+      if (await summaryAtEndOf(target, session.id) === "failed") return `[Session not summarized] ${named}: ${error?.message ? cut(error.message.replace(/\.+$/, ""), 400) : "It couldn't"}. Its conversation and work are as they were.`;
       const held = error && session.model ? await failedOn(target, session.model, error).catch(() => null) : null;
       if (held) return `[Session failed] ${named} stopped: ${holdWords(held)}. Starting it again there fails the same way: start it again on a model that can, from list_models, or tell the user.`;
       const why = error?.message ? `: ${cut(error.message.replace(/\.+$/, ""), 400)}` : "";
@@ -713,7 +714,8 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
       const bot = worksFor(session)?.bot;
       if (bot) noteWorkChanged(bot);
       // Only a summary it was asked for: not news, and not its work finishing.
-      if (event.type === "session.execution.succeeded" && await endedOnSummary(source, session.id)) return;
+      // (A finish that waited on what it left running, over meanwhile, is looked at now.)
+      if (event.type === "session.execution.succeeded" && await endedOnSummary(source, session.id)) return await settle(session.id);
       // On Autopilot nothing waits: a question goes ahead on the choice it marks, or comes back declined.
       const form = event.type === "form.created" ? event.data?.form ?? event.data as unknown as EngineForm : null;
       if (form && isAutopilot(session)) {

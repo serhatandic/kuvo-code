@@ -8,7 +8,8 @@ import { isObject } from "../../shared/json";
 import { cut } from "../../shared/text";
 import { call, engineGet } from "../engine/client";
 import { CHATS } from "../home";
-import { describePermission, lastIsSummary, projectNameOf } from "../notices/news";
+import { describePermission, projectNameOf } from "../notices/news";
+import { summaryAtEnd } from "../engine/sessions";
 import { listBots } from "../bots/list";
 import { asksIn } from "./answers";
 import type { Target } from "../../shared/records";
@@ -152,8 +153,40 @@ export async function contextOf(listed: Listed, signal?: AbortSignal): Promise<{
  * compact_session), which isn't news: no reply, nothing done.
  */
 export async function endedOnSummary(target: Target, session: string, signal?: AbortSignal): Promise<boolean> {
+  return summaryAtEndOf(target, session, signal).then(status => status === "completed");
+}
+
+/** How a summary asked for went, if that's what a session did last. */
+export async function summaryAtEndOf(target: Target, session: string, signal?: AbortSignal): Promise<string | null> {
   const page = await call(target, "GET", `/api/session/${encodeURIComponent(session)}/message?limit=6&order=desc`, undefined, signal).catch(() => null);
-  return lastIsSummary(page);
+  return summaryAtEnd(page);
+}
+
+/**
+ * How a session's work ended, past a summary asked for after it, which ends a turn of its own: the
+ * engine's `outcome` says how that went. What it said before stands.
+ */
+function outcomeOf(listed: Listed, page: unknown): unknown {
+  const messages = Array.isArray(page) ? page as { type?: unknown; outcome?: unknown; reason?: unknown }[] : [];
+  if (summaryAtEnd(messages) === null) return listed.data.outcome;
+  const summary = messages.findIndex(message => message?.type === "compaction");
+  return messages.slice(summary + 1).find(message => message?.type === "idle")?.outcome ?? listed.data.outcome;
+}
+
+/**
+ * A session that did nothing but summarize stays read, if it was read before: a summary leaves its
+ * idle time newer than when it was last looked at, on the engine as on the bridge. One with news
+ * from before it stays unread.
+ */
+export async function keepReadThroughSummary(target: Target, session: string, signal?: AbortSignal): Promise<void> {
+  const route = `/api/session/${encodeURIComponent(session)}`;
+  const page = await call(target, "GET", `${route}/message?limit=6&order=desc`, undefined, signal).catch(() => null);
+  if (summaryAtEnd(page) !== "completed" || !Array.isArray(page)) return;
+  const summary = page.findIndex(message => (message as { type?: unknown })?.type === "compaction");
+  const before = (page.slice(summary + 1).find(message => (message as { type?: unknown })?.type === "idle") as { time?: { created?: number } } | undefined)?.time?.created;
+  const listed = await call(target, "GET", route, undefined, signal).catch(() => null) as { time?: { viewed?: number } } | null;
+  if (before === undefined || (listed?.time?.viewed ?? 0) < before) return;
+  await call(target, "POST", `${route}/view`, {}, signal).catch(() => {});
 }
 
 const tokensOf = (data: Listed["data"]) => (data.tokens?.input ?? 0) + (data.tokens?.output ?? 0) + (data.tokens?.reasoning ?? 0);
@@ -164,8 +197,10 @@ export async function describeWork(listed: Listed, working: Set<string>, { repli
   const { data } = listed;
   const folder = data.location?.directory ?? data.directory ?? "";
   const asking = await askingNow(listed, signal);
+  // (With its last reply, read as well: how it ended, past a summary.)
+  const outcome = replies && !working.has(data.id) ? outcomeOf(listed, await call(listed.target, "GET", `/api/session/${encodeURIComponent(data.id)}/message?limit=6&order=desc`, undefined, signal).catch(() => null)) : data.outcome;
   const state: WorkSession["state"] = asking ? "asking" : working.has(data.id) ? "working"
-    : data.outcome === "succeeded" ? "finished" : data.outcome === "failed" ? "failed" : data.outcome === "interrupted" ? "stopped" : data.time?.idle ? "finished" : "idle";
+    : outcome === "succeeded" ? "finished" : outcome === "failed" ? "failed" : outcome === "interrupted" ? "stopped" : data.time?.idle ? "finished" : "idle";
   const reply = replies && state !== "working" ? await lastReplyOf(listed, signal) : null;
   const project = folder === CHATS ? undefined : projectNameOf(folder);
   return {

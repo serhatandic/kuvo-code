@@ -572,7 +572,15 @@ function shown(goal: Kept): Goal {
 
 /** The last turn's end in a conversation, oldest first. */
 function lastIdle(messages: any[]): any | undefined {
-  for (let index = messages.length - 1; index >= 0; index--) if (messages[index]?.type === "idle") return messages[index]
+  for (let index = messages.length - 1; index >= 0; index--) {
+    if (messages[index]?.type !== "idle") continue
+    // A summary asked for ends a turn of its own, with nothing done to check.
+    if (messages[index - 1]?.type === "compaction" && messages[index - 1].reason === "manual") {
+      index--
+      continue
+    }
+    return messages[index]
+  }
   return undefined
 }
 

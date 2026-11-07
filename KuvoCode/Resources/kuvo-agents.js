@@ -4162,9 +4162,15 @@ function shown(goal) {
   return rest;
 }
 function lastIdle(messages) {
-  for (let index = messages.length - 1;index >= 0; index--)
-    if (messages[index]?.type === "idle")
-      return messages[index];
+  for (let index = messages.length - 1;index >= 0; index--) {
+    if (messages[index]?.type !== "idle")
+      continue;
+    if (messages[index - 1]?.type === "compaction" && messages[index - 1].reason === "manual") {
+      index--;
+      continue;
+    }
+    return messages[index];
+  }
   return;
 }
 function turnOf(messages, idle) {
@@ -7624,7 +7630,10 @@ class AcpThread {
       await this.flavor.selectMode?.(rpc, sessionId, { approvesAll: active.hooks.approvesAll(), plan: input.plan }, this.setup);
       if (active.ended)
         return;
-      this.prompt(active, sessionId, [{ type: "text", text: "<system-reminder>Your connection was renewed partway through your work, and what was under way then was cut off. Carry on with the task from where you were.</system-reminder>" }]);
+      if (input.compact)
+        this.prompt(active, sessionId, [{ type: "text", text: "/compact" }]);
+      else
+        this.prompt(active, sessionId, [{ type: "text", text: "<system-reminder>Your connection was renewed partway through your work, and what was under way then was cut off. Carry on with the task from where you were.</system-reminder>" }]);
     } catch (error) {
       this.end(active, "failed", failure(error).message);
     }
@@ -16909,6 +16918,8 @@ class Sessions {
       return `${name} can't summarize on request: it does so by itself when the conversation fills up.`;
     if (!working && !this.slots(record)[model.providerID]?.seen)
       return `There's nothing to summarize yet: ${name} hasn't started on this conversation.`;
+    if (record.session.revert)
+      return "Redo what you undid or send a message first: a summary now would be thrown away with it.";
     return;
   }
   dropCompaction(id, record, turn) {
@@ -17369,7 +17380,8 @@ ${text.slice(0, 4000)}
     const { turn, abort } = run;
     const session = record.session;
     const directory = session.location.directory;
-    const held = session.outcome !== undefined && session.outcome !== "succeeded";
+    const before = session.outcome;
+    const held = before !== undefined && before !== "succeeded";
     run.compacting = true;
     emit("session.inbox.delivered", { sessionID: id, inboxID: input.id }, directory);
     const message = { type: "compaction", id: input.id, time: { created: Date.now() }, status: "running", reason: "manual" };
@@ -17393,10 +17405,12 @@ ${text.slice(0, 4000)}
     message.time.completed = Date.now();
     emit(outcome === "succeeded" ? "session.compaction.ended" : "session.compaction.failed", { sessionID: id }, directory);
     turn.finish(outcome, outcome === "interrupted" ? undefined : result.error);
+    session.outcome = before;
+    this.store.save(id, true);
     this.settleAsks(id, live);
     if (runOf(live.doing) !== run)
       return;
-    this.free(id, live, held ? undefined : outcome);
+    this.free(id, live, held ? undefined : outcome === "failed" ? undefined : outcome);
   }
   closeWhenIdle(id, live) {
     clearTimeout(live.idle);
@@ -23957,4 +23971,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 8675463228a8e0a9b7bbc49c47f0fdd5ffba864a41fe558db15dc402088405bc
+// Built from Packages/Box/src/agents 02045edffd165760d9ec844e09846fc2221524c02abc7ac964c291b32aebf5a0

@@ -3129,6 +3129,39 @@ describe("summarizing a conversation you ask for (/compact)", () => {
     expect(a.runs.map((run) => run.text)).toEqual(["first", "/compact", "second"])
   })
 
+  test("how a conversation ended stays as it was through a summary, gone through or not", async () => {
+    let fails = false
+    a.script = (input, turn, hooks, thread) => {
+      if (!input.compact) return replies(input, turn, hooks, thread)
+      return Promise.resolve(fails ? { outcome: "failed", error: { type: "agent", message: "It couldn't." } } : { outcome: "succeeded" })
+    }
+    const id = create()
+    send(id, "first")
+    await settled(id, 1)
+    sessions.compact(id)
+    await settled(id, 2)
+    expect(store.get(id)!.session.outcome).toBe("succeeded")
+    fails = true
+    sessions.compact(id)
+    await settled(id, 3)
+    expect(store.get(id)!.session.outcome).toBe("succeeded")
+    // Failed before it: still that, with the summary through.
+    store.get(id)!.session.outcome = "failed"
+    fails = false
+    sessions.compact(id)
+    await settled(id, 4)
+    expect(store.get(id)!.session.outcome).toBe("failed")
+  })
+
+  test("with an undo staged it says why not: the next message would throw the summary away with it", async () => {
+    const id = create()
+    send(id, "first")
+    await settled(id, 1)
+    const first = sessions.messages(id).find((message) => message.type === "user")!.id
+    await sessions.stageRevert(id, first)
+    expect(() => sessions.compact(id)).toThrow("Redo what you undid or send a message first: a summary now would be thrown away with it.")
+  })
+
   test("asked twice, it's one summary", async () => {
     let release!: () => void
     a.script = (input, turn, hooks, thread) => {

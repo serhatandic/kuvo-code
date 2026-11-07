@@ -1603,6 +1603,8 @@ export class Sessions {
     const name = agent.name.split(" · ")[0]
     if (!agent.compacts) return `${name} can't summarize on request: it does so by itself when the conversation fills up.`
     if (!working && !this.slots(record)[model.providerID]?.seen) return `There's nothing to summarize yet: ${name} hasn't started on this conversation.`
+    // The next message makes the undo final, which takes what came after it.
+    if (record.session.revert) return "Redo what you undid or send a message first: a summary now would be thrown away with it."
     return undefined
   }
 
@@ -2085,7 +2087,8 @@ export class Sessions {
     const { turn, abort } = run
     const session = record.session
     const directory = session.location.directory
-    const held = session.outcome !== undefined && session.outcome !== "succeeded"
+    const before = session.outcome
+    const held = before !== undefined && before !== "succeeded"
     run.compacting = true
     emit("session.inbox.delivered", { sessionID: id, inboxID: input.id }, directory)
     const message: CompactionMessage = { type: "compaction", id: input.id, time: { created: Date.now() }, status: "running", reason: "manual" }
@@ -2108,10 +2111,13 @@ export class Sessions {
     message.time.completed = Date.now()
     emit(outcome === "succeeded" ? "session.compaction.ended" : "session.compaction.failed", { sessionID: id }, directory)
     turn.finish(outcome, outcome === "interrupted" ? undefined : result.error)
+    // How the conversation ended stays as it was: a summary is no turn of its work.
+    session.outcome = before
+    this.store.save(id, true)
     this.settleAsks(id, live)
     // Deleted meanwhile: nothing more for it.
     if (runOf(live.doing) !== run) return
-    this.free(id, live, held ? undefined : outcome)
+    this.free(id, live, held ? undefined : outcome === "failed" ? undefined : outcome)
   }
 
   /** A while after its last turn, a session's agents stop running: they go on where they left off next time. */

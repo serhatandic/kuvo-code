@@ -424,7 +424,9 @@ export class AcpThread implements Thread {
       // A mode it can't be put in (asking first) stops the turn, rather than going on in another.
       await this.flavor.selectMode?.(rpc, sessionId, { approvesAll: active.hooks.approvesAll(), plan: input.plan }, this.setup)
       if (active.ended) return
-      this.prompt(active, sessionId, [{ type: "text", text: "<system-reminder>Your connection was renewed partway through your work, and what was under way then was cut off. Carry on with the task from where you were.</system-reminder>" }])
+      // (A summary is asked for again, exactly: words would start a turn of work.)
+      if (input.compact) this.prompt(active, sessionId, [{ type: "text", text: "/compact" }])
+      else this.prompt(active, sessionId, [{ type: "text", text: "<system-reminder>Your connection was renewed partway through your work, and what was under way then was cut off. Carry on with the task from where you were.</system-reminder>" }])
     } catch (error) {
       this.end(active, "failed", failure(error).message)
     }
