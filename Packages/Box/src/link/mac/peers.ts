@@ -4,8 +4,9 @@
 
 import { isObject } from "../../shared/json";
 import type { Body } from "../../shared/json";
-import { readEngineFile } from "../engine/client";
-import { deliverLeftAnswers, givenUp, macWaiting, sendOutbox } from "../letters/outbox";
+import { peerTargets, readEngineFile } from "../engine/client";
+import { deliverLeftAnswers, givenUp, macWaiting, outboxSoon, sendOutbox } from "../letters/outbox";
+import { pushRows } from "../work/elsewhere";
 import { attentionGiven } from "../notices/hold";
 import { announce, refreshOwn } from "../peers/agents";
 import { mailFor, peersOf } from "../peers/known";
@@ -44,15 +45,23 @@ export function runMacPeers(): void {
   watchSeats(() => macLink.host, stop.signal);
   watchMoves(() => macLink.host, stop.signal);
   refreshOwn(readEngineFile).catch(() => {});
+  // What this box answers goes at once.
+  outboxSoon.send = () => void macSendOutbox();
   const rounds = [
     setInterval(() => {
       const host = macLink.host;
       if (host?.welcomed) announce(host, readEngineFile).catch(() => {});
       else refreshOwn(readEngineFile).catch(() => {});
     }, 60_000),
-    setInterval(macSendOutbox, 3_000),
+    setInterval(() => {
+      macSendOutbox();
+      // The rows of sessions here whose lead lives on another computer, told to it as they change.
+      const host = macLink.host;
+      if (host?.welcomed) pushRows(host, readLink(), peerTargets()).catch(() => {});
+    }, 3_000),
   ];
   macLink.stopPeers = () => {
+    outboxSoon.send = () => {};
     stop.abort();
     for (const round of rounds) clearInterval(round);
   };
