@@ -82,8 +82,7 @@ function answerAfter(messages: EngineMessage[], id: string): string[] {
 }
 
 // Letters remembered, by id, with when: one seen again is said to be there, not delivered twice. A
-// note's for as long as it may come again (`note:<id>`), and which letters were answered as well
-// (`answer:<id>`), so an answer sent again under another id isn't a second message.
+// note's for as long as it may come again (`note:<id>`).
 export function lettersSeen(now: number): Record<string, number> {
   let seen: Record<string, number> = {};
   try { seen = JSON.parse(fs.readFileSync(LETTERS_SEEN, "utf8")); } catch {}
@@ -101,7 +100,6 @@ function noteSeen(id: string, now = Date.now()) {
     writePrivate(LETTERS_SEEN, JSON.stringify(seen));
   });
 }
-const answerSeen = (answers: string) => `answer:${answers}`;
 // Letters being delivered now: one that comes again meanwhile waits for that one's answer.
 const delivering = new Set<string>();
 
@@ -194,17 +192,10 @@ export async function takeLetter(sender: LetterSender, letter: unknown, { send, 
   if (typeof letter.to !== "string" || !/^ses_[A-Za-z0-9]{1,60}$/.test(letter.to) || typeof letter.text !== "string" || !letter.text.trim()) return no("That isn't a letter.");
   if (delivering.has(id)) return;
   if (seenAlready(id, now)) return send(sender, { delivered: { id, ok: true } });
-  const answers = typeof letter.answers === "string" && LETTER_ID.test(letter.answers) ? letter.answers : null;
-  // A letter's answered once: the same answer again under another id is there already.
-  if (answers && !isObject(letter.read) && seenAlready(answerSeen(answers), now)) {
-    noteSeen(id, now);
-    return send(sender, { delivered: { id, ok: true } });
-  }
   // An answer a tool here waits for (from the box its letter went to): to it. A conversation read
   // that nothing waits for now just goes: it isn't a message.
-  if (answers && (answered(sender, letter as AnswerLetter, now) || isObject(letter.read))) {
+  if (typeof letter.answers === "string" && LETTER_ID.test(letter.answers) && (answered(sender, letter as AnswerLetter, now) || isObject(letter.read))) {
     noteSeen(id, now);
-    noteSeen(answerSeen(answers), now);
     return send(sender, { delivered: { id, ok: true } });
   }
   if (isObject(letter.read)) return readFor(sender, letter as ReadLetter, { send, targets, answer, now, moved, moving, bridge });
@@ -261,7 +252,6 @@ export async function takeLetter(sender: LetterSender, letter: unknown, { send, 
     delivering.delete(id);
   }
   noteSeen(note ? `note:${id}` : id, now);
-  if (answers) noteSeen(answerSeen(answers), now);
   if (note) {
     // The sessions it speaks of live on the box it came from, as of when it was made.
     noteHomes(note.about ?? [], sender.key, typeof letter.made === "number" ? Math.min(letter.made, now) : now);

@@ -258,20 +258,6 @@ test("a note delivered once isn't delivered again three days later, whatever tim
   assert.equal(leadBox.prompts.length, 2);
 });
 
-test("an answer sent again under a new id reaches no one as a second message", async () => {
-  computers();
-  const leadBox = await engine({ ses_lead: { id: "ses_lead", title: "Foreman" } });
-  const answer = id => ({ id, from: "ses_there", to: "ses_lead", text: "Done, and tested.", wait: false, at: T, answers: "ltr_question" });
-  assert.equal((await taken(answer("ltr_answer1"), leadBox.target, T)).ok, true);
-  assert.equal(leadBox.prompts.length, 1, "no tool waits for it: it comes as a message");
-  const again = await taken(answer("ltr_answer2"), leadBox.target, T + MINUTE);
-  assert.equal(again.ok, true, "said to be there, so it stops coming");
-  assert.equal(leadBox.prompts.length, 1);
-  // A different letter's answer is that letter's.
-  await taken({ ...answer("ltr_answer3"), answers: "ltr_another" }, leadBox.target, T + MINUTE);
-  assert.equal(leadBox.prompts.length, 2);
-});
-
 test("a lead moved twice: the box it moved on from says where it lives, and the news goes on to it", async () => {
   const { lead, third } = computers();
   movedFrom([{ session: "ses_lead", key: lead.pub, at: T - 2 * MINUTE }]);

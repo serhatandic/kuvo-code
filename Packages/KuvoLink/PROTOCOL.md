@@ -242,8 +242,7 @@ connection.
 - **Letters**: `{"letter": {id, from, to, text, wait, at, answers?, read?, note?, made?}}` goes to the box that
   listed `to`.
   - **Checks**: the receiver drops a letter older than a day. It delivers each `id` once (ids
-    remembered two days, a `note`'s 30, noted once delivered), and one `answers` once, however many
-    letters come with it (bridge 0.9.203), at most 20 in ten minutes from a box (one answered
+    remembered two days, a `note`'s 30, noted once delivered), at most 20 in ten minutes from a box (one answered
     `retry` isn't counted, so one tried again and again leaves room for the rest), and only
     to a conversation an agent could be. A subagent's, a group chat's seat or one put away doesn't
     take letters. One it can't look up now (its engine starting) is answered `retry`, and so is one
