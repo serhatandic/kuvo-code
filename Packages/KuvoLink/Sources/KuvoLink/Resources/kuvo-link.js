@@ -1044,6 +1044,38 @@ import fs9 from "node:fs";
 import path8 from "node:path";
 import { fileURLToPath } from "node:url";
 
+// Packages/Box/src/shared/summaries.ts
+var asRows = (messages) => Array.isArray(messages) ? messages : [];
+var between = new Set(["synthetic", "system", "model-switched", "agent-switched"]);
+var asked2 = (row) => row?.type === "compaction" && row.reason === "manual";
+function onItsOwn(rows, index) {
+  for (let at = index + 1;at < rows.length; at++) {
+    if (between.has(rows[at]?.type))
+      continue;
+    return rows[at]?.type === "idle";
+  }
+  return true;
+}
+function summaryRowAtEnd(messages) {
+  const rows = asRows(messages);
+  const at = rows.findIndex((row) => row?.type !== "idle");
+  if (at < 0 || !asked2(rows[at]) || typeof rows[at].status !== "string")
+    return null;
+  return onItsOwn(rows, at) ? rows[at] : null;
+}
+var summaryAtEnd = (messages) => summaryRowAtEnd(messages)?.status ?? null;
+function lastTurnEnd(messages) {
+  const rows = asRows(messages);
+  for (let at = 0;at < rows.length; at++) {
+    if (rows[at]?.type !== "idle")
+      continue;
+    if (!asked2(rows[at + 1]) || !onItsOwn(rows, at + 1))
+      return rows[at];
+    at++;
+  }
+  return;
+}
+
 // Packages/Box/src/link/engine/sessions.ts
 import crypto3 from "node:crypto";
 var isHiddenRun = (session) => Boolean(session?.metadata?.kuvo?.engineFor || session?.metadata?.kuvo?.seat || session?.metadata?.kuvo?.reviewPart);
@@ -1053,14 +1085,6 @@ function messageID(now = Date.now()) {
   const time = (BigInt(now) * 0x1000n + BigInt(lastMessage.counter) & 0xFFFFFFFFFFFFn).toString(16).padStart(12, "0");
   const alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
   return `msg_${time}${Array.from(crypto3.randomBytes(14), (byte) => alphabet[byte % alphabet.length]).join("")}`;
-}
-function summaryAtEnd(messages) {
-  for (const message of Array.isArray(messages) ? messages : []) {
-    if (message?.type === "idle")
-      continue;
-    return message?.type === "compaction" && message.reason === "manual" && typeof message.status === "string" ? message.status : null;
-  }
-  return null;
 }
 
 // Packages/Box/src/shared/queues.ts
@@ -7342,31 +7366,31 @@ async function contextOf(listed, signal) {
   }
   return;
 }
-async function endedOnSummary(target, session, signal) {
-  return summaryAtEndOf(target, session, signal).then((status) => status === "completed");
-}
 async function summaryAtEndOf(target, session, signal) {
-  const page = await call(target, "GET", `/api/session/${encodeURIComponent(session)}/message?limit=6&order=desc`, undefined, signal).catch(() => null);
-  return summaryAtEnd(page);
+  return summaryAtEnd(await lastMessages(target, session, signal));
+}
+async function summaryRowOf(target, session, signal) {
+  return summaryRowAtEnd(await lastMessages(target, session, signal));
+}
+var lastMessages = (target, session, signal) => call(target, "GET", `/api/session/${encodeURIComponent(session)}/message?limit=6&order=desc`, undefined, signal).catch(() => null);
+async function workOutcomeOf(target, listed, signal) {
+  return outcomeOf({ data: listed }, await lastMessages(target, listed.id, signal));
 }
 function outcomeOf(listed, page) {
-  const messages = Array.isArray(page) ? page : [];
-  if (summaryAtEnd(messages) === null)
+  if (summaryAtEnd(page) === null)
     return listed.data.outcome;
-  const summary = messages.findIndex((message) => message?.type === "compaction");
-  return messages.slice(summary + 1).find((message) => message?.type === "idle")?.outcome ?? listed.data.outcome;
+  return lastTurnEnd(page)?.outcome ?? listed.data.outcome;
 }
 async function keepReadThroughSummary(target, session, signal) {
   const route = `/api/session/${encodeURIComponent(session)}`;
-  const page = await call(target, "GET", `${route}/message?limit=6&order=desc`, undefined, signal).catch(() => null);
-  if (summaryAtEnd(page) !== "completed" || !Array.isArray(page))
+  const page = await lastMessages(target, session, signal);
+  if (summaryAtEnd(page) !== "completed")
     return;
-  const summary = page.findIndex((message) => message?.type === "compaction");
-  const before = page.slice(summary + 1).find((message) => message?.type === "idle")?.time?.created;
+  const before = lastTurnEnd(page)?.time?.created;
   const listed = await call(target, "GET", route, undefined, signal).catch(() => null);
-  if (before === undefined || (listed?.time?.viewed ?? 0) < before)
+  if (before === undefined || listed?.time?.idle === undefined || (listed.time.viewed ?? 0) < before)
     return;
-  await call(target, "POST", `${route}/view`, {}, signal).catch(() => {});
+  await call(target, "POST", `${route}/view`, { idle: listed.time.idle }, signal).catch(() => {});
 }
 var tokensOf = (data) => (data.tokens?.input ?? 0) + (data.tokens?.output ?? 0) + (data.tokens?.reasoning ?? 0);
 async function describeWork(listed, working, { replies = false, signal } = {}) {
@@ -9204,7 +9228,7 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
     const waited = readTold(toldFile)?.waiting?.[data.id];
     if (waited && waited.from === from)
       return finish(data, starter, last);
-    const outcome = data.outcome;
+    const outcome = await workOutcomeOf(source, data, signal);
     const failed = outcome === "failed";
     const reply = last.id && last.id !== was.reply ? last.id : null;
     const failedBare = failed && !reply && !!last.turn && last.turn !== was.turn && !(was.at && (last.turnAt ?? Infinity) <= was.at);
@@ -9295,8 +9319,20 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
       const bot = worksFor(session)?.bot;
       if (bot)
         noteWorkChanged(bot);
-      if (event.type === "session.execution.succeeded" && await endedOnSummary(source, session.id))
-        return await settle(session.id);
+      if (event.type === "session.execution.succeeded" || event.type === "session.execution.failed") {
+        const summary = await summaryRowOf(source, session.id);
+        if (summary?.status === "failed") {
+          if (starter && wakes.includes("finished") && !isArchived(session) && readStopped(stoppedFile)[session.id] === undefined) {
+            const error = errorOf(event.data.error) ?? errorOf(summary.error);
+            const line = await wakeLine({ type: "session.execution.failed", data: { sessionID: session.id, error } }, session, source);
+            if (line)
+              tell(starter, line, false);
+          }
+          return await settle(session.id);
+        }
+        if (summary?.status === "completed" && event.type === "session.execution.succeeded")
+          return await settle(session.id);
+      }
       const form = event.type === "form.created" ? event.data?.form ?? event.data : null;
       if (form && isAutopilot(session)) {
         const asked = { ...form, sessionID: form.sessionID ?? id };
@@ -11179,14 +11215,17 @@ async function noticeFor(event, get) {
       const ended = await session(id);
       if (ended.parentID || isHiddenRun(ended))
         return null;
+      const page = await get(`api/session/${encodeURIComponent(id)}/message?limit=6&order=desc`).catch(() => null);
+      const summary = summaryAtEnd(page?.data);
+      if (summary === "failed")
+        return about(ended, "failed", "Couldn't summarize the conversation.");
       if (event.type === "session.execution.failed")
         return about(ended, "failed", "Stopped with an error.");
+      if (summary === "completed")
+        return null;
       let reply = "";
       try {
-        const page = await get(`api/session/${encodeURIComponent(id)}/message?limit=6&order=desc`);
-        if (lastIsSummary(page.data))
-          return null;
-        for (const message of page.data ?? []) {
+        for (const message of page?.data ?? []) {
           if (message.type !== "assistant")
             continue;
           reply = plain2((message.content ?? []).filter((part) => part.type === "text").map((part) => part.text).join(" "));
@@ -11199,9 +11238,6 @@ async function noticeFor(event, get) {
     default:
       return null;
   }
-}
-function lastIsSummary(messages) {
-  return summaryAtEnd(messages) === "completed";
 }
 async function settleHeld(engine, hold, only) {
   for (const entry of [...hold.held]) {
@@ -12866,7 +12902,7 @@ function conversationMarkdown(title, messages, agent) {
     speaker = who;
     blocks.push(words);
   };
-  for (const message of messages) {
+  for (const [at, message] of messages.entries()) {
     if (message.type === "user") {
       const written = String(message.text ?? "");
       const mail = /^\[Message from (.*) · (ses_\S+|unknown)\] \([^\n]*\)\n\n([\s\S]*)$/.exec(written);
@@ -12903,6 +12939,9 @@ function conversationMarkdown(title, messages, agent) {
       const output = String(message.output?.output ?? "").trim();
       say("User", "Ran `" + message.command + "`" + (output ? "\n\n```\n" + output + "\n```" : ""));
     } else if (message.type === "idle" && message.outcome === "failed") {
+      const before = messages[at - 1];
+      if (before?.type === "compaction" && before.status === "failed")
+        continue;
       say("Stopped", `It stopped with an error: ${message.error?.message?.trim() || "the engine gave no reason."}`);
     } else if (message.type === "compaction") {
       if (message.status === "completed")

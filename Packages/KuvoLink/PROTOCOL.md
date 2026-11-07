@@ -1488,12 +1488,16 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     inbox item of type `compaction`, and dropped with a notice if the turn doesn't succeed; asked
     twice is once). On the engine it waits for the next step; Stop and a failed run take it from the
     inbox, and it's never held or paused for. 400 `{"message"}` is a sentence to show: nothing to summarize yet, a subagent's,
-    or an agent that can't be asked (Cursor, Antigravity). It shows as the engine's own does, a
+    an agent that can't be asked (Cursor, Antigravity), or on the agents an undo staged. On the
+    engine an undo staged is made final by it, as by a message. It shows as the engine's own does, a
     `compaction` message with `reason: "manual"` and `session.compaction.started`, `.ended` or
-    `.failed`, then `idle`. It adds no reply, and what's there stays, how the session ended too.
-    A summary that went through is no news: it stays read if it was, with no notification and no
-    `[Session finished]` to a lead. One that failed says why, tells a lead `[Session not summarized]`
-    and pauses nothing.
+    `.failed`, then `idle`. It adds no reply, and what's there stays. Its `status` says how it went:
+    the engine's `idle` and run end say `succeeded` even for one that failed.
+    Only one that ran at rest is a turn of its own (an `idle` before it, `Packages/Box/src/shared/summaries.ts`):
+    taken at a step of a run on the engine, the `idle` after it ends that run, told as any run's.
+    A turn of its own that went through is no news: it stays read if it was, with no notification and
+    no `[Session finished]` to a lead, who still reads how the work before it went. One that failed
+    says why, tells a lead `[Session not summarized]` and pauses nothing.
 - Plan accounts (Copilot, OpenCode, GitLab, Poe, a provider's API key), on a Mac and a machine,
   as Settings › Accounts has them: the phone sees, reads and signs in to them as the app does.
   Each computer keeps its own: a new

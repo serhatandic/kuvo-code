@@ -3720,6 +3720,30 @@ function line(text, limit = 140) {
 // Packages/Box/src/shared/goals.ts
 var PAUSED_BY_YOU = "You paused it.";
 
+// Packages/Box/src/shared/summaries.ts
+var asRows = (messages) => Array.isArray(messages) ? messages : [];
+var between = new Set(["synthetic", "system", "model-switched", "agent-switched"]);
+var asked = (row) => row?.type === "compaction" && row.reason === "manual";
+function onItsOwn(rows, index) {
+  for (let at = index + 1;at < rows.length; at++) {
+    if (between.has(rows[at]?.type))
+      continue;
+    return rows[at]?.type === "idle";
+  }
+  return true;
+}
+function lastTurnEnd(messages) {
+  const rows = asRows(messages);
+  for (let at = 0;at < rows.length; at++) {
+    if (rows[at]?.type !== "idle")
+      continue;
+    if (!asked(rows[at + 1]) || !onItsOwn(rows, at + 1))
+      return rows[at];
+    at++;
+  }
+  return;
+}
+
 // Packages/Box/src/agents/goals.ts
 var unknownReset2 = 30 * 60000;
 var conditionLimit = 4000;
@@ -4162,16 +4186,7 @@ function shown(goal) {
   return rest;
 }
 function lastIdle(messages) {
-  for (let index = messages.length - 1;index >= 0; index--) {
-    if (messages[index]?.type !== "idle")
-      continue;
-    if (messages[index - 1]?.type === "compaction" && messages[index - 1].reason === "manual") {
-      index--;
-      continue;
-    }
-    return messages[index];
-  }
-  return;
+  return lastTurnEnd([...messages].reverse());
 }
 function turnOf(messages, idle) {
   const end = messages.findIndex((message) => message?.id === idle.id);
@@ -17410,7 +17425,7 @@ ${text.slice(0, 4000)}
     this.settleAsks(id, live);
     if (runOf(live.doing) !== run)
       return;
-    this.free(id, live, held ? undefined : outcome === "failed" ? undefined : outcome);
+    this.free(id, live, !held && outcome !== "failed" ? outcome : undefined);
   }
   closeWhenIdle(id, live) {
     clearTimeout(live.idle);
@@ -23971,4 +23986,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 02045edffd165760d9ec844e09846fc2221524c02abc7ac964c291b32aebf5a0
+// Built from Packages/Box/src/agents 83ee43e3d9e4d1739131a3c5c2065c5b7c70ec2d3969201c84744bfe6ec3b721

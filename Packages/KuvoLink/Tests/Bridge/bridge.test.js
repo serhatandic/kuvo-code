@@ -1079,6 +1079,33 @@ test("engine events become notifications, as the Mac words them", async () => {
   assert.equal(await link.noticeFor({ type: "session.text.delta", data: { sessionID: "ses_main" } }, get), null);
 });
 
+test("a summary's news: one that failed says only that, one that went through is none, and one during a run is that run's", async () => {
+  const session = { id: "ses_s", title: "Sign-in", location: { directory: "/home/me/kuvo-ai" } };
+  let page;
+  const get = async route => route.endsWith("/message?limit=6&order=desc") ? { data: page } : { data: session };
+  const ends = { type: "session.execution.succeeded", data: { sessionID: "ses_s" } };
+  const said = { type: "assistant", content: [{ type: "text", text: "All done." }] };
+  const end = outcome => ({ type: "idle", outcome });
+  const summary = status => ({ type: "compaction", status, reason: "manual" });
+  // At rest (newest first).
+  page = [end("succeeded"), summary("completed"), end("succeeded"), said];
+  assert.equal(await link.noticeFor(ends, get), null);
+  // Failed: as the engine ends it, and as the coding agents' bridge does.
+  page = [end("succeeded"), summary("failed"), end("succeeded"), said];
+  const failed = await link.noticeFor(ends, get);
+  assert.equal(failed.category, "failed");
+  assert.equal(failed.body, "Couldn't summarize the conversation.");
+  page = [end("failed"), summary("failed"), end("succeeded"), said];
+  assert.equal((await link.noticeFor({ type: "session.execution.failed", data: { sessionID: "ses_s" } }, get)).body, "Couldn't summarize the conversation.");
+  // During a run on the engine, gone through or not: its reply is the news.
+  for (const status of ["completed", "failed"]) {
+    page = [end("succeeded"), summary(status), said];
+    const news = await link.noticeFor(ends, get);
+    assert.equal(news.category, "finished");
+    assert.equal(news.body, "All done.");
+  }
+});
+
 test("a notice shows what it covers up to four, never a secret, and has no answer buttons where it can't show all they'd answer", async () => {
   const sessions = {
     ses_main: { id: "ses_main", title: "Fix the tests", location: { directory: "/home/me/kuvo-ai" } },

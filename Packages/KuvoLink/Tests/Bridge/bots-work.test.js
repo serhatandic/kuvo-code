@@ -360,6 +360,22 @@ test("a summary doesn't change how a lead reads a session: failed stays failed, 
   assert.doesNotMatch((await tool("list_sessions", {}, "ses_pixel")).text, /finished/);
 });
 
+test("how a lead reads a session past several summaries: what they did isn't how its work went", async () => {
+  const session = startedAddress(await tool("start_session", { task: "One.", title: "Sign-in", project: "Tidepool" }, "ses_pixel"));
+  busy.delete(session);
+  sessions.get(session).outcome = "succeeded";
+  sessions.get(session).time.idle = Date.now();
+  const end = (outcome, id) => ({ id, type: "idle", outcome });
+  const summary = (status, id) => ({ id, type: "compaction", status, reason: "manual" });
+  const said = { id: "msg_s", type: "assistant", content: [{ type: "text", text: "Done." }] };
+  // Worked; then a summary failed, and the next went through.
+  kept.set(session, [end("succeeded", "msg_i3"), summary("completed", "msg_c2"), end("failed", "msg_i2"), summary("failed", "msg_c1"), end("succeeded", "msg_i1"), said]);
+  assert.match((await tool("list_sessions", {}, "ses_pixel")).text, /finished/);
+  // Failed; then two summaries.
+  kept.set(session, [end("succeeded", "msg_i3"), summary("completed", "msg_c2"), end("succeeded", "msg_i2"), summary("completed", "msg_c1"), end("failed", "msg_i1"), said]);
+  assert.match((await tool("list_sessions", {}, "ses_pixel")).text, /failed/);
+});
+
 test("list_sessions tells how full a session's context is, as the app's gauge reads it, and the running total as that", async () => {
   const session = startedAddress(await tool("start_session", { task: "One.", title: "Sign-in", project: "Tidepool" }, "ses_pixel"));
   sessions.get(session).tokens = { input: 400_000, output: 27_000, reasoning: 0, cache: { read: 9_000_000, write: 0 } };

@@ -29,7 +29,7 @@ import { awaitedBy } from "./awaited";
 import { tellLateAnswers } from "./asks";
 import { errorOf, failedOn, followUnanswering, holdWords, turnError } from "./unanswering";
 import { backgroundWatcher, backgroundWords, forgetStopped, FINISH_HOLD_LIMIT, readStopped, startedSince, type BackgroundEvent, type BackgroundWork } from "./background";
-import { endedOnSummary, summaryAtEndOf, isArchived, lastReplyOf, placeWords, startedByOf, wakesOf, workSessions, worksFor, type Listed } from "./tree";
+import { summaryAtEndOf, summaryRowOf, workOutcomeOf, isArchived, lastReplyOf, placeWords, startedByOf, wakesOf, workSessions, worksFor, type Listed } from "./tree";
 import { projectNameOf } from "../notices/news";
 import type { Target } from "../../shared/records";
 import type { EngineSession } from "../engine/sessions";
@@ -627,7 +627,8 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
     const waited = readTold(toldFile)?.waiting?.[data.id];
     // Its finish was waiting as the box stopped: looked at as it would have been.
     if (waited && waited.from === from) return finish(data, starter, last);
-    const outcome = (data as { outcome?: string }).outcome;
+    // (Its work's, past a summary after it, whose own run says how that went.)
+    const outcome = await workOutcomeOf(source, data, signal);
     const failed = outcome === "failed";
     const reply = last.id && last.id !== was.reply ? last.id : null;
     // A turn that failed before it replied (its model out of reach, say): told by its end, once
@@ -713,9 +714,21 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
       }
       const bot = worksFor(session)?.bot;
       if (bot) noteWorkChanged(bot);
-      // Only a summary it was asked for: not news, and not its work finishing.
-      // (A finish that waited on what it left running, over meanwhile, is looked at now.)
-      if (event.type === "session.execution.succeeded" && await endedOnSummary(source, session.id)) return await settle(session.id);
+      // Only a summary it was asked for: not news, and not its work finishing. One that failed says
+      // only that, whichever way its run ended (the engine's says `succeeded`). A finish that waited
+      // on what it left running, over meanwhile, is looked at now, and stands either way.
+      if (event.type === "session.execution.succeeded" || event.type === "session.execution.failed") {
+        const summary = await summaryRowOf(source, session.id);
+        if (summary?.status === "failed") {
+          if (starter && wakes.includes("finished") && !isArchived(session) && readStopped(stoppedFile)[session.id] === undefined) {
+            const error = errorOf((event.data as { error?: unknown }).error) ?? errorOf(summary.error);
+            const line = await wakeLine({ type: "session.execution.failed", data: { sessionID: session.id, error } as WorkEvent["data"] }, session, source);
+            if (line) tell(starter, line, false);
+          }
+          return await settle(session.id);
+        }
+        if (summary?.status === "completed" && event.type === "session.execution.succeeded") return await settle(session.id);
+      }
       // On Autopilot nothing waits: a question goes ahead on the choice it marks, or comes back declined.
       const form = event.type === "form.created" ? event.data?.form ?? event.data as unknown as EngineForm : null;
       if (form && isAutopilot(session)) {

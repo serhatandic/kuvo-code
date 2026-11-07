@@ -7,7 +7,8 @@ import { cut, outsideShown } from "../../shared/text";
 import { readProjects } from "../areas/projects";
 import { readRemovedWorktrees, readWorktrees } from "../areas/worktree-records";
 import { engineGet } from "../engine/client";
-import { isHiddenRun, summaryAtEnd } from "../engine/sessions";
+import { summaryAtEnd } from "../../shared/summaries";
+import { isHiddenRun } from "../engine/sessions";
 import { sessionsWaitingOnServer } from "../work/answers";
 import { isAutopilot } from "../work/autopilot";
 import { IS_MAC, K } from "../home";
@@ -244,13 +245,16 @@ export async function noticeFor(event: EngineEvent, get: EngineAsk): Promise<Not
       const ended = await session(id);
       // A subagent's run is part of its parent's.
       if (ended.parentID || isHiddenRun(ended)) return null;
+      const page = await get(`api/session/${encodeURIComponent(id)}/message?limit=6&order=desc`).catch(() => null) as EngineAnswer<EngineMessage[]> | null;
+      // Only a summary it was asked for: that it failed, whichever way its run ended (the engine's
+      // says `succeeded`), and otherwise not news.
+      const summary = summaryAtEnd(page?.data);
+      if (summary === "failed") return about(ended, "failed", "Couldn't summarize the conversation.");
       if (event.type === "session.execution.failed") return about(ended, "failed", "Stopped with an error.");
+      if (summary === "completed") return null;
       let reply = "";
       try {
-        const page = await get(`api/session/${encodeURIComponent(id)}/message?limit=6&order=desc`) as EngineAnswer<EngineMessage[]>;
-        // Only a summary it was asked for: not news.
-        if (lastIsSummary(page.data)) return null;
-        for (const message of page.data ?? []) {
+        for (const message of page?.data ?? []) {
           if (message.type !== "assistant") continue;
           reply = plain((message.content ?? []).filter(part => part.type === "text").map(part => part.text).join(" "));
           if (reply) break;
@@ -262,14 +266,6 @@ export async function noticeFor(event: EngineEvent, get: EngineAsk): Promise<Not
     default:
       return null;
   }
-}
-
-/**
- * Of a session's latest messages, newest first, whether what it did last was a summary it was asked
- * for (`/compact`, a lead's compact_session): no reply, nothing done.
- */
-export function lastIsSummary(messages: unknown): boolean {
-  return summaryAtEnd(messages) === "completed";
 }
 
 // What `hold` keeps of `engine`'s that it asked you (a permission, a question) and isn't asked any

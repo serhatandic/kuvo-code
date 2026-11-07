@@ -40,9 +40,12 @@ const engine = http.createServer((request, response) => {
       whenLooked = null;
       then?.();
     }
-    else if (session && !rest && request.method === "GET") answer = inboxes[session] ? { data: { id: session, time: { viewed: viewedAt } } } : null;
+    else if (session && !rest && request.method === "GET") answer = inboxes[session] ? { data: { id: session, time: { viewed: viewedAt, idle: 3_000 } } } : null;
     else if (rest === "/view" && request.method === "POST") {
-      asked.push(`${session} viewed`);
+      // (As the engine: it takes which end you saw, and refuses a look that doesn't say.)
+      const seen = JSON.parse(body || "{}").idle;
+      if (seen === undefined) return reply({ message: "Missing key idle" }, 400);
+      viewedAt = seen;
       answer = {};
     }
     else if (rest === "/inbox") answer = { data: inboxes[session] ?? [] };
@@ -220,7 +223,8 @@ test("a failed run lets go of a summary waiting; a summary that failed pauses no
   pages.ses_2 = [{ type: "idle", outcome: "failed" }, { type: "compaction", status: "failed", reason: "manual" }];
   b.hear("session.execution.failed", { error: { message: "It couldn't." } }, "ses_2");
   await new Promise(resolve => setImmediate(resolve));
-  while (!asked.includes("ses_2 msg_q2 steer")) { b.wait(5000); await Promise.race([heard(), new Promise(resolve => setImmediate(resolve))]); }
+  for (let looks = 0; looks < 50 && !asked.includes("ses_2 msg_q2 steer"); looks++) { b.wait(5000); await Promise.race([heard(), new Promise(resolve => setImmediate(resolve))]); }
+  assert.ok(asked.includes("ses_2 msg_q2 steer"), "what waited went on");
   assert.equal((await ask("GET", "kuvo/sessions/ses_2/queue")).json.paused, false);
 });
 
@@ -230,17 +234,21 @@ test("a session only summarized while it was read stays read; one with news from
   pages.ses_1 = summarized;
   viewedAt = 2_000;
   await link.keepReadThroughSummary(target, "ses_1");
-  assert.deepEqual(asked, ["ses_1 viewed"]);
+  assert.equal(viewedAt, 3_000, "read up to the summary's end");
 
-  asked = [];
   viewedAt = 500;
   await link.keepReadThroughSummary(target, "ses_1");
-  assert.deepEqual(asked, [], "there was news before it");
+  assert.equal(viewedAt, 500, "there was news before it");
 
   viewedAt = 2_000;
   pages.ses_1 = [{ type: "idle", outcome: "succeeded", time: { created: 4_000 } }, { type: "assistant", content: [] }, ...summarized.slice(1)];
   await link.keepReadThroughSummary(target, "ses_1");
-  assert.deepEqual(asked, []);
+  assert.equal(viewedAt, 2_000, "a reply after it");
+
+  // Taken at a step of a run on the engine: the end after it is that run's, with its reply to read.
+  pages.ses_1 = [summarized[0], summarized[1], { type: "assistant", content: [] }, { type: "user", text: "Go." }, summarized[2]];
+  await link.keepReadThroughSummary(target, "ses_1");
+  assert.equal(viewedAt, 2_000, "a reply in the same run");
 });
 
 test("a Stop from a client that stops the run itself pauses the queue too; Send Now's stop-and-go doesn't", async () => {

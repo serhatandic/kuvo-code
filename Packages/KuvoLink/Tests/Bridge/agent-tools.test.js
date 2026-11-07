@@ -471,16 +471,37 @@ async function watchingTask() {
 
 test("a summary that failed reaches its lead as just that: its work isn't called failed", async () => {
   const { watch, runAll, toLead } = await watchingTask();
-  messages.set("ses_task", [{ id: "msg_zzb", type: "assistant", content: [{ type: "text", text: "All done." }] }, { id: "msg_zzc", type: "compaction", status: "failed", reason: "manual" }, { id: "msg_zzd", type: "idle", outcome: "failed", error: { message: "It couldn't." } }]);
+  messages.set("ses_task", [{ id: "msg_zzb", type: "assistant", content: [{ type: "text", text: "All done." }] }, { id: "msg_zzc0", type: "idle", outcome: "succeeded" }, { id: "msg_zzc", type: "compaction", status: "failed", reason: "manual" }, { id: "msg_zzd", type: "idle", outcome: "failed", error: { message: "It couldn't." } }]);
   await watch({ type: "session.execution.failed", data: { sessionID: "ses_task", error: { message: "It couldn't." } } });
   await runAll();
   assert.equal(toLead().length, 1);
   assert.match(toLead()[0].text, /^\[Session not summarized\][^\n]*: It couldn't\. Its conversation and work are as they were\.$/);
 });
 
+test("a summary that failed on the engine, whose run says it succeeded: its lead hears why, not that it finished", async () => {
+  const { watch, runAll, toLead } = await watchingTask();
+  messages.set("ses_task", [{ id: "msg_zzb", type: "assistant", content: [{ type: "text", text: "All done." }] }, { id: "msg_zzc0", type: "idle", outcome: "succeeded" }, { id: "msg_zzc", type: "compaction", status: "failed", reason: "manual", error: { type: "provider.invalid-request", message: "The provider refused." } }, { id: "msg_zzd", type: "idle", outcome: "succeeded" }]);
+  await watch({ type: "session.execution.succeeded", data: { sessionID: "ses_task" } });
+  await runAll();
+  assert.equal(toLead().length, 1);
+  assert.match(toLead()[0].text, /^\[Session not summarized\][^\n]*: The provider refused\. Its conversation and work are as they were\.$/);
+});
+
+test("a summary taken during a run on the engine is part of that run: its lead hears it finish, with its reply", async () => {
+  for (const status of ["completed", "failed"]) {
+    const { watch, runAll, toLead } = await watchingTask();
+    const before = toLead().length;
+    messages.set("ses_task", [{ id: `msg_zzb_${status}`, type: "assistant", content: [{ type: "text", text: `All done, ${status}.` }] }, { id: `msg_zzc_${status}`, type: "compaction", status, reason: "manual" }, { id: `msg_zzd_${status}`, type: "idle", outcome: "succeeded" }]);
+    await watch({ type: "session.execution.succeeded", data: { sessionID: "ses_task" } });
+    await runAll();
+    assert.equal(toLead().length, before + 1, status);
+    assert.match(toLead().at(-1).text, new RegExp(`^\\[Session finished\\][^\\n]*:\\nAll done, ${status}\\.`));
+  }
+});
+
 test("a session that only summarized its conversation, as it was asked, isn't told to its lead as finished; what it does next is", async () => {
   const { watch, runAll, toLead } = await watchingTask();
-  messages.set("ses_task", [{ id: "msg_zzb", type: "assistant", content: [{ type: "text", text: "All done." }] }, { id: "msg_zzc", type: "compaction", status: "completed", reason: "manual" }, { id: "msg_zzd", type: "idle", outcome: "succeeded" }]);
+  messages.set("ses_task", [{ id: "msg_zzb", type: "assistant", content: [{ type: "text", text: "All done." }] }, { id: "msg_zzc0", type: "idle", outcome: "succeeded" }, { id: "msg_zzc", type: "compaction", status: "completed", reason: "manual" }, { id: "msg_zzd", type: "idle", outcome: "succeeded" }]);
   await watch({ type: "session.execution.succeeded", data: { sessionID: "ses_task" } });
   await runAll();
   assert.deepEqual(toLead(), []);

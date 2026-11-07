@@ -103,6 +103,17 @@ describe("a goal", () => {
     expect(engine.checks).toHaveLength(1)
   })
 
+  test("a summary taken during a turn on the engine is part of that turn: the turn is what's checked", async () => {
+    engine.verdicts = [`{"verdict": "met", "reason": "npm test exits 0."}`]
+    engine.holding = true
+    await goals.set("ses_work", "all tests pass")
+    await until(() => engine.synthetic.length === 1)
+    engine.conversations.get("ses_work")!.push({ id: "msg_zmid", type: "compaction", status: "completed", reason: "manual", time: { created: 2 } } as any)
+    engine.finish()
+    await until(() => goal()?.state === "met")
+    expect(engine.checks).toHaveLength(1)
+  })
+
   test("starts the agent on it, keeps it going while it isn't met, and stops once a check finds it met", async () => {
     engine.verdicts = [`{"verdict": "not_met", "reason": "2 tests in test/auth still fail."}`, `{"verdict": "met", "reason": "npm test exits 0."}`]
     const set = await goals.set("ses_work", "all tests in test/auth pass")

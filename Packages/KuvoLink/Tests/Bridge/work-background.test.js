@@ -226,6 +226,28 @@ test("a finish waiting on its command, summarized meanwhile: told as the summary
   assert.match(finished()[0], /Started the tests/);
 });
 
+test("a finish waiting on its command, with a summary that failed meanwhile: its lead hears both", async () => {
+  const time = clock();
+  const watch = watcher(time);
+  await watch.caughtUp;
+  asked();
+  await watch(startJob("sh_1"));
+  said("Started the tests.");
+  await watch(ended());
+  await time.pass(10 * SECONDS);
+  state.messages.ses_tests.unshift({ id: "msg_sum", type: "compaction", status: "failed", reason: "manual", error: { message: "The provider refused." }, time: { created: at() } });
+  await watch(ended());
+  await time.pass(5 * SECONDS);
+  const told = () => state.prompts.filter(each => each.to === "ses_pixel").map(each => each.text).join("\n\n");
+  assert.match(told(), /\[Session not summarized\][^\n]*: The provider refused\./);
+  assert.deepEqual(finished(), [], "its command still runs");
+  await watch(exited("sh_1"));
+  await time.pass(11 * SECONDS);
+  await time.pass(5 * SECONDS);
+  assert.equal(finished().length, 1);
+  assert.match(finished()[0], /Started the tests/);
+});
+
 test("a command's end waking its agent: one word, with what it said at the end", async () => {
   const time = clock();
   const watch = watcher(time);

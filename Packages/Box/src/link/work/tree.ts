@@ -9,7 +9,7 @@ import { cut } from "../../shared/text";
 import { call, engineGet } from "../engine/client";
 import { CHATS } from "../home";
 import { describePermission, projectNameOf } from "../notices/news";
-import { summaryAtEnd } from "../engine/sessions";
+import { lastTurnEnd, summaryAtEnd, summaryRowAtEnd } from "../../shared/summaries";
 import { listBots } from "../bots/list";
 import { asksIn } from "./answers";
 import type { Target } from "../../shared/records";
@@ -158,8 +158,20 @@ export async function endedOnSummary(target: Target, session: string, signal?: A
 
 /** How a summary asked for went, if that's what a session did last. */
 export async function summaryAtEndOf(target: Target, session: string, signal?: AbortSignal): Promise<string | null> {
-  const page = await call(target, "GET", `/api/session/${encodeURIComponent(session)}/message?limit=6&order=desc`, undefined, signal).catch(() => null);
-  return summaryAtEnd(page);
+  return summaryAtEnd(await lastMessages(target, session, signal));
+}
+
+/** That summary's row, with why it failed if it did. */
+export async function summaryRowOf(target: Target, session: string, signal?: AbortSignal) {
+  return summaryRowAtEnd(await lastMessages(target, session, signal));
+}
+
+const lastMessages = (target: Target, session: string, signal?: AbortSignal) =>
+  call(target, "GET", `/api/session/${encodeURIComponent(session)}/message?limit=6&order=desc`, undefined, signal).catch(() => null);
+
+/** How a session's last turn of work ended, for one just listed. */
+export async function workOutcomeOf(target: Target, listed: Listed["data"], signal?: AbortSignal): Promise<unknown> {
+  return outcomeOf({ data: listed } as Listed, await lastMessages(target, listed.id, signal));
 }
 
 /**
@@ -167,10 +179,8 @@ export async function summaryAtEndOf(target: Target, session: string, signal?: A
  * engine's `outcome` says how that went. What it said before stands.
  */
 function outcomeOf(listed: Listed, page: unknown): unknown {
-  const messages = Array.isArray(page) ? page as { type?: unknown; outcome?: unknown; reason?: unknown }[] : [];
-  if (summaryAtEnd(messages) === null) return listed.data.outcome;
-  const summary = messages.findIndex(message => message?.type === "compaction");
-  return messages.slice(summary + 1).find(message => message?.type === "idle")?.outcome ?? listed.data.outcome;
+  if (summaryAtEnd(page) === null) return listed.data.outcome;
+  return lastTurnEnd(page)?.outcome ?? listed.data.outcome;
 }
 
 /**
@@ -180,13 +190,13 @@ function outcomeOf(listed: Listed, page: unknown): unknown {
  */
 export async function keepReadThroughSummary(target: Target, session: string, signal?: AbortSignal): Promise<void> {
   const route = `/api/session/${encodeURIComponent(session)}`;
-  const page = await call(target, "GET", `${route}/message?limit=6&order=desc`, undefined, signal).catch(() => null);
-  if (summaryAtEnd(page) !== "completed" || !Array.isArray(page)) return;
-  const summary = page.findIndex(message => (message as { type?: unknown })?.type === "compaction");
-  const before = (page.slice(summary + 1).find(message => (message as { type?: unknown })?.type === "idle") as { time?: { created?: number } } | undefined)?.time?.created;
-  const listed = await call(target, "GET", route, undefined, signal).catch(() => null) as { time?: { viewed?: number } } | null;
-  if (before === undefined || (listed?.time?.viewed ?? 0) < before) return;
-  await call(target, "POST", `${route}/view`, {}, signal).catch(() => {});
+  const page = await lastMessages(target, session, signal);
+  if (summaryAtEnd(page) !== "completed") return;
+  const before = lastTurnEnd(page)?.time?.created;
+  const listed = await call(target, "GET", route, undefined, signal).catch(() => null) as { time?: { viewed?: number; idle?: number } } | null;
+  if (before === undefined || listed?.time?.idle === undefined || (listed.time.viewed ?? 0) < before) return;
+  // (The engine takes which end you saw, and refuses a look that doesn't say.)
+  await call(target, "POST", `${route}/view`, { idle: listed.time.idle }, signal).catch(() => {});
 }
 
 const tokensOf = (data: Listed["data"]) => (data.tokens?.input ?? 0) + (data.tokens?.output ?? 0) + (data.tokens?.reasoning ?? 0);

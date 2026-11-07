@@ -120,7 +120,7 @@ test("a summary you asked for tells your phones nothing; a reply after it, or on
   const idle = { type: "idle", outcome: "succeeded" };
   const summary = { type: "compaction", status: "completed", reason: "manual" };
   const reply = { type: "assistant", content: [{ type: "text", text: "All done." }] };
-  assert.equal(await link.noticeFor(finished, ending([idle, summary, reply])), null);
+  assert.equal(await link.noticeFor(finished, ending([idle, summary, idle, reply])), null);
   assert.equal((await link.noticeFor(finished, ending([idle, reply, summary])))?.body, "All done.");
   assert.notEqual(await link.noticeFor(finished, ending([idle, { ...summary, reason: "auto" }, reply])), null);
   assert.notEqual(await link.noticeFor(finished, ending([idle, { ...summary, status: "failed" }, reply])), null);

@@ -2117,7 +2117,7 @@ export class Sessions {
     this.settleAsks(id, live)
     // Deleted meanwhile: nothing more for it.
     if (runOf(live.doing) !== run) return
-    this.free(id, live, held ? undefined : outcome === "failed" ? undefined : outcome)
+    this.free(id, live, !held && outcome !== "failed" ? outcome : undefined)
   }
 
   /** A while after its last turn, a session's agents stop running: they go on where they left off next time. */
