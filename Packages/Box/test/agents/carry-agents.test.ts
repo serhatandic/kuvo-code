@@ -5,6 +5,7 @@ import { describe, expect, test } from "bun:test"
 import { mkdtempSync, realpathSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import type { Agent } from "../../src/agents/agent"
 import { AntigravityAgent } from "../../src/agents/agents/antigravity"
 import { ClaudeAgent } from "../../src/agents/agents/claude"
 import { CodexAgent } from "../../src/agents/agents/codex"
@@ -17,7 +18,8 @@ describe("what Move's question says of a coding agent's own conversation", () =>
     const home = realpathSync(mkdtempSync(join(process.env.KUVO_TEST_ROOT ?? tmpdir(), "kuvo-carry-agents-")))
     const context = { home, temporary: home, deps: {} as any }
     try {
-      for (const agent of [new ClaudeAgent(context), new CodexAgent(context), new CursorAgent(context), new GrokAgent(context), new AntigravityAgent(context)]) {
+      const all: Agent[] = [new ClaudeAgent(context), new CodexAgent(context), new CursorAgent(context), new GrokAgent(context), new AntigravityAgent(context)]
+      for (const agent of all) {
         const carries = Boolean(agent.conversationFiles && agent.conversationPlace && agent.conversationRoots)
         expect([agent.providerID, CARRIED_AGENTS.has(agent.providerID)]).toEqual([agent.providerID, carries])
         expect(AGENT_NAMES[agent.providerID]).toBe(agent.name)
