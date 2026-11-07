@@ -113,6 +113,19 @@ test("a group chat's seat says nothing of its own: its chat tells your phones wh
   assert.equal(await link.noticeFor({ type: "session.execution.succeeded", data: { sessionID: "ses_seat" } }, get), null);
 });
 
+test("a summary you asked for tells your phones nothing; a reply after it, or one that failed, does", async () => {
+  const session = { id: "ses_task", title: "Task", location: { directory: "/home/me/work/web" } };
+  const ending = page => async route => ({ data: route.endsWith("/message?limit=6&order=desc") ? page : session });
+  const finished = { type: "session.execution.succeeded", data: { sessionID: "ses_task" } };
+  const idle = { type: "idle", outcome: "succeeded" };
+  const summary = { type: "compaction", status: "completed", reason: "manual" };
+  const reply = { type: "assistant", content: [{ type: "text", text: "All done." }] };
+  assert.equal(await link.noticeFor(finished, ending([idle, summary, reply])), null);
+  assert.equal((await link.noticeFor(finished, ending([idle, reply, summary])))?.body, "All done.");
+  assert.notEqual(await link.noticeFor(finished, ending([idle, { ...summary, reason: "auto" }, reply])), null);
+  assert.notEqual(await link.noticeFor(finished, ending([idle, { ...summary, status: "failed" }, reply])), null);
+});
+
 test("with a Mac connected, what an agent asks for as it browses here still reaches your phones, from the machine", async () => {
   macJustConnected();
   fs.writeFileSync(path.join(run, "browser-asks.json"), JSON.stringify({ asks: [{ id: "ask-1", kind: "code", host: "github.com", prompt: "The code GitHub sent" }] }));

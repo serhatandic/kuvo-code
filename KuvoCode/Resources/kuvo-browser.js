@@ -60,7 +60,7 @@ const TAB_IDLE = Number(process.env.KUVO_BROWSER_TAB_IDLE || 3600) * 1000;
 
 // Goes up with every change to the keeper (host mode): a newer one replaces one that's running
 // (its pages close, its sign-ins stay), and an older one never replaces a newer.
-const KEEPER = 46;
+const KEEPER = 47;
 // Passkeys: none yet, as in the panel's browser on the Mac (Passkeys.swift, the same script).
 const NO_PASSKEYS = "(() => {\n  try {\n    // Says a passkey was asked for with an event only this launch's listener, in a world of its\n    // own, knows the name of: nothing of it is left in the page's world. (Taken before the page\n    // can change them.)\n    const dispatch = EventTarget.prototype.dispatchEvent, Made = Event;\n    const tell = () => {\n      try {\n        dispatch.call(window, new Made(\"KUVO_PASSKEY_EVENT\"));\n      } catch {}\n    };\n    const none = (options) => {\n      // Asked of you, not looked for quietly as the page loads.\n      if (options.mediation !== \"conditional\") tell();\n      return Promise.reject(new DOMException(\"Passkeys can't be used in this browser.\", \"NotAllowedError\"));\n    };\n    const Container = window.CredentialsContainer;\n    if (Container && Container.prototype) {\n      const prototype = Container.prototype, get = prototype.get, create = prototype.create;\n      if (get) prototype.get = function (options) { return options && options.publicKey ? none(options) : get.call(this, options); };\n      if (create) prototype.create = function (options) { return options && options.publicKey ? none(options) : create.call(this, options); };\n    }\n    const Credential = window.PublicKeyCredential;\n    if (Credential) {\n      Credential.isUserVerifyingPlatformAuthenticatorAvailable = () => Promise.resolve(false);\n      if (Credential.isConditionalMediationAvailable) Credential.isConditionalMediationAvailable = () => Promise.resolve(false);\n    }\n  } catch {}\n})();";
 // The event it fires when a passkey is asked for (a name of this keeper's, which only the
@@ -2045,7 +2045,7 @@ const noAnswer = (answer, what) =>
 const text = (value, isError = false) => ({ content: [{ type: "text", text: value }], isError });
 
 // The tools answered by this machine's box: agents writing to each other and running their sessions.
-const MAIL_TOOLS = new Set(["list_agents", "send_message", "read_conversation", "start_session", "list_sessions", "stop_session", "answer_ask", "list_models", "make_project", "list_projects", "propose_goal", "goal_progress", "may_spend", "finish_goal"]);
+const MAIL_TOOLS = new Set(["list_agents", "send_message", "read_conversation", "start_session", "list_sessions", "stop_session", "compact_session", "answer_ask", "list_models", "make_project", "list_projects", "propose_goal", "goal_progress", "may_spend", "finish_goal"]);
 // Agents writing to each other (list_agents, send_message, read_conversation, start_session):
 // this machine's box answers them, as every box does (`POST kuvo/agent-tools`), so they're the same
 // on all your computers. A call that waits for an answer holds up to eleven minutes; stopped, the

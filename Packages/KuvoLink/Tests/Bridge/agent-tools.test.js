@@ -469,6 +469,20 @@ async function watchingTask() {
   };
 }
 
+test("a session that only summarized its conversation, as it was asked, isn't told to its lead as finished; what it does next is", async () => {
+  const { watch, runAll, toLead } = await watchingTask();
+  messages.set("ses_task", [{ id: "msg_zzb", type: "assistant", content: [{ type: "text", text: "All done." }] }, { id: "msg_zzc", type: "compaction", status: "completed", reason: "manual" }, { id: "msg_zzd", type: "idle", outcome: "succeeded" }]);
+  await watch({ type: "session.execution.succeeded", data: { sessionID: "ses_task" } });
+  await runAll();
+  assert.deepEqual(toLead(), []);
+  // A reply after it is news.
+  messages.get("ses_task").push({ id: "msg_zze", type: "assistant", content: [{ type: "text", text: "Carried on." }] });
+  await watch({ type: "session.execution.succeeded", data: { sessionID: "ses_task" } });
+  await runAll();
+  assert.equal(toLead().length, 1);
+  assert.match(toLead()[0].text, /^\[Session finished\][^\n]*:\nCarried on\./);
+});
+
 test("a conversation waiting for the answer of a session it started gets it from send_message, and isn't told again that the session finished with it, heard while it waited or after; a later finish is told", async () => {
   const { watch, runAll, whenWaiting, toLead } = await watchingTask();
   const heard = whenWaiting(() => watch({ type: "session.execution.succeeded", data: { sessionID: "ses_task" } }));

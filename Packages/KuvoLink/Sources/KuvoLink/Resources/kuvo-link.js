@@ -7300,6 +7300,24 @@ async function lastReplyOf(listed, signal) {
   }
   return null;
 }
+async function contextOf(listed, signal) {
+  const page = await call(listed.target, "GET", `/api/session/${encodeURIComponent(listed.data.id)}/message?limit=20&order=desc`, undefined, signal).catch(() => null);
+  for (const message of Array.isArray(page) ? page : []) {
+    if (!isObject(message))
+      continue;
+    if (message.type === "compaction" && message.status === "completed")
+      return { summarized: true };
+    if (message.type !== "assistant" || !isObject(message.tokens))
+      continue;
+    const { input, output, cache } = message.tokens;
+    return { used: (input ?? 0) + (cache?.read ?? 0) + (cache?.write ?? 0) + (output ?? 0) };
+  }
+  return;
+}
+async function endedOnSummary(target, session, signal) {
+  const page = await call(target, "GET", `/api/session/${encodeURIComponent(session)}/message?limit=6&order=desc`, undefined, signal).catch(() => null);
+  return lastIsSummary(page);
+}
 var tokensOf = (data) => (data.tokens?.input ?? 0) + (data.tokens?.output ?? 0) + (data.tokens?.reasoning ?? 0);
 async function describeWork(listed, working, { replies = false, signal } = {}) {
   const { data } = listed;
@@ -9224,6 +9242,8 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
       const bot = worksFor(session)?.bot;
       if (bot)
         noteWorkChanged(bot);
+      if (event.type === "session.execution.succeeded" && await endedOnSummary(source, session.id))
+        return;
       const form = event.type === "form.created" ? event.data?.form ?? event.data : null;
       if (form && isAutopilot(session)) {
         const asked = { ...form, sessionID: form.sessionID ?? id };
@@ -11111,6 +11131,8 @@ async function noticeFor(event, get) {
       let reply = "";
       try {
         const page = await get(`api/session/${encodeURIComponent(id)}/message?limit=6&order=desc`);
+        if (lastIsSummary(page.data))
+          return null;
         for (const message of page.data ?? []) {
           if (message.type !== "assistant")
             continue;
@@ -11124,6 +11146,14 @@ async function noticeFor(event, get) {
     default:
       return null;
   }
+}
+function lastIsSummary(messages) {
+  for (const message of Array.isArray(messages) ? messages : []) {
+    if (message?.type === "idle")
+      continue;
+    return message?.type === "compaction" && message.reason === "manual" && message.status === "completed";
+  }
+  return false;
 }
 async function settleHeld(engine, hold, only) {
   for (const entry of [...hold.held]) {
@@ -23697,7 +23727,7 @@ async function oneOfMine(caller, session, targets, doing, signal) {
   }
   if (title === null)
     return { error: refused(`There's no session ${session.trim()} here. Use list_sessions to see yours.`) };
-  return { error: refused(doing === "stop" ? `"${title}" isn't yours to stop: ask the user.` : `"${title}" isn't one of your sessions: only the user answers what it asks.`) };
+  return { error: refused(doing === "answer" ? `"${title}" isn't one of your sessions: only the user answers what it asks.` : `"${title}" isn't yours to ${doing}: ask the user.`) };
 }
 async function listSessionsTool(caller, targets, signal) {
   const listed = await mine(caller, targets, signal);
@@ -23712,7 +23742,9 @@ async function listSessionsTool(caller, targets, signal) {
     const under = work.depth > 1 ? `, started by ${work.startedBy}` : "";
     const reply = work.lastReply && work.state !== "asking" ? `
   Last reply: ${work.lastReply}` : "";
-    lines.push(`- ${work.title} (address ${work.session}), ${placeWords(work)}: ${state}${model}${under}${work.tokens ? ` · ${work.tokens.toLocaleString("en-US")} tokens` : ""}${reply}`);
+    const context = await contextOf(each, signal);
+    const held = !context ? "" : ("used" in context) ? ` · ${context.used.toLocaleString("en-US")} tokens in context now` : " · just summarized, context size known after its next step";
+    lines.push(`- ${work.title} (address ${work.session}), ${placeWords(work)}: ${state}${model}${under}${held}${work.tokens ? ` · ${work.tokens.toLocaleString("en-US")} tokens used in total` : ""}${reply}`);
   }
   return said(`Your sessions, the latest first:
 ${lines.join(`
@@ -23737,6 +23769,27 @@ async function stopSessionTool(caller, args, targets, signal) {
     return said(`Stopped and archived "${data.title || "New Session"}".`);
   }
   return said(`Stopped "${data.title || "New Session"}".`);
+}
+async function compactSessionTool(caller, args, targets, signal) {
+  const found = await oneOfMine(caller, args.session, targets, "compact", signal);
+  if ("error" in found)
+    return found.error;
+  const { target, data } = found.listed;
+  const title = data.title || "New Session";
+  const working = (await workingNow([target], signal)).has(data.id);
+  let answer;
+  try {
+    answer = await call(target, "POST", `/api/session/${encodeURIComponent(data.id)}/compact`, {}, signal);
+  } catch (error) {
+    return refused(`Couldn't summarize "${title}": ${why(error)}`);
+  }
+  changed(data);
+  const state = isObject(answer) ? answer.state : undefined;
+  if (state === "waiting")
+    return said(`"${title}" will be summarized when its turn ends.`);
+  if (working && state !== "compacting")
+    return said(`"${title}" will be summarized at its next step.`);
+  return said(`Summarizing "${title}" now. list_sessions shows its context size again after its next step.`);
 }
 function commandsInSandbox(target, permission) {
   let engine = false;
@@ -23916,7 +23969,7 @@ async function finishGoalTool(caller, args, targets) {
 }
 
 // Packages/Box/src/link/letters/tools.ts
-var AGENT_TOOLS = ["list_agents", "send_message", "read_conversation", "start_session", "list_sessions", "stop_session", "answer_ask", "list_models", "make_project", "list_projects", "propose_goal", "goal_progress", "may_spend", "finish_goal"];
+var AGENT_TOOLS = ["list_agents", "send_message", "read_conversation", "start_session", "list_sessions", "stop_session", "compact_session", "answer_ask", "list_models", "make_project", "list_projects", "propose_goal", "goal_progress", "may_spend", "finish_goal"];
 var isAgentTool = (name) => AGENT_TOOLS.includes(name);
 var said2 = (text) => ({ text, isError: false });
 var refused2 = (text) => ({ text, isError: true });
@@ -24165,6 +24218,7 @@ async function agentTool(name, args, session, place) {
     }
     case "list_sessions":
     case "stop_session":
+    case "compact_session":
     case "answer_ask": {
       if (!root)
         return refused2("Only a conversation on this computer has sessions of its own.");
@@ -24173,6 +24227,8 @@ async function agentTool(name, args, session, place) {
         return listSessionsTool(caller, targets, place.signal);
       if (name === "stop_session")
         return stopSessionTool(caller, args, targets, place.signal);
+      if (name === "compact_session")
+        return compactSessionTool(caller, args, targets, place.signal);
       return answerAskTool(caller, args, targets, place.signal);
     }
   }

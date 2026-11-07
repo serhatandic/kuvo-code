@@ -3295,6 +3295,7 @@ class EngineAgent {
   link;
   providerID;
   id = "engine";
+  compacts = true;
   instance = { id: "default" };
   constructor(link, providerID) {
     this.link = link;
@@ -3504,6 +3505,8 @@ class EngineThread {
       }
       if (!ownSession)
         return;
+      if (input.compact && !event.type.startsWith("session.execution."))
+        return;
       switch (event.type) {
         case "session.inbox.delivered":
           if (data.inboxID === inputID)
@@ -3610,12 +3613,16 @@ class EngineThread {
     const abort = () => void interrupt();
     hooks.signal.addEventListener("abort", abort);
     try {
-      await this.link.request("POST", `${path}/prompt`, {
-        id: inputID,
-        text: input.text,
-        files: input.files.length ? input.files.map((file) => ({ uri: file.uri, name: file.name })) : undefined,
-        delivery: "steer"
-      });
+      if (input.compact) {
+        delivered = true;
+        await this.link.request("POST", `${path}/compact`, { id: inputID, delivery: "steer" });
+      } else
+        await this.link.request("POST", `${path}/prompt`, {
+          id: inputID,
+          text: input.text,
+          files: input.files.length ? input.files.map((file) => ({ uri: file.uri, name: file.name })) : undefined,
+          delivery: "steer"
+        });
       if (hooks.signal.aborted)
         interrupt();
       return await settled;
@@ -7654,6 +7661,13 @@ class AcpThread {
       else if (file.path)
         others.push(this.fenced ? fenceCopy(this.session.location.directory, file.path) : file.path);
     }
+    if (input.compact) {
+      return new Promise((resolve) => {
+        const active = { turn, hooks, resolve, rpc, tools: new Map, toolsSinceText: false, ended: false, compacted: true, children: new Map, served: new Map, started: Date.now(), prompt: 0, input };
+        this.active = active;
+        this.prompt(active, sessionId, [{ type: "text", text: "/compact" }]);
+      });
+    }
     let text = input.text;
     const instructions = hooks.instructions();
     const sent = typeof this.state.acpInstructions === "string" ? this.state.acpInstructions : this.state.acpInstructed ? undefined : "";
@@ -9824,6 +9838,7 @@ class ClaudeAgent {
   static heardWithin = 1000;
   static keychain = process.platform === "darwin";
   id = "claude";
+  compacts = true;
   providerID;
   get name() {
     return accountName("Claude Code", this.instance);
@@ -10397,7 +10412,8 @@ class ClaudeThread {
     return new Promise((resolve) => {
       this.lastHooks = hooks;
       const message = userMessage(input, this.copies());
-      this.active = this.turnFor(turn, hooks, resolve, input.auto, new Map([[message.uuid, ""]]));
+      this.active = this.turnFor(turn, hooks, resolve, input.auto, new Map(input.compact ? [] : [[message.uuid, ""]]));
+      this.active.compacting = input.compact;
       this.input.push(message);
     });
   }
@@ -10920,12 +10936,20 @@ class ClaudeThread {
           turn.toolProgress(message.tool_use_id, { summary: message.summary ?? message.description, lastTool: message.last_tool_name });
         return;
       case "compact_boundary":
-        this.noticeLater(lane, "Claude Code summarized the conversation to make room.");
+        if (!active?.compacting)
+          this.noticeLater(lane, "Claude Code summarized the conversation to make room.");
         return;
-      case "status":
-        if (message.compact_result === "failed")
-          turn.notice(`Claude Code couldn't summarize the conversation${message.compact_error ? `: ${message.compact_error}` : ""}.`);
+      case "status": {
+        if (message.compact_result !== "failed")
+          return;
+        const failed = `Claude Code couldn't summarize the conversation${message.compact_error ? `: ${String(message.compact_error).replace(/\.$/, "")}` : ""}.`;
+        if (active?.compacting) {
+          active.compactFailed = true;
+          active.problem = failed;
+        } else
+          turn.notice(failed);
         return;
+      }
       case "api_retry":
         this.noticeOnce(`retry:${lane.turn.currentModel.id}`, turn, `Claude's API ${message.error === "overloaded" || message.error_status === 529 ? "is overloaded" : "had a problem"}: trying again${message.max_retries ? ` (${message.attempt}/${message.max_retries})` : ""}.`);
         return;
@@ -11181,7 +11205,7 @@ class ClaudeThread {
     const says = Array.isArray(result.user_message_uuids);
     for (const uuid of says ? result.user_message_uuids : [])
       active.steered.delete(uuid);
-    const succeeded = result.subtype === "success" && !result.is_error;
+    const succeeded = result.subtype === "success" && !result.is_error && !active.compactFailed;
     const goesOn = !active.stopping && !active.hooks.signal.aborted;
     if (succeeded && goesOn && says && active.steered.size) {
       clearTimeout(active.goingOn);
@@ -11392,7 +11416,7 @@ class ClaudeThread {
     this.own = undefined;
   }
 }
-var claudeMessages = new Set(["assistant", "user", "stream_event", "result", "system", "rate_limit_event", "auth_status", "conversation_reset", "tool_progress", "tool_use_summary", "prompt_suggestion"]);
+var claudeMessages = new Set(["assistant", "user", "stream_event", "result", "system", "rate_limit_event", "auth_status", "conversation_reset", "tool_progress", "tool_use_summary", "prompt_suggestion", "command_lifecycle"]);
 var claudeSystem = new Set([
   "init",
   "compact_boundary",
@@ -11830,6 +11854,7 @@ class CodexAgent {
   context;
   instance;
   id = "codex";
+  compacts = true;
   providerID;
   get name() {
     return accountName("Codex", this.instance);
@@ -12788,8 +12813,12 @@ ${others.map((path) => `- ${path}`).join(`
         resolve(result);
       };
       this.active = active;
-      turn.startStep();
-      rpc.request("turn/start", params, 60000).then((result) => {
+      if (input.compact)
+        active.compacting = true;
+      else
+        turn.startStep();
+      const asked = input.compact ? rpc.request("thread/compact/start", { threadId: this.nativeID }, 60000) : rpc.request("turn/start", params, 60000);
+      asked.then((result) => {
         if (result?.turn?.id)
           active.turnID ??= result.turn.id;
       }, (error) => {
@@ -13443,7 +13472,8 @@ From memory: ${cited.join("; ")}`);
         turn.toolSucceeded(item.id, withPictures("", [pictureFile(item.path)]));
         return;
       case "contextCompaction":
-        turn.notice("Codex summarized the conversation to make room.");
+        if (this.active?.turn !== turn || !this.active.compacting)
+          turn.notice("Codex summarized the conversation to make room.");
         return;
       case "enteredReviewMode":
         turn.notice(`Reviewing${typeof item.review === "string" && item.review ? `: ${item.review}` : ""}`);
@@ -14758,6 +14788,7 @@ class GrokAgent {
   context;
   instance;
   id = "grok";
+  compacts = true;
   providerID;
   get name() {
     return accountName("Grok", this.instance);
@@ -15111,8 +15142,12 @@ var budget = 16000;
 var outputLimit6 = 2000;
 function items(messages, names, partway = false) {
   const out = [];
+  let summary = false;
   for (const message of messages) {
     switch (message.type) {
+      case "compaction":
+        summary = true;
+        break;
       case "user": {
         const files = (message.files ?? []).map((file) => file.name ?? (file.source?.type === "uri" ? file.source.uri : "a file"));
         out.push({ role: partway ? "You, while it worked" : "You", text: message.text + (files.length ? `
@@ -15168,7 +15203,9 @@ ${trimmed}` : ""}` });
         break;
       }
       case "idle":
-        if (message.outcome !== "succeeded")
+        if (summary)
+          summary = false;
+        else if (message.outcome !== "succeeded")
           out.push({ role: "Stopped", text: message.error?.message ?? (message.outcome === "interrupted" ? "You stopped it." : "It stopped with an error.") });
         break;
     }
@@ -16301,8 +16338,18 @@ class Sessions {
     if (!record)
       return;
     let changed = false;
-    const lastUser = record.messages.findLastIndex((message) => message.type === "user" || message.type === "synthetic");
+    const lastUser = record.messages.findLastIndex((message) => message.type === "user" || message.type === "synthetic" || message.type === "compaction");
+    const queue = this.queue(record);
+    if (queue.some((input) => input.compact)) {
+      queue.splice(0, queue.length, ...queue.filter((input) => !input.compact));
+      changed = true;
+    }
     for (const message of record.messages) {
+      if (message.type === "compaction" && message.status === "running") {
+        message.status = "failed";
+        message.time.completed = message.time.created;
+        changed = true;
+      }
       if (message.type === "shell" && message.status === "running") {
         message.status = "failed";
         message.time.completed = message.time.created;
@@ -16781,8 +16828,8 @@ class Sessions {
     return this.queue(this.record(id)).map((input) => ({
       id: input.id,
       sessionID: id,
-      type: input.synthetic ? "synthetic" : "user",
-      payload: input.synthetic ? { text: input.text, description: input.synthetic.description } : { text: input.text, files: input.files, metadata: input.metadata },
+      type: input.compact ? "compaction" : input.synthetic ? "synthetic" : "user",
+      payload: input.compact ? {} : input.synthetic ? { text: input.text, description: input.synthetic.description } : { text: input.text, files: input.files, metadata: input.metadata },
       delivery: input.delivery
     }));
   }
@@ -16808,7 +16855,7 @@ class Sessions {
     if (queue.some((waiting) => waiting.id === input.id) || record.messages.some((message) => message.id === input.id))
       return;
     const doing = live.doing;
-    const into = doing.kind === "running" && input.delivery !== "queue" && doing.run.agent?.thread.steer ? doing.run : undefined;
+    const into = doing.kind === "running" && input.delivery !== "queue" && !doing.run.compacting && doing.run.agent?.thread.steer ? doing.run : undefined;
     const nothingRuns = doing.kind === "idle" || onFiles(doing);
     const delivery = into || nothingRuns && (input.delivery !== "queue" || !queue.length) ? "steer" : "queue";
     queue.push({ ...input, delivery });
@@ -16819,6 +16866,57 @@ class Sessions {
       this.steerNow(id, live, into, input);
     else if (delivery === "steer")
       this.wake(id);
+  }
+  compact(id) {
+    const record = this.record(id);
+    const live = this.state(id);
+    if (live.doing.kind === "deleting")
+      throw new NotFound(`No session ${id}.`);
+    if (record.session.parentID)
+      throw new BadRequest("A subagent's conversation can't be summarized: summarize the conversation that started it.");
+    const queue = this.queue(record);
+    const run = runOf(live.doing);
+    if (!run?.compacting && !queue.some((input) => input.compact)) {
+      const why = this.whyNotCompact(record, Boolean(run));
+      if (why)
+        throw new BadRequest(why);
+      const input = { id: newID("msg"), text: "", files: [], delivery: "steer", compact: true };
+      queue.unshift(input);
+      this.store.save(id, true);
+      emit("session.inbox.enqueued", { sessionID: id, inboxID: input.id, item: { type: "compaction", payload: {}, delivery: "steer" } }, record.session.location.directory);
+      if (run)
+        run.turn.notice("The conversation will be summarized when this turn ends.");
+    }
+    this.wake(id);
+    const running = runOf(live.doing);
+    return { state: !running || running.compacting ? "compacting" : "waiting" };
+  }
+  holdingModel(record) {
+    const model = record.session.model;
+    if (model?.providerID !== autoProvider)
+      return model;
+    return record.messages.findLast((message) => message.type === "assistant")?.model;
+  }
+  whyNotCompact(record, working) {
+    const model = this.holdingModel(record);
+    if (!model)
+      return "There's nothing to summarize yet.";
+    const agent = this.agent(model.providerID);
+    if (!agent)
+      return "This model's agent isn't available: sign in to it in Settings \u203A Accounts, or pick another model.";
+    const name = agent.name.split(" \xB7 ")[0];
+    if (!agent.compacts)
+      return `${name} can't summarize on request: it does so by itself when the conversation fills up.`;
+    if (!working && !this.slots(record)[model.providerID]?.seen)
+      return `There's nothing to summarize yet: ${name} hasn't started on this conversation.`;
+    return;
+  }
+  dropCompaction(id, record, turn) {
+    const waiting = this.queue(record).find((input) => input.compact);
+    if (!waiting)
+      return;
+    turn.notice("The conversation wasn't summarized: this turn stopped first.");
+    this.cancelInput(id, waiting.id);
   }
   promptSubagent(id, record, input) {
     const session = record.session;
@@ -17153,6 +17251,8 @@ ${text.slice(0, 4000)}
     this.runTurn(id, live, record, run, input);
   }
   async runTurn(id, live, record, run, input) {
+    if (input.compact)
+      return this.runCompaction(id, live, record, run, input);
     const { turn, abort } = run;
     const session = record.session;
     const directory = session.location.directory;
@@ -17218,6 +17318,8 @@ ${text.slice(0, 4000)}
       result = { outcome: "failed", error: failure(error) };
     }
     const outcome = abort.signal.aborted ? "interrupted" : result.outcome;
+    if (outcome !== "succeeded")
+      this.dropCompaction(id, record, turn);
     const before = record.messages[record.messages.length - 1]?.id;
     turn.finish(outcome, outcome === "interrupted" ? undefined : result.error);
     this.settleRelays(live, run);
@@ -17262,6 +17364,39 @@ ${text.slice(0, 4000)}
         return;
     }
     this.free(id, live, outcome);
+  }
+  async runCompaction(id, live, record, run, input) {
+    const { turn, abort } = run;
+    const session = record.session;
+    const directory = session.location.directory;
+    const held = session.outcome !== undefined && session.outcome !== "succeeded";
+    run.compacting = true;
+    emit("session.inbox.delivered", { sessionID: id, inboxID: input.id }, directory);
+    const message = { type: "compaction", id: input.id, time: { created: Date.now() }, status: "running", reason: "manual" };
+    record.messages.push(message);
+    session.time.updated = Date.now();
+    this.store.save(id, true);
+    emit("session.compaction.started", { sessionID: id, reason: "manual", inputID: input.id }, directory);
+    let result;
+    try {
+      const why = this.whyNotCompact(record, false);
+      const model = this.holdingModel(record);
+      if (why || !model)
+        result = { outcome: "failed", error: { type: "agent", message: why ?? "There's nothing to summarize yet." } };
+      else
+        result = await this.runOn(id, record, live, run, model, { text: "/compact", files: [], model, plan: session.agent === "plan", compact: true }, input.id);
+    } catch (error) {
+      result = { outcome: "failed", error: failure(error) };
+    }
+    const outcome = abort.signal.aborted ? "interrupted" : result.outcome;
+    message.status = outcome === "succeeded" ? "completed" : "failed";
+    message.time.completed = Date.now();
+    emit(outcome === "succeeded" ? "session.compaction.ended" : "session.compaction.failed", { sessionID: id }, directory);
+    turn.finish(outcome, outcome === "interrupted" ? undefined : result.error);
+    this.settleAsks(id, live);
+    if (runOf(live.doing) !== run)
+      return;
+    this.free(id, live, held ? undefined : outcome);
   }
   closeWhenIdle(id, live) {
     clearTimeout(live.idle);
@@ -17336,6 +17471,11 @@ ${text.slice(0, 4000)}
       }
       if (signal.aborted)
         return { outcome: "interrupted" };
+      if (input.compact) {
+        if (!slot.seen)
+          return { outcome: "failed", error: { type: "agent", message: `There's nothing to summarize: ${agent.name.split(" \xB7 ")[0]} couldn't pick its conversation up again, and starts over with your next message.` } };
+        return await Promise.race([thread.run({ ...input, model }, turn, hooks), abandoned]);
+      }
       const at = record.messages.findIndex((message) => message.id === userMessage);
       const seenAt = slot.seen ? record.messages.findIndex((message) => message.id === slot.seen) : -1;
       const hasMessage = at >= 0 && seenAt >= at;
@@ -19457,6 +19597,8 @@ async function groupRoutes(runner, store, method, parts, body) {
   switch (action) {
     case "send": {
       const { text } = await body();
+      if (typeof text === "string" && text.trim() === "/compact")
+        return error(400, "A group chat can't be summarized: each bot keeps its own conversation, and starts it over when it grows too long.");
       const members = new Set(found.group.members.flatMap((member) => store.bot(member)?.sessionID ?? runner.peers?.bots().find((bot) => bot.id === member)?.session ?? []));
       const named = typeof text === "string" ? namedBlock(text, readDirectory(store.agentsFile), members) : undefined;
       const message = typeof text === "string" ? runner.send(id, text, named) : undefined;
@@ -23057,6 +23199,10 @@ function handler(context) {
           }
         }
         switch (b) {
+          case "compact":
+            if (method === "POST")
+              return json11({ data: sessions.compact(id) });
+            break;
           case "background":
             if (method === "DELETE") {
               await sessions.stopBackground(id);
@@ -23809,4 +23955,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 47d2742f35a81a0050483cd6bad0b2045b31ab1252c985ad2af366e8a74aa1ea
+// Built from Packages/Box/src/agents bfb4303a78be5a190ff8c06de79e19989bce5c46b39a6c3eeda0a9ee94730c5a
