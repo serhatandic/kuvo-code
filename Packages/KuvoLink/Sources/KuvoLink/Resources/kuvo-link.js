@@ -17788,7 +17788,13 @@ function drive(id) {
   if (driving.has(id))
     return;
   driving.add(id);
-  inTurn(id, () => carryOn(id).catch((error) => takeBack2(id, String(error?.message ?? error), error?.status ?? 409))).finally(() => driving.delete(id));
+  inTurn(id, () => carryOn(id).catch(async (error) => {
+    await takeBack2(id, String(error?.message ?? error), error?.status ?? 409);
+    if (!readMove(id))
+      try {
+        fs65.rmSync(bundleOf(id), { recursive: true, force: true });
+      } catch {}
+  })).finally(() => driving.delete(id));
 }
 var nameOf2 = (key) => plainName(peersOf(readLink()).find((peer) => peer.key === key)?.name ?? "") || "the other computer";
 var sendInstead = null;

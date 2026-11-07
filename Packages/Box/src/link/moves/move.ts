@@ -179,7 +179,11 @@ const driving = new Set<string>();
 function drive(id: string): void {
   if (driving.has(id)) return;
   driving.add(id);
-  inTurn(id, () => carryOn(id).catch(error => takeBack(id, String((error as Error | null)?.message ?? error), (error as Refused | null)?.status ?? 409))).finally(() => driving.delete(id));
+  inTurn(id, () => carryOn(id).catch(async error => {
+    await takeBack(id, String((error as Error | null)?.message ?? error), (error as Refused | null)?.status ?? 409);
+    // Taken back already as a step went on (too long held): what that step left in its folder goes.
+    if (!readMove(id)) try { fs.rmSync(bundleOf(id), { recursive: true, force: true }); } catch {}
+  })).finally(() => driving.delete(id));
 }
 
 const nameOf = (key: string): string => plainName(peersOf(readLink()).find(peer => peer.key === key)?.name ?? "") || "the other computer";
