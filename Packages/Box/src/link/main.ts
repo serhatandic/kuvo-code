@@ -56,7 +56,8 @@ import { BRIDGE_FILE, IS_MAC, K, NEEDED_FILE, OWN_RUNTIME, PID_FILE, REAL_BOX, R
 import { isBridge, keepKeeper, needed, noLongerNeeded, runningBridge, startBridge } from "./keeper";
 import { noteRelay } from "./letters/leave";
 import { deliverLeftAnswers, outboxSoon, sendOutbox } from "./letters/outbox";
-import { outboxChanged } from "./letters/calls";
+import { SENDING } from "./letters/letter";
+import { watchFolders } from "./follow";
 import { pushRows } from "./work/elsewhere";
 import { macLinkCheck } from "./mac/link";
 import { macNoticeHold, macTell } from "./mac/notices";
@@ -376,10 +377,22 @@ async function run(): Promise<void> {
   const sendNow = () => {
     try { sendOutbox(current ?? { send() {} }, undefined, Date.now(), current?.welcomed ? 0 : Date.now() - lastWelcomed); } catch {}
   };
-  // What this box answers goes at once; what its tools leave (another process's), the moment it's there.
+  // What this box answers goes at once; what its tools leave (another process's), the moment the
+  // system says it's there (a watch on the folder, the same on macOS and Linux; a moment's gather,
+  // as a tool writes it in more than one step). One that dies is made again each round, which also
+  // sends what a watch missed.
   outboxSoon.send = sendNow;
-  setInterval(() => { if (outboxChanged()) sendNow(); }, 500);
+  let soon: ReturnType<typeof setTimeout> | null = null;
+  const leftNow = () => {
+    soon ??= setTimeout(() => { soon = null; sendNow(); }, 50);
+  };
+  try { fs.mkdirSync(SENDING, { recursive: true, mode: 0o700 }); } catch {}
+  let outboxWatch = watchFolders([SENDING], leftNow, { recursive: false });
   setInterval(() => {
+    if (!outboxWatch.whole) {
+      outboxWatch.close();
+      outboxWatch = watchFolders([SENDING], leftNow, { recursive: false });
+    }
     if (current?.welcomed && docsNoted()) try { docsChanged(current, { tell: true }); } catch {}
     if (current?.welcomed) lastWelcomed = Date.now();
     noteRelay(Boolean(current?.welcomed), lastWelcomed);

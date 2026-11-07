@@ -346,13 +346,14 @@ test("the other way: a bot that moved to the machine reaches the sessions it lef
   // This Mac's link stops: the machine hears it isn't answering, and its stop waits for it.
   link.stopMacLink();
   await eventually(() => !relay.has(macAddress));
+  // (A process of its own, as a machine's tools are: its call goes the moment the machine's link
+  // sees it in its outbox, and the relay's word comes back as fast.)
   const began = Date.now();
   const away = await onLab("list_sessions", {});
+  assert.ok(Date.now() - began < 2000, `took ${Date.now() - began} ms`);
   assert.match(away.text, /^On Studio Mac, as of .+\. Studio Mac isn't answering/m);
   const stop = await onLab("stop_session", { session: "ses_mleft1" });
   assert.match(stop.text, /^Studio Mac isn't answering .+ Your stop is kept/);
-  // (Each a process of its own, as a machine's tools are: under 2 s each.)
-  assert.ok(Date.now() - began < 4000, `took ${Date.now() - began} ms`);
   assert.ok(!macEngine.seen.interrupted.includes("ses_mleft1"));
   link.runMacLink();
   await eventually(() => macEngine.seen.interrupted.includes("ses_mleft1"));

@@ -427,14 +427,3 @@ export function callsBack(key: string): void {
   }
   if (any) outboxSoon.send();
 }
-
-/** A machine's link looking at its outbox between rounds: true when something new was left in it
- * since it last looked (a tool's call, say), so it goes now rather than at the next round. */
-let outboxSeen = "";
-export function outboxChanged(): boolean {
-  let mark = "";
-  try { mark = String(fs.statSync(SENDING).mtimeMs); } catch {}
-  if (mark === outboxSeen) return false;
-  outboxSeen = mark;
-  return true;
-}

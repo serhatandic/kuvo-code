@@ -241,20 +241,30 @@ test("rows of a lead's sessions go to the computer it lives on, and only there, 
   await link.pushRows(host, link.readLink(), [eng.target], T + MINUTE + 1000, { force: true });
   assert.equal(sent.length, 2);
   link.peerMail(mini.peer, { delivered: { id: rows.id, ok: true } }, host);
-  await link.pushRows(host, link.readLink(), [eng.target], T + 3 * MINUTE, { force: true });
+  // A quiet box stays quiet: minutes on, each round looking and working them out again, no mail at all.
+  for (let at = T + 2 * MINUTE; at <= T + 5 * MINUTE; at += 3000) await link.pushRows(host, link.readLink(), [eng.target], at);
   assert.equal(sent.length, 2);
   // One's put away: they've changed, and go at once.
   eng.all.get("ses_billing").metadata.kuvo.archived = true;
-  await link.pushRows(host, link.readLink(), [eng.target], T + 3 * MINUTE + 1000, { force: true });
+  await link.pushRows(host, link.readLink(), [eng.target], T + 5 * MINUTE + 1000, { force: true });
   assert.deepEqual(opened(sent[2], mini).rows.leads.ses_lead.map(row => row.session), ["ses_left"]);
-  link.peerMail(mini.peer, { delivered: { id: opened(sent[2], mini).rows.id, ok: true } }, host);
+  // A busy box: another change a moment later waits for 15 seconds after the last, then goes.
+  eng.all.get("ses_billing").metadata.kuvo.archived = false;
+  await link.pushRows(host, link.readLink(), [eng.target], T + 5 * MINUTE + 4000, { force: true });
+  await link.pushRows(host, link.readLink(), [eng.target], T + 5 * MINUTE + 7000);
+  assert.equal(sent.length, 3, "no sooner than 15 s after the last");
+  await link.pushRows(host, link.readLink(), [eng.target], T + 5 * MINUTE + 16_000);
+  assert.equal(sent.length, 4, "worked out again each round until it may go");
+  assert.equal(opened(sent[3], mini).rows.leads.ses_lead.length, 2);
+  link.peerMail(mini.peer, { delivered: { id: opened(sent[3], mini).rows.id, ok: true } }, host);
   // None left: the lead's computer hears that once.
   eng.all.get("ses_left").metadata.kuvo.archived = true;
-  await link.pushRows(host, link.readLink(), [eng.target], T + 4 * MINUTE, { force: true });
-  assert.deepEqual(opened(sent[3], mini).rows.leads, {});
-  link.peerMail(mini.peer, { delivered: { id: opened(sent[3], mini).rows.id, ok: true } }, host);
-  await link.pushRows(host, link.readLink(), [eng.target], T + 6 * MINUTE, { force: true });
-  assert.equal(sent.length, 4);
+  eng.all.get("ses_billing").metadata.kuvo.archived = true;
+  await link.pushRows(host, link.readLink(), [eng.target], T + 7 * MINUTE, { force: true });
+  assert.deepEqual(opened(sent[4], mini).rows.leads, {});
+  link.peerMail(mini.peer, { delivered: { id: opened(sent[4], mini).rows.id, ok: true } }, host);
+  await link.pushRows(host, link.readLink(), [eng.target], T + 9 * MINUTE, { force: true });
+  assert.equal(sent.length, 5);
 });
 
 test("rows kept from another computer: the newest it said, and the sessions it names live there", async () => {
@@ -303,14 +313,39 @@ test("calls kept for a box that's away: the oldest goes each minute; an allow is
   const told = eng.seen.prompts.find(each => each.to === "ses_lead");
   assert.match(told.text, /^\[Not done\] Your answer_ask for ses_a on mini wasn't done: that computer wasn't back in time\. An allow waits a day at most/);
 
+  // A kept stop whose box wasn't back in 30 days: let go, and the lead hears it wasn't done.
+  keep("cal_kept000000000006", { tool: "stop_session", args: { session: "ses_d" } }, T - 30 * DAY - MINUTE);
+  await round(T + 3 * MINUTE + 1);
+  assert.ok(!sending().includes("cal_kept000000000006.json"));
+  assert.match(eng.seen.prompts.filter(each => each.to === "ses_lead")[1].text, /^\[Not done\] Your stop_session for ses_d on mini wasn't done: that computer wasn't back in time\.$/);
+
   // A kept stop that box refuses for good (no such session there): the lead hears why.
   link.letterWent(mini.peer, { id: "cal_kept000000000001", ok: false, why: "There's no session ses_a on this computer." });
   // (Told as it's let go, from the receipt: looked at until it's there.)
-  const refused = await arrives(() => eng.seen.prompts.filter(each => each.to === "ses_lead")[1]);
+  const refused = await arrives(() => eng.seen.prompts.filter(each => each.to === "ses_lead")[2]);
   assert.equal(refused.text, "[Not done] Your stop_session for ses_a on mini: There's no session ses_a on this computer.");
   // One sent to every box in case it's there (`quiet`) ends without a word.
   keep("cal_kept000000000005", { tool: "stop_session", args: { session: "ses_x" } }, T, { quiet: true, sentTo: mini.pub });
   link.letterWent(mini.peer, { id: "cal_kept000000000005", ok: false, why: "There's no session ses_x on this computer." });
   assert.ok(!sending().includes("cal_kept000000000005.json"));
-  assert.equal(eng.seen.prompts.filter(each => each.to === "ses_lead").length, 2);
+  assert.equal(eng.seen.prompts.filter(each => each.to === "ses_lead").length, 3);
+});
+
+test("a message from another computer to a conversation this box doesn't list reaches it only from the conversation it's under", async () => {
+  // What this box tells its peers: its bots and latest sessions, not the older Sign-in.
+  write(path.join(run, "agents.json"), { machine: "devbox", agents: [{ session: "ses_user", name: "The user's own", kind: "session", machine: "devbox" }] });
+  const letter = (from, to) => ({ id: "ltr_" + crypto.randomBytes(6).toString("hex"), from, to, text: "How's it going?", wait: false, at: Date.now() });
+  const send = async (from, to) => {
+    const said = [];
+    await link.takeLetter(mini.peer, letter(from, to), { send: (_to, message) => said.push(message.delivered), targets: [eng.target], peers: [mini.peer], told: {}, moved: new Map(), wait: 1 });
+    return said[0];
+  };
+  // The lead following up the session it started: there.
+  assert.equal((await send("ses_lead", "ses_left")).ok, true);
+  // Another conversation by its address: refused.
+  const refused = await send("ses_someone", "ses_left");
+  assert.deepEqual([refused.ok, refused.retry, refused.why], [false, undefined, "That conversation isn't one this computer lists, nor one you started: write to one that list_agents names."]);
+  // One it lists takes anyone's, as before.
+  assert.equal((await send("ses_someone", "ses_user")).ok, true);
+  assert.deepEqual(eng.seen.prompts.map(each => each.to), ["ses_left", "ses_user"]);
 });

@@ -10,7 +10,7 @@ import { sendInto } from "../engine/queue";
 import { messageID } from "../engine/sessions";
 import { locked, writePrivate } from "../files";
 import { PEER_LOCK, isPutAway, peerOf, readPeerAgents } from "../peers/directory";
-import { movedOf, ownKey, peersOf } from "../peers/known";
+import { movedOf, ownKey, ownListed, peersOf } from "../peers/known";
 import { readLink } from "../state";
 import { LETTERS_SEEN, LETTER_ID, LETTER_LIFE, LETTER_MEMORY, NOTE_MEMORY, composeLetter, cutText, pausedNote, placeOfSession } from "./letter";
 import { READ_BY_MAIL, excerpt, readConversation } from "./conversation";
@@ -236,6 +236,9 @@ export async function takeLetter(sender: LetterSender, letter: unknown, { send, 
     if (note && isPutAway(place.data) && !place.data?.parentID && !kuvo.seat) return notDelivered("It's archived: it comes again once it's brought back.", true);
     if (place.data?.parentID || kuvo.seat || isPutAway(place.data)) return notDelivered("That conversation doesn't take messages.");
     if (note) went = await deliverNote(place.target, letter.to, messageID(), cutText(letter.text), note);
+    // One this box doesn't list (older than the latest it tells of) only from the conversation it's
+    // under: a lead following up the sessions it started, found by address (bridge 0.9.204).
+    else if (!(await listedOrUnder(letter.from, letter.to, targets))) return notDelivered("That conversation isn't one this computer lists, nor one you started: write to one that list_agents names.");
     else {
       // Its sender: that box's own agent, as it named it; one of this box's own claimed from there isn't.
       // (`from` isn't checked: one that's no session finds no agent.)
@@ -268,6 +271,15 @@ export async function takeLetter(sender: LetterSender, letter: unknown, { send, 
   const text = await answerTo(place.target, letter.to, prompt, { wait });
   if (text) answer({ from: letter.to, to: letter.from as string, text, answers: id, peer: sender.key });
 }
+// Whether a conversation here may be written to by another computer's agent `from`: one this box
+// lists to its peers (its bots, its latest sessions), or one under `from`. (Before this box has
+// written its list, as it starts, any.)
+async function listedOrUnder(from: unknown, session: string, targets: Target[]): Promise<boolean> {
+  const listed = ownListed();
+  if (!listed.length || listed.some(agent => agent.session === session)) return true;
+  return typeof from === "string" && under(from, await workSessions(targets)).some(each => each.data.id === session);
+}
+
 // Whether `session`, put away, is under the conversation `lead` (one it started, or theirs), and
 // `lead` isn't a conversation here.
 async function archivedUnder(lead: string, session: string, targets: Target[]): Promise<boolean> {

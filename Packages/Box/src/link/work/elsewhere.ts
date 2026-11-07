@@ -39,6 +39,8 @@ export interface RowsKept {
 
 // How many rows of each lead go: as list_sessions shows them.
 const ROWS_EACH = 40;
+// The least time between two mails of rows to one computer: four a minute at most, however busy.
+export const PUSH_SPACING = 15_000;
 const STATES: readonly Row["state"][] = ["working", "asking", "finished", "failed", "stopped", "idle"];
 const SESSION = /^ses_[A-Za-z0-9]{1,60}$/;
 
@@ -206,9 +208,10 @@ const marks = () => [WORK_CHANGES, path.join(MOVES, "moved.json"), path.join(RUN
 let pushing = false;
 
 /** The rows of leads elsewhere, told to the computer each lives on (one that takes them, `work.elsewhere`)
- * when they change, and again each minute until it says it has them; a computer told of some before
- * that has none now is told that once. Looked at each round (`sendOutbox`'s), worked out again only
- * when something changed or a minute went by. */
+ * when they change (once in 15 seconds at most), and again each minute until it says it has them;
+ * a computer told of some before that has none now is told that once. Nothing goes while nothing
+ * changed and it has them. Looked at each round (`sendOutbox`'s), worked out again only when
+ * something changed or a minute went by. */
 export async function pushRows(host: Pick<LinkHost, "send">, link: LinkState | null, targets: Target[], now = Date.now(), { force = false }: { force?: boolean } = {}): Promise<void> {
   if (!link?.key || pushing) return;
   const changedMarks = marks();
@@ -234,6 +237,12 @@ export async function pushRows(host: Pick<LinkHost, "send">, link: LinkState | n
       if (!(told[peer.key]?.features ?? []).includes("work.elsewhere")) continue;
       const id = idOf(leads);
       if (before?.id === id && (before.done || now - before.sent < 60_000)) continue;
+      // A busy box tells one computer once in PUSH_SPACING at most: worked out again next round
+      // until it may.
+      if (before && now - before.sent < PUSH_SPACING) {
+        lastMarks = "";
+        continue;
+      }
       // As many of each lead's as fit in one mail, the latest first.
       let bytes: Buffer | null = null;
       for (const most of [ROWS_EACH, 20, 10, 4]) {

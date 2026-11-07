@@ -13408,6 +13408,8 @@ async function takeLetter(sender, letter, { send, targets, answer = () => {}, to
       return notDelivered("That conversation doesn't take messages.");
     if (note)
       went = await deliverNote(place.target, letter.to, messageID(), cutText(letter.text), note);
+    else if (!await listedOrUnder(letter.from, letter.to, targets))
+      return notDelivered("That conversation isn't one this computer lists, nor one you started: write to one that list_agents names.");
     else {
       const listed = peerOf(letter.from, peers, told, moved)?.key === sender.key ? (told[sender.key]?.list ?? []).find((agent) => agent.session === letter.from) : null;
       if (listed && !await placeOfSession(letter.from, targets).catch(() => ({})))
@@ -13438,6 +13440,12 @@ async function takeLetter(sender, letter, { send, targets, answer = () => {}, to
   const text = await answerTo(place.target, letter.to, prompt, { wait });
   if (text)
     answer({ from: letter.to, to: letter.from, text, answers: id, peer: sender.key });
+}
+async function listedOrUnder(from, session, targets) {
+  const listed = ownListed();
+  if (!listed.length || listed.some((agent) => agent.session === session))
+    return true;
+  return typeof from === "string" && under(from, await workSessions(targets)).some((each) => each.data.id === session);
 }
 async function archivedUnder(lead, session, targets) {
   if (await placeOfSession(lead, targets).catch(() => {
@@ -13494,6 +13502,7 @@ var ELSEWHERE = path50.join(WORK_FOLDER, "elsewhere");
 var PUSHED = path50.join(WORK_FOLDER, "pushed.json");
 var LOCK8 = path50.join(WORK_FOLDER, ".elsewhere.lock");
 var ROWS_EACH = 40;
+var PUSH_SPACING = 15000;
 var STATES2 = ["working", "asking", "finished", "failed", "stopped", "idle"];
 var SESSION = /^ses_[A-Za-z0-9]{1,60}$/;
 function rowOf(given) {
@@ -13677,6 +13686,10 @@ async function pushRows(host, link, targets, now = Date.now(), { force = false }
       const id = idOf2(leads);
       if (before?.id === id && (before.done || now - before.sent < 60000))
         continue;
+      if (before && now - before.sent < PUSH_SPACING) {
+        lastMarks = "";
+        continue;
+      }
       let bytes = null;
       for (const most of [ROWS_EACH, 20, 10, 4]) {
         const fitted = Object.fromEntries(Object.entries(leads).map(([lead, each]) => [lead, each.slice(0, most)]));
@@ -18357,17 +18370,6 @@ function callsBack(key) {
   }
   if (any)
     outboxSoon.send();
-}
-var outboxSeen = "";
-function outboxChanged() {
-  let mark = "";
-  try {
-    mark = String(fs63.statSync(SENDING).mtimeMs);
-  } catch {}
-  if (mark === outboxSeen)
-    return false;
-  outboxSeen = mark;
-  return true;
 }
 
 // Packages/Box/src/link/letters/outbox.ts
@@ -30253,11 +30255,22 @@ async function run3() {
     } catch {}
   };
   outboxSoon.send = sendNow;
-  setInterval(() => {
-    if (outboxChanged())
+  let soon = null;
+  const leftNow = () => {
+    soon ??= setTimeout(() => {
+      soon = null;
       sendNow();
-  }, 500);
+    }, 50);
+  };
+  try {
+    fs102.mkdirSync(SENDING, { recursive: true, mode: 448 });
+  } catch {}
+  let outboxWatch = watchFolders([SENDING], leftNow, { recursive: false });
   setInterval(() => {
+    if (!outboxWatch.whole) {
+      outboxWatch.close();
+      outboxWatch = watchFolders([SENDING], leftNow, { recursive: false });
+    }
     if (current?.welcomed && docsNoted())
       try {
         docsChanged(current, { tell: true });
