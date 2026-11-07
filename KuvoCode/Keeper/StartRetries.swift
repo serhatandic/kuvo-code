@@ -28,6 +28,8 @@ import OpenCodeKit
     var asking: SystemAsking?
 
     private var tried = 0
+    /// Its last try took too long while macOS asked.
+    private var lastHeld = false
     /// The next try, waiting its turn.
     private var turn: UUID?
     private var sleeper: Task<Void, Never>?
@@ -56,17 +58,23 @@ import OpenCodeKit
     /// something, as far as anyone can tell: it took too long, with a question open at some point
     /// meanwhile. (Told to go, a server takes its question with it, so what's open now isn't enough.)
     func wasAsked(_ cause: any Error, since began: ContinuousClock.Instant) -> Bool {
+        lastHeld = false
         guard Self.tookTooLong(cause), let asking else { return false }
+        // Before this look too: told to go, its question may be gone by now, and that's no answer.
+        if asking.asked(since: began) { asking.heldTryEnded() }
         _ = asking.look()
-        guard asking.asked(since: began) else { return false }
+        lastHeld = asking.asked(since: began)
+        guard lastHeld else { return false }
         asking.heldTryEnded()
         return true
     }
 
     /// Up, after a try begun at `began`: a question open meanwhile was answered, or wasn't holding it
-    /// up, so whatever waits on one tries now.
+    /// up, so whatever waits on one tries now. So too after the last try was held up by one: this
+    /// one's may have been answered between looks.
     func cameUp(since began: ContinuousClock.Instant) {
-        guard let asking, asking.asked(since: began) else { return }
+        defer { lastHeld = false }
+        guard let asking, lastHeld || asking.asked(since: began) else { return }
         asking.answered()
     }
 
@@ -130,7 +138,7 @@ import OpenCodeKit
         case let error as URLError:
             return error.code != .cancelled && !["disk", "tls"].contains(EngineInstallError.kind(of: error))
         case let error as POSIXError:
-            return ![POSIXErrorCode.ENOENT, .EACCES, .EPERM, .ENOEXEC, .ENOTDIR, .EISDIR].contains(error.code)
+            return ![POSIXErrorCode.ENOENT, .EACCES, .EPERM, .ENOEXEC, .EBADARCH, .EBADEXEC, .EBADMACHO, .ENOTDIR, .EISDIR].contains(error.code)
         default:
             return true
         }

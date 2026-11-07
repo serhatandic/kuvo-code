@@ -105,7 +105,7 @@ final class MacBoxRunner {
     func start() async {
         let launch = UUID()
         self.launch = launch
-        let began = ContinuousClock.now
+        var began = ContinuousClock.now
         upSince = nil
         engine = .starting
         // Why one before stopped (a keeper killed before it could take it away) isn't this one's.
@@ -189,6 +189,8 @@ final class MacBoxRunner {
             guard launch == self.launch else { return }
             let environmentNow = shell
             let timeout = startTimeout
+            // (What's held the box up before this isn't this try's.)
+            began = .now
             let starting = Task {
                 try await ServerProcess.start(
                     executable: binary,

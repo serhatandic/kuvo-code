@@ -652,6 +652,7 @@ import Testing
         #expect(!StartRetries.canHelp(CocoaError(.fileNoSuchFile)))
         #expect(!StartRetries.canHelp(POSIXError(.EACCES)))
         #expect(StartRetries.canHelp(POSIXError(.EAGAIN)), "the Mac is short of something for now")
+        #expect(!StartRetries.canHelp(POSIXError(.EBADARCH)))
     }
 
     /// When a question counts as answered, which brings a try on at once: seen open on looks of its
@@ -685,6 +686,14 @@ import Testing
         asking.look()
         #expect(waiting.isWaiting)
 
+        // The same, gone before anyone hears that try ended.
+        open = true
+        let beganAgain = ContinuousClock.now
+        for _ in 1...4 { asking.look() }
+        open = false
+        #expect(held.wasAsked(ServerProcessError.timedOut, since: beganAgain))
+        #expect(waiting.isWaiting)
+
         // It's still there after that, and it closes: someone answered.
         open = true
         asking.look()
@@ -716,6 +725,25 @@ import Testing
         #expect(waiting.isWaiting, "nothing was seen open")
         asking.look()
         held.cameUp(since: beforeAsked)
+        try await until { went }
+    }
+
+    /// Its last try was held up, and this one came up with no question seen: answered between looks.
+    @Test func aQuestionAnsweredBetweenLooksStillBringsTheOthersOn() async throws {
+        let asking = SystemAsking()
+        var open = true
+        asking.isOpen = { open }
+        let clock = TestClock()
+        let waiting = StartRetries(), held = StartRetries()
+        waiting.asking = asking
+        waiting.clock = clock.wait
+        held.asking = asking
+        defer { clock.goOn() }
+        #expect(held.wasAsked(ServerProcessError.timedOut, since: .now))
+        var went = false
+        waiting.schedule(after: StartRetries.askedWait, orAnswered: true) { went = true; TestPulse.beat() }
+        open = false
+        held.cameUp(since: .now)
         try await until { went }
     }
 
