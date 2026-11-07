@@ -203,6 +203,16 @@ const big = seedClaude(mac, bigWork, bigClaude, { lines: [], memory: Object.from
   fs.closeSync(handle);
 }
 
+// A bot on a second Claude Code account the Mac has (signed in with a token of its own); the
+// machine has only its own.
+write(path.join(mac.agents, "accounts.json"), [{ kind: "claude", id: "work", label: "Work" }]);
+write(path.join(mac.agents, "claude", "tokens", "work.json"), { token: "stand-in" });
+const workClaude = conversation();
+const workWork = seedBot(mac, "bot_work", "ses_work");
+write(path.join(mac.bots, "bot_work", "bot.json"), { kuvo: 1, id: "bot_work", name: "bot_work", model: { id: "default", providerID: "claude-code@work" } });
+seedSession(mac, "ses_work", workWork, workClaude, { metadata: { kuvo: { bot: "bot_work" } }, provider: "claude-code@work" });
+const work = seedClaude({ claude: path.join(mac.agents, "claude", "accounts", "work") }, workWork, workClaude);
+
 const dropClaude = conversation();
 const dropWork = seedBot(mac, "bot_drop", "ses_drop");
 seedSession(mac, "ses_drop", dropWork, dropClaude, { metadata: { kuvo: { bot: "bot_drop" } } });
@@ -382,6 +392,27 @@ test("a chat whose conversation is there already doesn't go, and the one there i
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(lab.home, "run", "queues.json"), "utf8")).ses_twin, { paused: true, held: [] }, "its queue there is as it was");
 });
 
+test("a bot on a second account goes to a computer without that account: it says which account it uses there, and runs on it with its conversation", { timeout: 120_000 }, async t => {
+  signal = t.signal;
+  const before = hash(work.file);
+  // (Once the machine has said what it can do, as it does soon after it's paired: it's asked first then.)
+  await eventually(() => {
+    try { return JSON.parse(fs.readFileSync(path.join(mac.home, "run", "peer-agents.json"), "utf8"))[machine.key]?.features?.includes("moves.check"); } catch { return false; }
+  });
+  const moved = await ask("POST", "kuvo/moves", { kind: "bot", id: "bot_work", to: machine.key });
+  assert.equal(moved.status, 200, JSON.stringify(moved.json));
+  assert.match(moved.json.note ?? "", /uses the Claude Code account signed in there/);
+  // With the account that's there: its conversation where that account keeps them, the same.
+  const placed = path.join(lab.claude, "projects", slug(path.join(lab.bots, "bot_work", "workspace")), `${workClaude}.jsonl`);
+  assert.equal(hash(placed), before);
+  const there = await asks(lab, "GET", "/api/session/ses_work");
+  assert.equal(there.status, 200);
+  assert.equal(there.json?.data?.model?.providerID ?? there.json?.model?.providerID, "claude-code");
+  assert.equal(agentState(lab, "ses_work")?.threads?.["claude-code"]?.state?.claudeSession, workClaude, JSON.stringify(agentState(lab, "ses_work")));
+  assert.equal(JSON.parse(fs.readFileSync(path.join(lab.bots, "bot_work", "bot.json"), "utf8")).model.providerID, "claude-code");
+  assert.equal(await sessionThere(mac, "ses_work"), false);
+});
+
 test("a bot of more than 100 MB goes whole over the relay", { timeout: 600_000 }, async t => {
   signal = t.signal;
   const before = hash(big.file);
@@ -401,8 +432,10 @@ test("the relay dropped as it's sent: it goes on from where it was, whole", { ti
   const moving = ask("POST", "kuvo/moves", { kind: "bot", id: "bot_drop", to: machine.key });
   // Some of it on its way.
   await Promise.race([eventually(() => (fs.readdirSync(path.join(lab.home, "run", "moves")).find(name => /^mov_[A-Za-z0-9]+$/.test(name) && fs.existsSync(path.join(lab.home, "run", "moves", name, "got"))))), moving]);
+  const began = Date.now();
   relay.drop();
   const moved = await moving;
+  t.diagnostic(`went on and arrived ${((Date.now() - began) / 1000).toFixed(1)} s after the drop`);
   assert.equal(moved.status, 200, JSON.stringify(moved.json));
   assert.equal(hash(path.join(lab.claude, "projects", slug(path.join(lab.bots, "bot_drop", "workspace")), `${dropClaude}.jsonl`)), before);
   assert.equal(await sessionThere(mac, "ses_drop"), false);
