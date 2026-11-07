@@ -16,6 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- News from a session always reaches the bot or conversation that started it now, once, even if that moved to another computer long ago or its computer is away for days. It waits up to 30 days for that computer to come back; before, it was lost after a day or two.
 - If this Mac's engine, coding agents or background service couldn't start or keep stopping, Kuvo Code now goes on trying by itself, as your machines do, waiting longer each time up to ten minutes, so a failure in the night doesn't leave them down until you're back. The screen says why and that it's trying, and Try Again and Restart still work at any moment. It doesn't keep trying what can't work, like a program that's missing. If a macOS prompt is holding a start up, it comes back only about hourly, and answering it brings things back without waiting for that.
 - On your iPhone, making a group chat on this Mac says why its coding agents aren't running and whether they're being tried again, rather than that they're starting.
 - An engine that hung while running now starts again by itself, on this Mac and on your machines, and so do coding agents on this Mac. It takes ten minutes of silence with nothing at work, so a task that's working is left alone, and a sleeping Mac or a macOS prompt waiting for you doesn't count.
