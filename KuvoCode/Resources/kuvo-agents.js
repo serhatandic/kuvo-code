@@ -613,7 +613,7 @@ async function ownArgsLater(args, cwd) {
 }
 
 // Packages/Box/src/shared/platform.ts
-import { execFileSync, spawn } from "child_process";
+import { execFile as execFile2, execFileSync, spawn } from "child_process";
 import fs from "fs";
 import path from "path";
 function alive(pid) {
@@ -739,6 +739,83 @@ function sandboxGeneration(on) {
   } catch {
     return "";
   }
+}
+function useOf(rows, pid, command, asleep) {
+  const own = rows.find((row) => row.pid === pid);
+  if (!own)
+    return null;
+  const below = { seconds: 0, running: false };
+  const children = new Map;
+  for (const row of rows)
+    children.set(row.ppid, [...children.get(row.ppid) ?? [], row]);
+  const seen = new Set([pid]);
+  const left = [...children.get(pid) ?? []];
+  while (left.length) {
+    const row = left.pop();
+    if (seen.has(row.pid))
+      continue;
+    seen.add(row.pid);
+    below.seconds += row.seconds;
+    if (!asleep.includes(row.state) && row.state !== "Z")
+      below.running = true;
+    left.push(...children.get(row.pid) ?? []);
+  }
+  return { command, waiting: asleep.includes(own.state), seconds: own.seconds, below };
+}
+function linuxUse(pid, proc) {
+  const rows = [];
+  for (const name of fs.readdirSync(proc)) {
+    if (!/^\d+$/.test(name))
+      continue;
+    try {
+      const stat = fs.readFileSync(`${proc}/${name}/stat`, "utf8");
+      const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+      const [utime, stime, cutime, cstime] = fields.slice(11, 15).map(Number);
+      rows.push({ pid: Number(name), ppid: Number(fields[1]), state: fields[0], seconds: (utime + stime + (Number(name) === pid ? 0 : cutime + cstime)) / 100 });
+    } catch {}
+  }
+  let command = "";
+  try {
+    command = fs.readFileSync(`${proc}/${pid}/cmdline`, "utf8").replaceAll("\x00", " ").trim();
+  } catch {
+    return null;
+  }
+  return useOf(rows, pid, command, "S");
+}
+function cpuSeconds(time) {
+  const [days, clock] = time.includes("-") ? time.split("-") : ["0", time];
+  const parts = clock.split(":").map(Number);
+  if (!/^\d+$/.test(days) || parts.length < 2 || parts.length > 3 || parts.some(Number.isNaN))
+    return NaN;
+  return Number(days) * 86400 + parts.reduce((total, part) => total * 60 + part, 0);
+}
+function macUse(table, pid) {
+  const rows = [];
+  let command = "";
+  for (const line of table.split(`
+`)) {
+    const found = /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(\S+)\s+(.*)$/.exec(line);
+    const seconds = found ? cpuSeconds(found[4]) : NaN;
+    if (!found || Number.isNaN(seconds))
+      continue;
+    rows.push({ pid: Number(found[1]), ppid: Number(found[2]), state: found[3][0], seconds });
+    if (Number(found[1]) === pid)
+      command = found[5];
+  }
+  return useOf(rows, pid, command, "SI");
+}
+async function processUse(pid, proc = "/proc") {
+  if (fs.existsSync(proc)) {
+    try {
+      return linuxUse(pid, proc);
+    } catch {
+      return null;
+    }
+  }
+  const table = await new Promise((resolve) => {
+    execFile2("/bin/ps", ["-A", "-o", "pid=,ppid=,state=,time=,command="], { timeout: 15000, maxBuffer: 32 * 1024 * 1024 }, (error, output) => resolve(error ? null : output));
+  });
+  return table === null ? null : macUse(table, pid);
 }
 
 // Packages/Box/src/agents/proc.ts
@@ -23284,6 +23361,171 @@ class Store {
   }
 }
 
+// Packages/Box/src/shared/hang.ts
+import fs4 from "fs";
+import net from "net";
+import path4 from "path";
+var LOOK_EVERY = 30000;
+var ANSWER_WITHIN = 20000;
+var HUNG_AFTER = 600000;
+var OWN_WORK = 0.02;
+var WORK_BELOW = 0.1;
+var TIME_TO_GO = 1e4;
+var MOST_ENDED = 3;
+var ENDED_WHILE = 6 * 3600000;
+function ask2(port, within) {
+  return new Promise((resolve) => {
+    const socket = net.connect({ host: "127.0.0.1", port });
+    const done = (answer) => {
+      clearTimeout(timer);
+      socket.destroy();
+      resolve(answer);
+    };
+    const timer = setTimeout(() => done("silent"), within);
+    socket.once("connect", () => socket.write(`GET /api/info HTTP/1.1\r
+Host: 127.0.0.1\r
+Connection: close\r
+\r
+`));
+    socket.once("data", () => done("answered"));
+    socket.once("error", () => done("refused"));
+    socket.once("close", () => done("refused"));
+  });
+}
+function connectionsWork(within) {
+  return new Promise((resolve) => {
+    const server = net.createServer((socket) => socket.end("x"));
+    const done = (works) => {
+      server.close();
+      resolve(works);
+    };
+    server.once("error", () => done(false));
+    server.listen(0, "127.0.0.1", () => {
+      ask2(server.address().port, within).then((answer) => done(answer === "answered"));
+    });
+  });
+}
+
+class HangWatch {
+  options;
+  every;
+  answerWithin;
+  hungAfter;
+  timeToGo;
+  now;
+  use;
+  lastLook = 0;
+  looking = false;
+  seen = null;
+  constructor(options) {
+    this.options = options;
+    this.every = options.every ?? LOOK_EVERY;
+    this.answerWithin = options.answerWithin ?? ANSWER_WITHIN;
+    this.hungAfter = options.hungAfter ?? HUNG_AFTER;
+    this.timeToGo = options.timeToGo ?? TIME_TO_GO;
+    this.now = options.now ?? Date.now;
+    this.use = options.use ?? processUse;
+  }
+  async look() {
+    if (this.looking)
+      return;
+    this.looking = true;
+    try {
+      await this.lookOnce();
+    } finally {
+      this.looking = false;
+    }
+  }
+  async lookOnce() {
+    const began = this.now();
+    const onTime = this.lastLook > 0 && began >= this.lastLook && began - this.lastLook <= this.every * 2;
+    this.lastLook = began;
+    if (!onTime)
+      this.seen = null;
+    const server = this.server();
+    if (!server || this.stoppedOnPurpose()) {
+      this.seen = null;
+      return;
+    }
+    if (await ask2(server.port, this.answerWithin) !== "silent" || !await connectionsWork(this.answerWithin)) {
+      this.seen = null;
+      return;
+    }
+    const use = await this.use(server.pid);
+    const at = this.now();
+    const now = this.server();
+    if (at - began > this.answerWithin * 2 + this.every || !use?.waiting || !this.options.isIt(use.command) || use.below.running || now?.pid !== server.pid || now.port !== server.port) {
+      this.seen = null;
+      return;
+    }
+    const seen = this.seen?.pid === server.pid && this.seen.port === server.port ? this.seen : null;
+    if (!seen) {
+      this.seen = { ...server, since: began, at, use };
+      return;
+    }
+    const seconds = (at - seen.at) / 1000;
+    if (use.seconds - seen.use.seconds >= seconds * OWN_WORK || use.below.seconds - seen.use.below.seconds >= seconds * WORK_BELOW) {
+      this.seen = { ...server, since: began, at, use };
+      return;
+    }
+    this.seen = { ...seen, at, use };
+    if (at - seen.since >= this.hungAfter)
+      await this.end(server.pid, seen.since);
+  }
+  server() {
+    try {
+      const { pid, port } = JSON.parse(fs4.readFileSync(this.options.record, "utf8"));
+      return Number.isInteger(pid) && pid > 1 && Number.isInteger(port) && port > 0 ? { pid, port } : null;
+    } catch {
+      return null;
+    }
+  }
+  stoppedOnPurpose() {
+    return ["stopped", ".launching", ".updating"].some((name) => fs4.existsSync(path4.join(this.options.run, name)));
+  }
+  endedLately() {
+    const file = path4.join(this.options.run, `hung-${this.options.name}.json`);
+    try {
+      const times = JSON.parse(fs4.readFileSync(file, "utf8"));
+      return Array.isArray(times) ? times.filter((time) => typeof time === "number" && this.now() - time < ENDED_WHILE && time <= this.now()) : [];
+    } catch {
+      return [];
+    }
+  }
+  end(pid, since) {
+    this.seen = null;
+    const minutes = Math.round((this.now() - since) / 60000);
+    const lately = this.endedLately();
+    if (lately.length >= MOST_ENDED) {
+      console.error(`The ${this.options.name} has said nothing for ${minutes} minutes, and it's been ended ${lately.length} times lately: it's left as it is, for you to restart.`);
+      return;
+    }
+    console.error(`The ${this.options.name} (process ${pid}) has said nothing for ${minutes} minutes, with nothing at work: ending it, so it starts again.`);
+    const file = path4.join(this.options.run, `hung-${this.options.name}.json`);
+    try {
+      fs4.writeFileSync(`${file}.new`, JSON.stringify([...lately, this.now()]), { mode: 384 });
+      fs4.renameSync(`${file}.new`, file);
+    } catch {}
+    try {
+      process.kill(pid, "SIGTERM");
+    } catch {
+      return;
+    }
+    setTimeout(async () => {
+      const still = await this.use(pid);
+      if (!still || !this.options.isIt(still.command))
+        return;
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {}
+    }, this.timeToGo).unref?.();
+  }
+  start() {
+    setInterval(() => void this.look().catch(() => {}), this.every).unref?.();
+  }
+}
+var isEngine = (command) => /\bserve\b/.test(command) && !command.includes("kuvo-link");
+
 // Packages/Box/src/agents/main.ts
 var version3 = "1";
 var home2 = process.env.KUVO_AGENTS_HOME;
@@ -23500,6 +23742,8 @@ if (record2) {
   writeFileSync21(record2 + ".new", JSON.stringify({ pid: process.pid, port: server4.port, password }), { mode: 384 });
   renameSync15(record2 + ".new", record2);
 }
+if (runFolder)
+  new HangWatch({ name: "engine", run: runFolder, record: join29(runFolder, "engine.json"), isIt: isEngine }).start();
 var stopping = false;
 function stop() {
   if (stopping)
@@ -23533,4 +23777,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents c03449497b6d75281aab7b0c27cb263c996b94e9ab2e634850042304bb6e93e4
+// Built from Packages/Box/src/agents 86495995648e8e209b0cc8ec9c569d1b0df71e526f9d51cde7e8cb5f91bc5aa1

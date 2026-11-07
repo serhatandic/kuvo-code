@@ -6,7 +6,7 @@
 // by its command line where there's /proc, and by its being alive where there isn't
 // (`keepForRollback`'s `restore.sh`, link/updates/update.ts).
 
-import { execFileSync, spawn } from "node:child_process";
+import { execFile, execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -186,4 +186,96 @@ export function sandboxGeneration(on: string): string {
   } catch {
     return "";
   }
+}
+
+/** How a process and what it started are using the computer, at one moment. */
+export interface ProcessUse {
+  command: string;
+  /** It's asleep, waiting for something: not running, not held up on a disk, not paused by someone. */
+  waiting: boolean;
+  /** Its own CPU time so far, in seconds. */
+  seconds: number;
+  /** All that it started's, in seconds, and whether any of that is running (or on a disk) now. */
+  below: { seconds: number; running: boolean };
+}
+
+interface ProcessRow {
+  pid: number;
+  ppid: number;
+  state: string;
+  seconds: number;
+}
+
+/** `row`'s tree, by its parents' numbers. */
+function useOf(rows: ProcessRow[], pid: number, command: string, asleep: string): ProcessUse | null {
+  const own = rows.find(row => row.pid === pid);
+  if (!own) return null;
+  const below = { seconds: 0, running: false };
+  const children = new Map<number, ProcessRow[]>();
+  for (const row of rows) children.set(row.ppid, [...(children.get(row.ppid) ?? []), row]);
+  const seen = new Set([pid]);
+  const left = [...(children.get(pid) ?? [])];
+  while (left.length) {
+    const row = left.pop()!;
+    if (seen.has(row.pid)) continue;
+    seen.add(row.pid);
+    below.seconds += row.seconds;
+    if (!asleep.includes(row.state) && row.state !== "Z") below.running = true;
+    left.push(...(children.get(row.pid) ?? []));
+  }
+  return { command, waiting: asleep.includes(own.state), seconds: own.seconds, below };
+}
+
+/** Linux: from /proc (`proc`, a test's own), each process's state and CPU time; `stat`'s fields after its name, its name being anything. The system counts time in hundredths of a second for every program. */
+function linuxUse(pid: number, proc: string): ProcessUse | null {
+  const rows: ProcessRow[] = [];
+  for (const name of fs.readdirSync(proc)) {
+    if (!/^\d+$/.test(name)) continue;
+    try {
+      const stat = fs.readFileSync(`${proc}/${name}/stat`, "utf8");
+      const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+      // (A process's own, and for those it started, those that have ended too.)
+      const [utime, stime, cutime, cstime] = fields.slice(11, 15).map(Number);
+      rows.push({ pid: Number(name), ppid: Number(fields[1]), state: fields[0], seconds: (utime + stime + (Number(name) === pid ? 0 : cutime + cstime)) / 100 });
+    } catch {}
+  }
+  let command = "";
+  try { command = fs.readFileSync(`${proc}/${pid}/cmdline`, "utf8").replaceAll("\0", " ").trim(); } catch { return null; }
+  return useOf(rows, pid, command, "S");
+}
+
+/** A `ps` time, `[[dd-]hh:]mm:ss[.cc]`, in seconds; NaN when it isn't one. */
+export function cpuSeconds(time: string): number {
+  const [days, clock] = time.includes("-") ? time.split("-") : ["0", time];
+  const parts = clock.split(":").map(Number);
+  if (!/^\d+$/.test(days) || parts.length < 2 || parts.length > 3 || parts.some(Number.isNaN)) return NaN;
+  return Number(days) * 86_400 + parts.reduce((total, part) => total * 60 + part, 0);
+}
+
+/** macOS, which has no /proc: `ps`'s table, as `ps -A -o pid=,ppid=,state=,time=,command=` prints it. */
+export function macUse(table: string, pid: number): ProcessUse | null {
+  const rows: ProcessRow[] = [];
+  let command = "";
+  for (const line of table.split("\n")) {
+    const found = /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(\S+)\s+(.*)$/.exec(line);
+    const seconds = found ? cpuSeconds(found[4]) : NaN;
+    if (!found || Number.isNaN(seconds)) continue;
+    rows.push({ pid: Number(found[1]), ppid: Number(found[2]), state: found[3][0], seconds });
+    if (Number(found[1]) === pid) command = found[5];
+  }
+  return useOf(rows, pid, command, "SI");
+}
+
+/**
+ * How `pid` and what it started are using the computer now; null when that can't be told (it's gone,
+ * or this computer has neither /proc nor `ps`). `proc`: where /proc is (a test's own).
+ */
+export async function processUse(pid: number, proc = "/proc"): Promise<ProcessUse | null> {
+  if (fs.existsSync(proc)) {
+    try { return linuxUse(pid, proc); } catch { return null; }
+  }
+  const table = await new Promise<string | null>(resolve => {
+    execFile("/bin/ps", ["-A", "-o", "pid=,ppid=,state=,time=,command="], { timeout: 15_000, maxBuffer: 32 * 1024 * 1024 }, (error, output) => resolve(error ? null : output));
+  });
+  return table === null ? null : macUse(table, pid);
 }

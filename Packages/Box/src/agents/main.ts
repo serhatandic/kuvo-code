@@ -42,6 +42,7 @@ import { LinkDirectory, PeerPost, type PeerParts } from "./groups/post"
 import { GroupRunner } from "./groups/runner"
 import { GroupStore } from "./groups/store"
 import { queueFiles } from "../shared/queues"
+import { HangWatch, isEngine } from "../shared/hang"
 
 const version = "1"
 const home = process.env.KUVO_AGENTS_HOME
@@ -327,6 +328,10 @@ if (record) {
   writeFileSync(record + ".new", JSON.stringify({ pid: process.pid, port: server.port, password }), { mode: 0o600 })
   renameSync(record + ".new", record)
 }
+
+// This box's engine, ended should it hang (it's started again as after a crash), on a machine and on
+// this Mac alike. This box's link watches this bridge in turn (link/main.ts).
+if (runFolder) new HangWatch({ name: "engine", run: runFolder, record: join(runFolder, "engine.json"), isIt: isEngine }).start()
 
 let stopping = false
 function stop() {
