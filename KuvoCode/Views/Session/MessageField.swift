@@ -241,6 +241,13 @@ struct MessageField: NSViewRepresentable {
             view.restyle(marks: parent.marks, images: parent.images, token: token)
             view.followCaret()
         }
+
+        // The caret moved with the keys (the arrows, ⌘↓): its line comes into view in the list
+        // of quotes too, as in the field.
+        func textViewDidChangeSelection(_ notification: Notification) {
+            guard let view = notification.object as? MessageTextView, NSApp.currentEvent?.type == .keyDown else { return }
+            view.followCaret()
+        }
     }
 }
 
@@ -271,12 +278,20 @@ final class FieldScrollView: NSScrollView {
         super.viewDidMoveToWindow()
         around.forEach(NotificationCenter.default.removeObserver)
         around = []
-        // What scrolls around it, and what that holds, laid out at another size.
         guard window != nil, let outer = enclosingScrollView else { return }
+        let center = NotificationCenter.default
+        // What scrolls around it, and what that holds, laid out at another size.
         around = [outer.contentView, outer.documentView].compactMap { $0 }.map { view in
             view.postsFrameChangedNotifications = true
-            return NotificationCenter.default.addObserver(forName: NSView.frameDidChangeNotification, object: view, queue: nil) { [weak self] _ in
+            return center.addObserver(forName: NSView.frameDidChangeNotification, object: view, queue: nil) { [weak self] _ in
                 MainActor.assumeIsolated { self?.revealCaret() }
+            }
+        }
+        // Scrolled by hand, with the trackpad or a scroller, here or in what's around it: the
+        // caret is left where it is until you type again.
+        around += [self, outer].map { scroll in
+            center.addObserver(forName: NSScrollView.willStartLiveScrollNotification, object: scroll, queue: nil) { [weak self] _ in
+                MainActor.assumeIsolated { (self?.documentView as? MessageTextView)?.followsCaret = false }
             }
         }
     }
@@ -328,7 +343,8 @@ final class MessageTextView: PointerAwareTextView {
     private var revealsCaret = false
 
     /// After a change to the text: the line with the caret in view, now and as the field grows to
-    /// fit it.
+    /// fit it. Now too, not only before it's drawn: a field scrolled wholly out of the list's view
+    /// isn't drawn.
     func followCaret() {
         followsCaret = true
         showCaret()

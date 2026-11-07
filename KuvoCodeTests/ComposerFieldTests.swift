@@ -296,8 +296,9 @@ extension ComposerFieldTests {
 
     /// A long answer to a quote, where the quote and its answer are taller than the list of
     /// quotes shows: the line you're writing stays in view as each Return starts another, at the
-    /// end and in the middle, with nothing under the list's fade (#203). The window lays itself
-    /// out and draws after each key, as it does on screen.
+    /// end and in the middle, with nothing under the list's fade (#203). Scrolled back up with the
+    /// trackpad to read, the list stays there as it's laid out again, until you type. The window
+    /// lays itself out and draws after each key, as it does on screen.
     @Test(arguments: LongAnswer.allCases) func theLineYouWriteStaysInView(_ setup: LongAnswer) async throws {
         defer { done() }
         if setup != .underOtherAnswers { look.size = 18 }
@@ -330,7 +331,7 @@ extension ComposerFieldTests {
                                                          context: nil, characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36))
         for line in 1...16 {
             type("Line \(line), long enough that it wraps once it has gone on for a while like this", in: answer)
-            answer.keyDown(with: shiftReturn)
+            window.sendEvent(shiftReturn)
             await laidOut()
             if let hidden = hidden(caretOf: answer) { Issue.record("After line \(line), the caret's line is hidden: \(hidden)") }
         }
@@ -340,6 +341,39 @@ extension ComposerFieldTests {
         type(" again", in: answer)
         await laidOut()
         if let hidden = hidden(caretOf: answer) { Issue.record("In the middle, the caret's line is hidden: \(hidden)") }
+
+        // Back to the end, then up the list to read the quotes: laid out again (the text a size
+        // larger), it stays where you scrolled it.
+        answer.setSelectedRange(NSRange(location: (answer.string as NSString).length, length: 0))
+        type("The end.", in: answer)
+        await laidOut()
+        let list = try #require(answer.enclosingScrollView?.enclosingScrollView)
+        try await trackpadToTop(list)
+        #expect(hidden(caretOf: answer) != nil, "scrolled up, past the line being written")
+        look.size += 1
+        await laidOut()
+        #expect(hidden(caretOf: answer) != nil, "the list stays where you scrolled it")
+        type(" Really.", in: answer)
+        await laidOut()
+        if let hidden = hidden(caretOf: answer) { Issue.record("Typing again, the caret's line is hidden: \(hidden)") }
+    }
+
+    /// Scrolled to its top with a trackpad: the gesture's events to the scroll view itself (as
+    /// `StepsStayOpenTests` sends them: the window finds nothing under events off screen), and
+    /// the list moved as they move it (SwiftUI's scroll view moves on frames this window, off
+    /// screen, doesn't draw).
+    private func trackpadToTop(_ scroll: NSScrollView) async throws {
+        for phase in [CGScrollPhase.began, .changed, .ended] {
+            let event = try #require(CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: phase == .changed ? 2_000 : 0, wheel2: 0, wheel3: 0))
+            event.setIntegerValueField(.scrollWheelEventScrollPhase, value: Int64(phase.rawValue))
+            event.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+            scroll.scrollWheel(with: try #require(NSEvent(cgEvent: event)))
+            if phase == .changed {
+                scroll.contentView.scroll(to: .zero)
+                scroll.reflectScrolledClipView(scroll.contentView)
+            }
+            await laidOut()
+        }
     }
 
     /// The window as SwiftUI and AppKit lay it out and draw it, after what was typed.
@@ -368,7 +402,7 @@ extension ComposerFieldTests {
                 var shown = clip.convert(clip.bounds, to: nil)
                 // The list of quotes fades where there's more past an edge: the line stays clear of it.
                 if clip.enclosingScrollView !== field.enclosingScrollView, let document = clip.documentView {
-                    let fade: CGFloat = 14
+                    let fade = QuoteList.fade
                     if clip.bounds.minY > document.frame.minY + 1 { shown = shown.divided(atDistance: fade, from: clip.isFlipped ? .maxYEdge : .minYEdge).remainder }
                     if clip.bounds.maxY < document.frame.maxY - 1 { shown = shown.divided(atDistance: fade, from: clip.isFlipped ? .minYEdge : .maxYEdge).remainder }
                 }

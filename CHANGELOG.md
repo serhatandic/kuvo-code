@@ -16,7 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
-- Writing a long answer to a quote, the line you're on stays in view as you type, paste or start a new line, also with other quotes and answers around it. The list of quotes fades only at an edge with more past it, so the last line is no longer covered.
+- When you write a long answer to a quote, the line you're on stays in view as you type, paste or start a new line, also with other quotes and answers around it. The list of quotes fades only at an edge with more past it, so the last line is no longer covered.
 - If this Mac's engine, coding agents or background service couldn't start or keep stopping, Kuvo Code now goes on trying by itself, as your machines do, waiting longer each time up to ten minutes, so a failure in the night doesn't leave them down until you're back. The screen says why and that it's trying, and Try Again and Restart still work at any moment. It doesn't keep trying what can't work, like a program that's missing. If a macOS prompt is holding a start up, it comes back only about hourly, and answering it brings things back without waiting for that.
 - On your iPhone, making a group chat on this Mac says why its coding agents aren't running and whether they're being tried again, rather than that they're starting.
 - An engine that hung while running now starts again by itself, on this Mac and on your machines, and so do coding agents on this Mac. It takes ten minutes of silence with nothing at work, so a task that's working is left alone, and a sleeping Mac or a macOS prompt waiting for you doesn't count.

@@ -750,20 +750,26 @@ struct BottomStack: View {
             // KUVO_DEMO_QUOTE=<text>[||<text>…]: replying to those.
             if let quotes = ProcessInfo.processInfo.environment["KUVO_DEMO_QUOTE"] {
                 model.draftQuotes = quotes.components(separatedBy: "||").map { Drafts.Quote(text: $0) }
-                // KUVO_DEMO_QUOTE_ANSWER=<text>: typed into the first one's answer a word at a
-                // time, as from the keyboard, each "|" a new line.
-                if let answer = ProcessInfo.processInfo.environment["KUVO_DEMO_QUOTE_ANSWER"], let first = model.draftQuotes.first?.text {
-                    model.addQuote(first, how: "demo")
+                // KUVO_DEMO_QUOTE_ANSWER=<text>: the ones before the last answered, and this typed
+                // into the last one's answer a word at a time, each "|" starting a new line.
+                if let answer = ProcessInfo.processInfo.environment["KUVO_DEMO_QUOTE_ANSWER"], var lines = Optional(answer.components(separatedBy: "|")) {
+                    for index in model.draftQuotes.indices.dropLast() { model.draftQuotes[index].response = "Okay, keep it." }
+                    // Its first word, so its field shows, to take the keyboard.
+                    let first = lines[0].split(separator: " ").first.map(String.init) ?? ""
+                    lines[0] = String(lines[0].dropFirst(first.count))
+                    model.draftQuotes[model.draftQuotes.count - 1].response = first
                     Task {
                         try? await Task.sleep(for: .seconds(3))
-                        guard let field = NSApp.windows.lazy.compactMap({ $0.firstResponder as? MessageTextView })
-                            .first(where: { $0.accessibilityIdentifier() == "quote-answer" }) else { return }
-                        for line in answer.components(separatedBy: "|") {
+                        guard let field = NSApp.windows.lazy.flatMap({ Self.fields(in: $0.contentView) }).first(where: { $0.string == first }),
+                              let window = field.window else { return }
+                        window.makeFirstResponder(field)
+                        field.setSelectedRange(NSRange(location: (field.string as NSString).length, length: 0))
+                        for (index, line) in lines.enumerated() {
+                            if index > 0 { field.insertNewline(nil) }
                             for word in line.split(separator: " ") {
-                                field.insertText(word + " ", replacementRange: field.selectedRange())
+                                field.insertText(" " + word, replacementRange: field.selectedRange())
                                 try? await Task.sleep(for: .milliseconds(90))
                             }
-                            field.insertNewline(nil)
                         }
                     }
                 }
@@ -773,6 +779,15 @@ struct BottomStack: View {
         }
         #endif
     }
+
+    #if DEBUG
+    /// The answers' fields in a window, for KUVO_DEMO_QUOTE_ANSWER.
+    private static func fields(in view: NSView?) -> [MessageTextView] {
+        guard let view else { return [] }
+        let own = (view as? MessageTextView).map { $0.accessibilityIdentifier() == "quote-answer" ? [$0] : [] } ?? []
+        return own + view.subviews.flatMap { fields(in: $0) }
+    }
+    #endif
 
     private var offlineMachine: MachineEngine? { SessionView.offlineMachine(of: model, in: app) }
 

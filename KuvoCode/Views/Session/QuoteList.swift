@@ -29,7 +29,7 @@ struct QuoteList: View {
 
     private static let tallest: CGFloat = 260
     /// How far its edges fade, where there's more past them.
-    private static let fade: CGFloat = 14
+    static let fade: CGFloat = 14
 
     /// Your answer to a quote, found by its ID each time: a field on its way out (the quote was
     /// just dropped) reads nothing rather than a place in the list that's gone, which crashed.
