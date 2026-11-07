@@ -23,6 +23,7 @@ import Testing
         for key in ["machines", "machines.waiting", "machines.waitingSince", "projectFolders", "projectSettings", "worktrees"] {
             UserDefaults.standard.removeObject(forKey: key)
         }
+        try? FileManager.default.removeItem(at: Machines.file)
     }
 
     private func ask(_ path: String, method: String = "GET", body: [String: Any]? = nil) async throws -> (status: Int, json: [String: Any]) {

@@ -97,6 +97,7 @@ final class Keeper {
             // Its process, as a machine's keeper records its own.
             FileManager.default.createFile(atPath: KeeperRecord.run.appending(path: "box.pid").path, contents: Data("\(getpid())".utf8), attributes: [.posixPermissions: 0o600])
             log.info("Keeper \(self.version, privacy: .public) (\(self.build, privacy: .public)) started")
+            Machines.moveFromSettings()
             link.hasMachines = { Machines.anySaved }
             box.host.phoneLink = link
             box.host.appAnswers = false
