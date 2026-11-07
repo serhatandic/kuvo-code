@@ -218,7 +218,8 @@ final class KeeperFollower {
         if let engineRecord, !goesNow {
             askedToStart = nil
             engine = .ready(engineRecord)
-        } else if let reason = stoppedReason() {
+        } else if let reason = stoppedReason(), KeeperRecord.read() != nil || !retryAwaited {
+            // (With no keeper left to make it, a next try isn't coming, whatever its reason says.)
             engine = .failed(reason)
         } else if KeeperRecord.read() == nil, isGone() {
             onGone()
@@ -265,6 +266,10 @@ final class KeeperFollower {
     /// Why the engine stopped and isn't started again (`run/engine-stopped`), with what it wrote
     /// last under it (`run/engine-output`), as the window shows its own engine's: one from before
     /// the last restart was asked for is the last engine's.
+    private var retryAwaited: Bool {
+        FileManager.default.fileExists(atPath: KeeperRecord.run.appending(path: "engine.retry").path(percentEncoded: false))
+    }
+
     private func stoppedReason() -> String? {
         let file = KeeperRecord.run.appending(path: "engine-stopped")
         guard let reason = try? String(contentsOf: file, encoding: .utf8), !reason.isEmpty else { return nil }

@@ -41,6 +41,10 @@ import Testing
         case exits
         /// Never says where it listens, and takes no notice of being told to stop.
         case hangs
+        /// Never says where it listens, and goes as soon as it's told.
+        case holds
+        /// Never says where it listens, and when it's told to stop, goes only once `letGoFile` is there.
+        case slowToStop
     }
 
     /// Run as the engine is, or as the bridge is (`bridge`: otherwise it's the engine, and what's
@@ -53,6 +57,8 @@ import Testing
         let fail = switch failure {
         case .exits: "echo 'Error: the database is locked' >&2; exit 3"
         case .hangs: "trap '' TERM; while [ -d '\(folderPath)' ]; do sleep 0.05; done; exit 0"
+        case .holds: "while [ -d '\(folderPath)' ]; do sleep 0.05; done; exit 0"
+        case .slowToStop: "trap '' TERM; while [ ! -e '\(letGoFile)' ]; do sleep 0.05; done; exit 0"
         }
         let script = """
             #!/bin/sh
@@ -71,6 +77,15 @@ import Testing
     }
 
     private func letItStart() { try? FileManager.default.removeItem(atPath: failsFile) }
+
+    var letGoFile: String { folder.appending(path: "let-go").path(percentEncoded: false) }
+
+    /// The stand-ins started so far, by their process numbers.
+    private var started: [Int32] { ((try? FileManager.default.contentsOfDirectory(atPath: startsFolder)) ?? []).compactMap { Int32($0) } }
+
+    private func isGone(_ process: Int32) async throws {
+        while kill(process, 0) == 0 { try await Task.sleep(for: .milliseconds(20)) }
+    }
 
     /// Waits as a test says: each wait asked for is told to `asked`, and goes on once the test lets it.
     @MainActor final class TestClock {
@@ -197,6 +212,7 @@ import Testing
         let keeper = MacBoxRunner(box: BoxProcess(), agents: OutsideAgents(), host: HostInterface())
         keeper.onEngine = { _ in TestPulse.beat() }
         keeper.startTimeout = .milliseconds(300)
+        keeper.systemAsking = { false }
         let clock = TestClock()
         keeper.retryClock = clock.wait
         defer {
@@ -207,9 +223,135 @@ import Testing
         await keeper.start()
         try await until { clock.isWaiting }
         #expect(engineReason(keeper.engine)?.contains(StartRetries.note) == true, "\(keeper.engine)")
+        keeper.startTimeout = .seconds(60)
         letItStart()
         clock.goOn()
         try await until { if case .ready = keeper.engine { true } else { false } }
+    }
+
+    /// Held up with macOS asking you something: it waits on your answer, and another try would only
+    /// take that away and ask again. Said as it is, not tried again. The box's watch holds off too.
+    @Test func anEngineHeldUpWhileMacOSAsksIsNotTriedAgain() async throws {
+        let binary = try standIn(.hangs)
+        setenv("KUVO_OPENCODE_BINARY", binary.path(percentEncoded: false), 1)
+        let keeper = MacBoxRunner(box: BoxProcess(), agents: OutsideAgents(), host: HostInterface())
+        keeper.onEngine = { _ in TestPulse.beat() }
+        keeper.startTimeout = .milliseconds(300)
+        keeper.systemAsking = { true }
+        let clock = TestClock()
+        keeper.retryClock = clock.wait
+        let asking = BoxProcess.run.appending(path: ".system-asking").path(percentEncoded: false)
+        defer {
+            clock.goOn()
+            keeper.stop()
+            cleanUp()
+        }
+        await keeper.start()
+        #expect(engineReason(keeper.engine)?.contains(StartRetries.note) == false, "\(keeper.engine)")
+        #expect(clock.asked.isEmpty)
+        #expect(FileManager.default.fileExists(atPath: asking), "the box's watch is told")
+        keeper.stop()
+        #expect(!FileManager.default.fileExists(atPath: asking), "and nothing's left saying so")
+    }
+
+    /// Restart while a start is held up: it starts now, and the one held up is gone.
+    @Test func aRestartDuringAHeldUpEngineStartStartsItAtOnce() async throws {
+        let binary = try standIn(.holds)
+        setenv("KUVO_OPENCODE_BINARY", binary.path(percentEncoded: false), 1)
+        let keeper = MacBoxRunner(box: BoxProcess(), agents: OutsideAgents(), host: HostInterface())
+        keeper.onEngine = { _ in TestPulse.beat() }
+        defer {
+            keeper.stop()
+            cleanUp()
+        }
+        let first = Task { await keeper.start() }
+        try await until { starts == 1 }
+        let heldUp = try #require(started.first)
+        letItStart()
+        keeper.restartEngine()
+        try await until { if case .ready = keeper.engine { true } else { false } }
+        #expect(starts == 2)
+        try await isGone(heldUp)
+        await first.value
+        if case .ready = keeper.engine {} else { Issue.record("it took it with it: \(keeper.engine)") }
+    }
+
+    /// Stopped while a start is held up: it's gone at once, and nothing starts later.
+    @Test func aStopDuringAHeldUpEngineStartStaysStopped() async throws {
+        let binary = try standIn(.holds)
+        setenv("KUVO_OPENCODE_BINARY", binary.path(percentEncoded: false), 1)
+        let keeper = MacBoxRunner(box: BoxProcess(), agents: OutsideAgents(), host: HostInterface())
+        keeper.onEngine = { _ in TestPulse.beat() }
+        let clock = TestClock()
+        keeper.retryClock = clock.wait
+        defer {
+            keeper.stop()
+            cleanUp()
+        }
+        let first = Task { await keeper.start() }
+        try await until { starts == 1 }
+        let heldUp = try #require(started.first)
+        keeper.stopEngine()
+        try await isGone(heldUp)
+        await first.value
+        #expect(clock.asked.isEmpty, "nor is it tried again")
+        #expect(keeper.server == nil)
+        #expect(starts == 1)
+    }
+
+    /// As on a real Mac, where the keeper runs the box and the app follows it: the window says why and
+    /// that it's trying again, and connects by itself once the keeper has it up.
+    @Test func theWindowFollowingTheKeeperSaysItsTryingAndComesBackByItself() async throws {
+        let binary = try standIn(box: try #require(TestBox.node, "Node runs this Mac's box in the tests"))
+        setenv("KUVO_OPENCODE_BINARY", binary.path(percentEncoded: false), 1)
+        setenv("KUVO_KEEPER", "follow", 1)
+        let keeper = MacBoxRunner(box: BoxProcess(), agents: OutsideAgents(), host: HostInterface())
+        keeper.onEngine = { _ in TestPulse.beat() }
+        let clock = TestClock()
+        keeper.retryClock = clock.wait
+        let app = AppModel()
+        defer {
+            clock.goOn()
+            app.stop()
+            app.stopBox()
+            keeper.stop()
+            KeeperRecord.forget(pid: getpid())
+            unsetenv("KUVO_KEEPER")
+            cleanUp()
+        }
+        engine.list([StubEngine.session("ses_follow", title: "Followed", directory: "/tmp/kuvo-tests-retry")])
+        try KeeperRecord(pid: getpid(), version: AppInfo.version, build: AppInfo.build, url: "http://127.0.0.1:9", password: "x", started: 0).write()
+        await keeper.start()
+        try await until { clock.isWaiting }
+        await app.start()
+        guard case .failed(let shown) = app.engine else {
+            Issue.record("the window says \(app.engine)")
+            return
+        }
+        #expect(shown.contains(StartRetries.note), "\(shown)")
+        letItStart()
+        clock.goOn()
+        try await until { app.engine == .ready && app.workspace.session("ses_follow") != nil }
+    }
+
+    /// Tried again by itself and downloading the engine: the window shows that, not the failure
+    /// before it with a Try Again that would download beside it. Failing again, it says so.
+    @Test func aRetryThatDownloadsShowsItsProgress() async throws {
+        let binary = try standIn()
+        setenv("KUVO_OPENCODE_BINARY", binary.path(percentEncoded: false), 1)
+        let app = AppModel()
+        let clock = TestClock()
+        app.ownBox.retryClock = clock.wait
+        defer {
+            clock.goOn()
+            app.stop()
+            cleanUp()
+        }
+        await app.start()
+        app.ownBox.onEngine(.downloading(progress: 0.5))
+        #expect(app.engine == .downloading(progress: 0.5))
+        app.ownBox.onEngine(.failed("It still can't."))
+        #expect(app.engine == .failed("It still can't."))
     }
 
     /// A program that isn't there fails the same way each time: said at once, never tried again.
@@ -308,11 +450,63 @@ import Testing
         let said = try await ask()
         #expect(said.contains("This Mac's engine isn't running. The engine stopped (exit code 3). \(StartRetries.note)"), "\(said)")
         #expect(!said.contains("Try Again in Kuvo Code"), "\(said)")
+
+        // Its tries run out: only why, and what starts it.
+        clock.goOn()
+        for tries in 2...StartRetries.waits.count {
+            try await until { clock.asked.count == tries && clock.isWaiting }
+            clock.goOn()
+        }
+        try await until { engineReason(keeper.engine)?.contains(StartRetries.note) == false }
+        let after = try await ask()
+        #expect(after.contains("This Mac's engine isn't running. The engine stopped (exit code 3). Try Again in Kuvo Code on the Mac starts it."), "\(after)")
+        #expect(!after.contains(StartRetries.note), "\(after)")
+    }
+
+    /// You stop the engine while a try waits: a phone isn't told it's being tried.
+    @Test func aPhoneIsntToldItsTriedOnceItsStopped() async throws {
+        let binary = try standIn()
+        setenv("KUVO_OPENCODE_BINARY", binary.path(percentEncoded: false), 1)
+        let keeper = MacBoxRunner(box: BoxProcess(), agents: OutsideAgents(), host: HostInterface())
+        keeper.onEngine = { _ in TestPulse.beat() }
+        let clock = TestClock()
+        keeper.retryClock = clock.wait
+        defer {
+            clock.goOn()
+            keeper.stop()
+            cleanUp()
+        }
+        await keeper.start()
+        try await until { clock.isWaiting }
+        keeper.stopEngine()
+        for name in ["engine.retry", "engine-stopped"] {
+            #expect(!FileManager.default.fileExists(atPath: BoxProcess.run.appending(path: name).path(percentEncoded: false)), "\(name)")
+        }
+    }
+
+    /// What another try can change, and what it can't.
+    @Test func whatATryCanHelp() {
+        #expect(StartRetries.canHelp(ServerProcessError.exited(status: 1, output: "")))
+        #expect(StartRetries.canHelp(ServerProcessError.timedOut))
+        #expect(!StartRetries.canHelp(ServerProcessError.timedOut, systemAsking: true))
+        #expect(StartRetries.canHelp(ServerProcessError.exited(status: 1, output: ""), systemAsking: true))
+        #expect(StartRetries.canHelp(URLError(.notConnectedToInternet)))
+        #expect(!StartRetries.canHelp(URLError(.cancelled)))
+        #expect(!StartRetries.canHelp(URLError(.secureConnectionFailed)))
+        #expect(StartRetries.canHelp(EngineInstallError.serverAnswered(503)))
+        #expect(!StartRetries.canHelp(EngineInstallError.serverAnswered(404)))
+        #expect(!StartRetries.canHelp(CocoaError(.fileNoSuchFile)))
+    }
+
+    /// Its note is a sentence of its own, before what the server wrote.
+    @Test func whatItSaysWhileTrying() {
+        #expect(StartRetries.noted("It stopped.\n\nwhat it wrote") == "It stopped. \(StartRetries.note)\n\nwhat it wrote")
+        #expect(StartRetries.noted("service unavailable") == "service unavailable. \(StartRetries.note)")
     }
 
     // MARK: The bridge
 
-    private func bridge(_: URL, clock: TestClock) -> OutsideAgents {
+    private func bridge(clock: TestClock) -> OutsideAgents {
         let agents = OutsideAgents()
         agents.home = folder.appending(path: "agents")
         agents.retryClock = clock.wait
@@ -324,7 +518,7 @@ import Testing
     @Test func aBridgeThatFailsToStartIsTriedAgain() async throws {
         let binary = try standIn(bridge: true)
         let clock = TestClock()
-        let agents = bridge(binary, clock: clock)
+        let agents = bridge(clock: clock)
         defer {
             clock.goOn()
             agents.stop()
@@ -332,6 +526,7 @@ import Testing
         }
         await agents.start(engine: binary, environment: bridgeArguments)
         #expect(agents.failure?.contains(StartRetries.note) == true, "\(agents.failure ?? "")")
+        #expect(agents.failure?.contains("engine") == false, "the engine may be fine: \(agents.failure ?? "")")
         try await until { clock.isWaiting }
         clock.goOn()
         try await until { clock.asked.count == 2 }
@@ -348,7 +543,7 @@ import Testing
     @Test func aBridgeThatNeverStartsIsGivenUpOnAndRestartStillWorks() async throws {
         let binary = try standIn(bridge: true)
         let clock = TestClock()
-        let agents = bridge(binary, clock: clock)
+        let agents = bridge(clock: clock)
         defer {
             clock.goOn()
             agents.stop()
@@ -375,7 +570,7 @@ import Testing
     @Test func restartAndStopTakeEffectWhateverTheBridgeIsDoingByItself() async throws {
         let binary = try standIn(.hangs, bridge: true)
         let clock = TestClock()
-        let agents = bridge(binary, clock: clock)
+        let agents = bridge(clock: clock)
         defer {
             clock.goOn()
             agents.stop()
@@ -401,14 +596,85 @@ import Testing
         await again.value
         #expect(agents.api == nil, "nothing came up after the stop")
         #expect(clock.asked.isEmpty, "nor is it tried again")
-        #expect(!agents.isStarting)
+    }
+
+    /// One held up as it starts is slow to go after a Restart: its going, long after the new one came
+    /// up, says nothing of that one, which carries on untouched.
+    @Test func aHeldUpBridgeGoingLaterLeavesTheNewOneAlone() async throws {
+        let binary = try standIn(.slowToStop, bridge: true)
+        let clock = TestClock()
+        let agents = bridge(clock: clock)
+        defer {
+            clock.goOn()
+            agents.stop()
+            cleanUp()
+        }
+        let heldUp = Task { await agents.start(engine: binary, environment: bridgeArguments) }
+        try await until { starts == 1 }
+        let old = try #require(started.first)
+        letItStart()
+        await agents.startAgain()
+        let running = agents.processID
+        #expect(running != nil)
+        await heldUp.value
+
+        FileManager.default.createFile(atPath: letGoFile, contents: nil)
+        try await isGone(old)
+        // (Its going is told on the main thread after a moment: too soon here only ever passes.)
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(agents.processID == running, "the new one was stopped for it")
+        #expect(starts == 2)
+    }
+
+    /// The window's Try Again and Settings' Restart bring back a bridge given up on too, not only
+    /// the engine: many have no other Restart for it.
+    @Test func restartingTheEngineBringsBackABridgeGivenUpOn() async throws {
+        let binary = try standIn(bridge: true)
+        setenv("KUVO_OPENCODE_BINARY", binary.path(percentEncoded: false), 1)
+        let clock = TestClock()
+        let agents = bridge(clock: clock)
+        let keeper = MacBoxRunner(box: BoxProcess(), agents: agents, host: HostInterface())
+        keeper.onEngine = { _ in TestPulse.beat() }
+        defer {
+            clock.goOn()
+            keeper.stop()
+            cleanUp()
+        }
+        await agents.start(engine: binary, environment: bridgeArguments)
+        for tries in 1...StartRetries.waits.count {
+            try await until { clock.asked.count == tries && clock.isWaiting }
+            clock.goOn()
+            try await until { starts == tries + 1 }
+        }
+        try await until { agents.failure?.contains(StartRetries.note) == false }
+        letItStart()
+        keeper.restartEngine()
+        try await until { agents.api != nil }
+        #expect(agents.failure == nil)
+    }
+
+    /// Held up with macOS asking you something: said as it is, not tried again.
+    @Test func aBridgeHeldUpWhileMacOSAsksIsNotTriedAgain() async throws {
+        let binary = try standIn(.holds, bridge: true)
+        let clock = TestClock()
+        let agents = bridge(clock: clock)
+        agents.startTimeout = .milliseconds(300)
+        agents.systemAsking = { true }
+        defer {
+            clock.goOn()
+            agents.stop()
+            cleanUp()
+        }
+        await agents.start(engine: binary, environment: bridgeArguments)
+        #expect(agents.failure == "It took too long to start.", "\(agents.failure ?? "")")
+        #expect(clock.asked.isEmpty)
     }
 
     /// Stopped while a try waits its turn: it stays stopped.
     @Test func aStoppedBridgeIsNotTriedAgain() async throws {
         let binary = try standIn(bridge: true)
         let clock = TestClock()
-        let agents = bridge(binary, clock: clock)
+        let agents = bridge(clock: clock)
         defer {
             clock.goOn()
             agents.stop()
@@ -420,7 +686,6 @@ import Testing
         letItStart()
         clock.goOn()
         try await until { clock.passed == 1 }
-        #expect(!agents.isStarting)
         #expect(starts == 1)
         #expect(agents.api == nil)
     }

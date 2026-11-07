@@ -347,6 +347,19 @@ final class BoxProcess {
         }
     }
 
+    /// macOS is asking you something, or isn't any more: a server reading a folder may be waiting
+    /// on your answer, so the box's watch for hung servers holds off (`run/.system-asking`).
+    static func systemAsking(_ asking: Bool) {
+        let file = run.appending(path: ".system-asking")
+        guard asking != FileManager.default.fileExists(atPath: file.path(percentEncoded: false)) else { return }
+        if asking {
+            try? FileManager.default.createDirectory(at: run, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            FileManager.default.createFile(atPath: file.path(percentEncoded: false), contents: nil)
+        } else {
+            try? FileManager.default.removeItem(at: file)
+        }
+    }
+
     /// The engine isn't given up on any more (it's up, or starting again): why it was, and what it
     /// wrote then, gone.
     static func forgetEngineStopped() {

@@ -53,7 +53,8 @@ final class OutsideAgents {
     /// The start under way: a second start meanwhile (the engine restarted) waits for this one,
     /// and one stopped meanwhile (`stop`) leaves nothing running when it comes back.
     @ObservationIgnored private var startInFlight: UUID?
-    var isStarting: Bool { startInFlight != nil }
+    /// Which start the server running now came from: one before it, slow to go, says nothing of it.
+    @ObservationIgnored private var runningStart: UUID?
     /// Its process starting: stopping it ends that at once.
     @ObservationIgnored private var starting: Task<ServerProcess, Error>?
     /// One whose start failed, tried again by itself until these run out (`StartRetries`).
@@ -64,6 +65,8 @@ final class OutsideAgents {
     @ObservationIgnored var startTimeout: Duration = .seconds(60)
     /// How it waits between tries (a test's moves on as it says).
     @ObservationIgnored var retryClock: (Int) async -> Void = StartRetries.wait
+    /// Whether macOS is asking you something now (a test's says).
+    @ObservationIgnored var systemAsking: () -> Bool = { AppModel.systemPromptShowing }
     @ObservationIgnored private var eventTask: Task<Void, Never>?
     @ObservationIgnored private var restarts: [Date] = []
     @ObservationIgnored private var engine: URL?
@@ -223,7 +226,7 @@ final class OutsideAgents {
                     environment: environmentNow,
                     directory: directory,
                     timeout: timeout,
-                    onExit: { [weak self] status in Task { @MainActor in self?.exited(status: status) } }
+                    onExit: { [weak self] status in Task { @MainActor in self?.exited(status: status, of: start) } }
                 )
             }
             self.starting = starting
@@ -234,9 +237,10 @@ final class OutsideAgents {
                 return
             }
             self.server = server
+            runningStart = start
             // Stopped already, its exit heard before this: as `exited` would have it then.
             if let status = server.exitStatus {
-                exited(status: status)
+                exited(status: status, of: start)
                 return
             }
             let api = OpenCodeAPI(endpoint: server.endpoint)
@@ -253,15 +257,15 @@ final class OutsideAgents {
         } catch {
             guard startInFlight == start else { return }
             log.error("The agents bridge didn't start: \(error.localizedDescription, privacy: .public)")
-            guard StartRetries.canHelp(error), let wait = retries.next() else {
-                failure = error.localizedDescription
+            guard StartRetries.canHelp(error, systemAsking: systemAsking()), let wait = retries.next() else {
+                failure = Self.reason(error)
                 onStopped?()
                 return
             }
-            failure = StartRetries.noted(error.localizedDescription)
+            failure = StartRetries.noted(Self.reason(error))
             onStopped?()
             log.info("Trying the agents bridge again in \(wait) seconds")
-            let environment = self.environment
+            retry?.cancel()
             retry = Task { [weak self, retryClock] in
                 await retryClock(wait)
                 guard let self, !Task.isCancelled else { return }
@@ -298,6 +302,21 @@ final class OutsideAgents {
         onStopped?()
     }
     #endif
+
+    /// Why it didn't start, in the words of what's shown (ServerProcess's own say "the engine",
+    /// which may be fine, and this comes after "The coding agents couldn't start").
+    private static func reason(_ error: any Error) -> String {
+        switch error {
+        case ServerProcessError.exited(let status, let output):
+            "It stopped (exit code \(status)).\(output.isEmpty ? "" : "\n\n\(output)")"
+        case ServerProcessError.unreadableHandshake(let line):
+            "It said something unexpected when starting: \(line)"
+        case ServerProcessError.timedOut:
+            "It took too long to start."
+        default:
+            error.localizedDescription
+        }
+    }
 
     /// A start under way ended, and the next try called off.
     private func callOffStart() {
@@ -428,8 +447,8 @@ final class OutsideAgents {
     }
 
     /// It stopped by itself: started again, unless it keeps stopping.
-    private func exited(status: Int32) {
-        guard server != nil else { return }
+    private func exited(status: Int32, of start: UUID) {
+        guard server != nil, start == runningStart else { return }
         let output = server?.recentOutput.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         log.error("The agents bridge stopped (\(status)): \(output, privacy: .public)")
         stop()

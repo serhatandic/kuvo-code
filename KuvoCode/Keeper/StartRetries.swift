@@ -3,9 +3,9 @@ import OpenCodeKit
 
 /// How a server of this Mac's box that couldn't start (the engine, the coding agents' bridge) is
 /// tried again by itself: with the waits a machine's keeper has between starts that keep failing
-/// (`bin/kuvo-start`), and then no more, for you to see why. Only what another try can help: a
-/// program that isn't there fails the same way each time. What you ask for (Try Again, Restart)
-/// starts it at once, whatever this has left.
+/// (`bin/kuvo-start`, which goes on at the longest for good), and here, after those, no more, for
+/// you to see why. Only what another try can help: a program that isn't there fails the same way
+/// each time. What you ask for (Try Again, Restart) starts it at once, whatever this has left.
 struct StartRetries {
     /// How long to wait, in seconds, before each try after the first.
     static let waits = [15, 30, 60, 120, 300, 600]
@@ -27,21 +27,24 @@ struct StartRetries {
     /// Why it failed, saying it's tried again: in its first paragraph, which is what a client is
     /// told (`BoxProcess.engineGaveUp`), before what the server wrote.
     static func noted(_ reason: String) -> String {
-        guard let end = reason.range(of: "\n\n") else { return reason + " " + note }
-        return reason[..<end.lowerBound] + " " + note + reason[end.lowerBound...]
+        let end = reason.range(of: "\n\n")?.lowerBound ?? reason.endIndex
+        let why = reason[..<end]
+        // (A server's own words may have no stop of their own.)
+        let stop = why.last.map { ".!?:".contains($0) } == false ? "." : ""
+        return why + stop + " " + note + reason[end...]
     }
 
     /// Whether another try could go differently. One that started and stopped, took too long, or
     /// couldn't be reached can (the Mac was busy, its database was held, the network was down);
     /// one that can't be run, a download that was refused or damaged, or a folder that can't be
-    /// made fails the same way again.
-    static func canHelp(_ error: any Error) -> Bool {
+    /// made fails the same way again. Nor when it took too long with macOS asking you something
+    /// (`systemAsking`): it waited on your answer, and another try would only ask again.
+    static func canHelp(_ error: any Error, systemAsking: Bool = false) -> Bool {
         switch error {
-        case ServerProcessError.exited(let status, _):
-            // The system's words for a program it can't run, or can't find.
-            return status != 126 && status != 127
-        case ServerProcessError.timedOut:
+        case ServerProcessError.exited, ServerProcessError.unreadableHandshake:
             return true
+        case ServerProcessError.timedOut:
+            return !systemAsking
         case EngineInstallError.serverAnswered(let status):
             return status >= 500 || status == 408 || status == 429
         case is ServerError:

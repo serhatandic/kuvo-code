@@ -58,13 +58,17 @@ final class MacBoxRunner {
     private var retries = StartRetries()
     /// The next try, waiting its turn: stopping the engine calls it off.
     private var retry: Task<Void, Never>?
-    /// The engine's process starting: stopping the engine ends it at once, so there are never two
-    /// on the same data while a new start goes on.
+    /// The engine's process starting: stopping the engine tells it to go at once, rather than
+    /// leaving it beside a new start until its time is up.
     private var starting: Task<ServerProcess, Error>?
     /// How long it's given to say where it listens (a test's is short).
     var startTimeout: Duration = .seconds(60)
     /// How it waits between tries (a test's moves on as it says).
     var retryClock: (Int) async -> Void = StartRetries.wait
+    /// Whether macOS is asking you something now (a test's says).
+    var systemAsking: () -> Bool = { AppModel.systemPromptShowing }
+    /// Tells the box's watch of its servers while macOS asks you something (`BoxProcess.systemAsking`).
+    private var askingWatch: Task<Void, Never>?
 
     init(box: BoxProcess, agents: OutsideAgents, host: HostInterface) {
         self.box = box
@@ -102,6 +106,7 @@ final class MacBoxRunner {
         engine = .starting
         // Why one before stopped (a keeper killed before it could take it away) isn't this one's.
         BoxProcess.forgetEngineStopped()
+        watchSystemAsking()
         do {
             async let environment = ShellEnvironment.load()
             let binary: URL
@@ -221,7 +226,7 @@ final class MacBoxRunner {
             // One that started and stopped says so as the server does, whatever waiting on it said.
             let cause: any Error = if let status = server?.exitStatus { ServerProcessError.exited(status: status, output: "") } else { error }
             stopEngine()
-            guard StartRetries.canHelp(cause), let wait = retries.next() else {
+            guard StartRetries.canHelp(cause, systemAsking: systemAsking()), let wait = retries.next() else {
                 gaveUp(reason)
                 return
             }
@@ -230,7 +235,7 @@ final class MacBoxRunner {
             let again = self.launch
             retry = Task { [weak self, retryClock] in
                 await retryClock(wait)
-                guard let self, !Task.isCancelled, again == self.launch else { return }
+                guard let self, again == self.launch else { return }
                 // (Past its wait: stopping the engine ends this start by its `launch`, not by this.)
                 self.retry = nil
                 await self.start()
@@ -245,12 +250,16 @@ final class MacBoxRunner {
         retries.reset()
         stopEngine()
         engine = .starting
+        // The bridge given up on goes with it: for many, this is the only Restart there is.
+        if agents.failure != nil { Task { await agents.startAgain() } }
         Task { await start() }
     }
 
     /// The engine stopped (a start still on its way gives up); the box and the bridge stay up.
     func stopEngine() {
         launch = UUID()
+        // No longer tried again, so a phone isn't told it is.
+        if retry != nil { BoxProcess.forgetEngineStopped() }
         retry?.cancel()
         retry = nil
         starting?.cancel()
@@ -266,6 +275,9 @@ final class MacBoxRunner {
     /// the same data, and the engine always gets to close its database itself.
     func stop() {
         let running = [server?.processID, agents.processID, box.processID].compactMap(\.self)
+        askingWatch?.cancel()
+        askingWatch = nil
+        BoxProcess.systemAsking(false)
         stopEngine()
         agents.stop()
         box.stop()
@@ -303,6 +315,17 @@ final class MacBoxRunner {
             if let active = try? await OpenCodeAPI(endpoint: endpoint).activeSessions(), !active.isEmpty { return true }
         }
         return false
+    }
+
+    /// Looks for as long as this runs: only the Mac's own side can see macOS asking.
+    private func watchSystemAsking() {
+        guard askingWatch == nil else { return }
+        askingWatch = Task { [weak self] in
+            while !Task.isCancelled, let self {
+                BoxProcess.systemAsking(self.systemAsking())
+                try? await Task.sleep(for: .seconds(10))
+            }
+        }
     }
 
     private func gaveUp(_ reason: String, retryingAfter wait: Int? = nil) {

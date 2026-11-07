@@ -730,10 +730,20 @@ final class AppModel {
             Task { await start() }
         case .starting, .downloading:
             // Stopped while it ran: the window says it's starting again, and connects once it has.
-            guard engine == .ready else { return }
-            engineStoppedWhileRunning = true
-            disconnect()
-            engine = .starting
+            if engine == .ready {
+                engineStoppedWhileRunning = true
+                disconnect()
+                engine = .starting
+                return
+            }
+            // Tried again by itself, downloading the engine: its progress rather than the failure
+            // before it (and Try Again, which would download beside it).
+            guard starting == nil else { return }
+            switch (state, engine) {
+            case (.downloading(let progress), .failed), (.downloading(let progress), .downloading): engine = .downloading(progress: progress)
+            case (.starting, .downloading): engine = .starting
+            default: break
+            }
         case .failed(let reason):
             // A start under way hears it itself.
             guard starting == nil else { return }
