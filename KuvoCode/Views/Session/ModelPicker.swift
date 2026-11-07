@@ -180,6 +180,11 @@ struct ModelPicker: View {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 1) { listContent }
+                            // A stack of its own for each list: a model is a row of several (its
+                            // account's page, Starred, a search), each row known by the model, and
+                            // a lazy stack shown another list kept drawing the row it had for that
+                            // model there ("Opus 5.5 ⌘1", without its account, in Starred).
+                            .id(shownList)
                             .padding(6)
                             .onGeometryChange(for: CGFloat.self, of: \.size.height) { contentHeight = $0 }
                     }
@@ -480,6 +485,8 @@ struct ModelPicker: View {
         } label: {
             HStack(spacing: 9) {
                 ProviderLogo(id: model.makerLogoID, size: 15)
+                    // Starred or found, beside the agent's own: whose it is at a glance, as the rail marks it.
+                    .overlay(alignment: .bottomTrailing) { if section == nil { accountBadge(model.providerID) } }
                     .opacity(showsMark ? 1 : 0)
                     .frame(width: 18)
                     .accessibilityHidden(true)
@@ -566,17 +573,7 @@ struct ModelPicker: View {
                 ForEach(providers) { provider in
                     railButton(provider.id, name: provider.name, dimmed: provider.unavailable != nil) {
                         ProviderLogo(id: provider.logo, size: 17)
-                            .overlay(alignment: .bottomTrailing) {
-                                // An account you added: marked apart from the agent's own.
-                                if let label = accountInitial(provider) {
-                                    Text(label)
-                                        .font(.system(size: 7, weight: .bold))
-                                        .foregroundStyle(.background)
-                                        .frame(width: 11, height: 11)
-                                        .background(.secondary, in: .circle)
-                                        .offset(x: 5, y: 5)
-                                }
-                            }
+                            .overlay(alignment: .bottomTrailing) { accountBadge(provider.id) }
                     }
                 }
             }
@@ -609,11 +606,18 @@ struct ModelPicker: View {
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
-    /// The first letter of an added account's name, for its mark in the rail.
-    private func accountInitial(_ provider: Catalog.PickerProvider) -> String? {
-        guard provider.isAgent, OutsideAgents.account(provider.id) != nil else { return nil }
-        let label = provider.name.components(separatedBy: " · ").last ?? ""
-        return label.first.map { String($0).uppercased() } ?? "+"
+    /// An account you added, marked apart from the agent's own: the first letter of its name, on
+    /// its mark in the rail and on its models' in a list of every account's.
+    @ViewBuilder private func accountBadge(_ providerID: String) -> some View {
+        if OutsideAgents.account(providerID) != nil {
+            let label = catalog.providerName(providerID).components(separatedBy: " · ").last ?? ""
+            Text(label.first.map { String($0).uppercased() } ?? "+")
+                .font(.system(size: 7, weight: .bold))
+                .foregroundStyle(.background)
+                .frame(width: 11, height: 11)
+                .background(.secondary, in: .circle)
+                .offset(x: 5, y: 5)
+        }
     }
 
     // MARK: Effort
@@ -801,6 +805,9 @@ struct ModelPicker: View {
     private var selectedProvider: Catalog.PickerProvider? {
         providers.first { $0.id == railSelection }
     }
+
+    /// Which list is in view: what was found, or the rail's entry.
+    private var shownList: String { query.isEmpty ? railSelection : "?" }
 
     /// The rows in view, in order: what ⌘1–⌘9 and the arrow keys go through.
     private var visibleRows: [Model] {

@@ -171,6 +171,14 @@ describe("a computer's group chats, as a client reads them", () => {
 })
 
 describe("a computer's group chats, as a client changes them", () => {
+  test("/compact from a phone: the chat says why not, and nobody is told anything", async () => {
+    const before = runner.get(group.id)?.messages.length
+    const asked = await ask("POST", group.id, { text: "/compact" })
+    expect(asked.status).toBe(400)
+    expect(asked.json.message).toBe("A group chat can't be summarized: each bot keeps its own conversation, and starts it over when it grows too long.")
+    expect(runner.get(group.id)?.messages.length).toBe(before)
+  })
+
   test("made as New Group Chat makes one, of bots that live here, its meeting worked out here", async () => {
     expect((await ask("POST", "", { members: ["bot_pal", "bot_lb"] })).json).toEqual({ message: "A group chat needs a name." })
     expect((await ask("POST", "", { name: "Standup", members: ["bot_pal", "bot_pal"] })).json).toEqual({ message: "A group chat needs at least two bots." })

@@ -391,7 +391,7 @@ final class Workspace {
     /// Put away: out of Projects and Recents, still found by searching. Archived here (a
     /// note in the session's metadata), or by an older opencode.
     static func isArchived(_ session: Session) -> Bool {
-        session.time.archived != nil || session.metadata?[archivedKey]?.bool == true
+        AtWork.isArchived(session)
     }
 
     private static let archivedKey = "kuvo.archived"
@@ -2067,12 +2067,29 @@ final class Workspace {
             toldIdle[session.id] = max(idle, told ?? 0)
             guard reconnected, session.isUnread, idle > (told ?? 0) else { continue }
             Task {
-                let reply = await lastReply(of: session.id)
+                let page = try? await api(forSession: session.id)?.messages(session: session.id, limit: 6)
+                guard let news = Self.missedNews(page?.data ?? [], outcome: session.outcome, told: told ?? 0) else { return }
+                let reply = news == .finished ? await lastReply(of: session.id) : nil
                 if let reply { replyPreviews[session.id] = reply }
                 Notifier.shared.notify(session: session.id, title: botName?(session.id) ?? session.title ?? "New Session",
-                                       body: session.outcome == .failed ? "Stopped with an error." : reply ?? "Finished.", replies: true)
+                                       body: news == .couldntSummarize ? "Couldn't summarize the conversation." : news == .stopped ? "Stopped with an error." : reply ?? "Finished.", replies: true)
             }
         }
+    }
+
+    enum MissedNews { case finished, stopped, couldntSummarize }
+
+    /// What's news of a run missed, with its end told up to `told`. A summary it was asked for after
+    /// work already told is no news, unless it failed; work not told yet is, however it was
+    /// summarized since, and says how it went itself (a summary's run says how that did).
+    static func missedNews(_ messages: [Message], outcome: Session.Outcome?, told: Double) -> MissedNews? {
+        let end = messages.lastTurnEnd
+        if let summary = messages.summaryAtEnd, (end?.time.created ?? 0) <= told {
+            return summary.status == "failed" ? .couldntSummarize : nil
+        }
+        // (A run that died without writing an end has only its session's word.)
+        let went = messages.summaryAtEnd == nil ? outcome : end?.outcome ?? outcome
+        return went == .failed ? .stopped : .finished
     }
 
     /// A machine's sessions, when it connects (or reconnects after a gap), in place of what was
@@ -2458,6 +2475,12 @@ final class Workspace {
         }
         return nil
     }
+    /// How a summary asked for (`/compact`, a lead's compact_session) went, if that's what the session did last.
+    private func summaryAtEnd(_ id: String) async -> String? {
+        guard let page = try? await api(forSession: id)?.messages(session: id, limit: 6) else { return nil }
+        return page.data.summaryAtEnd?.status
+    }
+
     /// An agent (in a session, on a machine or this Mac) is asking you for something in its browser.
     @ObservationIgnored var onBrowserAsk: ((_ session: String, _ machine: String?) -> Void)?
     /// A run was refused its model's sign-in (it ran out and couldn't be renewed), or a step on it
@@ -2600,19 +2623,28 @@ final class Workspace {
                     // What it said last, as a chat app's notification shows the message, and a
                     // bot's row.
                     let isBot = botName?(id) != nil
-                    let reply = failed || !(Notifier.isEnabled || isBot) ? nil : await lastReply(of: id)
+                    // Only a summary it was asked for: not news, and its row keeps its last reply.
+                    // One that failed says only that, whichever way its run ended (the engine's says
+                    // it succeeded).
+                    let summary = await summaryAtEnd(id)
+                    let summaryFailed = summary == "failed"
+                    if !failed, summary == "completed" {
+                        if let idle = self.session(id)?.time.idle { toldIdle[id] = max(idle, toldIdle[id] ?? 0) }
+                        return
+                    }
+                    let reply = failed || summaryFailed || !(Notifier.isEnabled || isBot) ? nil : await lastReply(of: id)
                     // Read on another client meanwhile: it's news no more.
                     if let idle = self.session(id)?.time.idle, (readElsewhere[id] ?? 0) >= idle { return }
-                    if isBot { replyPreviews[id] = reply }
+                    if isBot, !summaryFailed { replyPreviews[id] = reply }
                     // Told: a reconnection won't tell it again.
                     if let idle = self.session(id)?.time.idle { toldIdle[id] = max(idle, toldIdle[id] ?? 0) }
                     Notifier.shared.notify(
                         session: id,
                         title: botName?(id) ?? session.title ?? "New Session",
                         subtitle: botName?(id) == nil ? projectName(session.location.directory) : nil,
-                        body: failed ? "Stopped with an error." : reply ?? "Finished.",
+                        body: summaryFailed ? "Couldn't summarize the conversation." : failed ? "Stopped with an error." : reply ?? "Finished.",
                         replies: true,
-                        push: .init(failed ? .failed : isBot ? .report : .finished, machine: sessionMachines[id] ?? RemoteFolder.machine(of: session.location.directory))
+                        push: .init(failed || summaryFailed ? .failed : isBot ? .report : .finished, machine: sessionMachines[id] ?? RemoteFolder.machine(of: session.location.directory))
                     )
                 }
             }
@@ -3224,16 +3256,15 @@ final class Workspace {
         leftRunning(by: id)?.subagents ?? 0
     }
 
-    /// Every session a bot oversees (`kuvo.by`) and that you haven't archived, under another one
-    /// too: what its row in Bots counts ("Overseeing 4 sessions").
-    func overseen(by bot: String) -> [Session] {
-        sessions.filter { WorksFor($0)?.bot == bot && !Self.isArchived($0) }
+    /// The session works, itself, or its box says something it left running still does (a subagent,
+    /// a command in the background): what its row, tab and bot show (`AtWork`, as the phone works it out).
+    func isWorking(_ id: String) -> Bool {
+        AtWork.isWorking(running: running.contains(id), background: leftRunning(by: id))
     }
 
-    /// The session works, itself, or its box says something it left running still does (a subagent,
-    /// a command in the background): what its row, tab and bot show.
-    func isWorking(_ id: String) -> Bool {
-        running.contains(id) || leftRunning(by: id) != nil
+    /// Working, or waiting on you: what a bot's sessions count as at work, in its row and its bar.
+    func isAtWork(_ id: String) -> Bool {
+        isWorking(id) || needsAttention(id)
     }
 
     // MARK: Commands running for agents

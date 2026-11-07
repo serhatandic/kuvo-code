@@ -421,13 +421,9 @@ struct TranscriptView: View {
         }
         // Where the conversation ends for Try Again: a model or mode picked after a failed run
         // leaves it the last, so it goes again with them.
-        let latestEnd = messages.lastIndex { if case .idle = $0 { true } else { false } }
-        let last = messages.lastIndex { message in
-            switch message {
-            case .modelSwitched, .agentSwitched: false
-            default: true
-            }
-        }
+        let latestEnd = messages.lastTurnEndIndex
+        // (While it runs, a summary included, there's nothing to try again yet.)
+        let last = model.transcript.isRunning ? nil : messages.whereItEnds
         func flushSteps(live: Bool) {
             guard !steps.isEmpty else { return }
             if !live, StepsRow.saysTime(steps, detail: stepsDetail) { turn.stepsSayTime = true }

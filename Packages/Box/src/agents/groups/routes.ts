@@ -88,6 +88,8 @@ export async function groupRoutes(runner: GroupRunner | undefined, store: GroupS
   switch (action) {
     case "send": {
       const { text } = await body()
+      // Not a conversation of one: each bot's own starts over when it grows too long.
+      if (typeof text === "string" && text.trim() === "/compact") return error(400, "A group chat can't be summarized: each bot keeps its own conversation, and starts it over when it grows too long.")
       // Who it names with "&" is worked out here, for every client alike: the chat's own bots aren't named again.
       const members = new Set(found.group.members.flatMap((member) => store.bot(member)?.sessionID ?? runner.peers?.bots().find((bot) => bot.id === member)?.session ?? []))
       const named = typeof text === "string" ? namedBlock(text, readDirectory(store.agentsFile), members) : undefined

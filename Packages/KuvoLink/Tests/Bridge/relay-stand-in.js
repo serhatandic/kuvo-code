@@ -98,6 +98,8 @@ export async function relayStandIn({ addressOf }, { changed = () => {} } = {}) {
       if (state.address && devices.get(state.address.toString("hex")) === give) devices.delete(state.address.toString("hex"));
       changed();
     };
+    // (A device's process ending, with no word first: as the real relay sees it, it's gone.)
+    socket.on("end", () => socket.destroy());
     socket.on("close", gone);
     socket.on("error", gone);
   });

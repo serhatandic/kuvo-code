@@ -341,6 +341,9 @@ export function handler(context: Context) {
           }
         }
         switch (b) {
+          case "compact":
+            if (method === "POST") return json({ data: sessions.compact(id) })
+            break
           case "background":
             if (method === "DELETE") {
               await sessions.stopBackground(id)

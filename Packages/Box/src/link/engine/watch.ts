@@ -9,6 +9,7 @@ import { nameDueWorktrees, nameWorktreeBranch, settleNewSession, tidyWorktrees }
 import { finishDeletes } from "../bots/edit";
 import { freshenBot, freshenBots } from "../bots/tell";
 import { ANSWERED, GROUP_NEWS, NEWS, RUN_ENDS, groupNotice, noticeFor, settleHeld } from "../notices/news";
+import { keepReadThroughSummary } from "../work/tree";
 import { bridgeTarget, engineGet, peerTargets, readBridgeFile, readEngineFile } from "./client";
 import { learnCompatibility } from "./compatibility";
 import { goalHolds, settleGoalHolds } from "../work/goals";
@@ -355,6 +356,7 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
         const reviewed = work && event.type === "permission.asked" ? reviewPermission(source, event, connection.signal).catch(() => null) : null;
         goalHeld?.(event).catch(() => {});
         if (signIns) noteSignIn(event, source).catch(() => {}).finally(() => signedIn(event));
+        if (work && event.type === "session.execution.succeeded" && typeof event.data?.sessionID === "string") keepReadThroughSummary(source, event.data.sessionID, connection.signal).catch(() => {});
         if (!bots) {
           if (event.type === "session.created") settleNewSession(source, event.data?.sessionID ?? event.data?.info?.id).catch(() => {});
           if (event.type === "session.renamed") nameWorktreeBranch(source, event.data?.sessionID).catch(() => {});

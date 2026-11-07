@@ -151,6 +151,7 @@ export class ClaudeAgent implements Agent {
   static keychain = process.platform === "darwin"
 
   id = "claude"
+  compacts = true
   readonly providerID: string
   get name() {
     return accountName("Claude Code", this.instance)
@@ -669,9 +670,11 @@ function withTimeout<T>(promise: Promise<T>, milliseconds: number): Promise<T> {
 
 function modelName(info: { value: string; displayName: string; description?: string }): string {
   // "Default (recommended)" says less than what it is: "Opus 4.8 with 1M context · Most capable…".
+  // Said as the default, though: it's listed beside the model it stands for now ("opus"), which
+  // would read the same, and it follows Claude Code's default when that changes.
   const what = info.description?.split(" · ")[0]?.trim()
-  if (what && /^(opus|sonnet|haiku|fable|claude)/i.test(what)) return what
-  return info.displayName
+  if (!what || !/^(opus|sonnet|haiku|fable|claude)/i.test(what)) return info.displayName
+  return info.value === "default" ? `Default (${what})` : what
 }
 
 /** Its family, for its maker's mark and so each shows in the short list: "claude-opus". */
@@ -720,6 +723,9 @@ interface Active extends Lane {
   subagents: Map<string, Lane & { run: SubagentRun; background: boolean }>
   /** Why the turn will fail, if Claude Code says before its result. */
   problem?: string
+  /** It's the /compact you asked for: no turn of words, and it may fail with a result that says success. */
+  compacting?: boolean
+  compactFailed?: boolean
   /** Claude turned its sign-in away: a turn to sign in again for, not to try again. */
   signInTurnedAway?: boolean
   /** A usage limit it reached (Auto goes on with the next model). */
@@ -912,8 +918,9 @@ class ClaudeThread implements Thread {
       this.lastHooks = hooks
       const message = userMessage(input, this.copies())
       // The turn ends with the result that answers it (one of its own before, like a command's
-      // end it took up, doesn't end it).
-      this.active = this.turnFor(turn, hooks, resolve, input.auto, new Map([[message.uuid, ""]]))
+      // end it took up, doesn't end it). Its /compact, typed as you would, ends with the first.
+      this.active = this.turnFor(turn, hooks, resolve, input.auto, new Map(input.compact ? [] : [[message.uuid, ""]]))
+      this.active.compacting = input.compact
       this.input!.push(message)
     })
   }
@@ -1483,11 +1490,18 @@ class ClaudeThread implements Thread {
         if (typeof message.tool_use_id === "string" && (message.summary || message.description)) turn.toolProgress(message.tool_use_id, { summary: message.summary ?? message.description, lastTool: message.last_tool_name })
         return
       case "compact_boundary":
-        this.noticeLater(lane, "Claude Code summarized the conversation to make room.")
+        // (One you asked for shows as that, whichever way it ends.)
+        if (!active?.compacting) this.noticeLater(lane, "Claude Code summarized the conversation to make room.")
         return
-      case "status":
-        if (message.compact_result === "failed") turn.notice(`Claude Code couldn't summarize the conversation${message.compact_error ? `: ${message.compact_error}` : ""}.`)
+      case "status": {
+        if (message.compact_result !== "failed") return
+        const failed = `Claude Code couldn't summarize the conversation${message.compact_error ? `: ${String(message.compact_error).replace(/\.$/, "")}` : ""}.`
+        if (active?.compacting) {
+          active.compactFailed = true
+          active.problem = failed
+        } else turn.notice(failed)
         return
+      }
       case "api_retry":
         // The API is busy or a request failed: it tries again (said once a step).
         this.noticeOnce(`retry:${lane.turn.currentModel.id}`, turn, `Claude's API ${message.error === "overloaded" || message.error_status === 529 ? "is overloaded" : "had a problem"}: trying again${message.max_retries ? ` (${message.attempt}/${message.max_retries})` : ""}.`)
@@ -1731,7 +1745,7 @@ class ClaudeThread implements Thread {
     // Which messages it took this turn (Claude Code says, from 2.1.2xx on).
     const says = Array.isArray(result.user_message_uuids)
     for (const uuid of says ? result.user_message_uuids : []) active.steered.delete(uuid)
-    const succeeded = result.subtype === "success" && !result.is_error
+    const succeeded = result.subtype === "success" && !result.is_error && !active.compactFailed
     const goesOn = !active.stopping && !active.hooks.signal.aborted
     // One you sent partway came after its last step: Claude Code takes it next, as a turn of its
     // own, so this one goes on with it (and ends with its result).
@@ -1982,7 +1996,7 @@ class ClaudeThread implements Thread {
  * elapsed time, a summary of tools already shown, suggestions it isn't asked for). A test checks
  * the SDK's own list against these; any other kind is shown when it has words, and logged.
  */
-export const claudeMessages = new Set(["assistant", "user", "stream_event", "result", "system", "rate_limit_event", "auth_status", "conversation_reset", "tool_progress", "tool_use_summary", "prompt_suggestion"])
+export const claudeMessages = new Set(["assistant", "user", "stream_event", "result", "system", "rate_limit_event", "auth_status", "conversation_reset", "tool_progress", "tool_use_summary", "prompt_suggestion", "command_lifecycle"])
 
 /** Its `system` messages' kinds: shown (compacting, retries, notes, hooks' failures, memory), used (tasks, init) or bookkeeping. */
 export const claudeSystem = new Set([

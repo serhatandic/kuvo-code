@@ -9,7 +9,7 @@ import Testing
 /// goes with the model the conversation is on now: once you switch away from the signed-out one
 /// it's back, and Switch Model goes. The engine is stubbed.
 @MainActor
-@Suite(.serialized) struct FailedTurnModelTests {
+@Suite(.serialized, .timeLimit(.minutes(1))) struct FailedTurnModelTests {
     let engine = StubEngine(port: 47909)
     let workspace = Workspace()
     let id = "ses_failedmodel"
@@ -30,6 +30,60 @@ import Testing
         return TranscriptView.rows(of: session, catalog: Catalog(), detail: .summary).compactMap {
             if case .turnEnd(_, let stats, _, _) = $0 { stats.model } else { nil }
         }
+    }
+
+    /// A turn too long for its model, summarized, can still be tried again; its turn isn't taken
+    /// back, which would throw the summary away and fail the same way. A later reply takes it away.
+    @Test func aFailedTurnSummarizedAfterCanStillBeTriedAgainWithoutLosingTheSummary() async throws {
+        defer { engine.stop() }
+        var conversation: [[String: Any]] = [
+            ["id": "msg_01", "type": "user", "time": ["created": 1_000], "text": "Write a short SEO checklist"],
+            ["id": "msg_02", "type": "idle", "time": ["created": 2_000], "outcome": "failed", "error": ["type": "provider", "message": "Prompt is too long."]],
+            ["id": "msg_03", "type": "compaction", "time": ["created": 3_000], "status": "completed", "reason": "manual"],
+            ["id": "msg_04", "type": "idle", "time": ["created": 4_000], "outcome": "succeeded"],
+        ]
+        engine.list([StubEngine.session(id, title: "Checklist", directory: "/tmp/kuvo-tests-failedmodel", extra: ["model": ["id": "m", "providerID": "p"]])])
+        engine.conversation(id, conversation)
+        engine.on("POST", "/api/session/\(id)/prompt", json: [:])
+        await workspace.refresh()
+        let session = try #require(workspace.model(for: id))
+        await session.load()
+        func lastEnds() -> [String] {
+            TranscriptView.rows(of: session, catalog: Catalog(), detail: .summary).compactMap {
+                if case .turnEnd(let idle, _, true, _) = $0 { idle.id } else { nil }
+            }
+        }
+        #expect(lastEnds() == ["msg_02"])
+        // Its time and its buttons stay on the turn's end, not on the summary's.
+        func latestEnds() -> [String] {
+            TranscriptView.rows(of: session, catalog: Catalog(), detail: .summary).compactMap {
+                if case .turnEnd(let idle, _, _, true) = $0 { idle.id } else { nil }
+            }
+        }
+        #expect(latestEnds() == ["msg_02"])
+
+        let message = try #require(session.transcript.messages.compactMap { if case .user(let user) = $0 { user } else { nil } }.first)
+        session.retry(message)
+        try await until { !engine.requests("POST", "/api/session/\(id)/prompt").isEmpty }
+        #expect(engine.requests("POST", "/api/session/\(id)/revert/stage").isEmpty)
+
+        conversation.append(["id": "msg_05", "type": "assistant", "time": ["created": 5_000], "agent": "build", "model": ["id": "m", "providerID": "p"], "content": [["type": "text", "text": "Here."]]])
+        engine.conversation(id, conversation)
+        await session.load()
+        #expect(lastEnds() == [])
+
+        // Taken at a step of a run on the engine, the end after it is that run's own.
+        engine.conversation(id, [
+            ["id": "msg_01", "type": "user", "time": ["created": 1_000], "text": "Write a short SEO checklist"],
+            ["id": "msg_02", "type": "assistant", "time": ["created": 2_000], "agent": "build", "model": ["id": "m", "providerID": "p"], "content": [["type": "text", "id": "t1", "text": "Done."]]],
+            ["id": "msg_03", "type": "compaction", "time": ["created": 3_000], "status": "completed", "reason": "manual"],
+            ["id": "msg_04", "type": "idle", "time": ["created": 4_000], "outcome": "succeeded"],
+        ])
+        await session.load()
+        #expect(lastEnds() == ["msg_04"])
+        #expect(latestEnds() == ["msg_04"])
+        // That summary is part of the turn, so trying the turn again takes it back as any other.
+        #expect(!session.transcript.messages.summarized(since: "msg_01"))
     }
 
     @Test func aTurnThatFailedBeforeAnyReplyKnowsItsModel() async throws {

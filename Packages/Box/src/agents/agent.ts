@@ -148,6 +148,8 @@ export interface RunInput {
   auto?: boolean
   /** A turn the agent began on its own (a command it left running ended): nothing to send, it's under way. */
   adopt?: boolean
+  /** No message: the agent summarizes its conversation, as you asked (`Agent.compacts`). Says nothing in it. */
+  compact?: boolean
 }
 
 /** What began a turn an agent started on its own, as the conversation says it. */
@@ -346,6 +348,8 @@ export interface Agent {
   /** Its models' provider in the app, and its account's ID: `claude-code`, `codex-cli`, … */
   providerID: string
   name: string
+  /** It summarizes its conversation when asked (`RunInput.compact`); others only do by themselves. */
+  compacts?: boolean
   /** The command that installs its program, when it's yours to install. */
   install?: string
   methods(): IntegrationMethod[]

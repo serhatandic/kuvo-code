@@ -388,7 +388,7 @@ struct BottomStack: View {
     private var workBot: Bot? { app.bots.bot(forSession: model.id) }
 
     /// Its sessions as its box last told them.
-    private var workReport: BotWorkReport? { workBot.flatMap { app.botWork.reports[$0.id] } }
+    private var workReport: BotWorkReport? { workBot.flatMap { app.botWork.report(of: $0) } }
 
     /// Its sessions' own bar: not while its goal shows, whose line has them (`BotWorkChip`).
     private var showsWorkBar: Bool { BotWorkBar.shows(workReport) && !showsGoalPlan }

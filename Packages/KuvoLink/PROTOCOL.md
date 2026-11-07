@@ -239,10 +239,10 @@ connection.
     takes on over SSH (by mail, before bridge 0.9.63, too).
 - **Personalities**: each box's view is a document ("Documents"); a box meets a peer's with its
   own, and its bots whose personality changed are told what they are now.
-- **Letters**: `{"letter": {id, from, to, text, wait, at, answers?, read?, note?}}` goes to the box that
+- **Letters**: `{"letter": {id, from, to, text, wait, at, answers?, read?, note?, made?}}` goes to the box that
   listed `to`.
   - **Checks**: the receiver drops a letter older than a day. It delivers each `id` once (ids
-    remembered two days, noted once delivered), at most 20 in ten minutes from a box (one answered
+    remembered two days, a `note`'s 30, noted once delivered), at most 20 in ten minutes from a box (one answered
     `retry` isn't counted, so one tried again and again leaves room for the rest), and only
     to a conversation an agent could be. A subagent's, a group chat's seat or one put away doesn't
     take letters. One it can't look up now (its engine starting) is answered `retry`, and so is one
@@ -253,11 +253,12 @@ connection.
     its own moves (`kuvo/moves`; bridge 0.9.108, before which this Mac's box asked its app). One
     for a conversation its engine doesn't have, while its coding agents' bridge isn't running, is
     answered `retry` too (it may be one of theirs, starting again), for half an hour from the first
-    time; after that it's refused as for no conversation (bridge 0.9.123).
+    time; after that it's refused as for no conversation (bridge 0.9.123). The same goes while its
+    engine isn't there to ask, as when it's starting (bridge 0.9.203).
   - **Sender**: it names the sender as the sending box named that agent, when that box alone
     lists `from` and it isn't one of the receiver's own conversations. Otherwise the letter is from
     "an agent on <box>", with no address to answer.
-  - **`delivered`**: it answers `{"delivered": {id, ok, why?, retry?, answer?}}`. `retry`: not
+  - **`delivered`**: it answers `{"delivered": {id, ok, why?, retry?, answer?, lives?}}`. `retry`: not
     now (an engine restarting, too many lately), so the sender tries again. `answer: false`: there,
     but no answer will come (its sender couldn't be verified, or its machine is away).
   - **`wait`**: the receiver watches for an answer for ten minutes and sends it back as a letter
@@ -280,9 +281,10 @@ connection.
     back the conversation as `read_conversation` words it (or the parts that mention `query`),
     about 20,000 characters at most, as an answer that also carries `read: {}`. An answer with
     `read` that no tool waits for any more is dropped, never delivered as a message.
-  - **`note`** `{from, words, delivery, line?}` (bridge 0.9.166): the letter is the sending box's
-    own word, not an agent's, for one of its conversations that moved away from it in the last two
-    days (its sessions' news, an answer you gave late, an answer its tool never took). Only a box
+  - **`note`** `{from, words, delivery, line?, about?}` (bridge 0.9.166): the letter is the sending box's
+    own word, not an agent's, for one of its conversations that lives on another computer now, however
+    long ago it left (its sessions' news, an answer you gave late, an answer its tool never took;
+    "Work", `run/work/homes.json`). Only a box
     leaves one; an agent's letter never has it. The receiver checks and counts it as any letter,
     then delivers `text` as the sender would have delivered it there: `delivery` `queue` or
     `steer`, shown from `from` with `words`, and with `line`, marked as the box's note
@@ -291,7 +293,28 @@ connection.
     until it's brought back. One whose `note` isn't whole is a letter as any. A box from before 0.9.166
     doesn't read `note`: it delivers the letter as any other, steered, from "an agent on <box>"
     that can't be answered, with `text` after its own heading. Its `words` and `line` are cut to fit
-    as `text` is.
+    as `text` is. `about`: the sessions on the sending box it speaks of, up to 100, which the
+    receiver notes live there.
+    - **It's kept until its conversation has it** (bridge 0.9.203): it's sealed anew at each send
+      (`at`, the time of this send, with `made` beside it for when it was left), sent again each
+      minute, for 30 days from `made`, and its `id` remembered as long, so a lost receipt can't
+      deliver it twice. A plain letter keeps the `at` it was left with, and still fails at a day. To a
+      box from before this, it's delivered as any note, and that box remembers its `id` two days,
+      so a receipt lost for longer shows it twice.
+    - The receiver answers `retry` rather than ending it for an `at` over a day off (a replay, or a
+      clock that's wrong) and for a conversation it can't find while the coding agents' bridge isn't
+      running, however long that lasts. For one that lives elsewhere, as far as it knows, it answers
+      `{id, ok: false, retry: true, lives: <key>}`: the sender, taking that only from the box it
+      sent it to, sends it there next (and to this box itself, if that's the key). A box that
+      answers plain `retry` has its peers' `moved` to go by, and an older box that no longer knows
+      where it went says there's no such conversation, which ends it. "There's no such conversation"
+      from a box that could ask both its engine and its bridge, and knows of no home, ends it; a box
+      that can't ask both now (its engine starting, say) answers `retry`, as it does any letter for one.
+    - A computer you removed (`left` in a peers document, or this Mac's own record) ends it. One just
+      missing from a list isn't that: it waits, for its 30 days.
+    - Past two minutes without one for a conversation there, only that conversation's oldest goes
+      each minute, until one's delivered or ended (`retry` doesn't count) or it's found to live
+      elsewhere. A box's notes are counted apart from its letters, 20 in ten minutes each.
 - **Leaving one**: an agent's `send_message` or `read_conversation` for an agent on another
   computer ("Agents' tools") leaves a letter in `run/outbox/sending/<id>.json`, which the link
   sends. Without the relay, letters wait for it: no box hands them to anyone over SSH (bridge
@@ -557,7 +580,7 @@ its own, which a `SIGTERM` stops waiting.
   `session` the conversation calling (as the engine names it; null outside one). The answer is the
   tool's own words. One that waits for an answer holds the request up to eleven minutes; the
   request going stops the wait, and an answer that comes later reaches the conversation as a
-  message (one moving to or from another computer once it's there; one that moved away lately,
+  message (one moving to or from another computer once it's there; one that lives on another now,
   there, as a letter with `note`, "Peers"). 400 for another `name`.
   - A subagent, and a coding agent's engine run (`kuvo.engineFor`), act as their conversation: its
     name, folder, model, approval, and where answers go. A group chat's seat may only list and read.
@@ -706,17 +729,26 @@ client shows it from the same routes.
   `run/work/awaited`, kept by whichever process waits, with its reply's id for a minute after.)
   What a starter hears is gathered a few seconds and sent as one
   message (an ask to be read at its next step), kept in `run/work/wakes.json` until it's sent (for a
-  conversation the engine doesn't know while the coding agents' bridge isn't running, a day at most,
-  since it may be the bridge's; and so is an answer given late, below; for an archived one, until
+  conversation the engine doesn't know while the coding agents' bridge isn't running, 30 days at most,
+  since it may be the bridge's; an answer given late, below, is kept a week; for an archived one, until
   it's brought back, as its own wake-ups wait, a week at most; for one moving to or from another
-  computer, until it's there; for one that moved away from here in the last two days, it goes to it
+  computer, until it's there; for one that lives on another computer now, it goes to it
   there as a letter with `note`, "Peers", delivered there as it would have been here). Clients mark rows by `kuvo.by`.
+  - **Homes** (`run/work/homes.json`, bridge 0.9.203): `{<session>: {key, at}}`, the box each
+    conversation that left lives on, by the newest word: this box's record of its moves, its peers'
+    `moved`, a box's `lives`, and a note's `about`. Unlike `moved` it doesn't forget at two days: a
+    home goes 30 days after its `at`, once no session here says it was started by that conversation
+    (looked at hourly, and only with the engine and the coding agents' bridge both there to ask). A
+    conversation this box has always wins over a home, and a computer you removed is no one's home.
+    A note's `about` counts as of its `made`.
   Its task ends with the session's half of the playbook: review your work with reviewer subagents,
   fix what they find, and end with a short report.
 - **Tools** (`POST kuvo/agent-tools`, any conversation, for the sessions under it):
   `list_sessions` (each with where it stands: working, asking and what, with the ask's id,
-  finished, failed, stopped; its model, tokens and last reply's first lines), `stop_session`
-  (`{session, archive?}`; only one of its own), `answer_ask` (`{session, ask, decision: allow|deny,
+  finished, failed, stopped; its model, the tokens in its context now, or that it was just
+  summarized, the tokens it used in total, and last reply's first lines), `stop_session`
+  (`{session, archive?}`; only one of its own), `compact_session` (`{session}`; only one of its
+  own, by `POST api/session/<id>/compact` where it runs), `answer_ask` (`{session, ask, decision: allow|deny,
   reason}`, or `{session, ask, answer, reason}` for a question), `list_models` (the models there's
   an account for here, `provider/model`, with their efforts; none its provider is retiring).
 - **Models that can't answer** (`work/unanswering.ts`, `run/work/unanswering.json`, bridge
@@ -772,7 +804,9 @@ client shows it from the same routes.
 - **`GET kuvo/work?bot=<id>`** → `{bot, sessions: [{session, title, folder, project?, startedBy,
   depth, model?, mode?, state, asks?, started, tokens, cost?, lastReply?}], answered: [answer with
   its session], today: {started, working, tokens, cost?}, limits}`: its sessions the latest first,
-  archived ones left out. 400 without `bot`, 404 for no such bot here, 503 with no engine.
+  archived ones left out. 400 without `bot`, 404 for no such bot here, 503 with no engine. Each
+  `state` is as of the read. `today.working` stays, since clients until 0.7.2 need it to read the
+  report, but no client shows it (see At work).
 - **`GET kuvo/work/events`** (ndjson): `{"changed": {<bot>: <ms>}}` now and at each change to a
   bot's work (a session started, stopped, finished or asking, an ask answered, its limits); a
   client reads that bot's work again when its time moves. Kept in `run/work/changes.json`.
@@ -792,6 +826,23 @@ client shows it from the same routes.
   another (its session that started one, say).
 
   Clients show the bot looking after its sessions with these marks. The first line is what was there already; each new `id` after it plays once. Only the latest minute is kept, at most 50, in `run/work/oversight.json`. A box from before it answers 404.
+- **At work** (KuvoClient's `AtWork`): whether a bot is at work and how many of its sessions are
+  isn't sent as an answer. Each client works it out the same way, from facts its box states, for a
+  bot's row, face, tab and header and the bar over its composer:
+  - a session is *working* when its engine (or the coding agents' bridge) runs a turn of it
+    (`session.status`, `/api/session/active`) or Background work lists it, and *at work* when it's
+    working or waiting on an answer (a permission or question, its own or a subagent's);
+  - the sessions a bot oversees are those marked `kuvo.by` with its id (the box marks those its
+    sessions start too, so no client follows `startedBy`), and not archived (`time.archived`, `kuvo.archived`, or `kuvo: {archived: true}`). A
+    subagent isn't one: it keeps the session it works for at work, through Background work;
+  - a bot is at work through them (its face and row) while one is working, unless its wake-ups are
+    paused (it sleeps; its bar still lists them). One only waiting on you shows that on its own row;
+  - the bar takes `kuvo/work`'s sessions as the client knows them now: one asking, asking; one
+    working, working; one the report had at work that no longer is, done. So it counts what the row
+    counts without reading the report again.
+
+  A box from before Background work lists nothing there, and its report doesn't count it either:
+  both say a session waiting on a command it left running isn't at work.
 - **Background work** (`work/background.ts`): what still runs for a session once its own turn is
   over. One fact, worked out on the box, that clients show and never work out themselves.
   - **`GET kuvo/work/background`** → `{sessions: {<session>: {commands, subagents, tasks, since}}}`,
@@ -800,8 +851,8 @@ client shows it from the same routes.
     `subagents`: subagents at work under it, a review's parts and other hidden runs left out.
     `tasks`: anything else its agent keeps going. A client shows a session at work when its own turn
     runs or it's listed here. Kept in `run/work/background.json`, per place (engine, bridge).
-  - **Counting at work**: `kuvo/work`'s `state` and `today.working`, a bot's limits and
-    `list_sessions` all go by the same fact. One running 6 hours (a dev server) stops counting, though
+  - **Counting at work**: `kuvo/work`'s `state` and `today.working`, a bot's limits,
+    `list_sessions` and every client's At work all go by the same fact. One running 6 hours (a dev server) stops counting, though
     it may still run, and a client's list of commands still shows it. A goal's Mac stays awake for it
     too, but it holds off a goal's nudge only for 30 minutes, and never hides a turn that failed at a
     limit.
@@ -880,7 +931,7 @@ folder you pick once per box, after asking you.
   tool waits up to ten minutes, then says it stays asked, and the conversation gets
   `[The user answered] …` as a message when you do (for a conversation the engine doesn't know
   while the coding agents' bridge isn't running, or one moving to or from another computer, tried
-  again every few minutes, a week at most; to one that moved away from here lately, as a letter there
+  again every few minutes, a week at most; to one that lives on another computer now, as a letter there
   with `note`, "Peers").
   - An ask goes with its bot (deleted), or after a week unanswered.
   - `GET kuvo/work/asks` and `GET kuvo/work/asks/events` (ndjson, a line now and at each change)
@@ -1480,6 +1531,22 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     too: it runs those through an engine session of its own, which carries
     `metadata.kuvo.engineFor` and is never shown (hide it in the engine's session list).
     `…/session/<id>/fork {before}` makes a new session from a message.
+  - `POST …/session/<id>/compact` summarizes a conversation, on the engine as on the agents (the
+    command `/compact`, and a lead's `compact_session`). On the agents: `{"data": {"state":
+    "compacting"}}`, or `"waiting"` while a turn runs (held to its end, first in the queue, as an
+    inbox item of type `compaction`, and dropped with a notice if the turn doesn't succeed; asked
+    twice is once). On the engine it waits for the next step; Stop and a failed run take it from the
+    inbox, and it's never held or paused for. 400 `{"message"}` is a sentence to show: nothing to summarize yet, a subagent's,
+    an agent that can't be asked (Cursor, Antigravity), or on the agents an undo staged. On the
+    engine an undo staged is made final by it, as by a message. It shows as the engine's own does, a
+    `compaction` message with `reason: "manual"` and `session.compaction.started`, `.ended` or
+    `.failed`, then `idle`. It adds no reply, and what's there stays. Its `status` says how it went:
+    the engine's `idle` and run end say `succeeded` even for one that failed.
+    Only one that ran at rest is a turn of its own (an `idle` before it, `Packages/Box/src/shared/summaries.ts`):
+    taken at a step of a run on the engine, the `idle` after it ends that run, told as any run's.
+    A turn of its own that went through is no news: it stays read if it was, with no notification and
+    no `[Session finished]` to a lead, who still reads how the work before it went. One that failed
+    says why, tells a lead `[Session not summarized]` and pauses nothing.
 - Plan accounts (Copilot, OpenCode, GitLab, Poe, a provider's API key), on a Mac and a machine,
   as Settings › Accounts has them: the phone sees, reads and signs in to them as the app does.
   Each computer keeps its own: a new
@@ -2308,7 +2375,7 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
 - `kuvo/groups`: the group chats that live on the computer asked, with their bots (face, name, session), who's
   talking, whether one is under way or paused, and the last thing said; `kuvo/groups/events`
   streams that list as it changes, and `kuvo/groups/<id>/events` one chat's latest messages,
-  the same way. `POST kuvo/groups/<id>` writes to it (`{"text"}`); `…/stop`, `…/keep-going`
+  the same way. `POST kuvo/groups/<id>` writes to it (`{"text"}`; 400 `{"message"}` for `/compact`, which a chat of several has no one conversation for); `…/stop`, `…/keep-going`
   and `…/viewed` do what they say; `…/undo` (`{"message"}`) takes a message of yours back and
   answers with what was taken. A wrap-up can carry `tasks`, who does what: each with `id`, `bot`,
   `task`, `state` (`proposed`, `waiting`, `working`, `done` or `failed`), `started`/`finished`,

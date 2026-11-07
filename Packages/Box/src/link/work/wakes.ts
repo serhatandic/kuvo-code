@@ -15,7 +15,7 @@ import { WAKE_MARKER } from "../areas/wakes";
 import { boxNote } from "../../shared/queues";
 import { messageID } from "../engine/sessions";
 import { locked, writePrivate } from "../files";
-import { LETTER_LIFE, placeOfSession } from "../letters/letter";
+import { NOTE_MEMORY, placeOfSession } from "../letters/letter";
 import { tellMovedAway } from "../letters/outbox";
 import { frozen } from "../moves/records";
 import { isPutAway, type PutAwayable } from "../peers/directory";
@@ -29,11 +29,12 @@ import { awaitedBy } from "./awaited";
 import { tellLateAnswers } from "./asks";
 import { errorOf, failedOn, followUnanswering, holdWords, turnError } from "./unanswering";
 import { backgroundWatcher, backgroundWords, forgetStopped, FINISH_HOLD_LIMIT, readStopped, startedSince, type BackgroundEvent, type BackgroundWork } from "./background";
-import { isArchived, lastReplyOf, placeWords, startedByOf, wakesOf, workSessions, worksFor, type Listed } from "./tree";
+import { summaryRowOf, isArchived, lastReplyOf, placeWords, startedByOf, wakesOf, workSessions, worksFor, type Listed } from "./tree";
 import { projectNameOf } from "../notices/news";
 import type { Target } from "../../shared/records";
 import type { EngineSession } from "../engine/sessions";
 import type { EngineForm, PermissionAsked } from "../notices/news";
+import { pastSummaries, workOutcome } from "../../shared/summaries";
 
 export const WORK_WAKES = path.join(WORK_FOLDER, "wakes.json");
 /** What each followed session's starter was told (its last reply's message, its asks), and when the
@@ -98,11 +99,20 @@ const took = (ms: number) => {
   return minutes < 1 ? "under a minute" : minutes < 90 ? `${minutes} min` : `${Math.round(minutes / 60)} h`;
 };
 
+/** A session as a line to its lead names it. */
+function namedOf(session: Partial<EngineSession> & { id: string }): string {
+  const folder = session.location?.directory ?? session.directory ?? "";
+  return `"${session.title || "New Session"}" ${placeWords({ project: projectNameOf(folder), folder })} (address ${session.id})`;
+}
+
+/** What a conversation is told of a summary it asked of a session that failed. */
+function notSummarizedLine(session: Partial<EngineSession> & { id: string }, why: string | undefined): string {
+  return `[Session not summarized] ${namedOf(session)}: ${why ? cut(why.replace(/\.+$/, ""), 400) : "It couldn't"}. Its conversation and work are as they were.`;
+}
+
 /** What a conversation is told of one of its sessions, as a line, or null for nothing. */
 export async function wakeLine(event: WorkEvent, session: Partial<EngineSession> & { id: string }, target: Target, still?: BackgroundWork | null): Promise<string | null> {
-  const folder = session.location?.directory ?? session.directory ?? "";
-  const project = projectNameOf(folder);
-  const named = `"${session.title || "New Session"}" ${placeWords({ project, folder })} (address ${session.id})`;
+  const named = namedOf(session);
   switch (event.type) {
     case "session.execution.succeeded": {
       const reply = await lastReplyOf({ target, data: session as never });
@@ -252,6 +262,8 @@ interface LastReply {
   began: Began;
   /** Something's written since its last turn ended. */
   underWay: boolean;
+  /** Its conversation, to read how its work went. */
+  whole: unknown;
 }
 
 // A session's last reply (its id, and when it was written; null for none), the end of a turn
@@ -276,14 +288,16 @@ async function latestMessages(target: Target, session: string) {
     const data: unknown[] = Array.isArray(page?.data) ? page.data : [];
     for (const message of data) if (isObject(message) && typeof message.id === "string") messages.push(message as typeof messages[number]);
     const next = page?.cursor?.next ?? page?.cursor?.previous;
-    if (!data.length || !next || turnIn(messages).before >= 0) break;
+    if (!data.length || !next || turnIn(pastSummaries(messages)).before >= 0) break;
     query = `limit=100&cursor=${encodeURIComponent(next)}`;
   }
   return messages;
 }
 
 async function lastReply(target: Target, session: string): Promise<LastReply> {
-  const messages = await latestMessages(target, session);
+  // (A summary asked for is no turn of its work: this is about what it did.)
+  const whole = await latestMessages(target, session);
+  const messages = pastSummaries(whole);
   const at = messageTime;
   const newest = (type: string) => { const index = messages.findIndex(message => message.type === type); return index < 0 ? Infinity : index; };
   const reply = messages[newest("assistant")];
@@ -299,7 +313,7 @@ async function lastReply(target: Target, session: string): Promise<LastReply> {
     text = message.content.filter((part: unknown) => isObject(part) && part.type === "text").map((part: { text?: unknown }) => String(part.text ?? "")).join(" ").replace(/\s+/g, " ").trim();
     if (text) break;
   }
-  return { id: reply?.id ?? null, at: at(reply), turn: ended?.id ?? null, turnAt: at(ended), text, began: beganBy(turn), underWay: from === 0 && turn.some(ofTurn) };
+  return { id: reply?.id ?? null, at: at(reply), turn: ended?.id ?? null, turnAt: at(ended), text, began: beganBy(turn), underWay: from === 0 && turn.some(ofTurn), whole };
 }
 
 // Whether a finished turn is news to whoever started the session. The first it hears of it always is,
@@ -359,19 +373,21 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
     if (!waiting?.lines.length) return;
     // Gone for sure: nothing to tell. Not to be reached now (the engine starting again, the coding
     // agents' bridge not running, whose it may be, or moving to or from another computer, when a
-    // turn here would be left behind): kept, a day at most, and tried again a little later each
-    // time. Moved to another computer since: told there, as a letter.
+    // turn here would be left behind): kept, as long as a note would be, and tried again a little
+    // later each time. Living on another computer now, however long ago it left: told there, as a
+    // letter.
     const place = frozen().has(starter) ? undefined : await placeOfSession(starter, targets()).catch(() => undefined);
     const line = wakeLineShown(waiting.lines);
     const delivery = waiting.asks ? "steer" : "queue";
-    if (place === null && tellMovedAway(starter, wakeText(waiting.lines), { from: "Its sessions", words: line, line, delivery })) return void failures.delete(starter);
-    if (place === null && (bridgeRuns() || Date.now() - waiting.since > LETTER_LIFE)) return;
+    const about = [...new Set(waiting.lines.map(each => /\(address (\S+?)\)/.exec(each)?.[1]).filter((each): each is string => Boolean(each)))];
+    if (place === null && tellMovedAway(starter, wakeText(waiting.lines), { from: "Its sessions", words: line, line, delivery, about }, now())) return void failures.delete(starter);
+    if (place === null && (bridgeRuns() || now() - waiting.since > NOTE_MEMORY)) return;
     try {
       if (!place) throw new Error("Not reached.");
       // Archived (from any app): kept until it's brought back, as its own wake-ups and goal wait,
       // rather than running a turn no one sees; a week at most.
       if (isPutAway(place.data as PutAwayable)) {
-        if (Date.now() - waiting.since > ARCHIVED_FOR) return;
+        if (now() - waiting.since > ARCHIVED_FOR) return;
         throw new Error("Archived.");
       }
       // Stopped by the user: it waits there with the queue, as theirs does.
@@ -400,8 +416,8 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
   // A line for `starter`, kept until it's sent, and what it told noted.
   const tell = (starter: string, line: string, asks: boolean) => {
     changeWaiting(file, all => {
-      const now = all[starter] ?? { lines: [], asks: false, since: Date.now() };
-      all[starter] = { lines: [...now.lines, line], asks: now.asks || asks, since: now.since };
+      const kept = all[starter] ?? { lines: [], asks: false, since: now() };
+      all[starter] = { lines: [...kept.lines, line], asks: kept.asks || asks, since: kept.since };
     });
     soon(starter);
   };
@@ -626,7 +642,8 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
     const waited = readTold(toldFile)?.waiting?.[data.id];
     // Its finish was waiting as the box stopped: looked at as it would have been.
     if (waited && waited.from === from) return finish(data, starter, last);
-    const outcome = (data as { outcome?: string }).outcome;
+    // (Its work's, past a summary after it, whose own run says how that went.)
+    const outcome = workOutcome(last.whole, (data as { outcome?: string }).outcome);
     const failed = outcome === "failed";
     const reply = last.id && last.id !== was.reply ? last.id : null;
     // A turn that failed before it replied (its model out of reach, say): told by its end, once
@@ -712,6 +729,20 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
       }
       const bot = worksFor(session)?.bot;
       if (bot) noteWorkChanged(bot);
+      // Only a summary it was asked for: not news, and not its work finishing. One that failed says
+      // only that, whichever way its run ended (the engine's says `succeeded`). A finish that waited
+      // on what it left running, over meanwhile, is looked at now, and stands either way.
+      if (event.type === "session.execution.succeeded" || event.type === "session.execution.failed") {
+        const summary = await summaryRowOf(source, session.id);
+        if (summary?.status === "failed") {
+          if (starter && wakes.includes("finished") && !isArchived(session) && readStopped(stoppedFile)[session.id] === undefined) {
+            const error = errorOf((event.data as { error?: unknown }).error) ?? errorOf(summary.error);
+            tell(starter, notSummarizedLine(session, error?.message), false);
+          }
+          return await settle(session.id);
+        }
+        if (summary?.status === "completed" && event.type === "session.execution.succeeded") return await settle(session.id);
+      }
       // On Autopilot nothing waits: a question goes ahead on the choice it marks, or comes back declined.
       const form = event.type === "form.created" ? event.data?.form ?? event.data as unknown as EngineForm : null;
       if (form && isAutopilot(session)) {

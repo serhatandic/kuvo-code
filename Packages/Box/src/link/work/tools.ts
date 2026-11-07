@@ -1,5 +1,6 @@
 // The tools a conversation runs its sessions with (PROTOCOL.md, "Work"): list_sessions, where each
-// it started stands; stop_session, one of them stopped; answer_ask, what one asks, answered within
+// it started stands; stop_session, one of them stopped; compact_session, one of them summarized to
+// free up its context; answer_ask, what one asks, answered within
 // what the asker may do itself; list_models, what a session can be started on; make_project, a new
 // project made (asking you first, once for a bot if you say Always); list_projects, the projects
 // here. Every box answers them alike, through `POST kuvo/agent-tools`.
@@ -26,7 +27,7 @@ import { cloneable, folderName, isEmptyFolder, namedPlace, projectPlace, shownPa
 import { projectsFolder } from "./settings";
 import { describeModels, usableModels } from "./models";
 import { atWorkNow, stopWork } from "./background";
-import { botOfConversation, describeWork, placeWords, under, workSessions, worksFor } from "./tree";
+import { botOfConversation, contextOf, describeWork, placeWords, under, workingNow, workSessions, worksFor } from "./tree";
 import type { Target } from "../../shared/records";
 import type { KitRule } from "../bots/kit";
 import type { SessionPlace } from "../letters/letter";
@@ -72,7 +73,7 @@ async function oneOfMine(caller: Caller, session: unknown, targets: Target[], do
     }
   }
   if (title === null) return { error: refused(`There's no session ${session.trim()} here. Use list_sessions to see yours.`) };
-  return { error: refused(doing === "stop" ? `"${title}" isn't yours to stop: ask the user.` : `"${title}" isn't one of your sessions: only the user answers what it asks.`) };
+  return { error: refused(doing === "answer" ? `"${title}" isn't one of your sessions: only the user answers what it asks.` : `"${title}" isn't yours to ${doing}: ask the user.`) };
 }
 
 /** list_sessions: the caller's sessions, where each stands, the latest first. */
@@ -87,7 +88,9 @@ export async function listSessionsTool(caller: Caller, targets: Target[], signal
     const state = work.state === "asking" ? `asks to ${work.asks!.replace(/^Wants to /, "").replace(/\.$/, "")} (ask ${work.askID})` : work.state;
     const under = work.depth > 1 ? `, started by ${work.startedBy}` : "";
     const reply = work.lastReply && work.state !== "asking" ? `\n  Last reply: ${work.lastReply}` : "";
-    lines.push(`- ${work.title} (address ${work.session}), ${placeWords(work)}: ${state}${model}${under}${work.tokens ? ` · ${work.tokens.toLocaleString("en-US")} tokens` : ""}${reply}`);
+    const context = await contextOf(each, signal);
+    const held = !context ? "" : "used" in context ? ` · ${context.used.toLocaleString("en-US")} tokens in context now` : " · just summarized, context size known after its next step";
+    lines.push(`- ${work.title} (address ${work.session}), ${placeWords(work)}: ${state}${model}${under}${held}${work.tokens ? ` · ${work.tokens.toLocaleString("en-US")} tokens used in total` : ""}${reply}`);
   }
   return said(`Your sessions, the latest first:\n${lines.join("\n")}`);
 }
@@ -112,6 +115,28 @@ export async function stopSessionTool(caller: Caller, args: Record<string, unkno
     return said(`Stopped and archived "${data.title || "New Session"}".`);
   }
   return said(`Stopped "${data.title || "New Session"}".`);
+}
+
+/** compact_session: one of the caller's sessions summarizes its conversation to free up its
+ * context, as its `/compact` does: what can't says why. */
+export async function compactSessionTool(caller: Caller, args: Record<string, unknown>, targets: Target[], signal?: AbortSignal): Promise<ToolAnswer> {
+  const found = await oneOfMine(caller, args.session, targets, "compact", signal);
+  if ("error" in found) return found.error;
+  const { target, data } = found.listed;
+  const title = data.title || "New Session";
+  const working = (await workingNow([target], signal)).has(data.id);
+  let answer: unknown;
+  try {
+    answer = await call(target, "POST", `/api/session/${encodeURIComponent(data.id)}/compact`, {}, signal);
+  } catch (error) {
+    return refused(`Couldn't summarize "${title}": ${why(error)}`);
+  }
+  changed(data);
+  // (The coding agents' bridge says; the engine takes it at its next step.)
+  const state = isObject(answer) ? answer.state : undefined;
+  if (state === "waiting") return said(`"${title}" will be summarized when its turn ends.`);
+  if (working && state !== "compacting") return said(`"${title}" will be summarized at its next step.`);
+  return said(`Summarizing "${title}" now. list_sessions shows its context size again after its next step.`);
 }
 
 /** Whether the commands `permission` asks about run in the sandbox: the engine's, as it stands; a
