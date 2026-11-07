@@ -180,6 +180,11 @@ struct ModelPicker: View {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 1) { listContent }
+                            // A stack of its own for each list: a model is a row of several (its
+                            // account's page, Starred, a search), each row known by the model, and
+                            // a lazy stack shown another list kept drawing the row it had for that
+                            // model there ("Opus 5.5 ⌘1", without its account, in Starred).
+                            .id(shownList)
                             .padding(6)
                             .onGeometryChange(for: CGFloat.self, of: \.size.height) { contentHeight = $0 }
                     }
@@ -801,6 +806,9 @@ struct ModelPicker: View {
     private var selectedProvider: Catalog.PickerProvider? {
         providers.first { $0.id == railSelection }
     }
+
+    /// Which list is in view: what was found, or the rail's entry.
+    private var shownList: String { query.isEmpty ? railSelection : "?" }
 
     /// The rows in view, in order: what ⌘1–⌘9 and the arrow keys go through.
     private var visibleRows: [Model] {

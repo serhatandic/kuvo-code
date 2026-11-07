@@ -1,0 +1,186 @@
+import AppKit
+import OpenCodeKit
+import SwiftUI
+import Testing
+@testable import KuvoCode
+
+/// The model picker with two accounts of one coding agent, the same model starred from each: the
+/// Starred list shows each once, saying whose it is, however you came to it; and picking one picks
+/// that account's. The agents' bridge is stubbed; the picker and the catalog are real.
+@MainActor
+@Suite(.serialized, .timeLimit(.minutes(1))) struct ModelPickerAccountsTests {
+    static let bridge = "http://127.0.0.1:47945"
+    /// Claude Code's own sign-in, and one you added and called Work: each lists the same models.
+    nonisolated static let accounts = [("claude-code", "Claude Code"), ("claude-code@work", "Claude Code · Work")]
+    let app = AppModel()
+    let window = NSWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: 400, height: 520), styleMask: [.titled], backing: .buffered, defer: false)
+
+    init() async {
+        TestEnvironment.prepare()
+        StubWeb.start(hosts: ["127.0.0.1"])
+        AXElement.reading(true)
+        window.isReleasedWhenClosed = false
+        StubWeb.handle(Self.bridge + "/api/integration") { _, _ in
+            StubWeb.json(["data": Self.accounts.map { id, name in
+                ["id": id, "name": name, "methods": [], "connections": [["type": "credential", "credentialID": id, "method": "oauth"]],
+                 "metadata": ["source": "agent", "agent": "claude-code", "installed": true] as [String: Any]] as [String: Any]
+            }])
+        }
+        StubWeb.handle(Self.bridge + "/api/model") { _, _ in
+            StubWeb.json(["data": Self.accounts.flatMap { account, _ in
+                [("default", "Opus 5.5", 3), ("sonnet", "Sonnet 5.5", 2)].map { id, name, released -> [String: Any] in
+                    ["id": id, "providerID": account, "name": name, "family": "claude-\(id)",
+                     "capabilities": ["tools": true, "input": ["text"], "output": ["text"]], "variants": [],
+                     "time": ["released": released], "cost": [["input": 0, "output": 0]],
+                     "status": "active", "enabled": true, "limit": ["context": 200_000, "output": 32_000]]
+                }
+            }])
+        }
+        app.catalog.outsideAgents = app.agents
+        app.agents.connect(ServerEndpoint(url: URL(string: Self.bridge)!, password: "test"), folderPrefix: "")
+        await app.catalog.refreshAgents()
+        UserDefaults.standard.set("claude-code/default,claude-code@work/default", forKey: "favoriteModels")
+    }
+
+    private func close() {
+        window.orderOut(nil)
+        window.close()
+        app.agents.disconnect()
+        UserDefaults.standard.removeObject(forKey: "favoriteModels")
+        AXElement.reading(false)
+        StubWeb.stop()
+    }
+
+    /// The picker as the composer's chip opens it, on its list, until it closes.
+    private struct Opener: View {
+        let catalog: Catalog
+        let selection: ModelRef?
+        let picked: (ModelRef) -> Void
+        @State private var isOpen = true
+
+        var body: some View {
+            VStack {
+                if isOpen {
+                    ModelPicker(catalog: catalog, selection: selection, onSelect: picked, close: { isOpen = false }, scope: .all, startsOnList: true)
+                }
+            }
+            .frame(width: 400, height: 520, alignment: .top)
+        }
+    }
+
+    private func show(selection: ModelRef?, picked: @escaping (ModelRef) -> Void = { _ in }) {
+        window.contentView = NSHostingView(rootView: Opener(catalog: app.catalog, selection: selection, picked: picked).environment(app.catalog))
+        window.orderBack(nil)
+        window.contentView?.layoutSubtreeIfNeeded()
+    }
+
+    /// What VoiceOver finds in the window, as it lays out now (and a beat for `until` to look again).
+    private var elements: [AXElement] {
+        window.contentView?.layoutSubtreeIfNeeded()
+        DispatchQueue.main.async { TestPulse.beat() }
+        return AXElement.all(in: window.contentView)
+    }
+
+    private var labels: [String] { elements.compactMap(\.label) }
+
+    /// The list's rows for a model named `name`, as VoiceOver reads them.
+    private func rows(_ name: String) -> [String] {
+        labels.filter { $0.hasPrefix(name) }
+    }
+
+    /// A click on the first of what VoiceOver calls `label`, sent through the window.
+    private func click(_ matches: (String) -> Bool) throws {
+        let found = elements.first { $0.label.map(matches) == true }
+        let element = try #require(found, "among \(labels)")
+        let frame = element.frame
+        let point = window.convertPoint(fromScreen: NSPoint(x: frame.midX, y: frame.midY))
+        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+            let event = try #require(NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                                        windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0))
+            window.sendEvent(event)
+        }
+    }
+
+    @Test func eachStarredRowSaysItsAccountAndPickingOnePicksThatAccount() async throws {
+        defer { close() }
+        var picked: ModelRef?
+        show(selection: nil) { picked = $0 }
+
+        try await until { rows("Opus 5.5").count == 2 }
+        let starred = rows("Opus 5.5")
+        #expect(starred.filter { $0.contains("Claude Code · Work") }.count == 1, "\(starred)")
+        #expect(starred.filter { !$0.contains("Work") && $0.contains("Claude Code") }.count == 1, "\(starred)")
+
+        // The added account's: what's picked is that account's model, as the session is sent it.
+        try click { $0.hasPrefix("Opus 5.5") && $0.contains("Work") }
+        try await until { picked != nil }
+        #expect(picked == ModelRef(id: "default", providerID: "claude-code@work"))
+    }
+
+    /// What the window draws now, as it shows on screen: its layers, not what VoiceOver reads (a row
+    /// can read right and still be drawn as it was on the page before).
+    private func drawn() throws -> NSBitmapImageRep {
+        window.displayIfNeeded()
+        let frame = try #require(window.contentView?.superview)
+        let layer = try #require(frame.layer)
+        let size = frame.bounds.size
+        let context = try #require(CGContext(data: nil, width: Int(size.width * 2), height: Int(size.height * 2), bitsPerComponent: 8, bytesPerRow: 0,
+                                             space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.scaleBy(x: 2, y: 2)
+        layer.render(in: context)
+        return NSBitmapImageRep(cgImage: try #require(context.makeImage()))
+    }
+
+    /// Whether a mark (the model's maker's) is drawn at the start of the row VoiceOver calls `label`.
+    private func drawsMark(_ matches: (String) -> Bool) throws -> Bool {
+        let shown = elements
+        guard let found = shown.first(where: { $0.label.map(matches) == true }) else {
+            throw TestFailure("No such row among \(shown.compactMap(\.label))")
+        }
+        let row = window.convertFromScreen(found.frame)
+        let image = try drawn()
+        let height = window.frame.height
+        var lightness: [CGFloat] = []
+        for x in stride(from: row.minX + 10, to: row.minX + 28, by: 0.5) {
+            for y in stride(from: row.minY + 2, to: row.maxY - 2, by: 0.5) {
+                guard let color = image.colorAt(x: Int(x * 2), y: Int((height - y) * 2))?.usingColorSpace(.deviceRGB) else { continue }
+                lightness.append((color.redComponent + color.greenComponent + color.blueComponent) / 3)
+            }
+        }
+        return (lightness.max() ?? 0) - (lightness.min() ?? 0) > 0.25
+    }
+
+    /// Opened on the current model's own account (its row first), then turned to Starred: each row
+    /// drawn as Starred's, with its maker's mark and its account, never as it was on that page.
+    @Test func turningToStarredFromAnAccountsPageDrawsEachRowAsStarreds() async throws {
+        defer { close() }
+        show(selection: ModelRef(id: "default", providerID: "claude-code"))
+        try await until { rows("Sonnet 5.5").count == 1 }
+        #expect(try !drawsMark { $0.hasPrefix("Opus 5.5") }, "Claude Code's own page: no mark, its maker is the account's")
+
+        try click { $0 == "Starred" }
+        try await until { rows("Sonnet 5.5").isEmpty && rows("Opus 5.5").contains { $0.contains("Work") } }
+        #expect(rows("Opus 5.5").count == 2, "one row for each account's: \(rows("Opus 5.5"))")
+        #expect(try drawsMark { $0.hasPrefix("Opus 5.5") && !$0.contains("Work") }, "Claude Code's own, drawn as a Starred row")
+        #expect(try drawsMark { $0.hasPrefix("Opus 5.5") && $0.contains("Work") })
+    }
+
+    /// Opened on the added account's own page, then Starred (as in the bug: its row there read
+    /// "Opus 5.5, ⌘1", as on the page before), then back to that page.
+    @Test func starredAfterAnAddedAccountsPageSaysWhoseEachRowIsAndBack() async throws {
+        defer { close() }
+        show(selection: ModelRef(id: "default", providerID: "claude-code@work"))
+        try await until { rows("Sonnet 5.5").count == 1 }
+        try click { $0 == "Starred" }
+        try await until { rows("Sonnet 5.5").isEmpty && rows("Opus 5.5").count == 2 }
+        let starred = rows("Opus 5.5")
+        #expect(starred.filter { $0.contains("Claude Code · Work") }.count == 1, "the Work account's, saying so: \(starred)")
+        #expect(starred.compactMap { $0.components(separatedBy: ", ").last }.sorted() == ["⌘1", "⌘2"], "one shortcut each: \(starred)")
+        #expect(try drawsMark { $0.hasPrefix("Opus 5.5") && $0.contains("Work") })
+
+        try click { $0 == "Claude Code · Work" }
+        try await until { rows("Sonnet 5.5").count == 1 }
+        #expect(rows("Opus 5.5").count == 1, "the account's own Opus 5.5 only: \(rows("Opus 5.5"))")
+        #expect(try !drawsMark { $0.hasPrefix("Opus 5.5") }, "drawn as the account's page draws it, not as Starred did")
+    }
+}
