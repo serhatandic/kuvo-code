@@ -1,7 +1,7 @@
 // The outbox: letters this box's agents leave for agents elsewhere
 // Each goes by mail to the box its agent is on, again each minute until that box says it has it
-// (or why not), for two days; without the relay, it waits for it. A waiting tool reads its answer
-// from `run/replies/<id>.json`.
+// (or why not), for two days; a note, the box's own word, for 30; without the relay, it waits for it.
+// A waiting tool reads its answer from `run/replies/<id>.json`.
 
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -13,16 +13,17 @@ import { sendInto } from "../engine/queue";
 import { messageID } from "../engine/sessions";
 import { listOf, writePrivate } from "../files";
 import { HERE, IS_MAC, RUN } from "../home";
-import { frozen, movedAway } from "../moves/records";
+import { frozen } from "../moves/records";
 import { announce, toldPeers } from "../peers/agents";
 import { isPutAway, peerOf, readPeerAgents } from "../peers/directory";
-import { mailFor, movedOf, ownKey, ownListed, peersOf } from "../peers/known";
+import { KEY, mailFor, movedOf, ownKey, ownListed, peersOf, removedBoxes } from "../peers/known";
 import { bridgeAsk, giveUpSeat, ONLINE_STEP, SEAT_LETTER_LIFE, seatAge, seatRounds, sendSeatLetter } from "../peers/seats";
 import { readLink } from "../state";
 import { excerpt, READ_BY_MAIL, readConversation } from "./conversation";
-import { composeLetter, cutText, LETTER_ID, LETTER_LIFE, LETTER_MEMORY, letterTries, OUTBOX, pausedNote, placeOfSession, SENDING } from "./letter";
+import { composeLetter, cutText, LETTER_ID, LETTER_LIFE, LETTER_MEMORY, letterTries, NOTE_MEMORY, OUTBOX, pausedNote, placeOfSession, SENDING } from "./letter";
 import { deliverNote, noteOf } from "./note";
 import { answerTo } from "./take";
+import { forgetOldHomes, homesOf, learnHomes, noteHome } from "../work/homes";
 import type { Target } from "../../shared/records";
 import type { PutAwayable } from "../peers/directory";
 import type { Peer } from "../peers/known";
@@ -44,6 +45,8 @@ export interface MailedLetter {
   read?: LetterRead;
   /** The box's own word, not an agent's: delivered as that box would have (`LetterNote`). */
   note?: LetterNote;
+  /** A note: when it was first left (`at` is when this mail of it was sealed). */
+  made?: number;
 }
 
 /** A letter that asks for a conversation instead of saying something (read_conversation from another
@@ -58,13 +61,15 @@ export interface LetterRead {
 export type AnswerLetter = Pick<MailedLetter, "text"> & { answers: string; from: string };
 
 /** How a letter went, as the box it went to says (`{"delivered": …}`): there (`ok`), or why not;
- * with `retry`, not now, so it's sent again; with `answer: false`, there, but no answer will come. */
+ * with `retry`, not now, so it's sent again; with `answer: false`, there, but no answer will come;
+ * with `lives`, a note's conversation lives on that box now, so that's where it goes. */
 export interface Delivered {
   id: string;
   ok: boolean;
   why?: string;
   retry?: boolean;
   answer?: boolean;
+  lives?: string;
 }
 
 /** A letter in the outbox (`run/outbox/sending/<id>.json`, as a tool's call or this box left it):
@@ -120,6 +125,11 @@ export interface MacWaiter {
 const introducing = new Map<string, { at: number; done: boolean }>();
 const INTRODUCING_FOR = 60_000;
 
+// Notes sent to each box and not a word back, since when and the last: past QUIET_AFTER it may be
+// away for days, with days of them kept for it, so only the oldest goes each minute until it answers.
+const notesUnanswered = new Map<string, { since: number; last: number }>();
+const QUIET_AFTER = 120_000;
+
 export const REPLIES = path.join(RUN, "replies");
 
 export const LETTER_BYTES = 24_000;
@@ -164,26 +174,34 @@ function leaveLetter(letter: OutboxLetter, now = Date.now()): boolean {
 }
 export const leaveAnswer = (letter: OutboxLetter): void => void leaveLetter(letter);
 
-/** What this box has to tell one of its conversations that moved to another computer lately
- * (`movedAway`): a letter to it there, which the outbox sends as any other, with `note` saying how
- * it would have been delivered here, so the box it goes to delivers it the same way. False when it
- * didn't move away from here, or the letter couldn't be left. */
+/** What this box has to tell one of its conversations that lives on another computer now, however
+ * long ago it left (`homesOf`): a letter to it there, which the outbox sends as a note, with `note`
+ * saying how it would have been delivered here, so the box it goes to delivers it the same way.
+ * False when it has no home elsewhere, or the letter couldn't be left. */
 export function tellMovedAway(session: string, text: string, note: LetterNote, now = Date.now()): boolean {
-  const away = movedAway(now).find(each => each.session === session);
-  return Boolean(away) && leaveLetter({ from: null, to: session, text, peer: away!.key, note }, now);
+  const link = readLink();
+  const key = homesOf(link).get(session);
+  return Boolean(key) && key !== ownKey(link ?? {}) && leaveLetter({ from: null, to: session, text, peer: key, note }, now);
 }
 
 // How a letter went, from the box it went to (anyone else's word is dropped): there, so it's not
 // sent again, and with `wait`, its answer awaited (`replies/<id>.wait`, whose box it's from), or
 // none to wait for; not now, so it's sent again; or why not, for a waiting tool.
-export function letterWent(sender: Pick<Peer, "key">, { id, ok, why, retry, answer }: Delivered): void {
+export function letterWent(sender: Pick<Peer, "key">, { id, ok, why, retry, answer, lives }: Delivered, now = Date.now()): void {
   if (!LETTER_ID.test(id)) return;
+  notesUnanswered.delete(sender.key);
   const file = path.join(SENDING, `${id}.json`);
   let letter: InSending | null = null;
   try { letter = JSON.parse(fs.readFileSync(file, "utf8")); } catch { return; }
   if (letter?.sentTo !== sender.key) return;
+  const note = noteOf(letter.note);
+  // A note's conversation lives elsewhere now, as the box it went to says: it goes there.
+  if (!ok && retry === true && note && typeof lives === "string" && KEY.test(lives)) {
+    noteHome(letter.to, lives, now);
+    try { writePrivate(file, JSON.stringify({ ...letter, peer: lives })); } catch {}
+  }
   // Not now: sent again. A group chat's waits as long as it takes (the outbox counts its time online).
-  if (!ok && retry === true && (isObject(letter.seat) || Date.now() - (letter.at ?? 0) < LETTER_MEMORY)) return;
+  if (!ok && retry === true && (isObject(letter.seat) || now - (letter.at ?? 0) < (note ? NOTE_MEMORY : LETTER_MEMORY))) return;
   // A group chat's that can't be delivered is given up, and the bridge told, never just dropped.
   if (!ok && isObject(letter.seat)) return void giveUpSeat(id, letter as SeatLetter);
   letterTries.delete(id);
@@ -231,6 +249,8 @@ async function deliverHere(id: string, file: string, letter: OutboxLetter, step:
     };
     if (!place) return done({ failed: "There's no such conversation here." });
     const kuvo = place.data?.metadata?.kuvo ?? {};
+    // The box's word for one put away here waits until it's brought back, as it does anywhere.
+    if (noteOf(letter.note) && isPutAway(place.data as PutAwayable) && !place.data?.parentID && !kuvo.seat) return;
     if (place.data?.parentID || kuvo.seat || isPutAway(place.data as PutAwayable)) return done({ failed: "That conversation doesn't take messages." });
     const name = nameOf(letter.to) ?? (place.data?.title || "New session");
     if (isObject(letter.read)) {
@@ -381,6 +401,10 @@ export function sendOutbox(host: Pick<LinkHost, "send">, link: LinkState | null 
   const peers = peersOf(link);
   const told = readPeerAgents();
   const moved = movedOf(link);
+  learnHomes(link, now);
+  telling.push(forgetOldHomes(now).catch(() => {}));
+  const homes = homesOf(link);
+  const removed = removedBoxes(link);
   // COMPAT(beta.1 outbox): letters an older Kuvo Code left in `run/outbox` for a Mac to collect over SSH (its tools', and those its link handed over without the relay), taken on here. Goes 3 months after 0.8.0.
   // No Mac collects them any more: they go as this link's own. (Not one a Mac took to deliver,
   // `.mac-…`: each goes one way, by whichever renames it first.)
@@ -438,13 +462,20 @@ export function sendOutbox(host: Pick<LinkHost, "send">, link: LinkState | null 
       if (told) telling.push(told);
       continue;
     }
-    // Where its agent lives now: a conversation moved goes where it went, whoever it was left for.
-    const lives = moved.get(letter.to);
+    // Where its agent lives now: a conversation moved goes where it went, whoever it was left for. A
+    // note goes by what's known of its home, however old (one listed here is found here first).
+    const note = noteOf(letter.note);
+    const lives = (note && !ownHere.has(letter.to) ? homes.get(letter.to) : undefined) ?? moved.get(letter.to) ?? (note && letter.peer === mine ? mine! : undefined);
     const peer = lives ? peers.find(each => each.key === lives) ?? null
       : typeof letter.peer === "string" ? peers.find(each => each.key === letter.peer) ?? null : peerOf(letter.to, peers, told, moved);
-    if (now - made > LETTER_MEMORY) {
+    if (now - made > (note ? NOTE_MEMORY : LETTER_MEMORY)) {
       fs.rmSync(file, { force: true });
       if (letter.wait === true) reply(id, { failed: "Its agent couldn't be reached." });
+      continue;
+    }
+    // Its computer was removed, which is more than being left out of a list for now: no one to tell.
+    if (note && !lives && !peer && removed.has(letter.peer as string)) {
+      fs.rmSync(file, { force: true });
       continue;
     }
     // Moved here since it was left (as the box it went from says, or as this box lists it now): here,
@@ -469,10 +500,15 @@ export function sendOutbox(host: Pick<LinkHost, "send">, link: LinkState | null 
       }
       if (!introduced.done && now - introduced.at < INTRODUCING_FOR) continue;
     }
+    const unanswered = note ? notesUnanswered.get(peer.key) : undefined;
+    if (unanswered && now - unanswered.since >= QUIET_AFTER && now - unanswered.last < 60_000) continue;
+    if (note) notesUnanswered.set(peer.key, { since: unanswered?.since ?? now, last: now });
     letterTries.set(id, now);
-    const bytes = letterMail(peer, { id, from: letter.from, to: letter.to, text: cutText(letter.text), wait: letter.wait === true, at: made,
+    // A note is sealed now, however long it's been kept, with when it was made beside that. A replay
+    // of an old one fails by its age or its id; an agent's message fails at a day, not arriving late.
+    const bytes = letterMail(peer, { id, from: letter.from, to: letter.to, text: cutText(letter.text), wait: letter.wait === true, at: note ? now : made,
       ...(letter.answers ? { answers: letter.answers } : {}), ...(isObject(letter.read) ? { read: typeof letter.read.query === "string" ? { query: letter.read.query } : {} } : {}),
-      ...(noteOf(letter.note) ? { note: noteOf(letter.note)! } : {}) }, link, now);
+      ...(note ? { note, made } : {}) }, link, now);
     if (!bytes) {
       fs.rmSync(file, { force: true });
       if (letter.wait === true) reply(id, { failed: "It's too long to send." });

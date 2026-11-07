@@ -12,12 +12,13 @@ import { locked, writePrivate } from "../files";
 import { PEER_LOCK, isPutAway, peerOf, readPeerAgents } from "../peers/directory";
 import { movedOf, ownKey, peersOf } from "../peers/known";
 import { readLink } from "../state";
-import { LETTERS_SEEN, LETTER_ID, LETTER_LIFE, LETTER_MEMORY, composeLetter, cutText, pausedNote, placeOfSession } from "./letter";
+import { LETTERS_SEEN, LETTER_ID, LETTER_LIFE, LETTER_MEMORY, NOTE_MEMORY, composeLetter, cutText, pausedNote, placeOfSession } from "./letter";
 import { READ_BY_MAIL, excerpt, readConversation } from "./conversation";
 import { allowed, takeBack } from "./limits";
 import { deliverNote, noteOf } from "./note";
 import { ANSWER_TEXT, answered } from "./outbox";
 import { awaitingAnswer } from "../work/awaited";
+import { homesOf, noteHome } from "../work/homes";
 import type { ListedAgent, Target, ToldAgents } from "../../shared/records";
 import type { EngineAnswer } from "../engine/client";
 import type { Peer } from "../peers/known";
@@ -80,14 +81,19 @@ function answerAfter(messages: EngineMessage[], id: string): string[] {
   return replies;
 }
 
-// Letters remembered, by id, with when: one seen again is said to be there, not delivered twice.
+// Letters remembered, by id, with when: one seen again is said to be there, not delivered twice. A
+// note's for as long as it may come again (`note:<id>`), and which letters were answered as well
+// (`answer:<id>`), so an answer sent again under another id isn't a second message.
 export function lettersSeen(now: number): Record<string, number> {
   let seen: Record<string, number> = {};
   try { seen = JSON.parse(fs.readFileSync(LETTERS_SEEN, "utf8")); } catch {}
-  for (const [key, at] of Object.entries(seen)) if (now - at > LETTER_MEMORY) delete seen[key];
+  for (const [key, at] of Object.entries(seen)) if (now - at > (key.startsWith("note:") ? NOTE_MEMORY : LETTER_MEMORY)) delete seen[key];
   return seen;
 }
-const seenAlready = (id: string, now = Date.now()) => id in lettersSeen(now);
+const seenAlready = (id: string, now = Date.now()) => {
+  const seen = lettersSeen(now);
+  return id in seen || `note:${id}` in seen;
+};
 function noteSeen(id: string, now = Date.now()) {
   locked(PEER_LOCK, () => {
     const seen = lettersSeen(now);
@@ -95,6 +101,7 @@ function noteSeen(id: string, now = Date.now()) {
     writePrivate(LETTERS_SEEN, JSON.stringify(seen));
   });
 }
+const answerSeen = (answers: string) => `answer:${answers}`;
 // Letters being delivered now: one that comes again meanwhile waits for that one's answer.
 const delivering = new Set<string>();
 
@@ -148,12 +155,14 @@ export const BRIDGE_WAIT = 30 * 60_000;
 const bridgeWaits = new Map<string, number>();
 
 // What a letter for a conversation this box doesn't have is told: to come again while the bridge
-// may be starting (`bridge`: it runs), else that there's none.
-function noConversation(id: string, bridge: boolean, now: number): [string, boolean] {
+// may be starting (`bridge`: it runs), else that there's none. A note always comes again while the
+// bridge is down, as its conversation may be the bridge's, and news is kept until it's there.
+function noConversation(id: string, bridge: boolean, now: number, note = false): [string, boolean] {
   if (bridge) {
     bridgeWaits.delete(id);
     return ["There's no such conversation here.", false];
   }
+  if (note) return [BRIDGE_AWAY, true];
   for (const [letter, since] of bridgeWaits) if (now - since > LETTER_MEMORY) bridgeWaits.delete(letter);
   const since = bridgeWaits.get(id) ?? now;
   bridgeWaits.set(id, since);
@@ -170,21 +179,32 @@ function noConversation(id: string, bridge: boolean, now: number): [string, bool
 // that tool. One for a conversation moving to or from another computer now (`moving`), or that
 // lives on another now, comes again, and reaches it where it lives then. One that's the sending
 // box's own word for a conversation that moved here from it (`note`) is delivered as that box would
-// have delivered it, from whom the note says. `send(peer, payload)`
+// have delivered it, from whom the note says; it comes again rather than ending for as long as its
+// conversation may yet have it, and hears where one that moved on from here lives (`lives`).
+// `send(peer, payload)`
 // mails the peer; `answer(letter)` sends this box's answer back.
 // (`send` and `targets` are always given: the `{}` is only there as the default.)
 export async function takeLetter(sender: LetterSender, letter: unknown, { send, targets, answer = () => {}, told = readPeerAgents(), peers = peersOf(readLink()), moved = movedOf(readLink()), now = Date.now(), wait, moving = async () => false, bridge = true }: TakeLetterOptions = {} as TakeLetterOptions): Promise<void> {
   if (!isObject(letter) || typeof letter.id !== "string" || !LETTER_ID.test(letter.id)) return;
   const { id } = letter;
-  const no = (why: string, again = false) => send(sender, { delivered: { id, ok: false, why, ...(again ? { retry: true } : {}) } });
-  if (typeof letter.at !== "number" || Math.abs(now - letter.at) > LETTER_LIFE) return no("It's too old to deliver.");
+  const no = (why: string, again = false, lives?: string) => send(sender, { delivered: { id, ok: false, why, ...(again ? { retry: true } : {}), ...(lives ? { lives } : {}) } });
+  // (A note is sealed as it's sent, so one this old is a replay, or a clock that's off: it doesn't
+  // end the real one, which comes again.)
+  if (typeof letter.at !== "number" || Math.abs(now - letter.at) > LETTER_LIFE) return no("It's too old to deliver.", noteOf(letter.note) !== null);
   if (typeof letter.to !== "string" || !/^ses_[A-Za-z0-9]{1,60}$/.test(letter.to) || typeof letter.text !== "string" || !letter.text.trim()) return no("That isn't a letter.");
   if (delivering.has(id)) return;
   if (seenAlready(id, now)) return send(sender, { delivered: { id, ok: true } });
+  const answers = typeof letter.answers === "string" && LETTER_ID.test(letter.answers) ? letter.answers : null;
+  // A letter's answered once: the same answer again under another id is there already.
+  if (answers && !isObject(letter.read) && seenAlready(answerSeen(answers), now)) {
+    noteSeen(id, now);
+    return send(sender, { delivered: { id, ok: true } });
+  }
   // An answer a tool here waits for (from the box its letter went to): to it. A conversation read
   // that nothing waits for now just goes: it isn't a message.
-  if (typeof letter.answers === "string" && LETTER_ID.test(letter.answers) && (answered(sender, letter as AnswerLetter, now) || isObject(letter.read))) {
+  if (answers && (answered(sender, letter as AnswerLetter, now) || isObject(letter.read))) {
     noteSeen(id, now);
+    noteSeen(answerSeen(answers), now);
     return send(sender, { delivered: { id, ok: true } });
   }
   if (isObject(letter.read)) return readFor(sender, letter as ReadLetter, { send, targets, answer, now, moved, moving, bridge });
@@ -192,10 +212,10 @@ export async function takeLetter(sender: LetterSender, letter: unknown, { send, 
   // one that can't be delivered yet, so one tried again and again leaves room for the rest.
   let counted: number | null = allowed("messages", `peer:${sender.key}`, now);
   if (counted === null) return no("It's sent a lot of messages in the last few minutes.", true);
-  const notDelivered = (why: string, again = false) => {
+  const notDelivered = (why: string, again = false, lives?: string) => {
     if (again && counted !== null) takeBack("messages", `peer:${sender.key}`, counted);
     counted = null;
-    return no(why, again);
+    return no(why, again, lives);
   };
   delivering.add(id);
   let place: SessionPlace | null, prompt = "", fromAgent: ListedAgent | null = null, went: "sent" | "waits";
@@ -204,10 +224,17 @@ export async function takeLetter(sender: LetterSender, letter: unknown, { send, 
   // never notes.
   const note = noteOf(letter.note);
   try {
+    const own = ownKey(readLink() ?? {});
     const lives = moved.get(letter.to);
-    if ((lives && lives !== ownKey(readLink() ?? {})) || (await moving(letter.to))) return notDelivered("It's moving to another computer: it comes again once it's there.", true);
+    if (lives && lives !== own) return notDelivered("It's moving to another computer: it comes again once it's there.", true, note ? lives : undefined);
+    if (await moving(letter.to)) return notDelivered("It's moving to another computer: it comes again once it's there.", true);
     place = await placeOfSession(letter.to, targets);
-    if (!place) return notDelivered(...noConversation(id, bridge, now));
+    if (!place) {
+      // The box's word for one that moved on from here, however long ago: it goes there.
+      const home = note ? homesOf(readLink()).get(letter.to) : undefined;
+      if (home && home !== own) return notDelivered("It lives on another computer now: it comes again there.", true, home);
+      return notDelivered(...noConversation(id, bridge, now, Boolean(note)));
+    }
     bridgeWaits.delete(id);
     const kuvo = place.data?.metadata?.kuvo ?? {};
     // The sending box's word for one put away here comes again, as it would wait there until it's brought back.
@@ -231,8 +258,13 @@ export async function takeLetter(sender: LetterSender, letter: unknown, { send, 
   } finally {
     delivering.delete(id);
   }
-  noteSeen(id, now);
-  if (note) return send(sender, { delivered: { id, ok: true } });
+  noteSeen(note ? `note:${id}` : id, now);
+  if (answers) noteSeen(answerSeen(answers), now);
+  if (note) {
+    // The sessions it speaks of live on the box it came from.
+    for (const session of note.about ?? []) noteHome(session, sender.key, now);
+    return send(sender, { delivered: { id, ok: true } });
+  }
   // Waiting for an answer it can't have (its sender couldn't be told): it hears no answer's coming.
   if (letter.wait === true && !fromAgent) return send(sender, { delivered: { id, ok: true, answer: false, why: "Its answer can't come back to you: it doesn't know who you are." } });
   // Stopped by the user here: it waits for them, and its answer comes as a message.

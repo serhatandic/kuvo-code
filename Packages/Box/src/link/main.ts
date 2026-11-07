@@ -108,6 +108,7 @@ export { COMPATIBILITY_FILE, engineConfigContent, learnCompatibility, readCompat
 export { queueOf, queueWatcher, readQueues, scanQueues } from "./engine/queue";
 export { letAttachmentsGo } from "./server/attached";
 export { workWatcher } from "./work/wakes";
+export { forgetOldHomes } from "./work/homes";
 export { AT_WORK_LIMIT, FINISH_HOLD_LIMIT, atWorkNow, noteStopped, readBackground, readStopped, stopWork } from "./work/background";
 export { goalFollowers, goalHolds, settleGoalHolds, lookAtGoals, periodOf, periodEnd, pauseGoal, REVIEW_PAUSE } from "./work/goals";
 export { keptAwake, letGo } from "./work/awake";
@@ -163,6 +164,7 @@ export { bridgeAsk, bridgeClock, carrySeat, seatPayloads, seatPeers, takeSeat, t
 export { announce, ownAgents, refreshOwn, writeAgents } from "./peers/agents";
 export { answered, deliverLeftAnswers, letterMail, letterWent, sendOutbox } from "./letters/outbox";
 export { takeLetter } from "./letters/take";
+export { letterTries } from "./letters/letter";
 export { peerPlaces } from "./engine/client";
 export { answerPersonalities, retellBots, takePersonalities, takePersonalitiesDocument } from "./personalities/take";
 export { docsChanged, macDocsChanged, receiveDocs } from "./documents/exchange";

@@ -424,3 +424,44 @@ test("a machine's conversation writes to a Mac's agent with its tool, and gets i
   const read = await machineTool("read_conversation", { of: "Release notes" }, "ses_lab1");
   assert.deepEqual(read, { text: "Release notes's computer doesn't share its conversations yet (it runs an older Kuvo Code). Ask it what you need with send_message.", isError: true });
 });
+
+// The machine's link, stopped, as a machine is when it's asleep; started again, it's back on the relay.
+async function stopMachineLink() {
+  const pid = Number(fs.readFileSync(run("link.pid"), "utf8"));
+  process.kill(pid, "SIGTERM");
+  await arrived(() => !relay.has(Buffer.from(lab.address, "base64url")));
+}
+async function startMachineLink() {
+  spawn(process.execPath, [script, "run"], { detached: true, stdio: "ignore", env: { PATH: process.env.PATH, HOME: support, KUVO_HOME: machineHome } }).unref();
+  await arrived(() => relay.has(Buffer.from(lab.address, "base64url")));
+}
+const NOTE = { from: "Its sessions", words: "It finished.", line: "“Sign-in” finished", delivery: "queue" };
+const THREE_DAYS = 3 * 86_400_000;
+
+test("news kept three days for a lead on the machine, whose link is stopped, arrives once it's started, once", { timeout: 60_000 }, async t => {
+  signal = t.signal;
+  await stopMachineLink();
+  fs.mkdirSync(path.join(macHome, "run", "outbox", "sending"), { recursive: true });
+  write(path.join(macHome, "run", "outbox", "sending", "ltr_newsformachine.json"), { from: null, to: "ses_lab1", text: "[Session finished] from the Mac", peer: lab.key, wait: false, at: Date.now() - THREE_DAYS, note: NOTE });
+  // A try goes nowhere while it's stopped: it stays.
+  await link.macSendOutbox();
+  assert.ok(sending(macHome).includes("ltr_newsformachine.json"));
+  await startMachineLink();
+  // (A try comes each minute: here, now.)
+  link.letterTries.clear();
+  await link.macSendOutbox();
+  await arrived(() => labEngine.seen.prompts.find(each => each.text === "[Session finished] from the Mac"));
+  await eventually(() => !sending(macHome).includes("ltr_newsformachine.json"));
+  assert.equal(labEngine.seen.prompts.filter(each => each.text === "[Session finished] from the Mac").length, 1);
+});
+
+test("news kept three days for a lead on this Mac by a machine whose link was stopped arrives as it's started, once", { timeout: 60_000 }, async t => {
+  signal = t.signal;
+  await stopMachineLink();
+  fs.mkdirSync(run("outbox/sending"), { recursive: true });
+  write(run("outbox/sending/ltr_newsformac0.json"), { from: null, to: "ses_mac1", text: "[Session finished] from the machine", peer: mac, wait: false, at: Date.now() - THREE_DAYS, note: NOTE });
+  await startMachineLink();
+  await arrived(() => macEngine.seen.prompts.find(each => each.text === "[Session finished] from the machine"));
+  await eventually(() => !sending(machineHome).includes("ltr_newsformac0.json"));
+  assert.equal(macEngine.seen.prompts.filter(each => each.text === "[Session finished] from the machine").length, 1);
+});

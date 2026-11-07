@@ -15,7 +15,7 @@ import { WAKE_MARKER } from "../areas/wakes";
 import { boxNote } from "../../shared/queues";
 import { messageID } from "../engine/sessions";
 import { locked, writePrivate } from "../files";
-import { LETTER_LIFE, placeOfSession } from "../letters/letter";
+import { NOTE_MEMORY, placeOfSession } from "../letters/letter";
 import { tellMovedAway } from "../letters/outbox";
 import { frozen } from "../moves/records";
 import { isPutAway, type PutAwayable } from "../peers/directory";
@@ -359,19 +359,21 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
     if (!waiting?.lines.length) return;
     // Gone for sure: nothing to tell. Not to be reached now (the engine starting again, the coding
     // agents' bridge not running, whose it may be, or moving to or from another computer, when a
-    // turn here would be left behind): kept, a day at most, and tried again a little later each
-    // time. Moved to another computer since: told there, as a letter.
+    // turn here would be left behind): kept, as long as a note would be, and tried again a little
+    // later each time. Living on another computer now, however long ago it left: told there, as a
+    // letter.
     const place = frozen().has(starter) ? undefined : await placeOfSession(starter, targets()).catch(() => undefined);
     const line = wakeLineShown(waiting.lines);
     const delivery = waiting.asks ? "steer" : "queue";
-    if (place === null && tellMovedAway(starter, wakeText(waiting.lines), { from: "Its sessions", words: line, line, delivery })) return void failures.delete(starter);
-    if (place === null && (bridgeRuns() || Date.now() - waiting.since > LETTER_LIFE)) return;
+    const about = [...new Set(waiting.lines.map(each => /\(address (\S+?)\)/.exec(each)?.[1]).filter((each): each is string => Boolean(each)))];
+    if (place === null && tellMovedAway(starter, wakeText(waiting.lines), { from: "Its sessions", words: line, line, delivery, about }, now())) return void failures.delete(starter);
+    if (place === null && (bridgeRuns() || now() - waiting.since > NOTE_MEMORY)) return;
     try {
       if (!place) throw new Error("Not reached.");
       // Archived (from any app): kept until it's brought back, as its own wake-ups and goal wait,
       // rather than running a turn no one sees; a week at most.
       if (isPutAway(place.data as PutAwayable)) {
-        if (Date.now() - waiting.since > ARCHIVED_FOR) return;
+        if (now() - waiting.since > ARCHIVED_FOR) return;
         throw new Error("Archived.");
       }
       // Stopped by the user: it waits there with the queue, as theirs does.
@@ -400,8 +402,8 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
   // A line for `starter`, kept until it's sent, and what it told noted.
   const tell = (starter: string, line: string, asks: boolean) => {
     changeWaiting(file, all => {
-      const now = all[starter] ?? { lines: [], asks: false, since: Date.now() };
-      all[starter] = { lines: [...now.lines, line], asks: now.asks || asks, since: now.since };
+      const kept = all[starter] ?? { lines: [], asks: false, since: now() };
+      all[starter] = { lines: [...kept.lines, line], asks: kept.asks || asks, since: kept.since };
     });
     soon(starter);
   };
