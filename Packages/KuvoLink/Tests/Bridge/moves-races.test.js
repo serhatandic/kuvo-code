@@ -299,6 +299,8 @@ test("every part on its way lost at once (the relay dropped them all) goes again
   const before = told.length;
   link.keepMoving(Date.now() + 25_000);
   assert.ok(told.slice(before).some(move => move.op === "part" && lost.has(move.i)), "those it lost go again");
+  // Half as many at once, on a connection that lost them: a slow one isn't sent it all over and over.
+  assert.equal(told.slice(before).filter(move => move.op === "part").length, 8);
   const moved = await moving;
   assert.equal(moved.status, 200, JSON.stringify(moved.json));
 });

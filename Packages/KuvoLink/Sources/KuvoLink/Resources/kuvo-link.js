@@ -18223,11 +18223,16 @@ function sendParts(record, now = Date.now()) {
   const of = Math.ceil(record.size / PART_BYTES);
   const file = path68.join(bundleOf(record.id), "bundle.tgz");
   let handle = null;
+  let lost = false;
   for (const [i, when] of state.flying)
-    if (now - when >= PART_AGAIN)
+    if (now - when >= PART_AGAIN) {
       state.flying.delete(i);
+      lost = true;
+    }
+  if (lost)
+    state.window = Math.max(1, Math.floor((state.window ?? IN_FLIGHT) / 2));
   try {
-    for (let i = 0;i < of && state.flying.size < IN_FLIGHT; i++) {
+    for (let i = 0;i < of && state.flying.size < (state.window ?? IN_FLIGHT); i++) {
       if (state.got.has(i) || state.flying.has(i))
         continue;
       handle ??= fs65.openSync(file, "r");
@@ -18929,7 +18934,8 @@ async function moveMail(sender, given, id) {
       if (!state)
         return;
       state.got.add(given.i);
-      state.flying.delete(given.i);
+      if (state.flying.delete(given.i))
+        state.window = Math.min(IN_FLIGHT, (state.window ?? IN_FLIGHT) + 1);
       const of = Math.ceil((mine.size ?? 0) / PART_BYTES);
       if (state.got.size === of) {
         changeMove(id, (each) => {
