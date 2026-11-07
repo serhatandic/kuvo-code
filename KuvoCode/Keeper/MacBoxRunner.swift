@@ -66,7 +66,7 @@ final class MacBoxRunner {
     /// How it waits between tries (a test's moves on as it says).
     var retryClock: (Int) async -> Void = StartRetries.wait
     /// Whether macOS is asking you something now (a test's says).
-    var systemAsking: () -> Bool = { AppModel.systemPromptShowing }
+    var systemAsking: () -> Bool = { AppModel.systemPromptOpen }
     /// Tells the box's watch of its servers while macOS asks you something (`BoxProcess.systemAsking`).
     private var askingWatch: Task<Void, Never>?
 
@@ -123,6 +123,7 @@ final class MacBoxRunner {
                     }
                 }
                 guard launch == self.launch else { return }
+                engine = .starting
             }
             // Neither the engine nor the box starts from an app changed since it was signed (the
             // box's script is in it): the engine itself was checked as it was found or downloaded.
@@ -226,7 +227,7 @@ final class MacBoxRunner {
             // One that started and stopped says so as the server does, whatever waiting on it said.
             let cause: any Error = if let status = server?.exitStatus { ServerProcessError.exited(status: status, output: "") } else { error }
             stopEngine()
-            guard StartRetries.canHelp(cause, systemAsking: systemAsking()), let wait = retries.next() else {
+            guard StartRetries.canHelp(cause), let wait = retries.next() else {
                 gaveUp(reason)
                 return
             }
@@ -258,8 +259,6 @@ final class MacBoxRunner {
     /// The engine stopped (a start still on its way gives up); the box and the bridge stay up.
     func stopEngine() {
         launch = UUID()
-        // No longer tried again, so a phone isn't told it is.
-        if retry != nil { BoxProcess.forgetEngineStopped() }
         retry?.cancel()
         retry = nil
         starting?.cancel()

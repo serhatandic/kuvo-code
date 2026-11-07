@@ -263,13 +263,13 @@ final class KeeperFollower {
         return BackgroundWork.shared.state != .on
     }
 
-    /// Why the engine stopped and isn't started again (`run/engine-stopped`), with what it wrote
-    /// last under it (`run/engine-output`), as the window shows its own engine's: one from before
-    /// the last restart was asked for is the last engine's.
     private var retryAwaited: Bool {
         FileManager.default.fileExists(atPath: KeeperRecord.run.appending(path: "engine.retry").path(percentEncoded: false))
     }
 
+    /// Why the engine stopped and isn't started again (`run/engine-stopped`), with what it wrote
+    /// last under it (`run/engine-output`), as the window shows its own engine's: one from before
+    /// the last restart was asked for is the last engine's.
     private func stoppedReason() -> String? {
         let file = KeeperRecord.run.appending(path: "engine-stopped")
         guard let reason = try? String(contentsOf: file, encoding: .utf8), !reason.isEmpty else { return nil }

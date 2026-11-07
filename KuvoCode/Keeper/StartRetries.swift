@@ -37,14 +37,11 @@ struct StartRetries {
     /// Whether another try could go differently. One that started and stopped, took too long, or
     /// couldn't be reached can (the Mac was busy, its database was held, the network was down);
     /// one that can't be run, a download that was refused or damaged, or a folder that can't be
-    /// made fails the same way again. Nor when it took too long with macOS asking you something
-    /// (`systemAsking`): it waited on your answer, and another try would only ask again.
-    static func canHelp(_ error: any Error, systemAsking: Bool = false) -> Bool {
+    /// made fails the same way again.
+    static func canHelp(_ error: any Error) -> Bool {
         switch error {
-        case ServerProcessError.exited, ServerProcessError.unreadableHandshake:
+        case ServerProcessError.exited, ServerProcessError.unreadableHandshake, ServerProcessError.timedOut:
             return true
-        case ServerProcessError.timedOut:
-            return !systemAsking
         case EngineInstallError.serverAnswered(let status):
             return status >= 500 || status == 408 || status == 429
         case is ServerError:

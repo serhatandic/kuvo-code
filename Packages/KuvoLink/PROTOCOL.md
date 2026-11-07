@@ -2707,8 +2707,8 @@ launch agent in the app (`Contents/Library/LaunchAgents/<bundle id>.box.plist`, 
 no window. It runs the engine, the box and the coding agents' bridge, starts each again when it
 stops (up to three times in five minutes), tries the engine and the bridge again when they couldn't
 start (after 15 s, 30 s, 1, 2, 5 and 10 minutes, as a machine's keeper waits, though a machine's
-goes on at the last for good; and not when another try can't help: a program that isn't there, or a
-start that took too long while macOS asked you something), and records each in the box's `run` folder,
+goes on at the last for good; and not when another try can't help: a program that isn't there), and
+records each in the box's `run` folder,
 as a machine's keeper does, so a client finds them there:
 
 - `run/keeper.json`: `{"pid", "version", "build", "url", "password", "started"}` (milliseconds).

@@ -65,8 +65,8 @@ final class OutsideAgents {
     @ObservationIgnored var startTimeout: Duration = .seconds(60)
     /// How it waits between tries (a test's moves on as it says).
     @ObservationIgnored var retryClock: (Int) async -> Void = StartRetries.wait
-    /// Whether macOS is asking you something now (a test's says).
-    @ObservationIgnored var systemAsking: () -> Bool = { AppModel.systemPromptShowing }
+    /// An exit heard, whichever server's (a test waits on it).
+    @ObservationIgnored var onExitHeard: () -> Void = {}
     @ObservationIgnored private var eventTask: Task<Void, Never>?
     @ObservationIgnored private var restarts: [Date] = []
     @ObservationIgnored private var engine: URL?
@@ -257,7 +257,7 @@ final class OutsideAgents {
         } catch {
             guard startInFlight == start else { return }
             log.error("The agents bridge didn't start: \(error.localizedDescription, privacy: .public)")
-            guard StartRetries.canHelp(error, systemAsking: systemAsking()), let wait = retries.next() else {
+            guard StartRetries.canHelp(error), let wait = retries.next() else {
                 failure = Self.reason(error)
                 onStopped?()
                 return
@@ -448,6 +448,7 @@ final class OutsideAgents {
 
     /// It stopped by itself: started again, unless it keeps stopping.
     private func exited(status: Int32, of start: UUID) {
+        defer { onExitHeard() }
         guard server != nil, start == runningStart else { return }
         let output = server?.recentOutput.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         log.error("The agents bridge stopped (\(status)): \(output, privacy: .public)")
