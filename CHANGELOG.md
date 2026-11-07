@@ -16,6 +16,8 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- If this Mac's engine or coding agents couldn't start, Kuvo Code now tries again by itself, waiting longer each time, rather than waiting for you. The screen says why and that it's trying, Try Again and Restart still work at any moment, and what you stop stays stopped. It doesn't keep trying what can't work, like a program that's missing.
+- An engine or coding agents' bridge that hung while running now starts again by itself, on this Mac and on your machines. It takes ten minutes of silence with nothing at work, so a long task is never cut short, and a sleeping Mac or a slow machine doesn't count.
 - A question from Codex always reaches you now, whatever its model does after asking. Before, one it went on from, by thinking, running a step or sleeping, was lost, so nothing showed and Autopilot had nothing to go ahead on. Your answer goes straight into its turn, and wakes it if it was sleeping on it.
 - Steps you open stay open as new ones come in, until you close them, and what you're reading stays where it is. Thinking you open as it's written stays open once it ends. Close them and you're back at the end.
 - A session waiting on a command or a subagent it left running now shows as at work, in its row and in the bar over its bot's composer, on your Mac and iPhone alike.

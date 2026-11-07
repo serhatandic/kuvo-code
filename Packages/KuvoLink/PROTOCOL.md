@@ -2705,14 +2705,18 @@ closed: its keeper is Kuvo Code's own executable run with `--box`, which launchd
 launch agent in the app (`Contents/Library/LaunchAgents/<bundle id>.box.plist`, registered with
 `SMAppService` the first time the app opens), at each login and again if it stops by itself. It has
 no window. It runs the engine, the box and the coding agents' bridge, starts each again when it
-stops (up to three times in five minutes), and records each in the box's `run` folder, as a
-machine's keeper does, so a client finds them there:
+stops (up to three times in five minutes), tries the engine and the bridge again when they couldn't
+start (after 15 s, 30 s, 1, 2, 5 and 10 minutes, as a machine's keeper waits, then no more, and not
+when another try can't help: a program that isn't there), and records each in the box's `run` folder,
+as a machine's keeper does, so a client finds them there:
 
 - `run/keeper.json`: `{"pid", "version", "build", "url", "password", "started"}` (milliseconds).
   `run/keeper.lock` is held while it runs: one at a time.
 - `run/engine.json` and `run/bridge.json`, as on a machine; `run/engine-stopped` (its reason) when
-  the engine stopped and isn't started again until asked, and beside it `run/engine-output`, what
-  the engine wrote last (when it wrote anything), which the app shows under the reason.
+  the engine stopped and isn't started again until asked, or until its next try, and beside it
+  `run/engine-output`, what the engine wrote last (when it wrote anything), which the app shows under
+  the reason, and while it waits for that try, `run/engine.retry` (when, in seconds since 1970, as on
+  a machine).
 - `run/serve.json`: `{"pid", "port", "password"}`, where the box answers.
 - `bin/kuvo-start`: as a machine's (`kuvo-start restart`), here calling the keeper
   (`--box-control`).
@@ -2851,7 +2855,8 @@ and `kuvo/groups…` (bridge 0.9.65); the app did each before. While its engine 
 again, the engine's routes answer `503 {"message": "This Mac's engine is starting. Try again in a
 moment."}` (a machine's say "This machine's"). From 0.9.66, once the app has given up on it (it kept
 stopping, or couldn't start; the app's `run/engine-stopped`, why, until it starts or stops it again),
-they say "This Mac's engine isn't running." with why, and that Try Again on the Mac starts it; and a
+they say "This Mac's engine isn't running." with why, and that Try Again on the Mac starts it (or
+from 0.9.201, while it waits for its next try, `run/engine.retry`, that it's trying again); and a
 machine's, while its keeper's next start is more than half a minute away (`run/engine.retry`, when,
 in seconds since 1970), "This machine's engine keeps stopping. It's started again in about N
 minutes." The rest, the Mac's own routes (`kuvo/info`,
@@ -4192,6 +4197,22 @@ engine again when it ends, unless it was stopped on purpose (`run/stopped`), and
 running while it has something to answer: a phone paired, a pairing waiting, or peers
 (`run/link.needed`, which the bridge writes). The bridge stays up while the engine is down, and
 starts the keeper when it isn't running. A Mac quitting or disconnecting leaves all of it running.
+
+**A server that hangs while running** (from 0.9.201, on this Mac and on machines alike:
+`src/shared/hang.ts`). The coding agents' bridge watches the engine, and the link watches the
+coding agents' bridge. Every 30 seconds each asks its server something over a plain connection (any
+answer counts, an error too). Only all of this, at every look for ten minutes without a break, counts
+as hung: it takes the connection and says nothing within 20 seconds; connections on this computer
+work (the watch answers itself); its main thread is asleep (not running, on a disk or paused), it used
+under 2% of a CPU since the last look, and nothing it started is running or used over 10% of one; its
+command line is that server's; and nothing's stopped, starting or updating it on purpose (`run/stopped`,
+`run/.launching`, `run/.updating`). A look that comes late (the computer slept, was paused, or was
+starved) starts the count again. A hung server is told to stop (SIGTERM), then made to ten seconds
+later (SIGKILL), and whoever keeps it starts it again as after any crash. At most three in six hours
+(`run/hung-engine.json`, `run/hung-bridge.json`, when each was ended, in milliseconds), then it's left
+for a Restart. A server spinning at full CPU is never ended: from outside, that's long work. Neither
+is the link watched, nor, on a machine with nothing for it to answer (where it doesn't run), the
+coding agents' bridge.
 
 ## For released Macs
 
