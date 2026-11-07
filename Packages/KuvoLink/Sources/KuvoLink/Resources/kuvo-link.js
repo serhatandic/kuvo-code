@@ -17897,7 +17897,7 @@ async function answerAskTool(caller, args, targets, signal, { made } = {}) {
   if (args.decision === "allow") {
     const mode = approvalOf(data, { agents: onBridge(target), bot: Boolean(botOfConversation(data.id) ?? worksFor(data)) });
     if (mode.effective === "askFirst") {
-      const state = mode.held ? `"${title}" asks first for now (${mode.held.why})` : `"${title}" is in Ask First`;
+      const state = mode.held ? `"${title}" asks first for now (${mode.held.why.replace(/\.$/, "")})` : `"${title}" is in Ask First`;
       return refused(`You can't allow that: ${state}, so the user answers every ask it makes, whatever mode you're in. The user sees the ask on "${title}" and answers it there. Tell them in a line why it's needed if it matters, and carry on with the rest. You can still deny it.`);
     }
     if (made !== undefined && Date.now() - made > ALLOW_LIFE)
