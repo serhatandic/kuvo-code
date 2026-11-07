@@ -772,7 +772,9 @@ client shows it from the same routes.
 - **`GET kuvo/work?bot=<id>`** → `{bot, sessions: [{session, title, folder, project?, startedBy,
   depth, model?, mode?, state, asks?, started, tokens, cost?, lastReply?}], answered: [answer with
   its session], today: {started, working, tokens, cost?}, limits}`: its sessions the latest first,
-  archived ones left out. 400 without `bot`, 404 for no such bot here, 503 with no engine.
+  archived ones left out. 400 without `bot`, 404 for no such bot here, 503 with no engine. Each
+  `state` is as of the read. `today.working` stays, since clients until 0.7.2 need it to read the
+  report, but no client shows it (see At work).
 - **`GET kuvo/work/events`** (ndjson): `{"changed": {<bot>: <ms>}}` now and at each change to a
   bot's work (a session started, stopped, finished or asking, an ask answered, its limits); a
   client reads that bot's work again when its time moves. Kept in `run/work/changes.json`.
@@ -792,6 +794,23 @@ client shows it from the same routes.
   another (its session that started one, say).
 
   Clients show the bot looking after its sessions with these marks. The first line is what was there already; each new `id` after it plays once. Only the latest minute is kept, at most 50, in `run/work/oversight.json`. A box from before it answers 404.
+- **At work** (KuvoClient's `AtWork`): whether a bot is at work and how many of its sessions are
+  isn't sent as an answer. Each client works it out the same way, from facts its box states, for a
+  bot's row, face, tab and header and the bar over its composer:
+  - a session is *working* when its engine (or the coding agents' bridge) runs a turn of it
+    (`session.status`, `/api/session/active`) or Background work lists it, and *at work* when it's
+    working or waiting on an answer (a permission or question, its own or a subagent's);
+  - the sessions a bot oversees are those marked `kuvo.by` with its id (the box marks those its
+    sessions start too, so no client follows `startedBy`), and not archived (`time.archived`, `kuvo.archived`, or `kuvo: {archived: true}`). A
+    subagent isn't one: it keeps the session it works for at work, through Background work;
+  - a bot is at work through them (its face and row) while one is working, unless its wake-ups are
+    paused (it sleeps; its bar still lists them). One only waiting on you shows that on its own row;
+  - the bar takes `kuvo/work`'s sessions as the client knows them now: one asking, asking; one
+    working, working; one the report had at work that no longer is, done. So it counts what the row
+    counts without reading the report again.
+
+  A box from before Background work lists nothing there, and its report doesn't count it either:
+  both say a session waiting on a command it left running isn't at work.
 - **Background work** (`work/background.ts`): what still runs for a session once its own turn is
   over. One fact, worked out on the box, that clients show and never work out themselves.
   - **`GET kuvo/work/background`** → `{sessions: {<session>: {commands, subagents, tasks, since}}}`,
@@ -800,8 +819,8 @@ client shows it from the same routes.
     `subagents`: subagents at work under it, a review's parts and other hidden runs left out.
     `tasks`: anything else its agent keeps going. A client shows a session at work when its own turn
     runs or it's listed here. Kept in `run/work/background.json`, per place (engine, bridge).
-  - **Counting at work**: `kuvo/work`'s `state` and `today.working`, a bot's limits and
-    `list_sessions` all go by the same fact. One running 6 hours (a dev server) stops counting, though
+  - **Counting at work**: `kuvo/work`'s `state` and `today.working`, a bot's limits,
+    `list_sessions` and every client's At work all go by the same fact. One running 6 hours (a dev server) stops counting, though
     it may still run, and a client's list of commands still shows it. A goal's Mac stays awake for it
     too, but it holds off a goal's nudge only for 30 minutes, and never hides a turn that failed at a
     limit.

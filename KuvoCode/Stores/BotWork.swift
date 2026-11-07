@@ -20,6 +20,18 @@ final class BotWork {
         boxes?(bot.box) ?? app?.box(bot.box)
     }
 
+    /// The bot's work as it stands now, for the bar over its composer: its box's report, each of its
+    /// sessions at work or not as this Mac knows from its box since (`AtWork`), so the bar counts
+    /// what the bot's row and face go by.
+    func report(of bot: Bot) -> BotWorkReport? {
+        guard let report = reports[bot.id] else { return nil }
+        #if DEBUG
+        if Self.demoBot == bot.name { return report }
+        #endif
+        guard let workspace = app?.workspace else { return report }
+        return report.standing(working: workspace.isWorking, asking: workspace.needsAttention)
+    }
+
     /// Whether the box a bot lives on runs its work (one from before doesn't).
     func runsWork(_ bot: Bot) -> Bool { !older.contains(bot.box) }
 
@@ -145,6 +157,9 @@ final class BotWork {
     }
 
     #if DEBUG
+    /// KUVO_DEMO_BOT_WORK: the bot whose work is the sample, shown as the sample has it.
+    private static let demoBot = ProcessInfo.processInfo.environment["KUVO_DEMO_BOT_WORK"]
+
     /// A bot's work as a sample: three sessions at work (one asking), two done, the asks it answered.
     private static func sample(_ bot: Bot) -> BotWorkReport? {
         let now = Date.now.timeIntervalSince1970 * 1000

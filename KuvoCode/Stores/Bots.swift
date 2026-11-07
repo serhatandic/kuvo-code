@@ -215,9 +215,10 @@ final class Bots {
     }
 
     /// A session the bot oversees is at work (its own conversation may be still), unless its
-    /// wake-ups are paused: what its row says ("Overseeing 3 sessions", shimmering) and its face shows.
+    /// wake-ups are paused: what its row says ("Overseeing 3 sessions", shimmering) and its face
+    /// shows, worked out as the phone does (`AtWork`).
     func isOverseeingWork(_ bot: Bot, in workspace: Workspace) -> Bool {
-        !paused.contains(bot.id) && workspace.overseen(by: bot.id).contains { workspace.isWorking($0.id) }
+        AtWork.isOverseeingWork(bot.id, paused: paused.contains(bot.id), in: workspace.sessions, isWorking: workspace.isWorking)
     }
 
     /// What the bot is up to, for how its avatar moves: waiting for you comes first, then working

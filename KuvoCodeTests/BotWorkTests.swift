@@ -1,3 +1,4 @@
+import ClientDesign
 import ClientSessions
 import Foundation
 import KuvoLink
@@ -101,6 +102,47 @@ import Testing
         try Data(#"{"bot_pixel00001": \#(Int(Date.now.timeIntervalSince1970 * 1000))}"#.utf8).write(to: changes.appending(path: "changes.json"))
         try await until { app.botWork.reports[pixel.id]?.atWork.count == 1 }
         #expect(BotWorkBar.title(app.botWork.reports[pixel.id]) == "A session is at work")
+    }
+
+    /// A session of the bot's whose turn ended while a command it started runs on (the sidebar once
+    /// said 6 at work, the bar 3): at work in the bot's row, its face and the bar over its composer
+    /// alike, each worked out from what its box says (`AtWork`), though the bar's report was read
+    /// before the command was known and isn't read again.
+    @Test func aSessionWaitingOnItsBackgroundCommandCountsInTheRowAndTheBarAlike() async throws {
+        let machine = try await lab()
+        defer { done(machine) }
+        let pixel = try #require(app.bots.bot("bot_pixel00001"))
+        // Its turn over, nothing left running: done, as the report and this Mac both say.
+        let signIn = StubEngine.session("ses_signin", title: "Sign-in", directory: "/home/me/tidepool", created: Date.now.timeIntervalSince1970 * 1000, extra: [
+            "metadata": ["kuvo": ["startedBy": "ses_pixel", "by": ["bot": "bot_pixel00001", "name": "Pixel"], "depth": 1]],
+        ])
+        engine.list([StubEngine.session("ses_pixel", title: "Pixel", directory: machine.folder.appending(path: "bots/bot_pixel00001/workspace").path), signIn], running: [])
+        app.workspace.api = engine.api
+        await app.workspace.refresh()
+        await app.botWork.read(pixel)
+        #expect(app.botWork.report(of: pixel)?.atWork.isEmpty == true)
+        #expect(AtWork.sessions(of: pixel.id, in: app.workspace.sessions, isAtWork: app.workspace.isAtWork).isEmpty)
+
+        // The command it left running, as its box keeps it.
+        let work = machine.folder.appending(path: "run/work")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        let command: [String: Any] = ["id": "sh_1", "command": "npm test", "started": Date.now.timeIntervalSince1970 * 1000]
+        try JSONSerialization.data(withJSONObject: ["bridge": ["sessions": ["ses_signin": ["commands": [command], "subagents": [Any](), "tasks": [Any]()]], "folders": [Any]()]])
+            .write(to: work.appending(path: "background.json"))
+        app.workspace.boxes = { _ in machine.client }
+        let workspace = app.workspace
+        let follow = Task { await workspace.followBackground("lab") }
+        defer { follow.cancel() }
+        try await until { app.workspace.isWorking("ses_signin") }
+
+        let row = AtWork.sessions(of: pixel.id, in: app.workspace.sessions, isAtWork: app.workspace.isAtWork)
+        #expect(row.map(\.id) == ["ses_signin"], "the sessions its row and face go by")
+        #expect(app.bots.isOverseeingWork(pixel, in: app.workspace))
+        #expect(app.bots.mood(of: pixel, in: app.workspace) == .working, "its face works, not asleep")
+        let bar = try #require(app.botWork.report(of: pixel))
+        #expect(bar.atWork.map(\.session) == row.map(\.id), "the bar counts the same session")
+        #expect(BotWorkBar.title(bar) == "A session is at work")
+        #expect(app.botWork.reports[pixel.id]?.atWork.isEmpty == true, "from the facts, not from reading the report again")
     }
 
     @Test func limitsSetInEditBotAreKeptOnItsBoxAndCanBeTakenAway() async throws {

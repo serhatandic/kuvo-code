@@ -391,7 +391,7 @@ final class Workspace {
     /// Put away: out of Projects and Recents, still found by searching. Archived here (a
     /// note in the session's metadata), or by an older opencode.
     static func isArchived(_ session: Session) -> Bool {
-        session.time.archived != nil || session.metadata?[archivedKey]?.bool == true
+        AtWork.isArchived(session)
     }
 
     private static let archivedKey = "kuvo.archived"
@@ -3224,16 +3224,15 @@ final class Workspace {
         leftRunning(by: id)?.subagents ?? 0
     }
 
-    /// Every session a bot oversees (`kuvo.by`) and that you haven't archived, under another one
-    /// too: what its row in Bots counts ("Overseeing 4 sessions").
-    func overseen(by bot: String) -> [Session] {
-        sessions.filter { WorksFor($0)?.bot == bot && !Self.isArchived($0) }
+    /// The session works, itself, or its box says something it left running still does (a subagent,
+    /// a command in the background): what its row, tab and bot show (`AtWork`, as the phone works it out).
+    func isWorking(_ id: String) -> Bool {
+        AtWork.isWorking(running: running.contains(id), background: leftRunning(by: id))
     }
 
-    /// The session works, itself, or its box says something it left running still does (a subagent,
-    /// a command in the background): what its row, tab and bot show.
-    func isWorking(_ id: String) -> Bool {
-        running.contains(id) || leftRunning(by: id) != nil
+    /// Working, or waiting on you: what a bot's sessions count as at work, in its row and its bar.
+    func isAtWork(_ id: String) -> Bool {
+        isWorking(id) || needsAttention(id)
     }
 
     // MARK: Commands running for agents
