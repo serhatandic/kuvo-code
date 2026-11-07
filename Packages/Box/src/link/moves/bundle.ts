@@ -47,6 +47,11 @@ export interface Contents {
   queues?: Record<string, unknown>;
   /** The calls its conversations made on Autopilot, by session. */
   decided?: Record<string, unknown>;
+  /** It talks with a coding agent: its conversations are in the bundle's `carry` folder as the agents
+   * bridge packed them (`exports` is empty), these. */
+  lane?: { sessions: string[]; root: string };
+  /** Where it was: the computer's name, and its folder (bots and chats). */
+  was?: { place: string; folder?: string };
 }
 
 // A chat's folder here: conversations of no project (this Mac's app's own, a machine's in its box).
@@ -172,21 +177,24 @@ export async function pack(id: string, contents: Contents): Promise<{ file: stri
   const staging = path.join(folder, "pack");
   const moveJSON = JSON.stringify(contents);
   const original = contents.folder ? folderOf(contents.kind, contents.thing) : null;
-  if (Buffer.byteLength(moveJSON) + (original ? bytesIn(original, MOST_BUNDLE) : 0) > MOST_BUNDLE) throw new TooBig();
+  const carried = contents.lane ? path.join(folder, "carry") : null;
+  if (Buffer.byteLength(moveJSON) + (original ? bytesIn(original, MOST_BUNDLE) : 0) + (carried ? bytesIn(carried, MOST_BUNDLE) : 0) > MOST_BUNDLE) throw new TooBig();
   fs.rmSync(staging, { recursive: true, force: true });
   fs.mkdirSync(staging, { recursive: true, mode: 0o700 });
   fs.writeFileSync(path.join(staging, "move.json"), moveJSON, { mode: 0o600 });
   const file = path.join(folder, "bundle.tgz");
   const args = [...(process.platform === "darwin" ? ["--no-mac-metadata", "--no-xattrs"] : []), "-czf", file, "-C", staging, "move.json"];
   if (original) args.push("-C", path.dirname(original), path.basename(original));
+  if (carried) args.push("-C", folder, "carry");
   await run("tar", args);
   fs.rmSync(staging, { recursive: true, force: true });
+  if (carried) fs.rmSync(carried, { recursive: true, force: true });
   return { file, size: fs.statSync(file).size, hash: await hashOf(file) };
 }
 
 /** The bundle that came for move `id`, opened: what it holds, and the folder it brought (in the
  * move's own folder, until it's put in place). */
-export async function unpack(id: string): Promise<{ contents: Contents; folder: string | null }> {
+export async function unpack(id: string): Promise<{ contents: Contents; folder: string | null; carry: string | null }> {
   const folder = bundleOf(id);
   const opened = path.join(folder, "opened");
   fs.rmSync(opened, { recursive: true, force: true });
@@ -210,7 +218,17 @@ export async function unpack(id: string): Promise<{ contents: Contents; folder: 
   if (brought) try { kind = fs.lstatSync(brought); } catch {}
   if (kind && !kind.isDirectory()) throw new NotTaken(`It brought ${kind.isSymbolicLink() ? "a link" : "something that isn’t a folder"} for its folder, which isn’t taken.`);
   if (brought && kind) plainOnly(brought);
-  return { contents, folder: kind ? brought : null };
+  // (The agents bridge checks each of these against what it says they are.)
+  const carried = path.join(opened, "carry");
+  let carry: string | null = null;
+  if (contents.lane) {
+    try {
+      if (fs.lstatSync(carried).isDirectory()) carry = carried;
+    } catch {}
+    if (!carry) throw new NotTaken("Its conversation didn’t come with it.");
+    plainOnly(carried);
+  }
+  return { contents, folder: kind ? brought : null, carry };
 }
 
 function plainOnly(folder: string): void {
@@ -222,9 +240,10 @@ function plainOnly(folder: string): void {
   }
 }
 
-/** `folder` to Kuvo Code's trash here (on a Mac, on to the Finder's Trash), as a deleted bot goes. */
-export async function toTrash(folder: string): Promise<void> {
-  if (!fs.existsSync(folder)) return;
+/** `folder` to Kuvo Code's trash here (on a Mac, on to the Finder's Trash), as a deleted bot goes:
+ * where it is now, while that's this box's trash. */
+export async function toTrash(folder: string): Promise<string | undefined> {
+  if (!fs.existsSync(folder)) return undefined;
   const now = new Date();
   const two = (number: number) => String(number).padStart(2, "0");
   const when = `${now.getFullYear()}${two(now.getMonth() + 1)}${two(now.getDate())}-${two(now.getHours())}${two(now.getMinutes())}${two(now.getSeconds())}`;
@@ -236,6 +255,7 @@ export async function toTrash(folder: string): Promise<void> {
     await hostTrash(trashed).catch(() => {});
     if (!fs.existsSync(trashed)) try { fs.rmdirSync(trash); } catch {}
   }
+  return fs.existsSync(trashed) ? trashed : undefined;
 }
 
 /** Each export into `engine` at `directory`, under its own ID (until `signal` gives up on it). */
@@ -252,7 +272,7 @@ export async function deleteSession(engine: Target, id: string): Promise<void> {
   try {
     await call(engine, "DELETE", `/api/session/${encodeURIComponent(id)}`, undefined, engineWait());
   } catch (error) {
-    if (!/404|not found/i.test(String((error as Error | null)?.message ?? error))) throw error;
+    if ((error as { status?: number } | null)?.status !== 404 && !/404|not found/i.test(String((error as Error | null)?.message ?? error))) throw error;
   }
 }
 

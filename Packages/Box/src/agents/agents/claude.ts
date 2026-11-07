@@ -4,12 +4,12 @@
 
 import { spawn } from "node:child_process"
 import { createHash, randomUUID } from "node:crypto"
-import { existsSync, mkdirSync, readFileSync, renameSync, rmdirSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
-import { dirname, join, resolve } from "node:path"
+import { basename, dirname, join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import { providerID, type AgentAccount } from "../accounts"
-import type { Agent, AgentContext, Account, MessageInput, OwnTurn, RunInput, RunResult, SignInAttempt, SignInOptions, SubagentMessages, SubagentRun, Thread, TurnHooks, PromptFile } from "../agent"
+import type { Agent, AgentContext, Account, ConversationFiles, ConversationPlace, MessageInput, OwnTurn, RunInput, RunResult, SignInAttempt, SignInOptions, SubagentMessages, SubagentRun, Thread, TurnHooks, PromptFile } from "../agent"
 import type { Limit } from "../auto"
 import { accountName, ContextWindows, failure, KnownAccount, model, signOutWith, TookTooLong } from "../agent"
 import { fileDiff, fromPatch } from "../diff"
@@ -50,6 +50,22 @@ const STATE_IN_HOME = [
   "statsig", "telemetry", "debug", "cache", "paste-cache", "image-cache", "state", "logs", "uploads",
   "stats-cache.json*", "mcp-needs-auth-cache.json*", ".credentials.json*", ".claude.json*", "*.lock",
 ]
+/** A conversation's name in its settings folder, as Claude Code gives it. */
+const CONVERSATION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const CONVERSATION_ITEM = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(\.jsonl$|$|\/)/i
+
+/** The folder's name under `projects`, as Claude Code makes it. (One too long for a name it cuts short
+ * with a sum of its own: such a conversation is still found by its ID, and goes with no memory of its folder's.) */
+const projectSlug = (directory: string) => directory.replace(/[^a-zA-Z0-9]/g, "-")
+
+/** A bot's memory in its own folder, for the bot's own conversation in its `workspace`. */
+function botMemory(session: Session): string | undefined {
+  const bot = (session.metadata?.kuvo as { bot?: unknown } | undefined)?.bot
+  const directory = session.location.directory
+  if (typeof bot !== "string" || basename(directory) !== "workspace" || basename(dirname(directory)) !== bot) return undefined
+  return join(dirname(directory), "memory")
+}
+
 /** What it never writes in its state either: settings put there. */
 const KEPT_IN_HOME = ["settings*.json", "hooks", ".mcp.json"]
 
@@ -475,14 +491,84 @@ export class ClaudeAgent implements Agent {
    * Its own files: in its settings folder, its plans, each project's memory (which it reads and
    * writes on its own) and what it saved of a long output, which it's told to read back
    * (`projects/<project>/<session>/tool-results`); and its background commands' output, in /tmp's
-   * `claude-<uid>` when it has no temporary folder of its own (in the sandbox).
+   * `claude-<uid>` when it has no temporary folder of its own (in the sandbox); and a bot's memory
+   * in its folder, for the bot's own conversation.
    */
-  ownsPath(path: string): boolean {
+  ownsPath(path: string, session?: Session): boolean {
     const file = resolve(path)
+    const memory = session && botMemory(session)
+    if (memory && file.startsWith(memory + "/")) return true
     const settings = this.configHome
     if (file.startsWith(settings + "/") && /^(plans\/[^/]+\.md|projects\/[^/]+\/memory\/.+|projects\/[^/]+\/[^/]+\/tool-results\/.+)$/.test(file.slice(settings.length + 1))) return true
     const uid = process.getuid?.()
     return uid !== undefined && ["/tmp", "/private/tmp"].some((tmp) => file.startsWith(`${tmp}/claude-${uid}/`) && /^[^/]+\/[^/]+\/tasks\/[^/]+$/.test(file.slice(`${tmp}/claude-${uid}/`.length)))
+  }
+
+  /** Where its conversations in a folder are kept, in its settings folder. */
+  private projectFolder(directory: string, home = this.configHome) {
+    return join(home, "projects", projectSlug(directory))
+  }
+
+  /** The settings folders a conversation of its may be in: the one it runs with now first. */
+  private homesItMayUse() {
+    return [...new Set([this.configHome, ...(this.instance.home ? [] : [this.consoleHome, process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude")])])]
+  }
+
+  /** Its conversation for a move: `<id>.jsonl`, the folder beside it (subagents, what it saved of long
+   * outputs), and what it remembers, unless that's in the bot's own folder and goes with it. Claude
+   * Code finds a conversation by its ID, whichever folder's it's in. */
+  conversationFiles(state: Record<string, unknown>, session: Session): ConversationFiles | null {
+    const id = state.claudeSession
+    if (typeof id !== "string" || !state.claudeStarted) return null
+    if (!CONVERSATION_ID.test(id)) return { items: [], missing: true }
+    let folder: string | undefined
+    for (const home of this.homesItMayUse()) {
+      const named = this.projectFolder(session.location.directory, home)
+      if (existsSync(join(named, `${id}.jsonl`))) {
+        folder = named
+        break
+      }
+    }
+    if (!folder) {
+      for (const home of this.homesItMayUse()) {
+        const projects = join(home, "projects")
+        const found = (() => {
+          try {
+            return readdirSync(projects).find((name) => existsSync(join(projects, name, `${id}.jsonl`)))
+          } catch {
+            return undefined
+          }
+        })()
+        if (found) {
+          folder = join(projects, found)
+          break
+        }
+      }
+    }
+    if (!folder) return { items: [], missing: true }
+    const beside = join(folder, id)
+    const ownMemory = botMemory(session)
+    const memory = ownMemory && existsSync(ownMemory) ? undefined : join(this.homesItMayUse().find((home) => folder.startsWith(home + "/")) ?? this.configHome, "projects", projectSlug(session.location.directory), "memory")
+    return {
+      items: [{ path: join(folder, `${id}.jsonl`), name: `${id}.jsonl` }, ...(existsSync(beside) ? [{ path: beside, name: id }] : [])],
+      ...(memory && existsSync(memory) ? { memory, ...(ownMemory ? {} : { memoryShared: true }) } : {}),
+    }
+  }
+
+  /** Where a conversation that came goes here: a bot's memory in its own folder (which goes wherever
+   * it goes), a chat's with the others' in the chats folder, which all of them share. */
+  conversationPlace(_state: Record<string, unknown>, session: Session): ConversationPlace {
+    const folder = this.projectFolder(session.location.directory)
+    const own = botMemory(session)
+    return {
+      item: (name) => (CONVERSATION_ITEM.test(name) ? join(folder, name) : null),
+      memory: own ?? join(folder, "memory"),
+      memoryMerges: !own,
+    }
+  }
+
+  conversationRoots() {
+    return this.homesItMayUse().map((home) => join(home, "projects"))
   }
 
   /** Where Claude Code reads skills itself: its settings folder's, and a project's `.claude/skills`. */
@@ -1136,6 +1222,8 @@ class ClaudeThread implements Thread {
     // While the box's sandbox is on, Claude Code runs whole in it, and so does all it starts: its
     // commands, its hooks and MCP servers (yours, and a project's).
     const whole = this.whole(skills, id)
+    const named = botMemory(this.session)
+    const ownMemory = named && existsSync(named) ? named : undefined
     this.input = new Queue()
     const tools = fenceOn() ? relayedTools(this.session.id, this) : kuvoTools(this.session.id)
     this.opened = { model: modelID, effort, plan, append, program: this.agent.program, tools: tools?.key, skills, fence: fenceKey() + fullAccessMark(this.session.id) }
@@ -1156,6 +1244,8 @@ class ClaudeThread implements Thread {
         systemPrompt: { type: "preset", preset: "claude_code", ...(append ? { append } : {}) },
         ...(skills ? { plugins: [{ type: "local" as const, path: skills, skipMcpDiscovery: true }] } : {}),
         ...(resume ? { resume: id } : { sessionId: id }),
+        // A bot's memory in its own folder, once it's there.
+        ...(ownMemory ? { settings: { autoMemoryDirectory: ownMemory } as any } : {}),
         // Its commands know their conversation, as the engine's do (kuvo-wake schedules for it).
         env: { ...this.agent.env(), OPENCODE_SESSION_ID: this.session.id, ...whole?.env },
         // Its own sandbox off while the box's is on (yours, or a project's settings, may turn it
