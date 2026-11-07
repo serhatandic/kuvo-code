@@ -45,6 +45,9 @@ const ENGINE_DEFAULTS: KitRule[] = [
 /** The rules a conversation goes by, as the engine applies them: its defaults, this box's Settings ›
  * Permissions, then the conversation's own. */
 export const rulesOf = (own: readonly KitRule[]): KitRule[] => [...ENGINE_DEFAULTS, ...(permissionsHere() ?? []), ...own];
+/** `rules` (a box's Settings › Permissions and a conversation's own, as a lead carries them) after
+ * the engine's own defaults. */
+export const withDefaults = (rules: readonly KitRule[]): KitRule[] => [...ENGINE_DEFAULTS, ...rules];
 
 
 /** A permission a session asks (it, or one of its subagents: `asker`), as the engine lists it. */

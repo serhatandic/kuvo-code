@@ -19,6 +19,7 @@ import { deliverNote, noteOf } from "./note";
 import { ANSWER_TEXT, answered } from "./outbox";
 import { awaitingAnswer } from "../work/awaited";
 import { homesOf, noteHomes } from "../work/homes";
+import { under, workSessions } from "../work/tree";
 import type { ListedAgent, Target, ToldAgents } from "../../shared/records";
 import type { EngineAnswer } from "../engine/client";
 import type { Peer } from "../peers/known";
@@ -93,7 +94,7 @@ const seenAlready = (id: string, now = Date.now()) => {
   const seen = lettersSeen(now);
   return id in seen || `note:${id}` in seen;
 };
-function noteSeen(id: string, now = Date.now()) {
+export function noteSeen(id: string, now = Date.now()): void {
   locked(PEER_LOCK, () => {
     const seen = lettersSeen(now);
     seen[id] = now;
@@ -195,7 +196,8 @@ export async function takeLetter(sender: LetterSender, letter: unknown, { send, 
   // An answer a tool here waits for (from the box its letter went to): to it. A conversation read
   // that nothing waits for now just goes: it isn't a message.
   if (typeof letter.answers === "string" && LETTER_ID.test(letter.answers) && (answered(sender, letter as AnswerLetter, now) || isObject(letter.read))) {
-    noteSeen(id, now);
+    // (A call's answer, the box's own word, as long as a note's: it may come again weeks on.)
+    noteSeen(noteOf(letter.note) ? `note:${id}` : id, now);
     return send(sender, { delivered: { id, ok: true } });
   }
   if (isObject(letter.read)) return readFor(sender, letter as ReadLetter, { send, targets, answer, now, moved, moving, bridge });
@@ -266,6 +268,13 @@ export async function takeLetter(sender: LetterSender, letter: unknown, { send, 
   const text = await answerTo(place.target, letter.to, prompt, { wait });
   if (text) answer({ from: letter.to, to: letter.from as string, text, answers: id, peer: sender.key });
 }
+// Whether `session`, put away, is under the conversation `lead` (one it started, or theirs), and
+// `lead` isn't a conversation here.
+async function archivedUnder(lead: string, session: string, targets: Target[]): Promise<boolean> {
+  if (await placeOfSession(lead, targets).catch(() => undefined) !== null) return false;
+  return under(lead, await workSessions(targets, undefined, { archived: true })).some(each => each.data.id === session);
+}
+
 /** A letter asking for a conversation here (`read`), once `takeLetter` checked it. */
 type ReadLetter = { id: string; to: string; from?: unknown; read: { query?: unknown } };
 
@@ -288,7 +297,10 @@ async function readFor(sender: LetterSender, letter: ReadLetter, { send, targets
     if (!place) return no(...noConversation(id, bridge, now));
     bridgeWaits.delete(id);
     const kuvo = place.data?.metadata?.kuvo ?? {};
-    if (place.data?.parentID || kuvo.seat || isPutAway(place.data)) return no("That conversation can't be read.");
+    if (place.data?.parentID || kuvo.seat) return no("That conversation can't be read.");
+    // One put away only by the conversation it's under (a lead reading its own archived work), and
+    // only for a lead that isn't one of this box's own.
+    if (isPutAway(place.data) && !(await archivedUnder(letter.from, letter.to, targets))) return no("That conversation can't be read.");
     const markdown = await readConversation(place.target, letter.to, place.data ?? {}, String(place.data?.title || "New session"));
     const query = typeof letter.read.query === "string" && letter.read.query.trim() ? letter.read.query.trim() : null;
     words = excerpt(markdown, query, READ_BY_MAIL);

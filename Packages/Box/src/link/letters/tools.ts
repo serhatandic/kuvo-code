@@ -26,7 +26,11 @@ import { allowed, takeBack } from "./limits";
 import { OUTSIDE, seatRefusal, startedWords, startSession } from "./start";
 import { answerTo } from "./take";
 import { noteOversightBy } from "../work/oversight";
-import { answerAskTool, finishGoalTool, goalProgressTool, listModelsTool, listProjectsTool, listSessionsTool, makeProjectTool, maySpendTool, proposeGoalTool, compactSessionTool, stopSessionTool } from "../work/tools";
+import { answerAskTool, describeList, finishGoalTool, goalProgressTool, leadOf, listModelsTool, listProjectsTool, liveRows, makeProjectTool, maySpendTool, proposeGoalTool, compactSessionTool, stopSessionTool } from "../work/tools";
+import { under, workSessions } from "../work/tree";
+import { rowsBox } from "../work/elsewhere";
+import { awaySince } from "../peers/reach";
+import { awaitAnswer, boxName, boxOf, elsewhereTool, rowsEverywhere } from "./calls";
 import type { ListedAgent, Target } from "../../shared/records";
 import type { SessionPlace } from "./letter";
 
@@ -113,23 +117,30 @@ export function describeAgents(agents: ListedAgent[], caller: string | null, her
   return "Agents you can write to with send_message, or whose conversation you can read with read_conversation (by name or address):\n" + lines.join("\n");
 }
 
-// A conversation here named by its address that the list doesn't (older than the latest it names):
-// one an agent could be, not a subagent's, a group chat's seat, nor one put away.
-async function addressed(wanted: string, targets: Target[], here: string | null): Promise<ListedAgent | null> {
-  const place = await placeOfSession(wanted, targets).catch(() => null);
-  if (!place || place.data.parentID || place.data.metadata?.kuvo?.seat || isPutAway(place.data)) return null;
+// A conversation named by its address that the list doesn't (older than the latest it names): one
+// here an agent could be, not a subagent's, a group chat's seat, nor one put away (with
+// `archivedOwn`, one put away that's under the caller); or one on another computer that this one
+// knows of (what that computer told of the caller's sessions, where one lives now).
+async function addressed(wanted: string, targets: Target[], here: string | null, caller: string | null, archivedOwn = false): Promise<ListedAgent | null> {
+  const place = await placeOfSession(wanted, targets).catch(() => undefined);
+  if (place === null && /^ses_[A-Za-z0-9]{1,60}$/.test(wanted)) {
+    const peer = boxOf(wanted);
+    return peer ? { session: wanted, name: rowsBox(wanted)?.row.title ?? "New session", kind: "session", machine: boxName(peer) } : null;
+  }
+  if (!place || place.data.parentID || place.data.metadata?.kuvo?.seat) return null;
+  if (isPutAway(place.data) && !(archivedOwn && caller && under(caller, await workSessions(targets, undefined, { archived: true })).some(each => each.data.id === wanted))) return null;
   const bot = listBots(here ?? undefined).some(each => each.session === wanted);
   return { session: wanted, name: place.data.title || "New session", kind: bot ? "bot" : "session", ...(here ? { machine: here } : {}) };
 }
 
 // The agent `wanted` names (its address, or its name, with or without the "&" you name it with), or
 // why there's none to take.
-async function findAgent(wanted: string, caller: string | null, { agents, here }: Everyone, targets: Target[]): Promise<{ agent: ListedAgent } | { error: ToolAnswer }> {
+async function findAgent(wanted: string, caller: string | null, { agents, here }: Everyone, targets: Target[], archivedOwn = false): Promise<{ agent: ListedAgent } | { error: ToolAnswer }> {
   let name = wanted.trim();
   if (name.startsWith("&") && !agents.some(agent => agent.name === name)) name = name.slice(1);
   let matches = agents.filter(agent => agent.session === name);
   if (!matches.length && name.startsWith("ses_")) {
-    const one = await addressed(name, targets, here);
+    const one = await addressed(name, targets, here, caller, archivedOwn);
     if (one) matches = [one];
   }
   if (!matches.length) matches = agents.filter(agent => folded(agent.name) === folded(name));
@@ -150,13 +161,11 @@ const nameOf = (caller: string | null, { agents, here }: Everyone) =>
 // Why there's no waiting for an answer while this box is off the relay.
 const offlineNote = () => `Your other computers can't be reached through the relay now: it goes once ${HERE}'s back on it, and its answer comes to you as a message.`;
 
-// The box a conversation not here is on, among the peers.
+// The box a conversation not here is on, among the peers: the one that lists it, told of it as one
+// of the caller's sessions, or where it's known to live now.
 function peerFor(session: string) {
-  const link = readLink();
-  const peers = peersOf(link);
-  const told = readPeerAgents();
-  const peer = peerOf(session, peers, told, movedOf(link));
-  return peer ? { peer, features: told[peer.key]?.features ?? [] } : null;
+  const peer = boxOf(session);
+  return peer ? { peer, features: readPeerAgents()[peer.key]?.features ?? [] } : null;
 }
 
 // A message from `caller` to the agent `args.to` names, wherever it runs; with `wait`, its answer.
@@ -225,7 +234,7 @@ async function readOne(args: Record<string, unknown>, caller: string | null, all
   const of = typeof args.of === "string" ? args.of.trim() : "";
   if (!of) return refused("Say whose conversation to read (of).");
   const query = typeof args.query === "string" && args.query.trim() ? args.query.trim() : null;
-  const found = await findAgent(of, caller, all, targets);
+  const found = await findAgent(of, caller, all, targets, true);
   if ("error" in found) return found.error;
   const target = found.agent;
   if (target.session === caller) return refused("That's this conversation: you have it already.");
@@ -244,16 +253,20 @@ async function readOne(args: Record<string, unknown>, caller: string | null, all
   const away = peerFor(target.session);
   if (!away || !caller || offRelay()) return refused(later);
   if (!away.features.includes("letters-read")) return refused(`${target.name}'s computer doesn't share its conversations yet (it runs an older Kuvo Code). Ask it what you need with send_message.`);
+  // Its computer isn't there: said at once, not kept (a read wanted now is no use next week).
+  const asleep = `${boxName(away.peer)} isn't answering (it may be asleep, off or offline), so ${target.name}'s conversation can't be read now. Try again later.`;
+  if (awaySince(away.peer.key) !== null) return refused(asleep);
   let id: string;
+  const sent = Date.now();
   try {
     id = leaveLetter({ from: caller, to: target.session, text: query ?? "read", peer: away.peer.key, wait: true, read: query ? { query } : {} });
   } catch {
     return refused(later);
   }
-  const answer = await letterAnswer(id, place.signal, { step: place.step, cut: READ_BY_MAIL });
+  const { answer, unreachable } = await awaitAnswer(id, away.peer.key, sent, place, { cut: READ_BY_MAIL });
   if (answer && "text" in answer) return said(intro + answer.text);
   if (answer && "failed" in answer) return refused(`Couldn't read ${target.name}'s conversation: ${answer.failed}`);
-  return refused(later);
+  return refused(unreachable ? asleep : later);
 }
 
 /** A tool's call (`name`, its `args`), from the conversation `session` (as the engine names it; null
@@ -311,10 +324,18 @@ export async function agentTool(name: AgentToolName, args: Record<string, unknow
       // Only a conversation here has sessions of its own.
       if (!root) return refused("Only a conversation on this computer has sessions of its own.");
       const caller = { ...root, name: nameOf(root.session, all) };
-      if (name === "list_sessions") return listSessionsTool(caller, targets, place.signal);
+      // Its sessions here, and on your other computers: those there, as they are now, or as of when
+      // that computer last told, while it isn't answering.
+      if (name === "list_sessions") {
+        const rows = await liveRows(caller.session, targets, place.signal);
+        return describeList(rows, await rowsEverywhere(leadOf(caller), place));
+      }
+      // One that isn't here (the engine and the coding agents' bridge say so): on the computer it's on.
+      const session = typeof args.session === "string" ? args.session.trim() : "";
+      if (/^ses_[A-Za-z0-9]{1,60}$/.test(session) && (await placeOfSession(session, targets).catch(() => undefined)) === null) return elsewhereTool(name, leadOf(caller), args, session, place);
       if (name === "stop_session") return stopSessionTool(caller, args, targets, place.signal);
       if (name === "compact_session") return compactSessionTool(caller, args, targets, place.signal);
-      return answerAskTool(caller, args, targets, place.signal);
+      return answerAskTool(leadOf(caller), args, targets, place.signal);
     }
   }
 }

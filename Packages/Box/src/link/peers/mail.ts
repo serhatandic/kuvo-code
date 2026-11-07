@@ -7,6 +7,9 @@ import { receiveDocs } from "../documents/exchange";
 import { readEngineFile } from "../engine/client";
 import { leaveAnswer, letterWent } from "../letters/outbox";
 import { takeLetter } from "../letters/take";
+import { callsBack, takeCall } from "../letters/calls";
+import { rowsWent, takeRows } from "../work/elsewhere";
+import { noteHeard } from "./reach";
 import { takeMoving, tellMovingAgain } from "../moves/elsewhere";
 import { takeMoveMail } from "../moves/move";
 import { frozen } from "../moves/records";
@@ -54,13 +57,21 @@ export function peerMail(sender: MailSender, payload: Record<string, unknown>, h
     }
   }
   if (isObject(payload.letter)) takeLetter(sender, payload.letter, { send, ...places(), answer: leaveAnswer, moving: async session => frozen().has(session) }).catch(() => {});
+  // A lead's tool, from the box it lives on, for sessions of its here (PROTOCOL.md, "Peers", `call`).
+  if (isObject(payload.call)) takeCall(sender, payload.call, { send, ...places() }).catch(() => {});
+  // What that box has of the sessions of leads that live here (PROTOCOL.md, "Work", `rows`): kept,
+  // and said to be had.
+  if (isObject(payload.rows) && typeof payload.rows.id === "string" && takeRows(sender, payload.rows)) send(sender, { delivered: { id: payload.rows.id, ok: true } });
   // A move between this box and that one (PROTOCOL.md, `kuvo/moves`).
   if (isObject(payload.move)) takeMoveMail(sender, payload.move).catch(() => {});
   // What moves on that box now, between it and any other (PROTOCOL.md, "Peers", `moving`).
   if (isObject(payload.moving)) takeMoving(sender, payload.moving);
   // Group chats across your computers: to the coding agents' bridge here.
   if (isObject(payload.seat) || isObject(payload.seatPart)) takeSeat(sender, payload, send).catch(() => {});
-  if (isObject(payload.delivered) && typeof payload.delivered.id === "string") letterWent(sender, payload.delivered as unknown as Delivered);
+  if (isObject(payload.delivered) && typeof payload.delivered.id === "string") {
+    letterWent(sender, payload.delivered as unknown as Delivered);
+    if (payload.delivered.ok === true) rowsWent(sender, payload.delivered.id);
+  }
 }
 
 // What came by mail, from a Mac or a peer: a Mac's lists, or what peers tell each other
@@ -76,6 +87,9 @@ export function receiveMail(
   const opened = openMail(body, link);
   if (!opened) return;
   const { sender, payload } = opened;
+  // It answers: whatever this box's tools last heard of it (PROTOCOL.md, "Peers", `run/peer-reach.json`).
+  // Back after not answering: what's kept for it goes now, not at its next minute.
+  if (noteHeard(sender.key)) callsBack(sender.key);
   if (macsOf(link).includes(sender.key)) heardFromMac(sender.key, payload);
   const attention = macsOf(link).includes(sender.key) ? attentionGiven(payload.attention) : null;
   if (attention && typeof payload.at === "number") attended(sender.key, attention, payload.at);

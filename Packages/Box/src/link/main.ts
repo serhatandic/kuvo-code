@@ -55,7 +55,9 @@ import { writePrivate } from "./files";
 import { BRIDGE_FILE, IS_MAC, K, NEEDED_FILE, OWN_RUNTIME, PID_FILE, REAL_BOX, RUN, scriptIs, socketKey, takeVaultSecrets, VERSION_FILE } from "./home";
 import { isBridge, keepKeeper, needed, noLongerNeeded, runningBridge, startBridge } from "./keeper";
 import { noteRelay } from "./letters/leave";
-import { deliverLeftAnswers, sendOutbox } from "./letters/outbox";
+import { deliverLeftAnswers, outboxSoon, sendOutbox } from "./letters/outbox";
+import { outboxChanged } from "./letters/calls";
+import { pushRows } from "./work/elsewhere";
 import { macLinkCheck } from "./mac/link";
 import { macNoticeHold, macTell } from "./mac/notices";
 import { runMacPeers } from "./mac/peers";
@@ -165,6 +167,9 @@ export { bridgeAsk, bridgeClock, carrySeat, seatPayloads, seatPeers, takeSeat, t
 export { announce, ownAgents, refreshOwn, writeAgents } from "./peers/agents";
 export { answered, deliverLeftAnswers, letterMail, letterWent, sendOutbox } from "./letters/outbox";
 export { takeLetter } from "./letters/take";
+export { callsBack, takeCall } from "./letters/calls";
+export { pushRows, takeRows } from "./work/elsewhere";
+export { readReach } from "./peers/reach";
 export { peerPlaces } from "./engine/client";
 export { answerPersonalities, retellBots, takePersonalities, takePersonalitiesDocument } from "./personalities/take";
 export { docsChanged, macDocsChanged, receiveDocs } from "./documents/exchange";
@@ -368,12 +373,20 @@ async function run(): Promise<void> {
     // Running: its Macs' 30 days go on, the relay there or not (time off doesn't count).
     try { noteOnline(); } catch {}
   }, 60_000);
+  const sendNow = () => {
+    try { sendOutbox(current ?? { send() {} }, undefined, Date.now(), current?.welcomed ? 0 : Date.now() - lastWelcomed); } catch {}
+  };
+  // What this box answers goes at once; what its tools leave (another process's), the moment it's there.
+  outboxSoon.send = sendNow;
+  setInterval(() => { if (outboxChanged()) sendNow(); }, 500);
   setInterval(() => {
     if (current?.welcomed && docsNoted()) try { docsChanged(current, { tell: true }); } catch {}
     if (current?.welcomed) lastWelcomed = Date.now();
     noteRelay(Boolean(current?.welcomed), lastWelcomed);
-    try { sendOutbox(current ?? { send() {} }, undefined, Date.now(), current?.welcomed ? 0 : Date.now() - lastWelcomed); } catch {}
+    sendNow();
     deliverLeftAnswers().catch(() => {});
+    // The rows of sessions here whose lead lives on another computer, told to it as they change.
+    if (current?.welcomed) pushRows(current, readLink(), peerTargets()).catch(() => {});
   }, 3_000);
 
   let attempt = 0;

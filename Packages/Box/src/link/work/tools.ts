@@ -11,7 +11,8 @@ import { agentsCommandsInSandbox, engineCommandsInSandbox, fenceWhole } from "..
 import { holdArchived } from "../areas/wakes";
 import { noteWorkChanged } from "./changes";
 import { noteOversightBy } from "./oversight";
-import { callOf, keepAnswer, noteSession, pendingAsk, permissionWords, ruleFor, rulesOf, type PendingPermission } from "./answers";
+import { callOf, keepAnswer, noteSession, pendingAsk, permissionWords, ruleFor, withDefaults, type PendingPermission } from "./answers";
+import { holdsBack, permissionsHere } from "../bots/tell";
 import { allowRefusal } from "./policy";
 import { approvalOf } from "./approval";
 import { appsNamed, finishGoal, goalProgress, goalProject, maySpend, progressRefused, proposalRefused, proposeGoal, runningGoal } from "./goals";
@@ -33,6 +34,8 @@ import type { KitRule } from "../bots/kit";
 import type { SessionPlace } from "../letters/letter";
 import type { ToolAnswer } from "../letters/tools";
 import type { Listed } from "./tree";
+import type { Row } from "./elsewhere";
+import type { WorksFor } from "../../shared/routes/work";
 
 /** The conversation calling: its root's address and place, and its name as the others know it. */
 export interface Caller {
@@ -41,12 +44,83 @@ export interface Caller {
   name: string;
 }
 
+/** Who runs its sessions with these tools, as the box it lives on knows it (`leadOf`), and as a
+ * call carries it to a box its sessions are on (PROTOCOL.md, "Peers", `call`, `as`): its address,
+ * its name, the bot it is, the rules it goes by there (that box's Settings › Permissions, then its
+ * own conversation's), and whether its own commands run free of the sandbox (Full Access, or no
+ * sandbox there). `from`: the box it lives on, for one that lives elsewhere (that box's name). */
+export interface Lead {
+  session: string;
+  name: string;
+  bot: WorksFor | null;
+  rules: KitRule[];
+  free: boolean;
+  from?: string;
+}
+
+/** The conversation calling, as a lead: worked out here, where it lives. */
+export function leadOf(caller: Caller): Lead {
+  const bot = botOfConversation(caller.session);
+  const bridge = (() => { try { return readEngineFile().port !== caller.place.target.port; } catch { return false; } })();
+  const free = approvalOf(caller.place.data, { agents: bridge, bot: Boolean(bot) }).effective === "fullAccess" || !commandsInSandbox(caller.place.target, { sandboxed: true } as PendingPermission);
+  return { session: caller.session, name: caller.name, bot, rules: [...(permissionsHere() ?? []), ...((caller.place.data.permissions ?? []) as KitRule[])], free };
+}
+
+/** A session of the caller's as list_sessions shows it: where it stands, its last reply, and how
+ * full its context is. */
+export type LiveRow = Row & { lastReply?: string; context?: { used: number } | { summarized: true } };
+
+/** The rows of `lead`'s sessions here, the latest first, at most `most`. */
+export async function liveRows(lead: string, targets: Target[], signal?: AbortSignal, most = 40): Promise<LiveRow[]> {
+  const listed = (await mine(lead, targets, signal)).slice(0, most);
+  if (!listed.length) return [];
+  const working = await atWorkNow(targets, signal);
+  const rows: LiveRow[] = [];
+  for (const each of listed) {
+    const work = await describeWork(each, working, { replies: true, signal });
+    const context = await contextOf(each, signal);
+    rows.push({ ...work, ...(context ? { context } : {}) });
+  }
+  return rows;
+}
+
+/** One session, in a line (and its last reply under it), as list_sessions says it. */
+export function rowLine(work: LiveRow): string {
+  const model = work.model ? ` · ${work.model.providerID}/${work.model.id}${work.model.variant ? ` (${work.model.variant})` : ""}` : "";
+  const state = work.state === "asking" ? `asks to ${(work.asks ?? "").replace(/^Wants to /, "").replace(/\.$/, "")}${work.askID ? ` (ask ${work.askID})` : ""}` : work.state;
+  const under = work.depth > 1 ? `, started by ${work.startedBy}` : "";
+  const reply = work.lastReply && work.state !== "asking" ? `\n  Last reply: ${work.lastReply}` : "";
+  const held = !work.context ? "" : "used" in work.context ? ` · ${work.context.used.toLocaleString("en-US")} tokens in context now` : " · just summarized, context size known after its next step";
+  return `- ${work.title} (address ${work.session}), ${placeWords(work)}: ${state}${model}${under}${held}${work.tokens ? ` · ${work.tokens.toLocaleString("en-US")} tokens used in total` : ""}${reply}`;
+}
+
+/** The caller's sessions on another computer, as list_sessions says them: by that computer's
+ * name, live, or as of when it last told (`asOf`) when it isn't answering (`away`, why). */
+export interface RowsThere {
+  name: string;
+  rows: LiveRow[];
+  asOf?: number;
+  away?: string;
+}
+
+// How long ago `at` was, in words.
+const ago = (at: number, now = Date.now()): string => {
+  const minutes = Math.max(0, Math.round((now - at) / 60_000));
+  if (minutes < 2) return "a minute ago";
+  if (minutes < 90) return `${minutes} minutes ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 36) return `${hours} hours ago`;
+  return `${Math.round(hours / 24)} days ago`;
+};
+
 const said = (text: string): ToolAnswer => ({ text, isError: false });
+// How long an allow given on another computer may wait to be given here.
+export const ALLOW_LIFE = 86_400_000;
 const refused = (text: string): ToolAnswer => ({ text, isError: true });
 const why = (error: unknown) => String((error as Error | null)?.message ?? error);
 // A change to the work of the bot a session works for, for clients to read it again; and, done by
 // the bot itself, what it did, for clients to show it looking after its sessions.
-const changed = (data: Listed["data"], did?: { kind: "stopped" | "answered"; by: Caller }) => {
+const changed = (data: Listed["data"], did?: { kind: "stopped" | "answered"; by: Pick<Lead, "session"> }) => {
   const bot = worksFor(data)?.bot;
   if (!bot) return;
   noteWorkChanged(bot);
@@ -54,12 +128,12 @@ const changed = (data: Listed["data"], did?: { kind: "stopped" | "answered"; by:
 };
 
 // The caller's sessions (the ones it started, and theirs), the latest first.
-const mine = async (caller: Caller, targets: Target[], signal?: AbortSignal) => under(caller.session, await workSessions(targets, signal));
+const mine = async (lead: string, targets: Target[], signal?: AbortSignal) => under(lead, await workSessions(targets, signal));
 
 // One of the caller's sessions by its address, or what to say when it isn't one.
-async function oneOfMine(caller: Caller, session: unknown, targets: Target[], doing: string, signal?: AbortSignal): Promise<{ listed: Listed } | { error: ToolAnswer }> {
+async function oneOfMine(caller: Pick<Lead, "session">, session: unknown, targets: Target[], doing: string, signal?: AbortSignal): Promise<{ listed: Listed } | { error: ToolAnswer }> {
   if (typeof session !== "string" || !session.trim()) return { error: refused("Say which session (session), by its address from list_sessions.") };
-  const listed = (await mine(caller, targets, signal)).find(each => each.data.id === session.trim());
+  const listed = (await mine(caller.session, targets, signal)).find(each => each.data.id === session.trim());
   if (listed) return { listed };
   const any = (await workSessions(targets, signal)).find(each => each.data.id === session.trim());
   let title: string | null = any?.data.title ?? null;
@@ -76,28 +150,30 @@ async function oneOfMine(caller: Caller, session: unknown, targets: Target[], do
   return { error: refused(doing === "answer" ? `"${title}" isn't one of your sessions: only the user answers what it asks.` : `"${title}" isn't yours to ${doing}: ask the user.`) };
 }
 
-/** list_sessions: the caller's sessions, where each stands, the latest first. */
-export async function listSessionsTool(caller: Caller, targets: Target[], signal?: AbortSignal): Promise<ToolAnswer> {
-  const listed = await mine(caller, targets, signal);
-  if (!listed.length) return said("You haven't started any sessions (or they're archived). Start one with start_session.");
-  const working = await atWorkNow(targets, signal);
-  const lines: string[] = [];
-  for (const each of listed.slice(0, 40)) {
-    const work = await describeWork(each, working, { replies: true, signal });
-    const model = work.model ? ` · ${work.model.providerID}/${work.model.id}${work.model.variant ? ` (${work.model.variant})` : ""}` : "";
-    const state = work.state === "asking" ? `asks to ${work.asks!.replace(/^Wants to /, "").replace(/\.$/, "")} (ask ${work.askID})` : work.state;
-    const under = work.depth > 1 ? `, started by ${work.startedBy}` : "";
-    const reply = work.lastReply && work.state !== "asking" ? `\n  Last reply: ${work.lastReply}` : "";
-    const context = await contextOf(each, signal);
-    const held = !context ? "" : "used" in context ? ` · ${context.used.toLocaleString("en-US")} tokens in context now` : " · just summarized, context size known after its next step";
-    lines.push(`- ${work.title} (address ${work.session}), ${placeWords(work)}: ${state}${model}${under}${held}${work.tokens ? ` · ${work.tokens.toLocaleString("en-US")} tokens used in total` : ""}${reply}`);
+/** list_sessions: the caller's sessions here, where each stands, the latest first. */
+export async function listSessionsTool(caller: Pick<Lead, "session">, targets: Target[], signal?: AbortSignal): Promise<ToolAnswer> {
+  return describeList(await liveRows(caller.session, targets, signal), []);
+}
+
+/** list_sessions' words: the caller's sessions here (`rows`), then those on each other computer
+ * (`there`), live or as of when it last told. */
+export function describeList(rows: LiveRow[], there: RowsThere[], now = Date.now()): ToolAnswer {
+  const others = there.filter(each => each.rows.length);
+  if (!rows.length && !others.length) return said("You haven't started any sessions (or they're archived). Start one with start_session.");
+  const parts: string[] = [];
+  if (rows.length) parts.push(`Your sessions${others.length ? ` on ${HERE}` : ""}, the latest first:\n${rows.map(rowLine).join("\n")}`);
+  for (const each of others) {
+    const head = each.away
+      ? `On ${each.name}, as of ${each.asOf ? ago(each.asOf, now) : "when it last told"}. ${each.name} isn't answering (${each.away}): what it asks waits, and a stop or an answer you give is kept and done when it's back.`
+      : `On ${each.name}, the latest first:`;
+    parts.push(`${head}\n${each.rows.map(rowLine).join("\n")}`);
   }
-  return said(`Your sessions, the latest first:\n${lines.join("\n")}`);
+  return said(parts.join("\n\n"));
 }
 
 /** stop_session: one of the caller's sessions stopped (what waits for it held), and put away if
  * it says so. */
-export async function stopSessionTool(caller: Caller, args: Record<string, unknown>, targets: Target[], signal?: AbortSignal): Promise<ToolAnswer> {
+export async function stopSessionTool(caller: Pick<Lead, "session" | "name">, args: Record<string, unknown>, targets: Target[], signal?: AbortSignal): Promise<ToolAnswer> {
   const found = await oneOfMine(caller, args.session, targets, "stop", signal);
   if ("error" in found) return found.error;
   const { target, data } = found.listed;
@@ -119,7 +195,7 @@ export async function stopSessionTool(caller: Caller, args: Record<string, unkno
 
 /** compact_session: one of the caller's sessions summarizes its conversation to free up its
  * context, as its `/compact` does: what can't says why. */
-export async function compactSessionTool(caller: Caller, args: Record<string, unknown>, targets: Target[], signal?: AbortSignal): Promise<ToolAnswer> {
+export async function compactSessionTool(caller: Pick<Lead, "session" | "name">, args: Record<string, unknown>, targets: Target[], signal?: AbortSignal): Promise<ToolAnswer> {
   const found = await oneOfMine(caller, args.session, targets, "compact", signal);
   if ("error" in found) return found.error;
   const { target, data } = found.listed;
@@ -155,7 +231,7 @@ const projectFolders = (folder: string): readonly string[] => readProjects().fin
 /** answer_ask: what one of the caller's sessions asks, answered. A permission it may allow only
  * where it could go ahead itself, as its own rules and mode say; it may always say no. A
  * question it answers in words. Kept on the session, with why. */
-export async function answerAskTool(caller: Caller, args: Record<string, unknown>, targets: Target[], signal?: AbortSignal): Promise<ToolAnswer> {
+export async function answerAskTool(caller: Lead, args: Record<string, unknown>, targets: Target[], signal?: AbortSignal, { made }: { made?: number } = {}): Promise<ToolAnswer> {
   const found = await oneOfMine(caller, args.session, targets, "answer", signal);
   if ("error" in found) return found.error;
   const { target, data } = found.listed;
@@ -165,8 +241,7 @@ export async function answerAskTool(caller: Caller, args: Record<string, unknown
   if (!reason) return refused("Say why, in a line (reason): the user sees it with your answer.");
   const ask = await pendingAsk(target, data.id, args.ask.trim(), signal);
   if (!ask) return refused(`"${title}" doesn't ask ${args.ask.trim()} now: it was answered, or it moved on.`);
-  const bot = botOfConversation(caller.session);
-  const by = bot ?? { name: caller.name };
+  const by = caller.bot ?? { name: caller.name };
   if ("question" in ask) {
     const answer = typeof args.answer === "string" ? args.answer.trim() : "";
     if (!answer) return refused(`"${title}" asks: ${ask.question.text} Answer it in words (answer).`);
@@ -185,15 +260,19 @@ export async function answerAskTool(caller: Caller, args: Record<string, unknown
   const shown = permission.resources.filter(each => each !== "*").join(", ") || permission.action;
   if (args.decision !== "allow" && args.decision !== "deny") return refused("Say allow or deny (decision).");
   if (args.decision === "allow") {
+    // An allow given on another computer and kept while this one was away, for a day at most: by
+    // then what it was given for may have changed.
+    if (made !== undefined && Date.now() - made > ALLOW_LIFE) return refused(`Your allow for "${title}" wasn't given: this computer was away for over a day after you gave it, so it's out of date. Look at what it asks now (list_sessions), and answer again if it still should go ahead.`);
     const folder = data.location?.directory ?? data.directory ?? "";
-    const rules = rulesOf((caller.place.data.permissions ?? []) as KitRule[]);
+    // The rules its own conversation goes by where it lives; on another computer's session, this
+    // one's Don't Allow rules too, which no one gets past here.
+    const rules = withDefaults([...caller.rules, ...(caller.from ? (permissionsHere() ?? []).filter(holdsBack) : [])]);
     const seen = await callOf(target, permission, signal);
     // What its own conversation could do without asking, as its own rules and mode say
-    // (`allowRefusal`): a command in the sandbox where its own run there, anywhere in Full Access.
+    // (`allowRefusal`): a command in the sandbox where its own run there (the session's, as it runs
+    // here), anywhere in Full Access.
     const sandboxed = commandsInSandbox(target, permission);
-    const bridge = (() => { try { return readEngineFile().port !== caller.place.target.port; } catch { return false; } })();
-    const free = approvalOf(caller.place.data, { agents: bridge, bot: Boolean(bot) }).effective === "fullAccess" || !commandsInSandbox(caller.place.target, { sandboxed: true } as PendingPermission);
-    const why = allowRefusal(permission.action, permission.resources, folder ? [folder, ...projectFolders(folder)] : [], rules, ruleFor, seen, { sandboxed, free });
+    const why = allowRefusal(permission.action, permission.resources, folder ? [folder, ...projectFolders(folder)] : [], rules, ruleFor, seen, { sandboxed, free: caller.free });
     if (why) return refused(`You can't allow that: you'd have to ask the user about it yourself. The user sees the ask on "${title}" and answers it there. Tell them in a line why it's needed, and carry on with the rest.`);
   }
   try {
