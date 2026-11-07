@@ -10286,9 +10286,9 @@ function withTimeout(promise, milliseconds) {
 }
 function modelName(info) {
   const what = info.description?.split(" \xB7 ")[0]?.trim();
-  if (what && /^(opus|sonnet|haiku|fable|claude)/i.test(what))
-    return what;
-  return info.displayName;
+  if (!what || !/^(opus|sonnet|haiku|fable|claude)/i.test(what))
+    return info.displayName;
+  return info.value === "default" ? `Default (${what})` : what;
 }
 function family(name) {
   return "claude-" + (name.split(/\s+/)[0] ?? "").toLowerCase();
@@ -23991,4 +23991,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents a02c8075abec7145382b111cb0e4e47a20d80a3f5651a770c83c7270d4d9a11a
+// Built from Packages/Box/src/agents cf1fe1c6e5515846c072fa7b1672ec96d628ea6ce6809faa4736866fdb0be12c
