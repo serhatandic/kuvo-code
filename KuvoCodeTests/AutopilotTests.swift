@@ -409,7 +409,9 @@ import Testing
         try await heard("frm_sub_goes")
         #expect(workspace.asking["frm_sub_goes"] == nil)
         #expect(asks.withLock { $0.contains("kuvo/sessions/ses_a/autopilot/asked frm_sub_goes") })
-        // Known by now as its conversation's: not counted first, as the Dock would show it.
+        // Known as its conversation's (a read of its own, apart from what `heard` waits on): not
+        // counted first, as the Dock would show it.
+        try await until { workspace.root(of: "ses_sub") == "ses_a" }
         try ask("frm_sub_again", in: "ses_sub", marked: false)
         #expect(workspace.asking["frm_sub_again"] == nil)
         try await heard("frm_sub_again")
