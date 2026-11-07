@@ -265,6 +265,23 @@ test("a phone pairs with Settings › Phone's link, and the Mac's box answers it
   assert.equal((await it.request("GET", "kuvo/named")).status, 200);
   const groups = await it.request("GET", "kuvo/groups");
   assert.deepEqual([groups.status, JSON.parse(groups.body).message], [503, "Group chats on this Mac are starting. Try again in a moment."]);
+  // What it hears of a bridge that's down isn't that it's starting: why, on each route that needs it,
+  // and what starts it, when nothing's trying.
+  const run = path.join(support, "box", "run");
+  const agentsStopped = path.join(run, "agents-stopped");
+  const heard = async () => Promise.all(["kuvo/groups", "kuvo/artifacts", "kuvo/agents/api/session"].map(async route => {
+    const answer = await it.request("GET", route);
+    return [answer.status, JSON.parse(answer.body).message];
+  }));
+  fs.writeFileSync(agentsStopped, JSON.stringify({ why: "It can't be run.", retrying: false }));
+  for (const each of await heard()) assert.deepEqual(each, [503, "This Mac's coding agents aren't running. It can't be run. Restart them in Kuvo Code on the Mac."]);
+  fs.writeFileSync(agentsStopped, JSON.stringify({ why: "It stopped (exit code 3). Trying again by itself.", retrying: true }));
+  for (const each of await heard()) assert.deepEqual(each, [503, "This Mac's coding agents aren't running. It stopped (exit code 3). Trying again by itself."]);
+  fs.rmSync(agentsStopped);
+  // Or the engine that runs it, given up on before it could start.
+  fs.writeFileSync(path.join(run, "engine-stopped"), "It can't be downloaded.");
+  for (const each of await heard()) assert.deepEqual(each, [503, "This Mac's engine isn't running. It can't be downloaded. Try Again in Kuvo Code on the Mac starts it."]);
+  fs.rmSync(path.join(run, "engine-stopped"));
   assert.equal(app.asked.length, asked, "none went to the app");
   // The Mac's own: the app's, with which phone asked.
   const usage = await it.request("GET", "kuvo/usage");

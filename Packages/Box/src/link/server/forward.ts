@@ -2,6 +2,7 @@
 // What isn't the box's own goes on to the engine, or to the coding agents' bridge (`kuvo/agents/…`),
 // a phone's prompts with who they name told, and that they're from a phone.
 
+import { agentsDown } from "../areas/agents-down";
 import { engineDown, stopShell } from "../areas/engine";
 import { holdArchived } from "../areas/wakes";
 import { MOVING } from "../bots/here";
@@ -153,7 +154,7 @@ export async function* agentsRoute(context: RouteContext): AsyncGenerator<Answer
   const target = bridge();
   if (!target) {
     yield { head: { status: 503, headers: { "content-type": "application/json" } } };
-    yield { body: Buffer.from(JSON.stringify({ message: "The coding agents aren't running on this machine." })) };
+    yield { body: Buffer.from(JSON.stringify({ message: agentsDown() ?? "The coding agents aren't running on this machine." })) };
     return;
   }
   return yield* forward(target, path, request, signal, agentsAllowed, namingHere(readEngine), () => "The coding agents aren't answering on this computer. Try again in a moment.", true);

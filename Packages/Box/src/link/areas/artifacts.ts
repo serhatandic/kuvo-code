@@ -3,6 +3,7 @@
 import { IS_MAC } from "../home";
 import type { Target } from "../../shared/records";
 import type { AnswerPiece, LinkRequest, RouteContext } from "../server/context";
+import { agentsDown } from "./agents-down";
 import { groupJSON } from "./groups";
 
 // What a client asks of the record (PROTOCOL.md, `kuvo/artifacts`): a place's list, Timeline and
@@ -49,6 +50,6 @@ const notAnswering = () => (IS_MAC ? "What your agents made on this Mac can’t 
 export async function* artifactsRoute(context: RouteContext): AsyncGenerator<AnswerPiece> {
   const { request, signal, route, bridge } = context;
   const target = bridge();
-  if (!target) return yield* groupJSON(503, { message: IS_MAC ? "What your agents made on this Mac is still loading. Try again in a moment." : "What agents made here is kept by the coding agents' bridge, which isn't running on this machine." });
+  if (!target) return yield* groupJSON(503, { message: agentsDown() ?? (IS_MAC ? "What your agents made on this Mac is still loading. Try again in a moment." : "What agents made here is kept by the coding agents' bridge, which isn't running on this machine.") });
   return yield* forwardArtifacts(target, route, request, signal);
 }
