@@ -522,7 +522,9 @@ A client asks the box it lives on once, and watches; the move goes on with no cl
   them from where it goes), its unanswered asks (`work/asks`) and the goals it proposed and you
   haven't started (they're here again if it comes back), and `agent: true` when its coding agent's
   own copy of its conversation is kept here as the way back (removed a week after it first runs
-  there). Clients put it in Move's question (`MoveWords.question`, its `stays`), with the words
+  there): Claude Code's and Codex's go with it. `startsOver: "<agent>"` instead, for one whose
+  coding agent can't take its own conversation along (Cursor, Grok, Antigravity): that agent starts
+  a new conversation there, handed what was said so far. Clients put it in Move's question (`MoveWords.question`, its `stays`), with the words
   that each computer's vault, integrations and browser sign-ins stay with it.
 - `POST kuvo/moves {kind, id, to}` (`to`: the box's key, as `places` gives it) answers once the move
   ends: `200 {move}` (it lives there now); `409 {message}` refused or taken back, as it was (still in

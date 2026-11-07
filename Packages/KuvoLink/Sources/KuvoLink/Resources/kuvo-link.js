@@ -17540,6 +17540,16 @@ async function groupAction(bridge, group, action) {
   return answer.value?.data ?? null;
 }
 
+// Packages/Box/src/shared/carry.ts
+var CARRIED_AGENTS = new Set(["claude-code", "codex-cli"]);
+var AGENT_NAMES = {
+  "claude-code": "Claude Code",
+  "codex-cli": "Codex",
+  cursor: "Cursor",
+  "grok-cli": "Grok",
+  antigravity: "Antigravity"
+};
+
 // Packages/Box/src/link/moves/elsewhere.ts
 import fs63 from "node:fs";
 import path66 from "node:path";
@@ -17971,7 +17981,10 @@ async function staysOf(kind, thing, what, signal) {
   const goals = proposedGoals().filter((goal) => own(goal.session, goal.bot)).length;
   if (goals)
     stays.goals = goals;
-  if (what.lane)
+  const agent = what.model?.providerID.split("@")[0] ?? "";
+  if (what.lane && AGENT_NAMES[agent] && !CARRIED_AGENTS.has(agent))
+    stays.startsOver = AGENT_NAMES[agent];
+  else if (what.lane)
     stays.agent = true;
   return stays;
 }

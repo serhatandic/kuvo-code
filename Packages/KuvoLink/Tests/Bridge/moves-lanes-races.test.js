@@ -82,6 +82,26 @@ const started = seedStarted("ses_started", path.join(support, "project"));
 write(path.join(memoryOf(started), "MEMORY.md"), "The project's.\n");
 const startedThere = seedStarted("ses_startedThere", path.join(shares.folder, "workspace"));
 
+// A bot on Codex, with its thread's rollout where Codex keeps it (its home's sessions, by day); and
+// one on Grok, whose own conversation can't go.
+function seedOtherBot(bot, provider, state) {
+  const folder = path.join(bots, bot), work = path.join(folder, "workspace"), session = `ses_${bot.slice(4)}`;
+  write(path.join(folder, "bot.json"), { kuvo: 1, id: bot, name: bot, model: { id: "default", providerID: provider } });
+  write(path.join(folder, "session"), `${session}\n`);
+  write(path.join(folder, "via"), "bridge\n");
+  fs.mkdirSync(work, { recursive: true });
+  const kept = path.join(agents, "sessions", session);
+  write(path.join(kept, "session.json"), { id: session, projectID: "prj_x", model: { id: "default", providerID: provider }, cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, time: { created: 1, updated: 1 }, title: bot, location: { directory: work }, metadata: { kuvo: { bot } } });
+  write(path.join(kept, "messages.json"), [{ id: `msg_${session}`, sessionID: session, type: "user", text: "Hello.", time: { created: 1 } }, { id: `msg_${session}x`, type: "idle", outcome: "succeeded", time: { created: 2 } }]);
+  write(path.join(kept, "agent.json"), { threads: { [provider]: { state, seen: `msg_${session}` } } });
+  return { bot, session, folder };
+}
+const thread = "01a1b6ec-ce98-71b0-9437-d5a970cdc89a";
+const codexBot = seedOtherBot("bot_codex", "codex-cli", { codexThread: thread });
+const rollout = path.join(support, ".codex", "sessions", "2026", "11", "07", `rollout-2026-11-07T19-52-16-${thread}.jsonl`);
+write(rollout, '{"type":"session_meta"}\n{"type":"response_item"}\n');
+const grokBot = seedOtherBot("bot_grok", "grok-cli", { acpSession: "01a158d3-0ce8-70b0-9071-6d8d831287c0" });
+
 write(path.join(agents, "claude", "tokens", "default.json"), { token: "stand-in" });
 const bridge = spawn(bun, [bridgeScript], {
   env: {
@@ -323,6 +343,36 @@ test("asked where it can go, a bot with a coding agent says its agent's copy of 
   const places = await ask("GET", `kuvo/moves/places?kind=bot&id=${quiet.bot}`);
   assert.equal(places.status, 200, JSON.stringify(places.json));
   assert.deepEqual(places.json.stays, { agent: true });
+});
+
+test("asked where it can go, a bot on Grok says Grok starts a new conversation there, its own staying here", async () => {
+  const places = await ask("GET", `kuvo/moves/places?kind=bot&id=${grokBot.bot}`);
+  assert.equal(places.status, 200, JSON.stringify(places.json));
+  assert.deepEqual(places.json.stays, { startsOver: "Grok" });
+});
+
+test("a bot on Codex goes with its thread's rollout, kept here as the way back until a week after it ran there, and comes back to where Codex finds it", async () => {
+  const wrote = fs.readFileSync(rollout, "utf8");
+  const returning = path.join(support, "codex-returning");
+  const packed = await asks("POST", "/api/kuvo/carry/pack", { root: codexBot.session, into: returning });
+  assert.equal(packed.status, 200, JSON.stringify(packed.json));
+  assert.equal(fs.readFileSync(path.join(returning, "lanes", "0", "conversation", "2026", "11", "07", path.basename(rollout)), "utf8"), fs.readFileSync(rollout, "utf8"), "its rollout, by its day");
+  assert.deepEqual((await ask("GET", `kuvo/moves/places?kind=bot&id=${codexBot.bot}`)).json.stays, { agent: true });
+
+  const entry = await moveAway(codexBot);
+  assert.equal(fs.readFileSync(rollout, "utf8"), wrote, "kept, as the way back");
+  const at = Date.now();
+  await say({ op: "ran", id: entry.id, at });
+  link.keepMoving(at + WEEK + 1);
+  await until(() => !leftHere().some(each => each.id === entry.id));
+  assert.ok(!fs.existsSync(rollout), "gone a week after it ran there");
+
+  // Back, as the other computer would send it: under its day, where Codex finds a thread by its ID.
+  const placed = await asks("POST", "/api/kuvo/carry/place", { from: returning, keep: path.join(support, "codex-keep"), directory: path.join(codexBot.folder, "workspace"), root: codexBot.session });
+  assert.equal(placed.status, 200, JSON.stringify(placed.json));
+  assert.equal(fs.readFileSync(rollout, "utf8"), wrote);
+  const state = JSON.parse(fs.readFileSync(path.join(agents, "sessions", codexBot.session, "agent.json"), "utf8"));
+  assert.equal(state.threads["codex-cli"].state.codexThread, thread, "it goes on with the same thread");
 });
 
 test("a bridge that isn't running says why", async () => {

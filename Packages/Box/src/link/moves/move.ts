@@ -38,6 +38,7 @@ import { decidedOf, forgetDecided, isAutopilot, keepDecided, tellAutopilot } fro
 import type { EngineSession } from "../engine/sessions";
 import { CHATS, engineWait, MOST_BUNDLE, NotTaken, TooBig, deleteSession, directoryOf, exportAll, folderOf, groupAction, conversationHash, hashOf, idsOf, importAll, keysOf, notPlainIn, ownTree, pack, toTrash, unpack } from "./bundle";
 import type { Contents } from "./bundle";
+import { AGENT_NAMES, CARRIED_AGENTS } from "../../shared/carry";
 import { forgetQuiet, tellMoving } from "./elsewhere";
 import { ASK_LEFT, KEEP_LEFT, forgetLeft, keysGone, noteLeft, noteRan, readLeft, removeTrashed } from "./left";
 import type { LeftEntry } from "./left";
@@ -354,7 +355,11 @@ async function staysOf(kind: MoveKind, thing: string, what: Movable, signal?: Ab
   if (asks) stays.asks = asks;
   const goals = proposedGoals().filter(goal => own(goal.session, goal.bot)).length;
   if (goals) stays.goals = goals;
-  if (what.lane) stays.agent = true;
+  // Its coding agent's own conversation: kept here as the way back where it goes too; one that can't
+  // go stays, and the agent starts a new one there, handed what was said so far.
+  const agent = what.model?.providerID.split("@")[0] ?? "";
+  if (what.lane && AGENT_NAMES[agent] && !CARRIED_AGENTS.has(agent)) stays.startsOver = AGENT_NAMES[agent];
+  else if (what.lane) stays.agent = true;
   return stays;
 }
 

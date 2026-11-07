@@ -36,18 +36,21 @@ public enum MoveWords {
 
     /// What of a bot or chat stays on the computer it leaves, as its box says it (`kuvo/moves/places`,
     /// `stays`): the sessions it started, its unanswered questions, the goals it proposed, and
-    /// whether its coding agent's copy of its conversation is kept there as the way back.
+    /// whether its coding agent's copy of its conversation is kept there as the way back, or which
+    /// coding agent can't take its own conversation along and starts a new one (`startsOver`).
     public struct Stays: Decodable, Equatable, Sendable {
         public var sessions: Int?
         public var asks: Int?
         public var goals: Int?
         public var agent: Bool?
+        public var startsOver: String?
 
-        public init(sessions: Int? = nil, asks: Int? = nil, goals: Int? = nil, agent: Bool? = nil) {
+        public init(sessions: Int? = nil, asks: Int? = nil, goals: Int? = nil, agent: Bool? = nil, startsOver: String? = nil) {
             self.sessions = sessions
             self.asks = asks
             self.goals = goals
             self.agent = agent
+            self.startsOver = startsOver
         }
     }
 
@@ -73,7 +76,11 @@ public enum MoveWords {
         let folder = stays?.agent == true
             ? "Its folder\(left) goes to \(trash), and its coding agent’s copy of its conversation stays\(left) until a week after it first runs there."
             : "Its folder\(left) goes to \(trash), with a copy of its conversation in it."
-        var sentences = [what, "Nothing goes to it while it moves.", folder]
+        var sentences = [what]
+        if let agent = stays?.startsOver {
+            sentences.append("\(agent) starts a new conversation there, handed what was said so far.")
+        }
+        sentences += ["Nothing goes to it while it moves.", folder]
         let started = stays?.sessions ?? 0
         let kept = [
             counted(started, one: "the session it started", many: "sessions it started", the: true),

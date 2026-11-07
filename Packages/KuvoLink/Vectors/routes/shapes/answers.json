@@ -4589,7 +4589,8 @@
         "sessions?": "number",
         "asks?": "number",
         "goals?": "number",
-        "agent?": "bool"
+        "agent?": "bool",
+        "startsOver?": "string"
        }
       }
      }
