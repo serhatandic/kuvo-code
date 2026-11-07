@@ -352,6 +352,7 @@ struct ToolCallView: View {
         // Kuvo Code's other tools, which the same server serves: what they do, not where they're from.
         case "list_sessions": return isActive ? "Checking its sessions" : "Checked its sessions"
         case "stop_session": return isActive ? "Stopping a session" : "Stopped a session"
+        case "compact_session": return isActive ? "Summarizing a session" : "Summarized a session"
         case "answer_ask": return isActive ? "Answering a session" : "Answered a session"
         case "list_models": return isActive ? "Looking up the models" : "Looked up the models"
         case "list_projects": return isActive ? "Looking up the projects" : "Looked up the projects"
@@ -472,6 +473,7 @@ struct ToolCallView: View {
         case "browser_save_pdf": "arrow.down.doc"
         case "list_sessions": "rectangle.stack"
         case "stop_session": "stop.circle"
+        case "compact_session": "rectangle.compress.vertical"
         case "answer_ask": "checkmark.bubble"
         case "list_models": "cpu"
         case "list_projects": "folder"

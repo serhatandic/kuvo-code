@@ -57,6 +57,45 @@ import Testing
         session.apply(try engine.event("session.step.ended", session: id, reply.merging(["finish": "tool-calls", "cost": 0.01, "tokens": tokens]) { $1 }))
     }
 
+    /// Summarized: the number from before it would be wrong, so the gauge waits for the next step.
+    @Test func aSummaryClearsTheNumberUntilTheNextStep() async throws {
+        defer { engine.stop() }
+        let session = try await open(on: "anthropic", "sonnet")
+        try step(session, input: 2_000, cached: 150_000, output: 300)
+        #expect(session.contextUsed == 152_300)
+        session.apply(try engine.event("session.compaction.started", session: id, ["reason": "manual", "inputID": "msg_c"]))
+        #expect(session.contextUsed == 152_300, "not until it has")
+        session.apply(try engine.event("session.compaction.ended", session: id, [:]))
+        #expect(session.contextUsed == nil)
+        try step(session, input: 400, cached: 11_000, output: 100)
+        #expect(session.contextUsed == 11_500)
+    }
+
+    /// One that didn't go through leaves the conversation as full as it was.
+    @Test func aFailedSummaryKeepsTheNumber() async throws {
+        defer { engine.stop() }
+        let session = try await open(on: "anthropic", "sonnet")
+        try step(session, input: 2_000, cached: 150_000, output: 300)
+        session.apply(try engine.event("session.compaction.started", session: id, ["reason": "manual", "inputID": "msg_c"]))
+        session.apply(try engine.event("session.compaction.failed", session: id, [:]))
+        #expect(session.contextUsed == 152_300)
+    }
+
+    /// A summary you asked for isn't news: it says nothing and did nothing. One the engine did by
+    /// itself on the way, or a reply after it, is.
+    @Test func aRunThatOnlySummarizedIsNoNews() throws {
+        func messages(_ json: [[String: Any]]) throws -> [Message] {
+            try JSONDecoder().decode([Message].self, from: JSONSerialization.data(withJSONObject: json))
+        }
+        let time = ["created": 1]
+        let summary: [String: Any] = ["id": "msg_c", "type": "compaction", "time": time, "status": "completed", "reason": "manual"]
+        let idle: [String: Any] = ["id": "msg_i", "type": "idle", "time": time, "outcome": "succeeded"]
+        #expect(Workspace.endsOnSummary(try messages([summary, idle])))
+        #expect(!Workspace.endsOnSummary(try messages([summary.merging(["reason": "auto"]) { $1 }, idle])))
+        #expect(!Workspace.endsOnSummary(try messages([summary.merging(["status": "failed"]) { $1 }, idle])))
+        #expect(!Workspace.endsOnSummary(try messages([summary, ["id": "msg_u", "type": "user", "time": time, "text": "and then"], idle])))
+    }
+
     @Test func theLastRequestAgainstWhatTheModelTakes() async throws {
         defer { engine.stop() }
         let session = try await open(on: "openai", "gpt-5")

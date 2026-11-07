@@ -103,6 +103,7 @@ import Testing
         #expect(try words("kuvo-browser_list_sessions", [:], running: true) == "Checking its sessions")
         #expect(try words("kuvo-browser_set_job", ["summary": "Keeps the build green"]) == "Set its job: Keeps the build green")
         #expect(try words("kuvo-browser_stop_session", ["session": "ses_1"]) == "Stopped a session")
+        #expect(try words("kuvo-browser_compact_session", ["session": "ses_1"]) == "Summarized a session")
         #expect(try words("kuvo-browser_make_project", ["name": "Tidepool"]) == "Made the project “Tidepool”")
         #expect(try words("kuvo-browser_vault_items", [:]) == "Looked up its vault items")
         #expect(try words("kuvo-browser_schedule_wake_up", ["when": "+2h", "note": "check CI"]) == "Scheduled a wake-up in 2 hr: check CI")

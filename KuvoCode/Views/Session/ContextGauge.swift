@@ -50,7 +50,7 @@ struct ContextGauge: View {
                 ContextDetails(used: used, limit: limit, cost: model.session.cost, plan: planLimits, openUsage: {
                     showsDetails = false
                     UsageMenuBar.shared.open(.dashboard)
-                }, summarize: OutsideAgents.isAgentSession(model.session) ? nil : {
+                }, summarize: {
                     showsDetails = false
                     model.compact()
                 })

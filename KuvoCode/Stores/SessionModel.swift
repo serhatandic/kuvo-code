@@ -280,6 +280,8 @@ final class SessionModel {
 
     private static func contextUsed(in messages: [Message]) -> Int? {
         for message in messages.reversed() {
+            // Summarized since: how much is left shows at its next step, not what it was before.
+            if case .compaction(let summary) = message, summary.status == "completed" { return nil }
             if case .assistant(let assistant) = message, let tokens = assistant.tokens {
                 return tokens.input + tokens.cache.read + tokens.cache.write + tokens.output
             }
@@ -1235,8 +1237,8 @@ final class SessionModel {
             case .loop, .plan: true
             // Where its box has it.
             case .autopilot: autopilotShown != nil
-            // Summarizing is the engine's: the coding agents keep their own context.
-            case .compact: !OutsideAgents.isAgentSession(session)
+            // Every conversation: an agent that can't says why when asked.
+            case .compact: true
             }
         }
     }

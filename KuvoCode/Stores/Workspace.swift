@@ -2458,6 +2458,22 @@ final class Workspace {
         }
         return nil
     }
+    /// Whether what a session did last was a summary it was asked for (`/compact`, a lead's
+    /// compact_session), which the box tells no one of either.
+    private func endedOnSummary(_ id: String) async -> Bool {
+        guard let page = try? await api(forSession: id)?.messages(session: id, limit: 6) else { return false }
+        return Self.endsOnSummary(page.data)
+    }
+
+    static func endsOnSummary(_ messages: [Message]) -> Bool {
+        for message in messages.reversed() {
+            if case .idle = message { continue }
+            if case .compaction(let summary) = message { return summary.reason == "manual" && summary.status == "completed" }
+            return false
+        }
+        return false
+    }
+
     /// An agent (in a session, on a machine or this Mac) is asking you for something in its browser.
     @ObservationIgnored var onBrowserAsk: ((_ session: String, _ machine: String?) -> Void)?
     /// A run was refused its model's sign-in (it ran out and couldn't be renewed), or a step on it
@@ -2600,6 +2616,11 @@ final class Workspace {
                     // What it said last, as a chat app's notification shows the message, and a
                     // bot's row.
                     let isBot = botName?(id) != nil
+                    // Only a summary it was asked for: not news, and its row keeps its last reply.
+                    if !failed, await endedOnSummary(id) {
+                        if let idle = self.session(id)?.time.idle { toldIdle[id] = max(idle, toldIdle[id] ?? 0) }
+                        return
+                    }
                     let reply = failed || !(Notifier.isEnabled || isBot) ? nil : await lastReply(of: id)
                     // Read on another client meanwhile: it's news no more.
                     if let idle = self.session(id)?.time.idle, (readElsewhere[id] ?? 0) >= idle { return }
