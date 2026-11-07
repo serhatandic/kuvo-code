@@ -2379,7 +2379,7 @@ final class SessionModel {
                     guard let data = file.data else { return nil }
                     return .init(uri: "data:\(file.mime);base64,\(data)", name: file.name)
                 }
-                _ = try await api.stageRevert(session: id, messageID: user.id)
+                if !transcript.messages.summarized(since: user.id) { _ = try await api.stageRevert(session: id, messageID: user.id) }
                 if let command = CommandMessages.shared[user.id], let (name, arguments) = SlashCommands.split(command) {
                     runCommand(name, arguments: arguments, files: Self.files(of: user))
                     return

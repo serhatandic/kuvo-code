@@ -66,8 +66,9 @@ enum ConversationExport {
             case .shell(let shell):
                 let output = shell.output?.output.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 say(you, "Ran `\(shell.command)`" + (output.isEmpty ? "" : "\n\n```\n\(output)\n```"))
-            case .compaction:
-                say(agent, "_Summarized the conversation so far._")
+            case .compaction(let summary):
+                if summary.status == "completed" { say(agent, "_Summarized the conversation so far._") }
+                else if summary.status == "failed" { say(agent, "_Couldn’t summarize the conversation._") }
             default:
                 break
             }
