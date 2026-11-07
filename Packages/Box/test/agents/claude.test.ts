@@ -1585,6 +1585,19 @@ describe("summarizing when you ask (/compact)", () => {
     expect(idles(id)[1].error?.message).toBe("Claude Code couldn't summarize the conversation: Not enough messages to compact.")
   })
 
+  test("Stop during it: Claude Code is told to stop, and the row says it didn't", async () => {
+    const id = await afterATurn()
+    sessions.compact(id)
+    await until(() => fake.sent.length === 2)
+    fake.onInterrupt = () => fake.result([fake.sent[1].uuid], "error_during_execution")
+    await sessions.interrupt(id, false)
+    await until(() => idles(id).length === 2)
+    expect(fake.interrupts).toBe(1)
+    expect(idles(id)[1].outcome).toBe("interrupted")
+    expect(sessions.messages(id).find((message) => message.type === "compaction")).toMatchObject({ status: "failed" })
+    expect(texts(id)).toEqual(["HARBOUR"])
+  })
+
   test("a hook that fails as it compacts still says so", async () => {
     const id = await afterATurn()
     sessions.compact(id)

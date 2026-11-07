@@ -1,7 +1,8 @@
 // /compact on the real coding agents, through the real agents' bridge (KuvoCode/Resources/
 // kuvo-agents.js, on Bun): asked at rest, the conversation shows the summary's row and stays whole,
 // the agent still knows what it was told; asked during a turn, the turn goes through and the summary
-// follows it; asked with nothing to summarize, it says so. For Claude Code, a project's
+// follows it; stopped under way, the conversation goes on; asked with nothing to summarize, it says
+// so. For Claude Code, a project's
 // `SessionStart:compact` hook starts.
 //
 // One test per lane, each with its own folders, skipped unless asked for and there:
@@ -128,7 +129,22 @@ async function scenario({ api, workspace }, provider, model) {
   assert.equal(counted.length, 2);
   assert.equal(counted.at(-1).status, "completed");
   assert.match(end.filter(each => each.type === "assistant").map(textOf).join("\n").toLowerCase(), /one hundred fifty|one hundred and fifty/);
-  return { id, rows: end.map(each => each.type) };
+
+  // Stop during a summary: it ends, however far it got, and the conversation goes on knowing.
+  const toStop = await api("POST", `api/session/${id}/compact`, {});
+  assert.deepEqual(toStop.json?.data, { state: "compacting" });
+  await waitFor(async () => Object.keys((await api("GET", "api/session/active")).json?.data ?? {}).includes(id), "the summary under way");
+  assert.equal((await api("POST", `api/session/${id}/interrupt`, {})).status, 200);
+  await settled(6);
+  const stopped = (await page()).filter(each => each.type === "compaction").at(-1);
+  assert.ok(counted.length + 1 === (await page()).filter(each => each.type === "compaction").length, "a summary's row each time");
+  assert.ok(["failed", "completed"].includes(stopped.status), `A stopped summary's row: ${stopped.status}`);
+  await send("Which words did I ask you to remember? Reply with only them.");
+  await settled(7);
+  const last = await page();
+  assert.equal(last.at(-1).outcome, "succeeded", JSON.stringify(last.at(-1)));
+  assert.match(textOf(last.filter(each => each.type === "assistant").at(-1)), /TANGERINE-42/);
+  return { id, rows: last.map(each => each.type), stopped: stopped.status };
 }
 
 test("Claude Code", { skip: !process.env.KUVO_TEST_COMPACT_CLAUDE ? "KUVO_TEST_COMPACT_CLAUDE isn't set" : !bun ? NO_BUN : !program("claude") ? "Claude Code isn't installed" : false, timeout: 900_000 }, async t => {
@@ -138,8 +154,10 @@ test("Claude Code", { skip: !process.env.KUVO_TEST_COMPACT_CLAUDE ? "KUVO_TEST_C
   const ran = path.join(running.home, "hook-ran.txt");
   fs.mkdirSync(path.join(running.workspace, ".claude"));
   fs.writeFileSync(path.join(running.workspace, ".claude", "settings.json"), JSON.stringify({ hooks: { SessionStart: [{ matcher: "compact", hooks: [{ type: "command", command: `echo ran >> ${ran}` }] }] } }));
-  const { id } = await scenario(running, "claude-code", process.env.KUVO_TEST_COMPACT_CLAUDE);
-  assert.equal(fs.readFileSync(ran, "utf8").trim().split("\n").length, 2, "its hook started each time");
+  const { id, stopped } = await scenario(running, "claude-code", process.env.KUVO_TEST_COMPACT_CLAUDE);
+  t.diagnostic(`A summary stopped under way: ${stopped}`);
+  // (Each summary that went through; one stopped may have gone far enough to start it too.)
+  assert.ok(fs.readFileSync(ran, "utf8").trim().split("\n").length >= 2, "its hook started each time");
   const notes = ((await running.api("GET", `api/session/${id}/message?limit=200&order=asc`)).json?.data ?? []).filter(each => each.type === "synthetic").map(each => each.text);
   assert.deepEqual(notes.filter(each => !each.startsWith("The conversation will be summarized")), []);
 });
@@ -147,10 +165,11 @@ test("Claude Code", { skip: !process.env.KUVO_TEST_COMPACT_CLAUDE ? "KUVO_TEST_C
 test("Grok", { skip: !process.env.KUVO_TEST_COMPACT_GROK ? "KUVO_TEST_COMPACT_GROK isn't set" : !bun ? NO_BUN : !program("grok") ? "Grok isn't installed" : false, timeout: 900_000 }, async t => {
   const running = await bridge("kuvo-compact-grok-");
   t.diagnostic(`Left to remove: the folder in ~/.grok/sessions named after ${running.workspace}`);
-  await scenario(running, "grok-cli", process.env.KUVO_TEST_COMPACT_GROK);
+  const { stopped } = await scenario(running, "grok-cli", process.env.KUVO_TEST_COMPACT_GROK);
+  t.diagnostic(`A summary stopped under way: ${stopped}`);
 });
 
-test("Codex", { skip: !process.env.KUVO_TEST_CODEX_AUTH || !process.env.KUVO_TEST_CODEX_MODEL ? "KUVO_TEST_CODEX_AUTH and KUVO_TEST_CODEX_MODEL aren't set" : !bun ? NO_BUN : !program("codex") ? "Codex isn't installed" : false, timeout: 900_000 }, async () => {
+test("Codex", { skip: !process.env.KUVO_TEST_CODEX_AUTH || !process.env.KUVO_TEST_CODEX_MODEL ? "KUVO_TEST_CODEX_AUTH and KUVO_TEST_CODEX_MODEL aren't set" : !bun ? NO_BUN : !program("codex") ? "Codex isn't installed" : false, timeout: 900_000 }, async t => {
   // A copy must never refresh, which would rotate the token and sign the original out.
   const auth = JSON.parse(fs.readFileSync(process.env.KUVO_TEST_CODEX_AUTH, "utf8"));
   const { exp } = JSON.parse(Buffer.from(auth.tokens.access_token.split(".")[1], "base64url").toString());
@@ -161,5 +180,6 @@ test("Codex", { skip: !process.env.KUVO_TEST_CODEX_AUTH || !process.env.KUVO_TES
   fs.writeFileSync(path.join(scratch, "auth.json"), fs.readFileSync(process.env.KUVO_TEST_CODEX_AUTH), { mode: 0o600 });
   fs.writeFileSync(path.join(scratch, "config.toml"), `cli_auth_credentials_store = "file"\n`);
   const running = await bridge("kuvo-compact-codex-", { CODEX_HOME: scratch }, false);
-  await scenario(running, "codex-cli", process.env.KUVO_TEST_CODEX_MODEL);
+  const { stopped } = await scenario(running, "codex-cli", process.env.KUVO_TEST_CODEX_MODEL);
+  t.diagnostic(`A summary stopped under way: ${stopped}`);
 });

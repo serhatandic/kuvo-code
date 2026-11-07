@@ -25,6 +25,8 @@ afterAll(() => rmSync(base, { recursive: true, force: true }))
 
 /** In a turn's events: Codex works on until you press Stop. */
 const untilStopped: [string, any] = ["(works until stopped)", {}]
+/** In a turn's events: a summary Codex is asked for after it goes on until it's stopped. */
+const summaryUntilStopped: [string, any] = ["(its summary works until stopped)", {}]
 /** In a turn's events: Codex (and so what it runs) writes or reads each place (`name: ["write" | "read", path]`), and says which it could. */
 const tries = "(tries)"
 /** In a turn's events: Codex sleeps, for hours, until new input comes for the turn (one that came before the sleep doesn't count, as with the real one). */
@@ -68,6 +70,8 @@ let refusingAsItSleeps = false
 let sleptInBreath
 let turning = false
 let endsAsTold = false
+let summaryWorks = false
+let summarizing = false
 const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n")
 // Its thread: "t1", but for a Codex of a session elsewhere (one of its own).
 const thread = process.cwd() === ${JSON.stringify(folder)} ? "t1" : "t-" + process.pid
@@ -77,6 +81,10 @@ async function turn() {
   send({ method: "turn/started", params: { threadId: thread, turn: { id: "u1" } } })
   for (const [method, params] of events) {
     if (method === ${JSON.stringify(untilStopped[0])}) return new Promise((resolve) => (stopped = resolve))
+    if (method === ${JSON.stringify(summaryUntilStopped[0])}) {
+      summaryWorks = true
+      continue
+    }
     if (method === ${JSON.stringify(endsAsTold[0])}) {
       endsAsTold = true
       return
@@ -162,6 +170,10 @@ process.stdin.on("data", (chunk) => {
       send({ id: message.id, result: {} })
       send({ method: "turn/started", params: { threadId: thread, turn: { id: "c1" } } })
       send({ method: "item/started", params: { threadId: thread, turnId: "c1", item: { type: "contextCompaction", id: "cc1" } } })
+      if (summaryWorks) {
+        summarizing = true
+        continue
+      }
       send({ method: "thread/tokenUsage/updated", params: { threadId: thread, turnId: "c1", tokenUsage: { last: { totalTokens: 16476, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0 }, total: { totalTokens: 16476 }, modelContextWindow: 272000 } } })
       send({ method: "item/completed", params: { threadId: thread, turnId: "c1", item: { type: "contextCompaction", id: "cc1" } } })
       send({ method: "turn/completed", params: { threadId: thread, turn: { id: "c1", status: "completed" } } })
@@ -202,7 +214,7 @@ process.stdin.on("data", (chunk) => {
     } else if (message.method === "turn/interrupt") {
       send({ id: message.id, result: {} })
       turning = false
-      send({ method: "turn/completed", params: { threadId: "t1", turn: { id: "u1", status: "interrupted" } } })
+      send({ method: "turn/completed", params: { threadId: "t1", turn: { id: summarizing ? "c1" : "u1", status: "interrupted" } } })
       stopped?.()
     } else if (message.method === "model/list") send({ id: message.id, result: { data: [{ id: "gpt-test", model: "gpt-test", displayName: "GPT Test", isDefault: true }] } })
     else if (message.id !== undefined) send({ id: message.id, result: {} })
@@ -1775,7 +1787,22 @@ describe("summarizing when you ask (/compact)", () => {
     const id = start([untilStopped])
     await until(() => existsSync(join(root, "sent.jsonl")) && sent().some((message) => message.method === "turn/start"))
     expect(sessions.compact(id).state).toBe("waiting")
-    await Bun.sleep(50)
-    expect(sent().some((message) => message.method === "thread/compact/start")).toBe(false)
+    // What was sent before the Stop is in the file before it, and Stop lets a waiting summary go.
+    await sessions.interrupt(id)
+    await until(() => sessions.messages(id).some((message) => message.type === "idle"))
+    const methods = sent().map((message) => message.method)
+    expect(methods).toContain("turn/interrupt")
+    expect(methods).not.toContain("thread/compact/start")
+  })
+
+  test("Stop during it: its own turn is told to stop, and the row says it didn't", async () => {
+    const id = await run([summaryUntilStopped])
+    expect(sessions.compact(id).state).toBe("compacting")
+    await until(() => sent().some((message) => message.method === "thread/compact/start"))
+    await sessions.interrupt(id)
+    await until(() => sessions.messages(id).filter((message) => message.type === "idle").length === 2)
+    expect(sent().filter((message) => message.method === "turn/interrupt").map((message) => message.params)).toEqual([{ threadId: "t1", turnId: "c1" }])
+    expect(sessions.messages(id).find((message) => message.type === "compaction")).toMatchObject({ status: "failed" })
+    expect(sessions.messages(id).filter((message) => message.type === "idle").at(-1)).toMatchObject({ outcome: "interrupted" })
   })
 })

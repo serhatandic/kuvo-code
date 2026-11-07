@@ -3176,9 +3176,11 @@ describe("summarizing a conversation you ask for (/compact)", () => {
     expect(sessions.compact(id).state).toBe("compacting")
     release()
     await settled(id, 2)
-    await Bun.sleep(20)
+    // A second one would go ahead of the next message.
+    send(id, "next")
+    await settled(id, 3)
     expect(compacting(id)).toHaveLength(1)
-    expect(a.runs).toHaveLength(2)
+    expect(a.runs.map((run) => run.text)).toEqual(["first", "/compact", "next"])
   })
 
   test("Stop during the turn before it: it's dropped, and the conversation says so", async () => {
@@ -3225,8 +3227,10 @@ describe("summarizing a conversation you ask for (/compact)", () => {
     await settled(id, 2)
     sessions.compact(id)
     await settled(id, 3)
-    await Bun.sleep(20)
-    expect(a.runs.map((run) => run.text)).toEqual(["first", "working", "/compact"])
+    // Let go, it would be under way by now, and a second summary would have to wait for it.
+    expect(sessions.compact(id).state).toBe("compacting")
+    await settled(id, 4)
+    expect(a.runs.map((run) => run.text)).toEqual(["first", "working", "/compact", "/compact"])
     expect(sessions.inbox(id).map((item) => item.type)).toEqual(["user"])
   })
 
