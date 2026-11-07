@@ -1804,9 +1804,34 @@ describe("summarizing when you ask (/compact)", () => {
     expect(sessions.messages(id).find((message) => message.type === "compaction")).toMatchObject({ status: "completed", reason: "manual" })
   })
 
-  test("one it does by itself still says so", async () => {
-    const id = await run([["item/completed", { item: { type: "contextCompaction", id: "cc0" } }]])
-    expect(sessions.messages(id).flatMap((message: any) => (message.type === "synthetic" ? [message.text] : []))).toEqual(["Codex summarized the conversation to make room."])
+  // As Codex 0.166 does one by itself (seen with a real one): the item starts, and completes a
+  // couple of seconds later, at a turn's start or partway through.
+  const summary = { type: "contextCompaction", id: "cc0" }
+
+  test("one it does by itself shows as it runs, last in the conversation, and ends as one finished row, not a note", async () => {
+    const id = start([["item/started", { item: summary }], untilTold, ["item/completed", { item: summary }], ["item/completed", { item: { type: "agentMessage", id: "m1", text: "Done." } }]])
+    await until(() => sessions.messages(id).some((message) => message.type === "compaction"))
+    expect(sessions.messages(id).at(-1)).toMatchObject({ type: "compaction", status: "running", reason: "auto" })
+    sessions.prompt(id, { id: "msg_codex_test_002", text: "carry on", files: [], delivery: "steer" })
+    await until(() => ended(id))
+    expect(sessions.messages(id).filter((message) => message.type === "compaction")).toMatchObject([{ status: "completed", reason: "auto" }])
+    expect(notices(id)).toEqual([])
+  })
+
+  test("one it does by itself that Stop cuts short isn't left under way", async () => {
+    const id = start([["item/started", { item: summary }], untilStopped])
+    await until(() => sessions.messages(id).some((message) => message.type === "compaction"))
+    await sessions.interrupt(id)
+    await until(() => ended(id))
+    expect(sessions.messages(id).filter((message) => message.type === "compaction")).toMatchObject([{ status: "failed", reason: "auto" }])
+  })
+
+  test("one you asked for is one row, not a second for the item Codex does it with", async () => {
+    await run([["item/completed", { item: { type: "agentMessage", id: "m1", text: "Hi." } }]])
+    const id = sessions.list()[0].id
+    sessions.compact(id)
+    await until(() => sessions.messages(id).filter((message) => message.type === "idle").length === 2)
+    expect(sessions.messages(id).filter((message) => message.type === "compaction")).toMatchObject([{ status: "completed", reason: "manual" }])
   })
 
   test("asked during a turn it isn't sent until that turn ends: Codex would stop the turn", async () => {

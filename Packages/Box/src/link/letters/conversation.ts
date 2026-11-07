@@ -16,6 +16,8 @@ interface ReadMessage {
   id: string;
   type: string;
   status?: string;
+  /** A summary's: one you asked for (`manual`), or one the agent made by itself (`auto`). */
+  reason?: string;
   text?: string;
   files?: { name?: string }[];
   content?: { type: string; text?: string; name?: string; state?: { input?: Record<string, unknown> } }[];
@@ -92,9 +94,10 @@ export function conversationMarkdown(title: string, messages: ReadMessage[], age
       const output = String(message.output?.output ?? "").trim();
       say("User", "Ran `" + message.command + "`" + (output ? "\n\n```\n" + output + "\n```" : ""));
     } else if (message.type === "idle" && message.outcome === "failed") {
-      // Why a turn stopped, as the conversation shows it. (A summary that failed says so itself.)
+      // Why a turn stopped, as the conversation shows it. (A summary you asked for that failed says
+      // so itself; one the agent made by itself was only part of the turn.)
       const before = messages[at - 1];
-      if (before?.type === "compaction" && before.status === "failed") continue;
+      if (before?.type === "compaction" && before.reason === "manual" && before.status === "failed") continue;
       say("Stopped", `It stopped with an error: ${message.error?.message?.trim() || "the engine gave no reason."}`);
     } else if (message.type === "compaction") {
       if (message.status === "completed") say(agent, "_Summarized the conversation so far._");

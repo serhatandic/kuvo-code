@@ -337,9 +337,12 @@ connection.
     told (`[Not done]`) at 30 days. A session it doesn't have is refused (`retry` while
     its coding agents' bridge isn't running). The tool itself then checks the session is under
     `from` (`kuvo.startedBy`, up its line), as for one here: so sessions the user started are out of
-    reach. An allow goes only as far as `as` says the lead could go itself, with the receiving box's
-    own Don't Allow rules (its Settings › Permissions' `deny`) added, which no one gets past there;
-    the sandbox it's judged by is the session's own, there. An allow `made` over a day ago isn't
+    reach. An allow goes only as far as `as` says the lead could go itself and as far as the receiving
+    box's own rules (its engine defaults and its Settings › Permissions, Ask and Don't Allow alike)
+    would let a conversation go ahead without asking, each judged on its own (moving never loosens
+    anything: a rule of this box that allows doesn't undo one of the lead's that asks, nor the other
+    way round); `free` is the lead's, the sandbox it's judged by the session's own, there. Never
+    for a session in Ask First ("Work", Answering asks), which this box knows. An allow `made` over a day ago isn't
     given, and says so. A stop or a compact kept over 31 days is refused as too old.
   - **The answer** is a letter back (`{to: from, answers: <call id>, refused?}`) whose `id` is the
     call's with `-a` after it, so a call that comes again is answered by one that's already been
@@ -932,6 +935,14 @@ client shows it from the same routes.
     where the session's run there too: the engine's while it's `on`; a coding agent's when the
     agents bridge marks its ask `sandboxed`, its program having started in it, and while it's still
     set up. In Full Access, or with no sandbox here, anywhere its rules allow.
+  - **A session in Ask First always asks the user** (bridge 0.9.205), whatever the bot's mode: a
+    bot in Full Access or Auto can't allow what it asks. Read from the session's approval as it
+    stands now ("Approval", `effective`: an Auto that can't be had here is Ask First), on the engine
+    and on the coding agents' bridge, by the box that has the session, so it holds across computers
+    too. Its answer is the same refusal ("You can't allow that"): the ask stays on the session for
+    the user. A bot may still deny, and still answer a question in words (that's no permission).
+    Accept Edits, Auto and Full Access sessions are judged as above; a subagent's ask is its
+    session's.
   - Everything else goes to the user. It may always deny, with its reason passed on. A command a
     bot allows still can't get out of the sandbox: only you can let one out (`sandbox_ask`,
     "Asks"), and no tool answers that.
@@ -1002,9 +1013,11 @@ client shows it from the same routes.
     too, but it holds off a goal's nudge only for 30 minutes, and never hides a turn that failed at a
     limit.
   - **Telling a lead**: `[Session finished]` waits while any of it runs, and looks again 10 seconds
-    after it ends, since the end wakes its agent. At 30 minutes it's told anyway, saying what still
-    runs. A turn someone asked for doesn't wait on what was running before they asked (a dev server):
-    it's told at once, saying what still runs. After that a turn someone asked for is always told. A
+    after it ends, since the end wakes its agent. At 30 minutes it's told anyway, but as
+    `[Session still working]` (nothing is finished), saying what still runs; clients show it as
+    "“<title>” still working". When it really finishes with something new to say, that's a normal
+    `[Session finished]`; with nothing new, nothing. A turn someone asked for doesn't wait on what was running before they asked (a dev server):
+    it's told at once as `[Session finished]`, saying what still runs. After that a turn someone asked for is always told. A
     turn following the box's own word (what a session it started did, a limit that reset) is too, as
     what comes of it may be the result. A turn that began on its own (what it
     left running ended, its own wake-up) is told only if it has something to say: 200 characters or
@@ -1692,6 +1705,15 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     A turn of its own that went through is no news: it stays read if it was, with no notification and
     no `[Session finished]` to a lead, who still reads how the work before it went. One that failed
     says why, tells a lead `[Session not summarized]` and pauses nothing.
+  - A summary the agent makes by itself as the conversation fills up shows the same way with
+    `reason: "auto"`, as the engine's own does: a `compaction` message partway through the turn
+    (what you send meanwhile comes after it), `running` from `session.compaction.started` until
+    `.ended` or `.failed`. Claude Code, Codex and Grok say when one begins; Cursor and Antigravity
+    only that one happened, which shows as a finished row. One that's stopped, or whose agent or
+    bridge quits, ends `failed`. While the last `compaction` since the last `idle` is `running`, a
+    client says the conversation is being summarized, on its row and on the line under it
+    ("Summarizing the conversation…", with the time since it began), rather than that it waits for
+    the model.
 - Plan accounts (Copilot, OpenCode, GitLab, Poe, a provider's API key), on a Mac and a machine,
   as Settings › Accounts has them: the phone sees, reads and signs in to them as the app does.
   Each computer keeps its own: a new
@@ -2437,7 +2459,7 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   them open with `[Goal started] The user approved the plan.`, `[Not now] The user didn't start
   this goal.`, `[Goal changed] The user changed the goal's limits.`, `[Goal's end] The end the
   user set has come.`, `[Goal] Nothing of the goal is at work now.`, `[Limit reset] <why> has
-  reset. Carry on`, `[Session finished|failed|asks] "<title>"` and `[The user answered] `: read
+  reset. Carry on`, `[Session finished|still working|failed|asks] "<title>"` and `[The user answered] `: read
   them the same way
   (`BoxNote` in KuvoClient's ClientSessions does both).
 - A prompt a phone sends (`POST api/session/<id>/prompt`, and `kuvo/agents/api/…` alike) gets a

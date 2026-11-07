@@ -1075,6 +1075,30 @@ describe("summarizing when you ask (/compact)", () => {
     expect(sessions.messages(id).find((message) => message.type === "compaction")).toMatchObject({ status: "completed", reason: "manual" })
   })
 
+  // What Grok 1.0.77 names its own (read from its program, not seen from a real one): begun with
+  // how full the context was, then how it went.
+  test("one Grok makes by itself shows while it runs, last, and ends as one finished row", async () => {
+    const grok = new TestGrok(program(fakeAcp([["s1", { sessionUpdate: "auto_compact_started", tokens_used: 180_000, context_window: 200_000, percentage: 90 }]], [], undefined, { hangs: true }), join(root, "grok")), root)
+    const id = start(grok)
+    await until(() => sessions.messages(id).some((message) => message.type === "compaction"))
+    expect(sessions.messages(id).at(-1)).toMatchObject({ type: "compaction", status: "running", reason: "auto" })
+    await sessions.interrupt(id)
+    await settled(id)
+    expect(sessions.messages(id).filter((message) => message.type === "compaction")).toMatchObject([{ status: "failed", reason: "auto" }])
+  })
+
+  test("one Grok makes by itself that goes through is one finished row, not a note", async () => {
+    const agent = new TestGrok(program(fakeAcp([
+      ["s1", { sessionUpdate: "auto_compact_started", tokens_used: 180_000, context_window: 200_000, percentage: 90 }],
+      ["s1", { sessionUpdate: "auto_compact_completed", tokens_before: 180_000, tokens_after: 20_000, summary_preview: "So far…" }],
+      ["s1", { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Done." } }],
+    ]), join(root, "grok")), root)
+    const id = await run(agent)
+    expect(sessions.messages(id).filter((message) => message.type === "compaction")).toMatchObject([{ status: "completed", reason: "auto" }])
+    expect(notices(id)).toEqual([])
+    expect(words(id)).toBe("Done.")
+  })
+
   test("Antigravity can't be asked: it says so, and nothing is sent", async () => {
     const agent = new TestAntigravity(fakeAcp([["agent_message_chunk", { content: { type: "text", text: "hello" } }]]), root)
     const id = await run(agent)

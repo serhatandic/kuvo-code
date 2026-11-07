@@ -111,14 +111,16 @@ function notSummarizedLine(session: Partial<EngineSession> & { id: string }, why
 }
 
 /** What a conversation is told of one of its sessions, as a line, or null for nothing. */
-export async function wakeLine(event: WorkEvent, session: Partial<EngineSession> & { id: string }, target: Target, still?: BackgroundWork | null): Promise<string | null> {
+export async function wakeLine(event: WorkEvent, session: Partial<EngineSession> & { id: string }, target: Target, still?: BackgroundWork | null, working = false): Promise<string | null> {
   const named = namedOf(session);
   switch (event.type) {
     case "session.execution.succeeded": {
       const reply = await lastReplyOf({ target, data: session as never });
       const since = session.time?.created ? `, after ${took(Date.now() - session.time.created)}` : "";
       const running = still ? `\n(Still running in the background: ${backgroundWords(still)}. It may write again once that ends.)` : "";
-      return `[Session finished] ${named}${since}:\n${reply ? cut(reply, 1200) : "(It ended without a reply.)"}${running}`;
+      // Its turn ended, but what it left running goes on and the lead is told anyway (the hold ran
+      // out): nothing is finished, and the line says so.
+      return `[Session ${working ? "still working" : "finished"}] ${named}${since}:\n${reply ? cut(reply, 1200) : "(It ended without a reply.)"}${running}`;
     }
     case "session.execution.failed": {
       // Why, in its engine's words; one at its account or its limit fails the same way again there.
@@ -145,12 +147,12 @@ export async function wakeLine(event: WorkEvent, session: Partial<EngineSession>
 export const wakeText = (lines: string[]) => lines.join("\n\n");
 
 /** What a conversation shows for the lines told it (`wakeLine`'s), in place of them: "“Sign-in”
- * finished", or how many there are. */
+ * finished" (or "still working"), or how many there are. */
 export function wakeLineShown(lines: string[]): string {
   if (lines.length !== 1) return `${lines.length} updates from its sessions`;
-  const said = /^\[Session (finished|failed|asks)\] "([^"\n]*)"/.exec(lines[0]!);
+  const said = /^\[Session (finished|still working|failed|asks)\] "([^"\n]*)"/.exec(lines[0]!);
   if (!said) return "News from a session";
-  const what = said[1] === "finished" ? "finished" : said[1] === "failed" ? "stopped with an error" : "asks something";
+  const what = said[1] === "finished" ? "finished" : said[1] === "still working" ? "still working" : said[1] === "failed" ? "stopped with an error" : "asks something";
   return `“${said[2] || "New Session"}” ${what}`;
 }
 
@@ -451,7 +453,7 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
   // it ended with this reply, which came to it in the tool, or another watch (the engine's stream
   // connected again meanwhile) has dealt with it. Noted as held meanwhile, so a box started again
   // looks at it then. `at`: when its reply was read.
-  const tellUnlessAnswered = (session: string, starter: string, reply: string | undefined, line: string, at: number, about: { said: string; early: boolean; bot?: string }, holds = false) => {
+  const tellUnlessAnswered = (session: string, starter: string, reply: string | undefined, line: string, at: number, about: { said: string; early: boolean; bot?: string; working?: boolean }, holds = false) => {
     const waited = awaitedBy(session, starter, reply);
     if (waited === "waits") {
       holding.add(session);
@@ -464,7 +466,8 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
     if (reply && readTold(toldFile)?.sessions[session]?.reply === reply) return noteTold(session, { reply });
     if (waited !== "answered") tell(starter, line, false);
     // One of a bot's sessions done: for clients to show it seeing that, once, as it's told.
-    if (about.bot) noteOversight(about.bot, session, "finished");
+    // (One still working isn't finished: its bot sees that once what it left running ends.)
+    if (about.bot) { if (about.working) markLater.set(session, about.bot); else noteOversight(about.bot, session, "finished"); }
     noteTold(session, { reply, at, said: about.said, early: about.early });
   };
   // A finish waiting for what its session left running, no longer.
@@ -518,13 +521,15 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
     const waitedSince = readTold(toldFile)?.waiting?.[session.id]?.at;
     // (Someone's question isn't held up by what was running before they asked: a dev server.)
     const askedAt = last?.began.kind === "asked" ? last.began.at : null;
-    if (still && (askedAt === null || startedSince(still, askedAt)) && now() - (waitedSince ?? at) < FINISH_HOLD_LIMIT) return waitFor(session.id, waitedSince ?? at);
+    const working = Boolean(still) && (askedAt === null || startedSince(still!, askedAt));
+    if (working && now() - (waitedSince ?? at) < FINISH_HOLD_LIMIT) return waitFor(session.id, waitedSince ?? at);
     const was = readTold(toldFile)?.sessions[session.id] ?? {};
     letGoOf(session.id);
     if (last && !isNews(was, last)) return noteTold(session.id, { reply: last.id ?? undefined });
-    const line = await wakeLine({ type: "session.execution.succeeded", data: { sessionID: session.id } }, session, source, still);
+    // Told while what it left running goes on (the hold ran out): still working, not finished.
+    const line = await wakeLine({ type: "session.execution.succeeded", data: { sessionID: session.id } }, session, source, still, working);
     if (!line) return;
-    tellUnlessAnswered(session.id, starter, last?.id ?? undefined, line, at, { said: last?.text ? hashed(last.text) : "", early: Boolean(still) || waitedSince !== undefined, bot: worksFor(session)?.bot });
+    tellUnlessAnswered(session.id, starter, last?.id ?? undefined, line, at, { said: last?.text ? hashed(last.text) : "", early: Boolean(still) || waitedSince !== undefined, bot: worksFor(session)?.bot, working });
   };
   // One whose finish waits, looked at now: gone, at work again (its end comes back here), or as above.
   const settle = async (id: string) => {

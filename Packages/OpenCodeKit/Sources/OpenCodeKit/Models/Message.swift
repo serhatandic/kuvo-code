@@ -548,6 +548,20 @@ public extension Array where Element == Message {
         return before >= startIndex && isSummaryOnItsOwn(at: before) ? before : nil
     }
 
+    /// The summary being made now, if one is: one you asked for, or one the agent began by itself
+    /// as the conversation filled up (its row comes partway through a turn, and what you send
+    /// meanwhile comes after it). Its row says so, and so does the line under the conversation.
+    var summaryUnderWay: Message.Compaction? {
+        for message in reversed() {
+            switch message {
+            case .compaction(let summary): return summary.status == "running" ? summary : nil
+            case .idle: return nil
+            default: continue
+            }
+        }
+        return nil
+    }
+
     /// The summary a session did last, if that's all it did since its last turn. How it went is its
     /// `status`: the engine's run says it succeeded even for one that failed.
     var summaryAtEnd: Message.Compaction? {

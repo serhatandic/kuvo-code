@@ -1125,7 +1125,7 @@ var GOAL_OPENINGS = [
   ["[Goal resumed] The user resumed the goal you paused.", "Goal resumed"]
 ];
 var ANSWERED = "[The user answered] ";
-var SESSION_NEWS = /^\[Session (finished|failed|asks)\] "([^"\n]*)"/;
+var SESSION_NEWS = /^\[Session (finished|still working|failed|asks)\] "([^"\n]*)"/;
 function boxNoteOf(text, metadata) {
   const note = isBoxNote(metadata) ? metadata.kuvo.note : null;
   if (note && typeof note.from === "string" && typeof note.line === "string")
@@ -1146,7 +1146,7 @@ function boxNoteOf(text, metadata) {
 `).filter((part) => SESSION_NEWS.test(part)).length;
   if (told !== 1)
     return { from: "Its sessions", line: `${told} updates from its sessions` };
-  const what = news[1] === "finished" ? "finished" : news[1] === "failed" ? "stopped with an error" : "asks something";
+  const what = news[1] === "finished" ? "finished" : news[1] === "still working" ? "still working" : news[1] === "failed" ? "stopped with an error" : "asks something";
   return { from: "Its sessions", line: `“${news[2] || "New Session"}” ${what}` };
 }
 var isBoxWritten = (text, metadata) => boxNoteOf(text, metadata) !== null;
@@ -8810,7 +8810,7 @@ function namedOf(session) {
 function notSummarizedLine(session, why) {
   return `[Session not summarized] ${namedOf(session)}: ${why ? cut(why.replace(/\.+$/, ""), 400) : "It couldn't"}. Its conversation and work are as they were.`;
 }
-async function wakeLine(event, session, target, still) {
+async function wakeLine(event, session, target, still, working = false) {
   const named = namedOf(session);
   switch (event.type) {
     case "session.execution.succeeded": {
@@ -8818,7 +8818,7 @@ async function wakeLine(event, session, target, still) {
       const since = session.time?.created ? `, after ${took(Date.now() - session.time.created)}` : "";
       const running = still ? `
 (Still running in the background: ${backgroundWords(still)}. It may write again once that ends.)` : "";
-      return `[Session finished] ${named}${since}:
+      return `[Session ${working ? "still working" : "finished"}] ${named}${since}:
 ${reply ? cut(reply, 1200) : "(It ended without a reply.)"}${running}`;
     }
     case "session.execution.failed": {
@@ -8846,10 +8846,10 @@ var wakeText = (lines) => lines.join(`
 function wakeLineShown(lines) {
   if (lines.length !== 1)
     return `${lines.length} updates from its sessions`;
-  const said = /^\[Session (finished|failed|asks)\] "([^"\n]*)"/.exec(lines[0]);
+  const said = /^\[Session (finished|still working|failed|asks)\] "([^"\n]*)"/.exec(lines[0]);
   if (!said)
     return "News from a session";
-  const what = said[1] === "finished" ? "finished" : said[1] === "failed" ? "stopped with an error" : "asks something";
+  const what = said[1] === "finished" ? "finished" : said[1] === "still working" ? "still working" : said[1] === "failed" ? "stopped with an error" : "asks something";
   return `“${said[2] || "New Session"}” ${what}`;
 }
 var LATE_AGAIN = 300000;
@@ -9084,8 +9084,12 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
       return noteTold(session, { reply });
     if (waited !== "answered")
       tell(starter, line, false);
-    if (about.bot)
-      noteOversight(about.bot, session, "finished");
+    if (about.bot) {
+      if (about.working)
+        markLater.set(session, about.bot);
+      else
+        noteOversight(about.bot, session, "finished");
+    }
     noteTold(session, { reply, at, said: about.said, early: about.early });
   };
   const letGoOf = (session) => {
@@ -9140,16 +9144,17 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
     const still = await background.of(session.id, folder).catch(() => null);
     const waitedSince = readTold(toldFile)?.waiting?.[session.id]?.at;
     const askedAt = last?.began.kind === "asked" ? last.began.at : null;
-    if (still && (askedAt === null || startedSince(still, askedAt)) && now() - (waitedSince ?? at) < FINISH_HOLD_LIMIT)
+    const working = Boolean(still) && (askedAt === null || startedSince(still, askedAt));
+    if (working && now() - (waitedSince ?? at) < FINISH_HOLD_LIMIT)
       return waitFor(session.id, waitedSince ?? at);
     const was = readTold(toldFile)?.sessions[session.id] ?? {};
     letGoOf(session.id);
     if (last && !isNews(was, last))
       return noteTold(session.id, { reply: last.id ?? undefined });
-    const line = await wakeLine({ type: "session.execution.succeeded", data: { sessionID: session.id } }, session, source, still);
+    const line = await wakeLine({ type: "session.execution.succeeded", data: { sessionID: session.id } }, session, source, still, working);
     if (!line)
       return;
-    tellUnlessAnswered(session.id, starter, last?.id ?? undefined, line, at, { said: last?.text ? hashed(last.text) : "", early: Boolean(still) || waitedSince !== undefined, bot: worksFor(session)?.bot });
+    tellUnlessAnswered(session.id, starter, last?.id ?? undefined, line, at, { said: last?.text ? hashed(last.text) : "", early: Boolean(still) || waitedSince !== undefined, bot: worksFor(session)?.bot, working });
   };
   const settle = async (id) => {
     if (signal?.aborted)
@@ -11335,6 +11340,7 @@ var ENGINE_DEFAULTS = [
   { action: "external_directory", resource: "*", effect: "ask" },
   { action: "doom_loop", resource: "*", effect: "ask" }
 ];
+var rulesOf = (own) => [...ENGINE_DEFAULTS, ...permissionsHere() ?? [], ...own];
 var withDefaults = (rules) => [...ENGINE_DEFAULTS, ...rules];
 async function callOf(target, permission, signal) {
   if (!permission.call)
@@ -12986,7 +12992,7 @@ function conversationMarkdown(title, messages, agent) {
       say("User", "Ran `" + message.command + "`" + (output ? "\n\n```\n" + output + "\n```" : ""));
     } else if (message.type === "idle" && message.outcome === "failed") {
       const before = messages[at - 1];
-      if (before?.type === "compaction" && before.status === "failed")
+      if (before?.type === "compaction" && before.reason === "manual" && before.status === "failed")
         continue;
       say("Stopped", `It stopped with an error: ${message.error?.message?.trim() || "the engine gave no reason."}`);
     } else if (message.type === "compaction") {
@@ -20152,16 +20158,16 @@ function grantFor(item, caller, grants = readGrants()) {
 // Packages/Box/src/link/work/tools.ts
 import fs67 from "node:fs";
 import path71 from "node:path";
+var onBridge = (target) => {
+  try {
+    return readEngineFile().port !== target.port;
+  } catch {
+    return false;
+  }
+};
 function leadOf(caller) {
   const bot = botOfConversation(caller.session);
-  const bridge = (() => {
-    try {
-      return readEngineFile().port !== caller.place.target.port;
-    } catch {
-      return false;
-    }
-  })();
-  const free = approvalOf(caller.place.data, { agents: bridge, bot: Boolean(bot) }).effective === "fullAccess" || !commandsInSandbox(caller.place.target, { sandboxed: true });
+  const free = approvalOf(caller.place.data, { agents: onBridge(caller.place.target), bot: Boolean(bot) }).effective === "fullAccess" || !commandsInSandbox(caller.place.target, { sandboxed: true });
   return { session: caller.session, name: caller.name, bot, rules: [...permissionsHere() ?? [], ...caller.place.data.permissions ?? []], free };
 }
 async function liveRows(lead, targets, signal, most = 40) {
@@ -20337,13 +20343,18 @@ async function answerAskTool(caller, args, targets, signal, { made } = {}) {
   if (args.decision !== "allow" && args.decision !== "deny")
     return refused("Say allow or deny (decision).");
   if (args.decision === "allow") {
+    const mode = approvalOf(data, { agents: onBridge(target), bot: Boolean(botOfConversation(data.id) ?? worksFor(data)) });
+    if (mode.effective === "askFirst") {
+      const state = mode.held ? `"${title}" asks first for now (${mode.held.why.replace(/\.$/, "")})` : `"${title}" is in Ask First`;
+      return refused(`You can't allow that: ${state}, so the user answers every ask it makes, whatever mode you're in. The user sees the ask on "${title}" and answers it there. Tell them in a line why it's needed if it matters, and carry on with the rest. You can still deny it.`);
+    }
     if (made !== undefined && Date.now() - made > ALLOW_LIFE)
       return refused(`Your allow for "${title}" wasn't given: this computer was away for over a day after you gave it, so it's out of date. Look at what it asks now (list_sessions), and answer again if it still should go ahead.`);
     const folder = data.location?.directory ?? data.directory ?? "";
-    const rules = withDefaults([...caller.rules, ...caller.from ? (permissionsHere() ?? []).filter(holdsBack) : []]);
     const seen = await callOf(target, permission, signal);
     const sandboxed = commandsInSandbox(target, permission);
-    const why = allowRefusal(permission.action, permission.resources, folder ? [folder, ...projectFolders(folder)] : [], rules, ruleFor, seen, { sandboxed, free: caller.free });
+    const judged = (rules) => allowRefusal(permission.action, permission.resources, folder ? [folder, ...projectFolders(folder)] : [], rules, ruleFor, seen, { sandboxed, free: caller.free });
+    const why = judged(withDefaults(caller.rules)) ?? (caller.from ? judged(rulesOf([])) : null);
     if (why)
       return refused(`You can't allow that: you'd have to ask the user about it yourself. The user sees the ask on "${title}" and answers it there. Tell them in a line why it's needed, and carry on with the rest.`);
   }
@@ -26999,7 +27010,7 @@ import fs89 from "node:fs";
 import path93 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.204";
+var BRIDGE_VERSION = "0.9.205";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

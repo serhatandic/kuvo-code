@@ -148,13 +148,17 @@ export interface ShellMessage {
   output?: { output: string; truncated: boolean }
 }
 
-/** A summary of the conversation you asked for, as the engine shows its own (`/compact`). */
+/**
+ * A summary of the conversation, as the engine shows its own: one you asked for (`/compact`,
+ * `manual`), or one its agent made by itself as the conversation filled up (`auto`), under way
+ * while it's `running`.
+ */
 export interface CompactionMessage {
   type: "compaction"
   id: string
   time: MessageTime
   status: "running" | "completed" | "failed"
-  reason: "manual"
+  reason: "manual" | "auto"
 }
 
 export type Message = UserMessage | AssistantMessage | NoticeMessage | IdleMessage | ModelSwitchMessage | AgentSwitchMessage | ShellMessage | CompactionMessage

@@ -11,8 +11,8 @@ import { agentsCommandsInSandbox, engineCommandsInSandbox, fenceWhole } from "..
 import { holdArchived } from "../areas/wakes";
 import { noteWorkChanged } from "./changes";
 import { noteOversightBy } from "./oversight";
-import { callOf, keepAnswer, noteSession, pendingAsk, permissionWords, ruleFor, withDefaults, type PendingPermission } from "./answers";
-import { holdsBack, permissionsHere } from "../bots/tell";
+import { callOf, keepAnswer, noteSession, pendingAsk, permissionWords, ruleFor, rulesOf, withDefaults, type PendingPermission } from "./answers";
+import { permissionsHere } from "../bots/tell";
 import { allowRefusal } from "./policy";
 import { approvalOf } from "./approval";
 import { appsNamed, finishGoal, goalProgress, goalProject, maySpend, progressRefused, proposalRefused, proposeGoal, runningGoal } from "./goals";
@@ -58,11 +58,13 @@ export interface Lead {
   from?: string;
 }
 
+// Whether `target` is the coding agents' bridge rather than the engine.
+const onBridge = (target: Target): boolean => { try { return readEngineFile().port !== target.port; } catch { return false; } };
+
 /** The conversation calling, as a lead: worked out here, where it lives. */
 export function leadOf(caller: Caller): Lead {
   const bot = botOfConversation(caller.session);
-  const bridge = (() => { try { return readEngineFile().port !== caller.place.target.port; } catch { return false; } })();
-  const free = approvalOf(caller.place.data, { agents: bridge, bot: Boolean(bot) }).effective === "fullAccess" || !commandsInSandbox(caller.place.target, { sandboxed: true } as PendingPermission);
+  const free = approvalOf(caller.place.data, { agents: onBridge(caller.place.target), bot: Boolean(bot) }).effective === "fullAccess" || !commandsInSandbox(caller.place.target, { sandboxed: true } as PendingPermission);
   return { session: caller.session, name: caller.name, bot, rules: [...(permissionsHere() ?? []), ...((caller.place.data.permissions ?? []) as KitRule[])], free };
 }
 
@@ -224,7 +226,8 @@ function commandsInSandbox(target: Target, permission: PendingPermission): boole
 const projectFolders = (folder: string): readonly string[] => readProjects().find(each => each.directory === folder)?.folders ?? [];
 
 /** answer_ask: what one of the caller's sessions asks, answered. A permission it may allow only
- * where it could go ahead itself, as its own rules and mode say; it may always say no. A
+ * where it could go ahead itself, as its own rules and mode say, and never in a session that's in
+ * Ask First (the user answers all of its asks); it may always say no. A
  * question it answers in words. Kept on the session, with why. */
 export async function answerAskTool(caller: Lead, args: Record<string, unknown>, targets: Target[], signal?: AbortSignal, { made }: { made?: number } = {}): Promise<ToolAnswer> {
   const found = await oneOfMine(caller, args.session, targets, "answer", signal);
@@ -255,19 +258,30 @@ export async function answerAskTool(caller: Lead, args: Record<string, unknown>,
   const shown = permission.resources.filter(each => each !== "*").join(", ") || permission.action;
   if (args.decision !== "allow" && args.decision !== "deny") return refused("Say allow or deny (decision).");
   if (args.decision === "allow") {
+    // A session in Ask First always asks the user, whatever its bot's mode: as it stands here now
+    // (a Full Access or Auto that can't be had here is the lower one), on the engine or the coding
+    // agents' bridge alike. The user sees the ask on the session; the bot may still say no. (First,
+    // so a stale allow isn't told to be given again.)
+    const mode = approvalOf(data, { agents: onBridge(target), bot: Boolean(botOfConversation(data.id) ?? worksFor(data)) });
+    if (mode.effective === "askFirst") {
+      const state = mode.held ? `"${title}" asks first for now (${mode.held.why.replace(/\.$/, "")})` : `"${title}" is in Ask First`;
+      return refused(`You can't allow that: ${state}, so the user answers every ask it makes, whatever mode you're in. The user sees the ask on "${title}" and answers it there. Tell them in a line why it's needed if it matters, and carry on with the rest. You can still deny it.`);
+    }
     // An allow given on another computer and kept while this one was away, for a day at most: by
     // then what it was given for may have changed.
     if (made !== undefined && Date.now() - made > ALLOW_LIFE) return refused(`Your allow for "${title}" wasn't given: this computer was away for over a day after you gave it, so it's out of date. Look at what it asks now (list_sessions), and answer again if it still should go ahead.`);
     const folder = data.location?.directory ?? data.directory ?? "";
-    // The rules its own conversation goes by where it lives; on another computer's session, this
-    // one's Don't Allow rules too, which no one gets past here.
-    const rules = withDefaults([...caller.rules, ...(caller.from ? (permissionsHere() ?? []).filter(holdsBack) : [])]);
     const seen = await callOf(target, permission, signal);
     // What its own conversation could do without asking, as its own rules and mode say
     // (`allowRefusal`): a command in the sandbox where its own run there (the session's, as it runs
     // here), anywhere in Full Access.
     const sandboxed = commandsInSandbox(target, permission);
-    const why = allowRefusal(permission.action, permission.resources, folder ? [folder, ...projectFolders(folder)] : [], rules, ruleFor, seen, { sandboxed, free: caller.free });
+    const judged = (rules: KitRule[]) => allowRefusal(permission.action, permission.resources, folder ? [folder, ...projectFolders(folder)] : [], rules, ruleFor, seen, { sandboxed, free: caller.free });
+    // By the rules its own conversation goes by where it lives, and, for a lead from another
+    // computer, by this computer's own as well (the engine's defaults and Settings › Permissions,
+    // Don't Allow and Ask alike): each judged on its own, so moving never loosens an allow (joined
+    // into one list, the last match would let this box's Allow override the lead's Ask).
+    const why = judged(withDefaults(caller.rules)) ?? (caller.from ? judged(rulesOf([])) : null);
     if (why) return refused(`You can't allow that: you'd have to ask the user about it yourself. The user sees the ask on "${title}" and answers it there. Tell them in a line why it's needed, and carry on with the rest.`);
   }
   try {
