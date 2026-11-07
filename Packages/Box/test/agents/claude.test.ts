@@ -745,6 +745,19 @@ describe("Claude Code's models", () => {
     expect(fake.asked).toEqual(["default", "claude-haiku-4-5", "opus[1m]"])
   })
 
+  test("its default reads apart from the model it stands for now, which Claude Code lists too", async () => {
+    fake.models = listed
+    const claude = new TestClaude(fake, root)
+    let names: Record<string, string> = {}
+    for (const start = Date.now(); Date.now() - start < 3_000 && !names.opus; await Bun.sleep(20)) {
+      names = Object.fromEntries((await claude.models()).map((model) => [model.id, model.name]))
+    }
+    expect(names).toEqual({ default: "Default (Opus 5.5)", opus: "Opus 5.5", "claude-haiku-4-5": "Haiku 4.5", "opus[1m]": "Opus 4.8 with 1M context" })
+    // Each its own kind, so neither folds the other away under Older models.
+    const families = new Set((await claude.models()).filter((model) => model.id === "default" || model.id === "opus").map((model) => model.family))
+    expect(families.size).toBe(2)
+  })
+
   test("an older Claude Code that doesn't say: as its list says", async () => {
     fake.models = listed
     const want = { default: 200_000, opus: 200_000, "claude-haiku-4-5": 200_000, "opus[1m]": 1_000_000 }

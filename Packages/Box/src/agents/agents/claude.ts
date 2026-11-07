@@ -669,9 +669,11 @@ function withTimeout<T>(promise: Promise<T>, milliseconds: number): Promise<T> {
 
 function modelName(info: { value: string; displayName: string; description?: string }): string {
   // "Default (recommended)" says less than what it is: "Opus 4.8 with 1M context · Most capable…".
+  // Said as the default, though: it's listed beside the model it stands for now ("opus"), which
+  // would read the same, and it follows Claude Code's default when that changes.
   const what = info.description?.split(" · ")[0]?.trim()
-  if (what && /^(opus|sonnet|haiku|fable|claude)/i.test(what)) return what
-  return info.displayName
+  if (!what || !/^(opus|sonnet|haiku|fable|claude)/i.test(what)) return info.displayName
+  return info.value === "default" ? `Default (${what})` : what
 }
 
 /** Its family, for its maker's mark and so each shows in the short list: "claude-opus". */
