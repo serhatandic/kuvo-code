@@ -45,9 +45,11 @@ export interface ListedAgent {
 }
 
 /** What one peer told this box of its agents (`run/peer-agents.json`, by its key): when it said
- * so, what it is, its id on its Macs, its agents, and what it answers (`features`). */
+ * so, by its clock, and when that reached this box, by this one's; what it is, its id on its Macs,
+ * its agents, and what it answers (`features`). */
 export interface ToldAgents {
   at: number;
+  heard?: number;
   kind: "mac" | "machine";
   id?: string;
   list: ListedAgent[];

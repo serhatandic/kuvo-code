@@ -66,7 +66,7 @@ export function forgetHostProof() {
  * asked without the password, so nothing else can learn it there). Bound to where we reached it, a
  * proof relayed from the app at another port (by another user's process on this Mac) fails. Nothing
  * else is sent until it has. */
-export async function proveHost(host: HostAddress): Promise<void> {
+export async function proveHost(host: HostAddress, signal?: AbortSignal): Promise<void> {
   if (provenBy === host.said) return;
   const nonce = crypto.randomBytes(32).toString("hex");
   let proof: Buffer | null = null;
@@ -75,7 +75,7 @@ export async function proveHost(host: HostAddress): Promise<void> {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ nonce }),
-      signal: AbortSignal.timeout(15_000),
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(15_000)]) : AbortSignal.timeout(15_000),
     });
     const answer = await (response.json() as Promise<{ proof?: unknown } | null>).catch(() => null);
     if (response.ok && typeof answer?.proof === "string") proof = Buffer.from(answer.proof);

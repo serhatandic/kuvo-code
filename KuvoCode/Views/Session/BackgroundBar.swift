@@ -57,9 +57,10 @@ struct WorkBar<Item: Identifiable, Row: View>: View {
                     VStack(spacing: 0) {
                         ForEach(items) { item in
                             row(item)
-                                // Under the line's words, past its mark.
+                                // Under the line's words, past its mark; its last control ends where the
+                                // line's does (`BarEnd`).
                                 .padding(.leading, 42)
-                                .padding(.trailing, 10)
+                                .padding(.trailing, BarEnd.trailing)
                                 .frame(height: Self.rowHeight)
                         }
                     }
@@ -96,8 +97,8 @@ struct WorkBar<Item: Identifiable, Row: View>: View {
 /// The line of a bar in the card over the composer (`WorkBar`, the goal's, the keywords'): its
 /// mark, what it says, how far along it is, and while what's under it is hidden, what that is;
 /// clicking it shows or hides what's under it. Its end is the same on every line of the card
-/// (`BarEnd`): ✕ last, and before it one column for the chevron, or for its own button when
-/// there's nothing under it to show.
+/// (`BarEnd`): its last control, the chevron (or ✕ where the bar has one), ends where the rows
+/// under it end.
 struct BarLine: View {
     let mark: AnyView
     let title: String
@@ -120,7 +121,7 @@ struct BarLine: View {
     let showHelp: String
     let hideHelp: String
     @Binding var isHidden: Bool
-    /// Whether there's anything under it: one with nothing keeps the chevron's room, empty.
+    /// Whether there's anything under it to show: one with nothing has no chevron.
     var opens = true
     /// Puts the bar away, as its ✕; nil for one that goes by itself.
     var close: (() -> Void)?
@@ -314,10 +315,11 @@ struct BarLine: View {
     }
 }
 
-/// The end of a bar's line, the same on every line of the card: ✕ that puts the bar away (or its
-/// room), and before it one column, centered on the same place whatever is in it: the chevron
-/// that shows or hides what's under it (the line itself does too), or, with nothing under it, the
-/// bar's own button ("Stop"). Its own button goes before the chevron when there's both.
+/// The end of a bar's line, the same on every line of the card: its controls from the right, ✕ that
+/// puts the bar away where it has one, then the chevron that shows or hides what's under it (the
+/// line itself does too), then the bar's own button ("All"). The last of them ends `trailing` from
+/// the card's edge, where the last control of every row under a bar ends (`WorkBar`'s rows, the
+/// queue's), so the chevron and a row's "Stop" share one right edge.
 struct BarEnd: View {
     @Binding var isHidden: Bool
     var opens = true
@@ -329,18 +331,15 @@ struct BarEnd: View {
     var closeLabel = "Close"
     var closeHelp = "Close"
 
-    /// The column before ✕: as wide as a short word's button, which is centered in it as the
-    /// chevron is (a longer one grows it to the left).
-    static let column: CGFloat = 40
     /// Between the controls at the end.
     static let gap: CGFloat = 2
-    /// From ✕ to the card's edge.
+    /// From the last control's edge (its hover fill's) to the card's edge: on every line and row.
     static let trailing: CGFloat = 8
 
     var body: some View {
         HStack(spacing: Self.gap) {
+            if let accessory { accessory }
             if opens {
-                if let accessory { accessory }
                 Button {
                     withAnimation(.ui) { isHidden.toggle() }
                 } label: {
@@ -354,10 +353,6 @@ struct BarEnd: View {
                 // The line says the same, and shows and hides it.
                 .accessibilityHidden(true)
                 .focusable(false)
-                .frame(width: Self.column)
-            } else if let accessory {
-                accessory
-                    .frame(minWidth: Self.column)
             }
             if let close {
                 Button(closeLabel, systemImage: "xmark", action: close)
@@ -366,10 +361,6 @@ struct BarEnd: View {
                     .foregroundStyle(.secondary)
                     .help(closeHelp)
                     .accessibilityHint(closeHelp)
-            } else {
-                Color.clear
-                    .frame(width: 24, height: 24)
-                    .accessibilityHidden(true)
             }
         }
         .padding(.trailing, Self.trailing)

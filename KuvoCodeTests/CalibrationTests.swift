@@ -210,7 +210,150 @@ import Testing
         #expect(app.bots.bot("bot_scout00001")?.job == "Watches the build")
     }
 
-    @Test func machinesThatWontReadAreSetAsideNotOverwritten() {
+    /// What's kept of your machines is one file the box reads too; the settings they were in before
+    /// give them up only once the file holds them.
+    @Test func theListMovesToItsFileAndStaysThere() throws {
+        defer { Self.clean() }
+        let before = [Machine(destination: "lab", otherAddresses: ["lab.tail"], identity: "a", reachedAt: "lab.tail"), Machine(destination: "vps")]
+        UserDefaults.standard.set(try JSONEncoder().encode(before), forKey: "machines")
+        #expect(Machines.anySaved, "before anything moved it")
+        let machines = Machines()
+        #expect(machines.list == before)
+        #expect(try JSONDecoder().decode([Machine].self, from: Data(contentsOf: Machines.file)) == before)
+        #expect(UserDefaults.standard.object(forKey: "machines") == nil)
+        machines.add("gpu")
+        machines.addAddress("lab.local", to: "lab")
+        let later = Machines()
+        #expect(later.list.map(\.id) == ["lab", "vps", "gpu"])
+        #expect(later.list.first?.otherAddresses == ["lab.tail", "lab.local"])
+        #expect(Machines.anySaved)
+    }
+
+    @Test func theKeeperMovesTheListAsTheAppDoes() throws {
+        defer { Self.clean() }
+        UserDefaults.standard.set(try JSONEncoder().encode([Machine(destination: "lab")]), forKey: "machines")
+        Machines.moveFromSettings()
+        #expect(try JSONDecoder().decode([Machine].self, from: Data(contentsOf: Machines.file)).map(\.id) == ["lab"])
+        #expect(UserDefaults.standard.object(forKey: "machines") == nil)
+        // With a file there, what an older version added joins it, for the box too.
+        UserDefaults.standard.set(try JSONEncoder().encode([Machine(destination: "old")]), forKey: "machines")
+        Machines.moveFromSettings()
+        #expect(try JSONDecoder().decode([Machine].self, from: Data(contentsOf: Machines.file)).map(\.id) == ["lab", "old"])
+        #expect(UserDefaults.standard.object(forKey: "machines") == nil)
+    }
+
+    /// A folder that can't be written: the list stays in the settings, changes to it too, and reaches
+    /// the file once it can.
+    @Test func aFileThatCantBeWrittenLosesNothing() throws {
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: Machines.file.deletingLastPathComponent().path)
+            Self.clean()
+        }
+        let folder = Machines.file.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: folder.path)
+        UserDefaults.standard.set(try JSONEncoder().encode([Machine(destination: "lab")]), forKey: "machines")
+        let machines = Machines()
+        #expect(machines.list.map(\.id) == ["lab"])
+        #expect(UserDefaults.standard.object(forKey: "machines") != nil || UserDefaults.standard.object(forKey: "machines.unsaved") != nil, "never out of the settings")
+        machines.add("gpu")
+        #expect(Machines().list.map(\.id) == ["lab", "gpu"])
+        #expect(Machines.anySaved)
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: folder.path)
+        #expect(Machines().list.map(\.id) == ["lab", "gpu"])
+        #expect(try JSONDecoder().decode([Machine].self, from: Data(contentsOf: Machines.file)).map(\.id) == ["lab", "gpu"])
+        #expect(UserDefaults.standard.object(forKey: "machines") == nil)
+        #expect(UserDefaults.standard.object(forKey: "machines.unsaved") == nil)
+    }
+
+    /// Removed while the file can't be written, it stays removed: what's in the settings then is the
+    /// whole list, not something to add to the file's.
+    @Test func oneRemovedWhileTheFileCantBeWrittenDoesntComeBack() throws {
+        let folder = Machines.file.deletingLastPathComponent()
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: folder.path)
+            Self.clean()
+        }
+        let machines = Machines()
+        machines.add("lab")
+        machines.add("vps")
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: folder.path)
+        machines.remove("lab", uninstall: false)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: folder.path)
+        #expect(Machines().list.map(\.id) == ["vps"])
+        #expect(try JSONDecoder().decode([Machine].self, from: Data(contentsOf: Machines.file)).map(\.id) == ["vps"])
+    }
+
+    /// A file that won't read isn't an empty list: left as it is, and what's written next goes beside it.
+    @Test func aFileThatWontReadIsNeverWrittenOver() throws {
+        defer {
+            for name in (try? FileManager.default.contentsOfDirectory(at: Machines.file.deletingLastPathComponent(), includingPropertiesForKeys: nil)) ?? [] where name.lastPathComponent.hasPrefix("machines.unreadable") {
+                try? FileManager.default.removeItem(at: name)
+            }
+            Self.clean()
+        }
+        let damaged = Data("[{\"destination\": 42}]".utf8)
+        try FileManager.default.createDirectory(at: Machines.file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try damaged.write(to: Machines.file)
+        let machines = Machines()
+        #expect(machines.list.isEmpty)
+        #expect(try Data(contentsOf: Machines.file) == damaged, "left as it is, however many launches find it")
+        #expect(Machines.anySaved, "may well have some")
+        machines.add("gpu")
+        #expect(Machines().list.map(\.id) == ["gpu"])
+        let beside = try FileManager.default.contentsOfDirectory(at: Machines.file.deletingLastPathComponent(), includingPropertiesForKeys: nil).filter { $0.lastPathComponent.hasPrefix("machines.unreadable") }
+        #expect(beside.count == 1)
+        #expect(try beside.first.map { try Data(contentsOf: $0) } == damaged)
+    }
+
+    /// One that wouldn't read at launch and reads by the time something's saved (a newer version wrote
+    /// it, say) still isn't written over, and one that can't be set aside stays as it is, with what's
+    /// new in the settings.
+    @Test func aFileThatDidntReadAtLaunchIsStillKept() throws {
+        let folder = Machines.file.deletingLastPathComponent()
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: folder.path)
+            for name in (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? [] where name.lastPathComponent.contains("unreadable") {
+                try? FileManager.default.removeItem(at: name)
+            }
+            Self.clean()
+        }
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try Data("{ not json".utf8).write(to: Machines.file)
+        let machines = Machines()
+        let later = try JSONEncoder().encode([Machine(destination: "vps")])
+        try later.write(to: Machines.file)
+        machines.add("gpu")
+        #expect(try JSONDecoder().decode([Machine].self, from: Data(contentsOf: Machines.file)).map(\.id) == ["gpu"])
+        let beside = try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil).filter { $0.lastPathComponent.contains("unreadable") }
+        #expect(try beside.map { try Data(contentsOf: $0) } == [later])
+
+        let damaged = Data("{ not json".utf8)
+        try damaged.write(to: Machines.file)
+        let stuck = Machines()
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: folder.path)
+        stuck.add("lab")
+        #expect(try Data(contentsOf: Machines.file) == damaged)
+        #expect(UserDefaults.standard.object(forKey: "machines.unsaved") != nil, "what's new stays in the settings")
+        #expect(stuck.fileDidntRead, "still not known to be none")
+    }
+
+    /// Back to an older version, which keeps its own list and sees nothing of this one, and forward
+    /// again: what you added there joins what you had, and nothing's written over.
+    @Test func goingBackToAnOlderVersionAndForwardAgainKeepsThemAll() throws {
+        defer { Self.clean() }
+        try FileManager.default.createDirectory(at: Machines.file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONEncoder().encode([Machine(destination: "lab"), Machine(destination: "vps", otherAddresses: ["vps.tail"])]).write(to: Machines.file)
+        UserDefaults.standard.set(try JSONEncoder().encode([Machine(destination: "vps"), Machine(destination: "gpu")]), forKey: "machines")
+        let machines = Machines()
+        #expect(machines.list.map(\.id) == ["lab", "vps", "gpu"])
+        #expect(machines.list.first { $0.id == "vps" }?.otherAddresses == ["vps.tail"], "what the file knows of one in both stays")
+        #expect(try JSONDecoder().decode([Machine].self, from: Data(contentsOf: Machines.file)) == machines.list)
+        #expect(UserDefaults.standard.object(forKey: "machines") == nil)
+    }
+
+    @Test func machinesInTheSettingsThatWontReadAreSetAsideNotOverwritten() {
         defer { Self.clean() }
         let damaged = Data("[{\"destination\": 42}]".utf8)
         UserDefaults.standard.set(damaged, forKey: "machines")
@@ -222,6 +365,5 @@ import Testing
         // Once, however many launches find it there.
         _ = Machines()
         #expect(UserDefaults.standard.dictionaryRepresentation().filter { $0.key.hasPrefix(Machines.unreadableKey) }.count == 1)
-        UserDefaults.standard.removeObject(forKey: "machines")
     }
 }

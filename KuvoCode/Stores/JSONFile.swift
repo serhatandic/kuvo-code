@@ -14,18 +14,28 @@ nonisolated enum JSONFile {
         do {
             return try decoder.decode(type, from: data)
         } catch {
-            let when = Date.now.formatted(.iso8601.year().month().day().time(includingFractionalSeconds: false).timeSeparator(.omitted).dateSeparator(.omitted))
-            // Its own name, also beside one set aside the same second.
-            var aside = file.deletingPathExtension().appendingPathExtension("unreadable-\(when).json")
-            var number = 2
-            while FileManager.default.fileExists(atPath: aside.path) {
-                aside = file.deletingPathExtension().appendingPathExtension("unreadable-\(when)-\(number).json")
-                number += 1
-            }
-            try? FileManager.default.moveItem(at: file, to: aside)
-            log.error("\(file.lastPathComponent, privacy: .public) couldn't be read and was set aside as \(aside.lastPathComponent, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            setAside(file, because: error.localizedDescription)
             return nil
         }
+    }
+
+    /// `file` moved to `<name>.unreadable-<when>.json` beside it, its own name there too (also beside
+    /// one set aside the same second), and the log says so. False when it couldn't be moved.
+    @discardableResult
+    static func setAside(_ file: URL, because why: String) -> Bool {
+        let when = Date.now.formatted(.iso8601.year().month().day().time(includingFractionalSeconds: false).timeSeparator(.omitted).dateSeparator(.omitted))
+        var aside = file.deletingPathExtension().appendingPathExtension("unreadable-\(when).json")
+        var number = 2
+        while FileManager.default.fileExists(atPath: aside.path) {
+            aside = file.deletingPathExtension().appendingPathExtension("unreadable-\(when)-\(number).json")
+            number += 1
+        }
+        guard (try? FileManager.default.moveItem(at: file, to: aside)) != nil else {
+            log.error("\(file.lastPathComponent, privacy: .public) couldn't be set aside: \(why, privacy: .public)")
+            return false
+        }
+        log.error("\(file.lastPathComponent, privacy: .public) couldn't be read and was set aside as \(aside.lastPathComponent, privacy: .public): \(why, privacy: .public)")
+        return true
     }
 
     /// Writes `value` to `file`; false (and a line in the log) if it couldn't.

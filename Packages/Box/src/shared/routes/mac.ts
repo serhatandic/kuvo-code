@@ -1,6 +1,6 @@
-// What only this Mac's box answers, through its app (PhoneLink): its own features, the machines
-// your phones reach directly, and the usage panel's numbers. (Its other own routes, `kuvo/machines`,
-// `kuvo/mac` and `kuvo/claude-code`, have no scenario asking them yet.)
+// What only this Mac's box answers, through its app (PhoneLink), or by itself while the app is closed:
+// its own features, its machines, the machines your phones reach directly, and the usage panel's
+// numbers. (Its other own routes, `kuvo/mac` and `kuvo/claude-code`, have no scenario asking them yet.)
 
 import { any, bool, type Infer, list, literal, NOTHING, object, type RouteShape, string } from "../shape";
 
@@ -17,7 +17,18 @@ export const HOSTS = object({
 
 export type Hosts = Infer<typeof HOSTS>;
 
+/** Its machines as Settings › Machines has them. The open app says more of a connection (`failure`,
+ * `action`, `step`, `home`, `alsoUsedBy`, `folded`: PROTOCOL.md); what's here is what this box says
+ * by itself with the app closed too. */
+export const MACHINES = object({
+  machines: list(object({ id: string, name: string, otherAddresses: list(string), connection: string, status: string })),
+  hosts: list(string),
+});
+
+export type MacMachines = Infer<typeof MACHINES>;
+
 export const MAC_ROUTES: RouteShape[] = [
+  { route: "GET kuvo/machines", answers: { 200: MACHINES } },
   { route: "GET kuvo/hosts", answers: { 200: HOSTS } },
   { route: "DELETE kuvo/hosts/:machine", answers: { 200: NOTHING } },
   // The usage panel's numbers, as UsageKit gives them to a phone: its own record.

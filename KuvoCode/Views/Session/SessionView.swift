@@ -348,24 +348,15 @@ struct BottomStack: View {
         return found
     }
 
-    /// Whether a bar is folded: its own way with fewer than three, the card's with more. Two or
-    /// more, and the last one open folded by its chevron: they tuck into one line (nothing
-    /// floats over the card to do it).
+    /// Whether a bar is folded: its own way with fewer than three, the card's with more. Folding
+    /// one folds only it, the last one open too: the others, and the card, stay as they were.
     private func hidden(_ bar: ComposerBar, _ own: Binding<Bool>) -> Binding<Bool> {
         Binding(get: { folds.isHidden(bar, among: bars, asking: isAsking, own: own.wrappedValue) },
                 set: { hidden in
                     var left = own.wrappedValue
                     folds.set(bar, hidden: hidden, among: bars, own: &left)
                     if left != own.wrappedValue { own.wrappedValue = left }
-                    // (Not a look under a question: answering brings the card back as it was.)
-                    if hidden, !isAsking, liveBars.count >= 2, allFolded { model.tuck.hide() }
                 })
-    }
-
-    /// Every bar showing is folded to its line, as you left them (not as a question folds them,
-    /// which answering undoes).
-    private var allFolded: Bool {
-        liveBars.allSatisfy { folds.isHidden($0, among: bars, asking: false, own: self.own($0).wrappedValue) }
     }
 
     /// What in a bar is worth opening it for: a review that found something, a side question
