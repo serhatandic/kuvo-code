@@ -31,6 +31,7 @@ import type { MailSender, Peer } from "../peers/known";
 import type { LinkHost } from "../relay/host";
 import { readLink } from "../state";
 import { goalRuns } from "../work/goals";
+import { readBackground } from "../work/background";
 import { decidedOf, forgetDecided, isAutopilot, keepDecided, tellAutopilot } from "../work/autopilot";
 import type { EngineSession } from "../engine/sessions";
 import { CHATS, engineWait, MOST_BUNDLE, NotTaken, TooBig, deleteSession, directoryOf, exportAll, folderOf, groupAction, conversationHash, hashOf, idsOf, importAll, keysOf, ownTree, pack, toTrash, unpack } from "./bundle";
@@ -98,6 +99,7 @@ export const say = {
   otherAccount: (name: string, agent: string, who: string, place: string) => `On ${place}, ${name} uses the ${agent} account signed in there${who}.`,
   modelNotThere: (name: string, model: string, place: string) => `${name} uses ${model}, which needs a sign-in on ${place}. Sign in to it in Settings › Accounts there, or choose another model, then move ${name}.`,
   notSame: (name: string) => `${name}’s conversation didn’t come out the same on the other computer, so it stayed here. Try again.`,
+  background: (name: string, what: string) => `${name} has ${what} running. Wait for it to finish, or stop it, then move ${name}.`,
   onGoal: (name: string) => `${name} is working on a goal, which stays on this computer. Move it once the goal is done, or stop the goal first.`,
   waiting: (name: string) => `${name} still has messages on their way. Try again in a moment.`,
   busy: (name: string) => `${name} kept getting messages while it moved, so it stayed where it is. Try again in a moment.`,
@@ -118,6 +120,7 @@ const note = {
   inProject: "Works in a project",
   noAgents: "Its coding agents aren’t running",
   onGoal: "Working on a goal",
+  background: "Running something",
   inBoxGroup: "In a group chat that lives here",
   needsUpdate: "Needs a newer Kuvo Code",
   botsNotThere: "Its bots don’t all live there",
@@ -255,6 +258,8 @@ async function movable(kind: MoveKind, thing: string, signal?: AbortSignal): Pro
     if (here.described.project) return { name, why: say.inProject(name), note: note.inProject };
     if (here.agents && !bridgeTarget()) return { name, why: say.noAgents(HERE), note: note.noAgents };
     if (goalRuns(thing)) return { name, why: say.onGoal(name), note: note.onGoal };
+    const running = runningOf([here.session]);
+    if (running) return { name, why: say.background(name, running), note: note.background };
     // One in a group chat that lives here with its bots, on a machine, stays with it.
     if (!IS_MAC) {
       let bridge: Target | null = null;
@@ -276,6 +281,8 @@ async function movable(kind: MoveKind, thing: string, signal?: AbortSignal): Pro
     const directory = isObject(session.location) ? session.location.directory : session.directory;
     if (directory !== CHATS) return null;
     if (await chatGoalRuns(thing, signal)) return { name: title, why: say.onGoal(title), note: note.onGoal };
+    const running = runningOf([thing]);
+    if (running) return { name: title, why: say.background(title, running), note: note.background };
     return { name: title, root: thing, ...(lane ? { lane: true } : {}), ...(modelOf(session.model) ?? {}) };
   }
   let bridge: Target;
@@ -287,6 +294,16 @@ async function movable(kind: MoveKind, thing: string, signal?: AbortSignal): Pro
     name: `“${plainName(listed.value?.data?.group?.name ?? "") || "Group chat"}”`,
     members: Array.isArray(members) ? members.filter((member): member is string => typeof member === "string") : [],
   };
+}
+
+/** What still runs for any of `sessions` besides a turn (a command left running, a subagent sent
+ * off), in words; null when nothing does. It would end as it moves, so it's waited for. */
+function runningOf(sessions: readonly string[]): string | null {
+  const running = readBackground();
+  const all = sessions.map(session => running[session]).filter(each => each !== undefined);
+  const commands = all.reduce((sum, each) => sum + each.commands, 0), helpers = all.reduce((sum, each) => sum + each.subagents + each.tasks, 0);
+  if (!commands && !helpers) return null;
+  return [commands ? (commands === 1 ? "a command" : `${commands} commands`) : "", helpers ? (helpers === 1 ? "a subagent" : `${helpers} subagents`) : ""].filter(Boolean).join(" and ");
 }
 
 const modelOf = (model: unknown): { model: { providerID: string; id: string } } | null =>
@@ -488,6 +505,8 @@ async function carryOn(id: string): Promise<void> {
     }
     const target = record.lane ? readBridgeFile() : readEngineFile();
     await settle(target, record.sessions, record.name);
+    const running = runningOf(record.sessions);
+    if (running) throw new Refused(say.background(record.name, running));
     if (record.lane) {
       const packed = await carry<Packed>(target, "pack", { root: record.sessions[0], into: path.join(bundleOf(id), "carry"), most: MOST_BUNDLE }).catch(error => {
         throw (error as { status?: number } | null)?.status === 413 ? new Refused(say.tooBig(record.name)) : new Refused(say.cantCarry(record.name, String((error as Error | null)?.message ?? error)));

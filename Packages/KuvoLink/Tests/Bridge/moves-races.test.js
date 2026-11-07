@@ -1160,3 +1160,26 @@ test("a bot whose own key can't be kept here isn't set up: it's said back, and n
   assert.ok(!engine.sessions.has(session));
   assert.ok(!fs.existsSync(path.join(support, "bots", thing)));
 });
+
+// ---- What still runs ----
+
+test("one with a command still running in the background doesn't move (it would end): it says why, and stays as it was", async () => {
+  chat("ses_bg1");
+  const file = path.join(home, "run", "work", "background.json");
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ engine: { sessions: { ses_bg1: { commands: [{ id: "cmd_1", command: "npm run dev", started: Date.now() }], subagents: [], tasks: [] } }, folders: [] } }));
+  try {
+    const places = (await ask("GET", "kuvo/moves/places?kind=chat&id=ses_bg1")).json.places;
+    const lab = places.find(place => place.key === peerKey);
+    assert.equal(lab.ok, false);
+    assert.equal(lab.why, "“Trip plans” has a command running. Wait for it to finish, or stop it, then move “Trip plans”.");
+    assert.equal(lab.note, "Running something");
+    script = move => assert.fail(`nothing goes while it runs: ${move.op}`);
+    const moved = await ask("POST", "kuvo/moves", { kind: "chat", id: "ses_bg1", to: peerKey });
+    assert.equal(moved.status, 409);
+    assert.match(moved.json.message, /has a command running/);
+    await asItWas("ses_bg1");
+  } finally {
+    fs.rmSync(file, { force: true });
+  }
+});

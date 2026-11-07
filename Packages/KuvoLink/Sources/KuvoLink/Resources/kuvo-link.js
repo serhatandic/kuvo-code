@@ -17706,6 +17706,7 @@ var say = {
   otherAccount: (name, agent, who, place) => `On ${place}, ${name} uses the ${agent} account signed in there${who}.`,
   modelNotThere: (name, model, place) => `${name} uses ${model}, which needs a sign-in on ${place}. Sign in to it in Settings › Accounts there, or choose another model, then move ${name}.`,
   notSame: (name) => `${name}’s conversation didn’t come out the same on the other computer, so it stayed here. Try again.`,
+  background: (name, what) => `${name} has ${what} running. Wait for it to finish, or stop it, then move ${name}.`,
   onGoal: (name) => `${name} is working on a goal, which stays on this computer. Move it once the goal is done, or stop the goal first.`,
   waiting: (name) => `${name} still has messages on their way. Try again in a moment.`,
   busy: (name) => `${name} kept getting messages while it moved, so it stayed where it is. Try again in a moment.`,
@@ -17724,6 +17725,7 @@ var note = {
   inProject: "Works in a project",
   noAgents: "Its coding agents aren’t running",
   onGoal: "Working on a goal",
+  background: "Running something",
   inBoxGroup: "In a group chat that lives here",
   needsUpdate: "Needs a newer Kuvo Code",
   botsNotThere: "Its bots don’t all live there",
@@ -17827,6 +17829,9 @@ async function movable(kind, thing, signal) {
       return { name, why: say.noAgents(HERE), note: note.noAgents };
     if (goalRuns(thing))
       return { name, why: say.onGoal(name), note: note.onGoal };
+    const running = runningOf([here.session]);
+    if (running)
+      return { name, why: say.background(name, running), note: note.background };
     if (!IS_MAC) {
       let bridge = null;
       try {
@@ -17853,6 +17858,9 @@ async function movable(kind, thing, signal) {
       return null;
     if (await chatGoalRuns(thing, signal))
       return { name: title, why: say.onGoal(title), note: note.onGoal };
+    const running = runningOf([thing]);
+    if (running)
+      return { name: title, why: say.background(title, running), note: note.background };
     return { name: title, root: thing, ...lane ? { lane: true } : {}, ...modelOf(session.model) ?? {} };
   }
   let bridge;
@@ -17869,6 +17877,14 @@ async function movable(kind, thing, signal) {
     name: `“${plainName(listed.value?.data?.group?.name ?? "") || "Group chat"}”`,
     members: Array.isArray(members) ? members.filter((member) => typeof member === "string") : []
   };
+}
+function runningOf(sessions) {
+  const running = readBackground();
+  const all = sessions.map((session) => running[session]).filter((each) => each !== undefined);
+  const commands = all.reduce((sum, each) => sum + each.commands, 0), helpers = all.reduce((sum, each) => sum + each.subagents + each.tasks, 0);
+  if (!commands && !helpers)
+    return null;
+  return [commands ? commands === 1 ? "a command" : `${commands} commands` : "", helpers ? helpers === 1 ? "a subagent" : `${helpers} subagents` : ""].filter(Boolean).join(" and ");
 }
 var modelOf = (model) => isObject(model) && typeof model.providerID === "string" && typeof model.id === "string" ? { model: { providerID: model.providerID, id: model.id } } : null;
 function botsLiveOn(members, peer) {
@@ -18070,6 +18086,9 @@ async function carryOn(id) {
     }
     const target = record.lane ? readBridgeFile() : readEngineFile();
     await settle2(target, record.sessions, record.name);
+    const running = runningOf(record.sessions);
+    if (running)
+      throw new Refused(say.background(record.name, running));
     if (record.lane) {
       const packed = await carry(target, "pack", { root: record.sessions[0], into: path68.join(bundleOf(id), "carry"), most: MOST_BUNDLE }).catch((error) => {
         throw error?.status === 413 ? new Refused(say.tooBig(record.name)) : new Refused(say.cantCarry(record.name, String(error?.message ?? error)));
