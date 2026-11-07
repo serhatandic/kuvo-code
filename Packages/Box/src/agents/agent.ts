@@ -342,6 +342,27 @@ export interface Thread {
   readonly outside?: boolean
 }
 
+/** A conversation's own files where its agent keeps them, for a move (carry.ts). */
+export interface ConversationFiles {
+  /** Each file or folder of it, and its name wherever the agent keeps it. */
+  items: { path: string; name: string }[]
+  /** The folder of what it remembers, kept apart from the conversation. */
+  memory?: string
+  /** That's shared with others in the same folder: it's copied, and stays. */
+  memoryShared?: boolean
+  /** It has started on this conversation, and its files aren't there: its agent can't go on with it anywhere. */
+  missing?: boolean
+}
+
+/** Where a conversation's own files go on this computer, for a move (carry.ts). */
+export interface ConversationPlace {
+  /** Where an item of that name goes; null for one the agent doesn't keep. */
+  item(name: string): string | null
+  memory?: string
+  /** That memory is shared with others (a folder's): what's there stays, and what's different goes beside it. */
+  memoryMerges?: boolean
+}
+
 export interface Agent {
   /** The bridge's own name for it: `claude`, `codex`, `cursor`, `grok`, `antigravity`. */
   id: string
@@ -398,10 +419,20 @@ export interface Agent {
   /** A session here was deleted: its conversation where the agent keeps it goes too. */
   forgetConversation?(state: Record<string, unknown>): Promise<void>
   /**
+   * A conversation's own files, for a move: null when it hasn't started on it. None of this for an
+   * agent whose conversations can't be picked up on another computer: its next run there starts
+   * over, handed what came before.
+   */
+  conversationFiles?(state: Record<string, unknown>, session: Session): ConversationFiles | null
+  /** Where those go here, for `session` as it is here. */
+  conversationPlace?(state: Record<string, unknown>, session: Session): ConversationPlace
+  /** The folders it keeps conversations in, for clearing what a moved one left. */
+  conversationRoots?(): string[]
+  /**
    * A file of the agent's own, which it keeps for itself and reads or writes on its own (Claude
    * Code's memory, plans, and long outputs it saved): never "outside the project".
    */
-  ownsPath?(path: string): boolean
+  ownsPath?(path: string, session?: Session): boolean
 }
 
 /**

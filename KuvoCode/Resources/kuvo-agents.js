@@ -1,7 +1,7 @@
 // @bun
 // Packages/Box/src/agents/main.ts
-import { mkdirSync as mkdirSync19, readdirSync as readdirSync15, readFileSync as readFileSync28, renameSync as renameSync15, rmSync as rmSync15, writeFileSync as writeFileSync21 } from "fs";
-import { join as join29 } from "path";
+import { mkdirSync as mkdirSync19, readdirSync as readdirSync16, readFileSync as readFileSync28, renameSync as renameSync15, rmSync as rmSync15, writeFileSync as writeFileSync21 } from "fs";
+import { join as join30 } from "path";
 
 // Packages/Box/src/agents/accounts.ts
 import { randomBytes } from "crypto";
@@ -9504,9 +9504,9 @@ function unzipper() {
 // Packages/Box/src/agents/agents/claude.ts
 import { spawn as spawn5 } from "child_process";
 import { createHash as createHash6, randomUUID } from "crypto";
-import { existsSync as existsSync13, mkdirSync as mkdirSync13, readFileSync as readFileSync18, renameSync as renameSync10, rmdirSync as rmdirSync2, rmSync as rmSync10, statSync as statSync8, writeFileSync as writeFileSync15 } from "fs";
+import { existsSync as existsSync13, mkdirSync as mkdirSync13, readdirSync as readdirSync12, readFileSync as readFileSync18, renameSync as renameSync10, rmdirSync as rmdirSync2, rmSync as rmSync10, statSync as statSync8, writeFileSync as writeFileSync15 } from "fs";
 import { homedir } from "os";
-import { dirname as dirname11, join as join21, resolve as resolve6 } from "path";
+import { basename as basename8, dirname as dirname11, join as join21, resolve as resolve6 } from "path";
 import { pathToFileURL as pathToFileURL3 } from "url";
 
 // Packages/Box/src/agents/maintenance.ts
@@ -9821,6 +9821,16 @@ var STATE_IN_HOME = [
   ".claude.json*",
   "*.lock"
 ];
+var CONVERSATION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+var CONVERSATION_ITEM = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(\.jsonl$|$|\/)/i;
+var projectSlug = (directory) => directory.replace(/[^a-zA-Z0-9]/g, "-");
+function botMemory(session) {
+  const bot = session.metadata?.kuvo?.bot;
+  const directory = session.location.directory;
+  if (typeof bot !== "string" || basename8(directory) !== "workspace" || basename8(dirname11(directory)) !== bot)
+    return;
+  return join21(dirname11(directory), "memory");
+}
 var KEPT_IN_HOME = ["settings*.json", "hooks", ".mcp.json"];
 var PRINTED_TOKEN = /sk-ant-oat\d+-[A-Za-z0-9_-]{60,}(?=[^A-Za-z0-9_-])/;
 var ANY_TOKEN = /sk-ant-[A-Za-z0-9_-]+/g;
@@ -10135,13 +10145,74 @@ class ClaudeAgent {
     await this.context.deps.ensure(this.id, SDK, { optional: false });
     return this.context.deps.load(this.id, SDK[0].name);
   }
-  ownsPath(path) {
+  ownsPath(path, session) {
     const file = resolve6(path);
+    const memory = session && botMemory(session);
+    if (memory && file.startsWith(memory + "/"))
+      return true;
     const settings = this.configHome;
     if (file.startsWith(settings + "/") && /^(plans\/[^/]+\.md|projects\/[^/]+\/memory\/.+|projects\/[^/]+\/[^/]+\/tool-results\/.+)$/.test(file.slice(settings.length + 1)))
       return true;
     const uid = process.getuid?.();
     return uid !== undefined && ["/tmp", "/private/tmp"].some((tmp) => file.startsWith(`${tmp}/claude-${uid}/`) && /^[^/]+\/[^/]+\/tasks\/[^/]+$/.test(file.slice(`${tmp}/claude-${uid}/`.length)));
+  }
+  projectFolder(directory, home = this.configHome) {
+    return join21(home, "projects", projectSlug(directory));
+  }
+  homesItMayUse() {
+    return [...new Set([this.configHome, ...this.instance.home ? [] : [this.consoleHome, process.env.CLAUDE_CONFIG_DIR ?? join21(homedir(), ".claude")]])];
+  }
+  conversationFiles(state, session) {
+    const id = state.claudeSession;
+    if (typeof id !== "string" || !state.claudeStarted)
+      return null;
+    if (!CONVERSATION_ID.test(id))
+      return { items: [], missing: true };
+    let folder;
+    for (const home of this.homesItMayUse()) {
+      const named = this.projectFolder(session.location.directory, home);
+      if (existsSync13(join21(named, `${id}.jsonl`))) {
+        folder = named;
+        break;
+      }
+    }
+    if (!folder) {
+      for (const home of this.homesItMayUse()) {
+        const projects = join21(home, "projects");
+        const found = (() => {
+          try {
+            return readdirSync12(projects).find((name) => existsSync13(join21(projects, name, `${id}.jsonl`)));
+          } catch {
+            return;
+          }
+        })();
+        if (found) {
+          folder = join21(projects, found);
+          break;
+        }
+      }
+    }
+    if (!folder)
+      return { items: [], missing: true };
+    const beside = join21(folder, id);
+    const ownMemory = botMemory(session);
+    const memory = ownMemory && existsSync13(ownMemory) ? undefined : join21(this.homesItMayUse().find((home) => folder.startsWith(home + "/")) ?? this.configHome, "projects", projectSlug(session.location.directory), "memory");
+    return {
+      items: [{ path: join21(folder, `${id}.jsonl`), name: `${id}.jsonl` }, ...existsSync13(beside) ? [{ path: beside, name: id }] : []],
+      ...memory && existsSync13(memory) ? { memory, ...ownMemory ? {} : { memoryShared: true } } : {}
+    };
+  }
+  conversationPlace(_state, session) {
+    const folder = this.projectFolder(session.location.directory);
+    const own = botMemory(session);
+    return {
+      item: (name) => CONVERSATION_ITEM.test(name) ? join21(folder, name) : null,
+      memory: own ?? join21(folder, "memory"),
+      memoryMerges: !own
+    };
+  }
+  conversationRoots() {
+    return this.homesItMayUse().map((home) => join21(home, "projects"));
   }
   ownSkillFolders(directory) {
     const settings = this.configHome;
@@ -10656,6 +10727,8 @@ class ClaudeThread {
     if (!resume)
       delete this.state.claudeCost;
     const whole = this.whole(skills, id);
+    const named = botMemory(this.session);
+    const ownMemory = named && existsSync13(named) ? named : undefined;
     this.input = new Queue;
     const tools = fenceOn() ? relayedTools(this.session.id, this) : kuvoTools(this.session.id);
     this.opened = { model: modelID, effort, plan, append, program: this.agent.program, tools: tools?.key, skills, fence: fenceKey() + fullAccessMark(this.session.id) };
@@ -10674,6 +10747,7 @@ class ClaudeThread {
         systemPrompt: { type: "preset", preset: "claude_code", ...append ? { append } : {} },
         ...skills ? { plugins: [{ type: "local", path: skills, skipMcpDiscovery: true }] } : {},
         ...resume ? { resume: id } : { sessionId: id },
+        ...ownMemory ? { settings: { autoMemoryDirectory: ownMemory } } : {},
         env: { ...this.agent.env(), OPENCODE_SESSION_ID: this.session.id, ...whole?.env },
         ...whole ? { sandbox: { enabled: false }, spawnClaudeCodeProcess: whole.spawn } : {},
         stderr: () => {}
@@ -11724,12 +11798,12 @@ function describe(status) {
 }
 
 // Packages/Box/src/agents/agents/codex.ts
-import { existsSync as existsSync14, lstatSync as lstatSync4, mkdirSync as mkdirSync14, readdirSync as readdirSync12, readFileSync as readFileSync19, readlinkSync, rmSync as rmSync11, symlinkSync as symlinkSync2 } from "fs";
+import { existsSync as existsSync14, lstatSync as lstatSync4, mkdirSync as mkdirSync14, readdirSync as readdirSync13, readFileSync as readFileSync19, readlinkSync, rmSync as rmSync11, symlinkSync as symlinkSync2 } from "fs";
 import { homedir as homedir2 } from "os";
 import { join as join22 } from "path";
 
 // Packages/Box/src/agents/agents/codex-citations.ts
-import { basename as basename8 } from "path";
+import { basename as basename9 } from "path";
 var opening2 = ":codex-";
 var longest = 4096;
 
@@ -11776,7 +11850,7 @@ class CodexCitations {
 }
 function plainCitations(text) {
   const reader = new CodexCitations;
-  return [...reader.read(text), ...reader.end()].map((said) => ("text" in said) ? said.text : basename8(said.made)).join("");
+  return [...reader.read(text), ...reader.end()].map((said) => ("text" in said) ? said.text : basename9(said.made)).join("");
 }
 function citedIn(message) {
   if (message.type !== "assistant" || parseProvider(message.model.providerID)?.kind !== "codex")
@@ -13830,7 +13904,7 @@ function agentTitle(path) {
 function shadowHome(home, own) {
   const kept = new Set(["auth.json", "models_cache.json"]);
   mkdirSync14(home, { recursive: true, mode: 448 });
-  const wanted = existsSync14(own) ? readdirSync12(own).filter((name) => !kept.has(name)) : [];
+  const wanted = existsSync14(own) ? readdirSync13(own).filter((name) => !kept.has(name)) : [];
   for (const name of wanted) {
     const link = join22(home, name);
     const target = join22(own, name);
@@ -13845,7 +13919,7 @@ function shadowHome(home, own) {
       symlinkSync2(target, link);
     } catch {}
   }
-  for (const name of readdirSync12(home)) {
+  for (const name of readdirSync13(home)) {
     const link = join22(home, name);
     try {
       if (lstatSync4(link).isSymbolicLink() && !wanted.includes(name))
@@ -16588,6 +16662,28 @@ class Sessions {
     emit("session.created", { sessionID: session.id, session }, session.location.directory);
     return session;
   }
+  atWorkNow(id) {
+    return this.active().includes(id);
+  }
+  slotsOf(id) {
+    return this.slots(this.record(id));
+  }
+  closeAgents(id) {
+    const live = this.live.get(id);
+    if (!live || isBusy(live.doing) || !live.threads.size)
+      return false;
+    clearTimeout(live.idle);
+    for (const thread of live.threads.values())
+      thread.close();
+    live.threads.clear();
+    return true;
+  }
+  addCarried(record) {
+    this.store.addWhole(record);
+    this.repair(record.session.id);
+    this.store.save(record.session.id, true);
+    emit("session.updated", { sessionID: record.session.id, session: record.session }, record.session.location.directory);
+  }
   list(directory, parentID) {
     return this.store.all().filter((session) => !directory || session.location.directory === directory).filter((session) => parentID === undefined || (parentID === null ? !session.parentID : session.parentID === parentID)).sort((a, b) => b.time.updated - a.time.updated || (a.id < b.id ? 1 : -1));
   }
@@ -17982,7 +18078,8 @@ ${live.agentPrompt}` : ""
   }
   ownedBy(turn) {
     const agent = this.agent(turn.currentModel.providerID);
-    return agent?.ownsPath ? (path) => agent.ownsPath(path) : undefined;
+    const session = this.store.get(turn.sessionID)?.session;
+    return agent?.ownsPath ? (path) => agent.ownsPath(path, session) : undefined;
   }
   attached(id) {
     const paths = new Set;
@@ -18573,6 +18670,528 @@ function followed(store, read, signal) {
   return new Response(stream, { headers: { "Content-Type": "application/x-ndjson", "Cache-Control": "no-cache" } });
 }
 
+// Packages/Box/src/agents/carry.ts
+import { createHash as createHash8 } from "crypto";
+import { createReadStream } from "fs";
+import { copyFile, lstat as lstat2, mkdir, readFile as readFile3, readdir, rename, rm, stat as stat2, writeFile } from "fs/promises";
+import { basename as basename10, dirname as dirname15, isAbsolute as isAbsolute3, join as join27, normalize, sep as sep11 } from "path";
+class CantCarry extends Error {
+  status;
+  constructor(message, status = 409) {
+    super(message);
+    this.status = status;
+  }
+}
+async function hashOf(file) {
+  const hash = createHash8("sha256");
+  for await (const chunk of createReadStream(file))
+    hash.update(chunk);
+  return hash.digest("hex");
+}
+async function plainFiles(from, link, at = "") {
+  const whole = at ? join27(from, at) : from;
+  const kind = await lstat2(whole);
+  if (kind.isFile())
+    return [{ path: at, size: kind.size }];
+  if (!kind.isDirectory())
+    throw link(whole);
+  const files = [];
+  for (const name of (await readdir(whole)).sort())
+    files.push(...await plainFiles(from, link, at ? join27(at, name) : name));
+  return files;
+}
+var digestOf = (records, lanes, said = []) => {
+  const hash = createHash8("sha256");
+  for (const record of records)
+    hash.update(`r ${record.path} ${record.size} ${record.sha256}
+`);
+  for (const each of said)
+    hash.update(`s ${each}
+`);
+  for (const lane of lanes) {
+    hash.update(`l ${lane.provider} ${lane.session} ${lane.how}
+`);
+    for (const file of lane.list)
+      hash.update(`f ${file.path} ${file.size} ${file.sha256}
+`);
+  }
+  return hash.digest("base64url");
+};
+var safeWithin = (name) => Boolean(name) && !isAbsolute3(name) && normalize(name) === name && !name.split(sep11).includes("..");
+var ID = /^ses_[A-Za-z0-9]{1,60}$/;
+var QUIET = { still: 400, most: 5000 };
+
+class Carrying {
+  sessions;
+  store;
+  agentOf;
+  accountsOf;
+  constructor(sessions, store, agentOf, accountsOf) {
+    this.sessions = sessions;
+    this.store = store;
+    this.agentOf = agentOf;
+    this.accountsOf = accountsOf;
+  }
+  family(root) {
+    const out = [];
+    const next = [root];
+    while (next.length) {
+      const id = next.shift();
+      const record = this.store.get(id);
+      if (!record) {
+        if (id === root)
+          throw new NotFound(`No session ${id}.`);
+        continue;
+      }
+      out.push(record);
+      next.push(...this.sessions.list(undefined, id).map((child) => child.id));
+    }
+    return out;
+  }
+  laneFiles(record, provider, state, conversation) {
+    if (!conversation)
+      return { files: null, why: "left-out" };
+    const agent = this.agentOf(provider);
+    if (!agent)
+      return { files: null, why: "unknown-agent" };
+    if (!agent.conversationFiles)
+      return { files: null, why: "not-carried" };
+    const files = agent.conversationFiles(state, record.session);
+    if (files?.missing)
+      return { files: null, why: "missing" };
+    return { files };
+  }
+  async laneList(at, files) {
+    const link = (path) => new CantCarry(`its conversation has something that isn't a plain file (${basename10(path)})`);
+    const out = [];
+    const take = async (from, into) => {
+      for (const { path, size } of await plainFiles(from, link)) {
+        const whole = path ? join27(from, path) : from;
+        out.push({ from: whole, file: { path: path ? join27(into, path) : into, size, sha256: await hashOf(whole) } });
+      }
+    };
+    for (const item of files.items)
+      await take(item.path, join27("lanes", String(at), "conversation", item.name));
+    if (files.memory)
+      await take(files.memory, join27("lanes", String(at), "memory"));
+    return out;
+  }
+  async read(root, conversation, into) {
+    const family = this.family(root);
+    const records = [];
+    const said = [];
+    const lanes = [];
+    const left = [];
+    let at = 0;
+    for (const record of family) {
+      const id = record.session.id;
+      this.store.save(id, true);
+      const marks = record.session.metadata ?? {};
+      const archived = record.session.time.archived ?? marks["kuvo.archived"] ?? marks.kuvo?.archived ?? null;
+      said.push(JSON.stringify([id, record.session.title ?? null, record.session.model ?? null, archived]));
+      for (const name of ["session.json", "messages.json", "agent.json"]) {
+        const file = this.store.fileOf(id, name);
+        const path = join27("sessions", id, name);
+        if (name === "messages.json")
+          records.push({ path, size: (await stat2(file)).size, sha256: await hashOf(file) });
+        if (into) {
+          await mkdir(dirname15(join27(into, path)), { recursive: true });
+          await copyFile(file, join27(into, path));
+        }
+      }
+      const slots = this.sessions.slotsOf(id);
+      for (const [provider, slot] of Object.entries(slots)) {
+        if (!Object.keys(slot.state ?? {}).length)
+          continue;
+        const { files, why } = this.laneFiles(record, provider, slot.state, conversation);
+        if (!files && !why)
+          continue;
+        const list = files ? await this.laneList(at, files) : [];
+        const lane = {
+          provider,
+          session: id,
+          how: files ? "files" : "handover",
+          ...why ? { why } : {},
+          items: (files?.items ?? []).map((item) => item.name),
+          memory: Boolean(files?.memory),
+          files: list.length,
+          bytes: list.reduce((sum, each) => sum + each.file.size, 0),
+          list: list.map((each) => each.file)
+        };
+        lanes.push(lane);
+        if (files)
+          left.push({ provider, paths: files.items.map((item) => item.path), ...files.memory && !files.memoryShared ? { memory: files.memory } : {}, directory: record.session.location.directory });
+        if (into) {
+          for (const { from, file } of list) {
+            await mkdir(dirname15(join27(into, file.path)), { recursive: true });
+            await copyFile(from, join27(into, file.path));
+          }
+        }
+        at++;
+      }
+    }
+    const digest = digestOf(records, lanes, said);
+    return {
+      manifest: {
+        root,
+        sessions: family.map(({ session }) => ({ id: session.id, ...session.parentID ? { parentID: session.parentID } : {}, ...session.metadata ? { metadata: session.metadata } : {} })),
+        lanes,
+        records,
+        digest
+      },
+      left
+    };
+  }
+  async settle(root) {
+    const family = this.family(root);
+    const working = family.filter(({ session }) => this.sessions.atWorkNow(session.id));
+    if (working.length)
+      throw new CantCarry("it's working");
+    const closed = family.map(({ session }) => this.sessions.closeAgents(session.id)).some(Boolean);
+    if (!closed)
+      return;
+    const files = family.flatMap((record) => Object.entries(this.sessions.slotsOf(record.session.id)).flatMap(([provider, slot]) => this.laneFiles(record, provider, slot.state, true).files?.items.map((item) => item.path) ?? []));
+    const when = async () => (await Promise.all(files.map((file) => stat2(file).then((found) => found.mtimeMs, () => 0)))).join();
+    const began = Date.now();
+    let last = await when();
+    while (Date.now() - began < QUIET.most) {
+      await Bun.sleep(QUIET.still);
+      const now = await when();
+      if (now === last)
+        return;
+      last = now;
+    }
+  }
+  async pack(root, into, options = {}) {
+    const conversation = options.conversation !== false;
+    await this.settle(root);
+    const counted = await this.read(root, conversation);
+    const bytes = counted.manifest.lanes.reduce((sum, lane) => sum + lane.bytes, 0) + counted.manifest.records.reduce((sum, record) => sum + record.size, 0);
+    if (options.most !== undefined && bytes > options.most)
+      throw new CantCarry("it's too big", 413);
+    await rm(into, { recursive: true, force: true });
+    await mkdir(into, { recursive: true, mode: 448 });
+    const { manifest, left } = await this.read(root, conversation, into);
+    await writeFile(join27(into, "carry.json"), JSON.stringify(manifest), { mode: 384 });
+    return { sessions: manifest.sessions, lanes: manifest.lanes.map(({ list: _, ...lane }) => lane), digest: manifest.digest, left };
+  }
+  async digest(root, conversation = true) {
+    await this.settle(root);
+    return (await this.read(root, conversation)).manifest.digest;
+  }
+  async keep(root, into) {
+    for (const { session } of this.family(root)) {
+      this.store.save(session.id, true);
+      const folder = join27(into, session.id);
+      await mkdir(folder, { recursive: true });
+      for (const name of ["session.json", "messages.json"])
+        await copyFile(this.store.fileOf(session.id, name), join27(folder, name));
+    }
+  }
+  async hostOf(provider) {
+    const own = this.agentOf(provider);
+    const signedIn = (agent) => agent.account(false).then((said) => said.signedIn, () => false);
+    if (own && await signedIn(own))
+      return own;
+    const named = parseProvider(provider);
+    if (!named)
+      return own;
+    const accounts = this.accountsOf(named.kind);
+    for (const account of accounts)
+      if (await signedIn(account))
+        return account;
+    return own ?? accounts[0] ?? this.agentOf(baseProvider[named.kind]);
+  }
+  async place(from, keep, directory, root) {
+    return await this.inTurn(keep, () => this.placeNow(from, keep, directory, root));
+  }
+  turns = new Map;
+  takenBack = new Set;
+  async inTurn(keep, work) {
+    const before = this.turns.get(keep) ?? Promise.resolve();
+    const now = before.catch(() => {}).then(work);
+    this.turns.set(keep, now);
+    try {
+      return await now;
+    } finally {
+      if (this.turns.get(keep) === now)
+        this.turns.delete(keep);
+    }
+  }
+  inUse() {
+    return this.store.all().flatMap((session) => {
+      const record = this.store.get(session.id);
+      if (!record)
+        return [];
+      return Object.entries(this.sessions.slotsOf(session.id)).flatMap(([provider, slot]) => this.laneFiles(record, provider, slot.state ?? {}, true).files?.items.map((item) => item.path) ?? []);
+    });
+  }
+  async placeNow(from, keep, directory, root) {
+    const manifest = await this.readManifest(from);
+    if (manifest.root !== root)
+      throw new CantCarry("its conversations aren't its own");
+    for (const { id } of manifest.sessions)
+      if (this.store.get(id))
+        throw new CantCarry("its conversations are here already");
+    for (const file of [...manifest.records, ...manifest.lanes.flatMap((lane) => lane.list)])
+      await this.checked(from, file);
+    await mkdir(keep, { recursive: true, mode: 448 });
+    const undo = new Undo(keep);
+    const sessions = manifest.sessions.map(({ id }) => id);
+    const stillOn = () => {
+      if (this.takenBack.has(keep))
+        throw new CantCarry("it was taken back");
+    };
+    const inUse = this.inUse();
+    try {
+      const hosts = new Map;
+      for (const lane of manifest.lanes)
+        if (!hosts.has(lane.provider))
+          hosts.set(lane.provider, await this.hostOf(lane.provider));
+      const placed = [];
+      for (const { id } of manifest.sessions) {
+        stillOn();
+        const read = async (name, or) => {
+          try {
+            return JSON.parse(await readFile3(join27(from, "sessions", id, name), "utf8"));
+          } catch (error) {
+            if (or !== undefined)
+              return or;
+            throw new CantCarry("its conversation didn't come whole");
+          }
+        };
+        const session = await read("session.json");
+        const messages = await read("messages.json");
+        const agent = await read("agent.json", {});
+        if (session?.id !== id || !Array.isArray(messages))
+          throw new CantCarry("its conversation didn't come whole");
+        session.location = { ...session.location, directory };
+        session.projectID = "prj_" + createHash8("sha1").update(directory).digest("hex").slice(0, 16);
+        delete agent.snapshots;
+        const lanesHere = manifest.lanes.filter((lane) => lane.session === id);
+        const threads = agent.threads ?? {};
+        const kept = {};
+        const inTurn = Object.entries(threads).sort(([one], [other]) => Number(one === session.model?.providerID) - Number(other === session.model?.providerID));
+        for (const [provider, slot] of inTurn) {
+          const lane = lanesHere.find((each) => each.provider === provider);
+          const host = hosts.get(provider) ?? this.agentOf(provider);
+          const here = host?.providerID ?? provider;
+          if (lane?.how === "files" && !host?.conversationPlace)
+            throw new CantCarry("its coding agent isn't here to take its conversation");
+          if (lane?.how === "files" && host?.conversationPlace) {
+            kept[here] = slot;
+            const where = host.conversationPlace(slot.state, session);
+            for (const file of lane.list) {
+              const conversation = join27("lanes", String(manifest.lanes.indexOf(lane)), "conversation") + sep11;
+              const memory = join27("lanes", String(manifest.lanes.indexOf(lane)), "memory");
+              const dest = file.path.startsWith(conversation) ? where.item(file.path.slice(conversation.length)) : file.path === memory ? where.memory ?? null : file.path.startsWith(memory + sep11) && where.memory ? join27(where.memory, file.path.slice(memory.length + 1)) : null;
+              if (!dest)
+                throw new CantCarry("its conversation didn't come whole");
+              if (inUse.some((path) => dest === path || dest.startsWith(path + sep11)))
+                throw new CantCarry("its conversation is one here already");
+              stillOn();
+              await undo.put(join27(from, file.path), dest, file, Boolean(where.memoryMerges && !file.path.startsWith(conversation)));
+            }
+            placed.push(lane);
+          } else {
+            kept[here] = { state: {} };
+          }
+        }
+        agent.threads = kept;
+        if (session.model?.providerID && hosts.get(session.model.providerID))
+          session.model = { ...session.model, providerID: hosts.get(session.model.providerID).providerID };
+        stillOn();
+        await undo.noteSession(id);
+        this.sessions.addCarried({ session, messages, agent });
+      }
+      return { sessions, infos: manifest.sessions.map(({ id, metadata }) => ({ id, metadata })), digest: manifest.digest, lanes: manifest.lanes.map(({ list: _, ...lane }) => ({ ...lane, how: placed.includes(manifest.lanes.find((each) => each.session === lane.session && each.provider === lane.provider)) ? "files" : "handover" })), model: this.store.get(manifest.root)?.session.model };
+    } catch (error) {
+      await this.undoNow(keep).catch(() => {});
+      throw error;
+    }
+  }
+  async readManifest(from) {
+    let manifest;
+    try {
+      manifest = JSON.parse(await readFile3(join27(from, "carry.json"), "utf8"));
+    } catch {
+      throw new CantCarry("its conversation didn't come whole");
+    }
+    const ids = Array.isArray(manifest?.sessions) ? manifest.sessions.map((each) => each?.id) : [];
+    const parentsKnown = ids.length > 0 && manifest.sessions.every((each) => each.id === manifest.root ? !each.parentID : typeof each.parentID === "string" && ids.includes(each.parentID));
+    if (!ids.includes(manifest?.root) || ids.some((id) => !ID.test(id)) || new Set(ids).size !== ids.length || !parentsKnown)
+      throw new CantCarry("its conversations aren't its own");
+    if (!Array.isArray(manifest.lanes) || !Array.isArray(manifest.records))
+      throw new CantCarry("its conversation didn't come whole");
+    for (const file of [...manifest.records, ...manifest.lanes.flatMap((lane) => lane.list ?? [])])
+      if (!safeWithin(file?.path) || typeof file.sha256 !== "string")
+        throw new CantCarry("its conversation didn't come whole");
+    return manifest;
+  }
+  async checked(from, file) {
+    let found;
+    try {
+      found = await lstat2(join27(from, file.path));
+    } catch {
+      throw new CantCarry("a file of its conversation didn't come with it");
+    }
+    if (!found.isFile() || found.size !== file.size || await hashOf(join27(from, file.path)) !== file.sha256)
+      throw new CantCarry("a file of its conversation didn't come whole");
+  }
+  async undo(keep) {
+    this.takenBack.add(keep);
+    try {
+      await this.inTurn(keep, () => this.undoNow(keep));
+    } finally {
+      this.takenBack.delete(keep);
+    }
+  }
+  async undoNow(keep) {
+    const undo = new Undo(keep);
+    for (const id of (await undo.read()).sessions.reverse())
+      await this.sessions.remove(id).catch((error) => {
+        if (!(error instanceof NotFound))
+          throw error;
+      });
+    await undo.undo();
+  }
+  async remove(left, ownSessions = [], back = false) {
+    const removed = [];
+    const kept = [];
+    const live = new Set(this.inUse());
+    for (const lane of left) {
+      const named = parseProvider(lane.provider);
+      const agents = named ? this.accountsOf(named.kind) : [];
+      const roots = (this.agentOf(lane.provider)?.conversationRoots?.() ?? agents.flatMap((agent) => agent.conversationRoots?.() ?? [])).map((root) => root + sep11);
+      const ours = (path) => roots.some((root) => path.startsWith(root) && normalize(path) === path);
+      for (const path of lane.paths) {
+        if (!ours(path) || live.has(path)) {
+          kept.push(path);
+          continue;
+        }
+        await rm(path, { recursive: true, force: true });
+        removed.push(path);
+      }
+      if (!lane.memory)
+        continue;
+      const shared = this.store.all().some((session) => session.location.directory === lane.directory && !(back && ownSessions.includes(session.id)));
+      if (shared || !ours(lane.memory)) {
+        kept.push(lane.memory);
+        continue;
+      }
+      await rm(lane.memory, { recursive: true, force: true });
+      removed.push(lane.memory);
+    }
+    return { removed, kept };
+  }
+}
+
+class Undo {
+  keep;
+  list = { sessions: [], placed: [] };
+  count = 0;
+  constructor(keep) {
+    this.keep = keep;
+  }
+  get file() {
+    return join27(this.keep, "placed.json");
+  }
+  async read() {
+    try {
+      const said = JSON.parse(await readFile3(this.file, "utf8"));
+      this.list = { sessions: Array.isArray(said?.sessions) ? said.sessions : [], placed: Array.isArray(said?.placed) ? said.placed : [] };
+    } catch {}
+    return this.list;
+  }
+  async write() {
+    await writeFile(this.file, JSON.stringify(this.list), { mode: 384 });
+  }
+  async noteSession(id) {
+    this.list.sessions.push(id);
+    await this.write();
+  }
+  async put(from, dest, file, merges) {
+    await mkdir(dirname15(dest), { recursive: true });
+    let there = await lstat2(dest).then(() => true, () => false);
+    if (there && merges) {
+      if (await hashOf(dest).catch(() => "") === file.sha256)
+        return;
+      dest = join27(dirname15(dest), `moved-${file.sha256.slice(0, 8)}-${basename10(dest)}`);
+      there = await lstat2(dest).then(() => true, () => false);
+      if (there)
+        return;
+    }
+    const placed = merges ? { dest, sha256: file.sha256 } : { dest };
+    if (there)
+      placed.replaced = join27(this.keep, "replaced", String(this.count++));
+    this.list.placed.push(placed);
+    await this.write();
+    if (placed.replaced) {
+      await mkdir(dirname15(placed.replaced), { recursive: true });
+      await rename(dest, placed.replaced);
+    }
+    await copyFile(from, dest);
+    if (await hashOf(dest) !== file.sha256)
+      throw new CantCarry("a file of its conversation didn't copy whole");
+  }
+  async undo() {
+    await this.read();
+    this.list.sessions = [];
+    while (this.list.placed.length) {
+      const { dest, replaced, sha256 } = this.list.placed[this.list.placed.length - 1];
+      const exists = (path) => lstat2(path).then(() => true, () => false);
+      if (replaced) {
+        if (await exists(replaced)) {
+          await rm(dest, { force: true });
+          await rename(replaced, dest);
+        }
+      } else if (!sha256 || !await exists(dest) || await hashOf(dest).catch(() => "") === sha256) {
+        await rm(dest, { force: true });
+      }
+      this.list.placed.pop();
+      await this.write();
+    }
+    await this.write().catch(() => {});
+  }
+}
+async function carryRoutes(carrying, method, parts, body) {
+  const json = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
+  if (!carrying)
+    return json({ message: "Moves aren't running on this computer." }, 503);
+  if (method !== "POST")
+    return json({ message: "Not allowed" }, 405);
+  const given = await body();
+  const text = (name) => {
+    const value = given?.[name];
+    if (typeof value !== "string" || !value)
+      throw new CantCarry(`say ${name}`, 400);
+    return value;
+  };
+  try {
+    switch (parts[0]) {
+      case "pack":
+        return json({ data: await carrying.pack(text("root"), text("into"), { conversation: given?.conversation !== false, ...typeof given?.most === "number" ? { most: given.most } : {} }) });
+      case "digest":
+        return json({ data: { digest: await carrying.digest(text("root"), given?.conversation !== false) } });
+      case "keep":
+        await carrying.keep(text("root"), text("into"));
+        return json({ data: true });
+      case "place":
+        return json({ data: await carrying.place(text("from"), text("keep"), text("directory"), text("root")) });
+      case "undo":
+        await carrying.undo(text("keep"));
+        return json({ data: true });
+      case "remove":
+        return json({ data: await carrying.remove(Array.isArray(given?.left) ? given.left : [], Array.isArray(given?.sessions) ? given.sessions : [], given?.back === true) });
+    }
+    return json({ message: "Not found" }, 404);
+  } catch (error) {
+    if (error instanceof CantCarry)
+      return json({ message: error.message, carry: true }, error.status);
+    throw error;
+  }
+}
+
 // Packages/Box/src/agents/groups/rules.ts
 var stamp3 = (date = new Date) => date.toISOString().replace(/\.\d{3}Z$/, "Z");
 function length(text) {
@@ -19143,8 +19762,8 @@ function seatRules(folder, askFirst, denies) {
 }
 
 // Packages/Box/src/agents/groups/store.ts
-import { existsSync as existsSync16, mkdirSync as mkdirSync17, readdirSync as readdirSync13, readFileSync as readFileSync24, renameSync as renameSync12, rmSync as rmSync13, writeFileSync as writeFileSync18 } from "fs";
-import { join as join27 } from "path";
+import { existsSync as existsSync16, mkdirSync as mkdirSync17, readdirSync as readdirSync14, readFileSync as readFileSync24, renameSync as renameSync12, rmSync as rmSync13, writeFileSync as writeFileSync18 } from "fs";
+import { join as join28 } from "path";
 var version2 = 1;
 function isTurning(value) {
   return value && typeof value.bot === "string" && typeof value.seat === "string" && typeof value.agents === "boolean" && typeof value.prompt === "string" && typeof value.sent === "number" && (value.wrapUp === undefined || typeof value.wrapUp === "boolean");
@@ -19214,13 +19833,13 @@ class GroupStore {
     mkdirSync17(root, { recursive: true, mode: 448 });
   }
   folder(id) {
-    return join27(this.root, id);
+    return join28(this.root, id);
   }
   load() {
     const all = new Map;
     let names = [];
     try {
-      names = readdirSync13(this.root);
+      names = readdirSync14(this.root);
     } catch {}
     for (const id of names) {
       if (!/^grp_[a-z0-9]+$/.test(id))
@@ -19232,24 +19851,24 @@ class GroupStore {
     return all;
   }
   read(id) {
-    const record = read2(join27(this.folder(id), "group.json"));
+    const record = read2(join28(this.folder(id), "group.json"));
     if (!record || typeof record.kuvo !== "number" || record.kuvo > version2 || !isGroup(record.group, id))
       return;
-    const messages = read2(join27(this.folder(id), "messages.json")) ?? [];
+    const messages = read2(join28(this.folder(id), "messages.json")) ?? [];
     if (!isMessages(messages))
       return;
     return { group: record.group, status: record.status === "held" ? "held" : "active", talking: record.talking === true, paused: record.paused === true, ...isTurning(record.turning) ? { turning: record.turning } : {}, messages };
   }
   saveGroup(kept) {
     mkdirSync17(this.folder(kept.group.id), { recursive: true, mode: 448 });
-    write(join27(this.folder(kept.group.id), "group.json"), { kuvo: version2, status: kept.status, ...kept.talking ? { talking: true } : {}, ...kept.paused ? { paused: true } : {}, ...kept.turning ? { turning: kept.turning } : {}, group: kept.group });
+    write(join28(this.folder(kept.group.id), "group.json"), { kuvo: version2, status: kept.status, ...kept.talking ? { talking: true } : {}, ...kept.paused ? { paused: true } : {}, ...kept.turning ? { turning: kept.turning } : {}, group: kept.group });
   }
   saveMessages(kept) {
     mkdirSync17(this.folder(kept.group.id), { recursive: true, mode: 448 });
-    write(join27(this.folder(kept.group.id), "messages.json"), kept.messages);
+    write(join28(this.folder(kept.group.id), "messages.json"), kept.messages);
   }
   setAwake(id, awake) {
-    const file = join27(this.folder(id), "awake");
+    const file = join28(this.folder(id), "awake");
     if (awake && !existsSync16(file) && existsSync16(this.folder(id)))
       writeFileSync18(file, "");
     if (!awake)
@@ -19258,13 +19877,13 @@ class GroupStore {
   trash(id, trash) {
     if (!existsSync16(this.folder(id)))
       return;
-    const into = join27(trash, `${new Date().toISOString().replace(/[-:]/g, "").replace(/\..*/, "")}-group-${id}`);
+    const into = join28(trash, `${new Date().toISOString().replace(/[-:]/g, "").replace(/\..*/, "")}-group-${id}`);
     mkdirSync17(into, { recursive: true, mode: 448 });
-    renameSync12(this.folder(id), join27(into, id));
+    renameSync12(this.folder(id), join28(into, id));
     emit("kuvo.group.trashed", { id, path: into });
   }
   settings() {
-    const value = read2(join27(this.root, "settings.json"));
+    const value = read2(join28(this.root, "settings.json"));
     if (!value || typeof value !== "object")
       return;
     return {
@@ -19277,40 +19896,40 @@ class GroupStore {
     };
   }
   writeSettings(settings) {
-    write(join27(this.root, "settings.json"), { kuvo: version2, ...settings });
+    write(join28(this.root, "settings.json"), { kuvo: version2, ...settings });
   }
   allBots() {
     let names = [];
     try {
-      names = readdirSync13(this.bots);
+      names = readdirSync14(this.bots);
     } catch {}
     return names.flatMap((name) => this.bot(name) ?? []);
   }
   bot(id) {
     if (!/^bot_[A-Za-z0-9]+$/.test(id))
       return;
-    const folder = join27(this.bots, id);
-    const described = read2(join27(folder, "bot.json"));
-    const sessionID = text2(join27(folder, "session"))?.trim();
+    const folder = join28(this.bots, id);
+    const described = read2(join28(folder, "bot.json"));
+    const sessionID = text2(join28(folder, "session"))?.trim();
     if (!described?.name || !sessionID)
       return;
-    const job = read2(join27(folder, "job.json"));
-    const directory = text2(join27(folder, "directory"))?.trim() || join27(folder, "workspace");
+    const job = read2(join28(folder, "job.json"));
+    const directory = text2(join28(folder, "directory"))?.trim() || join28(folder, "workspace");
     return {
       id,
       name: String(described.name),
       job: typeof job?.line === "string" ? job.line : String(described.job ?? ""),
       instructions: typeof job?.details === "string" ? job.details : "",
-      memoryFile: join27(folder, "MEMORY.md"),
+      memoryFile: join28(folder, "MEMORY.md"),
       folder,
       sessionID,
       directory,
       model: described.model?.id && described.model?.providerID ? described.model : undefined,
       personality: typeof described.personality === "string" ? described.personality : undefined,
-      agents: text2(join27(folder, "via"))?.trim() === "bridge",
+      agents: text2(join28(folder, "via"))?.trim() === "bridge",
       ...described.look !== undefined ? { look: described.look } : {},
       ...typeof described.created === "string" ? { created: described.created } : {},
-      ...text2(join27(folder, "paused"))?.trim() === "moving" ? { moving: true } : {}
+      ...text2(join28(folder, "paused"))?.trim() === "moving" ? { moving: true } : {}
     };
   }
   peerMemory(bot) {
@@ -19322,7 +19941,7 @@ class GroupStore {
     return typeof at === "number" ? at : 0;
   }
   peerEntries(bot) {
-    const all = read2(join27(this.root, "peer-memory.json"));
+    const all = read2(join28(this.root, "peer-memory.json"));
     const entries = all && typeof all === "object" ? all[bot] : undefined;
     return entries && typeof entries === "object" ? entries : {};
   }
@@ -19338,7 +19957,7 @@ class GroupStore {
     });
   }
   changePeerMemory(bot, change) {
-    const all = read2(join27(this.root, "peer-memory.json")) ?? {};
+    const all = read2(join28(this.root, "peer-memory.json")) ?? {};
     const entries = { ...all[bot] ?? {} };
     change(entries);
     for (const [key, entry] of Object.entries(entries))
@@ -19348,10 +19967,10 @@ class GroupStore {
       delete all[bot];
     else
       all[bot] = entries;
-    write(join27(this.root, "peer-memory.json"), all);
+    write(join28(this.root, "peer-memory.json"), all);
   }
   peerWork() {
-    const all = read2(join27(this.root, "peer-work.json"));
+    const all = read2(join28(this.root, "peer-work.json"));
     return all && typeof all === "object" ? all : {};
   }
   keepPeerWork(task, work) {
@@ -19365,29 +19984,29 @@ class GroupStore {
   changePeerWork(change) {
     const all = this.peerWork();
     change(all);
-    write(join27(this.root, "peer-work.json"), all);
+    write(join28(this.root, "peer-work.json"), all);
   }
   pendingMemory() {
-    const value = read2(join27(this.root, "pending-memory.json"));
+    const value = read2(join28(this.root, "pending-memory.json"));
     if (!value || typeof value !== "object" || Array.isArray(value))
       return {};
     return Object.fromEntries(Object.entries(value).filter(([bot, chats]) => /^bot_[A-Za-z0-9]+$/.test(bot) && strings2(chats)));
   }
   setPendingMemory(pending) {
     if (Object.keys(pending).length === 0)
-      rmSync13(join27(this.root, "pending-memory.json"), { force: true });
+      rmSync13(join28(this.root, "pending-memory.json"), { force: true });
     else
-      write(join27(this.root, "pending-memory.json"), pending);
+      write(join28(this.root, "pending-memory.json"), pending);
   }
   peerTurns() {
-    const all = read2(join27(this.root, "peer-turns.json"));
+    const all = read2(join28(this.root, "peer-turns.json"));
     return all && typeof all === "object" ? all : {};
   }
   keepPeerTurns(turns) {
-    write(join27(this.root, "peer-turns.json"), turns);
+    write(join28(this.root, "peer-turns.json"), turns);
   }
   writeFile(path, contents) {
-    mkdirSync17(join27(path, ".."), { recursive: true });
+    mkdirSync17(join28(path, ".."), { recursive: true });
     writeFileSync18(path + ".new", contents, { mode: 384 });
     renameSync12(path + ".new", path);
   }
@@ -23443,6 +24062,8 @@ function handler(context) {
         context.restartOutside?.();
         return json11({});
       }
+      if (area === "kuvo" && a === "carry")
+        return await carryRoutes(context.carrying, method, parts.slice(3), body);
       if (area === "kuvo" && a === "goals")
         return await goalRoutes(context.goals, method, parts.slice(3), body);
       if (area === "kuvo" && a === "btw")
@@ -23543,8 +24164,8 @@ ${all}`;
 }
 
 // Packages/Box/src/agents/store.ts
-import { mkdirSync as mkdirSync18, readdirSync as readdirSync14, readFileSync as readFileSync27, renameSync as renameSync14, rmSync as rmSync14, statSync as statSync10, writeFileSync as writeFileSync20 } from "fs";
-import { join as join28 } from "path";
+import { mkdirSync as mkdirSync18, readdirSync as readdirSync15, readFileSync as readFileSync27, renameSync as renameSync14, rmSync as rmSync14, statSync as statSync10, writeFileSync as writeFileSync20 } from "fs";
+import { join as join29 } from "path";
 
 class Store {
   root;
@@ -23553,17 +24174,17 @@ class Store {
   constructor(root) {
     this.root = root;
     mkdirSync18(root, { recursive: true });
-    for (const id of readdirSync14(root)) {
+    for (const id of readdirSync15(root)) {
       try {
-        const folder = join28(root, id);
-        const session = JSON.parse(readFileSync27(join28(folder, "session.json"), "utf8"));
+        const folder = join29(root, id);
+        const session = JSON.parse(readFileSync27(join29(folder, "session.json"), "utf8"));
         let messages = [];
         try {
-          messages = JSON.parse(readFileSync27(join28(folder, "messages.json"), "utf8"));
+          messages = JSON.parse(readFileSync27(join29(folder, "messages.json"), "utf8"));
         } catch {}
         let agent = {};
         try {
-          agent = JSON.parse(readFileSync27(join28(folder, "agent.json"), "utf8"));
+          agent = JSON.parse(readFileSync27(join29(folder, "agent.json"), "utf8"));
         } catch {}
         this.records.set(session.id, { session, messages, agent });
       } catch {}
@@ -23575,9 +24196,16 @@ class Store {
   get(id) {
     return this.records.get(id);
   }
+  fileOf(id, name) {
+    return join29(this.root, id, name);
+  }
+  addWhole(record) {
+    this.records.set(record.session.id, record);
+    this.save(record.session.id, true);
+  }
   writtenAt(id) {
     try {
-      return statSync10(join28(this.root, id, "messages.json")).mtimeMs;
+      return statSync10(join29(this.root, id, "messages.json")).mtimeMs;
     } catch {
       return;
     }
@@ -23590,7 +24218,7 @@ class Store {
     this.records.delete(id);
     clearTimeout(this.pending.get(id));
     this.pending.delete(id);
-    rmSync14(join28(this.root, id), { recursive: true, force: true });
+    rmSync14(join29(this.root, id), { recursive: true, force: true });
   }
   save(id, now = false) {
     clearTimeout(this.pending.get(id));
@@ -23613,14 +24241,14 @@ class Store {
     if (!record)
       return;
     try {
-      const folder = join28(this.root, id);
+      const folder = join29(this.root, id);
       mkdirSync18(folder, { recursive: true });
       for (const [name, value] of [
         ["session.json", record.session],
         ["messages.json", record.messages],
         ["agent.json", record.agent]
       ]) {
-        const file = join28(folder, name);
+        const file = join29(folder, name);
         writeFileSync20(file + ".new", JSON.stringify(value));
         renameSync14(file + ".new", file);
       }
@@ -23817,19 +24445,19 @@ if (onMachine) {
   takeOwnFolders();
   if (home2)
     dropCarriedSignIns(home2);
-  process.env.KUVO_BIN = join29(machineHome, "bin");
-  process.env.KUVO_BOTS ??= join29(machineHome, "bots");
-  process.env.KUVO_WAKES ??= join29(machineHome, "wakes");
+  process.env.KUVO_BIN = join30(machineHome, "bin");
+  process.env.KUVO_BOTS ??= join30(machineHome, "bots");
+  process.env.KUVO_WAKES ??= join30(machineHome, "wakes");
   for (const name of ["OPENCODE_CONFIG_CONTENT", "OPENCODE_CONFIG", "OPENCODE_CLIENT", "KUVO_AGENTS_PASSWORD", "KUVO_AGENTS_PORT", "KUVO_ENGINE_PORT", "KUVO_ENGINE_PID"])
     delete process.env[name];
 }
-var temporary = process.env.TMPDIR?.replace(/\/$/, "") || join29(home2, "tmp");
+var temporary = process.env.TMPDIR?.replace(/\/$/, "") || join30(home2, "tmp");
 mkdirSync19(temporary, { recursive: true });
-rmSync15(join29(temporary, "antigravity"), { recursive: true, force: true });
+rmSync15(join30(temporary, "antigravity"), { recursive: true, force: true });
 try {
-  for (const name of readdirSync15(join29(home2, "antigravity")))
+  for (const name of readdirSync16(join30(home2, "antigravity")))
     if (name.startsWith(".install-"))
-      rmSync15(join29(home2, "antigravity", name), { recursive: true, force: true });
+      rmSync15(join30(home2, "antigravity", name), { recursive: true, force: true });
 } catch {}
 delete process.env.BUN_BE_BUN;
 process.env.KUVO_WAKE_VIA = "bridge";
@@ -23839,15 +24467,15 @@ process.on("uncaughtException", (error) => {
   console.error("uncaught:", error);
   process.exit(1);
 });
-var deps = new Deps(join29(home2, "runtime"), join29(home2, "cache"));
+var deps = new Deps(join30(home2, "runtime"), join30(home2, "cache"));
 if (onMachine) {
-  dropOwnPrograms(join29(home2, "runtime"));
+  dropOwnPrograms(join30(home2, "runtime"));
   useSavedLoginPath();
 }
-rmSync15(join29(home2, "cache", "install"), { recursive: true, force: true });
+rmSync15(join30(home2, "cache", "install"), { recursive: true, force: true });
 var context = { home: home2, temporary, deps };
 var roster = new Roster(new Accounts(home2), context);
-var store = new Store(join29(home2, "sessions"));
+var store = new Store(join30(home2, "sessions"));
 var auto = new Auto(home2);
 var link3 = new EngineLink;
 if (machineEngine)
@@ -23863,7 +24491,7 @@ function engineAgent(providerID) {
     engineAgents.set(providerID, agent = new EngineAgent(link3, providerID));
   return agent;
 }
-var sessions = new Sessions(store, roster, auto, engineAgent, (directory) => link3.policies(directory), (name, directory) => link3.agent(name, directory), new Snapshots(join29(home2, "snapshots")), (directory) => link3.titleModel(directory));
+var sessions = new Sessions(store, roster, auto, engineAgent, (directory) => link3.policies(directory), (name, directory) => link3.agent(name, directory), new Snapshots(join30(home2, "snapshots")), (directory) => link3.titleModel(directory));
 var restarting = false;
 var noteInside = () => {
   if (restarting)
@@ -23879,18 +24507,18 @@ setInterval(noteInside, 5000).unref?.();
 var self;
 var partGiven;
 var groups;
-var groupFolders = onMachine ? { root: join29(machineHome, "groups"), bots: process.env.KUVO_BOTS ?? join29(machineHome, "bots"), trash: join29(machineHome, "trash") } : process.env.KUVO_GROUPS && process.env.KUVO_BOTS && process.env.KUVO_TRASH ? { root: process.env.KUVO_GROUPS, bots: process.env.KUVO_BOTS, trash: process.env.KUVO_TRASH } : undefined;
+var groupFolders = onMachine ? { root: join30(machineHome, "groups"), bots: process.env.KUVO_BOTS ?? join30(machineHome, "bots"), trash: join30(machineHome, "trash") } : process.env.KUVO_GROUPS && process.env.KUVO_BOTS && process.env.KUVO_TRASH ? { root: process.env.KUVO_GROUPS, bots: process.env.KUVO_BOTS, trash: process.env.KUVO_TRASH } : undefined;
 var groupMemoryKey = process.env.KUVO_GROUPS_MEMORY_KEY || undefined;
-var artifactsFolder = onMachine ? join29(machineHome, "artifacts") : process.env.KUVO_ARTIFACTS || undefined;
-var botsFolder = groupFolders?.bots ?? (onMachine ? join29(machineHome, "bots") : process.env.KUVO_BOTS || undefined);
-var agentsFile = onMachine ? join29(machineHome, "run", "agents.json") : process.env.KUVO_AGENTS_FILE || undefined;
-var runFolder = onMachine ? join29(machineHome, "run") : process.env.KUVO_RUN || undefined;
+var artifactsFolder = onMachine ? join30(machineHome, "artifacts") : process.env.KUVO_ARTIFACTS || undefined;
+var botsFolder = groupFolders?.bots ?? (onMachine ? join30(machineHome, "bots") : process.env.KUVO_BOTS || undefined);
+var agentsFile = onMachine ? join30(machineHome, "run", "agents.json") : process.env.KUVO_AGENTS_FILE || undefined;
+var runFolder = onMachine ? join30(machineHome, "run") : process.env.KUVO_RUN || undefined;
 for (const name of ["KUVO_GROUPS", "KUVO_TRASH", "KUVO_GROUPS_MEMORY_KEY", "KUVO_AGENTS_FILE", "KUVO_ARTIFACTS", "KUVO_RUN", ...onMachine ? [] : ["KUVO_BOTS"]])
   delete process.env[name];
 if (groupFolders) {
   try {
     const store = new GroupStore(groupFolders.root, groupFolders.bots, agentsFile);
-    const post = new PeerPost(join29(groupFolders.root, "peer-outbox.json"));
+    const post = new PeerPost(join30(groupFolders.root, "peer-outbox.json"));
     const directory = new LinkDirectory(post);
     const runner = new GroupRunner({
       store,
@@ -23935,11 +24563,11 @@ var places4 = {
     }
   }
 };
-var goals = new Goals(join29(home2, "goals.json"), places4);
+var goals = new Goals(join30(home2, "goals.json"), places4);
 setInterval(() => goals.resumeDue(), 60000).unref?.();
-var sideQuestions = new SideQuestions(join29(home2, "side-questions.json"), places4);
+var sideQuestions = new SideQuestions(join30(home2, "side-questions.json"), places4);
 var handoffs = new Handoffs(places4);
-var reviews = new Reviews(join29(home2, "reviews.json"), places4);
+var reviews = new Reviews(join30(home2, "reviews.json"), places4);
 var voice = new VoiceWords(places4);
 var artifacts;
 var noted2;
@@ -23982,13 +24610,14 @@ if (artifactsFolder) {
   }
 }
 await untilSandboxDecided();
+var carrying = new Carrying(sessions, store, (provider) => sessions.agent(provider), (kind) => roster.all().filter((agent) => parseProvider(agent.providerID)?.kind === kind));
 var server4;
 try {
   server4 = Bun.serve({
     hostname: "127.0.0.1",
     port,
     idleTimeout: 0,
-    fetch: handler({ roster, sessions, auto, link: link3, password, version: version3, groups, goals, sideQuestions, handoffs, places: places4, reviews, voice, artifacts, noted: noted2, restartOutside })
+    fetch: handler({ roster, sessions, auto, link: link3, password, version: version3, groups, goals, sideQuestions, handoffs, places: places4, reviews, voice, artifacts, noted: noted2, restartOutside, carrying })
   });
 } catch (error) {
   console.error("couldn't listen:", error?.message ?? error);
@@ -24012,13 +24641,13 @@ link3.whenReady().then(() => {
     console.error("group chats:", error);
   }
 });
-var record2 = onMachine ? join29(machineHome, "run", "bridge.json") : undefined;
+var record2 = onMachine ? join30(machineHome, "run", "bridge.json") : undefined;
 if (record2) {
   writeFileSync21(record2 + ".new", JSON.stringify({ pid: process.pid, port: server4.port, password }), { mode: 384 });
   renameSync15(record2 + ".new", record2);
 }
 if (runFolder)
-  new HangWatch({ name: "engine", run: runFolder, record: join29(runFolder, "engine.json"), isIt: isEngine }).start();
+  new HangWatch({ name: "engine", run: runFolder, record: join30(runFolder, "engine.json"), isIt: isEngine }).start();
 var stopping = false;
 function stop() {
   if (stopping)
@@ -24052,4 +24681,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 800ff0a9a67cd20fd318a1cb0eaa747890379b64c5c28274191933323c928ba0
+// Built from Packages/Box/src/agents 747da7a695825ca4a4dd61e68a60e2da397bf305f127aa0ac1b9ad2b1c2ade10

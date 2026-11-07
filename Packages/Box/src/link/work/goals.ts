@@ -226,6 +226,10 @@ export function goalPlans(file = GOALS_FILE): GoalPlanShape[] {
     .map(shown);
 }
 
+/** The goals proposed and waiting for your word (a day at most: one older can't be started). */
+export const proposedGoals = (file = GOALS_FILE, now = Date.now()): KeptGoal[] =>
+  latestOf(readKept(file)).filter(goal => goal.state === "proposed" && now - goal.proposed < SHOWN);
+
 /** `bot`'s goal while it runs; null otherwise. */
 export const runningGoal = (bot: string | null | undefined, file = GOALS_FILE): KeptGoal | null => (bot ? readKept(file).find(goal => goal.bot === bot && goal.state === "running") ?? null : null);
 

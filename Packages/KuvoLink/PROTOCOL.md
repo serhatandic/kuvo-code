@@ -337,9 +337,12 @@ connection.
     told (`[Not done]`) at 30 days. A session it doesn't have is refused (`retry` while
     its coding agents' bridge isn't running). The tool itself then checks the session is under
     `from` (`kuvo.startedBy`, up its line), as for one here: so sessions the user started are out of
-    reach. An allow goes only as far as `as` says the lead could go itself, with the receiving box's
-    own Don't Allow rules (its Settings › Permissions' `deny`) added, which no one gets past there;
-    the sandbox it's judged by is the session's own, there. An allow `made` over a day ago isn't
+    reach. An allow goes only as far as `as` says the lead could go itself and as far as the receiving
+    box's own rules (its engine defaults and its Settings › Permissions, Ask and Don't Allow alike)
+    would let a conversation go ahead without asking, each judged on its own (moving never loosens
+    anything: a rule of this box that allows doesn't undo one of the lead's that asks, nor the other
+    way round); `free` is the lead's, the sandbox it's judged by the session's own, there. Never
+    for a session in Ask First ("Work", Answering asks), which this box knows. An allow `made` over a day ago isn't
     given, and says so. A stop or a compact kept over 31 days is refused as too old.
   - **The answer** is a letter back (`{to: from, answers: <call id>, refused?}`) whose `id` is the
     call's with `-a` after it, so a call that comes again is answered by one that's already been
@@ -508,18 +511,28 @@ A client asks the box it lives on once, and watches; the move goes on with no cl
 - `GET kuvo/moves/places?kind=bot|chat|group&id=…` → `200 {places: [{key, name, kind, ok, why?,
   note?}]}`: each of your other computers (its box's key, its name, `mac` or `machine`), and whether
   it can go there now, with why not in words to show (it works in a project, talks with a coding
-  agent, is in a group chat that lives here with its bots, is working on a goal (a bot's, or a
+  agent and this box's agents bridge isn't running, or that computer's box is from before
+  `moves.agents`, is in a group chat that lives here with its bots, is working on a goal (a bot's, or a
   chat's own `/goal` working or paused; it stays on this box), is moving already; that computer's box is
   from before moves, as the `features` its agents' mail last gave say; a group chat's bots don't all
   live on that machine, as its agents' mail says, none of them here) and `note`, the same in a few
   words for beside the computer's name in a menu. `404 {message}` when it isn't here. A group chat
-  can go to any Mac (its bots stay where they are); the machine it goes to checks again.
+  can go to any Mac (its bots stay where they are); the machine it goes to checks again. For a bot
+  or chat, `stays?: {sessions?, asks?, goals?, agent?}` says what of it stays on this box as it moves
+  (each left out when none, `stays` too): how many sessions it started (they stay, and it reaches
+  them from where it goes), its unanswered asks (`work/asks`) and the goals it proposed and you
+  haven't started (they're here again if it comes back), and `agent: true` when its coding agent's
+  own copy of its conversation is kept here as the way back (removed a week after it first runs
+  there). Clients put it in Move's question (`MoveWords.question`, its `stays`), with the words
+  that each computer's vault, integrations and browser sign-ins stay with it.
 - `POST kuvo/moves {kind, id, to}` (`to`: the box's key, as `places` gives it) answers once the move
   ends: `200 {move}` (it lives there now); `409 {message}` refused or taken back, as it was (working,
   working on a goal,
   messages still on their way, kept getting messages while it moved, too big, refused there);
   `503 {message}` the other computer didn't answer; `404 {message}` it isn't here, or that isn't one
-  of your computers. A client that goes doesn't stop it.
+  of your computers. A client that goes doesn't stop it. `note` beside `move` (feature
+  `moves.check`), when there is one, says what it does differently there, in words to show (it uses
+  another account of its coding agent, the one signed in there).
 - `GET kuvo/moves` → `200 {moves: [Move], away: [session]}`, and `GET kuvo/moves/events`, the same
   as a line now and each time it changes. `Move = {id, kind, thing, name, from, to, role, stage,
   sessions, place?, sent?, size?, waiting?}`: `from` and `to` are boxes' keys; `role`, whether this box is
@@ -545,8 +558,31 @@ A client asks the box it lives on once, and watches; the move goes on with no cl
   changing or deleting the bot answers `409`, and what its sessions or an ask's late answer would
   tell it waits until it's there. A client shows it as moving.
 
+With a coding agent (feature `moves.agents`): a bot or chat whose conversations are on the agents
+bridge moves too, with each agent's own conversation (Claude Code's conversation file, what's
+beside it, and its memory) as well as the bridge's record. The agents bridge does the agent's part
+(`POST api/kuvo/carry/{pack, digest, keep, place, undo, remove}`, on each box for its own agents):
+`pack {root, into, conversation?}` writes what goes into the bundle's `carry` folder, with a
+manifest of every file and its SHA-256, and says its `digest`; `place` puts it in place on the box
+it goes to (paths and the conversation's folder made right for this box, the memory beside one
+already there kept, a file with the same name but other words kept beside it as
+`moved-<sha8>-<name>`), noting each step so `undo` takes it all back; `digest {root}` says the same
+hash again. A bot's memory goes in its own folder (`<bot>/memory`, Claude Code's
+`autoMemoryDirectory`) from there on. An agent that keeps nothing to carry, or one whose files
+can't be found, goes with the bridge's record, and its next turn starts from what that holds.
+`conversation: false` leaves the agent's own conversation out, for a box that doesn't carry it.
+
 Between the boxes, each `{"move": {op, id, …}}` (`id`: `mov_…`), each step sent again each minute
 until it's answered:
+
+0. To a box whose `features` say `moves.check`, before anything's held: `check {kind, name, lane?,
+   model?}` (`model`, `{providerID, id}`, the one it talks with) → `checked {ok, message?, note?}`.
+   The box it goes to says, at once and keeping nothing, whether it can run it: its engine or agents
+   bridge running; on the engine, the model's account signed in there; with a coding agent, that
+   agent installed and signed in there (Custom Auto picks there itself). Its own account of the
+   agent not there but another one signed in: `ok`, with a `note` saying which it uses. `ok: false`
+   takes it back (409, `message` as it's said); no answer in 45 seconds, 503. While it's asked,
+   nothing's held: it isn't in what's moving for prompts and letters, and its wake-ups go on.
 
 1. The box it leaves holds it, waits until its conversations are settled (no turn running, nothing
    in their inbox but what a Stop held there; a minute at most), and packs one file: `move.json` (its conversations as the
@@ -561,8 +597,8 @@ until it's answered:
    packed). Getting it ready for 30 minutes (its engine or group chats stuck) takes
    it back (409, as it was). Either box waits for one answer of its engine or group chats two
    minutes at most (a conversation's export, ten), and takes one that doesn't come for a failure.
-2. `offer {kind, thing, name, size, hash, wasPaused, pausedAs?, from, members?}` → `ready`, or
-   `refused {message}`: its engine or group chats aren't running, too big, a group chat's bots
+2. `offer {kind, thing, name, size, hash, wasPaused, pausedAs?, from, members?, lane?}` → `ready`, or
+   `refused {message}`: its engine, its agents bridge (`lane`) or group chats aren't running, too big, a group chat's bots
    (`members`) don't all live on that machine, one by that ID lives there already, or a move of it
    is under way (only the computer whose move it is can offer it again). A first offer unanswered
    for 30 seconds: the other computer isn't there (503). While it moves, its folder's `paused` says
@@ -577,8 +613,10 @@ until it's answered:
    a chat's `directory` its chats folder; each conversation imported under its own ID (noted first;
    they must be one conversation and its subagents', rooted at the chat or at the conversation a
    bot's folder names, none of them on this box already); their `queues` kept paused in place of
-   any there (what waits, whole, in its order; a file only as a `data:` link); a bot's keys given; a group chat put there
-   held (`PUT api/kuvo/groups/<id>`, `status: "held"`). → `arrived {hash}`, or `failed {message}`,
+   any there (what waits, whole, in its order; a file only as a `data:` link); a bot's keys given
+   (one this box can't keep, and it's `failed`, so the bot stays where it was with it); a group chat put there
+   held (`PUT api/kuvo/groups/<id>`, `status: "held"`); with a coding agent, on the agents bridge
+   (`carry/place`). → `arrived {hash, digest?}` (`digest`, what's in place, with a coding agent), or `failed {message}`,
    what it set up gone again; the message says only what's wrong with what came, never what this box
    found. Setting it up for 30 minutes (its engine stuck) is given up on the same way, and so is one
    it was setting up as it stopped (as it starts again). The box it leaves, every part answered and
@@ -587,7 +625,8 @@ until it's answered:
    or cut short by a restart), each with the `hash` it was asked about. An `arrived` or `failed`
    for a bundle other than the one sent last is ignored.
 5. The box it leaves settles and reads it again, its queues too. Anything new, and it all goes again
-   (from 1, three tries; then 409, `busy`).
+   (from 1, three tries; then 409, `busy`). With a coding agent, a `digest` that isn't what it sent
+   takes it back (409), and so does one that changed here since it was packed (it goes again).
 6. It notes the switch, and sends `switch` → `switched`: the box it went to lets its wake-ups go (as
    they were), starts a group chat (`activate`), tells a bot what it is (as
    `kuvo/bots/<id>/arrived` does), and lets a queue that wasn't paused go on (one you stopped
@@ -595,8 +634,23 @@ until it's answered:
 7. Then the box it left lets the original go: its conversation saved in its folder (or
    `moved-<id>` in the box's folder) as `conversation.json`, its conversations deleted with their
    queues (what waited for them on this box went with them), a bot's own
-   keys removed, the folder to Kuvo Code's trash (on a Mac, on to the Finder's Trash), a group chat
-   released. It says for two days where those conversations live now ("Peers", `moved`).
+   keys removed (ones that can't be now, its Keychain out of reach, noted in `left.json` and tried
+   again each hour until they're gone, never while it's moving back), the folder to Kuvo Code's trash (on a Mac, on to the Finder's Trash), a group chat
+   released. It says for two days where those conversations live now ("Peers", `moved`). With a
+   coding agent, the bridge's record is kept in the folder (`conversation/`), and each agent's own
+   files stay where they were, kept as the way back: nothing here runs or reaches them. At the switch
+   the box it went to adds a note to what the agent is told, saying where it came from, where
+   its folder's paths are now, and that the sessions it started stay there.
+
+What a move left on the box it came from (`run/moves/left.json`: its folder in the box's trash, and
+where each agent kept its files) is removed by that box a week after the conversation first ran
+where it went. It asks the box it went to each hour, `ran? {session}` → `ran {at}`, answered only
+for a move that came there and was switched to: when the first reply since was (nothing while there
+is none), or now when the conversation is gone from there. Only that box's word counts. Nothing is
+removed without it, nor while a move of it is under way (coming back, or taken back as it does). Moved
+back before then, what's here is the one: the older copy in the trash goes, and its entry with it.
+The sessions it started aren't part of it: they stay on the computer they're on, and nothing here
+touches them, nor a memory folder one of them still uses.
 
 Each move's steps are taken one at a time on each box, in the order they come. The box it goes to
 sets a copy up once, whatever parts come again, and lets go of what it set up if setting it up
@@ -876,6 +930,14 @@ client shows it from the same routes.
     where the session's run there too: the engine's while it's `on`; a coding agent's when the
     agents bridge marks its ask `sandboxed`, its program having started in it, and while it's still
     set up. In Full Access, or with no sandbox here, anywhere its rules allow.
+  - **A session in Ask First always asks the user** (bridge 0.9.205), whatever the bot's mode: a
+    bot in Full Access or Auto can't allow what it asks. Read from the session's approval as it
+    stands now ("Approval", `effective`: an Auto that can't be had here is Ask First), on the engine
+    and on the coding agents' bridge, by the box that has the session, so it holds across computers
+    too. Its answer is the same refusal ("You can't allow that"): the ask stays on the session for
+    the user. A bot may still deny, and still answer a question in words (that's no permission).
+    Accept Edits, Auto and Full Access sessions are judged as above; a subagent's ask is its
+    session's.
   - Everything else goes to the user. It may always deny, with its reason passed on. A command a
     bot allows still can't get out of the sandbox: only you can let one out (`sandbox_ask`,
     "Asks"), and no tool answers that.
@@ -946,9 +1008,11 @@ client shows it from the same routes.
     too, but it holds off a goal's nudge only for 30 minutes, and never hides a turn that failed at a
     limit.
   - **Telling a lead**: `[Session finished]` waits while any of it runs, and looks again 10 seconds
-    after it ends, since the end wakes its agent. At 30 minutes it's told anyway, saying what still
-    runs. A turn someone asked for doesn't wait on what was running before they asked (a dev server):
-    it's told at once, saying what still runs. After that a turn someone asked for is always told. A
+    after it ends, since the end wakes its agent. At 30 minutes it's told anyway, but as
+    `[Session still working]` (nothing is finished), saying what still runs; clients show it as
+    "“<title>” still working". When it really finishes with something new to say, that's a normal
+    `[Session finished]`; with nothing new, nothing. A turn someone asked for doesn't wait on what was running before they asked (a dev server):
+    it's told at once as `[Session finished]`, saying what still runs. After that a turn someone asked for is always told. A
     turn following the box's own word (what a session it started did, a limit that reset) is too, as
     what comes of it may be the result. A turn that began on its own (what it
     left running ended, its own wake-up) is told only if it has something to say: 200 characters or
@@ -2390,7 +2454,7 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   them open with `[Goal started] The user approved the plan.`, `[Not now] The user didn't start
   this goal.`, `[Goal changed] The user changed the goal's limits.`, `[Goal's end] The end the
   user set has come.`, `[Goal] Nothing of the goal is at work now.`, `[Limit reset] <why> has
-  reset. Carry on`, `[Session finished|failed|asks] "<title>"` and `[The user answered] `: read
+  reset. Carry on`, `[Session finished|still working|failed|asks] "<title>"` and `[The user answered] `: read
   them the same way
   (`BoxNote` in KuvoClient's ClientSessions does both).
 - A prompt a phone sends (`POST api/session/<id>/prompt`, and `kuvo/agents/api/…` alike) gets a

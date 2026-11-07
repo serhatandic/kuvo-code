@@ -132,5 +132,80 @@ while [ "$(load | awk -v max="$MAX_LOAD" '{ print ($1 > max) }')" = 1 ]; do
     sleep 15
 done
 
-[ -n "${old_way:-}" ] && exec lockf -k "$OLD" "$@"
-exec "$@"
+# The job runs in a process group of its own, and the group ends with the job: once the command is
+# over, or this helper is stopped, everything the command started that stays in its group is
+# stopped too, so nothing is left running behind a finished or cancelled job. The group is stopped
+# by its id, which is the job's pid: no `ps`, no search by name (a sandbox refuses `ps`, and a name
+# matches other people's processes). TERM first, KILL for what's still there after about 3 seconds.
+# A shell that gave the job no group of its own has no group by that id, and the kill finds nothing.
+group=
+watch=
+early=
+end_group() {
+    [ -n "$group" ] && kill -0 -- "-$group" 2>/dev/null || return 0
+    kill -s "$1" -- "-$group" 2>/dev/null || true
+    tries=0
+    while [ "$tries" -lt 30 ] && kill -0 -- "-$group" 2>/dev/null; do
+        sleep 0.1
+        tries=$((tries + 1))
+    done
+    ! kill -0 -- "-$group" 2>/dev/null || kill -s KILL -- "-$group" 2>/dev/null || true
+}
+end_watch() {
+    [ -n "$watch" ] || return 0
+    { kill -s KILL -- "-$watch" && wait "$watch"; } 2>/dev/null || true
+}
+stopped() {
+    # Stopped before the job has started (between its start and its id being known): once it has.
+    if [ -z "$group" ]; then
+        early="$1 $2"
+        return 0
+    fi
+    trap '' HUP INT TERM
+    end_group "$1"
+    end_watch
+    exit "$2"
+}
+
+# In a terminal the job stays in the terminal's own group: one in a group of its own couldn't read
+# the keyboard (a passphrase prompt would stop it), and Ctrl-C reaches the whole group there anyway.
+if [ -t 0 ] || { true </dev/tty; } 2>/dev/null; then
+    [ -n "${old_way:-}" ] && exec lockf -k "$OLD" "$@"
+    exec "$@"
+fi
+
+trap 'stopped HUP 129' HUP
+trap 'stopped INT 130' INT
+trap 'stopped TERM 143' TERM
+set -m
+if [ -n "${old_way:-}" ]; then
+    lockf -k "$OLD" "$@" &
+else
+    "$@" &
+fi
+group=$!
+# `lockf` doesn't pass a signal on to its command, and lets go of the lock as it ends: this helper
+# (the job's `lockf` is its parent) being stopped, even killed, would leave the job running. A
+# watcher of its own, in a group of its own too, notices when the parent is gone, stops this shell
+# if it's still there, and then the job's group itself if nothing else has: this shell may have been
+# killed, and a helper above it may have stopped it before it was done.
+parent=$PPID
+me=$$
+(
+    while kill -0 "$parent" 2>/dev/null; do sleep 0.2; done
+    kill -s TERM "$me" 2>/dev/null || true
+    waits=0
+    while [ "$waits" -lt 100 ] && kill -0 "$me" 2>/dev/null; do
+        sleep 0.1
+        waits=$((waits + 1))
+    done
+    end_group TERM
+) >/dev/null 2>&1 &
+watch=$!
+set +m
+[ -z "$early" ] || stopped ${early}
+status=0
+wait "$group" || status=$?
+end_group TERM
+end_watch
+exit "$status"

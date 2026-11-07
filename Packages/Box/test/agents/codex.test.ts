@@ -1212,6 +1212,32 @@ describe.skipIf(!canFence)("Codex in the box's sandbox", () => {
     expect(readFileSync(join(scout, "MEMORY.md"), "utf8")).toBe("# bot_scout's memory\n")
   })
 
+  test("a bot's agent keeps its own memory folder from the sandbox, not another bot's", async () => {
+    const bot = (id: string) => {
+      const folder = join(kuvo, "bots", id)
+      mkdirSync(join(folder, "workspace"), { recursive: true })
+      mkdirSync(join(folder, "memory"), { recursive: true })
+      writeFileSync(join(folder, "memory", "MEMORY.md"), `# ${id}'s memory\n`)
+      return folder
+    }
+    const ship = bot("bot_shipmem")
+    const scout = bot("bot_scoutmem")
+    codex = new TestCodex(fakeCodex(root, [[tries, {
+      kept: ["write", join(ship, "memory", "MEMORY.md")],
+      made: ["write", join(ship, "memory", "deploys.md")],
+      other: ["write", join(scout, "memory", "MEMORY.md")],
+      read: ["read", join(scout, "memory", "MEMORY.md")],
+    }]]), root)
+    const agent = codex
+    sessions = new Sessions(new Store(join(root, "sessions")), { find: (id: string | undefined) => (id === agent.providerID ? agent : undefined) } as unknown as Roster, new Auto(root))
+    const id = sessions.create({ title: "Ship", model: { providerID: agent.providerID, id: "gpt-test" }, location: { directory: join(ship, "workspace") }, permissions: askFirst }).id
+    writeFileSync(join(ship, "session"), id)
+    sessions.prompt(id, { id: "msg_codex_test_001", text: "go", files: [], delivery: "steer" })
+    await until(() => ended(id))
+    expect(said(id)).toBe("kept=yes made=yes other=no read=no")
+    expect(readFileSync(join(scout, "memory", "MEMORY.md"), "utf8")).toBe("# bot_scoutmem's memory\n")
+  })
+
   test("a bot's seat in a group chat, working in its project's folder, keeps the bot's memory too; a memory that's another file's other name isn't given", async () => {
     const bot = (id: string) => {
       const folder = join(kuvo, "bots", id)

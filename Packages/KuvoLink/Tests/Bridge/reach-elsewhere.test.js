@@ -164,7 +164,8 @@ const macEngine = await engineWith([
 const labEngine = await engineWith([
   { id: "ses_wren", title: "Wren", listed: true, permissions: [] },
   { id: "ses_left1", title: "Sign-in", metadata: { kuvo: { startedBy: "ses_lead", depth: 1, by } } },
-  { id: "ses_left2", title: "Billing", metadata: { kuvo: { startedBy: "ses_lead", depth: 1, by } } },
+  // (In Accept Edits: a session in Ask First is always the user's to answer, so a bot can't allow what it asks.)
+  { id: "ses_left2", title: "Billing", permissions: [{ action: "shell", resource: "*", effect: "ask" }], metadata: { kuvo: { startedBy: "ses_lead", depth: 1, by, approval: "acceptEdits", applied: "acceptEdits" } } },
   { id: "ses_left3", title: "Old work", metadata: { kuvo: { startedBy: "ses_lead", depth: 1, by } } },
   { id: "ses_user", title: "The user's own", listed: true },
   { id: "ses_user_old", title: "The user's archived", metadata: { kuvo: { archived: true } } },

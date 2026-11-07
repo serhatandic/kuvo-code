@@ -21,6 +21,7 @@ import { noteToolServer } from "./fence"
 import { newID } from "./ids"
 import { BadRequest, NotFound, Sessions } from "./sessions"
 import { artifactRoutes, notedRoute } from "./artifacts/routes"
+import { carryRoutes, type Carrying } from "./carry"
 import type { ArtifactStore } from "./artifacts/store"
 import { linkRoutes } from "./groups/link"
 import { peerRoutes, type PeerParts } from "./groups/post"
@@ -55,6 +56,8 @@ export interface Context {
   reviews?: Reviews
   /** The project's words for voice input to listen for (voice.ts). */
   voice?: VoiceWords
+  /** Conversations on their way to and from your other computers (carry.ts). */
+  carrying?: Carrying
 }
 
 const attempts = new Map<string, { agent: Agent; attempt: SignInAttempt; created: number; expires: number }>()
@@ -490,6 +493,7 @@ export function handler(context: Context) {
         context.restartOutside?.()
         return json({})
       }
+      if (area === "kuvo" && a === "carry") return await carryRoutes(context.carrying, method, parts.slice(3), body)
       if (area === "kuvo" && a === "goals") return await goalRoutes(context.goals, method, parts.slice(3), body)
       if (area === "kuvo" && a === "btw") return await sideQuestionRoutes(context.sideQuestions, method, parts.slice(3), body)
       if (area === "kuvo" && a === "handoff") return await handoffRoutes(context.handoffs, method, parts.slice(3), body)

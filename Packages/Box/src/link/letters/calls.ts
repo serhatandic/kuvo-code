@@ -365,8 +365,9 @@ function asOfMail(given: unknown): CallAs | null {
  * back whose id comes from the call's. Who it's for (`from`) must be a conversation that isn't
  * here, and that this box doesn't know to live elsewhere than the box that sent it (that may be a
  * stale word: tried again); its session must be here and under it (each tool checks that); an
- * allow goes only within what the lead could do itself, where it lives, and within this box's own
- * Don't Allow rules. Anything else a call can't reach. */
+ * allow goes only within what the lead could do itself, where it lives, and within what this box's
+ * own rules (its Settings › Permissions) allow too, each judged on its own; and never for a session
+ * in Ask First. Anything else a call can't reach. */
 export async function takeCall(sender: LetterSender & { name?: string }, given: unknown, { send, targets, answer = leaveCallAnswer, now = Date.now(), bridge = true, moved = movedOf(readLink()) }: TakeCallOptions): Promise<void> {
   if (!isObject(given) || typeof given.id !== "string" || !CALL_ID.test(given.id)) return;
   const id = given.id;
