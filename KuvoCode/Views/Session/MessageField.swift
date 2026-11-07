@@ -55,6 +55,9 @@ struct MessageField: NSViewRepresentable {
     var isEditable = true
     /// What VoiceOver calls it.
     var label = "Message"
+    /// Room kept between the line being written and the edges of what scrolls around the field
+    /// (a list of quotes), where that fades.
+    var edgeRoom: CGFloat = 0
 
     /// A request for the keyboard: each one made is another.
     struct FocusRequest: Equatable {
@@ -172,6 +175,7 @@ struct MessageField: NSViewRepresentable {
         }
         view.onFocus = onFocus
         view.onPaste = onPaste
+        view.edgeRoom = edgeRoom
         if view.placeholder != placeholder { view.placeholder = placeholder }
         if view.example != example { view.example = example }
         var changed = false
@@ -235,17 +239,50 @@ struct MessageField: NSViewRepresentable {
             // goes back to plain text.
             let token = parent.token.flatMap { view.string.utf16.count >= $0.length && view.string.hasPrefix("/") ? $0 : nil }
             view.restyle(marks: parent.marks, images: parent.images, token: token)
-            view.scrollRangeToVisible(view.selectedRange())
+            view.followCaret()
         }
     }
 }
 
 /// The field's scroll view: the wheel goes on to what's around it (the conversation, a list of
-/// quotes) while the field has nothing to scroll.
+/// quotes) while the field has nothing to scroll. SwiftUI sizes the field to its text only after
+/// the text changed, and what scrolls around it (a list of quotes, which measures what it holds
+/// before it takes its own height) after that: the line being written comes into view again once
+/// they're laid out at their new sizes (`MessageTextView.revealCaret`).
 final class FieldScrollView: NSScrollView {
+    nonisolated(unsafe) private var around: [NSObjectProtocol] = []
+
+    deinit { around.forEach(NotificationCenter.default.removeObserver) }
+
     override func scrollWheel(with event: NSEvent) {
+        // Scrolling to read what's written: the caret is left where it is until you type again.
+        (documentView as? MessageTextView)?.followsCaret = false
         let overflow = (documentView?.frame.height ?? 0) - contentView.bounds.height
         if overflow > 0.5 { super.scrollWheel(with: event) } else { nextResponder?.scrollWheel(with: event) }
+    }
+
+    override func setFrameSize(_ size: NSSize) {
+        let resized = size != frame.size
+        super.setFrameSize(size)
+        if resized { revealCaret() }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        around.forEach(NotificationCenter.default.removeObserver)
+        around = []
+        // What scrolls around it, and what that holds, laid out at another size.
+        guard window != nil, let outer = enclosingScrollView else { return }
+        around = [outer.contentView, outer.documentView].compactMap { $0 }.map { view in
+            view.postsFrameChangedNotifications = true
+            return NotificationCenter.default.addObserver(forName: NSView.frameDidChangeNotification, object: view, queue: nil) { [weak self] _ in
+                MainActor.assumeIsolated { self?.revealCaret() }
+            }
+        }
+    }
+
+    private func revealCaret() {
+        (documentView as? MessageTextView)?.revealCaret()
     }
 }
 
@@ -281,6 +318,62 @@ final class MessageTextView: PointerAwareTextView {
     /// What's drawn in place of a mark's first character: a bot's face, a conversation's or a
     /// picture's mark.
     private var faces = TextFaces()
+
+    /// Written in since it was last scrolled by hand: the line with the caret is kept in view.
+    var followsCaret = false
+    /// See `MessageField.edgeRoom`.
+    var edgeRoom: CGFloat = 0
+
+    /// The line with the caret is to be shown before the field is next drawn.
+    private var revealsCaret = false
+
+    /// After a change to the text: the line with the caret in view, now and as the field grows to
+    /// fit it.
+    func followCaret() {
+        followsCaret = true
+        showCaret()
+        revealCaret()
+    }
+
+    /// The line with the caret in view once SwiftUI is done laying out the field and what's around
+    /// it, before they're drawn: a list of quotes scrolled while SwiftUI lays it out goes back to
+    /// where SwiftUI had it.
+    func revealCaret() {
+        guard followsCaret else { return }
+        revealsCaret = true
+        needsDisplay = true
+    }
+
+    override func viewWillDraw() {
+        if revealsCaret {
+            revealsCaret = false
+            showCaret()
+        }
+        super.viewWillDraw()
+    }
+
+    /// The line with the caret in view: in the field, and in what scrolls around it (the list of
+    /// quotes), which the field's own scrolling doesn't reach, with `edgeRoom` to spare there.
+    func showCaret() {
+        guard window?.firstResponder === self, let scroll = enclosingScrollView else { return }
+        scrollRangeToVisible(selectedRange())
+        guard let line = caretLine else { return }
+        scroll.scrollToVisible(convert(line, to: scroll).insetBy(dx: 0, dy: -edgeRoom))
+    }
+
+    /// The line the caret is on, where it's laid out.
+    private var caretLine: NSRect? {
+        guard let layoutManager, let textContainer else { return nil }
+        let length = (string as NSString).length
+        let caret = selectedRange().location
+        layoutManager.ensureLayout(for: textContainer)
+        // After a last new line, the empty line it starts.
+        let line = caret >= length && !layoutManager.extraLineFragmentRect.isEmpty
+            ? layoutManager.extraLineFragmentRect
+            : length == 0 ? NSRect(x: 0, y: 0, width: bounds.width, height: lineHeight)
+            : layoutManager.lineFragmentRect(forGlyphAt: layoutManager.glyphIndexForCharacter(at: min(caret, length - 1)), effectiveRange: nil)
+        return line.offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y)
+    }
 
     var lineHeight: CGFloat {
         layoutManager?.defaultLineHeight(for: font ?? .systemFont(ofSize: NSFont.systemFontSize)) ?? 17

@@ -750,6 +750,23 @@ struct BottomStack: View {
             // KUVO_DEMO_QUOTE=<text>[||<text>…]: replying to those.
             if let quotes = ProcessInfo.processInfo.environment["KUVO_DEMO_QUOTE"] {
                 model.draftQuotes = quotes.components(separatedBy: "||").map { Drafts.Quote(text: $0) }
+                // KUVO_DEMO_QUOTE_ANSWER=<text>: typed into the first one's answer a word at a
+                // time, as from the keyboard, each "|" a new line.
+                if let answer = ProcessInfo.processInfo.environment["KUVO_DEMO_QUOTE_ANSWER"], let first = model.draftQuotes.first?.text {
+                    model.addQuote(first, how: "demo")
+                    Task {
+                        try? await Task.sleep(for: .seconds(3))
+                        guard let field = NSApp.windows.lazy.compactMap({ $0.firstResponder as? MessageTextView })
+                            .first(where: { $0.accessibilityIdentifier() == "quote-answer" }) else { return }
+                        for line in answer.components(separatedBy: "|") {
+                            for word in line.split(separator: " ") {
+                                field.insertText(word + " ", replacementRange: field.selectedRange())
+                                try? await Task.sleep(for: .milliseconds(90))
+                            }
+                            field.insertNewline(nil)
+                        }
+                    }
+                }
             }
             // KUVO_DEMO_FAILURE=<text>: as if something just failed.
             if let failure = ProcessInfo.processInfo.environment["KUVO_DEMO_FAILURE"] { model.failure = failure }

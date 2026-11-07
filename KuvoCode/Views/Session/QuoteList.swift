@@ -28,6 +28,8 @@ struct QuoteList: View {
     @State private var clicked: (id: UUID, request: MessageField.FocusRequest)?
 
     private static let tallest: CGFloat = 260
+    /// How far its edges fade, where there's more past them.
+    private static let fade: CGFloat = 14
 
     /// Your answer to a quote, found by its ID each time: a field on its way out (the quote was
     /// just dropped) reads nothing rather than a place in the list that's gone, which crashed.
@@ -78,7 +80,7 @@ struct QuoteList: View {
                                                  } else if open == quote.id, quotes.first(where: { $0.id == quote.id })?.response.isEmpty != false {
                                                      withAnimation(.ui) { open = nil }
                                                  }
-                                             }, onPaste: onPaste, identifier: "quote-answer", label: "Your Answer")
+                                             }, onPaste: onPaste, identifier: "quote-answer", label: "Your Answer", edgeRoom: Self.fade)
                                     .padding(.leading, 12)
                                     .padding(.bottom, 4)
                                     .transition(.opacity)
@@ -94,13 +96,9 @@ struct QuoteList: View {
             .scrollPosition($position)
             .scrollBounceBehavior(.basedOnSize)
             .scrollIndicators(height > Self.tallest ? .automatic : .never)
-            // Taller than it shows: it fades out at the edges, rather than being cut there.
-            .mask {
-                let fade = height > Self.tallest ? 14 / Self.tallest : 0
-                LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: fade),
-                                       .init(color: .black, location: 1 - fade), .init(color: .clear, location: 1)],
-                               startPoint: .top, endPoint: .bottom)
-            }
+            // Taller than it shows: it fades out at an edge with more past it, rather than being
+            // cut there; at its end, nothing's faded.
+            .fadingScrollEdges(Self.fade)
             // Its own height until it's measured, so it doesn't take the window's first.
             .frame(height: height == 0 ? nil : min(height, Self.tallest))
             .fixedSize(horizontal: false, vertical: height == 0)
