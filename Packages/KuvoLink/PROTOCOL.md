@@ -511,8 +511,8 @@ A client asks the box it lives on once, and watches; the move goes on with no cl
   agent and this box's agents bridge isn't running, or that computer's box is from before
   `moves.agents`, is in a group chat that lives here with its bots, is working on a goal (a bot's, or a
   chat's own `/goal` working or paused; it stays on this box), has a command or subagent running, has
-  a link or anything but plain files and folders in its folder (the box it goes to takes none; looked
-  for again as it's packed), is moving already; that computer's box is
+  a link out of its folder (absolute, or out of it by `..`) or anything but files, folders and
+  relative links within it (the box it goes to takes none; looked for again as it's packed), is moving already; that computer's box is
   from before moves, as the `features` its agents' mail last gave say; a group chat's bots don't all
   live on that machine, as its agents' mail says, none of them here) and `note`, the same in a few
   words for beside the computer's name in a menu. `404 {message}` when it isn't here. A group chat
@@ -609,8 +609,8 @@ until it's answered:
    comes (beside the bundle), so one it gets after starting again counts those before.
 4. Once all are there and its SHA-256 matches, the box it goes to puts it in place, held, in the
    move's turn (a step about it that comes meanwhile waits), saying `working` now and each minute
-   until it's done: the folder where it keeps them (only files and folders: a link or anything else
-   in it or for it, or a `move.json` that isn't a file of its own, and it's refused), `paused` saying `moving`,
+   until it's done: the folder where it keeps them (only files, folders and relative links within it: a
+   link out of it or anything else in it or for it, or a `move.json` that isn't a file of its own, and it's refused), `paused` saying `moving`,
    a chat's `directory` its chats folder; each conversation imported under its own ID (noted first;
    they must be one conversation and its subagents', rooted at the chat or at the conversation a
    bot's folder names, none of them on this box already); their `queues` kept paused in place of
