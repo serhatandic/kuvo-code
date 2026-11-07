@@ -100,7 +100,7 @@ struct ModelPicker: View {
         if picked == nil, catalog.isUnavailable(selection) || selection.map({ !scope.allows($0.providerID) }) == true { return nil }
         return catalog.model(choice) ?? (selection == nil ? catalog.defaultModel.flatMap { scope.allows($0.providerID) ? $0 : nil } : nil)
     }
-    private var variant: String? { current.flatMap { model in choice?.sameModel(as: model.ref) == true ? choice?.variant : nil } }
+    private var variant: String? { current.flatMap { model in choice.map(model.isNamed(by:)) == true ? choice?.variant : nil } }
 
     var body: some View {
         Group {
@@ -142,7 +142,7 @@ struct ModelPicker: View {
             #endif
         }
         .onDisappear {
-            if let picked, !(picked.sameModel(as: selection) && picked.variant == selection?.variant) { onSelect(picked) }
+            if let picked, !(catalog.isSameModel(picked, selection) && picked.variant == selection?.variant) { onSelect(picked) }
         }
     }
 
@@ -547,6 +547,8 @@ struct ModelPicker: View {
         .onHover { if $0 { highlight = id } }
         // The line is in its label already: the engine's words as its help, and VoiceOver's hint.
         .help(held?.why ?? "")
+        // The check mark, for VoiceOver: the model in use.
+        .accessibilityAddTraits(isCurrent ? .isSelected : [])
         .id(id)
     }
 
@@ -850,8 +852,10 @@ struct ModelPicker: View {
         .map { $0 }
     }
 
+    /// Your starred models' keys, one a model was starred by another name (Claude Code's `default`)
+    /// as that model's own.
     private var favoriteKeys: [String] {
-        favoriteStorage.split(separator: ",").map(String.init)
+        providers.flatMap(\.models).canonicalKeys(favoriteStorage.split(separator: ",").map(String.init))
     }
 
     /// Your starred models you can use here, in the order you starred them.

@@ -10,6 +10,9 @@ public struct Model: Codable, Sendable, Hashable, Identifiable {
     public var providerID: String
     public var name: String
     public var family: String?
+    /// Other ids the box knows it by, which a saved pick or a conversation may still name it with:
+    /// Claude Code's `default` is the model it recommends now, listed under its own id.
+    public var aliases: [String]?
     public var capabilities: Capabilities
     /// Reasoning-effort presets (`low`, `high`, …), selected with `ModelRef.variant`.
     public var variants: [Variant]
@@ -54,11 +57,30 @@ public struct Model: Codable, Sendable, Hashable, Identifiable {
     }
 
     public var ref: ModelRef { ModelRef(id: id, providerID: providerID) }
+
+    /// Whether `ref` names this model: by its id, or an alias of it.
+    public func isNamed(by ref: ModelRef) -> Bool {
+        providerID == ref.providerID && (id == ref.id || aliases?.contains(ref.id) == true)
+    }
     public var key: String { providerID + "/" + id }
     public var acceptsImages: Bool { capabilities.input.contains("image") }
     public var isFree: Bool { cost.allSatisfy { $0.input == 0 && $0.output == 0 } }
     /// Its provider is retiring it.
     public var isDeprecated: Bool { status == "deprecated" }
+}
+
+extension Collection where Element == Model {
+    /// Saved model keys (starred, picked last), each as the key of the model it names now: a key
+    /// that names one by an alias becomes that model's own, and two that come to the same model
+    /// are one. One naming no model here stays as it is.
+    public func canonicalKeys(_ saved: [String]) -> [String] {
+        var seen = Set<String>()
+        return saved.compactMap { key in
+            let own = first { $0.key == key } ?? first { model in model.aliases?.contains { model.providerID + "/" + $0 == key } == true }
+            let canonical = own?.key ?? key
+            return seen.insert(canonical).inserted ? canonical : nil
+        }
+    }
 }
 
 /// Model-serving configuration that's ready to use (its integration is connected,
