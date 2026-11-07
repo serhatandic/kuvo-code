@@ -9,7 +9,7 @@ import Testing
 /// goes with the model the conversation is on now: once you switch away from the signed-out one
 /// it's back, and Switch Model goes. The engine is stubbed.
 @MainActor
-@Suite(.serialized) struct FailedTurnModelTests {
+@Suite(.serialized, .timeLimit(.minutes(1))) struct FailedTurnModelTests {
     let engine = StubEngine(port: 47909)
     let workspace = Workspace()
     let id = "ses_failedmodel"
