@@ -16,6 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- Bots and chats that talk with Claude Code can move to another computer now, with their conversation and memory: they carry on there where they left off. Kuvo Code checks every file arrived the same before it switches, and if anything is off the move is taken back and nothing is lost. What a move leaves on the old computer is kept as the way back, and removed by itself a week after the bot first runs on the new one. The sessions a bot started stay on the computer they're on.
 - News from a session always reaches the bot or conversation that started it now, once, even if that moved to another computer long ago or its computer is away for days. It waits up to 30 days for that computer to come back; before, it was lost after a day or two.
 - A bot that moved to another computer can still list, read, answer, summarize and stop the sessions it left behind, from where it lives now. If that computer is asleep or offline, the bot hears so at once, sees its sessions as they were last told, and a stop or an answer it gives is done once that computer is back. Your machines take part with the update; a machine on an older Kuvo Code says so.
 - `/compact` and Summarize Now work in every conversation now, on Claude Code, Codex and Grok as on the engine's models: the conversation stays whole, and the agent carries on from a summary. Cursor and Antigravity only summarize by themselves, and it says so. During a turn, a coding agent's summary waits for the turn to end.

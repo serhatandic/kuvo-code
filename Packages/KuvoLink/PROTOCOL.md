@@ -508,7 +508,8 @@ A client asks the box it lives on once, and watches; the move goes on with no cl
 - `GET kuvo/moves/places?kind=bot|chat|group&id=…` → `200 {places: [{key, name, kind, ok, why?,
   note?}]}`: each of your other computers (its box's key, its name, `mac` or `machine`), and whether
   it can go there now, with why not in words to show (it works in a project, talks with a coding
-  agent, is in a group chat that lives here with its bots, is working on a goal (a bot's, or a
+  agent and this box's agents bridge isn't running, or that computer's box is from before
+  `moves.agents`, is in a group chat that lives here with its bots, is working on a goal (a bot's, or a
   chat's own `/goal` working or paused; it stays on this box), is moving already; that computer's box is
   from before moves, as the `features` its agents' mail last gave say; a group chat's bots don't all
   live on that machine, as its agents' mail says, none of them here) and `note`, the same in a few
@@ -545,6 +546,20 @@ A client asks the box it lives on once, and watches; the move goes on with no cl
   changing or deleting the bot answers `409`, and what its sessions or an ask's late answer would
   tell it waits until it's there. A client shows it as moving.
 
+With a coding agent (feature `moves.agents`): a bot or chat whose conversations are on the agents
+bridge moves too, with each agent's own conversation (Claude Code's conversation file, what's
+beside it, and its memory) as well as the bridge's record. The agents bridge does the agent's part
+(`POST api/kuvo/carry/{pack, digest, keep, place, undo, remove}`, on each box for its own agents):
+`pack {root, into, conversation?}` writes what goes into the bundle's `carry` folder, with a
+manifest of every file and its SHA-256, and says its `digest`; `place` puts it in place on the box
+it goes to (paths and the conversation's folder made right for this box, the memory beside one
+already there kept, a file with the same name but other words kept beside it as
+`moved-<sha8>-<name>`), noting each step so `undo` takes it all back; `digest {root}` says the same
+hash again. A bot's memory goes in its own folder (`<bot>/memory`, Claude Code's
+`autoMemoryDirectory`) from there on. An agent that keeps nothing to carry, or one whose files
+can't be found, goes with the bridge's record, and its next turn starts from what that holds.
+`conversation: false` leaves the agent's own conversation out, for a box that doesn't carry it.
+
 Between the boxes, each `{"move": {op, id, …}}` (`id`: `mov_…`), each step sent again each minute
 until it's answered:
 
@@ -561,8 +576,8 @@ until it's answered:
    packed). Getting it ready for 30 minutes (its engine or group chats stuck) takes
    it back (409, as it was). Either box waits for one answer of its engine or group chats two
    minutes at most (a conversation's export, ten), and takes one that doesn't come for a failure.
-2. `offer {kind, thing, name, size, hash, wasPaused, pausedAs?, from, members?}` → `ready`, or
-   `refused {message}`: its engine or group chats aren't running, too big, a group chat's bots
+2. `offer {kind, thing, name, size, hash, wasPaused, pausedAs?, from, members?, lane?}` → `ready`, or
+   `refused {message}`: its engine, its agents bridge (`lane`) or group chats aren't running, too big, a group chat's bots
    (`members`) don't all live on that machine, one by that ID lives there already, or a move of it
    is under way (only the computer whose move it is can offer it again). A first offer unanswered
    for 30 seconds: the other computer isn't there (503). While it moves, its folder's `paused` says
@@ -578,7 +593,8 @@ until it's answered:
    they must be one conversation and its subagents', rooted at the chat or at the conversation a
    bot's folder names, none of them on this box already); their `queues` kept paused in place of
    any there (what waits, whole, in its order; a file only as a `data:` link); a bot's keys given; a group chat put there
-   held (`PUT api/kuvo/groups/<id>`, `status: "held"`). → `arrived {hash}`, or `failed {message}`,
+   held (`PUT api/kuvo/groups/<id>`, `status: "held"`); with a coding agent, on the agents bridge
+   (`carry/place`). → `arrived {hash, digest?}` (`digest`, what's in place, with a coding agent), or `failed {message}`,
    what it set up gone again; the message says only what's wrong with what came, never what this box
    found. Setting it up for 30 minutes (its engine stuck) is given up on the same way, and so is one
    it was setting up as it stopped (as it starts again). The box it leaves, every part answered and
@@ -587,7 +603,8 @@ until it's answered:
    or cut short by a restart), each with the `hash` it was asked about. An `arrived` or `failed`
    for a bundle other than the one sent last is ignored.
 5. The box it leaves settles and reads it again, its queues too. Anything new, and it all goes again
-   (from 1, three tries; then 409, `busy`).
+   (from 1, three tries; then 409, `busy`). With a coding agent, a `digest` that isn't what it sent
+   takes it back (409), and so does one that changed here since it was packed (it goes again).
 6. It notes the switch, and sends `switch` → `switched`: the box it went to lets its wake-ups go (as
    they were), starts a group chat (`activate`), tells a bot what it is (as
    `kuvo/bots/<id>/arrived` does), and lets a queue that wasn't paused go on (one you stopped
@@ -596,7 +613,21 @@ until it's answered:
    `moved-<id>` in the box's folder) as `conversation.json`, its conversations deleted with their
    queues (what waited for them on this box went with them), a bot's own
    keys removed, the folder to Kuvo Code's trash (on a Mac, on to the Finder's Trash), a group chat
-   released. It says for two days where those conversations live now ("Peers", `moved`).
+   released. It says for two days where those conversations live now ("Peers", `moved`). With a
+   coding agent, the bridge's record is kept in the folder (`conversation/`), and each agent's own
+   files stay where they were, kept as the way back: nothing here runs or reaches them. At the switch
+   the box it went to adds a note to what the agent is told, saying where it came from, where
+   its folder's paths are now, and that the sessions it started stay there.
+
+What a move left on the box it came from (`run/moves/left.json`: its folder in the box's trash, and
+where each agent kept its files) is removed by that box a week after the conversation first ran
+where it went. It asks the box it went to each hour, `ran? {session}` → `ran {at}`, answered only
+for a move that came there and was switched to: when the first reply since was (nothing while there
+is none), or now when the conversation is gone from there. Only that box's word counts. Nothing is
+removed without it, nor while a move of it is under way (coming back, or taken back as it does). Moved
+back before then, what's here is the one: the older copy in the trash goes, and its entry with it.
+The sessions it started aren't part of it: they stay on the computer they're on, and nothing here
+touches them, nor a memory folder one of them still uses.
 
 Each move's steps are taken one at a time on each box, in the order they come. The box it goes to
 sets a copy up once, whatever parts come again, and lets go of what it set up if setting it up
