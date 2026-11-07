@@ -70,7 +70,7 @@ export function takeAgents(sender: { key: string; kind: "mac" | "machine"; id?: 
     let all: Record<string, ToldAgents> = {};
     try { all = JSON.parse(fs.readFileSync(file, "utf8")); } catch {}
     if ((given.at as number) <= (all[sender.key]?.at ?? 0)) return false;
-    all[sender.key] = { at: given.at as number, kind: sender.kind, ...(sender.id ? { id: sender.id } : {}), list: (given.list as unknown[]).filter(fitsAgent).slice(0, MOST_AGENTS).map(keptAgent),
+    all[sender.key] = { at: given.at as number, heard: Date.now(), kind: sender.kind, ...(sender.id ? { id: sender.id } : {}), list: (given.list as unknown[]).filter(fitsAgent).slice(0, MOST_AGENTS).map(keptAgent),
       ...(Array.isArray(given.features) ? { features: keptFeatures(given.features) } : {}), ...(Array.isArray(given.moved) ? { moved: keptMoved(given.moved) } : {}) };
     writePrivate(file, JSON.stringify(all));
     return true;

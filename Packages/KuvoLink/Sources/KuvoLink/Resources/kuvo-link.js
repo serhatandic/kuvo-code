@@ -8093,6 +8093,7 @@ function takeAgents(sender, given, file = PEER_AGENTS_FILE, lock = PEER_LOCK) {
       return false;
     all[sender.key] = {
       at: given.at,
+      heard: Date.now(),
       kind: sender.kind,
       ...sender.id ? { id: sender.id } : {},
       list: given.list.filter(fitsAgent).slice(0, MOST_AGENTS).map(keptAgent),
@@ -13621,7 +13622,7 @@ function forgetHostProof() {
   provenBy = null;
   vaultProvenBy = null;
 }
-async function proveHost(host) {
+async function proveHost(host, signal) {
   if (provenBy === host.said)
     return;
   const nonce = crypto23.randomBytes(32).toString("hex");
@@ -13631,7 +13632,7 @@ async function proveHost(host) {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ nonce }),
-      signal: AbortSignal.timeout(15000)
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(15000)]) : AbortSignal.timeout(15000)
     });
     const answer = await response.json().catch(() => null);
     if (response.ok && typeof answer?.proof === "string")
@@ -28463,7 +28464,7 @@ async function appAnswer(request, phone, signal) {
     return null;
   let response;
   try {
-    await proveHost(host);
+    await proveHost(host, signal);
     response = await fetch(`${host.url}/link/route`, {
       method: "POST",
       headers: { authorization: `Bearer ${host.password}`, "content-type": "application/json" },
@@ -28511,12 +28512,22 @@ var TIMING = { wait: 5000, look: 1e4 };
 var macName = () => macLink.config?.name || "this Mac";
 var notOpen = () => `Kuvo Code isn’t open on ${macName()}`;
 var UNREADABLE = "This Mac’s list of machines can’t be read right now.";
+function keptHosts() {
+  try {
+    return JSON.parse(fs95.readFileSync(PHONE_LINK_FILE, "utf8")).machines ?? {};
+  } catch (error) {
+    return error.code === "ENOENT" ? undefined : null;
+  }
+}
 function savedMachines() {
   let text;
   try {
     text = fs95.readFileSync(LIST_FILE, "utf8");
   } catch (error) {
-    return error.code === "ENOENT" ? [] : null;
+    if (error.code !== "ENOENT")
+      return null;
+    const kept = keptHosts();
+    return kept === undefined || kept && !Object.keys(kept).length ? [] : null;
   }
   try {
     const saved = JSON.parse(text);
@@ -28534,8 +28545,8 @@ function machinesWithoutApp(now = Date.now()) {
   return {
     machines: saved.map(({ destination, otherAddresses }) => {
       const peer = peers.find((each) => each.id === destination);
-      const at = peer ? told[peer.key]?.at ?? 0 : 0;
-      const heard = !peer ? "" : now - at < HEARD_LATELY ? "Running · " : "Not heard from lately · ";
+      const last = peer ? told[peer.key] : undefined;
+      const heard = !peer ? "" : now - (last?.heard ?? last?.at ?? 0) < HEARD_LATELY ? "Running · " : "Not heard from lately · ";
       return { id: destination, name: destination, otherAddresses: Array.isArray(otherAddresses) ? otherAddresses : [], connection: "notConnected", status: heard + notOpen() };
     }),
     hosts: []
@@ -28544,37 +28555,18 @@ function machinesWithoutApp(now = Date.now()) {
 function hostsWithoutApp() {
   const saved = savedMachines();
   const relay = macLink.config?.relay;
-  if (!saved || !relay)
+  const kept = keptHosts();
+  if (!saved || !relay || kept === null || kept === undefined && saved.length)
     return null;
-  let kept = {};
-  try {
-    kept = JSON.parse(fs95.readFileSync(PHONE_LINK_FILE, "utf8")).machines ?? {};
-  } catch (error) {
-    if (error.code !== "ENOENT")
-      return null;
-  }
-  const hosts = Object.entries(kept).flatMap(([machine, { name, address, key, anotherMac }]) => typeof name === "string" && typeof address === "string" && typeof key === "string" ? [{ kind: "machine", name, address, key, relay, machine, anotherMac: anotherMac === true, removed: !saved.some((each) => each.destination === machine) }] : []);
+  const hosts = Object.entries(kept ?? {}).flatMap(([machine, { name, address, key, anotherMac }]) => typeof name === "string" && typeof address === "string" && typeof key === "string" ? [{ kind: "machine", name, address, key, relay, machine, anotherMac: anotherMac === true, removed: !saved.some((each) => each.destination === machine) }] : []);
   return { hosts: hosts.sort((one, other) => one.name < other.name ? -1 : one.name > other.name ? 1 : 0) };
 }
 var answer4 = (status, value) => [{ head: { status, headers: { "content-type": "application/json" } } }, { body: Buffer.from(JSON.stringify(value)) }];
 async function appWithin(request, phone, signal, wait) {
-  const stop = new AbortController;
-  const stopNow = () => stop.abort();
-  signal?.addEventListener("abort", stopNow, { once: true });
-  let timer;
-  const late = new Promise((done) => {
-    timer = setTimeout(() => {
-      stopNow();
-      done(null);
-    }, wait);
-  });
-  const asked = appAnswer(request, phone, stop.signal);
-  const response = await Promise.race([asked, late]);
+  const late = new AbortController;
+  const timer = setTimeout(() => late.abort(), wait);
+  const response = await appAnswer(request, phone, signal ? AbortSignal.any([signal, late.signal]) : late.signal);
   clearTimeout(timer);
-  if (!response) {
-    signal?.removeEventListener("abort", stopNow);
-    asked.then((gone) => gone?.body?.cancel()).catch(() => {});
-  }
   return response;
 }
 var pause2 = (ms, signal) => new Promise((done) => {
@@ -28615,13 +28607,13 @@ async function* machinesFollowed(request, phone, signal, timing) {
     if (signal?.aborted)
       return;
     const own = machinesWithoutApp();
-    if (!own && !started)
-      return yield* answer4(503, { message: UNREADABLE });
+    if (!own)
+      return started ? undefined : yield* answer4(503, { message: UNREADABLE });
     if (!started)
       yield head;
     started = true;
-    const line = own && JSON.stringify(own);
-    if (line && line !== last) {
+    const line = JSON.stringify(own);
+    if (line !== last) {
       yield { body: Buffer.from(line + `
 `) };
       last = line;
@@ -28635,17 +28627,15 @@ async function* machinesRoute(request, phone, signal, route, timing = TIMING) {
   if (read && route === "kuvo/machines/events")
     return yield* machinesFollowed(request, phone, signal, timing);
   const response = read ? await appWithin(request, phone, signal, timing.wait) : await appAnswer(request, phone, signal);
-  if (response)
+  const own = !read ? null : route === "kuvo/machines" ? machinesWithoutApp : route === "kuvo/hosts" ? hostsWithoutApp : null;
+  if (response && (!own || response.status === 200))
     return yield* passedOn(response, signal);
+  await response?.body?.cancel().catch(() => {});
   if (signal?.aborted)
     return;
-  if (read && route === "kuvo/machines") {
-    const own = machinesWithoutApp();
-    return yield* answer4(own ? 200 : 503, own ?? { message: UNREADABLE });
-  }
-  if (read && route === "kuvo/hosts") {
-    const own = hostsWithoutApp();
-    return yield* answer4(own ? 200 : 503, own ?? { message: UNREADABLE });
+  if (own) {
+    const said = own();
+    return yield* answer4(said ? 200 : 503, said ?? { message: UNREADABLE });
   }
   yield* answer4(503, { message: `${notOpen()}. Open it there, then try again.` });
 }

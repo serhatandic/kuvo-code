@@ -22,7 +22,8 @@ const support = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link
 removeAtEnd(support);
 
 // What answers for this Mac's app (the keeper's host interface): `closed`, as the keeper says it while
-// the app isn't open, which isn't the app's own answer; `open`, the app's; `stuck`, no answer.
+// the app isn't open, which isn't the app's own answer; `open`, the app's; `starting`, its own 503 until
+// it's ready; `stuck`, no answer.
 const app = { state: "closed", streams: new Set(), asked: [] };
 const appLine = { machines: [{ id: "lab", name: "lab", otherAddresses: [], connection: "connected", status: "Connected", action: "disconnect" }], hosts: ["gpu"] };
 const appHost = http.createServer((request, response) => {
@@ -38,6 +39,7 @@ const appHost = http.createServer((request, response) => {
     if (request.url !== "/link/route") return response.writeHead(404).end();
     app.asked.push(given);
     if (app.state === "stuck") return;
+    if (app.state === "starting") return response.writeHead(503, { "content-type": "application/json", "x-kuvo-answer": "1" }).end(JSON.stringify({ message: "Kuvo Code isn't ready yet." }));
     if (app.state === "closed") return response.writeHead(503, { "content-type": "application/json" }).end(JSON.stringify({ message: "Kuvo Code isn’t open on this Mac." }));
     if (given.path === "kuvo/machines/events") {
       response.writeHead(200, { "content-type": "application/x-ndjson", "x-kuvo-answer": "1" });
@@ -223,8 +225,58 @@ test("with the app closed a phone still learns which machines it may reach, and 
   // What a phone takes for all your machines is never said from what can't be read: it would forget them.
   fs.writeFileSync(phoneLinkFile, "{ not json");
   assert.equal((await phone.request("GET", "kuvo/hosts")).status, 503);
+  // Nor from nothing, with machines in the list.
   fs.rmSync(phoneLinkFile, { force: true });
-  assert.deepEqual((await phone.request("GET", "kuvo/hosts")).json, { hosts: [] });
+  assert.equal((await phone.request("GET", "kuvo/hosts")).status, 503);
+  saved([]);
+  assert.deepEqual(await phone.request("GET", "kuvo/hosts"), { status: 200, json: { hosts: [] } });
+  fs.rmSync(listFile, { force: true });
+  assert.deepEqual(await phone.request("GET", "kuvo/hosts"), { status: 200, json: { hosts: [] } });
+});
+
+test("no list while the app keeps bridges for machines isn't none: the list is still in its settings", async () => {
+  app.state = "closed";
+  fs.rmSync(listFile, { force: true });
+  const unknown = { status: 503, json: { message: "This Mac’s list of machines can’t be read right now." } };
+  fs.writeFileSync(phoneLinkFile, JSON.stringify({ phones: [], removed: [], machines: { lab: { name: "lab", address: "ab".repeat(16), key: Buffer.alloc(32, 9).toString("base64url") } } }));
+  assert.deepEqual(await phone.request("GET", "kuvo/machines"), unknown);
+  assert.deepEqual(await phone.request("GET", "kuvo/hosts"), unknown, "a phone would forget them all");
+  // The last one removed leaves an empty list, so that's none, and the one left is marked.
+  saved([]);
+  assert.deepEqual(await phone.request("GET", "kuvo/machines"), { status: 200, json: { machines: [], hosts: [] } });
+  assert.deepEqual((await phone.request("GET", "kuvo/hosts")).json.hosts.map(host => host.removed), [true]);
+  fs.rmSync(phoneLinkFile, { force: true });
+  fs.rmSync(listFile, { force: true });
+});
+
+test("whether a machine was heard from goes by when it was heard, not by its clock", async () => {
+  app.state = "closed";
+  saved([{ destination: "lab" }]);
+  const key = Buffer.alloc(32, 1).toString("base64url");
+  for (const off of [-6, 6]) {
+    fs.rmSync(path.join(box, "run", "peer-agents.json"), { force: true });
+    assert.equal(link.takeAgents({ key, kind: "machine", id: "lab" }, { at: Date.now() + off * 3600_000, list: [] }), true);
+    assert.equal((await phone.request("GET", "kuvo/machines")).json.machines[0].status, "Running · Kuvo Code isn’t open on Studio", `a clock ${off} hours off`);
+  }
+  // And long ago is long ago, however it was dated.
+  const kept = JSON.parse(fs.readFileSync(path.join(box, "run", "peer-agents.json"), "utf8"));
+  kept[key].heard = Date.now() - 3600_000;
+  fs.writeFileSync(path.join(box, "run", "peer-agents.json"), JSON.stringify(kept));
+  assert.equal((await phone.request("GET", "kuvo/machines")).json.machines[0].status, "Not heard from lately · Kuvo Code isn’t open on Studio");
+});
+
+test("an app still starting says it isn't ready, and a phone gets the list all the same", async () => {
+  saved([{ destination: "lab" }]);
+  app.state = "starting";
+  const listed = await phone.request("GET", "kuvo/machines");
+  assert.equal(listed.status, 200);
+  assert.equal(listed.json.machines[0].id, "lab");
+  fs.writeFileSync(phoneLinkFile, JSON.stringify({ phones: [], removed: [], machines: {} }));
+  assert.equal((await phone.request("GET", "kuvo/hosts")).status, 200);
+  fs.rmSync(phoneLinkFile, { force: true });
+  // What changes something hears it from the app.
+  assert.deepEqual(await phone.request("POST", "kuvo/machines/lab/connect"), { status: 503, json: { message: "Kuvo Code isn't ready yet." } });
+  app.state = "closed";
 });
 
 // What the phone reads from a stream, line by line, in this process (the app coming and going takes
@@ -246,6 +298,9 @@ function follow() {
       return line;
     },
     close: () => pieces.return(),
+    async ended() {
+      for (;;) if ((await pieces.next()).done) return;
+    },
   };
 }
 
@@ -283,6 +338,56 @@ test("an app that's stuck is answered for, as one that's closed", async () => {
   assert.equal(parts[0].head.status, 200);
   assert.equal(JSON.parse(parts[1].body).machines[0].id, "lab");
   app.state = "closed";
+});
+
+test("a stream carries on past an app that's stuck, or still starting, and finds it when it answers", async () => {
+  saved([{ destination: "bench" }]);
+  const own = { machines: [{ id: "bench", name: "bench", otherAddresses: [], connection: "notConnected", status: "Kuvo Code isn’t open on Studio" }], hosts: [] };
+  for (const state of ["stuck", "starting"]) {
+    app.state = state;
+    const stream = follow();
+    assert.equal((await stream.head()).head.status, 200, state);
+    assert.deepEqual(JSON.parse(await stream.line()), own, state);
+    app.state = "open";
+    assert.deepEqual(JSON.parse(await stream.line()), appLine, state);
+    stream.stop();
+    await stream.close();
+    for (const response of app.streams) response.destroy();
+    app.streams.clear();
+  }
+  app.state = "closed";
+});
+
+test("a phone leaving stops the asking", async () => {
+  saved([{ destination: "lab" }]);
+  app.state = "stuck";
+  const front = link.macFront(async function* () {}, { wait: 60_000, look: 60_000 });
+  const stop = new AbortController();
+  const pieces = front({ method: "GET", path: "kuvo/machines/events", headers: {}, body: Buffer.alloc(0) }, undefined, stop.signal);
+  const asked = app.asked.length;
+  const next = pieces.next();
+  while (app.asked.length === asked) await new Promise(resolve => setImmediate(resolve));
+  stop.abort();
+  assert.equal((await next).done, true, "ended, with nothing more said and nothing left waiting a minute");
+  app.state = "closed";
+});
+
+test("the list going unreadable ends a stream, so what the app said last doesn't stand, and a phone's next try hears why", async () => {
+  saved([{ destination: "bench" }]);
+  app.state = "open";
+  const stream = follow();
+  await stream.head();
+  assert.deepEqual(JSON.parse(await stream.line()), appLine);
+  saved("{ not json");
+  for (const response of app.streams) response.destroy();
+  app.streams.clear();
+  app.state = "closed";
+  await stream.ended();
+  const again = follow();
+  assert.equal((await again.head()).head.status, 503);
+  again.stop();
+  await again.close();
+  fs.rmSync(listFile, { force: true });
 });
 
 test("a list that can't be read as a stream starts says so, as a read does", async () => {

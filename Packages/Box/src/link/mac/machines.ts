@@ -36,14 +36,33 @@ const macName = () => macLink.config?.name || "this Mac";
 const notOpen = () => `Kuvo Code isn’t open on ${macName()}`;
 const UNREADABLE = "This Mac’s list of machines can’t be read right now.";
 
-// Its machines as the app keeps them: none while the file isn't there (none added yet), null when
-// it's there and can't be read, which isn't the same as none.
+interface KeptHost {
+  name?: unknown;
+  address?: unknown;
+  key?: unknown;
+  anotherMac?: unknown;
+}
+
+// What the app keeps of your machines' bridges: undefined without the file, null when it won't read.
+function keptHosts(): Record<string, KeptHost> | null | undefined {
+  try {
+    return JSON.parse(fs.readFileSync(PHONE_LINK_FILE, "utf8")).machines ?? {};
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? undefined : null;
+  }
+}
+
+// Its machines as the app keeps them, or null when that can't be told, which isn't the same as none:
+// a list that won't read, or no list while the app keeps bridges for machines. (Removing the last one
+// leaves an empty list; no list then means it couldn't be written, and it's in the app's settings.)
 function savedMachines(): { destination: string; otherAddresses?: string[] }[] | null {
   let text: string;
   try {
     text = fs.readFileSync(LIST_FILE, "utf8");
   } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "ENOENT" ? [] : null;
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") return null;
+    const kept = keptHosts();
+    return kept === undefined || (kept && !Object.keys(kept).length) ? [] : null;
   }
   try {
     const saved = JSON.parse(text);
@@ -62,8 +81,9 @@ export function machinesWithoutApp(now = Date.now()): MacMachines | null {
   return {
     machines: saved.map(({ destination, otherAddresses }) => {
       const peer = peers.find(each => each.id === destination);
-      const at = peer ? told[peer.key]?.at ?? 0 : 0;
-      const heard = !peer ? "" : now - at < HEARD_LATELY ? "Running · " : "Not heard from lately · ";
+      const last = peer ? told[peer.key] : undefined;
+      // (By this Mac's clock: `heard`. A list kept before there was one has only the sender's.)
+      const heard = !peer ? "" : now - (last?.heard ?? last?.at ?? 0) < HEARD_LATELY ? "Running · " : "Not heard from lately · ";
       return { id: destination, name: destination, otherAddresses: Array.isArray(otherAddresses) ? otherAddresses : [], connection: "notConnected", status: heard + notOpen() };
     }),
     // What Add a Machine suggests, for what only the app can do.
@@ -72,18 +92,14 @@ export function machinesWithoutApp(now = Date.now()): MacMachines | null {
 }
 
 /** `kuvo/hosts` as this box says it without the app, from what the app keeps: null when that can't
- * be read or there's no relay yet to name, since a phone takes this list for all your machines. */
+ * be told or there's no relay yet to name, since a phone takes this list for all your machines and
+ * forgets the rest. */
 function hostsWithoutApp(): Hosts | null {
   const saved = savedMachines();
   const relay = macLink.config?.relay;
-  if (!saved || !relay) return null;
-  let kept: Record<string, { name?: unknown; address?: unknown; key?: unknown; anotherMac?: unknown }> = {};
-  try {
-    kept = JSON.parse(fs.readFileSync(PHONE_LINK_FILE, "utf8")).machines ?? {};
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") return null;
-  }
-  const hosts = Object.entries(kept).flatMap(([machine, { name, address, key, anotherMac }]) => (typeof name === "string" && typeof address === "string" && typeof key === "string"
+  const kept = keptHosts();
+  if (!saved || !relay || kept === null || (kept === undefined && saved.length)) return null;
+  const hosts = Object.entries(kept ?? {}).flatMap(([machine, { name, address, key, anotherMac }]) => (typeof name === "string" && typeof address === "string" && typeof key === "string"
     ? [{ kind: "machine" as const, name, address, key, relay, machine, anotherMac: anotherMac === true, removed: !saved.some(each => each.destination === machine) }]
     : []));
   return { hosts: hosts.sort((one, other) => (one.name < other.name ? -1 : one.name > other.name ? 1 : 0)) };
@@ -93,24 +109,10 @@ const answer = (status: number, value: unknown): AnswerPiece[] => [{ head: { sta
 
 // The app's answer, once it's started answering, within `wait`.
 async function appWithin(request: LinkRequest, phone: Asker | undefined, signal: AbortSignal | undefined, wait: number): Promise<Response | null> {
-  const stop = new AbortController();
-  const stopNow = () => stop.abort();
-  signal?.addEventListener("abort", stopNow, { once: true });
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const late = new Promise<null>(done => {
-    timer = setTimeout(() => {
-      stopNow();
-      done(null);
-    }, wait);
-  });
-  const asked = appAnswer(request, phone, stop.signal);
-  const response = await Promise.race([asked, late]);
+  const late = new AbortController();
+  const timer = setTimeout(() => late.abort(), wait);
+  const response = await appAnswer(request, phone, signal ? AbortSignal.any([signal, late.signal]) : late.signal);
   clearTimeout(timer);
-  if (!response) {
-    signal?.removeEventListener("abort", stopNow);
-    // (One that came just too late goes unread.)
-    asked.then(gone => gone?.body?.cancel()).catch(() => {});
-  }
   return response;
 }
 
@@ -125,8 +127,9 @@ const pause = (ms: number, signal: AbortSignal | undefined) => new Promise<void>
 });
 
 // `kuvo/machines/events`: the app's lines while it's there, this box's while it isn't, one stream
-// over both, for as long as the phone follows. Where the list can't be read as it starts, that's said
-// once, as a read would; later, the last line stands until it can.
+// over both, for as long as the phone follows. Where the list can't be read that's said as a read
+// would: at once as it starts, and later the stream ends, for a phone's next try to hear it, since the
+// last line may be the app's, saying it's connected.
 async function* machinesFollowed(request: LinkRequest, phone: Asker | undefined, signal: AbortSignal | undefined, timing: AppTiming): AsyncGenerator<AnswerPiece> {
   const head: AnswerPiece = { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
   let started = false;
@@ -152,11 +155,11 @@ async function* machinesFollowed(request: LinkRequest, phone: Asker | undefined,
     }
     if (signal?.aborted) return;
     const own = machinesWithoutApp();
-    if (!own && !started) return yield* answer(503, { message: UNREADABLE });
+    if (!own) return started ? undefined : yield* answer(503, { message: UNREADABLE });
     if (!started) yield head;
     started = true;
-    const line = own && JSON.stringify(own);
-    if (line && line !== last) {
+    const line = JSON.stringify(own);
+    if (line !== last) {
       yield { body: Buffer.from(line + "\n") };
       last = line;
     }
@@ -173,17 +176,16 @@ export async function* machinesRoute(request: LinkRequest, phone: Asker | undefi
   const read = request.method.toUpperCase() === "GET";
   if (read && route === "kuvo/machines/events") return yield* machinesFollowed(request, phone, signal, timing);
   // Only what's read has this box to fall back on. What changes something may take as long as it
-  // takes (adding a machine checks it over SSH first).
+  // takes (adding a machine checks it over SSH first), and can't be said not to have happened.
   const response = read ? await appWithin(request, phone, signal, timing.wait) : await appAnswer(request, phone, signal);
-  if (response) return yield* passedOn(response, signal);
+  const own = !read ? null : route === "kuvo/machines" ? machinesWithoutApp : route === "kuvo/hosts" ? hostsWithoutApp : null;
+  // (An app still starting says it isn't ready, and this box has the list.)
+  if (response && (!own || response.status === 200)) return yield* passedOn(response, signal);
+  await response?.body?.cancel().catch(() => {});
   if (signal?.aborted) return;
-  if (read && route === "kuvo/machines") {
-    const own = machinesWithoutApp();
-    return yield* answer(own ? 200 : 503, own ?? { message: UNREADABLE });
-  }
-  if (read && route === "kuvo/hosts") {
-    const own = hostsWithoutApp();
-    return yield* answer(own ? 200 : 503, own ?? { message: UNREADABLE });
+  if (own) {
+    const said = own();
+    return yield* answer(said ? 200 : 503, said ?? { message: UNREADABLE });
   }
   yield* answer(503, { message: `${notOpen()}. Open it there, then try again.` });
 }

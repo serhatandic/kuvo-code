@@ -15,7 +15,7 @@ export async function appAnswer(request: LinkRequest, phone: Asker | undefined, 
     // Nothing goes until it's proved it's this Mac's app: once for each host.json, which is
     // enough because this box (`serve`) ends with its app (its stdin closes), so no other
     // process can take the app's port while this box still trusts it, without the file changing.
-    await proveHost(host);
+    await proveHost(host, signal);
     response = await fetch(`${host.url}/link/route`, {
       method: "POST",
       headers: { authorization: `Bearer ${host.password}`, "content-type": "application/json" },
