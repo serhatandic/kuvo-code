@@ -8,13 +8,18 @@
 // - it takes connections but says nothing (not one that refuses them, or answers anything at all,
 //   an error too: the question needs only its event loop, none of its work);
 // - this box's own connections work, so it isn't the computer that's stuck;
-// - its main thread is asleep, not running, on a disk or paused, and it used next to no CPU since
+// - all its threads are asleep, none running, on a disk or paused, and it used next to no CPU since
 //   the last look: one at long work uses CPU, however deaf it is meanwhile;
 // - nothing it started is working either (a long command under it);
+// - macOS isn't asking you something (`run/.system-asking`, as this Mac's box says): a server that
+//   reads a folder waits on your answer, asleep;
 // - and this watch itself looked on time: a sleeping Mac, a paused machine or a starved one misses
 //   its looks, and then what it saw before doesn't count.
 //
-// A server spinning at full CPU is never ended by this: from outside, that's long work.
+// From outside, nothing tells a server stuck for good in a call that sleeps from one that call will
+// still return to, so a call taking over ten minutes (a network folder that stalled) counts as hung.
+// A server spinning at full CPU is never ended by this: from outside, that's long work. Neither is
+// one whose event loop runs but whose work is stuck: it answers.
 
 import fs from "node:fs";
 import net from "node:net";
@@ -28,7 +33,7 @@ export const ANSWER_WITHIN = 20_000;
 export const HUNG_AFTER = 600_000;
 /** How much of one CPU, since the last look, says a server is working, and what it started. */
 const OWN_WORK = 0.02;
-const WORK_BELOW = 0.1;
+const WORK_BELOW = 0.05;
 /** Told to stop, how long it has before it's made to (ms). */
 const TIME_TO_GO = 10_000;
 /** How many it may end in a while, should a server keep hanging, or this be wrong about it. */
@@ -74,7 +79,7 @@ function ask(port: number, within: number): Promise<Answer> {
 }
 
 /** Whether connections on this computer work now, this process's event loop with them. */
-function connectionsWork(within: number): Promise<boolean> {
+function connectionsWork(): Promise<boolean> {
   return new Promise(resolve => {
     const server = net.createServer(socket => socket.end("x"));
     const done = (works: boolean) => {
@@ -83,7 +88,7 @@ function connectionsWork(within: number): Promise<boolean> {
     };
     server.once("error", () => done(false));
     server.listen(0, "127.0.0.1", () => {
-      ask((server.address() as net.AddressInfo).port, within).then(answer => done(answer === "answered"));
+      ask((server.address() as net.AddressInfo).port, ANSWER_WITHIN).then(answer => done(answer === "answered"));
     });
   });
 }
@@ -95,17 +100,17 @@ export class HangWatch {
   private readonly timeToGo: number;
   private readonly now: () => number;
   private readonly use: (pid: number) => Promise<ProcessUse | null>;
-  /** The last look, on time or not. */
-  private lastLook = 0;
   private looking = false;
   /** What's been seen of it without a break. */
   private seen: { pid: number; port: number; since: number; at: number; use: ProcessUse } | null = null;
 
   constructor(private readonly options: HangWatchOptions) {
-    this.every = options.every ?? LOOK_EVERY;
-    this.answerWithin = options.answerWithin ?? ANSWER_WITHIN;
-    this.hungAfter = options.hungAfter ?? HUNG_AFTER;
-    this.timeToGo = options.timeToGo ?? TIME_TO_GO;
+    // (KUVO_TEST_HANG_EVERY: a test's real server, in milliseconds, with the rest in proportion.)
+    const test = Number(process.env.KUVO_TEST_HANG_EVERY) || 0;
+    this.every = options.every ?? (test || LOOK_EVERY);
+    this.answerWithin = options.answerWithin ?? (test ? test / 2 : ANSWER_WITHIN);
+    this.hungAfter = options.hungAfter ?? (test ? test * 3 : HUNG_AFTER);
+    this.timeToGo = options.timeToGo ?? (test || TIME_TO_GO);
     this.now = options.now ?? Date.now;
     this.use = options.use ?? processUse;
   }
@@ -123,28 +128,27 @@ export class HangWatch {
 
   private async lookOnce(): Promise<void> {
     const began = this.now();
-    const onTime = this.lastLook > 0 && began >= this.lastLook && began - this.lastLook <= this.every * 2;
-    this.lastLook = began;
-    // Late: the computer slept, or this was held up. What it saw before says nothing of now.
-    if (!onTime) this.seen = null;
     const server = this.server();
     if (!server || this.stoppedOnPurpose()) {
       this.seen = null;
       return;
     }
-    if ((await ask(server.port, this.answerWithin)) !== "silent" || !(await connectionsWork(this.answerWithin))) {
+    if ((await ask(server.port, this.answerWithin)) !== "silent" || !(await connectionsWork())) {
       this.seen = null;
       return;
     }
     const use = await this.use(server.pid);
     const at = this.now();
-    // (Held up meanwhile, a sleep among it: as above. Started over meanwhile: another server.)
+    // (Started over meanwhile: another server.)
     const now = this.server();
-    if (at - began > this.answerWithin * 2 + this.every || !use?.waiting || !this.options.isIt(use.command) || use.below.running || now?.pid !== server.pid || now.port !== server.port) {
+    if (!use?.waiting || !this.options.isIt(use.command) || use.below.running || now?.pid !== server.pid || now.port !== server.port) {
       this.seen = null;
       return;
     }
-    const seen = this.seen?.pid === server.pid && this.seen.port === server.port ? this.seen : null;
+    // Late since the last look, or the clock went back: the computer slept (between looks or in
+    // this one), or this was held up. What it saw before says nothing of now.
+    const onTime = this.seen && at >= this.seen.at && at - this.seen.at <= this.every * 2;
+    const seen = onTime && this.seen?.pid === server.pid && this.seen.port === server.port ? this.seen : null;
     if (!seen) {
       this.seen = { ...server, since: began, at, use };
       return;
@@ -168,19 +172,20 @@ export class HangWatch {
     }
   }
 
-  /** You stopped it, or it's being started, stopped or updated: nothing here to judge. */
+  /** You stopped it, it's being started, stopped or updated, or macOS is asking you something: nothing here to judge. */
   private stoppedOnPurpose(): boolean {
-    return ["stopped", ".launching", ".updating"].some(name => fs.existsSync(path.join(this.options.run, name)));
+    return ["stopped", ".launching", ".updating", ".system-asking"].some(name => fs.existsSync(path.join(this.options.run, name)));
   }
 
-  /** The times this ended one lately, read and kept beside its records. */
-  private endedLately(): number[] {
+  /** The times this ended one lately, read and kept beside its records; null when there's no telling. */
+  private endedLately(): number[] | null {
     const file = path.join(this.options.run, `hung-${this.options.name}.json`);
+    if (!fs.existsSync(file)) return [];
     try {
       const times = JSON.parse(fs.readFileSync(file, "utf8"));
-      return Array.isArray(times) ? times.filter(time => typeof time === "number" && this.now() - time < ENDED_WHILE && time <= this.now()) : [];
+      return Array.isArray(times) ? times.filter(time => typeof time === "number" && this.now() - time < ENDED_WHILE && time <= this.now()) : null;
     } catch {
-      return [];
+      return null;
     }
   }
 
@@ -188,16 +193,20 @@ export class HangWatch {
     this.seen = null;
     const minutes = Math.round((this.now() - since) / 60_000);
     const lately = this.endedLately();
-    if (lately.length >= MOST_ENDED) {
-      console.error(`The ${this.options.name} has said nothing for ${minutes} minutes, and it's been ended ${lately.length} times lately: it's left as it is, for you to restart.`);
+    if (!lately || lately.length >= MOST_ENDED) {
+      console.error(`The ${this.options.name} has said nothing for ${minutes} minutes, and it's been ended too often lately, or there's no telling how often: it's left as it is, for you to restart.`);
       return;
     }
-    console.error(`The ${this.options.name} (process ${pid}) has said nothing for ${minutes} minutes, with nothing at work: ending it, so it starts again.`);
+    // Counted first: what can't be counted isn't ended, so the limit always holds.
     const file = path.join(this.options.run, `hung-${this.options.name}.json`);
     try {
       fs.writeFileSync(`${file}.new`, JSON.stringify([...lately, this.now()]), { mode: 0o600 });
       fs.renameSync(`${file}.new`, file);
-    } catch {}
+    } catch {
+      console.error(`The ${this.options.name} has said nothing for ${minutes} minutes, but that can't be noted in ${file}: it's left as it is, for you to restart.`);
+      return;
+    }
+    console.error(`The ${this.options.name} (process ${pid}) has said nothing for ${minutes} minutes, with nothing at work: ending it, so it starts again.`);
     try {
       process.kill(pid, "SIGTERM");
     } catch {

@@ -34,8 +34,9 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  // (Each leads a process group, with what it started: nothing's left running after a test.)
   for (const child of started.splice(0)) {
-    try { child.kill("SIGKILL") } catch {}
+    try { process.kill(-child.pid!, "SIGKILL") } catch {}
   }
   rmSync(root, { recursive: true, force: true })
 })
@@ -58,7 +59,7 @@ const BEHAVIOR = {
   /** Long work: as deaf, at full CPU. */
   spins: "while (true) {}",
   /** Hung, with a long command at work under it. */
-  hangsOverWork: `spawn("/bin/sh", ["-c", "while :; do :; done"], { stdio: "ignore" }); setTimeout(asleep, 50);`,
+  hangsOverWork: `spawn("/bin/sh", ["-c", 'while [ ! -e "$0" ]; do :; done', process.argv[3]], { stdio: "ignore" }); setTimeout(asleep, 50);`,
   /** Hung, with something asleep under it (an idle MCP server). */
   hangsOverIdle: `spawn("/bin/sleep", ["600"], { stdio: "ignore" }); setTimeout(asleep, 50);`,
   answers: "",
@@ -68,7 +69,7 @@ const BEHAVIOR = {
 async function server(behavior: keyof typeof BEHAVIOR, argument = "serve"): Promise<{ child: ChildProcess; pid: number; port: number; gone: Promise<unknown> }> {
   const script = join(root, `server-${started.length}.js`)
   writeFileSync(script, `${OPEN}\nfunction afterListening() { ${BEHAVIOR[behavior]} }\n`)
-  const child = spawn(process.execPath, [script, argument], { stdio: ["ignore", "pipe", "ignore"] })
+  const child = spawn(process.execPath, [script, argument, join(root, "work-over")], { stdio: ["ignore", "pipe", "ignore"], detached: true })
   started.push(child)
   const gone = new Promise(resolve => child.once("exit", resolve))
   const line = await new Promise<string>(resolve => child.stdout!.once("data", chunk => resolve(String(chunk))))
@@ -155,8 +156,13 @@ test("a server at long work, as deaf at full CPU, is never ended", async () => {
 
 test("a server hung over a long command at work is left until that's over", async () => {
   const over = await server("hangsOverWork")
-  await looks(watch(), 12)
+  const hang = watch()
+  await looks(hang, 12)
   expect(alive(over.child)).toBe(true)
+  writeFileSync(join(root, "work-over"), "")
+  await until(async () => (await processUse(over.pid))?.below.running === false)
+  await looks(hang, 4)
+  await over.gone
 })
 
 test("one paused (a debugger, you) is never ended", async () => {
@@ -241,8 +247,8 @@ test("what took its number is never ended: its command line isn't the server's",
   expect(alive(other.child)).toBe(true)
 })
 
-for (const purpose of ["stopped", ".launching", ".updating"]) {
-  test(`stopped, starting or updating on purpose (run/${purpose}): nothing's judged`, async () => {
+for (const purpose of ["stopped", ".launching", ".updating", ".system-asking"]) {
+  test(`stopped, starting or updating on purpose, or macOS asking you something (run/${purpose}): nothing's judged`, async () => {
     const hung = await server("hangs")
     writeFileSync(join(run, purpose), "")
     const hang = watch()
@@ -291,6 +297,22 @@ test("started over during the very look that would end the old one: that isn't e
   expect(alive(first.child)).toBe(true)
 })
 
+test("what can't be counted isn't ended: the limit always holds", async () => {
+  // (Where it notes that: taken, as a full disk or a folder gone read-only would have it.)
+  mkdirSync(join(run, "hung-engine.json.new"))
+  const hung = await server("hangs")
+  await looks(watch(), 6)
+  expect(alive(hung.child)).toBe(true)
+  expect(existsSync(join(run, "hung-engine.json"))).toBe(false)
+})
+
+test("a count that can't be read isn't taken for none", async () => {
+  writeFileSync(join(run, "hung-engine.json"), "{ not this")
+  const hung = await server("hangs")
+  await looks(watch(), 6)
+  expect(alive(hung.child)).toBe(true)
+})
+
 test("it ends only so many in a while, in case it's wrong: then it's left for you to restart", async () => {
   const file = join(run, "hung-engine.json")
   writeFileSync(file, JSON.stringify(Array.from({ length: MOST_ENDED }, (_, index) => now - index)))
@@ -311,4 +333,34 @@ test("each server goes by its own program", () => {
   expect(isEngine("opencode run --config=/dev/null /x/kuvo-agents.js")).toBe(false)
   expect(isBridge("/home/you/.kuvo-code/engine/2.2.0/opencode --config=/dev/null --no-env-file /home/you/.kuvo-code/bin/kuvo-agents.js")).toBe(true)
   expect(isBridge("sh -c n=0; while kill -0")).toBe(false)
+})
+
+// The real servers, each started as a box starts it, on a quick clock: that they watch at all.
+function realServer(script: string, argument: string[], env: Record<string, string>): ChildProcess {
+  const home = join(root, "home")
+  mkdirSync(home, { recursive: true })
+  const child = spawn(process.execPath, [join(import.meta.dir, "..", "src", script), ...argument], {
+    // (Its standard input stays open: it stops once that closes.)
+    stdio: ["pipe", "ignore", "ignore"],
+    detached: true,
+    cwd: root,
+    env: { HOME: home, PATH: process.env.PATH!, TMPDIR: root, OPENCODE_PASSWORD: "x", KUVO_TEST_HANG_EVERY: "300", ...env },
+  })
+  started.push(child)
+  return child
+}
+
+test("the coding agents' bridge ends this box's hung engine", async () => {
+  const hung = await server("hangs")
+  realServer(join("agents", "main.ts"), [], { KUVO_AGENTS_HOME: join(root, "agents"), KUVO_RUN: run, KUVO_SANDBOX: "off" })
+  await hung.gone
+  expect(existsSync(join(run, "hung-engine.json"))).toBe(true)
+})
+
+test("the link ends this box's hung coding agents' bridge", async () => {
+  record = join(run, "bridge.json")
+  const hung = await server("hangs", "kuvo-agents")
+  realServer(join("link", "main.ts"), ["serve"], { KUVO_HOME: root, KUVO_TEST_NO_PEERS: "1" })
+  await hung.gone
+  expect(existsSync(join(run, "hung-bridge.json"))).toBe(true)
 })

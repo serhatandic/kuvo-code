@@ -336,12 +336,16 @@ test.skipIf(!account?.endsWith("/bash"))("Linux: a start from cron, whose shell 
 // How a process and what it started use the computer, each side as its system tells it.
 
 /** A /proc of the test's own, each process's `stat` as Linux writes it. */
-function procStats(processes: { pid: number; ppid: number; state: string; name?: string; utime?: number; stime?: number; cutime?: number; cmdline?: string }[]) {
+function procStats(processes: { pid: number; ppid: number; state: string; name?: string; utime?: number; stime?: number; cutime?: number; cmdline?: string; threads?: string[] }[]) {
   const folder = join(root, "proc")
   for (const process of processes) {
     mkdirSync(join(folder, String(process.pid)), { recursive: true })
     const after = [process.state, process.ppid, 0, 0, 0, 0, 0, 0, 0, 0, 0, process.utime ?? 0, process.stime ?? 0, process.cutime ?? 0, 0, 20, 0, 1, 0, 0]
     writeFileSync(join(folder, String(process.pid), "stat"), `${process.pid} (${process.name ?? "bun"}) ${after.join(" ")}\n`)
+    for (const [thread, state] of [[process.pid, process.state], ...(process.threads ?? []).map((state, index) => [process.pid + 1000 + index, state])]) {
+      mkdirSync(join(folder, String(process.pid), "task", String(thread)), { recursive: true })
+      writeFileSync(join(folder, String(process.pid), "task", String(thread), "stat"), `${thread} (${process.name ?? "bun"}) ${state} ${process.ppid}\n`)
+    }
     writeFileSync(join(folder, String(process.pid), "cmdline"), (process.cmdline ?? "x").replaceAll(" ", "\0") + "\0")
   }
   // Not a process's.
@@ -370,6 +374,16 @@ test("Linux: running, on a disk or paused isn't asleep; what's below it asleep i
   const folder = procStats([{ pid: 100, ppid: 1, state: "S" }, { pid: 101, ppid: 100, state: "S" }, { pid: 102, ppid: 100, state: "Z" }])
   expect((await processUse(100, folder))?.below.running).toBe(false)
   expect(await processUse(999, folder)).toBeNull()
+})
+
+test("Linux: one thread at work, or on a disk, means it isn't asleep, whatever the main thread's doing", async () => {
+  for (const state of ["R", "D", "T"]) {
+    const folder = procStats([{ pid: 100, ppid: 1, state: "S", threads: ["S", state] }])
+    expect((await processUse(100, folder))?.waiting).toBe(false)
+    rmSync(folder, { recursive: true })
+  }
+  const folder = procStats([{ pid: 100, ppid: 1, state: "S", threads: ["S", "S"] }])
+  expect((await processUse(100, folder))?.waiting).toBe(true)
 })
 
 test("ps's times, as macOS and Linux print them", () => {

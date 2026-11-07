@@ -236,7 +236,18 @@ function linuxUse(pid, proc) {
   } catch {
     return null;
   }
-  return useOf(rows, pid, command, "S");
+  const use = useOf(rows, pid, command, "S");
+  return use && { ...use, waiting: use.waiting && threadsAsleep(pid, proc) };
+}
+function threadsAsleep(pid, proc) {
+  try {
+    return fs.readdirSync(`${proc}/${pid}/task`).every((thread) => {
+      const stat = fs.readFileSync(`${proc}/${pid}/task/${thread}/stat`, "utf8");
+      return stat.slice(stat.lastIndexOf(")") + 2).startsWith("S");
+    });
+  } catch {
+    return false;
+  }
 }
 function cpuSeconds(time) {
   const [days, clock] = time.includes("-") ? time.split("-") : ["0", time];
@@ -279,7 +290,7 @@ var LOOK_EVERY = 30000;
 var ANSWER_WITHIN = 20000;
 var HUNG_AFTER = 600000;
 var OWN_WORK = 0.02;
-var WORK_BELOW = 0.1;
+var WORK_BELOW = 0.05;
 var TIME_TO_GO = 1e4;
 var MOST_ENDED = 3;
 var ENDED_WHILE = 6 * 3600000;
@@ -302,7 +313,7 @@ Connection: close\r
     socket.once("close", () => done("refused"));
   });
 }
-function connectionsWork(within) {
+function connectionsWork() {
   return new Promise((resolve) => {
     const server = net.createServer((socket) => socket.end("x"));
     const done = (works) => {
@@ -311,7 +322,7 @@ function connectionsWork(within) {
     };
     server.once("error", () => done(false));
     server.listen(0, "127.0.0.1", () => {
-      ask(server.address().port, within).then((answer) => done(answer === "answered"));
+      ask(server.address().port, ANSWER_WITHIN).then((answer) => done(answer === "answered"));
     });
   });
 }
@@ -324,15 +335,15 @@ class HangWatch {
   timeToGo;
   now;
   use;
-  lastLook = 0;
   looking = false;
   seen = null;
   constructor(options) {
     this.options = options;
-    this.every = options.every ?? LOOK_EVERY;
-    this.answerWithin = options.answerWithin ?? ANSWER_WITHIN;
-    this.hungAfter = options.hungAfter ?? HUNG_AFTER;
-    this.timeToGo = options.timeToGo ?? TIME_TO_GO;
+    const test = Number(process.env.KUVO_TEST_HANG_EVERY) || 0;
+    this.every = options.every ?? (test || LOOK_EVERY);
+    this.answerWithin = options.answerWithin ?? (test ? test / 2 : ANSWER_WITHIN);
+    this.hungAfter = options.hungAfter ?? (test ? test * 3 : HUNG_AFTER);
+    this.timeToGo = options.timeToGo ?? (test || TIME_TO_GO);
     this.now = options.now ?? Date.now;
     this.use = options.use ?? processUse;
   }
@@ -348,27 +359,24 @@ class HangWatch {
   }
   async lookOnce() {
     const began = this.now();
-    const onTime = this.lastLook > 0 && began >= this.lastLook && began - this.lastLook <= this.every * 2;
-    this.lastLook = began;
-    if (!onTime)
-      this.seen = null;
     const server = this.server();
     if (!server || this.stoppedOnPurpose()) {
       this.seen = null;
       return;
     }
-    if (await ask(server.port, this.answerWithin) !== "silent" || !await connectionsWork(this.answerWithin)) {
+    if (await ask(server.port, this.answerWithin) !== "silent" || !await connectionsWork()) {
       this.seen = null;
       return;
     }
     const use = await this.use(server.pid);
     const at = this.now();
     const now = this.server();
-    if (at - began > this.answerWithin * 2 + this.every || !use?.waiting || !this.options.isIt(use.command) || use.below.running || now?.pid !== server.pid || now.port !== server.port) {
+    if (!use?.waiting || !this.options.isIt(use.command) || use.below.running || now?.pid !== server.pid || now.port !== server.port) {
       this.seen = null;
       return;
     }
-    const seen = this.seen?.pid === server.pid && this.seen.port === server.port ? this.seen : null;
+    const onTime = this.seen && at >= this.seen.at && at - this.seen.at <= this.every * 2;
+    const seen = onTime && this.seen?.pid === server.pid && this.seen.port === server.port ? this.seen : null;
     if (!seen) {
       this.seen = { ...server, since: began, at, use };
       return;
@@ -391,31 +399,36 @@ class HangWatch {
     }
   }
   stoppedOnPurpose() {
-    return ["stopped", ".launching", ".updating"].some((name) => fs2.existsSync(path2.join(this.options.run, name)));
+    return ["stopped", ".launching", ".updating", ".system-asking"].some((name) => fs2.existsSync(path2.join(this.options.run, name)));
   }
   endedLately() {
     const file = path2.join(this.options.run, `hung-${this.options.name}.json`);
+    if (!fs2.existsSync(file))
+      return [];
     try {
       const times = JSON.parse(fs2.readFileSync(file, "utf8"));
-      return Array.isArray(times) ? times.filter((time) => typeof time === "number" && this.now() - time < ENDED_WHILE && time <= this.now()) : [];
+      return Array.isArray(times) ? times.filter((time) => typeof time === "number" && this.now() - time < ENDED_WHILE && time <= this.now()) : null;
     } catch {
-      return [];
+      return null;
     }
   }
   end(pid, since) {
     this.seen = null;
     const minutes = Math.round((this.now() - since) / 60000);
     const lately = this.endedLately();
-    if (lately.length >= MOST_ENDED) {
-      console.error(`The ${this.options.name} has said nothing for ${minutes} minutes, and it's been ended ${lately.length} times lately: it's left as it is, for you to restart.`);
+    if (!lately || lately.length >= MOST_ENDED) {
+      console.error(`The ${this.options.name} has said nothing for ${minutes} minutes, and it's been ended too often lately, or there's no telling how often: it's left as it is, for you to restart.`);
       return;
     }
-    console.error(`The ${this.options.name} (process ${pid}) has said nothing for ${minutes} minutes, with nothing at work: ending it, so it starts again.`);
     const file = path2.join(this.options.run, `hung-${this.options.name}.json`);
     try {
       fs2.writeFileSync(`${file}.new`, JSON.stringify([...lately, this.now()]), { mode: 384 });
       fs2.renameSync(`${file}.new`, file);
-    } catch {}
+    } catch {
+      console.error(`The ${this.options.name} has said nothing for ${minutes} minutes, but that can't be noted in ${file}: it's left as it is, for you to restart.`);
+      return;
+    }
+    console.error(`The ${this.options.name} (process ${pid}) has said nothing for ${minutes} minutes, with nothing at work: ending it, so it starts again.`);
     try {
       process.kill(pid, "SIGTERM");
     } catch {

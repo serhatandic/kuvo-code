@@ -191,7 +191,7 @@ export function sandboxGeneration(on: string): string {
 /** How a process and what it started are using the computer, at one moment. */
 export interface ProcessUse {
   command: string;
-  /** It's asleep, waiting for something: not running, not held up on a disk, not paused by someone. */
+  /** All its threads are asleep, waiting for something: none running, held up on a disk, or paused by someone. */
   waiting: boolean;
   /** Its own CPU time so far, in seconds. */
   seconds: number;
@@ -241,7 +241,21 @@ function linuxUse(pid: number, proc: string): ProcessUse | null {
   }
   let command = "";
   try { command = fs.readFileSync(`${proc}/${pid}/cmdline`, "utf8").replaceAll("\0", " ").trim(); } catch { return null; }
-  return useOf(rows, pid, command, "S");
+  const use = useOf(rows, pid, command, "S");
+  // A process's own state is only its main thread's here (macOS's `ps` goes by all of them).
+  return use && { ...use, waiting: use.waiting && threadsAsleep(pid, proc) };
+}
+
+/** Whether all a process's threads are asleep, as far as can be told. */
+function threadsAsleep(pid: number, proc: string): boolean {
+  try {
+    return fs.readdirSync(`${proc}/${pid}/task`).every(thread => {
+      const stat = fs.readFileSync(`${proc}/${pid}/task/${thread}/stat`, "utf8");
+      return stat.slice(stat.lastIndexOf(")") + 2).startsWith("S");
+    });
+  } catch {
+    return false;
+  }
 }
 
 /** A `ps` time, `[[dd-]hh:]mm:ss[.cc]`, in seconds; NaN when it isn't one. */
