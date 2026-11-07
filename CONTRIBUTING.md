@@ -147,6 +147,15 @@ A job also waits while the Mac is busy (its load over the last minute above 40;
 this way themselves. `python3 -m unittest discover -s scripts -p test_heavy.py`
 tries the helper.
 
+A job's command runs in a process group of its own, which ends with it: when the command is over,
+and when the helper is stopped, whatever the command started that stays in that group is stopped too
+(a process that starts a group or session of its own, like a daemon, isn't; and when the helper
+runs in a terminal, the job stays in the terminal's group, as a Ctrl-C reaches it there). So nothing that stays in
+the job's group is left behind to clean up. Never stop a process by name or pattern (`pkill`, `killall`,
+`kill $(pgrep …)`): a pattern matches other people's apps and other sessions. Stop only a process
+you started, by its PID (`$!`, a pid file) or by a process group you created, never the one you
+were started in. On macOS every option goes before the pattern, in `pgrep` too.
+
 `KuvoCodeTests` tries what the app does on its own code, scenario by scenario:
 Discard in Changes on throwaway git repositories, say, checking what's on disk
 after. The app hosting them starts nothing (no window, engine or menu bar item),
